@@ -5,6 +5,10 @@
 .beads-credential-key
 .beads/proxieddb/
 
+# Gas Town / Claude Code local runtime and private instructions
+.runtime/
+CLAUDE.local.md
+
 # dependencies
 /node_modules
 /.pnp
