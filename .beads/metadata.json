@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "ugcportal",
+  "project_id": "0e1d9e4d-3530-4904-b981-bfdf345f2339"
+}
