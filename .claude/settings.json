@@ -11,5 +11,11 @@
         "matcher": ""
       }
     ]
+  },
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "Bash(curl *)"
+    ]
   }
 }
