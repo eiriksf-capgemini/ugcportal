@@ -6,14 +6,24 @@ export async function AuthStatus() {
 
   if (!session?.user) {
     return (
-      <form
-        action={async () => {
-          "use server";
-          await signIn("facebook");
-        }}
-      >
-        <Button type="submit">Sign in with Facebook</Button>
-      </form>
+      <div className="flex items-center gap-2">
+        <form
+          action={async () => {
+            "use server";
+            await signIn("google");
+          }}
+        >
+          <Button type="submit">Sign in with Google</Button>
+        </form>
+        <form
+          action={async () => {
+            "use server";
+            await signIn("facebook");
+          }}
+        >
+          <Button type="submit">Sign in with Facebook</Button>
+        </form>
+      </div>
     );
   }
 
