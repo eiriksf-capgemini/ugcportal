@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "Bash(git fetch *)",
-      "Bash(git push *)"
+      "Bash(git push *)",
+      "WebSearch",
+      "Bash(curl *)"
     ]
   },
   "hooks": {
@@ -16,12 +18,6 @@
         ],
         "matcher": ""
       }
-    ]
-  },
-  "permissions": {
-    "allow": [
-      "WebSearch",
-      "Bash(curl *)"
     ]
   }
 }
