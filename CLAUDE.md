@@ -57,6 +57,19 @@ This protocol applies when ending a Beads implementation workflow. It is subordi
 - If a required sync or push is blocked, stop and report the exact command and error.
 <!-- END BEADS INTEGRATION -->
 
+## Changing `.claude/settings.json` or `.claude/settings.local.json`
+
+These files are edit/write-denied for all agents (`permissions.deny` in `.claude/settings.json`).
+This is deliberate: a polecat previously self-modified `.claude/settings.json` inside its work
+branch (adding permission entries) and it nearly got auto-merged to `main` by the Refinery
+unreviewed.
+
+If a task genuinely needs a change here:
+- **Do not** try to work around the deny rule.
+- Either open a dedicated PR against `origin/main` containing only that file change, for
+  human review, **or** stop and hand the exact change (diff/snippet) to Eirik to apply manually.
+- Never bundle a settings.json/settings.local.json change into an unrelated work branch — the
+  Refinery does not treat these files specially and will merge them like any other diff.
 
 ## Build & Test
 
