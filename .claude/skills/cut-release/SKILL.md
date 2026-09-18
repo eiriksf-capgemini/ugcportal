@@ -75,7 +75,9 @@ Prepend a version header above the sections:
 
 ## 6. Write it out
 
-Prepend (not append — newest release on top) this section to `CHANGELOG.md` at the repo root. If the file doesn't exist yet, create it with a `# Changelog` top-level header first. Also update `version` in `package.json` to the new value, then run `npm install --package-lock-only` so `package-lock.json`'s own `version` field (it appears twice, at the root and under `packages[""]`) moves with it — bumping `package.json` alone leaves the lockfile pointing at the old version, which drifts further with every release this step is skipped.
+Prepend (not append — newest release on top) this section to `CHANGELOG.md` at the repo root. If the file doesn't exist yet, create it with a `# Changelog` top-level header first.
+
+Bump the version with `npm version <version> --no-git-tag-version` (not a manual edit) — it updates both `package.json` and `package-lock.json`'s `version` fields (the lockfile has it twice: at the root and under `packages[""]`) in one step. Deliberately **don't** use `npm install --package-lock-only` for this: it re-resolves every dependency against its declared range, so if anything pinned with a caret (most of this repo's deps) has a newer semver-compatible release upstream since the lockfile was last touched, it would rewrite that package's `resolved`/`integrity`/version entries too — an unreviewed transitive dependency bump riding along inside a PR this skill's own step 8 treats as trivially non-sensitive and auto-mergeable. `npm version` only ever touches the version fields, never dependency resolution.
 
 ## 7. Mark issues as released
 
