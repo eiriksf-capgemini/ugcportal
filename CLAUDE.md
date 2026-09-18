@@ -38,7 +38,10 @@ This protocol applies when ending a Beads implementation workflow. It is subordi
 
 1. **File issues for remaining work** - Create beads for anything that needs follow-up
 2. **Run quality gates** (if code changed) - Tests, linters, builds
-3. **Update issue status** - Close finished work, update in-progress items
+3. **Update issue status** - Close finished work, update in-progress items. When
+   closing a bead whose work is done, set `cc_type`/`cc_scope`/`prs` and a
+   best-effort `tokens_impl` estimate (see "Token cost metadata" below);
+   `tokens_qa` is recorded separately by `pr-review-merge` once review runs.
 4. **Handle git/sync by active profile**:
    ```bash
    # Conservative/minimal: report status and proposed commands; wait for approval.
@@ -127,6 +130,30 @@ unshipped work as released. When you close a bead, make sure
 
 ```bash
 bd update <id> --set-metadata cc_type=feat --set-metadata cc_scope=gallery --set-metadata prs=gh-71
+```
+
+### Token cost metadata
+
+Two more metadata fields track the cost of a bead, in tokens, alongside
+`cc_type`/`cc_scope`/`prs`:
+
+- `tokens_impl` — cost of building the feature (everything up to opening
+  the PR). There's no clean automatic measurement for this today, since it
+  happens inline in the main conversation rather than as a separately
+  measurable agent run. Set it as a best-effort estimate from the session's
+  own token accounting when closing the bead; note in the bead's notes if
+  the number is rough.
+- `tokens_qa` — cost of the post-implementation QA/review pass. This one
+  *is* exact: the `pr-review-merge` skill runs the `code-review` skill as a
+  forked subagent, and forked-agent completions report an exact
+  `subagent_tokens` figure. `pr-review-merge` records that figure as
+  `tokens_qa` on the bead parsed from the PR title automatically — you
+  don't need to set it by hand unless running review manually outside that
+  skill. If review runs more than once for the same bead (e.g. a fix-up
+  pass after findings), the figure accumulates rather than overwrites.
+
+```bash
+bd update <id> --set-metadata tokens_impl=42000 --set-metadata tokens_qa=107768
 ```
 
 ## Build & Test

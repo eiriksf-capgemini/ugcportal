@@ -52,6 +52,19 @@ This posts inline findings as PR comments itself. Note whether it reported zero 
 
 If for some reason that skill isn't available in this session, review the diff yourself for correctness bugs and security issues (not style nits) and post equivalent PR comments via `gh pr comment <n> --body "..."`.
 
+## 4a. Record QA token cost
+
+The `code-review` skill runs as a forked subagent; its completion notification includes an exact `subagent_tokens` figure (in a `<usage>` block). Use that figure to record the QA cost of this bead:
+
+1. Parse `<bead-id>` from the PR title's trailing `(<bead-id>)` (see Conventional Commits in CLAUDE.md). If the title has no bead id (e.g. a `chore(release): vX.Y.Z` PR), skip this step.
+2. Read the bead's current `tokens_qa` metadata, if any: `bd show <bead-id>` (or `bd show <bead-id> --json` if available).
+3. Set `tokens_qa` to the **sum** of the existing value (if any) and this run's `subagent_tokens`, so repeated review passes on the same bead accumulate rather than clobber each other:
+   ```bash
+   bd update <bead-id> --set-metadata tokens_qa=<existing_plus_new>
+   ```
+
+This applies regardless of whether the PR ends up merged or left for a human — the QA cost was incurred either way.
+
 ## 5. Decide
 
 Approve and merge **only if all of the following hold**:
@@ -70,4 +83,4 @@ Otherwise: do not approve, do not merge. Post a single clear comment (`gh pr com
 
 ## 6. Report back
 
-State plainly: PR number, decision (merged / left for human), and the exact reason. If merged, confirm the merge actually happened (`gh pr view <n> --json state,mergedAt`).
+State plainly: PR number, decision (merged / left for human), and the exact reason. If merged, confirm the merge actually happened (`gh pr view <n> --json state,mergedAt`). Include the `tokens_qa` figure recorded in step 4a (or note that it was skipped, and why).
