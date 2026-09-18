@@ -3,7 +3,12 @@
     "allow": [
       "Bash(git *)",
       "WebSearch",
-      "Bash(curl *)"
+      "Bash(curl *)",
+      "Bash(npx *)",
+      "Bash(docker *)",
+      "Bash(node *)",
+      "Bash(python3 *)",
+      "Bash(gh *)"
     ],
     "deny": [
       "Edit(.claude/settings.json)",
