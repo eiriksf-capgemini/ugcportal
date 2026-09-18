@@ -45,9 +45,6 @@ jobs:
       - name: Lint
         run: npm run lint
 
-      - name: Typecheck
-        run: npm run typecheck
-
       - name: Build
         run: npm run build
         env:
@@ -56,3 +53,6 @@ jobs:
           AUTH_GOOGLE_SECRET: ci-placeholder
           AUTH_FACEBOOK_ID: ci-placeholder
           AUTH_FACEBOOK_SECRET: ci-placeholder
+
+      - name: Typecheck
+        run: npm run typecheck

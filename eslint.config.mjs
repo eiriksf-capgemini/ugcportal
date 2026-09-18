@@ -18,6 +18,9 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Agent worktrees (gitignored, but not excluded from lint by default,
+    // which makes local `npm run lint` scan stale checkouts under here).
+    ".claude/worktrees/**",
   ]),
   {
     // Design-system guardrail (ugcportal-eh5): components must consume the
