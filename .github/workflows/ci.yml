@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  guard-sensitive-files:
+    name: Guard sensitive settings files
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fail if .claude/settings*.json is bundled with other changes
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          CHANGED=$(git diff --name-only "origin/${BASE_REF}...HEAD")
+          echo "Changed files:"
+          echo "$CHANGED"
+          if echo "$CHANGED" | grep -Ex '\.claude/settings(\.local)?\.json'; then
+            echo "::error::This PR touches .claude/settings.json or .claude/settings.local.json. Per CLAUDE.md policy, changes to these files must go through a dedicated PR for human review and must never be bundled with unrelated work. Split this change out."
+            exit 1
+          fi
+
+  quality:
+    name: Lint, typecheck, build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+        env:
+          AUTH_SECRET: ci-placeholder-secret-not-for-real-use
+          AUTH_GOOGLE_ID: ci-placeholder
+          AUTH_GOOGLE_SECRET: ci-placeholder
+          AUTH_FACEBOOK_ID: ci-placeholder
+          AUTH_FACEBOOK_SECRET: ci-placeholder
