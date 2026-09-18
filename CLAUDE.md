@@ -143,14 +143,20 @@ Two more metadata fields track the cost of a bead, in tokens, alongside
   measurable agent run. Set it as a best-effort estimate from the session's
   own token accounting when closing the bead; note in the bead's notes if
   the number is rough.
-- `tokens_qa` — cost of the post-implementation QA/review pass. This one
-  *is* exact: the `pr-review-merge` skill runs the `code-review` skill as a
-  forked subagent, and forked-agent completions report an exact
-  `subagent_tokens` figure. `pr-review-merge` records that figure as
-  `tokens_qa` on the bead parsed from the PR title automatically — you
+- `tokens_qa` — cost of the post-implementation QA/review pass. Each
+  individual figure is exact: the `pr-review-merge` skill runs the
+  `code-review` skill as a forked subagent, and forked-agent completions
+  report an exact `subagent_tokens` figure, which `pr-review-merge` records
+  as `tokens_qa` on the bead parsed from the PR title automatically — you
   don't need to set it by hand unless running review manually outside that
   skill. If review runs more than once for the same bead (e.g. a fix-up
-  pass after findings), the figure accumulates rather than overwrites.
+  pass after findings), the figure accumulates rather than overwrites — but
+  the accumulation itself is a best-effort read-then-write (`bd` has no
+  compare-and-swap for metadata), so treat the running total as an
+  approximation, not a guaranteed-exact ledger, if reviews on the same bead
+  could ever overlap. `pr-review-merge` skips recording entirely (rather
+  than guessing) when there's no real subagent run to measure, e.g. its
+  manual-review fallback path.
 
 ```bash
 bd update <id> --set-metadata tokens_impl=42000 --set-metadata tokens_qa=107768

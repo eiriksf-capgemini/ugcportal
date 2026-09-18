@@ -54,14 +54,17 @@ If for some reason that skill isn't available in this session, review the diff y
 
 ## 4a. Record QA token cost
 
-The `code-review` skill runs as a forked subagent; its completion notification includes an exact `subagent_tokens` figure (in a `<usage>` block). Use that figure to record the QA cost of this bead:
+If step 4 ran `code-review` as a forked subagent, its completion notification includes an exact `subagent_tokens` figure (in a `<usage>` block). Use that figure to record the QA cost of this bead:
 
-1. Parse `<bead-id>` from the PR title's trailing `(<bead-id>)` (see Conventional Commits in CLAUDE.md). If the title has no bead id (e.g. a `chore(release): vX.Y.Z` PR), skip this step.
-2. Read the bead's current `tokens_qa` metadata, if any: `bd show <bead-id>` (or `bd show <bead-id> --json` if available).
-3. Set `tokens_qa` to the **sum** of the existing value (if any) and this run's `subagent_tokens`, so repeated review passes on the same bead accumulate rather than clobber each other:
+1. Skip this whole step — do not write anything, and do not guess a number — if either:
+   - the PR title has no trailing `(<bead-id>)` to attach the cost to (e.g. a `chore(release): vX.Y.Z` PR), or
+   - step 4 used the manual fallback (`code-review` unavailable, you reviewed the diff yourself) — there's no subagent run and thus no real `subagent_tokens` figure to record.
+2. Otherwise, parse `<bead-id>` from the PR title and read its current `tokens_qa` metadata, if any: `bd show <bead-id>`.
+3. Set `tokens_qa` to the **sum** of the existing value (if any) and this run's `subagent_tokens`:
    ```bash
    bd update <bead-id> --set-metadata tokens_qa=<existing_plus_new>
    ```
+   This read-then-write isn't atomic — `bd` has no compare-and-swap for metadata fields (only `--if-assignee`/`--if-status` guard status/assignee changes). If you have reason to think another review pass on the *same bead* is landing its own `tokens_qa` update around the same time, re-read with `bd show <bead-id>` immediately before writing and re-add your figure to whatever is there then; otherwise treat the accumulated total as a best-effort approximation, not an exact ledger.
 
 This applies regardless of whether the PR ends up merged or left for a human — the QA cost was incurred either way.
 
