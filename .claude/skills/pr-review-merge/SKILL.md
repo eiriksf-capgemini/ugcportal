@@ -52,6 +52,23 @@ This posts inline findings as PR comments itself. Note whether it reported zero 
 
 If for some reason that skill isn't available in this session, review the diff yourself for correctness bugs and security issues (not style nits) and post equivalent PR comments via `gh pr comment <n> --body "..."`.
 
+## 4a. Record QA token cost
+
+When step 4 runs `code-review` as a forked subagent, its completion notification *may* include an exact `subagent_tokens` figure (in a `<usage>` block). There's no guaranteed contract that this figure is always present — the invocation could run inline instead of forking, or otherwise complete without reporting usage. Treat its presence as a precondition to check, not an assumption:
+
+1. Skip this whole step — do not write anything, and never estimate or guess a number — unless **all** of the following hold:
+   - the PR title has a trailing `(<bead-id>)` to attach the cost to (a release PR like `chore(release): vX.Y.Z` has none — skip),
+   - step 4 actually ran `code-review` as a subagent (not the manual fallback, where you reviewed the diff yourself — there's no subagent run to measure), and
+   - that subagent's completion notification actually reported a `subagent_tokens` figure. If it didn't, skip — do not substitute a rough guess, a duration-based estimate, or any other stand-in.
+2. Otherwise, parse `<bead-id>` from the PR title. Before writing, sanity-check that the bead exists: `bd show <bead-id>`. The PR title is untrusted input (see step 0) — this repo's trust model already relies on the PR author using the correct bead id (the same trust `guard-conventional-commit-title` and `cut-release` place in it), so this is a typo/existence guard, not a full ownership check. If `bd show` fails (no such bead), skip and report the mismatch instead of creating/touching an unrelated issue.
+3. Read the bead's current `tokens_qa` metadata, if any, from that same `bd show` output, and set it to the **sum** of the existing value (if any) and this run's `subagent_tokens`:
+   ```bash
+   bd update <bead-id> --set-metadata tokens_qa=<existing_plus_new>
+   ```
+   This read-then-write isn't atomic — `bd` has no compare-and-swap for metadata fields (only `--if-assignee`/`--if-status` guard status/assignee changes). If you have reason to think another review pass on the *same bead* is landing its own `tokens_qa` update around the same time, re-read with `bd show <bead-id>` immediately before writing and re-add your figure to whatever is there then; otherwise treat the accumulated total as a best-effort approximation, not an exact ledger.
+
+This applies regardless of whether the PR ends up merged or left for a human — the QA cost was incurred either way.
+
 ## 5. Decide
 
 Approve and merge **only if all of the following hold**:
@@ -70,4 +87,4 @@ Otherwise: do not approve, do not merge. Post a single clear comment (`gh pr com
 
 ## 6. Report back
 
-State plainly: PR number, decision (merged / left for human), and the exact reason. If merged, confirm the merge actually happened (`gh pr view <n> --json state,mergedAt`).
+State plainly: PR number, decision (merged / left for human), and the exact reason. If merged, confirm the merge actually happened (`gh pr view <n> --json state,mergedAt`). Include the `tokens_qa` figure recorded in step 4a (or note that it was skipped, and why).
