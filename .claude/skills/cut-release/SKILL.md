@@ -1,6 +1,6 @@
 ---
 name: cut-release
-description: Generate an easy-to-read release note from closed beads that haven't been released yet, grouped by conventional-commit type, linking each entry to its bead id and every PR that shipped it (a bead can have more than one), and compute the next semver version. Prepends the result to CHANGELOG.md and bumps package.json's version. Use when asked to "cut a release", "generate release notes", or "what's changed since the last release".
+description: Generate an easy-to-read release note from closed beads that haven't been released yet, grouped by conventional-commit type, linking each entry to its bead id and every PR that shipped it (a bead can have more than one), and compute the next semver version. Prepends the result to CHANGELOG.md, bumps package.json's version, and — once that change has merged to main — publishes a matching GitHub Release. Use when asked to "cut a release", "generate release notes", or "what's changed since the last release".
 ---
 
 # Release Notes (ugcportal)
@@ -93,6 +93,20 @@ This step commits and pushes — defer to CLAUDE.md's "Agent Context Profiles" f
 
 Once authorized: branch, commit (`chore(release): v<version>` — a release commit legitimately isn't tied to a single bead, so it's fine without a bead-id suffix), push, open a PR via `gh pr create` with the generated changelog section as the PR body, ending with the repo's usual Claude Code attribution footer.
 
-## 9. Report back
+A release PR only ever touches `CHANGELOG.md` and `package.json`, so it isn't a sensitive path under `pr-review-merge`'s gate. If the active profile grants merge authority, run that skill against the PR you just opened; otherwise report the PR URL and wait for a human to merge it. Either way, do not proceed to step 9 until the PR has actually merged.
 
-State the computed version, the bump reason (which issue(s) triggered feat/major), how many issues were included, and the PR URL.
+## 9. Publish the GitHub Release
+
+Do this only after confirming the release PR from step 8 is merged (`gh pr view <n> --json state,mergedAt` shows `MERGED`) — never before, and never for a version that already has one.
+
+1. Check for an existing release first: `gh release view v<version>`. If it already exists, skip this step and note that in your report (this makes the skill safe to re-run without double-publishing).
+2. Write the same grouped notes built in step 5 to a scratch file, **without** the `## v<version> - <date>` header line (the GitHub Release UI already shows the tag and date) — e.g. via the `Write` tool to a path under the session's scratchpad directory.
+3. Create the release, targeting the branch the PR merged into (normally `main`) so the tag lands on the merge commit rather than wherever `HEAD` happens to be:
+   ```bash
+   gh release create v<version> --title "v<version>" --notes-file <scratch-file> --target main
+   ```
+   This creates the `v<version>` tag if it doesn't already exist — no separate `git tag`/`git push --tags` needed.
+
+## 10. Report back
+
+State the computed version, the bump reason (which issue(s) triggered feat/major), how many issues were included, the PR URL, and the GitHub Release URL (or why it was skipped/deferred).
