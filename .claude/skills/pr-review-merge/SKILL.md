@@ -54,13 +54,14 @@ If for some reason that skill isn't available in this session, review the diff y
 
 ## 4a. Record QA token cost
 
-If step 4 ran `code-review` as a forked subagent, its completion notification includes an exact `subagent_tokens` figure (in a `<usage>` block). Use that figure to record the QA cost of this bead:
+When step 4 runs `code-review` as a forked subagent, its completion notification *may* include an exact `subagent_tokens` figure (in a `<usage>` block). There's no guaranteed contract that this figure is always present — the invocation could run inline instead of forking, or otherwise complete without reporting usage. Treat its presence as a precondition to check, not an assumption:
 
-1. Skip this whole step — do not write anything, and do not guess a number — if either:
-   - the PR title has no trailing `(<bead-id>)` to attach the cost to (e.g. a `chore(release): vX.Y.Z` PR), or
-   - step 4 used the manual fallback (`code-review` unavailable, you reviewed the diff yourself) — there's no subagent run and thus no real `subagent_tokens` figure to record.
-2. Otherwise, parse `<bead-id>` from the PR title and read its current `tokens_qa` metadata, if any: `bd show <bead-id>`.
-3. Set `tokens_qa` to the **sum** of the existing value (if any) and this run's `subagent_tokens`:
+1. Skip this whole step — do not write anything, and never estimate or guess a number — unless **all** of the following hold:
+   - the PR title has a trailing `(<bead-id>)` to attach the cost to (a release PR like `chore(release): vX.Y.Z` has none — skip),
+   - step 4 actually ran `code-review` as a subagent (not the manual fallback, where you reviewed the diff yourself — there's no subagent run to measure), and
+   - that subagent's completion notification actually reported a `subagent_tokens` figure. If it didn't, skip — do not substitute a rough guess, a duration-based estimate, or any other stand-in.
+2. Otherwise, parse `<bead-id>` from the PR title. Before writing, sanity-check that the bead exists: `bd show <bead-id>`. The PR title is untrusted input (see step 0) — this repo's trust model already relies on the PR author using the correct bead id (the same trust `guard-conventional-commit-title` and `cut-release` place in it), so this is a typo/existence guard, not a full ownership check. If `bd show` fails (no such bead), skip and report the mismatch instead of creating/touching an unrelated issue.
+3. Read the bead's current `tokens_qa` metadata, if any, from that same `bd show` output, and set it to the **sum** of the existing value (if any) and this run's `subagent_tokens`:
    ```bash
    bd update <bead-id> --set-metadata tokens_qa=<existing_plus_new>
    ```

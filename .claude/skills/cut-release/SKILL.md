@@ -101,9 +101,9 @@ Do this only after confirming the release PR from step 8 is merged (`gh pr view 
 
 1. Check for an existing release first: `gh release view v<version>`. If it already exists, skip this step and note that in your report (this makes the skill safe to re-run without double-publishing).
 2. Write the same grouped notes built in step 5 to a scratch file, **without** the `## v<version> - <date>` header line (the GitHub Release UI already shows the tag and date) — e.g. via the `Write` tool to a path under the session's scratchpad directory.
-3. Create the release, targeting the branch the PR merged into (normally `main`) so the tag lands on the merge commit rather than wherever `HEAD` happens to be:
+3. Read the release PR's actual base branch rather than assuming `main` — `gh pr view <n> --json baseRefName -q .baseRefName` — and create the release targeting that branch, so the tag lands on the merge commit rather than wherever `HEAD` happens to be:
    ```bash
-   gh release create v<version> --title "v<version>" --notes-file <scratch-file> --target main
+   gh release create v<version> --title "v<version>" --notes-file <scratch-file> --target <base-ref>
    ```
    This creates the `v<version>` tag if it doesn't already exist — no separate `git tag`/`git push --tags` needed.
 
