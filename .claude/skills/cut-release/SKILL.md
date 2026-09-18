@@ -73,6 +73,26 @@ Prepend a version header above the sections:
 ## v<version> - <YYYY-MM-DD>
 ```
 
+## 5a. Cost summary
+
+Right after the version header (before the per-type sections from step 5), add a per-type rollup of the same `tokens_impl`/`tokens_qa` bead metadata described in CLAUDE.md > "Token cost metadata" — but only if **at least one** included issue has either field set. If none do, skip this whole step (an all-empty table is noise, not a summary).
+
+Using the same grouping and section order as step 5, sum `tokens_impl` and `tokens_qa` separately across the issues in each non-empty section (missing fields count as 0 for the sum but don't count toward the "beads with data" fraction), plus a **Total** row summing across all sections:
+
+```markdown
+### 💰 Cost Summary
+
+| Type | Impl | QA | Total | Beads with data |
+|---|---:|---:|---:|:---:|
+| ✨ Features | 12,000 | 236,451 | 248,451 | 2/4 |
+| 🔧 Chores | — | 129,674 | 129,674 | 1/1 |
+| **Total** | **12,000** | **366,125** | **378,125** | **3/7** |
+
+*Cost figures come from bead metadata (`tokens_impl`/`tokens_qa`). `tokens_impl` is a best-effort manual estimate that isn't consistently recorded — treat these totals as a lower bound on the release's actual cost, not the full figure.*
+```
+
+Only include rows for sections that actually appear in step 5's output (don't render a zero-entry row for a section with no issues). Use `—` rather than `0` for an Impl/QA/Total cell where the underlying sum is zero because nothing in that section has the field set, so a reader doesn't mistake "no data" for "confirmed zero cost." Comma-format numbers for readability. Always keep the caveat line — it's what stops a partial figure (which this will usually be, until `tokens_impl` is recorded more consistently) from being misread as the release's true cost.
+
 ## 6. Write it out
 
 Prepend (not append — newest release on top) this section to `CHANGELOG.md` at the repo root. If the file doesn't exist yet, create it with a `# Changelog` top-level header first.
