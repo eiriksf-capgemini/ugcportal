@@ -17,6 +17,11 @@ enum Role {
   ADMIN
 }
 
+enum MediaKind {
+  IMAGE
+  VIDEO
+}
+
 // Core user record. Shape follows the Auth.js Prisma adapter convention
 // (https://authjs.dev/getting-started/adapters/prisma) so the upcoming
 // Google/Facebook OAuth work (ugcportal-3vy, ugcportal-3zj) can plug in
@@ -33,6 +38,7 @@ model User {
 
   accounts Account[]
   sessions Session[]
+  media    Media[]
 }
 
 // One row per linked login provider (Google, Facebook, ...) for a user.
@@ -70,4 +76,22 @@ model VerificationToken {
   expires    DateTime
 
   @@unique([identifier, token])
+}
+
+// One row per uploaded file (ugcportal-8wa). `key` is the object's path in
+// the S3-compatible bucket (see src/lib/s3.ts); the file bytes themselves
+// live only in storage, never in the DB.
+model Media {
+  id           String    @id @default(cuid())
+  userId       String
+  kind         MediaKind
+  key          String    @unique
+  mimeType     String
+  sizeBytes    Int
+  originalName String
+  createdAt    DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
