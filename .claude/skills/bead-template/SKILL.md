@@ -66,20 +66,9 @@ If a bead is genuinely not a code change (a pure review/decision gate, e.g. a se
 Run this whenever you suspect drift (a bead created outside this skill, an old bead predating the policy, or after a bulk import). `bd lint` only checks that an "Acceptance Criteria" *section* exists — it does not check for the negative criterion, the Verified-by clauses, or the metadata, so it is not sufficient on its own:
 
 ```bash
-for s in open in_progress blocked deferred closed; do bd list --status=$s --json; done | python3 -c "
+bd list --all --limit=0 --json | python3 -c "
 import json, sys
-buf = sys.stdin.read()
-objs, depth, start = [], 0, None
-for i, c in enumerate(buf):
-    if c == '[' and depth == 0: start = i; depth = 1
-    elif c == '[': depth += 1
-    elif c == ']':
-        depth -= 1
-        if depth == 0: objs.append(json.loads(buf[start:i+1]))
-seen, all_issues = set(), []
-for o in objs:
-    for d in o:
-        if d['id'] not in seen: seen.add(d['id']); all_issues.append(d)
+all_issues = json.load(sys.stdin)
 
 no_verified, no_negative, missing_meta = [], [], []
 for d in all_issues:
@@ -95,6 +84,8 @@ print('missing negative criterion:', no_negative)
 print('missing cc_type/cc_scope:', missing_meta)
 "
 ```
+
+(`--all` covers every status bucket in one call, and `--limit=0` disables `bd list`'s default 50-result cap — without it, any status bucket over 50 issues would be silently truncated. This replaced an earlier version of this script that looped over each status separately and hand-parsed concatenated JSON arrays by counting brackets; that parser broke on any free-text field containing a literal `[`/`]`, e.g. a markdown link or checklist in a description.)
 
 For anything the audit flags: fix the bead directly with `bd update <id> --acceptance="..."` / `--set-metadata ...` rather than opening a separate cleanup bead — this is metadata/documentation hygiene, not a code change, so it doesn't need its own PR.
 
