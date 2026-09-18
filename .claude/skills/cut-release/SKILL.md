@@ -77,7 +77,7 @@ Prepend a version header above the sections:
 
 Right after the version header (before the per-type sections from step 5), add a per-type rollup of the same `tokens_impl`/`tokens_qa` bead metadata described in CLAUDE.md > "Token cost metadata" — but only if **at least one** included issue has either field set. If none do, skip this whole step (an all-empty table is noise, not a summary).
 
-Using the same grouping and section order as step 5, sum `tokens_impl` and `tokens_qa` separately across the issues in each non-empty section (missing fields count as 0 for the sum but don't count toward the "beads with data" fraction), plus a **Total** row summing across all sections:
+Render one row for **every section step 5 rendered** (i.e., every `cc_type` bucket with at least one issue in it), regardless of whether any issue in that section has cost data — a section with zero data still gets a row of dashes, so its absence of data is visible rather than silently dropped. For each such section, sum `tokens_impl` and `tokens_qa` separately across its issues (a missing field contributes 0 to the sum), and separately count how many of that section's issues have *either* field set as its "Beads with data" numerator (denominator is the section's total issue count from step 5). Add a final **Total** row summing every Impl/QA/Total column down, and summing both the numerators and the denominators of "Beads with data" down (not re-deriving it from the totals):
 
 ```markdown
 ### 💰 Cost Summary
@@ -86,7 +86,7 @@ Using the same grouping and section order as step 5, sum `tokens_impl` and `toke
 |---|---:|---:|---:|:---:|
 | ✨ Features | 12,000 | 236,451 | 248,451 | 2/4 |
 | 🔧 Chores | — | 129,674 | 129,674 | 1/1 |
-| **Total** | **12,000** | **366,125** | **378,125** | **3/7** |
+| **Total** | **12,000** | **366,125** | **378,125** | **3/5** |
 
 *Cost figures come from bead metadata (`tokens_impl`/`tokens_qa`). `tokens_impl` is a best-effort manual estimate that isn't consistently recorded — treat these totals as a lower bound on the release's actual cost, not the full figure.*
 ```
@@ -122,7 +122,7 @@ A release PR only ever touches `CHANGELOG.md`, `package.json`, and `package-lock
 Do this only after confirming the release PR from step 8 is merged (`gh pr view <n> --json state,mergedAt` shows `MERGED`) — never before, and never for a version that already has one.
 
 1. Check for an existing release first: `gh release view v<version>`. If it already exists, skip this step and note that in your report (this makes the skill safe to re-run without double-publishing).
-2. Write the same grouped notes built in step 5 to a scratch file, **without** the `## v<version> - <date>` header line (the GitHub Release UI already shows the tag and date) — e.g. via the `Write` tool to a path under the session's scratchpad directory.
+2. Write the same notes built in steps 5 and 5a (grouped sections *and* the Cost Summary table, if step 5a produced one) to a scratch file, **without** the `## v<version> - <date>` header line (the GitHub Release UI already shows the tag and date) — e.g. via the `Write` tool to a path under the session's scratchpad directory. `CHANGELOG.md` and the GitHub Release must carry the same content; don't let one channel drop the Cost Summary while the other keeps it.
 3. Read the release PR's actual base branch rather than assuming `main` — `gh pr view <n> --json baseRefName -q .baseRefName` — and create the release targeting that branch, so the tag lands on the merge commit rather than wherever `HEAD` happens to be:
    ```bash
    gh release create v<version> --title "v<version>" --notes-file <scratch-file> --target <base-ref>
