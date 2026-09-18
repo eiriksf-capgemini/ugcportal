@@ -82,6 +82,10 @@ PR titles (and the resulting squash-merge commit) must follow
 
 Example: `feat(gallery): add lightbox with PhotoSwipe (ugcportal-71y)`
 
+`<scope>` and the trailing `(<bead-id>)` are both required. The one exception
+is a release commit cut by the `cut-release` skill, which isn't tied to a
+single bead: `chore(release): vX.Y.Z`.
+
 Enforced by the `guard-conventional-commit-title` job in `.github/workflows/ci.yml`
 on every PR. Valid `<type>` values and their semver impact:
 
@@ -110,8 +114,11 @@ metadata (`bd show <id>` -> `metadata.cc_type` / `metadata.cc_scope`), plus
 `metadata.prs` listing every merged PR that shipped it (comma-separated —
 a bead can have more than one, e.g. a `feat` PR followed by a later `fix`
 PR closing a gap). This metadata is the source of truth the release-notes
-skill (`.claude/skills/release-notes/`) reads from — it does not parse git
-history. When you close a bead, make sure `cc_type`/`cc_scope`/`prs` are set:
+skill (`.claude/skills/cut-release/`) reads from — it does not parse git
+history. `prs` must only ever list PRs that are actually merged; a bead
+closed with a still-open PR in `prs` will make `cut-release` claim
+unshipped work as released. When you close a bead, make sure
+`cc_type`/`cc_scope`/`prs` are set:
 
 ```bash
 bd update <id> --set-metadata cc_type=feat --set-metadata cc_scope=gallery --set-metadata prs=gh-71
