@@ -93,7 +93,7 @@ This step commits and pushes — defer to CLAUDE.md's "Agent Context Profiles" f
 
 Once authorized: branch, commit (`chore(release): v<version>` — a release commit legitimately isn't tied to a single bead, so it's fine without a bead-id suffix), push, open a PR via `gh pr create` with the generated changelog section as the PR body, ending with the repo's usual Claude Code attribution footer.
 
-A release PR only ever touches `CHANGELOG.md` and `package.json`, so it isn't a sensitive path under `pr-review-merge`'s gate. If the active profile grants merge authority, run that skill against the PR you just opened; otherwise report the PR URL and wait for a human to merge it. Either way, do not proceed to step 9 until the PR has actually merged.
+A release PR only ever touches `CHANGELOG.md`, `package.json`, and `package-lock.json`, so it isn't a sensitive path under `pr-review-merge`'s gate. If the active profile grants merge authority, run that skill against the PR you just opened; otherwise report the PR URL and wait for a human to merge it. Either way, do not proceed to step 9 until the PR has actually merged.
 
 ## 9. Publish the GitHub Release
 
