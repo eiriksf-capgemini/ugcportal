@@ -71,6 +71,59 @@ If a task genuinely needs a change here:
 - Never bundle a settings.json/settings.local.json change into an unrelated work branch — the
   Refinery does not treat these files specially and will merge them like any other diff.
 
+## Conventional Commits & Release Notes
+
+PR titles (and the resulting squash-merge commit) must follow
+[Conventional Commits](https://www.conventionalcommits.org/):
+
+```
+<type>(<scope>): <description> (<bead-id>)
+```
+
+Example: `feat(gallery): add lightbox with PhotoSwipe (ugcportal-71y)`
+
+`<scope>` and the trailing `(<bead-id>)` are both required. The one exception
+is a release commit cut by the `cut-release` skill, which isn't tied to a
+single bead: `chore(release): vX.Y.Z`.
+
+Enforced by the `guard-conventional-commit-title` job in `.github/workflows/ci.yml`
+on every PR. Valid `<type>` values and their semver impact:
+
+| type       | meaning                                  | semver bump |
+|------------|-------------------------------------------|-------------|
+| `feat`     | new user-facing capability                | minor       |
+| `fix`      | bug fix                                   | patch       |
+| `docs`     | documentation only                        | patch\*     |
+| `style`    | formatting, no logic change               | patch\*     |
+| `refactor` | code change that's neither a fix nor feat | patch\*     |
+| `perf`     | performance improvement                   | patch       |
+| `test`     | adding/fixing tests only                  | patch\*     |
+| `build`    | build system or dependencies              | patch\*     |
+| `ci`       | CI/CD config                              | patch\*     |
+| `chore`    | everything else (ops, reviews, cleanup)   | patch\*     |
+| `revert`   | reverts a previous commit                 | patch       |
+
+\* Types marked patch\* don't warrant a release on their own in most tooling,
+but count as patch if bundled into a release alongside a `feat`/`fix`. A `!`
+after the type/scope (e.g. `feat(auth)!: ...`) or a `BREAKING CHANGE:` footer
+means **major**, regardless of type.
+
+`<scope>` is a short kebab-case area of the codebase (e.g. `auth`, `gallery`,
+`storage`, `ci`). Every tracked bead carries this same classification as
+metadata (`bd show <id>` -> `metadata.cc_type` / `metadata.cc_scope`), plus
+`metadata.prs` listing every merged PR that shipped it (comma-separated —
+a bead can have more than one, e.g. a `feat` PR followed by a later `fix`
+PR closing a gap). This metadata is the source of truth the release-notes
+skill (`.claude/skills/cut-release/`) reads from — it does not parse git
+history. `prs` must only ever list PRs that are actually merged; a bead
+closed with a still-open PR in `prs` will make `cut-release` claim
+unshipped work as released. When you close a bead, make sure
+`cc_type`/`cc_scope`/`prs` are set:
+
+```bash
+bd update <id> --set-metadata cc_type=feat --set-metadata cc_scope=gallery --set-metadata prs=gh-71
+```
+
 ## Build & Test
 
 _Add your build and test commands here_
