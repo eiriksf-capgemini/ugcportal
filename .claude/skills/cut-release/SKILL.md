@@ -75,7 +75,7 @@ Prepend a version header above the sections:
 
 ## 6. Write it out
 
-Prepend (not append — newest release on top) this section to `CHANGELOG.md` at the repo root. If the file doesn't exist yet, create it with a `# Changelog` top-level header first. Also update `version` in `package.json` to the new value.
+Prepend (not append — newest release on top) this section to `CHANGELOG.md` at the repo root. If the file doesn't exist yet, create it with a `# Changelog` top-level header first. Also update `version` in `package.json` to the new value, then run `npm install --package-lock-only` so `package-lock.json`'s own `version` field (it appears twice, at the root and under `packages[""]`) moves with it — bumping `package.json` alone leaves the lockfile pointing at the old version, which drifts further with every release this step is skipped.
 
 ## 7. Mark issues as released
 
