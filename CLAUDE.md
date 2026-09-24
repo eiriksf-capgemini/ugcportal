@@ -162,6 +162,45 @@ Two more metadata fields track the cost of a bead, in tokens, alongside
 bd update <id> --set-metadata tokens_impl=42000 --set-metadata tokens_qa=107768
 ```
 
+### Model-fit metadata
+
+Three more fields estimate which model is best suited to *doing* the bead, so
+work can be routed to the cheapest model that will actually do the job well
+instead of defaulting everything to the most capable one:
+
+- `model` — a **tier label**, one of `haiku` | `sonnet` | `opus` | `fable`.
+  Deliberately not a pinned model ID (`claude-opus-5`): IDs go stale on every
+  model generation and would force a bulk rewrite of every bead. Mapping as of
+  2026-09-24 — `haiku` -> `claude-haiku-4-5`, `sonnet` -> `claude-sonnet-5`,
+  `opus` -> `claude-opus-5`, `fable` -> `claude-fable-5-1`. When a new
+  generation ships, update this mapping, not the beads.
+- `model_effort` — `low` | `medium` | `high` | `xhigh` | `max`, the
+  `output_config.effort` level to pair with the tier. `high` is the default;
+  `xhigh` is the sweet spot for hard coding/agentic work; `max` is for the rare
+  bead where correctness matters more than cost.
+- `model_why` — one line justifying the pick, so the estimate is auditable and
+  cheap to revise.
+
+Rough tier guidance used for the existing backlog:
+
+| tier     | shape of work                                                                 |
+|----------|-------------------------------------------------------------------------------|
+| `haiku`  | mechanical and fully specified — scaffolds, config from vendor docs, a one-line CI guard |
+| `sonnet` | well-trodden implementation — a documented library wired in, standard CRUD, conventional manifests |
+| `opus`   | multi-system integration, security/money correctness, third-party API quirks, anything with a wide blast radius |
+| `fable`  | judgment over code — security and architecture reviews, legal/GDPR rights analysis |
+
+These are estimates, not measurements. The `tokens_impl`/`tokens_qa` figures
+above are the calibration signal: if a `sonnet` bead consistently costs what an
+`opus` bead costs, the estimate was wrong — fix the bead, and the guidance here.
+Nothing reads these fields automatically yet; they inform the human or agent
+picking a model before starting work.
+
+```bash
+bd update <id> --set-metadata model=opus --set-metadata model_effort=xhigh \
+  --set-metadata model_why="money plus webhook idempotency; duplicate orders are the expensive failure"
+```
+
 ## Build & Test
 
 _Add your build and test commands here_
