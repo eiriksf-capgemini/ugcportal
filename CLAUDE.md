@@ -218,3 +218,25 @@ _Add a brief overview of your project architecture_
 ## Conventions & Patterns
 
 _Add your project-specific conventions here_
+
+## Pull request descriptions
+
+**Refresh the PR description in the same command sequence as the push, not
+afterwards.** Treat it as part of pushing:
+
+```bash
+git push
+gh pr edit <n> --body-file <path>   # same breath, every time
+```
+
+A PR that has been through review rounds accumulates a description written
+against code that no longer exists. That is worse than no description,
+because it is the artefact people act on — on ugcportal-e86 the description
+was still advertising pre-headroom container sizing (1 GB -> limit 3 /
+queue 12 / peak 1004 MB) three commits after the code said 3 / 5 / 864 MB,
+and container sizing is exactly what a reader takes from a PR body.
+
+Rewrite it wholesale rather than patching the stale numbers; after a few
+rounds the structure is usually stale too. Anything quantitative in it —
+tables, test counts, reference configurations — should be regenerated from
+the code, not edited in place.
