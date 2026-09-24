@@ -73,6 +73,10 @@ const unpublishedMedia: MediaModel = {
   kind: "IMAGE",
   key: "media/user-a/abc-photo.png",
   previewKey: "previews/user-a/def-photo.webp",
+  // The opaque public handle for that preview (ugcportal-r1d). Set and
+  // nulled together with previewKey; the anonymous feed exposes this,
+  // never the key, because the key embeds the uploader's id.
+  previewId: "preview-abc",
   mimeType: "image/png",
   sizeBytes: 1024,
   originalName: "photo.png",
@@ -93,6 +97,7 @@ const previewLessMedia: MediaModel = {
   kind: "VIDEO",
   key: "media/user-a/ghi-clip.mp4",
   previewKey: null,
+  previewId: null,
   mimeType: "video/mp4",
   originalName: "clip.mp4",
 };
@@ -109,6 +114,7 @@ const OWNER_FIELDS = [
   "kind",
   "mimeType",
   "originalName",
+  "previewId",
   "previewKey",
   "publishedAt",
   "sizeBytes",
@@ -124,6 +130,7 @@ function toOwnerShape(media: MediaModel) {
     id: media.id,
     kind: media.kind,
     previewKey: media.previewKey,
+    previewId: media.previewId,
     mimeType: media.mimeType,
     sizeBytes: media.sizeBytes,
     originalName: media.originalName,

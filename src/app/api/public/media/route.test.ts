@@ -26,6 +26,7 @@ type Row = {
   kind: "IMAGE" | "VIDEO";
   key: string;
   previewKey: string | null;
+  previewId: string | null;
   mimeType: string;
   sizeBytes: number;
   originalName: string;
@@ -131,19 +132,35 @@ function seed(rows: Row[]) {
 
 let sequence = 0;
 
+/**
+ * Both storage paths are derived from the row's own `userId`, exactly as
+ * POST /api/media builds them (`media/${userId}/…`, `previews/${userId}/…`).
+ *
+ * This is load-bearing, not incidental. An earlier version of this fixture
+ * hard-coded `previews/user-1/…` regardless of the `userId` override, which
+ * made the "exposes no userId" assertion below unfalsifiable: a row created as
+ * `row({ userId: "user-9" })` put the string `user-9` nowhere in the payload,
+ * so the test passed while the handler was in fact publishing every uploader's
+ * account id inside `previewKey`. A fixture that cannot reproduce the leak
+ * cannot detect it.
+ */
 function row(overrides: Partial<Row> = {}): Row {
   sequence += 1;
   const id = overrides.id ?? `media-${sequence}`;
+  const userId = overrides.userId ?? "user-1";
   return {
     id,
-    userId: "user-1",
+    userId,
     kind: "IMAGE",
-    key: `media/user-1/${id}-original.png`,
-    previewKey: `previews/user-1/${id}.webp`,
+    key: `media/${userId}/${id}-original.png`,
+    previewKey: `previews/${userId}/${id}.webp`,
+    previewId: `preview-${id}`,
     mimeType: "image/png",
     sizeBytes: 1234,
     originalName: `${id}.png`,
-    createdAt: new Date(`2026-09-${String((sequence % 28) + 1).padStart(2, "0")}T10:00:00Z`),
+    createdAt: new Date(
+      `2026-09-${String((sequence % 28) + 1).padStart(2, "0")}T10:00:00Z`,
+    ),
     publishedAt: new Date("2026-09-24T12:00:00Z"),
     ...overrides,
   };
@@ -155,7 +172,7 @@ const ANONYMOUS_FIELDS = [
   "id",
   "kind",
   "mimeType",
-  "previewKey",
+  "previewId",
   "publishedAt",
   "sizeBytes",
 ];
@@ -249,7 +266,7 @@ describe("GET /api/public/media — no original key, no preview-less row (K3)", 
     expect(serialized).not.toContain("clip.mp4");
   });
 
-  it("serializes no 'key' field and no media/ path for any row", async () => {
+  it("serializes no storage path of any kind, original or preview", async () => {
     seed([row({ id: "a" }), row({ id: "b" }), row({ id: "c" })]);
 
     const body = await (await GET(request())).json();
@@ -258,22 +275,62 @@ describe("GET /api/public/media — no original key, no preview-less row (K3)", 
     expect(body.items).toHaveLength(3);
     for (const item of body.items) {
       expect(item).not.toHaveProperty("key");
-      expect(item.previewKey).toMatch(/^previews\//);
+      // Not the preview's path either: it embeds the uploader's id. The feed
+      // hands out an opaque handle instead.
+      expect(item).not.toHaveProperty("previewKey");
+      expect(item.previewId).toBe(`preview-${item.id}`);
     }
-    // The originals live under the media/ prefix; nothing in the payload
-    // points at it, so the original is not reachable from this feed.
-    expect(serialized).not.toContain("media/user-1");
+    // Neither prefix appears anywhere in the payload, so neither object is
+    // nameable from this feed.
+    expect(serialized).not.toContain("media/");
+    expect(serialized).not.toContain("previews/");
     expect(serialized).not.toContain("-original.png");
   });
 
-  it("exposes no userId, so the feed cannot be grouped by uploader", async () => {
+  it("exposes no userId, in a field or embedded in one", async () => {
+    // `row()` derives both storage paths from this userId, exactly as
+    // POST /api/media does. That is what makes this assertion able to fail:
+    // with a fixture that hard-coded `previews/user-1/…` it could not, and
+    // for one round it did not — the feed was returning `previewKey`, which
+    // is built as `previews/{userId}/{uuid}.webp`, so every uploader's
+    // account id was in the payload in plain text.
     seed([row({ id: "a", userId: "user-9" })]);
 
     const body = await (await GET(request())).json();
+    const serialized = JSON.stringify(body);
 
     expect(body.items[0]).not.toHaveProperty("userId");
-    expect(JSON.stringify(body)).not.toContain("user-9");
+    expect(serialized).not.toContain("user-9");
     expect(Object.keys(body.items[0]).sort()).toEqual(ANONYMOUS_FIELDS);
+  });
+
+  it("gives two uploaders' rows nothing an anonymous caller could group by", async () => {
+    // The capability being denied, stated directly: page the feed and try to
+    // partition it by uploader. Every value in the payload must be either
+    // per-row-unique or shared across uploaders — never per-uploader.
+    seed([
+      row({ id: "a", userId: "user-1" }),
+      row({ id: "b", userId: "user-1" }),
+      row({ id: "c", userId: "user-2" }),
+    ]);
+
+    const body = await (await GET(request())).json();
+    const serialized = JSON.stringify(body);
+
+    expect(body.items).toHaveLength(3);
+    for (const uploader of ["user-1", "user-2"]) {
+      expect(serialized).not.toContain(uploader);
+    }
+    // The two rows from the same uploader share no value that the row from
+    // the other uploader does not also share. `previewId` is the only
+    // per-row identifier, and it is opaque and unique.
+    const [a, b, c] = body.items.slice().sort(
+      (x: { id: string }, y: { id: string }) => (x.id < y.id ? -1 : 1),
+    );
+    expect(new Set([a.previewId, b.previewId, c.previewId]).size).toBe(3);
+    for (const field of ["kind", "mimeType", "sizeBytes"]) {
+      expect(a[field]).toEqual(c[field]);
+    }
   });
 
   it("withholds the uploader-supplied filename from anonymous callers", async () => {
@@ -290,7 +347,7 @@ describe("GET /api/public/media — no original key, no preview-less row (K3)", 
     // `originalName` is volunteered, not chosen for publication, and was
     // owner-only before this endpoint existed. Publishing an item must not
     // also publish whatever the uploader happened to call the file on their
-    // own disk (ugcportal-r1d review finding 2).
+    // own disk (ugcportal-r1d review round 1, finding 2).
     expect(body.items[0]).not.toHaveProperty("originalName");
     expect(JSON.stringify(body)).not.toContain("anna-berg-passport-scan");
     expect(Object.keys(body.items[0]).sort()).toEqual(ANONYMOUS_FIELDS);
@@ -307,6 +364,9 @@ describe("GET /api/public/media — no original key, no preview-less row (K3)", 
     expect(select).not.toHaveProperty("originalName");
     expect(select).not.toHaveProperty("key");
     expect(select).not.toHaveProperty("userId");
+    // Nor the preview's path, which embeds the uploader's id.
+    expect(select).not.toHaveProperty("previewKey");
+    expect(select.previewId).toBe(true);
   });
 
   it("still shows the owner their own filenames on the owner-scoped feed", async () => {
@@ -317,7 +377,11 @@ describe("GET /api/public/media — no original key, no preview-less row (K3)", 
     );
 
     expect(MEDIA_OWNER_SELECT).toHaveProperty("originalName", true);
+    expect(MEDIA_OWNER_SELECT).toHaveProperty("previewKey", true);
     expect(MEDIA_ANONYMOUS_SELECT).not.toHaveProperty("originalName");
+    expect(MEDIA_ANONYMOUS_SELECT).not.toHaveProperty("previewKey");
+    // Both audiences get the opaque handle; only the owner gets the path.
+    expect(MEDIA_ANONYMOUS_SELECT).toHaveProperty("previewId", true);
     // Anonymous must stay a strict subset of owner.
     for (const field of Object.keys(MEDIA_ANONYMOUS_SELECT)) {
       expect(MEDIA_OWNER_SELECT).toHaveProperty(field, true);
@@ -554,13 +618,42 @@ describe("GET /api/public/media — pagination contract", () => {
     expect(body.nextCursor).toBeNull();
   });
 
-  it("never reports hasMore without a usable cursor to go with it", async () => {
+  it("keeps paging when the defensive filter empties a page", async () => {
     // Pathological: the query hands back preview-less rows the where-clause
-    // should have excluded. The defensive filter drops them, leaving no
-    // cursor — so the handler must not still claim another page exists.
+    // should have excluded. The filter drops them all, so this page is empty
+    // — but the extra row says more exist, and a (createdAt, id) cursor can
+    // still name where to resume from. Reporting hasMore: false here would be
+    // a silent end-of-list in exactly the situation the filter exists for
+    // (ugcportal-r1d review round 2, finding 3).
     mediaFindManyMock.mockResolvedValue([
-      { id: "a", previewKey: null },
-      { id: "b", previewKey: null },
+      {
+        id: "a",
+        previewId: null,
+        createdAt: new Date("2026-09-24T10:00:00Z"),
+      },
+      {
+        id: "b",
+        previewId: null,
+        createdAt: new Date("2026-09-23T10:00:00Z"),
+      },
+    ]);
+
+    const body = await (await GET(request("?limit=1"))).json();
+
+    expect(body.items).toEqual([]);
+    expect(body.hasMore).toBe(true);
+    expect(Buffer.from(body.nextCursor, "base64url").toString("utf8")).toBe(
+      "2026-09-24T10:00:00.000Z|a",
+    );
+  });
+
+  it("reports no cursor when there genuinely is no further page", async () => {
+    mediaFindManyMock.mockResolvedValue([
+      {
+        id: "a",
+        previewId: null,
+        createdAt: new Date("2026-09-24T10:00:00Z"),
+      },
     ]);
 
     const body = await (await GET(request("?limit=1"))).json();
@@ -570,32 +663,33 @@ describe("GET /api/public/media — pagination contract", () => {
     expect(body.nextCursor).toBeNull();
   });
 
-  it("takes nextCursor from an emitted row, not a filtered-out one", async () => {
+  it("takes nextCursor from the last row read, including a filtered-out one", async () => {
     mediaFindManyMock.mockResolvedValue([
       {
         id: "a",
-        previewKey: "previews/user-1/a.webp",
+        previewId: "preview-a",
         createdAt: new Date("2026-09-24T10:00:00Z"),
       },
       {
         id: "b",
-        previewKey: null,
+        previewId: null,
         createdAt: new Date("2026-09-23T10:00:00Z"),
       },
       {
         id: "c",
-        previewKey: "previews/user-1/c.webp",
+        previewId: "preview-c",
         createdAt: new Date("2026-09-22T10:00:00Z"),
       },
     ]);
 
     const body = await (await GET(request("?limit=2"))).json();
 
-    // `b` is dropped by the filter; taking the position from it would report a
-    // row the caller never received as "where you got to" — the silent skip.
+    // `b` is dropped from the payload but is still a valid *position*: the
+    // next page resumes strictly after it, so `c` is not skipped and nothing
+    // is served twice.
     expect(body.items.map((i: { id: string }) => i.id)).toEqual(["a"]);
     expect(Buffer.from(body.nextCursor, "base64url").toString("utf8")).toBe(
-      "2026-09-24T10:00:00.000Z|a",
+      "2026-09-23T10:00:00.000Z|b",
     );
   });
 });
@@ -630,6 +724,10 @@ describe("GET /api/public/media — visibility is not sellability (K4)", () => {
 
     // And the query that produced it asked about visibility only.
     const where = mediaFindManyMock.mock.calls[0][0].where;
-    expect(Object.keys(where).sort()).toEqual(["previewKey", "publishedAt"]);
+    expect(Object.keys(where).sort()).toEqual([
+      "previewId",
+      "previewKey",
+      "publishedAt",
+    ]);
   });
 });

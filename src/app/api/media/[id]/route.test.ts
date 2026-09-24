@@ -46,6 +46,10 @@ const ownedMedia: MediaModel = {
   key: "media/user-a/abc-photo.png",
   // Since ugcportal-44q an image upload also stores a watermarked preview.
   previewKey: "previews/user-a/def-photo.webp",
+  // The opaque public handle for that preview (ugcportal-r1d). Set and
+  // nulled together with previewKey; the anonymous feed exposes this,
+  // never the key, because the key embeds the uploader's id.
+  previewId: "preview-abc",
   mimeType: "image/png",
   sizeBytes: 1024,
   originalName: "photo.png",
@@ -64,6 +68,7 @@ const ownedVideo: MediaModel = {
   kind: "VIDEO",
   key: "media/user-a/ghi-clip.mp4",
   previewKey: null,
+  previewId: null,
   mimeType: "video/mp4",
   originalName: "clip.mp4",
 };
@@ -322,6 +327,7 @@ describe("PATCH /api/media/[id] as the owner", () => {
         "kind",
         "mimeType",
         "originalName",
+        "previewId",
         "previewKey",
         // Added by ugcportal-r1d. A rename does not change it — see the
         // assertion below — but the projection reports it, because the

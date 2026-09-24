@@ -31,7 +31,10 @@ import { prisma } from "@/lib/prisma";
 const MEDIA_SHARED_SELECT = {
   id: true,
   kind: true,
-  previewKey: true,
+  // The opaque public handle for the watermarked preview — safe for anyone.
+  // Its storage path, `previewKey`, is owner-only and lives in the owner
+  // select below; see the note there and on the Media model.
+  previewId: true,
   mimeType: true,
   sizeBytes: true,
   createdAt: true,
@@ -49,29 +52,48 @@ const MEDIA_SHARED_SELECT = {
   // (ugcportal-71y's call), not the internal account id.
 } as const;
 
-/** Owner-facing: adds the filename, which only its uploader should see. */
+/** Owner-facing: adds the two fields only the row's own uploader may see. */
 export const MEDIA_OWNER_SELECT = {
   ...MEDIA_SHARED_SELECT,
   // `originalName` is uploader-supplied text. It is how an owner recognises
   // their own file in a list, so it belongs here — and nowhere else. See the
   // anonymous select below for why.
   originalName: true,
+  // `previewKey` is a storage path of the form `previews/{userId}/{uuid}`.
+  // Returning it to its own owner discloses nothing they do not already know:
+  // the embedded id is theirs. Returning it to anyone else discloses whose
+  // upload it is, which is why the anonymous select carries `previewId`
+  // instead. Never widen this one.
+  previewKey: true,
 } as const;
 
 /**
- * Anonymous-facing: the owner select minus `originalName`.
+ * Anonymous-facing: the owner select minus `originalName` and `previewKey`.
  *
- * Filenames are volunteered, not chosen for publication —
+ * Two separate withholdings, for the same underlying reason — an anonymous
+ * caller must not be able to attribute a gallery item to an account, or read
+ * text its uploader never meant to publish.
+ *
+ * `originalName`: filenames are volunteered, not chosen for publication —
  * `anna-berg-passport-scan.jpg`, `client-acme-draft-v3.png`. Before
  * ugcportal-r1d this column was only ever returned to the row's own owner;
  * shipping the public feed off a shared projection would have made it
- * world-readable for every published row as a side effect, which is exactly
- * the class of leak `userId` was withheld to avoid.
+ * world-readable for every published row as a side effect. The gallery does
+ * not need it, and it is not alt text either — a filename makes poor alt text,
+ * and if ugcportal-71y wants captions those should be a field the uploader
+ * knowingly fills in, not a string harvested from their local disk.
  *
- * The gallery does not need it. It is not alt text either — a filename makes
- * poor alt text, and if ugcportal-71y wants captions or accessible
- * descriptions those should be a field the uploader knowingly fills in, not a
- * string harvested from their local disk.
+ * `previewKey`: the storage path embeds the uploader's id
+ * (`previews/{userId}/{uuid}.webp`), so publishing it publishes the very thing
+ * withholding `userId` was meant to withhold — page the feed, split each key
+ * on "/", and you have an anonymous per-uploader index of the whole gallery.
+ * Withholding a value while publishing a derivation of it is not withholding
+ * it. `previewId` is exposed instead: an unrelated random id, with no
+ * derivation from the key, the user, or the row.
+ *
+ * Kept as an explicit list rather than a subtraction from the owner select, so
+ * a column added to the owner side does not silently arrive here too. Adding a
+ * field means choosing an audience.
  */
 export const MEDIA_ANONYMOUS_SELECT = MEDIA_SHARED_SELECT;
 
@@ -102,6 +124,7 @@ export function toOwnerMedia(media: MediaModel): OwnerMedia {
     id: media.id,
     kind: media.kind,
     previewKey: media.previewKey,
+    previewId: media.previewId,
     mimeType: media.mimeType,
     sizeBytes: media.sizeBytes,
     originalName: media.originalName,

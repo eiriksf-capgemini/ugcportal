@@ -218,6 +218,20 @@ export async function POST(request: Request) {
     ? `previews/${userId}/${randomUUID()}${PREVIEW_FILE_EXTENSION}`
     : null;
 
+  // The public handle for that preview, and a third independent UUID.
+  //
+  // `previewKey` embeds `userId` by construction, so it is owner-only: handing
+  // it to an anonymous caller would publish which account uploaded what, the
+  // exact capability withholding `userId` from the feed was meant to deny
+  // (ugcportal-r1d review, round 2). The anonymous feed exposes this instead.
+  //
+  // Uncorrelated with both other ids on purpose, for the same reason the
+  // preview's UUID is uncorrelated with the original's above: an opaque handle
+  // that can be transformed back into the thing it was meant to hide is not
+  // opaque. Nothing about the row — not the user, not the key, not the
+  // filename — is an input here.
+  const previewId = preview ? randomUUID() : null;
+
   // Track what actually made it into the bucket so the compensating delete
   // below covers both objects, not just the original.
   const storedKeys: string[] = [];
@@ -251,6 +265,10 @@ export async function POST(request: Request) {
         kind: validation.kind,
         key,
         previewKey,
+        // Set together with previewKey and null together with it, so "has a
+        // watermarked preview" stays one fact rather than two that can
+        // disagree.
+        previewId,
         mimeType: file.type,
         sizeBytes: file.size,
         // Repaired, not rejected — see sanitizeOriginalName in
@@ -301,7 +319,7 @@ export async function POST(request: Request) {
  * rather than querying Media directly.
  *
  * Two rules hold the guarantee up, and both live in listMedia():
- *   1. only rows that have a previewKey are returned, so anything without a
+ *   1. only rows that have a preview are returned, so anything without a
  *      protected representation (today: every VIDEO) is invisible; and
  *   2. the response goes through MEDIA_OWNER_SELECT, which has no `key` in
  *      it — the paid original is never selected, mapped, or serialised.
@@ -325,7 +343,7 @@ export async function GET(request: Request) {
 
   const result = await listMedia(
     request.url,
-    { userId, previewKey: { not: null } },
+    { userId, previewKey: { not: null }, previewId: { not: null } },
     // The owner's own filenames. The anonymous feed uses the narrower
     // MEDIA_ANONYMOUS_SELECT — see src/lib/media-access.ts.
     MEDIA_OWNER_SELECT,

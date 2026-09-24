@@ -90,6 +90,21 @@ model VerificationToken {
 // poster frames are deferred, see ugcportal-pmb) and because rows created
 // before this column existed have none either.
 //
+// `previewId` is the *public handle* for that preview, and exists because a
+// storage path is not a safe public identifier. `previewKey` is built as
+// `previews/{userId}/{uuid}.webp`, so handing it to an anonymous caller
+// publishes the uploader's account id in plain text — page the public feed,
+// split each key on "/", and you have a per-uploader index of the whole
+// gallery. That is the exact capability withholding `userId` was meant to
+// deny (ugcportal-r1d review, round 2), and it is the same class of mistake
+// ugcportal-44q already avoided one field over when it made the preview's
+// UUID uncorrelated with the original's.
+//
+// So: `previewKey` (a storage path, owner-only) and `previewId` (an opaque
+// random id, safe for anyone) are deliberately separate values with no
+// derivation between them. Set together at upload and null together, so
+// "has a watermarked preview" is one fact, not two that can disagree.
+//
 // `publishedAt` is the visibility switch (ugcportal-r1d): null means the row
 // is private to its owner, a timestamp means it is in the public listing and
 // records since when. Nullable with no default, so the migration that adds it
@@ -106,6 +121,7 @@ model Media {
   kind         MediaKind
   key          String    @unique
   previewKey   String?   @unique
+  previewId    String?   @unique
   mimeType     String
   sizeBytes    Int
   originalName String

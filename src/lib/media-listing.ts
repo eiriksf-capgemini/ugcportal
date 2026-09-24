@@ -24,11 +24,15 @@ const MAX_LISTING_LIMIT = 100;
 /**
  * What a listing is allowed to filter by.
  *
- * `previewKey` is not optional: every listing must exclude rows that have no
- * watermarked representation, so the only object any feed can ever name is the
- * preview and never `key`, the paid original (ugcportal-5d6). Making it a
- * required property means a future third caller cannot forget it — it will not
- * compile.
+ * `previewKey` and `previewId` are both required: every listing must exclude
+ * rows that have no watermarked representation, so the only object any feed
+ * can ever name is the preview and never `key`, the paid original
+ * (ugcportal-5d6). Making them required properties means a future third caller
+ * cannot forget either — it will not compile.
+ *
+ * Both, rather than one: they are written together and nulled together, so a
+ * row failing either check is a row whose preview state is inconsistent, and
+ * excluding it is the fail-closed answer.
  *
  * `publishedAt` is how the public feed opts in to visible-only rows; the
  * owner's own view leaves it off precisely because an owner must keep seeing
@@ -38,6 +42,7 @@ export type MediaListingScope = {
   userId?: string;
   publishedAt?: { not: null };
   previewKey: { not: null };
+  previewId: { not: null };
 };
 
 /**
@@ -48,11 +53,11 @@ export type MediaListingSelect =
   | typeof MEDIA_OWNER_SELECT
   | typeof MEDIA_ANONYMOUS_SELECT;
 
-/** A listing row, narrowed so `previewKey` is non-nullable for the caller. */
+/** A listing row, narrowed so `previewId` is non-nullable for the caller. */
 export type MediaListingItem<TSelect extends MediaListingSelect> = Pick<
   MediaModel,
   keyof TSelect & keyof MediaModel
-> & { previewKey: string };
+> & { previewId: string };
 
 export type MediaListingPage<TSelect extends MediaListingSelect> = {
   items: MediaListingItem<TSelect>[];
@@ -200,24 +205,34 @@ export async function listMedia<TSelect extends MediaListingSelect>(
     // which it cannot narrow back to the caller's concrete TSelect. The narrow
     // is safe because TSelect *is* the select the query just ran with; the
     // `where`/`select` above are the only things that decide what comes back.
-  })) as (MediaListingItem<TSelect> & { previewKey: string | null })[];
+  })) as (MediaListingItem<TSelect> & { previewId: string | null })[];
 
   const page = rows.length > limit ? rows.slice(0, limit) : rows;
 
-  // The where-clause already excludes them, but previewKey is still typed
+  // The where-clause already excludes them, but previewId is still typed
   // `string | null`; narrowing here makes the emitted shape non-nullable and
   // means a future query change can't quietly start emitting preview-less rows.
+  //
+  // Narrowed on `previewId` rather than `previewKey` because that is the field
+  // both projections carry — the anonymous select deliberately has no
+  // previewKey, and `undefined !== null` is true, so a previewKey check would
+  // have silently passed every anonymous row through while looking like a
+  // guard.
   const items = page.filter(
-    (row): row is MediaListingItem<TSelect> => row.previewKey !== null,
+    (row): row is MediaListingItem<TSelect> => row.previewId !== null,
   );
 
-  // Built from `items`, not `page`: a cursor taken from a row the filter
-  // dropped would still be a valid position, but reporting a row the caller
-  // never received as "where you got to" is how a page gets silently skipped.
-  // And if the filter emptied the page there is no position to give, so we
-  // must not claim there is more — a caller that sees hasMore with no cursor
-  // either loops forever or stalls.
-  const last = rows.length > limit ? items.at(-1) : undefined;
+  // Built from `page`, not `items`.
+  //
+  // When the cursor was a row reference this had to come from an emitted row,
+  // since naming a row the caller never received meant the next request's
+  // where-clause would exclude it too and a page would be silently skipped.
+  // A (createdAt, id) position has no such requirement: it is a place in the
+  // ordering, and a row dropped by the defensive filter still marks a perfectly
+  // valid one. Taking it from `items` instead would mean a page whose rows were
+  // *all* dropped reports hasMore: false — a silent end-of-list, in exactly the
+  // situation the defensive filter exists to cover.
+  const last = rows.length > limit ? page.at(-1) : undefined;
   const nextCursor = last ? encodeMediaCursor(last) : null;
 
   return {
