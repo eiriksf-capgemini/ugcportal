@@ -39,28 +39,32 @@ function cpu(cpus: number): CpuBudget {
  * The reference table, written out as literal expected values.
  *
  * Deliberately not computed from the module's own constants. The previous
- * version of the containment test rebuilt projectedPeakBytes with the same
+ * version of the containment test rebuilt projectedGatedPeakBytes with the same
  * expression the implementation uses, so when that expression was wrong —
  * it charged the request body to queued callers but not to running ones —
  * the test agreed with it and passed. A hand-written table cannot agree with
  * a formula it does not contain: if the derivation changes, these have to be
  * re-derived by hand and justified, which is the point.
  *
- * Worked by hand from: 320 MB baseline, 148 MB per in-flight upload (128 MB
- * decode + 20 MB body), 20 MB per queued body, ceiling 3.
- *   512 -> 192 spendable; 192/148 = 1 running (44 left -> 2 queued);
- *          320 + 148 + 40  = 508
- *   768 -> 448 spendable; 448/148 = 3 running (4 left  -> 0 queued);
- *          320 + 444 + 0   = 764
- *  1024 -> 704 spendable; capped at 3 running (260 left -> 13, capped 12);
- *          320 + 444 + 240 = 1004
- *  2048 -> ceiling-bound, identical to 1024
+ * Worked by hand from: 15% headroom off the budget first, then 320 MB
+ * baseline, then 148 MB per in-flight upload (128 MB decode + 20 MB body),
+ * then 20 MB per queued body, ceiling 3, queue capped at 4 per slot.
+ *
+ *   512 -> usable 435.2; spendable 115.2; 115.2/148 = 0 -> clamped to 1
+ *          running, nothing left to queue; 320 + 148       =  468, and
+ *          468 > 435.2, so this container does NOT fit
+ *   768 -> usable 652.8; spendable 332.8; 332.8/148 = 2 running
+ *          (36.8 left -> 1 queued);       320 + 296 + 20    =  636
+ *  1024 -> usable 870.4; spendable 550.4; 550.4/148 = 3, at the ceiling
+ *          (106.4 left -> 5 queued);      320 + 444 + 100   =  864
+ *  2048 -> usable 1740.8; ceiling-bound at 3 running, queue capped at 12;
+ *                                         320 + 444 + 240   = 1004
  */
 const REFERENCE_TABLE = [
-  { budgetMiB: 512, limit: 1, queueLimit: 2, projectedMiB: 508 },
-  { budgetMiB: 768, limit: 3, queueLimit: 0, projectedMiB: 764 },
-  { budgetMiB: 1024, limit: 3, queueLimit: 12, projectedMiB: 1004 },
-  { budgetMiB: 2048, limit: 3, queueLimit: 12, projectedMiB: 1004 },
+  { budgetMiB: 512, limit: 1, queueLimit: 0, projectedMiB: 468, fits: false },
+  { budgetMiB: 768, limit: 2, queueLimit: 1, projectedMiB: 636, fits: true },
+  { budgetMiB: 1024, limit: 3, queueLimit: 5, projectedMiB: 864, fits: true },
+  { budgetMiB: 2048, limit: 3, queueLimit: 12, projectedMiB: 1004, fits: true },
 ] as const;
 
 describe("resolveWatermarkConcurrencySettings", () => {
@@ -78,9 +82,42 @@ describe("resolveWatermarkConcurrencySettings", () => {
         budgetMiB: row.budgetMiB,
         limit: settings.limit,
         queueLimit: settings.queueLimit,
-        projectedMiB: settings.projectedPeakBytes / MiB,
+        projectedMiB: settings.projectedGatedPeakBytes / MiB,
+        fits: settings.fitsBudget,
       }).toEqual(row);
     }
+  });
+
+  it("leaves headroom rather than spending the budget to the last byte", () => {
+    // Round-5 finding 4. Before this, step 3 gave every remaining byte to
+    // queue depth and the recommended 1 GB configuration landed at
+    // 1004/1024 MB — 98% of the number the kernel kills on, defended by a
+    // per-operation figure that has never run on the alpine image.
+    for (const row of REFERENCE_TABLE) {
+      const settings = resolveWatermarkConcurrencySettings(
+        {},
+        budget(row.budgetMiB * MiB),
+        cpu(8),
+      );
+      expect(settings.usableBudgetBytes).toBeLessThan(settings.budgetBytes);
+      if (settings.fitsBudget) {
+        // The headroom is real: what is committed stays clear of the cliff.
+        const utilisation =
+          settings.projectedGatedPeakBytes / settings.budgetBytes;
+        expect(utilisation).toBeLessThan(0.9);
+      }
+    }
+
+    // And the headroom at the recommended size covers at least one whole
+    // unaccounted upload, which is the unit the under-estimates come in.
+    const recommended = resolveWatermarkConcurrencySettings(
+      {},
+      budget(1024 * MiB),
+      cpu(8),
+    );
+    expect(
+      recommended.budgetBytes - recommended.usableBudgetBytes,
+    ).toBeGreaterThan(IN_FLIGHT_BYTES_PER_UPLOAD);
   });
 
   it("charges the request body to running callers, not only queued ones", () => {
@@ -102,8 +139,8 @@ describe("resolveWatermarkConcurrencySettings", () => {
     );
     // 320 + 3 x 148, with no queue at all: every byte here is in-flight, so
     // an accounting that skipped running bodies would report 704 MB.
-    expect(settings.projectedPeakBytes).toBe(764 * MiB);
-    expect(settings.projectedPeakBytes).toBeGreaterThan(
+    expect(settings.projectedGatedPeakBytes).toBe(764 * MiB);
+    expect(settings.projectedGatedPeakBytes).toBeGreaterThan(
       PREVIEW_PROCESS_BASELINE_BYTES + 3 * PREVIEW_BYTES_PER_OPERATION,
     );
   });
@@ -112,28 +149,32 @@ describe("resolveWatermarkConcurrencySettings", () => {
     // The property the reference table is a sample of: across the whole
     // plausible range, what the process commits to never exceeds what the
     // kernel will kill it for.
-    for (const bytes of [512 * MiB, 640 * MiB, 768 * MiB, GiB, 2 * GiB, 8 * GiB]) {
+    // Every size at or above the viable floor; below it no configuration
+    // fits and that is reported rather than hidden (see the floor test).
+    for (const bytes of [576 * MiB, 640 * MiB, 768 * MiB, GiB, 2 * GiB, 8 * GiB]) {
       const settings = resolveWatermarkConcurrencySettings(
         {},
         budget(bytes),
         cpu(8),
       );
-      expect(settings.projectedPeakBytes).toBeLessThanOrEqual(bytes);
+      expect(settings.projectedGatedPeakBytes).toBeLessThanOrEqual(
+        settings.usableBudgetBytes,
+      );
       expect(settings.fitsBudget).toBe(true);
     }
   });
 
   it("shrinks the queue rather than the limit when memory is tight", () => {
-    // 512 MB leaves 44 MB after one in-flight upload: two queued bodies, not
-    // the four a fixed 4x multiple would have handed out.
+    // 640 MB affords one in-flight upload and 76 MB after it: three queued
+    // bodies, not the four a fixed 4x multiple would have handed out.
     const settings = resolveWatermarkConcurrencySettings(
       {},
-      budget(512 * MiB),
+      budget(640 * MiB),
       cpu(8),
     );
     expect(settings.limit).toBe(1);
-    expect(settings.queueLimit).toBe(2);
-    expect(settings.projectedPeakBytes).toBeLessThanOrEqual(512 * MiB);
+    expect(settings.queueLimit).toBe(3);
+    expect(settings.projectedGatedPeakBytes).toBe(528 * MiB);
   });
 
   it("drops to pure shedding when nothing is left for a queue", () => {
@@ -158,7 +199,7 @@ describe("resolveWatermarkConcurrencySettings", () => {
     expect(settings.limit).toBe(1);
     expect(settings.queueLimit).toBe(0);
     expect(settings.fitsBudget).toBe(false);
-    expect(settings.projectedPeakBytes).toBeGreaterThan(256 * MiB);
+    expect(settings.projectedGatedPeakBytes).toBeGreaterThan(256 * MiB);
   });
 
   it("is bounded by the libuv worker pool, not by memory, on a big container", () => {
@@ -207,6 +248,20 @@ describe("resolveWatermarkConcurrencySettings", () => {
     expect(settings.clamped[0]).toContain("UV_THREADPOOL_SIZE");
   });
 
+  it("does not tell the operator to raise a pool that is not what bound them", () => {
+    // Round-5 finding 1. With a 32-worker pool the ceiling is the module's
+    // own cap of 8, and "raise UV_THREADPOOL_SIZE" would send them round a
+    // loop that can never change the answer.
+    const settings = resolveWatermarkConcurrencySettings(
+      { WATERMARK_MAX_CONCURRENCY: "16", UV_THREADPOOL_SIZE: "32" },
+      budget(64 * GiB),
+      cpu(32),
+    );
+    expect(settings.limit).toBe(MAX_DERIVED_CONCURRENCY);
+    expect(settings.clamped[0]).toContain("MAX_DERIVED_CONCURRENCY");
+    expect(settings.clamped[0]).toContain("will not lift it");
+  });
+
   it("honours WATERMARK_MAX_CONCURRENCY when the pool can back it", () => {
     const settings = resolveWatermarkConcurrencySettings(
       { WATERMARK_MAX_CONCURRENCY: "6", UV_THREADPOOL_SIZE: "8" },
@@ -249,7 +304,7 @@ describe("resolveWatermarkConcurrencySettings", () => {
     );
     expect(settings.queueLimit).toBe(512);
     expect(settings.clamped).toEqual([]);
-    expect(settings.projectedPeakBytes).toBe(
+    expect(settings.projectedGatedPeakBytes).toBe(
       PREVIEW_PROCESS_BASELINE_BYTES +
         3 * IN_FLIGHT_BYTES_PER_UPLOAD +
         512 * UPLOAD_BODY_BYTES,
@@ -273,9 +328,12 @@ describe("resolveWatermarkConcurrencySettings", () => {
     expect(settings.budgetBytes).toBe(512 * MiB);
     expect(settings.budgetSource).toBe("env");
     expect(settings.limit).toBe(1);
-    expect(settings.queueLimit).toBe(2);
-    expect(settings.projectedPeakBytes).toBe(508 * MiB);
-    expect(settings.fitsBudget).toBe(true);
+    expect(settings.queueLimit).toBe(0);
+    expect(settings.projectedGatedPeakBytes).toBe(468 * MiB);
+    // And the answer it now escapes *to* is "this container is too small",
+    // which is the useful one. Sized from the 64 GB host it would have
+    // derived 3 previews and a 12-deep queue and called that a fit.
+    expect(settings.fitsBudget).toBe(false);
   });
 
   it("reports over-budget rather than shrinking an explicit limit", () => {
@@ -292,7 +350,7 @@ describe("resolveWatermarkConcurrencySettings", () => {
     expect(settings.queueLimit).toBe(0);
     expect(settings.clamped).toEqual([]);
     expect(settings.fitsBudget).toBe(false);
-    expect(settings.projectedPeakBytes).toBe(764 * MiB);
+    expect(settings.projectedGatedPeakBytes).toBe(764 * MiB);
   });
 
   it("will not accept a budget larger than the machine", () => {
@@ -373,24 +431,39 @@ describe("resolveWatermarkConcurrencySettings", () => {
 
 describe("resolveConcurrencyCeiling", () => {
   it("leaves one libuv worker free for dns and fs", () => {
-    expect(resolveConcurrencyCeiling({})).toBe(
-      LIBUV_DEFAULT_THREADPOOL_SIZE - 1,
-    );
-    expect(resolveConcurrencyCeiling({ UV_THREADPOOL_SIZE: "8" })).toBe(7);
+    expect(resolveConcurrencyCeiling({})).toEqual({
+      value: LIBUV_DEFAULT_THREADPOOL_SIZE - 1,
+      boundBy: "libuv-pool",
+    });
+    expect(resolveConcurrencyCeiling({ UV_THREADPOOL_SIZE: "8" })).toEqual({
+      value: 7,
+      boundBy: "libuv-pool",
+    });
   });
 
   it("never goes below 1, even with a one-worker pool", () => {
-    expect(resolveConcurrencyCeiling({ UV_THREADPOOL_SIZE: "1" })).toBe(1);
+    expect(resolveConcurrencyCeiling({ UV_THREADPOOL_SIZE: "1" }).value).toBe(1);
   });
 
-  it("stays under the absolute ceiling however big the pool is", () => {
-    expect(resolveConcurrencyCeiling({ UV_THREADPOOL_SIZE: "128" })).toBe(
-      MAX_DERIVED_CONCURRENCY,
-    );
+  it("reports the absolute cap as the binding term when it is", () => {
+    // Round-5 finding 1: which term bound decides what advice the operator
+    // gets, and "raise UV_THREADPOOL_SIZE" is advice that cannot work here.
+    expect(resolveConcurrencyCeiling({ UV_THREADPOOL_SIZE: "128" })).toEqual({
+      value: MAX_DERIVED_CONCURRENCY,
+      boundBy: "absolute-cap",
+    });
+    // Exactly at the boundary the cap is what binds, since raising the pool
+    // further changes nothing.
+    expect(
+      resolveConcurrencyCeiling({ UV_THREADPOOL_SIZE: "9" }).boundBy,
+    ).toBe("absolute-cap");
+    expect(
+      resolveConcurrencyCeiling({ UV_THREADPOOL_SIZE: "8" }).boundBy,
+    ).toBe("libuv-pool");
   });
 
   it("ignores a junk UV_THREADPOOL_SIZE", () => {
-    expect(resolveConcurrencyCeiling({ UV_THREADPOOL_SIZE: "nope" })).toBe(
+    expect(resolveConcurrencyCeiling({ UV_THREADPOOL_SIZE: "nope" }).value).toBe(
       LIBUV_DEFAULT_THREADPOOL_SIZE - 1,
     );
   });
@@ -406,10 +479,22 @@ describe("describeWatermarkConcurrency", () => {
       ),
     );
     expect(line).toContain("limit=3 (derived)");
-    expect(line).toContain("queue=12");
+    expect(line).toContain("queue=5");
     expect(line).toContain("memoryBudget=1024 MB (host)");
     expect(line).toContain("cpuBudget=8 (host)");
-    expect(line).toContain("projectedPeak=1004 MB");
+    expect(line).toContain("usableBudget=870 MB");
+    expect(line).toContain("projectedGatedPeak=864 MB");
+  });
+
+  it("says 'gated' so the figure is not read as a whole-process bound", () => {
+    // The label carries the caveat, because the log line is where an
+    // operator meets this number. What it excludes — shed uploads, video,
+    // oversized-then-rejected bodies — is ugcportal-05b.
+    const line = describeWatermarkConcurrency(
+      resolveWatermarkConcurrencySettings({}, budget(GiB), cpu(8)),
+    );
+    expect(line).toContain("projectedGatedPeak=");
+    expect(line).not.toMatch(/projectedPeak=/);
   });
 });
 
@@ -545,6 +630,60 @@ describe("generateWatermarkedPreview under concurrency", () => {
     expect(settled.filter((r) => r.status === "fulfilled").length).toBe(
       settled.length - rejected.length,
     );
+  });
+
+  it("logs shedding distinguishably from a broken runtime (K2)", async () => {
+    // Round-5 finding 2. The route rethrows WatermarkOverloadedError into
+    // console.error("[media] watermark service unavailable") — the message
+    // written for the fontless-runtime case, where every upload is broken
+    // and someone should be paged. Shedding is routine on a small container,
+    // so without a line of its own the two are byte-identical in the logs
+    // and alerting cannot tell normal operation from an outage.
+    process.env.WATERMARK_MAX_CONCURRENCY = "1";
+    process.env.WATERMARK_QUEUE_LIMIT = "0";
+    resetWatermarkConcurrencyGate();
+    warnSpy.mockClear();
+
+    const input = await source();
+    const settled = await Promise.allSettled(
+      Array.from({ length: 6 }, () => generateWatermarkedPreview(input)),
+    );
+    expect(settled.some((r) => r.status === "rejected")).toBe(true);
+
+    const shedLines = warnSpy.mock.calls
+      .map(([line]) => line as string)
+      .filter((line) => line.includes("shed an upload"));
+    expect(shedLines).toHaveLength(1);
+    expect(shedLines[0]).toContain("queue-full");
+    expect(shedLines[0]).toContain("not a broken runtime");
+    // Names the follow-up that owns the status code, so the 500 a caller
+    // still sees is traceable from the log rather than mysterious.
+    expect(shedLines[0]).toContain("ugcportal-u7g");
+  });
+
+  it("throttles the shed log instead of adding a log storm to a load problem", async () => {
+    process.env.WATERMARK_MAX_CONCURRENCY = "1";
+    process.env.WATERMARK_QUEUE_LIMIT = "0";
+    resetWatermarkConcurrencyGate();
+    warnSpy.mockClear();
+
+    const input = await source();
+    // Two separate bursts, well inside the throttle interval.
+    await Promise.allSettled(
+      Array.from({ length: 6 }, () => generateWatermarkedPreview(input)),
+    );
+    await Promise.allSettled(
+      Array.from({ length: 6 }, () => generateWatermarkedPreview(input)),
+    );
+
+    const shedLines = warnSpy.mock.calls
+      .map(([line]) => line as string)
+      .filter((line) => line.includes("shed an upload"));
+    // One line total, and it accounts for the ones it swallowed rather than
+    // dropping them silently.
+    expect(shedLines).toHaveLength(1);
+    const stats = watermarkConcurrencyStats();
+    expect(stats.shed).toBeGreaterThan(1);
   });
 
   it("gives up on a queued caller at the timeout instead of hanging (K2)", async () => {

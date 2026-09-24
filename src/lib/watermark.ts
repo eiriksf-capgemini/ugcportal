@@ -212,6 +212,33 @@ export const DEFAULT_QUEUE_TIMEOUT_MS = 10_000;
 export const MAX_SHARP_THREADS_PER_OPERATION = 4;
 
 /**
+ * Fraction of the memory budget left unspent.
+ *
+ * The budget arithmetic is only as good as PREVIEW_BYTES_PER_OPERATION, and
+ * that figure is a darwin measurement that has never run on the alpine image
+ * this ships in. Spending the budget to the last byte turns any under-
+ * estimate straight into the OOM kill this whole change exists to replace
+ * with shedding — and the derivation *would* spend it all, because step 3
+ * gives every remaining byte to queue depth. Before this, the recommended
+ * 1 GB configuration sat at 1004/1024 MB: 98% of the number the kernel kills
+ * on, defended by an estimate.
+ *
+ * 15% is chosen so the headroom at the recommended container size (~154 MB of
+ * 1 GB) is larger than one whole in-flight upload (148 MB). That is the unit
+ * the under-estimates come in: musl's allocator fragmenting more than
+ * darwin's, RSS not being returned promptly between operations, or one upload
+ * the gate is not accounting for (see the note on projectedGatedPeakBytes).
+ * It absorbs at least one of those rather than being a round number.
+ */
+export const BUDGET_HEADROOM_FRACTION = 0.15;
+
+/** Which term bound {@link resolveConcurrencyCeiling}'s answer. */
+export interface ConcurrencyCeiling {
+  value: number;
+  boundBy: "libuv-pool" | "absolute-cap";
+}
+
+/**
  * Longest wait an operator may configure for a queued upload.
  *
  * The queue's memory cost is bounded by its depth, not by how long anyone
@@ -244,7 +271,7 @@ export const MAX_QUEUE_TIMEOUT_MS = 120_000;
 // describing reality); WATERMARK_QUEUE_TIMEOUT_MS to MAX_QUEUE_TIMEOUT_MS
 // (past it, "bounded wait" stops being true). WATERMARK_QUEUE_LIMIT is *not*
 // clamped: its only cost is memory, and memory is exactly what
-// projectedPeakBytes/fitsBudget already tell the truth about.
+// projectedGatedPeakBytes/fitsBudget already tell the truth about.
 //
 // The consequence to keep in mind: `fitsBudget` is an honest statement about
 // the configuration that is actually in force, including overrides, and never
@@ -281,19 +308,27 @@ export const MAX_QUEUE_TIMEOUT_MS = 120_000;
 
 /**
  * Smallest memory budget in which the gate can honour its own arithmetic:
- * the baseline plus one upload being processed (its body and its decode).
- * Currently 468 MB. Below this the limit is clamped up to 1 — a gate that
- * admits nothing is not an improvement on an OOM — and the configuration is,
- * by its own reckoning, over budget, which
- * {@link resolveWatermarkConcurrencySettings} reports via `fitsBudget` and
- * getGate() warns about.
+ * the baseline plus one upload being processed (its body and its decode),
+ * grossed up by {@link BUDGET_HEADROOM_FRACTION} so it is a floor on the
+ * budget rather than on the spend. Currently ~551 MB.
+ *
+ * Below this the limit is clamped up to 1 — a gate that admits nothing is
+ * not an improvement on an OOM — and the configuration is, by its own
+ * reckoning, over budget, which {@link resolveWatermarkConcurrencySettings}
+ * reports via `fitsBudget` and getGate() warns about. Note that this moved
+ * up when the headroom was introduced: a 512 MB container used to be
+ * reported as fitting, at 91% utilisation defended by an unvalidated
+ * estimate. It now reports that it does not fit, which is the more useful
+ * answer even though it is the less flattering one.
  *
  * Note this is a floor on the *arithmetic*, not a recommendation. See the
  * reference table on resolveWatermarkConcurrencySettings for the practical
  * one, which is a good deal higher.
  */
-export const MIN_VIABLE_BUDGET_BYTES =
-  PREVIEW_PROCESS_BASELINE_BYTES + IN_FLIGHT_BYTES_PER_UPLOAD;
+export const MIN_VIABLE_BUDGET_BYTES = Math.ceil(
+  (PREVIEW_PROCESS_BASELINE_BYTES + IN_FLIGHT_BYTES_PER_UPLOAD) /
+    (1 - BUDGET_HEADROOM_FRACTION),
+);
 
 /**
  * Just the variables this module reads.
@@ -326,9 +361,31 @@ export interface WatermarkConcurrencySettings {
   cpus: number;
   cpuSource: CpuBudget["source"];
   limitSource: "env" | "derived";
-  /** Worst-case resident memory this configuration can reach. */
-  projectedPeakBytes: number;
-  /** False when `projectedPeakBytes` exceeds the budget; see MIN_VIABLE_BUDGET_BYTES. */
+  /**
+   * The part of the budget the derivation is allowed to spend:
+   * `budgetBytes` less {@link BUDGET_HEADROOM_FRACTION}.
+   */
+  usableBudgetBytes: number;
+  /**
+   * Worst-case resident memory of the uploads **this gate is holding** —
+   * every running and queued caller's body, every running caller's decode,
+   * plus the process baseline.
+   *
+   * Named "gated" because that is the whole of what it bounds, and the
+   * unqualified version of this claim was wrong. The route buffers each
+   * request body *before* calling in, so uploads the gate has not admitted
+   * are not counted and are not bounded by anything: 60 concurrent 10 MB
+   * POSTs on the recommended configuration are 15 admitted or queued and 45
+   * shed, but all 60 bodies are resident at the moment the shed decision is
+   * taken. Video uploads and oversized-then-rejected bodies are outside it
+   * too. Bounding the upload path as a whole — including the shed-image case
+   * this gate itself creates — is ugcportal-05b.
+   */
+  projectedGatedPeakBytes: number;
+  /**
+   * False when `projectedGatedPeakBytes` exceeds `usableBudgetBytes`. Read
+   * it as "the gated part fits, with headroom", not "the process fits".
+   */
   fitsBudget: boolean;
   /**
    * One entry per environment override that was reduced, explaining which and
@@ -386,10 +443,16 @@ function nonNegativeInt(raw: string | undefined): number | undefined {
  */
 export function resolveConcurrencyCeiling(
   env: WatermarkConcurrencyEnv = process.env,
-): number {
+): ConcurrencyCeiling {
   const poolSize =
     positiveInt(env.UV_THREADPOOL_SIZE) ?? LIBUV_DEFAULT_THREADPOOL_SIZE;
-  return Math.min(MAX_DERIVED_CONCURRENCY, Math.max(1, poolSize - 1));
+  const fromPool = Math.max(1, poolSize - 1);
+  // Which term won matters to the operator, not just to us: told "raise
+  // UV_THREADPOOL_SIZE" when the absolute cap is what bound them, they would
+  // raise it, redeploy, and get the same number back.
+  return fromPool >= MAX_DERIVED_CONCURRENCY
+    ? { value: MAX_DERIVED_CONCURRENCY, boundBy: "absolute-cap" }
+    : { value: fromPool, boundBy: "libuv-pool" };
 }
 
 /**
@@ -544,7 +607,13 @@ export function resolveWatermarkConcurrencySettings(
     }
   }
 
-  const spendable = budgetBytes - PREVIEW_PROCESS_BASELINE_BYTES;
+  // Headroom comes off before anything is allocated, so the derivation
+  // cannot spend it: see BUDGET_HEADROOM_FRACTION for why an estimate-backed
+  // budget must not be spent to the last byte.
+  const usableBudgetBytes = Math.floor(
+    budgetBytes * (1 - BUDGET_HEADROOM_FRACTION),
+  );
+  const spendable = usableBudgetBytes - PREVIEW_PROCESS_BASELINE_BYTES;
 
   // 2. The limit. An explicit value wins over the memory derivation but not
   //    over the libuv pool, which is a property of the runtime rather than
@@ -555,14 +624,16 @@ export function resolveWatermarkConcurrencySettings(
   let limit: number;
   if (limitOverride === undefined) {
     limit = Math.min(
-      ceiling,
+      ceiling.value,
       Math.max(1, Math.floor(spendable / IN_FLIGHT_BYTES_PER_UPLOAD)),
     );
   } else {
-    limit = Math.min(limitOverride, ceiling);
+    limit = Math.min(limitOverride, ceiling.value);
     if (limit !== limitOverride) {
       clamped.push(
-        `WATERMARK_MAX_CONCURRENCY=${limitOverride} clamped to ${limit}: one fewer than the libuv worker pool, which is all that can actually run at once (raise UV_THREADPOOL_SIZE in the container environment — not in .env — to lift it)`,
+        ceiling.boundBy === "libuv-pool"
+          ? `WATERMARK_MAX_CONCURRENCY=${limitOverride} clamped to ${limit}: one fewer than the libuv worker pool, which is all that can actually run at once (raise UV_THREADPOOL_SIZE in the container environment — not in .env — to lift it)`
+          : `WATERMARK_MAX_CONCURRENCY=${limitOverride} clamped to ${limit}: MAX_DERIVED_CONCURRENCY, this module's absolute ceiling — raising UV_THREADPOOL_SIZE will not lift it`,
       );
     }
   }
@@ -597,7 +668,7 @@ export function resolveWatermarkConcurrencySettings(
     );
   }
 
-  const projectedPeakBytes =
+  const projectedGatedPeakBytes =
     PREVIEW_PROCESS_BASELINE_BYTES +
     limit * IN_FLIGHT_BYTES_PER_UPLOAD +
     queueLimit * UPLOAD_BODY_BYTES;
@@ -612,8 +683,9 @@ export function resolveWatermarkConcurrencySettings(
     cpus: cpu.cpus,
     cpuSource: cpu.source,
     limitSource: limitOverride === undefined ? "derived" : "env",
-    projectedPeakBytes,
-    fitsBudget: projectedPeakBytes <= budgetBytes,
+    usableBudgetBytes,
+    projectedGatedPeakBytes,
+    fitsBudget: projectedGatedPeakBytes <= usableBudgetBytes,
     clamped,
   };
 }
@@ -644,7 +716,8 @@ export function describeWatermarkConcurrency(
     `libvipsThreadsPerPreview=${settings.sharpThreads}`,
     `memoryBudget=${mib(settings.budgetBytes)} (${settings.budgetSource})`,
     `cpuBudget=${settings.cpus} (${settings.cpuSource})`,
-    `projectedPeak=${mib(settings.projectedPeakBytes)}`,
+    `usableBudget=${mib(settings.usableBudgetBytes)}`,
+    `projectedGatedPeak=${mib(settings.projectedGatedPeakBytes)}`,
   ].join(" ");
 }
 
@@ -660,7 +733,9 @@ function logConcurrencySettings(settings: WatermarkConcurrencySettings): void {
     );
   }
   if (!settings.fitsBudget) {
-    const overBy = mib(settings.projectedPeakBytes - settings.budgetBytes);
+    const overBy = mib(
+      settings.projectedGatedPeakBytes - settings.usableBudgetBytes,
+    );
     // Two quite different causes, and naming the wrong one sends the
     // operator to the wrong knob during exactly the incident this line
     // exists for. The budget being too small for a single upload is not
@@ -735,6 +810,8 @@ export function watermarkConcurrencyStats() {
 export function resetWatermarkConcurrencyGate(): void {
   gate = undefined;
   gateSettings = undefined;
+  shedLogLastAt = 0;
+  shedLogSuppressed = 0;
 }
 
 // Fallback when WATERMARK_TEXT is unset. Documented in env.example.
@@ -1187,6 +1264,7 @@ export async function generateWatermarkedPreview(
     );
   } catch (error) {
     if (error instanceof ConcurrencyLimitError) {
+      logShedUpload(error);
       throw new WatermarkOverloadedError(
         "Too many previews are being generated right now",
         {
@@ -1198,6 +1276,65 @@ export async function generateWatermarkedPreview(
     }
     throw error;
   }
+}
+
+/**
+ * Shortest interval between shed log lines; the rest are counted and
+ * reported on the next one.
+ *
+ * Shedding fires precisely when the service is busiest, so a line per
+ * rejection would add a log storm to a load problem. The first shed after a
+ * quiet period is always logged, so the transition into shedding — the part
+ * worth alerting on — is never delayed.
+ */
+const SHED_LOG_INTERVAL_MS = 10_000;
+
+let shedLogLastAt = 0;
+let shedLogSuppressed = 0;
+
+/**
+ * Say, in this module, that an upload was shed.
+ *
+ * This exists because of where the error goes next. src/app/api/media/route.ts
+ * rethrows anything that is not a WatermarkError, and logs
+ * "[media] watermark service unavailable" on the way — a message written for
+ * the fontless-runtime case, where every upload is broken and someone should
+ * be woken up. Shedding is not that: it is this gate working as designed, and
+ * on a small container it is routine (the 768 MB reference configuration has
+ * no queue at all, so the fourth concurrent upload sheds). Without a line of
+ * its own, normal operation and a broken deployment produce byte-identical
+ * logs and alerting cannot tell them apart.
+ *
+ * So this is the line to key alerting on, and its absence is what makes the
+ * route's message mean what it says. Deliberately console.warn rather than
+ * console.error: a shed upload is a capacity signal, not a fault.
+ *
+ * It does not fix the status code — the caller still gets a 500 rather than
+ * 503 + Retry-After, because that mapping is a route change and the route
+ * belongs to another change in flight. That is ugcportal-u7g; this is only
+ * the half that can be done from here.
+ */
+function logShedUpload(error: ConcurrencyLimitError): void {
+  const now = Date.now();
+  if (shedLogLastAt !== 0 && now - shedLogLastAt < SHED_LOG_INTERVAL_MS) {
+    shedLogSuppressed += 1;
+    return;
+  }
+
+  const suppressed = shedLogSuppressed;
+  shedLogSuppressed = 0;
+  shedLogLastAt = now;
+
+  const stats = gate?.stats();
+  console.warn(
+    `[watermark] shed an upload (${error.reason}): the preview gate is at capacity, ` +
+      `limit=${stats?.limit ?? "?"} queue=${stats?.queueLimit ?? "?"} ` +
+      `shedTotal=${stats?.shed ?? "?"}` +
+      (suppressed > 0 ? ` (+${suppressed} more since the last line)` : "") +
+      ". This is the gate working, not a broken runtime — see ugcportal-e86. " +
+      "The route additionally logs its generic 5xx for the same event until " +
+      "ugcportal-u7g maps this to a 503.",
+  );
 }
 
 /** The part of preview generation that actually costs memory. */
