@@ -13,9 +13,22 @@ type RouteContext = { params: Promise<{ id: string }> };
 // storage key is derived at upload time and is never editable.
 const MAX_ORIGINAL_NAME_LENGTH = 255;
 
-// Control characters (and DEL) would survive into every UI that renders the
-// name; there is no legitimate filename that needs them.
-const CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
+// A rename carries no file, so the body is one short JSON object. App Router
+// puts no default cap on `request.json()`, so without this an owner could
+// make the server buffer gigabytes before the length check below runs. Same
+// Content-Length early-return POST uses for uploads, three orders of
+// magnitude smaller: a 255-character name with every character escaped
+// still fits several times over.
+const MAX_PATCH_BODY_BYTES = 4096;
+
+// Characters that would survive into every UI rendering the name and lie
+// about what it says: C0 and C1 controls, DEL, and the bidi marks and
+// overrides. The last group is the reason this check is wider than it looks
+// — "invoice\u202Egnp.exe" renders as "invoice exe.png", the exact
+// deception the check exists to stop. Zero-width joiners are deliberately
+// left alone; emoji filenames are legitimate and don't reorder text.
+const UNSAFE_NAME_CHARS =
+  /[\u0000-\u001F\u007F-\u009F\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/;
 
 type NameResult = { ok: true; value: string } | { ok: false; message: string };
 
@@ -48,10 +61,11 @@ function parseOriginalName(body: unknown): NameResult {
       message: `Field 'originalName' must be at most ${MAX_ORIGINAL_NAME_LENGTH} characters`,
     };
   }
-  if (CONTROL_CHARS.test(trimmed)) {
+  if (UNSAFE_NAME_CHARS.test(trimmed)) {
     return {
       ok: false,
-      message: "Field 'originalName' must not contain control characters",
+      message:
+        "Field 'originalName' must not contain control or text-direction characters",
     };
   }
 
@@ -65,6 +79,11 @@ export async function PATCH(request: Request, { params }: RouteContext) {
   const access = await requireOwnedMedia(id);
   if (!access.ok) {
     return NextResponse.json({ error: access.error }, { status: access.status });
+  }
+
+  const contentLength = Number(request.headers.get("content-length") ?? 0);
+  if (contentLength > MAX_PATCH_BODY_BYTES) {
+    return NextResponse.json({ error: "Request body too large" }, { status: 413 });
   }
 
   let body: unknown;
@@ -125,15 +144,23 @@ export async function DELETE(request: Request, { params }: RouteContext) {
   // would have no way to retry it. This way a failed storage call leaves an
   // orphaned object — invisible to the user, cleanable out of band — which
   // is the same trade POST makes when it compensates a failed DB write.
-  // Logged, not surfaced: the delete the caller asked for did happen.
-  await getS3Client()
-    .send(new DeleteObjectCommand({ Bucket: getBucketName(), Key: access.media.key }))
-    .catch((error: unknown) => {
-      console.error(
-        `Deleted media ${id} but failed to remove object ${access.media.key} from storage`,
-        error,
-      );
-    });
+  //
+  // try/catch around the whole block, not just the send: getS3Client() and
+  // getBucketName() both go through requireEnv() and throw synchronously on
+  // a missing variable, so a `.catch()` on the promise alone would let a
+  // misconfigured environment turn an already-committed delete into a 500 —
+  // and lose the orphan log, the only record of the leaked key.
+  try {
+    await getS3Client().send(
+      new DeleteObjectCommand({ Bucket: getBucketName(), Key: access.media.key }),
+    );
+  } catch (error: unknown) {
+    // Logged, not surfaced: the delete the caller asked for did happen.
+    console.error(
+      `Deleted media ${id} but failed to remove object ${access.media.key} from storage`,
+      error,
+    );
+  }
 
   return new NextResponse(null, { status: 204 });
 }
