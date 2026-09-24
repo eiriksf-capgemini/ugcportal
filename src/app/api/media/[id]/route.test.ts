@@ -66,6 +66,45 @@ function deleteRequest() {
   });
 }
 
+const BODY_LIMIT_BYTES = 4096;
+const CHUNK_BYTES = 1024;
+// Chunks the handler may take before giving up: the four that fit under the
+// cap, the fifth that trips it, and one more that the stream's internal
+// queue pre-pulls to stay one ahead of the reader.
+const MAX_EXPECTED_PULLS = BODY_LIMIT_BYTES / CHUNK_BYTES + 2;
+// Far more than the cap, so a handler that drained the stream instead of
+// bounding it would be obvious in the pull count.
+const OVERSIZED_CHUNKS = 64;
+
+/**
+ * A PATCH request whose body arrives in 1 KiB chunks and whose
+ * Content-Length is whatever the caller says (including nothing at all, as
+ * on a chunked request). `pulled()` reports how many chunks the handler
+ * actually took, which is how the tests tell a real streaming bound from a
+ * check that buffered everything first and only then complained.
+ */
+function chunkedPatchRequest(chunkCount: number, contentLength?: string) {
+  let pulled = 0;
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (pulled >= chunkCount) {
+        controller.close();
+        return;
+      }
+      pulled += 1;
+      controller.enqueue(new Uint8Array(CHUNK_BYTES).fill(0x20));
+    },
+  });
+
+  const headers = new Headers({ "content-type": "application/json" });
+  if (contentLength !== undefined) {
+    headers.set("content-length", contentLength);
+  }
+
+  const request = { headers, body: stream } as unknown as Request;
+  return { request, pulled: () => pulled };
+}
+
 // The gate must read exactly the row the handler then writes; if a refactor
 // let those ids drift apart, every other assertion here would still pass.
 function expectGateReadRow(id: string = MEDIA_ID) {
@@ -283,17 +322,89 @@ describe("PATCH /api/media/[id] as the owner", () => {
     expect(mediaUpdateManyMock).not.toHaveBeenCalled();
   });
 
-  it("returns 413 for an oversized body without buffering it", async () => {
-    const jsonMock = vi.fn();
+  it("returns 413 from the Content-Length early-out without reading the body", async () => {
+    let bodyRead = false;
     const fakeRequest = {
-      headers: new Headers({ "content-length": String(4097) }),
-      json: jsonMock,
+      headers: new Headers({
+        "content-length": String(BODY_LIMIT_BYTES + 1),
+      }),
+      get body() {
+        bodyRead = true;
+        return null;
+      },
     } as unknown as Request;
 
     const response = await PATCH(fakeRequest, context());
 
     expect(response.status).toBe(413);
-    expect(jsonMock).not.toHaveBeenCalled();
+    expect(bodyRead).toBe(false);
+    expect(mediaUpdateManyMock).not.toHaveBeenCalled();
+  });
+
+  // The header is the cheap check, not the enforcement: a chunked request
+  // carries no Content-Length at all, so the cap has to hold on the stream.
+  it("returns 413 for an oversized body sent with no content-length header", async () => {
+    const { request, pulled } = chunkedPatchRequest(OVERSIZED_CHUNKS);
+
+    const response = await PATCH(request, context());
+
+    expect(response.status).toBe(413);
+    await expect(response.json()).resolves.toEqual({
+      error: "Request body too large",
+    });
+    // Stopped as soon as the running total passed the cap rather than
+    // draining all 64 KiB.
+    expect(pulled()).toBeLessThanOrEqual(MAX_EXPECTED_PULLS);
+    expect(mediaUpdateManyMock).not.toHaveBeenCalled();
+  });
+
+  // Number("4096abc") is NaN, and NaN > limit is false, so a malformed
+  // header slips straight past the early-out.
+  it("returns 413 for an oversized body sent with a malformed content-length", async () => {
+    const { request, pulled } = chunkedPatchRequest(OVERSIZED_CHUNKS, "4096abc");
+
+    const response = await PATCH(request, context());
+
+    expect(response.status).toBe(413);
+    expect(pulled()).toBeLessThanOrEqual(MAX_EXPECTED_PULLS);
+    expect(mediaUpdateManyMock).not.toHaveBeenCalled();
+  });
+
+  it("accepts a body streamed in chunks when it stays under the cap", async () => {
+    mediaUpdateManyMock.mockResolvedValue({ count: 1 });
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        const payload = new TextEncoder().encode(
+          JSON.stringify({ originalName: "streamed.png" }),
+        );
+        controller.enqueue(payload.slice(0, 5));
+        controller.enqueue(payload.slice(5));
+        controller.close();
+      },
+    });
+    const request = {
+      headers: new Headers({ "content-type": "application/json" }),
+      body: stream,
+    } as unknown as Request;
+
+    const response = await PATCH(request, context());
+
+    expect(response.status).toBe(200);
+    expect(mediaUpdateManyMock).toHaveBeenCalledWith({
+      where: { id: MEDIA_ID, userId: OWNER_ID },
+      data: { originalName: "streamed.png" },
+    });
+  });
+
+  it("returns 400 when the request carries no body at all", async () => {
+    const request = {
+      headers: new Headers(),
+      body: null,
+    } as unknown as Request;
+
+    const response = await PATCH(request, context());
+
+    expect(response.status).toBe(400);
     expect(mediaUpdateManyMock).not.toHaveBeenCalled();
   });
 

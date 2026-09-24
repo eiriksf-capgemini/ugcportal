@@ -13,12 +13,11 @@ type RouteContext = { params: Promise<{ id: string }> };
 // storage key is derived at upload time and is never editable.
 const MAX_ORIGINAL_NAME_LENGTH = 255;
 
-// A rename carries no file, so the body is one short JSON object. App Router
-// puts no default cap on `request.json()`, so without this an owner could
-// make the server buffer gigabytes before the length check below runs. Same
-// Content-Length early-return POST uses for uploads, three orders of
-// magnitude smaller: a 255-character name with every character escaped
-// still fits several times over.
+// A rename carries no file, so the body is one short JSON object: a
+// 255-character name with every character escaped fits several times over.
+// App Router puts no default cap on the request body, so without this an
+// owner could make the server buffer gigabytes before the length check in
+// parseOriginalName ever runs.
 const MAX_PATCH_BODY_BYTES = 4096;
 
 // Characters that would survive into every UI rendering the name and lie
@@ -31,6 +30,69 @@ const UNSAFE_NAME_CHARS =
   /[\u0000-\u001F\u007F-\u009F\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/;
 
 type NameResult = { ok: true; value: string } | { ok: false; message: string };
+
+type BodyResult =
+  | { ok: true; value: unknown }
+  | { ok: false; status: 400 | 413; error: string };
+
+/**
+ * Reads and JSON-parses the request body, never holding more than `limit`
+ * bytes of it.
+ *
+ * The Content-Length check is only a cheap early-out, and deliberately not
+ * the enforcement: the header is absent on a chunked request and can be
+ * malformed, in which case `Number()` yields NaN and `NaN > limit` is
+ * false. Trusting it alone would wave through exactly the unbounded
+ * buffering the cap exists to prevent. The read loop is what actually
+ * enforces the bound — it stops at the first chunk that takes the running
+ * total past `limit` and cancels the stream, so a sender that lies about
+ * (or omits) its length gets a 413 rather than memory.
+ */
+async function readJsonBody(
+  request: Request,
+  limit: number,
+): Promise<BodyResult> {
+  const declared = Number(request.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > limit) {
+    return { ok: false, status: 413, error: "Request body too large" };
+  }
+
+  if (!request.body) {
+    return { ok: false, status: 400, error: "Invalid JSON body" };
+  }
+
+  const reader = request.body.getReader();
+  const decoder = new TextDecoder();
+  let received = 0;
+  let text = "";
+
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+
+      received += value.byteLength;
+      if (received > limit) {
+        await reader.cancel();
+        return { ok: false, status: 413, error: "Request body too large" };
+      }
+
+      text += decoder.decode(value, { stream: true });
+    }
+    text += decoder.decode();
+  } catch {
+    // A truncated or reset connection is the client's problem, not a 500.
+    return { ok: false, status: 400, error: "Invalid JSON body" };
+  }
+
+  try {
+    return { ok: true, value: JSON.parse(text) };
+  } catch {
+    return { ok: false, status: 400, error: "Invalid JSON body" };
+  }
+}
 
 /**
  * Pulls the one editable field off the request body. `originalName` is the
@@ -81,19 +143,12 @@ export async function PATCH(request: Request, { params }: RouteContext) {
     return NextResponse.json({ error: access.error }, { status: access.status });
   }
 
-  const contentLength = Number(request.headers.get("content-length") ?? 0);
-  if (contentLength > MAX_PATCH_BODY_BYTES) {
-    return NextResponse.json({ error: "Request body too large" }, { status: 413 });
+  const body = await readJsonBody(request, MAX_PATCH_BODY_BYTES);
+  if (!body.ok) {
+    return NextResponse.json({ error: body.error }, { status: body.status });
   }
 
-  let body: unknown;
-  try {
-    body = await request.json();
-  } catch {
-    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
-  }
-
-  const name = parseOriginalName(body);
+  const name = parseOriginalName(body.value);
   if (!name.ok) {
     return NextResponse.json({ error: name.message }, { status: 400 });
   }
