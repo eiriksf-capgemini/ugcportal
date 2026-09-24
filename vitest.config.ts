@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import { defineConfig } from "vitest/config";
+import { defaultExclude, defineConfig } from "vitest/config";
 
 export default defineConfig({
   resolve: {
@@ -10,5 +10,22 @@ export default defineConfig({
   },
   test: {
     environment: "node",
+    // Vitest's defaultExclude covers node_modules, dist, cypress and a short
+    // list of dot-directories — none of which match .claude/, where agent
+    // worktrees live. Without this, a local `vitest run` also collects those
+    // sibling checkouts and reports their stale failures as if they were
+    // yours (ugcportal-97y). eslint.config.mjs ignores .claude/worktrees/**
+    // for the same reason; this is deliberately broader, since no
+    // first-party test lives anywhere under .claude/.
+    //
+    // Left as an exclude rather than a narrow `include` on purpose: an
+    // `include` of src/** would silently stop collecting any future test
+    // outside src/ (prisma/seed.test.ts, scripts/, a root tests/ dir) and,
+    // because src/ still matches, `passWithNoTests` would never fire to
+    // tell anyone — CI would go green with that suite never having run.
+    //
+    // CI is unaffected either way: it checks out a clean tree with no
+    // worktrees in it.
+    exclude: [...defaultExclude, ".claude/**"],
   },
 });
