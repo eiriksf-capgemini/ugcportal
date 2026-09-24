@@ -392,6 +392,54 @@ describe("publishing a row with no watermarked preview", () => {
     expect((await response.json()).publishedAt).toBeNull();
   });
 
+  it("refuses a row with a preview key but no public handle", async () => {
+    signedInAs(OWNER_ID);
+    // The half-set pair. mediaPreviewColumns makes this unexpressible, but
+    // that helper is a convention: a writer bypassing it (ugcportal-ct0's
+    // Instagram sync is the named candidate) or a row an earlier backfill
+    // missed could still produce one. Both listings filter on previewId as
+    // well as previewKey, so publishing this would answer 200 and leave the
+    // row in no feed at all.
+    mediaFindUniqueMock.mockResolvedValue({
+      ...unpublishedMedia,
+      previewKey: "previews/user-a/def-photo.webp",
+      previewId: null,
+    });
+
+    const response = await POST(publishRequest("POST"), context());
+
+    expect(response.status).toBe(409);
+    expect(mediaUpdateManyMock).not.toHaveBeenCalled();
+    expectNoOtherWrites();
+  });
+
+  it("refuses a row with a public handle but no preview key", async () => {
+    signedInAs(OWNER_ID);
+    // The mirror case: the guard has to be the same condition the feeds use,
+    // not a subset of it in either direction.
+    mediaFindUniqueMock.mockResolvedValue({
+      ...unpublishedMedia,
+      previewKey: null,
+      previewId: "preview-abc",
+    });
+
+    const response = await POST(publishRequest("POST"), context());
+
+    expect(response.status).toBe(409);
+    expect(mediaUpdateManyMock).not.toHaveBeenCalled();
+  });
+
+  it("still publishes normally when both preview columns are set", async () => {
+    // The guard must not have become so broad it refuses ordinary rows.
+    signedInAs(OWNER_ID);
+    mediaFindUniqueMock.mockResolvedValue(unpublishedMedia);
+
+    const response = await POST(publishRequest("POST"), context());
+
+    expect(response.status).toBe(200);
+    expect(mediaUpdateManyMock).toHaveBeenCalledTimes(1);
+  });
+
   it("refuses before the ownership gate would be bypassed, not after", async () => {
     // The 409 must not become a way to probe someone else's library: the
     // ownership gate still runs first.

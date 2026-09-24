@@ -171,10 +171,8 @@ const ANONYMOUS_FIELDS = [
   "createdAt",
   "id",
   "kind",
-  "mimeType",
   "previewId",
   "publishedAt",
-  "sizeBytes",
 ];
 
 function request(query = "") {
@@ -328,8 +326,18 @@ describe("GET /api/public/media — no original key, no preview-less row (K3)", 
       (x: { id: string }, y: { id: string }) => (x.id < y.id ? -1 : 1),
     );
     expect(new Set([a.previewId, b.previewId, c.previewId]).size).toBe(3);
-    for (const field of ["kind", "mimeType", "sizeBytes"]) {
-      expect(a[field]).toEqual(c[field]);
+    // `kind` is the only non-unique field left, and it is identical across
+    // uploaders rather than varying with them — so it partitions nothing.
+    // Asserted against the cross-uploader pair specifically: a field that
+    // happened to correlate with the uploader would differ here.
+    expect(a.kind).toEqual(c.kind);
+    expect(b.kind).toEqual(c.kind);
+    // Every remaining field is either shared by all three or unique to one.
+    // Nothing sits in between, which is what "cannot be grouped" means.
+    for (const field of Object.keys(a)) {
+      const values = [a[field], b[field], c[field]];
+      const distinct = new Set(values.map((v) => JSON.stringify(v))).size;
+      expect([1, 3]).toContain(distinct);
     }
   });
 
@@ -367,6 +375,48 @@ describe("GET /api/public/media — no original key, no preview-less row (K3)", 
     // Nor the preview's path, which embeds the uploader's id.
     expect(select).not.toHaveProperty("previewKey");
     expect(select.previewId).toBe(true);
+    // Nor the original's type and size: this feed can only ever serve the
+    // watermarked preview, which is a different format at a different size.
+    expect(select).not.toHaveProperty("mimeType");
+    expect(select).not.toHaveProperty("sizeBytes");
+  });
+
+  it("reports no metadata describing the original file", async () => {
+    seed([
+      row({
+        id: "a",
+        mimeType: "image/png",
+        sizeBytes: 1_400_000,
+      }),
+    ]);
+
+    const body = await (await GET(request())).json();
+    const serialized = JSON.stringify(body);
+
+    // The only asset this feed can hand over is the webp preview, so the
+    // original's content type and byte count are not merely private — they
+    // are the wrong answer about the wrong file. A consumer using `mimeType`
+    // for a <source type> would be wrong on every row, and `sizeBytes` is an
+    // exact fingerprint of a file the caller cannot fetch.
+    expect(body.items[0]).not.toHaveProperty("mimeType");
+    expect(body.items[0]).not.toHaveProperty("sizeBytes");
+    expect(serialized).not.toContain("image/png");
+    expect(serialized).not.toContain("1400000");
+    expect(Object.keys(body.items[0]).sort()).toEqual(ANONYMOUS_FIELDS);
+  });
+
+  it("keeps the original's type and size on the owner-scoped projection", async () => {
+    // The split is per audience, not a global removal: an owner's own library
+    // (and ugcportal-n3c's upload UI) legitimately wants "photo.png,
+    // image/png, 1.4 MB" about the file they actually uploaded.
+    const { MEDIA_OWNER_SELECT, MEDIA_ANONYMOUS_SELECT } = await import(
+      "@/lib/media-access"
+    );
+
+    expect(MEDIA_OWNER_SELECT).toHaveProperty("mimeType", true);
+    expect(MEDIA_OWNER_SELECT).toHaveProperty("sizeBytes", true);
+    expect(MEDIA_ANONYMOUS_SELECT).not.toHaveProperty("mimeType");
+    expect(MEDIA_ANONYMOUS_SELECT).not.toHaveProperty("sizeBytes");
   });
 
   it("still shows the owner their own filenames on the owner-scoped feed", async () => {

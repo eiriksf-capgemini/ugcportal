@@ -30,13 +30,13 @@ import { prisma } from "@/lib/prisma";
 
 const MEDIA_SHARED_SELECT = {
   id: true,
+  // Which sort of artefact this is. True of the original and of anything
+  // derived from it, so it reads the same to either audience.
   kind: true,
   // The opaque public handle for the watermarked preview — safe for anyone.
   // Its storage path, `previewKey`, is owner-only and lives in the owner
   // select below; see the note there and on the Media model.
   previewId: true,
-  mimeType: true,
-  sizeBytes: true,
   createdAt: true,
   // Visibility state (ugcportal-r1d). On the anonymous feed it is always
   // non-null and reads as "public since"; a null is only ever visible to the
@@ -52,7 +52,7 @@ const MEDIA_SHARED_SELECT = {
   // (ugcportal-71y's call), not the internal account id.
 } as const;
 
-/** Owner-facing: adds the two fields only the row's own uploader may see. */
+/** Owner-facing: everything about the row its own uploader may see. */
 export const MEDIA_OWNER_SELECT = {
   ...MEDIA_SHARED_SELECT,
   // `originalName` is uploader-supplied text. It is how an owner recognises
@@ -65,14 +65,24 @@ export const MEDIA_OWNER_SELECT = {
   // upload it is, which is why the anonymous select carries `previewId`
   // instead. Never widen this one.
   previewKey: true,
+  // `mimeType` and `sizeBytes` describe the ORIGINAL — the file as uploaded,
+  // not the watermarked preview. For an owner that is the useful number and
+  // the correct one: their library, their upload, "photo.png, image/png,
+  // 1.4 MB" (ugcportal-n3c's upload UI wants exactly this). For anyone else
+  // it would be a fact about a file they can neither see nor fetch; see the
+  // anonymous select for why that is worse than useless.
+  mimeType: true,
+  sizeBytes: true,
 } as const;
 
 /**
- * Anonymous-facing: the owner select minus `originalName` and `previewKey`.
+ * Anonymous-facing: the owner select minus `originalName`, `previewKey`,
+ * `mimeType` and `sizeBytes`.
  *
- * Two separate withholdings, for the same underlying reason — an anonymous
- * caller must not be able to attribute a gallery item to an account, or read
- * text its uploader never meant to publish.
+ * The first two are withheld because an anonymous caller must not be able to
+ * attribute a gallery item to an account, or read text its uploader never
+ * meant to publish. The last two are withheld for a different reason: they are
+ * simply not true of the thing this feed serves.
  *
  * `originalName`: filenames are volunteered, not chosen for publication —
  * `anna-berg-passport-scan.jpg`, `client-acme-draft-v3.png`. Before
@@ -91,9 +101,29 @@ export const MEDIA_OWNER_SELECT = {
  * it. `previewId` is exposed instead: an unrelated random id, with no
  * derivation from the key, the user, or the row.
  *
+ * `mimeType` and `sizeBytes`: both describe the original upload, and the
+ * original is the one thing this feed can never hand over. The only asset it
+ * can represent is the watermarked preview — a different format and a
+ * different size. Reporting `image/png` and 1.4 MB next to a webp thumbnail is
+ * not a small inaccuracy: a consumer using `mimeType` for a `<source type>` or
+ * a download extension is wrong on every row, one showing the size beside the
+ * thumbnail is wrong on every row, and the byte count is an exact fingerprint
+ * of a file the caller is not entitled to.
+ *
+ * Nothing is substituted, because there is nothing true to substitute. Media
+ * stores no metadata about the preview: its content type is a constant of the
+ * watermark service (PREVIEW_CONTENT_TYPE in src/lib/watermark.ts, the same
+ * for every row, so not per-row data a feed should repeat), and its byte size
+ * is not recorded at all. Publishing a right-shaped wrong number is worse than
+ * publishing none — the wrong one gets used. If the gallery (ugcportal-71y)
+ * turns out to need the preview's size, that is a new column written at
+ * upload time and a deliberate decision, not a reinterpretation of this one.
+ *
  * Kept as an explicit list rather than a subtraction from the owner select, so
  * a column added to the owner side does not silently arrive here too. Adding a
- * field means choosing an audience.
+ * field means choosing an audience — and `mimeType`/`sizeBytes` sat in the
+ * shared base for three rounds precisely because that choice was never made
+ * for them.
  */
 export const MEDIA_ANONYMOUS_SELECT = MEDIA_SHARED_SELECT;
 

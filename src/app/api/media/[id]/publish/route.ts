@@ -60,24 +60,37 @@ export async function POST(_request: Request, { params }: RouteContext) {
     );
   }
 
-  if (access.media.previewKey === null) {
-    // Refused rather than silently pointless. The public feed requires a
-    // watermarked preview as well as a publish timestamp, so publishing a row
-    // that has none — today, every VIDEO; poster frames are ugcportal-pmb —
-    // would set publishedAt, answer 200, and still never appear anywhere. The
-    // owner would have no way to tell that apart from a working publish.
-    //
-    // 409 rather than 400 or 422: the request is well-formed and the caller is
-    // authorized. What blocks it is the row's current state, and that state is
-    // expected to change when ugcportal-pmb lands, at which point this refusal
-    // simply stops firing.
-    //
-    // Safe to decide from the gate's read even though that read is a round
-    // trip old, because `previewKey` is write-once: it is set in the
-    // `prisma.media.create` in POST /api/media and there is no code path
-    // anywhere that updates it (PATCH writes only originalName, and this file
-    // writes only publishedAt). That is the opposite of `publishedAt` above,
-    // which is exactly why that one is decided by the write instead.
+  // Deliberately the same condition both listings filter on, not a subset of
+  // it. GET /api/media and GET /api/public/media each require `previewKey` AND
+  // `previewId` to be non-null, so checking only one here would leave the exact
+  // hole this guard exists to close, moved one field over: a row with a key but
+  // no id would publish with 200 and a real timestamp, then appear in neither
+  // feed — not even its owner's own library — with nothing to distinguish that
+  // from a working publish.
+  //
+  // Such a row should not exist: mediaPreviewColumns (src/lib/media.ts) makes
+  // the pair unexpressible-when-half-set. But that helper is a convention a
+  // second writer has to opt into, and its own comment names ugcportal-ct0's
+  // Instagram sync as the writer that will need to. A guard that trusts a
+  // convention it cannot enforce is not a guard, so this reads both columns
+  // rather than assuming the invariant held.
+  //
+  // Refused rather than silently pointless: publishing a row with no
+  // watermarked preview — today, every VIDEO; poster frames are ugcportal-pmb
+  // — would set publishedAt, answer 200, and still never surface anywhere.
+  //
+  // 409 rather than 400 or 422: the request is well-formed and the caller is
+  // authorized. What blocks it is the row's current state, and that state is
+  // expected to change when ugcportal-pmb lands, at which point this refusal
+  // simply stops firing.
+  //
+  // Safe to decide from the gate's read even though that read is a round trip
+  // old, because both columns are write-once: they are set together in the
+  // `prisma.media.create` in POST /api/media and no code path anywhere updates
+  // either (PATCH writes only originalName, and this file writes only
+  // publishedAt). That is the opposite of `publishedAt` below, which is exactly
+  // why that one is decided by the write instead.
+  if (access.media.previewKey === null || access.media.previewId === null) {
     return NextResponse.json(
       {
         error:
