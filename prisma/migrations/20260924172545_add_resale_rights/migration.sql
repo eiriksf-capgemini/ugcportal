@@ -22,14 +22,18 @@ CREATE TABLE "ResaleRightsReview" (
 CREATE TABLE "ResaleRightsEvent" (
     "id" TEXT NOT NULL PRIMARY KEY,
     "reviewId" TEXT NOT NULL,
+    "instagramAccountId" TEXT NOT NULL,
+    "instagramUsername" TEXT,
     "fromStatus" TEXT,
     "toStatus" TEXT NOT NULL,
     "actorUserId" TEXT,
     "actorEmail" TEXT,
     "reason" TEXT NOT NULL,
     "selfReview" BOOLEAN NOT NULL DEFAULT false,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT "ResaleRightsEvent_reviewId_fkey" FOREIGN KEY ("reviewId") REFERENCES "ResaleRightsReview" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+    "checklistVersion" TEXT,
+    "evidenceKey" TEXT,
+    "evidenceSha256" TEXT,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 -- CreateTable
@@ -61,6 +65,12 @@ CREATE INDEX "ResaleRightsReview_reviewedByUserId_idx" ON "ResaleRightsReview"("
 
 -- CreateIndex
 CREATE INDEX "ResaleRightsEvent_reviewId_createdAt_idx" ON "ResaleRightsEvent"("reviewId", "createdAt");
+
+-- CreateIndex
+CREATE INDEX "ResaleRightsEvent_instagramAccountId_createdAt_idx" ON "ResaleRightsEvent"("instagramAccountId", "createdAt");
+
+-- CreateIndex
+CREATE INDEX "ResaleRightsEvent_createdAt_idx" ON "ResaleRightsEvent"("createdAt");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "CuratedPost_mediaId_key" ON "CuratedPost"("mediaId");

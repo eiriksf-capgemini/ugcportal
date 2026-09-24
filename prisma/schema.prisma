@@ -242,9 +242,11 @@ model ResaleRightsReview {
   createdAt          DateTime           @default(now())
   updatedAt          DateTime           @updatedAt
 
-  instagramAccount InstagramAccount    @relation(fields: [instagramAccountId], references: [id], onDelete: Cascade)
-  reviewedBy       User?               @relation("ResaleRightsReviewer", fields: [reviewedByUserId], references: [id])
-  events           ResaleRightsEvent[]
+  instagramAccount InstagramAccount @relation(fields: [instagramAccountId], references: [id], onDelete: Cascade)
+  reviewedBy       User?            @relation("ResaleRightsReviewer", fields: [reviewedByUserId], references: [id])
+  // No `events` relation field: ResaleRightsEvent deliberately carries no
+  // foreign key back here, so that disconnecting the account cannot delete
+  // the history. Read events by `reviewId` or `instagramAccountId`.
 
   @@index([reviewedByUserId])
 }
@@ -253,29 +255,50 @@ model ResaleRightsReview {
 // deletes these rows; the current status lives on ResaleRightsReview, this is
 // the history of how it got there.
 //
-// Unlike RoleChange this one does keep a foreign key to its review: the
-// events are meaningless without it, and both disappear together when the
-// account is disconnected. The actor is kept as a plain id/email snapshot for
-// the same reason RoleChange does — deleting a user must not delete the trail.
+// Carries no foreign keys, for the same reason RoleChange doesn't
+// (ugcportal-lu7): an audit row that cascades away stops being an audit trail
+// exactly when it matters most. Here the cascade would have run on the most
+// ordinary action there is — one click of Disconnect deletes the
+// InstagramAccount, which would take the review and, with a FK, every event
+// with it, erasing who cleared what, when, against which checklist version
+// and on which evidence. That is the record you most want after the account
+// is gone.
+//
+// So the ids are plain strings and the facts a reader needs are snapshotted
+// alongside them: the account's handle, the checklist version in force, and
+// the evidence pointer at the moment of the decision. The review row remains
+// the *current* state and still cascades with the account; this table is the
+// history, and it outlives both.
 model ResaleRightsEvent {
-  id          String              @id @default(cuid())
-  reviewId    String
-  fromStatus  ResaleRightsStatus?
-  toStatus    ResaleRightsStatus
+  id                 String              @id @default(cuid())
+  // Not a relation: the review row it describes may already be gone.
+  reviewId           String
+  instagramAccountId String
+  // Snapshot — the InstagramAccount row may be gone by the time this is read.
+  instagramUsername  String?
+  fromStatus         ResaleRightsStatus?
+  toStatus           ResaleRightsStatus
   // Null only for system transitions, which may never produce CLEARED.
-  actorUserId String?
-  actorEmail  String?
-  reason      String
+  actorUserId        String?
+  actorEmail         String?
+  reason             String
   // Separation of duties (checklist Part E.3): true when the reviewer is the
   // same admin who connected the account. Soft — recorded and surfaced in the
   // admin UI rather than refused, because a single-admin instance has no
   // other option (ugcportal-0ss K3).
-  selfReview  Boolean             @default(false)
-  createdAt   DateTime            @default(now())
-
-  review ResaleRightsReview @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  selfReview         Boolean             @default(false)
+  // Snapshots of the decision's own terms, so the row still answers "cleared
+  // against what, on what evidence" with no other table present. Also the
+  // only remaining record of which objects under rights-evidence/ belong to a
+  // disconnected account (purging them is ugcportal-69p's job).
+  checklistVersion   String?
+  evidenceKey        String?
+  evidenceSha256     String?
+  createdAt          DateTime            @default(now())
 
   @@index([reviewId, createdAt])
+  @@index([instagramAccountId, createdAt])
+  @@index([createdAt])
 }
 
 // An owner-uploaded original (ugcportal-8wa Media row) put forward for sale

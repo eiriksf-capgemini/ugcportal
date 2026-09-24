@@ -18,7 +18,9 @@ import { getBucketName, getS3Client } from "@/lib/s3";
  *  - it always writes under `rights-evidence/<instagramAccountId>/`, and the
  *    account id is checked against a strict pattern first, so a caller cannot
  *    traverse out of the prefix;
- *  - it never sets a public-read ACL, and asks for server-side encryption;
+ *  - it never sets a public-read ACL, and asks for server-side encryption
+ *    when `S3_EVIDENCE_SSE=AES256` is set (see below — off by default so the
+ *    KMS-less dev MinIO works out of the box);
  *  - it does **not** make the bucket private on its own. If the bucket has a
  *    blanket public-read policy, nothing in application code can fix that —
  *    that is a deployment-level control (ugcportal-odx for DreamObjects,
@@ -28,20 +30,31 @@ import { getBucketName, getS3Client } from "@/lib/s3";
 export const RIGHTS_EVIDENCE_PREFIX = "rights-evidence";
 
 /**
- * Server-side encryption to request. SSE-S3 (`AES256`) by default; set
- * `S3_EVIDENCE_SSE=none` for a local MinIO without a KMS configured, which
- * rejects the header rather than ignoring it.
+ * Server-side encryption to request, from `S3_EVIDENCE_SSE`.
  *
- * Not yet in env.example: that file is owned by another in-flight branch
- * (ugcportal-e86, PR #31) and editing it here would conflict. Documented in
- * the follow-up bead instead.
+ * **Off by default, and that is a deployment requirement, not an oversight.**
+ * The development stack is the MinIO in docker-compose.yml with no KMS
+ * configured, and MinIO answers a `ServerSideEncryption: AES256` header with
+ * an error rather than ignoring it — so defaulting it on would mean evidence
+ * upload fails on a fresh checkout, which is how a feature ends up disabled
+ * in production too. Defaulting it off keeps dev working and makes the
+ * production setting an explicit, reviewable act:
+ *
+ *     S3_EVIDENCE_SSE=AES256
+ *
+ * **Production must set this** (DreamObjects, ugcportal-odx), or evidence —
+ * contracts and personal data — sits unencrypted at rest at the object level.
+ * Bucket-default encryption set on the storage side satisfies the same
+ * requirement and is the better answer where it is available, since it cannot
+ * be forgotten per-request.
+ *
+ * Not in env.example yet: that file belongs to another in-flight branch
+ * (ugcportal-e86, PR #31). Tracked in ugcportal-e15.
  */
 function encryptionSetting(): "AES256" | undefined {
-  const configured = process.env.S3_EVIDENCE_SSE?.trim();
-  if (configured === "none") {
-    return undefined;
-  }
-  return "AES256";
+  return process.env.S3_EVIDENCE_SSE?.trim() === "AES256"
+    ? "AES256"
+    : undefined;
 }
 
 /** cuid/cuid2-ish: the ids this app generates, and nothing with a slash. */

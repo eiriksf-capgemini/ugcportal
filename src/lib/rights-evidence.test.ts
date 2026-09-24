@@ -59,7 +59,7 @@ describe("rightsEvidenceKey", () => {
 describe("putRightsEvidence", () => {
   const body = new Uint8Array([1, 2, 3, 4]);
 
-  it("stores the file privately, encrypted, and returns its hash", async () => {
+  it("stores the file privately and returns its hash", async () => {
     const result = await putRightsEvidence({
       instagramAccountId: "acc-1",
       filename: "assignment.pdf",
@@ -76,14 +76,42 @@ describe("putRightsEvidence", () => {
       Bucket: "ugcportal-test",
       Key: result.key,
       ContentType: "application/pdf",
-      ServerSideEncryption: "AES256",
       ACL: "private",
     });
     expect(input.Key?.startsWith("rights-evidence/acc-1/")).toBe(true);
   });
 
-  it("can drop the encryption header for a MinIO without a KMS", async () => {
-    process.env.S3_EVIDENCE_SSE = "none";
+  // The dev stack is a KMS-less MinIO, which rejects the SSE header rather
+  // than ignoring it. Sending it by default would break evidence upload on a
+  // fresh checkout, so it is opt-in.
+  it("sends no encryption header unless one is configured", async () => {
+    await putRightsEvidence({
+      instagramAccountId: "acc-1",
+      filename: "a.pdf",
+      body,
+    });
+
+    expect(lastPutInput().ServerSideEncryption).toBeUndefined();
+    // Private either way: the default is about encryption at rest, not access.
+    expect(lastPutInput().ACL).toBe("private");
+  });
+
+  it("asks for SSE-S3 when production configures it", async () => {
+    process.env.S3_EVIDENCE_SSE = "AES256";
+
+    await putRightsEvidence({
+      instagramAccountId: "acc-1",
+      filename: "a.pdf",
+      body,
+    });
+
+    expect(lastPutInput().ServerSideEncryption).toBe("AES256");
+  });
+
+  it("ignores a value it does not understand rather than sending it", async () => {
+    // A typo'd or unsupported algorithm must not reach S3 as a header that
+    // fails the whole upload.
+    process.env.S3_EVIDENCE_SSE = "aes256";
 
     await putRightsEvidence({
       instagramAccountId: "acc-1",
@@ -92,8 +120,6 @@ describe("putRightsEvidence", () => {
     });
 
     expect(lastPutInput().ServerSideEncryption).toBeUndefined();
-    // Still private: the opt-out is about encryption at rest, not access.
-    expect(lastPutInput().ACL).toBe("private");
   });
 
   it("falls back to a neutral content type", async () => {

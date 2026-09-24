@@ -3,15 +3,11 @@ import { notFound } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { requireAdmin } from "@/lib/admin";
 import { prisma } from "@/lib/prisma";
-import {
-  CURRENT_CHECKLIST_VERSION,
-  RESALE_RIGHTS_ROUTES,
-  RESALE_RIGHTS_STATUSES,
-  accountClearanceBlocker,
-} from "@/lib/resale-rights";
+import { accountClearanceBlocker } from "@/lib/resale-rights";
 import { INSTAGRAM_CONNECT_PATH } from "@/lib/routes";
 
 import { disconnectInstagramAccount, recordResaleRightsDecision } from "./actions";
+import { ResaleRightsDecisionForm } from "./decision-form";
 import { BLOCKER_MESSAGES, outcomeMessage } from "./outcomes";
 
 export const metadata = {
@@ -208,90 +204,11 @@ export default async function InstagramSettingsPage({
                   <summary className="cursor-pointer font-medium">
                     Record a resale-rights decision
                   </summary>
-                  <form
+                  <ResaleRightsDecisionForm
+                    instagramAccountId={account.id}
+                    review={review ?? null}
                     action={recordResaleRightsDecision}
-                    className="mt-3 space-y-3"
-                  >
-                    <input
-                      type="hidden"
-                      name="instagramAccountId"
-                      value={account.id}
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      Worked through checklist version{" "}
-                      {CURRENT_CHECKLIST_VERSION} (
-                      docs/legal/instagram-resale-rights-checklist.md). The
-                      decision is recorded against you by name.
-                    </p>
-                    <label className="block text-xs font-medium">
-                      Status
-                      <select
-                        name="status"
-                        defaultValue={review?.status ?? "UNREVIEWED"}
-                        className="mt-1 block w-full rounded-md border border-border bg-background p-2 text-sm"
-                      >
-                        {RESALE_RIGHTS_STATUSES.map((status) => (
-                          <option key={status} value={status}>
-                            {status}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label className="block text-xs font-medium">
-                      Route (how the rights were obtained)
-                      <select
-                        name="route"
-                        defaultValue={review?.route ?? ""}
-                        className="mt-1 block w-full rounded-md border border-border bg-background p-2 text-sm"
-                      >
-                        <option value="">not recorded</option>
-                        {RESALE_RIGHTS_ROUTES.map((route) => (
-                          <option key={route} value={route}>
-                            {route}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label className="block text-xs font-medium">
-                      Valid until (optional — the clearance stops counting at
-                      the start of this day, UTC)
-                      <input
-                        type="date"
-                        name="validUntil"
-                        className="mt-1 block w-full rounded-md border border-border bg-background p-2 text-sm"
-                      />
-                    </label>
-                    <label className="block text-xs font-medium">
-                      Conditions from Part D (optional)
-                      <textarea
-                        name="conditions"
-                        rows={2}
-                        defaultValue={review?.conditions ?? ""}
-                        className="mt-1 block w-full rounded-md border border-border bg-background p-2 text-sm"
-                      />
-                    </label>
-                    <label className="block text-xs font-medium">
-                      Reason (required, recorded in the audit trail)
-                      <textarea
-                        name="reason"
-                        rows={2}
-                        required
-                        className="mt-1 block w-full rounded-md border border-border bg-background p-2 text-sm"
-                      />
-                    </label>
-                    <label className="block text-xs font-medium">
-                      Evidence file (optional — stored privately, never with
-                      sellable media)
-                      <input
-                        type="file"
-                        name="evidence"
-                        className="mt-1 block w-full text-sm"
-                      />
-                    </label>
-                    <Button type="submit" size="sm">
-                      Record decision
-                    </Button>
-                  </form>
+                  />
                 </details>
               </li>
             );

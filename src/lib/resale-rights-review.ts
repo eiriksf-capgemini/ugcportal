@@ -101,7 +101,7 @@ export async function setResaleRightsStatus(
   return prisma.$transaction(async (tx) => {
     const account = await tx.instagramAccount.findUnique({
       where: { id: instagramAccountId },
-      select: { id: true, connectedByUserId: true },
+      select: { id: true, username: true, connectedByUserId: true },
     });
     if (!account) {
       return { outcome: "account_not_found" } as const;
@@ -164,11 +164,15 @@ export async function setResaleRightsStatus(
           }
         : {};
 
+    // The written row is read back rather than reconstructed, so the audit
+    // snapshot below records what the review *actually* says after the write
+    // — including fields this transition left alone.
+    const snapshot = { id: true, checklistVersion: true, evidenceKey: true, evidenceSha256: true };
     const review = existing
       ? await tx.resaleRightsReview.update({
           where: { id: existing.id },
           data: { status: transition.status, ...adminFields },
-          select: { id: true },
+          select: snapshot,
         })
       : await tx.resaleRightsReview.create({
           data: {
@@ -177,12 +181,16 @@ export async function setResaleRightsStatus(
             checklistVersion: CURRENT_CHECKLIST_VERSION,
             ...adminFields,
           },
-          select: { id: true },
+          select: snapshot,
         });
 
     await tx.resaleRightsEvent.create({
       data: {
         reviewId: review.id,
+        // Snapshotted, not joined: this row has to still read sensibly after
+        // the account is disconnected and both it and the review are gone.
+        instagramAccountId,
+        instagramUsername: account.username,
         // No row yet means the account was UNREVIEWED by definition, which is
         // what the gate treated it as — so record that, not null.
         fromStatus: existing ? existing.status : "UNREVIEWED",
@@ -193,6 +201,9 @@ export async function setResaleRightsStatus(
           transition.source === "ADMIN" ? (transition.actorEmail ?? null) : null,
         reason,
         selfReview,
+        checklistVersion: review.checklistVersion,
+        evidenceKey: review.evidenceKey,
+        evidenceSha256: review.evidenceSha256,
       },
     });
 

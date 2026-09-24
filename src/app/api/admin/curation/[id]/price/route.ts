@@ -86,15 +86,22 @@ function parsePriceInput(body: unknown): ParseResult {
  *         belongs to has no closed resale-rights clearance (or the post is
  *         not triaged). The request is well-formed; the state forbids it.
  *
+ * `{"priceCents": null}` — un-pricing — is **not** gated. The gate exists to
+ * stop things being offered for sale; refusing to *withdraw* an offer would
+ * point it backwards, and would strand a price on exactly the accounts that
+ * just lost their clearance. An admin can always take something off sale.
+ *
  * The gate read and the write share a transaction. Note honestly what that
  * does and does not buy: `@prisma/adapter-libsql` opens SQLite transactions
  * as `deferred` (the known issue recorded on ugcportal-lu7 about
  * src/lib/roles.ts), so this does not serialise against a concurrent
  * revocation — a revoke committing between the read and the write can leave
- * a price set on a no-longer-cleared post. That is survivable precisely
- * because a price is not a sale: the catalogue and checkout evaluate the
- * same gate again at render and at payment (Part E.3), so a stale price sells
- * nothing.
+ * a price set on a no-longer-cleared post. Two things make that survivable,
+ * and both are load-bearing: a price is not a sale, because the catalogue and
+ * checkout evaluate this same gate again at render and at payment (Part E.3,
+ * and an acceptance criterion on ugcportal-74w and ugcportal-p3v); and the
+ * stale price really can be cleared afterwards, because un-pricing is
+ * ungated.
  */
 export async function POST(request: Request, { params }: RouteContext) {
   const session = await requireAdmin();
@@ -114,6 +121,8 @@ export async function POST(request: Request, { params }: RouteContext) {
     return NextResponse.json({ error: parsed.error }, { status: 400 });
   }
 
+  const unpricing = parsed.value.priceCents === null;
+
   const result = await prisma.$transaction(async (tx) => {
     const post = await tx.curatedPost.findUnique({
       where: { id },
@@ -123,16 +132,22 @@ export async function POST(request: Request, { params }: RouteContext) {
       return { kind: "not_found" } as const;
     }
 
-    const gate = evaluateSellability(post);
-    if (!gate.sellable) {
-      return { kind: "blocked", blocker: gate.blocker } as const;
+    if (!unpricing) {
+      const gate = evaluateSellability(post);
+      if (!gate.sellable) {
+        return { kind: "blocked", blocker: gate.blocker } as const;
+      }
     }
 
     const updated = await tx.curatedPost.update({
       where: { id },
       data: {
         priceCents: parsed.value.priceCents,
-        ...(parsed.value.currency ? { currency: parsed.value.currency } : {}),
+        // Currency is only meaningful alongside a price, and applying it on
+        // an un-pricing call would be a write the gate never checked.
+        ...(!unpricing && parsed.value.currency
+          ? { currency: parsed.value.currency }
+          : {}),
       },
       select: { id: true, priceCents: true, currency: true },
     });

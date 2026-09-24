@@ -98,6 +98,31 @@ describe("ugcportal-0ss K4: the only writer of CLEARED", () => {
 
     expect(writers).toEqual(["lib/resale-rights-review.ts"]);
   });
+
+  it("has exactly one module that writes the audit trail", () => {
+    // Same gate on the events table. It matters more since the events lost
+    // their foreign key: a second writer could now create rows pointing at
+    // nothing, and nothing in the database would object.
+    const writers = files
+      .filter((file) =>
+        /resaleRightsEvent\.(create|createMany|update|updateMany|upsert)\b/.test(
+          file.source,
+        ),
+      )
+      .map((file) => file.name);
+
+    expect(writers).toEqual(["lib/resale-rights-review.ts"]);
+  });
+
+  it("never deletes an audit row", () => {
+    // Append-only is a property of the code, not of the schema: SQLite will
+    // happily delete these rows if asked. Nothing may ask.
+    const deleters = files
+      .filter((file) => /resaleRightsEvent\.delete/.test(file.source))
+      .map((file) => file.name);
+
+    expect(deleters).toEqual([]);
+  });
 });
 
 describe("the database's own default", () => {
@@ -123,5 +148,36 @@ describe("the database's own default", () => {
 
     expect(sql).toContain(`"status" TEXT NOT NULL DEFAULT 'UNREVIEWED'`);
     expect(sql).not.toContain("CLEARED");
+  });
+
+  it("gives the audit table no foreign key to cascade from", () => {
+    // ugcportal-lu7's lesson, applied: one click of Disconnect must not
+    // delete the record of who cleared the account. Asserted against the
+    // migration rather than the schema because the migration is what the
+    // database actually gets.
+    const sql = readFileSync(
+      resolve(
+        process.cwd(),
+        "prisma/migrations/20260924172545_add_resale_rights/migration.sql",
+      ),
+      "utf8",
+    );
+    const eventTable = /CREATE TABLE "ResaleRightsEvent" \(([\s\S]*?)\n\);/.exec(
+      sql,
+    );
+
+    expect(eventTable).not.toBeNull();
+    expect(eventTable![1]).not.toContain("FOREIGN KEY");
+    // And it carries the snapshots that let a row stand on its own.
+    for (const column of [
+      "instagramAccountId",
+      "instagramUsername",
+      "actorEmail",
+      "checklistVersion",
+      "evidenceKey",
+      "evidenceSha256",
+    ]) {
+      expect(eventTable![1]).toContain(`"${column}"`);
+    }
   });
 });

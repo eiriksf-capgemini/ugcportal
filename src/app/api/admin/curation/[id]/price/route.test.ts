@@ -1,7 +1,12 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ResaleRightsStatus } from "@/generated/prisma/enums";
-import { CURRENT_CHECKLIST_VERSION } from "@/lib/resale-rights";
+import {
+  CURATED_POST_GATE_SELECT,
+  CURRENT_CHECKLIST_VERSION,
+  evaluateSellability,
+  isSellable,
+} from "@/lib/resale-rights";
 import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db";
 
 /**
@@ -164,6 +169,57 @@ describe("ugcportal-0ss K1: the gate at the price-setting endpoint", () => {
       expect(await priceOf()).toBeNull();
     });
   }
+
+  // Un-pricing is the safe direction: it takes something *off* sale. Gating
+  // it would strand a price on exactly the accounts that just lost their
+  // clearance — and the price route's own concurrency argument depends on a
+  // stale price being clearable afterwards.
+  for (const status of allStatuses) {
+    if (status === "CLEARED") continue;
+
+    it(`still lets an admin un-price a post whose account is ${status}`, async () => {
+      await setReview("CLEARED");
+      expect(
+        (await POST(priceRequest({ priceCents: 24900 }), context())).status,
+      ).toBe(200);
+      await setReview(status);
+
+      const response = await POST(priceRequest({ priceCents: null }), context());
+
+      expect(response.status).toBe(200);
+      expect(await priceOf()).toBeNull();
+    });
+  }
+
+  it("lets an admin un-price a post whose account was never reviewed", async () => {
+    await prisma.curatedPost.update({
+      where: { id: "post-1" },
+      data: { priceCents: 500 },
+    });
+
+    expect(
+      (await POST(priceRequest({ priceCents: null }), context())).status,
+    ).toBe(200);
+    expect(await priceOf()).toBeNull();
+  });
+
+  it("does not let un-pricing smuggle a currency change past the gate", async () => {
+    await prisma.curatedPost.update({
+      where: { id: "post-1" },
+      data: { currency: "NOK" },
+    });
+
+    await POST(
+      priceRequest({ priceCents: null, currency: "USD" }),
+      context(),
+    );
+
+    const post = await prisma.curatedPost.findUniqueOrThrow({
+      where: { id: "post-1" },
+    });
+    expect(post.priceCents).toBeNull();
+    expect(post.currency).toBe("NOK");
+  });
 
   it("refuses to price a post whose account has no review row at all", async () => {
     // Nothing created in this test: the row genuinely does not exist.
@@ -366,5 +422,79 @@ describe("input handling", () => {
       where: { id: "post-1" },
       data: { depictsPeople: false },
     });
+  });
+});
+
+/**
+ * The gate has to be callable at the two other moments Part E.3 names —
+ * catalogue render and checkout — not just here. Those are ugcportal-74w and
+ * ugcportal-p3v's code, but the *shape* is this bead's responsibility, and a
+ * predicate that only fits the one call site it was written for is a
+ * predicate those beads will quietly reinvent.
+ *
+ * So this exercises both shapes against the real database: the list read a
+ * catalogue does, and the single read inside a transaction a checkout does.
+ */
+describe("the shapes ugcportal-74w and ugcportal-p3v need", () => {
+  beforeEach(async () => {
+    await prisma.curatedPost.deleteMany({ where: { id: { not: "post-1" } } });
+  });
+
+  it("filters a catalogue listing, with one query and no per-row lookups", async () => {
+    await setReview("CLEARED");
+    await prisma.curatedPost.create({
+      data: {
+        id: "post-2",
+        instagramAccountId: "acc-1",
+        mediaId: "media-2",
+        // Same cleared account, but this one was never triaged.
+        depictsPeople: null,
+      },
+    });
+
+    // Exactly what a catalogue render would do: one findMany, the shared
+    // select spread into whatever else the page needs, then the predicate.
+    const rows = await prisma.curatedPost.findMany({
+      where: { priceCents: { not: null } },
+      select: { id: true, priceCents: true, ...CURATED_POST_GATE_SELECT },
+    });
+    const sellable = rows.filter((row) => isSellable(row));
+
+    // post-1 has no price yet, post-2 is not triaged: nothing is sellable.
+    expect(sellable).toHaveLength(0);
+
+    await POST(priceRequest({ priceCents: 24900 }), context());
+    const priced = await prisma.curatedPost.findMany({
+      where: { priceCents: { not: null } },
+      select: { id: true, priceCents: true, ...CURATED_POST_GATE_SELECT },
+    });
+    expect(priced.filter((row) => isSellable(row)).map((row) => row.id)).toEqual(
+      ["post-1"],
+    );
+  });
+
+  it("re-checks at checkout inside the transaction that takes the money", async () => {
+    await setReview("CLEARED");
+    await POST(priceRequest({ priceCents: 24900 }), context());
+
+    // A revoke lands after the price was set — the race the price route's
+    // comment describes. Checkout is the backstop.
+    await setReview("REVOKED");
+
+    const decision = await prisma.$transaction(async (tx) => {
+      const post = await tx.curatedPost.findUniqueOrThrow({
+        where: { id: "post-1" },
+        select: { id: true, priceCents: true, ...CURATED_POST_GATE_SELECT },
+      });
+      return evaluateSellability(post);
+    });
+
+    expect(decision).toEqual({
+      sellable: false,
+      blocker: "status_not_cleared",
+    });
+    // The stale price is still there, which is exactly why checkout must ask
+    // rather than trust it.
+    expect(await priceOf()).toBe(24900);
   });
 });

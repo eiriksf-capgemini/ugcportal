@@ -36,26 +36,24 @@ async function review() {
   });
 }
 
+const USERS = [
+  { id: CONNECTING_ADMIN, email: "connector@example.com", role: "ADMIN" },
+  { id: OTHER_ADMIN, email: "reviewer@example.com", role: "ADMIN" },
+  { id: "user-1", email: "user@example.com", role: "USER" },
+] as const;
+
+const ACCOUNT = {
+  id: "acc-1",
+  instagramUserId: "ig-1",
+  username: "owner",
+  accessTokenEncrypted: "sealed",
+  tokenExpiresAt: new Date("2027-01-01T00:00:00.000Z"),
+  scopes: "instagram_business_basic",
+  connectedByUserId: CONNECTING_ADMIN,
+};
+
 beforeAll(async () => {
   await applyMigrations(prisma);
-  await prisma.user.createMany({
-    data: [
-      { id: CONNECTING_ADMIN, email: "connector@example.com", role: "ADMIN" },
-      { id: OTHER_ADMIN, email: "reviewer@example.com", role: "ADMIN" },
-      { id: "user-1", email: "user@example.com", role: "USER" },
-    ],
-  });
-  await prisma.instagramAccount.create({
-    data: {
-      id: "acc-1",
-      instagramUserId: "ig-1",
-      username: "owner",
-      accessTokenEncrypted: "sealed",
-      tokenExpiresAt: new Date("2027-01-01T00:00:00.000Z"),
-      scopes: "instagram_business_basic",
-      connectedByUserId: CONNECTING_ADMIN,
-    },
-  });
 });
 
 afterAll(async () => {
@@ -64,8 +62,21 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  // Cascades the events with it.
-  await prisma.resaleRightsReview.deleteMany({});
+  // Rebuilt rather than merely truncated, because two tests here delete the
+  // account and the reviewer on purpose — that is the behaviour under test.
+  //
+  // Note that events are cleared explicitly: they no longer cascade from
+  // anything, which is the entire point of the table (see the schema, and
+  // "survives the account being disconnected" below). Before that change
+  // this line was invisible, because deleting the review took the events
+  // with it.
+  await prisma.resaleRightsEvent.deleteMany({});
+  await prisma.instagramAccount.deleteMany({});
+  await prisma.user.deleteMany({});
+  for (const user of USERS) {
+    await prisma.user.create({ data: user });
+  }
+  await prisma.instagramAccount.create({ data: ACCOUNT });
 });
 
 describe("ugcportal-0ss K3: an admin clearance is recorded", () => {
@@ -107,6 +118,13 @@ describe("ugcportal-0ss K3: an admin clearance is recorded", () => {
       actorEmail: "reviewer@example.com",
       reason: "Signed assignment on file, Part D complete.",
       selfReview: false,
+      // Snapshots, so the row still answers "cleared against what, on what
+      // evidence" when the review and the account are gone.
+      instagramAccountId: "acc-1",
+      instagramUsername: "owner",
+      checklistVersion: CURRENT_CHECKLIST_VERSION,
+      evidenceKey: "rights-evidence/acc-1/contract.pdf",
+      evidenceSha256: "abc123",
     });
   });
 
@@ -171,6 +189,69 @@ describe("ugcportal-0ss K3: an admin clearance is recorded", () => {
       evidenceKey: "rights-evidence/acc-1/contract.pdf",
       evidenceSha256: "abc123",
     });
+  });
+
+  // An audit trail that disappears when someone clicks Disconnect is not an
+  // audit trail. RoleChange (ugcportal-lu7) solved this by carrying no
+  // foreign keys; this table does the same, and snapshots the facts a reader
+  // needs so the row still stands alone.
+  it("survives the account being disconnected", async () => {
+    await setResaleRightsStatus("acc-1", {
+      source: "ADMIN",
+      actorUserId: OTHER_ADMIN,
+      actorEmail: "reviewer@example.com",
+      status: "CLEARED",
+      reason: "Signed assignment on file.",
+      evidence: { key: "rights-evidence/acc-1/contract.pdf", sha256: "abc123" },
+    });
+
+    // Exactly what disconnectInstagramAccount does.
+    await prisma.instagramAccount.delete({ where: { id: "acc-1" } });
+
+    // The current-state row goes with the account, by design.
+    expect(await review()).toBeNull();
+
+    // The history does not.
+    const survivors = await prisma.resaleRightsEvent.findMany({
+      where: { instagramAccountId: "acc-1" },
+    });
+    expect(survivors).toHaveLength(1);
+    expect(survivors[0]).toMatchObject({
+      instagramAccountId: "acc-1",
+      // Who, when, what, against which checklist, on which evidence — all
+      // readable with no other table present.
+      instagramUsername: "owner",
+      actorUserId: OTHER_ADMIN,
+      actorEmail: "reviewer@example.com",
+      toStatus: "CLEARED",
+      checklistVersion: CURRENT_CHECKLIST_VERSION,
+      evidenceKey: "rights-evidence/acc-1/contract.pdf",
+      evidenceSha256: "abc123",
+    });
+  });
+
+  it("survives the reviewing admin's account being deleted", async () => {
+    await setResaleRightsStatus("acc-1", {
+      source: "ADMIN",
+      actorUserId: OTHER_ADMIN,
+      actorEmail: "reviewer@example.com",
+      status: "CLEARED",
+      reason: "Signed assignment on file.",
+    });
+
+    await prisma.user.delete({ where: { id: OTHER_ADMIN } });
+
+    const [event] = await prisma.resaleRightsEvent.findMany({
+      where: { instagramAccountId: "acc-1" },
+    });
+    // The id dangles, but the snapshotted email still names the human.
+    expect(event).toMatchObject({
+      actorUserId: OTHER_ADMIN,
+      actorEmail: "reviewer@example.com",
+    });
+    // And the clearance stops counting, because the gate re-reads the role
+    // and there is no longer a user to read (ON DELETE SET NULL).
+    expect((await review())?.reviewedByUserId).toBeNull();
   });
 
   it("refuses to record a decision with no reason", async () => {
