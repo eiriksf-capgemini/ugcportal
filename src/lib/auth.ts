@@ -4,6 +4,7 @@ import Facebook from "next-auth/providers/facebook";
 import Google from "next-auth/providers/google";
 
 import type { Role } from "@/generated/prisma/enums";
+import { reconcileBootstrapAdmin } from "@/lib/admin-bootstrap";
 import { prisma } from "@/lib/prisma";
 
 declare module "next-auth" {
@@ -43,6 +44,15 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       // waiting for their session to expire.
       session.user.role = toRole(user);
       return session;
+    },
+  },
+  events: {
+    // The first-admin bootstrap (ugcportal-lu7). Runs here rather than in the
+    // session callback because that one fires on every request and this needs
+    // a write; sign-in is the one moment where doing it once is both cheap
+    // and early enough for the same visit to land on an admin page.
+    async signIn({ user }) {
+      await reconcileBootstrapAdmin(user);
     },
   },
   providers: [
