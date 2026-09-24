@@ -120,26 +120,58 @@ describe("generateWatermarkedPreview", () => {
     expect(metadata.height).toBeLessThan(SOURCE_HEIGHT);
   });
 
+  /**
+   * The overlay has to actually mark the image (not merely re-encode it) and
+   * it has to be everywhere, so that no single crop removes it — a corner
+   * stamp would light up one quadrant and leave the other three untouched.
+   */
+  function expectFullFrameCoverage(diff: Awaited<ReturnType<typeof diffPixels>>) {
+    const { changed, total, quadrants } = diff;
+    expect(changed / total).toBeGreaterThan(0.02);
+    const perQuadrantFloor = (total / 4) * 0.01;
+    expect(quadrants.topLeft).toBeGreaterThan(perQuadrantFloor);
+    expect(quadrants.topRight).toBeGreaterThan(perQuadrantFloor);
+    expect(quadrants.bottomLeft).toBeGreaterThan(perQuadrantFloor);
+    expect(quadrants.bottomRight).toBeGreaterThan(perQuadrantFloor);
+  }
+
   it("burns a watermark into the pixels, spread across the whole frame (K1)", async () => {
     const source = await buildSourcePng();
 
     const preview = await generateWatermarkedPreview(source);
     const baseline = await buildUnwatermarkedBaseline(source);
 
-    const { changed, total, quadrants } = await diffPixels(
-      preview.data,
-      baseline,
-    );
+    expectFullFrameCoverage(await diffPixels(preview.data, baseline));
+  });
 
-    // The overlay has to actually mark the image, not merely re-encode it.
-    expect(changed / total).toBeGreaterThan(0.02);
-    // ...and it has to be everywhere, so no single crop removes it. A corner
-    // stamp would light up one quadrant and leave the other three untouched.
-    const perQuadrantFloor = (total / 4) * 0.01;
-    expect(quadrants.topLeft).toBeGreaterThan(perQuadrantFloor);
-    expect(quadrants.topRight).toBeGreaterThan(perQuadrantFloor);
-    expect(quadrants.bottomLeft).toBeGreaterThan(perQuadrantFloor);
-    expect(quadrants.bottomRight).toBeGreaterThan(perQuadrantFloor);
+  it.each([
+    ["the default", undefined],
+    ["a long brand name", "Some Rather Long Studio Name"],
+    // The cap resolveWatermarkText enforces, i.e. the worst case a deployment
+    // can actually configure. Tile width scales with glyph count, so without
+    // shrink-to-fit this length makes the tile wider than the frame and the
+    // diagonal repeat collapses to one or two isolated runs.
+    ["the maximum-length text", "W".repeat(40)],
+  ])("keeps full-frame coverage with %s", async (_label, text) => {
+    const source = await buildSourcePng();
+
+    const preview = await generateWatermarkedPreview(source, { text });
+    const baseline = await buildUnwatermarkedBaseline(source);
+
+    expectFullFrameCoverage(await diffPixels(preview.data, baseline));
+  });
+
+  it("repeats the mark many times over rather than stamping it once", async () => {
+    // Coverage alone can be satisfied by a couple of enormous runs; this
+    // checks the tile actually repeats at the configured cap.
+    const svg = buildWatermarkOverlaySvg(
+      PREVIEW_MAX_DIMENSION,
+      853,
+      "W".repeat(40),
+    );
+    const tileWidth = Number(/<pattern[^>]*\swidth="(\d+)"/.exec(svg)?.[1]);
+
+    expect(tileWidth).toBeLessThan(PREVIEW_MAX_DIMENSION / 2);
   });
 
   it("leaves the image recognisable rather than obliterating it", async () => {

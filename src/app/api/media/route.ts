@@ -77,8 +77,7 @@ export async function POST(request: Request) {
     );
   }
 
-  const uploadId = randomUUID();
-  const key = `media/${userId}/${uploadId}-${sanitizeFilename(file.name)}`;
+  const key = `media/${userId}/${randomUUID()}-${sanitizeFilename(file.name)}`;
 
   // Watermark first, store second.
   //
@@ -120,8 +119,17 @@ export async function POST(request: Request) {
     }
   }
 
+  // An independent UUID, deliberately not derived from `key`.
+  //
+  // Withholding the original's key from every response is worthless if the
+  // key can simply be recomputed from what we do return. Sharing one id
+  // between the two would mean previewKey + originalName + the (deterministic)
+  // sanitizeFilename above is enough to reconstruct the original's full path —
+  // so the moment ugcportal-71y makes previewKey fetchable against this
+  // bucket, K2 is defeated by string concatenation. Uncorrelated ids make the
+  // original's key unguessable from anything the listing exposes.
   const previewKey = preview
-    ? `previews/${userId}/${uploadId}${PREVIEW_FILE_EXTENSION}`
+    ? `previews/${userId}/${randomUUID()}${PREVIEW_FILE_EXTENSION}`
     : null;
 
   // Track what actually made it into the bucket so the compensating delete

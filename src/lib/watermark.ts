@@ -22,8 +22,18 @@ export const PREVIEW_FILE_EXTENSION = ".webp";
 // src/lib/media.ts) can legitimately be a few megapixels, but can also be
 // crafted to decode to billions of them. sharp's own default is ~268 MP,
 // far more than any real upload needs; 50 MP still covers every consumer
-// camera while capping worst-case decode memory at a few hundred MB rather
-// than tens of GB.
+// camera.
+//
+// What this bounds is exactly one decode: a single call cannot expand past
+// ~50 MP (a few hundred MB of native memory) instead of tens of GB. It says
+// nothing about the process as a whole. Nothing here limits how many
+// previews are generated at once, so N concurrent uploads cost N times this,
+// outside the V8 heap and outside any Node-level limit — ~10 simultaneous
+// 50 MP uploads is enough native memory to get a container OOM-killed. A
+// concurrency gate is genuinely needed and is deliberately not bolted on
+// here: the limit has to be derived from the container's memory budget and
+// has to interact with request timeouts (queued uploads hold connections
+// open), which is a design decision of its own. Tracked as ugcportal-e86.
 export const MAX_INPUT_PIXELS = 50_000_000;
 
 // Fallback when WATERMARK_TEXT is unset. Documented in env.example.
@@ -36,6 +46,23 @@ const MAX_WATERMARK_TEXT_LENGTH = 40;
 // Named first so the font the Dockerfile installs is the one actually picked;
 // the rest are there for local dev on macOS/Linux workstations.
 const FONT_STACK = "DejaVu Sans, Liberation Sans, Helvetica, Arial, sans-serif";
+
+// Rough average advance width of a sans-serif glyph, in em. librsvg won't
+// measure text for us, so tile geometry is estimated from the glyph count.
+const GLYPH_ADVANCE_EM = 0.62;
+
+// A single run of the watermark text may occupy at most this fraction of the
+// preview's width. The tile is 1.8x a run, so 0.25 keeps the tile under half
+// the frame and therefore guarantees the pattern repeats at least twice
+// across it, for any configurable text length. Let a run grow much past this
+// and the tile ends up wider than the frame, collapsing the diagonal repeat
+// into one or two isolated runs — exactly the croppable single stamp the
+// tiling exists to avoid.
+const MAX_TEXT_RUN_FRACTION = 0.25;
+
+// Floor for the shrink-to-fit above, so a 40-character brand name on a small
+// preview still produces something readable rather than a grey haze.
+const MIN_FONT_SIZE = 10;
 
 /**
  * Thrown when a preview cannot be produced from *this particular file* — an
@@ -158,14 +185,27 @@ export function buildWatermarkOverlaySvg(
   text: string,
 ): string {
   const safeText = escapeXml(text);
-  const fontSize = Math.min(
+  const glyphs = Math.max(1, text.length);
+
+  // Size to the frame first...
+  const framedFontSize = Math.min(
     48,
     Math.max(14, Math.round(Math.min(width, height) * 0.045)),
   );
-  // librsvg can't be asked to measure text for us, so estimate the advance
-  // width from the glyph count; 0.62em per character is a fair average for a
-  // sans-serif face and only affects tile spacing.
-  const estimatedTextWidth = Math.max(1, text.length) * fontSize * 0.62;
+  // ...then shrink to fit the text, so tile width stays a function of the
+  // frame rather than of how long someone's brand name is. Without this a
+  // 40-character WATERMARK_TEXT (the cap env.example invites) produces a tile
+  // wider than a 1280px preview and the repeat degenerates into a couple of
+  // isolated runs.
+  const fittedFontSize = Math.floor(
+    (width * MAX_TEXT_RUN_FRACTION) / (glyphs * GLYPH_ADVANCE_EM),
+  );
+  const fontSize = Math.max(
+    MIN_FONT_SIZE,
+    Math.min(framedFontSize, fittedFontSize),
+  );
+
+  const estimatedTextWidth = glyphs * fontSize * GLYPH_ADVANCE_EM;
   const tileWidth = Math.round(estimatedTextWidth * 1.8);
   const tileHeight = Math.round(fontSize * 4);
   const textStrokeWidth = Math.max(1, fontSize / 24);
@@ -228,12 +268,21 @@ async function probeFont(): Promise<boolean> {
  * that actually has the problem — which a test on the CI host never can,
  * because CI is not the container image.
  *
- * Memoised: the probe is a few milliseconds, but there is no reason to pay it
- * per upload.
+ * Only *success* is memoised. Whether a font is installed can't change under
+ * a running process, so caching a true result is free; caching a false one is
+ * not, because the probe allocates and rasterises and can therefore fail for
+ * reasons that have nothing to do with fonts. Memoising that would turn one
+ * transient blip into every subsequent upload returning a 500, with a
+ * thoroughly misleading "install a font package" in the log, until someone
+ * restarts the process. Concurrent callers still share one in-flight probe.
  */
 export async function assertWatermarkFontAvailable(): Promise<void> {
-  fontProbe ??= probeFont().catch(() => false);
-  if (!(await fontProbe)) {
+  const probe = (fontProbe ??= probeFont().catch(() => false));
+
+  if (!(await probe)) {
+    // Drop the cached attempt so the next caller re-probes. Guarded in case
+    // another caller already replaced it.
+    if (fontProbe === probe) fontProbe = undefined;
     throw new WatermarkFontUnavailableError(
       "No usable font found for watermark text. libvips ships no fonts; install a font package (e.g. fontconfig + font-dejavu) in the runtime image.",
     );

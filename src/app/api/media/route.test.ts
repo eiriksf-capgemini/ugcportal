@@ -229,6 +229,29 @@ describe("POST /api/media", () => {
     expect(JSON.stringify(body)).not.toContain("media/");
   });
 
+  it("does not let the original key be reconstructed from the exposed fields (K2)", async () => {
+    authMock.mockResolvedValue({ user: { id: "user-1" } });
+    s3SendMock.mockResolvedValue({});
+    mediaCreateMock.mockImplementation(async ({ data }) =>
+      selectedRow({ previewKey: data.previewKey }),
+    );
+    const file = new File([REAL_PNG], "photo.png", { type: "image/png" });
+
+    await POST(buildRequest(file));
+
+    const { key, previewKey } = mediaCreateMock.mock.calls[0][0].data;
+    const [originalId] = key.replace("media/user-1/", "").split("-photo.png");
+    const previewId = previewKey
+      .replace("previews/user-1/", "")
+      .replace(".webp", "");
+
+    // Hiding `key` achieves nothing if it can be recomputed from previewKey +
+    // originalName, since sanitizeFilename is deterministic. The two ids must
+    // be independent.
+    expect(previewId).not.toBe(originalId);
+    expect(`media/user-1/${previewId}-photo.png`).not.toBe(key);
+  });
+
   it("stores no preview for a video upload and leaves previewKey null", async () => {
     authMock.mockResolvedValue({ user: { id: "user-1" } });
     s3SendMock.mockResolvedValue({});
