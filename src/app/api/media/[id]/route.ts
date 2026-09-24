@@ -75,7 +75,12 @@ async function readJsonBody(
 
       received += value.byteLength;
       if (received > limit) {
-        await reader.cancel();
+        // Swallowed deliberately: cancel() can reject when the connection
+        // is already gone, and the shared catch below answers 400. The cap
+        // has been decided by this point, so letting a failed teardown
+        // rewrite a correct 413 into "malformed JSON" would report the
+        // wrong thing about a request we already understand.
+        await reader.cancel().catch(() => {});
         return { ok: false, status: 413, error: "Request body too large" };
       }
 

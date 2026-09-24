@@ -83,7 +83,11 @@ const OVERSIZED_CHUNKS = 64;
  * actually took, which is how the tests tell a real streaming bound from a
  * check that buffered everything first and only then complained.
  */
-function chunkedPatchRequest(chunkCount: number, contentLength?: string) {
+function chunkedPatchRequest(
+  chunkCount: number,
+  contentLength?: string,
+  options: { cancelRejects?: boolean } = {},
+) {
   let pulled = 0;
   const stream = new ReadableStream<Uint8Array>({
     pull(controller) {
@@ -93,6 +97,12 @@ function chunkedPatchRequest(chunkCount: number, contentLength?: string) {
       }
       pulled += 1;
       controller.enqueue(new Uint8Array(CHUNK_BYTES).fill(0x20));
+    },
+    cancel() {
+      if (options.cancelRejects) {
+        // What a reset connection looks like from the reader's side.
+        return Promise.reject(new Error("stream already torn down"));
+      }
     },
   });
 
@@ -367,6 +377,22 @@ describe("PATCH /api/media/[id] as the owner", () => {
 
     expect(response.status).toBe(413);
     expect(pulled()).toBeLessThanOrEqual(MAX_EXPECTED_PULLS);
+    expect(mediaUpdateManyMock).not.toHaveBeenCalled();
+  });
+
+  // Tearing down the stream can fail once the connection is gone; that must
+  // not downgrade a decided 413 into "your JSON was malformed".
+  it("still returns 413 when cancelling the oversized stream rejects", async () => {
+    const { request } = chunkedPatchRequest(OVERSIZED_CHUNKS, undefined, {
+      cancelRejects: true,
+    });
+
+    const response = await PATCH(request, context());
+
+    expect(response.status).toBe(413);
+    await expect(response.json()).resolves.toEqual({
+      error: "Request body too large",
+    });
     expect(mediaUpdateManyMock).not.toHaveBeenCalled();
   });
 
