@@ -1,6 +1,8 @@
 import { DeleteObjectCommand } from "@aws-sdk/client-s3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { MediaModel } from "@/generated/prisma/models";
+
 const authMock = vi.fn();
 const s3SendMock = vi.fn();
 const getS3ClientMock = vi.fn();
@@ -37,16 +39,34 @@ const OWNER_ID = "user-a";
 const OTHER_ID = "user-b";
 const MEDIA_ID = "media-1";
 
-const ownedMedia = {
+const ownedMedia: MediaModel = {
   id: MEDIA_ID,
   userId: OWNER_ID,
-  kind: "IMAGE" as const,
+  kind: "IMAGE",
   key: "media/user-a/abc-photo.png",
+  // Since ugcportal-44q an image upload also stores a watermarked preview.
+  previewKey: "previews/user-a/def-photo.webp",
   mimeType: "image/png",
   sizeBytes: 1024,
   originalName: "photo.png",
   createdAt: new Date("2026-01-01T00:00:00.000Z"),
 };
+
+// A VIDEO row, which gets no preview yet (ugcportal-pmb owns the poster
+// frame), so DELETE has only one object to remove.
+const ownedVideo: MediaModel = {
+  ...ownedMedia,
+  id: "media-2",
+  kind: "VIDEO",
+  key: "media/user-a/ghi-clip.mp4",
+  previewKey: null,
+  mimeType: "video/mp4",
+  originalName: "clip.mp4",
+};
+
+// The log every best-effort storage failure goes through, so the orphaned
+// key is always recoverable from the logs.
+const ORPHAN_LOG = "[media] failed to remove object after delete";
 
 function context(id: string = MEDIA_ID) {
   return { params: Promise.resolve({ id }) };
@@ -130,7 +150,7 @@ function expectNoWrites() {
 // Answers from the stored row set rather than unconditionally, so passing
 // the wrong id to the gate surfaces as a 404 instead of silently
 // authorizing against whatever the mock was told to return.
-function seedMedia(...rows: Array<typeof ownedMedia>) {
+function seedMedia(...rows: MediaModel[]) {
   mediaFindUniqueMock.mockImplementation(
     async (args: { where: { id: string } }) =>
       rows.find((row) => row.id === args.where.id) ?? null,
@@ -272,6 +292,36 @@ describe("PATCH /api/media/[id] as the owner", () => {
     });
     expect(body).toMatchObject({ id: MEDIA_ID, originalName: "holiday.png" });
     expect(s3SendMock).not.toHaveBeenCalled();
+  });
+
+  // The ownership gate reads the whole row because DELETE needs the storage
+  // keys; echoing that row back would hand the client `key`, the ungated
+  // original that POST and GET are careful never to return (ugcportal-5d6).
+  it("never returns the original's storage key in the rename response", async () => {
+    mediaUpdateManyMock.mockResolvedValue({ count: 1 });
+
+    const response = await PATCH(
+      patchRequest({ originalName: "holiday.png" }),
+      context(),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body).not.toHaveProperty("key");
+    expect(body).not.toHaveProperty("userId");
+    expect(JSON.stringify(body)).not.toContain(ownedMedia.key);
+    // The public projection is still complete, not just stripped.
+    expect(Object.keys(body).sort()).toEqual(
+      [
+        "createdAt",
+        "id",
+        "kind",
+        "mimeType",
+        "originalName",
+        "previewKey",
+        "sizeBytes",
+      ].sort(),
+    );
   });
 
   it("ignores unknown fields instead of forwarding them to Prisma", async () => {
@@ -452,7 +502,15 @@ describe("DELETE /api/media/[id] as the owner", () => {
     seedMedia(ownedMedia);
   });
 
-  it("deletes the row, then the stored object, and returns 204", async () => {
+  function deletedKeys() {
+    return s3SendMock.mock.calls.map((call) => {
+      expect(call[0]).toBeInstanceOf(DeleteObjectCommand);
+      expect(call[0].input).toMatchObject({ Bucket: "test-bucket" });
+      return call[0].input.Key;
+    });
+  }
+
+  it("deletes the row, then both stored objects, and returns 204", async () => {
     mediaDeleteManyMock.mockResolvedValue({ count: 1 });
     s3SendMock.mockResolvedValue({});
 
@@ -464,16 +522,25 @@ describe("DELETE /api/media/[id] as the owner", () => {
     expect(mediaDeleteManyMock).toHaveBeenCalledWith({
       where: { id: MEDIA_ID, userId: OWNER_ID },
     });
-    expect(s3SendMock).toHaveBeenCalledTimes(1);
-    const command = s3SendMock.mock.calls[0][0];
-    expect(command).toBeInstanceOf(DeleteObjectCommand);
-    expect(command.input).toMatchObject({
-      Bucket: "test-bucket",
-      Key: ownedMedia.key,
-    });
+    // The preview is the half that has no other record of its key once the
+    // row is gone (ugcportal-44q), so it is the one worth pinning.
+    expect(deletedKeys().sort()).toEqual(
+      [ownedMedia.key, ownedMedia.previewKey].sort(),
+    );
   });
 
-  it("still returns 204 when storage deletion fails, and logs the orphan", async () => {
+  it("deletes only the original for a row with no preview", async () => {
+    seedMedia(ownedVideo);
+    mediaDeleteManyMock.mockResolvedValue({ count: 1 });
+    s3SendMock.mockResolvedValue({});
+
+    const response = await DELETE(deleteRequest(), context(ownedVideo.id));
+
+    expect(response.status).toBe(204);
+    expect(deletedKeys()).toEqual([ownedVideo.key]);
+  });
+
+  it("still returns 204 when storage deletion fails, and logs each orphan", async () => {
     mediaDeleteManyMock.mockResolvedValue({ count: 1 });
     s3SendMock.mockRejectedValue(new Error("bucket unreachable"));
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -481,14 +548,67 @@ describe("DELETE /api/media/[id] as the owner", () => {
     const response = await DELETE(deleteRequest(), context());
 
     expect(response.status).toBe(204);
+    expect(consoleError).toHaveBeenCalledTimes(2);
+    expect(consoleError).toHaveBeenCalledWith(
+      ORPHAN_LOG,
+      expect.objectContaining({ key: ownedMedia.key, role: "original" }),
+    );
+    expect(consoleError).toHaveBeenCalledWith(
+      ORPHAN_LOG,
+      expect.objectContaining({ key: ownedMedia.previewKey, role: "preview" }),
+    );
+  });
+
+  // Each object is attempted independently: losing one must not mean the
+  // other is never even tried, or a single bad key strands its sibling.
+  it("still deletes the preview when the original's delete fails", async () => {
+    mediaDeleteManyMock.mockResolvedValue({ count: 1 });
+    s3SendMock.mockImplementation((command: DeleteObjectCommand) =>
+      command.input.Key === ownedMedia.key
+        ? Promise.reject(new Error("original gone missing"))
+        : Promise.resolve({}),
+    );
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const response = await DELETE(deleteRequest(), context());
+
+    expect(response.status).toBe(204);
+    expect(deletedKeys().sort()).toEqual(
+      [ownedMedia.key, ownedMedia.previewKey].sort(),
+    );
     expect(consoleError).toHaveBeenCalledOnce();
-    expect(String(consoleError.mock.calls[0][0])).toContain(ownedMedia.key);
+    expect(consoleError).toHaveBeenCalledWith(
+      ORPHAN_LOG,
+      expect.objectContaining({ key: ownedMedia.key, role: "original" }),
+    );
+  });
+
+  it("still deletes the original when the preview's delete fails", async () => {
+    mediaDeleteManyMock.mockResolvedValue({ count: 1 });
+    s3SendMock.mockImplementation((command: DeleteObjectCommand) =>
+      command.input.Key === ownedMedia.previewKey
+        ? Promise.reject(new Error("preview gone missing"))
+        : Promise.resolve({}),
+    );
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const response = await DELETE(deleteRequest(), context());
+
+    expect(response.status).toBe(204);
+    expect(deletedKeys().sort()).toEqual(
+      [ownedMedia.key, ownedMedia.previewKey].sort(),
+    );
+    expect(consoleError).toHaveBeenCalledOnce();
+    expect(consoleError).toHaveBeenCalledWith(
+      ORPHAN_LOG,
+      expect.objectContaining({ key: ownedMedia.previewKey, role: "preview" }),
+    );
   });
 
   // The row is already gone by this point, so a throw from the storage
   // helpers themselves — requireEnv() on a missing S3_BUCKET_NAME — must
   // not turn a completed delete into a 500 and swallow the orphan log.
-  it("still returns 204 when the storage config throws, and logs the orphan", async () => {
+  it("still returns 204 when the storage config throws, and logs the orphans", async () => {
     mediaDeleteManyMock.mockResolvedValue({ count: 1 });
     getBucketNameMock.mockImplementation(() => {
       throw new Error("Missing required environment variable: S3_BUCKET_NAME");
@@ -498,8 +618,15 @@ describe("DELETE /api/media/[id] as the owner", () => {
     const response = await DELETE(deleteRequest(), context());
 
     expect(response.status).toBe(204);
-    expect(consoleError).toHaveBeenCalledOnce();
-    expect(String(consoleError.mock.calls[0][0])).toContain(ownedMedia.key);
+    expect(consoleError).toHaveBeenCalledTimes(2);
+    expect(consoleError).toHaveBeenCalledWith(
+      ORPHAN_LOG,
+      expect.objectContaining({ key: ownedMedia.key }),
+    );
+    expect(consoleError).toHaveBeenCalledWith(
+      ORPHAN_LOG,
+      expect.objectContaining({ key: ownedMedia.previewKey }),
+    );
   });
 
   it("still returns 204 when the storage client cannot be constructed", async () => {
@@ -512,8 +639,11 @@ describe("DELETE /api/media/[id] as the owner", () => {
     const response = await DELETE(deleteRequest(), context());
 
     expect(response.status).toBe(204);
-    expect(consoleError).toHaveBeenCalledOnce();
-    expect(String(consoleError.mock.calls[0][0])).toContain(ownedMedia.key);
+    expect(consoleError).toHaveBeenCalledTimes(2);
+    expect(consoleError).toHaveBeenCalledWith(
+      ORPHAN_LOG,
+      expect.objectContaining({ key: ownedMedia.key }),
+    );
   });
 
   it("returns 404 when the row is deleted between the check and the write", async () => {

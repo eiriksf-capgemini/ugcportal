@@ -1,33 +1,20 @@
 import { DeleteObjectCommand } from "@aws-sdk/client-s3";
 import { NextResponse } from "next/server";
 
-import { requireOwnedMedia } from "@/lib/media-access";
+import { MAX_ORIGINAL_NAME_LENGTH, validateOriginalName } from "@/lib/media";
+import { requireOwnedMedia, toPublicMedia } from "@/lib/media-access";
 import { prisma } from "@/lib/prisma";
 import { getBucketName, getS3Client } from "@/lib/s3";
 
 // App Router hands dynamic segments in as a Promise (Next 16).
 type RouteContext = { params: Promise<{ id: string }> };
 
-// Display-only label, so the bound is about keeping the field printable and
-// the row small rather than about any filesystem limit — the object's real
-// storage key is derived at upload time and is never editable.
-const MAX_ORIGINAL_NAME_LENGTH = 255;
-
-// A rename carries no file, so the body is one short JSON object: a
-// 255-character name with every character escaped fits several times over.
-// App Router puts no default cap on the request body, so without this an
-// owner could make the server buffer gigabytes before the length check in
-// parseOriginalName ever runs.
+// A rename carries no file, so the body is one short JSON object: a name at
+// the full MAX_ORIGINAL_NAME_LENGTH with every character escaped still fits
+// several times over. App Router puts no default cap on the request body, so
+// without this an owner could make the server buffer gigabytes before the
+// length check in validateOriginalName ever runs.
 const MAX_PATCH_BODY_BYTES = 4096;
-
-// Characters that would survive into every UI rendering the name and lie
-// about what it says: C0 and C1 controls, DEL, and the bidi marks and
-// overrides. The last group is the reason this check is wider than it looks
-// — "invoice\u202Egnp.exe" renders as "invoice exe.png", the exact
-// deception the check exists to stop. Zero-width joiners are deliberately
-// left alone; emoji filenames are legitimate and don't reorder text.
-const UNSAFE_NAME_CHARS =
-  /[\u0000-\u001F\u007F-\u009F\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/;
 
 type NameResult = { ok: true; value: string } | { ok: false; message: string };
 
@@ -113,30 +100,40 @@ function parseOriginalName(body: unknown): NameResult {
     return { ok: false, message: "Expected a JSON object body" };
   }
 
+  // The name itself is checked by the shared validator in src/lib/media.ts,
+  // which the upload path calls too — see the note there on why one
+  // implementation is the whole point.
   const { originalName } = body as { originalName?: unknown };
-  if (typeof originalName !== "string") {
-    return { ok: false, message: "Field 'originalName' must be a string" };
-  }
+  return validateOriginalName(originalName);
+}
 
-  const trimmed = originalName.trim();
-  if (trimmed.length === 0) {
-    return { ok: false, message: "Field 'originalName' must not be empty" };
+/**
+ * Removes one stored object, swallowing and logging any failure.
+ *
+ * try/catch around the whole body rather than a `.catch()` on the send:
+ * getS3Client() and getBucketName() both go through requireEnv() and throw
+ * synchronously on a missing variable, so a promise-level catch would let a
+ * misconfigured environment turn an already-committed delete into a 500 —
+ * and lose the orphan log, the only record of the leaked key.
+ */
+async function deleteObjectBestEffort(
+  mediaId: string,
+  objectKey: string,
+  role: string,
+): Promise<void> {
+  try {
+    await getS3Client().send(
+      new DeleteObjectCommand({ Bucket: getBucketName(), Key: objectKey }),
+    );
+  } catch (cause: unknown) {
+    // Logged, not surfaced: the delete the caller asked for did happen.
+    console.error("[media] failed to remove object after delete", {
+      mediaId,
+      key: objectKey,
+      role,
+      cause,
+    });
   }
-  if (trimmed.length > MAX_ORIGINAL_NAME_LENGTH) {
-    return {
-      ok: false,
-      message: `Field 'originalName' must be at most ${MAX_ORIGINAL_NAME_LENGTH} characters`,
-    };
-  }
-  if (UNSAFE_NAME_CHARS.test(trimmed)) {
-    return {
-      ok: false,
-      message:
-        "Field 'originalName' must not contain control or text-direction characters",
-    };
-  }
-
-  return { ok: true, value: trimmed };
 }
 
 /** Renames one media item. Owner only (ugcportal-bdh). */
@@ -176,7 +173,15 @@ export async function PATCH(request: Request, { params }: RouteContext) {
   // No re-read: the only column touched is the one just validated, and
   // Media has no DB-derived fields (no updatedAt, no triggers) that a
   // second round trip would reveal.
-  return NextResponse.json({ ...access.media, originalName: name.value });
+  //
+  // Projected through toPublicMedia rather than spread: the gate reads the
+  // whole row because DELETE needs the storage keys, and echoing that row
+  // verbatim would hand `key` — the ungated original (ugcportal-5d6) — to
+  // the client, the one column POST and GET go out of their way never to
+  // return.
+  return NextResponse.json(
+    toPublicMedia({ ...access.media, originalName: name.value }),
+  );
 }
 
 /** Deletes one media item and its stored object. Owner only (ugcportal-bdh). */
@@ -199,28 +204,31 @@ export async function DELETE(request: Request, { params }: RouteContext) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  // Row first, object second. The inverse order would leave a row pointing
+  // Row first, objects second. The inverse order would leave a row pointing
   // at bytes that are already gone if the DB call then failed, and the user
   // would have no way to retry it. This way a failed storage call leaves an
   // orphaned object — invisible to the user, cleanable out of band — which
   // is the same trade POST makes when it compensates a failed DB write.
   //
-  // try/catch around the whole block, not just the send: getS3Client() and
-  // getBucketName() both go through requireEnv() and throw synchronously on
-  // a missing variable, so a `.catch()` on the promise alone would let a
-  // misconfigured environment turn an already-committed delete into a 500 —
-  // and lose the orphan log, the only record of the leaked key.
-  try {
-    await getS3Client().send(
-      new DeleteObjectCommand({ Bucket: getBucketName(), Key: access.media.key }),
-    );
-  } catch (error: unknown) {
-    // Logged, not surfaced: the delete the caller asked for did happen.
-    console.error(
-      `Deleted media ${id} but failed to remove object ${access.media.key} from storage`,
-      error,
-    );
-  }
+  // Both objects, not just the original: since ugcportal-44q an image also
+  // has a watermarked preview, and the row is the only thing that knows its
+  // previewKey. Dropping the row without deleting it would strand an object
+  // nothing can ever name again — storage that grows with ordinary use and
+  // user-derived content that outlives the "delete" that was meant to
+  // remove it.
+  //
+  // Independently best-effort: each key is attempted and logged on its own,
+  // so a failure on the original doesn't skip the preview or vice versa.
+  await Promise.all(
+    [
+      { key: access.media.key, role: "original" },
+      { key: access.media.previewKey, role: "preview" },
+    ]
+      .filter((target): target is { key: string; role: string } =>
+        Boolean(target.key),
+      )
+      .map((target) => deleteObjectBestEffort(id, target.key, target.role)),
+  );
 
   return new NextResponse(null, { status: 204 });
 }

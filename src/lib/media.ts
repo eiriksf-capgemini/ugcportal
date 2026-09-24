@@ -100,3 +100,96 @@ export function validateUpload(file: {
 
   return { ok: true, kind };
 }
+
+// --- originalName: one implementation, two call sites -----------------------
+//
+// `originalName` is the only user-controlled string we store and later render,
+// and it reaches the DB by two different doors: the upload in POST /api/media
+// (taken from `file.name`) and the rename in PATCH /api/media/[id]. A check
+// that lives on only one of them is theatre — an attacker simply uploads a
+// file already called what they would otherwise have renamed it to. Hence one
+// denylist and one bound, here, consumed by both.
+
+// Display-only label, so the bound is about keeping the field printable and
+// the row small rather than about any filesystem limit — the object's real
+// storage key is derived separately at upload time and is never editable.
+//
+// Counted in code points rather than UTF-16 units so that truncating can
+// never split a surrogate pair and leave half a character behind. The two
+// functions below have to agree on what "255" counts, or a sanitized name
+// could still fail validation.
+export const MAX_ORIGINAL_NAME_LENGTH = 255;
+
+// Characters that would survive into every UI rendering the name and lie
+// about what it says: C0 and C1 controls, DEL, and the bidi marks and
+// overrides. The last group is why this is wider than it looks —
+// "invoice\u202Egnp.exe" renders as "invoice exe.png", the exact deception
+// it exists to stop. Zero-width joiners are deliberately left alone; emoji
+// filenames are legitimate and don't reorder text.
+const UNSAFE_NAME_CHARS =
+  /[\u0000-\u001F\u007F-\u009F\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/;
+const UNSAFE_NAME_CHARS_GLOBAL = new RegExp(UNSAFE_NAME_CHARS, "gu");
+
+// Used when sanitizing leaves nothing behind — a name made entirely of
+// stripped characters or whitespace. Better than an empty string, which
+// renders as a blank row in any listing.
+const FALLBACK_ORIGINAL_NAME = "untitled";
+
+export type OriginalNameValidation =
+  | { ok: true; value: string }
+  | { ok: false; message: string };
+
+/**
+ * Strict form, for a *rename*: the client is deliberately submitting this
+ * exact string as the new name, so anything wrong with it is worth saying out
+ * loud, and rejecting costs the caller nothing but a retry.
+ */
+export function validateOriginalName(value: unknown): OriginalNameValidation {
+  if (typeof value !== "string") {
+    return { ok: false, message: "Field 'originalName' must be a string" };
+  }
+
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    return { ok: false, message: "Field 'originalName' must not be empty" };
+  }
+  if (Array.from(trimmed).length > MAX_ORIGINAL_NAME_LENGTH) {
+    return {
+      ok: false,
+      message: `Field 'originalName' must be at most ${MAX_ORIGINAL_NAME_LENGTH} characters`,
+    };
+  }
+  if (UNSAFE_NAME_CHARS.test(trimmed)) {
+    return {
+      ok: false,
+      message:
+        "Field 'originalName' must not contain control or text-direction characters",
+    };
+  }
+
+  return { ok: true, value: trimmed };
+}
+
+/**
+ * Lenient form, for an *upload*: the name is incidental metadata riding along
+ * with a body that may already be hundreds of megabytes, and the user often
+ * didn't choose it (a phone's picker names the file, not them). Failing the
+ * whole transfer over a cosmetic problem with a label is disproportionate, so
+ * this repairs rather than rejects.
+ *
+ * The asymmetry with validateOriginalName is deliberate and is only about how
+ * the caller is *told*: what reaches the database is held to exactly the same
+ * standard by both paths. That equivalence is pinned by a test —
+ * validateOriginalName(sanitizeOriginalName(x)) is ok for every x.
+ */
+export function sanitizeOriginalName(value: string): string {
+  const stripped = value.replace(UNSAFE_NAME_CHARS_GLOBAL, "").trim();
+  // Truncate by code point, then trim again: cutting mid-string can expose
+  // trailing whitespace that wasn't at the edge before.
+  const truncated = Array.from(stripped)
+    .slice(0, MAX_ORIGINAL_NAME_LENGTH)
+    .join("")
+    .trim();
+
+  return truncated.length > 0 ? truncated : FALLBACK_ORIGINAL_NAME;
+}
