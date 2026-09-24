@@ -5,6 +5,7 @@ import {
   MAX_INPUT_PIXELS,
   PREVIEW_CONTENT_TYPE,
   PREVIEW_MAX_DIMENSION,
+  PREVIEW_MAX_SCALE,
   PREVIEW_QUALITY,
   WatermarkError,
   assertWatermarkFontAvailable,
@@ -39,11 +40,19 @@ async function buildSourcePng(): Promise<Buffer> {
  * own would also be true of a plain resize, which protects nothing.
  */
 async function buildUnwatermarkedBaseline(source: Buffer) {
+  const { width = 0, height = 0 } = await sharp(source).metadata();
+  const target = Math.max(
+    1,
+    Math.min(
+      PREVIEW_MAX_DIMENSION,
+      Math.round(Math.max(width, height) * PREVIEW_MAX_SCALE),
+    ),
+  );
   return sharp(source)
     .rotate()
     .resize({
-      width: PREVIEW_MAX_DIMENSION,
-      height: PREVIEW_MAX_DIMENSION,
+      width: target,
+      height: target,
       fit: "inside",
       withoutEnlargement: true,
     })
@@ -134,6 +143,54 @@ describe("generateWatermarkedPreview", () => {
     expect(quadrants.bottomLeft).toBeGreaterThan(perQuadrantFloor);
     expect(quadrants.bottomRight).toBeGreaterThan(perQuadrantFloor);
   }
+
+  it.each([
+    ["well above the cap", 2400, 1600],
+    // The case the cap alone misses: at or below PREVIEW_MAX_DIMENSION,
+    // `withoutEnlargement` means no downscale happens at all, so a preview
+    // would come back at the original's exact resolution and the only thing
+    // the buyer would be paying to remove is the mark.
+    ["just below the cap", 1200, 800],
+    ["far below the cap", 200, 150],
+  ])(
+    "always returns a preview strictly smaller than the original (%s)",
+    async (_label, width, height) => {
+      const source = await sharp({
+        create: { width, height, channels: 3, background: SOURCE_COLOR },
+      })
+        .png()
+        .toBuffer();
+
+      const preview = await generateWatermarkedPreview(source);
+
+      expect(preview.width).toBeLessThan(width);
+      expect(preview.height).toBeLessThan(height);
+      expect(Math.max(preview.width, preview.height)).toBeLessThanOrEqual(
+        PREVIEW_MAX_DIMENSION,
+      );
+      expect(Math.max(preview.width, preview.height)).toBeLessThanOrEqual(
+        Math.round(Math.max(width, height) * PREVIEW_MAX_SCALE),
+      );
+    },
+  );
+
+  it("still produces a valid preview for a 1x1 original", async () => {
+    // Degenerate end of the scale floor: 1 * 0.75 rounds to 1, and the clamp
+    // must keep it at 1 rather than 0.
+    const source = await sharp({
+      create: { width: 1, height: 1, channels: 3, background: SOURCE_COLOR },
+    })
+      .png()
+      .toBuffer();
+
+    const preview = await generateWatermarkedPreview(source);
+
+    expect(preview.width).toBe(1);
+    expect(preview.height).toBe(1);
+    await expect(sharp(preview.data).metadata()).resolves.toMatchObject({
+      format: "webp",
+    });
+  });
 
   it("burns a watermark into the pixels, spread across the whole frame (K1)", async () => {
     const source = await buildSourcePng();
@@ -364,6 +421,23 @@ describe("resolveWatermarkText", () => {
   it("truncates an absurdly long value", () => {
     process.env.WATERMARK_TEXT = "x".repeat(500);
     expect(resolveWatermarkText().length).toBe(40);
+  });
+
+  it("truncates by code point, never splitting an astral character", () => {
+    // 39 plain characters then an emoji: a UTF-16 slice at 40 would cut the
+    // surrogate pair in half and leave a lone high surrogate, which renders as
+    // a stray U+FFFD tiled across every preview.
+    const text = `${"x".repeat(39)}\u{1F4F7}z`;
+
+    const resolved = resolveWatermarkText(text);
+
+    expect([...resolved]).toHaveLength(40);
+    expect(resolved.endsWith("\u{1F4F7}")).toBe(true);
+    expect(resolved).not.toContain("�");
+    // No unpaired surrogate survived the cut.
+    expect(/[\uD800-\uDFFF]/.test(resolved.replace(/\u{1F4F7}/gu, ""))).toBe(
+      false,
+    );
   });
 
   it("removes XML-illegal control characters and collapses whitespace", () => {

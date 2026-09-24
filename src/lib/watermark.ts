@@ -10,6 +10,15 @@ import sharp from "sharp";
 // paying for something the browser never handed out.
 export const PREVIEW_MAX_DIMENSION = 1280;
 
+// ...but a cap alone only bites on uploads bigger than the cap. An original
+// at or below 1280px would otherwise come back as a preview at the original's
+// exact resolution, and for that whole class of upload the argument above
+// would simply not hold — the buyer would be paying for a mark removal, not
+// for pixels. So the preview is additionally never more than this fraction of
+// the original's longest edge, which makes "the preview is strictly smaller
+// than the original" true for every upload rather than only for large ones.
+export const PREVIEW_MAX_SCALE = 0.75;
+
 // One normalised output format for every preview, whatever the source was
 // (JPEG/PNG/WebP/GIF). The gallery then never has to branch on format, and a
 // preview's content type is a constant. WebP at q78 is a good size/quality
@@ -60,7 +69,7 @@ const GLYPH_ADVANCE_EM = 0.62;
 // "Aims at", not "guarantees": MIN_FONT_SIZE below can override the
 // shrink-to-fit on small frames, and then the tile grows past half the width
 // again. Measured with the 40-character maximum text: a 1280x853 landscape
-// preview lands at 0.35 of the width, a 853x1280 portrait one at 0.52, and a
+// preview lands at 0.42 of the width, a 853x1280 portrait one at 0.52, and a
 // 640x480 at 0.70. What survives in every case is the thing that actually
 // matters — the mark is rotated and repeats vertically too, so full-frame
 // coverage stays around 13% spread evenly across all four quadrants. The
@@ -160,7 +169,11 @@ export function resolveWatermarkText(override?: string): string {
   const raw = override ?? process.env.WATERMARK_TEXT ?? "";
   const cleaned = stripXmlIllegalChars(raw.replace(/\s+/g, " ")).trim();
   const text = cleaned.length > 0 ? cleaned : DEFAULT_WATERMARK_TEXT;
-  return text.slice(0, MAX_WATERMARK_TEXT_LENGTH);
+  // Truncate by code point, not by UTF-16 code unit. String.slice would cut an
+  // astral character in half and leave a lone surrogate — the very thing
+  // stripXmlIllegalChars just walked by code point to remove — which
+  // Buffer.from then renders as a stray U+FFFD tiled across every preview.
+  return [...text].slice(0, MAX_WATERMARK_TEXT_LENGTH).join("");
 }
 
 /**
@@ -353,19 +366,37 @@ async function decodeAndDownscale(input: Buffer, limitInputPixels: number) {
     // `animated` is left off, so an animated GIF/WebP collapses to its first
     // frame — a still preview is all the gallery shows today. Metadata (EXIF,
     // GPS, ...) is dropped because we never call withMetadata().
-    return await sharp(input, {
+    const image = sharp(input, {
       limitInputPixels,
       // Reject genuinely broken files but tolerate the merely sloppy ones
       // (truncated trailing bytes, odd markers) that sharp's default
       // "warning" threshold would refuse — with a fail-closed upload policy,
       // being stricter than that rejects legitimate uploads.
       failOn: "error",
-    })
+    });
+
+    // Header parse only — this does not decode pixels, and the same instance
+    // is reused for the real work below. The longest edge is what both bounds
+    // are expressed against, and taking a max makes it invariant to whether
+    // EXIF orientation will end up swapping the axes.
+    const { width = 0, height = 0 } = await image.metadata();
+    const longestEdge = Math.max(width, height);
+    const target = Math.max(
+      1,
+      Math.min(
+        PREVIEW_MAX_DIMENSION,
+        Math.round(longestEdge * PREVIEW_MAX_SCALE),
+      ),
+    );
+
+    return await image
       .rotate()
       .resize({
-        width: PREVIEW_MAX_DIMENSION,
-        height: PREVIEW_MAX_DIMENSION,
+        width: target,
+        height: target,
         fit: "inside",
+        // Redundant now that `target` can never exceed the longest edge, but
+        // kept so a future change to that arithmetic can't start upscaling.
         withoutEnlargement: true,
       })
       .raw()

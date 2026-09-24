@@ -103,6 +103,12 @@ model Media {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
+  // Matches the listing query in GET /api/media exactly: filter on userId,
+  // then ORDER BY createdAt DESC, id DESC. Without it SQLite re-sorts the
+  // user's entire row set on every page, which would defeat the keyset
+  // pagination the endpoint is built around. The plain [userId] index above
+  // is kept for the lookups that don't order.
+  @@index([userId, createdAt, id])
 }
 
 // One connected Instagram account whose media can be synced (ugcportal-ct0)
