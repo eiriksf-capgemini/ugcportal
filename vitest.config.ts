@@ -10,6 +10,10 @@ export default defineConfig({
   },
   test: {
     environment: "node",
+    // Removes host environment variables that would otherwise change how
+    // the watermark concurrency gate sizes itself, and so whether unrelated
+    // tests pass (ugcportal-e86). See the file for the specific failures.
+    setupFiles: ["./vitest.setup.ts"],
     // Vitest's defaultExclude covers node_modules, dist, cypress and a short
     // list of dot-directories — none of which match .claude/, where agent
     // worktrees live. Without this, a local `vitest run` also collects those

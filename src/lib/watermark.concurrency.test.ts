@@ -548,8 +548,11 @@ describe("generateWatermarkedPreview under concurrency", () => {
     warnSpy.mockRestore();
     process.env = { ...env };
     resetWatermarkConcurrencyGate();
-    // Undo the process-global thread pinning these tests applied.
-    sharp.concurrency(0);
+    // Undo the process-global thread pinning these tests applied — but to 1,
+    // not to 0. sharp.concurrency(0) means "one thread per core", the
+    // heaviest possible setting, and it would be inherited by whatever test
+    // file shares this process next; vitest runs them in parallel.
+    sharp.concurrency(1);
   });
 
   async function source(): Promise<Buffer> {
