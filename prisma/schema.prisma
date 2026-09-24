@@ -121,3 +121,36 @@ model InstagramAccount {
 
   @@index([connectedByUserId])
 }
+
+// Where a role change came from. `BOOTSTRAP` is the first-admin path, which
+// by definition has no admin behind it (see ADMIN_BOOTSTRAP_EMAILS in
+// env.example); `ADMIN` is every change made from the admin users screen.
+enum RoleChangeSource {
+  BOOTSTRAP
+  ADMIN
+}
+
+// Append-only audit trail of every User.role change (ugcportal-lu7). Nothing
+// updates or deletes these rows; the current role lives on User, this is the
+// history of how it got there.
+//
+// Deliberately carries no foreign keys. An audit row whose FK cascades away
+// when the user is deleted stops being an audit trail exactly when it matters
+// most, and a restricting FK would block deleting a user at all (GDPR erasure
+// is ugcportal-x1a's problem, not something an audit log should veto). The ids
+// are kept as plain strings, with the email snapshotted alongside so a row
+// still reads sensibly after the account is gone.
+model RoleChange {
+  id           String           @id @default(cuid())
+  targetUserId String
+  targetEmail  String?
+  previousRole Role
+  newRole      Role
+  source       RoleChangeSource
+  actorUserId  String?
+  actorEmail   String?
+  createdAt    DateTime         @default(now())
+
+  @@index([targetUserId])
+  @@index([createdAt])
+}

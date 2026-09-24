@@ -4,3 +4,4 @@
 export const INSTAGRAM_SETTINGS_PATH = "/admin/settings/instagram";
 export const INSTAGRAM_CALLBACK_PATH = "/api/admin/instagram/callback";
 export const INSTAGRAM_CONNECT_PATH = "/api/admin/instagram/connect";
+export const ADMIN_USERS_PATH = "/admin/settings/users";
