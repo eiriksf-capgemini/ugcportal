@@ -73,9 +73,33 @@ Prepend a version header above the sections:
 ## v<version> - <YYYY-MM-DD>
 ```
 
+This header, the optional Cost Summary from step 5a immediately below, and the per-type sections above together make up **"the release notes"** for this version — referenced as that one combined unit everywhere below (steps 6, 8, and 9). Assemble them in this order: version header, then Cost Summary (if step 5a produces one), then the per-type sections.
+
+## 5a. Cost summary
+
+Add a per-type rollup of the same `tokens_impl`/`tokens_qa` bead metadata described in CLAUDE.md > "Token cost metadata" — but only if **at least one** included issue has either field set. If none do, skip this whole step (an all-empty table is noise, not a summary); say so explicitly in your step 10 report either way.
+
+Reuse the exact same per-`cc_type` sections step 5 already grouped — same buckets, same order, same membership — rather than recomputing or restating the bucketing rules here. Render one row per section, regardless of whether any issue in it has cost data (a section with zero data still gets a row of dashes, so the absence is visible rather than silently dropped). For each section: sum `tokens_impl` and `tokens_qa` separately across its issues, and set `Total = Impl + QA` for that row. A missing `tokens_impl`/`tokens_qa` field contributes 0 to its sum; if a value is present but isn't a plain integer, treat it as missing too (don't guess or round) and flag the malformed value in your step 10 report. Separately, count how many of the section's issues have *either* field set as a "Beads with data" fraction (numerator = issues with data, denominator = the section's total issue count from step 5).
+
+Add a final **Total** row: `Total = Impl + QA` there too, and its Impl/QA/Total/"Beads with data" cells are each the straight sum of that column down the per-section rows above (numerator-with-numerator, denominator-with-denominator for the fraction) — never inferred by inspecting whether other columns are zero.
+
+```markdown
+### 💰 Cost Summary
+
+| Type | Impl | QA | Total | Beads with data |
+|---|---:|---:|---:|:---:|
+| ✨ Features | 12,000 | 236,451 | 248,451 | 2/4 |
+| 🔧 Chores | — | 129,674 | 129,674 | 1/1 |
+| **Total** | **12,000** | **366,125** | **378,125** | **3/5** |
+
+*Cost figures come from bead metadata (`tokens_impl`/`tokens_qa`) as recorded as of this release. `tokens_impl` is a best-effort manual estimate that isn't consistently recorded, and a bead's `tokens_qa` can keep growing later from review on a follow-up fix without retroactively updating a past release — treat these totals as a lower bound, not the release's full or final cost.*
+```
+
+Use `—` rather than `0` for any Impl/QA/Total cell — including in the Total row — where the underlying sum is zero only because nothing contributing to it has the field set, so a reader doesn't mistake "no data" for "confirmed zero cost." Comma-format numbers for readability. Always keep the caveat line — it's what stops a partial figure (which this will usually be, until `tokens_impl` is recorded more consistently) from being misread as the release's true or final cost.
+
 ## 6. Write it out
 
-Prepend (not append — newest release on top) this section to `CHANGELOG.md` at the repo root. If the file doesn't exist yet, create it with a `# Changelog` top-level header first.
+Prepend (not append — newest release on top) the release notes assembled in steps 5–5a to `CHANGELOG.md` at the repo root. If the file doesn't exist yet, create it with a `# Changelog` top-level header first.
 
 Bump the version with `npm version <version> --no-git-tag-version` (not a manual edit) — it updates both `package.json` and `package-lock.json`'s `version` fields (the lockfile has it twice: at the root and under `packages[""]`) in one step. Deliberately **don't** use `npm install --package-lock-only` for this: it re-resolves every dependency against its declared range, so if anything pinned with a caret (most of this repo's deps) has a newer semver-compatible release upstream since the lockfile was last touched, it would rewrite that package's `resolved`/`integrity`/version entries too — an unreviewed transitive dependency bump riding along inside a PR this skill's own step 8 treats as trivially non-sensitive and auto-mergeable. `npm version` only ever touches the version fields, never dependency resolution.
 
@@ -93,7 +117,7 @@ This is what makes the skill idempotent — re-running it immediately after shou
 
 This step commits and pushes — defer to CLAUDE.md's "Agent Context Profiles" for whether you may do that unprompted (Conservative default: report the generated changes and wait for explicit approval before committing/pushing; only proceed straight to branch/commit/push/PR if the user's request or the active profile already grants that authority).
 
-Once authorized: branch, commit (`chore(release): v<version>` — a release commit legitimately isn't tied to a single bead, so it's fine without a bead-id suffix), push, open a PR via `gh pr create` with the generated changelog section as the PR body, ending with the repo's usual Claude Code attribution footer.
+Once authorized: branch, commit (`chore(release): v<version>` — a release commit legitimately isn't tied to a single bead, so it's fine without a bead-id suffix), push, open a PR via `gh pr create` with the release notes (steps 5–5a) as the PR body, ending with the repo's usual Claude Code attribution footer.
 
 A release PR only ever touches `CHANGELOG.md`, `package.json`, and `package-lock.json`, so it isn't a sensitive path under `pr-review-merge`'s gate. If the active profile grants merge authority, run that skill against the PR you just opened; otherwise report the PR URL and wait for a human to merge it. Either way, do not proceed to step 9 until the PR has actually merged.
 
@@ -102,7 +126,7 @@ A release PR only ever touches `CHANGELOG.md`, `package.json`, and `package-lock
 Do this only after confirming the release PR from step 8 is merged (`gh pr view <n> --json state,mergedAt` shows `MERGED`) — never before, and never for a version that already has one.
 
 1. Check for an existing release first: `gh release view v<version>`. If it already exists, skip this step and note that in your report (this makes the skill safe to re-run without double-publishing).
-2. Write the same grouped notes built in step 5 to a scratch file, **without** the `## v<version> - <date>` header line (the GitHub Release UI already shows the tag and date) — e.g. via the `Write` tool to a path under the session's scratchpad directory.
+2. Write the release notes (steps 5–5a) to a scratch file, **without** the `## v<version> - <date>` header line (the GitHub Release UI already shows the tag and date) — e.g. via the `Write` tool to a path under the session's scratchpad directory. `CHANGELOG.md`, the release PR body, and the GitHub Release all derive from this one same set of release notes — don't let any one of the three channels drop the Cost Summary while the others keep it.
 3. Read the release PR's actual base branch rather than assuming `main` — `gh pr view <n> --json baseRefName -q .baseRefName` — and create the release targeting that branch, so the tag lands on the merge commit rather than wherever `HEAD` happens to be:
    ```bash
    gh release create v<version> --title "v<version>" --notes-file <scratch-file> --target <base-ref>
@@ -111,4 +135,4 @@ Do this only after confirming the release PR from step 8 is merged (`gh pr view 
 
 ## 10. Report back
 
-State the computed version, the bump reason (which issue(s) triggered feat/major), how many issues were included, the PR URL, and the GitHub Release URL (or why it was skipped/deferred).
+State the computed version, the bump reason (which issue(s) triggered feat/major), how many issues were included, whether step 5a's Cost Summary was included or skipped (and why, if skipped, or note any malformed `tokens_impl`/`tokens_qa` value it ignored), the PR URL, and the GitHub Release URL (or why it was skipped/deferred).
