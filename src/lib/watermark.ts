@@ -81,7 +81,7 @@ export const MAX_INPUT_PIXELS = 50_000_000;
 // protect a 1 GB container would fail most of a perfectly ordinary five-image
 // selection while the server is nearly idle a second later. On the default 1
 // GB reference configuration below, a five-image burst is fully absorbed
-// (limit 3 + queue 12) and nothing sheds.
+// (limit 3 + queue 5) and nothing sheds.
 //
 // Why not an unbounded queue: it converts a memory problem into a latency
 // problem and holds HTTP connections open while it does so, which is how a
@@ -530,13 +530,15 @@ export function resolveSharpThreads(
  * holding is charged for, so the projected total is a statement about the
  * whole configuration rather than about a convenient part of it:
  *
- *   1. the process baseline comes off the top;
- *   2. in-flight uploads take what is left, at
+ *   0. BUDGET_HEADROOM_FRACTION comes off the budget first, so none of the
+ *      steps below can spend it;
+ *   1. the process baseline comes off the top of what is left;
+ *   2. in-flight uploads take what remains, at
  *      IN_FLIGHT_BYTES_PER_UPLOAD each (a preview's decode *plus* the body
  *      being decoded), capped by resolveConcurrencyCeiling();
- *   3. the queue gets whatever remains, at UPLOAD_BODY_BYTES each, capped at
- *      DEFAULT_QUEUE_DEPTH_PER_SLOT per slot so a large container does not
- *      buy a queue so deep that the wait is pointless.
+ *   3. the queue gets whatever is still spare, at UPLOAD_BODY_BYTES each,
+ *      capped at DEFAULT_QUEUE_DEPTH_PER_SLOT per slot so a large container
+ *      does not buy a queue so deep that the wait is pointless.
  *
  * Both of those per-caller figures were arrived at by getting them wrong
  * first, and in the same direction each time — under-counting, which is the
@@ -555,25 +557,28 @@ export function resolveSharpThreads(
  * is 3. "Burst" is how many simultaneous uploads are absorbed with nothing
  * shed, i.e. limit + queue:
  *
- *   512 MB -> limit 1, queue 2   burst 3   (projected 508 MB)
- *   768 MB -> limit 3, queue 0   burst 3   (projected 764 MB)
- *     1 GB -> limit 3, queue 12  burst 15  (projected 1004 MB)
- *     2 GB -> limit 3, queue 12  burst 15  (projected 1004 MB; ceiling-bound,
- *             not memory-bound — raise UV_THREADPOOL_SIZE to use the rest)
+ *   512 MB -> limit 1, queue 0   burst 1   (projected 468 MB — DOES NOT FIT)
+ *   768 MB -> limit 2, queue 1   burst 3   (projected 636 MB, 83% used)
+ *     1 GB -> limit 3, queue 5   burst 8   (projected 864 MB, 84% used)
+ *     2 GB -> limit 3, queue 12  burst 15  (projected 1004 MB, 49% used;
+ *             ceiling-bound, not memory-bound — raise UV_THREADPOOL_SIZE in
+ *             the container environment to use the rest)
  *
- * **1 GB is the recommended floor, and the only reference point here that
- * absorbs an ordinary multi-image selection.** Note the cliff at 768 MB:
- * three previews fit but leave nothing for a queue, so it sheds the fourth
- * concurrent upload just as 512 MB does. That is not a tuning artefact to be
- * smoothed away — 320 baseline + 3 x 148 is 764 of 768 MB, and there is no
- * fourth caller's worth of memory in the box. Below 1 GB the honest summary
- * is that bursts shed, and today a shed upload is an unretryable 500 (see
- * WatermarkOverloadedError and ugcportal-u7g).
+ * **1 GB is the recommended floor.** It absorbs an ordinary multi-image
+ * selection with room over; 768 MB absorbs three and sheds the fourth. Below
+ * that, 512 MB no longer fits at all — it used to be reported as fitting, at
+ * 91% utilisation, which is what the headroom is for. Below 1 GB the honest
+ * summary is that bursts shed, and today a shed upload is an unretryable 500
+ * (see WatermarkOverloadedError and ugcportal-u7g).
  *
- * Below MIN_VIABLE_BUDGET_BYTES (468 MB) it gets worse: the limit is clamped
- * up to 1 and `fitsBudget` goes false, meaning the configuration is over
- * budget by its own reckoning. getGate() warns about that the first time a
- * preview is generated.
+ * Note 2 GB is now meaningfully better than 1 GB rather than identical: with
+ * the budget derated, the queue at 1 GB is what the remaining memory affords
+ * rather than the 4-per-slot cap.
+ *
+ * Below MIN_VIABLE_BUDGET_BYTES (~551 MB) the limit is clamped up to 1 and
+ * `fitsBudget` goes false, meaning the configuration is over budget by its
+ * own reckoning. getGate() warns about that the first time a preview is
+ * generated.
  *
  * Every input is a parameter so this is testable without a container.
  */
