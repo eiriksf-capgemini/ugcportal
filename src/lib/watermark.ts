@@ -33,16 +33,34 @@ const DEFAULT_WATERMARK_TEXT = "ugcportal";
 // into an unreadable smear (and can't blow up the generated SVG).
 const MAX_WATERMARK_TEXT_LENGTH = 40;
 
+// Named first so the font the Dockerfile installs is the one actually picked;
+// the rest are there for local dev on macOS/Linux workstations.
+const FONT_STACK = "DejaVu Sans, Liberation Sans, Helvetica, Arial, sans-serif";
+
 /**
- * Thrown when a preview cannot be produced — an undecodable/corrupt file, an
- * input over the pixel limit, or any other sharp failure. Callers must treat
- * this as fatal for the upload: see the failure policy in
+ * Thrown when a preview cannot be produced from *this particular file* — an
+ * undecodable/corrupt image, or one over the pixel limit. Callers must treat
+ * it as fatal for the upload: see the failure policy in
  * src/app/api/media/route.ts. Never fall back to serving the original.
  */
 export class WatermarkError extends Error {
   constructor(message: string, options?: { cause?: unknown }) {
     super(message, options);
     this.name = "WatermarkError";
+  }
+}
+
+/**
+ * Thrown when the *runtime* cannot draw text at all, i.e. no usable font is
+ * installed. Deliberately not a {@link WatermarkError}: nothing is wrong with
+ * the upload, the deployment is broken, and every image would come out with
+ * an unreadable mark on it. Callers should let this surface as a 5xx rather
+ * than blaming the file.
+ */
+export class WatermarkFontUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "WatermarkFontUnavailableError";
   }
 }
 
@@ -69,9 +87,43 @@ function escapeXml(value: string): string {
     .replace(/'/g, "&apos;");
 }
 
+/**
+ * Drop every code point XML 1.0 forbids in character data.
+ *
+ * Entity-escaping alone is not enough: a control character such as a form
+ * feed is not escapable, and librsvg rejects the whole document with
+ * "PCDATA invalid Char value 12". Since the text comes from WATERMARK_TEXT,
+ * that would turn one bad environment variable into a 422 on *every* image
+ * upload. Iterating with for..of walks whole code points, so astral
+ * characters (emoji) survive as pairs while lone surrogates — also illegal —
+ * are dropped.
+ */
+function stripXmlIllegalChars(value: string): string {
+  let out = "";
+  for (const char of value) {
+    const cp = char.codePointAt(0) ?? 0;
+    const legal =
+      cp === 0x09 ||
+      cp === 0x0a ||
+      cp === 0x0d ||
+      (cp >= 0x20 && cp <= 0xd7ff) ||
+      (cp >= 0xe000 && cp <= 0xfffd) ||
+      cp >= 0x10000;
+    if (legal) out += char;
+  }
+  return out;
+}
+
+/**
+ * The watermark text, guaranteed safe to interpolate into the overlay SVG:
+ * whitespace collapsed to single spaces (a multi-line mark makes no sense in
+ * a tiled single-line <text>), XML-illegal code points removed, trimmed, and
+ * length-capped. Falls back to the default if sanitising leaves nothing.
+ */
 export function resolveWatermarkText(override?: string): string {
-  const raw = (override ?? process.env.WATERMARK_TEXT ?? "").trim();
-  const text = raw.length > 0 ? raw : DEFAULT_WATERMARK_TEXT;
+  const raw = override ?? process.env.WATERMARK_TEXT ?? "";
+  const cleaned = stripXmlIllegalChars(raw.replace(/\s+/g, " ")).trim();
+  const text = cleaned.length > 0 ? cleaned : DEFAULT_WATERMARK_TEXT;
   return text.slice(0, MAX_WATERMARK_TEXT_LENGTH);
 }
 
@@ -84,17 +136,27 @@ export function resolveWatermarkText(override?: string): string {
  * frame diagonally means any crop large enough to be worth stealing still
  * carries the mark.
  *
- * White text with a thin dark outline so it stays visible over both light and
- * dark photographs, at an opacity low enough to leave the image readable.
+ * Each element is drawn as a white/black pair so it stays visible over both
+ * light and dark photographs, at an opacity low enough to leave the image
+ * readable.
  *
- * The tile also draws a hairline rule. libvips ships no font files of its own
- * — it renders text through whatever fontconfig finds on the host — so on a
- * bare container image the text could silently render as nothing. The hairline
- * needs no font, so in that (misconfigured) case the overlay degrades to a
- * visible diagonal grid instead of to an unmarked image. The Dockerfile
- * installs a font so this stays a backstop, not the main event.
+ * The tile also draws two rules, which need no font. libvips ships no font
+ * files of its own — it renders text through whatever fontconfig finds on the
+ * host — so a misconfigured runtime could otherwise produce a completely
+ * unmarked "preview". {@link assertWatermarkFontAvailable} makes that case a
+ * hard error rather than a silent one; the rules are the second line of
+ * defence, and are positioned strictly inside the tile so the pattern repeat
+ * cannot clip them away (drawing on the tile boundary loses half the stroke
+ * and renders them all but invisible).
+ *
+ * Exported so tests can strip the glyphs and verify what a fontless runtime
+ * would actually produce.
  */
-function buildWatermarkSvg(width: number, height: number, text: string): string {
+export function buildWatermarkOverlaySvg(
+  width: number,
+  height: number,
+  text: string,
+): string {
   const safeText = escapeXml(text);
   const fontSize = Math.min(
     48,
@@ -106,13 +168,24 @@ function buildWatermarkSvg(width: number, height: number, text: string): string 
   const estimatedTextWidth = Math.max(1, text.length) * fontSize * 0.62;
   const tileWidth = Math.round(estimatedTextWidth * 1.8);
   const tileHeight = Math.round(fontSize * 4);
-  const strokeWidth = Math.max(1, fontSize / 24);
+  const textStrokeWidth = Math.max(1, fontSize / 24);
+  const ruleWidth = Math.max(1, Math.round(fontSize / 16));
+
+  // Quarter and three-quarter height: evenly spaced, and far enough from the
+  // tile edges that the full stroke of both the white rule and its dark
+  // companion survives the repeat.
+  const rules = [Math.round(tileHeight / 4), Math.round((tileHeight * 3) / 4)]
+    .flatMap((y) => [
+      `<line x1="0" y1="${y}" x2="${tileWidth}" y2="${y}" stroke="white" stroke-opacity="0.22" stroke-width="${ruleWidth}" />`,
+      `<line x1="0" y1="${y + ruleWidth}" x2="${tileWidth}" y2="${y + ruleWidth}" stroke="black" stroke-opacity="0.16" stroke-width="${ruleWidth}" />`,
+    ])
+    .join("\n      ");
 
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">
   <defs>
     <pattern id="wm" width="${tileWidth}" height="${tileHeight}" patternUnits="userSpaceOnUse" patternTransform="rotate(-30)">
-      <line x1="0" y1="${tileHeight}" x2="${tileWidth}" y2="${tileHeight}" stroke="white" stroke-opacity="0.10" stroke-width="1" />
-      <g font-family="DejaVu Sans, Liberation Sans, Helvetica, Arial, sans-serif" font-size="${fontSize}" font-weight="600" fill="white" fill-opacity="0.34" stroke="black" stroke-opacity="0.18" stroke-width="${strokeWidth}" paint-order="stroke">
+      ${rules}
+      <g font-family="${FONT_STACK}" font-size="${fontSize}" font-weight="600" fill="white" fill-opacity="0.34" stroke="black" stroke-opacity="0.18" stroke-width="${textStrokeWidth}" paint-order="stroke">
         <text x="0" y="${fontSize}">${safeText}</text>
         <text x="${Math.round(tileWidth / 2)}" y="${Math.round(tileHeight / 2 + fontSize)}">${safeText}</text>
       </g>
@@ -122,20 +195,71 @@ function buildWatermarkSvg(width: number, height: number, text: string): string 
 </svg>`;
 }
 
+let fontProbe: Promise<boolean> | undefined;
+
+async function probeFont(): Promise<boolean> {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="96" height="48"><text x="0" y="36" font-family="${FONT_STACK}" font-size="36" fill="white">Wg</text></svg>`;
+  const { data, info } = await sharp({
+    create: {
+      width: 96,
+      height: 48,
+      channels: 4,
+      background: { r: 0, g: 0, b: 0, alpha: 0 },
+    },
+  })
+    .composite([{ input: Buffer.from(svg) }])
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+
+  // Any non-transparent pixel means glyphs were rasterised.
+  for (let i = info.channels - 1; i < data.length; i += info.channels) {
+    if (data[i] > 0) return true;
+  }
+  return false;
+}
+
+/**
+ * Fail loudly, once, if this runtime cannot rasterise text.
+ *
+ * Without this the fontless case is invisible: sharp reports success, the
+ * overlay comes out with no words on it, and previews ship looking far less
+ * protected than they should. A crashed upload is a much better outcome than
+ * a quietly under-marked one, and it shows up in the logs of the environment
+ * that actually has the problem — which a test on the CI host never can,
+ * because CI is not the container image.
+ *
+ * Memoised: the probe is a few milliseconds, but there is no reason to pay it
+ * per upload.
+ */
+export async function assertWatermarkFontAvailable(): Promise<void> {
+  fontProbe ??= probeFont().catch(() => false);
+  if (!(await fontProbe)) {
+    throw new WatermarkFontUnavailableError(
+      "No usable font found for watermark text. libvips ships no fonts; install a font package (e.g. fontconfig + font-dejavu) in the runtime image.",
+    );
+  }
+}
+
 /**
  * Turn uploaded image bytes into a downscaled, watermarked preview.
  *
  * Images only. Video is deferred to ugcportal-pmb (watermarked poster frame),
  * so callers must not hand video bytes to this function.
  *
- * Throws {@link WatermarkError} rather than returning a partial result: there
- * is deliberately no "return the input unchanged" path, because that would put
- * an unwatermarked original into the slot the gallery reads from.
+ * Throws rather than returning a partial result: there is deliberately no
+ * "return the input unchanged" path, because that would put an unwatermarked
+ * original into the slot the gallery reads from. A bad file raises
+ * {@link WatermarkError}; a runtime with no fonts raises
+ * {@link WatermarkFontUnavailableError}.
  */
 export async function generateWatermarkedPreview(
   input: Buffer,
   options: PreviewOptions = {},
 ): Promise<PreviewResult> {
+  // Outside the try below on purpose: this is an environment fault, and must
+  // not be laundered into a per-file WatermarkError.
+  await assertWatermarkFontAvailable();
+
   const text = resolveWatermarkText(options.text);
   const limitInputPixels = options.limitInputPixels ?? MAX_INPUT_PIXELS;
 
@@ -173,7 +297,11 @@ export async function generateWatermarkedPreview(
       },
     })
       .composite([
-        { input: Buffer.from(buildWatermarkSvg(info.width, info.height, text)) },
+        {
+          input: Buffer.from(
+            buildWatermarkOverlaySvg(info.width, info.height, text),
+          ),
+        },
       ])
       .webp({ quality: PREVIEW_QUALITY })
       .toBuffer();

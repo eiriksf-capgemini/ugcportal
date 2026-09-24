@@ -56,6 +56,24 @@ const MP4_HEADER = Buffer.concat([
   Buffer.from("ftypmp42", "ascii"),
 ]);
 
+/**
+ * The shape prisma returns when the handler passes `select:` — i.e. `key` is
+ * already absent at the DB layer. The tests assert on the handler's own
+ * projection by feeding it exactly what that select would yield.
+ */
+function selectedRow(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "media-1",
+    kind: "IMAGE",
+    previewKey: "previews/user-1/abc.webp",
+    mimeType: "image/png",
+    sizeBytes: 1234,
+    originalName: "photo.png",
+    createdAt: new Date("2026-09-24T10:00:00Z"),
+    ...overrides,
+  };
+}
+
 function buildRequest(file: File | null) {
   const formData = new FormData();
   if (file) {
@@ -142,11 +160,15 @@ describe("POST /api/media", () => {
   it("stores a watermarked preview alongside the original and persists its key", async () => {
     authMock.mockResolvedValue({ user: { id: "user-1" } });
     s3SendMock.mockResolvedValue({});
-    mediaCreateMock.mockImplementation(async ({ data }) => ({
-      id: "media-1",
-      createdAt: new Date(),
-      ...data,
-    }));
+    mediaCreateMock.mockImplementation(async ({ data }) =>
+      selectedRow({
+        kind: data.kind,
+        previewKey: data.previewKey,
+        mimeType: data.mimeType,
+        sizeBytes: data.sizeBytes,
+        originalName: data.originalName,
+      }),
+    );
     const file = new File([REAL_PNG], "photo.png", { type: "image/png" });
 
     const response = await POST(buildRequest(file));
@@ -183,18 +205,36 @@ describe("POST /api/media", () => {
         originalName: "photo.png",
         previewKey: previewPut.input.Key,
       }),
+      select: expect.objectContaining({ previewKey: true }),
     });
-    expect(body).toMatchObject({ id: "media-1", userId: "user-1" });
+    expect(body).toMatchObject({ id: "media-1", previewKey: previewPut.input.Key });
+  });
+
+  it("never returns the original key in the upload response either (K2)", async () => {
+    authMock.mockResolvedValue({ user: { id: "user-1" } });
+    s3SendMock.mockResolvedValue({});
+    mediaCreateMock.mockImplementation(async ({ data }) =>
+      selectedRow({ previewKey: data.previewKey }),
+    );
+    const file = new File([REAL_PNG], "photo.png", { type: "image/png" });
+
+    const response = await POST(buildRequest(file));
+    const body = await response.json();
+
+    // The POST response is as much an exposure surface as the listing: the
+    // select must exclude `key` there too, not just in GET.
+    const select = mediaCreateMock.mock.calls[0][0].select;
+    expect(select).not.toHaveProperty("key");
+    expect(body).not.toHaveProperty("key");
+    expect(JSON.stringify(body)).not.toContain("media/");
   });
 
   it("stores no preview for a video upload and leaves previewKey null", async () => {
     authMock.mockResolvedValue({ user: { id: "user-1" } });
     s3SendMock.mockResolvedValue({});
-    mediaCreateMock.mockImplementation(async ({ data }) => ({
-      id: "media-2",
-      createdAt: new Date(),
-      ...data,
-    }));
+    mediaCreateMock.mockImplementation(async ({ data }) =>
+      selectedRow({ id: "media-2", kind: data.kind, previewKey: data.previewKey }),
+    );
     const file = new File([MP4_HEADER], "clip.mp4", { type: "video/mp4" });
 
     const response = await POST(buildRequest(file));
@@ -204,12 +244,14 @@ describe("POST /api/media", () => {
     expect(s3SendMock).toHaveBeenCalledTimes(1);
     expect(mediaCreateMock).toHaveBeenCalledWith({
       data: expect.objectContaining({ kind: "VIDEO", previewKey: null }),
+      select: expect.any(Object),
     });
   });
 
   it("fails the whole upload when the watermark can't be generated", async () => {
     authMock.mockResolvedValue({ user: { id: "user-1" } });
     s3SendMock.mockResolvedValue({});
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     // Valid PNG signature, undecodable body: sharp throws.
     const file = new File([PNG_HEADER], "photo.png", { type: "image/png" });
 
@@ -220,6 +262,15 @@ describe("POST /api/media", () => {
     // survive a watermark failure (ugcportal-44q K2).
     expect(s3SendMock).not.toHaveBeenCalled();
     expect(mediaCreateMock).not.toHaveBeenCalled();
+
+    // A 422 alone can't be told apart from "the user uploaded junk"; the
+    // underlying sharp failure has to reach the logs so a systemic outage is
+    // visible.
+    expect(errorSpy).toHaveBeenCalledWith(
+      "[media] watermark generation failed",
+      expect.objectContaining({ cause: expect.any(Error) }),
+    );
+    errorSpy.mockRestore();
   });
 
   it("deletes both the original and the preview if the DB write fails", async () => {
@@ -256,11 +307,15 @@ describe("POST /api/media", () => {
   });
 });
 
+function buildListRequest(query = "") {
+  return new Request(`http://localhost/api/media${query}`);
+}
+
 describe("GET /api/media", () => {
   it("returns 401 for an unauthenticated request", async () => {
     authMock.mockResolvedValue(null);
 
-    const response = await GET();
+    const response = await GET(buildListRequest());
 
     expect(response.status).toBe(401);
     expect(mediaFindManyMock).not.toHaveBeenCalled();
@@ -270,7 +325,7 @@ describe("GET /api/media", () => {
     authMock.mockResolvedValue({ user: { id: "user-1" } });
     mediaFindManyMock.mockResolvedValue([]);
 
-    await GET();
+    await GET(buildListRequest());
 
     const args = mediaFindManyMock.mock.calls[0][0];
     expect(args.where).toMatchObject({
@@ -279,30 +334,26 @@ describe("GET /api/media", () => {
     });
     expect(args.select).not.toHaveProperty("key");
     expect(args.select.previewKey).toBe(true);
+    // Unique tiebreak, otherwise cursor paging skips or repeats rows that
+    // share a createdAt.
+    expect(args.orderBy).toEqual([{ createdAt: "desc" }, { id: "desc" }]);
   });
 
   it("exposes preview keys only — no original key reaches the listing (K2)", async () => {
     authMock.mockResolvedValue({ user: { id: "user-1" } });
-    const imageRow = {
-      id: "media-1",
-      kind: "IMAGE",
-      previewKey: "previews/user-1/abc.webp",
-      originalName: "photo.png",
-      createdAt: new Date("2026-09-24T10:00:00Z"),
-    };
     // A VIDEO row with no preview, returned here even though the where-clause
     // should have excluded it: the handler must not emit a row that has no
     // protected representation, whatever the query hands back.
-    const videoRow = {
+    const videoRow = selectedRow({
       id: "media-2",
       kind: "VIDEO",
       previewKey: null,
+      mimeType: "video/mp4",
       originalName: "clip.mp4",
-      createdAt: new Date("2026-09-24T11:00:00Z"),
-    };
-    mediaFindManyMock.mockResolvedValue([videoRow, imageRow]);
+    });
+    mediaFindManyMock.mockResolvedValue([videoRow, selectedRow()]);
 
-    const response = await GET();
+    const response = await GET(buildListRequest());
     const body = await response.json();
     const serialized = JSON.stringify(body);
 
@@ -320,5 +371,62 @@ describe("GET /api/media", () => {
     // unwatermarked originals live under.
     expect(serialized).not.toContain("media/");
     expect(serialized).not.toContain("clip.mp4");
+  });
+
+  it("requests one row beyond the page size and reports hasMore with a cursor", async () => {
+    authMock.mockResolvedValue({ user: { id: "user-1" } });
+    mediaFindManyMock.mockResolvedValue([
+      selectedRow({ id: "a", previewKey: "previews/user-1/a.webp" }),
+      selectedRow({ id: "b", previewKey: "previews/user-1/b.webp" }),
+      selectedRow({ id: "c", previewKey: "previews/user-1/c.webp" }),
+    ]);
+
+    const response = await GET(buildListRequest("?limit=2"));
+    const body = await response.json();
+
+    expect(mediaFindManyMock.mock.calls[0][0].take).toBe(3);
+    expect(body.items.map((i: { id: string }) => i.id)).toEqual(["a", "b"]);
+    expect(body.hasMore).toBe(true);
+    expect(body.nextCursor).toBe("b");
+  });
+
+  it("reports the end of the list", async () => {
+    authMock.mockResolvedValue({ user: { id: "user-1" } });
+    mediaFindManyMock.mockResolvedValue([selectedRow({ id: "a" })]);
+
+    const body = await (await GET(buildListRequest("?limit=2"))).json();
+
+    expect(body.hasMore).toBe(false);
+    expect(body.nextCursor).toBeNull();
+  });
+
+  it("pages past the first screenful with a cursor", async () => {
+    authMock.mockResolvedValue({ user: { id: "user-1" } });
+    mediaFindManyMock.mockResolvedValue([]);
+
+    await GET(buildListRequest("?cursor=media-42"));
+
+    // skip:1 so the cursor row itself isn't repeated on the next page.
+    expect(mediaFindManyMock.mock.calls[0][0]).toMatchObject({
+      cursor: { id: "media-42" },
+      skip: 1,
+    });
+  });
+
+  it("clamps or defaults a bogus limit instead of trusting it", async () => {
+    authMock.mockResolvedValue({ user: { id: "user-1" } });
+    mediaFindManyMock.mockResolvedValue([]);
+
+    for (const [query, expectedTake] of [
+      ["", 51],
+      ["?limit=abc", 51],
+      ["?limit=0", 2],
+      ["?limit=-5", 2],
+      ["?limit=10000", 101],
+    ] as const) {
+      mediaFindManyMock.mockClear();
+      await GET(buildListRequest(query));
+      expect(mediaFindManyMock.mock.calls[0][0].take).toBe(expectedTake);
+    }
   });
 });

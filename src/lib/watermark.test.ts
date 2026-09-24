@@ -7,6 +7,8 @@ import {
   PREVIEW_MAX_DIMENSION,
   PREVIEW_QUALITY,
   WatermarkError,
+  assertWatermarkFontAvailable,
+  buildWatermarkOverlaySvg,
   generateWatermarkedPreview,
   resolveWatermarkText,
 } from "@/lib/watermark";
@@ -49,6 +51,12 @@ async function buildUnwatermarkedBaseline(source: Buffer) {
     .toBuffer();
 }
 
+// WebP is lossy, so identical inputs still differ by a point or two. Only
+// count a pixel as marked once it moves well past that noise floor. Every
+// claim in this file about "the watermark is visible" is made at this
+// threshold, including the fontless-backstop check.
+const NOISE_TOLERANCE = 12;
+
 /** Per-pixel comparison of two same-sized images, decoded back to RGB. */
 async function diffPixels(a: Buffer, b: Buffer) {
   const [left, right] = await Promise.all([
@@ -60,9 +68,6 @@ async function diffPixels(a: Buffer, b: Buffer) {
   expect(left.info.height).toBe(right.info.height);
 
   const { width, height, channels } = left.info;
-  // WebP is lossy, so identical inputs still differ by a point or two. Only
-  // count a pixel as marked once it moves well past that noise floor.
-  const NOISE_TOLERANCE = 12;
   const quadrants = { topLeft: 0, topRight: 0, bottomLeft: 0, bottomRight: 0 };
   let changed = 0;
 
@@ -173,6 +178,50 @@ describe("generateWatermarkedPreview", () => {
     expect(withDefault.data.equals(withEnv.data)).toBe(false);
   });
 
+  it("still marks the image when no font is available to draw the glyphs", async () => {
+    // Simulates a runtime where fontconfig finds nothing: the overlay is
+    // composited with every <text> element removed, leaving only the
+    // font-independent rules. assertWatermarkFontAvailable should make this
+    // case impossible in production, but if the overlay's own backstop is
+    // worthless then a single missed check ships unprotected previews — and
+    // no test running on the CI host would ever notice, because CI is not
+    // the container image.
+    const source = await buildSourcePng();
+    const baseline = await buildUnwatermarkedBaseline(source);
+    const { width, height } = await sharp(baseline).metadata();
+
+    const glyphlessSvg = buildWatermarkOverlaySvg(
+      width as number,
+      height as number,
+      "ugcportal",
+    ).replace(/<text[\s\S]*?<\/text>/g, "");
+    expect(glyphlessSvg).not.toContain("<text");
+
+    const glyphless = await sharp(baseline)
+      .composite([{ input: Buffer.from(glyphlessSvg) }])
+      .webp({ quality: PREVIEW_QUALITY })
+      .toBuffer();
+    // Compare against the same image put through the same extra encode pass,
+    // so only the overlay is being measured.
+    const reencodedBaseline = await sharp(baseline)
+      .webp({ quality: PREVIEW_QUALITY })
+      .toBuffer();
+
+    const { changed, total, quadrants } = await diffPixels(
+      glyphless,
+      reencodedBaseline,
+    );
+
+    // Must be clearly distinguishable from an unwatermarked resize at the
+    // very threshold K1 uses — not merely "not byte-identical".
+    expect(changed / total).toBeGreaterThan(0.02);
+    const perQuadrantFloor = (total / 4) * 0.01;
+    expect(quadrants.topLeft).toBeGreaterThan(perQuadrantFloor);
+    expect(quadrants.topRight).toBeGreaterThan(perQuadrantFloor);
+    expect(quadrants.bottomLeft).toBeGreaterThan(perQuadrantFloor);
+    expect(quadrants.bottomRight).toBeGreaterThan(perQuadrantFloor);
+  });
+
   it("escapes XML metacharacters in the configured text", async () => {
     const source = await buildSourcePng();
 
@@ -185,6 +234,29 @@ describe("generateWatermarkedPreview", () => {
     await expect(sharp(preview.data).metadata()).resolves.toMatchObject({
       format: "webp",
     });
+  });
+
+  it("survives XML-illegal control characters in the configured text", async () => {
+    const source = await buildSourcePng();
+
+    // A form feed cannot be entity-escaped; interpolated raw it makes librsvg
+    // reject the document ("PCDATA invalid Char value 12"), which would turn
+    // one bad env var into a 422 on every single image upload.
+    process.env.WATERMARK_TEXT = "studio\fname ";
+
+    const preview = await generateWatermarkedPreview(source);
+
+    await expect(sharp(preview.data).metadata()).resolves.toMatchObject({
+      format: "webp",
+    });
+  });
+
+  it("requires a usable font to be installed", async () => {
+    // Positive direction only — the negative case is an environment fault
+    // that can't be induced here. Its value is that it runs at all: if the
+    // probe itself is broken, every upload would start failing loudly rather
+    // than shipping under-marked previews.
+    await expect(assertWatermarkFontAvailable()).resolves.toBeUndefined();
   });
 
   it("rejects a file that isn't decodable as an image", async () => {
@@ -234,5 +306,16 @@ describe("resolveWatermarkText", () => {
   it("truncates an absurdly long value", () => {
     process.env.WATERMARK_TEXT = "x".repeat(500);
     expect(resolveWatermarkText().length).toBe(40);
+  });
+
+  it("removes XML-illegal control characters and collapses whitespace", () => {
+    expect(resolveWatermarkText("a\fb c")).toBe("a bc");
+    expect(resolveWatermarkText("two\n\tlines")).toBe("two lines");
+    // Astral characters are legal XML and must survive intact.
+    expect(resolveWatermarkText("studio \u{1F4F7}")).toBe("studio \u{1F4F7}");
+  });
+
+  it("falls back to the default when sanitising leaves nothing", () => {
+    expect(resolveWatermarkText(" ")).toBe("ugcportal");
   });
 });

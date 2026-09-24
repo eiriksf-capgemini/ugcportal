@@ -19,20 +19,26 @@ function sanitizeFilename(name: string): string {
   return name.replace(/[^a-zA-Z0-9._-]/g, "_").slice(-100);
 }
 
-// The only columns any browsable surface is allowed to see. Spelled out as an
-// explicit `select` rather than an `omit` so a column added later is excluded
-// by default instead of leaking until someone remembers to blocklist it — and
-// `key`, the ungated paid original (ugcportal-5d6), is the column that must
-// never appear here.
-const LISTING_SELECT = {
+// The only Media columns any HTTP response may carry, shared by POST and GET
+// so the two can't drift apart.
+//
+// Spelled out as an explicit `select` rather than an `omit` so a column added
+// later is excluded by default instead of leaking until someone remembers to
+// blocklist it — and `key`, the ungated paid original (ugcportal-5d6), is the
+// column that must never appear here, in either direction. Returning the
+// freshly created row from POST is just as much an exposure as listing it.
+const MEDIA_PUBLIC_SELECT = {
   id: true,
   kind: true,
   previewKey: true,
+  mimeType: true,
+  sizeBytes: true,
   originalName: true,
   createdAt: true,
 } as const;
 
-const LISTING_LIMIT = 100;
+const DEFAULT_LISTING_LIMIT = 50;
+const MAX_LISTING_LIMIT = 100;
 
 export async function POST(request: Request) {
   const session = await auth();
@@ -92,11 +98,24 @@ export async function POST(request: Request) {
       preview = await generateWatermarkedPreview(buffer);
     } catch (error) {
       if (error instanceof WatermarkError) {
+        // Log the underlying sharp failure. A 422 on its own is
+        // indistinguishable from "user uploaded junk"; if watermarking starts
+        // failing systemically the cause is the only thing that says so.
+        console.error("[media] watermark generation failed", {
+          userId,
+          mimeType: file.type,
+          sizeBytes: file.size,
+          cause: error.cause,
+        });
         return NextResponse.json(
           { error: "Could not process this image" },
           { status: 422 },
         );
       }
+      // Not a problem with this file — e.g. WatermarkFontUnavailableError,
+      // meaning the runtime has no fonts and every preview would come out
+      // under-marked. That is a 5xx, and must not be reported as a bad upload.
+      console.error("[media] watermark service unavailable", error);
       throw error;
     }
   }
@@ -142,6 +161,7 @@ export async function POST(request: Request) {
         sizeBytes: file.size,
         originalName: file.name,
       },
+      select: MEDIA_PUBLIC_SELECT,
     });
 
     return NextResponse.json(media, { status: 201 });
@@ -164,6 +184,15 @@ export async function POST(request: Request) {
   }
 }
 
+function parseLimit(raw: string | null): number {
+  // Number(null) and Number("") are both 0, which would silently clamp an
+  // absent ?limit down to a single row instead of using the default.
+  if (raw === null || raw.trim() === "") return DEFAULT_LISTING_LIMIT;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) return DEFAULT_LISTING_LIMIT;
+  return Math.min(MAX_LISTING_LIMIT, Math.max(1, Math.floor(parsed)));
+}
+
 /**
  * Listing feed for browsable media.
  *
@@ -177,34 +206,56 @@ export async function POST(request: Request) {
  * Two rules hold the guarantee up:
  *   1. only rows that have a previewKey are returned, so anything without a
  *      protected representation (today: every VIDEO) is invisible; and
- *   2. the response exposes previewKey only — `key`, the paid original, is
- *      never selected, never mapped, never serialised.
+ *   2. the response goes through MEDIA_PUBLIC_SELECT, which has no `key` in
+ *      it — the paid original is never selected, mapped, or serialised.
+ *
+ * Paginated with an opaque cursor (the last item's id) rather than a bare cap,
+ * so nothing becomes permanently unreachable once a user passes the page size,
+ * and `hasMore` tells the caller when the list was truncated. Ordering is
+ * (createdAt desc, id desc) because cursor pagination needs a unique tiebreak
+ * to be stable across rows sharing a timestamp.
  *
  * Scoped to the signed-in user's own media. Widening this to a public feed is
  * a deliberate decision for ugcportal-71y to make, not something to inherit by
  * accident. Turning previewKey into a fetchable URL (signed or public) belongs
  * with the delivery work, not here.
  */
-export async function GET() {
+export async function GET(request: Request) {
   const session = await auth();
   const userId = session?.user?.id;
   if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  const params = new URL(request.url).searchParams;
+  const limit = parseLimit(params.get("limit"));
+  const cursor = params.get("cursor");
+
   const rows = await prisma.media.findMany({
     where: { userId, previewKey: { not: null } },
-    select: LISTING_SELECT,
-    orderBy: { createdAt: "desc" },
-    take: LISTING_LIMIT,
+    select: MEDIA_PUBLIC_SELECT,
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    // One extra row is a cheap way to know whether another page exists
+    // without a second count query.
+    take: limit + 1,
+    ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
   });
+
+  const hasMore = rows.length > limit;
+  const page = hasMore ? rows.slice(0, limit) : rows;
 
   // The where-clause already excludes them, but previewKey is still typed
   // `string | null`; narrowing here makes the emitted shape non-nullable and
   // means a future query change can't quietly start emitting preview-less rows.
-  const items = rows.filter(
+  const items = page.filter(
     (row): row is typeof row & { previewKey: string } => row.previewKey !== null,
   );
 
-  return NextResponse.json({ items });
+  return NextResponse.json({
+    items,
+    hasMore,
+    // Taken from the unfiltered page, so the defensive filter above can never
+    // strand the caller on a cursor that skips rows.
+    nextCursor: hasMore ? (page.at(-1)?.id ?? null) : null,
+  });
 }
