@@ -28,6 +28,26 @@
 # build time (in the builder stage, before `next build`) so
 # `src/generated/prisma` exists for the app to import and for the build
 # to bundle.
+#
+# sharp note (ugcportal-44q): watermark generation needs sharp's native
+# libvips binding, which npm installs as a platform-specific optional
+# dependency — @img/sharp-linuxmusl-x64 (+ @img/sharp-libvips-linuxmusl-x64)
+# on this alpine base. Two things have to hold, and both were checked
+# without running this build:
+#   1. the lockfile resolves the musl variant — confirmed by running
+#      `npm ci --omit=dev --os=linux --libc=musl --cpu=x64` against this
+#      exact package-lock.json, which installs both @img musl packages; and
+#   2. Next's file tracing carries them into `.next/standalone/node_modules`
+#      — @vercel/nft has an explicit `sharp` rule that enumerates *every*
+#      entry in sharp's own optionalDependencies (and each of those packages'
+#      optionalDependencies) and emits whichever ones exist on disk, so it
+#      does not branch on the host platform. Observed doing exactly that for
+#      the darwin binding on a workstation build.
+# Residual risk: this image has never actually been built or run, so a
+# failure at load time would only show up on first deploy.
+#
+# What tracing cannot supply is font *files*; see the apk install in the
+# runner stage.
 
 ARG NODE_VERSION=20-alpine
 
@@ -85,6 +105,33 @@ ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
     PORT=3000 \
     HOSTNAME=0.0.0.0
+
+# Fonts for the watermark overlay (ugcportal-44q). sharp draws the preview's
+# watermark text through libvips -> pango -> fontconfig, and libvips ships no
+# font files of its own; a bare node:*-alpine image has none either. Without
+# this the text renders as nothing. `fontconfig` supplies /etc/fonts so the
+# font is actually discoverable; `font-dejavu` is the family named first in
+# the font stack in src/lib/watermark.ts.
+#
+# Removing this does not silently degrade previews: the watermark service
+# probes for a usable font on first use and refuses to run without one, so
+# uploads fail with a 5xx instead of shipping under-marked images.
+#
+# No FONTCONFIG_PATH is set, and that is deliberate rather than an oversight.
+# The concern is real — sharp bundles its own fontconfig inside
+# libvips-cpp.so, so its compiled-in default could point at the build prefix
+# rather than at /etc/fonts. Checked against the actual artifact this image
+# installs (@img/sharp-libvips-linuxmusl-x64, libvips-cpp.so.8.18.6):
+#   - the only config-directory path in the binary is "/etc/fonts", sitting
+#     immediately beside the "FONTCONFIG_FILE"/"FONTCONFIG_PATH"/"fonts.conf"
+#     strings, i.e. fontconfig's standard default-path lookup with /etc/fonts
+#     as the compiled-in fallback. There is no build-prefix path to compete
+#     with it; and
+#   - the built-in fallback config it embeds already lists
+#     <dir>/usr/share/fonts</dir>, which is where apk puts font-dejavu.
+# So FONTCONFIG_PATH=/etc/fonts would be a provable no-op, and setting it
+# would imply a problem that the binary says does not exist.
+RUN apk add --no-cache fontconfig font-dejavu
 
 # Non-root runtime user (K1: "run as a non-root user in the final stage").
 RUN addgroup --system --gid 1001 nodejs \

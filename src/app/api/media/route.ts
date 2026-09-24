@@ -7,10 +7,38 @@ import { auth } from "@/lib/auth";
 import { MAX_UPLOAD_BYTES, sniffKind, validateUpload } from "@/lib/media";
 import { prisma } from "@/lib/prisma";
 import { getBucketName, getS3Client } from "@/lib/s3";
+import type { PreviewResult } from "@/lib/watermark";
+import {
+  PREVIEW_CONTENT_TYPE,
+  PREVIEW_FILE_EXTENSION,
+  WatermarkError,
+  generateWatermarkedPreview,
+} from "@/lib/watermark";
 
 function sanitizeFilename(name: string): string {
   return name.replace(/[^a-zA-Z0-9._-]/g, "_").slice(-100);
 }
+
+// The only Media columns any HTTP response may carry, shared by POST and GET
+// so the two can't drift apart.
+//
+// Spelled out as an explicit `select` rather than an `omit` so a column added
+// later is excluded by default instead of leaking until someone remembers to
+// blocklist it — and `key`, the ungated paid original (ugcportal-5d6), is the
+// column that must never appear here, in either direction. Returning the
+// freshly created row from POST is just as much an exposure as listing it.
+const MEDIA_PUBLIC_SELECT = {
+  id: true,
+  kind: true,
+  previewKey: true,
+  mimeType: true,
+  sizeBytes: true,
+  originalName: true,
+  createdAt: true,
+} as const;
+
+const DEFAULT_LISTING_LIMIT = 50;
+const MAX_LISTING_LIMIT = 100;
 
 export async function POST(request: Request) {
   const session = await auth();
@@ -51,34 +79,249 @@ export async function POST(request: Request) {
 
   const key = `media/${userId}/${randomUUID()}-${sanitizeFilename(file.name)}`;
 
-  await getS3Client().send(
-    new PutObjectCommand({
-      Bucket: getBucketName(),
-      Key: key,
-      Body: buffer,
-      ContentType: file.type,
-    }),
-  );
+  // Watermark first, store second.
+  //
+  // Failure policy (ugcportal-44q K2): a failed watermark fails the whole
+  // upload. There is no path where the original lands in the bucket with a
+  // null previewKey for an image — that row would be an unprotected original
+  // sitting in the same table the gallery reads from, one careless query away
+  // from being served. Doing this before any PutObject means a rejected
+  // upload also leaves nothing behind to compensate for.
+  //
+  // VIDEO gets no preview yet (ugcportal-pmb owns the watermarked poster
+  // frame). Those rows keep previewKey null and are excluded from the listing
+  // below, so they are never browsable in the meantime.
+  let preview: PreviewResult | null = null;
+  if (validation.kind === "IMAGE") {
+    try {
+      preview = await generateWatermarkedPreview(buffer);
+    } catch (error) {
+      if (error instanceof WatermarkError) {
+        // Log the underlying sharp failure. A 422 on its own is
+        // indistinguishable from "user uploaded junk"; if watermarking starts
+        // failing systemically the cause is the only thing that says so.
+        console.error("[media] watermark generation failed", {
+          userId,
+          mimeType: file.type,
+          sizeBytes: file.size,
+          cause: error.cause,
+        });
+        return NextResponse.json(
+          { error: "Could not process this image" },
+          { status: 422 },
+        );
+      }
+      // Not a problem with this file — e.g. WatermarkFontUnavailableError,
+      // meaning the runtime has no fonts and every preview would come out
+      // under-marked. That is a 5xx, and must not be reported as a bad upload.
+      console.error("[media] watermark service unavailable", error);
+      throw error;
+    }
+  }
+
+  // An independent UUID, deliberately not derived from `key`.
+  //
+  // Withholding the original's key from every response is worthless if the
+  // key can simply be recomputed from what we do return. Sharing one id
+  // between the two would mean previewKey + originalName + the (deterministic)
+  // sanitizeFilename above is enough to reconstruct the original's full path —
+  // so the moment ugcportal-71y makes previewKey fetchable against this
+  // bucket, K2 is defeated by string concatenation. Uncorrelated ids make the
+  // original's key unguessable from anything the listing exposes.
+  const previewKey = preview
+    ? `previews/${userId}/${randomUUID()}${PREVIEW_FILE_EXTENSION}`
+    : null;
+
+  // Track what actually made it into the bucket so the compensating delete
+  // below covers both objects, not just the original.
+  const storedKeys: string[] = [];
 
   try {
+    await getS3Client().send(
+      new PutObjectCommand({
+        Bucket: getBucketName(),
+        Key: key,
+        Body: buffer,
+        ContentType: file.type,
+      }),
+    );
+    storedKeys.push(key);
+
+    if (preview && previewKey) {
+      await getS3Client().send(
+        new PutObjectCommand({
+          Bucket: getBucketName(),
+          Key: previewKey,
+          Body: preview.data,
+          ContentType: PREVIEW_CONTENT_TYPE,
+        }),
+      );
+      storedKeys.push(previewKey);
+    }
+
     const media = await prisma.media.create({
       data: {
         userId,
         kind: validation.kind,
         key,
+        previewKey,
         mimeType: file.type,
         sizeBytes: file.size,
         originalName: file.name,
       },
+      select: MEDIA_PUBLIC_SELECT,
     });
 
     return NextResponse.json(media, { status: 201 });
   } catch (error) {
-    // Best-effort compensation so a DB hiccup doesn't leave an untracked
-    // object sitting in the bucket forever.
-    await getS3Client()
-      .send(new DeleteObjectCommand({ Bucket: getBucketName(), Key: key }))
-      .catch(() => {});
+    // Best-effort compensation so a failed preview upload or DB hiccup doesn't
+    // leave untracked objects sitting in the bucket forever. Failures here are
+    // swallowed because the original error is the one worth propagating — but
+    // they are logged, not discarded: a compensation that is quietly failing
+    // every time leaks storage indefinitely with nothing to notice it by.
+    await Promise.all(
+      storedKeys.map((storedKey) =>
+        getS3Client()
+          .send(
+            new DeleteObjectCommand({
+              Bucket: getBucketName(),
+              Key: storedKey,
+            }),
+          )
+          .catch((cleanupError) => {
+            console.error("[media] failed to clean up orphaned object", {
+              key: storedKey,
+              cause: cleanupError,
+            });
+          }),
+      ),
+    );
     throw error;
   }
+}
+
+function parseLimit(raw: string | null): number {
+  // Number(null) and Number("") are both 0, which would silently clamp an
+  // absent ?limit down to a single row instead of using the default.
+  if (raw === null || raw.trim() === "") return DEFAULT_LISTING_LIMIT;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) return DEFAULT_LISTING_LIMIT;
+  return Math.min(MAX_LISTING_LIMIT, Math.max(1, Math.floor(parsed)));
+}
+
+/**
+ * Listing feed for browsable media.
+ *
+ * This is deliberately the minimum needed to make ugcportal-44q's K2
+ * checkable — "the original file URL is never reachable from the gallery" is
+ * only a real guarantee once something actually lists media. The gallery UI
+ * itself (lightbox, layout, public portfolio page) is ugcportal-71y's job and
+ * is not built here; that bead should consume this endpoint's projection
+ * rather than querying Media directly.
+ *
+ * Two rules hold the guarantee up:
+ *   1. only rows that have a previewKey are returned, so anything without a
+ *      protected representation (today: every VIDEO) is invisible; and
+ *   2. the response goes through MEDIA_PUBLIC_SELECT, which has no `key` in
+ *      it — the paid original is never selected, mapped, or serialised.
+ *
+ * Paginated with an opaque cursor (the last item's id) rather than a bare cap,
+ * so nothing becomes permanently unreachable once a user passes the page size,
+ * and `hasMore` tells the caller when the list was truncated. Ordering is
+ * (createdAt desc, id desc) because pagination needs a unique tiebreak to be
+ * stable across rows sharing a timestamp.
+ *
+ * The cursor is resolved by hand rather than through Prisma's `cursor`/`skip`,
+ * for two reasons. It is a client-supplied id and therefore untrusted: Prisma
+ * compiles `cursor` into a subquery that ignores the outer `where`, so a
+ * caller could pass the id of a row this endpoint deliberately excludes (a
+ * VIDEO row — an id POST hands them) or another user's row, and use the
+ * resulting window as an ordering oracle over rows they can't see. And it is
+ * wrong even when honest: that subquery's comparison is inclusive, so with
+ * rows sharing a `createdAt` the `skip: 1` then silently swallows a real row.
+ * Resolving the anchor against the caller's own rows and expressing the window
+ * as an explicit keyset predicate fixes both — the predicate lives inside the
+ * same `where` as the scoping, so it cannot outrun it.
+ *
+ * Scoped to the signed-in user's own media. Widening this to a public feed is
+ * a deliberate decision for ugcportal-71y to make, not something to inherit by
+ * accident. Turning previewKey into a fetchable URL (signed or public) belongs
+ * with the delivery work, not here.
+ */
+export async function GET(request: Request) {
+  const session = await auth();
+  const userId = session?.user?.id;
+  if (!userId) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const params = new URL(request.url).searchParams;
+  const limit = parseLimit(params.get("limit"));
+  // Treat `?cursor=` as absent rather than as the id "", which would otherwise
+  // 400 on a perfectly ordinary first-page request.
+  const cursor = params.get("cursor")?.trim() || null;
+
+  // Everything the listing itself is scoped by. The anchor lookup reuses it
+  // verbatim so a cursor can only ever name a row this caller is already
+  // allowed to see in this feed.
+  const scope = { userId, previewKey: { not: null } } as const;
+
+  let keyset: object | undefined;
+  if (cursor !== null) {
+    const anchor = await prisma.media.findFirst({
+      where: { ...scope, id: cursor },
+      select: { id: true, createdAt: true },
+    });
+
+    if (!anchor) {
+      // Unknown, foreign, or since-deleted. Answering with an empty page would
+      // be a false end-of-list — the caller would stop, believing it had seen
+      // everything. Say so instead, and let it restart pagination.
+      return NextResponse.json(
+        { error: "Invalid or expired cursor" },
+        { status: 400 },
+      );
+    }
+
+    // Strict "after the anchor" in (createdAt desc, id desc) order. No skip
+    // needed: the anchor itself can't satisfy either branch.
+    keyset = {
+      OR: [
+        { createdAt: { lt: anchor.createdAt } },
+        { createdAt: anchor.createdAt, id: { lt: anchor.id } },
+      ],
+    };
+  }
+
+  const rows = await prisma.media.findMany({
+    where: { ...scope, ...keyset },
+    select: MEDIA_PUBLIC_SELECT,
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    // One extra row is a cheap way to know whether another page exists
+    // without a second count query.
+    take: limit + 1,
+  });
+
+  const page = rows.length > limit ? rows.slice(0, limit) : rows;
+
+  // The where-clause already excludes them, but previewKey is still typed
+  // `string | null`; narrowing here makes the emitted shape non-nullable and
+  // means a future query change can't quietly start emitting preview-less rows.
+  const items = page.filter(
+    (row): row is typeof row & { previewKey: string } => row.previewKey !== null,
+  );
+
+  // Taken from `items`, not `page`: a cursor naming a row the filter dropped
+  // is a row the *next* request's where-clause also excludes, which is exactly
+  // how a page gets silently skipped. And if the filter emptied the page there
+  // is no cursor to give, so we must not claim there is more — a caller that
+  // sees hasMore with no cursor either loops forever or stalls.
+  const nextCursor =
+    rows.length > limit ? (items.at(-1)?.id ?? null) : null;
+
+  return NextResponse.json({
+    items,
+    hasMore: nextCursor !== null,
+    nextCursor,
+  });
 }
