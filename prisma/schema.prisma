@@ -147,6 +147,29 @@ model Media {
   // can no longer supply the sort order and SQLite falls back to a full scan
   // plus a temp B-tree. The publishedAt/previewKey predicates are applied as
   // filters during the scan instead.
+  //
+  // KNOWN LIMITATION — that EXPLAIN evidence proves *ordering*, not
+  // *selectivity*, and the difference matters. Because publishedAt, previewKey
+  // and previewId are filters applied during the scan rather than part of the
+  // index key, a public-feed page costs work proportional to the total number
+  // of Media rows in the range, not to the published ones. Measured on SQLite 3
+  // with 200,000 rows of which 1% were published, first page of 50: 0.000653s
+  // user against this index, versus 0.000014s against a partial index on the
+  // same columns — ~46x, and widening with table size. Both are sub-millisecond
+  // today, so this is a scaling note rather than a live problem; it is recorded
+  // because GET /api/public/media is unauthenticated, so the work is reachable
+  // without an account, and because the plan above looks clean and hides it.
+  //
+  // The fix is a partial index. Contrary to what is often assumed, Prisma 7.10
+  // *can* express one for sqlite — `@@index([createdAt, id], where: raw(...))`
+  // behind `previewFeatures = ["partialIndexes"]` — and `migrate diff` then
+  // emits the intended `CREATE INDEX ... WHERE ...` with no drift. Verified
+  // 2026-09-24; see ugcportal-ei7 for the exact commands and output. It is not
+  // done here because turning on a preview feature changes generator config for
+  // the whole schema, which is its own decision with its own blast radius, not
+  // a rider on a publish-state PR.
+  //
+  // Tracked as ugcportal-ei7 (perf/media, discovered from ugcportal-r1d).
   @@index([createdAt, id])
 }
 

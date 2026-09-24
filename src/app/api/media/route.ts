@@ -6,6 +6,7 @@ import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import {
   MAX_UPLOAD_BYTES,
+  mediaPreviewColumns,
   sanitizeOriginalName,
   sniffKind,
   validateUpload,
@@ -214,23 +215,19 @@ export async function POST(request: Request) {
   // so the moment ugcportal-71y makes previewKey fetchable against this
   // bucket, K2 is defeated by string concatenation. Uncorrelated ids make the
   // original's key unguessable from anything the listing exposes.
-  const previewKey = preview
-    ? `previews/${userId}/${randomUUID()}${PREVIEW_FILE_EXTENSION}`
-    : null;
-
-  // The public handle for that preview, and a third independent UUID.
+  // Both preview columns at once, via the one helper that can produce them.
   //
-  // `previewKey` embeds `userId` by construction, so it is owner-only: handing
-  // it to an anonymous caller would publish which account uploaded what, the
-  // exact capability withholding `userId` from the feed was meant to deny
-  // (ugcportal-r1d review, round 2). The anonymous feed exposes this instead.
-  //
-  // Uncorrelated with both other ids on purpose, for the same reason the
-  // preview's UUID is uncorrelated with the original's above: an opaque handle
-  // that can be transformed back into the thing it was meant to hide is not
-  // opaque. Nothing about the row — not the user, not the key, not the
-  // filename — is an input here.
-  const previewId = preview ? randomUUID() : null;
+  // `previewKey` is the storage path and embeds `userId`, so it is owner-only;
+  // `previewId` is the opaque handle the anonymous feed exposes instead
+  // (ugcportal-r1d). They are inseparable — a row with one and not the other
+  // is filtered out of every listing — so they are never written as two
+  // independent expressions. See mediaPreviewColumns in src/lib/media.ts.
+  const previewColumns = mediaPreviewColumns(
+    preview
+      ? `previews/${userId}/${randomUUID()}${PREVIEW_FILE_EXTENSION}`
+      : null,
+  );
+  const { previewKey } = previewColumns;
 
   // Track what actually made it into the bucket so the compensating delete
   // below covers both objects, not just the original.
@@ -264,11 +261,9 @@ export async function POST(request: Request) {
         userId,
         kind: validation.kind,
         key,
-        previewKey,
-        // Set together with previewKey and null together with it, so "has a
-        // watermarked preview" stays one fact rather than two that can
-        // disagree.
-        previewId,
+        // Spread as a pair, never as two fields, so the columns cannot drift
+        // apart at this call site either.
+        ...previewColumns,
         mimeType: file.type,
         sizeBytes: file.size,
         // Repaired, not rejected — see sanitizeOriginalName in

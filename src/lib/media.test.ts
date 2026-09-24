@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   MAX_ORIGINAL_NAME_LENGTH,
+  mediaPreviewColumns,
   sanitizeOriginalName,
   sniffKind,
   validateOriginalName,
@@ -224,4 +225,72 @@ describe("sanitizeOriginalName", () => {
       });
     },
   );
+});
+
+describe("mediaPreviewColumns", () => {
+  // previewKey (a storage path embedding the uploader's id, owner-only) and
+  // previewId (the opaque handle the public feed exposes) are two columns for
+  // one fact. Both listings filter on both, so a row carrying only one is
+  // invisible in every feed — including its own owner's library — with no
+  // repair path. ugcportal-r1d introduced that coupling; this helper is what
+  // keeps a future second writer (ugcportal-ct0's Instagram sync) from
+  // half-setting it.
+
+  it("returns both columns set when there is a preview", () => {
+    const columns = mediaPreviewColumns("previews/user-1/abc.webp");
+
+    expect(columns.previewKey).toBe("previews/user-1/abc.webp");
+    expect(typeof columns.previewId).toBe("string");
+    expect(columns.previewId).not.toBeNull();
+  });
+
+  it("returns both columns null when there is none", () => {
+    // Every VIDEO today; poster frames are ugcportal-pmb.
+    expect(mediaPreviewColumns(null)).toEqual({
+      previewKey: null,
+      previewId: null,
+    });
+  });
+
+  it("never returns a half-set pair, for any input", () => {
+    for (const key of [
+      null,
+      "previews/user-1/a.webp",
+      "previews/user-2/b.webp",
+      "",
+    ]) {
+      const { previewKey, previewId } = mediaPreviewColumns(key);
+      // The invariant stated directly: the two are null together or set
+      // together, never one of each.
+      expect(previewKey === null).toBe(previewId === null);
+    }
+  });
+
+  it("derives previewId from nothing about the row", () => {
+    const key = "previews/user-1/abc.webp";
+    const first = mediaPreviewColumns(key);
+    const second = mediaPreviewColumns(key);
+
+    // Same input, different id: it is random, not a function of the key. An
+    // opaque handle that can be recomputed from the thing it hides is not
+    // opaque (the ugcportal-44q decorrelation argument, one field out).
+    expect(first.previewId).not.toBe(second.previewId);
+    expect(first.previewId).not.toContain("user-1");
+    expect(first.previewId).not.toContain("abc");
+    expect(first.previewId).not.toContain("previews/");
+    expect(key).not.toContain(String(first.previewId));
+  });
+
+  it("gives every row a distinct previewId", () => {
+    // previewId is @unique in the schema, so a collision is not a cosmetic
+    // problem — it is a failed insert.
+    const ids = new Set(
+      Array.from(
+        { length: 500 },
+        () => mediaPreviewColumns("previews/user-1/a.webp").previewId,
+      ),
+    );
+
+    expect(ids.size).toBe(500);
+  });
 });

@@ -48,16 +48,52 @@ export type MediaListingScope = {
 /**
  * The projections a listing may serve. Two audiences, two selects — see
  * src/lib/media-access.ts for why they are not one.
+ *
+ * A closed union rather than Prisma's `MediaSelect`, so no caller can hand
+ * this function an ad-hoc projection with `key` in it. Widening the feeds is a
+ * decision made in media-access.ts, not at a call site.
  */
 export type MediaListingSelect =
   | typeof MEDIA_OWNER_SELECT
   | typeof MEDIA_ANONYMOUS_SELECT;
 
-/** A listing row, narrowed so `previewId` is non-nullable for the caller. */
-export type MediaListingItem<TSelect extends MediaListingSelect> = Pick<
+/**
+ * The columns listMedia reads for itself, whatever the audience: `id` and
+ * `createdAt` to build a cursor, `previewId` for the narrowing below.
+ *
+ * Required of the type parameter as well as of the union, and that redundancy
+ * is the point. If a third projection is added to MediaListingSelect without
+ * `previewId`, this constraint fails at the call site rather than leaving the
+ * narrowing to read `undefined` — which, since `undefined !== null`, would
+ * pass every row through a filter that still looked like a filter. That is the
+ * precise shape of the bug this listing already shipped once with
+ * `previewKey`; it does not get a second outing one field over.
+ */
+export type MediaListingRequiredColumns = {
+  id: true;
+  createdAt: true;
+  previewId: true;
+};
+
+/**
+ * A row exactly as the query returns it — `previewId` still nullable, because
+ * the column is.
+ *
+ * The second Pick is not redundant with the first. `keyof TSelect` is deferred
+ * while TSelect is generic, so a bare `Pick<MediaModel, keyof TSelect & …>`
+ * cannot be indexed inside this module at all; naming the three columns the
+ * module itself touches makes them resolvable here without widening what the
+ * caller receives.
+ */
+type MediaListingRow<TSelect extends MediaListingSelect> = Pick<
   MediaModel,
   keyof TSelect & keyof MediaModel
-> & { previewId: string };
+> &
+  Pick<MediaModel, "id" | "createdAt" | "previewId">;
+
+/** A listing row, narrowed so `previewId` is non-nullable for the caller. */
+export type MediaListingItem<TSelect extends MediaListingSelect> =
+  MediaListingRow<TSelect> & { previewId: string };
 
 export type MediaListingPage<TSelect extends MediaListingSelect> = {
   items: MediaListingItem<TSelect>[];
@@ -163,7 +199,9 @@ function decodeMediaCursor(raw: string): MediaCursor | null {
  * swallows a real row. Writing the predicate by hand puts it inside the same
  * `where` as the scoping, so it cannot outrun it.
  */
-export async function listMedia<TSelect extends MediaListingSelect>(
+export async function listMedia<
+  TSelect extends MediaListingSelect & MediaListingRequiredColumns,
+>(
   requestUrl: string,
   scope: MediaListingScope,
   select: TSelect,
@@ -205,7 +243,11 @@ export async function listMedia<TSelect extends MediaListingSelect>(
     // which it cannot narrow back to the caller's concrete TSelect. The narrow
     // is safe because TSelect *is* the select the query just ran with; the
     // `where`/`select` above are the only things that decide what comes back.
-  })) as (MediaListingItem<TSelect> & { previewId: string | null })[];
+    //
+    // Cast to the *row* type, not the item type: `previewId` stays `string |
+    // null` here, which is what keeps the filter below a real runtime check
+    // rather than one the compiler has already decided can never be false.
+  })) as MediaListingRow<TSelect>[];
 
   const page = rows.length > limit ? rows.slice(0, limit) : rows;
 
@@ -218,6 +260,10 @@ export async function listMedia<TSelect extends MediaListingSelect>(
   // previewKey, and `undefined !== null` is true, so a previewKey check would
   // have silently passed every anonymous row through while looking like a
   // guard.
+  //
+  // MediaListingRequiredColumns is what makes this line load-bearing rather
+  // than decorative: it guarantees `previewId` was actually selected, so the
+  // value tested is a real `string | null` and not an absent property.
   const items = page.filter(
     (row): row is MediaListingItem<TSelect> => row.previewId !== null,
   );
