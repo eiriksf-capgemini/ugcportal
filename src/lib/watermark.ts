@@ -70,6 +70,10 @@ export const MAX_INPUT_PIXELS = 50_000_000;
 //     carrying a retryAfterSeconds hint. It is never partially processed, and
 //     no upload is ever stored without its preview.
 //
+// The timeout bounds *waiting*, not running: once a preview starts it has no
+// deadline, because the libvips call cannot be cancelled and freeing the slot
+// without freeing the memory would defeat the bound. See ConcurrencyGate.run.
+//
 // Why not pure shedding: uploads arrive in bursts by construction (a
 // multi-file picker sends every file at once), and a limit small enough to
 // protect a 1 GB container would fail most of a perfectly ordinary five-image
@@ -86,24 +90,26 @@ export const MAX_INPUT_PIXELS = 50_000_000;
 // the cap plus the timeout are what force the degradation to happen at a
 // predictable point instead of at whatever depth the heap dies.
 //
-// A queued upload is NOT free, and the queue is bounded in bytes because of
-// it. The gate copies nothing — the body is already buffered by the HTTP
-// layer before this module is reached — but waiting keeps that body alive
-// alongside every other queued one, when they would otherwise have been
-// freed one at a time. See QUEUED_UPLOAD_BYTES, and the budget allocation in
+// Every upload the gate is holding — running or queued — costs its request
+// body, and the budget accounts for all of them. The gate copies nothing (the
+// body is already buffered by the HTTP layer before this module is reached),
+// but holding N of them alive at once is a real commitment where freeing them
+// one at a time would not have been. See UPLOAD_BODY_BYTES,
+// IN_FLIGHT_BYTES_PER_UPLOAD, and the budget allocation in
 // resolveWatermarkConcurrencySettings.
 
 /**
  * Native memory to reserve for everything that is not preview work: the Next
  * server, the V8 heap, Prisma/libsql, the S3 client's buffers.
  *
- * Deliberately does *not* include queued upload bodies. An earlier version of
- * this constant did, hand-waving them in as "plus a request body or two",
- * which was wrong in a way worth naming: queued bodies scale with the queue
- * depth, which scales with the limit, which is derived from this. Folding a
- * variable into a constant that sizes it is circular, and it under-counted by
- * however deep the queue happened to go. They are now priced separately as
- * {@link QUEUED_UPLOAD_BYTES} and allocated out of the budget explicitly.
+ * Deliberately does *not* include upload bodies, queued or in flight. An
+ * earlier version of this constant did, hand-waving them in as "plus a
+ * request body or two", which was wrong in a way worth naming: the number of
+ * live bodies scales with the limit and the queue, both of which are derived
+ * from this. Folding a variable into the constant that sizes it is circular,
+ * and it under-counted by however many bodies were actually live. They are
+ * priced separately as {@link UPLOAD_BODY_BYTES} and allocated out of the
+ * budget explicitly.
  *
  * Still an estimate, and flagged as one: it has not been measured against the
  * production image, only reasoned from a Next standalone server's typical
@@ -124,27 +130,50 @@ export const PREVIEW_PROCESS_BASELINE_BYTES = 320 * 1024 * 1024;
  * four; the same image as JPEG cost ~31-40 MB. 128 MB is ~1.5x the worst
  * observed figure, which is the headroom for the allocator behaving
  * differently under musl than under darwin's.
+ *
+ * Read it as "the cost of decoding a body", not "the cost of an upload": it
+ * is a *delta*, measured with the source buffer already resident, so it does
+ * not include the body itself. {@link IN_FLIGHT_BYTES_PER_UPLOAD} is the
+ * figure to size anything against.
  */
 export const PREVIEW_BYTES_PER_OPERATION = 128 * 1024 * 1024;
 
 /**
- * Resident memory one *queued* upload holds alive while it waits.
+ * Resident memory one upload's request body holds, from the moment the route
+ * has read it until the handler returns.
  *
  * Twice the image upload cap, because src/app/api/media/route.ts materialises
  * the body twice before it ever reaches this module: `await
  * request.formData()` produces a File holding the bytes, and
- * `Buffer.from(await file.arrayBuffer())` copies them into a Buffer that
- * stays referenced for the whole handler. Both are alive for the entire wait.
+ * `Buffer.from(await file.arrayBuffer())` copies them into a Buffer. Both
+ * stay referenced for the whole handler. (There is a third, transient copy —
+ * the intermediate ArrayBuffer — but it is garbage immediately, so it is not
+ * counted.)
  *
- * This is the correction to the original reasoning that "queueing costs no
- * extra memory because the body is already buffered". True as far as it goes
- * — the gate does not copy anything — but the conclusion drawn from it was
- * wrong: the cost of a queue is not the copy, it is keeping N bodies
- * *simultaneously* alive that would otherwise have been freed one at a time.
- * At a 20-deep queue that is 400 MB, which is not a rounding error against a
- * 1 GB container.
+ * Charged to *every* caller the gate is holding, queued or running, and that
+ * is the correction to two successive mistakes rather than one:
+ *
+ *  - first, that queueing was free because the body was already buffered.
+ *    True that the gate copies nothing; false that it costs nothing, because
+ *    a queue keeps N bodies simultaneously alive that would otherwise have
+ *    been freed one at a time.
+ *  - then, that only *queued* callers held a body. A running caller holds
+ *    exactly the same two copies, and PREVIEW_BYTES_PER_OPERATION does not
+ *    cover them: it is a measured delta taken with the source buffer already
+ *    resident, so it is the cost of decoding a body, on top of the body.
+ *
+ * Both errors ran the same way — under-counting what the process is actually
+ * committed to — which is the direction that ends in an OOM rather than in
+ * an unnecessarily small limit.
  */
-export const QUEUED_UPLOAD_BYTES = 2 * MAX_IMAGE_UPLOAD_BYTES;
+export const UPLOAD_BODY_BYTES = 2 * MAX_IMAGE_UPLOAD_BYTES;
+
+/**
+ * Total resident memory one in-flight preview commits the process to: the
+ * decode/encode work plus the request body that is being decoded.
+ */
+export const IN_FLIGHT_BYTES_PER_UPLOAD =
+  PREVIEW_BYTES_PER_OPERATION + UPLOAD_BODY_BYTES;
 
 /**
  * Absolute ceiling on the derived limit, whatever any budget says.
@@ -182,14 +211,19 @@ export const MAX_SHARP_THREADS_PER_OPERATION = 4;
 
 /**
  * Smallest memory budget in which the gate can honour its own arithmetic:
- * the baseline plus one preview. Below this the limit is clamped up to 1 (a
- * gate that admits nothing is not an improvement on an OOM) and the
- * configuration is, by its own reckoning, over budget — which
+ * the baseline plus one upload being processed (its body and its decode).
+ * Currently 468 MB. Below this the limit is clamped up to 1 — a gate that
+ * admits nothing is not an improvement on an OOM — and the configuration is,
+ * by its own reckoning, over budget, which
  * {@link resolveWatermarkConcurrencySettings} reports via `fitsBudget` and
- * getGate() logs a warning about.
+ * getGate() warns about.
+ *
+ * Note this is a floor on the *arithmetic*, not a recommendation. See the
+ * reference table on resolveWatermarkConcurrencySettings for the practical
+ * one, which is a good deal higher.
  */
 export const MIN_VIABLE_BUDGET_BYTES =
-  PREVIEW_PROCESS_BASELINE_BYTES + PREVIEW_BYTES_PER_OPERATION;
+  PREVIEW_PROCESS_BASELINE_BYTES + IN_FLIGHT_BYTES_PER_UPLOAD;
 
 /**
  * Just the variables this module reads.
@@ -261,11 +295,18 @@ function nonNegativeInt(raw: string | undefined): number | undefined {
  * PutObject that needs DNS — saturating the pool with previews would stall
  * the very uploads the previews belong to.
  *
- * Raising UV_THREADPOOL_SIZE raises this. That is the supported way to get a
- * limit above 3 out of a large container, and it is documented in
- * env.example; the alternative, setting it from inside the process, does not
- * work reliably because libuv reads it when the pool is first used, which has
- * long since happened by the time a request arrives.
+ * Raising UV_THREADPOOL_SIZE raises this, and is the supported way to get a
+ * limit above 3 out of a large container — but it has to be set in the real
+ * process environment, and there is a trap worth stating because this
+ * function cannot detect it. libuv reads UV_THREADPOOL_SIZE when the pool is
+ * first used, which is early in process start. Setting it from inside the
+ * process is therefore too late, and so is putting it in a `.env` file: Next
+ * loads those into process.env after libuv has already sized its pool. In
+ * both cases this function would read the raised value and lift the ceiling
+ * while the actual pool stayed at 4, pushing the surplus into libuv's
+ * invisible, uncapped queue — the precise failure this ceiling exists to
+ * avoid. There is no public API for the real pool size, so the variable is
+ * trusted; env.example says not to set it there.
  */
 export function resolveConcurrencyCeiling(
   env: WatermarkConcurrencyEnv = process.env,
@@ -307,8 +348,10 @@ export function resolveConcurrencyCeiling(
  * host's cores and this rule would hand out host-sized thread pools inside a
  * two-CPU container.
  *
- * The rule keeps *total* libvips threads at roughly one per effective CPU
- * instead of one per CPU per in-flight image. The cost is real but small and
+ * The rule keeps *total* libvips threads at one per effective CPU instead of
+ * one per CPU per in-flight image — with one exception, since the floor of a
+ * thread per preview wins when the limit exceeds the CPU count (limit 3 on
+ * 2 CPUs gives 3 threads, not 2). The cost is real but small and
  * only paid when the server is idle: a single lone 49 MP PNG preview took
  * ~169ms with one thread against ~158ms with four (3-run means), because the
  * PNG decode dominates and does not parallelise well.
@@ -338,49 +381,54 @@ export function resolveSharpThreads(
  * logs a warning when it sees `source: "host"`, and why
  * WATERMARK_MAX_CONCURRENCY can override the result outright.
  *
- * The budget is spent in a fixed order, so the total is bounded by
- * construction rather than by hoping the parts add up:
+ * The budget is spent in a fixed order, and every caller the gate can be
+ * holding is charged for, so the projected total is a statement about the
+ * whole configuration rather than about a convenient part of it:
  *
  *   1. the process baseline comes off the top;
- *   2. in-flight previews take what is left, capped by
- *      resolveConcurrencyCeiling();
- *   3. the queue gets whatever remains after that, in whole queued-upload
- *      bytes, capped at DEFAULT_QUEUE_DEPTH_PER_SLOT per slot so a large
- *      container does not buy a queue so deep that the wait is pointless.
+ *   2. in-flight uploads take what is left, at
+ *      IN_FLIGHT_BYTES_PER_UPLOAD each (a preview's decode *plus* the body
+ *      being decoded), capped by resolveConcurrencyCeiling();
+ *   3. the queue gets whatever remains, at UPLOAD_BODY_BYTES each, capped at
+ *      DEFAULT_QUEUE_DEPTH_PER_SLOT per slot so a large container does not
+ *      buy a queue so deep that the wait is pointless.
  *
- * Step 3 is why the queue is bounded by *bytes* and not simply by 4x the
- * limit. A queued upload is not free — it holds ~20 MB of request body alive
- * (see QUEUED_UPLOAD_BYTES) — so a fixed multiple would let a 1 GB container
- * configure 5 in-flight previews and 20 queued bodies, i.e. ~640 MB of
- * preview work plus ~400 MB of queued bodies plus a 320 MB baseline, which
- * is 1.36 GB in a 1 GB box. The gate would then have been a mechanism for
- * causing the exact OOM it exists to prevent.
+ * Both of those per-caller figures were arrived at by getting them wrong
+ * first, and in the same direction each time — under-counting, which is the
+ * direction that ends in an OOM:
  *
- * Reference points, recomputed from the constants above rather than carried
- * over (default UV_THREADPOOL_SIZE, so the ceiling is 3). "Burst" is the
- * number of simultaneous uploads absorbed with nothing shed, i.e. limit plus
- * queue:
+ *  - a flat "queue = 4x the limit" ignored queued bodies entirely, letting a
+ *    1 GB container commit to ~1.36 GB;
+ *  - then charging UPLOAD_BODY_BYTES only to *queued* callers ignored the
+ *    body every running caller is holding too, under-counting by
+ *    limit x 20 MB — enough to make a 768 MB container report 764 MB and
+ *    `fitsBudget: true` while actually committing ~824 MB.
  *
- *   512 MB -> limit 1, queue 3   burst 4   (projected 508 MB)
- *   768 MB -> limit 3, queue 3   burst 6   (projected 764 MB)
- *     1 GB -> limit 3, queue 12  burst 15  (projected 944 MB)
- *     2 GB -> limit 3, queue 12  burst 15  (projected 944 MB; ceiling-bound,
+ * Reference points, computed from the constants above (not measured; the
+ * per-operation figure they build on is the darwin measurement documented on
+ * PREVIEW_BYTES_PER_OPERATION). Default UV_THREADPOOL_SIZE, so the ceiling
+ * is 3. "Burst" is how many simultaneous uploads are absorbed with nothing
+ * shed, i.e. limit + queue:
+ *
+ *   512 MB -> limit 1, queue 2   burst 3   (projected 508 MB)
+ *   768 MB -> limit 3, queue 0   burst 3   (projected 764 MB)
+ *     1 GB -> limit 3, queue 12  burst 15  (projected 1004 MB)
+ *     2 GB -> limit 3, queue 12  burst 15  (projected 1004 MB; ceiling-bound,
  *             not memory-bound — raise UV_THREADPOOL_SIZE to use the rest)
  *
- * **768 MB is the practical floor, and 1 GB the recommended one.** At 512 MB
- * a burst of four is absorbed and the fifth sheds — one short of the
- * five-image multi-select used above to argue against pure shedding, and
- * today that shed is an unretryable 500 (see WatermarkOverloadedError and
- * ugcportal-u7g). That is not a tuning mistake to be papered over: 320 MB
- * baseline + 128 MB of preview + 5 x 20 MB of queued bodies is 548 MB, so a
- * 512 MB container genuinely cannot hold that burst. The choice is between
- * shedding it and being OOM-killed by it, and no arrangement of these
- * constants changes that. Give the container 1 GB, or accept that small
- * bursts shed.
+ * **1 GB is the recommended floor, and the only reference point here that
+ * absorbs an ordinary multi-image selection.** Note the cliff at 768 MB:
+ * three previews fit but leave nothing for a queue, so it sheds the fourth
+ * concurrent upload just as 512 MB does. That is not a tuning artefact to be
+ * smoothed away — 320 baseline + 3 x 148 is 764 of 768 MB, and there is no
+ * fourth caller's worth of memory in the box. Below 1 GB the honest summary
+ * is that bursts shed, and today a shed upload is an unretryable 500 (see
+ * WatermarkOverloadedError and ugcportal-u7g).
  *
- * Below MIN_VIABLE_BUDGET_BYTES (448 MB) it gets worse: the limit is clamped
+ * Below MIN_VIABLE_BUDGET_BYTES (468 MB) it gets worse: the limit is clamped
  * up to 1 and `fitsBudget` goes false, meaning the configuration is over
- * budget by its own reckoning and getGate() warns about it at startup.
+ * budget by its own reckoning. getGate() warns about that the first time a
+ * preview is generated.
  *
  * Every input is a parameter so this is testable without a container.
  */
@@ -390,26 +438,26 @@ export function resolveWatermarkConcurrencySettings(
   cpu: CpuBudget = detectCpuBudget(),
 ): WatermarkConcurrencySettings {
   const override = positiveInt(env.WATERMARK_MAX_CONCURRENCY);
-  const forPreviews = budget.bytes - PREVIEW_PROCESS_BASELINE_BYTES;
+  const spendable = budget.bytes - PREVIEW_PROCESS_BASELINE_BYTES;
   const limit =
     override ??
     Math.min(
       resolveConcurrencyCeiling(env),
-      Math.max(1, Math.floor(forPreviews / PREVIEW_BYTES_PER_OPERATION)),
+      Math.max(1, Math.floor(spendable / IN_FLIGHT_BYTES_PER_UPLOAD)),
     );
 
-  const forQueue = forPreviews - limit * PREVIEW_BYTES_PER_OPERATION;
+  const forQueue = spendable - limit * IN_FLIGHT_BYTES_PER_UPLOAD;
   const queueLimit =
     nonNegativeInt(env.WATERMARK_QUEUE_LIMIT) ??
     Math.min(
       limit * DEFAULT_QUEUE_DEPTH_PER_SLOT,
-      Math.max(0, Math.floor(forQueue / QUEUED_UPLOAD_BYTES)),
+      Math.max(0, Math.floor(forQueue / UPLOAD_BODY_BYTES)),
     );
 
   const projectedPeakBytes =
     PREVIEW_PROCESS_BASELINE_BYTES +
-    limit * PREVIEW_BYTES_PER_OPERATION +
-    queueLimit * QUEUED_UPLOAD_BYTES;
+    limit * IN_FLIGHT_BYTES_PER_UPLOAD +
+    queueLimit * UPLOAD_BODY_BYTES;
 
   return {
     limit,
@@ -471,8 +519,16 @@ function logConcurrencySettings(settings: WatermarkConcurrencySettings): void {
     );
   }
   if (!settings.fitsBudget) {
+    const overBy = mib(settings.projectedPeakBytes - settings.budgetBytes);
+    // Two quite different causes, and naming the wrong one sends the
+    // operator to the wrong knob during exactly the incident this line
+    // exists for. The budget being too small for a single upload is not
+    // fixable by configuration; an over-large explicit limit or queue is
+    // fixable by nothing else.
     warnings.push(
-      `projected peak memory exceeds the budget by ${mib(settings.projectedPeakBytes - settings.budgetBytes)}; this container is below the ${mib(MIN_VIABLE_BUDGET_BYTES)} floor one preview needs`,
+      settings.budgetBytes < MIN_VIABLE_BUDGET_BYTES
+        ? `projected peak memory exceeds the budget by ${overBy}; this container is below the ${mib(MIN_VIABLE_BUDGET_BYTES)} floor a single upload needs, so no configuration fits — give it more memory`
+        : `projected peak memory exceeds the budget by ${overBy}; the budget would fit a smaller configuration, so check the explicitly set WATERMARK_MAX_CONCURRENCY / WATERMARK_QUEUE_LIMIT (unset them to derive both from the budget)`,
     );
   }
 
@@ -488,9 +544,20 @@ let gateSettings: WatermarkConcurrencySettings | undefined;
 
 /**
  * Built on first use rather than at import time, so the configuration is read
- * after the runtime has finished populating process.env — and so importing
- * this module for `resolveWatermarkText` does not reconfigure libvips, or log
- * a startup line, as a side effect.
+ * after the runtime has finished populating process.env, and so importing
+ * this module for `resolveWatermarkText` does not reconfigure libvips as a
+ * side effect.
+ *
+ * The cost of that is timing, and it is worth being exact about rather than
+ * calling it a startup log: {@link logConcurrencySettings} runs here, so it
+ * fires on the first image upload, not at boot. A deployment missing its
+ * `--memory` flag therefore looks clean until someone uploads something.
+ * Moving the call to module scope would not actually fix that — the only
+ * non-test importer of this module is the upload route, which Next does not
+ * load until it is first served — so the documentation says "first upload"
+ * instead of overstating it. A health check that calls
+ * {@link watermarkConcurrencyStats} would surface it at boot properly; there
+ * is no health endpoint to hang that on yet.
  */
 function getGate(): ConcurrencyGate {
   if (gate) return gate;
@@ -950,7 +1017,13 @@ async function decodeAndDownscale(input: Buffer, limitInputPixels: number) {
  *
  * Bounded, not unbounded: concurrent calls past the gate's limit queue, and
  * past the queue's cap or timeout they fail fast with
- * {@link WatermarkOverloadedError}. No call waits indefinitely.
+ * {@link WatermarkOverloadedError}. No call waits indefinitely *for a slot*
+ * — which is not the same as no call taking forever. Once admitted there is
+ * no deadline, because the underlying libvips work cannot be cancelled and
+ * abandoning the promise would free the slot without freeing the memory; see
+ * ConcurrencyGate.run. A wedged operation holds its slot until the process
+ * restarts, and shows up as a large
+ * {@link watermarkConcurrencyStats}().longestRunningMs.
  */
 export async function generateWatermarkedPreview(
   input: Buffer,

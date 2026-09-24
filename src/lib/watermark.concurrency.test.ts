@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { CpuBudget, MemoryBudget } from "@/lib/container-limits";
 import {
+  IN_FLIGHT_BYTES_PER_UPLOAD,
   LIBUV_DEFAULT_THREADPOOL_SIZE,
   MAX_DERIVED_CONCURRENCY,
   MAX_SHARP_THREADS_PER_OPERATION,
@@ -11,7 +12,7 @@ import {
   PREVIEW_BYTES_PER_OPERATION,
   PREVIEW_CONTENT_TYPE,
   PREVIEW_PROCESS_BASELINE_BYTES,
-  QUEUED_UPLOAD_BYTES,
+  UPLOAD_BODY_BYTES,
   WatermarkOverloadedError,
   describeWatermarkConcurrency,
   generateWatermarkedPreview,
@@ -33,74 +34,104 @@ function cpu(cpus: number): CpuBudget {
   return { cpus, source: "cgroup-v2" };
 }
 
-/** What the settings actually commit the process to, worst case. */
-function projected(settings: {
-  limit: number;
-  queueLimit: number;
-}): number {
-  return (
-    PREVIEW_PROCESS_BASELINE_BYTES +
-    settings.limit * PREVIEW_BYTES_PER_OPERATION +
-    settings.queueLimit * QUEUED_UPLOAD_BYTES
-  );
-}
+/**
+ * The reference table, written out as literal expected values.
+ *
+ * Deliberately not computed from the module's own constants. The previous
+ * version of the containment test rebuilt projectedPeakBytes with the same
+ * expression the implementation uses, so when that expression was wrong —
+ * it charged the request body to queued callers but not to running ones —
+ * the test agreed with it and passed. A hand-written table cannot agree with
+ * a formula it does not contain: if the derivation changes, these have to be
+ * re-derived by hand and justified, which is the point.
+ *
+ * Worked by hand from: 320 MB baseline, 148 MB per in-flight upload (128 MB
+ * decode + 20 MB body), 20 MB per queued body, ceiling 3.
+ *   512 -> 192 spendable; 192/148 = 1 running (44 left -> 2 queued);
+ *          320 + 148 + 40  = 508
+ *   768 -> 448 spendable; 448/148 = 3 running (4 left  -> 0 queued);
+ *          320 + 444 + 0   = 764
+ *  1024 -> 704 spendable; capped at 3 running (260 left -> 13, capped 12);
+ *          320 + 444 + 240 = 1004
+ *  2048 -> ceiling-bound, identical to 1024
+ */
+const REFERENCE_TABLE = [
+  { budgetMiB: 512, limit: 1, queueLimit: 2, projectedMiB: 508 },
+  { budgetMiB: 768, limit: 3, queueLimit: 0, projectedMiB: 764 },
+  { budgetMiB: 1024, limit: 3, queueLimit: 12, projectedMiB: 1004 },
+  { budgetMiB: 2048, limit: 3, queueLimit: 12, projectedMiB: 1004 },
+] as const;
 
 describe("resolveWatermarkConcurrencySettings", () => {
-  it("derives the limit from the memory budget, not from a guess", () => {
-    // 320 MB baseline, 128 MB per in-flight preview, ceiling 3 at the default
-    // libuv pool size.
-    expect(
-      resolveWatermarkConcurrencySettings({}, budget(512 * MiB), cpu(8)).limit,
-    ).toBe(1);
-    expect(
-      resolveWatermarkConcurrencySettings({}, budget(768 * MiB), cpu(8)).limit,
-    ).toBe(3);
-    expect(
-      resolveWatermarkConcurrencySettings({}, budget(GiB), cpu(8)).limit,
-    ).toBe(3);
+  it("matches the documented reference table exactly", () => {
+    // Literal expectations, hand-derived; see REFERENCE_TABLE. These are the
+    // numbers the Dockerfile and env.example quote to operators, so drifting
+    // from them silently is its own bug.
+    for (const row of REFERENCE_TABLE) {
+      const settings = resolveWatermarkConcurrencySettings(
+        {},
+        budget(row.budgetMiB * MiB),
+        cpu(8),
+      );
+      expect({
+        budgetMiB: row.budgetMiB,
+        limit: settings.limit,
+        queueLimit: settings.queueLimit,
+        projectedMiB: settings.projectedPeakBytes / MiB,
+      }).toEqual(row);
+    }
+  });
+
+  it("charges the request body to running callers, not only queued ones", () => {
+    // The round-3 finding. A running caller holds the same two copies of the
+    // body a queued one does, and PREVIEW_BYTES_PER_OPERATION is a measured
+    // delta taken with the source already resident, so it does not include
+    // them. Charging queued callers only under-counted by limit x 20 MB —
+    // enough for 768 MB to report 764 and fitsBudget true while really
+    // committing ~824 MB.
+    expect(UPLOAD_BODY_BYTES).toBe(20 * MiB);
+    expect(IN_FLIGHT_BYTES_PER_UPLOAD).toBe(
+      PREVIEW_BYTES_PER_OPERATION + UPLOAD_BODY_BYTES,
+    );
+
+    const settings = resolveWatermarkConcurrencySettings(
+      { WATERMARK_MAX_CONCURRENCY: "3", WATERMARK_QUEUE_LIMIT: "0" },
+      budget(8 * GiB),
+      cpu(8),
+    );
+    // 320 + 3 x 148, with no queue at all: every byte here is in-flight, so
+    // an accounting that skipped running bodies would report 704 MB.
+    expect(settings.projectedPeakBytes).toBe(764 * MiB);
+    expect(settings.projectedPeakBytes).toBeGreaterThan(
+      PREVIEW_PROCESS_BASELINE_BYTES + 3 * PREVIEW_BYTES_PER_OPERATION,
+    );
   });
 
   it("keeps the whole configuration inside the memory budget", () => {
-    // The regression this guards is the reason the queue is bounded in bytes:
-    // a flat 4x-the-limit queue let a 1 GB container configure 5 previews and
-    // 20 queued bodies, i.e. ~1.36 GB of commitments in a 1 GB box — the gate
-    // causing the OOM it exists to prevent.
-    for (const bytes of [512 * MiB, 768 * MiB, GiB, 2 * GiB, 8 * GiB]) {
+    // The property the reference table is a sample of: across the whole
+    // plausible range, what the process commits to never exceeds what the
+    // kernel will kill it for.
+    for (const bytes of [512 * MiB, 640 * MiB, 768 * MiB, GiB, 2 * GiB, 8 * GiB]) {
       const settings = resolveWatermarkConcurrencySettings(
         {},
         budget(bytes),
         cpu(8),
       );
-      expect(settings.projectedPeakBytes).toBe(projected(settings));
       expect(settings.projectedPeakBytes).toBeLessThanOrEqual(bytes);
       expect(settings.fitsBudget).toBe(true);
     }
   });
 
-  it("prices queued upload bodies rather than treating them as free", () => {
-    // 1 GB: 320 baseline + 3x128 in-flight = 704, leaving 320 MB for the
-    // queue, which is 16 bodies at 20 MB — capped to 4 per slot, so 12.
-    const settings = resolveWatermarkConcurrencySettings(
-      {},
-      budget(GiB),
-      cpu(8),
-    );
-    expect(QUEUED_UPLOAD_BYTES).toBe(20 * MiB);
-    expect(settings.limit).toBe(3);
-    expect(settings.queueLimit).toBe(12);
-    expect(settings.projectedPeakBytes).toBe(944 * MiB);
-  });
-
   it("shrinks the queue rather than the limit when memory is tight", () => {
-    // 512 MB leaves 64 MB after one preview: three queued bodies, not the
-    // twelve a fixed 4x multiple would have handed out.
+    // 512 MB leaves 44 MB after one in-flight upload: two queued bodies, not
+    // the four a fixed 4x multiple would have handed out.
     const settings = resolveWatermarkConcurrencySettings(
       {},
       budget(512 * MiB),
       cpu(8),
     );
     expect(settings.limit).toBe(1);
-    expect(settings.queueLimit).toBe(3);
+    expect(settings.queueLimit).toBe(2);
     expect(settings.projectedPeakBytes).toBeLessThanOrEqual(512 * MiB);
   });
 
@@ -260,7 +291,7 @@ describe("describeWatermarkConcurrency", () => {
     expect(line).toContain("queue=12");
     expect(line).toContain("memoryBudget=1024 MB (host)");
     expect(line).toContain("cpuBudget=8 (host)");
-    expect(line).toContain("projectedPeak=944 MB");
+    expect(line).toContain("projectedPeak=1004 MB");
   });
 });
 
@@ -465,6 +496,23 @@ describe("generateWatermarkedPreview under concurrency", () => {
     expect(lines[0]).toContain("[watermark] preview concurrency limit=1 (env)");
     expect(lines[0]).toMatch(/memoryBudget=\d+ MB \((cgroup-v[12]|host)\)/);
     expect(lines[0]).toMatch(/cpuBudget=\d+ \((cgroup-v[12]|host)\)/);
+  });
+
+  it("blames the right thing when the configuration does not fit", () => {
+    // fitsBudget goes false for two unrelated reasons, and naming the wrong
+    // one sends the operator to a knob that cannot help during exactly the
+    // incident this line exists for. An oversized explicit limit on a
+    // roomy host is not "below the 468 MB floor".
+    process.env.WATERMARK_MAX_CONCURRENCY = "64";
+    process.env.WATERMARK_QUEUE_LIMIT = "512";
+    resetWatermarkConcurrencyGate();
+    warnSpy.mockClear();
+
+    const stats = watermarkConcurrencyStats();
+    expect(stats.settings.fitsBudget).toBe(false);
+    const line = warnSpy.mock.calls[0][0] as string;
+    expect(line).toContain("WATERMARK_MAX_CONCURRENCY / WATERMARK_QUEUE_LIMIT");
+    expect(line).not.toContain("floor");
   });
 
   it("warns, rather than logging quietly, when no container memory limit was found", () => {

@@ -15,9 +15,11 @@
 export type ConcurrencyLimitReason = "queue-full" | "timeout";
 
 /**
- * The gate refused to run the task. Never thrown by the task itself, so a
- * caller can always tell "we were too busy to try" apart from "we tried and
- * it failed", and map the two to different HTTP statuses.
+ * The gate refused to run the task. The gate only ever raises this *instead
+ * of* calling the task, so it distinguishes "we were too busy to try" from
+ * "we tried and it failed", and the two can map to different HTTP statuses.
+ * (A task that threw this type itself would be indistinguishable — nothing
+ * here can prevent that, and no task in this repo does.)
  */
 export class ConcurrencyLimitError extends Error {
   readonly reason: ConcurrencyLimitReason;
@@ -64,6 +66,18 @@ export interface ConcurrencyGateStats {
   admitted: number;
   /** Callers rejected with a {@link ConcurrencyLimitError}, cumulative. */
   shed: number;
+  /**
+   * How long the longest-running in-flight task has held its slot, in
+   * milliseconds; 0 when nothing is running.
+   *
+   * Exposed because the gate deliberately does *not* time admitted tasks
+   * out — see {@link ConcurrencyGate.run} — so this is the only way to
+   * notice a wedged one. A value far above the expected task duration means
+   * a slot is not coming back, and on a small `limit` that is
+   * indistinguishable from the service being down. A health check can read
+   * it; nothing in the gate acts on it.
+   */
+  longestRunningMs: number;
 }
 
 export interface ConcurrencyGate {
@@ -71,6 +85,17 @@ export interface ConcurrencyGate {
    * Runs `task` once a slot is free, releasing the slot whether it resolves
    * or rejects. Rejects with {@link ConcurrencyLimitError} — without ever
    * calling `task` — if the queue is full or the wait times out.
+   *
+   * The timeout applies to *waiting*, not to running. An admitted task has
+   * no deadline, and that is deliberate rather than an omission: the task
+   * this gate was built for is a native libvips call that cannot be
+   * cancelled from JavaScript. A deadline could only abandon the promise,
+   * not the operation, so it would hand the slot to a new caller while the
+   * old one still held its hundreds of megabytes — converting a stuck
+   * request into the memory overshoot the gate exists to prevent. The
+   * honest trade is that a genuinely wedged task holds its slot until the
+   * process restarts; {@link ConcurrencyGateStats.longestRunningMs} is there
+   * so that is detectable rather than silent.
    */
   run<T>(task: () => Promise<T>): Promise<T>;
   stats(): ConcurrencyGateStats;
@@ -102,6 +127,12 @@ export function createConcurrencyGate(
   let admitted = 0;
   let shed = 0;
   const waiters: Waiter[] = [];
+
+  // Start times of the tasks currently holding a slot, keyed by a run id so
+  // two tasks starting in the same millisecond stay distinct. Only used to
+  // compute longestRunningMs; see the note on run().
+  let nextRunId = 0;
+  const startedAt = new Map<number, number>();
 
   function occupySlot(): void {
     inFlight += 1;
@@ -172,20 +203,34 @@ export function createConcurrencyGate(
   return {
     async run<T>(task: () => Promise<T>): Promise<T> {
       await acquire();
+      const runId = (nextRunId += 1);
+      startedAt.set(runId, Date.now());
       try {
         return await task();
       } finally {
+        startedAt.delete(runId);
         releaseSlot();
       }
     },
-    stats: () => ({
-      limit,
-      queueLimit,
-      inFlight,
-      queued: waiters.length,
-      peakInFlight,
-      admitted,
-      shed,
-    }),
+    stats: () => {
+      let longestRunningMs = 0;
+      if (startedAt.size > 0) {
+        const now = Date.now();
+        for (const started of startedAt.values()) {
+          const age = now - started;
+          if (age > longestRunningMs) longestRunningMs = age;
+        }
+      }
+      return {
+        limit,
+        queueLimit,
+        inFlight,
+        queued: waiters.length,
+        peakInFlight,
+        admitted,
+        shed,
+        longestRunningMs,
+      };
+    },
   };
 }

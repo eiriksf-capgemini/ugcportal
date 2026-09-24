@@ -89,7 +89,8 @@ function parsePositive(raw: string | undefined): number | undefined {
  * deliberately *not* silent: `source: "host"` tells the caller the number is
  * an upper bound on what the machine has, not a promise about what this
  * process may use, and on a shared host it will over-provision anything sized
- * from it. src/lib/watermark.ts logs a warning when it sees it.
+ * from it. src/lib/watermark.ts warns when it sees it, on the first image
+ * upload (that is when it configures its gate — not at process start).
  *
  * A cgroup limit above host RAM is also treated as absent: the kernel allows
  * it, but it cannot be honoured, and taking it at face value would produce a

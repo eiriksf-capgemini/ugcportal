@@ -265,6 +265,50 @@ describe("createConcurrencyGate", () => {
     await running;
   });
 
+  it("reports how long the longest-held slot has been held", async () => {
+    // An admitted task has no deadline — see the note on run() for why a
+    // deadline would trade a stuck request for a memory overshoot — so this
+    // counter is the only way a wedged operation is visible at all. Assert
+    // it is non-zero while something is parked and back to zero afterwards,
+    // rather than asserting a duration, which would make the test a race.
+    const gate = createConcurrencyGate({
+      name: "test",
+      limit: 2,
+      queueLimit: 0,
+      queueTimeoutMs: 60_000,
+    });
+    const worker = instrumentedWorker();
+
+    expect(gate.stats().longestRunningMs).toBe(0);
+
+    const running = Promise.all([gate.run(worker.task), gate.run(worker.task)]);
+    await settle();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(gate.stats().longestRunningMs).toBeGreaterThan(0);
+
+    await worker.release(2);
+    await running;
+    expect(gate.stats().longestRunningMs).toBe(0);
+    expect(gate.stats().inFlight).toBe(0);
+  });
+
+  it("clears the run's start time even when the task throws", async () => {
+    const gate = createConcurrencyGate({
+      name: "test",
+      limit: 1,
+      queueLimit: 0,
+      queueTimeoutMs: 1_000,
+    });
+
+    await expect(
+      gate.run(async () => {
+        throw new Error("boom");
+      }),
+    ).rejects.toThrow("boom");
+    // A leaked entry would keep ageing forever and look like a wedged slot.
+    expect(gate.stats().longestRunningMs).toBe(0);
+  });
+
   it("clamps nonsensical options instead of trusting them", async () => {
     // A misconfigured WATERMARK_MAX_CONCURRENCY of 0 must not mean "no
     // previews ever"; a negative queue must not mean "negative capacity".
