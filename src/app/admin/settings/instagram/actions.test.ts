@@ -160,8 +160,43 @@ describe("recordResaleRightsDecision", () => {
       validUntil: new Date("2027-06-01"),
       conditions: "Editorial use only.",
       evidence: undefined,
+      // Absent checkbox means "I did not re-run the checklist", so the
+      // stored version is left alone.
+      restampChecklist: false,
     });
     expect(revalidatePathMock).toHaveBeenCalledWith("/admin/settings/instagram");
+  });
+
+  it("passes the re-stamp through only when the box was ticked", async () => {
+    authMock.mockResolvedValue(ADMIN_SESSION);
+
+    await expect(
+      recordResaleRightsDecision(decisionForm({ restampChecklist: "yes" })),
+    ).rejects.toThrow("rights=recorded");
+
+    expect(setResaleRightsStatusMock).toHaveBeenCalledWith(
+      "acc-1",
+      expect.objectContaining({ restampChecklist: true }),
+    );
+  });
+
+  it("treats any other value for the re-stamp as not ticked", async () => {
+    authMock.mockResolvedValue(ADMIN_SESSION);
+
+    // Fails closed on a tampered or unexpected value: the only thing that
+    // re-validates a retired checklist version is the exact value the
+    // checkbox submits.
+    for (const value of ["on", "true", "1", ""]) {
+      setResaleRightsStatusMock.mockClear();
+      await expect(
+        recordResaleRightsDecision(decisionForm({ restampChecklist: value })),
+      ).rejects.toThrow("rights=recorded");
+
+      expect(setResaleRightsStatusMock).toHaveBeenCalledWith(
+        "acc-1",
+        expect.objectContaining({ restampChecklist: false }),
+      );
+    }
   });
 
   it("rejects a tampered status without writing anything", async () => {

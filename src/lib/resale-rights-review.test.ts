@@ -254,6 +254,108 @@ describe("ugcportal-0ss K3: an admin clearance is recorded", () => {
     expect((await review())?.reviewedByUserId).toBeNull();
   });
 
+  // checklistVersion and productDecisionRef both answer "under what was this
+  // granted". Neither may move on an ordinary edit: retiring a checklist
+  // version is how a revised legal process forces re-review, and
+  // re-attributing a clearance to a product decision taken after it is a
+  // false audit record.
+  it("leaves the recorded checklist version and decision ref alone by default", async () => {
+    await setResaleRightsStatus("acc-1", {
+      source: "ADMIN",
+      actorUserId: OTHER_ADMIN,
+      status: "CLEARED",
+      reason: "Contract signed.",
+      restampChecklist: true,
+    });
+    await prisma.resaleRightsReview.update({
+      where: { instagramAccountId: "acc-1" },
+      data: {
+        checklistVersion: "2019-01-01.0",
+        productDecisionRef: "ugcportal-old",
+      },
+    });
+
+    await setResaleRightsStatus("acc-1", {
+      source: "ADMIN",
+      actorUserId: OTHER_ADMIN,
+      status: "CLEARED",
+      reason: "Fixed a typo in the conditions.",
+      conditions: "Editorial use only.",
+    });
+
+    expect(await review()).toMatchObject({
+      checklistVersion: "2019-01-01.0",
+      productDecisionRef: "ugcportal-old",
+    });
+  });
+
+  it("re-stamps both only when the reviewer asks", async () => {
+    await setResaleRightsStatus("acc-1", {
+      source: "ADMIN",
+      actorUserId: OTHER_ADMIN,
+      status: "CLEARED",
+      reason: "Contract signed.",
+    });
+    await prisma.resaleRightsReview.update({
+      where: { instagramAccountId: "acc-1" },
+      data: { checklistVersion: "2019-01-01.0", productDecisionRef: "old" },
+    });
+
+    await setResaleRightsStatus("acc-1", {
+      source: "ADMIN",
+      actorUserId: OTHER_ADMIN,
+      status: "CLEARED",
+      reason: "Re-reviewed against the current checklist.",
+      restampChecklist: true,
+    });
+
+    expect(await review()).toMatchObject({
+      checklistVersion: CURRENT_CHECKLIST_VERSION,
+      productDecisionRef: PRODUCT_DECISION_REF,
+    });
+  });
+
+  it("stamps the current version on a first decision, with nothing to preserve", async () => {
+    await setResaleRightsStatus("acc-1", {
+      source: "ADMIN",
+      actorUserId: OTHER_ADMIN,
+      status: "IN_REVIEW",
+      reason: "Starting the checklist.",
+    });
+
+    expect(await review()).toMatchObject({
+      checklistVersion: CURRENT_CHECKLIST_VERSION,
+      productDecisionRef: PRODUCT_DECISION_REF,
+    });
+  });
+
+  it("records the effective version on the audit row either way", async () => {
+    await setResaleRightsStatus("acc-1", {
+      source: "ADMIN",
+      actorUserId: OTHER_ADMIN,
+      status: "CLEARED",
+      reason: "Contract signed.",
+    });
+    await prisma.resaleRightsReview.update({
+      where: { instagramAccountId: "acc-1" },
+      data: { checklistVersion: "2019-01-01.0" },
+    });
+    await setResaleRightsStatus("acc-1", {
+      source: "ADMIN",
+      actorUserId: OTHER_ADMIN,
+      status: "REJECTED",
+      reason: "Scope turned out to be narrower.",
+    });
+
+    const saved = await review();
+    // The snapshot is read back from the written row, so it reports what the
+    // review actually says rather than what this call passed in.
+    expect((await events(saved!.id)).at(-1)).toMatchObject({
+      toStatus: "REJECTED",
+      checklistVersion: "2019-01-01.0",
+    });
+  });
+
   it("refuses to record a decision with no reason", async () => {
     await expect(
       setResaleRightsStatus("acc-1", {

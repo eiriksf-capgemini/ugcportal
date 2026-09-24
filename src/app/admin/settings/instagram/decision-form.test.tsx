@@ -3,9 +3,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   ResaleRightsDecisionForm,
-  toDateInputValue,
   type DecisionFormReview,
 } from "@/app/admin/settings/instagram/decision-form";
+import { CURRENT_CHECKLIST_VERSION } from "@/lib/resale-rights";
 
 /**
  * This form is an *edit* form over a security-relevant record: submitting it
@@ -23,6 +23,7 @@ const EXISTING: DecisionFormReview = {
   route: "CONTRACT",
   validUntil: new Date("2027-06-01T00:00:00.000Z"),
   conditions: "Editorial use only.",
+  checklistVersion: CURRENT_CHECKLIST_VERSION,
 };
 
 function render(review: DecisionFormReview | null): string {
@@ -45,24 +46,6 @@ function inputValue(markup: string, name: string): string | null {
   }
   return /value="([^"]*)"/.exec(match[0])?.[1] ?? null;
 }
-
-describe("toDateInputValue", () => {
-  it("formats a date the way <input type=date> requires", () => {
-    expect(toDateInputValue(new Date("2027-06-01T00:00:00.000Z"))).toBe(
-      "2027-06-01",
-    );
-    // UTC, not local: the action parses the value back as midnight UTC, so
-    // formatting in local time would move the expiry by a day either way.
-    expect(toDateInputValue(new Date("2027-06-01T23:30:00.000Z"))).toBe(
-      "2027-06-01",
-    );
-  });
-
-  it("gives an empty string for no date, so the input renders blank", () => {
-    expect(toDateInputValue(null)).toBe("");
-    expect(toDateInputValue(new Date("nonsense"))).toBe("");
-  });
-});
 
 describe("the decision form round-trips the existing review", () => {
   // The regression this file exists for.
@@ -116,5 +99,75 @@ describe("the decision form round-trips the existing review", () => {
 
   it("carries the account id it was rendered for", () => {
     expect(inputValue(render(null), "instagramAccountId")).toBe("acc-1");
+  });
+});
+
+describe("every field on the form is classified", () => {
+  /**
+   * Both fail-opens found in review were the same shape: a form field that
+   * did not round-trip its stored value. This locks the field list so a new
+   * one has to be classified here — and, if it is stored, covered by the
+   * whole-row round-trip in decision-round-trip.test.tsx.
+   *
+   *   instagramAccountId — identity, from props, not stored by the action
+   *   status             — round-trips (defaultValue)
+   *   route              — round-trips (defaultValue)
+   *   validUntil         — round-trips (defaultValue); blank clears, on purpose
+   *   conditions         — round-trips (defaultValue); blank clears, on purpose
+   *   reason             — intentionally blank: an assertion about this decision
+   *   evidence           — intentionally blank: absent means "keep what's stored"
+   *   restampChecklist   — intentionally unticked: absent means "don't re-stamp"
+   */
+  it("renders exactly the fields listed above", () => {
+    const names = new Set(
+      [...render(EXISTING).matchAll(/\bname="([^"]+)"/g)].map(
+        (match) => match[1],
+      ),
+    );
+
+    expect([...names].sort()).toEqual([
+      "conditions",
+      "evidence",
+      "instagramAccountId",
+      "reason",
+      "restampChecklist",
+      "route",
+      "status",
+      "validUntil",
+    ]);
+  });
+});
+
+describe("the checklist re-stamp is an assertion, not a default", () => {
+  // The sibling of the validUntil fail-open: checklistVersion decides which
+  // checklist a clearance was granted under, and retiring a version is how a
+  // revised legal process forces re-review. It must not move because someone
+  // edited the conditions text.
+  it("offers the re-stamp unticked", () => {
+    const markup = render(EXISTING);
+    const checkbox = /<input[^>]*name="restampChecklist"[^>]*>/.exec(markup);
+
+    expect(checkbox).not.toBeNull();
+    expect(checkbox![0]).toContain('value="yes"');
+    // Unticked: an unticked checkbox submits nothing, so the stored version
+    // is preserved by default.
+    expect(checkbox![0]).not.toContain("checked");
+  });
+
+  it("shows which version the account currently stands on", () => {
+    expect(render(EXISTING)).toContain(CURRENT_CHECKLIST_VERSION);
+  });
+
+  it("says plainly when the recorded version has been retired", () => {
+    const markup = render({ ...EXISTING, checklistVersion: "2019-01-01.0" });
+
+    expect(markup).toContain("2019-01-01.0");
+    expect(markup).toContain("retired version");
+  });
+
+  it("does not offer a re-stamp for an account with no review yet", () => {
+    // Nothing to preserve, and the first decision is necessarily made
+    // against the current checklist.
+    expect(render(null)).not.toContain('name="restampChecklist"');
   });
 });

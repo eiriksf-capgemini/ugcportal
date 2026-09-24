@@ -76,9 +76,24 @@ describe("putRightsEvidence", () => {
       Bucket: "ugcportal-test",
       Key: result.key,
       ContentType: "application/pdf",
-      ACL: "private",
     });
     expect(input.Key?.startsWith("rights-evidence/acc-1/")).toBe(true);
+  });
+
+  // A bucket with Object Ownership = "bucket owner enforced" rejects any ACL
+  // header outright, and that is the configuration a private evidence store
+  // should be running. Sending `ACL: private` would make every
+  // evidence-bearing decision unrecordable there, for no gain: privacy is
+  // the bucket's job. The media upload path sends none either.
+  it("sends no ACL header at all", async () => {
+    await putRightsEvidence({
+      instagramAccountId: "acc-1",
+      filename: "a.pdf",
+      body,
+    });
+
+    expect(lastPutInput().ACL).toBeUndefined();
+    expect("ACL" in lastPutInput()).toBe(false);
   });
 
   // The dev stack is a KMS-less MinIO, which rejects the SSE header rather
@@ -92,8 +107,6 @@ describe("putRightsEvidence", () => {
     });
 
     expect(lastPutInput().ServerSideEncryption).toBeUndefined();
-    // Private either way: the default is about encryption at rest, not access.
-    expect(lastPutInput().ACL).toBe("private");
   });
 
   it("asks for SSE-S3 when production configures it", async () => {

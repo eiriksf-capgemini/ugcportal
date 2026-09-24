@@ -40,6 +40,23 @@ export type ResaleRightsTransition =
       validUntil?: Date | null;
       conditions?: string | null;
       evidence?: { key: string; sha256: string } | null;
+      /**
+       * Re-stamp `checklistVersion` (and `productDecisionRef`) to what is
+       * currently in force — an assertion that the reviewer has just worked
+       * the account through *today's* checklist, not last year's.
+       *
+       * Default false, and that matters. Retiring a checklist version is how
+       * a revision to the legal process forces re-review: the gate stops
+       * accepting clearances granted under the old one. If every admin write
+       * re-stamped the version, an admin fixing a typo in the conditions
+       * would silently re-validate an account the process had deliberately
+       * suspended — the same shape of bug as a form field that resets to its
+       * permissive value. A re-stamp has to be asked for.
+       *
+       * Ignored when no review row exists yet: a first decision is
+       * necessarily made against the checklist in force.
+       */
+      restampChecklist?: boolean;
     }
   | {
       /**
@@ -156,11 +173,23 @@ export async function setResaleRightsStatus(
               transition.evidence === null ? null : transition.evidence?.key,
             evidenceSha256:
               transition.evidence === null ? null : transition.evidence?.sha256,
-            // Which product decision the human was applying (Option A).
-            productDecisionRef: PRODUCT_DECISION_REF,
-            // Always the version in force at decision time; a clearance can
-            // never be recorded against a checklist the reviewer didn't read.
-            checklistVersion: CURRENT_CHECKLIST_VERSION,
+            // Both of these say "this clearance was granted under X". They
+            // are only written when the reviewer says they have just worked
+            // through X — otherwise `undefined` leaves the stored answer
+            // alone. Restamping them on every edit would let a typo fix
+            // re-validate an account whose checklist version had been
+            // retired, or silently re-attribute a clearance to a product
+            // decision that was taken after it.
+            //
+            // On create there is nothing to preserve and the reviewer is
+            // looking at the current form, so the caller below supplies the
+            // current values instead.
+            ...(transition.restampChecklist
+              ? {
+                  checklistVersion: CURRENT_CHECKLIST_VERSION,
+                  productDecisionRef: PRODUCT_DECISION_REF,
+                }
+              : {}),
           }
         : {};
 
@@ -178,7 +207,15 @@ export async function setResaleRightsStatus(
           data: {
             instagramAccountId,
             status: transition.status,
+            // First decision on this account: there is no stored version to
+            // preserve, and the form the reviewer just used is the current
+            // one. (A SYSTEM-created row — a revoke on an account nobody
+            // reviewed — gets the same stamp; it is meaningless there, but
+            // the column is required and the row is never sellable.)
             checklistVersion: CURRENT_CHECKLIST_VERSION,
+            ...(transition.source === "ADMIN"
+              ? { productDecisionRef: PRODUCT_DECISION_REF }
+              : {}),
             ...adminFields,
           },
           select: snapshot,

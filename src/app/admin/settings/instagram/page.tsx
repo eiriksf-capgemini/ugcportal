@@ -7,6 +7,7 @@ import { accountClearanceBlocker } from "@/lib/resale-rights";
 import { INSTAGRAM_CONNECT_PATH } from "@/lib/routes";
 
 import { disconnectInstagramAccount, recordResaleRightsDecision } from "./actions";
+import { formatClearanceDate } from "./dates";
 import { ResaleRightsDecisionForm } from "./decision-form";
 import { BLOCKER_MESSAGES, outcomeMessage } from "./outcomes";
 
@@ -171,8 +172,15 @@ export default async function InstagramSettingsPage({
                       <div>
                         <dt className="inline font-medium">Valid until: </dt>
                         <dd className="inline">
+                          {/*
+                            UTC, not the server's timezone: the same value is
+                            stored as midnight UTC, compared as an instant by
+                            the gate, and rendered into the edit form in UTC.
+                            Formatting it locally here would show an admin an
+                            expiry a day off from the one in the form below.
+                          */}
                           {review.validUntil
-                            ? dateFormat.format(review.validUntil)
+                            ? formatClearanceDate(review.validUntil)
                             : "no end date"}
                         </dd>
                       </div>

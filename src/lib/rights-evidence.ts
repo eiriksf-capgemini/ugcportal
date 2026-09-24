@@ -18,9 +18,9 @@ import { getBucketName, getS3Client } from "@/lib/s3";
  *  - it always writes under `rights-evidence/<instagramAccountId>/`, and the
  *    account id is checked against a strict pattern first, so a caller cannot
  *    traverse out of the prefix;
- *  - it never sets a public-read ACL, and asks for server-side encryption
- *    when `S3_EVIDENCE_SSE=AES256` is set (see below — off by default so the
- *    KMS-less dev MinIO works out of the box);
+ *  - it sends no ACL at all (see the note at the PutObjectCommand) and asks
+ *    for server-side encryption when `S3_EVIDENCE_SSE=AES256` is set (see
+ *    below — off by default so the KMS-less dev MinIO works out of the box);
  *  - it does **not** make the bucket private on its own. If the bucket has a
  *    blanket public-read policy, nothing in application code can fix that —
  *    that is a deployment-level control (ugcportal-odx for DreamObjects,
@@ -115,8 +115,18 @@ export async function putRightsEvidence({
       Body: body,
       ContentType: contentType || "application/octet-stream",
       ServerSideEncryption: encryptionSetting(),
-      // Belt and braces against a bucket whose default ACL is public-read.
-      ACL: "private",
+      // No ACL header, deliberately. `ACL: "private"` looks like free
+      // defence-in-depth but is not: a bucket with Object Ownership set to
+      // "bucket owner enforced" — the modern default, and the configuration
+      // you *want* for a private evidence store — rejects any ACL header
+      // outright, which would make every evidence-bearing decision
+      // unrecordable. The media upload path sends none either.
+      //
+      // Privacy here is the bucket's job: no public-read policy, no
+      // anonymous access. Nothing in this application serves objects from
+      // this prefix — there is no presign or download route for it — so the
+      // only way one becomes readable is a bucket misconfiguration, which a
+      // per-request header would not have fixed anyway.
     }),
   );
 

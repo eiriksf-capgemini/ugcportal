@@ -1,6 +1,11 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+import {
+  ACCEPTED_CHECKLIST_VERSIONS,
+  CURRENT_CHECKLIST_VERSION,
+  accountClearanceBlocker,
+} from "@/lib/resale-rights";
 import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db";
 
 /**
@@ -38,6 +43,8 @@ const { setResaleRightsStatus } = await import("@/lib/resale-rights-review");
 
 const ADMIN = { user: { id: "admin-1", email: "admin@example.com", role: "ADMIN" } };
 const VALID_UNTIL = new Date("2027-06-01T00:00:00.000Z");
+/** A version the checklist has moved on from, so the gate no longer accepts it. */
+const RETIRED_VERSION = "2019-01-01.0";
 
 function decodeEntities(value: string): string {
   return value
@@ -67,7 +74,15 @@ function formDataFromMarkup(markup: string): FormData {
 
   for (const [tag] of markup.matchAll(/<input\b[^>]*>/g)) {
     const name = attribute(tag, "name");
-    if (!name || attribute(tag, "type") === "file") continue;
+    const type = attribute(tag, "type");
+    if (!name || type === "file") continue;
+    // A browser submits a checkbox only when it is checked, and submits
+    // nothing at all for it otherwise — which is what makes "unticked" mean
+    // "leave the checklist version alone". Getting this wrong in the harness
+    // would have hidden the very bug these tests cover.
+    if ((type === "checkbox" || type === "radio") && !/\bchecked\b/.test(tag)) {
+      continue;
+    }
     data.set(name, decodeEntities(attribute(tag, "value") ?? ""));
   }
 
@@ -104,6 +119,7 @@ async function renderFormForAccount(): Promise<FormData> {
       route: true,
       validUntil: true,
       conditions: true,
+      checklistVersion: true,
     },
   });
 
@@ -164,6 +180,58 @@ beforeEach(async () => {
   });
 });
 
+describe("the whole row round-trips", () => {
+  /**
+   * The generalised version of the two fail-opens found in review, and the
+   * reason this is a loop rather than a list of fields: both bugs were "a
+   * form field that does not round-trip its stored value", and a per-field
+   * assertion only catches the fields someone thought to name. This walks
+   * every column of the stored review, so a field added later is covered
+   * the day it exists — including one added by a different bead.
+   */
+  it("changes nothing but the reviewer stamp when only the reason is edited", async () => {
+    // Populate every writable column first, so nothing is trivially null.
+    await setResaleRightsStatus("acc-1", {
+      source: "ADMIN",
+      actorUserId: "admin-1",
+      actorEmail: "admin@example.com",
+      status: "CLEARED",
+      reason: "Signed assignment on file.",
+      route: "CONTRACT",
+      validUntil: VALID_UNTIL,
+      conditions: "Editorial use only.",
+      evidence: { key: "rights-evidence/acc-1/contract.pdf", sha256: "abc123" },
+      restampChecklist: true,
+    });
+
+    const before = await storedReview();
+
+    const form = await renderFormForAccount();
+    form.set("reason", "Filing the same decision again, with a clearer note.");
+    await expect(recordResaleRightsDecision(form)).rejects.toThrow(
+      "rights=recorded",
+    );
+
+    const after = await storedReview();
+
+    // The only columns allowed to move: who decided and when, which is the
+    // whole point of recording a decision, and Prisma's own bookkeeping.
+    const expectedToChange = new Set(["reviewedAt", "updatedAt"]);
+    for (const key of Object.keys(before) as (keyof typeof before)[]) {
+      if (expectedToChange.has(key)) continue;
+      // Keyed so a failure names the offending column rather than dumping
+      // the whole row.
+      expect({ [key]: after[key] }).toEqual({ [key]: before[key] });
+    }
+
+    // And the stamp really did move, so the loop above is not vacuous.
+    expect(after.reviewedAt!.getTime()).toBeGreaterThanOrEqual(
+      before.reviewedAt!.getTime(),
+    );
+    expect(after.reviewedByUserId).toBe("admin-1");
+  });
+});
+
 describe("editing one field does not silently change the others", () => {
   it("keeps validUntil when an admin only edits the conditions", async () => {
     const form = await renderFormForAccount();
@@ -213,6 +281,71 @@ describe("editing one field does not silently change the others", () => {
     );
 
     expect((await storedReview()).validUntil).toBeNull();
+  });
+
+  // Same bug, different field. `checklistVersion` decides *which* checklist
+  // a clearance was granted under, and dropping a version from
+  // ACCEPTED_CHECKLIST_VERSIONS is how a revision to the legal process
+  // forces every account to be re-reviewed. Re-stamping it on any edit
+  // quietly undoes that.
+  it("keeps a retired checklistVersion when an admin only edits the conditions", async () => {
+    // The account was cleared, then the checklist was revised and the
+    // version it was cleared under retired.
+    await prisma.resaleRightsReview.update({
+      where: { instagramAccountId: "acc-1" },
+      data: { checklistVersion: RETIRED_VERSION },
+    });
+    expect(ACCEPTED_CHECKLIST_VERSIONS.has(RETIRED_VERSION)).toBe(false);
+
+    const form = await renderFormForAccount();
+    form.set("conditions", "Editorial use only. No political advertising.");
+    form.set("reason", "Owner clarified the permitted uses.");
+
+    await expect(recordResaleRightsDecision(form)).rejects.toThrow(
+      "rights=recorded",
+    );
+
+    const review = await storedReview();
+    expect(review.checklistVersion).toBe(RETIRED_VERSION);
+    // And the account is still not sellable, which is the point of retiring
+    // a version in the first place.
+    expect(
+      accountClearanceBlocker({
+        status: review.status,
+        checklistVersion: review.checklistVersion,
+        reviewedByUserId: review.reviewedByUserId,
+        validUntil: review.validUntil,
+        reviewedBy: { role: "ADMIN" },
+      }),
+    ).toBe("checklist_version_retired");
+  });
+
+  it("re-stamps only when the reviewer says they re-ran the checklist", async () => {
+    await prisma.resaleRightsReview.update({
+      where: { instagramAccountId: "acc-1" },
+      data: { checklistVersion: RETIRED_VERSION },
+    });
+
+    const form = await renderFormForAccount();
+    form.set("reason", "Re-reviewed against the new checklist; still clear.");
+    // What ticking the checkbox submits.
+    form.set("restampChecklist", "yes");
+
+    await expect(recordResaleRightsDecision(form)).rejects.toThrow(
+      "rights=recorded",
+    );
+
+    const review = await storedReview();
+    expect(review.checklistVersion).toBe(CURRENT_CHECKLIST_VERSION);
+    expect(
+      accountClearanceBlocker({
+        status: review.status,
+        checklistVersion: review.checklistVersion,
+        reviewedByUserId: review.reviewedByUserId,
+        validUntil: review.validUntil,
+        reviewedBy: { role: "ADMIN" },
+      }),
+    ).toBeNull();
   });
 
   it("carries the rendered expiry through as the same instant", async () => {

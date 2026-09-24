@@ -100,6 +100,12 @@ export async function recordResaleRightsDecision(formData: FormData) {
     validUntil = parsed;
   }
 
+  // An unticked checkbox submits nothing at all, so absence is "no" — which
+  // is the safe reading: the stored checklist version stays as it is, and a
+  // clearance granted under a retired version is not quietly revalidated by
+  // an edit to some other field.
+  const restampChecklist = formData.get("restampChecklist") === "yes";
+
   const conditionsValue = formData.get("conditions");
   const conditions =
     typeof conditionsValue === "string" && conditionsValue.trim()
@@ -144,6 +150,7 @@ export async function recordResaleRightsDecision(formData: FormData) {
     validUntil,
     conditions,
     evidence,
+    restampChecklist,
   });
 
   revalidatePath(INSTAGRAM_SETTINGS_PATH);

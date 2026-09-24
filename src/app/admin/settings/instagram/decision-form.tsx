@@ -1,9 +1,12 @@
 import { Button } from "@/components/ui/button";
 import {
+  ACCEPTED_CHECKLIST_VERSIONS,
   CURRENT_CHECKLIST_VERSION,
   RESALE_RIGHTS_ROUTES,
   RESALE_RIGHTS_STATUSES,
 } from "@/lib/resale-rights";
+
+import { toDateInputValue } from "./dates";
 
 /**
  * The resale-rights decision form (ugcportal-0ss).
@@ -22,22 +25,8 @@ export type DecisionFormReview = {
   route: string | null;
   validUntil: Date | null;
   conditions: string | null;
+  checklistVersion: string;
 };
-
-/**
- * Format a Date for `<input type="date">`, which accepts only `YYYY-MM-DD`.
- *
- * UTC, matching how the action parses it back (`new Date("YYYY-MM-DD")` is
- * midnight UTC), so a value written by the server and read back by the
- * browser is the same instant rather than one shifted by the viewer's
- * timezone.
- */
-export function toDateInputValue(date: Date | null): string {
-  if (!date || Number.isNaN(date.getTime())) {
-    return "";
-  }
-  return date.toISOString().slice(0, 10);
-}
 
 export function ResaleRightsDecisionForm({
   instagramAccountId,
@@ -48,14 +37,33 @@ export function ResaleRightsDecisionForm({
   review: DecisionFormReview | null;
   action: (formData: FormData) => void | Promise<void>;
 }) {
+  const storedVersion = review?.checklistVersion ?? null;
+  const versionRetired = Boolean(
+    storedVersion && !ACCEPTED_CHECKLIST_VERSIONS.has(storedVersion),
+  );
+
   return (
     <form action={action} className="mt-3 space-y-3">
       <input type="hidden" name="instagramAccountId" value={instagramAccountId} />
       <p className="text-xs text-muted-foreground">
-        Worked through checklist version {CURRENT_CHECKLIST_VERSION} (
-        docs/legal/instagram-resale-rights-checklist.md). The decision is
-        recorded against you by name.
+        The decision is recorded against you by name. The current checklist is
+        version {CURRENT_CHECKLIST_VERSION} (
+        docs/legal/instagram-resale-rights-checklist.md).
       </p>
+      {storedVersion ? (
+        <p
+          className={
+            versionRetired
+              ? "text-xs font-medium text-destructive"
+              : "text-xs text-muted-foreground"
+          }
+        >
+          This account was last reviewed against version {storedVersion}
+          {versionRetired
+            ? " — a retired version, so nothing from it is sellable until it is reviewed again."
+            : "."}
+        </p>
+      ) : null}
       <label className="block text-xs font-medium">
         Status
         <select
@@ -128,6 +136,28 @@ export function ResaleRightsDecisionForm({
         Evidence file (optional — stored privately, never with sellable media)
         <input type="file" name="evidence" className="mt-1 block w-full text-sm" />
       </label>
+      {review ? (
+        // Unchecked by default, and deliberately not a field that
+        // round-trips: the stored version is preserved by *not* writing it.
+        // Ticking this is an assertion about work the reviewer has just
+        // done, so it starts false on every render — an assertion that
+        // persisted from last time would be the same silent re-validation
+        // this control exists to prevent.
+        <label className="flex items-start gap-2 text-xs font-medium">
+          <input
+            type="checkbox"
+            name="restampChecklist"
+            value="yes"
+            className="mt-0.5"
+          />
+          <span>
+            I have just worked this account through checklist version{" "}
+            {CURRENT_CHECKLIST_VERSION}. Leave unticked to keep the recorded
+            version ({storedVersion}) — an edit to the fields above does not
+            count as a re-review.
+          </span>
+        </label>
+      ) : null}
       <Button type="submit" size="sm">
         Record decision
       </Button>
