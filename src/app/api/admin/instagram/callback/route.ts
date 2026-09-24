@@ -69,49 +69,36 @@ export async function GET(request: Request) {
     return settingsRedirect(request, "missing_code");
   }
 
-  let username: string;
-  let instagramUserId: string;
-  let encryptedToken: string;
-  let tokenExpiresAt: Date;
-  let scopes: string;
-
   try {
     const shortLived = await exchangeCodeForShortLivedToken(code);
     const longLived = await exchangeForLongLivedToken(shortLived.accessToken);
     const profile = await fetchInstagramProfile(longLived.accessToken);
 
-    instagramUserId = profile.id;
-    username = profile.username;
-    scopes = shortLived.permissions;
-    tokenExpiresAt = longLived.expiresAt;
-    encryptedToken = encryptSecret(longLived.accessToken);
+    // Upsert rather than create: reconnecting an already-connected account is
+    // the normal way to replace a revoked or expired token, and should not
+    // collide on the unique instagramUserId. Inside the try because Prisma's
+    // upsert isn't atomic — two concurrent callbacks for the same account
+    // race to P2002, and SQLite adds SQLITE_BUSY on top. That must end as a
+    // redirect like any other failure, not a raw 500 that leaves the
+    // one-shot state cookie live for the rest of its 10 minutes.
+    const fields = {
+      username: profile.username,
+      accessTokenEncrypted: encryptSecret(longLived.accessToken),
+      tokenExpiresAt: longLived.expiresAt,
+      scopes: shortLived.permissions,
+      connectedByUserId: session.user.id,
+    };
+
+    await prisma.instagramAccount.upsert({
+      where: { instagramUserId: profile.id },
+      create: { instagramUserId: profile.id, ...fields },
+      update: fields,
+    });
   } catch (error) {
     // Log for the operator, but don't surface provider text to the browser.
     console.error("Instagram connect failed", error);
     return settingsRedirect(request, "exchange_failed");
   }
-
-  // Upsert rather than create: reconnecting an already-connected account is
-  // the normal way to replace a revoked or expired token, and should not
-  // collide on the unique instagramUserId.
-  await prisma.instagramAccount.upsert({
-    where: { instagramUserId },
-    create: {
-      instagramUserId,
-      username,
-      accessTokenEncrypted: encryptedToken,
-      tokenExpiresAt,
-      scopes,
-      connectedByUserId: session.user.id,
-    },
-    update: {
-      username,
-      accessTokenEncrypted: encryptedToken,
-      tokenExpiresAt,
-      scopes,
-      connectedByUserId: session.user.id,
-    },
-  });
 
   return settingsRedirect(request, "connected");
 }

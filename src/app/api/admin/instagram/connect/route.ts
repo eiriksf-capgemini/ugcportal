@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { requireAdmin } from "@/lib/admin";
-import { buildAuthorizeUrl } from "@/lib/instagram";
+import { buildAuthorizeUrl, isCallbackSecure } from "@/lib/instagram";
 import {
   STATE_COOKIE,
   createOAuthState,
@@ -13,7 +13,7 @@ import {
  * gets 403 here rather than a redirect, so no OAuth round trip is ever begun
  * on their behalf.
  */
-export async function GET(request: Request) {
+export async function GET() {
   const session = await requireAdmin();
   if (!session) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
@@ -21,10 +21,6 @@ export async function GET(request: Request) {
 
   const state = createOAuthState();
   const response = NextResponse.redirect(buildAuthorizeUrl(state));
-  response.cookies.set(
-    STATE_COOKIE,
-    state,
-    stateCookieOptions(new URL(request.url).protocol === "https:"),
-  );
+  response.cookies.set(STATE_COOKIE, state, stateCookieOptions(isCallbackSecure()));
   return response;
 }

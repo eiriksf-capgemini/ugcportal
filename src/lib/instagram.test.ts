@@ -6,6 +6,7 @@ import {
   exchangeForLongLivedToken,
   fetchInstagramProfile,
   getRedirectUri,
+  isCallbackSecure,
 } from "@/lib/instagram";
 
 const ENV_KEYS = [
@@ -93,8 +94,47 @@ describe("buildAuthorizeUrl", () => {
   });
 });
 
+describe("isCallbackSecure", () => {
+  it("follows the registered callback URL, not the inbound request", () => {
+    expect(isCallbackSecure()).toBe(false);
+
+    process.env.INSTAGRAM_REDIRECT_URI = "https://ugc.example/cb";
+    expect(isCallbackSecure()).toBe(true);
+  });
+});
+
 describe("exchangeCodeForShortLivedToken", () => {
-  it("posts the code and returns the token with a stringified user id", async () => {
+  // The shape Business Login for Instagram actually returns. Reading only
+  // the flat Basic-Display shape would burn the one-time code every time.
+  it("unwraps the `data` array Business Login returns", async () => {
+    stubFetch({
+      json: async () => ({
+        data: [
+          {
+            access_token: "short-token",
+            user_id: "17841400000000000",
+            permissions: "instagram_business_basic",
+          },
+        ],
+      }),
+    });
+
+    await expect(exchangeCodeForShortLivedToken("the-code")).resolves.toEqual({
+      accessToken: "short-token",
+      instagramUserId: "17841400000000000",
+      permissions: "instagram_business_basic",
+    });
+  });
+
+  it("throws when the `data` array is present but empty", async () => {
+    stubFetch({ json: async () => ({ data: [] }) });
+
+    await expect(exchangeCodeForShortLivedToken("code")).rejects.toThrow(
+      /returned no access token/,
+    );
+  });
+
+  it("still accepts the flat response shape", async () => {
     const fetchMock = stubFetch({
       json: async () => ({
         access_token: "short-token",

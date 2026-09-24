@@ -39,6 +39,16 @@ export function getRedirectUri(): string {
   return new URL(INSTAGRAM_CALLBACK_PATH, requireEnv("AUTH_URL")).toString();
 }
 
+/**
+ * Whether cookies in this flow must carry `Secure`. Derived from the
+ * registered callback URL rather than the inbound request: behind a
+ * TLS-terminating proxy that doesn't set `x-forwarded-proto`, `request.url`
+ * reads as http and would silently drop `Secure` on a production HTTPS site.
+ */
+export function isCallbackSecure(): boolean {
+  return new URL(getRedirectUri()).protocol === "https:";
+}
+
 export function getScopes(): string {
   return process.env.INSTAGRAM_SCOPES || DEFAULT_SCOPES;
 }
@@ -97,21 +107,28 @@ export async function exchangeCodeForShortLivedToken(
     throw new Error(`Instagram code exchange failed: ${await readError(response)}`);
   }
 
-  const data = await response.json();
-  if (!data?.access_token || data?.user_id === undefined) {
+  const body = await response.json();
+
+  // Business Login for Instagram wraps the payload in a `data` array:
+  //   { "data": [ { access_token, user_id, permissions } ] }
+  // The older Basic Display API returned those fields flat. Accept either,
+  // because reading only the flat shape silently burns the one-time code on
+  // every real connect attempt — and a mocked test can't tell you that.
+  const payload = Array.isArray(body?.data) ? body.data[0] : body;
+
+  if (!payload?.access_token || payload?.user_id === undefined) {
     throw new Error("Instagram code exchange returned no access token");
   }
 
   return {
-    accessToken: String(data.access_token),
-    // `user_id` comes back as a number, and JS numbers can't hold every
-    // Instagram id exactly — but the value has already been through
-    // JSON.parse by this point, so the only safe fix is on their side.
-    // Stringify it here so at least nothing downstream does arithmetic on it.
-    instagramUserId: String(data.user_id),
-    permissions: Array.isArray(data.permissions)
-      ? data.permissions.join(",")
-      : String(data.permissions ?? getScopes()),
+    accessToken: String(payload.access_token),
+    // `user_id` can arrive as a JSON number, which can't hold every Instagram
+    // id exactly — the value has already been through JSON.parse by now, so
+    // stringify it to at least stop anything downstream doing arithmetic.
+    instagramUserId: String(payload.user_id),
+    permissions: Array.isArray(payload.permissions)
+      ? payload.permissions.join(",")
+      : String(payload.permissions ?? getScopes()),
   };
 }
 

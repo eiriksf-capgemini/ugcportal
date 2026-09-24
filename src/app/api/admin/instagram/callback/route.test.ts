@@ -182,6 +182,24 @@ describe("GET /api/admin/instagram/callback", () => {
       expect(exchangeCodeMock).not.toHaveBeenCalled();
     });
 
+    // A concurrent callback for the same account makes Prisma's non-atomic
+    // upsert throw P2002 (and SQLite adds SQLITE_BUSY). That must redirect
+    // like any other failure, not 500 and leave the state cookie live.
+    it("redirects and clears the cookie when the database write fails", async () => {
+      const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+      upsertMock.mockRejectedValue(
+        Object.assign(new Error("Unique constraint failed"), { code: "P2002" }),
+      );
+
+      const response = await GET(callback());
+
+      expect(outcomeOf(response).error).toBe("exchange_failed");
+      const cookie = response.cookies.get(STATE_COOKIE);
+      expect(cookie?.value).toBe("");
+      expect(cookie?.maxAge).toBe(0);
+      consoleError.mockRestore();
+    });
+
     it("surfaces a generic error and stores nothing when the exchange fails", async () => {
       const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
       exchangeLongLivedMock.mockRejectedValue(

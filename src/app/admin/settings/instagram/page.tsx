@@ -6,18 +6,10 @@ import { prisma } from "@/lib/prisma";
 import { INSTAGRAM_CONNECT_PATH } from "@/lib/routes";
 
 import { disconnectInstagramAccount } from "./actions";
+import { outcomeMessage } from "./outcomes";
 
 export const metadata = {
   title: "Instagram accounts",
-};
-
-const OUTCOME_MESSAGES: Record<string, string> = {
-  denied: "Instagram authorisation was cancelled. Nothing was connected.",
-  invalid_state:
-    "That connect link expired or didn't match this browser session. Start again.",
-  missing_code: "Instagram didn't return an authorisation code. Start again.",
-  exchange_failed:
-    "Couldn't complete the connection with Instagram. Check the server logs and try again.",
 };
 
 const dateFormat = new Intl.DateTimeFormat("en-GB", {
@@ -47,8 +39,7 @@ export default async function InstagramSettingsPage({
     },
   });
 
-  const errorMessage =
-    typeof error === "string" ? OUTCOME_MESSAGES[error] : undefined;
+  const errorMessage = outcomeMessage(error);
 
   return (
     <main className="mx-auto w-full max-w-3xl flex-1 px-6 py-12">
