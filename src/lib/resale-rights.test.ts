@@ -35,6 +35,10 @@ function clearedReview(overrides: Partial<GateReview> = {}): GateReview {
 function sellablePost(overrides: Partial<GatePost> = {}): GatePost {
   return {
     mediaId: "media-1",
+    ownerUserId: "owner-1",
+    // The Media row the listing points at, loaded by the caller. Owned by
+    // the same user the listing says owns it.
+    media: { userId: "owner-1" },
     depictsPeople: false,
     modelReleaseKey: null,
     containsMusic: false,
@@ -170,6 +174,18 @@ describe("per-post triage (checklist Part C)", () => {
     ).toEqual({ sellable: false, blocker: "model_release_missing" });
   });
 
+  it("refuses a model release key that is only whitespace", () => {
+    // Trimmed like the other string checks: a key of spaces is not a
+    // release, and consent for a photograph of a person is not a field you
+    // want passing on truthiness alone.
+    expect(
+      evaluateSellability(
+        sellablePost({ depictsPeople: true, modelReleaseKey: "   " }),
+        NOW,
+      ),
+    ).toEqual({ sellable: false, blocker: "model_release_missing" });
+  });
+
   it("accepts a post showing people once a release is on file", () => {
     const post = sellablePost({
       depictsPeople: true,
@@ -240,6 +256,33 @@ describe("ugcportal-2eh Option A: the file sold is the owner's upload", () => {
     expect(evaluateSellability(sellablePost({ mediaId: "  " }), NOW).sellable).toBe(
       false,
     );
+  });
+
+  // mediaId has no foreign key behind it — the Media model belongs to
+  // another branch — so "there is a row with this id" is a question only the
+  // loaded row can answer.
+  it("refuses a mediaId that resolves to nothing", () => {
+    expect(evaluateSellability(sellablePost({ media: null }), NOW)).toEqual({
+      sellable: false,
+      blocker: "not_owner_supplied_original",
+    });
+  });
+
+  // The one that matters most: a clearance covers one party's rights, so a
+  // listing under it must not be able to sell a different user's upload.
+  it("refuses a file belonging to someone other than the listing's owner", () => {
+    expect(
+      evaluateSellability(
+        sellablePost({ media: { userId: "someone-else" } }),
+        NOW,
+      ),
+    ).toEqual({ sellable: false, blocker: "media_not_owned" });
+  });
+
+  it("refuses a listing that names no owner at all", () => {
+    expect(
+      evaluateSellability(sellablePost({ ownerUserId: null }), NOW),
+    ).toEqual({ sellable: false, blocker: "media_not_owned" });
   });
 });
 

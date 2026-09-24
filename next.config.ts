@@ -7,25 +7,21 @@ const nextConfig: NextConfig = {
   // the Next.js CLI. See Dockerfile.
   output: "standalone",
 
-  experimental: {
-    serverActions: {
-      // Next's default server-action body limit is 1 MB, which the framework
-      // enforces before the action runs — so an action's own size check can
-      // never be reached above it, and an ordinary 4 MB signed PDF would die
-      // with a generic framework error instead of a usable message.
-      //
-      // Raised to sit just above MAX_EVIDENCE_BYTES in
-      // src/app/admin/settings/instagram/actions.ts (20 MB), so that the
-      // action's own check is the one that fires and the two numbers agree.
-      // Keep them in step: this is the outer bound, that one is the message.
-      //
-      // Applies to every server action, not just this one. That is
-      // acceptable while the only other action carries a single account id,
-      // and it is a ceiling, not an allocation — nothing buffers 21 MB
-      // unless a client actually sends it.
-      bodySizeLimit: "21mb",
-    },
-  },
+  // Deliberately NOT raising experimental.serverActions.bodySizeLimit.
+  //
+  // An earlier revision of ugcportal-0ss raised it to 21mb so that a 20 MB
+  // evidence file could reach an admin-only server action. That setting is
+  // global and the framework enforces it before any action code — including
+  // requireAdmin — runs, so it would have let an anonymous caller make the
+  // server buffer 21 MB against *any* action id, including the sign-in
+  // actions. A denial-of-service surface opened by a fix for an admin-only
+  // feature.
+  //
+  // File upload now goes to a route handler instead
+  // (src/app/api/admin/instagram/rights-decision/route.ts), which reads its
+  // body through readCappedFormData in src/lib/request-body.ts and so owns
+  // its own limit without moving anyone else's. Keep it that way: if a
+  // server action ever needs a large body, give it a route handler.
 };
 
 export default nextConfig;

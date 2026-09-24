@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  formatClearanceDate,
+  formatClearanceExpiry,
+  formatReviewTimestamp,
   toDateInputValue,
 } from "@/app/admin/settings/instagram/dates";
 
@@ -35,12 +36,18 @@ describe("toDateInputValue", () => {
   });
 });
 
-describe("formatClearanceDate", () => {
-  it("names the stored day, and says which clock that is", () => {
-    expect(formatClearanceDate(MIDNIGHT_UTC)).toBe("1 Jun 2027 (UTC)");
+describe("formatClearanceExpiry", () => {
+  it("states the instant and the last day anything can be sold", () => {
+    // The gate refuses at `validUntil <= now`, so a clearance stamped
+    // 1 Jun stops working as the 1st begins and the 31st of May is the last
+    // sellable day. "Valid until 1 Jun" read as though it included the 1st,
+    // which is the wrong direction to be ambiguous in.
+    expect(formatClearanceExpiry(MIDNIGHT_UTC)).toBe(
+      "1 Jun 2027, 00:00 UTC — last sellable day 31 May 2027",
+    );
   });
 
-  it("agrees with the form input for the same instant", () => {
+  it("names the same day as the form input for the same instant", () => {
     // The actual invariant. If either formatter is changed to use the
     // server's timezone, these stop matching.
     for (const iso of [
@@ -49,7 +56,7 @@ describe("formatClearanceDate", () => {
       "2026-12-31T00:00:00.000Z",
     ]) {
       const date = new Date(iso);
-      const shownDay = Number(formatClearanceDate(date).split(" ")[0]);
+      const shownDay = Number(formatClearanceExpiry(date).split(" ")[0]);
       const inputDay = Number(toDateInputValue(date).split("-")[2]);
       expect(shownDay).toBe(inputDay);
     }
@@ -64,6 +71,28 @@ describe("formatClearanceDate", () => {
     });
 
     expect(local.format(MIDNIGHT_UTC)).toBe("31 May 2027");
-    expect(formatClearanceDate(MIDNIGHT_UTC)).toContain("1 Jun 2027");
+    expect(formatClearanceExpiry(MIDNIGHT_UTC)).toContain("1 Jun 2027");
+  });
+});
+
+describe("formatReviewTimestamp", () => {
+  it("labels the zone, so it cannot be read as local time", () => {
+    expect(formatReviewTimestamp(new Date("2026-09-24T17:05:00.000Z"))).toBe(
+      "24 Sept 2026, 17:05 UTC",
+    );
+  });
+
+  it("is UTC even when the server is not", () => {
+    // It renders directly above the UTC-labelled expiry; an unlabelled
+    // local timestamp there is the same drift in a different field.
+    const local = new Intl.DateTimeFormat("en-GB", {
+      dateStyle: "medium",
+      timeStyle: "short",
+      timeZone: "America/Los_Angeles",
+    });
+    const instant = new Date("2026-09-24T02:30:00.000Z");
+
+    expect(local.format(instant)).toContain("23 Sept");
+    expect(formatReviewTimestamp(instant)).toContain("24 Sept");
   });
 });

@@ -43,6 +43,8 @@ model User {
   // Resale-rights reviews this user signed off (ugcportal-0ss). Named so the
   // relation stays unambiguous if a second User link is added later.
   resaleReviews     ResaleRightsReview[] @relation("ResaleRightsReviewer")
+  // Listings that claim to be selling this user's uploads (ugcportal-0ss).
+  curatedPosts      CuratedPost[]        @relation("CuratedPostOwner")
 }
 
 // One row per linked login provider (Google, Facebook, ...) for a user.
@@ -318,6 +320,16 @@ model CuratedPost {
   id                 String  @id @default(cuid())
   instagramAccountId String
   mediaId            String  @unique
+  // Who the listing says owns the file being sold. Checked against the
+  // referenced Media row's own `userId` by the gate: without it, `mediaId`
+  // is an unconstrained pointer, and a curated post under a cleared account
+  // could offer *another user's* upload for sale and pass every rights
+  // check. The clearance covers one party's rights, so the file has to be
+  // that party's file.
+  //
+  // A real foreign key here (unlike mediaId) because User is not being
+  // changed on another branch.
+  ownerUserId        String
   instagramPermalink String?
 
   // Null until an admin sets a price through the gated endpoint
@@ -341,6 +353,8 @@ model CuratedPost {
   updatedAt DateTime @updatedAt
 
   instagramAccount InstagramAccount @relation(fields: [instagramAccountId], references: [id], onDelete: Cascade)
+  owner            User             @relation("CuratedPostOwner", fields: [ownerUserId], references: [id], onDelete: Cascade)
 
   @@index([instagramAccountId])
+  @@index([ownerUserId])
 }

@@ -60,12 +60,23 @@ export type ResaleRightsTransition =
     }
   | {
       /**
-       * Deauthorize callbacks (ugcportal-69p) and the validity sweep. May
-       * only move an account *away* from sellable.
+       * Deauthorize callbacks (ugcportal-69p), the validity sweep, and admin
+       * disconnect. May only move an account *away* from sellable.
        */
       source: "SYSTEM";
       status: SystemSettableStatus;
       reason: string;
+      /**
+       * The human who triggered it, where there is one — an admin clicking
+       * Disconnect. Recorded on the audit row only, never as
+       * `reviewedByUserId`: triggering a revocation is not reviewing an
+       * account, and writing them in as the reviewer of record would forge
+       * a review that never happened.
+       *
+       * Null for a genuinely unattended transition (a callback, a sweep).
+       */
+      triggeredByUserId?: string | null;
+      triggeredByEmail?: string | null;
     };
 
 export type SetResaleRightsStatusResult =
@@ -73,7 +84,23 @@ export type SetResaleRightsStatusResult =
   | { outcome: "unchanged"; reviewId: string }
   | { outcome: "account_not_found" }
   | { outcome: "actor_not_admin" }
-  | { outcome: "forbidden_system_transition" };
+  | { outcome: "forbidden_system_transition" }
+  /** Another decision on the same account landed first — retry on a re-read. */
+  | { outcome: "conflict" };
+
+/**
+ * Prisma's unique-constraint violation. Matched on the documented error code
+ * rather than `instanceof PrismaClientKnownRequestError`, because the driver
+ * adapter re-wraps errors and an instanceof check across module instances is
+ * a coin flip.
+ */
+function isUniqueConstraintError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { code?: unknown }).code === "P2002"
+  );
+}
 
 /**
  * Record a resale-rights decision for one connected account.
@@ -197,13 +224,16 @@ export async function setResaleRightsStatus(
     // snapshot below records what the review *actually* says after the write
     // — including fields this transition left alone.
     const snapshot = { id: true, checklistVersion: true, evidenceKey: true, evidenceSha256: true };
-    const review = existing
-      ? await tx.resaleRightsReview.update({
-          where: { id: existing.id },
-          data: { status: transition.status, ...adminFields },
-          select: snapshot,
-        })
-      : await tx.resaleRightsReview.create({
+    let review;
+    if (existing) {
+      review = await tx.resaleRightsReview.update({
+        where: { id: existing.id },
+        data: { status: transition.status, ...adminFields },
+        select: snapshot,
+      });
+    } else {
+      try {
+        review = await tx.resaleRightsReview.create({
           data: {
             instagramAccountId,
             status: transition.status,
@@ -220,6 +250,24 @@ export async function setResaleRightsStatus(
           },
           select: snapshot,
         });
+      } catch (error) {
+        // The read above and this write are not serialised — adapter-libsql
+        // opens `deferred` transactions — so two first decisions on the same
+        // account can both see no existing row and both try to create one.
+        // The unique index on instagramAccountId is what actually prevents
+        // two reviews; without this catch the loser would throw P2002 out of
+        // a function contracted to return outcomes, and the admin would get
+        // an unhandled-error page instead of a message.
+        //
+        // Reported rather than retried here: the winner may have written a
+        // different status, so the right move is to re-read and decide
+        // again, which is what the caller's redirect makes the admin do.
+        if (isUniqueConstraintError(error)) {
+          return { outcome: "conflict" } as const;
+        }
+        throw error;
+      }
+    }
 
     await tx.resaleRightsEvent.create({
       data: {
@@ -232,10 +280,17 @@ export async function setResaleRightsStatus(
         // what the gate treated it as — so record that, not null.
         fromStatus: existing ? existing.status : "UNREVIEWED",
         toStatus: transition.status,
+        // For a system transition this is whoever triggered it, if anyone —
+        // an admin clicking Disconnect is named here without being recorded
+        // as the account's reviewer.
         actorUserId:
-          transition.source === "ADMIN" ? transition.actorUserId : null,
+          transition.source === "ADMIN"
+            ? transition.actorUserId
+            : (transition.triggeredByUserId ?? null),
         actorEmail:
-          transition.source === "ADMIN" ? (transition.actorEmail ?? null) : null,
+          transition.source === "ADMIN"
+            ? (transition.actorEmail ?? null)
+            : (transition.triggeredByEmail ?? null),
         reason,
         selfReview,
         checklistVersion: review.checklistVersion,

@@ -91,7 +91,8 @@ export type SellabilityBlocker =
   | "triage_incomplete"
   | "model_release_missing"
   | "third_party_layer_uncleared"
-  | "not_owner_supplied_original";
+  | "not_owner_supplied_original"
+  | "media_not_owned";
 
 export type SellabilityResult =
   | { sellable: true }
@@ -113,6 +114,18 @@ export type GateReview = {
  */
 export type GatePost = {
   mediaId: string | null;
+  /** Who the listing claims owns the file. See `media` below. */
+  ownerUserId: string | null;
+  /**
+   * The referenced Media row, or null if there isn't one.
+   *
+   * Loaded separately by the caller (see `loadGateMedia`) because
+   * CuratedPost.mediaId has no Prisma relation yet — the Media model belongs
+   * to an in-flight branch. It is part of the gate input rather than an
+   * afterthought precisely because "does this file exist, and is it the
+   * right person's file" is a rights question, not a tidiness one.
+   */
+  media: { userId: string } | null;
   depictsPeople: boolean | null;
   modelReleaseKey: string | null;
   containsMusic: boolean | null;
@@ -131,6 +144,7 @@ export type GatePost = {
  */
 export const CURATED_POST_GATE_SELECT = {
   mediaId: true,
+  ownerUserId: true,
   depictsPeople: true,
   modelReleaseKey: true,
   containsMusic: true,
@@ -153,6 +167,41 @@ export const CURATED_POST_GATE_SELECT = {
     },
   },
 } as const;
+
+/** Just enough of a Media row for the gate; never `key`, never the bytes. */
+export const GATE_MEDIA_SELECT = { userId: true } as const;
+
+/**
+ * Loads the Media row a curated post points at, for the ownership check.
+ *
+ * A second query rather than a join because CuratedPost.mediaId has no
+ * Prisma relation — the Media model is owned by an in-flight branch
+ * (ugcportal-r1d), and ugcportal-vsm will re-anchor all of this to uploads
+ * anyway. Collapse it into a single read with an `include` once one of those
+ * has landed; the predicate does not care which way the row arrived.
+ *
+ * Takes the client so a caller can pass a transaction and have the
+ * ownership check see the same snapshot as the rest of its work.
+ */
+export async function loadGateMedia(
+  client: {
+    media: {
+      findUnique: (args: {
+        where: { id: string };
+        select: typeof GATE_MEDIA_SELECT;
+      }) => Promise<{ userId: string } | null>;
+    };
+  },
+  mediaId: string | null,
+): Promise<{ userId: string } | null> {
+  if (!mediaId || !mediaId.trim()) {
+    return null;
+  }
+  return client.media.findUnique({
+    where: { id: mediaId },
+    select: GATE_MEDIA_SELECT,
+  });
+}
 
 /**
  * True when this post has been explicitly cleared at post level with a
@@ -250,7 +299,10 @@ export function evaluateSellability(
   if (post.depictsPeople === null) {
     return { sellable: false, blocker: "triage_incomplete" };
   }
-  if (post.depictsPeople && !post.modelReleaseKey) {
+  // Trimmed, like the mediaId and post-clearance checks: a key of spaces is
+  // not a model release, and storing one would otherwise wave through the
+  // consent requirement for a photograph of a person.
+  if (post.depictsPeople && !post.modelReleaseKey?.trim()) {
     return { sellable: false, blocker: "model_release_missing" };
   }
   for (const layer of [
@@ -274,6 +326,21 @@ export function evaluateSellability(
   // ever taken, it belongs in code, in review, not in a database column.
   if (!post.mediaId || !post.mediaId.trim()) {
     return { sellable: false, blocker: "not_owner_supplied_original" };
+  }
+  // The pointer has to resolve. `mediaId` has no foreign key behind it (the
+  // Media model belongs to another branch), so "there is a row with this id"
+  // is a question only the loaded row can answer — and an unresolvable
+  // pointer is not an owner-supplied original, it is nothing at all.
+  if (!post.media) {
+    return { sellable: false, blocker: "not_owner_supplied_original" };
+  }
+  // And it has to resolve to the right person's file. This is the check that
+  // stops a listing under a cleared account from offering *someone else's*
+  // upload: the clearance covers one party's rights, so the only file it can
+  // authorise is that party's. Without it, `mediaId` is an unconstrained
+  // pointer at every upload in the system.
+  if (!post.ownerUserId || post.media.userId !== post.ownerUserId) {
+    return { sellable: false, blocker: "media_not_owned" };
   }
 
   return { sellable: true };

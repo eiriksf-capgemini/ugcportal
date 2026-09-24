@@ -20,9 +20,39 @@ const UTC_DATE = new Intl.DateTimeFormat("en-GB", {
   timeZone: "UTC",
 });
 
-/** For display. Reads as a date, and says which clock it is on. */
-export function formatClearanceDate(date: Date): string {
-  return `${UTC_DATE.format(date)} (UTC)`;
+const UTC_DATE_TIME = new Intl.DateTimeFormat("en-GB", {
+  dateStyle: "medium",
+  timeStyle: "short",
+  timeZone: "UTC",
+});
+
+const DAY_BEFORE_MS = 1;
+
+/**
+ * How a clearance's expiry is described on screen.
+ *
+ * "Valid until 31 Dec" was ambiguous in the direction that favours the
+ * admin: the gate refuses at `validUntil <= now`, so a clearance stamped
+ * 31 Dec stops working at midnight *entering* the 31st, and the last day
+ * anything can be sold is the 30th. An admin reading "valid until 31 Dec"
+ * reasonably believes they have that day. Both facts are stated rather than
+ * leaving the reader to work out which reading applies.
+ */
+export function formatClearanceExpiry(date: Date): string {
+  const lastSellableDay = new Date(date.getTime() - DAY_BEFORE_MS);
+  return `${UTC_DATE_TIME.format(date)} UTC — last sellable day ${UTC_DATE.format(lastSellableDay)}`;
+}
+
+/**
+ * An instant, in UTC and labelled as such.
+ *
+ * UTC rather than the server's zone for the same reason as everything else
+ * here: it sits next to values that are UTC by construction, and an
+ * unlabelled local timestamp beside a labelled UTC one is the drift this
+ * module exists to prevent.
+ */
+export function formatReviewTimestamp(date: Date): string {
+  return `${UTC_DATE_TIME.format(date)} UTC`;
 }
 
 /**

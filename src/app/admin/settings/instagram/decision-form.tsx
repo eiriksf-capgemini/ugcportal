@@ -35,7 +35,13 @@ export function ResaleRightsDecisionForm({
 }: {
   instagramAccountId: string;
   review: DecisionFormReview | null;
-  action: (formData: FormData) => void | Promise<void>;
+  /**
+   * The URL of the route handler that records the decision — a string, not
+   * a server action. The evidence file needs a body limit that belongs to
+   * one endpoint rather than to every server action in the app; see
+   * src/app/api/admin/instagram/rights-decision/route.ts.
+   */
+  action: string;
 }) {
   const storedVersion = review?.checklistVersion ?? null;
   const versionRetired = Boolean(
@@ -43,7 +49,15 @@ export function ResaleRightsDecisionForm({
   );
 
   return (
-    <form action={action} className="mt-3 space-y-3">
+    // encType is required: without it the browser posts
+    // application/x-www-form-urlencoded and the evidence file arrives as a
+    // bare filename string.
+    <form
+      action={action}
+      method="post"
+      encType="multipart/form-data"
+      className="mt-3 space-y-3"
+    >
       <input type="hidden" name="instagramAccountId" value={instagramAccountId} />
       <p className="text-xs text-muted-foreground">
         The decision is recorded against you by name. The current checklist is

@@ -6,6 +6,7 @@ import {
   CURRENT_CHECKLIST_VERSION,
   evaluateSellability,
   isSellable,
+  loadGateMedia,
 } from "@/lib/resale-rights";
 import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db";
 
@@ -88,11 +89,29 @@ beforeAll(async () => {
       connectedByUserId: "admin-1",
     },
   });
+  // A real uploaded original for the listing to point at. The gate checks
+  // the row exists and belongs to the party the listing names, so a fixture
+  // without one would be testing a different thing.
+  await prisma.user.create({
+    data: { id: "owner-1", email: "owner@example.com", role: "USER" },
+  });
+  await prisma.media.create({
+    data: {
+      id: "media-1",
+      userId: "owner-1",
+      kind: "IMAGE",
+      key: "uploads/owner-1/original.jpg",
+      mimeType: "image/jpeg",
+      sizeBytes: 1234,
+      originalName: "original.jpg",
+    },
+  });
   await prisma.curatedPost.create({
     data: {
       id: "post-1",
       instagramAccountId: "acc-1",
       mediaId: "media-1",
+      ownerUserId: "owner-1",
       depictsPeople: false,
       containsMusic: false,
       thirdPartyCreator: false,
@@ -440,37 +459,66 @@ describe("the shapes ugcportal-74w and ugcportal-p3v need", () => {
     await prisma.curatedPost.deleteMany({ where: { id: { not: "post-1" } } });
   });
 
-  it("filters a catalogue listing, with one query and no per-row lookups", async () => {
+  /**
+   * What a catalogue render would do. Two queries, not one per row: the
+   * posts, then their Media rows in a single `in` lookup. The second query
+   * is the price of `mediaId` having no foreign key to join on yet — and
+   * the reason the ownership check is part of the gate input rather than
+   * something each caller is trusted to remember.
+   */
+  async function catalogueListing() {
+    const rows = await prisma.curatedPost.findMany({
+      where: { priceCents: { not: null } },
+      select: { id: true, priceCents: true, ...CURATED_POST_GATE_SELECT },
+    });
+    const media = await prisma.media.findMany({
+      where: { id: { in: rows.map((row) => row.mediaId) } },
+      select: { id: true, userId: true },
+    });
+    const byId = new Map(media.map((row) => [row.id, { userId: row.userId }]));
+    return rows
+      .map((row) => ({ ...row, media: byId.get(row.mediaId) ?? null }))
+      .filter((row) => isSellable(row));
+  }
+
+  it("filters a catalogue listing without a query per row", async () => {
     await setReview("CLEARED");
     await prisma.curatedPost.create({
       data: {
         id: "post-2",
         instagramAccountId: "acc-1",
         mediaId: "media-2",
+        ownerUserId: "owner-1",
         // Same cleared account, but this one was never triaged.
         depictsPeople: null,
       },
     });
 
-    // Exactly what a catalogue render would do: one findMany, the shared
-    // select spread into whatever else the page needs, then the predicate.
-    const rows = await prisma.curatedPost.findMany({
-      where: { priceCents: { not: null } },
-      select: { id: true, priceCents: true, ...CURATED_POST_GATE_SELECT },
-    });
-    const sellable = rows.filter((row) => isSellable(row));
-
     // post-1 has no price yet, post-2 is not triaged: nothing is sellable.
-    expect(sellable).toHaveLength(0);
+    expect(await catalogueListing()).toHaveLength(0);
 
     await POST(priceRequest({ priceCents: 24900 }), context());
-    const priced = await prisma.curatedPost.findMany({
-      where: { priceCents: { not: null } },
-      select: { id: true, priceCents: true, ...CURATED_POST_GATE_SELECT },
+    expect((await catalogueListing()).map((row) => row.id)).toEqual(["post-1"]);
+  });
+
+  it("keeps a listing out of the catalogue when its file is someone else's", async () => {
+    // The sharp end of finding 3: a priced, triaged post under a cleared
+    // account, pointing at an upload that belongs to another user.
+    await setReview("CLEARED");
+    await POST(priceRequest({ priceCents: 24900 }), context());
+    expect((await catalogueListing()).map((row) => row.id)).toEqual(["post-1"]);
+
+    await prisma.media.update({
+      where: { id: "media-1" },
+      data: { userId: "user-1" },
     });
-    expect(priced.filter((row) => isSellable(row)).map((row) => row.id)).toEqual(
-      ["post-1"],
-    );
+
+    expect(await catalogueListing()).toHaveLength(0);
+
+    await prisma.media.update({
+      where: { id: "media-1" },
+      data: { userId: "owner-1" },
+    });
   });
 
   it("re-checks at checkout inside the transaction that takes the money", async () => {
@@ -486,7 +534,10 @@ describe("the shapes ugcportal-74w and ugcportal-p3v need", () => {
         where: { id: "post-1" },
         select: { id: true, priceCents: true, ...CURATED_POST_GATE_SELECT },
       });
-      return evaluateSellability(post);
+      return evaluateSellability({
+        ...post,
+        media: await loadGateMedia(tx, post.mediaId),
+      });
     });
 
     expect(decision).toEqual({

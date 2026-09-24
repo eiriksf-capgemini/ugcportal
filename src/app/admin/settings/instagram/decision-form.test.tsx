@@ -31,7 +31,7 @@ function render(review: DecisionFormReview | null): string {
     <ResaleRightsDecisionForm
       instagramAccountId="acc-1"
       review={review}
-      action={() => {}}
+      action="/api/admin/instagram/rights-decision"
     />,
   );
 }
@@ -99,6 +99,21 @@ describe("the decision form round-trips the existing review", () => {
 
   it("carries the account id it was rendered for", () => {
     expect(inputValue(render(null), "instagramAccountId")).toBe("acc-1");
+  });
+
+  it("posts multipart to the route handler, not a server action", () => {
+    // Without encType the browser sends urlencoded and the evidence file
+    // arrives as a bare filename. And it has to be a route handler at all
+    // because a server action's body limit is global (see next.config.ts).
+    const markup = render(EXISTING);
+    const form = /<form[^>]*>/.exec(markup)![0];
+
+    expect(form).toContain('method="post"');
+    // React emits the JSX spelling, `encType`. HTML attribute names are
+    // ASCII case-insensitive so browsers read it the same, but the
+    // assertion has to be.
+    expect(form).toMatch(/enctype="multipart\/form-data"/i);
+    expect(form).toContain('action="/api/admin/instagram/rights-decision"');
   });
 });
 

@@ -1,11 +1,12 @@
 import { NextResponse } from "next/server";
 
 import { requireAdmin } from "@/lib/admin";
-import { readJsonBody } from "@/lib/json-body";
+import { readJsonBody } from "@/lib/request-body";
 import { prisma } from "@/lib/prisma";
 import {
   CURATED_POST_GATE_SELECT,
   evaluateSellability,
+  loadGateMedia,
 } from "@/lib/resale-rights";
 
 // App Router hands dynamic segments in as a Promise (Next 16).
@@ -133,7 +134,12 @@ export async function POST(request: Request, { params }: RouteContext) {
     }
 
     if (!unpricing) {
-      const gate = evaluateSellability(post);
+      // Second read, inside the same transaction, because mediaId has no
+      // foreign key to join on yet. The gate needs the Media row to check
+      // that the file being priced belongs to the party the clearance
+      // covers.
+      const media = await loadGateMedia(tx, post.mediaId);
+      const gate = evaluateSellability({ ...post, media });
       if (!gate.sellable) {
         return { kind: "blocked", blocker: gate.blocker } as const;
       }

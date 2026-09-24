@@ -4,10 +4,13 @@ import { Button } from "@/components/ui/button";
 import { requireAdmin } from "@/lib/admin";
 import { prisma } from "@/lib/prisma";
 import { accountClearanceBlocker } from "@/lib/resale-rights";
-import { INSTAGRAM_CONNECT_PATH } from "@/lib/routes";
+import {
+  INSTAGRAM_CONNECT_PATH,
+  INSTAGRAM_RIGHTS_DECISION_PATH,
+} from "@/lib/routes";
 
-import { disconnectInstagramAccount, recordResaleRightsDecision } from "./actions";
-import { formatClearanceDate } from "./dates";
+import { disconnectInstagramAccount } from "./actions";
+import { formatClearanceExpiry, formatReviewTimestamp } from "./dates";
 import { ResaleRightsDecisionForm } from "./decision-form";
 import { BLOCKER_MESSAGES, outcomeMessage } from "./outcomes";
 
@@ -19,10 +22,10 @@ const dateFormat = new Intl.DateTimeFormat("en-GB", {
   dateStyle: "medium",
 });
 
-const dateTimeFormat = new Intl.DateTimeFormat("en-GB", {
-  dateStyle: "medium",
-  timeStyle: "short",
-});
+// The account's own OAuth dates stay in the server's zone, as ugcportal-5ce
+// rendered them. Everything belonging to the *clearance* goes through
+// ./dates instead, in UTC: those values are UTC by construction and are read
+// alongside the edit form, which is where a mismatch misleads.
 
 export default async function InstagramSettingsPage({
   searchParams,
@@ -158,7 +161,7 @@ export default async function InstagramSettingsPage({
                             ? `${reviewer.name ?? reviewer.email ?? review.reviewedByUserId} (${reviewer.role})`
                             : "none recorded"}
                           {review.reviewedAt
-                            ? ` · ${dateTimeFormat.format(review.reviewedAt)}`
+                            ? ` · ${formatReviewTimestamp(review.reviewedAt)}`
                             : null}
                         </dd>
                       </div>
@@ -170,17 +173,17 @@ export default async function InstagramSettingsPage({
                         </dd>
                       </div>
                       <div>
-                        <dt className="inline font-medium">Valid until: </dt>
+                        <dt className="inline font-medium">Expires: </dt>
                         <dd className="inline">
                           {/*
-                            UTC, not the server's timezone: the same value is
-                            stored as midnight UTC, compared as an instant by
-                            the gate, and rendered into the edit form in UTC.
-                            Formatting it locally here would show an admin an
-                            expiry a day off from the one in the form below.
+                            Stated as an instant plus the last day anything
+                            can actually be sold. The gate refuses at
+                            `validUntil <= now`, so a bare "valid until
+                            31 Dec" reads as a day the admin does not have —
+                            ambiguous in the direction that favours selling.
                           */}
                           {review.validUntil
-                            ? formatClearanceDate(review.validUntil)
+                            ? formatClearanceExpiry(review.validUntil)
                             : "no end date"}
                         </dd>
                       </div>
@@ -215,7 +218,7 @@ export default async function InstagramSettingsPage({
                   <ResaleRightsDecisionForm
                     instagramAccountId={account.id}
                     review={review ?? null}
-                    action={recordResaleRightsDecision}
+                    action={INSTAGRAM_RIGHTS_DECISION_PATH}
                   />
                 </details>
               </li>

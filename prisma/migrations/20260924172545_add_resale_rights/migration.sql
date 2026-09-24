@@ -41,6 +41,7 @@ CREATE TABLE "CuratedPost" (
     "id" TEXT NOT NULL PRIMARY KEY,
     "instagramAccountId" TEXT NOT NULL,
     "mediaId" TEXT NOT NULL,
+    "ownerUserId" TEXT NOT NULL,
     "instagramPermalink" TEXT,
     "priceCents" INTEGER,
     "currency" TEXT NOT NULL DEFAULT 'NOK',
@@ -54,7 +55,8 @@ CREATE TABLE "CuratedPost" (
     "postClearanceReason" TEXT,
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" DATETIME NOT NULL,
-    CONSTRAINT "CuratedPost_instagramAccountId_fkey" FOREIGN KEY ("instagramAccountId") REFERENCES "InstagramAccount" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+    CONSTRAINT "CuratedPost_instagramAccountId_fkey" FOREIGN KEY ("instagramAccountId") REFERENCES "InstagramAccount" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT "CuratedPost_ownerUserId_fkey" FOREIGN KEY ("ownerUserId") REFERENCES "User" ("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
 
 -- CreateIndex
@@ -77,3 +79,6 @@ CREATE UNIQUE INDEX "CuratedPost_mediaId_key" ON "CuratedPost"("mediaId");
 
 -- CreateIndex
 CREATE INDEX "CuratedPost_instagramAccountId_idx" ON "CuratedPost"("instagramAccountId");
+
+-- CreateIndex
+CREATE INDEX "CuratedPost_ownerUserId_idx" ON "CuratedPost"("ownerUserId");

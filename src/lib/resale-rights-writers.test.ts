@@ -30,8 +30,12 @@ const ALLOWED = new Map<string, string>([
     "the only writer — an ADMIN transition, guarded by type and at runtime",
   ],
   [
+    "app/api/admin/instagram/rights-decision/route.ts",
+    "the admin-only endpoint that calls the writer; names the status in its docs only",
+  ],
+  [
     "app/admin/settings/instagram/actions.ts",
-    "documentation only: the admin action that calls the writer",
+    "documentation only: explains why disconnect revokes rather than leaving CLEARED as the trail's last word",
   ],
 ]);
 
