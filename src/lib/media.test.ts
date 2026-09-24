@@ -12,6 +12,12 @@ const BIDI_OVERRIDE = "\u202E";
 const NUL = "\u0000";
 const C1_NEL = "\u0085";
 const RTL_ISOLATE = "\u2067";
+const LONE_HIGH_SURROGATE = "\uD800";
+const LONE_LOW_SURROGATE = "\uDC00";
+const ZERO_WIDTH_SPACE = "\u200B";
+const WORD_JOINER = "\u2060";
+const LINE_SEPARATOR = "\u2028";
+const HANGUL_FILLER = "\u3164";
 
 describe("validateUpload", () => {
   it("accepts a small image", () => {
@@ -101,6 +107,13 @@ const HOSTILE_NAMES: Array<[string, string]> = [
   ["nothing but whitespace", "   "],
   ["nothing but stripped characters", `${BIDI_OVERRIDE}${NUL}`],
   ["an empty string", ""],
+  ["an unpaired high surrogate", `bad${LONE_HIGH_SURROGATE}name.png`],
+  ["an unpaired low surrogate", `bad${LONE_LOW_SURROGATE}name.png`],
+  ["a zero-width space mid-name", `bad${ZERO_WIDTH_SPACE}name.png`],
+  ["a line separator mid-name", `bad${LINE_SEPARATOR}name.png`],
+  ["nothing but a zero-width space", ZERO_WIDTH_SPACE],
+  ["nothing but a word joiner", WORD_JOINER],
+  ["nothing but a Hangul filler", HANGUL_FILLER],
 ];
 
 describe("validateOriginalName", () => {
@@ -109,6 +122,19 @@ describe("validateOriginalName", () => {
       ok: true,
       value: "holiday.png",
     });
+  });
+
+  it("rejects an unpaired surrogate with a distinct message", () => {
+    // Distinct message from the control/bidi case: this is about the string
+    // not being well-formed UTF-16, not about which characters it chose.
+    // @libsql/client silently stores U+FFFD instead, and PATCH echoes the
+    // submitted name without re-reading, so the 200 response would disagree
+    // with what a later GET returns.
+    expect(validateOriginalName(`a${LONE_HIGH_SURROGATE}b`)).toEqual({
+      ok: false,
+      message: "Field 'originalName' must be valid text",
+    });
+    expect(validateOriginalName(`a${LONE_LOW_SURROGATE}b`).ok).toBe(false);
   });
 
   it("accepts emoji, which reorder nothing", () => {
@@ -166,6 +192,24 @@ describe("sanitizeOriginalName", () => {
   it("falls back to a placeholder when nothing survives", () => {
     expect(sanitizeOriginalName(`${BIDI_OVERRIDE}${NUL}  `)).toBe("untitled");
     expect(sanitizeOriginalName("")).toBe("untitled");
+  });
+
+  // Regression: these are not whitespace and have non-zero .length, so before
+  // they joined the denylist they passed as valid and rendered as a blank row
+  // — the exact outcome the fallback exists to prevent.
+  it("falls back for names made only of invisible characters", () => {
+    expect(sanitizeOriginalName(ZERO_WIDTH_SPACE)).toBe("untitled");
+    expect(sanitizeOriginalName(WORD_JOINER)).toBe("untitled");
+    expect(sanitizeOriginalName(HANGUL_FILLER)).toBe("untitled");
+  });
+
+  // A valid astral character is itself made of surrogate code units, so a
+  // naive [\uD800-\uDFFF] denylist would strip every emoji. Only unpaired
+  // units may be dropped.
+  it("drops unpaired surrogates but keeps valid astral characters", () => {
+    expect(sanitizeOriginalName(`a${LONE_HIGH_SURROGATE}b.png`)).toBe("ab.png");
+    expect(sanitizeOriginalName(`a${LONE_LOW_SURROGATE}b.png`)).toBe("ab.png");
+    expect(sanitizeOriginalName("sunset 🌅.png")).toBe("sunset 🌅.png");
   });
 
   // The invariant that makes the strict/lenient split safe: the two paths

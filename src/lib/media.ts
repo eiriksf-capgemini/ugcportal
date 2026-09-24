@@ -122,13 +122,34 @@ export const MAX_ORIGINAL_NAME_LENGTH = 255;
 
 // Characters that would survive into every UI rendering the name and lie
 // about what it says: C0 and C1 controls, DEL, and the bidi marks and
-// overrides. The last group is why this is wider than it looks —
+// overrides, and the invisibles that render as nothing at all. The bidi
+// group is why this is wider than it looks —
 // "invoice\u202Egnp.exe" renders as "invoice exe.png", the exact deception
-// it exists to stop. Zero-width joiners are deliberately left alone; emoji
-// filenames are legitimate and don't reorder text.
+// it exists to stop.
+//
+// The invisible group (soft hyphen, ZWSP, line/paragraph separators, word
+// joiner, Hangul filler, BOM) is denied rather than merely trimmed because a
+// name built only from them is not empty by length yet renders as a blank
+// row — FALLBACK_ORIGINAL_NAME below could not fire without this.
+//
+// Zero-width JOINER (U+200D) is deliberately absent: emoji sequences need it,
+// and it neither reorders nor hides text.
 const UNSAFE_NAME_CHARS =
-  /[\u0000-\u001F\u007F-\u009F\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/;
+  /[\u0000-\u001F\u007F-\u009F\u00AD\u061C\u200B\u200E\u200F\u202A-\u202E\u2028\u2029\u2060\u2066-\u2069\u3164\uFEFF]/;
 const UNSAFE_NAME_CHARS_GLOBAL = new RegExp(UNSAFE_NAME_CHARS, "gu");
+
+// Unpaired surrogates cannot join the class above: at code-unit level every
+// astral character (so every emoji) is MADE of surrogates, and a naive
+// [\uD800-\uDFFF] would reject exactly the names that comment promises to
+// allow. Only the unpaired ones are a problem, and they are a real one. JSON
+// permits "\ud800"; it is neither a control nor a bidi character, and the
+// @libsql/client driver this repo uses silently substitutes U+FFFD on write.
+// Because PATCH deliberately skips a re-read and echoes the submitted name, the
+// 200 response would then disagree with what a later GET returns. A strict-UTF-8
+// driver would throw instead, turning the same input into a 500.
+const LONE_SURROGATE =
+  /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+const LONE_SURROGATE_GLOBAL = new RegExp(LONE_SURROGATE, "g");
 
 // Used when sanitizing leaves nothing behind — a name made entirely of
 // stripped characters or whitespace. Better than an empty string, which
@@ -166,6 +187,14 @@ export function validateOriginalName(value: unknown): OriginalNameValidation {
         "Field 'originalName' must not contain control or text-direction characters",
     };
   }
+  // Separate check, separate message: this one is about the string being
+  // well-formed UTF-16 at all, not about which characters it chose.
+  if (LONE_SURROGATE.test(trimmed)) {
+    return {
+      ok: false,
+      message: "Field 'originalName' must be valid text",
+    };
+  }
 
   return { ok: true, value: trimmed };
 }
@@ -183,7 +212,13 @@ export function validateOriginalName(value: unknown): OriginalNameValidation {
  * validateOriginalName(sanitizeOriginalName(x)) is ok for every x.
  */
 export function sanitizeOriginalName(value: string): string {
-  const stripped = value.replace(UNSAFE_NAME_CHARS_GLOBAL, "").trim();
+  const stripped = value
+    .replace(UNSAFE_NAME_CHARS_GLOBAL, "")
+    // Dropped rather than replaced with U+FFFD: a visible replacement glyph
+    // would be a worse answer than simply not showing the broken unit, and
+    // leaving it in would break the sanitize -> validate invariant below.
+    .replace(LONE_SURROGATE_GLOBAL, "")
+    .trim();
   // Truncate by code point, then trim again: cutting mid-string can expose
   // trailing whitespace that wasn't at the edge before.
   const truncated = Array.from(stripped)

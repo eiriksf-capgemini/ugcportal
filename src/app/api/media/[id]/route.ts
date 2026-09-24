@@ -1,7 +1,7 @@
 import { DeleteObjectCommand } from "@aws-sdk/client-s3";
 import { NextResponse } from "next/server";
 
-import { MAX_ORIGINAL_NAME_LENGTH, validateOriginalName } from "@/lib/media";
+import { validateOriginalName } from "@/lib/media";
 import { requireOwnedMedia, toPublicMedia } from "@/lib/media-access";
 import { prisma } from "@/lib/prisma";
 import { getBucketName, getS3Client } from "@/lib/s3";
