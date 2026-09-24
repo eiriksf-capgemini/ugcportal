@@ -165,12 +165,25 @@ EXPOSE 3000
 # With no limit set, that read falls back to host RAM, and on a shared host
 # the cap is then derived from memory this container does not actually have —
 # the process is free to allocate its way to an OOM kill, which is the exact
-# failure the cap exists to prevent. The fallback is visible rather than
-# silent (the budget reports source "host"), and WATERMARK_MAX_CONCURRENCY
-# overrides the derived value outright if the environment cannot supply one.
+# failure the cap exists to prevent. The fallback is not silent: the app logs
+# a warning at startup naming the budget, the chosen configuration and where
+# each number came from. WATERMARK_MAX_CONCURRENCY overrides the derived
+# value outright if the environment cannot supply a cgroup limit.
 #
-# Reference points from the derivation in src/lib/watermark.ts: 512 MB
-# derives 1 concurrent preview, 1 GB derives 5, ~1.5 GB and up derives the
-# 8-way ceiling. Setting a limit and load-checking against it is ugcportal-jp4.
+# Reference points from the derivation in src/lib/watermark.ts, where "burst"
+# is how many simultaneous uploads are absorbed before any are rejected:
+#
+#     512 MB -> 1 at once,  3 queued, burst 4
+#     768 MB -> 3 at once,  3 queued, burst 6
+#       1 GB -> 3 at once, 12 queued, burst 15   <- recommended
+#       2 GB -> 3 at once, 12 queued, burst 15
+#
+# Give it 1 GB. 512 MB does not fit an ordinary five-image multi-select and
+# will reject the fifth upload; that is arithmetic, not tuning. Past ~1 GB
+# the limit is bounded by libuv's worker pool rather than by memory, so a
+# larger container needs UV_THREADPOOL_SIZE raised to make use of it.
+#
+# Setting the limit in a real deployment and load-checking against it is
+# ugcportal-jp4.
 
 CMD ["node", "server.js"]

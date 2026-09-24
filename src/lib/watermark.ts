@@ -1,5 +1,3 @@
-import os from "node:os";
-
 import sharp from "sharp";
 
 import type { ConcurrencyGate, ConcurrencyLimitReason } from "@/lib/concurrency-gate";
@@ -7,8 +5,9 @@ import {
   ConcurrencyLimitError,
   createConcurrencyGate,
 } from "@/lib/concurrency-gate";
-import type { MemoryBudget } from "@/lib/memory-budget";
-import { detectMemoryBudget } from "@/lib/memory-budget";
+import type { CpuBudget, MemoryBudget } from "@/lib/container-limits";
+import { detectCpuBudget, detectMemoryBudget } from "@/lib/container-limits";
+import { MAX_IMAGE_UPLOAD_BYTES } from "@/lib/media";
 
 // Longest-edge cap for a generated preview.
 //
@@ -74,7 +73,9 @@ export const MAX_INPUT_PIXELS = 50_000_000;
 // Why not pure shedding: uploads arrive in bursts by construction (a
 // multi-file picker sends every file at once), and a limit small enough to
 // protect a 1 GB container would fail most of a perfectly ordinary five-image
-// selection while the server is nearly idle a second later.
+// selection while the server is nearly idle a second later. On the default 1
+// GB reference configuration below, a five-image burst is fully absorbed
+// (limit 3 + queue 12) and nothing sheds.
 //
 // Why not an unbounded queue: it converts a memory problem into a latency
 // problem and holds HTTP connections open while it does so, which is how a
@@ -85,22 +86,29 @@ export const MAX_INPUT_PIXELS = 50_000_000;
 // the cap plus the timeout are what force the degradation to happen at a
 // predictable point instead of at whatever depth the heap dies.
 //
-// Note what queueing does *not* cost here: a queued caller's image is already
-// buffered in memory by the HTTP layer before this function is reached, so
-// waiting adds no allocation. The queue depth is therefore bounded by
-// acceptable latency, not by memory, which is why it is expressed as a
-// multiple of the limit rather than derived from the memory budget.
+// A queued upload is NOT free, and the queue is bounded in bytes because of
+// it. The gate copies nothing — the body is already buffered by the HTTP
+// layer before this module is reached — but waiting keeps that body alive
+// alongside every other queued one, when they would otherwise have been
+// freed one at a time. See QUEUED_UPLOAD_BYTES, and the budget allocation in
+// resolveWatermarkConcurrencySettings.
 
 /**
- * Native memory to reserve for everything that is not a preview: the Next
- * server, the V8 heap, Prisma/libsql, the S3 client's buffers, and the
- * request bodies of uploads that are waiting for a slot.
+ * Native memory to reserve for everything that is not preview work: the Next
+ * server, the V8 heap, Prisma/libsql, the S3 client's buffers.
  *
- * An estimate, and flagged as one: it has not been measured against the
+ * Deliberately does *not* include queued upload bodies. An earlier version of
+ * this constant did, hand-waving them in as "plus a request body or two",
+ * which was wrong in a way worth naming: queued bodies scale with the queue
+ * depth, which scales with the limit, which is derived from this. Folding a
+ * variable into a constant that sizes it is circular, and it under-counted by
+ * however deep the queue happened to go. They are now priced separately as
+ * {@link QUEUED_UPLOAD_BYTES} and allocated out of the budget explicitly.
+ *
+ * Still an estimate, and flagged as one: it has not been measured against the
  * production image, only reasoned from a Next standalone server's typical
- * resident set plus the 10 MB image upload cap in src/lib/media.ts. If it is
- * wrong the derived limit is wrong with it, which is what
- * WATERMARK_MAX_CONCURRENCY exists to correct without a deploy.
+ * resident set. If it is wrong the derived limit is wrong with it, which is
+ * what WATERMARK_MAX_CONCURRENCY exists to correct without a deploy.
  */
 export const PREVIEW_PROCESS_BASELINE_BYTES = 320 * 1024 * 1024;
 
@@ -120,15 +128,42 @@ export const PREVIEW_PROCESS_BASELINE_BYTES = 320 * 1024 * 1024;
 export const PREVIEW_BYTES_PER_OPERATION = 128 * 1024 * 1024;
 
 /**
- * Ceiling on the *derived* limit, whatever the memory budget says.
+ * Resident memory one *queued* upload holds alive while it waits.
  *
- * Past this point extra parallelism stops buying throughput: measured on a
- * 10-core machine, 8 concurrent 49 MP previews took 376ms against 226ms for
- * 4, i.e. the work was already CPU-bound and the only thing more concurrency
- * added was resident memory. A large host would otherwise derive a limit of
- * dozens, which is a worse configuration, not a better one.
+ * Twice the image upload cap, because src/app/api/media/route.ts materialises
+ * the body twice before it ever reaches this module: `await
+ * request.formData()` produces a File holding the bytes, and
+ * `Buffer.from(await file.arrayBuffer())` copies them into a Buffer that
+ * stays referenced for the whole handler. Both are alive for the entire wait.
+ *
+ * This is the correction to the original reasoning that "queueing costs no
+ * extra memory because the body is already buffered". True as far as it goes
+ * — the gate does not copy anything — but the conclusion drawn from it was
+ * wrong: the cost of a queue is not the copy, it is keeping N bodies
+ * *simultaneously* alive that would otherwise have been freed one at a time.
+ * At a 20-deep queue that is 400 MB, which is not a rounding error against a
+ * 1 GB container.
+ */
+export const QUEUED_UPLOAD_BYTES = 2 * MAX_IMAGE_UPLOAD_BYTES;
+
+/**
+ * Absolute ceiling on the derived limit, whatever any budget says.
+ *
+ * The effective ceiling is usually lower; see
+ * {@link resolveConcurrencyCeiling}. This one only exists so a host with
+ * enormous limits cannot derive something absurd.
  */
 export const MAX_DERIVED_CONCURRENCY = 8;
+
+/**
+ * libuv's default worker-thread count, used when UV_THREADPOOL_SIZE is unset.
+ *
+ * Relevant because sharp's async work runs *on* that pool: each in-flight
+ * preview occupies one libuv worker for its whole duration. It is the same
+ * pool `dns.lookup` and async fs use, and every preview here is immediately
+ * followed by an S3 PutObject that needs a DNS resolution.
+ */
+export const LIBUV_DEFAULT_THREADPOOL_SIZE = 4;
 
 /** Queue depth per slot, i.e. worst-case wait of ~4 preview durations. */
 export const DEFAULT_QUEUE_DEPTH_PER_SLOT = 4;
@@ -146,6 +181,17 @@ export const DEFAULT_QUEUE_TIMEOUT_MS = 10_000;
 export const MAX_SHARP_THREADS_PER_OPERATION = 4;
 
 /**
+ * Smallest memory budget in which the gate can honour its own arithmetic:
+ * the baseline plus one preview. Below this the limit is clamped up to 1 (a
+ * gate that admits nothing is not an improvement on an OOM) and the
+ * configuration is, by its own reckoning, over budget — which
+ * {@link resolveWatermarkConcurrencySettings} reports via `fitsBudget` and
+ * getGate() logs a warning about.
+ */
+export const MIN_VIABLE_BUDGET_BYTES =
+  PREVIEW_PROCESS_BASELINE_BYTES + PREVIEW_BYTES_PER_OPERATION;
+
+/**
  * Just the variables this module reads.
  *
  * Narrower than NodeJS.ProcessEnv on purpose: process.env is assignable to
@@ -157,6 +203,7 @@ export interface WatermarkConcurrencyEnv {
   readonly WATERMARK_QUEUE_LIMIT?: string;
   readonly WATERMARK_QUEUE_TIMEOUT_MS?: string;
   readonly WATERMARK_SHARP_THREADS?: string;
+  readonly UV_THREADPOOL_SIZE?: string;
   // Present so process.env (which is an index-signature type) is assignable
   // without also making this a "weak type" TypeScript refuses to accept it
   // into. The named keys above are documentation, not a closed set.
@@ -171,7 +218,13 @@ export interface WatermarkConcurrencySettings {
   /** Where the numbers above came from, for logging and for tests. */
   budgetBytes: number;
   budgetSource: MemoryBudget["source"];
+  cpus: number;
+  cpuSource: CpuBudget["source"];
   limitSource: "env" | "derived";
+  /** Worst-case resident memory this configuration can reach. */
+  projectedPeakBytes: number;
+  /** False when `projectedPeakBytes` exceeds the budget; see MIN_VIABLE_BUDGET_BYTES. */
+  fitsBudget: boolean;
 }
 
 function positiveInt(raw: string | undefined): number | undefined {
@@ -189,6 +242,40 @@ function nonNegativeInt(raw: string | undefined): number | undefined {
 }
 
 /**
+ * The most previews it makes sense to run at once, before memory is even
+ * considered.
+ *
+ * Bounded by libuv's worker pool, not by CPU count, because that is the
+ * resource an in-flight preview actually holds: sharp's async work runs on a
+ * libuv worker for the duration of the operation. Going past the pool size
+ * buys nothing — slots beyond it hold previews that are sitting in libuv's
+ * own queue doing no work, which is a strictly worse way to queue than this
+ * gate (no cap, no timeout, no visibility). It is also very likely the real
+ * explanation for the 8-vs-4 timing measured during this work (376ms against
+ * 226ms on a 10-core machine, which was originally read as CPU saturation;
+ * with a 4-worker pool, 8 concurrent previews cannot have been running 8-wide
+ * whatever the core count).
+ *
+ * One worker is left free on purpose. The pool is shared with `dns.lookup`
+ * and async fs, and every preview here is immediately followed by an S3
+ * PutObject that needs DNS — saturating the pool with previews would stall
+ * the very uploads the previews belong to.
+ *
+ * Raising UV_THREADPOOL_SIZE raises this. That is the supported way to get a
+ * limit above 3 out of a large container, and it is documented in
+ * env.example; the alternative, setting it from inside the process, does not
+ * work reliably because libuv reads it when the pool is first used, which has
+ * long since happened by the time a request arrives.
+ */
+export function resolveConcurrencyCeiling(
+  env: WatermarkConcurrencyEnv = process.env,
+): number {
+  const poolSize =
+    positiveInt(env.UV_THREADPOOL_SIZE) ?? LIBUV_DEFAULT_THREADPOOL_SIZE;
+  return Math.min(MAX_DERIVED_CONCURRENCY, Math.max(1, poolSize - 1));
+}
+
+/**
  * libvips threads to allow *per preview*.
  *
  * sharp's `concurrency` is not a cap on how many images are processed at
@@ -199,10 +286,10 @@ function nonNegativeInt(raw: string | undefined): number | undefined {
  * machine with four concurrent 49 MP PNG previews: 253 MB of peak RSS at one
  * thread per image, 337 MB at sharp's default of four, 417 MB at ten — a 65%
  * memory swing with *no* throughput difference at all (208ms in every case),
- * because at four concurrent images the cores are already busy.
+ * because at four concurrent images the machine is already busy.
  *
  * So the answer to "does it interact with the gate" is yes, and leaving it
- * alone would have quietly invalidated the arithmetic above. Two reasons to
+ * alone would have quietly invalidated the memory arithmetic. Two reasons to
  * pin it rather than trust the default:
  *
  *  1. it is the difference between the memory budget meaning something and
@@ -213,21 +300,28 @@ function nonNegativeInt(raw: string | undefined): number | undefined {
  *     cgroup's CPU quota. A 2-vCPU container on a 64-core host would default
  *     to 64 threads per image.
  *
- * The rule keeps *total* libvips threads at roughly one per core instead of
- * one per core per in-flight image. The cost is real but small and only paid
- * when the server is idle: a single lone 49 MP PNG preview took ~169ms with
- * one thread against ~158ms with four (3-run means), because the PNG decode
- * dominates and does not parallelise well.
+ * `cpus` must therefore be the *effective* CPU count from
+ * detectCpuBudget() and not os.availableParallelism(), which has exactly the
+ * blind spot in (2): a CFS bandwidth quota (`docker run --cpus=2`) does not
+ * narrow the affinity mask, so availableParallelism() keeps reporting the
+ * host's cores and this rule would hand out host-sized thread pools inside a
+ * two-CPU container.
+ *
+ * The rule keeps *total* libvips threads at roughly one per effective CPU
+ * instead of one per CPU per in-flight image. The cost is real but small and
+ * only paid when the server is idle: a single lone 49 MP PNG preview took
+ * ~169ms with one thread against ~158ms with four (3-run means), because the
+ * PNG decode dominates and does not parallelise well.
  */
 export function resolveSharpThreads(
   limit: number,
-  cpuCount: number,
+  cpus: number,
   override?: number,
 ): number {
   if (override !== undefined) return override;
   return Math.min(
     MAX_SHARP_THREADS_PER_OPERATION,
-    Math.max(1, Math.floor(cpuCount / Math.max(1, limit))),
+    Math.max(1, Math.floor(cpus / Math.max(1, limit))),
   );
 }
 
@@ -240,48 +334,153 @@ export function resolveSharpThreads(
  * reserving what the rest of the process needs. detectMemoryBudget() reads
  * that from the cgroup; if there is no cgroup limit it falls back to host RAM
  * and says so, and on a shared host that will over-provision — which is why
- * the Dockerfile documents running with an explicit `--memory` and why
+ * the Dockerfile documents running with an explicit `--memory`, why getGate()
+ * logs a warning when it sees `source: "host"`, and why
  * WATERMARK_MAX_CONCURRENCY can override the result outright.
  *
- * Worked examples with the constants above: a 512 MB container derives 1, 1 GB
- * derives 5, and anything from ~1.5 GB up derives the 8-way ceiling.
+ * The budget is spent in a fixed order, so the total is bounded by
+ * construction rather than by hoping the parts add up:
+ *
+ *   1. the process baseline comes off the top;
+ *   2. in-flight previews take what is left, capped by
+ *      resolveConcurrencyCeiling();
+ *   3. the queue gets whatever remains after that, in whole queued-upload
+ *      bytes, capped at DEFAULT_QUEUE_DEPTH_PER_SLOT per slot so a large
+ *      container does not buy a queue so deep that the wait is pointless.
+ *
+ * Step 3 is why the queue is bounded by *bytes* and not simply by 4x the
+ * limit. A queued upload is not free — it holds ~20 MB of request body alive
+ * (see QUEUED_UPLOAD_BYTES) — so a fixed multiple would let a 1 GB container
+ * configure 5 in-flight previews and 20 queued bodies, i.e. ~640 MB of
+ * preview work plus ~400 MB of queued bodies plus a 320 MB baseline, which
+ * is 1.36 GB in a 1 GB box. The gate would then have been a mechanism for
+ * causing the exact OOM it exists to prevent.
+ *
+ * Reference points, recomputed from the constants above rather than carried
+ * over (default UV_THREADPOOL_SIZE, so the ceiling is 3). "Burst" is the
+ * number of simultaneous uploads absorbed with nothing shed, i.e. limit plus
+ * queue:
+ *
+ *   512 MB -> limit 1, queue 3   burst 4   (projected 508 MB)
+ *   768 MB -> limit 3, queue 3   burst 6   (projected 764 MB)
+ *     1 GB -> limit 3, queue 12  burst 15  (projected 944 MB)
+ *     2 GB -> limit 3, queue 12  burst 15  (projected 944 MB; ceiling-bound,
+ *             not memory-bound — raise UV_THREADPOOL_SIZE to use the rest)
+ *
+ * **768 MB is the practical floor, and 1 GB the recommended one.** At 512 MB
+ * a burst of four is absorbed and the fifth sheds — one short of the
+ * five-image multi-select used above to argue against pure shedding, and
+ * today that shed is an unretryable 500 (see WatermarkOverloadedError and
+ * ugcportal-u7g). That is not a tuning mistake to be papered over: 320 MB
+ * baseline + 128 MB of preview + 5 x 20 MB of queued bodies is 548 MB, so a
+ * 512 MB container genuinely cannot hold that burst. The choice is between
+ * shedding it and being OOM-killed by it, and no arrangement of these
+ * constants changes that. Give the container 1 GB, or accept that small
+ * bursts shed.
+ *
+ * Below MIN_VIABLE_BUDGET_BYTES (448 MB) it gets worse: the limit is clamped
+ * up to 1 and `fitsBudget` goes false, meaning the configuration is over
+ * budget by its own reckoning and getGate() warns about it at startup.
  *
  * Every input is a parameter so this is testable without a container.
  */
 export function resolveWatermarkConcurrencySettings(
   env: WatermarkConcurrencyEnv = process.env,
   budget: MemoryBudget = detectMemoryBudget(),
-  cpuCount: number = os.availableParallelism?.() ?? os.cpus().length,
+  cpu: CpuBudget = detectCpuBudget(),
 ): WatermarkConcurrencySettings {
   const override = positiveInt(env.WATERMARK_MAX_CONCURRENCY);
-  const derived = Math.min(
-    MAX_DERIVED_CONCURRENCY,
-    Math.max(
-      1,
-      Math.floor(
-        (budget.bytes - PREVIEW_PROCESS_BASELINE_BYTES) /
-          PREVIEW_BYTES_PER_OPERATION,
-      ),
-    ),
-  );
-  const limit = override ?? derived;
+  const forPreviews = budget.bytes - PREVIEW_PROCESS_BASELINE_BYTES;
+  const limit =
+    override ??
+    Math.min(
+      resolveConcurrencyCeiling(env),
+      Math.max(1, Math.floor(forPreviews / PREVIEW_BYTES_PER_OPERATION)),
+    );
+
+  const forQueue = forPreviews - limit * PREVIEW_BYTES_PER_OPERATION;
+  const queueLimit =
+    nonNegativeInt(env.WATERMARK_QUEUE_LIMIT) ??
+    Math.min(
+      limit * DEFAULT_QUEUE_DEPTH_PER_SLOT,
+      Math.max(0, Math.floor(forQueue / QUEUED_UPLOAD_BYTES)),
+    );
+
+  const projectedPeakBytes =
+    PREVIEW_PROCESS_BASELINE_BYTES +
+    limit * PREVIEW_BYTES_PER_OPERATION +
+    queueLimit * QUEUED_UPLOAD_BYTES;
 
   return {
     limit,
-    queueLimit:
-      nonNegativeInt(env.WATERMARK_QUEUE_LIMIT) ??
-      limit * DEFAULT_QUEUE_DEPTH_PER_SLOT,
+    queueLimit,
     queueTimeoutMs:
       positiveInt(env.WATERMARK_QUEUE_TIMEOUT_MS) ?? DEFAULT_QUEUE_TIMEOUT_MS,
     sharpThreads: resolveSharpThreads(
       limit,
-      cpuCount,
+      cpu.cpus,
       positiveInt(env.WATERMARK_SHARP_THREADS),
     ),
     budgetBytes: budget.bytes,
     budgetSource: budget.source,
+    cpus: cpu.cpus,
+    cpuSource: cpu.source,
     limitSource: override === undefined ? "derived" : "env",
+    projectedPeakBytes,
+    fitsBudget: projectedPeakBytes <= budget.bytes,
   };
+}
+
+const mib = (bytes: number) => `${Math.round(bytes / (1024 * 1024))} MB`;
+
+/**
+ * One line at startup describing the configuration and, crucially, where it
+ * came from.
+ *
+ * Without this the provenance tracked through
+ * {@link WatermarkConcurrencySettings} is decoration: detectMemoryBudget()
+ * goes to the trouble of reporting `source: "host"` precisely so a missing
+ * container memory limit is noticeable, and the Dockerfile tells operators to
+ * set one — but if nobody ever prints it, the only signal that the limit was
+ * derived from a 256 GB shared host instead of a 1 GB container is the OOM
+ * kill it was supposed to prevent.
+ *
+ * Exported so the message can be asserted on rather than eyeballed.
+ */
+export function describeWatermarkConcurrency(
+  settings: WatermarkConcurrencySettings,
+): string {
+  return [
+    `[watermark] preview concurrency limit=${settings.limit} (${settings.limitSource})`,
+    `queue=${settings.queueLimit}`,
+    `timeout=${settings.queueTimeoutMs}ms`,
+    `libvipsThreadsPerPreview=${settings.sharpThreads}`,
+    `memoryBudget=${mib(settings.budgetBytes)} (${settings.budgetSource})`,
+    `cpuBudget=${settings.cpus} (${settings.cpuSource})`,
+    `projectedPeak=${mib(settings.projectedPeakBytes)}`,
+  ].join(" ");
+}
+
+function logConcurrencySettings(settings: WatermarkConcurrencySettings): void {
+  const line = describeWatermarkConcurrency(settings);
+  const warnings: string[] = [];
+
+  if (settings.budgetSource === "host") {
+    warnings.push(
+      "no container memory limit found, so the limit was derived from total host RAM; run the container with an explicit memory limit (see the Dockerfile) or set WATERMARK_MAX_CONCURRENCY",
+    );
+  }
+  if (!settings.fitsBudget) {
+    warnings.push(
+      `projected peak memory exceeds the budget by ${mib(settings.projectedPeakBytes - settings.budgetBytes)}; this container is below the ${mib(MIN_VIABLE_BUDGET_BYTES)} floor one preview needs`,
+    );
+  }
+
+  if (warnings.length > 0) {
+    console.warn(`${line} — ${warnings.join("; ")}`);
+    return;
+  }
+  console.info(line);
 }
 
 let gate: ConcurrencyGate | undefined;
@@ -290,8 +489,8 @@ let gateSettings: WatermarkConcurrencySettings | undefined;
 /**
  * Built on first use rather than at import time, so the configuration is read
  * after the runtime has finished populating process.env — and so importing
- * this module for `resolveWatermarkText` does not reconfigure libvips as a
- * side effect.
+ * this module for `resolveWatermarkText` does not reconfigure libvips, or log
+ * a startup line, as a side effect.
  */
 function getGate(): ConcurrencyGate {
   if (gate) return gate;
@@ -300,6 +499,7 @@ function getGate(): ConcurrencyGate {
   // Process-global, and applied here because this is the only sharp user in
   // the app; if that changes, this becomes a shared setting and should move.
   sharp.concurrency(settings.sharpThreads);
+  logConcurrencySettings(settings);
   gateSettings = settings;
   gate = createConcurrencyGate({
     name: "watermark preview generation",
