@@ -17,15 +17,15 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Fail if .claude/settings*.json is bundled with other changes
+      - name: Fail if .claude/settings*.json or CLAUDE.md is bundled with other changes
         env:
           BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
           CHANGED=$(git diff --name-only "origin/${BASE_REF}...HEAD")
           echo "Changed files:"
           echo "$CHANGED"
-          if echo "$CHANGED" | grep -Ex '\.claude/settings(\.local)?\.json'; then
-            echo "::error::This PR touches .claude/settings.json or .claude/settings.local.json. Per CLAUDE.md policy, changes to these files must go through a dedicated PR for human review and must never be bundled with unrelated work. Split this change out."
+          if echo "$CHANGED" | grep -Ex '(\.claude/settings(\.local)?\.json|CLAUDE\.md)'; then
+            echo "::error::This PR touches .claude/settings.json, .claude/settings.local.json, or CLAUDE.md. Per CLAUDE.md policy, changes to these files must go through a dedicated PR for human review and must never be bundled with unrelated work. Split this change out."
             exit 1
           fi
 
