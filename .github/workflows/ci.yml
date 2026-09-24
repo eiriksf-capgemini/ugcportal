@@ -29,6 +29,37 @@ jobs:
             exit 1
           fi
 
+  guard-version-consistency:
+    name: Guard package.json/package-lock.json version consistency
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check version fields match
+        run: |
+          node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('package.json'));
+            const lock = JSON.parse(fs.readFileSync('package-lock.json'));
+            const pv = pkg.version;
+            const ltv = lock.version;
+            const lrv = lock.packages[''].version;
+            const mismatches = [];
+            if (pv !== ltv) mismatches.push('package.json (' + pv + ') !== package-lock.json top-level (' + ltv + ')');
+            if (pv !== lrv) mismatches.push('package.json (' + pv + ') !== package-lock.json packages[\"\"] (' + lrv + ')');
+            if (ltv !== lrv) mismatches.push('package-lock.json top-level (' + ltv + ') !== packages[\"\"] (' + lrv + ')');
+            if (mismatches.length > 0) {
+              console.error('::error::Version mismatch detected:');
+              mismatches.forEach(m => console.error('  - ' + m));
+              console.error('All three version fields must be identical:');
+              console.error('  package.json version: ' + pv);
+              console.error('  package-lock.json top-level version: ' + ltv);
+              console.error('  package-lock.json packages[\"\"].version: ' + lrv);
+              process.exit(1);
+            }
+            console.log('✓ Version fields match: ' + pv);
+          "
+
   guard-conventional-commit-title:
     name: Guard conventional-commit PR title
     runs-on: ubuntu-latest
