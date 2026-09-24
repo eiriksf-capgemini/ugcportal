@@ -18,6 +18,7 @@ vi.mock("@/lib/prisma", () => ({
 }));
 
 const { GET } = await import("@/app/api/public/media/route");
+const { encodeMediaCursor } = await import("@/lib/media-listing");
 
 type Row = {
   id: string;
@@ -148,6 +149,17 @@ function row(overrides: Partial<Row> = {}): Row {
   };
 }
 
+/** Exactly the fields an anonymous caller may see. */
+const ANONYMOUS_FIELDS = [
+  "createdAt",
+  "id",
+  "kind",
+  "mimeType",
+  "previewKey",
+  "publishedAt",
+  "sizeBytes",
+];
+
 function request(query = "") {
   return new Request(`http://localhost/api/public/media${query}`);
 }
@@ -261,16 +273,55 @@ describe("GET /api/public/media — no original key, no preview-less row (K3)", 
 
     expect(body.items[0]).not.toHaveProperty("userId");
     expect(JSON.stringify(body)).not.toContain("user-9");
-    expect(Object.keys(body.items[0]).sort()).toEqual([
-      "createdAt",
-      "id",
-      "kind",
-      "mimeType",
-      "originalName",
-      "previewKey",
-      "publishedAt",
-      "sizeBytes",
+    expect(Object.keys(body.items[0]).sort()).toEqual(ANONYMOUS_FIELDS);
+  });
+
+  it("withholds the uploader-supplied filename from anonymous callers", async () => {
+    seed([
+      row({
+        id: "a",
+        originalName: "anna-berg-passport-scan.jpg",
+      }),
     ]);
+
+    const response = await GET(request());
+    const body = await response.json();
+
+    // `originalName` is volunteered, not chosen for publication, and was
+    // owner-only before this endpoint existed. Publishing an item must not
+    // also publish whatever the uploader happened to call the file on their
+    // own disk (ugcportal-r1d review finding 2).
+    expect(body.items[0]).not.toHaveProperty("originalName");
+    expect(JSON.stringify(body)).not.toContain("anna-berg-passport-scan");
+    expect(Object.keys(body.items[0]).sort()).toEqual(ANONYMOUS_FIELDS);
+  });
+
+  it("never selects the filename at the database layer either", async () => {
+    seed([row({ id: "a" })]);
+
+    await GET(request());
+
+    // Not selected, not merely dropped afterwards — so a future change that
+    // starts echoing the selected row cannot leak it by accident.
+    const select = mediaFindManyMock.mock.calls[0][0].select;
+    expect(select).not.toHaveProperty("originalName");
+    expect(select).not.toHaveProperty("key");
+    expect(select).not.toHaveProperty("userId");
+  });
+
+  it("still shows the owner their own filenames on the owner-scoped feed", async () => {
+    // The two projections diverged deliberately; this pins that the narrowing
+    // applies to the anonymous feed only, and is not a global removal.
+    const { MEDIA_OWNER_SELECT, MEDIA_ANONYMOUS_SELECT } = await import(
+      "@/lib/media-access"
+    );
+
+    expect(MEDIA_OWNER_SELECT).toHaveProperty("originalName", true);
+    expect(MEDIA_ANONYMOUS_SELECT).not.toHaveProperty("originalName");
+    // Anonymous must stay a strict subset of owner.
+    for (const field of Object.keys(MEDIA_ANONYMOUS_SELECT)) {
+      expect(MEDIA_OWNER_SELECT).toHaveProperty(field, true);
+    }
   });
 
   it("never selects the original key at the database layer either", async () => {
@@ -317,7 +368,11 @@ describe("GET /api/public/media — pagination contract", () => {
     expect(mediaFindManyMock.mock.calls[0][0].take).toBe(3);
     expect(body.items.map((i: { id: string }) => i.id)).toEqual(["a", "b"]);
     expect(body.hasMore).toBe(true);
-    expect(body.nextCursor).toBe("b");
+    // A position, not a row reference. Decoded without the library's own
+    // decoder so the encoding is pinned rather than assumed.
+    expect(Buffer.from(body.nextCursor, "base64url").toString("utf8")).toBe(
+      "2026-09-22T10:00:00.000Z|b",
+    );
   });
 
   it("walks the whole feed exactly once across pages", async () => {
@@ -346,10 +401,13 @@ describe("GET /api/public/media — pagination contract", () => {
   });
 
   it("pages with an explicit keyset predicate, not Prisma's cursor", async () => {
-    const anchorCreatedAt = new Date("2026-09-22T10:00:00Z");
-    seed([row({ id: "anchor", createdAt: anchorCreatedAt })]);
+    const position = {
+      id: "anchor",
+      createdAt: new Date("2026-09-22T10:00:00Z"),
+    };
+    seed([row({ id: "anchor", createdAt: position.createdAt })]);
 
-    await GET(request("?cursor=anchor"));
+    await GET(request(`?cursor=${encodeMediaCursor(position)}`));
 
     const args = mediaFindManyMock.mock.calls[0][0];
     expect(args).not.toHaveProperty("cursor");
@@ -358,47 +416,100 @@ describe("GET /api/public/media — pagination contract", () => {
       publishedAt: { not: null },
       previewKey: { not: null },
       OR: [
-        { createdAt: { lt: anchorCreatedAt } },
-        { createdAt: anchorCreatedAt, id: { lt: "anchor" } },
+        { createdAt: { lt: position.createdAt } },
+        { createdAt: position.createdAt, id: { lt: "anchor" } },
       ],
     });
   });
 
-  it("rejects a cursor naming an unpublished row rather than using it as an oracle", async () => {
-    // An owner knows the ids of their own drafts — POST hands them back. If
-    // the anchor were resolved outside the feed's scope, passing a draft id
-    // here would order the public feed relative to a private row.
-    seed([row({ id: "draft", publishedAt: null }), row({ id: "a" })]);
-
-    const response = await GET(request("?cursor=draft"));
-
-    expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: "Invalid or expired cursor" });
-    // An empty page would read as end-of-list and the caller would stop,
-    // believing it had seen everything.
-    expect(mediaFindManyMock).not.toHaveBeenCalled();
-  });
-
-  it("rejects a cursor naming a preview-less row, or one that never existed", async () => {
+  it("does not strand a visitor when an unrelated owner unpublishes mid-scroll", async () => {
+    // The row this visitor's cursor came from has just been unpublished by
+    // someone else — a person the visitor has never heard of, acting on their
+    // own media. Resolving the cursor back to a row would turn that into a
+    // hard 400 and a restart from the top of the feed, for something the
+    // visitor neither did nor can see (ugcportal-r1d review finding 3).
+    const gone = {
+      id: "was-published",
+      createdAt: new Date("2026-09-22T10:00:00Z"),
+    };
     seed([
-      row({ id: "clip", kind: "VIDEO", previewKey: null }),
-      row({ id: "a" }),
+      row({ ...gone, publishedAt: null }),
+      row({ id: "older", createdAt: new Date("2026-09-21T10:00:00Z") }),
     ]);
 
-    expect((await GET(request("?cursor=clip"))).status).toBe(400);
-    expect((await GET(request("?cursor=nope"))).status).toBe(400);
+    const response = await GET(request(`?cursor=${encodeMediaCursor(gone)}`));
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.items.map((i: { id: string }) => i.id)).toEqual(["older"]);
+    // No anchor lookup happens at all any more.
+    expect(mediaFindFirstMock).not.toHaveBeenCalled();
   });
 
-  it("resolves the cursor only against rows this feed already shows", async () => {
-    seed([row({ id: "a", createdAt: new Date("2026-09-22T10:00:00Z") })]);
+  it("does not strand a visitor when the cursor's row was deleted outright", async () => {
+    seed([row({ id: "older", createdAt: new Date("2026-09-21T10:00:00Z") })]);
 
-    await GET(request("?cursor=a"));
+    const response = await GET(
+      request(
+        `?cursor=${encodeMediaCursor({
+          id: "since-deleted",
+          createdAt: new Date("2026-09-22T10:00:00Z"),
+        })}`,
+      ),
+    );
 
-    expect(mediaFindFirstMock.mock.calls[0][0].where).toEqual({
+    expect(response.status).toBe(200);
+    expect((await response.json()).items.map((i: { id: string }) => i.id)).toEqual(
+      ["older"],
+    );
+  });
+
+  it("cannot be widened by a forged cursor naming a private row", async () => {
+    // An owner knows the (createdAt, id) of their own drafts — the owner feed
+    // hands both back — so a forged cursor is trivially constructible. It can
+    // move the window; it must not widen it, because the keyset predicate
+    // lives inside the same `where` as the publish/preview scoping.
+    const draft = {
+      id: "draft",
+      createdAt: new Date("2026-09-23T10:00:00Z"),
+    };
+    seed([
+      row({ ...draft, publishedAt: null }),
+      row({ id: "public-older", createdAt: new Date("2026-09-22T10:00:00Z") }),
+    ]);
+
+    const response = await GET(request(`?cursor=${encodeMediaCursor(draft)}`));
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    // The draft is still absent; all the cursor did was choose a position.
+    expect(body.items.map((i: { id: string }) => i.id)).toEqual(["public-older"]);
+    expect(JSON.stringify(body)).not.toContain("draft");
+    expect(mediaFindManyMock.mock.calls[0][0].where).toMatchObject({
       publishedAt: { not: null },
       previewKey: { not: null },
-      id: "a",
     });
+  });
+
+  it("rejects a malformed cursor rather than faking an empty page", async () => {
+    seed([row({ id: "a" })]);
+
+    for (const bad of [
+      "draft",
+      "not-base64!!",
+      Buffer.from("no-separator").toString("base64url"),
+      Buffer.from("2026-09-22T10:00:00.000Z|").toString("base64url"),
+      Buffer.from("2026|a").toString("base64url"),
+      Buffer.from("not-a-date|a").toString("base64url"),
+    ]) {
+      mediaFindManyMock.mockClear();
+
+      const response = await GET(request(`?cursor=${bad}`));
+
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ error: "Invalid cursor" });
+      expect(mediaFindManyMock).not.toHaveBeenCalled();
+    }
   });
 
   it("treats an empty ?cursor= as an ordinary first-page request", async () => {
@@ -461,17 +572,31 @@ describe("GET /api/public/media — pagination contract", () => {
 
   it("takes nextCursor from an emitted row, not a filtered-out one", async () => {
     mediaFindManyMock.mockResolvedValue([
-      { id: "a", previewKey: "previews/user-1/a.webp" },
-      { id: "b", previewKey: null },
-      { id: "c", previewKey: "previews/user-1/c.webp" },
+      {
+        id: "a",
+        previewKey: "previews/user-1/a.webp",
+        createdAt: new Date("2026-09-24T10:00:00Z"),
+      },
+      {
+        id: "b",
+        previewKey: null,
+        createdAt: new Date("2026-09-23T10:00:00Z"),
+      },
+      {
+        id: "c",
+        previewKey: "previews/user-1/c.webp",
+        createdAt: new Date("2026-09-22T10:00:00Z"),
+      },
     ]);
 
     const body = await (await GET(request("?limit=2"))).json();
 
-    // `b` is dropped by the filter; pointing the next page at it would name a
-    // row the next request's where-clause also excludes — the silent skip.
+    // `b` is dropped by the filter; taking the position from it would report a
+    // row the caller never received as "where you got to" — the silent skip.
     expect(body.items.map((i: { id: string }) => i.id)).toEqual(["a"]);
-    expect(body.nextCursor).toBe("a");
+    expect(Buffer.from(body.nextCursor, "base64url").toString("utf8")).toBe(
+      "2026-09-24T10:00:00.000Z|a",
+    );
   });
 });
 

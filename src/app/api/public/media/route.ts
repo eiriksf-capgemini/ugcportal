@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { MEDIA_ANONYMOUS_SELECT } from "@/lib/media-access";
 import { listMedia } from "@/lib/media-listing";
 
 /**
@@ -22,8 +23,14 @@ import { listMedia } from "@/lib/media-listing";
  *     from this feed even though its owner published it. That is the intended
  *     behaviour, not an oversight: without a preview the only representation
  *     of the row is `key`, the paid original (ugcportal-5d6), which no
- *     response may ever carry. MEDIA_PUBLIC_SELECT does not contain `key`, so
- *     the original is never even selected.
+ *     response may ever carry. MEDIA_ANONYMOUS_SELECT does not contain `key`,
+ *     so the original is never even selected.
+ *
+ * Projected through MEDIA_ANONYMOUS_SELECT, which is strictly narrower than
+ * the owner's. Notably it drops `originalName`: uploader-supplied filenames
+ * were owner-only before this endpoint existed and stay that way — see
+ * src/lib/media-access.ts for the reasoning. The two feeds deliberately no
+ * longer share one projection.
  *
  * Published is NOT for sale. This endpoint decides *visibility only*. Whether
  * an item may be sold is a separate gate — the per-account resale-rights
@@ -34,10 +41,11 @@ import { listMedia } from "@/lib/media-listing";
  * gate once that exists.
  */
 export async function GET(request: Request) {
-  const result = await listMedia(request.url, {
-    publishedAt: { not: null },
-    previewKey: { not: null },
-  });
+  const result = await listMedia(
+    request.url,
+    { publishedAt: { not: null }, previewKey: { not: null } },
+    MEDIA_ANONYMOUS_SELECT,
+  );
 
   if (!result.ok) {
     return NextResponse.json(

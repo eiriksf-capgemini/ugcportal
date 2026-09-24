@@ -10,7 +10,7 @@ import {
   sniffKind,
   validateUpload,
 } from "@/lib/media";
-import { MEDIA_PUBLIC_SELECT } from "@/lib/media-access";
+import { MEDIA_OWNER_SELECT } from "@/lib/media-access";
 import { listMedia } from "@/lib/media-listing";
 import { prisma } from "@/lib/prisma";
 import { getBucketName, getS3Client } from "@/lib/s3";
@@ -123,9 +123,9 @@ async function readCappedFormData(
   }
 }
 
-// MEDIA_PUBLIC_SELECT moved to src/lib/media-access.ts when PATCH
-// (ugcportal-bdh) became a third caller that has to honour it — the comment
-// explaining what it guarantees lives with it there.
+// The response projections moved to src/lib/media-access.ts when PATCH
+// (ugcportal-bdh) became a third caller that has to honour them — the comment
+// explaining what they guarantee, and why there are two, lives with them there.
 
 export async function POST(request: Request) {
   const session = await auth();
@@ -259,7 +259,7 @@ export async function POST(request: Request) {
         // the GET listing echoes it back, so it cannot go in raw.
         originalName: sanitizeOriginalName(file.name),
       },
-      select: MEDIA_PUBLIC_SELECT,
+      select: MEDIA_OWNER_SELECT,
     });
 
     return NextResponse.json(media, { status: 201 });
@@ -303,7 +303,7 @@ export async function POST(request: Request) {
  * Two rules hold the guarantee up, and both live in listMedia():
  *   1. only rows that have a previewKey are returned, so anything without a
  *      protected representation (today: every VIDEO) is invisible; and
- *   2. the response goes through MEDIA_PUBLIC_SELECT, which has no `key` in
+ *   2. the response goes through MEDIA_OWNER_SELECT, which has no `key` in
  *      it — the paid original is never selected, mapped, or serialised.
  *
  * Scoped to the signed-in user's own media, and deliberately NOT filtered by
@@ -323,10 +323,13 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const result = await listMedia(request.url, {
-    userId,
-    previewKey: { not: null },
-  });
+  const result = await listMedia(
+    request.url,
+    { userId, previewKey: { not: null } },
+    // The owner's own filenames. The anonymous feed uses the narrower
+    // MEDIA_ANONYMOUS_SELECT — see src/lib/media-access.ts.
+    MEDIA_OWNER_SELECT,
+  );
 
   if (!result.ok) {
     return NextResponse.json({ error: result.error }, { status: result.status });

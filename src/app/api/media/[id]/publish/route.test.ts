@@ -86,8 +86,24 @@ const publishedMedia: MediaModel = {
   publishedAt: PUBLISHED_AT,
 };
 
-/** Exactly the fields a publish response may carry — no `key`, no `userId`. */
-const PUBLIC_FIELDS = [
+// No watermarked preview yet — every VIDEO, until ugcportal-pmb lands.
+const previewLessMedia: MediaModel = {
+  ...unpublishedMedia,
+  id: "media-2",
+  kind: "VIDEO",
+  key: "media/user-a/ghi-clip.mp4",
+  previewKey: null,
+  mimeType: "video/mp4",
+  originalName: "clip.mp4",
+};
+
+/**
+ * Exactly the fields a publish response may carry — no `key`, no `userId`.
+ * This is the OWNER projection: publish is an owner-only endpoint, so
+ * `originalName` belongs here. The anonymous feed drops it; see
+ * src/app/api/public/media/route.test.ts.
+ */
+const OWNER_FIELDS = [
   "createdAt",
   "id",
   "kind",
@@ -97,6 +113,24 @@ const PUBLIC_FIELDS = [
   "publishedAt",
   "sizeBytes",
 ];
+
+/**
+ * The shape prisma returns for `select: MEDIA_OWNER_SELECT` — i.e. `key` is
+ * already absent at the DB layer, so the re-read path is fed exactly what that
+ * select would actually yield.
+ */
+function toOwnerShape(media: MediaModel) {
+  return {
+    id: media.id,
+    kind: media.kind,
+    previewKey: media.previewKey,
+    mimeType: media.mimeType,
+    sizeBytes: media.sizeBytes,
+    originalName: media.originalName,
+    createdAt: media.createdAt,
+    publishedAt: media.publishedAt,
+  };
+}
 
 function context(id: string = MEDIA_ID) {
   return { params: Promise.resolve({ id }) };
@@ -235,12 +269,40 @@ describe("POST /api/media/[id]/publish", () => {
   it("is idempotent and never moves an existing 'public since' timestamp", async () => {
     signedInAs(OWNER_ID);
     mediaFindUniqueMock.mockResolvedValue(publishedMedia);
+    // The `publishedAt: null` in the predicate is what makes the re-publish a
+    // no-op: the statement runs, matches nothing, and changes nothing.
+    mediaUpdateManyMock.mockResolvedValue({ count: 0 });
+    mediaFindFirstMock.mockResolvedValue(toOwnerShape(publishedMedia));
 
     const body = await (await POST(publishRequest("POST"), context())).json();
 
-    // No write at all — a second publish must not rewrite when it went public.
-    expect(mediaUpdateManyMock).not.toHaveBeenCalled();
+    expect(mediaUpdateManyMock.mock.calls[0][0].where).toMatchObject({
+      publishedAt: null,
+    });
     expect(body.publishedAt).toBe(PUBLISHED_AT.toISOString());
+  });
+
+  it("publishes correctly when an unpublish lands between the gate and the write", async () => {
+    signedInAs(OWNER_ID);
+    // The interleaving: DELETE /publish committed after requireOwnedMedia read
+    // the row, so the gate's copy still says "published" while the database
+    // says null. An earlier version short-circuited on the gate's stale copy,
+    // wrote nothing, and answered 200 with the old timestamp — leaving the
+    // client certain the item was public when it was private, until a reload.
+    mediaFindUniqueMock.mockResolvedValue(publishedMedia);
+    // The database's actual state is null, so the predicate matches and the
+    // write goes through.
+    mediaUpdateManyMock.mockResolvedValue({ count: 1 });
+
+    const before = Date.now();
+    const body = await (await POST(publishRequest("POST"), context())).json();
+
+    // A real write happened...
+    expect(mediaUpdateManyMock).toHaveBeenCalledTimes(1);
+    // ...and the answer reports the timestamp it just wrote, not the stale one
+    // the gate had read.
+    expect(body.publishedAt).not.toBe(PUBLISHED_AT.toISOString());
+    expect(Date.parse(body.publishedAt)).toBeGreaterThanOrEqual(before);
   });
 
   it("reports the winner's timestamp when a concurrent publish got there first", async () => {
@@ -248,10 +310,7 @@ describe("POST /api/media/[id]/publish", () => {
     mediaFindUniqueMock.mockResolvedValue(unpublishedMedia);
     // `publishedAt: null` in the predicate means the loser updates 0 rows.
     mediaUpdateManyMock.mockResolvedValue({ count: 0 });
-    mediaFindFirstMock.mockResolvedValue({
-      ...publishedMedia,
-      key: undefined,
-    });
+    mediaFindFirstMock.mockResolvedValue(toOwnerShape(publishedMedia));
 
     const response = await POST(publishRequest("POST"), context());
     const body = await response.json();
@@ -284,7 +343,7 @@ describe("POST /api/media/[id]/publish", () => {
     expect(body).not.toHaveProperty("key");
     expect(body).not.toHaveProperty("userId");
     expect(JSON.stringify(body)).not.toContain("media/");
-    expect(Object.keys(body).sort()).toEqual(PUBLIC_FIELDS);
+    expect(Object.keys(body).sort()).toEqual(OWNER_FIELDS);
 
     // The re-read path must honour the same projection.
     expect(
@@ -292,6 +351,49 @@ describe("POST /api/media/[id]/publish", () => {
         (call) => call[0].select?.key === undefined,
       ),
     ).toBe(true);
+  });
+});
+
+describe("publishing a row with no watermarked preview", () => {
+  it("refuses with 409 rather than setting a timestamp that changes nothing", async () => {
+    signedInAs(OWNER_ID);
+    mediaFindUniqueMock.mockResolvedValue(previewLessMedia);
+
+    const response = await POST(publishRequest("POST"), context());
+    const body = await response.json();
+
+    // The public feed requires both a publish timestamp AND a previewKey, so
+    // publishing this row would have answered 200 and still left it invisible
+    // forever, with nothing to tell the owner apart from a working publish.
+    expect(response.status).toBe(409);
+    expect(body.error).toMatch(/preview/i);
+    expect(mediaUpdateManyMock).not.toHaveBeenCalled();
+    expectNoOtherWrites();
+  });
+
+  it("still lets the owner unpublish it, since that cannot fail", async () => {
+    signedInAs(OWNER_ID);
+    mediaFindUniqueMock.mockResolvedValue({
+      ...previewLessMedia,
+      publishedAt: PUBLISHED_AT,
+    });
+
+    // A row published before this refusal existed must still be retractable.
+    const response = await DELETE(publishRequest("DELETE"), context());
+
+    expect(response.status).toBe(200);
+    expect((await response.json()).publishedAt).toBeNull();
+  });
+
+  it("refuses before the ownership gate would be bypassed, not after", async () => {
+    // The 409 must not become a way to probe someone else's library: the
+    // ownership gate still runs first.
+    signedInAs(OTHER_ID);
+    mediaFindUniqueMock.mockResolvedValue(previewLessMedia);
+
+    const response = await POST(publishRequest("POST"), context());
+
+    expect(response.status).toBe(403);
   });
 });
 
@@ -402,7 +504,7 @@ describe("publishing is visibility only, never sellability (K4)", () => {
 
     // A client cannot infer "this is now buyable" from a publish response,
     // because the response says nothing about buying at all.
-    expect(Object.keys(body).sort()).toEqual(PUBLIC_FIELDS);
+    expect(Object.keys(body).sort()).toEqual(OWNER_FIELDS);
     for (const forbidden of [
       "price",
       "priceCents",

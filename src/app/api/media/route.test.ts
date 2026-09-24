@@ -30,6 +30,7 @@ vi.mock("@/lib/s3", () => ({
 }));
 
 const { GET, POST } = await import("@/app/api/media/route");
+const { encodeMediaCursor } = await import("@/lib/media-listing");
 
 // A valid PNG signature with nothing decodable behind it: enough to pass the
 // magic-byte sniff in src/lib/media.ts, but sharp cannot turn it into an
@@ -605,7 +606,12 @@ describe("GET /api/media", () => {
     expect(mediaFindManyMock.mock.calls[0][0].take).toBe(3);
     expect(body.items.map((i: { id: string }) => i.id)).toEqual(["a", "b"]);
     expect(body.hasMore).toBe(true);
-    expect(body.nextCursor).toBe("b");
+    // The cursor is the position the page ended at — (createdAt, id) — not a
+    // row reference (ugcportal-r1d). Decoded here without the library's own
+    // decoder, so the encoding is pinned rather than assumed.
+    expect(Buffer.from(body.nextCursor, "base64url").toString("utf8")).toBe(
+      "2026-09-24T10:00:00.000Z|b",
+    );
   });
 
   it("reports the end of the list", async () => {
@@ -620,14 +626,13 @@ describe("GET /api/media", () => {
 
   it("pages past the first screenful with a keyset predicate, not Prisma's cursor", async () => {
     authMock.mockResolvedValue({ user: { id: "user-1" } });
-    const anchorCreatedAt = new Date("2026-09-24T10:00:00Z");
-    mediaFindFirstMock.mockResolvedValue({
+    const position = {
       id: "media-42",
-      createdAt: anchorCreatedAt,
-    });
+      createdAt: new Date("2026-09-24T10:00:00Z"),
+    };
     mediaFindManyMock.mockResolvedValue([]);
 
-    await GET(buildListRequest("?cursor=media-42"));
+    await GET(buildListRequest(`?cursor=${encodeMediaCursor(position)}`));
 
     const args = mediaFindManyMock.mock.calls[0][0];
     // Prisma's `cursor` compiles to a subquery that ignores the outer `where`,
@@ -638,58 +643,88 @@ describe("GET /api/media", () => {
       userId: "user-1",
       previewKey: { not: null },
       OR: [
-        { createdAt: { lt: anchorCreatedAt } },
-        { createdAt: anchorCreatedAt, id: { lt: "media-42" } },
+        { createdAt: { lt: position.createdAt } },
+        { createdAt: position.createdAt, id: { lt: "media-42" } },
       ],
     });
   });
 
-  it("resolves the cursor only against rows this caller may already see", async () => {
+  it("needs no anchor lookup, so a since-deleted row's cursor still pages", async () => {
     authMock.mockResolvedValue({ user: { id: "user-1" } });
-    mediaFindFirstMock.mockResolvedValue({
+    mediaFindManyMock.mockResolvedValue([selectedRow({ id: "next" })]);
+
+    // Nothing in the table matches this position any more — the row it came
+    // from is gone. Paging must carry on from where it left off rather than
+    // 400-ing the caller back to the top of the feed (ugcportal-r1d).
+    const cursor = encodeMediaCursor({
+      id: "since-deleted",
+      createdAt: new Date("2026-09-24T10:00:00Z"),
+    });
+    const response = await GET(buildListRequest(`?cursor=${cursor}`));
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(mediaFindFirstMock).not.toHaveBeenCalled();
+    expect(body.items.map((i: { id: string }) => i.id)).toEqual(["next"]);
+  });
+
+  it("keeps the window inside the same where as the scoping", async () => {
+    authMock.mockResolvedValue({ user: { id: "user-1" } });
+    mediaFindManyMock.mockResolvedValue([]);
+
+    const cursor = encodeMediaCursor({
       id: "media-42",
       createdAt: new Date("2026-09-24T10:00:00Z"),
     });
-    mediaFindManyMock.mockResolvedValue([]);
+    await GET(buildListRequest(`?cursor=${cursor}`));
 
-    await GET(buildListRequest("?cursor=media-42"));
-
-    // Same scoping as the listing itself, so a cursor can't name a row the
-    // feed excludes and be used as an ordering oracle over it.
-    expect(mediaFindFirstMock.mock.calls[0][0].where).toEqual({
-      userId: "user-1",
-      previewKey: { not: null },
-      id: "media-42",
-    });
+    // A forged cursor can move the window but never widen it: the keyset
+    // predicate sits alongside the userId scoping, not in a subquery that
+    // could outrun it.
+    const where = mediaFindManyMock.mock.calls[0][0].where;
+    expect(where.userId).toBe("user-1");
+    expect(where.previewKey).toEqual({ not: null });
+    expect(where).toHaveProperty("OR");
   });
 
-  it("rejects a cursor naming a row the listing excludes, rather than faking an empty page", async () => {
+  it("rejects a malformed cursor rather than faking an empty page", async () => {
     authMock.mockResolvedValue({ user: { id: "user-1" } });
-    // A VIDEO row's id: the POST response hands these to the client, and the
-    // listing deliberately filters them out. Also covers another user's id and
-    // an id that has since been deleted.
-    mediaFindFirstMock.mockResolvedValue(null);
 
-    const response = await GET(buildListRequest("?cursor=video-row-id"));
+    for (const bad of [
+      // A bare row id, which is what this cursor used to be.
+      "media-42",
+      "not-base64!!",
+      // Well-formed base64url, but not a cursor.
+      Buffer.from("no-separator").toString("base64url"),
+      // Empty id.
+      Buffer.from("2026-09-24T10:00:00.000Z|").toString("base64url"),
+      // Timestamps Date() tolerates but that are not full ISO instants, so
+      // they would silently mean a different position than the row they came
+      // from.
+      Buffer.from("2026|media-42").toString("base64url"),
+      Buffer.from("not-a-date|media-42").toString("base64url"),
+    ]) {
+      mediaFindManyMock.mockClear();
 
-    expect(response.status).toBe(400);
-    // An empty page would read as end-of-list and the caller would stop,
-    // believing it had seen everything.
-    expect(mediaFindManyMock).not.toHaveBeenCalled();
+      const response = await GET(buildListRequest(`?cursor=${bad}`));
+
+      expect(response.status).toBe(400);
+      // An empty page would read as end-of-list and the caller would stop,
+      // believing it had seen everything.
+      expect(mediaFindManyMock).not.toHaveBeenCalled();
+    }
   });
 
-  it("does not consult the anchor lookup when no cursor is supplied", async () => {
+  it("treats an empty ?cursor= as an ordinary first-page request", async () => {
     authMock.mockResolvedValue({ user: { id: "user-1" } });
     mediaFindManyMock.mockResolvedValue([]);
 
     for (const query of ["", "?cursor=", "?cursor=%20"]) {
-      mediaFindFirstMock.mockClear();
       mediaFindManyMock.mockClear();
 
-      await GET(buildListRequest(query));
+      const response = await GET(buildListRequest(query));
 
-      // An empty ?cursor= is an ordinary first-page request, not the id "".
-      expect(mediaFindFirstMock).not.toHaveBeenCalled();
+      expect(response.status).toBe(200);
       expect(mediaFindManyMock.mock.calls[0][0].where).not.toHaveProperty("OR");
     }
   });
@@ -738,8 +773,8 @@ describe("GET /api/media", () => {
 
   it("takes nextCursor from an emitted row, not from a filtered-out one", async () => {
     authMock.mockResolvedValue({ user: { id: "user-1" } });
-    // `b` is dropped by the filter. Pointing the next page at `b` would name a
-    // row the next request's where-clause also excludes — the silent skip.
+    // `b` is dropped by the filter. Taking the position from `b` would report
+    // a row the caller never received as "where you got to" — the silent skip.
     mediaFindManyMock.mockResolvedValue([
       selectedRow({ id: "a", previewKey: "previews/user-1/a.webp" }),
       selectedRow({ id: "b", previewKey: null }),
@@ -749,7 +784,9 @@ describe("GET /api/media", () => {
     const body = await (await GET(buildListRequest("?limit=2"))).json();
 
     expect(body.items.map((i: { id: string }) => i.id)).toEqual(["a"]);
-    expect(body.nextCursor).toBe("a");
+    expect(Buffer.from(body.nextCursor, "base64url").toString("utf8")).toBe(
+      "2026-09-24T10:00:00.000Z|a",
+    );
   });
 
   it("clamps or defaults a bogus limit instead of trusting it", async () => {

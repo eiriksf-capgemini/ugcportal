@@ -2,7 +2,7 @@ import { DeleteObjectCommand } from "@aws-sdk/client-s3";
 import { NextResponse } from "next/server";
 
 import { validateOriginalName } from "@/lib/media";
-import { requireOwnedMedia, toPublicMedia } from "@/lib/media-access";
+import { requireOwnedMedia, toOwnerMedia } from "@/lib/media-access";
 import { prisma } from "@/lib/prisma";
 import { getBucketName, getS3Client } from "@/lib/s3";
 
@@ -174,13 +174,13 @@ export async function PATCH(request: Request, { params }: RouteContext) {
   // Media has no DB-derived fields (no updatedAt, no triggers) that a
   // second round trip would reveal.
   //
-  // Projected through toPublicMedia rather than spread: the gate reads the
+  // Projected through toOwnerMedia rather than spread: the gate reads the
   // whole row because DELETE needs the storage keys, and echoing that row
   // verbatim would hand `key` — the ungated original (ugcportal-5d6) — to
   // the client, the one column POST and GET go out of their way never to
   // return.
   return NextResponse.json(
-    toPublicMedia({ ...access.media, originalName: name.value }),
+    toOwnerMedia({ ...access.media, originalName: name.value }),
   );
 }
 

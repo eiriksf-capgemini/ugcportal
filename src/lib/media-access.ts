@@ -3,54 +3,101 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 
 /**
- * The only Media columns any HTTP response may carry, shared by POST, GET and
- * PATCH so the three can't drift apart.
+ * Two projections, deliberately not one.
  *
- * Spelled out as an explicit `select` rather than an `omit` so a column added
- * later is excluded by default instead of leaking until someone remembers to
- * blocklist it — and `key`, the ungated paid original (ugcportal-5d6), is the
- * column that must never appear here, in any direction. Echoing a row back
- * from a write is just as much an exposure as listing it.
+ * Both are spelled out as explicit `select`s rather than an `omit`, so a
+ * column added later is excluded by default instead of leaking until someone
+ * remembers to blocklist it — `key`, the ungated paid original
+ * (ugcportal-5d6), is the column that must never appear in either, in any
+ * direction. Echoing a row back from a write is just as much an exposure as
+ * listing it.
  *
- * Lives here rather than in the route that first needed it because PATCH
- * (ugcportal-bdh) is a third caller in a different file, and a projection
- * copied per route is a projection that eventually disagrees with itself.
+ * They live here rather than in a route because four files now project Media,
+ * and a projection copied per route is one that eventually disagrees with
+ * itself.
+ *
+ * The split between them is the audience, and it is load-bearing:
+ *
+ *   MEDIA_OWNER_SELECT      what an authenticated owner sees about their own
+ *                           row (POST, GET /api/media, PATCH, publish).
+ *   MEDIA_ANONYMOUS_SELECT  what an unauthenticated visitor sees on the public
+ *                           feed. A strict subset of the owner select.
+ *
+ * Adding a column means answering "which of the two?" rather than defaulting
+ * to both — which is how `originalName` reached the anonymous feed in the
+ * first draft of ugcportal-r1d.
  */
-export const MEDIA_PUBLIC_SELECT = {
+
+const MEDIA_SHARED_SELECT = {
   id: true,
   kind: true,
   previewKey: true,
   mimeType: true,
   sizeBytes: true,
-  originalName: true,
   createdAt: true,
-  // Visibility state (ugcportal-r1d). Safe in both directions: on the public
-  // listing it is always non-null and means "public since", and a null is only
-  // ever visible to the row's own owner, because the public listing filters
-  // non-null rows only. The owner's view needs it to render a publish toggle
-  // at all, and the publish endpoint needs it to report the new state.
+  // Visibility state (ugcportal-r1d). On the anonymous feed it is always
+  // non-null and reads as "public since"; a null is only ever visible to the
+  // row's own owner, because that feed filters to non-null rows. The owner's
+  // view needs it to render a publish toggle at all, and the publish endpoint
+  // needs it to report the new state.
   publishedAt: true,
-  // `userId` is deliberately still absent. On the owner's view it would be
-  // redundant (every row is theirs); on the anonymous public feed it would let
-  // anyone group the whole gallery by uploader and enumerate one person's
-  // complete published output from an id they never chose to show. If the
-  // gallery later wants attribution, that is a display name the uploader
-  // opted into (ugcportal-71y's call), not the internal account id.
+  // `userId` is absent from both. On the owner's view it would be redundant
+  // (every row is theirs); on the anonymous feed it would let anyone group the
+  // whole gallery by uploader and enumerate one person's complete published
+  // output from an id they never chose to show. If the gallery later wants
+  // attribution, that is a display name the uploader opted into
+  // (ugcportal-71y's call), not the internal account id.
+} as const;
+
+/** Owner-facing: adds the filename, which only its uploader should see. */
+export const MEDIA_OWNER_SELECT = {
+  ...MEDIA_SHARED_SELECT,
+  // `originalName` is uploader-supplied text. It is how an owner recognises
+  // their own file in a list, so it belongs here — and nowhere else. See the
+  // anonymous select below for why.
+  originalName: true,
 } as const;
 
 /**
- * Tied to MEDIA_PUBLIC_SELECT by construction: widen the select and this type
- * widens with it, so toPublicMedia below stops compiling until it is updated
- * too. That is the point — the two can't silently disagree.
+ * Anonymous-facing: the owner select minus `originalName`.
+ *
+ * Filenames are volunteered, not chosen for publication —
+ * `anna-berg-passport-scan.jpg`, `client-acme-draft-v3.png`. Before
+ * ugcportal-r1d this column was only ever returned to the row's own owner;
+ * shipping the public feed off a shared projection would have made it
+ * world-readable for every published row as a side effect, which is exactly
+ * the class of leak `userId` was withheld to avoid.
+ *
+ * The gallery does not need it. It is not alt text either — a filename makes
+ * poor alt text, and if ugcportal-71y wants captions or accessible
+ * descriptions those should be a field the uploader knowingly fills in, not a
+ * string harvested from their local disk.
  */
-export type PublicMedia = Pick<MediaModel, keyof typeof MEDIA_PUBLIC_SELECT>;
+export const MEDIA_ANONYMOUS_SELECT = MEDIA_SHARED_SELECT;
 
 /**
- * Projects a full row down to the public shape, for the caller that already
- * holds one (PATCH re-uses the row the ownership gate read, rather than
- * paying for a second query just to get a narrower select).
+ * Tied to the selects by construction: widen one and its type widens with it,
+ * so toOwnerMedia below stops compiling until it is updated too. That is the
+ * point — they can't silently disagree.
  */
-export function toPublicMedia(media: MediaModel): PublicMedia {
+export type OwnerMedia = Pick<MediaModel, keyof typeof MEDIA_OWNER_SELECT>;
+export type AnonymousMedia = Pick<
+  MediaModel,
+  keyof typeof MEDIA_ANONYMOUS_SELECT
+>;
+
+/**
+ * Projects a full row down to the owner-facing shape, for the caller that
+ * already holds one (PATCH and the publish routes re-use the row the ownership
+ * gate read, rather than paying for a second query just to get a narrower
+ * select).
+ *
+ * There is deliberately no `toAnonymousMedia` counterpart: nothing anonymous
+ * ever starts from a full row. The public feed selects MEDIA_ANONYMOUS_SELECT
+ * at the database layer, so `originalName` and `key` are never read, let alone
+ * mapped away afterwards.
+ */
+export function toOwnerMedia(media: MediaModel): OwnerMedia {
   return {
     id: media.id,
     kind: media.kind,
