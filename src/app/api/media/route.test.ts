@@ -2,7 +2,7 @@ import { DeleteObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
 import sharp from "sharp";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { MAX_UPLOAD_BYTES } from "@/lib/media";
+import { MAX_ORIGINAL_NAME_LENGTH, MAX_UPLOAD_BYTES } from "@/lib/media";
 
 const authMock = vi.fn();
 const s3SendMock = vi.fn();
@@ -87,6 +87,85 @@ function buildRequest(file: File | null) {
   });
 }
 
+const MULTIPART_BOUNDARY = "----ugcportaltestboundary";
+const MULTIPART_CHUNK_BYTES = 64 * 1024;
+
+/**
+ * A multipart upload delivered as a stream, with the Content-Length header
+ * under the test's control — which is the whole point, since that header is
+ * exactly what the cap must not depend on.
+ *
+ * Assembled by hand rather than via `new Request(url, { body: formData })`
+ * deliberately: on Node 24 a FormData-backed request body throws
+ * ERR_INVALID_STATE out of undici's internal pump when the reader is
+ * cancelled early, which crashes the worker rather than failing the test.
+ * A plain ReadableStream cancels cleanly. Don't "simplify" this into
+ * FormData.
+ */
+function multipartRequest({
+  payload,
+  payloadBytes,
+  filename = "photo.png",
+  contentType = "image/png",
+  contentLength,
+}: {
+  payload?: Uint8Array;
+  payloadBytes?: number;
+  filename?: string;
+  contentType?: string;
+  contentLength?: string;
+}) {
+  const encoder = new TextEncoder();
+  const head = encoder.encode(
+    `--${MULTIPART_BOUNDARY}\r\n` +
+      `Content-Disposition: form-data; name="file"; filename="${filename}"\r\n` +
+      `Content-Type: ${contentType}\r\n\r\n`,
+  );
+  const tail = encoder.encode(`\r\n--${MULTIPART_BOUNDARY}--\r\n`);
+
+  const chunks: Uint8Array[] = [head];
+  if (payload) {
+    chunks.push(payload);
+  } else {
+    const total = payloadBytes ?? 0;
+    for (let sent = 0; sent < total; sent += MULTIPART_CHUNK_BYTES) {
+      chunks.push(
+        new Uint8Array(Math.min(MULTIPART_CHUNK_BYTES, total - sent)).fill(0x41),
+      );
+    }
+  }
+  chunks.push(tail);
+
+  let index = 0;
+  let pulled = 0;
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (index >= chunks.length) {
+        controller.close();
+        return;
+      }
+      pulled += 1;
+      controller.enqueue(chunks[index++]);
+    },
+  });
+
+  const headers = new Headers({
+    "content-type": `multipart/form-data; boundary=${MULTIPART_BOUNDARY}`,
+  });
+  if (contentLength !== undefined) {
+    headers.set("content-length", contentLength);
+  }
+
+  const request = {
+    url: "http://localhost/api/media",
+    method: "POST",
+    headers,
+    body,
+  } as unknown as Request;
+
+  return { request, pulled: () => pulled };
+}
+
 beforeEach(() => {
   authMock.mockReset();
   s3SendMock.mockReset();
@@ -121,6 +200,52 @@ describe("POST /api/media", () => {
 
     expect(response.status).toBe(413);
     expect(formDataMock).not.toHaveBeenCalled();
+  });
+
+  // The Content-Length gate is only an early-out; these two shapes are the
+  // ones that used to walk straight past it into an unbounded formData()
+  // (ugcportal-i04). Built by hand rather than from a FormData instance on
+  // purpose — see the note on multipartRequest.
+  it.each([
+    ["no content-length header", undefined],
+    ["a malformed content-length header", "4096abc"],
+  ])("returns 413 for an oversized upload with %s", async (_label, header) => {
+    authMock.mockResolvedValue({ user: { id: "user-1" } });
+    const { request, pulled } = multipartRequest({
+      payloadBytes: MAX_UPLOAD_BYTES + 512 * 1024,
+      contentLength: header,
+    });
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(413);
+    await expect(response.json()).resolves.toEqual({
+      error: "Request body too large",
+    });
+    // Stopped near the cap instead of draining the whole body.
+    expect(pulled() * MULTIPART_CHUNK_BYTES).toBeLessThanOrEqual(
+      MAX_UPLOAD_BYTES + 2 * MULTIPART_CHUNK_BYTES,
+    );
+    expect(s3SendMock).not.toHaveBeenCalled();
+    expect(mediaCreateMock).not.toHaveBeenCalled();
+  });
+
+  it("still accepts a chunked upload that stays under the cap", async () => {
+    authMock.mockResolvedValue({ user: { id: "user-1" } });
+    s3SendMock.mockResolvedValue({});
+    mediaCreateMock.mockImplementation(async ({ data }) =>
+      selectedRow({ originalName: data.originalName }),
+    );
+    const { request } = multipartRequest({ payload: REAL_PNG });
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(201);
+    expect(mediaCreateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ originalName: "photo.png" }),
+      }),
+    );
   });
 
   it("returns 415 for an unsupported file type", async () => {
@@ -211,6 +336,48 @@ describe("POST /api/media", () => {
       select: expect.objectContaining({ previewKey: true }),
     });
     expect(body).toMatchObject({ id: "media-1", previewKey: previewPut.input.Key });
+  });
+
+  // The rename path's denylist is worthless if a file can simply arrive
+  // already named this way (ugcportal-bdh). Same case the PATCH tests use.
+  it("strips a bidi override from the uploaded filename instead of storing it", async () => {
+    authMock.mockResolvedValue({ user: { id: "user-1" } });
+    s3SendMock.mockResolvedValue({});
+    mediaCreateMock.mockImplementation(async ({ data }) =>
+      selectedRow({ originalName: data.originalName }),
+    );
+    const file = new File([REAL_PNG], "invoice\u202Egnp.exe", {
+      type: "image/png",
+    });
+
+    const response = await POST(buildRequest(file));
+    const body = await response.json();
+
+    expect(response.status).toBe(201);
+    const stored = mediaCreateMock.mock.calls[0][0].data.originalName;
+    expect(stored).toBe("invoicegnp.exe");
+    expect(stored).not.toContain("\u202E");
+    // And the listing-visible value the client gets back is the repaired one.
+    expect(body.originalName).toBe("invoicegnp.exe");
+  });
+
+  it("truncates an over-long uploaded filename rather than failing the upload", async () => {
+    authMock.mockResolvedValue({ user: { id: "user-1" } });
+    s3SendMock.mockResolvedValue({});
+    mediaCreateMock.mockImplementation(async ({ data }) =>
+      selectedRow({ originalName: data.originalName }),
+    );
+    const file = new File([REAL_PNG], `${"x".repeat(400)}.png`, {
+      type: "image/png",
+    });
+
+    const response = await POST(buildRequest(file));
+
+    expect(response.status).toBe(201);
+    const stored = mediaCreateMock.mock.calls[0][0].data.originalName;
+    expect(Array.from(stored as string)).toHaveLength(
+      MAX_ORIGINAL_NAME_LENGTH,
+    );
   });
 
   it("never returns the original key in the upload response either (K2)", async () => {

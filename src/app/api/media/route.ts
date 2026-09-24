@@ -4,7 +4,13 @@ import { DeleteObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
 import { NextResponse } from "next/server";
 
 import { auth } from "@/lib/auth";
-import { MAX_UPLOAD_BYTES, sniffKind, validateUpload } from "@/lib/media";
+import {
+  MAX_UPLOAD_BYTES,
+  sanitizeOriginalName,
+  sniffKind,
+  validateUpload,
+} from "@/lib/media";
+import { MEDIA_PUBLIC_SELECT } from "@/lib/media-access";
 import { prisma } from "@/lib/prisma";
 import { getBucketName, getS3Client } from "@/lib/s3";
 import type { PreviewResult } from "@/lib/watermark";
@@ -19,23 +25,106 @@ function sanitizeFilename(name: string): string {
   return name.replace(/[^a-zA-Z0-9._-]/g, "_").slice(-100);
 }
 
-// The only Media columns any HTTP response may carry, shared by POST and GET
-// so the two can't drift apart.
-//
-// Spelled out as an explicit `select` rather than an `omit` so a column added
-// later is excluded by default instead of leaking until someone remembers to
-// blocklist it — and `key`, the ungated paid original (ugcportal-5d6), is the
-// column that must never appear here, in either direction. Returning the
-// freshly created row from POST is just as much an exposure as listing it.
-const MEDIA_PUBLIC_SELECT = {
-  id: true,
-  kind: true,
-  previewKey: true,
-  mimeType: true,
-  sizeBytes: true,
-  originalName: true,
-  createdAt: true,
-} as const;
+/** Thrown from inside the body stream, so it surfaces out of formData(). */
+class BodyTooLargeError extends Error {
+  constructor() {
+    super("Request body too large");
+    this.name = "BodyTooLargeError";
+  }
+}
+
+/**
+ * Wraps a body stream so it errors the moment more than `limit` bytes have
+ * gone through it, rather than letting the parser downstream buffer whatever
+ * the client feels like sending.
+ */
+function cappedBody(
+  source: ReadableStream<Uint8Array>,
+  limit: number,
+): ReadableStream<Uint8Array> {
+  let received = 0;
+  return source.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        received += chunk.byteLength;
+        if (received > limit) {
+          controller.error(new BodyTooLargeError());
+          return;
+        }
+        controller.enqueue(chunk);
+      },
+    }),
+  );
+}
+
+function isBodyTooLarge(error: unknown): boolean {
+  // undici sometimes surfaces a stream error wrapped in its own TypeError,
+  // so follow the cause chain rather than checking only the top.
+  for (let cursor = error, depth = 0; cursor && depth < 5; depth += 1) {
+    if (cursor instanceof BodyTooLargeError) return true;
+    cursor = (cursor as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
+type FormDataResult =
+  | { ok: true; value: FormData }
+  | { ok: false; status: 400 | 413; error: string };
+
+/**
+ * Reads the multipart body, never letting more than `limit` bytes through.
+ *
+ * The Content-Length check is only a cheap early-out and deliberately not the
+ * enforcement (ugcportal-i04): the header is absent on a chunked request —
+ * `Number(null)` is 0 — and can be malformed, where `Number()` yields NaN and
+ * `NaN > limit` is false. Either shape used to fall straight through to an
+ * unbounded `request.formData()`, letting one authenticated caller make the
+ * server buffer far more than the ~205 MB cap. The wrapped stream is what
+ * actually holds the line; the header just saves the work when a client
+ * declares an oversized upload honestly.
+ *
+ * The body is re-framed onto a new Request so the platform still does the
+ * multipart parsing — this bounds what the parser is fed, it does not
+ * reimplement it. Content-Length is dropped from the copied headers because
+ * it describes the original framing, not this one.
+ */
+async function readCappedFormData(
+  request: Request,
+  limit: number,
+): Promise<FormDataResult> {
+  const declared = Number(request.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > limit) {
+    return { ok: false, status: 413, error: "Request body too large" };
+  }
+
+  if (!request.body) {
+    return { ok: false, status: 400, error: "Expected a multipart form body" };
+  }
+
+  const headers = new Headers(request.headers);
+  headers.delete("content-length");
+
+  const reframed = new Request(request.url, {
+    method: request.method,
+    headers,
+    body: cappedBody(request.body, limit),
+    // Required by the fetch spec for a streaming request body.
+    duplex: "half",
+  } as RequestInit & { duplex: "half" });
+
+  try {
+    return { ok: true, value: await reframed.formData() };
+  } catch (error) {
+    if (isBodyTooLarge(error)) {
+      return { ok: false, status: 413, error: "Request body too large" };
+    }
+    return { ok: false, status: 400, error: "Malformed multipart form body" };
+  }
+}
+
+// MEDIA_PUBLIC_SELECT moved to src/lib/media-access.ts when PATCH
+// (ugcportal-bdh) became a third caller that has to honour it — the comment
+// explaining what it guarantees lives with it there.
 
 const DEFAULT_LISTING_LIMIT = 50;
 const MAX_LISTING_LIMIT = 100;
@@ -47,13 +136,12 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const contentLength = Number(request.headers.get("content-length") ?? 0);
-  if (contentLength > MAX_UPLOAD_BYTES) {
-    return NextResponse.json({ error: "Request body too large" }, { status: 413 });
+  const body = await readCappedFormData(request, MAX_UPLOAD_BYTES);
+  if (!body.ok) {
+    return NextResponse.json({ error: body.error }, { status: body.status });
   }
 
-  const formData = await request.formData();
-  const file = formData.get("file");
+  const file = body.value.get("file");
   if (!(file instanceof File)) {
     return NextResponse.json(
       { error: "Missing 'file' field" },
@@ -167,7 +255,11 @@ export async function POST(request: Request) {
         previewKey,
         mimeType: file.type,
         sizeBytes: file.size,
-        originalName: file.name,
+        // Repaired, not rejected — see sanitizeOriginalName in
+        // src/lib/media.ts for why the upload path is lenient where the
+        // rename path refuses. `file.name` is fully client-controlled and
+        // the GET listing echoes it back, so it cannot go in raw.
+        originalName: sanitizeOriginalName(file.name),
       },
       select: MEDIA_PUBLIC_SELECT,
     });

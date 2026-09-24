@@ -1,6 +1,23 @@
 import { describe, expect, it } from "vitest";
 
-import { sniffKind, validateUpload } from "@/lib/media";
+import {
+  MAX_ORIGINAL_NAME_LENGTH,
+  sanitizeOriginalName,
+  sniffKind,
+  validateOriginalName,
+  validateUpload,
+} from "@/lib/media";
+
+const BIDI_OVERRIDE = "\u202E";
+const NUL = "\u0000";
+const C1_NEL = "\u0085";
+const RTL_ISOLATE = "\u2067";
+const LONE_HIGH_SURROGATE = "\uD800";
+const LONE_LOW_SURROGATE = "\uDC00";
+const ZERO_WIDTH_SPACE = "\u200B";
+const WORD_JOINER = "\u2060";
+const LINE_SEPARATOR = "\u2028";
+const HANGUL_FILLER = "\u3164";
 
 describe("validateUpload", () => {
   it("accepts a small image", () => {
@@ -77,4 +94,134 @@ describe("sniffKind", () => {
     const buf = Buffer.from("just some text", "ascii");
     expect(sniffKind(buf)).toBeNull();
   });
+});
+
+// Every nasty name the two paths have to cope with, in one place, so the
+// strict and lenient forms are always exercised against the same inputs.
+const HOSTILE_NAMES: Array<[string, string]> = [
+  ["a bidi override disguising the extension", `invoice${BIDI_OVERRIDE}gnp.exe`],
+  ["a NUL byte", `bad${NUL}name.png`],
+  ["a C1 control character", `bad${C1_NEL}name.png`],
+  ["an RTL isolate", `photo${RTL_ISOLATE}gnp.exe`],
+  ["an over-long name", `${"x".repeat(400)}.png`],
+  ["nothing but whitespace", "   "],
+  ["nothing but stripped characters", `${BIDI_OVERRIDE}${NUL}`],
+  ["an empty string", ""],
+  ["an unpaired high surrogate", `bad${LONE_HIGH_SURROGATE}name.png`],
+  ["an unpaired low surrogate", `bad${LONE_LOW_SURROGATE}name.png`],
+  ["a zero-width space mid-name", `bad${ZERO_WIDTH_SPACE}name.png`],
+  ["a line separator mid-name", `bad${LINE_SEPARATOR}name.png`],
+  ["nothing but a zero-width space", ZERO_WIDTH_SPACE],
+  ["nothing but a word joiner", WORD_JOINER],
+  ["nothing but a Hangul filler", HANGUL_FILLER],
+];
+
+describe("validateOriginalName", () => {
+  it("accepts an ordinary filename and trims it", () => {
+    expect(validateOriginalName("  holiday.png  ")).toEqual({
+      ok: true,
+      value: "holiday.png",
+    });
+  });
+
+  it("rejects an unpaired surrogate with a distinct message", () => {
+    // Distinct message from the control/bidi case: this is about the string
+    // not being well-formed UTF-16, not about which characters it chose.
+    // @libsql/client silently stores U+FFFD instead, and PATCH echoes the
+    // submitted name without re-reading, so the 200 response would disagree
+    // with what a later GET returns.
+    expect(validateOriginalName(`a${LONE_HIGH_SURROGATE}b`)).toEqual({
+      ok: false,
+      message: "Field 'originalName' must be valid text",
+    });
+    expect(validateOriginalName(`a${LONE_LOW_SURROGATE}b`).ok).toBe(false);
+  });
+
+  it("accepts emoji, which reorder nothing", () => {
+    const result = validateOriginalName("sunset 🌅.png");
+    expect(result).toEqual({ ok: true, value: "sunset 🌅.png" });
+  });
+
+  it("accepts a name exactly at the limit", () => {
+    const name = "y".repeat(MAX_ORIGINAL_NAME_LENGTH);
+    expect(validateOriginalName(name)).toEqual({ ok: true, value: name });
+  });
+
+  it("counts the limit in code points, not UTF-16 units", () => {
+    // Each of these is two UTF-16 units but one character to a reader.
+    const name = "🌅".repeat(MAX_ORIGINAL_NAME_LENGTH);
+    expect(validateOriginalName(name).ok).toBe(true);
+    expect(validateOriginalName(`${name}🌅`).ok).toBe(false);
+  });
+
+  it("rejects a non-string", () => {
+    expect(validateOriginalName(42)).toEqual({
+      ok: false,
+      message: expect.any(String),
+    });
+  });
+
+  it.each(HOSTILE_NAMES)("rejects %s", (_label, name) => {
+    expect(validateOriginalName(name).ok).toBe(false);
+  });
+});
+
+describe("sanitizeOriginalName", () => {
+  it("leaves an ordinary filename alone", () => {
+    expect(sanitizeOriginalName("holiday.png")).toBe("holiday.png");
+  });
+
+  it("strips the bidi override rather than rejecting the upload", () => {
+    expect(sanitizeOriginalName(`invoice${BIDI_OVERRIDE}gnp.exe`)).toBe(
+      "invoicegnp.exe",
+    );
+  });
+
+  it("truncates an over-long name to the limit", () => {
+    const result = sanitizeOriginalName(`${"x".repeat(400)}.png`);
+    expect(Array.from(result)).toHaveLength(MAX_ORIGINAL_NAME_LENGTH);
+  });
+
+  it("never splits a surrogate pair when truncating", () => {
+    const result = sanitizeOriginalName("🌅".repeat(400));
+    expect(Array.from(result)).toHaveLength(MAX_ORIGINAL_NAME_LENGTH);
+    // A split pair would leave a lone surrogate, which round-trips to U+FFFD.
+    expect(Buffer.from(result, "utf8").toString("utf8")).toBe(result);
+  });
+
+  it("falls back to a placeholder when nothing survives", () => {
+    expect(sanitizeOriginalName(`${BIDI_OVERRIDE}${NUL}  `)).toBe("untitled");
+    expect(sanitizeOriginalName("")).toBe("untitled");
+  });
+
+  // Regression: these are not whitespace and have non-zero .length, so before
+  // they joined the denylist they passed as valid and rendered as a blank row
+  // — the exact outcome the fallback exists to prevent.
+  it("falls back for names made only of invisible characters", () => {
+    expect(sanitizeOriginalName(ZERO_WIDTH_SPACE)).toBe("untitled");
+    expect(sanitizeOriginalName(WORD_JOINER)).toBe("untitled");
+    expect(sanitizeOriginalName(HANGUL_FILLER)).toBe("untitled");
+  });
+
+  // A valid astral character is itself made of surrogate code units, so a
+  // naive [\uD800-\uDFFF] denylist would strip every emoji. Only unpaired
+  // units may be dropped.
+  it("drops unpaired surrogates but keeps valid astral characters", () => {
+    expect(sanitizeOriginalName(`a${LONE_HIGH_SURROGATE}b.png`)).toBe("ab.png");
+    expect(sanitizeOriginalName(`a${LONE_LOW_SURROGATE}b.png`)).toBe("ab.png");
+    expect(sanitizeOriginalName("sunset 🌅.png")).toBe("sunset 🌅.png");
+  });
+
+  // The invariant that makes the strict/lenient split safe: the two paths
+  // disagree about how the caller is told, never about what may be stored.
+  it.each(HOSTILE_NAMES)(
+    "produces a value the strict validator accepts, for %s",
+    (_label, name) => {
+      const sanitized = sanitizeOriginalName(name);
+      expect(validateOriginalName(sanitized)).toEqual({
+        ok: true,
+        value: sanitized,
+      });
+    },
+  );
 });
