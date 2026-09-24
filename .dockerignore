@@ -1,0 +1,54 @@
+# Keep the Docker build context (and every intermediate layer) free of
+# anything that isn't needed to build the production image, per ugcportal-9rt
+# acceptance criteria K2 (no dev artifacts / secrets / VCS metadata in the
+# final image).
+
+# Dependencies (reinstalled fresh inside the image; never copy the host's)
+node_modules
+npm-debug.log*
+
+# Next.js build output (rebuilt inside the image)
+.next
+out
+build
+
+# Generated Prisma client (regenerated inside the image from
+# prisma/schema.prisma - see Dockerfile - so host state never leaks in)
+src/generated
+
+# Version control
+.git
+.gitignore
+
+# Local env files / secrets — never bake these into an image layer
+.env
+.env*
+!.env.example
+!env.example
+
+# Beads issue tracker local database (large, irrelevant to the app, and
+# never something that should end up in an image)
+.beads/embeddeddolt
+.beads/proxieddb
+
+# Editor / OS cruft
+.DS_Store
+*.pem
+
+# Agent tooling / docs not needed at build or runtime
+.claude
+.codex
+.agents
+.github
+.runtime
+AGENTS.md
+CLAUDE.md
+CHANGELOG.md
+
+# Test artifacts
+/coverage
+*.tsbuildinfo
+
+# Local SQLite dev databases
+*.db
+*.db-journal
