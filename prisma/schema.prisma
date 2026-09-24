@@ -36,9 +36,10 @@ model User {
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
-  accounts Account[]
-  sessions Session[]
-  media    Media[]
+  accounts          Account[]
+  sessions          Session[]
+  media             Media[]
+  instagramAccounts InstagramAccount[]
 }
 
 // One row per linked login provider (Google, Facebook, ...) for a user.
@@ -94,4 +95,29 @@ model Media {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
+}
+
+// One connected Instagram account whose media can be synced (ugcportal-ct0)
+// and later curated for sale (ugcportal-74w). Several accounts can be
+// connected; `connectedBy` records which admin authorised this one.
+//
+// `accessTokenEncrypted` holds a long-lived Instagram token sealed with
+// AES-256-GCM (see src/lib/crypto.ts) rather than the plaintext the Auth.js
+// `Account` table stores — these tokens are a standing capability over
+// someone else's content, not a login artefact, so they never sit in the
+// clear at rest. Refresh before `tokenExpiresAt` is ugcportal-cud's job.
+model InstagramAccount {
+  id                   String   @id @default(cuid())
+  instagramUserId      String   @unique
+  username             String
+  accessTokenEncrypted String
+  tokenExpiresAt       DateTime
+  scopes               String
+  connectedByUserId    String
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  connectedBy User @relation(fields: [connectedByUserId], references: [id], onDelete: Cascade)
+
+  @@index([connectedByUserId])
 }
