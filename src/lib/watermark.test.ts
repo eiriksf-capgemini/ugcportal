@@ -161,7 +161,7 @@ describe("generateWatermarkedPreview", () => {
     expectFullFrameCoverage(await diffPixels(preview.data, baseline));
   });
 
-  it("repeats the mark many times over rather than stamping it once", async () => {
+  it("repeats the mark horizontally at full preview width, even at max text length", async () => {
     // Coverage alone can be satisfied by a couple of enormous runs; this
     // checks the tile actually repeats at the configured cap.
     const svg = buildWatermarkOverlaySvg(
@@ -172,6 +172,31 @@ describe("generateWatermarkedPreview", () => {
     const tileWidth = Number(/<pattern[^>]*\swidth="(\d+)"/.exec(svg)?.[1]);
 
     expect(tileWidth).toBeLessThan(PREVIEW_MAX_DIMENSION / 2);
+  });
+
+  it("still covers a portrait frame at max text length, where MIN_FONT_SIZE binds", async () => {
+    // On a narrow frame the shrink-to-fit hits MIN_FONT_SIZE and the tile ends
+    // up wider than half the width (~0.52 here), so the horizontal repeat
+    // degrades. Pinned as a test because the protection must not: rotation and
+    // the vertical repeat have to carry full-frame coverage regardless.
+    const portrait = await sharp({
+      create: {
+        width: 1600,
+        height: 2400,
+        channels: 3,
+        background: SOURCE_COLOR,
+      },
+    })
+      .png()
+      .toBuffer();
+    const text = "W".repeat(40);
+
+    const preview = await generateWatermarkedPreview(portrait, { text });
+    const baseline = await buildUnwatermarkedBaseline(portrait);
+
+    expect(preview.height).toBe(PREVIEW_MAX_DIMENSION);
+    expect(preview.width).toBeLessThan(PREVIEW_MAX_DIMENSION);
+    expectFullFrameCoverage(await diffPixels(preview.data, baseline));
   });
 
   it("leaves the image recognisable rather than obliterating it", async () => {
@@ -274,7 +299,7 @@ describe("generateWatermarkedPreview", () => {
     // A form feed cannot be entity-escaped; interpolated raw it makes librsvg
     // reject the document ("PCDATA invalid Char value 12"), which would turn
     // one bad env var into a 422 on every single image upload.
-    process.env.WATERMARK_TEXT = "studio\fname ";
+    process.env.WATERMARK_TEXT = "studio\fname\u0000\u0008";
 
     const preview = await generateWatermarkedPreview(source);
 
@@ -321,6 +346,7 @@ describe("generateWatermarkedPreview", () => {
     expect(error).toBeInstanceOf(WatermarkError);
     expect((error as WatermarkError).cause).toBeInstanceOf(Error);
   });
+
 });
 
 describe("resolveWatermarkText", () => {
@@ -341,13 +367,13 @@ describe("resolveWatermarkText", () => {
   });
 
   it("removes XML-illegal control characters and collapses whitespace", () => {
-    expect(resolveWatermarkText("a\fb c")).toBe("a bc");
+    expect(resolveWatermarkText("a\fb\u0000c")).toBe("a bc");
     expect(resolveWatermarkText("two\n\tlines")).toBe("two lines");
     // Astral characters are legal XML and must survive intact.
     expect(resolveWatermarkText("studio \u{1F4F7}")).toBe("studio \u{1F4F7}");
   });
 
   it("falls back to the default when sanitising leaves nothing", () => {
-    expect(resolveWatermarkText(" ")).toBe("ugcportal");
+    expect(resolveWatermarkText("\u0000\u0001\u0002")).toBe("ugcportal");
   });
 });

@@ -52,16 +52,25 @@ const FONT_STACK = "DejaVu Sans, Liberation Sans, Helvetica, Arial, sans-serif";
 const GLYPH_ADVANCE_EM = 0.62;
 
 // A single run of the watermark text may occupy at most this fraction of the
-// preview's width. The tile is 1.8x a run, so 0.25 keeps the tile under half
-// the frame and therefore guarantees the pattern repeats at least twice
-// across it, for any configurable text length. Let a run grow much past this
-// and the tile ends up wider than the frame, collapsing the diagonal repeat
-// into one or two isolated runs — exactly the croppable single stamp the
-// tiling exists to avoid.
+// preview's width. The tile is 1.8x a run, so 0.25 aims at a tile under half
+// the frame — i.e. the pattern repeats horizontally rather than collapsing
+// into one isolated run, which is the croppable single stamp the tiling
+// exists to avoid.
+//
+// "Aims at", not "guarantees": MIN_FONT_SIZE below can override the
+// shrink-to-fit on small frames, and then the tile grows past half the width
+// again. Measured with the 40-character maximum text: a 1280x853 landscape
+// preview lands at 0.35 of the width, a 853x1280 portrait one at 0.52, and a
+// 640x480 at 0.70. What survives in every case is the thing that actually
+// matters — the mark is rotated and repeats vertically too, so full-frame
+// coverage stays around 13% spread evenly across all four quadrants. The
+// horizontal repeat is what degrades on small frames, not the protection.
 const MAX_TEXT_RUN_FRACTION = 0.25;
 
 // Floor for the shrink-to-fit above, so a 40-character brand name on a small
-// preview still produces something readable rather than a grey haze.
+// preview still produces something readable rather than a grey haze. This is
+// a deliberate trade of horizontal repeats for legibility; see above for what
+// it costs.
 const MIN_FONT_SIZE = 10;
 
 /**
@@ -85,8 +94,8 @@ export class WatermarkError extends Error {
  * than blaming the file.
  */
 export class WatermarkFontUnavailableError extends Error {
-  constructor(message: string) {
-    super(message);
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
     this.name = "WatermarkFontUnavailableError";
   }
 }
@@ -235,31 +244,52 @@ export function buildWatermarkOverlaySvg(
 </svg>`;
 }
 
-let fontProbe: Promise<boolean> | undefined;
+/**
+ * Two distinguishable outcomes, because they call for opposite operator
+ * actions: "no glyphs came out" means install a font, while "the probe threw"
+ * usually means something transient and has nothing to do with fonts.
+ * Collapsing both into `false` is what makes an allocation failure advise a
+ * font install — the operator then installs fonts, redeploys, and gets the
+ * identical message.
+ */
+type FontProbeResult =
+  | { available: true }
+  | { available: false; rendered: boolean; cause?: unknown };
 
-async function probeFont(): Promise<boolean> {
+let fontProbe: Promise<FontProbeResult> | undefined;
+
+async function probeFont(): Promise<FontProbeResult> {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="96" height="48"><text x="0" y="36" font-family="${FONT_STACK}" font-size="36" fill="white">Wg</text></svg>`;
-  const { data, info } = await sharp({
-    create: {
-      width: 96,
-      height: 48,
-      channels: 4,
-      background: { r: 0, g: 0, b: 0, alpha: 0 },
-    },
-  })
-    .composite([{ input: Buffer.from(svg) }])
-    .raw()
-    .toBuffer({ resolveWithObject: true });
+
+  let data: Buffer;
+  let channels: number;
+  try {
+    const probed = await sharp({
+      create: {
+        width: 96,
+        height: 48,
+        channels: 4,
+        background: { r: 0, g: 0, b: 0, alpha: 0 },
+      },
+    })
+      .composite([{ input: Buffer.from(svg) }])
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    data = probed.data;
+    channels = probed.info.channels;
+  } catch (cause) {
+    return { available: false, rendered: false, cause };
+  }
 
   // Any non-transparent pixel means glyphs were rasterised.
-  for (let i = info.channels - 1; i < data.length; i += info.channels) {
-    if (data[i] > 0) return true;
+  for (let i = channels - 1; i < data.length; i += channels) {
+    if (data[i] > 0) return { available: true };
   }
-  return false;
+  return { available: false, rendered: true };
 }
 
 /**
- * Fail loudly, once, if this runtime cannot rasterise text.
+ * Fail loudly if this runtime cannot rasterise text.
  *
  * Without this the fontless case is invisible: sharp reports success, the
  * overlay comes out with no words on it, and previews ship looking far less
@@ -277,47 +307,53 @@ async function probeFont(): Promise<boolean> {
  * restarts the process. Concurrent callers still share one in-flight probe.
  */
 export async function assertWatermarkFontAvailable(): Promise<void> {
-  const probe = (fontProbe ??= probeFont().catch(() => false));
+  const probe = (fontProbe ??= probeFont());
 
-  if (!(await probe)) {
-    // Drop the cached attempt so the next caller re-probes. Guarded in case
-    // another caller already replaced it.
-    if (fontProbe === probe) fontProbe = undefined;
-    throw new WatermarkFontUnavailableError(
-      "No usable font found for watermark text. libvips ships no fonts; install a font package (e.g. fontconfig + font-dejavu) in the runtime image.",
-    );
+  let result: FontProbeResult;
+  try {
+    result = await probe;
+  } catch (cause) {
+    // probeFont() handles its own failures, so this is belt and braces; treat
+    // it the same way rather than letting an unrelated error type escape.
+    result = { available: false, rendered: false, cause };
   }
+
+  if (result.available) return;
+
+  // Drop the cached attempt so the next caller re-probes. Guarded in case
+  // another caller already replaced it.
+  if (fontProbe === probe) fontProbe = undefined;
+
+  throw new WatermarkFontUnavailableError(
+    result.rendered
+      ? "No usable font found for watermark text: text rasterised to nothing. libvips ships no fonts; install a font package (e.g. fontconfig + font-dejavu) in the runtime image."
+      : "Could not verify that a font is available: the probe itself failed, which is usually transient and unrelated to fonts. See the cause.",
+    { cause: result.cause },
+  );
 }
 
 /**
- * Turn uploaded image bytes into a downscaled, watermarked preview.
+ * Pass 1: decode the upload, apply EXIF orientation, downscale.
  *
- * Images only. Video is deferred to ugcportal-pmb (watermarked poster frame),
- * so callers must not hand video bytes to this function.
+ * Split out so the WatermarkError wrapping covers exactly this step and no
+ * more. This is the only stage whose input is the untrusted upload, so "the
+ * file is bad" is the plausible explanation for a failure here and a 422 is
+ * the honest answer.
  *
- * Throws rather than returning a partial result: there is deliberately no
- * "return the input unchanged" path, because that would put an unwatermarked
- * original into the slot the gallery reads from. A bad file raises
- * {@link WatermarkError}; a runtime with no fonts raises
- * {@link WatermarkFontUnavailableError}.
+ * Caveat worth naming rather than papering over: it can still fail for
+ * non-file reasons, most obviously an allocation failure under the
+ * concurrent-load scenario in MAX_INPUT_PIXELS' comment (ugcportal-e86).
+ * Those are indistinguishable from a corrupt upload at this layer without
+ * parsing libvips error strings, which is far too brittle to rely on. The
+ * narrowing removes the systemic misattributions; it does not claim to remove
+ * every one.
  */
-export async function generateWatermarkedPreview(
-  input: Buffer,
-  options: PreviewOptions = {},
-): Promise<PreviewResult> {
-  // Outside the try below on purpose: this is an environment fault, and must
-  // not be laundered into a per-file WatermarkError.
-  await assertWatermarkFontAvailable();
-
-  const text = resolveWatermarkText(options.text);
-  const limitInputPixels = options.limitInputPixels ?? MAX_INPUT_PIXELS;
-
+async function decodeAndDownscale(input: Buffer, limitInputPixels: number) {
   try {
-    // Pass 1: normalise orientation and downscale. `animated` is left off, so
-    // an animated GIF/WebP collapses to its first frame — a still preview is
-    // all the gallery shows today. Metadata (EXIF, GPS, ...) is dropped
-    // because we never call withMetadata().
-    const { data: pixels, info } = await sharp(input, {
+    // `animated` is left off, so an animated GIF/WebP collapses to its first
+    // frame — a still preview is all the gallery shows today. Metadata (EXIF,
+    // GPS, ...) is dropped because we never call withMetadata().
+    return await sharp(input, {
       limitInputPixels,
       // Reject genuinely broken files but tolerate the merely sloppy ones
       // (truncated trailing bytes, odd markers) that sharp's default
@@ -334,36 +370,75 @@ export async function generateWatermarkedPreview(
       })
       .raw()
       .toBuffer({ resolveWithObject: true });
-
-    // Pass 2: composite the overlay, sized to the actual downscaled frame,
-    // then encode. Going through raw pixels avoids a throwaway lossy re-encode
-    // between the two passes.
-    const data = await sharp(pixels, {
-      raw: {
-        width: info.width,
-        height: info.height,
-        channels: info.channels,
-      },
-    })
-      .composite([
-        {
-          input: Buffer.from(
-            buildWatermarkOverlaySvg(info.width, info.height, text),
-          ),
-        },
-      ])
-      .webp({ quality: PREVIEW_QUALITY })
-      .toBuffer();
-
-    return {
-      data,
-      contentType: PREVIEW_CONTENT_TYPE,
-      width: info.width,
-      height: info.height,
-    };
   } catch (error) {
-    throw new WatermarkError("Failed to generate a watermarked preview", {
+    throw new WatermarkError("Failed to decode the uploaded image", {
       cause: error,
     });
   }
+}
+
+/**
+ * Turn uploaded image bytes into a downscaled, watermarked preview.
+ *
+ * Images only. Video is deferred to ugcportal-pmb (watermarked poster frame),
+ * so callers must not hand video bytes to this function.
+ *
+ * Throws rather than returning a partial result: there is deliberately no
+ * "return the input unchanged" path, because that would put an unwatermarked
+ * original into the slot the gallery reads from.
+ *
+ * The error type carries the blame, and callers depend on that distinction:
+ * {@link WatermarkError} means the *file* could not be decoded (map it to a
+ * 4xx), {@link WatermarkFontUnavailableError} and any other error mean the
+ * *runtime* is at fault (map those to a 5xx, so alerting sees them).
+ */
+export async function generateWatermarkedPreview(
+  input: Buffer,
+  options: PreviewOptions = {},
+): Promise<PreviewResult> {
+  // Outside the try below on purpose: this is an environment fault, and must
+  // not be laundered into a per-file WatermarkError.
+  await assertWatermarkFontAvailable();
+
+  const text = resolveWatermarkText(options.text);
+  const limitInputPixels = options.limitInputPixels ?? MAX_INPUT_PIXELS;
+
+  // Only this step's failures become a WatermarkError; see its doc comment.
+  const { data: pixels, info } = await decodeAndDownscale(
+    input,
+    limitInputPixels,
+  );
+
+  // Pass 2: composite the overlay, sized to the actual downscaled frame, then
+  // encode. Going through raw pixels avoids a throwaway lossy re-encode
+  // between the two passes.
+  //
+  // Deliberately not wrapped in a WatermarkError: this stage consumes raw
+  // pixels we produced ourselves against an SVG we generated, so nothing here
+  // can be blamed on the uploader. A libvips built without WebP save would
+  // otherwise turn 100% of uploads into 422s and never register as a 5xx
+  // anywhere in alerting.
+  const data = await sharp(pixels, {
+    raw: {
+      width: info.width,
+      height: info.height,
+      channels: info.channels,
+    },
+  })
+    .composite([
+      {
+        input: Buffer.from(
+          buildWatermarkOverlaySvg(info.width, info.height, text),
+        ),
+      },
+    ])
+    .webp({ quality: PREVIEW_QUALITY })
+    .toBuffer();
+
+  return {
+    data,
+    contentType: PREVIEW_CONTENT_TYPE,
+    width: info.width,
+    height: info.height,
+  };
 }

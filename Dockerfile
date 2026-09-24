@@ -116,6 +116,21 @@ ENV NODE_ENV=production \
 # Removing this does not silently degrade previews: the watermark service
 # probes for a usable font on first use and refuses to run without one, so
 # uploads fail with a 5xx instead of shipping under-marked images.
+#
+# No FONTCONFIG_PATH is set, and that is deliberate rather than an oversight.
+# The concern is real — sharp bundles its own fontconfig inside
+# libvips-cpp.so, so its compiled-in default could point at the build prefix
+# rather than at /etc/fonts. Checked against the actual artifact this image
+# installs (@img/sharp-libvips-linuxmusl-x64, libvips-cpp.so.8.18.6):
+#   - the only config-directory path in the binary is "/etc/fonts", sitting
+#     immediately beside the "FONTCONFIG_FILE"/"FONTCONFIG_PATH"/"fonts.conf"
+#     strings, i.e. fontconfig's standard default-path lookup with /etc/fonts
+#     as the compiled-in fallback. There is no build-prefix path to compete
+#     with it; and
+#   - the built-in fallback config it embeds already lists
+#     <dir>/usr/share/fonts</dir>, which is where apk puts font-dejavu.
+# So FONTCONFIG_PATH=/etc/fonts would be a provable no-op, and setting it
+# would imply a problem that the binary says does not exist.
 RUN apk add --no-cache fontconfig font-dejavu
 
 # Non-root runtime user (K1: "run as a non-root user in the final stage").

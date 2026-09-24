@@ -8,6 +8,7 @@ const authMock = vi.fn();
 const s3SendMock = vi.fn();
 const mediaCreateMock = vi.fn();
 const mediaFindManyMock = vi.fn();
+const mediaFindFirstMock = vi.fn();
 
 vi.mock("@/lib/auth", () => ({
   auth: authMock,
@@ -18,6 +19,7 @@ vi.mock("@/lib/prisma", () => ({
     media: {
       create: mediaCreateMock,
       findMany: mediaFindManyMock,
+      findFirst: mediaFindFirstMock,
     },
   },
 }));
@@ -90,6 +92,7 @@ beforeEach(() => {
   s3SendMock.mockReset();
   mediaCreateMock.mockReset();
   mediaFindManyMock.mockReset();
+  mediaFindFirstMock.mockReset();
 });
 
 describe("POST /api/media", () => {
@@ -328,6 +331,28 @@ describe("POST /api/media", () => {
     expect(commands.filter((c) => c instanceof DeleteObjectCommand)).toHaveLength(1);
     expect(mediaCreateMock).not.toHaveBeenCalled();
   });
+
+  it("logs, rather than discards, a failed cleanup of an orphaned object", async () => {
+    authMock.mockResolvedValue({ user: { id: "user-1" } });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    s3SendMock.mockImplementation(async (command) => {
+      if (command instanceof DeleteObjectCommand) throw new Error("delete denied");
+      return {};
+    });
+    mediaCreateMock.mockRejectedValue(new Error("db down"));
+    const file = new File([REAL_PNG], "photo.png", { type: "image/png" });
+
+    // The original failure is still what propagates...
+    await expect(POST(buildRequest(file))).rejects.toThrow("db down");
+
+    // ...but a compensation that quietly fails every time leaks storage
+    // indefinitely with nothing to notice it by.
+    expect(errorSpy).toHaveBeenCalledWith(
+      "[media] failed to clean up orphaned object",
+      expect.objectContaining({ cause: expect.any(Error) }),
+    );
+    errorSpy.mockRestore();
+  });
 });
 
 function buildListRequest(query = "") {
@@ -423,17 +448,113 @@ describe("GET /api/media", () => {
     expect(body.nextCursor).toBeNull();
   });
 
-  it("pages past the first screenful with a cursor", async () => {
+  it("pages past the first screenful with a keyset predicate, not Prisma's cursor", async () => {
     authMock.mockResolvedValue({ user: { id: "user-1" } });
+    const anchorCreatedAt = new Date("2026-09-24T10:00:00Z");
+    mediaFindFirstMock.mockResolvedValue({
+      id: "media-42",
+      createdAt: anchorCreatedAt,
+    });
     mediaFindManyMock.mockResolvedValue([]);
 
     await GET(buildListRequest("?cursor=media-42"));
 
-    // skip:1 so the cursor row itself isn't repeated on the next page.
-    expect(mediaFindManyMock.mock.calls[0][0]).toMatchObject({
-      cursor: { id: "media-42" },
-      skip: 1,
+    const args = mediaFindManyMock.mock.calls[0][0];
+    // Prisma's `cursor` compiles to a subquery that ignores the outer `where`,
+    // so the window must be an ordinary predicate inside it instead.
+    expect(args).not.toHaveProperty("cursor");
+    expect(args).not.toHaveProperty("skip");
+    expect(args.where).toMatchObject({
+      userId: "user-1",
+      previewKey: { not: null },
+      OR: [
+        { createdAt: { lt: anchorCreatedAt } },
+        { createdAt: anchorCreatedAt, id: { lt: "media-42" } },
+      ],
     });
+  });
+
+  it("resolves the cursor only against rows this caller may already see", async () => {
+    authMock.mockResolvedValue({ user: { id: "user-1" } });
+    mediaFindFirstMock.mockResolvedValue({
+      id: "media-42",
+      createdAt: new Date("2026-09-24T10:00:00Z"),
+    });
+    mediaFindManyMock.mockResolvedValue([]);
+
+    await GET(buildListRequest("?cursor=media-42"));
+
+    // Same scoping as the listing itself, so a cursor can't name a row the
+    // feed excludes and be used as an ordering oracle over it.
+    expect(mediaFindFirstMock.mock.calls[0][0].where).toEqual({
+      userId: "user-1",
+      previewKey: { not: null },
+      id: "media-42",
+    });
+  });
+
+  it("rejects a cursor naming a row the listing excludes, rather than faking an empty page", async () => {
+    authMock.mockResolvedValue({ user: { id: "user-1" } });
+    // A VIDEO row's id: the POST response hands these to the client, and the
+    // listing deliberately filters them out. Also covers another user's id and
+    // an id that has since been deleted.
+    mediaFindFirstMock.mockResolvedValue(null);
+
+    const response = await GET(buildListRequest("?cursor=video-row-id"));
+
+    expect(response.status).toBe(400);
+    // An empty page would read as end-of-list and the caller would stop,
+    // believing it had seen everything.
+    expect(mediaFindManyMock).not.toHaveBeenCalled();
+  });
+
+  it("does not consult the anchor lookup when no cursor is supplied", async () => {
+    authMock.mockResolvedValue({ user: { id: "user-1" } });
+    mediaFindManyMock.mockResolvedValue([]);
+
+    for (const query of ["", "?cursor=", "?cursor=%20"]) {
+      mediaFindFirstMock.mockClear();
+      mediaFindManyMock.mockClear();
+
+      await GET(buildListRequest(query));
+
+      // An empty ?cursor= is an ordinary first-page request, not the id "".
+      expect(mediaFindFirstMock).not.toHaveBeenCalled();
+      expect(mediaFindManyMock.mock.calls[0][0].where).not.toHaveProperty("OR");
+    }
+  });
+
+  it("never reports hasMore without a usable cursor to go with it", async () => {
+    authMock.mockResolvedValue({ user: { id: "user-1" } });
+    // Pathological: the extra row says another page exists, but everything on
+    // this page fails the defensive preview filter. Claiming hasMore here
+    // would leave the caller looping or stalled with nothing to page on.
+    mediaFindManyMock.mockResolvedValue([
+      selectedRow({ id: "a", previewKey: null }),
+      selectedRow({ id: "b", previewKey: null }),
+    ]);
+
+    const body = await (await GET(buildListRequest("?limit=1"))).json();
+
+    expect(body.items).toEqual([]);
+    expect(body.nextCursor).toBeNull();
+    expect(body.hasMore).toBe(false);
+  });
+
+  it("takes nextCursor from an emitted row, not from a filtered-out one", async () => {
+    authMock.mockResolvedValue({ user: { id: "user-1" } });
+    // `b` is dropped by the filter. Pointing the next page at `b` would name a
+    // row the next request's where-clause also excludes — the silent skip.
+    mediaFindManyMock.mockResolvedValue([
+      selectedRow({ id: "a", previewKey: "previews/user-1/a.webp" }),
+      selectedRow({ id: "b", previewKey: null }),
+      selectedRow({ id: "c", previewKey: "previews/user-1/c.webp" }),
+    ]);
+
+    const body = await (await GET(buildListRequest("?limit=2"))).json();
+
+    expect(body.items.map((i: { id: string }) => i.id)).toEqual(["a"]);
+    expect(body.nextCursor).toBe("a");
   });
 
   it("clamps or defaults a bogus limit instead of trusting it", async () => {

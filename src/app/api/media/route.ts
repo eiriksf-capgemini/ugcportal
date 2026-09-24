@@ -175,7 +175,10 @@ export async function POST(request: Request) {
     return NextResponse.json(media, { status: 201 });
   } catch (error) {
     // Best-effort compensation so a failed preview upload or DB hiccup doesn't
-    // leave untracked objects sitting in the bucket forever.
+    // leave untracked objects sitting in the bucket forever. Failures here are
+    // swallowed because the original error is the one worth propagating — but
+    // they are logged, not discarded: a compensation that is quietly failing
+    // every time leaks storage indefinitely with nothing to notice it by.
     await Promise.all(
       storedKeys.map((storedKey) =>
         getS3Client()
@@ -185,7 +188,12 @@ export async function POST(request: Request) {
               Key: storedKey,
             }),
           )
-          .catch(() => {}),
+          .catch((cleanupError) => {
+            console.error("[media] failed to clean up orphaned object", {
+              key: storedKey,
+              cause: cleanupError,
+            });
+          }),
       ),
     );
     throw error;
@@ -220,8 +228,20 @@ function parseLimit(raw: string | null): number {
  * Paginated with an opaque cursor (the last item's id) rather than a bare cap,
  * so nothing becomes permanently unreachable once a user passes the page size,
  * and `hasMore` tells the caller when the list was truncated. Ordering is
- * (createdAt desc, id desc) because cursor pagination needs a unique tiebreak
- * to be stable across rows sharing a timestamp.
+ * (createdAt desc, id desc) because pagination needs a unique tiebreak to be
+ * stable across rows sharing a timestamp.
+ *
+ * The cursor is resolved by hand rather than through Prisma's `cursor`/`skip`,
+ * for two reasons. It is a client-supplied id and therefore untrusted: Prisma
+ * compiles `cursor` into a subquery that ignores the outer `where`, so a
+ * caller could pass the id of a row this endpoint deliberately excludes (a
+ * VIDEO row — an id POST hands them) or another user's row, and use the
+ * resulting window as an ordering oracle over rows they can't see. And it is
+ * wrong even when honest: that subquery's comparison is inclusive, so with
+ * rows sharing a `createdAt` the `skip: 1` then silently swallows a real row.
+ * Resolving the anchor against the caller's own rows and expressing the window
+ * as an explicit keyset predicate fixes both — the predicate lives inside the
+ * same `where` as the scoping, so it cannot outrun it.
  *
  * Scoped to the signed-in user's own media. Widening this to a public feed is
  * a deliberate decision for ugcportal-71y to make, not something to inherit by
@@ -237,20 +257,52 @@ export async function GET(request: Request) {
 
   const params = new URL(request.url).searchParams;
   const limit = parseLimit(params.get("limit"));
-  const cursor = params.get("cursor");
+  // Treat `?cursor=` as absent rather than as the id "", which would otherwise
+  // 400 on a perfectly ordinary first-page request.
+  const cursor = params.get("cursor")?.trim() || null;
+
+  // Everything the listing itself is scoped by. The anchor lookup reuses it
+  // verbatim so a cursor can only ever name a row this caller is already
+  // allowed to see in this feed.
+  const scope = { userId, previewKey: { not: null } } as const;
+
+  let keyset: object | undefined;
+  if (cursor !== null) {
+    const anchor = await prisma.media.findFirst({
+      where: { ...scope, id: cursor },
+      select: { id: true, createdAt: true },
+    });
+
+    if (!anchor) {
+      // Unknown, foreign, or since-deleted. Answering with an empty page would
+      // be a false end-of-list — the caller would stop, believing it had seen
+      // everything. Say so instead, and let it restart pagination.
+      return NextResponse.json(
+        { error: "Invalid or expired cursor" },
+        { status: 400 },
+      );
+    }
+
+    // Strict "after the anchor" in (createdAt desc, id desc) order. No skip
+    // needed: the anchor itself can't satisfy either branch.
+    keyset = {
+      OR: [
+        { createdAt: { lt: anchor.createdAt } },
+        { createdAt: anchor.createdAt, id: { lt: anchor.id } },
+      ],
+    };
+  }
 
   const rows = await prisma.media.findMany({
-    where: { userId, previewKey: { not: null } },
+    where: { ...scope, ...keyset },
     select: MEDIA_PUBLIC_SELECT,
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     // One extra row is a cheap way to know whether another page exists
     // without a second count query.
     take: limit + 1,
-    ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
   });
 
-  const hasMore = rows.length > limit;
-  const page = hasMore ? rows.slice(0, limit) : rows;
+  const page = rows.length > limit ? rows.slice(0, limit) : rows;
 
   // The where-clause already excludes them, but previewKey is still typed
   // `string | null`; narrowing here makes the emitted shape non-nullable and
@@ -259,11 +311,17 @@ export async function GET(request: Request) {
     (row): row is typeof row & { previewKey: string } => row.previewKey !== null,
   );
 
+  // Taken from `items`, not `page`: a cursor naming a row the filter dropped
+  // is a row the *next* request's where-clause also excludes, which is exactly
+  // how a page gets silently skipped. And if the filter emptied the page there
+  // is no cursor to give, so we must not claim there is more — a caller that
+  // sees hasMore with no cursor either loops forever or stalls.
+  const nextCursor =
+    rows.length > limit ? (items.at(-1)?.id ?? null) : null;
+
   return NextResponse.json({
     items,
-    hasMore,
-    // Taken from the unfiltered page, so the defensive filter above can never
-    // strand the caller on a cursor that skips rows.
-    nextCursor: hasMore ? (page.at(-1)?.id ?? null) : null,
+    hasMore: nextCursor !== null,
+    nextCursor,
   });
 }
