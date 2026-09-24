@@ -22,40 +22,109 @@ const DEFAULT_LISTING_LIMIT = 50;
 const MAX_LISTING_LIMIT = 100;
 
 /**
- * What a listing is allowed to filter by.
- *
- * `previewKey` and `previewId` are both required: every listing must exclude
- * rows that have no watermarked representation, so the only object any feed
- * can ever name is the preview and never `key`, the paid original
- * (ugcportal-5d6). Making them required properties means a future third caller
- * cannot forget either — it will not compile.
- *
- * Both, rather than one: they are written together and nulled together, so a
- * row failing either check is a row whose preview state is inconsistent, and
- * excluding it is the fail-closed answer.
- *
- * `publishedAt` is how the public feed opts in to visible-only rows; the
- * owner's own view leaves it off precisely because an owner must keep seeing
- * their unpublished uploads.
+ * Every listing filters on both preview columns: a row without a watermarked
+ * representation must never be listed, so the only object any feed can name is
+ * the preview and never `key`, the paid original (ugcportal-5d6). Both rather
+ * than one, because they are written together and nulled together — a row
+ * failing either check has inconsistent preview state, and excluding it is the
+ * fail-closed answer.
  */
-export type MediaListingScope = {
-  userId?: string;
-  publishedAt?: { not: null };
+type PreviewFilter = {
   previewKey: { not: null };
   previewId: { not: null };
 };
 
 /**
+ * The owner's own library. `userId` is required — this arm exists to be
+ * scoped to one account — and `publishedAt` is deliberately optional, because
+ * an owner must keep seeing their unpublished uploads.
+ */
+export type MediaOwnerScope = PreviewFilter & {
+  userId: string;
+  publishedAt?: { not: null };
+};
+
+/**
+ * An anonymous feed. `publishedAt: { not: null }` is REQUIRED, and that is the
+ * single most important line in this file.
+ *
+ * It used to be optional and shared with the owner arm, which meant this
+ * compiled clean:
+ *
+ *   listMedia(url, { previewKey: …, previewId: … }, MEDIA_ANONYMOUS_SELECT)
+ *
+ * — an anonymous listing with no publish filter, serving every private upload
+ * in the database to anyone who asked. A future anonymous feed (ugcportal-71y,
+ * or tag/search browsing) that copied the public route and dropped one line
+ * would have type-checked, passed CI, and shipped exactly the failure this
+ * whole bead was created to prevent. The preview columns were already
+ * structurally required; visibility, which matters more, was not.
+ *
+ * `userId?: never` because an anonymous feed scoped to a single account is a
+ * different product decision (it would let anyone enumerate one person's
+ * portfolio by id) and must not be reachable by accident from here.
+ *
+ * Adding a filter to an anonymous feed means editing this type, in this file,
+ * next to this comment. That is the point: the decision belongs beside the
+ * rule, not in whichever route copied it.
+ */
+export type MediaAnonymousScope = PreviewFilter & {
+  publishedAt: { not: null };
+  userId?: never;
+};
+
+export type MediaListingScope = MediaOwnerScope | MediaAnonymousScope;
+
+/**
+ * Columns no listing may project, whatever its audience.
+ *
+ * `key` is the ungated paid original (ugcportal-5d6); `userId` is the
+ * attribution the anonymous feed goes to some length to withhold. Spelled as
+ * optional-never rather than trusted to the union below, because the union
+ * alone does not actually stop them: excess-property checking only applies to
+ * *fresh* object literals, so
+ *
+ *   const adhoc = { ...MEDIA_OWNER_SELECT, key: true } as const;
+ *   listMedia(url, scope, adhoc);
+ *
+ * type-checked, and `items[].key` resolved — Prisma would have selected and
+ * serialised the original. A comment here previously claimed the union
+ * prevented that. It did not. `key?: never` does.
+ */
+type NeverProjected = {
+  key?: never;
+  userId?: never;
+};
+
+/**
+ * Additionally withheld from anonymous callers: the preview's storage path
+ * (embeds the uploader's id), the uploader's filename, and the original's type
+ * and size (which describe a file this feed cannot serve). See
+ * src/lib/media-access.ts for the reasoning on each.
+ */
+type OwnerOnlyProjection = {
+  previewKey?: never;
+  originalName?: never;
+  mimeType?: never;
+  sizeBytes?: never;
+};
+
+/** The owner projection, and nothing smuggled alongside it. */
+export type MediaOwnerListingSelect = typeof MEDIA_OWNER_SELECT &
+  NeverProjected;
+
+/** The anonymous projection, and nothing smuggled alongside it. */
+export type MediaAnonymousListingSelect = typeof MEDIA_ANONYMOUS_SELECT &
+  NeverProjected &
+  OwnerOnlyProjection;
+
+/**
  * The projections a listing may serve. Two audiences, two selects — see
  * src/lib/media-access.ts for why they are not one.
- *
- * A closed union rather than Prisma's `MediaSelect`, so no caller can hand
- * this function an ad-hoc projection with `key` in it. Widening the feeds is a
- * decision made in media-access.ts, not at a call site.
  */
 export type MediaListingSelect =
-  | typeof MEDIA_OWNER_SELECT
-  | typeof MEDIA_ANONYMOUS_SELECT;
+  | MediaOwnerListingSelect
+  | MediaAnonymousListingSelect;
 
 /**
  * The columns listMedia reads for itself, whatever the audience: `id` and
@@ -113,6 +182,13 @@ function parseListingLimit(raw: string | null): number {
   if (!Number.isFinite(parsed)) return DEFAULT_LISTING_LIMIT;
   return Math.min(MAX_LISTING_LIMIT, Math.max(1, Math.floor(parsed)));
 }
+
+/**
+ * How many consecutive entirely-withheld pages the scan below will step over
+ * before giving up. Only reachable when the query's where-clause and the
+ * defensive filter disagree; in normal operation the scan runs once.
+ */
+const MAX_WITHHELD_PAGE_SCANS = 5;
 
 const CURSOR_SEPARATOR = "|";
 
@@ -183,6 +259,19 @@ function decodeMediaCursor(raw: string): MediaCursor | null {
 }
 
 /**
+ * Strictly "after this position" in (createdAt desc, id desc) order. No skip
+ * needed: the position itself cannot satisfy either branch.
+ */
+function keysetAfter(position: MediaCursor) {
+  return {
+    OR: [
+      { createdAt: { lt: position.createdAt } },
+      { createdAt: position.createdAt, id: { lt: position.id } },
+    ],
+  };
+}
+
+/**
  * Reads one page of media matching `scope`, projected through `select`.
  *
  * Ordering is (createdAt desc, id desc) because pagination needs a unique
@@ -199,6 +288,21 @@ function decodeMediaCursor(raw: string): MediaCursor | null {
  * swallows a real row. Writing the predicate by hand puts it inside the same
  * `where` as the scoping, so it cannot outrun it.
  */
+export async function listMedia(
+  requestUrl: string,
+  scope: MediaOwnerScope,
+  select: MediaOwnerListingSelect & MediaListingRequiredColumns,
+): Promise<MediaListingResult<MediaOwnerListingSelect>>;
+/**
+ * The anonymous arm. Its scope type requires the publish filter, so there is
+ * no spelling of this call that serves unpublished rows to an anonymous
+ * caller — not by copying a route, not by deleting a line.
+ */
+export async function listMedia(
+  requestUrl: string,
+  scope: MediaAnonymousScope,
+  select: MediaAnonymousListingSelect & MediaListingRequiredColumns,
+): Promise<MediaListingResult<MediaAnonymousListingSelect>>;
 export async function listMedia<
   TSelect extends MediaListingSelect & MediaListingRequiredColumns,
 >(
@@ -212,7 +316,7 @@ export async function listMedia<
   // 400 on a perfectly ordinary first-page request.
   const rawCursor = params.get("cursor")?.trim() || null;
 
-  let keyset: object | undefined;
+  let keyset: ReturnType<typeof keysetAfter> | undefined;
   if (rawCursor !== null) {
     const position = decodeMediaCursor(rawCursor);
     if (!position) {
@@ -222,63 +326,104 @@ export async function listMedia<
       return { ok: false, status: 400, error: "Invalid cursor" };
     }
 
-    // Strict "after this position" in (createdAt desc, id desc) order. No skip
-    // needed: the position itself can't satisfy either branch.
-    keyset = {
-      OR: [
-        { createdAt: { lt: position.createdAt } },
-        { createdAt: position.createdAt, id: { lt: position.id } },
-      ],
-    };
+    keyset = keysetAfter(position);
   }
 
-  const rows = (await prisma.media.findMany({
-    where: { ...scope, ...keyset },
-    select,
-    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-    // One extra row is a cheap way to know whether another page exists
-    // without a second count query.
-    take: limit + 1,
-    // Prisma infers a union of both projections from the union-typed `select`,
-    // which it cannot narrow back to the caller's concrete TSelect. The narrow
-    // is safe because TSelect *is* the select the query just ran with; the
-    // `where`/`select` above are the only things that decide what comes back.
+  // Scan forward until this page has something to emit, or the feed runs out.
+  //
+  // Every cursor handed back is built from a row that was actually emitted.
+  // That is a privacy requirement, not a tidiness one: encodeMediaCursor's
+  // justification for being readable is that it contains only what the caller
+  // was just given, and a position taken from a row the defensive filter
+  // dropped would break exactly that — handing an anonymous caller the cuid and
+  // creation time of a row deliberately withheld from them.
+  //
+  // The obvious alternatives are both wrong, and the shape of this loop is the
+  // reason. Taking the position from the last *emitted* row and stopping there
+  // reports hasMore: false whenever a page is entirely filtered out — a silent
+  // end-of-list, in precisely the case the filter exists to cover. Taking it
+  // from the last row *read* fixes that but leaks the withheld row. So the
+  // advance past withheld rows happens here, server-side, where the position
+  // never leaves the process.
+  //
+  // Bounded rather than open: a run this long means the query's where-clause
+  // and the filter below disagree across hundreds of rows, which is a broken
+  // invariant that should be noticed, not smoothed over. In normal operation
+  // the two agree and this runs exactly once.
+  let scanned: MediaListingRow<TSelect>[] = [];
+  let page: MediaListingRow<TSelect>[] = [];
+  let items: MediaListingItem<TSelect>[] = [];
+
+  for (let attempt = 0; attempt < MAX_WITHHELD_PAGE_SCANS; attempt += 1) {
+    scanned = (await prisma.media.findMany({
+      where: { ...scope, ...keyset },
+      select,
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      // One extra row is a cheap way to know whether another page exists
+      // without a second count query.
+      take: limit + 1,
+      // Prisma infers a union of both projections from the union-typed
+      // `select`, which it cannot narrow back to the caller's concrete
+      // TSelect. The narrow is safe because TSelect *is* the select the query
+      // just ran with; the `where`/`select` above are the only things that
+      // decide what comes back.
+      //
+      // Cast to the *row* type, not the item type: `previewId` stays
+      // `string | null` here, which is what keeps the filter below a real
+      // runtime check rather than one the compiler has already decided can
+      // never be false.
+    })) as MediaListingRow<TSelect>[];
+
+    page = scanned.length > limit ? scanned.slice(0, limit) : scanned;
+
+    // The where-clause already excludes them, but previewId is still typed
+    // `string | null`; narrowing here makes the emitted shape non-nullable and
+    // means a future query change can't quietly start emitting preview-less
+    // rows.
     //
-    // Cast to the *row* type, not the item type: `previewId` stays `string |
-    // null` here, which is what keeps the filter below a real runtime check
-    // rather than one the compiler has already decided can never be false.
-  })) as MediaListingRow<TSelect>[];
+    // Narrowed on `previewId` rather than `previewKey` because that is the
+    // field both projections carry — the anonymous select deliberately has no
+    // previewKey, and `undefined !== null` is true, so a previewKey check
+    // would have silently passed every anonymous row through while looking
+    // like a guard.
+    //
+    // MediaListingRequiredColumns is what makes this line load-bearing rather
+    // than decorative: it guarantees `previewId` was actually selected, so the
+    // value tested is a real `string | null` and not an absent property.
+    items = page.filter(
+      (row): row is MediaListingItem<TSelect> => row.previewId !== null,
+    );
 
-  const page = rows.length > limit ? rows.slice(0, limit) : rows;
+    // Something to emit, or nothing left to look at.
+    if (items.length > 0 || scanned.length <= limit) {
+      break;
+    }
 
-  // The where-clause already excludes them, but previewId is still typed
-  // `string | null`; narrowing here makes the emitted shape non-nullable and
-  // means a future query change can't quietly start emitting preview-less rows.
-  //
-  // Narrowed on `previewId` rather than `previewKey` because that is the field
-  // both projections carry — the anonymous select deliberately has no
-  // previewKey, and `undefined !== null` is true, so a previewKey check would
-  // have silently passed every anonymous row through while looking like a
-  // guard.
-  //
-  // MediaListingRequiredColumns is what makes this line load-bearing rather
-  // than decorative: it guarantees `previewId` was actually selected, so the
-  // value tested is a real `string | null` and not an absent property.
-  const items = page.filter(
-    (row): row is MediaListingItem<TSelect> => row.previewId !== null,
-  );
+    // Everything on this page was withheld and more rows exist. Step past the
+    // last row read — internally. This position is never encoded for the
+    // caller; it only moves the next query's window.
+    const withheld = page.at(-1);
+    if (!withheld) {
+      break;
+    }
+    keyset = keysetAfter(withheld);
 
-  // Built from `page`, not `items`.
-  //
-  // When the cursor was a row reference this had to come from an emitted row,
-  // since naming a row the caller never received meant the next request's
-  // where-clause would exclude it too and a page would be silently skipped.
-  // A (createdAt, id) position has no such requirement: it is a place in the
-  // ordering, and a row dropped by the defensive filter still marks a perfectly
-  // valid one. Taking it from `items` instead would mean a page whose rows were
-  // *all* dropped reports hasMore: false — a silent end-of-list, in exactly the
-  // situation the defensive filter exists to cover.
-  const last = rows.length > limit ? page.at(-1) : undefined;
+    if (attempt === MAX_WITHHELD_PAGE_SCANS - 1) {
+      console.error("[media] listing filter withheld every scanned row", {
+        scans: MAX_WITHHELD_PAGE_SCANS,
+        limit,
+        // No row identifiers: this log is about a broken invariant, not about
+        // the rows, and it is reachable from an anonymous request.
+      });
+    }
+  }
+
+  // From an emitted row, always. When the extra row says more exist but this
+  // page emitted nothing, there is no position that is both truthful and safe
+  // to disclose — the loop above exists so that case is reached only when the
+  // database is inconsistent with its own query, and it is reported as the end
+  // of the list rather than by disclosing a withheld row.
+  const last = scanned.length > limit ? items.at(-1) : undefined;
   const nextCursor = last ? encodeMediaCursor(last) : null;
 
   return {

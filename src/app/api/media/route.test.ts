@@ -787,33 +787,82 @@ describe("GET /api/media", () => {
     }
   });
 
-  it("keeps paging when the defensive filter empties a page", async () => {
+  it("steps past an entirely withheld page instead of stranding the caller", async () => {
     authMock.mockResolvedValue({ user: { id: "user-1" } });
-    // Pathological: the extra row says another page exists, but everything on
-    // this page fails the defensive preview filter. A (createdAt, id) cursor
-    // can still say where to resume, so reporting the end of the list here
-    // would strand the caller short of rows that do exist (ugcportal-r1d
-    // review round 2, finding 3).
+    // The query handed back preview-less rows its own where-clause should have
+    // excluded. The advance past them happens server-side, so the caller gets
+    // the next real row rather than a cursor naming a row it never received.
+    mediaFindManyMock
+      .mockResolvedValueOnce([
+        selectedRow({
+          id: "withheld-1",
+          previewId: null,
+          createdAt: new Date("2026-09-24T10:00:00Z"),
+        }),
+        selectedRow({
+          id: "withheld-2",
+          previewId: null,
+          createdAt: new Date("2026-09-23T10:00:00Z"),
+        }),
+      ])
+      .mockResolvedValueOnce([
+        selectedRow({
+          id: "real",
+          previewId: "preview-real",
+          createdAt: new Date("2026-09-22T10:00:00Z"),
+        }),
+      ]);
+
+    const body = await (await GET(buildListRequest("?limit=1"))).json();
+    const serialized = JSON.stringify(body);
+
+    expect(body.items.map((i: { id: string }) => i.id)).toEqual(["real"]);
+    expect(serialized).not.toContain("withheld-1");
+    expect(serialized).not.toContain("withheld-2");
+    expect(mediaFindManyMock).toHaveBeenCalledTimes(2);
+    // The second window starts strictly after the last row read, and stays
+    // inside the same owner scoping.
+    const second = mediaFindManyMock.mock.calls[1][0].where;
+    expect(second.userId).toBe("user-1");
+    expect(second.OR).toEqual([
+      { createdAt: { lt: new Date("2026-09-24T10:00:00Z") } },
+      {
+        createdAt: new Date("2026-09-24T10:00:00Z"),
+        id: { lt: "withheld-1" },
+      },
+    ]);
+  });
+
+  it("reports the end of the list rather than naming a withheld row", async () => {
+    authMock.mockResolvedValue({ user: { id: "user-1" } });
+    // Every window entirely withheld: the where-clause and the filter
+    // disagree. The scan is bounded and gives up rather than handing back a
+    // position taken from a row the caller never received.
     mediaFindManyMock.mockResolvedValue([
       selectedRow({
-        id: "a",
+        id: "withheld-1",
         previewId: null,
         createdAt: new Date("2026-09-24T10:00:00Z"),
       }),
       selectedRow({
-        id: "b",
+        id: "withheld-2",
         previewId: null,
         createdAt: new Date("2026-09-23T10:00:00Z"),
       }),
     ]);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
     const body = await (await GET(buildListRequest("?limit=1"))).json();
 
     expect(body.items).toEqual([]);
-    expect(body.hasMore).toBe(true);
-    expect(Buffer.from(body.nextCursor, "base64url").toString("utf8")).toBe(
-      "2026-09-24T10:00:00.000Z|a",
+    expect(body.hasMore).toBe(false);
+    expect(body.nextCursor).toBeNull();
+    expect(mediaFindManyMock).toHaveBeenCalledTimes(5);
+    expect(errorSpy).toHaveBeenCalledWith(
+      "[media] listing filter withheld every scanned row",
+      expect.objectContaining({ scans: 5 }),
     );
+    errorSpy.mockRestore();
   });
 
   it("reports no cursor when there genuinely is no further page", async () => {
@@ -854,9 +903,9 @@ describe("GET /api/media", () => {
     expect(body.items[1].publishedAt).toBe("2026-09-24T12:00:00.000Z");
   });
 
-  it("takes nextCursor from the last row read, including a filtered-out one", async () => {
+  it("never builds nextCursor from a withheld row", async () => {
     authMock.mockResolvedValue({ user: { id: "user-1" } });
-    mediaFindManyMock.mockResolvedValue([
+    mediaFindManyMock.mockResolvedValueOnce([
       selectedRow({
         id: "a",
         previewId: "preview-a",
@@ -876,11 +925,13 @@ describe("GET /api/media", () => {
 
     const body = await (await GET(buildListRequest("?limit=2"))).json();
 
-    // `b` is dropped from the payload but remains a valid *position*: the next
-    // page resumes strictly after it, so `c` is neither skipped nor repeated.
+    // The page read is [a, b]; `b` is withheld. The cursor names `a`, the last
+    // row actually emitted. Resuming after `a` re-reads `b`, which is dropped
+    // again, so nothing is skipped and nothing is served twice.
     expect(body.items.map((i: { id: string }) => i.id)).toEqual(["a"]);
+    expect(body.hasMore).toBe(true);
     expect(Buffer.from(body.nextCursor, "base64url").toString("utf8")).toBe(
-      "2026-09-23T10:00:00.000Z|b",
+      "2026-09-24T10:00:00.000Z|a",
     );
   });
 

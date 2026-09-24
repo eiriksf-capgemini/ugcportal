@@ -668,33 +668,94 @@ describe("GET /api/public/media — pagination contract", () => {
     expect(body.nextCursor).toBeNull();
   });
 
-  it("keeps paging when the defensive filter empties a page", async () => {
-    // Pathological: the query hands back preview-less rows the where-clause
-    // should have excluded. The filter drops them all, so this page is empty
-    // — but the extra row says more exist, and a (createdAt, id) cursor can
-    // still name where to resume from. Reporting hasMore: false here would be
-    // a silent end-of-list in exactly the situation the filter exists for
-    // (ugcportal-r1d review round 2, finding 3).
+  it("steps past an entirely withheld page instead of stranding the caller", async () => {
+    // The query handed back preview-less rows its own where-clause should have
+    // excluded, so the defensive filter empties this page. The advance past
+    // them happens server-side: the caller gets the next real row and never
+    // sees the withheld rows' identifiers.
+    mediaFindManyMock
+      .mockResolvedValueOnce([
+        {
+          id: "withheld-1",
+          previewId: null,
+          createdAt: new Date("2026-09-24T10:00:00Z"),
+        },
+        {
+          id: "withheld-2",
+          previewId: null,
+          createdAt: new Date("2026-09-23T10:00:00Z"),
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          id: "real",
+          previewId: "preview-real",
+          createdAt: new Date("2026-09-22T10:00:00Z"),
+        },
+      ]);
+
+    const response = await GET(request("?limit=1"));
+    const body = await response.json();
+    const serialized = JSON.stringify(body);
+
+    expect(response.status).toBe(200);
+    expect(body.items.map((i: { id: string }) => i.id)).toEqual(["real"]);
+    // Neither withheld row is disclosed, in any form.
+    expect(serialized).not.toContain("withheld-1");
+    expect(serialized).not.toContain("withheld-2");
+    expect(serialized).not.toContain("2026-09-24T10:00:00.000Z");
+
+    // Two windows, the second starting strictly after the last row read.
+    expect(mediaFindManyMock).toHaveBeenCalledTimes(2);
+    expect(mediaFindManyMock.mock.calls[1][0].where.OR).toEqual([
+      { createdAt: { lt: new Date("2026-09-24T10:00:00Z") } },
+      {
+        createdAt: new Date("2026-09-24T10:00:00Z"),
+        id: { lt: "withheld-1" },
+      },
+    ]);
+  });
+
+  it("reports the end of the list rather than disclosing a withheld row", async () => {
+    // Pathological: every window is entirely withheld, i.e. the where-clause
+    // and the filter disagree across the whole feed. The scan is bounded, and
+    // when it gives up it says end-of-list — the only alternative would be
+    // handing an anonymous caller the cuid and creation time of rows
+    // deliberately dropped (ugcportal-r1d review round 5, finding 3).
     mediaFindManyMock.mockResolvedValue([
       {
-        id: "a",
+        id: "withheld-1",
         previewId: null,
         createdAt: new Date("2026-09-24T10:00:00Z"),
       },
       {
-        id: "b",
+        id: "withheld-2",
         previewId: null,
         createdAt: new Date("2026-09-23T10:00:00Z"),
       },
     ]);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
     const body = await (await GET(request("?limit=1"))).json();
 
     expect(body.items).toEqual([]);
-    expect(body.hasMore).toBe(true);
-    expect(Buffer.from(body.nextCursor, "base64url").toString("utf8")).toBe(
-      "2026-09-24T10:00:00.000Z|a",
+    expect(body.hasMore).toBe(false);
+    expect(body.nextCursor).toBeNull();
+    expect(JSON.stringify(body)).not.toContain("withheld");
+    // Bounded, not open-ended: this runs on an unauthenticated endpoint.
+    expect(mediaFindManyMock).toHaveBeenCalledTimes(5);
+    // A broken invariant should be noticed, not smoothed over.
+    expect(errorSpy).toHaveBeenCalledWith(
+      "[media] listing filter withheld every scanned row",
+      expect.objectContaining({ scans: 5 }),
     );
+    // The log itself must not carry row identifiers either — it is about a
+    // broken invariant, not about the rows, and it is reachable anonymously.
+    const logged = JSON.stringify(errorSpy.mock.calls[0]?.[1]);
+    expect(logged).not.toContain("withheld-1");
+    expect(logged).not.toContain("withheld-2");
+    expect(logged).not.toContain("2026-09-24T10:00:00.000Z");
+    errorSpy.mockRestore();
   });
 
   it("reports no cursor when there genuinely is no further page", async () => {
@@ -713,8 +774,8 @@ describe("GET /api/public/media — pagination contract", () => {
     expect(body.nextCursor).toBeNull();
   });
 
-  it("takes nextCursor from the last row read, including a filtered-out one", async () => {
-    mediaFindManyMock.mockResolvedValue([
+  it("never builds nextCursor from a withheld row", async () => {
+    mediaFindManyMock.mockResolvedValueOnce([
       {
         id: "a",
         previewId: "preview-a",
@@ -734,13 +795,17 @@ describe("GET /api/public/media — pagination contract", () => {
 
     const body = await (await GET(request("?limit=2"))).json();
 
-    // `b` is dropped from the payload but is still a valid *position*: the
-    // next page resumes strictly after it, so `c` is not skipped and nothing
-    // is served twice.
+    // The page read is [a, b]; `b` is withheld. The cursor names `a`, the last
+    // row the caller actually received. Naming `b` would disclose a row
+    // deliberately dropped, contradicting the whole reason the cursor is safe
+    // to hand out. Resuming after `a` re-reads `b` — which is dropped again —
+    // so nothing is skipped and nothing is served twice.
     expect(body.items.map((i: { id: string }) => i.id)).toEqual(["a"]);
+    expect(body.hasMore).toBe(true);
     expect(Buffer.from(body.nextCursor, "base64url").toString("utf8")).toBe(
-      "2026-09-23T10:00:00.000Z|b",
+      "2026-09-24T10:00:00.000Z|a",
     );
+    expect(JSON.stringify(body)).not.toContain("2026-09-23T10:00:00.000Z");
   });
 });
 
