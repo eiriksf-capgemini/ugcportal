@@ -40,6 +40,9 @@ model User {
   sessions          Session[]
   media             Media[]
   instagramAccounts InstagramAccount[]
+  // Resale-rights reviews this user signed off (ugcportal-0ss). Named so the
+  // relation stays unambiguous if a second User link is added later.
+  resaleReviews     ResaleRightsReview[] @relation("ResaleRightsReviewer")
 }
 
 // One row per linked login provider (Google, Facebook, ...) for a user.
@@ -131,7 +134,11 @@ model InstagramAccount {
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
 
-  connectedBy User @relation(fields: [connectedByUserId], references: [id], onDelete: Cascade)
+  connectedBy        User                @relation(fields: [connectedByUserId], references: [id], onDelete: Cascade)
+  // ugcportal-0ss. Optional in the schema, but a missing review is read as
+  // UNREVIEWED by the sellability gate, never as "fine to sell".
+  resaleRightsReview ResaleRightsReview?
+  curatedPosts       CuratedPost[]
 
   @@index([connectedByUserId])
 }
@@ -167,4 +174,150 @@ model RoleChange {
 
   @@index([targetUserId])
   @@index([createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Resale rights (ugcportal-0ss). Implements Part E of
+// docs/legal/instagram-resale-rights-checklist.md, which is the enforcement
+// half of the ugcportal-zec legal review: nothing from a connected Instagram
+// account may be offered for sale until a human ADMIN has recorded a
+// clearance against that account.
+// ---------------------------------------------------------------------------
+
+// Per-account resale-rights position. `UNREVIEWED` is the default and the
+// fail-closed state; a *missing* ResaleRightsReview row means exactly the
+// same thing (see evaluateSellability in src/lib/resale-rights.ts), so
+// forgetting to create the row can never make something sellable.
+enum ResaleRightsStatus {
+  UNREVIEWED
+  IN_REVIEW
+  CLEARED
+  REJECTED
+  REVOKED
+  EXPIRED
+}
+
+// How the rights were obtained (checklist Part B). Recorded for the audit;
+// not read by the gate.
+enum ResaleRightsRoute {
+  CONTRACT
+  OWN_TERMS_ACCEPTANCE
+  EXPLICIT_CONSENT
+}
+
+// One review per connected account. A separate table rather than columns on
+// InstagramAccount so the OAuth row stays about plumbing, and so the history
+// (ResaleRightsEvent) hangs off the thing it describes.
+//
+// Only an authenticated ADMIN may ever write status = CLEARED — see
+// setResaleRightsStatus in src/lib/resale-rights-review.ts, the only writer
+// of this column in the codebase (checklist Part E.3, ugcportal-0ss K4). No
+// migration default, sync job or OAuth callback may produce it.
+model ResaleRightsReview {
+  id                 String             @id @default(cuid())
+  instagramAccountId String             @unique
+  status             ResaleRightsStatus @default(UNREVIEWED)
+  route              ResaleRightsRoute?
+  // Version of docs/legal/instagram-resale-rights-checklist.md the reviewer
+  // worked through. Revising the checklist retires old versions, which makes
+  // every account cleared under one stop being sellable until re-reviewed
+  // (see ACCEPTED_CHECKLIST_VERSIONS in src/lib/resale-rights.ts).
+  checklistVersion   String
+  // Must refer to a user with role ADMIN — set by the admin action and
+  // re-checked at read time by the gate, because a reviewer can be demoted
+  // after the clearance was recorded.
+  reviewedByUserId   String?
+  reviewedAt         DateTime?
+  validUntil         DateTime?
+  conditions         String?
+  // Object key under the private rights-evidence/ prefix (see
+  // src/lib/rights-evidence.ts). Never a Media row: evidence is contracts and
+  // personal data, not a sellable asset.
+  evidenceKey        String?
+  evidenceSha256     String?
+  // Bead id of the product decision this clearance was made under — today
+  // ugcportal-2eh (Option A: the Instagram API is used for discovery only;
+  // the sellable file is the owner-uploaded original from ugcportal-8wa).
+  productDecisionRef String?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  instagramAccount InstagramAccount    @relation(fields: [instagramAccountId], references: [id], onDelete: Cascade)
+  reviewedBy       User?               @relation("ResaleRightsReviewer", fields: [reviewedByUserId], references: [id])
+  events           ResaleRightsEvent[]
+
+  @@index([reviewedByUserId])
+}
+
+// Append-only audit trail of every status transition. Nothing updates or
+// deletes these rows; the current status lives on ResaleRightsReview, this is
+// the history of how it got there.
+//
+// Unlike RoleChange this one does keep a foreign key to its review: the
+// events are meaningless without it, and both disappear together when the
+// account is disconnected. The actor is kept as a plain id/email snapshot for
+// the same reason RoleChange does — deleting a user must not delete the trail.
+model ResaleRightsEvent {
+  id          String              @id @default(cuid())
+  reviewId    String
+  fromStatus  ResaleRightsStatus?
+  toStatus    ResaleRightsStatus
+  // Null only for system transitions, which may never produce CLEARED.
+  actorUserId String?
+  actorEmail  String?
+  reason      String
+  // Separation of duties (checklist Part E.3): true when the reviewer is the
+  // same admin who connected the account. Soft — recorded and surfaced in the
+  // admin UI rather than refused, because a single-admin instance has no
+  // other option (ugcportal-0ss K3).
+  selfReview  Boolean             @default(false)
+  createdAt   DateTime            @default(now())
+
+  review ResaleRightsReview @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+
+  @@index([reviewId, createdAt])
+}
+
+// An owner-uploaded original (ugcportal-8wa Media row) put forward for sale
+// under one InstagramAccount's clearance. The synced Instagram post is only a
+// discovery pointer (`instagramPermalink`); under the ugcportal-2eh Option A
+// decision the *file* sold is always the owner's upload, never anything
+// fetched from graph.instagram.com.
+//
+// `mediaId` is a plain column with no Prisma relation on purpose: the Media
+// model is being changed on another branch (ugcportal-r1d) and adding the
+// back-relation field there would conflict. ugcportal-74w, which owns the
+// curation UI, should promote it to a real foreign key once both have landed.
+// Until then referential integrity for this column is not enforced by the
+// database — the gate treats a blank mediaId as not sellable, which fails in
+// the safe direction, but a *dangling* id would not be caught here.
+model CuratedPost {
+  id                 String  @id @default(cuid())
+  instagramAccountId String
+  mediaId            String  @unique
+  instagramPermalink String?
+
+  // Null until an admin sets a price through the gated endpoint
+  // (src/app/api/admin/curation/[id]/price/route.ts). Integer minor units, so
+  // no float ever touches money.
+  priceCents Int?
+  currency   String @default("NOK")
+
+  // Per-post triage (checklist Part C / Part E.1). `null` means "not
+  // triaged", which is not sellable — absence is never consent.
+  depictsPeople       Boolean?
+  modelReleaseKey     String?
+  containsMusic       Boolean?
+  thirdPartyCreator   Boolean?
+  sponsoredContent    Boolean?
+  postClearedByUserId String?
+  postClearedAt       DateTime?
+  postClearanceReason String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  instagramAccount InstagramAccount @relation(fields: [instagramAccountId], references: [id], onDelete: Cascade)
+
+  @@index([instagramAccountId])
 }
