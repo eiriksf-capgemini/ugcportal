@@ -148,4 +148,29 @@ USER nextjs
 
 EXPOSE 3000
 
+# Run this image with an explicit memory limit (ugcportal-e86).
+#
+#     docker run --memory=1g ...
+#     # or, in a compose file / k8s manifest:
+#     #   mem_limit: 1g  /  resources.limits.memory: 1Gi
+#
+# Not a nice-to-have, and not something this file can set for you — a memory
+# limit is a runtime property of the container, so there is no Dockerfile
+# directive for it. It matters here because watermark preview generation
+# allocates in native libvips memory, outside the V8 heap and outside
+# anything --max-old-space-size can bound. src/lib/watermark.ts caps how many
+# previews run at once, and it sizes that cap by reading the cgroup's memory
+# limit (src/lib/memory-budget.ts).
+#
+# With no limit set, that read falls back to host RAM, and on a shared host
+# the cap is then derived from memory this container does not actually have —
+# the process is free to allocate its way to an OOM kill, which is the exact
+# failure the cap exists to prevent. The fallback is visible rather than
+# silent (the budget reports source "host"), and WATERMARK_MAX_CONCURRENCY
+# overrides the derived value outright if the environment cannot supply one.
+#
+# Reference points from the derivation in src/lib/watermark.ts: 512 MB
+# derives 1 concurrent preview, 1 GB derives 5, ~1.5 GB and up derives the
+# 8-way ceiling. Setting a limit and load-checking against it is ugcportal-jp4.
+
 CMD ["node", "server.js"]

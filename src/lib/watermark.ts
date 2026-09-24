@@ -1,4 +1,14 @@
+import os from "node:os";
+
 import sharp from "sharp";
+
+import type { ConcurrencyGate, ConcurrencyLimitReason } from "@/lib/concurrency-gate";
+import {
+  ConcurrencyLimitError,
+  createConcurrencyGate,
+} from "@/lib/concurrency-gate";
+import type { MemoryBudget } from "@/lib/memory-budget";
+import { detectMemoryBudget } from "@/lib/memory-budget";
 
 // Longest-edge cap for a generated preview.
 //
@@ -34,16 +44,290 @@ export const PREVIEW_FILE_EXTENSION = ".webp";
 // camera.
 //
 // What this bounds is exactly one decode: a single call cannot expand past
-// ~50 MP (a few hundred MB of native memory) instead of tens of GB. It says
-// nothing about the process as a whole. Nothing here limits how many
-// previews are generated at once, so N concurrent uploads cost N times this,
-// outside the V8 heap and outside any Node-level limit — ~10 simultaneous
-// 50 MP uploads is enough native memory to get a container OOM-killed. A
-// concurrency gate is genuinely needed and is deliberately not bolted on
-// here: the limit has to be derived from the container's memory budget and
-// has to interact with request timeouts (queued uploads hold connections
-// open), which is a design decision of its own. Tracked as ugcportal-e86.
+// ~50 MP instead of tens of GB. It says nothing on its own about how many
+// such decodes run at once — that is the job of the concurrency gate below
+// (ugcportal-e86), and the two only bound the process *together*: this
+// constant fixes the worst case of one operation, and the gate fixes how
+// many worst cases can overlap.
 export const MAX_INPUT_PIXELS = 50_000_000;
+
+// ---------------------------------------------------------------------------
+// Concurrency gate (ugcportal-e86)
+//
+// Preview generation is the one thing this app does that allocates hundreds of
+// megabytes *outside* the V8 heap: libvips buffers live in native memory, so
+// --max-old-space-size does not see them, the GC does not bound them, and the
+// only component that has an opinion about the total is the kernel's OOM
+// killer. Bounding one decode (MAX_INPUT_PIXELS) therefore bounds nothing
+// about the process; a burst of concurrent uploads multiplies it.
+//
+// Policy, stated rather than emergent — a bounded queue that degrades into
+// load shedding:
+//
+//   * up to `limit` previews render at once;
+//   * the next `queueLimit` callers wait for a slot;
+//   * a caller that waits longer than `queueTimeoutMs`, or that arrives when
+//     the queue is already full, is rejected with a WatermarkOverloadedError
+//     carrying a retryAfterSeconds hint. It is never partially processed, and
+//     no upload is ever stored without its preview.
+//
+// Why not pure shedding: uploads arrive in bursts by construction (a
+// multi-file picker sends every file at once), and a limit small enough to
+// protect a 1 GB container would fail most of a perfectly ordinary five-image
+// selection while the server is nearly idle a second later.
+//
+// Why not an unbounded queue: it converts a memory problem into a latency
+// problem and holds HTTP connections open while it does so, which is how a
+// saturated service stops responding to health checks and gets restarted —
+// the outage it was supposed to prevent, with a different cause in the
+// postmortem. Under *sustained* overload (arrival rate above service rate) a
+// queue cannot help by definition; shedding is the only honest answer, and
+// the cap plus the timeout are what force the degradation to happen at a
+// predictable point instead of at whatever depth the heap dies.
+//
+// Note what queueing does *not* cost here: a queued caller's image is already
+// buffered in memory by the HTTP layer before this function is reached, so
+// waiting adds no allocation. The queue depth is therefore bounded by
+// acceptable latency, not by memory, which is why it is expressed as a
+// multiple of the limit rather than derived from the memory budget.
+
+/**
+ * Native memory to reserve for everything that is not a preview: the Next
+ * server, the V8 heap, Prisma/libsql, the S3 client's buffers, and the
+ * request bodies of uploads that are waiting for a slot.
+ *
+ * An estimate, and flagged as one: it has not been measured against the
+ * production image, only reasoned from a Next standalone server's typical
+ * resident set plus the 10 MB image upload cap in src/lib/media.ts. If it is
+ * wrong the derived limit is wrong with it, which is what
+ * WATERMARK_MAX_CONCURRENCY exists to correct without a deploy.
+ */
+export const PREVIEW_PROCESS_BASELINE_BYTES = 320 * 1024 * 1024;
+
+/**
+ * Peak additional resident memory one preview costs, worst case.
+ *
+ * Measured, not guessed — but measured on darwin/arm64 with the same sharp
+ * 0.35.4 / libvips 8.18.6 this app depends on, not inside the alpine image,
+ * so treat it as the right order of magnitude rather than an exact figure for
+ * production. A 49 MP PNG (the worst case MAX_INPUT_PIXELS allows, and worse
+ * than JPEG because libvips cannot shrink-on-load it) cost ~66 MB of peak RSS
+ * per operation with one libvips thread and ~85 MB with sharp's default of
+ * four; the same image as JPEG cost ~31-40 MB. 128 MB is ~1.5x the worst
+ * observed figure, which is the headroom for the allocator behaving
+ * differently under musl than under darwin's.
+ */
+export const PREVIEW_BYTES_PER_OPERATION = 128 * 1024 * 1024;
+
+/**
+ * Ceiling on the *derived* limit, whatever the memory budget says.
+ *
+ * Past this point extra parallelism stops buying throughput: measured on a
+ * 10-core machine, 8 concurrent 49 MP previews took 376ms against 226ms for
+ * 4, i.e. the work was already CPU-bound and the only thing more concurrency
+ * added was resident memory. A large host would otherwise derive a limit of
+ * dozens, which is a worse configuration, not a better one.
+ */
+export const MAX_DERIVED_CONCURRENCY = 8;
+
+/** Queue depth per slot, i.e. worst-case wait of ~4 preview durations. */
+export const DEFAULT_QUEUE_DEPTH_PER_SLOT = 4;
+
+/**
+ * How long a queued upload may wait. Well inside a typical 30-60s proxy or
+ * browser upload timeout, so an overloaded server answers rather than having
+ * the connection cut from the other end with nothing logged.
+ */
+export const DEFAULT_QUEUE_TIMEOUT_MS = 10_000;
+
+/**
+ * Cap on libvips threads per preview; see {@link resolveSharpThreads}.
+ */
+export const MAX_SHARP_THREADS_PER_OPERATION = 4;
+
+/**
+ * Just the variables this module reads.
+ *
+ * Narrower than NodeJS.ProcessEnv on purpose: process.env is assignable to
+ * it, but a test can pass a literal without having to fabricate NODE_ENV and
+ * everything else the app's ProcessEnv declaration requires.
+ */
+export interface WatermarkConcurrencyEnv {
+  readonly WATERMARK_MAX_CONCURRENCY?: string;
+  readonly WATERMARK_QUEUE_LIMIT?: string;
+  readonly WATERMARK_QUEUE_TIMEOUT_MS?: string;
+  readonly WATERMARK_SHARP_THREADS?: string;
+  // Present so process.env (which is an index-signature type) is assignable
+  // without also making this a "weak type" TypeScript refuses to accept it
+  // into. The named keys above are documentation, not a closed set.
+  readonly [key: string]: string | undefined;
+}
+
+export interface WatermarkConcurrencySettings {
+  limit: number;
+  queueLimit: number;
+  queueTimeoutMs: number;
+  sharpThreads: number;
+  /** Where the numbers above came from, for logging and for tests. */
+  budgetBytes: number;
+  budgetSource: MemoryBudget["source"];
+  limitSource: "env" | "derived";
+}
+
+function positiveInt(raw: string | undefined): number | undefined {
+  if (raw === undefined || raw.trim() === "") return undefined;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1) return undefined;
+  return value;
+}
+
+function nonNegativeInt(raw: string | undefined): number | undefined {
+  if (raw === undefined || raw.trim() === "") return undefined;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 0) return undefined;
+  return value;
+}
+
+/**
+ * libvips threads to allow *per preview*.
+ *
+ * sharp's `concurrency` is not a cap on how many images are processed at
+ * once — it is "the maximum number of threads libvips should use to process
+ * *each image*" (sharp's own wording). So it multiplies with this gate rather
+ * than substituting for it: N concurrent previews at the default thread count
+ * is N thread pools, each with its own tile buffers. Measured on a 10-core
+ * machine with four concurrent 49 MP PNG previews: 253 MB of peak RSS at one
+ * thread per image, 337 MB at sharp's default of four, 417 MB at ten — a 65%
+ * memory swing with *no* throughput difference at all (208ms in every case),
+ * because at four concurrent images the cores are already busy.
+ *
+ * So the answer to "does it interact with the gate" is yes, and leaving it
+ * alone would have quietly invalidated the arithmetic above. Two reasons to
+ * pin it rather than trust the default:
+ *
+ *  1. it is the difference between the memory budget meaning something and
+ *     not, per the measurements above; and
+ *  2. the default is the host's core count (on musl — sharp's
+ *     one-thread-on-glibc-without-jemalloc exception does not apply to the
+ *     alpine image), and glib reads that from the machine, not from the
+ *     cgroup's CPU quota. A 2-vCPU container on a 64-core host would default
+ *     to 64 threads per image.
+ *
+ * The rule keeps *total* libvips threads at roughly one per core instead of
+ * one per core per in-flight image. The cost is real but small and only paid
+ * when the server is idle: a single lone 49 MP PNG preview took ~169ms with
+ * one thread against ~158ms with four (3-run means), because the PNG decode
+ * dominates and does not parallelise well.
+ */
+export function resolveSharpThreads(
+  limit: number,
+  cpuCount: number,
+  override?: number,
+): number {
+  if (override !== undefined) return override;
+  return Math.min(
+    MAX_SHARP_THREADS_PER_OPERATION,
+    Math.max(1, Math.floor(cpuCount / Math.max(1, limit))),
+  );
+}
+
+/**
+ * The gate's configuration, derived from the container's memory budget.
+ *
+ * "Derived from the budget, not guessed" is the whole point (and the bead's
+ * explicit requirement): the number of previews that may overlap is whatever
+ * fits in the memory the kernel will actually kill us for exceeding, after
+ * reserving what the rest of the process needs. detectMemoryBudget() reads
+ * that from the cgroup; if there is no cgroup limit it falls back to host RAM
+ * and says so, and on a shared host that will over-provision — which is why
+ * the Dockerfile documents running with an explicit `--memory` and why
+ * WATERMARK_MAX_CONCURRENCY can override the result outright.
+ *
+ * Worked examples with the constants above: a 512 MB container derives 1, 1 GB
+ * derives 5, and anything from ~1.5 GB up derives the 8-way ceiling.
+ *
+ * Every input is a parameter so this is testable without a container.
+ */
+export function resolveWatermarkConcurrencySettings(
+  env: WatermarkConcurrencyEnv = process.env,
+  budget: MemoryBudget = detectMemoryBudget(),
+  cpuCount: number = os.availableParallelism?.() ?? os.cpus().length,
+): WatermarkConcurrencySettings {
+  const override = positiveInt(env.WATERMARK_MAX_CONCURRENCY);
+  const derived = Math.min(
+    MAX_DERIVED_CONCURRENCY,
+    Math.max(
+      1,
+      Math.floor(
+        (budget.bytes - PREVIEW_PROCESS_BASELINE_BYTES) /
+          PREVIEW_BYTES_PER_OPERATION,
+      ),
+    ),
+  );
+  const limit = override ?? derived;
+
+  return {
+    limit,
+    queueLimit:
+      nonNegativeInt(env.WATERMARK_QUEUE_LIMIT) ??
+      limit * DEFAULT_QUEUE_DEPTH_PER_SLOT,
+    queueTimeoutMs:
+      positiveInt(env.WATERMARK_QUEUE_TIMEOUT_MS) ?? DEFAULT_QUEUE_TIMEOUT_MS,
+    sharpThreads: resolveSharpThreads(
+      limit,
+      cpuCount,
+      positiveInt(env.WATERMARK_SHARP_THREADS),
+    ),
+    budgetBytes: budget.bytes,
+    budgetSource: budget.source,
+    limitSource: override === undefined ? "derived" : "env",
+  };
+}
+
+let gate: ConcurrencyGate | undefined;
+let gateSettings: WatermarkConcurrencySettings | undefined;
+
+/**
+ * Built on first use rather than at import time, so the configuration is read
+ * after the runtime has finished populating process.env — and so importing
+ * this module for `resolveWatermarkText` does not reconfigure libvips as a
+ * side effect.
+ */
+function getGate(): ConcurrencyGate {
+  if (gate) return gate;
+
+  const settings = resolveWatermarkConcurrencySettings();
+  // Process-global, and applied here because this is the only sharp user in
+  // the app; if that changes, this becomes a shared setting and should move.
+  sharp.concurrency(settings.sharpThreads);
+  gateSettings = settings;
+  gate = createConcurrencyGate({
+    name: "watermark preview generation",
+    limit: settings.limit,
+    queueLimit: settings.queueLimit,
+    queueTimeoutMs: settings.queueTimeoutMs,
+  });
+  return gate;
+}
+
+/**
+ * Live view of the gate, for tests and for anything that wants to log how
+ * close the process is running to its bound.
+ */
+export function watermarkConcurrencyStats() {
+  const stats = getGate().stats();
+  return { ...stats, settings: gateSettings as WatermarkConcurrencySettings };
+}
+
+/**
+ * Drops the memoised gate so the next call rebuilds it from the current
+ * environment. Exists for tests; nothing in the app calls it, because
+ * resizing a live pool would let in-flight work exceed either bound.
+ */
+export function resetWatermarkConcurrencyGate(): void {
+  gate = undefined;
+  gateSettings = undefined;
+}
 
 // Fallback when WATERMARK_TEXT is unset. Documented in env.example.
 const DEFAULT_WATERMARK_TEXT = "ugcportal";
@@ -106,6 +390,44 @@ export class WatermarkFontUnavailableError extends Error {
   constructor(message: string, options?: { cause?: unknown }) {
     super(message, options);
     this.name = "WatermarkFontUnavailableError";
+  }
+}
+
+/**
+ * Thrown when the *service* is too busy to start this preview (ugcportal-e86)
+ * — the concurrency gate was full and either the queue was too, or the wait
+ * ran past its timeout.
+ *
+ * Deliberately not a {@link WatermarkError}: nothing is wrong with the file,
+ * and mapping it to a 4xx would blame the uploader for the server's capacity
+ * and hide a saturation incident from alerting. It is the one error here that
+ * is genuinely worth retrying, hence {@link retryAfterSeconds}.
+ *
+ * Caveat, stated plainly: src/app/api/media/route.ts currently rethrows
+ * everything that is not a WatermarkError, so today this surfaces as a 500
+ * with no Retry-After rather than the 503 it deserves. The honest mapping is
+ * a few lines in that route, which is owned by another change in flight, so
+ * it is tracked separately (ugcportal-u7g) — the shape of this error (a
+ * distinct class carrying retryAfterSeconds) is what makes that a one-liner
+ * when it lands. Blame-wise the current behaviour is already correct: a 5xx,
+ * logged as "watermark service unavailable".
+ */
+export class WatermarkOverloadedError extends Error {
+  readonly reason: ConcurrencyLimitReason;
+  readonly retryAfterSeconds: number;
+
+  constructor(
+    message: string,
+    options: {
+      cause?: unknown;
+      reason: ConcurrencyLimitReason;
+      retryAfterSeconds: number;
+    },
+  ) {
+    super(message, { cause: options.cause });
+    this.name = "WatermarkOverloadedError";
+    this.reason = options.reason;
+    this.retryAfterSeconds = options.retryAfterSeconds;
   }
 }
 
@@ -354,8 +676,10 @@ export async function assertWatermarkFontAvailable(): Promise<void> {
  * the honest answer.
  *
  * Caveat worth naming rather than papering over: it can still fail for
- * non-file reasons, most obviously an allocation failure under the
- * concurrent-load scenario in MAX_INPUT_PIXELS' comment (ugcportal-e86).
+ * non-file reasons, most obviously an allocation failure. The concurrency
+ * gate (ugcportal-e86) makes that far less likely by bounding how many
+ * decodes overlap, but it cannot make it impossible — the per-operation
+ * memory figure the gate sizes against is an estimate, not a guarantee.
  * Those are indistinguishable from a corrupt upload at this layer without
  * parsing libvips error strings, which is far too brittle to rely on. The
  * narrowing removes the systemic misattributions; it does not claim to remove
@@ -420,8 +744,13 @@ async function decodeAndDownscale(input: Buffer, limitInputPixels: number) {
  *
  * The error type carries the blame, and callers depend on that distinction:
  * {@link WatermarkError} means the *file* could not be decoded (map it to a
- * 4xx), {@link WatermarkFontUnavailableError} and any other error mean the
- * *runtime* is at fault (map those to a 5xx, so alerting sees them).
+ * 4xx), {@link WatermarkFontUnavailableError}, {@link WatermarkOverloadedError}
+ * and any other error mean the *runtime* is at fault (map those to a 5xx, so
+ * alerting sees them).
+ *
+ * Bounded, not unbounded: concurrent calls past the gate's limit queue, and
+ * past the queue's cap or timeout they fail fast with
+ * {@link WatermarkOverloadedError}. No call waits indefinitely.
  */
 export async function generateWatermarkedPreview(
   input: Buffer,
@@ -434,6 +763,35 @@ export async function generateWatermarkedPreview(
   const text = resolveWatermarkText(options.text);
   const limitInputPixels = options.limitInputPixels ?? MAX_INPUT_PIXELS;
 
+  // Everything above this line is cheap (the font probe memoises after the
+  // first call), so it stays outside the gate: a broken deployment should
+  // fail immediately rather than queue behind previews that are also going to
+  // fail. Everything below allocates native memory, so all of it is inside.
+  try {
+    return await getGate().run(() =>
+      renderPreview(input, text, limitInputPixels),
+    );
+  } catch (error) {
+    if (error instanceof ConcurrencyLimitError) {
+      throw new WatermarkOverloadedError(
+        "Too many previews are being generated right now",
+        {
+          cause: error,
+          reason: error.reason,
+          retryAfterSeconds: error.retryAfterSeconds,
+        },
+      );
+    }
+    throw error;
+  }
+}
+
+/** The part of preview generation that actually costs memory. */
+async function renderPreview(
+  input: Buffer,
+  text: string,
+  limitInputPixels: number,
+): Promise<PreviewResult> {
   // Only this step's failures become a WatermarkError; see its doc comment.
   const { data: pixels, info } = await decodeAndDownscale(
     input,
