@@ -28,6 +28,15 @@
 # build time (in the builder stage, before `next build`) so
 # `src/generated/prisma` exists for the app to import and for the build
 # to bundle.
+#
+# sharp note (ugcportal-44q): watermark generation needs sharp's native
+# libvips binding, which npm installs as a platform-specific optional
+# dependency (@img/sharp-linuxmusl-x64 on this alpine base). Because the
+# builder stage runs on the same platform as the runner, `npm ci` resolves
+# the musl build and Next's tracing carries it into
+# `.next/standalone/node_modules` alongside @libsql — verified by inspecting
+# the traced output. What tracing cannot supply is font *files*; see the apk
+# install in the runner stage.
 
 ARG NODE_VERSION=20-alpine
 
@@ -85,6 +94,15 @@ ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
     PORT=3000 \
     HOSTNAME=0.0.0.0
+
+# Fonts for the watermark overlay (ugcportal-44q). sharp draws the preview's
+# watermark text through libvips -> pango -> fontconfig, and libvips ships no
+# font files of its own; a bare node:*-alpine image has none either. Without
+# this the text silently renders as nothing and previews would go out
+# effectively unmarked. `fontconfig` supplies /etc/fonts so the font is
+# actually discoverable; `font-dejavu` is the family named first in the font
+# stack in src/lib/watermark.ts.
+RUN apk add --no-cache fontconfig font-dejavu
 
 # Non-root runtime user (K1: "run as a non-root user in the final stage").
 RUN addgroup --system --gid 1001 nodejs \

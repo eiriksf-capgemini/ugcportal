@@ -82,11 +82,19 @@ model VerificationToken {
 // One row per uploaded file (ugcportal-8wa). `key` is the object's path in
 // the S3-compatible bucket (see src/lib/s3.ts); the file bytes themselves
 // live only in storage, never in the DB.
+//
+// `previewKey` points at the downscaled, watermarked copy (ugcportal-44q,
+// see src/lib/watermark.ts) and is the *only* object anything browsable may
+// expose — `key` is the paid original (ugcportal-5d6) and must never reach
+// the gallery. Nullable because VIDEO rows have no preview yet (watermarked
+// poster frames are deferred, see ugcportal-pmb) and because rows created
+// before this column existed have none either.
 model Media {
   id           String    @id @default(cuid())
   userId       String
   kind         MediaKind
   key          String    @unique
+  previewKey   String?   @unique
   mimeType     String
   sizeBytes    Int
   originalName String
