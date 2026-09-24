@@ -72,6 +72,9 @@ function selectedRow(overrides: Record<string, unknown> = {}) {
     sizeBytes: 1234,
     originalName: "photo.png",
     createdAt: new Date("2026-09-24T10:00:00Z"),
+    // Owner's own view: unpublished by default, and still listed. See the
+    // regression test at the bottom of the GET block (ugcportal-r1d).
+    publishedAt: null,
     ...overrides,
   };
 }
@@ -706,6 +709,31 @@ describe("GET /api/media", () => {
     expect(body.items).toEqual([]);
     expect(body.nextCursor).toBeNull();
     expect(body.hasMore).toBe(false);
+  });
+
+  it("still lists the owner's own unpublished rows (ugcportal-r1d)", async () => {
+    authMock.mockResolvedValue({ user: { id: "user-1" } });
+    mediaFindManyMock.mockResolvedValue([
+      selectedRow({ id: "draft", publishedAt: null }),
+      selectedRow({
+        id: "live",
+        previewKey: "previews/user-1/live.webp",
+        publishedAt: new Date("2026-09-24T12:00:00Z"),
+      }),
+    ]);
+
+    const body = await (await GET(buildListRequest())).json();
+
+    // This is the owner's library, not the public feed. Filtering it by
+    // publishedAt would hide the very rows the publish toggle acts on.
+    const args = mediaFindManyMock.mock.calls[0][0];
+    expect(args.where).not.toHaveProperty("publishedAt");
+    expect(body.items.map((i: { id: string }) => i.id)).toEqual([
+      "draft",
+      "live",
+    ]);
+    expect(body.items[0].publishedAt).toBeNull();
+    expect(body.items[1].publishedAt).toBe("2026-09-24T12:00:00.000Z");
   });
 
   it("takes nextCursor from an emitted row, not from a filtered-out one", async () => {

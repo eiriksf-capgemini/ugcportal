@@ -50,6 +50,10 @@ const ownedMedia: MediaModel = {
   sizeBytes: 1024,
   originalName: "photo.png",
   createdAt: new Date("2026-01-01T00:00:00.000Z"),
+  // Private until its owner publishes it (ugcportal-r1d). Renaming and
+  // deleting are indifferent to publish state; publishing lives in
+  // ./publish/route.ts.
+  publishedAt: null,
 };
 
 // A VIDEO row, which gets no preview yet (ugcportal-pmb owns the poster
@@ -319,9 +323,33 @@ describe("PATCH /api/media/[id] as the owner", () => {
         "mimeType",
         "originalName",
         "previewKey",
+        // Added by ugcportal-r1d. A rename does not change it — see the
+        // assertion below — but the projection reports it, because the
+        // owner's UI needs to know whether the item it just renamed is
+        // public.
+        "publishedAt",
         "sizeBytes",
       ].sort(),
     );
+  });
+
+  it("does not change publish state while renaming (ugcportal-r1d)", async () => {
+    mediaUpdateManyMock.mockResolvedValue({ count: 1 });
+
+    const response = await PATCH(
+      patchRequest({ originalName: "holiday.png", publishedAt: new Date() }),
+      context(),
+    );
+    const body = await response.json();
+
+    // `originalName` remains the only column PATCH writes; visibility is
+    // changed only through POST/DELETE /api/media/[id]/publish, and a
+    // `publishedAt` smuggled into the rename body is ignored like any other
+    // unknown field.
+    expect(mediaUpdateManyMock.mock.calls[0][0].data).toEqual({
+      originalName: "holiday.png",
+    });
+    expect(body.publishedAt).toBeNull();
   });
 
   it("ignores unknown fields instead of forwarding them to Prisma", async () => {

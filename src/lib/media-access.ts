@@ -24,6 +24,18 @@ export const MEDIA_PUBLIC_SELECT = {
   sizeBytes: true,
   originalName: true,
   createdAt: true,
+  // Visibility state (ugcportal-r1d). Safe in both directions: on the public
+  // listing it is always non-null and means "public since", and a null is only
+  // ever visible to the row's own owner, because the public listing filters
+  // non-null rows only. The owner's view needs it to render a publish toggle
+  // at all, and the publish endpoint needs it to report the new state.
+  publishedAt: true,
+  // `userId` is deliberately still absent. On the owner's view it would be
+  // redundant (every row is theirs); on the anonymous public feed it would let
+  // anyone group the whole gallery by uploader and enumerate one person's
+  // complete published output from an id they never chose to show. If the
+  // gallery later wants attribution, that is a display name the uploader
+  // opted into (ugcportal-71y's call), not the internal account id.
 } as const;
 
 /**
@@ -47,6 +59,7 @@ export function toPublicMedia(media: MediaModel): PublicMedia {
     sizeBytes: media.sizeBytes,
     originalName: media.originalName,
     createdAt: media.createdAt,
+    publishedAt: media.publishedAt,
   };
 }
 
