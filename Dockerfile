@@ -188,6 +188,25 @@ EXPOSE 3000
 # the request body being decoded) and a queued one ~20 MB, on top of a
 # ~320 MB process baseline.
 #
+# IMPORTANT — what that figure does NOT cover. It prices *gated image
+# preview generation* and nothing else, so 1 GB is a floor for this gate,
+# not a sufficient size for the upload route as a whole. Three paths are
+# outside the gate today and can exceed it on their own:
+#
+#   - video uploads, which are accepted at up to 200 MB, copied again into a
+#     Buffer (~400 MB resident each), and never reach the gate at all since
+#     preview generation is image-only until ugcportal-pmb. Two concurrent
+#     videos exceed 1 GB while the gate reports inFlight: 0;
+#   - oversized uploads that will ultimately be rejected. The whole body is
+#     buffered against MAX_UPLOAD_BYTES (205 MB) *before* the per-kind cap is
+#     checked, so four concurrent 200 MB POSTs declaring image/jpeg cost
+#     ~820 MB and are then refused;
+#   - any combination of the above, since nothing coordinates them.
+#
+# Bounding those is ugcportal-05b. Until it lands, size the container for
+# your actual upload mix rather than from the preview table alone — or keep
+# video uploads off this deployment.
+#
 # Past ~1 GB the limit is bounded by libuv's worker pool rather than by
 # memory, so a larger container needs UV_THREADPOOL_SIZE raised to make use
 # of it — set in this container's environment (docker run -e / compose

@@ -7,6 +7,7 @@ import {
   IN_FLIGHT_BYTES_PER_UPLOAD,
   LIBUV_DEFAULT_THREADPOOL_SIZE,
   MAX_DERIVED_CONCURRENCY,
+  MAX_QUEUE_TIMEOUT_MS,
   MAX_SHARP_THREADS_PER_OPERATION,
   MIN_VIABLE_BUDGET_BYTES,
   PREVIEW_BYTES_PER_OPERATION,
@@ -187,6 +188,123 @@ describe("resolveWatermarkConcurrencySettings", () => {
     );
     expect(settings.limit).toBe(1);
     expect(settings.limitSource).toBe("derived");
+  });
+
+  it("clamps WATERMARK_MAX_CONCURRENCY to the libuv pool and says so", () => {
+    // Round-4 finding 1. Admitting 8 sharp operations onto a 4-worker pool
+    // does not run 8 of them; it parks the surplus in libuv's own uncapped,
+    // invisible queue and starves the dns.lookup for the S3 upload that
+    // follows every preview — the failure the ceiling was added to prevent.
+    const settings = resolveWatermarkConcurrencySettings(
+      { WATERMARK_MAX_CONCURRENCY: "8" },
+      budget(8 * GiB),
+      cpu(8),
+    );
+    expect(settings.limit).toBe(LIBUV_DEFAULT_THREADPOOL_SIZE - 1);
+    expect(settings.limitSource).toBe("env");
+    expect(settings.clamped).toHaveLength(1);
+    expect(settings.clamped[0]).toContain("WATERMARK_MAX_CONCURRENCY=8");
+    expect(settings.clamped[0]).toContain("UV_THREADPOOL_SIZE");
+  });
+
+  it("honours WATERMARK_MAX_CONCURRENCY when the pool can back it", () => {
+    const settings = resolveWatermarkConcurrencySettings(
+      { WATERMARK_MAX_CONCURRENCY: "6", UV_THREADPOOL_SIZE: "8" },
+      budget(8 * GiB),
+      cpu(8),
+    );
+    expect(settings.limit).toBe(6);
+    expect(settings.clamped).toEqual([]);
+  });
+
+  it("clamps WATERMARK_SHARP_THREADS so the budget stays meaningful", () => {
+    // Round-4 finding 3. 64 threads per preview invalidates the measured
+    // per-operation figure the whole projection rests on.
+    const settings = resolveWatermarkConcurrencySettings(
+      { WATERMARK_SHARP_THREADS: "64" },
+      budget(GiB),
+      cpu(8),
+    );
+    expect(settings.sharpThreads).toBe(MAX_SHARP_THREADS_PER_OPERATION);
+    expect(settings.clamped[0]).toContain("WATERMARK_SHARP_THREADS=64");
+  });
+
+  it("clamps WATERMARK_QUEUE_TIMEOUT_MS so the wait stays bounded", () => {
+    const settings = resolveWatermarkConcurrencySettings(
+      { WATERMARK_QUEUE_TIMEOUT_MS: "3600000" },
+      budget(GiB),
+      cpu(8),
+    );
+    expect(settings.queueTimeoutMs).toBe(MAX_QUEUE_TIMEOUT_MS);
+    expect(settings.clamped[0]).toContain("WATERMARK_QUEUE_TIMEOUT_MS=3600000");
+  });
+
+  it("does not clamp WATERMARK_QUEUE_LIMIT, but does count it", () => {
+    // The other half of the rule: the queue's only cost is memory, and
+    // fitsBudget is what memory claims are supposed to be checked against.
+    const settings = resolveWatermarkConcurrencySettings(
+      { WATERMARK_QUEUE_LIMIT: "512" },
+      budget(GiB),
+      cpu(8),
+    );
+    expect(settings.queueLimit).toBe(512);
+    expect(settings.clamped).toEqual([]);
+    expect(settings.projectedPeakBytes).toBe(
+      PREVIEW_PROCESS_BASELINE_BYTES +
+        3 * IN_FLIGHT_BYTES_PER_UPLOAD +
+        512 * UPLOAD_BODY_BYTES,
+    );
+    expect(settings.fitsBudget).toBe(false);
+  });
+
+  it("lets WATERMARK_MEMORY_BUDGET_MB escape an invisible cgroup limit", () => {
+    // Round-4 finding 2. The documented escape hatch has to fix the *budget*,
+    // not just the limit: a 512 MB container on a 64 GB host that overrode
+    // only WATERMARK_MAX_CONCURRENCY still had its queue sized from 64 GB,
+    // committed ~1004 MB, and reported fitsBudget true — the one scenario
+    // the knob exists for was the one it did not cover.
+    const hostRam = 64 * GiB;
+    const settings = resolveWatermarkConcurrencySettings(
+      { WATERMARK_MEMORY_BUDGET_MB: "512" },
+      { bytes: hostRam, source: "host" },
+      cpu(8),
+      hostRam,
+    );
+    expect(settings.budgetBytes).toBe(512 * MiB);
+    expect(settings.budgetSource).toBe("env");
+    expect(settings.limit).toBe(1);
+    expect(settings.queueLimit).toBe(2);
+    expect(settings.projectedPeakBytes).toBe(508 * MiB);
+    expect(settings.fitsBudget).toBe(true);
+  });
+
+  it("reports over-budget rather than shrinking an explicit limit", () => {
+    // The other side of "never clamped to the memory budget": an operator
+    // who insists on 3 concurrent previews in a 512 MB container gets them,
+    // gets no queue (there is nothing left to give it), and gets told the
+    // configuration does not fit — rather than quietly getting 1.
+    const settings = resolveWatermarkConcurrencySettings(
+      { WATERMARK_MAX_CONCURRENCY: "3" },
+      budget(512 * MiB),
+      cpu(8),
+    );
+    expect(settings.limit).toBe(3);
+    expect(settings.queueLimit).toBe(0);
+    expect(settings.clamped).toEqual([]);
+    expect(settings.fitsBudget).toBe(false);
+    expect(settings.projectedPeakBytes).toBe(764 * MiB);
+  });
+
+  it("will not accept a budget larger than the machine", () => {
+    const hostRam = 8 * GiB;
+    const settings = resolveWatermarkConcurrencySettings(
+      { WATERMARK_MEMORY_BUDGET_MB: "999999" },
+      { bytes: hostRam, source: "host" },
+      cpu(8),
+      hostRam,
+    );
+    expect(settings.budgetBytes).toBe(hostRam);
+    expect(settings.clamped[0]).toContain("more memory than the machine has");
   });
 
   it("lets WATERMARK_MAX_CONCURRENCY override the derivation", () => {
@@ -501,18 +619,63 @@ describe("generateWatermarkedPreview under concurrency", () => {
   it("blames the right thing when the configuration does not fit", () => {
     // fitsBudget goes false for two unrelated reasons, and naming the wrong
     // one sends the operator to a knob that cannot help during exactly the
-    // incident this line exists for. An oversized explicit limit on a
-    // roomy host is not "below the 468 MB floor".
-    process.env.WATERMARK_MAX_CONCURRENCY = "64";
+    // incident this line exists for. A 1 GB container with an over-large
+    // queue is not "below the 468 MB floor".
+    //
+    // The budget is pinned rather than read from the machine. An earlier
+    // version of this test asserted fitsBudget === false against real host
+    // RAM, which only held because the projection happened to exceed this
+    // workstation's memory; on a larger machine the assertion inverted and
+    // the next line threw on an empty warnSpy. A test whose outcome depends
+    // on the developer's RAM is not testing the code.
+    process.env.WATERMARK_MEMORY_BUDGET_MB = "1024";
     process.env.WATERMARK_QUEUE_LIMIT = "512";
+    resetWatermarkConcurrencyGate();
+    warnSpy.mockClear();
+
+    const stats = watermarkConcurrencyStats();
+    expect(stats.settings.budgetBytes).toBe(1024 * MiB);
+    expect(stats.settings.fitsBudget).toBe(false);
+    const line = warnSpy.mock.calls[0][0] as string;
+    expect(line).toContain("WATERMARK_MAX_CONCURRENCY / WATERMARK_QUEUE_LIMIT");
+    expect(line).not.toContain("floor");
+  });
+
+  it("names the floor, not the knobs, when the container is simply too small", () => {
+    process.env.WATERMARK_MEMORY_BUDGET_MB = "256";
     resetWatermarkConcurrencyGate();
     warnSpy.mockClear();
 
     const stats = watermarkConcurrencyStats();
     expect(stats.settings.fitsBudget).toBe(false);
     const line = warnSpy.mock.calls[0][0] as string;
-    expect(line).toContain("WATERMARK_MAX_CONCURRENCY / WATERMARK_QUEUE_LIMIT");
-    expect(line).not.toContain("floor");
+    expect(line).toContain("floor");
+    expect(line).toContain("give it more memory");
+  });
+
+  it("warns when it has to clamp an override, rather than silently obeying", () => {
+    // The round-4 class of bug: an override that quietly exceeds a bound the
+    // budget arithmetic depends on makes fitsBudget a lie. Clamping without
+    // saying so would only move the lie.
+    process.env.WATERMARK_MEMORY_BUDGET_MB = "2048";
+    process.env.WATERMARK_MAX_CONCURRENCY = "64";
+    process.env.WATERMARK_SHARP_THREADS = "64";
+    process.env.WATERMARK_QUEUE_TIMEOUT_MS = "600000";
+    resetWatermarkConcurrencyGate();
+    warnSpy.mockClear();
+
+    const { settings } = watermarkConcurrencyStats();
+    expect(settings.limit).toBe(LIBUV_DEFAULT_THREADPOOL_SIZE - 1);
+    expect(settings.sharpThreads).toBe(MAX_SHARP_THREADS_PER_OPERATION);
+    expect(settings.queueTimeoutMs).toBe(MAX_QUEUE_TIMEOUT_MS);
+    expect(settings.clamped).toHaveLength(3);
+    // And the projection describes what is in force, not what was asked for.
+    expect(settings.fitsBudget).toBe(true);
+
+    const line = warnSpy.mock.calls[0][0] as string;
+    expect(line).toContain("WATERMARK_MAX_CONCURRENCY=64 clamped to 3");
+    expect(line).toContain("WATERMARK_SHARP_THREADS=64 clamped to 4");
+    expect(line).toContain("WATERMARK_QUEUE_TIMEOUT_MS=600000 clamped to");
   });
 
   it("warns, rather than logging quietly, when no container memory limit was found", () => {

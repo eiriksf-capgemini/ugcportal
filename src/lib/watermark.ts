@@ -1,3 +1,5 @@
+import os from "node:os";
+
 import sharp from "sharp";
 
 import type { ConcurrencyGate, ConcurrencyLimitReason } from "@/lib/concurrency-gate";
@@ -210,6 +212,74 @@ export const DEFAULT_QUEUE_TIMEOUT_MS = 10_000;
 export const MAX_SHARP_THREADS_PER_OPERATION = 4;
 
 /**
+ * Longest wait an operator may configure for a queued upload.
+ *
+ * The queue's memory cost is bounded by its depth, not by how long anyone
+ * waits, so an enormous timeout does not break the budget — it breaks the
+ * other promise this module makes, that a caller gets a bounded wait and a
+ * documented answer rather than a held-open connection. Two minutes is
+ * already past any sensible proxy timeout; beyond it the caller is gone and
+ * the slot is being held for nobody.
+ */
+export const MAX_QUEUE_TIMEOUT_MS = 120_000;
+
+// ---------------------------------------------------------------------------
+// How overrides are treated
+//
+// One rule, applied to every variable below, because the alternative — each
+// knob deciding for itself — is how three of them ended up able to silently
+// invalidate the arithmetic that `fitsBudget` reports on:
+//
+//   An override is clamped exactly where exceeding it would break something
+//   this module promises, and clamping is always reported (settings.clamped,
+//   logged as a warning). It is never clamped to the memory budget, because
+//   that is the one input an operator may legitimately know better than we
+//   do — so the budget itself is overridable instead, and the projection is
+//   always recomputed from the settings that actually took effect.
+//
+// Concretely: WATERMARK_MAX_CONCURRENCY is clamped to the libuv worker pool
+// (past it, previews queue invisibly inside libuv and starve the DNS lookup
+// of the S3 upload that follows each one); WATERMARK_SHARP_THREADS to
+// MAX_SHARP_THREADS_PER_OPERATION (past it, PREVIEW_BYTES_PER_OPERATION stops
+// describing reality); WATERMARK_QUEUE_TIMEOUT_MS to MAX_QUEUE_TIMEOUT_MS
+// (past it, "bounded wait" stops being true). WATERMARK_QUEUE_LIMIT is *not*
+// clamped: its only cost is memory, and memory is exactly what
+// projectedPeakBytes/fitsBudget already tell the truth about.
+//
+// The consequence to keep in mind: `fitsBudget` is an honest statement about
+// the configuration that is actually in force, including overrides, and never
+// about the one that was asked for.
+//
+// Every variable this module reads, and what a hostile or merely wrong value
+// does (audited rather than assumed, because the first three rounds of this
+// change all shipped an override that could quietly invalidate the budget):
+//
+//   WATERMARK_MEMORY_BUDGET_MB  tiny -> limit 1, no queue, fitsBudget false
+//                               and a warning; huge -> clamped to host RAM.
+//   WATERMARK_MAX_CONCURRENCY   above the pool -> clamped, warned; above what
+//                               memory affords -> honoured, queue drops to 0,
+//                               fitsBudget false.
+//   WATERMARK_QUEUE_LIMIT       any size -> honoured and counted; fitsBudget
+//                               goes false when it does not fit.
+//   WATERMARK_QUEUE_TIMEOUT_MS  huge -> clamped to MAX_QUEUE_TIMEOUT_MS; tiny
+//                               -> effectively pure shedding, which is safe.
+//   WATERMARK_SHARP_THREADS     above the measured cap -> clamped, warned.
+//   UV_THREADPOOL_SIZE          raises the ceiling up to MAX_DERIVED_
+//                               CONCURRENCY. The one unfixable case: set in a
+//                               .env file it does not reach libuv but is
+//                               still read here, so the ceiling rises while
+//                               the real pool does not. No API exposes the
+//                               real pool size; env.example says not to set
+//                               it there. fitsBudget stays honest either way,
+//                               since the harm is libuv queueing, not memory.
+//   WATERMARK_TEXT              sanitised by resolveWatermarkText (ugcportal-
+//                               44q); no effect on any of this.
+//
+// Anything non-integer, zero or negative falls back to the derived value
+// rather than throwing: a typo in one variable must not turn every upload
+// into a 500.
+
+/**
  * Smallest memory budget in which the gate can honour its own arithmetic:
  * the baseline plus one upload being processed (its body and its decode).
  * Currently 468 MB. Below this the limit is clamped up to 1 — a gate that
@@ -233,6 +303,7 @@ export const MIN_VIABLE_BUDGET_BYTES =
  * everything else the app's ProcessEnv declaration requires.
  */
 export interface WatermarkConcurrencyEnv {
+  readonly WATERMARK_MEMORY_BUDGET_MB?: string;
   readonly WATERMARK_MAX_CONCURRENCY?: string;
   readonly WATERMARK_QUEUE_LIMIT?: string;
   readonly WATERMARK_QUEUE_TIMEOUT_MS?: string;
@@ -251,7 +322,7 @@ export interface WatermarkConcurrencySettings {
   sharpThreads: number;
   /** Where the numbers above came from, for logging and for tests. */
   budgetBytes: number;
-  budgetSource: MemoryBudget["source"];
+  budgetSource: MemoryBudget["source"] | "env";
   cpus: number;
   cpuSource: CpuBudget["source"];
   limitSource: "env" | "derived";
@@ -259,6 +330,11 @@ export interface WatermarkConcurrencySettings {
   projectedPeakBytes: number;
   /** False when `projectedPeakBytes` exceeds the budget; see MIN_VIABLE_BUDGET_BYTES. */
   fitsBudget: boolean;
+  /**
+   * One entry per environment override that was reduced, explaining which and
+   * why. Empty when every override was honoured as given.
+   */
+  clamped: string[];
 }
 
 function positiveInt(raw: string | undefined): number | undefined {
@@ -361,7 +437,13 @@ export function resolveSharpThreads(
   cpus: number,
   override?: number,
 ): number {
-  if (override !== undefined) return override;
+  // The override is clamped like everything else (see "How overrides are
+  // treated" above): 64 threads per preview would multiply the per-operation
+  // memory this module's whole budget is built on, and it is measured only
+  // up to four.
+  if (override !== undefined) {
+    return Math.min(MAX_SHARP_THREADS_PER_OPERATION, Math.max(1, override));
+  }
   return Math.min(
     MAX_SHARP_THREADS_PER_OPERATION,
     Math.max(1, Math.floor(cpus / Math.max(1, limit))),
@@ -434,18 +516,59 @@ export function resolveSharpThreads(
  */
 export function resolveWatermarkConcurrencySettings(
   env: WatermarkConcurrencyEnv = process.env,
-  budget: MemoryBudget = detectMemoryBudget(),
+  detected: MemoryBudget = detectMemoryBudget(),
   cpu: CpuBudget = detectCpuBudget(),
+  hostMemoryBytes: number = os.totalmem(),
 ): WatermarkConcurrencySettings {
-  const override = positiveInt(env.WATERMARK_MAX_CONCURRENCY);
-  const spendable = budget.bytes - PREVIEW_PROCESS_BASELINE_BYTES;
-  const limit =
-    override ??
-    Math.min(
-      resolveConcurrencyCeiling(env),
+  const clamped: string[] = [];
+
+  // 1. The budget. Overridable outright, because "the cgroup is invisible so
+  //    the detected number is wrong" is the whole reason an escape hatch
+  //    exists, and overriding only the *limit* does not escape anything —
+  //    the queue would still be sized from a budget everyone agrees is
+  //    fiction. Capped at host RAM for the same reason detectMemoryBudget
+  //    caps the cgroup value: a budget larger than the machine cannot be
+  //    honoured whoever asserts it.
+  const budgetOverrideMb = positiveInt(env.WATERMARK_MEMORY_BUDGET_MB);
+  let budgetBytes = detected.bytes;
+  let budgetSource: WatermarkConcurrencySettings["budgetSource"] =
+    detected.source;
+  if (budgetOverrideMb !== undefined) {
+    const requested = budgetOverrideMb * 1024 * 1024;
+    budgetBytes = Math.min(requested, hostMemoryBytes);
+    budgetSource = "env";
+    if (budgetBytes !== requested) {
+      clamped.push(
+        `WATERMARK_MEMORY_BUDGET_MB=${budgetOverrideMb} is more memory than the machine has; clamped to ${mib(budgetBytes)}`,
+      );
+    }
+  }
+
+  const spendable = budgetBytes - PREVIEW_PROCESS_BASELINE_BYTES;
+
+  // 2. The limit. An explicit value wins over the memory derivation but not
+  //    over the libuv pool, which is a property of the runtime rather than
+  //    an estimate: admitting more previews than there are workers does not
+  //    run them, it queues them somewhere this gate cannot see or cap.
+  const ceiling = resolveConcurrencyCeiling(env);
+  const limitOverride = positiveInt(env.WATERMARK_MAX_CONCURRENCY);
+  let limit: number;
+  if (limitOverride === undefined) {
+    limit = Math.min(
+      ceiling,
       Math.max(1, Math.floor(spendable / IN_FLIGHT_BYTES_PER_UPLOAD)),
     );
+  } else {
+    limit = Math.min(limitOverride, ceiling);
+    if (limit !== limitOverride) {
+      clamped.push(
+        `WATERMARK_MAX_CONCURRENCY=${limitOverride} clamped to ${limit}: one fewer than the libuv worker pool, which is all that can actually run at once (raise UV_THREADPOOL_SIZE in the container environment — not in .env — to lift it)`,
+      );
+    }
+  }
 
+  // 3. The queue. Not clamped, only counted: its cost is memory, and memory
+  //    is what fitsBudget is for.
   const forQueue = spendable - limit * IN_FLIGHT_BYTES_PER_UPLOAD;
   const queueLimit =
     nonNegativeInt(env.WATERMARK_QUEUE_LIMIT) ??
@@ -453,6 +576,26 @@ export function resolveWatermarkConcurrencySettings(
       limit * DEFAULT_QUEUE_DEPTH_PER_SLOT,
       Math.max(0, Math.floor(forQueue / UPLOAD_BODY_BYTES)),
     );
+
+  // 4. The wait. Clamped because past this point "bounded wait" stops being
+  //    a true description of the policy, not because of memory.
+  const timeoutOverride = positiveInt(env.WATERMARK_QUEUE_TIMEOUT_MS);
+  let queueTimeoutMs = timeoutOverride ?? DEFAULT_QUEUE_TIMEOUT_MS;
+  if (queueTimeoutMs > MAX_QUEUE_TIMEOUT_MS) {
+    clamped.push(
+      `WATERMARK_QUEUE_TIMEOUT_MS=${queueTimeoutMs} clamped to ${MAX_QUEUE_TIMEOUT_MS}: a longer wait holds a connection open past any useful deadline`,
+    );
+    queueTimeoutMs = MAX_QUEUE_TIMEOUT_MS;
+  }
+
+  // 5. Threads. Clamped by resolveSharpThreads; reported here.
+  const threadOverride = positiveInt(env.WATERMARK_SHARP_THREADS);
+  const sharpThreads = resolveSharpThreads(limit, cpu.cpus, threadOverride);
+  if (threadOverride !== undefined && sharpThreads !== threadOverride) {
+    clamped.push(
+      `WATERMARK_SHARP_THREADS=${threadOverride} clamped to ${sharpThreads}: more libvips threads per preview than the per-operation memory figure was measured at, which would make the budget meaningless`,
+    );
+  }
 
   const projectedPeakBytes =
     PREVIEW_PROCESS_BASELINE_BYTES +
@@ -462,20 +605,16 @@ export function resolveWatermarkConcurrencySettings(
   return {
     limit,
     queueLimit,
-    queueTimeoutMs:
-      positiveInt(env.WATERMARK_QUEUE_TIMEOUT_MS) ?? DEFAULT_QUEUE_TIMEOUT_MS,
-    sharpThreads: resolveSharpThreads(
-      limit,
-      cpu.cpus,
-      positiveInt(env.WATERMARK_SHARP_THREADS),
-    ),
-    budgetBytes: budget.bytes,
-    budgetSource: budget.source,
+    queueTimeoutMs,
+    sharpThreads,
+    budgetBytes,
+    budgetSource,
     cpus: cpu.cpus,
     cpuSource: cpu.source,
-    limitSource: override === undefined ? "derived" : "env",
+    limitSource: limitOverride === undefined ? "derived" : "env",
     projectedPeakBytes,
-    fitsBudget: projectedPeakBytes <= budget.bytes,
+    fitsBudget: projectedPeakBytes <= budgetBytes,
+    clamped,
   };
 }
 
@@ -511,7 +650,9 @@ export function describeWatermarkConcurrency(
 
 function logConcurrencySettings(settings: WatermarkConcurrencySettings): void {
   const line = describeWatermarkConcurrency(settings);
-  const warnings: string[] = [];
+  // Clamped overrides first: an operator who set something and did not get
+  // it should find that out before anything else in the line.
+  const warnings: string[] = [...settings.clamped];
 
   if (settings.budgetSource === "host") {
     warnings.push(
