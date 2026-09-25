@@ -1,5 +1,14 @@
 import sharp from "sharp";
-import { afterEach, describe, expect, it } from "vitest";
+import type { MockInstance } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import {
   MAX_INPUT_PIXELS,
@@ -11,6 +20,7 @@ import {
   assertWatermarkFontAvailable,
   buildWatermarkOverlaySvg,
   generateWatermarkedPreview,
+  resetWatermarkConcurrencyGate,
   resolveWatermarkText,
 } from "@/lib/watermark";
 
@@ -104,7 +114,61 @@ async function diffPixels(a: Buffer, b: Buffer) {
   return { changed, total: width * height, quadrants };
 }
 
+let infoSpy: MockInstance;
+let warnSpy: MockInstance;
+
+/**
+ * Pin the concurrency gate, so these tests are about watermarking.
+ *
+ * generateWatermarkedPreview goes through the gate (ugcportal-e86), and the
+ * gate sizes itself from the container's memory budget. Without this, tests
+ * here that run two previews at once would pass or fail depending on how
+ * much memory the machine has: on a small container the derivation lands on
+ * limit 1 with a queue of 0, and a second concurrent call is shed with "Too
+ * many previews are being generated right now" — a failure with nothing to
+ * do with what any of these tests are checking. Reproduced with
+ * `WATERMARK_MEMORY_BUDGET_MB=512`.
+ *
+ * Limit 1 rather than something larger, deliberately: it is the only value
+ * that can never be clamped (so no warning is logged) whatever the host's
+ * libuv pool size is. The generous queue is what makes concurrency here a
+ * latency detail rather than a pass/fail condition — nothing is ever shed.
+ *
+ * Set per test rather than once: vitest.setup.ts scrubs these before every
+ * test precisely so no file inherits them from the host, and its hook runs
+ * before this one. Re-pinning here is what makes this file's intent win over
+ * that scrub without weakening it for everyone else.
+ */
+beforeEach(() => {
+  // Rebuilding the gate per test means it logs its configuration per test,
+  // and on a workstation with no cgroup the budget comes from host RAM, so
+  // it takes the warn branch: one "no container memory limit found" line per
+  // test, in a file with nothing to say about container sizing. Captured
+  // rather than printed — watermark.concurrency.test.ts, which does assert
+  // on that line, spies the same way.
+  infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
+  warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+  process.env.WATERMARK_MAX_CONCURRENCY = "1";
+  process.env.WATERMARK_QUEUE_LIMIT = "64";
+  // One libvips thread per preview, for the same reason: vitest runs test
+  // files in parallel, and the default (cores / limit, so 4 here) would have
+  // this file ask for more threads than the configuration it replaced. A
+  // test suite wants its resource use predictable, not maximal.
+  process.env.WATERMARK_SHARP_THREADS = "1";
+  resetWatermarkConcurrencyGate();
+});
+
+afterAll(() => {
+  resetWatermarkConcurrencyGate();
+  // Deliberately not sharp.concurrency(0): 0 means "one thread per core",
+  // which is the heaviest possible setting and would be inherited by
+  // whatever test file shares this process next. Leave it low.
+  sharp.concurrency(1);
+});
+
 afterEach(() => {
+  infoSpy.mockRestore();
+  warnSpy.mockRestore();
   delete process.env.WATERMARK_TEXT;
 });
 

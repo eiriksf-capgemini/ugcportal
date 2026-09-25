@@ -20,6 +20,12 @@ const MAX_SIZE_BYTES: Record<MediaKind, number> = {
 export const MAX_UPLOAD_BYTES =
   Math.max(...Object.values(MAX_SIZE_BYTES)) + 5 * 1024 * 1024;
 
+// Exported so the watermark concurrency gate can price a queued upload
+// (ugcportal-e86): waiting for a preview slot holds this many bytes of
+// request body alive, and the gate's memory arithmetic has to account for
+// it. Kept derived from MAX_SIZE_BYTES so the two cannot drift.
+export const MAX_IMAGE_UPLOAD_BYTES = MAX_SIZE_BYTES.IMAGE;
+
 // Signature checks against the actual bytes, so a mismatched or spoofed
 // Content-Type (fully client-controlled) can't smuggle a file past the
 // declared-type check above.
