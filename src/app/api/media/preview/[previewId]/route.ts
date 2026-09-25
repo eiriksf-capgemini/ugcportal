@@ -4,11 +4,16 @@ import { GetObjectCommand } from "@aws-sdk/client-s3";
 import { NextResponse } from "next/server";
 
 import { auth } from "@/lib/auth";
-import { PREVIEW_KEY_PREFIX } from "@/lib/media";
+// Both from @/lib/media, deliberately, even though @/lib/watermark re-exports
+// PREVIEW_CONTENT_TYPE and reads as the more natural home for it. Importing it
+// from there pulls sharp, libvips and a native binary into this route's module
+// graph — measured at 86 extra files in the Next build trace — to read a
+// ten-character string. This route forwards bytes somebody else encoded and is
+// the hot path; it has no business loading an image-processing library.
+import { PREVIEW_CONTENT_TYPE, PREVIEW_KEY_PREFIX } from "@/lib/media";
 import { MEDIA_PREVIEW_DELIVERY_SELECT } from "@/lib/media-access";
 import { prisma } from "@/lib/prisma";
 import { getBucketName, getS3Client } from "@/lib/s3";
-import { PREVIEW_CONTENT_TYPE } from "@/lib/watermark";
 
 /**
  * GET /api/media/preview/[previewId] — the watermarked preview's bytes
@@ -214,10 +219,26 @@ function previewCacheHeaders(etag: string): Record<string, string> {
  * Sound because the representation at a given `previewId` never changes:
  * `previewKey` is write-once (nothing in the codebase updates the column, and
  * POST /api/media mints a fresh `randomUUID()` key per upload, so no object is
- * ever overwritten in place), and `previewId` is unique and 1:1 with it. The
- * assumption this does rest on, stated plainly rather than buried: if someone
- * replaces the object in the bucket out of band, this validator will not
- * notice, and clients holding the old bytes keep them.
+ * ever overwritten in place), and `previewId` is unique and 1:1 with it.
+ *
+ * What it does rest on, stated plainly rather than buried: the validator is
+ * computed from the row alone and never looks at the object, so it cannot
+ * notice anything done to the bucket out of band. Two cases, both accepted:
+ *
+ *   Replaced — a client holding the old bytes keeps them, because the tag it
+ *   presents still matches.
+ *
+ *   Deleted — worse-looking, and still accepted. A client holding a validator
+ *   goes on being answered 304 while a fresh client gets 404 (the
+ *   `isMissingObject` path below), so the same URL is simultaneously cached
+ *   and gone. See the short-circuit below for why the check stays where it
+ *   is; tracked as ugcportal-817.
+ *
+ * Neither is reachable through the product. The only delete path,
+ * DELETE /api/media/[id], removes the ROW first and the objects second, so
+ * after it there is no row for the query to find and no 304 to be had —
+ * reaching either case needs a bucket-level action nothing in the app
+ * performs.
  *
  * Hashed rather than used verbatim. Not for secrecy — `previewId` is in the
  * request URL, so there is nothing to hide — but because a hash is
@@ -288,21 +309,36 @@ function isPreviewObjectKey(key: string): boolean {
   return !key.split("/").includes("..");
 }
 
-/** True for the S3 error meaning "the row points at an object that is gone". */
+/**
+ * True for the S3 error meaning "this row points at an object that is gone".
+ *
+ * Matched on specific error codes and NOT on `$metadata.httpStatusCode === 404`,
+ * which is what this shipped with for one review round — worth spelling out so
+ * it does not come back.
+ *
+ * `NoSuchBucket` is also a 404. So a wrong, renamed or deleted
+ * `S3_BUCKET_NAME` would have matched, and every preview in the product would
+ * have answered a calm `404 {"error":"Not found"}`: no 5xx, nothing in any
+ * error-rate alert, a gallery that looks empty rather than broken. A
+ * misconfiguration that produces no error signal is worse than one that
+ * crashes, because nothing ever goes looking for it.
+ *
+ * The asymmetry is the point, and it runs the opposite way to what the comment
+ * here used to claim. Failing to recognise a genuinely-absent object costs a
+ * 500 where a 404 would have read better — noisy, harmless, and it cannot
+ * widen what is served. Recognising too much converts whole classes of
+ * infrastructure failure into silence. So this list stays exhaustive by name:
+ * add a code only when it means *this specific object* is absent.
+ *
+ * Both spellings are kept because S3-compatible servers disagree — GetObject
+ * answers `NoSuchKey` on S3 and MinIO, while some gateways normalise to
+ * `NotFound`. Neither is the bucket-level error, which is `NoSuchBucket` and
+ * must keep reaching the 500 path.
+ */
 function isMissingObject(error: unknown): boolean {
   if (typeof error !== "object" || error === null) return false;
-  const shaped = error as {
-    name?: unknown;
-    $metadata?: { httpStatusCode?: unknown };
-  };
-  // Both spellings, because MinIO and DreamObjects do not agree on which they
-  // send. Getting this wrong only ever costs a 500 where a 404 would have been
-  // tidier; it cannot widen what is served.
-  return (
-    shaped.name === "NoSuchKey" ||
-    shaped.name === "NotFound" ||
-    shaped.$metadata?.httpStatusCode === 404
-  );
+  const { name } = error as { name?: unknown };
+  return name === "NoSuchKey" || name === "NotFound";
 }
 
 export async function GET(
@@ -372,6 +408,23 @@ export async function GET(
   // After the authorisation query, never before. A 304 is a statement that the
   // caller's cached copy is still current, which is only true for a caller who
   // may have it at all.
+  //
+  // Also BEFORE the GetObject, and that placement is the trade rather than an
+  // oversight. It means an object deleted out of band keeps being revalidated
+  // as 304 for clients holding a validator, while a fresh client gets 404 —
+  // the same URL cached and gone at once (ugcportal-817, pinned by a test so
+  // the behaviour cannot change unnoticed).
+  //
+  // Moving the check after the fetch would close that, and would also delete
+  // the entire reason this route says `no-cache` instead of `no-store`: the
+  // point of the conditional request is to skip the bucket round trip and the
+  // body. A 304 that costs a full GetObject is a 200 with the bytes thrown
+  // away. The authorisation re-check — the part that actually matters, and the
+  // reason `no-cache` is safe at all — has already happened above, against the
+  // database, which is the source of truth for whether this caller may see
+  // anything. Storage is the source of truth for whether the bytes are still
+  // there, and that question is worth one round trip per delivery, not one per
+  // revalidation.
   if (ifNoneMatchSatisfied(request.headers.get("if-none-match"), etag)) {
     return new Response(null, {
       status: 304,

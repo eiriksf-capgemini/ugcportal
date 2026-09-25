@@ -64,8 +64,14 @@ vi.mock("@/lib/s3", () => ({
 }));
 
 const { GET } = await import("@/app/api/media/preview/[previewId]/route");
-const { PREVIEW_CONTENT_TYPE } = await import("@/lib/watermark");
-const { PREVIEW_KEY_PREFIX } = await import("@/lib/media");
+// From @/lib/media, matching the route. Importing them from @/lib/watermark
+// here would work — it re-exports both — but it would also mean this suite
+// stops failing if the route quietly went back to the heavy import, since the
+// two constants are identical either way. Pulling them from the same module
+// the route does keeps the assertion below about the module graph honest.
+const { PREVIEW_CONTENT_TYPE, PREVIEW_KEY_PREFIX } = await import(
+  "@/lib/media"
+);
 
 const OWNER_ID = "user-a";
 const OTHER_ID = "user-b";
@@ -590,6 +596,44 @@ describe("caching", () => {
     expect(one.headers.get("etag")).not.toBe(two.headers.get("etag"));
   });
 
+  it("PINS A KNOWN GAP (ugcportal-817): a 304 outlives an object deleted out of band", async () => {
+    // Not an assertion that this is right — it is the accepted cost of putting
+    // the If-None-Match short-circuit before the GetObject, which is what
+    // makes `no-cache` cheaper than `no-store` at all. A client holding a
+    // validator keeps getting 304 while a fresh client gets 404, so the same
+    // URL is cached and gone at once.
+    //
+    // Pinned so that closing ugcportal-817 has to change this test
+    // deliberately, and so that nobody "fixes" it by moving the check after
+    // the fetch — which would make every revalidation cost a full object read
+    // and quietly undo the caching decision.
+    //
+    // Unreachable through the product: DELETE /api/media/[id] removes the row
+    // before the objects, so after it there is no row and no 304 to be had.
+    const first = await call(PUBLISHED.previewId as string);
+    const etag = first.headers.get("etag") as string;
+    await first.arrayBuffer();
+
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
+    s3SendMock.mockRejectedValue(
+      Object.assign(new Error("gone"), { name: "NoSuchKey" }),
+    );
+
+    // Fresh client: told the truth.
+    const fresh = await call(PUBLISHED.previewId as string);
+    expect(fresh.status).toBe(404);
+
+    // Client holding the validator: still told it is current. This is the gap.
+    const cached = await call(PUBLISHED.previewId as string, {
+      headers: { "if-none-match": etag },
+    });
+    consoleError.mockRestore();
+
+    expect(cached.status).toBe(304);
+  });
+
   it("revalidation re-runs authorisation: an unpublished item 404s rather than 304s", async () => {
     // This is the whole justification for `no-cache` over a max-age. The
     // caller holds a valid validator for bytes they were legitimately served;
@@ -611,9 +655,9 @@ describe("caching", () => {
 
 describe("storage failures", () => {
   it.each([
-    ["NoSuchKey", { name: "NoSuchKey" }],
-    ["NotFound", { name: "NotFound" }],
-    ["a 404 status", { name: "Whatever", $metadata: { httpStatusCode: 404 } }],
+    // By CODE, never by status — see the NoSuchBucket case below for why.
+    ["NoSuchKey", { name: "NoSuchKey", $metadata: { httpStatusCode: 404 } }],
+    ["NotFound", { name: "NotFound", $metadata: { httpStatusCode: 404 } }],
   ])("404s identically when the object is gone (%s)", async (_label, error) => {
     const consoleError = vi
       .spyOn(console, "error")
@@ -628,6 +672,34 @@ describe("storage failures", () => {
 
     expect(missing.status).toBe(404);
     expect(missing).toEqual(unknown);
+  });
+
+  it.each([
+    // The whole point of matching on the code rather than the status: all
+    // three of these are 404s at the HTTP layer, and none of them means "this
+    // object is absent". Swallowing them would turn a misconfigured or deleted
+    // bucket into a product that looks empty rather than broken, with nothing
+    // in any error-rate alert to notice it by.
+    ["NoSuchBucket", "NoSuchBucket"],
+    ["InvalidBucketName", "InvalidBucketName"],
+    ["AccessDenied", "AccessDenied"],
+  ])("500s rather than 404s on %s, which is also a 404 status", async (
+    _label,
+    name,
+  ) => {
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
+    s3SendMock.mockRejectedValue(
+      Object.assign(new Error("nope"), {
+        name,
+        $metadata: { httpStatusCode: 404 },
+      }),
+    );
+    const response = await call(PUBLISHED.previewId as string);
+    consoleError.mockRestore();
+
+    expect(response.status).toBe(500);
   });
 
   it("500s when the fetch fails for any other reason", async () => {
