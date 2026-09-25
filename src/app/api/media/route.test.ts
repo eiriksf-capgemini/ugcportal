@@ -583,6 +583,49 @@ function buildListRequest(query = "") {
   return new Request(`http://localhost/api/media${query}`);
 }
 
+describe("GET /api/media — caching", () => {
+  it("marks every response private and unstorable, whatever the status", async () => {
+    // All three exits, not just the happy one. A header set on 200 alone is
+    // one refactor away from not being set at all, and the 401 is the
+    // response a signed-out caller is most likely to hit repeatedly.
+    authMock.mockResolvedValue(null);
+    const unauthorized = await GET(buildListRequest());
+    expect(unauthorized.status).toBe(401);
+    expect(unauthorized.headers.get("cache-control")).toBe(
+      "private, no-store",
+    );
+
+    authMock.mockResolvedValue({ user: { id: "user-1" } });
+    const badCursor = await GET(buildListRequest("?cursor=not-a-cursor"));
+    expect(badCursor.status).toBe(400);
+    expect(badCursor.headers.get("cache-control")).toBe("private, no-store");
+
+    mediaFindManyMock.mockResolvedValueOnce([selectedRow({ id: "a" })]);
+    const ok = await GET(buildListRequest());
+    expect(ok.status).toBe(200);
+    expect(ok.headers.get("cache-control")).toBe("private, no-store");
+  });
+
+  it("says `private`, not merely `no-store`, because the body belongs to one account", async () => {
+    // This route authenticates with a session cookie, and a shared cache does
+    // not treat a cookie-bearing response as unshareable the way it treats an
+    // Authorization-bearing one. Without `private`, an intermediary keying on
+    // the URL alone could serve one user's library — drafts included — to the
+    // next caller. The public feed is uncacheable for a different reason and
+    // carries a different header; these two must not be collapsed into one
+    // shared constant on the grounds that they look similar.
+    authMock.mockResolvedValue({ user: { id: "user-1" } });
+    mediaFindManyMock.mockResolvedValueOnce([selectedRow({ id: "a" })]);
+
+    const header = (await GET(buildListRequest())).headers.get(
+      "cache-control",
+    );
+
+    expect(header).toContain("private");
+    expect(header).toContain("no-store");
+  });
+});
+
 describe("GET /api/media", () => {
   it("returns 401 for an unauthenticated request", async () => {
     authMock.mockResolvedValue(null);

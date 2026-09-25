@@ -329,11 +329,38 @@ export async function POST(request: Request) {
  * Turning previewKey into a fetchable URL (signed or public) belongs with the
  * delivery work, not here.
  */
+/**
+ * Private to one account, and said so explicitly.
+ *
+ * Deliberately NOT the same header as GET /api/public/media, because the two
+ * endpoints are uncacheable for different reasons and the header should carry
+ * the reason. The public feed is `no-store` because its content changes when
+ * an owner unpublishes and a cache must not outlive that. This one is
+ * `private` because the response belongs to exactly one account: the body is
+ * that user's library, drafts included.
+ *
+ * `private` is the load-bearing word. This route authenticates with a session
+ * *cookie*, and a shared cache does not treat a cookie-bearing response as
+ * unshareable the way RFC 9111 makes it treat an `Authorization`-bearing one.
+ * Absent this header, a misconfigured intermediary keying on the URL alone
+ * could store one user's response and serve it to the next caller — one
+ * person's private uploads handed to a stranger. The preconditions are narrow;
+ * the outcome is not.
+ *
+ * `no-store` alongside it because there is nothing worth keeping even in the
+ * end user's own browser: a list of someone's unpublished work should not
+ * survive on a shared machine after they sign out.
+ */
+const PRIVATE_NO_STORE = { "cache-control": "private, no-store" } as const;
+
 export async function GET(request: Request) {
   const session = await auth();
   const userId = session?.user?.id;
   if (!userId) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return NextResponse.json(
+      { error: "Unauthorized" },
+      { status: 401, headers: PRIVATE_NO_STORE },
+    );
   }
 
   const result = await listMedia(
@@ -345,8 +372,11 @@ export async function GET(request: Request) {
   );
 
   if (!result.ok) {
-    return NextResponse.json({ error: result.error }, { status: result.status });
+    return NextResponse.json(
+      { error: result.error },
+      { status: result.status, headers: PRIVATE_NO_STORE },
+    );
   }
 
-  return NextResponse.json(result.page);
+  return NextResponse.json(result.page, { headers: PRIVATE_NO_STORE });
 }
