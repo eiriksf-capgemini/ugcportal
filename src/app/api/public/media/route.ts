@@ -56,6 +56,34 @@ import { listMedia } from "@/lib/media-listing";
  * add a "buy" affordance driven off this feed; drive it off the sellability
  * gate once that exists.
  */
+/**
+ * Never cached, anywhere, by anything.
+ *
+ * This is the one response in the app that does not vary by session, which is
+ * exactly what makes it the one a shared cache would happily store under the
+ * URL alone and hand to everybody. Every other endpoint is either behind auth
+ * or varies per user, so a cache has a reason not to reuse it; this one does
+ * not, and would look like an ideal candidate.
+ *
+ * It must not be, because unpublishing has to take effect. ugcportal-r1d
+ * exists so an owner can withdraw an item from public view, and a cached page
+ * keeps serving that item after they have — the withdrawal appears to work,
+ * the item stays visible to anyone whose request the cache answers, and
+ * nothing anywhere reports a problem. A visibility control that a cache can
+ * silently outlive is not a visibility control.
+ *
+ * There is a real tension here, and it is the same one the ordering comment
+ * below reasons about: caching is precisely what would blunt this endpoint's
+ * scan cost (see the index note in prisma/schema.prisma, and ugcportal-9w5 for
+ * the rate-limiting side of it). That trade is worth making — but only
+ * alongside an invalidation path that a publish and an unpublish both trigger.
+ * Until that exists, correctness wins and the header says so plainly.
+ * `no-store` rather than `no-cache` because there is nothing here worth
+ * revalidating: the answer is cheap to recompute and must never be served
+ * stale, not even once.
+ */
+const NO_STORE = { "cache-control": "no-store" } as const;
+
 export async function GET(request: Request) {
   const result = await listMedia(
     request.url,
@@ -70,9 +98,9 @@ export async function GET(request: Request) {
   if (!result.ok) {
     return NextResponse.json(
       { error: result.error },
-      { status: result.status },
+      { status: result.status, headers: NO_STORE },
     );
   }
 
-  return NextResponse.json(result.page);
+  return NextResponse.json(result.page, { headers: NO_STORE });
 }

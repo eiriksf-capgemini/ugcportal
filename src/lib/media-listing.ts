@@ -261,6 +261,27 @@ export type MediaCursor = { createdAt: Date; id: string };
  * data inside is a `createdAt` and an `id` the caller was just handed in the
  * same response, so there is nothing here it did not already have.
  */
+/*
+ * Precision assumption, stated because it is invisible until it breaks.
+ *
+ * The position is serialised with toISOString(), i.e. to the millisecond, and
+ * keysetAfter compares `createdAt` against exactly that value. On SQLite —
+ * what this app runs, see prisma/schema.prisma — DateTime is stored as Unix
+ * milliseconds, so the round trip is lossless and the comparison is exact.
+ *
+ * It would not be on a provider with finer resolution. The schema header still
+ * advertises `create-db`, so this is worth naming: on Postgres, `timestamp`
+ * keeps microseconds, a row at .123456Z would encode as .123Z, and every row
+ * in (.123000, .123456] would satisfy neither keyset branch — `createdAt` is
+ * not strictly less than .123Z, and it is not equal to it either. Those rows
+ * would vanish from the feed with no error and `hasMore` behaving normally,
+ * which is the worst shape a pagination bug can take.
+ *
+ * Deliberately not built for: the provider has not changed, and guessing at
+ * one adds a format to maintain for no current benefit. If it ever does
+ * change, this is the function to revisit — encode the raw epoch value, or
+ * compare on a column whose precision the cursor can represent.
+ */
 export function encodeMediaCursor(position: MediaCursor): string {
   return Buffer.from(
     `${position.createdAt.toISOString()}${CURSOR_SEPARATOR}${position.id}`,

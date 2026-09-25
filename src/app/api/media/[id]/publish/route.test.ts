@@ -327,6 +327,46 @@ describe("POST /api/media/[id]/publish", () => {
     expect(body.publishedAt).toBe(PUBLISHED_AT.toISOString());
   });
 
+  it("refuses rather than claiming success when an unpublish wins the race", async () => {
+    signedInAs(OWNER_ID);
+    // The gate saw it published, so the `publishedAt: null` predicate matches
+    // nothing; then an unpublish commits before the re-read. The row exists,
+    // the caller owns it, and it is NOT published.
+    mediaFindUniqueMock.mockResolvedValue(publishedMedia);
+    mediaUpdateManyMock.mockResolvedValue({ count: 0 });
+    mediaFindFirstMock.mockResolvedValue(
+      toOwnerShape({ ...publishedMedia, publishedAt: null }),
+    );
+
+    const response = await POST(publishRequest("POST"), context());
+    const body = await response.json();
+
+    // The bug this replaces: 200 with `publishedAt: null` — a success
+    // describing its own opposite, telling the client the item is public
+    // while handing back a body saying it is not.
+    expect(response.status).toBe(409);
+    expect(body).not.toHaveProperty("publishedAt");
+    expect(body.error).toMatch(/unpublished/i);
+    // And it must not overturn the newer instruction by retrying the write.
+    expect(mediaUpdateManyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("still answers 200 when a concurrent publish, not an unpublish, won", async () => {
+    // The neighbouring branch: same count === 0, different cause, different
+    // answer. Both are reached by reading what is actually there.
+    signedInAs(OWNER_ID);
+    mediaFindUniqueMock.mockResolvedValue(unpublishedMedia);
+    mediaUpdateManyMock.mockResolvedValue({ count: 0 });
+    mediaFindFirstMock.mockResolvedValue(toOwnerShape(publishedMedia));
+
+    const response = await POST(publishRequest("POST"), context());
+
+    expect(response.status).toBe(200);
+    expect((await response.json()).publishedAt).toBe(
+      PUBLISHED_AT.toISOString(),
+    );
+  });
+
   it("returns 404 when the row was deleted between the gate and the write", async () => {
     signedInAs(OWNER_ID);
     mediaFindUniqueMock.mockResolvedValue(unpublishedMedia);

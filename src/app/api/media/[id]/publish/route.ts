@@ -116,19 +116,48 @@ export async function POST(_request: Request, { params }: RouteContext) {
   });
 
   if (count === 0) {
-    // The row was already published (by an earlier request of this caller's,
-    // or a concurrent one), or it went away entirely. One read tells the two
-    // apart; guessing 404 would report a successful publish as a failure, and
-    // guessing 200 would report a deleted row as published.
+    // Three different things cause this, and the answer differs for each, so
+    // the re-read decides on what it actually finds rather than assuming the
+    // common case. Guessing 404 would report a successful publish as a
+    // failure; guessing 200 would report a deleted row as published, or — the
+    // case this branch used to get wrong — answer 200 with a body saying the
+    // item is not published, which is a success describing its own opposite.
     const current = await prisma.media.findFirst({
       where: { id, userId: access.userId },
       select: MEDIA_OWNER_SELECT,
     });
 
     if (!current) {
+      // Deleted, or re-owned, between the gate and the write. Same answer the
+      // sibling DELETE gives when it loses the same race.
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
 
+    if (current.publishedAt === null) {
+      // The row exists and is NOT published: an unpublish committed between
+      // the updateMany and this read, so the write matched nothing and the
+      // later request won. Reporting 200 here would tell the client its
+      // publish succeeded while handing back `publishedAt: null`.
+      //
+      // 409 rather than retrying the write: the unpublish is the more recent
+      // instruction, and a retry would let this older request overturn it —
+      // last-writer-wins, backwards. The caller is told what actually holds
+      // and can decide whether it still wants to publish.
+      //
+      // 404 would be wrong too, and is why this is not simply folded into the
+      // branch above: the row is right there, and the caller owns it.
+      return NextResponse.json(
+        {
+          error:
+            "This item was unpublished by another request. Publish it again if that was not intended.",
+        },
+        { status: 409 },
+      );
+    }
+
+    // Published, by an earlier request of this caller's or a concurrent one.
+    // Idempotent success, reporting the winner's timestamp rather than
+    // overwriting it.
     return NextResponse.json(current);
   }
 

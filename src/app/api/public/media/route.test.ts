@@ -454,6 +454,43 @@ describe("GET /api/public/media — no original key, no preview-less row (K3)", 
   });
 });
 
+describe("GET /api/public/media — caching", () => {
+  it("forbids storing the response, on success and on error alike", async () => {
+    seed([row({ id: "a" })]);
+
+    const ok = await GET(request());
+    expect(ok.status).toBe(200);
+    expect(ok.headers.get("cache-control")).toBe("no-store");
+
+    // The 400 path too: a cached "Invalid cursor" is its own small trap, and
+    // a header that is only set on the happy path is one refactor from not
+    // being set at all.
+    const bad = await GET(request("?cursor=not-a-cursor"));
+    expect(bad.status).toBe(400);
+    expect(bad.headers.get("cache-control")).toBe("no-store");
+  });
+
+  it("does not let an unpublished row be served from a cached page", async () => {
+    // The requirement behind the header, stated as behaviour rather than as a
+    // string: this endpoint is session-independent, so a shared cache would
+    // key on the URL alone and keep answering with the published version long
+    // after the owner withdrew the item. `no-store` is what stops that, and
+    // ugcportal-r1d's whole purpose is that the withdrawal is real.
+    const published = row({ id: "a" });
+    seed([published]);
+
+    const before = await GET(request());
+    expect((await before.json()).items).toHaveLength(1);
+    expect(before.headers.get("cache-control")).toBe("no-store");
+
+    seed([{ ...published, publishedAt: null }]);
+
+    const after = await GET(request());
+    expect((await after.json()).items).toEqual([]);
+    expect(after.headers.get("cache-control")).toBe("no-store");
+  });
+});
+
 describe("GET /api/public/media — pagination contract", () => {
   it("orders by createdAt desc with id as the tiebreak", async () => {
     const sameInstant = new Date("2026-09-20T10:00:00Z");
