@@ -55,36 +55,38 @@ export const MAX_IMAGE_UPLOAD_BYTES = MAX_SIZE_BYTES.IMAGE;
 
 /**
  * The size cap {@link validateUpload} *will* apply to a file declaring
- * `mimeType`, or null when no kind accepts that type at all.
+ * `mimeType`, or null when it will refuse that type at any size.
  *
  * Exists so the upload route can apply that cap to the request **stream**,
  * before the body has been materialised, instead of only to the `File` it
- * already paid to build (ugcportal-05b). That only works if the two numbers
- * are provably the same number, which is why this reads MIME_TO_KIND and
- * MAX_SIZE_BYTES directly rather than taking a copy: a second table would be
- * a check comparing the wrong two things the first time either drifted, and
- * the failure would be silent in the safe-looking direction (a stream capped
- * at 200 MB for a file validateUpload caps at 10 MB).
+ * already paid to build (ugcportal-05b).
  *
- * Lower-cased because `File.type` is normalised to lower case by the platform
- * before validateUpload ever sees it, so `IMAGE/PNG` on the wire becomes
- * `image/png` in the File. Not lower-casing here would read that part as
- * "unknown type" and cap it loosely, while validateUpload went on to accept
- * it — again, the wrong two things.
+ * That is only sound if the two answers are the same answer, so this does not
+ * consult the tables itself — it asks `validateUpload`, with a size chosen so
+ * that the type is the only thing it can possibly refuse for. Anything else
+ * is a second implementation of the same rule, and the first version of this
+ * function proved the point: it normalised the media type by splitting off
+ * Content-Type parameters, which `validateUpload` does not do. `File.type`
+ * really does carry parameters on this runtime, so
+ * `video/mp4; codecs="avc1.42E01E"` was given a 200 MB stream cap and then
+ * refused with a 415 by validateUpload — the read-to-the-maximum-then-reject
+ * pattern this bead exists to remove, available to anyone who appends a
+ * parameter. The doc even claimed the two were provably identical while that
+ * was true.
  *
- * Returns null, rather than a fallback number, for a type no kind accepts:
- * such an upload is refused at *any* size, so what the caller should do with
- * it is a policy decision (see uploadReadLimitBytes) rather than a cap.
+ * Returns null, rather than a fallback number, for a type validateUpload will
+ * not accept: such an upload is refused at *any* size, so what the caller
+ * should do with it is a policy decision (see uploadReadLimitBytes) rather
+ * than a cap.
  */
 export function declaredUploadCapBytes(
   mimeType: string | null | undefined,
 ): number | null {
   if (typeof mimeType !== "string") return null;
-  // Content-Type may carry parameters (`image/png; charset=binary`); the
-  // media type is everything before the first `;`.
-  const mediaType = mimeType.split(";")[0].trim().toLowerCase();
-  const kind = kindForDeclaredType(mediaType);
-  return kind === undefined ? null : MAX_SIZE_BYTES[kind];
+  // size 1 is deliberately neither 0 (which validateUpload refuses as empty)
+  // nor above any cap, so `ok` is a statement about the type alone.
+  const validation = validateUpload({ type: mimeType, size: 1 });
+  return validation.ok ? MAX_SIZE_BYTES[validation.kind] : null;
 }
 
 // Signature checks against the actual bytes, so a mismatched or spoofed

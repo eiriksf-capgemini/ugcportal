@@ -30,13 +30,43 @@ class BodyTooLargeError extends Error {
 }
 
 /**
+ * The caller has run out of room for this body part-way through it.
+ *
+ * Distinct from {@link BodyTooLargeError} because the two are different
+ * answers: too large is about this request and is a 413, out of budget is
+ * about the process and is a retryable 503.
+ */
+class BodyOverBudgetError extends Error {
+  constructor() {
+    super("Upload buffers are at capacity");
+    this.name = "BodyOverBudgetError";
+  }
+}
+
+function isOverBudget(error: unknown): boolean {
+  for (let cursor = error, depth = 0; cursor && depth < 5; depth += 1) {
+    if (cursor instanceof BodyOverBudgetError) return true;
+    cursor = (cursor as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
+/**
  * Wraps a body stream so it errors the moment more than `limit` bytes have
  * gone through it, rather than letting the parser downstream buffer whatever
  * the client feels like sending.
+ *
+ * `admitBytes`, when supplied, is called with the running total *before* each
+ * chunk is passed on, and may refuse it. That is what lets a caller commit
+ * memory in step with what has actually arrived rather than up front from
+ * what the request claimed it would send (ugcportal-05b round 2): the chunk
+ * is not forwarded, so nothing downstream ever holds bytes the caller did not
+ * agree to.
  */
 function cappedBody(
   source: ReadableStream<Uint8Array>,
   limit: number,
+  admitBytes?: (received: number) => boolean,
 ): ReadableStream<Uint8Array> {
   let received = 0;
   return source.pipeThrough(
@@ -45,6 +75,10 @@ function cappedBody(
         received += chunk.byteLength;
         if (received > limit) {
           controller.error(new BodyTooLargeError());
+          return;
+        }
+        if (admitBytes && !admitBytes(received)) {
+          controller.error(new BodyOverBudgetError());
           return;
         }
         controller.enqueue(chunk);
@@ -120,7 +154,7 @@ export async function readJsonBody(
 
 export type FormDataResult =
   | { ok: true; value: FormData }
-  | { ok: false; status: 400 | 408 | 413; error: string };
+  | { ok: false; status: 400 | 408 | 413 | 503; error: string };
 
 /**
  * Reads a multipart body, never letting more than `limit` bytes through.
@@ -208,6 +242,16 @@ function stallGuarded(
           return;
         }
         controller.enqueue(value);
+      } catch (error) {
+        // Tear the source down explicitly. Erroring *this* stream does not
+        // propagate upstream, and `cancel` below only runs when the teardown
+        // came from downstream — so without this the source stays locked with
+        // a read outstanding, and the request body is left un-torn-down after
+        // the 408. That is half the point of not waiting for requestTimeout.
+        // Swallowed because the error being reported is the stall, not
+        // whatever cancelling a possibly-already-dead stream does.
+        await reader.cancel(error).catch(() => {});
+        throw error;
       } finally {
         if (timer) clearTimeout(timer);
       }
@@ -232,11 +276,24 @@ function stallGuarded(
  * a body missing its first few kilobytes, which is exactly the kind of quiet
  * wrongness this signature makes impossible to express.
  */
+export interface CappedReadOptions {
+  /** Overrides {@link BODY_STALL_TIMEOUT_MS}; exposed for tests. */
+  stallTimeoutMs?: number;
+  /**
+   * Called with the running byte total before each chunk is forwarded;
+   * return false to refuse the rest of the body with a 503.
+   *
+   * This is how the upload route keeps its memory reservation in step with
+   * what has actually been delivered. See cappedBody.
+   */
+  admitBytes?: (received: number) => boolean;
+}
+
 export async function readCappedFormDataFrom(
   request: Pick<Request, "url" | "method" | "headers">,
   body: ReadableStream<Uint8Array>,
   limit: number,
-  stallTimeoutMs: number = BODY_STALL_TIMEOUT_MS,
+  options: CappedReadOptions = {},
 ): Promise<FormDataResult> {
   const headers = new Headers(request.headers);
   headers.delete("content-length");
@@ -246,7 +303,11 @@ export async function readCappedFormDataFrom(
     headers,
     // Stall guard outside the cap, so the byte counter only ever sees chunks
     // that actually arrived.
-    body: cappedBody(stallGuarded(body, stallTimeoutMs), limit),
+    body: cappedBody(
+      stallGuarded(body, options.stallTimeoutMs ?? BODY_STALL_TIMEOUT_MS),
+      limit,
+      options.admitBytes,
+    ),
     // Required by the fetch spec for a streaming request body.
     duplex: "half",
   } as RequestInit & { duplex: "half" });
@@ -256,6 +317,16 @@ export async function readCappedFormDataFrom(
   } catch (error) {
     if (isBodyTooLarge(error)) {
       return { ok: false, status: 413, error: "Request body too large" };
+    }
+    if (isOverBudget(error)) {
+      // The body outgrew what the caller could commit to. A load condition,
+      // not a fault of this request, so the same retryable answer a refused
+      // admission gets.
+      return {
+        ok: false,
+        status: 503,
+        error: "Too many uploads are being processed right now",
+      };
     }
     if (isBodyStalled(error)) {
       // 408, not 400: the request was well-formed as far as it got, and the

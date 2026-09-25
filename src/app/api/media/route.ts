@@ -21,6 +21,7 @@ import {
   readCappedFormDataFrom,
 } from "@/lib/request-body";
 import { getBucketName, getS3Client } from "@/lib/s3";
+import type { UploadReservation } from "@/lib/upload-memory";
 import {
   UploadMemoryExhaustedError,
   UploadTooLargeForBudgetError,
@@ -75,7 +76,12 @@ const UPLOAD_FIELD_NAME = "file";
  *     declaration cannot widen it);
  *  3. the process-wide byte budget, which is what turns "each request is
  *     bounded" into "all of them together are bounded" — the dimension
- *     ugcportal-i04's per-request cap deliberately did not cover; and
+ *     ugcportal-i04's per-request cap deliberately did not cover. It is taken
+ *     in two parts: a fixed grant of one image's worth before the read, which
+ *     is what lets a burst be refused at the door, and then growth in step
+ *     with the bytes actually delivered. Nothing past the grant is committed
+ *     on a client's say-so, which is the difference between a bound and a
+ *     number an attacker chooses (round-2 finding 1); and
  *  4. BODY_STALL_TIMEOUT_MS, which bounds how *long* a reservation can be
  *     held by a client that has stopped sending. Without it the first three
  *     are bounds on bytes with no bound on time, and one stalled connection
@@ -164,7 +170,10 @@ export async function POST(request: Request) {
   }
 
   try {
-    return await handleUpload(request, peeked.body, userId, readLimitBytes);
+    return await handleUpload(request, peeked.body, userId, {
+      readLimitBytes,
+      reservation,
+    });
   } finally {
     // Held for the whole handler, not just the read: the File's backing store
     // and the Buffer over its arrayBuffer copy both stay reachable until this
@@ -179,14 +188,35 @@ async function handleUpload(
   request: Request,
   requestBody: ReadableStream<Uint8Array>,
   userId: string,
-  readLimitBytes: number,
+  admission: { readLimitBytes: number; reservation: UploadReservation },
 ) {
-  const body = await readCappedFormDataFrom(
-    request,
-    requestBody,
-    readLimitBytes,
-  );
+  const { readLimitBytes, reservation } = admission;
+  const body = await readCappedFormDataFrom(request, requestBody, readLimitBytes, {
+    // Commit memory in step with what has actually arrived. The grant taken
+    // before the read is one image's worth; everything past that is backed by
+    // bytes the client really sent, rather than by the size it claimed it was
+    // going to send (round-2 finding 1). A refusal here stops the stream, so
+    // the bytes are never forwarded to the parser.
+    admitBytes: (received) =>
+      reservation.growTo(uploadReservationBytes(received)),
+  });
   if (!body.ok) {
+    if (body.status === 503) {
+      // Same answer, and the same shape, as a refused admission: a
+      // busy-but-healthy server. The budget already logged it, throttled.
+      return NextResponse.json(
+        {
+          error: body.error,
+          retryAfterSeconds: reservation.retryAfterSeconds,
+        },
+        {
+          status: 503,
+          headers: {
+            "Retry-After": String(reservation.retryAfterSeconds),
+          },
+        },
+      );
+    }
     return NextResponse.json({ error: body.error }, { status: body.status });
   }
 

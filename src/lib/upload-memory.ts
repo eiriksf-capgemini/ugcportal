@@ -34,8 +34,20 @@ import type { WatermarkConcurrencySettings } from "@/lib/watermark";
  * This module bounds all three by moving the decision in front of the read:
  * nothing is buffered until the bytes it will occupy have been reserved out
  * of a fixed budget, and the reservation is *enforced* rather than trusted,
- * because the number reserved is the same number the body stream is capped
- * at (see {@link uploadReadLimitBytes}).
+ * because the body stream is capped at the same number the reservation may
+ * grow to (see {@link uploadReadLimitBytes}).
+ *
+ * The reservation is taken in two parts, and the split is the difference
+ * between a bound and a number the client picks:
+ *
+ *  - {@link INITIAL_GRANT_BYTES} on arrival, before a byte of body is read.
+ *    One image's worth, fixed, the same for every request whatever it claims
+ *    to be. This is what lets a burst be refused at the door rather than
+ *    after every body is resident.
+ *  - everything above that only as bytes are actually delivered, via
+ *    {@link UploadReservation.growTo}. A declared `video/mp4`, or a 205 MB
+ *    Content-Length, buys a larger *ceiling* — a threshold for refusing the
+ *    request outright — but commits nothing until the bytes turn up.
  *
  * ## Why it is a byte budget and not a second gate
  *
@@ -304,10 +316,22 @@ export interface UploadMemorySettings {
  *    that `text/plain`, which no kind accepts, so this is a certain 415 and
  *    gets the smallest cap;
  *  - `null` — the part was not found within the peek budget, so nothing is
- *    known. Falls back to Content-Length if there is one, and otherwise to
- *    {@link UNDECLARED_UPLOAD_LIMIT_BYTES} rather than to MAX_UPLOAD_BYTES:
- *    see that constant for why the old unconditional fallback was
- *    disproportionate enough to be a denial-of-service in ordinary use.
+ *    known, and the answer is {@link UNDECLARED_UPLOAD_LIMIT_BYTES}.
+ *
+ * Content-Length **narrows and never widens**, and that asymmetry is the
+ * whole safety argument. An earlier version let a large Content-Length lift
+ * the undeclared case back up to MAX_UPLOAD_BYTES, on the reasoning that an
+ * honest header is information — but the header is an assertion the client
+ * has not delivered on, and sizing anything from it meant two connections
+ * asserting 205 MB could commit ~430 MB apiece for a few hundred bytes of
+ * actual traffic. Every input here can now only make the answer smaller than
+ * the type-derived cap, so no client statement can enlarge what this process
+ * commits to.
+ *
+ * The cost is one shape: a chunked request with more than 8 KiB of fields
+ * ahead of the file *and* a file above the image cap is refused. No ordinary
+ * client produces it — browsers send Content-Length for a FormData body, and
+ * forms put the file input near the front.
  *
  * Content-Length is handled the way ugcportal-i04 established for the same
  * header: as an optimisation, never as the enforcement. Absent, it is
@@ -326,11 +350,7 @@ export function uploadReadLimitBytes(options: {
 
   const byType =
     declaredContentType === null
-      ? // Nothing known about the file. Content-Length, if honest, is the
-        // only proportionate signal left; failing that, the smallest cap.
-        hasLength
-        ? MAX_UPLOAD_BYTES
-        : UNDECLARED_UPLOAD_LIMIT_BYTES
+      ? UNDECLARED_UPLOAD_LIMIT_BYTES
       : (declaredUploadCapBytes(declaredContentType) ?? MAX_IMAGE_UPLOAD_BYTES) +
         MULTIPART_OVERHEAD_ALLOWANCE_BYTES;
 
@@ -422,11 +442,25 @@ export function resolveUploadMemorySettings(
 
   const derivedBudget = spendable - decodeReserveBytes;
   const budgetBytes = Math.max(MIN_UPLOAD_BUDGET_BYTES, derivedBudget);
-  const soloReservationCeilingBytes = Math.max(budgetBytes, spendable);
+  // One decode short of everything, not everything. A solo caller is alone in
+  // the *budget*, which is not the same as being alone in the process: if it
+  // is an image it goes on to run a preview, and that decode lands on top of
+  // the body it is still holding. Handing it the whole spendable region made
+  // the real peak `spendable + DECODE`, which at 768 MB was 818,728,140 bytes
+  // inside an 805,306,368-byte container — an OOM reachable with one upload.
+  const soloReservationCeilingBytes = Math.max(
+    budgetBytes,
+    spendable - PREVIEW_BYTES_PER_OPERATION,
+  );
 
   const projectedUploadPathPeakBytes =
     PREVIEW_PROCESS_BASELINE_BYTES +
-    Math.max(decodeReserveBytes + budgetBytes, soloReservationCeilingBytes);
+    Math.max(
+      // Many callers: bodies up to the budget, and up to `limit` previews.
+      decodeReserveBytes + budgetBytes,
+      // One caller: its body, and the one preview it can be running.
+      soloReservationCeilingBytes + PREVIEW_BYTES_PER_OPERATION,
+    );
 
   return {
     budgetBytes,
@@ -447,8 +481,60 @@ export function resolveUploadMemorySettings(
   };
 }
 
+/**
+ * What a request may commit to before it has delivered anything.
+ *
+ * One maximum-size image — the same figure as
+ * {@link MIN_UPLOAD_BUDGET_BYTES}, deliberately, since that is the floor the
+ * budget is guaranteed to have, so a single upload is always admissible on an
+ * idle process.
+ *
+ * This is the whole unbacked commitment, and keeping it small is the point.
+ * A reservation used to be taken in full from the cap the request *declared*
+ * it was entitled to, which meant a client that asserted `video/mp4`, or a
+ * 205 MB Content-Length, committed ~430 MB having sent nothing but part
+ * headers. On a 1 GiB container that fits only under the solo rule, so it
+ * 503'd every other upload — and since the stall timeout is an idle timer,
+ * one byte every 29 seconds held it for Node's full `requestTimeout`. Two
+ * alternating connections could close the upload route for a few hundred
+ * bytes of traffic: cheaper to trigger than the problem this module exists to
+ * fix, and an availability regression against having no bound at all.
+ *
+ * So: grant this much on arrival, and grow the reservation only as bytes are
+ * actually delivered ({@link UploadReservation.growTo}). Everything past the
+ * first 10 MB is backed by bytes the client has really sent.
+ *
+ * It cannot be much smaller. The reason a reservation is taken before the
+ * read at all is so that a burst is refused *at the door* rather than after
+ * every body is resident, and the granularity at which that decision is worth
+ * making is one upload's worth. A one-chunk grant would admit all 60 of a
+ * 60-request burst and only then start refusing them, which is the behaviour
+ * this bead removed.
+ */
+export const INITIAL_GRANT_BYTES = MIN_UPLOAD_BUDGET_BYTES;
+
 export interface UploadReservation {
+  /** Bytes held right now: the initial grant, plus whatever has been grown. */
   readonly bytes: number;
+  /** The most this reservation may ever grow to. */
+  readonly ceilingBytes: number;
+  /** Suggested backoff if a later {@link growTo} is refused. */
+  readonly retryAfterSeconds: number;
+  /**
+   * Raises the reservation to `toBytes`, or reports that it cannot be raised.
+   *
+   * Returns true when the reservation now covers `toBytes` — including when
+   * it already did, so a caller charging cumulative progress can call this on
+   * every chunk without tracking what it last asked for. Returns false when
+   * the budget cannot afford the increase, which is the caller's signal to
+   * stop reading and answer 503: the bytes have not been committed, so
+   * reading them anyway would put the process over the bound.
+   *
+   * Never shrinks. A reservation only releases when the handler returns,
+   * because what it is pricing — the parsed File and the Buffer over its
+   * arrayBuffer copy — stays reachable until then.
+   */
+  growTo(toBytes: number): boolean;
   /** Idempotent: a double release cannot hand the budget back twice. */
   release(): void;
 }
@@ -463,21 +549,28 @@ export interface UploadMemoryStats {
   admitted: number;
   /** Uploads refused with {@link UploadMemoryExhaustedError}, cumulative. */
   shed: number;
+  /** Reservations refused an increase mid-read, cumulative. */
+  outgrown: number;
   /** Uploads refused with {@link UploadTooLargeForBudgetError}, cumulative. */
   refusedTooLarge: number;
 }
 
 export interface UploadMemoryBudget {
   /**
-   * Reserves `bytes` or refuses. Never waits — see the note at the top of
-   * this file on why the outer bound of two bounds in series does not queue.
+   * Admits a request that may eventually hold up to `ceilingBytes`, granting
+   * it {@link INITIAL_GRANT_BYTES} (or the ceiling, if smaller) to start.
+   * Never waits — see the note at the top of this file on why the outer of
+   * two bounds in series does not queue.
    *
-   * @throws {UploadTooLargeForBudgetError} when `bytes` could not be admitted
-   *   even on an idle process (413; retrying will not help).
+   * @throws {UploadTooLargeForBudgetError} when `ceilingBytes` could not be
+   *   held even on an idle process (413; retrying will not help). Checked
+   *   against the ceiling rather than the grant so a request that cannot
+   *   possibly finish is told so immediately, instead of part-way through
+   *   uploading.
    * @throws {UploadMemoryExhaustedError} when the process is currently
-   *   holding too much (503; retrying will).
+   *   holding too much to grant even the initial share (503; retrying will).
    */
-  reserve(bytes: number): UploadReservation;
+  reserve(ceilingBytes: number): UploadReservation;
   stats(): UploadMemoryStats;
 }
 
@@ -488,44 +581,93 @@ export function createUploadMemoryBudget(
   let peakHeldBytes = 0;
   let admitted = 0;
   let shed = 0;
+  let outgrown = 0;
   let refusedTooLarge = 0;
 
+  /**
+   * Can a holder currently sitting at `mine` move to `want`?
+   *
+   * Two ways, and the second is what makes a 200 MB video possible at all:
+   * take a share of the budget, or take more than the budget when nobody else
+   * holds any. "Nobody else" is the entire precondition for the solo path —
+   * it is what guarantees at most one preview can be running, because the
+   * route holds its reservation across the watermark gate, which is why
+   * `soloReservationCeilingBytes` is a decode short of the spendable region
+   * rather than all of it.
+   */
+  function admissible(mine: number, want: number): boolean {
+    const others = heldBytes - mine;
+    if (others + want <= settings.budgetBytes) return true;
+    return others === 0 && want <= settings.soloReservationCeilingBytes;
+  }
+
+  function take(mine: number, want: number): void {
+    heldBytes += want - mine;
+    if (heldBytes > peakHeldBytes) peakHeldBytes = heldBytes;
+  }
+
   return {
-    reserve(bytes: number): UploadReservation {
-      if (bytes > settings.soloReservationCeilingBytes) {
+    reserve(ceilingBytes: number): UploadReservation {
+      if (ceilingBytes > settings.soloReservationCeilingBytes) {
         refusedTooLarge += 1;
         throw new UploadTooLargeForBudgetError(
-          `Upload of ${bytes} bytes exceeds what this container can buffer (${settings.soloReservationCeilingBytes} bytes)`,
+          `Upload of up to ${ceilingBytes} bytes exceeds what this container can buffer (${settings.soloReservationCeilingBytes} bytes)`,
           { limitBytes: settings.maxSingleUploadBytes },
         );
       }
 
-      // Two ways in, and the second is the one that makes a 200 MB video
-      // possible at all: take a share of the budget, or take the whole thing
-      // when nobody else holds any. `heldBytes === 0` is the entire
-      // precondition — it is what guarantees no preview is running, because
-      // the route holds its reservation across the gate.
-      const fits = heldBytes + bytes <= settings.budgetBytes;
-      if (!fits && heldBytes !== 0) {
+      const grant = Math.min(ceilingBytes, INITIAL_GRANT_BYTES);
+      if (!admissible(0, grant)) {
         shed += 1;
-        logShedUpload({ wanted: bytes, heldBytes, budgetBytes: settings.budgetBytes, shed });
+        logShedUpload({
+          wanted: grant,
+          heldBytes,
+          budgetBytes: settings.budgetBytes,
+          shed,
+        });
         throw new UploadMemoryExhaustedError(
           `Upload buffers are at capacity (${heldBytes} of ${settings.budgetBytes} bytes held); try again shortly`,
           { retryAfterSeconds: settings.retryAfterSeconds },
         );
       }
 
-      heldBytes += bytes;
+      take(0, grant);
       admitted += 1;
-      if (heldBytes > peakHeldBytes) peakHeldBytes = heldBytes;
 
+      let mine = grant;
       let released = false;
       return {
-        bytes,
+        get bytes() {
+          return mine;
+        },
+        ceilingBytes,
+        retryAfterSeconds: settings.retryAfterSeconds,
+        growTo(toBytes: number): boolean {
+          if (released) return false;
+          if (toBytes <= mine) return true;
+          // The ceiling is enforced by the caller's stream cap too, but a
+          // reservation that could exceed it would make that cap and this
+          // budget disagree about the same request.
+          if (toBytes > ceilingBytes) return false;
+          if (!admissible(mine, toBytes)) {
+            outgrown += 1;
+            logShedUpload({
+              wanted: toBytes,
+              heldBytes,
+              budgetBytes: settings.budgetBytes,
+              shed: shed + outgrown,
+            });
+            return false;
+          }
+          take(mine, toBytes);
+          mine = toBytes;
+          return true;
+        },
         release() {
           if (released) return;
           released = true;
-          heldBytes -= bytes;
+          heldBytes -= mine;
+          mine = 0;
         },
       };
     },
@@ -535,6 +677,7 @@ export function createUploadMemoryBudget(
       peakHeldBytes,
       admitted,
       shed,
+      outgrown,
       refusedTooLarge,
     }),
   };
@@ -629,8 +772,8 @@ function getBudget(): UploadMemoryBudget {
 }
 
 /** @see UploadMemoryBudget.reserve */
-export function reserveUploadMemory(bytes: number): UploadReservation {
-  return getBudget().reserve(bytes);
+export function reserveUploadMemory(ceilingBytes: number): UploadReservation {
+  return getBudget().reserve(ceilingBytes);
 }
 
 /** Live view of the budget, for tests and for anything that wants to log it. */

@@ -8,6 +8,7 @@ import {
   MAX_UPLOAD_BYTES,
 } from "@/lib/media";
 import {
+  INITIAL_GRANT_BYTES,
   MULTIPART_OVERHEAD_ALLOWANCE_BYTES,
   resetUploadMemoryBudget,
   uploadMemoryStats,
@@ -936,14 +937,18 @@ describe("POST /api/media — upload memory (ugcportal-05b)", () => {
     expect(uploadMemoryStats().heldBytes).toBe(0);
   });
 
-  it("buffers at most one maximum-size video at a time (K3)", async () => {
+  it("commits one image's worth for a 200 MB declaration, not 400 (K3)", async () => {
     // Video reaches no gate at all — preview generation is image-only until
     // ugcportal-pmb — so before this bead nothing bounded how many were
-    // resident. On the recommended 1 GB a maximum-size video costs more than
-    // the steady-state budget, so the answer is exactly one.
+    // resident. Round-2 finding 1 then established what "bounded" has to
+    // mean: a request that *says* it is a 200 MB video commits the fixed
+    // initial grant and nothing more until the bytes turn up. Reserving the
+    // declared size up front was itself a denial of service — one such
+    // connection took the whole budget on a 1 GB container and, since the
+    // stall timer is an idle timer, could hold it for five minutes.
     const settings = configureContainer(1024);
     const parked = deferred<unknown>();
-    s3SendMock.mockImplementationOnce(() => parked.promise);
+    s3SendMock.mockImplementation(() => parked.promise);
 
     const videoRequest = () =>
       multipartRequest({
@@ -952,36 +957,125 @@ describe("POST /api/media — upload memory (ugcportal-05b)", () => {
         contentType: "video/mp4",
       });
 
-    const admitted = POST(videoRequest().request);
+    const first = POST(videoRequest().request);
     await until(
       () => uploadMemoryStats().heldBytes > 0,
       "the first video to reserve its body",
     );
 
-    const reserved = uploadReservationBytes(
-      200 * 1024 * 1024 + MULTIPART_OVERHEAD_ALLOWANCE_BYTES,
-    );
-    expect(uploadMemoryStats().heldBytes).toBe(reserved);
-    // Over-committed by the solo rule, which is why the second is refused
-    // rather than joining it.
-    expect(reserved).toBeGreaterThan(settings.budgetBytes);
-    expect(reserved).toBeLessThanOrEqual(settings.soloReservationCeilingBytes);
+    expect(uploadMemoryStats().heldBytes).toBe(INITIAL_GRANT_BYTES);
+    // The ceiling it *could* have grown to is far larger, and is what the
+    // 413 check uses — but it is not a commitment.
+    expect(
+      uploadReservationBytes(200 * 1024 * 1024 + MULTIPART_OVERHEAD_ALLOWANCE_BYTES),
+    ).toBeGreaterThan(settings.budgetBytes);
 
-    const second = await POST(videoRequest().request);
-    expect(second.status).toBe(503);
-    expect(second.headers.get("Retry-After")).toBe(
-      String(settings.retryAfterSeconds),
+    // So concurrency is now bounded by bytes actually held, not by what was
+    // claimed: several small videos coexist where one claimed-large one used
+    // to exclude everything.
+    const second = POST(videoRequest().request);
+    const third = POST(videoRequest().request);
+    await until(
+      () => uploadMemoryStats().admitted === 3,
+      "all three videos to be admitted",
     );
+
+    expect(uploadMemoryStats().heldBytes).toBe(3 * INITIAL_GRANT_BYTES);
+    expect(uploadMemoryStats().shed).toBe(0);
 
     parked.resolve({});
-    await expect(admitted.then((r) => r.status)).resolves.toBe(201);
+    const responses = await Promise.all([first, second, third]);
+    expect(responses.map((r) => r.status)).toEqual([201, 201, 201]);
 
-    // The K3 assertion: however many arrived, the peak concurrent buffering
-    // never exceeded one video's worth.
-    expect(uploadMemoryStats().peakHeldBytes).toBe(reserved);
+    // The K3 assertion: however many arrived, peak concurrent buffering
+    // stayed inside the budget.
+    expect(uploadMemoryStats().peakHeldBytes).toBeLessThanOrEqual(
+      settings.budgetBytes,
+    );
     expect(uploadMemoryStats().heldBytes).toBe(0);
-    // And it never reached the watermark gate, exactly as before.
+    // And none of them reached the watermark gate, exactly as before.
     expect(watermarkConcurrencyStats().admitted).toBe(0);
+  });
+
+  it("grows the reservation only as bytes actually arrive", async () => {
+    configureContainer(1024);
+    const deliveredBytes = 12 * 1024 * 1024;
+    const payload = new Uint8Array(deliveredBytes);
+    payload.set(MP4_HEADER);
+
+    const response = await POST(
+      multipartRequest({
+        payload,
+        filename: "clip.mp4",
+        contentType: "video/mp4",
+      }).request,
+    );
+
+    expect(response.status).toBe(201);
+
+    // Past the initial grant, because more than half a grant's worth of body
+    // really arrived — and proportional to what arrived rather than to the
+    // 200 MB the declaration entitled it to.
+    const peak = uploadMemoryStats().peakHeldBytes;
+    expect(peak).toBeGreaterThan(INITIAL_GRANT_BYTES);
+    expect(peak).toBeGreaterThanOrEqual(uploadReservationBytes(deliveredBytes));
+    expect(peak).toBeLessThanOrEqual(
+      uploadReservationBytes(deliveredBytes + MULTIPART_OVERHEAD_ALLOWANCE_BYTES),
+    );
+    expect(uploadMemoryStats().heldBytes).toBe(0);
+  });
+
+  it("cuts off a body that outgrows the budget mid-read, with a 503", async () => {
+    // Admission is granted on the fixed grant, so a request whose body turns
+    // out to need more than the budget can spare is stopped where it is
+    // rather than allowed to finish. The bytes are never forwarded to the
+    // parser, so what is resident never exceeds what was committed.
+    const settings = configureContainer(640);
+    const parked = deferred<typeof STUB_PREVIEW>();
+    vi.mocked(generateWatermarkedPreview).mockImplementation(
+      () => parked.promise,
+    );
+
+    const parkedUploads = [0, 1, 2].map(
+      () => POST(multipartRequest({ payload: REAL_PNG }).request),
+    );
+    await until(
+      () => uploadMemoryStats().admitted === 3,
+      "three uploads to be holding grants",
+    );
+    expect(uploadMemoryStats().heldBytes).toBe(3 * INITIAL_GRANT_BYTES);
+
+    const declaredBytes = 25 * 1024 * 1024;
+    const payload = new Uint8Array(declaredBytes);
+    payload.set(MP4_HEADER);
+    const response = await POST(
+      multipartRequest({
+        payload,
+        filename: "clip.mp4",
+        contentType: "video/mp4",
+        // Needed to bring the ceiling under this container's solo limit, so
+        // the request is admitted at all rather than refused with a 413.
+        contentLength: String(declaredBytes + 1024),
+      }).request,
+    );
+
+    expect(response.status).toBe(503);
+    expect(response.headers.get("Retry-After")).toBe(
+      String(settings.retryAfterSeconds),
+    );
+    await expect(response.json()).resolves.toEqual({
+      error: "Too many uploads are being processed right now",
+      retryAfterSeconds: settings.retryAfterSeconds,
+    });
+    expect(uploadMemoryStats().outgrown).toBe(1);
+    expect(uploadMemoryStats().peakHeldBytes).toBeLessThanOrEqual(
+      settings.budgetBytes,
+    );
+    expect(s3SendMock).not.toHaveBeenCalled();
+
+    parked.resolve(STUB_PREVIEW);
+    await Promise.all(parkedUploads);
+    expect(uploadMemoryStats().heldBytes).toBe(0);
   });
 
   it("refuses an upload this container could never buffer with a 413, not a 503", async () => {

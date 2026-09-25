@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   BODY_STALL_TIMEOUT_MS,
@@ -264,7 +264,7 @@ describe("peekDeclaredPartType", () => {
   });
 });
 
-describe("readCappedFormDataFrom — stalled bodies (round-1 finding 2)", () => {
+describe("readCappedFormDataFrom — stalls and metered reads", () => {
   const request = {
     url: "http://localhost/api/media",
     method: "POST",
@@ -294,7 +294,7 @@ describe("readCappedFormDataFrom — stalled bodies (round-1 finding 2)", () => 
       request,
       stalledBody(),
       10 * 1024 * 1024,
-      25,
+      { stallTimeoutMs: 25 },
     );
 
     expect(result).toEqual({
@@ -313,7 +313,7 @@ describe("readCappedFormDataFrom — stalled bodies (round-1 finding 2)", () => 
       request,
       malformed,
       10 * 1024 * 1024,
-      25,
+      { stallTimeoutMs: 25 },
     );
 
     expect(result).toEqual({
@@ -346,10 +346,74 @@ describe("readCappedFormDataFrom — stalled bodies (round-1 finding 2)", () => 
       request,
       slow,
       10 * 1024 * 1024,
-      40,
+      { stallTimeoutMs: 40 },
     );
 
     expect(result.ok).toBe(true);
+  });
+
+  it("tears the source down on a stall rather than leaving it locked", async () => {
+    // Round-2 finding 4. Erroring the guarded stream does not propagate
+    // upstream, and the stream's own `cancel` only runs on a teardown that
+    // came from downstream — so without an explicit cancel the request body
+    // was left locked with a read outstanding after the 408, which is half
+    // the point of not waiting for requestTimeout.
+    const cancelled = vi.fn();
+    let sent = false;
+    const source = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (sent) return new Promise<void>(() => {});
+        sent = true;
+        controller.enqueue(new TextEncoder().encode(partHeader()));
+      },
+      cancel: cancelled,
+    });
+
+    const result = await readCappedFormDataFrom(request, source, 10 * 1024 * 1024, {
+      stallTimeoutMs: 25,
+    });
+
+    expect(result).toMatchObject({ ok: false, status: 408 });
+    expect(cancelled).toHaveBeenCalledTimes(1);
+  });
+
+  it("answers 503 when the caller cannot commit to the rest of the body", async () => {
+    // The metered path (round-2 finding 1): the upload route grows its memory
+    // reservation as bytes arrive and refuses here when it cannot. A 503,
+    // distinct from the 413 for a body that is simply too large — one is
+    // about the process, the other about this request.
+    const seen: number[] = [];
+    const body = streamOf([partHeader(), "A".repeat(200), "B".repeat(200)]);
+
+    const result = await readCappedFormDataFrom(request, body, 10 * 1024 * 1024, {
+      admitBytes: (received) => {
+        seen.push(received);
+        return received <= 300;
+      },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 503,
+      error: "Too many uploads are being processed right now",
+    });
+    // Called with the running total, and stopped at the first refusal rather
+    // than draining the rest of the body.
+    expect(seen).toHaveLength(2);
+    expect(seen[seen.length - 1]).toBeGreaterThan(300);
+  });
+
+  it("forwards nothing once the caller has refused", async () => {
+    // The refusal has to prevent the bytes reaching the parser, not merely
+    // report them afterwards — otherwise the reservation and what is
+    // actually resident disagree, which is the whole failure this bead is
+    // about.
+    const body = streamOf([partHeader(), "A".repeat(4096)]);
+    const result = await readCappedFormDataFrom(request, body, 10 * 1024 * 1024, {
+      admitBytes: () => false,
+    });
+
+    expect(result).toMatchObject({ ok: false, status: 503 });
   });
 
   it("defaults to an idle budget far longer than any real pause", () => {

@@ -182,10 +182,10 @@ EXPOSE 3000
 #                 previews     burst    upload-body    largest
 #                 at once /    (max-    budget         upload
 #                 queued       size)
-#     512 MB  ->  1 /  0          1       21 MB         57 MB   DOES NOT FIT
-#     768 MB  ->  2 /  1          3       77 MB        166 MB
-#       1 GB  ->  3 /  5          8      166 MB        275 MB   <- recommended
-#       2 GB  ->  3 / 12         15    1_037 MB        710 MB
+#     512 MB  ->  1 /  0          1       21 MB         10 MB   DOES NOT FIT
+#     768 MB  ->  2 /  1          3       77 MB        102 MB
+#       1 GB  ->  3 /  5          8      166 MB        211 MB   <- recommended
+#       2 GB  ->  3 / 12         15    1_037 MB        646 MB
 #
 # Up to and including 1 GB the two bounds coincide: the upload budget affords
 # about the burst the gate can hold (8 x 20.5 MB = 166 MB at 1 GB), so a
@@ -212,9 +212,24 @@ EXPOSE 3000
 # exists to replace with shedding.
 #
 # 1 GB is also the smallest size at which *every* upload the app accepts
-# fits: a 200 MB video needs 275 MB of largest-upload headroom and 768 MB
-# affords 166 MB, so a maximum-size video is refused there with a 413 saying
-# so. Below 1 GB, expect bursts to shed (a retryable 503 with Retry-After).
+# fits: a maximum-size (200 MB) video needs 211 MB of largest-upload room,
+# which 1 GB affords with about 11 MB to spare and 768 MB (102 MB) does not,
+# so such a video is refused there with a 413 saying so. Below 1 GB, expect
+# bursts to shed (a retryable 503 with Retry-After).
+#
+# "Largest upload" is smaller than it looks because a single upload alone in
+# the budget may also be an image, which then runs a preview: its body and
+# that decode are resident at the same moment, so the room for the body is a
+# decode short of everything spendable, not all of it.
+#
+# The budget is not committed up front from what a request *claims* it will
+# send. Every upload is granted one image's worth (21 MB) on arrival — enough
+# to refuse a burst before any of it is read — and grows only as bytes
+# actually arrive. A request that declares a 200 MB video and then sends
+# nothing holds 21 MB, not 420 MB. That matters more than it sounds: sizing
+# the commitment from the declaration meant two connections asserting a large
+# Content-Length could hold the whole budget of a 1 GB container for the
+# lifetime of the request, for a few hundred bytes of real traffic.
 #
 # WHAT THE NUMBERS COVER, AND WHAT THEY DO NOT.
 #

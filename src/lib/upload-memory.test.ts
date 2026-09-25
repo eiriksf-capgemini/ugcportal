@@ -4,8 +4,10 @@ import {
   MAX_IMAGE_UPLOAD_BYTES,
   MAX_UPLOAD_BYTES,
   declaredUploadCapBytes,
+  validateUpload,
 } from "@/lib/media";
 import {
+  INITIAL_GRANT_BYTES,
   MIN_UPLOAD_BUDGET_BYTES,
   MULTIPART_OVERHEAD_ALLOWANCE_BYTES,
   UNDECLARED_UPLOAD_LIMIT_BYTES,
@@ -19,7 +21,10 @@ import {
   uploadReadLimitBytes,
   uploadReservationBytes,
 } from "@/lib/upload-memory";
-import type { UploadMemorySettings } from "@/lib/upload-memory";
+import type {
+  UploadMemorySettings,
+  UploadReservation,
+} from "@/lib/upload-memory";
 import {
   PREVIEW_BYTES_PER_OPERATION,
   PREVIEW_PROCESS_BASELINE_BYTES,
@@ -59,13 +64,41 @@ describe("declaredUploadCapBytes", () => {
     expect(declaredUploadCapBytes("video/mp4")).toBe(200 * MiB);
   });
 
-  it("normalises case and strips Content-Type parameters", () => {
-    // `File.type` is lower-cased by the platform before validateUpload ever
-    // sees it, so a cap keyed on the raw header has to do the same or it
-    // reads as "unknown" and caps loosely while validateUpload accepts.
-    expect(declaredUploadCapBytes("IMAGE/PNG")).toBe(10 * MiB);
-    expect(declaredUploadCapBytes("image/png; charset=binary")).toBe(10 * MiB);
-    expect(declaredUploadCapBytes("  video/mp4  ")).toBe(200 * MiB);
+  // Round-2 finding 3. The first version normalised the media type by
+  // splitting off Content-Type parameters; validateUpload does not, and
+  // `File.type` really does carry them on this runtime. So
+  // `video/mp4; codecs="avc1.42E01E"` was given a 200 MB stream cap and then
+  // refused with a 415 — read-to-the-maximum-then-reject, for the cost of
+  // appending a parameter — while the doc claimed the two were provably
+  // identical. They are now the same code path, so this is a property rather
+  // than a list of cases.
+  it.each([
+    "image/png",
+    "video/mp4",
+    "application/pdf",
+    'video/mp4; codecs="avc1.42E01E"',
+    "image/png; charset=binary",
+    "IMAGE/PNG",
+    "  video/mp4  ",
+    "",
+    "constructor",
+    "__proto__",
+  ])("answers exactly as validateUpload does for %j", (type) => {
+    const accepted = validateUpload({ type, size: 1 }).ok;
+
+    expect(declaredUploadCapBytes(type) !== null).toBe(accepted);
+  });
+
+  it("gives a parameterised type the smallest cap, not its kind's", () => {
+    // The concrete consequence of the property above, spelled out because it
+    // is the attack it closes: a parameterised video type now reads ~10 MB
+    // before its 415 instead of ~200 MB.
+    expect(declaredUploadCapBytes('video/mp4; codecs="avc1.42E01E"')).toBeNull();
+    expect(
+      uploadReadLimitBytes({
+        declaredContentType: 'video/mp4; codecs="avc1.42E01E"',
+      }),
+    ).toBe(MAX_IMAGE_UPLOAD_BYTES + MULTIPART_OVERHEAD_ALLOWANCE_BYTES);
   });
 
   it("returns null rather than a number for a type no kind accepts", () => {
@@ -130,16 +163,34 @@ describe("uploadReadLimitBytes", () => {
     );
   });
 
-  it("still trusts Content-Length when the declaration is unreadable", () => {
-    // The undeclared floor is a fallback for having no information at all.
-    // An honest Content-Length is information, and a video sent that way is
-    // sized from it rather than refused.
+  // Round-2 finding 1. An earlier version let a large Content-Length lift the
+  // undeclared case back to MAX_UPLOAD_BYTES on the reasoning that an honest
+  // header is information — but it is an assertion the client has not
+  // delivered on, and it was enough to make two connections commit ~430 MB
+  // apiece for a few hundred bytes of traffic.
+  it.each([
+    ["an unreadable declaration", null],
+    ["a declared image", "image/png"],
+    ["a declared video", "video/mp4"],
+  ])("never lets Content-Length widen the cap, with %s", (_label, declared) => {
+    const withoutHeader = uploadReadLimitBytes({
+      declaredContentType: declared,
+    });
+    const withHugeHeader = uploadReadLimitBytes({
+      declaredContentType: declared,
+      contentLengthHeader: String(4 * 1024 * MiB),
+    });
+
+    expect(withHugeHeader).toBe(withoutHeader);
+  });
+
+  it("keeps an undeclared upload at the smallest cap however big it claims to be", () => {
     expect(
       uploadReadLimitBytes({
         declaredContentType: null,
         contentLengthHeader: String(150 * MiB),
       }),
-    ).toBe(150 * MiB + MULTIPART_OVERHEAD_ALLOWANCE_BYTES);
+    ).toBe(UNDECLARED_UPLOAD_LIMIT_BYTES);
   });
 
   it("never exceeds the fallback, whatever is declared", () => {
@@ -245,17 +296,17 @@ describe("resolveUploadMemorySettings", () => {
   //   spendable = usable - 320 MiB baseline         = 577_136_230
   //   limit     = 3 (libuv-bound), decode 3 x 128 MiB = 402_653_184
   //   budget    = spendable - decode                = 174_483_046  (166.4 MiB)
-  //   solo      = spendable                         = 577_136_230  (550.4 MiB)
-  //   maxSingle = floor(solo / 2) - 256 KiB         = 288_305_971  (274.9 MiB)
-  //   projected = 320 MiB + max(decode + budget, solo) = usable exactly
+  //   solo      = spendable - 128 MiB               = 442_918_502  (422.4 MiB)
+  //   maxSingle = floor(solo / 2) - 256 KiB         = 221_197_107  (211.0 MiB)
+  //   projected = 320 MiB + max(decode + budget, solo + decode) = usable
   it("derives the recommended 1 GB configuration", () => {
     const settings = uploadFor(1024);
 
     expect(settings.watermark.usableBudgetBytes).toBe(912_680_550);
     expect(settings.watermark.limit).toBe(3);
     expect(settings.budgetBytes).toBe(174_483_046);
-    expect(settings.soloReservationCeilingBytes).toBe(577_136_230);
-    expect(settings.maxSingleUploadBytes).toBe(288_305_971);
+    expect(settings.soloReservationCeilingBytes).toBe(442_918_502);
+    expect(settings.maxSingleUploadBytes).toBe(221_197_107);
     expect(settings.projectedUploadPathPeakBytes).toBe(912_680_550);
     expect(settings.fitsBudget).toBe(true);
   });
@@ -263,22 +314,55 @@ describe("resolveUploadMemorySettings", () => {
   it("accepts every upload the app allows at 1 GB, and not at 768 MB", () => {
     // The operator-facing consequence, and the reason maxSingleUploadBytes is
     // a field rather than an internal: a 200 MB video costs two copies plus
-    // framing, which 1 GB affords and 768 MB does not.
+    // the form allowance, which 1 GB affords and 768 MB does not.
     expect(uploadFor(1024).maxSingleUploadBytes).toBeGreaterThan(200 * MiB);
     expect(uploadFor(768).maxSingleUploadBytes).toBeLessThan(200 * MiB);
     // Images fit everywhere, including the smallest container that runs.
-    expect(uploadFor(512).maxSingleUploadBytes).toBeGreaterThan(
+    expect(uploadFor(512).maxSingleUploadBytes).toBeGreaterThanOrEqual(
       MAX_IMAGE_UPLOAD_BYTES,
     );
   });
 
+  // Round-2 finding 2. A solo caller is alone in the *budget*, not in the
+  // process: an image goes on to run a preview, and that decode lands on top
+  // of the body it is still holding. Handing solo the whole spendable region
+  // made the true peak `usable + DECODE` — 818,728,140 bytes inside a
+  // 805,306,368-byte container at 768 MB, an OOM from a single upload.
+  it.each([512, 640, 768, 1024, 1536, 2048, 4096])(
+    "leaves room for the preview a solo upload then runs, at %i MB",
+    (mb) => {
+      const settings = uploadFor(mb);
+      const soloPeak =
+        PREVIEW_PROCESS_BASELINE_BYTES +
+        settings.soloReservationCeilingBytes +
+        PREVIEW_BYTES_PER_OPERATION;
+
+      expect(settings.projectedUploadPathPeakBytes).toBeGreaterThanOrEqual(
+        soloPeak,
+      );
+      if (settings.fitsBudget) {
+        expect(soloPeak).toBeLessThanOrEqual(
+          settings.watermark.usableBudgetBytes,
+        );
+      }
+      // The container itself, not just the derated budget — the number the
+      // kernel actually kills on.
+      expect(soloPeak).toBeLessThanOrEqual(mb * MiB);
+    },
+  );
+
   it("admits exactly the burst the gate can hold at 1 GB", () => {
     const settings = uploadFor(1024);
-    const perMaxImage = uploadReservationBytes(
-      MAX_IMAGE_UPLOAD_BYTES + MULTIPART_OVERHEAD_ALLOWANCE_BYTES,
-    );
 
-    expect(Math.floor(settings.budgetBytes / perMaxImage)).toBe(
+    // The initial grant is what a burst is refused against, and it is one
+    // maximum-size image's worth — so the arithmetic is the same whether the
+    // burst is of images or of anything else claiming to be larger.
+    expect(INITIAL_GRANT_BYTES).toBe(
+      uploadReservationBytes(
+        MAX_IMAGE_UPLOAD_BYTES + MULTIPART_OVERHEAD_ALLOWANCE_BYTES,
+      ),
+    );
+    expect(Math.floor(settings.budgetBytes / INITIAL_GRANT_BYTES)).toBe(
       settings.watermark.limit + settings.watermark.queueLimit,
     );
   });
@@ -357,7 +441,7 @@ describe("resolveUploadMemorySettings", () => {
         Math.max(
           settings.watermark.limit * PREVIEW_BYTES_PER_OPERATION +
             settings.budgetBytes,
-          settings.soloReservationCeilingBytes,
+          settings.soloReservationCeilingBytes + PREVIEW_BYTES_PER_OPERATION,
         );
       if (settings.projectedUploadPathPeakBytes !== expected) return true;
       // The Dockerfile says "the container limit less the 15% headroom, by
@@ -371,6 +455,92 @@ describe("resolveUploadMemorySettings", () => {
     });
 
     expect(failures).toEqual([]);
+  });
+
+  it("keeps every reserving branch inside the container, not just inside the budget", () => {
+    // Round-2 asked for the peak to be re-derived per branch and checked
+    // against the container size rather than against the budget, because the
+    // gap between the two is exactly where finding 2 lived: the solo ceiling
+    // fitted the budget and the decode that followed it did not fit the
+    // container.
+    //
+    // There are two shapes the process can be in, and the admission rule
+    // admits nothing outside them:
+    //   many holders — bodies bounded by budgetBytes, up to `limit` previews;
+    //   one holder    — its body bounded by soloReservationCeilingBytes, and
+    //                   the single preview it can be running.
+    // Which branch produced the reservation (declared type, undeclared with
+    // or without Content-Length) changes only the *ceiling*, never what the
+    // rule will let be held, so it cannot move either peak.
+    const failures: string[] = [];
+
+    for (const mb of EVERY_MB) {
+      const settings = uploadFor(mb);
+      const manyPeak =
+        PREVIEW_PROCESS_BASELINE_BYTES +
+        settings.budgetBytes +
+        settings.watermark.limit * PREVIEW_BYTES_PER_OPERATION;
+      const soloPeak =
+        PREVIEW_PROCESS_BASELINE_BYTES +
+        settings.soloReservationCeilingBytes +
+        PREVIEW_BYTES_PER_OPERATION;
+      const peak = Math.max(manyPeak, soloPeak);
+
+      if (peak > mb * MiB) failures.push(`${mb} MB: ${peak} over the container`);
+      if (peak !== settings.projectedUploadPathPeakBytes) {
+        failures.push(`${mb} MB: projection does not report the real peak`);
+      }
+      if (settings.fitsBudget && peak !== settings.watermark.usableBudgetBytes) {
+        failures.push(`${mb} MB: peak is not the usable budget exactly`);
+      }
+    }
+
+    expect(failures).toEqual([]);
+  });
+
+  it("never lets any branch's ceiling exceed what one caller may hold", () => {
+    // The ceiling is a rejection threshold, not a commitment — but it must
+    // still be something the process could honour, or a request would be
+    // admitted and then cut off part-way for no reason it could have known.
+    const branches = (mb: number) => ({
+      declaredImage: uploadReservationBytes(
+        uploadReadLimitBytes({ declaredContentType: "image/png" }),
+      ),
+      declaredVideo: uploadReservationBytes(
+        uploadReadLimitBytes({ declaredContentType: "video/mp4" }),
+      ),
+      undeclared: uploadReservationBytes(
+        uploadReadLimitBytes({ declaredContentType: null }),
+      ),
+      undeclaredWithLength: uploadReservationBytes(
+        uploadReadLimitBytes({
+          declaredContentType: null,
+          contentLengthHeader: String(4 * 1024 * MiB),
+        }),
+      ),
+      _mb: mb,
+    });
+
+    for (const mb of [512, 640, 768, 1024, 2048, 4096]) {
+      const settings = uploadFor(mb);
+      const ceilings = branches(mb);
+
+      // The image and undeclared branches must be admissible everywhere, or
+      // the route would refuse ordinary uploads on a supported container.
+      expect(ceilings.declaredImage).toBeLessThanOrEqual(
+        settings.soloReservationCeilingBytes,
+      );
+      expect(ceilings.undeclared).toBeLessThanOrEqual(
+        settings.soloReservationCeilingBytes,
+      );
+      // Content-Length cannot enlarge the undeclared branch, whatever it says.
+      expect(ceilings.undeclaredWithLength).toBe(ceilings.undeclared);
+      // Video is the branch that legitimately does not fit small containers,
+      // and gets a 413 saying so rather than being admitted and then cut off.
+      expect(ceilings.declaredVideo <= settings.soloReservationCeilingBytes).toBe(
+        mb >= 1024,
+      );
+    }
   });
 
   it("is at least as large a claim as the gate's own projection", () => {
@@ -418,7 +588,7 @@ describe("describeUploadMemory", () => {
     const line = describeUploadMemory(uploadFor(1024));
 
     expect(line).toContain("budget=166 MB");
-    expect(line).toContain("maxSingleUpload=275 MB");
+    expect(line).toContain("maxSingleUpload=211 MB");
     expect(line).toContain("projectedUploadPathPeak=870 MB");
   });
 });
@@ -581,6 +751,144 @@ describe("createUploadMemoryBudget", () => {
     // and reported on the next line rather than each getting one.
     expect(warnSpy).toHaveBeenCalledTimes(1);
     expect(budget.stats().shed).toBe(50);
+  });
+
+  it("commits only the initial grant before a byte has been delivered", () => {
+    // Round-2 finding 1, in one assertion: what a request claims it will send
+    // buys a ceiling, not a commitment.
+    const budget = createUploadMemoryBudget(
+      budgetOf({
+        budgetBytes: 10_000_000,
+        soloReservationCeilingBytes: 10_000_000,
+      }),
+    );
+
+    const huge = budget.reserve(9_000_000);
+
+    expect(huge.ceilingBytes).toBe(9_000_000);
+    expect(huge.bytes).toBe(Math.min(9_000_000, INITIAL_GRANT_BYTES));
+    expect(budget.stats().heldBytes).toBe(huge.bytes);
+  });
+
+  it("grows only as far as delivered bytes justify, and no further than the ceiling", () => {
+    const budget = createUploadMemoryBudget(
+      budgetOf({ budgetBytes: 600, soloReservationCeilingBytes: 600 }),
+    );
+    const reservation = budget.reserve(500);
+
+    // Ceiling below the grant, so the grant is the ceiling.
+    expect(reservation.bytes).toBe(500);
+    // Already covered; a caller charging cumulative progress can call this
+    // on every chunk without tracking what it last asked for.
+    expect(reservation.growTo(100)).toBe(true);
+    expect(budget.stats().heldBytes).toBe(500);
+    // Past the ceiling is refused even with the budget wide open, so the
+    // stream cap and this budget cannot disagree about the same request.
+    expect(reservation.growTo(501)).toBe(false);
+    expect(budget.stats().heldBytes).toBe(500);
+  });
+
+  it("grows past the budget only while nobody else holds anything", () => {
+    const budget = createUploadMemoryBudget(
+      budgetOf({ budgetBytes: 100, soloReservationCeilingBytes: 400 }),
+    );
+    const solo = budget.reserve(400);
+
+    expect(solo.bytes).toBe(100 > INITIAL_GRANT_BYTES ? INITIAL_GRANT_BYTES : 400);
+    expect(solo.growTo(400)).toBe(true);
+    expect(budget.stats().heldBytes).toBe(400);
+    // Over-committed now, so nothing else joins it.
+    expect(() => budget.reserve(1)).toThrow(UploadMemoryExhaustedError);
+  });
+
+  it("refuses to grow when someone else is holding the budget", () => {
+    // Scaled in grants, because growth past the grant is the path under test
+    // and any ceiling below INITIAL_GRANT_BYTES is handed over in full.
+    const grant = INITIAL_GRANT_BYTES;
+    const budget = createUploadMemoryBudget(
+      budgetOf({
+        budgetBytes: 3 * grant,
+        soloReservationCeilingBytes: 10 * grant,
+      }),
+    );
+    const a = budget.reserve(5 * grant);
+    const b = budget.reserve(5 * grant);
+
+    expect(a.bytes).toBe(grant);
+    expect(b.bytes).toBe(grant);
+
+    // a holds one grant, so b growing to three would put the pair at four
+    // against a budget of three. Refused rather than the process going over.
+    expect(b.growTo(3 * grant)).toBe(false);
+    expect(budget.stats().heldBytes).toBe(2 * grant);
+    expect(budget.stats().outgrown).toBe(1);
+    // Counted separately from a refused admission: one is a request that
+    // never started, the other is one cut off part-way.
+    expect(budget.stats().shed).toBe(0);
+
+    a.release();
+    expect(b.growTo(3 * grant)).toBe(true);
+    expect(budget.stats().heldBytes).toBe(3 * grant);
+  });
+
+  it("releases whatever it had grown to, not what it started at", () => {
+    const budget = createUploadMemoryBudget(
+      budgetOf({ budgetBytes: 1000, soloReservationCeilingBytes: 1000 }),
+    );
+    const reservation = budget.reserve(900);
+    reservation.growTo(900);
+    expect(budget.stats().heldBytes).toBe(900);
+
+    reservation.release();
+
+    // A reservation that released its grant instead of its grown size would
+    // leak the difference on every large upload, shrinking the budget until
+    // the route refused everything.
+    expect(budget.stats().heldBytes).toBe(0);
+    expect(reservation.growTo(900)).toBe(false);
+  });
+
+  it("never holds more than the solo ceiling, under arbitrary interleaving, with growth", () => {
+    // The bound itself with the metered path exercised: reserve, grow and
+    // release in a long randomised sequence, checked after every operation.
+    const grant = INITIAL_GRANT_BYTES;
+    const settings = budgetOf({
+      budgetBytes: 3 * grant,
+      soloReservationCeilingBytes: 7 * grant,
+    });
+    const budget = createUploadMemoryBudget(settings);
+    const held: UploadReservation[] = [];
+    let seed = 776_211;
+    const next = () => (seed = (seed * 1103515245 + 12345) % 2147483648);
+    // Ceilings spanning the grant, so both the "granted in full" and the
+    // "has to grow" shapes occur.
+    const size = () => 1 + (next() % (4 * grant));
+
+    for (let step = 0; step < 5000; step += 1) {
+      const roll = next() % 3;
+      if (held.length > 0 && roll === 0) {
+        held.splice(next() % held.length, 1)[0].release();
+      } else if (held.length > 0 && roll === 1) {
+        held[next() % held.length].growTo(size());
+      } else {
+        try {
+          held.push(budget.reserve(size()));
+        } catch {
+          // Shed or refused; both are correct answers here.
+        }
+      }
+      expect(budget.stats().heldBytes).toBeLessThanOrEqual(
+        settings.soloReservationCeilingBytes,
+      );
+      expect(budget.stats().heldBytes).toBeGreaterThanOrEqual(0);
+      // The sum of what the holders think they have must equal what the
+      // budget thinks it has handed out, or a release will corrupt the count.
+      expect(held.reduce((total, r) => total + r.bytes, 0)).toBe(
+        budget.stats().heldBytes,
+      );
+    }
+
+    expect(budget.stats().outgrown).toBeGreaterThan(0);
   });
 
   it("never holds more than the solo ceiling, under arbitrary interleaving", () => {
