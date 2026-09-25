@@ -75,6 +75,30 @@ describe("formatClearanceExpiry", () => {
   });
 });
 
+/**
+ * `Intl.DateTimeFormat.format` throws RangeError on an Invalid Date, and
+ * these run inside a server component — so one unreadable row would blank
+ * the entire settings page rather than one line of it. `toDateInputValue`
+ * was guarded from the start; the other two were not, which is these
+ * formatters drifting apart in robustness rather than in timezone.
+ */
+describe("an unreadable date", () => {
+  const BROKEN = new Date("nonsense");
+
+  it("does not throw out of any formatter", () => {
+    expect(() => formatClearanceExpiry(BROKEN)).not.toThrow();
+    expect(() => formatReviewTimestamp(BROKEN)).not.toThrow();
+    expect(() => toDateInputValue(BROKEN)).not.toThrow();
+  });
+
+  it("is shown as a problem rather than hidden", () => {
+    // The gate treats an Invalid Date as expired, so the screen saying
+    // something is wrong agrees with the code refusing to sell.
+    expect(formatClearanceExpiry(BROKEN)).toContain("unreadable");
+    expect(formatReviewTimestamp(BROKEN)).toContain("unreadable");
+  });
+});
+
 describe("formatReviewTimestamp", () => {
   it("labels the zone, so it cannot be read as local time", () => {
     expect(formatReviewTimestamp(new Date("2026-09-24T17:05:00.000Z"))).toBe(

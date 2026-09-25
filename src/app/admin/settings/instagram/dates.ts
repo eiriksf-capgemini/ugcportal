@@ -32,6 +32,26 @@ const UTC_DATE_TIME = new Intl.DateTimeFormat("en-GB", {
 const ONE_MILLISECOND = 1;
 
 /**
+ * What an unreadable date renders as.
+ *
+ * `Intl.DateTimeFormat.format` throws RangeError on an Invalid Date, and
+ * these run inside a server component — so one unparseable row would blank
+ * the whole settings page rather than one line of it. `toDateInputValue`
+ * already guarded against this; these two did not, which is the same
+ * formatters drifting apart that this module exists to prevent, in
+ * robustness rather than in timezone.
+ *
+ * Shows the problem instead of hiding it: a clearance whose expiry cannot be
+ * read is a clearance to look at, and the gate treats an Invalid Date as
+ * `validUntil <= now` — not sellable — so the screen and the gate agree.
+ */
+const UNREADABLE = "unreadable date — check this record";
+
+function isReadable(date: Date): boolean {
+  return !Number.isNaN(date.getTime());
+}
+
+/**
  * How a clearance's expiry is described on screen.
  *
  * "Valid until 31 Dec" was ambiguous in the direction that favours the
@@ -42,6 +62,9 @@ const ONE_MILLISECOND = 1;
  * leaving the reader to work out which reading applies.
  */
 export function formatClearanceExpiry(date: Date): string {
+  if (!isReadable(date)) {
+    return UNREADABLE;
+  }
   const lastSellableDay = new Date(date.getTime() - ONE_MILLISECOND);
   return `${UTC_DATE_TIME.format(date)} UTC — last sellable day ${UTC_DATE.format(lastSellableDay)}`;
 }
@@ -55,7 +78,7 @@ export function formatClearanceExpiry(date: Date): string {
  * module exists to prevent.
  */
 export function formatReviewTimestamp(date: Date): string {
-  return `${UTC_DATE_TIME.format(date)} UTC`;
+  return isReadable(date) ? `${UTC_DATE_TIME.format(date)} UTC` : UNREADABLE;
 }
 
 /**

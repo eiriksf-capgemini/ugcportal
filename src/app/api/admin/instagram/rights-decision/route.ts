@@ -194,19 +194,31 @@ export async function POST(request: Request) {
     }
   }
 
-  const result = await setResaleRightsStatus(instagramAccountId, {
-    source: "ADMIN",
-    actorUserId: session.user.id,
-    actorEmail: session.user.email,
-    status,
-    reason,
-    route,
-    validUntil,
-    conditions,
-    clearedOwnerUserId,
-    evidence,
-    restampChecklist,
-  });
+  let result;
+  try {
+    result = await setResaleRightsStatus(instagramAccountId, {
+      source: "ADMIN",
+      actorUserId: session.user.id,
+      actorEmail: session.user.email,
+      status,
+      reason,
+      route,
+      validUntil,
+      conditions,
+      clearedOwnerUserId,
+      evidence,
+      restampChecklist,
+    });
+  } catch (error) {
+    // An error the writer deliberately re-throws — a real fault rather than
+    // a lost race. It still leaves an uploaded contract with nothing
+    // pointing at it, which is the case the cleanup below exists for, so do
+    // it here too and then let the fault surface unchanged.
+    if (evidence) {
+      await deleteRightsEvidence(evidence.key);
+    }
+    throw error;
+  }
 
   revalidatePath(INSTAGRAM_SETTINGS_PATH);
 

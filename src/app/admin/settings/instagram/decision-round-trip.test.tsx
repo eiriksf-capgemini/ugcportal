@@ -141,8 +141,19 @@ function formDataFromMarkup(markup: string): FormData {
   return data;
 }
 
-/** Renders the form exactly as page.tsx does, from the stored review. */
-async function renderFormForAccount(): Promise<FormData> {
+/**
+ * Renders the form exactly as page.tsx does, from the stored review.
+ *
+ * `rightsHolders` is a parameter because the page caps that list, so the
+ * recorded holder can legitimately fall outside it — and a form rendered
+ * without them submits a blank, which the handler reads as "clear it".
+ * Passing the holder every time is what hid that for a round.
+ */
+async function renderFormForAccount(
+  rightsHolders: { id: string; name: string | null; email: string | null }[] = [
+    { id: "owner-1", name: "Owner One", email: "owner@example.com" },
+  ],
+): Promise<FormData> {
   const review = await prisma.resaleRightsReview.findUnique({
     where: { instagramAccountId: "acc-1" },
     select: {
@@ -159,9 +170,7 @@ async function renderFormForAccount(): Promise<FormData> {
     <ResaleRightsDecisionForm
       instagramAccountId="acc-1"
       review={review}
-      rightsHolders={[
-        { id: "owner-1", name: "Owner One", email: "owner@example.com" },
-      ]}
+      rightsHolders={rightsHolders}
       action="/api/admin/instagram/rights-decision"
     />,
   );
@@ -365,6 +374,44 @@ describe("editing one field does not silently change the others", () => {
 
     const review = await storedReview();
     expect(review.checklistVersion).toBe(CURRENT_CHECKLIST_VERSION);
+    expect(
+      accountClearanceBlocker({
+        status: review.status,
+        checklistVersion: review.checklistVersion,
+        reviewedByUserId: review.reviewedByUserId,
+        validUntil: review.validUntil,
+        reviewedBy: { role: "ADMIN" },
+        clearedOwnerUserId: review.clearedOwnerUserId,
+      }),
+    ).toBeNull();
+  });
+
+  /**
+   * The page caps the rights-holder list, so an instance with more users
+   * than the cap renders a form whose select does not contain the recorded
+   * holder. The browser then submits the blank first option and the handler
+   * reads it as "clear it" — erasing whose rights were cleared, and making
+   * the account unsellable, because someone edited the conditions text.
+   *
+   * Same bug family as validUntil, one level up: the field round-trips
+   * correctly and the *option list* is what loses the value.
+   */
+  it("keeps a rights holder who is outside the page's slice of users", async () => {
+    // The form as an instance past the cap would render it: the recorded
+    // holder is not among the users handed to the component.
+    const form = await renderFormForAccount([
+      { id: "someone-else", name: "Someone Else", email: "else@example.com" },
+    ]);
+    expect(form.get("clearedOwnerUserId")).toBe("owner-1");
+
+    form.set("conditions", "Editorial use only. Updated.");
+    form.set("reason", "Clarified the permitted uses.");
+    await expectRedirect(form, "rights=recorded");
+
+    const review = await storedReview();
+    expect(review.clearedOwnerUserId).toBe("owner-1");
+    // And the account is still sellable at the account level, which is what
+    // the erasure would have broken.
     expect(
       accountClearanceBlocker({
         status: review.status,

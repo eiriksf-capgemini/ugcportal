@@ -2,6 +2,10 @@ import { NextResponse } from "next/server";
 
 import { requireAdmin } from "@/lib/admin";
 import { isSameOriginRequest } from "@/lib/origin";
+import {
+  PRISMA_RECORD_NOT_FOUND,
+  prismaErrorCode,
+} from "@/lib/prisma-errors";
 import { readJsonBody } from "@/lib/request-body";
 import { prisma } from "@/lib/prisma";
 import {
@@ -154,19 +158,31 @@ export async function POST(request: Request, { params }: RouteContext) {
       }
     }
 
-    const updated = await tx.curatedPost.update({
-      where: { id },
-      data: {
-        priceCents: parsed.value.priceCents,
-        // Currency is only meaningful alongside a price, and applying it on
-        // an un-pricing call would be a write the gate never checked.
-        ...(!unpricing && parsed.value.currency
-          ? { currency: parsed.value.currency }
-          : {}),
-      },
-      select: { id: true, priceCents: true, currency: true },
-    });
-    return { kind: "ok", post: updated } as const;
+    try {
+      const updated = await tx.curatedPost.update({
+        where: { id },
+        data: {
+          priceCents: parsed.value.priceCents,
+          // Currency is only meaningful alongside a price, and applying it
+          // on an un-pricing call would be a write the gate never checked.
+          ...(!unpricing && parsed.value.currency
+            ? { currency: parsed.value.currency }
+            : {}),
+        },
+        select: { id: true, priceCents: true, currency: true },
+      });
+      return { kind: "ok", post: updated } as const;
+    } catch (error) {
+      // The gate read above and this write are not serialised (deferred
+      // transactions again), so the post can be deleted in between. That is
+      // the same 404 the caller would have got a moment earlier, not a
+      // server fault — and answering it as one on an endpoint that maps
+      // 403/404/422 deliberately would be the odd one out.
+      if (prismaErrorCode(error) === PRISMA_RECORD_NOT_FOUND) {
+        return { kind: "not_found" } as const;
+      }
+      throw error;
+    }
   });
 
   if (result.kind === "not_found") {

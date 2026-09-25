@@ -48,8 +48,9 @@ export const RIGHTS_EVIDENCE_PREFIX = "rights-evidence";
  * requirement and is the better answer where it is available, since it cannot
  * be forgotten per-request.
  *
- * Not in env.example yet: that file belongs to another in-flight branch
- * (ugcportal-e86, PR #31). Tracked in ugcportal-e15.
+ * Documented in env.example, and a production start with neither this nor
+ * `S3_EVIDENCE_ENCRYPTED_AT_BUCKET=true` logs a warning at boot (see
+ * src/instrumentation.ts).
  */
 function encryptionSetting(): "AES256" | undefined {
   return process.env.S3_EVIDENCE_SSE?.trim() === "AES256"

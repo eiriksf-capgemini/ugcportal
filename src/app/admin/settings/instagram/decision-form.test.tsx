@@ -162,6 +162,84 @@ describe("every field on the form is classified", () => {
   });
 });
 
+/**
+ * The fourth variant of "a field that does not round-trip its stored value",
+ * after validUntil, checklistVersion and productDecisionRef — and the first
+ * where the field itself is fine and the *option list* is lossy. A select
+ * whose stored value is missing from its options submits the blank first
+ * entry, which the handler correctly reads as "clear it".
+ *
+ * So the assertion is made generically: for every select on the form, the
+ * stored value must appear among its options. A new select inherits it.
+ */
+describe("no select can silently drop its stored value", () => {
+  /** `{ name -> { selected, values } }` for every select in the markup. */
+  function selects(markup: string) {
+    const found = new Map<string, { selected?: string; values: string[] }>();
+    for (const match of markup.matchAll(
+      /<select\b([^>]*)>([\s\S]*?)<\/select>/g,
+    )) {
+      const name = /\bname="([^"]+)"/.exec(match[1])?.[1];
+      if (!name) continue;
+      const options = [...match[2].matchAll(/<option\b([^>]*)>/g)].map(
+        (option) => option[1],
+      );
+      found.set(name, {
+        selected: /\bvalue="([^"]*)"/.exec(
+          options.find((option) => /\bselected\b/.test(option)) ?? "",
+        )?.[1],
+        values: options.map(
+          (option) => /\bvalue="([^"]*)"/.exec(option)?.[1] ?? "",
+        ),
+      });
+    }
+    return found;
+  }
+
+  it("offers, and selects, the stored value of every select", () => {
+    const stored = {
+      status: "REJECTED",
+      route: "EXPLICIT_CONSENT",
+      clearedOwnerUserId: "owner-2",
+    };
+    const rendered = selects(
+      render({ ...EXISTING, ...stored, validUntil: null, conditions: null }),
+    );
+
+    // Not a hand-written list: read the names off the form, so a select
+    // added later is covered without anyone remembering to add it.
+    expect(rendered.size).toBe(3);
+    for (const [name, select] of rendered) {
+      const expected = stored[name as keyof typeof stored];
+      expect(select.values).toContain(expected);
+      expect(select.selected).toBe(expected);
+    }
+  });
+
+  // The regression: the page caps the rights-holder list, so the recorded
+  // holder can fall outside the slice it was given.
+  it("renders a recorded rights holder who is not in the supplied list", () => {
+    const markup = render({
+      ...EXISTING,
+      clearedOwnerUserId: "owner-outside-the-page",
+    });
+    const holder = selects(markup).get("clearedOwnerUserId")!;
+
+    expect(holder.values).toContain("owner-outside-the-page");
+    expect(holder.selected).toBe("owner-outside-the-page");
+  });
+
+  it("does not invent an option when no holder is recorded", () => {
+    const holder = selects(
+      render({ ...EXISTING, clearedOwnerUserId: null }),
+    ).get("clearedOwnerUserId")!;
+
+    // Blank plus the two supplied users, and blank is what is selected.
+    expect(holder.values).toEqual(["", "owner-1", "owner-2"]);
+    expect(holder.selected ?? "").toBe("");
+  });
+});
+
 describe("the checklist re-stamp is an assertion, not a default", () => {
   // The sibling of the validUntil fail-open: checklistVersion decides which
   // checklist a clearance was granted under, and retiring a version is how a

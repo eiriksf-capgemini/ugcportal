@@ -4,6 +4,12 @@ import type {
 } from "@/generated/prisma/enums";
 import { prisma } from "@/lib/prisma";
 import {
+  PRISMA_FOREIGN_KEY_VIOLATION,
+  PRISMA_RECORD_NOT_FOUND,
+  PRISMA_UNIQUE_VIOLATION,
+  prismaErrorCode,
+} from "@/lib/prisma-errors";
+import {
   CURRENT_CHECKLIST_VERSION,
   PRODUCT_DECISION_REF,
 } from "@/lib/resale-rights";
@@ -117,19 +123,16 @@ export type SetResaleRightsStatusResult =
  * it stands for; anything else is a real failure and stays loud.
  */
 const RACE_OUTCOMES: Record<string, "conflict" | "missing_reference"> = {
-  P2002: "conflict",
-  P2003: "missing_reference",
-  P2025: "conflict",
+  [PRISMA_UNIQUE_VIOLATION]: "conflict",
+  [PRISMA_FOREIGN_KEY_VIOLATION]: "missing_reference",
+  [PRISMA_RECORD_NOT_FOUND]: "conflict",
 };
 
 function raceOutcome(
   error: unknown,
 ): "conflict" | "missing_reference" | undefined {
-  if (typeof error !== "object" || error === null) {
-    return undefined;
-  }
-  const code = (error as { code?: unknown }).code;
-  return typeof code === "string" ? RACE_OUTCOMES[code] : undefined;
+  const code = prismaErrorCode(error);
+  return code === undefined ? undefined : RACE_OUTCOMES[code];
 }
 
 /**

@@ -59,6 +59,29 @@ export function ResaleRightsDecisionForm({
     storedVersion && !ACCEPTED_CHECKLIST_VERSIONS.has(storedVersion),
   );
 
+  /**
+   * The recorded rights holder is always an option, even when the caller's
+   * list doesn't contain them.
+   *
+   * The list is capped (the page renders it per account), so a holder
+   * outside that slice would otherwise render no matching <option>; the
+   * browser submits the first one, which is blank, and the handler
+   * faithfully reads that as "clear it". Editing an unrelated field would
+   * then erase whose rights were cleared and make the account unsellable.
+   *
+   * Handled here rather than only in the page because it is a property of
+   * the *control* — a select whose stored value is missing from its options
+   * is lossy no matter who assembled the list.
+   */
+  const recordedHolder = review?.clearedOwnerUserId ?? null;
+  const holderOptions =
+    recordedHolder && !rightsHolders.some((one) => one.id === recordedHolder)
+      ? [
+          { id: recordedHolder, name: null, email: null },
+          ...rightsHolders,
+        ]
+      : rightsHolders;
+
   return (
     // encType is required: without it the browser posts
     // application/x-www-form-urlencoded and the evidence file arrives as a
@@ -126,7 +149,7 @@ export function ResaleRightsDecisionForm({
           className="mt-1 block w-full rounded-md border border-border bg-background p-2 text-sm"
         >
           <option value="">not recorded</option>
-          {rightsHolders.map((holder) => (
+          {holderOptions.map((holder) => (
             <option key={holder.id} value={holder.id}>
               {holder.name ?? holder.email ?? holder.id}
             </option>

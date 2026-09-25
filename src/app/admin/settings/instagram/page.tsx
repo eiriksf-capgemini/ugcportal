@@ -96,6 +96,26 @@ export default async function InstagramSettingsPage({
       })
     : [];
 
+  // The account being edited may have a rights holder outside that slice.
+  // The form renders them regardless — a select missing its own stored value
+  // silently clears it on the next submit — but it can only show a raw id
+  // unless we fetch the name, so fetch it.
+  const editedHolderId =
+    accounts.find((account) => account.id === editingAccountId)
+      ?.resaleRightsReview?.clearedOwnerUserId ?? null;
+  if (
+    editedHolderId &&
+    !rightsHolders.some((holder) => holder.id === editedHolderId)
+  ) {
+    const recorded = await prisma.user.findUnique({
+      where: { id: editedHolderId },
+      select: { id: true, name: true, email: true },
+    });
+    if (recorded) {
+      rightsHolders.unshift(recorded);
+    }
+  }
+
   const errorMessage = outcomeMessage(error);
 
   return (

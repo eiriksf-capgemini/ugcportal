@@ -427,6 +427,22 @@ describe("evidence upload", () => {
     );
   });
 
+  // Cleanup ran only for *mapped* failures, so any error the writer
+  // re-throws — a real fault — left the contract orphaned, which is the
+  // exact case the cleanup was added for.
+  it("removes the uploaded file when the write throws outright", async () => {
+    setResaleRightsStatusMock.mockRejectedValue(new Error("database is gone"));
+    const file = new File([new Uint8Array([1])], "a.pdf");
+
+    await expect(post(decisionForm({ evidence: file }))).rejects.toThrow(
+      "database is gone",
+    );
+
+    expect(deleteRightsEvidenceMock).toHaveBeenCalledWith(
+      "rights-evidence/acc-1/x.pdf",
+    );
+  });
+
   it("keeps the uploaded file when the decision was recorded", async () => {
     const file = new File([new Uint8Array([1])], "a.pdf");
 
