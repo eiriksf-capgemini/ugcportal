@@ -682,11 +682,45 @@ describe("generateWatermarkedPreview under concurrency", () => {
     const shedLines = warnSpy.mock.calls
       .map(([line]) => line as string)
       .filter((line) => line.includes("shed an upload"));
-    // One line total, and it accounts for the ones it swallowed rather than
-    // dropping them silently.
     expect(shedLines).toHaveLength(1);
+
+    // ...and the ones it swallowed are still reported. This is the half the
+    // throttle originally lost: the suppressed count was only ever flushed
+    // by the *next* logged shed, so a burst that sheds and then goes quiet
+    // reported one upload out of ten. Reading the stats flushes it (a timer
+    // does the same in production, for nobody-is-looking).
     const stats = watermarkConcurrencyStats();
     expect(stats.shed).toBeGreaterThan(1);
+
+    const tail = warnSpy.mock.calls
+      .map(([line]) => line as string)
+      .filter((line) => line.includes("more upload(s) since the last line"));
+    expect(tail).toHaveLength(1);
+    // The two lines must account for every shed upload between them: one
+    // named by the first line, the rest by the tail.
+    const reported = Number(/shed (\d+) more/.exec(tail[0])?.[1]);
+    expect(reported).toBe(stats.shed - 1);
+  });
+
+  it("does not emit a tail line when nothing was suppressed", async () => {
+    process.env.WATERMARK_MAX_CONCURRENCY = "1";
+    process.env.WATERMARK_QUEUE_LIMIT = "0";
+    resetWatermarkConcurrencyGate();
+    warnSpy.mockClear();
+
+    const input = await source();
+    // Exactly two callers: one runs, one sheds and is logged immediately.
+    await Promise.allSettled([
+      generateWatermarkedPreview(input),
+      generateWatermarkedPreview(input),
+    ]);
+    watermarkConcurrencyStats();
+
+    const lines = warnSpy.mock.calls.map(([line]) => line as string);
+    expect(lines.filter((l) => l.includes("shed an upload"))).toHaveLength(1);
+    expect(
+      lines.filter((l) => l.includes("more upload(s) since the last line")),
+    ).toHaveLength(0);
   });
 
   it("gives up on a queued caller at the timeout instead of hanging (K2)", async () => {

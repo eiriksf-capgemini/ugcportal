@@ -375,9 +375,11 @@ export interface WatermarkConcurrencySettings {
    * unqualified version of this claim was wrong. The route buffers each
    * request body *before* calling in, so uploads the gate has not admitted
    * are not counted and are not bounded by anything: 60 concurrent 10 MB
-   * POSTs on the recommended configuration are 15 admitted or queued and 45
-   * shed, but all 60 bodies are resident at the moment the shed decision is
-   * taken. Video uploads and oversized-then-rejected bodies are outside it
+   * POSTs on the recommended 1 GB configuration are 8 admitted or queued
+   * (limit 3 + queue 5) and 52 shed, but all 60 bodies — ~1.2 GB — are
+   * resident at the moment those shed decisions are taken. The same figures
+   * appear in the Dockerfile's sizing note; if you change one, change both.
+   * Video uploads and oversized-then-rejected bodies are outside it
    * too. Bounding the upload path as a whole — including the shed-image case
    * this gate itself creates — is ugcportal-05b.
    */
@@ -803,6 +805,9 @@ function getGate(): ConcurrencyGate {
  * close the process is running to its bound.
  */
 export function watermarkConcurrencyStats() {
+  // Anyone asking how the gate is doing should not be told a shed count that
+  // is still sitting unprinted in the throttle; see flushShedLog.
+  flushShedLog();
   const stats = getGate().stats();
   return { ...stats, settings: gateSettings as WatermarkConcurrencySettings };
 }
@@ -817,6 +822,10 @@ export function resetWatermarkConcurrencyGate(): void {
   gateSettings = undefined;
   shedLogLastAt = 0;
   shedLogSuppressed = 0;
+  if (shedLogFlushTimer) {
+    clearTimeout(shedLogFlushTimer);
+    shedLogFlushTimer = undefined;
+  }
 }
 
 // Fallback when WATERMARK_TEXT is unset. Documented in env.example.
@@ -1296,6 +1305,53 @@ const SHED_LOG_INTERVAL_MS = 10_000;
 
 let shedLogLastAt = 0;
 let shedLogSuppressed = 0;
+let shedLogFlushTimer: ReturnType<typeof setTimeout> | undefined;
+
+/**
+ * Emit the tail of a burst: the sheds that were counted but never printed.
+ *
+ * Without this the throttle silently eats them. A burst sheds, the first one
+ * logs, the rest increment a counter — and if nothing sheds again, that
+ * counter is never printed, because the only thing that flushed it was the
+ * *next* logged shed. On the recommended 1 GB configuration a 60-upload
+ * burst sheds 52, and the single line an operator got claimed one. A
+ * throttle that loses the tail of every isolated incident is worse than no
+ * throttle, because it reports a number that looks precise and is wrong by
+ * a factor of 50.
+ *
+ * Called from a timer (so it happens without anyone asking) and from
+ * {@link watermarkConcurrencyStats} (so it is observable synchronously, and
+ * so a process shutting down before the timer fires still gets a chance).
+ */
+function flushShedLog(): void {
+  if (shedLogFlushTimer) {
+    clearTimeout(shedLogFlushTimer);
+    shedLogFlushTimer = undefined;
+  }
+  if (shedLogSuppressed === 0) return;
+
+  const suppressed = shedLogSuppressed;
+  shedLogSuppressed = 0;
+  shedLogLastAt = Date.now();
+
+  const stats = gate?.stats();
+  console.warn(
+    `[watermark] shed ${suppressed} more upload(s) since the last line ` +
+      `(shedTotal=${stats?.shed ?? "?"}). Throttled to one line per ` +
+      `${SHED_LOG_INTERVAL_MS}ms; see ugcportal-e86.`,
+  );
+}
+
+function scheduleShedLogFlush(): void {
+  if (shedLogFlushTimer) return;
+  const delay = Math.max(0, SHED_LOG_INTERVAL_MS - (Date.now() - shedLogLastAt));
+  shedLogFlushTimer = setTimeout(() => {
+    shedLogFlushTimer = undefined;
+    flushShedLog();
+  }, delay);
+  // Never hold the event loop open just to report a count.
+  shedLogFlushTimer.unref?.();
+}
 
 /**
  * Say, in this module, that an upload was shed.
@@ -1305,8 +1361,8 @@ let shedLogSuppressed = 0;
  * "[media] watermark service unavailable" on the way — a message written for
  * the fontless-runtime case, where every upload is broken and someone should
  * be woken up. Shedding is not that: it is this gate working as designed, and
- * on a small container it is routine (the 768 MB reference configuration has
- * no queue at all, so the fourth concurrent upload sheds). Without a line of
+ * on a small container it is routine (the 768 MB reference configuration
+ * absorbs three concurrent uploads, so the fourth sheds). Without a line of
  * its own, normal operation and a broken deployment produce byte-identical
  * logs and alerting cannot tell them apart.
  *
@@ -1314,15 +1370,25 @@ let shedLogSuppressed = 0;
  * route's message mean what it says. Deliberately console.warn rather than
  * console.error: a shed upload is a capacity signal, not a fault.
  *
- * It does not fix the status code — the caller still gets a 500 rather than
- * 503 + Retry-After, because that mapping is a route change and the route
- * belongs to another change in flight. That is ugcportal-u7g; this is only
- * the half that can be done from here.
+ * Two things it does not fix, both because the route belongs to another
+ * change in flight (ugcportal-u7g owns them):
+ *
+ *  - the status code. The caller still gets a 500 rather than 503 +
+ *    Retry-After.
+ *  - the volume. The route's console.error is *not* throttled, so the same
+ *    52-upload burst that produces one warn line here produces 52
+ *    error-level lines there. Until u7g lands, "one warn, many errors" is
+ *    the shape to expect, and error-rate alerting will still fire on
+ *    ordinary shedding — this line is what lets you tell that apart, not
+ *    something that quietens it.
  */
 function logShedUpload(error: ConcurrencyLimitError): void {
   const now = Date.now();
   if (shedLogLastAt !== 0 && now - shedLogLastAt < SHED_LOG_INTERVAL_MS) {
     shedLogSuppressed += 1;
+    // Make sure the tail of this burst is reported even if it is the last
+    // thing that happens.
+    scheduleShedLogFlush();
     return;
   }
 
@@ -1337,8 +1403,8 @@ function logShedUpload(error: ConcurrencyLimitError): void {
       `shedTotal=${stats?.shed ?? "?"}` +
       (suppressed > 0 ? ` (+${suppressed} more since the last line)` : "") +
       ". This is the gate working, not a broken runtime — see ugcportal-e86. " +
-      "The route additionally logs its generic 5xx for the same event until " +
-      "ugcportal-u7g maps this to a 503.",
+      "The route additionally logs its generic 5xx for the same event, " +
+      "unthrottled, until ugcportal-u7g maps this to a 503.",
   );
 }
 
