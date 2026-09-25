@@ -206,16 +206,16 @@ export async function POST(request: Request) {
     }
   }
 
-  // An independent UUID, deliberately not derived from `key`.
-  //
-  // Withholding the original's key from every response is worthless if the
-  // key can simply be recomputed from what we do return. Sharing one id
-  // between the two would mean previewKey + originalName + the (deterministic)
-  // sanitizeFilename above is enough to reconstruct the original's full path —
-  // so the moment ugcportal-71y makes previewKey fetchable against this
-  // bucket, K2 is defeated by string concatenation. Uncorrelated ids make the
-  // original's key unguessable from anything the listing exposes.
   // Both preview columns at once, via the one helper that can produce them.
+  //
+  // The preview's own UUID is independent of the original's, deliberately.
+  // Withholding the original's key from every response is worthless if the key
+  // can simply be recomputed from what we do return: sharing one id between the
+  // two would mean previewKey + originalName + the (deterministic)
+  // sanitizeFilename above is enough to reconstruct the original's full path,
+  // so the moment previewKey became fetchable against this bucket, K2 would
+  // fall to string concatenation. Uncorrelated ids make the original's key
+  // unguessable from anything any listing exposes.
   //
   // `previewKey` is the storage path and embeds `userId`, so it is owner-only;
   // `previewId` is the opaque handle the anonymous feed exposes instead

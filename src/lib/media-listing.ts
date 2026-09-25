@@ -145,24 +145,69 @@ export type MediaListingRequiredColumns = {
 };
 
 /**
+ * The columns a projection actually selects: those whose value is literally
+ * `true`.
+ *
+ * `keyof TSelect` is NOT that set, which is the trap this type exists to avoid.
+ * An optional-never property still contributes its key, so
+ * `keyof (typeof MEDIA_ANONYMOUS_SELECT & NeverProjected)` includes `key` and
+ * `userId` — and `Pick<MediaModel, …>` over that happily pulls both back out
+ * with their real types. The row type then promised `item.key: string` and
+ * `item.originalName: string` on the anonymous feed, for fields Prisma never
+ * selected and that are `undefined` at runtime.
+ *
+ * That is the failure mode worth naming, because runtime was never at risk:
+ * a type lie like this ships green. ugcportal-71y writes `item.originalName`
+ * as a caption, it type-checks, and every card renders `undefined` — or
+ * someone builds a download URL out of `item.key`. Filtering on `extends true`
+ * makes the emitted type match what was actually queried.
+ *
+ * Note this is a different job from `NeverProjected`, not a replacement for
+ * it: that one stops a bad select being *passed in*, this one stops a
+ * withheld column being *typed on the way out*. Both are needed; neither
+ * covers the other.
+ */
+type SelectedColumnKeys<TSelect> = {
+  // No `-?` here, deliberately. It would collapse `key?: never` to `never`,
+  // and `never extends true` is *true*, so the modifier meant to tidy this up
+  // would put every blocked column straight back in. Left optional, the value
+  // is `undefined`, which does not extend `true`.
+  [K in keyof TSelect]: TSelect[K] extends true ? K : never;
+}[keyof TSelect] &
+  keyof MediaModel;
+
+/**
  * A row exactly as the query returns it — `previewId` still nullable, because
  * the column is.
  *
- * The second Pick is not redundant with the first. `keyof TSelect` is deferred
- * while TSelect is generic, so a bare `Pick<MediaModel, keyof TSelect & …>`
- * cannot be indexed inside this module at all; naming the three columns the
- * module itself touches makes them resolvable here without widening what the
- * caller receives.
+ * The second Pick is not redundant with the first. `SelectedColumnKeys` is
+ * deferred while TSelect is generic, so the first Pick cannot be indexed
+ * inside this module at all; naming the three columns the module itself
+ * touches makes them resolvable here without widening what the caller
+ * receives.
  */
 type MediaListingRow<TSelect extends MediaListingSelect> = Pick<
   MediaModel,
-  keyof TSelect & keyof MediaModel
+  SelectedColumnKeys<TSelect>
 > &
   Pick<MediaModel, "id" | "createdAt" | "previewId">;
 
-/** A listing row, narrowed so `previewId` is non-nullable for the caller. */
+/**
+ * The preview columns, narrowed to non-null for the caller — both of them,
+ * for whichever projection carries them.
+ *
+ * `previewKey` is conditional because only the owner projection selects it.
+ * Narrowing it matters: the runtime guard below rejects a row whose
+ * `previewKey` is null, and if the type did not say so, an owner-feed consumer
+ * would still be handling a null that can no longer reach it.
+ */
+type NarrowedPreview<TSelect> = "previewKey" extends SelectedColumnKeys<TSelect>
+  ? { previewId: string; previewKey: string }
+  : { previewId: string };
+
+/** A listing row, narrowed so the preview columns are non-nullable. */
 export type MediaListingItem<TSelect extends MediaListingSelect> =
-  MediaListingRow<TSelect> & { previewId: string };
+  MediaListingRow<TSelect> & NarrowedPreview<TSelect>;
 
 export type MediaListingPage<TSelect extends MediaListingSelect> = {
   items: MediaListingItem<TSelect>[];
@@ -256,6 +301,24 @@ function decodeMediaCursor(raw: string): MediaCursor | null {
   if (createdAt.toISOString() !== iso) return null;
 
   return { createdAt, id };
+}
+
+/**
+ * Whether a row carries every preview column its projection selected.
+ *
+ * Deliberately tolerant of the column being absent — the anonymous projection
+ * has no `previewKey` — and intolerant of it being present and null. Absent
+ * and null are the two cases a single `!== null` check conflates, and
+ * conflating them is how this guard twice became a no-op for one audience
+ * while reading as a guard for both.
+ */
+function hasCompletePreview(row: {
+  previewId: string | null;
+  previewKey?: string | null;
+}): boolean {
+  if (row.previewId === null) return false;
+  if ("previewKey" in row && row.previewKey === null) return false;
+  return true;
 }
 
 /**
@@ -376,22 +439,27 @@ export async function listMedia<
 
     page = scanned.length > limit ? scanned.slice(0, limit) : scanned;
 
-    // The where-clause already excludes them, but previewId is still typed
-    // `string | null`; narrowing here makes the emitted shape non-nullable and
-    // means a future query change can't quietly start emitting preview-less
-    // rows.
+    // The where-clause already excludes them, but the preview columns are
+    // still typed nullable because the columns are; narrowing here makes the
+    // emitted shape non-nullable and means a future query change can't quietly
+    // start emitting preview-less rows.
     //
-    // Narrowed on `previewId` rather than `previewKey` because that is the
-    // field both projections carry — the anonymous select deliberately has no
-    // previewKey, and `undefined !== null` is true, so a previewKey check
-    // would have silently passed every anonymous row through while looking
-    // like a guard.
+    // Checks whichever preview columns this projection actually carries, not
+    // one fixed field. `previewId` is on both arms —
+    // MediaListingRequiredColumns guarantees it, which is what makes that half
+    // load-bearing rather than decorative. `previewKey` is on the owner arm
+    // only, so it is tested via `in` rather than read directly: a bare
+    // `row.previewKey !== null` was once the whole guard, and on the anonymous
+    // arm it read `undefined !== null` and passed every row through while
+    // looking like a check.
     //
-    // MediaListingRequiredColumns is what makes this line load-bearing rather
-    // than decorative: it guarantees `previewId` was actually selected, so the
-    // value tested is a real `string | null` and not an absent property.
-    items = page.filter(
-      (row): row is MediaListingItem<TSelect> => row.previewId !== null,
+    // Both, because the two columns are one fact (see mediaPreviewColumns in
+    // src/lib/media.ts). Guarding only `previewId` left the owner listing
+    // emitting `previewKey: null` for a half-set row while
+    // POST /api/media/[id]/publish refused that same row with 409 — two
+    // surfaces disagreeing about whether it has a preview.
+    items = page.filter((row): row is MediaListingItem<TSelect> =>
+      hasCompletePreview(row),
     );
 
     // Something to emit, or nothing left to look at.

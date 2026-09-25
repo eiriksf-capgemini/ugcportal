@@ -903,6 +903,53 @@ describe("GET /api/media", () => {
     expect(body.items[1].publishedAt).toBe("2026-09-24T12:00:00.000Z");
   });
 
+  it("withholds a row with a preview id but no preview key", async () => {
+    authMock.mockResolvedValue({ user: { id: "user-1" } });
+    // The half-set pair, from the owner's side. The owner projection does
+    // select previewKey, so guarding only previewId would emit this row with
+    // `previewKey: null` — while POST /api/media/[id]/publish refuses the very
+    // same row with 409. Two surfaces disagreeing about whether one row has a
+    // preview is worse than either answer on its own (ugcportal-r1d review
+    // round 6, finding 2).
+    mediaFindManyMock.mockResolvedValueOnce([
+      selectedRow({
+        id: "half-set",
+        previewId: "preview-half",
+        previewKey: null,
+        createdAt: new Date("2026-09-24T10:00:00Z"),
+      }),
+      selectedRow({
+        id: "whole",
+        previewId: "preview-whole",
+        previewKey: "previews/user-1/whole.webp",
+        createdAt: new Date("2026-09-23T10:00:00Z"),
+      }),
+    ]);
+
+    const body = await (await GET(buildListRequest())).json();
+
+    expect(body.items.map((i: { id: string }) => i.id)).toEqual(["whole"]);
+    expect(JSON.stringify(body)).not.toContain("half-set");
+  });
+
+  it("still emits rows whose preview columns are both set", async () => {
+    // The guard must not have become so broad it drops ordinary rows — the
+    // anonymous arm has no previewKey at all, and "absent" must not be read
+    // as "null".
+    authMock.mockResolvedValue({ user: { id: "user-1" } });
+    mediaFindManyMock.mockResolvedValueOnce([
+      selectedRow({
+        id: "ok",
+        previewId: "preview-ok",
+        previewKey: "previews/user-1/ok.webp",
+      }),
+    ]);
+
+    const body = await (await GET(buildListRequest())).json();
+
+    expect(body.items.map((i: { id: string }) => i.id)).toEqual(["ok"]);
+  });
+
   it("never builds nextCursor from a withheld row", async () => {
     authMock.mockResolvedValue({ user: { id: "user-1" } });
     mediaFindManyMock.mockResolvedValueOnce([

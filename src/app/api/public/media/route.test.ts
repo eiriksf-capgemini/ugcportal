@@ -774,6 +774,23 @@ describe("GET /api/public/media — pagination contract", () => {
     expect(body.nextCursor).toBeNull();
   });
 
+  it("does not mistake an absent previewKey for a null one", async () => {
+    // The anonymous projection never selects previewKey, so it is absent
+    // rather than null on every row here. A guard that read `undefined` as
+    // "no preview" would empty the entire public feed; one that read it as
+    // "has a preview" was the no-op this listing already shipped once. Both
+    // failure modes are one `in` check apart, so both are pinned.
+    seed([row({ id: "a" }), row({ id: "b" })]);
+
+    const body = await (await GET(request())).json();
+
+    expect(body.items.map((i: { id: string }) => i.id).sort()).toEqual([
+      "a",
+      "b",
+    ]);
+    expect(body.items[0]).not.toHaveProperty("previewKey");
+  });
+
   it("never builds nextCursor from a withheld row", async () => {
     mediaFindManyMock.mockResolvedValueOnce([
       {
