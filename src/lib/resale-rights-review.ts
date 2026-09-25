@@ -99,7 +99,7 @@ export type SetResaleRightsStatusResult =
   | { outcome: "forbidden_system_transition" }
   /** Another decision on the same account landed first — retry on a re-read. */
   | { outcome: "conflict" }
-  /** A row this decision points at (the rights holder) is gone. */
+  /** A user this decision points at (rights holder, reviewer) is gone. */
   | { outcome: "missing_reference" };
 
 /**
@@ -107,7 +107,9 @@ export type SetResaleRightsStatusResult =
  * because each is a race a user can legitimately lose rather than a fault:
  *
  *   P2002 unique violation   — two first decisions on one account
- *   P2003 foreign key        — the rights holder was deleted mid-form
+ *   P2003 foreign key        — a row this decision names was deleted
+ *                              mid-form; which one decides the outcome, see
+ *                              foreignKeyOutcome below
  *   P2025 record not found   — the review row vanished between read and write
  *
  * Matched on the documented error codes rather than
@@ -122,17 +124,46 @@ export type SetResaleRightsStatusResult =
  * that never gets looked at. The list is short and each entry names the race
  * it stands for; anything else is a real failure and stays loud.
  */
-const RACE_OUTCOMES: Record<string, "conflict" | "missing_reference"> = {
+type RaceOutcome = "conflict" | "missing_reference" | "account_not_found";
+
+const RACE_OUTCOMES: Record<string, RaceOutcome> = {
   [PRISMA_UNIQUE_VIOLATION]: "conflict",
   [PRISMA_FOREIGN_KEY_VIOLATION]: "missing_reference",
   [PRISMA_RECORD_NOT_FOUND]: "conflict",
 };
 
-function raceOutcome(
-  error: unknown,
-): "conflict" | "missing_reference" | undefined {
+/**
+ * Which foreign key a P2003 was about, if the driver said.
+ *
+ * Three FKs on this row can raise it — the account, the rights holder and
+ * the reviewer — and they need different answers. Reporting all of them as
+ * "the rights holder no longer exists, pick someone still here" is advice
+ * that cannot work when the account is what vanished, and points the admin
+ * at the wrong record.
+ *
+ * The field name is matched loosely because its shape differs by connector:
+ * SQLite reports something like
+ * `ResaleRightsReview_instagramAccountId_fkey (index)`, Postgres the bare
+ * column. When it cannot be attributed, the fallback is a message that
+ * names both possibilities rather than guessing one.
+ */
+function foreignKeyOutcome(error: unknown): RaceOutcome {
+  const field = (error as { meta?: { field_name?: unknown } })?.meta
+    ?.field_name;
+  return typeof field === "string" && field.includes("instagramAccountId")
+    ? "account_not_found"
+    : "missing_reference";
+}
+
+function raceOutcome(error: unknown): RaceOutcome | undefined {
   const code = prismaErrorCode(error);
-  return code === undefined ? undefined : RACE_OUTCOMES[code];
+  if (code === undefined) {
+    return undefined;
+  }
+  if (code === PRISMA_FOREIGN_KEY_VIOLATION) {
+    return foreignKeyOutcome(error);
+  }
+  return RACE_OUTCOMES[code];
 }
 
 /**
@@ -169,7 +200,9 @@ export async function setResaleRightsStatus(
     return { outcome: "forbidden_system_transition" };
   }
 
-  const reason = transition.reason.trim();
+  // `?? ""` rather than trusting the type: a JS caller passing no reason
+  // should get the explained refusal below, not a TypeError from .trim().
+  const reason = (transition.reason ?? "").trim();
   if (!reason) {
     // An audit row that doesn't say why is not an audit row.
     throw new Error("A reason is required to change resale-rights status");

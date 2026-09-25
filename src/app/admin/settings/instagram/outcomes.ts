@@ -25,8 +25,11 @@ const OUTCOME_MESSAGES: Record<string, string> = {
     "Your admin role was revoked since you signed in, so the decision wasn't recorded.",
   disconnect_not_revoked:
     "The account wasn't disconnected: its resale rights couldn't be revoked first, and disconnecting without that would leave the audit trail saying it was still cleared. Try again.",
+  // Deliberately names both possibilities. Three foreign keys can produce
+  // this, and where the driver doesn't say which, advice to "pick another
+  // rights holder" would point at the wrong record.
   rights_holder_missing:
-    "The rights holder named on that decision no longer exists, so nothing was recorded. Pick someone who is still here and try again.",
+    "A user this decision refers to — the rights holder, or the reviewer — no longer exists, so nothing was recorded. Check who is named and try again.",
   rights_conflict:
     "Another decision on this account was recorded at the same moment. Check what it says, then record yours again if it's still right.",
 };

@@ -56,10 +56,10 @@ function uniqueViolation() {
 }
 
 /** What Prisma raises when a foreign key has nothing to point at. */
-function foreignKeyViolation() {
+function foreignKeyViolation(fieldName = "clearedOwnerUserId") {
   return Object.assign(new Error("Foreign key constraint violated"), {
     code: "P2003",
-    meta: { field_name: "clearedOwnerUserId" },
+    meta: { field_name: fieldName },
   });
 }
 
@@ -160,6 +160,38 @@ describe("a rights holder deleted mid-form", () => {
 
     await expect(setResaleRightsStatus("acc-1", DECISION)).resolves.toEqual({
       outcome: "conflict",
+    });
+  });
+
+  /**
+   * Three foreign keys on this row can raise P2003 — the account, the
+   * rights holder and the reviewer. Reporting all of them as "the rights
+   * holder no longer exists, pick someone still here" is advice that cannot
+   * work when the *account* is what vanished, and points at the wrong
+   * record.
+   */
+  it("reports a vanished account as account_not_found, not as a bad holder", async () => {
+    // SQLite names the constraint rather than the bare column.
+    createMock.mockRejectedValue(
+      foreignKeyViolation("ResaleRightsReview_instagramAccountId_fkey (index)"),
+    );
+
+    await expect(setResaleRightsStatus("acc-1", DECISION)).resolves.toEqual({
+      outcome: "account_not_found",
+    });
+  });
+
+  it("falls back to the user-facing message when the driver says nothing", async () => {
+    // No field name to go on: the message this maps to names both
+    // possibilities rather than guessing one.
+    createMock.mockRejectedValue(
+      Object.assign(new Error("FOREIGN KEY constraint failed"), {
+        code: "P2003",
+      }),
+    );
+
+    await expect(setResaleRightsStatus("acc-1", DECISION)).resolves.toEqual({
+      outcome: "missing_reference",
     });
   });
 

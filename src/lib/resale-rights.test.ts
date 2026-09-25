@@ -131,6 +131,53 @@ describe("ugcportal-0ss K2: a CLEARED review can still be insufficient", () => {
     expect(evaluateSellability(post, NOW).sellable).toBe(true);
   });
 
+  /**
+   * An Invalid Date's getTime() is NaN, and every comparison against NaN is
+   * false — so `expiry <= now` answered "not expired" for a date nobody can
+   * read, and the gate returned sellable. Reachable from any validUntil the
+   * route handler didn't write: an import, a manual fix-up, a restored
+   * backup. It compounded with the form, which renders an unreadable date
+   * as blank, so the next unrelated edit made the clearance perpetual.
+   *
+   * The whole module is now written so NaN lands on the blocked side.
+   */
+  it("refuses a clearance whose validUntil cannot be read", () => {
+    const post = withReview(clearedReview({ validUntil: new Date("nonsense") }));
+    expect(evaluateSellability(post, NOW)).toEqual({
+      sellable: false,
+      blocker: "clearance_expired",
+    });
+  });
+
+  it("refuses everything when `now` itself is unreadable", () => {
+    // A caller with a broken clock gets nothing sold, rather than
+    // everything sold.
+    const post = withReview(
+      clearedReview({ validUntil: new Date("2099-01-01T00:00:00.000Z") }),
+    );
+    expect(evaluateSellability(post, new Date("nonsense")).sellable).toBe(
+      false,
+    );
+  });
+
+  it("refuses a validUntil that is not a Date at all", () => {
+    // A hand-written query, or a future select that maps the column as a
+    // string, must not read as "no expiry".
+    const post = withReview(
+      clearedReview({ validUntil: "2099-01-01" as unknown as Date }),
+    );
+    expect(evaluateSellability(post, NOW).sellable).toBe(false);
+  });
+
+  it("treats an undefined validUntil as no expiry, not as a crash", () => {
+    // Absent is legitimately "no end date" — the column is nullable — and
+    // the old `!== null` test would have thrown on undefined instead.
+    const post = withReview(
+      clearedReview({ validUntil: undefined as unknown as null }),
+    );
+    expect(evaluateSellability(post, NOW).sellable).toBe(true);
+  });
+
   it("refuses a checklist version that is not in the accepted set", () => {
     expect(ACCEPTED_CHECKLIST_VERSIONS.has("2026-01-01.0")).toBe(false);
     const post = withReview(clearedReview({ checklistVersion: "2026-01-01.0" }));
@@ -201,6 +248,46 @@ describe("per-post triage (checklist Part C)", () => {
     expect(
       evaluateSellability(sellablePost({ triagedBy: null }), NOW).sellable,
     ).toBe(false);
+  });
+
+  /**
+   * `undefined === null` is false, so an undefined triage flag used to slip
+   * past the "not triaged" check — and for depictsPeople that meant
+   * skipping the model-release requirement entirely, because `undefined` is
+   * also falsy. Every flag is now checked for being a real boolean.
+   */
+  it.each(["depictsPeople", "containsMusic", "thirdPartyCreator", "sponsoredContent"] as const)(
+    "treats an undefined %s as untriaged rather than as false",
+    (field) => {
+      expect(
+        evaluateSellability(
+          sellablePost({ [field]: undefined as unknown as null }),
+          NOW,
+        ),
+      ).toEqual({ sellable: false, blocker: "triage_incomplete" });
+    },
+  );
+
+  it("treats a non-boolean triage answer as untriaged", () => {
+    expect(
+      evaluateSellability(
+        sellablePost({ depictsPeople: "false" as unknown as boolean }),
+        NOW,
+      ),
+    ).toEqual({ sellable: false, blocker: "triage_incomplete" });
+  });
+
+  it("survives a missing layerClearances relation", () => {
+    // A caller that forgot the include should get "not cleared", not a
+    // TypeError some outer catch might read as a transient failure.
+    const post = sellablePost({
+      containsMusic: true,
+      layerClearances: undefined as unknown as [],
+    });
+    expect(evaluateSellability(post, NOW)).toEqual({
+      sellable: false,
+      blocker: "third_party_layer_uncleared",
+    });
   });
 
   it("refuses a post showing people with no model release", () => {

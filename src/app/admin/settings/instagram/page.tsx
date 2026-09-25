@@ -14,16 +14,14 @@ import { disconnectInstagramAccount } from "./actions";
 import { formatClearanceExpiry, formatReviewTimestamp } from "./dates";
 import { ResaleRightsDecisionForm } from "./decision-form";
 import { BLOCKER_MESSAGES, outcomeMessage } from "./outcomes";
+import {
+  MAX_RIGHTS_HOLDER_OPTIONS,
+  resolveRightsHolders,
+} from "./rights-holders";
 
 export const metadata = {
   title: "Instagram accounts",
 };
-
-/**
- * Cap on the rights-holder <select>. Bounds one page render; it is not a
- * statement about how many users the instance may have.
- */
-const MAX_RIGHTS_HOLDER_OPTIONS = 200;
 
 const dateFormat = new Intl.DateTimeFormat("en-GB", {
   dateStyle: "medium",
@@ -96,25 +94,23 @@ export default async function InstagramSettingsPage({
       })
     : [];
 
-  // The account being edited may have a rights holder outside that slice.
-  // The form renders them regardless — a select missing its own stored value
-  // silently clears it on the next submit — but it can only show a raw id
-  // unless we fetch the name, so fetch it.
+  // The account being edited may have a recorded rights holder outside the
+  // capped slice. Fetched separately so the option carries a name rather
+  // than a raw id; resolveRightsHolders decides how it is folded in, and
+  // whether the truncation notice applies.
   const editedHolderId =
     accounts.find((account) => account.id === editingAccountId)
       ?.resaleRightsReview?.clearedOwnerUserId ?? null;
-  if (
-    editedHolderId &&
-    !rightsHolders.some((holder) => holder.id === editedHolderId)
-  ) {
-    const recorded = await prisma.user.findUnique({
-      where: { id: editedHolderId },
-      select: { id: true, name: true, email: true },
-    });
-    if (recorded) {
-      rightsHolders.unshift(recorded);
-    }
-  }
+  const recordedHolder =
+    editedHolderId && !rightsHolders.some((one) => one.id === editedHolderId)
+      ? await prisma.user.findUnique({
+          where: { id: editedHolderId },
+          select: { id: true, name: true, email: true },
+        })
+      : null;
+
+  const { options: rightsHolderOptions, truncated: rightsHoldersTruncated } =
+    resolveRightsHolders({ holders: rightsHolders, recorded: recordedHolder });
 
   const errorMessage = outcomeMessage(error);
 
@@ -280,10 +276,10 @@ export default async function InstagramSettingsPage({
                     <ResaleRightsDecisionForm
                       instagramAccountId={account.id}
                       review={review ?? null}
-                      rightsHolders={rightsHolders}
+                      rightsHolders={rightsHolderOptions}
                       action={INSTAGRAM_RIGHTS_DECISION_PATH}
                     />
-                    {rightsHolders.length === MAX_RIGHTS_HOLDER_OPTIONS ? (
+                    {rightsHoldersTruncated ? (
                       <p className="mt-2 text-xs text-muted-foreground">
                         Showing the first {MAX_RIGHTS_HOLDER_OPTIONS} users.
                         If the rights holder isn&apos;t listed, this screen

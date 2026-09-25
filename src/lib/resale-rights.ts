@@ -198,6 +198,30 @@ export const CURATED_POST_GATE_SELECT = {
   },
 } as const;
 
+/**
+ * Milliseconds for a value that is supposed to be a Date, or NaN.
+ *
+ * NaN is the honest answer for "not a readable instant", and every
+ * comparison in this module is written so that NaN lands on the blocked
+ * side. Anything that is not a Date — a string that survived a hand-written
+ * query, a column a future select forgot to map — gets the same treatment
+ * as an Invalid Date rather than throwing or being silently coerced.
+ */
+function timeOf(value: unknown): number {
+  return value instanceof Date ? value.getTime() : Number.NaN;
+}
+
+/**
+ * True only for a real boolean. `null` means "not triaged"; so does
+ * `undefined`, and so does anything else that turns up in a column typed
+ * `Boolean?`. Written as a type check rather than `=== null` because
+ * `undefined === null` is false, which used to let an untriaged
+ * `depictsPeople` skip the model-release requirement entirely.
+ */
+function isTriaged(value: unknown): value is boolean {
+  return typeof value === "boolean";
+}
+
 /** Just enough of a Media row for the gate; never `key`, never the bytes. */
 export const GATE_MEDIA_SELECT = { userId: true } as const;
 
@@ -249,14 +273,18 @@ export async function loadGateMedia(
  * survive as long as some *other* admin signed the account.
  */
 function layerIsCleared(post: GatePost, layer: RightsLayer): boolean {
-  const clearance = post.layerClearances.find(
+  // `?? []` and `?.trim()` for the same reason as everything else in this
+  // module: a missing relation or a null column must answer "not cleared",
+  // not throw a TypeError that some caller might catch and treat as a
+  // transient failure.
+  const clearance = (post.layerClearances ?? []).find(
     (candidate) => candidate.layer === layer,
   );
   if (!clearance) {
     return false;
   }
   return Boolean(
-    clearance.reason.trim() &&
+    clearance.reason?.trim() &&
       clearance.clearedByUserId &&
       clearance.clearedBy?.role === "ADMIN",
   );
@@ -268,13 +296,14 @@ function layerIsCleared(post: GatePost, layer: RightsLayer): boolean {
  * never passes.
  */
 function layerIsSettled(
-  value: boolean | null,
+  value: boolean,
   post: GatePost,
   layer: RightsLayer,
 ): boolean {
-  if (value === null) return false;
-  if (value === false) return true;
-  return layerIsCleared(post, layer);
+  // `value` is a real boolean by the time this is called (see isTriaged at
+  // the call site), so absent is not a case here — only "not present" and
+  // "present, and therefore needing its own clearance".
+  return value === false || layerIsCleared(post, layer);
 }
 
 /**
@@ -301,11 +330,23 @@ export function accountClearanceBlocker(
   // (2) A clearance with a validity window stops counting the moment it ends.
   // No background job is required for the gate to be correct — EXPIRED as a
   // *status* is bookkeeping, this comparison is the enforcement.
-  if (
-    review.validUntil !== null &&
-    review.validUntil.getTime() <= now.getTime()
-  ) {
-    return "clearance_expired";
+  //
+  // Written as `!(expiry > now)` rather than `expiry <= now`, which is not a
+  // style choice. An Invalid Date's getTime() is NaN, and every comparison
+  // against NaN is false — so `expiry <= now` answered "not expired" for a
+  // date nobody can read, and the gate could return sellable. Inverting a
+  // `>` makes the unreadable case fall to the blocked side, because `NaN >
+  // n` is false and `!false` is true. Same for a caller that hands in a
+  // broken `now`.
+  //
+  // `validUntil` truthiness rather than `!== null` covers `undefined` too: a
+  // row assembled by hand, or a future select that omits the column, would
+  // otherwise have thrown on `.getTime()`.
+  if (review.validUntil) {
+    const expiresAt = timeOf(review.validUntil);
+    if (!(expiresAt > timeOf(now))) {
+      return "clearance_expired";
+    }
   }
 
   // (3) Re-checked here rather than trusted from write time: the reviewer may
@@ -363,7 +404,7 @@ export function evaluateSellability(
   // identifiable person" sells the photograph. Read-time role check, like
   // everywhere else here, so a demoted admin's assertions stop counting
   // rather than persisting because someone else signed the account.
-  if (post.depictsPeople === null) {
+  if (!isTriaged(post.depictsPeople)) {
     return { sellable: false, blocker: "triage_incomplete" };
   }
   if (!post.triagedByUserId || post.triagedBy?.role !== "ADMIN") {
@@ -394,7 +435,7 @@ export function evaluateSellability(
     [post.sponsoredContent, RightsLayer.SPONSORED_CONTENT],
   ];
   for (const [value, layer] of layers) {
-    if (value === null) {
+    if (!isTriaged(value)) {
       return { sellable: false, blocker: "triage_incomplete" };
     }
     if (!layerIsSettled(value, post, layer)) {
@@ -427,7 +468,10 @@ export function evaluateSellability(
   // set `mediaId` can set that too. The clearance is the only party to this
   // that a listing's author does not control, so it is the one that decides
   // whose uploads may be sold.
-  if (post.media.userId !== review.clearedOwnerUserId) {
+  // `clearedOwnerUserId` is already known non-empty (the account-level
+  // check above), so an absent media owner cannot compare equal to it — but
+  // the explicit guard says so rather than relying on that reading.
+  if (!post.media.userId || post.media.userId !== review.clearedOwnerUserId) {
     return { sellable: false, blocker: "media_not_owned" };
   }
 
