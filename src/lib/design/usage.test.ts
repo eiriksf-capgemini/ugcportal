@@ -163,6 +163,7 @@ describe("findAlphaColorUtilities", () => {
         utility: "bg-black/50",
         property: "--color-black",
         alphaPercent: 50,
+        role: "background",
       },
     ]);
   });
@@ -173,6 +174,62 @@ describe("findAlphaColorUtilities", () => {
     // old code had one.
     const root = fixture({ "a.tsx": `const c = "border-destructive/[.08]";` });
     expect(() => findAlphaColorUtilities(root)).toThrow(/arbitrary alpha/);
+  });
+
+  // Round 3 of review. Both halves of the same mistake: the round-2 scanner
+  // used one pattern per unresolvable shape, which over-matched an arbitrary
+  // *length* and under-matched an arbitrary colour carrying an arbitrary
+  // alpha. The matrix is now enumerated over both name forms and all three
+  // alpha forms, so neither is possible.
+
+  it("does not treat an arbitrary length as a colour", () => {
+    // button.tsx already ships text-[0.8rem]; adding a line height to it is
+    // one character away, and used to hard-fail with advice about PAIRINGS.
+    const root = fixture({
+      "a.tsx": `const c = "text-[0.8rem]/5 text-[14px]/6 text-[length:var(--x)]/5 text-[1.6]/7";`,
+    });
+    expect(findAlphaColorUtilities(root)).toEqual([]);
+  });
+
+  it("refuses an arbitrary colour carrying an arbitrary alpha", () => {
+    // Matched none of the round-2 patterns and was silently skipped, which
+    // contradicted this module's own "it never just skips" contract.
+    const root = fixture({ "a.tsx": `const c = "bg-[var(--x)]/[.5]";` });
+    expect(() => findAlphaColorUtilities(root)).toThrow(/arbitrary colour/);
+  });
+
+  it("refuses an arbitrary colour carrying an interpolated alpha", () => {
+    const root = fixture({ "a.tsx": "const c = `bg-[var(--x)]/${a}`;" });
+    expect(() => findAlphaColorUtilities(root)).toThrow(/arbitrary colour/);
+  });
+
+  it("honours Tailwind's explicit colour hint on an arbitrary value", () => {
+    const root = fixture({ "a.tsx": `const c = "text-[color:var(--x)]/50";` });
+    expect(() => findAlphaColorUtilities(root)).toThrow(/arbitrary colour/);
+  });
+
+  it("ignores a gradient interpolation modifier, which is not an alpha", () => {
+    // bg-linear-to-r/oklch has a slash and a colour namespace, but the
+    // modifier is a colour space. An alpha is a number, a bracketed value or
+    // an interpolation - never a bare keyword.
+    const root = fixture({
+      "a.tsx": `const c = "bg-linear-to-r/oklch bg-conic/srgb bg-radial/longer";`,
+    });
+    expect(findAlphaColorUtilities(root)).toEqual([]);
+  });
+
+  it("tags backgrounds and foregrounds apart", () => {
+    const root = fixture({
+      "a.tsx": `const c = "bg-primary/80 from-primary/80 ring-ring/80 text-destructive/75";`,
+    });
+    expect(
+      findAlphaColorUtilities(root).map((u) => [u.utility, u.role]),
+    ).toEqual([
+      ["bg-primary/80", "background"],
+      ["from-primary/80", "background"],
+      ["ring-ring/80", "foreground"],
+      ["text-destructive/75", "foreground"],
+    ]);
   });
 
   it("throws rather than returning nothing when pointed at an empty tree", () => {

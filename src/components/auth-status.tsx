@@ -24,7 +24,6 @@ export async function AuthStatus() {
           a substring of it, which is what WCAG 2.5.3 asks of a visible label.
         */}
         <form
-          className="min-w-0"
           action={async () => {
             "use server";
             await signIn("google");
@@ -36,7 +35,6 @@ export async function AuthStatus() {
           </Button>
         </form>
         <form
-          className="min-w-0"
           action={async () => {
             "use server";
             await signIn("facebook");
@@ -60,8 +58,10 @@ export async function AuthStatus() {
       className="flex min-w-0 items-center gap-2"
     >
       {/*
-        min-w-0 on the flex child, or the ellipsis is inert and a long name
-        pushes the header wider instead of truncating.
+        min-w-0 on this span, or the ellipsis is inert and a long name pushes
+        the header wider instead of truncating. It is the only element in the
+        header actions allowed to shrink, which is what keeps the Sign out
+        button at full width while a long email gives way.
       */}
       <span className="min-w-0 truncate text-sm text-muted-foreground">
         {session.user.name ?? session.user.email}

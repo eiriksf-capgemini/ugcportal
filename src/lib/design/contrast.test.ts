@@ -167,14 +167,21 @@ describe("the gate cannot be routed around", () => {
    * follow the stylesheet.
    */
   it("measures every alpha-modified colour utility the components ship", () => {
-    const measured = new Set(
-      PAIRINGS.flatMap((pairing) =>
-        [pairing.foreground, ...pairing.background].map((reference) => {
-          const { property, alpha } = parseTokenReference(reference);
-          return `${resolveToken(property, tokens)}@${Math.round(alpha * 100)}`;
-        }),
+    // Keyed by role, not just by colour. --ring and --primary resolve to the
+    // same literal, so a single set made `bg-primary/80` - a surface text
+    // sits on, needing 4.5:1 - read as covered by the --ring/80 focus-ring
+    // pairing, which is checked at 3:1. Reproduced before fixing: muted text
+    // on that fill measures 1.71:1 and the suite stayed green.
+    const key = (reference: string) => {
+      const { property, alpha } = parseTokenReference(reference);
+      return `${resolveToken(property, tokens)}@${Math.round(alpha * 100)}`;
+    };
+    const measured = {
+      foreground: new Set(PAIRINGS.map((pairing) => key(pairing.foreground))),
+      background: new Set(
+        PAIRINGS.flatMap((pairing) => pairing.background.map(key)),
       ),
-    );
+    } as const;
 
     const used = findAlphaColorUtilities();
     expect(used.length).toBeGreaterThan(0);
@@ -190,12 +197,15 @@ describe("the gate cannot be routed around", () => {
           `surface/ink/petrol scales so the gate can measure it.`,
       ).toBe(true);
 
-      const key = `${resolveToken(usage.property, tokens)}@${usage.alphaPercent}`;
+      const usageKey = `${resolveToken(usage.property, tokens)}@${usage.alphaPercent}`;
       expect(
-        measured.has(key),
+        measured[usage.role].has(usageKey),
         `${usage.file} uses "${usage.utility}", but no pairing in PAIRINGS ` +
-          `measures ${usage.property} at ${usage.alphaPercent}% alpha. Add the ` +
-          `pairing, or change the utility to an alpha that is already measured.`,
+          `measures ${usage.property} at ${usage.alphaPercent}% alpha as a ` +
+          `${usage.role}. Add that pairing - a colour measured as a ${
+            usage.role === "background" ? "foreground" : "background"
+          } does not cover it, because the two are held to different thresholds ` +
+          `and sit against different things.`,
       ).toBe(true);
     }
   });

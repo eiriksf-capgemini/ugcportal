@@ -87,59 +87,61 @@ const NON_COLOR_SCALE_NAMES: Record<string, readonly string[]> = {
   "inset-shadow": ["2xs", "xs", "sm", "none"],
 };
 
+/**
+ * Which half of a pairing a namespace produces. `bg-primary/80` is a surface
+ * that text will sit ON; `ring-ring/80` is a mark drawn OVER one. Round 3 of
+ * review: without this distinction the coverage check only asked "is this
+ * colour measured at this alpha anywhere", and --ring and --primary resolve
+ * to the same literal — so a `bg-primary/80` text background read as already
+ * covered by the --ring/80 focus-ring pairing, which is checked at 3:1.
+ * Reproduced before fixing: the suite stayed green with muted text on that
+ * fill at 1.71:1.
+ */
+const BACKGROUND_PREFIXES = new Set(["bg", "from", "via", "to"]);
+
 const PREFIX_ALTERNATION = COLOR_UTILITY_PREFIXES.join("|");
 
 // A utility may carry any number of variant prefixes (`focus-visible:`,
 // `aria-invalid:`, `dark:hover:`), so match on the boundary before it.
 const BOUNDARY = String.raw`(?:^|[\s"'\`:\[(])`;
 
-const NUMERIC_ALPHA = new RegExp(
-  String.raw`${BOUNDARY}(${PREFIX_ALTERNATION})-([a-z0-9][a-z0-9-]*)\/(\d{1,3})(?![\w./-])`,
+/**
+ * One pattern for the whole space, rather than a resolvable pattern plus a
+ * list of unresolvable ones.
+ *
+ * That split is what let `bg-[var(--x)]/[.5]` through in round 2: an
+ * arbitrary colour *and* an arbitrary alpha matched neither the numeric
+ * pattern (its name is not a bare word) nor the arbitrary-alpha pattern (same
+ * reason) nor the arbitrary-colour pattern (which required a numeric alpha).
+ * Three patterns, three near-misses, silently skipped — in a file whose header
+ * promises it never just skips.
+ *
+ * A Tailwind alpha modifier is exactly one of three things: a number, an
+ * arbitrary value in brackets, or an interpolation. Enumerating all three
+ * against both name forms means a colour utility carrying an alpha cannot
+ * miss. Anything whose modifier is none of those (`bg-linear-to-r/oklch`, the
+ * gradient interpolation keyword) is not an alpha at all, and is correctly
+ * not matched.
+ */
+const ALPHA_UTILITY = new RegExp(
+  String.raw`${BOUNDARY}(${PREFIX_ALTERNATION})-(\[[^\]]*\]|[a-z0-9][a-z0-9-]*)\/(\$\{|\[[^\]]*\]|\d{1,3}(?![\w.-]))`,
   "g",
 );
 
 /**
- * Shapes that are colour utilities but that this scanner cannot turn into a
- * (token, alpha) pair. Each throws with advice rather than being skipped,
- * because skipping is how a colour ships unmeasured.
+ * An arbitrary value that is a length or a bare number, so not a colour.
+ *
+ * `text-[0.8rem]/5` is a font size with a line height, and button.tsx already
+ * ships `text-[0.8rem]`. Treating it as a colour made the suite hard-fail with
+ * advice about PAIRINGS, one character away from code already in the repo.
+ * Tailwind's own `length:`/`number:`/`percentage:` hints are honoured too.
  */
-const UNRESOLVABLE = [
-  {
-    // `bg-destructive/[.08]` - a valid Tailwind alpha, not a number here.
-    pattern: new RegExp(
-      String.raw`${BOUNDARY}(${PREFIX_ALTERNATION})-([a-z0-9][a-z0-9-]*)\/\[`,
-      "g",
-    ),
-    advice:
-      "uses an arbitrary alpha modifier. The contrast gate can only measure a " +
-      "numeric one, so write e.g. /40 rather than /[.4] and add the pairing to PAIRINGS",
-    ignoreNonColorScale: true,
-  },
-  {
-    // `ring-ring/${alpha}` - the alpha is not knowable from the source.
-    pattern: new RegExp(
-      String.raw`${BOUNDARY}(${PREFIX_ALTERNATION})-([a-z0-9][a-z0-9-]*)\/\$\{`,
-      "g",
-    ),
-    advice:
-      "interpolates its alpha modifier. The contrast gate cannot know what it " +
-      "resolves to, so write the alpha literally and add the pairing to PAIRINGS",
-    ignoreNonColorScale: true,
-  },
-  {
-    // `bg-[var(--ring)]/50`, `bg-[oklch(...)]/50` - an arbitrary colour value
-    // carrying an alpha. Slips past NUMERIC_ALPHA entirely, since the name is
-    // not a bare word.
-    pattern: new RegExp(
-      String.raw`${BOUNDARY}(${PREFIX_ALTERNATION})-(\[[^\]]*\])\/\d`,
-      "g",
-    ),
-    advice:
-      "applies an alpha to an arbitrary colour value. Use a design token so the " +
-      "gate can resolve and measure it",
-    ignoreNonColorScale: false,
-  },
-] as const;
+function isNonColorArbitraryValue(value: string): boolean {
+  const inner = value.slice(1, -1).trim();
+  if (/^(length|number|percentage|integer|angle|ratio):/.test(inner)) return true;
+  if (/^(color|image|url):/.test(inner)) return false;
+  return /^-?[\d.]+([a-z%]*)$/.test(inner);
+}
 
 export type AlphaUtilityUsage = {
   /** Path relative to the scanned root's parent, for error messages. */
@@ -150,6 +152,8 @@ export type AlphaUtilityUsage = {
   property: string;
   /** The Tailwind modifier as an integer percentage, e.g. 80. */
   alphaPercent: number;
+  /** Whether the colour is painted behind content or over it. */
+  role: "background" | "foreground";
 };
 
 function fail(message: string): never {
@@ -217,40 +221,53 @@ export function findAlphaColorUtilities(
     const relative = path.relative(path.dirname(root), file);
     const source = stripComments(readFileSync(file, "utf8"));
 
-    for (const { pattern, advice, ignoreNonColorScale } of UNRESOLVABLE) {
-      pattern.lastIndex = 0;
-      let match: RegExpExecArray | null;
-      while ((match = pattern.exec(source)) !== null) {
-        pattern.lastIndex -= 1;
-        const [, prefix, name] = match;
-        // `text-sm/[1.6]` is a font-size with an arbitrary line-height, not a
-        // colour with an arbitrary alpha. Advising the author about PAIRINGS
-        // there would be nonsense, so skip it the same way the numeric scan
-        // does - and keep looking, because a real offender may follow.
-        if (ignoreNonColorScale && isNonColorScaleName(prefix, name)) continue;
-        fail(`${relative}: "${prefix}-${name}/..." ${advice}.`);
-      }
-    }
-
-    NUMERIC_ALPHA.lastIndex = 0;
+    ALPHA_UTILITY.lastIndex = 0;
     let match: RegExpExecArray | null;
-    while ((match = NUMERIC_ALPHA.exec(source)) !== null) {
-      // Overlapping matches: the boundary character is consumed, so step back
-      // one to keep two adjacent utilities from hiding each other.
-      NUMERIC_ALPHA.lastIndex -= 1;
+    while ((match = ALPHA_UTILITY.exec(source)) !== null) {
+      // The boundary character is consumed, so step back one or two adjacent
+      // utilities hide each other.
+      ALPHA_UTILITY.lastIndex -= 1;
 
       const [, prefix, name, modifier] = match;
+      const written = `${prefix}-${name}/${modifier}`;
+
+      // 1. Is this a colour at all? Two namespaces are overloaded, and an
+      //    arbitrary value may be a length rather than a colour.
+      if (name.startsWith("[")) {
+        if (isNonColorArbitraryValue(name)) continue;
+        fail(
+          `${relative}: "${written}..." applies an alpha to an arbitrary colour ` +
+            `value. Use a design token so the gate can resolve and measure it.`,
+        );
+      }
       if (isNonColorScaleName(prefix, name)) continue;
+
+      // 2. It is a colour. Can the alpha be resolved to a number?
+      if (modifier.startsWith("${")) {
+        fail(
+          `${relative}: "${written}" interpolates its alpha modifier. The contrast ` +
+            `gate cannot know what it resolves to, so write the alpha literally ` +
+            `and add the pairing to PAIRINGS.`,
+        );
+      }
+      if (modifier.startsWith("[")) {
+        fail(
+          `${relative}: "${written}" uses an arbitrary alpha modifier. The contrast ` +
+            `gate can only measure a numeric one, so write e.g. /40 rather than ` +
+            `/[.4] and add the pairing to PAIRINGS.`,
+        );
+      }
 
       const alphaPercent = Number(modifier);
       if (alphaPercent > 100) {
-        fail(`${relative}: alpha modifier above 100 in "${prefix}-${name}/${modifier}"`);
+        fail(`${relative}: alpha modifier above 100 in "${written}"`);
       }
       found.push({
         file: relative,
-        utility: `${prefix}-${name}/${modifier}`,
+        utility: written,
         property: `--color-${name}`,
         alphaPercent,
+        role: BACKGROUND_PREFIXES.has(prefix) ? "background" : "foreground",
       });
     }
   }

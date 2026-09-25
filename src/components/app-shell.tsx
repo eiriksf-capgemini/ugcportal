@@ -65,15 +65,38 @@ export function AppShell({ children }: { children: ReactNode }) {
         <div className="mx-auto flex h-14 w-full max-w-6xl items-center gap-4 px-4 sm:px-6">
           <Link
             href="/"
-            className="min-w-0 truncate rounded-sm text-sm font-medium tracking-tight text-foreground transition-colors hover:text-primary focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring"
+            /*
+              shrink-[999] sets an explicit yield order for the header row:
+              the wordmark gives way first, then the signed-in user's name,
+              and the button labels never do. Flexbox distributes shrinkage in
+              proportion to base-size x shrink-factor, so an outsized factor
+              here means the wordmark is fully consumed before any pressure
+              reaches the actions.
+            */
+            className="min-w-0 shrink-[999] truncate rounded-sm text-sm font-medium tracking-tight text-foreground transition-colors hover:text-primary focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring"
           >
             {SITE_NAME}
           </Link>
           {/*
             Auth is the only header action today. Nav links belong here, to
             the left of this, once there is more than one destination.
+
+            min-w-0, and no shrink-0. The two together used to cancel:
+            shrink-0 sized this to max-content, which made the truncate on the
+            signed-in user's name inert and sent a long email off the right
+            edge at 320-375px.
+
+            Relying on the default `min-width: auto` instead does not work
+            either, and the reason is worth writing down. min-width:0 on the
+            name removes its *floor*; it does not cap its min-content
+            contribution, and `truncate` sets white-space: nowrap, so that
+            contribution is the full width of the text. The wrapper's
+            automatic minimum would therefore be the whole untruncated email -
+            measured at 700px for a long address - and it would refuse to
+            shrink at all. Hence min-w-0 here, with the yield order set
+            explicitly on the wordmark above rather than left to min-content.
           */}
-          <div className="ml-auto flex min-w-0 shrink-0 items-center gap-2">
+          <div className="ml-auto flex min-w-0 items-center gap-2">
             <AuthStatus />
           </div>
         </div>
