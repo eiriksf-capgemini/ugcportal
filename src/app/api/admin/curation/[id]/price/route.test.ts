@@ -35,7 +35,7 @@ const ADMIN_SESSION = { user: { id: "admin-1", email: "a@example.com", role: "AD
 function priceRequest(body: unknown, id = "post-1") {
   return new Request(`http://localhost/api/admin/curation/${id}/price`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", origin: "http://localhost" },
     body: JSON.stringify(body),
   });
 }
@@ -62,6 +62,9 @@ async function setReview(
     reviewedByUserId: "admin-1",
     reviewedAt: new Date(),
     validUntil: null,
+    // Whose uploads the clearance covers. The gate compares the file's
+    // owner against this, so a fixture without it clears nothing.
+    clearedOwnerUserId: "owner-1",
   };
   await prisma.resaleRightsReview.upsert({
     where: { instagramAccountId: "acc-1" },
@@ -111,7 +114,6 @@ beforeAll(async () => {
       id: "post-1",
       instagramAccountId: "acc-1",
       mediaId: "media-1",
-      ownerUserId: "owner-1",
       depictsPeople: false,
       containsMusic: false,
       thirdPartyCreator: false,
@@ -126,6 +128,8 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
+  // The same-origin check compares against AUTH_URL (see src/lib/origin.ts).
+  process.env.AUTH_URL = "http://localhost";
   authMock.mockReset().mockResolvedValue(ADMIN_SESSION);
   await prisma.curatedPost.update({
     where: { id: "post-1" },
@@ -240,6 +244,88 @@ describe("ugcportal-0ss K1: the gate at the price-setting endpoint", () => {
     expect(post.currency).toBe("NOK");
   });
 
+  /**
+   * Per-layer clearance, against the real schema. The unique index on
+   * (curatedPostId, layer) is part of the guarantee: one row per layer
+   * means the gate never has two answers to the same question.
+   */
+  it("needs a clearance for each layer that is present, not one for the post", async () => {
+    await setReview("CLEARED");
+    await prisma.curatedPost.update({
+      where: { id: "post-1" },
+      data: { containsMusic: true, thirdPartyCreator: true },
+    });
+
+    // A licence for the music says nothing about the collaborator.
+    await prisma.postRightsClearance.create({
+      data: {
+        curatedPostId: "post-1",
+        layer: "MUSIC",
+        reason: "Licence purchased, receipt in evidence.",
+        clearedByUserId: "admin-1",
+      },
+    });
+
+    let response = await POST(priceRequest({ priceCents: 100 }), context());
+    expect(response.status).toBe(422);
+    expect(await response.json()).toMatchObject({
+      blocker: "third_party_layer_uncleared",
+    });
+
+    await prisma.postRightsClearance.create({
+      data: {
+        curatedPostId: "post-1",
+        layer: "THIRD_PARTY_CREATOR",
+        reason: "Collaborator signed the assignment.",
+        clearedByUserId: "admin-1",
+      },
+    });
+
+    response = await POST(priceRequest({ priceCents: 100 }), context());
+    expect(response.status).toBe(200);
+
+    // And a clearer who has since been demoted stops counting, the same way
+    // the account reviewer does.
+    await prisma.user.update({
+      where: { id: "admin-1" },
+      data: { role: "USER" },
+    });
+    await prisma.curatedPost.update({
+      where: { id: "post-1" },
+      data: { priceCents: null },
+    });
+
+    response = await POST(priceRequest({ priceCents: 100 }), context());
+    expect(response.status).toBe(422);
+    expect(await priceOf()).toBeNull();
+
+    await prisma.user.update({
+      where: { id: "admin-1" },
+      data: { role: "ADMIN" },
+    });
+    await prisma.postRightsClearance.deleteMany({});
+    await prisma.curatedPost.update({
+      where: { id: "post-1" },
+      data: { containsMusic: false, thirdPartyCreator: false },
+    });
+  });
+
+  it("refuses a cleared account that names no rights holder", async () => {
+    await setReview("CLEARED");
+    await prisma.resaleRightsReview.update({
+      where: { instagramAccountId: "acc-1" },
+      data: { clearedOwnerUserId: null },
+    });
+
+    const response = await POST(priceRequest({ priceCents: 100 }), context());
+
+    expect(response.status).toBe(422);
+    expect(await response.json()).toMatchObject({
+      blocker: "rights_holder_not_recorded",
+    });
+    expect(await priceOf()).toBeNull();
+  });
+
   it("refuses to price a post whose account has no review row at all", async () => {
     // Nothing created in this test: the row genuinely does not exist.
     expect(
@@ -337,6 +423,27 @@ describe("authorization", () => {
     authMock.mockResolvedValue({ user: { id: "user-1", role: "USER" } });
 
     const response = await POST(priceRequest({ priceCents: 100 }), context());
+
+    expect(response.status).toBe(403);
+    expect(await priceOf()).toBeNull();
+  });
+
+  // Same second lock as the decision handler. A route handler gets no
+  // framework-level origin check, and this one moves money-adjacent state.
+  it("answers 403 for a cross-origin post, with no write", async () => {
+    await setReview("CLEARED");
+
+    const response = await POST(
+      new Request("http://localhost/api/admin/curation/post-1/price", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          origin: "https://evil.example",
+        },
+        body: JSON.stringify({ priceCents: 100 }),
+      }),
+      context(),
+    );
 
     expect(response.status).toBe(403);
     expect(await priceOf()).toBeNull();
@@ -488,7 +595,6 @@ describe("the shapes ugcportal-74w and ugcportal-p3v need", () => {
         id: "post-2",
         instagramAccountId: "acc-1",
         mediaId: "media-2",
-        ownerUserId: "owner-1",
         // Same cleared account, but this one was never triaged.
         depictsPeople: null,
       },

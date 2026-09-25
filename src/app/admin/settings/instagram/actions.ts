@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 
 import { requireAdmin } from "@/lib/admin";
 import { prisma } from "@/lib/prisma";
@@ -50,12 +51,23 @@ export async function disconnectInstagramAccount(formData: FormData) {
   });
 
   // "account_not_found" is a double submit or a stale tab — the account is
-  // already gone, so there is nothing to revoke and nothing to delete. Any
-  // other non-write outcome would mean the revoke failed, and deleting the
-  // account anyway would destroy the evidence of why.
+  // already gone, so there is nothing to revoke and nothing to delete.
   if (revoked.outcome === "account_not_found") {
     revalidatePath(INSTAGRAM_SETTINGS_PATH);
     return;
+  }
+
+  // Anything other than a successful write means the revocation was NOT
+  // recorded, and deleting the account anyway would leave the trail's last
+  // word as whatever it was before — `CLEARED`, for an account that no
+  // longer exists. Allow-list the two success outcomes rather than
+  // excluding the failures known today: `conflict` was added to this union
+  // after this code was first written, and it is exactly the case that
+  // would have slipped through. A new outcome must now be considered here
+  // to be let past.
+  if (revoked.outcome !== "recorded" && revoked.outcome !== "unchanged") {
+    revalidatePath(INSTAGRAM_SETTINGS_PATH);
+    redirect(`${INSTAGRAM_SETTINGS_PATH}?error=disconnect_not_revoked`);
   }
 
   // deleteMany, not delete: deleting an already-removed account (double

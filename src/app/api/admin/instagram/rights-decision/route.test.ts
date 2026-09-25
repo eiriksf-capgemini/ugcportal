@@ -58,6 +58,9 @@ function outcomeOf(response: Response): string {
 }
 
 beforeEach(() => {
+  // The origin check compares against AUTH_URL, so the tests have to say
+  // what the public origin is — the same variable production sets.
+  process.env.AUTH_URL = "http://localhost";
   authMock.mockReset().mockResolvedValue(ADMIN_SESSION);
   revalidatePathMock.mockReset();
   setResaleRightsStatusMock
@@ -115,13 +118,69 @@ describe("authorization", () => {
     expect(setResaleRightsStatusMock).not.toHaveBeenCalled();
   });
 
-  it("refuses a post with no Origin header", async () => {
+  it("refuses a cross-site post even with a matching Origin spoofed away", async () => {
+    // Sec-Fetch-Site is set by the browser and cannot be forged from page
+    // script, so it is worth consulting on its own.
     const response = await POST(
-      new Request(URL_, { method: "POST", body: decisionForm() }),
+      new Request(URL_, {
+        method: "POST",
+        body: decisionForm(),
+        headers: { "sec-fetch-site": "cross-site" },
+      }),
     );
 
     expect(response.status).toBe(403);
     expect(setResaleRightsStatusMock).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The expected origin comes from AUTH_URL, not from `request.url`.
+   *
+   * Behind a TLS-terminating proxy — what the standalone image assumes —
+   * the handler sees `http://<internal>:3000` while the browser sends the
+   * public `https://<host>`. Comparing against the request would 403 every
+   * legitimate decision in production while passing a test that used one
+   * host for both, so this test deliberately makes them differ.
+   */
+  it("accepts the public origin when the server sees an internal one", async () => {
+    process.env.AUTH_URL = "https://ugc.example";
+
+    const response = await POST(
+      new Request("http://10.0.0.7:3000/api/admin/instagram/rights-decision", {
+        method: "POST",
+        body: decisionForm(),
+        headers: { origin: "https://ugc.example" },
+      }),
+    );
+
+    expect(response.status).toBe(303);
+    expect(setResaleRightsStatusMock).toHaveBeenCalled();
+  });
+
+  it("refuses an origin that is not the configured one", async () => {
+    process.env.AUTH_URL = "https://ugc.example";
+
+    const response = await POST(
+      new Request(URL_, {
+        method: "POST",
+        body: decisionForm(),
+        headers: { origin: "http://localhost" },
+      }),
+    );
+
+    expect(response.status).toBe(403);
+  });
+
+  // Allowed on purpose: no browser omits Origin on a *cross-origin* POST,
+  // so its absence cannot be an attacker's cross-site form — while some
+  // clients do omit it same-origin, and refusing those would be an outage
+  // dressed up as a defence. requireAdmin and SameSite=Lax still apply.
+  it("allows a post with no Origin header", async () => {
+    const response = await POST(
+      new Request(URL_, { method: "POST", body: decisionForm() }),
+    );
+
+    expect(response.status).toBe(303);
   });
 
   it("checks admin before reading the body at all", async () => {
@@ -160,6 +219,7 @@ describe("recording the decision", () => {
       route: "CONTRACT",
       validUntil: new Date("2027-06-01"),
       conditions: "Editorial use only.",
+      clearedOwnerUserId: null,
       evidence: undefined,
       restampChecklist: false,
     });

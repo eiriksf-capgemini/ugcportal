@@ -151,6 +151,7 @@ async function renderFormForAccount(): Promise<FormData> {
       validUntil: true,
       conditions: true,
       checklistVersion: true,
+      clearedOwnerUserId: true,
     },
   });
 
@@ -158,6 +159,9 @@ async function renderFormForAccount(): Promise<FormData> {
     <ResaleRightsDecisionForm
       instagramAccountId="acc-1"
       review={review}
+      rightsHolders={[
+        { id: "owner-1", name: "Owner One", email: "owner@example.com" },
+      ]}
       action="/api/admin/instagram/rights-decision"
     />,
   );
@@ -174,6 +178,9 @@ beforeAll(async () => {
   await applyMigrations(prisma);
   await prisma.user.create({
     data: { id: "admin-1", email: "admin@example.com", role: "ADMIN" },
+  });
+  await prisma.user.create({
+    data: { id: "owner-1", email: "owner@example.com", role: "USER" },
   });
   await prisma.instagramAccount.create({
     data: {
@@ -207,6 +214,7 @@ beforeEach(async () => {
     route: "CONTRACT",
     validUntil: VALID_UNTIL,
     conditions: "Editorial use only.",
+    clearedOwnerUserId: "owner-1",
   });
 });
 
@@ -230,6 +238,7 @@ describe("the whole row round-trips", () => {
       route: "CONTRACT",
       validUntil: VALID_UNTIL,
       conditions: "Editorial use only.",
+      clearedOwnerUserId: "owner-1",
       evidence: { key: "rights-evidence/acc-1/contract.pdf", sha256: "abc123" },
       restampChecklist: true,
     });
@@ -336,6 +345,7 @@ describe("editing one field does not silently change the others", () => {
         reviewedByUserId: review.reviewedByUserId,
         validUntil: review.validUntil,
         reviewedBy: { role: "ADMIN" },
+        clearedOwnerUserId: review.clearedOwnerUserId,
       }),
     ).toBe("checklist_version_retired");
   });
@@ -362,6 +372,7 @@ describe("editing one field does not silently change the others", () => {
         reviewedByUserId: review.reviewedByUserId,
         validUntil: review.validUntil,
         reviewedBy: { role: "ADMIN" },
+        clearedOwnerUserId: review.clearedOwnerUserId,
       }),
     ).toBeNull();
   });

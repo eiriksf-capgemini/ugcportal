@@ -39,6 +39,12 @@ export type ResaleRightsTransition =
       route?: ResaleRightsRoute | null;
       validUntil?: Date | null;
       conditions?: string | null;
+      /**
+       * The user whose uploads this clearance covers. Absent leaves it as it
+       * was; explicit null clears it. A CLEARED review without one sells
+       * nothing — the gate has no owner to compare a file against.
+       */
+      clearedOwnerUserId?: string | null;
       evidence?: { key: string; sha256: string } | null;
       /**
        * Re-stamp `checklistVersion` (and `productDecisionRef`) to what is
@@ -196,6 +202,7 @@ export async function setResaleRightsStatus(
             route: transition.route,
             validUntil: transition.validUntil,
             conditions: transition.conditions,
+            clearedOwnerUserId: transition.clearedOwnerUserId,
             evidenceKey:
               transition.evidence === null ? null : transition.evidence?.key,
             evidenceSha256:

@@ -26,15 +26,26 @@ export type DecisionFormReview = {
   validUntil: Date | null;
   conditions: string | null;
   checklistVersion: string;
+  clearedOwnerUserId: string | null;
+};
+
+/** A user this clearance could name as the rights holder. */
+export type RightsHolderOption = {
+  id: string;
+  name: string | null;
+  email: string | null;
 };
 
 export function ResaleRightsDecisionForm({
   instagramAccountId,
   review,
+  rightsHolders,
   action,
 }: {
   instagramAccountId: string;
   review: DecisionFormReview | null;
+  /** Users whose uploads a clearance could cover. */
+  rightsHolders: RightsHolderOption[];
   /**
    * The URL of the route handler that records the decision — a string, not
    * a server action. The evidence file needs a body limit that belongs to
@@ -106,6 +117,25 @@ export function ResaleRightsDecisionForm({
             </option>
           ))}
         </select>
+      </label>
+      <label className="block text-xs font-medium">
+        Rights holder — whose uploads this clearance covers
+        <select
+          name="clearedOwnerUserId"
+          defaultValue={review?.clearedOwnerUserId ?? ""}
+          className="mt-1 block w-full rounded-md border border-border bg-background p-2 text-sm"
+        >
+          <option value="">not recorded</option>
+          {rightsHolders.map((holder) => (
+            <option key={holder.id} value={holder.id}>
+              {holder.name ?? holder.email ?? holder.id}
+            </option>
+          ))}
+        </select>
+        <span className="mt-1 block font-normal text-muted-foreground">
+          Only this user&apos;s own uploads can be sold under the clearance.
+          A CLEARED decision with nobody named here sells nothing.
+        </span>
       </label>
       <label className="block text-xs font-medium">
         Valid until (optional — the clearance stops counting at the start of

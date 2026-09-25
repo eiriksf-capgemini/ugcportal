@@ -56,6 +56,8 @@ export default async function InstagramSettingsPage({
           reviewedByUserId: true,
           reviewedAt: true,
           validUntil: true,
+          clearedOwnerUserId: true,
+          clearedOwner: { select: { name: true, email: true } },
           conditions: true,
           evidenceKey: true,
           evidenceSha256: true,
@@ -63,6 +65,13 @@ export default async function InstagramSettingsPage({
         },
       },
     },
+  });
+
+  // Every user is a candidate rights holder: an upload's owner is whoever
+  // uploaded it, and the clearance has to be able to name them.
+  const rightsHolders = await prisma.user.findMany({
+    orderBy: [{ name: "asc" }, { email: "asc" }],
+    select: { id: true, name: true, email: true },
   });
 
   const errorMessage = outcomeMessage(error);
@@ -173,6 +182,16 @@ export default async function InstagramSettingsPage({
                         </dd>
                       </div>
                       <div>
+                        <dt className="inline font-medium">Rights holder: </dt>
+                        <dd className="inline">
+                          {review.clearedOwnerUserId
+                            ? (review.clearedOwner?.name ??
+                              review.clearedOwner?.email ??
+                              review.clearedOwnerUserId)
+                            : "none recorded — nothing is sellable"}
+                        </dd>
+                      </div>
+                      <div>
                         <dt className="inline font-medium">Expires: </dt>
                         <dd className="inline">
                           {/*
@@ -218,6 +237,7 @@ export default async function InstagramSettingsPage({
                   <ResaleRightsDecisionForm
                     instagramAccountId={account.id}
                     review={review ?? null}
+                    rightsHolders={rightsHolders}
                     action={INSTAGRAM_RIGHTS_DECISION_PATH}
                   />
                 </details>

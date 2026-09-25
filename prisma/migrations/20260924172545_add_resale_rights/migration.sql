@@ -6,6 +6,7 @@ CREATE TABLE "ResaleRightsReview" (
     "route" TEXT,
     "checklistVersion" TEXT NOT NULL,
     "reviewedByUserId" TEXT,
+    "clearedOwnerUserId" TEXT,
     "reviewedAt" DATETIME,
     "validUntil" DATETIME,
     "conditions" TEXT,
@@ -15,7 +16,8 @@ CREATE TABLE "ResaleRightsReview" (
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" DATETIME NOT NULL,
     CONSTRAINT "ResaleRightsReview_instagramAccountId_fkey" FOREIGN KEY ("instagramAccountId") REFERENCES "InstagramAccount" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
-    CONSTRAINT "ResaleRightsReview_reviewedByUserId_fkey" FOREIGN KEY ("reviewedByUserId") REFERENCES "User" ("id") ON DELETE SET NULL ON UPDATE CASCADE
+    CONSTRAINT "ResaleRightsReview_reviewedByUserId_fkey" FOREIGN KEY ("reviewedByUserId") REFERENCES "User" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
+    CONSTRAINT "ResaleRightsReview_clearedOwnerUserId_fkey" FOREIGN KEY ("clearedOwnerUserId") REFERENCES "User" ("id") ON DELETE SET NULL ON UPDATE CASCADE
 );
 
 -- CreateTable
@@ -41,7 +43,6 @@ CREATE TABLE "CuratedPost" (
     "id" TEXT NOT NULL PRIMARY KEY,
     "instagramAccountId" TEXT NOT NULL,
     "mediaId" TEXT NOT NULL,
-    "ownerUserId" TEXT NOT NULL,
     "instagramPermalink" TEXT,
     "priceCents" INTEGER,
     "currency" TEXT NOT NULL DEFAULT 'NOK',
@@ -50,13 +51,23 @@ CREATE TABLE "CuratedPost" (
     "containsMusic" BOOLEAN,
     "thirdPartyCreator" BOOLEAN,
     "sponsoredContent" BOOLEAN,
-    "postClearedByUserId" TEXT,
-    "postClearedAt" DATETIME,
-    "postClearanceReason" TEXT,
+    "triagedByUserId" TEXT,
+    "triagedAt" DATETIME,
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" DATETIME NOT NULL,
-    CONSTRAINT "CuratedPost_instagramAccountId_fkey" FOREIGN KEY ("instagramAccountId") REFERENCES "InstagramAccount" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
-    CONSTRAINT "CuratedPost_ownerUserId_fkey" FOREIGN KEY ("ownerUserId") REFERENCES "User" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+    CONSTRAINT "CuratedPost_instagramAccountId_fkey" FOREIGN KEY ("instagramAccountId") REFERENCES "InstagramAccount" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+);
+
+-- CreateTable
+CREATE TABLE "PostRightsClearance" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "curatedPostId" TEXT NOT NULL,
+    "layer" TEXT NOT NULL,
+    "reason" TEXT NOT NULL,
+    "clearedByUserId" TEXT,
+    "clearedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT "PostRightsClearance_curatedPostId_fkey" FOREIGN KEY ("curatedPostId") REFERENCES "CuratedPost" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT "PostRightsClearance_clearedByUserId_fkey" FOREIGN KEY ("clearedByUserId") REFERENCES "User" ("id") ON DELETE SET NULL ON UPDATE CASCADE
 );
 
 -- CreateIndex
@@ -81,4 +92,7 @@ CREATE UNIQUE INDEX "CuratedPost_mediaId_key" ON "CuratedPost"("mediaId");
 CREATE INDEX "CuratedPost_instagramAccountId_idx" ON "CuratedPost"("instagramAccountId");
 
 -- CreateIndex
-CREATE INDEX "CuratedPost_ownerUserId_idx" ON "CuratedPost"("ownerUserId");
+CREATE INDEX "PostRightsClearance_clearedByUserId_idx" ON "PostRightsClearance"("clearedByUserId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "PostRightsClearance_curatedPostId_layer_key" ON "PostRightsClearance"("curatedPostId", "layer");

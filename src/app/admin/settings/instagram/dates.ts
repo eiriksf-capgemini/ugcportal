@@ -26,7 +26,10 @@ const UTC_DATE_TIME = new Intl.DateTimeFormat("en-GB", {
   timeZone: "UTC",
 });
 
-const DAY_BEFORE_MS = 1;
+// The smallest step back from the expiry instant. The gate refuses at
+// `validUntil <= now`, so one millisecond earlier is the last moment a sale
+// is allowed, and the day containing it is the last sellable day.
+const ONE_MILLISECOND = 1;
 
 /**
  * How a clearance's expiry is described on screen.
@@ -39,7 +42,7 @@ const DAY_BEFORE_MS = 1;
  * leaving the reader to work out which reading applies.
  */
 export function formatClearanceExpiry(date: Date): string {
-  const lastSellableDay = new Date(date.getTime() - DAY_BEFORE_MS);
+  const lastSellableDay = new Date(date.getTime() - ONE_MILLISECOND);
   return `${UTC_DATE_TIME.format(date)} UTC — last sellable day ${UTC_DATE.format(lastSellableDay)}`;
 }
 

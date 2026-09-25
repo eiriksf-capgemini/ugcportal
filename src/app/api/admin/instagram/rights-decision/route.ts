@@ -3,6 +3,7 @@ import { revalidatePath } from "next/cache";
 
 import type { ResaleRightsRoute } from "@/generated/prisma/enums";
 import { requireAdmin } from "@/lib/admin";
+import { isSameOriginRequest } from "@/lib/origin";
 import { readCappedFormData } from "@/lib/request-body";
 import { isResaleRightsRoute, isResaleRightsStatus } from "@/lib/resale-rights";
 import { setResaleRightsStatus } from "@/lib/resale-rights-review";
@@ -46,28 +47,6 @@ function settingsRedirect(request: Request, query = ""): NextResponse {
   );
 }
 
-/**
- * Same-origin check, which a server action would have done for us.
- *
- * The session cookie is SameSite=Lax, so a cross-site POST carries no
- * credentials and `requireAdmin` already refuses it — this is the second
- * lock, for the case where that cookie policy changes or a subdomain is
- * added. Absent Origin is refused rather than allowed: every browser sends
- * it on a cross-origin form POST, and a same-origin POST from our own page
- * always has one.
- */
-function isSameOrigin(request: Request): boolean {
-  const origin = request.headers.get("origin");
-  if (!origin) {
-    return false;
-  }
-  try {
-    return new URL(origin).origin === new URL(request.url).origin;
-  } catch {
-    return false;
-  }
-}
-
 export async function POST(request: Request) {
   const session = await requireAdmin();
   if (!session) {
@@ -76,7 +55,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  if (!isSameOrigin(request)) {
+  if (!isSameOriginRequest(request)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
@@ -148,6 +127,17 @@ export async function POST(request: Request) {
       ? conditionsValue.trim()
       : null;
 
+  // Whose uploads this clearance covers. Not validated against the user
+  // table here: setResaleRightsStatus writes it as a foreign key, so a made
+  // up id is refused by the database rather than by a check that could drift
+  // from it. A blank value clears it, and a CLEARED review without one
+  // authorises nothing (see accountClearanceBlocker).
+  const clearedOwnerValue = formData.get("clearedOwnerUserId");
+  const clearedOwnerUserId =
+    typeof clearedOwnerValue === "string" && clearedOwnerValue.trim()
+      ? clearedOwnerValue.trim()
+      : null;
+
   // Uploaded before the status write, so a failed upload leaves no clearance
   // claiming evidence that isn't there. The cost of this ordering is the
   // other kind of orphan: if the write below is then refused, the object
@@ -184,6 +174,7 @@ export async function POST(request: Request) {
     route,
     validUntil,
     conditions,
+    clearedOwnerUserId,
     evidence,
     restampChecklist,
   });

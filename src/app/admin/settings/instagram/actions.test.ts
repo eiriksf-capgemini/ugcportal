@@ -10,6 +10,14 @@ vi.mock("@/lib/prisma", () => ({
   prisma: { instagramAccount: { deleteMany: deleteManyMock } },
 }));
 vi.mock("next/cache", () => ({ revalidatePath: revalidatePathMock }));
+// redirect() throws in Next so the caller stops; the stand-in has to throw
+// too, or the assertions after a redirect would be testing code that never
+// runs in production.
+vi.mock("next/navigation", () => ({
+  redirect: (url: string) => {
+    throw new Error(`NEXT_REDIRECT ${url}`);
+  },
+}));
 vi.mock("@/lib/resale-rights-review", () => ({
   setResaleRightsStatus: setResaleRightsStatusMock,
 }));
@@ -112,6 +120,45 @@ describe("disconnectInstagramAccount", () => {
 
     expect(deleteManyMock).not.toHaveBeenCalled();
     expect(revalidatePathMock).toHaveBeenCalledWith("/admin/settings/instagram");
+  });
+
+  /**
+   * Every outcome that is not a successful write. `conflict` is the one
+   * that was actually reachable and actually wrong: a decision landing at
+   * the same moment as a Disconnect, on an account with no review row yet,
+   * made the disconnect's create lose the unique-index race — and the
+   * account was deleted anyway, leaving `CLEARED` as the trail's last word.
+   * Exactly the failure the code's own comment claimed to prevent.
+   */
+  it.each(["conflict", "actor_not_admin", "forbidden_system_transition"])(
+    "does not delete when the revoke came back %s",
+    async (outcome) => {
+      authMock.mockResolvedValue(ADMIN_SESSION);
+      setResaleRightsStatusMock.mockResolvedValue({ outcome });
+
+      await expect(disconnectInstagramAccount(form("acc-1"))).rejects.toThrow(
+        "error=disconnect_not_revoked",
+      );
+      expect(deleteManyMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("deletes for the two outcomes that mean the revoke was recorded", async () => {
+    authMock.mockResolvedValue(ADMIN_SESSION);
+
+    for (const outcome of [
+      { outcome: "recorded", reviewId: "rev-1", selfReview: false },
+      // Already REVOKED — nothing new to write, but the trail already says
+      // so, which is what the delete is waiting for.
+      { outcome: "unchanged", reviewId: "rev-1" },
+    ]) {
+      deleteManyMock.mockClear();
+      setResaleRightsStatusMock.mockResolvedValue(outcome);
+
+      await disconnectInstagramAccount(form("acc-1"));
+
+      expect(deleteManyMock).toHaveBeenCalledWith({ where: { id: "acc-1" } });
+    }
   });
 
   it("rejects a missing id without touching the database", async () => {

@@ -1,6 +1,7 @@
 import {
   ResaleRightsRoute,
   ResaleRightsStatus,
+  RightsLayer,
   type Role,
 } from "@/generated/prisma/enums";
 
@@ -92,7 +93,8 @@ export type SellabilityBlocker =
   | "model_release_missing"
   | "third_party_layer_uncleared"
   | "not_owner_supplied_original"
-  | "media_not_owned";
+  | "media_not_owned"
+  | "rights_holder_not_recorded";
 
 export type SellabilityResult =
   | { sellable: true }
@@ -105,6 +107,20 @@ export type GateReview = {
   reviewedByUserId: string | null;
   validUntil: Date | null;
   reviewedBy: { role: Role } | null;
+  /** The user whose uploads this clearance covers. See `media` on GatePost. */
+  clearedOwnerUserId: string | null;
+};
+
+/**
+ * One layer's justification, with the clearer's *current* role — re-read for
+ * the same reason the account reviewer's is: a demotion has to take effect
+ * on the clearances that person signed.
+ */
+export type GateLayerClearance = {
+  layer: RightsLayer;
+  reason: string;
+  clearedByUserId: string | null;
+  clearedBy: { role: Role } | null;
 };
 
 /**
@@ -114,8 +130,6 @@ export type GateReview = {
  */
 export type GatePost = {
   mediaId: string | null;
-  /** Who the listing claims owns the file. See `media` below. */
-  ownerUserId: string | null;
   /**
    * The referenced Media row, or null if there isn't one.
    *
@@ -131,9 +145,8 @@ export type GatePost = {
   containsMusic: boolean | null;
   thirdPartyCreator: boolean | null;
   sponsoredContent: boolean | null;
-  postClearedByUserId: string | null;
-  postClearedAt: Date | null;
-  postClearanceReason: string | null;
+  /** One justification per layer; see layerIsSettled. */
+  layerClearances: GateLayerClearance[];
   instagramAccount: { resaleRightsReview: GateReview | null } | null;
 };
 
@@ -144,15 +157,19 @@ export type GatePost = {
  */
 export const CURATED_POST_GATE_SELECT = {
   mediaId: true,
-  ownerUserId: true,
   depictsPeople: true,
   modelReleaseKey: true,
   containsMusic: true,
   thirdPartyCreator: true,
   sponsoredContent: true,
-  postClearedByUserId: true,
-  postClearedAt: true,
-  postClearanceReason: true,
+  layerClearances: {
+    select: {
+      layer: true,
+      reason: true,
+      clearedByUserId: true,
+      clearedBy: { select: { role: true } },
+    },
+  },
   instagramAccount: {
     select: {
       resaleRightsReview: {
@@ -161,6 +178,7 @@ export const CURATED_POST_GATE_SELECT = {
           checklistVersion: true,
           reviewedByUserId: true,
           validUntil: true,
+          clearedOwnerUserId: true,
           reviewedBy: { select: { role: true } },
         },
       },
@@ -204,29 +222,47 @@ export async function loadGateMedia(
 }
 
 /**
- * True when this post has been explicitly cleared at post level with a
- * recorded human and reason — the escape hatch Part C allows for a layer
- * (music, a third-party creator, sponsorship) that is present but handled.
- * All three fields are required: a clearance with no reason is not a
- * clearance, it is a checkbox.
+ * True when *this specific layer* carries a justification an admin signed.
+ *
+ * Per layer, not per post. An earlier revision took any post-level clearance
+ * as settling all three, so a post cleared with "music licence purchased"
+ * became sellable with an untriaged third-party creator and an untriaged
+ * sponsorship attached — one answer standing in for three unrelated
+ * questions, in a module whose contract is that nothing passes by default.
+ *
+ * The clearer's role is re-read here rather than trusted from write time,
+ * exactly as accountClearanceBlocker does for the account reviewer: a
+ * justification signed by someone since demoted is not one this instance
+ * stands behind. Without it, a demoted admin's layer clearances quietly
+ * survive as long as some *other* admin signed the account.
  */
-function hasPostLevelClearance(post: GatePost): boolean {
+function layerIsCleared(post: GatePost, layer: RightsLayer): boolean {
+  const clearance = post.layerClearances.find(
+    (candidate) => candidate.layer === layer,
+  );
+  if (!clearance) {
+    return false;
+  }
   return Boolean(
-    post.postClearedByUserId &&
-      post.postClearedAt &&
-      post.postClearanceReason &&
-      post.postClearanceReason.trim(),
+    clearance.reason.trim() &&
+      clearance.clearedByUserId &&
+      clearance.clearedBy?.role === "ADMIN",
   );
 }
 
 /**
- * A layer that must be absent, or explicitly cleared if present. `null` means
- * nobody has triaged it, which is not the same as `false` and never passes.
+ * A layer that must be absent, or cleared on its own terms if present.
+ * `null` means nobody has triaged it, which is not the same as `false` and
+ * never passes.
  */
-function layerIsSettled(value: boolean | null, post: GatePost): boolean {
+function layerIsSettled(
+  value: boolean | null,
+  post: GatePost,
+  layer: RightsLayer,
+): boolean {
   if (value === null) return false;
   if (value === false) return true;
-  return hasPostLevelClearance(post);
+  return layerIsCleared(post, layer);
 }
 
 /**
@@ -272,6 +308,14 @@ export function accountClearanceBlocker(
     return "checklist_version_retired";
   }
 
+  // (5) A clearance has to say whose rights were cleared, or it authorises
+  // nothing in particular. The gate compares the file's owner against this
+  // (see evaluateSellability), so without it every ownership check would
+  // have nothing to check against.
+  if (!review.clearedOwnerUserId) {
+    return "rights_holder_not_recorded";
+  }
+
   return null;
 }
 
@@ -290,8 +334,12 @@ export function evaluateSellability(
   const review = post.instagramAccount?.resaleRightsReview ?? null;
 
   const accountBlocker = accountClearanceBlocker(review, now);
-  if (accountBlocker) {
-    return { sellable: false, blocker: accountBlocker };
+  // `!review` is redundant with the blocker above — a null review always
+  // produces "no_review" — but it is what narrows the type for the
+  // ownership comparison at the end, and a redundant fail-closed check is
+  // the right kind of redundant.
+  if (accountBlocker || !review) {
+    return { sellable: false, blocker: accountBlocker ?? "no_review" };
   }
 
   // (5) Per-post triage (Part C). Account-level clearance covers the Owner's
@@ -305,15 +353,19 @@ export function evaluateSellability(
   if (post.depictsPeople && !post.modelReleaseKey?.trim()) {
     return { sellable: false, blocker: "model_release_missing" };
   }
-  for (const layer of [
-    post.containsMusic,
-    post.thirdPartyCreator,
-    post.sponsoredContent,
-  ]) {
-    if (layer === null) {
+  // Each layer answers for itself. Pairing the triage flag with its own
+  // RightsLayer is what keeps one justification from covering three
+  // unrelated questions.
+  const layers: [boolean | null, RightsLayer][] = [
+    [post.containsMusic, RightsLayer.MUSIC],
+    [post.thirdPartyCreator, RightsLayer.THIRD_PARTY_CREATOR],
+    [post.sponsoredContent, RightsLayer.SPONSORED_CONTENT],
+  ];
+  for (const [value, layer] of layers) {
+    if (value === null) {
       return { sellable: false, blocker: "triage_incomplete" };
     }
-    if (!layerIsSettled(layer, post)) {
+    if (!layerIsSettled(value, post, layer)) {
       return { sellable: false, blocker: "third_party_layer_uncleared" };
     }
   }
@@ -334,12 +386,16 @@ export function evaluateSellability(
   if (!post.media) {
     return { sellable: false, blocker: "not_owner_supplied_original" };
   }
-  // And it has to resolve to the right person's file. This is the check that
-  // stops a listing under a cleared account from offering *someone else's*
-  // upload: the clearance covers one party's rights, so the only file it can
-  // authorise is that party's. Without it, `mediaId` is an unconstrained
-  // pointer at every upload in the system.
-  if (!post.ownerUserId || post.media.userId !== post.ownerUserId) {
+  // And it has to be the file of the person the *clearance* names.
+  //
+  // Compared against the review, not against a second column on this same
+  // row. An earlier revision put an `ownerUserId` on CuratedPost and checked
+  // the two against each other — but both were written by whoever created
+  // the listing, so it only proved a row was self-consistent. Whoever can
+  // set `mediaId` can set that too. The clearance is the only party to this
+  // that a listing's author does not control, so it is the one that decides
+  // whose uploads may be sold.
+  if (post.media.userId !== review.clearedOwnerUserId) {
     return { sellable: false, blocker: "media_not_owned" };
   }
 

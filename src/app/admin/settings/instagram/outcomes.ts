@@ -23,6 +23,8 @@ const OUTCOME_MESSAGES: Record<string, string> = {
     "That account is no longer connected. The list has been refreshed.",
   rights_actor_not_admin:
     "Your admin role was revoked since you signed in, so the decision wasn't recorded.",
+  disconnect_not_revoked:
+    "The account wasn't disconnected: its resale rights couldn't be revoked first, and disconnecting without that would leave the audit trail saying it was still cleared. Try again.",
   rights_conflict:
     "Another decision on this account was recorded at the same moment. Check what it says, then record yours again if it's still right.",
 };
@@ -60,6 +62,8 @@ export const BLOCKER_MESSAGES: Record<SellabilityBlocker, string> = {
     "Music, a third-party creator or a sponsorship is involved and has not been cleared for this post.",
   not_owner_supplied_original:
     "No owner-uploaded original is linked, and only the owner's own file may be sold.",
+  rights_holder_not_recorded:
+    "The clearance doesn't say whose uploads it covers, so it authorises nothing. Record a decision naming the rights holder.",
   media_not_owned:
     "The linked file belongs to a different account than the one this listing is for. Only the cleared party's own upload may be sold.",
 };

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { requireAdmin } from "@/lib/admin";
+import { isSameOriginRequest } from "@/lib/origin";
 import { readJsonBody } from "@/lib/request-body";
 import { prisma } from "@/lib/prisma";
 import {
@@ -107,6 +108,14 @@ function parsePriceInput(body: unknown): ParseResult {
 export async function POST(request: Request, { params }: RouteContext) {
   const session = await requireAdmin();
   if (!session) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
+  // Same second lock as the decision handler: SameSite=Lax means a
+  // cross-site POST arrives uncredentialed and requireAdmin refuses it
+  // first, but a route handler gets no framework-level check and this one
+  // moves money-adjacent state.
+  if (!isSameOriginRequest(request)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 

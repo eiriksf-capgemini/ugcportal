@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { ResaleRightsStatus } from "@/generated/prisma/enums";
+import { ResaleRightsStatus, RightsLayer } from "@/generated/prisma/enums";
 import {
   ACCEPTED_CHECKLIST_VERSIONS,
   CURRENT_CHECKLIST_VERSION,
+  type GateLayerClearance,
   type GatePost,
   type GateReview,
   accountClearanceBlocker,
@@ -23,6 +24,7 @@ function clearedReview(overrides: Partial<GateReview> = {}): GateReview {
     reviewedByUserId: "admin-1",
     validUntil: null,
     reviewedBy: { role: "ADMIN" },
+    clearedOwnerUserId: "owner-1",
     ...overrides,
   };
 }
@@ -35,18 +37,15 @@ function clearedReview(overrides: Partial<GateReview> = {}): GateReview {
 function sellablePost(overrides: Partial<GatePost> = {}): GatePost {
   return {
     mediaId: "media-1",
-    ownerUserId: "owner-1",
     // The Media row the listing points at, loaded by the caller. Owned by
-    // the same user the listing says owns it.
+    // the user the *clearance* names, which is the comparison that matters.
     media: { userId: "owner-1" },
+    layerClearances: [],
     depictsPeople: false,
     modelReleaseKey: null,
     containsMusic: false,
     thirdPartyCreator: false,
     sponsoredContent: false,
-    postClearedByUserId: null,
-    postClearedAt: null,
-    postClearanceReason: null,
     instagramAccount: { resaleRightsReview: clearedReview() },
     ...overrides,
   };
@@ -194,54 +193,132 @@ describe("per-post triage (checklist Part C)", () => {
     expect(evaluateSellability(post, NOW).sellable).toBe(true);
   });
 
-  for (const layer of [
-    "containsMusic",
-    "thirdPartyCreator",
-    "sponsoredContent",
-  ] as const) {
-    it(`refuses an un-triaged ${layer}`, () => {
-      expect(
-        evaluateSellability(sellablePost({ [layer]: null }), NOW),
-      ).toEqual({ sellable: false, blocker: "triage_incomplete" });
+  const LAYERS = [
+    ["containsMusic", RightsLayer.MUSIC],
+    ["thirdPartyCreator", RightsLayer.THIRD_PARTY_CREATOR],
+    ["sponsoredContent", RightsLayer.SPONSORED_CONTENT],
+  ] as const;
+
+  /** A justification for one layer, signed by a current admin. */
+  function clearance(
+    layer: RightsLayer,
+    overrides: Partial<GateLayerClearance> = {},
+  ): GateLayerClearance {
+    return {
+      layer,
+      reason: "Licence on file, see evidence.",
+      clearedByUserId: "admin-1",
+      clearedBy: { role: "ADMIN" },
+      ...overrides,
+    };
+  }
+
+  for (const [field, layer] of LAYERS) {
+    it(`refuses an un-triaged ${field}`, () => {
+      expect(evaluateSellability(sellablePost({ [field]: null }), NOW)).toEqual({
+        sellable: false,
+        blocker: "triage_incomplete",
+      });
     });
 
-    it(`refuses ${layer} = true with no post-level clearance`, () => {
-      expect(evaluateSellability(sellablePost({ [layer]: true }), NOW)).toEqual({
+    it(`refuses ${field} = true with no clearance`, () => {
+      expect(evaluateSellability(sellablePost({ [field]: true }), NOW)).toEqual({
         sellable: false,
         blocker: "third_party_layer_uncleared",
       });
     });
 
-    it(`accepts ${layer} = true once explicitly cleared with a reason`, () => {
+    it(`accepts ${field} = true once cleared with a reason`, () => {
       const post = sellablePost({
-        [layer]: true,
-        postClearedByUserId: "admin-1",
-        postClearedAt: NOW,
-        postClearanceReason: "Licence on file, see evidence.",
+        [field]: true,
+        layerClearances: [clearance(layer)],
       });
       expect(evaluateSellability(post, NOW).sellable).toBe(true);
     });
 
-    it(`refuses ${layer} = true when the clearance has no reason`, () => {
+    it(`refuses ${field} = true when its clearance has no reason`, () => {
       const post = sellablePost({
-        [layer]: true,
-        postClearedByUserId: "admin-1",
-        postClearedAt: NOW,
-        postClearanceReason: "   ",
+        [field]: true,
+        layerClearances: [clearance(layer, { reason: "   " })],
       });
       expect(evaluateSellability(post, NOW).sellable).toBe(false);
     });
 
-    it(`refuses ${layer} = true when nobody signed the clearance`, () => {
+    it(`refuses ${field} = true when nobody signed its clearance`, () => {
       const post = sellablePost({
-        [layer]: true,
-        postClearedByUserId: null,
-        postClearedAt: NOW,
-        postClearanceReason: "Someone said it was fine.",
+        [field]: true,
+        layerClearances: [
+          clearance(layer, { clearedByUserId: null, clearedBy: null }),
+        ],
+      });
+      expect(evaluateSellability(post, NOW).sellable).toBe(false);
+    });
+
+    // The same read-time role re-check the account reviewer gets. Without
+    // it, a demoted admin's justifications keep working as long as some
+    // other admin signed the account clearance.
+    it(`refuses ${field} = true when its clearer is no longer an ADMIN`, () => {
+      const post = sellablePost({
+        [field]: true,
+        layerClearances: [clearance(layer, { clearedBy: { role: "USER" } })],
+      });
+      expect(evaluateSellability(post, NOW)).toEqual({
+        sellable: false,
+        blocker: "third_party_layer_uncleared",
+      });
+    });
+
+    it(`refuses ${field} = true when its clearer's account is gone`, () => {
+      const post = sellablePost({
+        [field]: true,
+        layerClearances: [clearance(layer, { clearedBy: null })],
       });
       expect(evaluateSellability(post, NOW).sellable).toBe(false);
     });
   }
+
+  /**
+   * The bug this structure exists to prevent: one justification used to
+   * settle all three layers, so "music licence purchased" made a post with
+   * an untriaged collaborator and an undisclosed sponsorship sellable.
+   */
+  for (const [field, layer] of LAYERS) {
+    it(`clearing ${field} leaves the other layers blocking`, () => {
+      const others = LAYERS.filter(([other]) => other !== field);
+      const post = sellablePost({
+        [field]: true,
+        [others[0][0]]: true,
+        [others[1][0]]: true,
+        layerClearances: [clearance(layer)],
+      });
+
+      expect(evaluateSellability(post, NOW)).toEqual({
+        sellable: false,
+        blocker: "third_party_layer_uncleared",
+      });
+    });
+
+    it(`a clearance for a different layer does not settle ${field}`, () => {
+      const other = LAYERS.find(([name]) => name !== field)![1];
+      const post = sellablePost({
+        [field]: true,
+        layerClearances: [clearance(other)],
+      });
+
+      expect(evaluateSellability(post, NOW).sellable).toBe(false);
+    });
+  }
+
+  it("accepts a post whose three layers are each cleared in their own right", () => {
+    const post = sellablePost({
+      containsMusic: true,
+      thirdPartyCreator: true,
+      sponsoredContent: true,
+      layerClearances: LAYERS.map(([, layer]) => clearance(layer)),
+    });
+
+    expect(evaluateSellability(post, NOW)).toEqual({ sellable: true });
+  });
 });
 
 describe("ugcportal-2eh Option A: the file sold is the owner's upload", () => {
@@ -270,7 +347,12 @@ describe("ugcportal-2eh Option A: the file sold is the owner's upload", () => {
 
   // The one that matters most: a clearance covers one party's rights, so a
   // listing under it must not be able to sell a different user's upload.
-  it("refuses a file belonging to someone other than the listing's owner", () => {
+  //
+  // Compared against the *review's* rights holder, not a second column on
+  // the listing. An earlier revision checked CuratedPost.ownerUserId
+  // against the Media row, but both were written by whoever created the
+  // listing — it proved the row agreed with itself and nothing more.
+  it("refuses a file belonging to someone other than the cleared rights holder", () => {
     expect(
       evaluateSellability(
         sellablePost({ media: { userId: "someone-else" } }),
@@ -279,9 +361,25 @@ describe("ugcportal-2eh Option A: the file sold is the owner's upload", () => {
     ).toEqual({ sellable: false, blocker: "media_not_owned" });
   });
 
-  it("refuses a listing that names no owner at all", () => {
+  it("refuses a clearance that names no rights holder at all", () => {
+    // Nothing to compare the file against, so nothing is sellable — caught
+    // at the account level, before any per-post question is asked.
     expect(
-      evaluateSellability(sellablePost({ ownerUserId: null }), NOW),
+      evaluateSellability(
+        withReview(clearedReview({ clearedOwnerUserId: null })),
+        NOW,
+      ),
+    ).toEqual({ sellable: false, blocker: "rights_holder_not_recorded" });
+  });
+
+  it("follows the rights holder when the clearance names a different one", () => {
+    // The listing is unchanged; only the clearance moved. Selling has to
+    // follow the clearance.
+    expect(
+      evaluateSellability(
+        withReview(clearedReview({ clearedOwnerUserId: "another-owner" })),
+        NOW,
+      ),
     ).toEqual({ sellable: false, blocker: "media_not_owned" });
   });
 });

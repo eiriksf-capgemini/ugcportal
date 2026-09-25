@@ -24,13 +24,20 @@ const EXISTING: DecisionFormReview = {
   validUntil: new Date("2027-06-01T00:00:00.000Z"),
   conditions: "Editorial use only.",
   checklistVersion: CURRENT_CHECKLIST_VERSION,
+  clearedOwnerUserId: "owner-1",
 };
+
+const RIGHTS_HOLDERS = [
+  { id: "owner-1", name: "Owner One", email: "owner@example.com" },
+  { id: "owner-2", name: null, email: "second@example.com" },
+];
 
 function render(review: DecisionFormReview | null): string {
   return renderToStaticMarkup(
     <ResaleRightsDecisionForm
       instagramAccountId="acc-1"
       review={review}
+      rightsHolders={RIGHTS_HOLDERS}
       action="/api/admin/instagram/rights-decision"
     />,
   );
@@ -125,6 +132,7 @@ describe("every field on the form is classified", () => {
    * whole-row round-trip in decision-round-trip.test.tsx.
    *
    *   instagramAccountId — identity, from props, not stored by the action
+   *   clearedOwnerUserId — round-trips (defaultValue); blank clears, on purpose
    *   status             — round-trips (defaultValue)
    *   route              — round-trips (defaultValue)
    *   validUntil         — round-trips (defaultValue); blank clears, on purpose
@@ -141,6 +149,7 @@ describe("every field on the form is classified", () => {
     );
 
     expect([...names].sort()).toEqual([
+      "clearedOwnerUserId",
       "conditions",
       "evidence",
       "instagramAccountId",

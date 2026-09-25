@@ -37,6 +37,10 @@ const ALLOWED = new Map<string, string>([
     "app/admin/settings/instagram/actions.ts",
     "documentation only: explains why disconnect revokes rather than leaving CLEARED as the trail's last word",
   ],
+  [
+    "app/admin/settings/instagram/decision-form.tsx",
+    "UI copy only: tells the reviewer a CLEARED decision with no rights holder sells nothing",
+  ],
 ]);
 
 function sourceFiles(dir: string, found: string[] = []): string[] {
