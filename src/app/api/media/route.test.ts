@@ -1,8 +1,18 @@
 import { DeleteObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
 import sharp from "sharp";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { MAX_ORIGINAL_NAME_LENGTH, MAX_UPLOAD_BYTES } from "@/lib/media";
+import {
+  MAX_IMAGE_UPLOAD_BYTES,
+  MAX_ORIGINAL_NAME_LENGTH,
+  MAX_UPLOAD_BYTES,
+} from "@/lib/media";
+import {
+  MULTIPART_ENVELOPE_SLACK_BYTES,
+  resetUploadMemoryBudget,
+  uploadMemoryStats,
+  uploadReservationBytes,
+} from "@/lib/upload-memory";
 
 const authMock = vi.fn();
 const s3SendMock = vi.fn();
@@ -750,6 +760,353 @@ describe("POST /api/media", () => {
       expect.objectContaining({ cause: expect.any(Error) }),
     );
     errorSpy.mockRestore();
+  });
+});
+
+/**
+ * Stands in for a real preview while a request is parked mid-handler.
+ *
+ * The parked calls here are about *when* generateWatermarkedPreview settles,
+ * not about what it produces, and generating a real preview inside a test
+ * that is holding a memory reservation open would add seconds of libvips work
+ * to the thing being measured.
+ */
+const STUB_PREVIEW = {
+  data: Buffer.from([0x01, 0x02, 0x03, 0x04]),
+  contentType: "image/webp",
+  width: 8,
+  height: 8,
+};
+
+/** A promise plus the handle to settle it, for parking a request in flight. */
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+
+/**
+ * Holds until `condition` is true, so a test can establish that one request
+ * has actually reached a given state before starting the next.
+ *
+ * Racing both from the same tick would make "which one is refused" depend on
+ * scheduling rather than on the bound under test — the round-3 finding on
+ * ugcportal-u7g, in the test directly above this block.
+ */
+async function until(condition: () => boolean, what: string) {
+  const deadline = Date.now() + 2_000;
+  while (!condition()) {
+    if (Date.now() > deadline) throw new Error(`Timed out waiting for ${what}`);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+}
+
+describe("POST /api/media — upload memory (ugcportal-05b)", () => {
+  /**
+   * Sizes the container for a test and rebuilds both bounds from it.
+   *
+   * The memory budget is the one input the derivation can be told rather than
+   * having to read, and WATERMARK_MEMORY_BUDGET_MB is clamped downwards only
+   * — so this is a real configuration, derived by the real resolver, not a
+   * stubbed settings object. Returns the settings that actually took effect,
+   * because a CI container with its own cgroup limit below the requested one
+   * would clamp, and the assertions should be against what is in force.
+   */
+  function configureContainer(megabytes: number) {
+    process.env.WATERMARK_MEMORY_BUDGET_MB = String(megabytes);
+    resetWatermarkConcurrencyGate();
+    resetUploadMemoryBudget();
+    return uploadMemoryStats().settings;
+  }
+
+  let envBackup: NodeJS.ProcessEnv;
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    envBackup = { ...process.env };
+    // A container sized below what the preview configuration needs warns on
+    // first use, from both bounds. That is the designed behaviour, not noise
+    // this block should silence globally — the tests that care assert on it.
+    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(console, "info").mockImplementation(() => {});
+    authMock.mockResolvedValue({ user: { id: "user-1" } });
+    s3SendMock.mockResolvedValue({});
+    mediaCreateMock.mockImplementation(async ({ data }) =>
+      selectedRow({ kind: data.kind, originalName: data.originalName }),
+    );
+  });
+
+  afterEach(() => {
+    process.env = envBackup;
+    resetWatermarkConcurrencyGate();
+    resetUploadMemoryBudget();
+    vi.restoreAllMocks();
+  });
+
+  it("stops reading an oversized image at the image cap, not at the request cap (K2)", async () => {
+    // 60 MB declaring itself image/jpeg. Deliberately not the full ~205 MB
+    // from the bead's reproduction — the assertion is against the *cap*, not
+    // against the payload, and six times the image cap demonstrates it
+    // without allocating 205 MB inside the test process.
+    const { request, pulled } = multipartRequest({
+      payloadBytes: 60 * 1024 * 1024,
+      filename: "huge.jpg",
+      contentType: "image/jpeg",
+    });
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(413);
+
+    // The K2 evidence: peak allocation stays far below the declared size,
+    // because the request stream was capped at the cap validateUpload was
+    // going to apply anyway rather than at MAX_UPLOAD_BYTES.
+    //
+    // The slack is four chunks rather than none because a ReadableStream
+    // pulls ahead of its reader, and this body passes through three of them
+    // (the peek's replay, the cap's TransformStream, and the re-framed
+    // request), each entitled to a chunk of read-ahead past the byte that
+    // tripped the cap. The bound that matters is the second assertion.
+    const pulledBytes = pulled() * MULTIPART_CHUNK_BYTES;
+    expect(pulledBytes).toBeLessThanOrEqual(
+      MAX_IMAGE_UPLOAD_BYTES +
+        MULTIPART_ENVELOPE_SLACK_BYTES +
+        4 * MULTIPART_CHUNK_BYTES,
+    );
+    expect(pulledBytes).toBeLessThan(MAX_UPLOAD_BYTES / 10);
+
+    expect(s3SendMock).not.toHaveBeenCalled();
+    expect(mediaCreateMock).not.toHaveBeenCalled();
+    expect(uploadMemoryStats().heldBytes).toBe(0);
+  });
+
+  it("refuses a burst without buffering it, where the gate could only shed it after (K1)", async () => {
+    // The bead's third and most important path: image uploads the watermark
+    // gate sheds. The gate rejecting them keeps its own accounting true and
+    // does nothing about the memory already held, because the route had
+    // buffered every body twice before it called in.
+    //
+    // 512 MB floors the upload budget at one maximum-size image, which makes
+    // the burst small enough to drive here. The shape is the same at 1 GB
+    // with eight.
+    const settings = configureContainer(512);
+    const parked = deferred<typeof STUB_PREVIEW>();
+    vi.mocked(generateWatermarkedPreview).mockImplementationOnce(
+      () => parked.promise,
+    );
+
+    const admitted = POST(multipartRequest({ payload: REAL_PNG }).request);
+    await until(
+      () => uploadMemoryStats().heldBytes > 0,
+      "the first upload to reserve its body",
+    );
+
+    const burst = Array.from({ length: 5 }, () =>
+      multipartRequest({ payloadBytes: 4 * 1024 * 1024 }),
+    );
+    const refused = await Promise.all(burst.map((b) => POST(b.request)));
+
+    for (const [index, response] of refused.entries()) {
+      expect(response.status).toBe(503);
+      await expect(response.json()).resolves.toEqual({
+        error: "Too many uploads are being processed right now",
+        retryAfterSeconds: settings.retryAfterSeconds,
+      });
+      expect(response.headers.get("Retry-After")).toBe(
+        String(settings.retryAfterSeconds),
+      );
+      // The whole point, and the difference from shedding at the gate: the
+      // part header the peek read, plus at most one chunk of the stream's own
+      // read-ahead. The 4 MB behind it was never read, never parsed into a
+      // File and never copied into a Buffer — where before this bead all
+      // five bodies were fully resident when the shed decisions were taken.
+      expect(burst[index].pulled()).toBeLessThanOrEqual(2);
+    }
+
+    const stats = uploadMemoryStats();
+    expect(stats.shed).toBe(5);
+    expect(stats.peakHeldBytes).toBeLessThanOrEqual(
+      Math.max(stats.budgetBytes, settings.soloReservationCeilingBytes),
+    );
+
+    parked.resolve(STUB_PREVIEW);
+    await expect(admitted.then((r) => r.status)).resolves.toBe(201);
+    expect(uploadMemoryStats().heldBytes).toBe(0);
+  });
+
+  it("buffers at most one maximum-size video at a time (K3)", async () => {
+    // Video reaches no gate at all — preview generation is image-only until
+    // ugcportal-pmb — so before this bead nothing bounded how many were
+    // resident. On the recommended 1 GB a maximum-size video costs more than
+    // the steady-state budget, so the answer is exactly one.
+    const settings = configureContainer(1024);
+    const parked = deferred<unknown>();
+    s3SendMock.mockImplementationOnce(() => parked.promise);
+
+    const videoRequest = () =>
+      multipartRequest({
+        payload: MP4_HEADER,
+        filename: "clip.mp4",
+        contentType: "video/mp4",
+      });
+
+    const admitted = POST(videoRequest().request);
+    await until(
+      () => uploadMemoryStats().heldBytes > 0,
+      "the first video to reserve its body",
+    );
+
+    const reserved = uploadReservationBytes(
+      200 * 1024 * 1024 + MULTIPART_ENVELOPE_SLACK_BYTES,
+    );
+    expect(uploadMemoryStats().heldBytes).toBe(reserved);
+    // Over-committed by the solo rule, which is why the second is refused
+    // rather than joining it.
+    expect(reserved).toBeGreaterThan(settings.budgetBytes);
+    expect(reserved).toBeLessThanOrEqual(settings.soloReservationCeilingBytes);
+
+    const second = await POST(videoRequest().request);
+    expect(second.status).toBe(503);
+    expect(second.headers.get("Retry-After")).toBe(
+      String(settings.retryAfterSeconds),
+    );
+
+    parked.resolve({});
+    await expect(admitted.then((r) => r.status)).resolves.toBe(201);
+
+    // The K3 assertion: however many arrived, the peak concurrent buffering
+    // never exceeded one video's worth.
+    expect(uploadMemoryStats().peakHeldBytes).toBe(reserved);
+    expect(uploadMemoryStats().heldBytes).toBe(0);
+    // And it never reached the watermark gate, exactly as before.
+    expect(watermarkConcurrencyStats().admitted).toBe(0);
+  });
+
+  it("refuses an upload this container could never buffer with a 413, not a 503", async () => {
+    // 768 MB cannot hold two copies of a 200 MB video plus the process
+    // baseline, at any level of idleness. Telling that caller to retry would
+    // be telling them to retry forever.
+    const settings = configureContainer(768);
+    expect(settings.maxSingleUploadBytes).toBeLessThan(200 * 1024 * 1024);
+
+    const { request, pulled } = multipartRequest({
+      payload: MP4_HEADER,
+      filename: "clip.mp4",
+      contentType: "video/mp4",
+    });
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(413);
+    expect(response.headers.get("Retry-After")).toBeNull();
+    await expect(response.json()).resolves.toEqual({
+      error: "Upload is larger than this server can buffer",
+      maxBytes: settings.maxSingleUploadBytes,
+    });
+    // Header only, plus the stream's one-chunk read-ahead; the body itself
+    // was never read.
+    expect(pulled()).toBeLessThanOrEqual(2);
+    expect(uploadMemoryStats().refusedTooLarge).toBe(1);
+    expect(uploadMemoryStats().shed).toBe(0);
+  });
+
+  it("lets a small honest upload through where a maximum-size one would not fit", async () => {
+    // Content-Length narrows the reservation, so the burst capacity the
+    // budget buys is set by what people actually upload rather than by the
+    // largest thing the route accepts. Without this, a 512 MB container would
+    // serialise every upload including tiny ones.
+    configureContainer(512);
+    const parked = deferred<typeof STUB_PREVIEW>();
+    vi.mocked(generateWatermarkedPreview).mockImplementationOnce(
+      () => parked.promise,
+    );
+
+    const first = multipartRequest({
+      payload: REAL_PNG,
+      contentLength: String(REAL_PNG.length + 512),
+    });
+    const admitted = POST(first.request);
+    await until(
+      () => uploadMemoryStats().heldBytes > 0,
+      "the first upload to reserve its body",
+    );
+
+    const second = multipartRequest({
+      payload: REAL_PNG,
+      contentLength: String(REAL_PNG.length + 512),
+    });
+    const response = await POST(second.request);
+
+    expect(response.status).toBe(201);
+
+    parked.resolve(STUB_PREVIEW);
+    await admitted;
+    expect(uploadMemoryStats().shed).toBe(0);
+  });
+
+  it("gives a lying declaration the cap it asked for and nothing more", async () => {
+    // Declaring video/mp4 to buy the 200 MB cap still has to survive
+    // sniffKind, which reads the bytes. The declaration can only ever choose
+    // between caps the route already offered somebody; it cannot invent one.
+    configureContainer(1024);
+    const { request } = multipartRequest({
+      payload: REAL_PNG,
+      filename: "not-a-video.mp4",
+      contentType: "video/mp4",
+    });
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(415);
+    await expect(response.json()).resolves.toEqual({
+      error: "File content does not match its declared type",
+    });
+    expect(uploadMemoryStats().heldBytes).toBe(0);
+  });
+
+  it.each([
+    [
+      "a rejected upload",
+      () => multipartRequest({ payload: new Uint8Array([1, 2, 3, 4]) }).request,
+      415,
+    ],
+    ["an accepted upload", () => multipartRequest({ payload: REAL_PNG }).request, 201],
+  ])("releases the reservation after %s", async (_label, build, status) => {
+    configureContainer(1024);
+
+    const response = await POST(build());
+
+    expect(response.status).toBe(status);
+    expect(uploadMemoryStats().heldBytes).toBe(0);
+    expect(uploadMemoryStats().admitted).toBe(1);
+  });
+
+  it("releases the reservation when the handler throws", async () => {
+    // A leaked reservation is worse than no bound at all: the budget would
+    // shrink with every failure until the route refused everything.
+    configureContainer(1024);
+    mediaCreateMock.mockRejectedValue(new Error("db down"));
+
+    await expect(POST(multipartRequest({ payload: REAL_PNG }).request)).rejects.toThrow(
+      "db down",
+    );
+
+    expect(uploadMemoryStats().heldBytes).toBe(0);
+  });
+
+  it("warns once, naming the shortfall, when the container is too small", async () => {
+    configureContainer(512);
+    const settings = uploadMemoryStats().settings;
+
+    expect(settings.fitsBudget).toBe(false);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("[media] upload body budget="),
+    );
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("too small for the preview configuration"),
+    );
   });
 });
 
