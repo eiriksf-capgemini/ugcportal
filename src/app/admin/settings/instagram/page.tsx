@@ -137,7 +137,7 @@ export default async function InstagramSettingsPage({
         </p>
       ) : null}
       {errorMessage ? (
-        <p className="mt-6 rounded-lg border border-destructive/60 bg-destructive-surface p-3 text-sm text-destructive">
+        <p className="mt-6 rounded-lg border border-destructive/75 bg-destructive-surface p-3 text-sm text-destructive">
           {errorMessage}
         </p>
       ) : null}
@@ -186,7 +186,7 @@ export default async function InstagramSettingsPage({
                 <div
                   className={
                     blocker
-                      ? "rounded-lg border border-destructive/60 bg-destructive-surface p-3 text-sm"
+                      ? "rounded-lg border border-destructive/75 bg-destructive-surface p-3 text-sm"
                       : "rounded-lg border border-border bg-muted p-3 text-sm"
                   }
                 >

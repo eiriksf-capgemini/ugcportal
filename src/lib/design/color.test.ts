@@ -143,12 +143,39 @@ describe("compositeOver", () => {
     expect(compositeOver(top, parseColor("#ffffff"))).toEqual(top);
   });
 
-  it("blends in linear light, not in gamma-encoded channels", () => {
-    // 50% white over black is linear 0.5, which encodes to #bcbcbc, not the
-    // #808080 a naive channel average would give.
+  it("composites the way a browser does, not the way light does", () => {
+    // CSS simple alpha compositing runs on the non-linear device values, so
+    // 50% white over black paints #808080. The physically correct answer is
+    // linear 0.5, which encodes to #bcbcbc — that is what this asserted before
+    // review, and it made every alpha pairing in the gate read 0.5 to 2.2
+    // ratio points higher than the browser actually paints.
+    // Asserted on the channel rather than the hex: `oklch(1 0 0)` lands a
+    // half-ULP below 1, so white-over-black rounds to #7f7f7f while
+    // black-over-white rounds to #808080. That is 8-bit quantisation, not the
+    // model, and pinning the hex would make this test about floating point.
+    // The two models are not close enough for that to matter: gamma-space
+    // gives channel 0.5, linear light gives 0.7354.
+    const whiteOverBlack = compositeOver(
+      parseColor("oklch(1 0 0 / 0.5)"),
+      parseColor("#000000"),
+    );
+    expect(whiteOverBlack.r).toBeCloseTo(0.5, 10);
     expect(
-      toHex(compositeOver(parseColor("#ffffff80"), parseColor("#000000"))),
-    ).toBe("#bcbcbc");
+      toHex(compositeOver(parseColor("oklch(0 0 0 / 0.5)"), parseColor("#ffffff"))),
+    ).toBe("#808080");
+  });
+
+  it("is linear in alpha, per channel", () => {
+    // The property that makes the above true in general rather than at one
+    // convenient midpoint. Under the old linear-light blend, alpha 0.25 gave
+    // an encoded channel of 0.537, not 0.25.
+    for (const alpha of [0, 0.25, 0.6, 0.9, 1]) {
+      const composited = compositeOver(
+        parseColor(`oklch(1 0 0 / ${alpha})`),
+        parseColor("#000000"),
+      );
+      expect(composited.r).toBeCloseTo(alpha, 10);
+    }
   });
 });
 

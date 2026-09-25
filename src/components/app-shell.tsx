@@ -71,7 +71,25 @@ export function AppShell({ children }: { children: ReactNode }) {
         </div>
       </header>
 
-      <main id="main-content" className="flex flex-1 flex-col">
+      {/*
+        tabIndex={-1} so the skip link actually moves focus: a plain #hash
+        jump scrolls but leaves focus on the link in most engines, so the next
+        Tab continues from the header the user was trying to skip.
+
+        scroll-mt-14 matches the 56px sticky header. Without it the browser
+        scrolls this element's top edge to viewport top, the header covers it,
+        and "Skip to content" lands the reader 56px into their own content -
+        past the <h1> on both admin screens. Keep the two in step.
+
+        outline-hidden only for this programmatic focus: a full-width ring
+        round the entire content region is noise, and every control inside it
+        keeps its own indicator.
+      */}
+      <main
+        id="main-content"
+        tabIndex={-1}
+        className="flex flex-1 scroll-mt-14 flex-col outline-hidden"
+      >
         {children}
       </main>
 

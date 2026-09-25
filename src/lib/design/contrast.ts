@@ -86,18 +86,23 @@ function onEverySurface(
 }
 
 /**
- * The focus-ring alpha the components actually ship (`outline-ring/70` in the
- * base layer, `ring-ring/70` on buttons). Checked at that alpha, not at full
- * opacity, because the alpha is what the user sees.
+ * The focus-ring alpha the components ship (`outline-ring/80` in the base
+ * layer; `ring-ring/80`, `ring-destructive/80` on buttons). Checked at that
+ * alpha, not at full opacity, because the alpha is what the user sees.
+ *
+ * 80, not the shadcn default and not the 70 this bead first pushed: with
+ * compositing done the way browsers actually do it (see compositeOver), 70
+ * measures 3.15:1 on the lightest surface. That passes, but by less than the
+ * margin worth keeping — so 80, at 3.65:1.
  */
-export const RING_ALPHA_MODIFIER = 70;
+export const RING_ALPHA_MODIFIER = 80;
 
 /**
- * The alpha the destructive border ships at (`border-destructive/60`). The
- * stock shadcn /40 measures 2.79:1 on the lightest surface, i.e. it fails
- * 1.4.11 as the boundary of a destructive control; /60 clears it with room.
+ * The alpha the destructive border ships at. The stock shadcn /40 measures
+ * 2.19:1 on the lightest surface and /60 measures 2.97:1 — both fail 1.4.11
+ * as the boundary of a destructive control. /75 clears it at 3.79:1.
  */
-export const DESTRUCTIVE_EDGE_ALPHA_MODIFIER = 60;
+export const DESTRUCTIVE_EDGE_ALPHA_MODIFIER = 75;
 
 export const PAIRINGS: Pairing[] = [
   ...onEverySurface(
@@ -145,6 +150,19 @@ export const PAIRINGS: Pairing[] = [
     requirement: "body",
     usage: "Label of the filled primary action button.",
   },
+  {
+    id: "primary-label-on-primary-hover",
+    foreground: "--primary-foreground",
+    background: ["--primary-hover"],
+    requirement: "body",
+    usage: "Label of the filled primary action button, hovered.",
+  },
+  ...onEverySurface(
+    "primary-hover-fill",
+    "--primary-hover",
+    "ui",
+    "The hovered primary button's fill, as the boundary that identifies it against the page.",
+  ),
   {
     id: "selection-text-on-selection",
     foreground: "--selection-foreground",

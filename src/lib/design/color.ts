@@ -216,7 +216,26 @@ export function relativeLuminance(color: Srgb): number {
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;
 }
 
-/** Source-over composite of `top` onto an opaque `backdrop`. */
+/**
+ * Source-over composite of `top` onto an opaque `backdrop`, **in
+ * gamma-encoded sRGB**, because that is what browsers do.
+ *
+ * This is physically wrong and deliberately so. Blending light is a linear
+ * operation, so the physically correct answer for 50% white over black is
+ * linear 0.5, which encodes to #bcbcbc. Every engine instead paints #808080:
+ * CSS simple alpha compositing runs on the non-linear device values, not on
+ * linear light. This function has to model the browser, not optics, or the
+ * gate measures a colour nobody will ever see.
+ *
+ * Getting this backwards is not a rounding error. Blending in linear light
+ * overstates the contrast of a translucent foreground on a dark backdrop by
+ * roughly 0.5 to 2.2 ratio points at the alphas this design system uses, which
+ * is easily the difference between passing and failing 1.4.11. It shipped that
+ * way in the first push of ugcportal-axu and was caught in review;
+ * `composites the way a browser does, not the way light does` in color.test.ts
+ * and the end-to-end engine check in contrast.test.ts both exist to stop it
+ * coming back.
+ */
 export function compositeOver(top: Srgb, backdrop: Srgb): Srgb {
   if (backdrop.alpha !== 1) {
     fail(
@@ -224,8 +243,7 @@ export function compositeOver(top: Srgb, backdrop: Srgb): Srgb {
     );
   }
   if (top.alpha === 1) return top;
-  const mix = (a: number, b: number) =>
-    encodeGamma(decodeGamma(a) * top.alpha + decodeGamma(b) * (1 - top.alpha));
+  const mix = (a: number, b: number) => a * top.alpha + b * (1 - top.alpha);
   return {
     r: mix(top.r, backdrop.r),
     g: mix(top.g, backdrop.g),

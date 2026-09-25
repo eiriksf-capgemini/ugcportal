@@ -133,10 +133,10 @@
    * happens to produce. The gate rejects out-of-gamut tokens rather than
    * trusting a clipped ratio, so this one is chosen to fit.
    *
-   * --color-danger-surface is an opaque error well rather than the usual
-   * `bg-destructive/10` wash. Two reasons: a translucent fill has no single
-   * defined contrast ratio, so error text on it could not be verified; and the
-   * /10 wash measured 4.17:1 under this palette, i.e. it was already failing.
+   * --color-danger-surface is an opaque error well rather than the tinted
+   * wash shadcn ships. Two reasons: a translucent fill has no single defined
+   * contrast ratio, so error text on it could not be verified; and the tinted
+   * version measured 4.17:1 under this palette, i.e. it was already failing.
    */
   --color-danger: oklch(0.78 0.12 25);
   --color-danger-surface: oklch(0.26 0.045 25);
@@ -182,6 +182,7 @@
   --color-secondary: var(--secondary);
   --color-primary-foreground: var(--primary-foreground);
   --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
   --color-popover-foreground: var(--popover-foreground);
   --color-popover: var(--popover);
   --color-card-foreground: var(--card-foreground);
@@ -213,8 +214,21 @@
    * The one place petrol still fills an area: a single primary action. Its
    * label is the page colour, not petrol-950 — petrol-950 is out of gamut
    * (see --color-petrol-deep).
+   *
+   * The hover state is an opaque step along the petrol ramp rather than the
+   * usual alpha fade. A translucent fill would put the button's label on a
+   * background that changes with whatever is behind the button, which has no
+   * one contrast ratio to check; this way both the fill and its label are
+   * verifiable on every surface.
+   *
+   * It brightens rather than darkens. That is the right affordance on a dark
+   * theme (hover raises a surface, as it does throughout the neutral scale),
+   * and darkening to petrol-500 left the hovered fill at only 1.007x the 3:1
+   * it needs against surface-4 - inside the measured authored-vs-rendered
+   * drift, so the gate could not honestly call it a pass.
    */
   --primary: var(--color-petrol-400);
+  --primary-hover: var(--color-petrol-300);
   --primary-foreground: var(--color-surface-0);
 
   --secondary: var(--color-surface-2);
@@ -264,9 +278,12 @@
   * {
     /*
      * The ring alpha is checked at this exact value by the contrast gate
-     * (RING_ALPHA_MODIFIER in src/lib/design/contrast.ts). Change both.
+     * (RING_ALPHA_MODIFIER in src/lib/design/contrast.ts), and a coverage
+     * test scans the components for alpha-modified colour utilities and fails
+     * on any whose exact alpha the gate has not measured — so this cannot
+     * drift out of step on either side.
      */
-    @apply border-border outline-ring/70;
+    @apply border-border outline-ring/80;
   }
   body {
     @apply bg-background text-foreground;

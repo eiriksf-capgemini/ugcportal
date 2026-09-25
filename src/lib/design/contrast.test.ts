@@ -11,7 +11,8 @@ import {
   parseTokenReference,
   type Pairing,
 } from "./contrast";
-import { GLOBALS_CSS_PATH, loadThemeTokens } from "./tokens";
+import { GLOBALS_CSS_PATH, loadThemeTokens, resolveToken } from "./tokens";
+import { findAlphaColorUtilities } from "./usage";
 
 const tokens = loadThemeTokens();
 const css = readFileSync(GLOBALS_CSS_PATH, "utf8");
@@ -150,7 +151,47 @@ describe("the gate cannot be routed around", () => {
     }
   });
 
-  it("checks the focus ring at the alpha the stylesheet actually renders", () => {
+  /**
+   * Finding 3 of round 1: pinning `outline-ring/80` with a string literal
+   * covered exactly one of the six alpha-modified utilities this codebase
+   * ships. The other five were free to drift — dropping `ring-ring/80` to
+   * `/50` would have taken the real focus indicator to about 2.2:1 with the
+   * suite still green. This derives the assertion from the source instead, so
+   * coverage follows the components the way the token coverage tests already
+   * follow the stylesheet.
+   */
+  it("measures every alpha-modified colour utility the components ship", () => {
+    const measured = new Set(
+      PAIRINGS.flatMap((pairing) =>
+        [pairing.foreground, ...pairing.background].map((reference) => {
+          const { property, alpha } = parseTokenReference(reference);
+          return `${resolveToken(property, tokens)}@${Math.round(alpha * 100)}`;
+        }),
+      ),
+    );
+
+    const used = findAlphaColorUtilities();
+    expect(used.length).toBeGreaterThan(0);
+
+    for (const usage of used) {
+      const key = `${resolveToken(usage.property, tokens)}@${usage.alphaPercent}`;
+      expect(
+        measured.has(key),
+        `${usage.file} uses "${usage.utility}", but no pairing in PAIRINGS ` +
+          `measures ${usage.property} at ${usage.alphaPercent}% alpha. Add the ` +
+          `pairing, or change the utility to an alpha that is already measured.`,
+      ).toBe(true);
+    }
+  });
+
+  it("still ships the focus ring at the alpha the constant names", () => {
+    const rings = findAlphaColorUtilities().filter(
+      (usage) => usage.property === "--color-ring",
+    );
+    expect(rings.length).toBeGreaterThan(0);
+    for (const ring of rings) {
+      expect(ring.alphaPercent, ring.file).toBe(RING_ALPHA_MODIFIER);
+    }
     expect(css).toContain(`outline-ring/${RING_ALPHA_MODIFIER}`);
   });
 

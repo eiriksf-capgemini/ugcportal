@@ -62,7 +62,7 @@ export default async function AdminUsersPage({
       </p>
 
       {errorMessage ? (
-        <p className="mt-6 rounded-lg border border-destructive/60 bg-destructive-surface p-3 text-sm text-destructive">
+        <p className="mt-6 rounded-lg border border-destructive/75 bg-destructive-surface p-3 text-sm text-destructive">
           {errorMessage}
         </p>
       ) : null}
