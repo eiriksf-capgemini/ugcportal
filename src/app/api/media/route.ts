@@ -6,6 +6,7 @@ import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import {
   MAX_UPLOAD_BYTES,
+  PREVIEW_KEY_PREFIX,
   mediaPreviewColumns,
   sanitizeOriginalName,
   sniffKind,
@@ -224,7 +225,7 @@ export async function POST(request: Request) {
   // independent expressions. See mediaPreviewColumns in src/lib/media.ts.
   const previewColumns = mediaPreviewColumns(
     preview
-      ? `previews/${userId}/${randomUUID()}${PREVIEW_FILE_EXTENSION}`
+      ? `${PREVIEW_KEY_PREFIX}${userId}/${randomUUID()}${PREVIEW_FILE_EXTENSION}`
       : null,
   );
   const { previewKey } = previewColumns;

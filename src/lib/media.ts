@@ -237,6 +237,25 @@ export function sanitizeOriginalName(value: string): string {
   return truncated.length > 0 ? truncated : FALLBACK_ORIGINAL_NAME;
 }
 
+/**
+ * The object-storage prefix every watermarked preview is written under.
+ *
+ * One definition, because two places now depend on it pointing at the same
+ * shelf: POST /api/media builds keys with it, and the delivery route
+ * (GET /api/media/preview/[previewId], ugcportal-a2l) refuses to fetch any
+ * object whose key does not start with it. Those two are a producer and a
+ * gate on the same layout, and a gate that has its own private copy of the
+ * layout is a gate that silently stops matching the day the producer moves.
+ *
+ * Originals live under `media/` (see POST /api/media), so this prefix is what
+ * separates "the watermarked copy anyone may be shown" from "the paid
+ * original" (ugcportal-5d6) at the storage layer.
+ *
+ * Deliberately NOT enforced by mediaPreviewColumns below — see the note in
+ * that function about why it checks blankness and not shape. This constant is
+ * the layout; that function is about the two columns never disagreeing.
+ */
+export const PREVIEW_KEY_PREFIX = "previews/";
 
 /**
  * The two preview columns, as one value that cannot be half-set.
