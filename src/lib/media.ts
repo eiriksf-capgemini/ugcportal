@@ -258,6 +258,36 @@ export function sanitizeOriginalName(value: string): string {
 export const PREVIEW_KEY_PREFIX = "previews/";
 
 /**
+ * The preview's output format, as the two facts anything outside the
+ * watermark service needs about it: what to call the object, and what to
+ * label the bytes.
+ *
+ * These live here rather than in src/lib/watermark.ts, and that placement is
+ * the whole point. `watermark.ts` imports `sharp`, which pulls libvips and a
+ * ~40 MB native binary into the module graph of anything that touches it. It
+ * had exactly one non-test importer — the upload route, which genuinely needs
+ * to encode images. The delivery route needs neither: it forwards bytes
+ * somebody else encoded, and it is the hot path. Importing an image-processing
+ * library to read a ten-character string is a cost with no matching benefit,
+ * and it is invisible in review because an unused import looks free. Measured
+ * on the Next build trace: importing the content type from `watermark.ts`
+ * pulled 86 sharp/libvips files into the preview route's file trace, native
+ * `.node` binary included.
+ *
+ * `watermark.ts` re-exports both, so it remains the one place a reader looks
+ * for "everything about previews" and no existing importer changed.
+ *
+ * The split is by dependency weight, not by topic: these two are *facts about
+ * the artefact* (its name and its type), which a consumer needs; the quality,
+ * dimensions and pixel budget next to them in `watermark.ts` are *inputs to
+ * producing it*, which only the producer needs. They sit beside
+ * PREVIEW_KEY_PREFIX above because all three describe the stored object rather
+ * than how it was made.
+ */
+export const PREVIEW_CONTENT_TYPE = "image/webp";
+export const PREVIEW_FILE_EXTENSION = ".webp";
+
+/**
  * The two preview columns, as one value that cannot be half-set.
  *
  * `previewKey` is the watermarked object's storage path; `previewId` is the
