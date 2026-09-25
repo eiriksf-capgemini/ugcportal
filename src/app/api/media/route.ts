@@ -15,7 +15,18 @@ import {
 import { MEDIA_OWNER_SELECT } from "@/lib/media-access";
 import { listMedia } from "@/lib/media-listing";
 import { prisma } from "@/lib/prisma";
+import {
+  peekFirstMultipartPart,
+  readCappedFormDataFrom,
+} from "@/lib/request-body";
 import { getBucketName, getS3Client } from "@/lib/s3";
+import {
+  UploadMemoryExhaustedError,
+  UploadTooLargeForBudgetError,
+  reserveUploadMemory,
+  uploadReadLimitBytes,
+  uploadReservationBytes,
+} from "@/lib/upload-memory";
 import type { PreviewResult } from "@/lib/watermark";
 import {
   PREVIEW_CONTENT_TYPE,
@@ -29,107 +40,48 @@ function sanitizeFilename(name: string): string {
   return name.replace(/[^a-zA-Z0-9._-]/g, "_").slice(-100);
 }
 
-/** Thrown from inside the body stream, so it surfaces out of formData(). */
-class BodyTooLargeError extends Error {
-  constructor() {
-    super("Request body too large");
-    this.name = "BodyTooLargeError";
-  }
-}
-
-/**
- * Wraps a body stream so it errors the moment more than `limit` bytes have
- * gone through it, rather than letting the parser downstream buffer whatever
- * the client feels like sending.
- */
-function cappedBody(
-  source: ReadableStream<Uint8Array>,
-  limit: number,
-): ReadableStream<Uint8Array> {
-  let received = 0;
-  return source.pipeThrough(
-    new TransformStream<Uint8Array, Uint8Array>({
-      transform(chunk, controller) {
-        received += chunk.byteLength;
-        if (received > limit) {
-          controller.error(new BodyTooLargeError());
-          return;
-        }
-        controller.enqueue(chunk);
-      },
-    }),
-  );
-}
-
-function isBodyTooLarge(error: unknown): boolean {
-  // undici sometimes surfaces a stream error wrapped in its own TypeError,
-  // so follow the cause chain rather than checking only the top.
-  for (let cursor = error, depth = 0; cursor && depth < 5; depth += 1) {
-    if (cursor instanceof BodyTooLargeError) return true;
-    cursor = (cursor as { cause?: unknown }).cause;
-  }
-  return false;
-}
-
-type FormDataResult =
-  | { ok: true; value: FormData }
-  | { ok: false; status: 400 | 413; error: string };
-
-/**
- * Reads the multipart body, never letting more than `limit` bytes through.
- *
- * The Content-Length check is only a cheap early-out and deliberately not the
- * enforcement (ugcportal-i04): the header is absent on a chunked request —
- * `Number(null)` is 0 — and can be malformed, where `Number()` yields NaN and
- * `NaN > limit` is false. Either shape used to fall straight through to an
- * unbounded `request.formData()`, letting one authenticated caller make the
- * server buffer far more than the ~205 MB cap. The wrapped stream is what
- * actually holds the line; the header just saves the work when a client
- * declares an oversized upload honestly.
- *
- * The body is re-framed onto a new Request so the platform still does the
- * multipart parsing — this bounds what the parser is fed, it does not
- * reimplement it. Content-Length is dropped from the copied headers because
- * it describes the original framing, not this one.
- */
-async function readCappedFormData(
-  request: Request,
-  limit: number,
-): Promise<FormDataResult> {
-  const declared = Number(request.headers.get("content-length"));
-  if (Number.isFinite(declared) && declared > limit) {
-    return { ok: false, status: 413, error: "Request body too large" };
-  }
-
-  if (!request.body) {
-    return { ok: false, status: 400, error: "Expected a multipart form body" };
-  }
-
-  const headers = new Headers(request.headers);
-  headers.delete("content-length");
-
-  const reframed = new Request(request.url, {
-    method: request.method,
-    headers,
-    body: cappedBody(request.body, limit),
-    // Required by the fetch spec for a streaming request body.
-    duplex: "half",
-  } as RequestInit & { duplex: "half" });
-
-  try {
-    return { ok: true, value: await reframed.formData() };
-  } catch (error) {
-    if (isBodyTooLarge(error)) {
-      return { ok: false, status: 413, error: "Request body too large" };
-    }
-    return { ok: false, status: 400, error: "Malformed multipart form body" };
-  }
-}
-
 // The response projections moved to src/lib/media-access.ts when PATCH
 // (ugcportal-bdh) became a third caller that has to honour them — the comment
 // explaining what they guarantee, and why there are two, lives with them there.
 
+/**
+ * The multipart field the upload arrives in.
+ *
+ * One constant because two things now depend on it naming the same part: the
+ * pre-read peek that decides this request's cap, and the `get()` below that
+ * actually takes the file out. A peek that inspected a different part than
+ * the handler reads would size the cap from one file and buffer another.
+ */
+const UPLOAD_FIELD_NAME = "file";
+
+/**
+ * Admission, then the upload.
+ *
+ * The order is the point of ugcportal-05b. Everything down to
+ * `reserveUploadMemory` is O(1) in the size of the body — a session lookup, a
+ * header, and at most PART_HEADER_PEEK_BYTES of the stream — so an upload
+ * that will not fit is answered before the process has committed to holding
+ * it. Before this, the body was read to MAX_UPLOAD_BYTES (~205 MB) and *then*
+ * checked against its kind's cap, and the only bound on how many requests did
+ * that at once was how many a client cared to open.
+ *
+ * Three bounds now apply, in this order, and each is narrower than the last:
+ *
+ *  1. Content-Length against MAX_UPLOAD_BYTES — free, and the only one that
+ *     can act on a request whose body has not been touched at all;
+ *  2. the per-kind cap, from what the first part *declares* it is, applied to
+ *     the request stream (see uploadReadLimitBytes for why a lying
+ *     declaration cannot widen it); and
+ *  3. the process-wide byte budget, which is what turns "each request is
+ *     bounded" into "all of them together are bounded" — the dimension
+ *     ugcportal-i04's per-request cap deliberately did not cover.
+ *
+ * On either refusal the remaining body is left unread rather than cancelled.
+ * Cancelling a request body by hand has a known failure mode with
+ * FormData-backed bodies (see the note on multipartRequest in route.test.ts),
+ * and the runtime tears the stream down with the response anyway. The unread
+ * bytes cost nothing on this heap.
+ */
 export async function POST(request: Request) {
   const session = await auth();
   const userId = session?.user?.id;
@@ -137,12 +89,93 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const body = await readCappedFormData(request, MAX_UPLOAD_BYTES);
+  // Unchanged from ugcportal-i04, and still only an early-out rather than the
+  // enforcement: absent the header `Number(null)` is 0, malformed it is NaN,
+  // and `NaN > limit` is false. The stream caps below are what hold the line.
+  const contentLengthHeader = request.headers.get("content-length");
+  const declaredLength = Number(contentLengthHeader);
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_UPLOAD_BYTES) {
+    return NextResponse.json(
+      { error: "Request body too large" },
+      { status: 413 },
+    );
+  }
+
+  if (!request.body) {
+    return NextResponse.json(
+      { error: "Expected a multipart form body" },
+      { status: 400 },
+    );
+  }
+
+  const peeked = await peekFirstMultipartPart(request.body, UPLOAD_FIELD_NAME);
+  const readLimitBytes = uploadReadLimitBytes({
+    declaredContentType: peeked.declaredContentType,
+    contentLengthHeader,
+  });
+
+  let reservation;
+  try {
+    reservation = reserveUploadMemory(uploadReservationBytes(readLimitBytes));
+  } catch (error) {
+    if (error instanceof UploadTooLargeForBudgetError) {
+      // Not a load condition: this upload would not fit even on an idle
+      // process, so a retry cannot help and must not be suggested.
+      return NextResponse.json(
+        {
+          error: "Upload is larger than this server can buffer",
+          maxBytes: error.limitBytes,
+        },
+        { status: 413 },
+      );
+    }
+    if (error instanceof UploadMemoryExhaustedError) {
+      // The same answer the watermark gate's shed path gives (ugcportal-u7g),
+      // for the same reason: a busy-but-healthy server, not a bad upload.
+      // Deliberately not error-logged — a burst is exactly when this fires,
+      // and a line per rejection would turn a load problem into a log storm.
+      return NextResponse.json(
+        {
+          error: "Too many uploads are being processed right now",
+          retryAfterSeconds: error.retryAfterSeconds,
+        },
+        {
+          status: 503,
+          headers: { "Retry-After": String(error.retryAfterSeconds) },
+        },
+      );
+    }
+    throw error;
+  }
+
+  try {
+    return await handleUpload(request, peeked.body, userId, readLimitBytes);
+  } finally {
+    // Held for the whole handler, not just the read: the File's backing store
+    // and the Buffer over its arrayBuffer copy both stay reachable until this
+    // returns, including across the S3 puts. Releasing at the end of the read
+    // would free the accounting while the memory was still held, which is the
+    // under-counting mistake ugcportal-e86 made twice.
+    reservation.release();
+  }
+}
+
+async function handleUpload(
+  request: Request,
+  requestBody: ReadableStream<Uint8Array>,
+  userId: string,
+  readLimitBytes: number,
+) {
+  const body = await readCappedFormDataFrom(
+    request,
+    requestBody,
+    readLimitBytes,
+  );
   if (!body.ok) {
     return NextResponse.json({ error: body.error }, { status: body.status });
   }
 
-  const file = body.value.get("file");
+  const file = body.value.get(UPLOAD_FIELD_NAME);
   if (!(file instanceof File)) {
     return NextResponse.json(
       { error: "Missing 'file' field" },
