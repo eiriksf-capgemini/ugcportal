@@ -48,6 +48,7 @@ const { encodeMediaCursor } = await import("@/lib/media-listing");
 const {
   generateWatermarkedPreview,
   resetWatermarkConcurrencyGate,
+  watermarkConcurrencyStats,
   WatermarkOverloadedError,
   WatermarkFontUnavailableError,
 } = await import("@/lib/watermark");
@@ -631,7 +632,7 @@ describe("POST /api/media", () => {
     // still be driving an actual rejection through it. This test does: real
     // gate, real generateWatermarkedPreview (the beforeEach above restores it
     // as the mock's default — no mockRejectedValueOnce here), forced into
-    // shedding by racing two uploads through a gate sized to admit only one.
+    // shedding by a gate sized to admit only one.
     authMock.mockResolvedValue({ user: { id: "user-1" } });
     s3SendMock.mockResolvedValue({});
     mediaCreateMock.mockImplementation(async ({ data }) =>
@@ -645,29 +646,40 @@ describe("POST /api/media", () => {
     resetWatermarkConcurrencyGate();
 
     try {
-      // Limit 1, queue 0: whichever of these two reaches the gate first is
-      // admitted, and the other has nowhere to wait, so it sheds for real —
-      // deterministic because the gate's admission check runs synchronously
-      // (see acquire() in src/lib/concurrency-gate.ts), regardless of which
-      // request happens to get there first.
-      const [first, second] = await Promise.all([
-        POST(
-          buildRequest(
-            new File([REAL_PNG], "photo-a.png", { type: "image/png" }),
-          ),
-        ),
-        POST(
-          buildRequest(
-            new File([REAL_PNG], "photo-b.png", { type: "image/png" }),
-          ),
-        ),
-      ]);
+      // Round-3 finding 2: racing both uploads via Promise.all([...]) from the
+      // same tick made "which one sheds" depend on which happened to reach
+      // acquire() first — nothing enforced that ordering, and it stopped being
+      // consistent once other tests warmed the memoised font probe. Instead,
+      // start the first upload, then hold here until the gate's own state
+      // shows it has actually acquired the single slot (inFlight === 1) before
+      // starting the second. That makes the ordering a fact about the gate
+      // rather than a hope about scheduling: the second upload cannot even
+      // begin until the first demonstrably holds the only slot, and limit 1 /
+      // queue 0 means there is nowhere for it to go but shed.
+      const firstUpload = POST(
+        buildRequest(new File([REAL_PNG], "photo-a.png", { type: "image/png" })),
+      );
 
-      const statuses = [first.status, second.status].sort();
-      expect(statuses).toEqual([201, 503]);
+      const deadline = Date.now() + 2_000;
+      while (watermarkConcurrencyStats().inFlight < 1) {
+        if (Date.now() > deadline) {
+          throw new Error(
+            "Timed out waiting for the first upload to acquire the watermark gate's slot",
+          );
+        }
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
 
-      const shed = first.status === 503 ? first : second;
-      const retryAfterHeader = shed.headers.get("Retry-After");
+      const secondUpload = POST(
+        buildRequest(new File([REAL_PNG], "photo-b.png", { type: "image/png" })),
+      );
+
+      const [first, second] = await Promise.all([firstUpload, secondUpload]);
+
+      expect(first.status).toBe(201);
+      expect(second.status).toBe(503);
+
+      const retryAfterHeader = second.headers.get("Retry-After");
       expect(retryAfterHeader).not.toBeNull();
       const retryAfter = Number(retryAfterHeader);
       expect(Number.isInteger(retryAfter)).toBe(true);

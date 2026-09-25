@@ -1448,7 +1448,9 @@ function logShedUpload(error: ConcurrencyLimitError): void {
       (suppressed > 0 ? ` (+${suppressed} more since the last line)` : "") +
       ". This is the gate working, not a broken runtime — see ugcportal-e86. " +
       "The route maps this to a 503 with Retry-After and logs nothing " +
-      "further for it (ugcportal-u7g) — this is the only line per shed.",
+      "further for it (ugcportal-u7g) — this is the only *place* a shed is " +
+      "logged, throttled to one line per " +
+      `${SHED_LOG_INTERVAL_MS}ms, not one line per shed.`,
   );
 }
 
