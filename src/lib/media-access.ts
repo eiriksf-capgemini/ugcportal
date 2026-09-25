@@ -141,6 +141,44 @@ export const MEDIA_ANONYMOUS_SELECT = {
 } as const satisfies Partial<typeof MEDIA_OWNER_SELECT>;
 
 /**
+ * A third select, and NOT a third audience — read this before widening it by
+ * analogy with the two above.
+ *
+ * The two selects above answer "what may this audience SEE". This one answers
+ * a different question: "what does the preview delivery route
+ * (GET /api/media/preview/[previewId], ugcportal-a2l) have to READ in order to
+ * serve bytes it will never describe". Nothing selected here is serialised to
+ * anybody. That route's response is an image body plus a fixed, hand-written
+ * set of headers; no column value reaches either.
+ *
+ * `previewKey` is in it precisely because it must not come out of it. It is
+ * the storage path (`previews/{userId}/{uuid}.webp`), so it is simultaneously
+ * the only way to locate the object and the exact string that would re-leak
+ * the uploader's account id — the leak `previewId` exists to close. Resolving
+ * it has to happen server-side, which is what this select is for.
+ *
+ * One column, deliberately. Reaching for MEDIA_OWNER_SELECT here would
+ * compile and work, and would be wrong in a way that only surfaces later: it
+ * reads `originalName` on behalf of anonymous callers, and it wires every
+ * future owner-facing column into an anonymous code path — which is the exact
+ * drift the two-select split above exists to prevent.
+ *
+ * The `satisfies Partial<typeof MEDIA_OWNER_SELECT>` is load-bearing rather
+ * than decorative, and the mechanism is worth naming because the surrounding
+ * file has been burned by a type constraint that did not constrain.
+ * `Partial<T>` has no `key` member and no `userId` member, because neither is
+ * in the owner select; excess-property checking then rejects this literal
+ * outright if either is added. So the paid original (ugcportal-5d6) and the
+ * uploader's id are not merely "not selected today" — they cannot be added to
+ * this list without a compile error. What it does NOT do is stop a caller
+ * passing some other ad-hoc object to the same query; that is why the route
+ * imports this constant rather than spelling a select inline.
+ */
+export const MEDIA_PREVIEW_DELIVERY_SELECT = {
+  previewKey: true,
+} as const satisfies Partial<typeof MEDIA_OWNER_SELECT>;
+
+/**
  * Tied to the selects by construction: widen one and its type widens with it,
  * so toOwnerMedia below stops compiling until it is updated too. That is the
  * point — they can't silently disagree.

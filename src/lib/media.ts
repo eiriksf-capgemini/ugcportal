@@ -237,6 +237,55 @@ export function sanitizeOriginalName(value: string): string {
   return truncated.length > 0 ? truncated : FALLBACK_ORIGINAL_NAME;
 }
 
+/**
+ * The object-storage prefix every watermarked preview is written under.
+ *
+ * One definition, because two places now depend on it pointing at the same
+ * shelf: POST /api/media builds keys with it, and the delivery route
+ * (GET /api/media/preview/[previewId], ugcportal-a2l) refuses to fetch any
+ * object whose key does not start with it. Those two are a producer and a
+ * gate on the same layout, and a gate that has its own private copy of the
+ * layout is a gate that silently stops matching the day the producer moves.
+ *
+ * Originals live under `media/` (see POST /api/media), so this prefix is what
+ * separates "the watermarked copy anyone may be shown" from "the paid
+ * original" (ugcportal-5d6) at the storage layer.
+ *
+ * Deliberately NOT enforced by mediaPreviewColumns below — see the note in
+ * that function about why it checks blankness and not shape. This constant is
+ * the layout; that function is about the two columns never disagreeing.
+ */
+export const PREVIEW_KEY_PREFIX = "previews/";
+
+/**
+ * The preview's output format, as the two facts anything outside the
+ * watermark service needs about it: what to call the object, and what to
+ * label the bytes.
+ *
+ * These live here rather than in src/lib/watermark.ts, and that placement is
+ * the whole point. `watermark.ts` imports `sharp`, which pulls libvips and a
+ * ~40 MB native binary into the module graph of anything that touches it. It
+ * had exactly one non-test importer — the upload route, which genuinely needs
+ * to encode images. The delivery route needs neither: it forwards bytes
+ * somebody else encoded, and it is the hot path. Importing an image-processing
+ * library to read a ten-character string is a cost with no matching benefit,
+ * and it is invisible in review because an unused import looks free. Measured
+ * on the Next build trace: importing the content type from `watermark.ts`
+ * pulled 86 sharp/libvips files into the preview route's file trace, native
+ * `.node` binary included.
+ *
+ * `watermark.ts` re-exports both, so it remains the one place a reader looks
+ * for "everything about previews" and no existing importer changed.
+ *
+ * The split is by dependency weight, not by topic: these two are *facts about
+ * the artefact* (its name and its type), which a consumer needs; the quality,
+ * dimensions and pixel budget next to them in `watermark.ts` are *inputs to
+ * producing it*, which only the producer needs. They sit beside
+ * PREVIEW_KEY_PREFIX above because all three describe the stored object rather
+ * than how it was made.
+ */
+export const PREVIEW_CONTENT_TYPE = "image/webp";
+export const PREVIEW_FILE_EXTENSION = ".webp";
 
 /**
  * The two preview columns, as one value that cannot be half-set.

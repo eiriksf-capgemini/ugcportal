@@ -9,7 +9,11 @@ import {
 } from "@/lib/concurrency-gate";
 import type { CpuBudget, MemoryBudget } from "@/lib/container-limits";
 import { detectCpuBudget, detectMemoryBudget } from "@/lib/container-limits";
-import { MAX_IMAGE_UPLOAD_BYTES } from "@/lib/media";
+import {
+  MAX_IMAGE_UPLOAD_BYTES,
+  PREVIEW_CONTENT_TYPE,
+  PREVIEW_FILE_EXTENSION,
+} from "@/lib/media";
 
 // Longest-edge cap for a generated preview.
 //
@@ -35,8 +39,14 @@ export const PREVIEW_MAX_SCALE = 0.75;
 // preview's content type is a constant. WebP at q78 is a good size/quality
 // trade-off and is supported by every browser we target.
 export const PREVIEW_QUALITY = 78;
-export const PREVIEW_CONTENT_TYPE = "image/webp";
-export const PREVIEW_FILE_EXTENSION = ".webp";
+
+// Re-exported, not defined here. Both now live in src/lib/media.ts because
+// consumers that only need to NAME or LABEL a preview object must not be made
+// to import this module — it pulls sharp, libvips and a native binary, which
+// is a steep price for a string and an invisible one at the import site. See
+// the note beside them there. Re-exported so this module still answers
+// "everything about previews" and no existing importer had to change.
+export { PREVIEW_CONTENT_TYPE, PREVIEW_FILE_EXTENSION };
 
 // Decompression-bomb guard. A 10 MB PNG (our image upload cap, see
 // src/lib/media.ts) can legitimately be a few megapixels, but can also be
