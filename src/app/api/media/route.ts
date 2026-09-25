@@ -21,6 +21,7 @@ import {
   PREVIEW_CONTENT_TYPE,
   PREVIEW_FILE_EXTENSION,
   WatermarkError,
+  WatermarkOverloadedError,
   generateWatermarkedPreview,
 } from "@/lib/watermark";
 
@@ -199,9 +200,39 @@ export async function POST(request: Request) {
           { status: 422 },
         );
       }
-      // Not a problem with this file — e.g. WatermarkFontUnavailableError,
-      // meaning the runtime has no fonts and every preview would come out
-      // under-marked. That is a 5xx, and must not be reported as a bad upload.
+      if (error instanceof WatermarkOverloadedError) {
+        // Not a fault, and not this route's fault to report as one. The gate
+        // (ugcportal-e86) is working as designed, and watermark.ts already
+        // emits a throttled console.warn per shed (logShedUpload) — at most
+        // one line per SHED_LOG_INTERVAL_MS *in total*, off a single global
+        // timestamp rather than one throttle per reason. The line that fires
+        // does carry that shed's own reason/limit/queue/shedTotal, but a shed
+        // suppressed by the throttle is only ever counted in the next line's
+        // "+N more" tally (or the flush line, which reports a count with no
+        // reason at all) — so e.g. a `timeout` shed a few seconds after a
+        // `queue-full` shed can be folded into a count without its reason
+        // ever appearing in the logs. Logging again here, even at a lower
+        // level, would reintroduce exactly the volume problem this bead
+        // exists to remove: a 52-upload shed burst would go from "52 error
+        // lines" to "52 lines of some other level," not to a handful. The
+        // operator-facing signal already exists and is already throttled;
+        // all this branch owes the caller is a response that says try again.
+        return NextResponse.json(
+          {
+            error: "Too many uploads are being processed right now",
+            retryAfterSeconds: error.retryAfterSeconds,
+          },
+          {
+            status: 503,
+            headers: { "Retry-After": String(error.retryAfterSeconds) },
+          },
+        );
+      }
+      // Not a problem with this file, and not routine shedding either — e.g.
+      // WatermarkFontUnavailableError, meaning the runtime has no fonts and
+      // every preview would come out under-marked. That is a genuine 5xx
+      // fault distinct from both of the above and must not be reported as a
+      // bad upload or as a busy-but-healthy gate.
       console.error("[media] watermark service unavailable", error);
       throw error;
     }

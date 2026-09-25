@@ -595,8 +595,9 @@ export function resolveSharpThreads(
  * selection with room over; 768 MB absorbs three and sheds the fourth. Below
  * that, 512 MB no longer fits at all — it used to be reported as fitting, at
  * 91% utilisation, which is what the headroom is for. Below 1 GB the honest
- * summary is that bursts shed, and today a shed upload is an unretryable 500
- * (see WatermarkOverloadedError and ugcportal-u7g).
+ * summary is that bursts shed — a retryable 503 with Retry-After since
+ * ugcportal-u7g, not the unretryable 500 it used to be, but still a shed
+ * upload the caller has to redo (see WatermarkOverloadedError).
  *
  * Note 2 GB is now meaningfully better than 1 GB rather than identical: with
  * the budget derated, the queue at 1 GB is what the remaining memory affords
@@ -944,14 +945,13 @@ export class WatermarkFontUnavailableError extends Error {
  * and hide a saturation incident from alerting. It is the one error here that
  * is genuinely worth retrying, hence {@link retryAfterSeconds}.
  *
- * Caveat, stated plainly: src/app/api/media/route.ts currently rethrows
- * everything that is not a WatermarkError, so today this surfaces as a 500
- * with no Retry-After rather than the 503 it deserves. The honest mapping is
- * a few lines in that route, which is owned by another change in flight, so
- * it is tracked separately (ugcportal-u7g) — the shape of this error (a
- * distinct class carrying retryAfterSeconds) is what makes that a one-liner
- * when it lands. Blame-wise the current behaviour is already correct: a 5xx,
- * logged as "watermark service unavailable".
+ * src/app/api/media/route.ts (ugcportal-u7g) catches this ahead of its
+ * generic rethrow and maps it to a 503 with a `Retry-After` header set from
+ * {@link retryAfterSeconds} — the shape of this error (a distinct class
+ * carrying that field) is what makes that mapping a few lines rather than a
+ * rewrite. The route does not additionally error-log the rejection: this
+ * module's own {@link logShedUpload} already reports it, throttled, which is
+ * the one line to key alerting on for this event.
  */
 export class WatermarkOverloadedError extends Error {
   readonly reason: ConcurrencyLimitReason;
@@ -1416,31 +1416,25 @@ function scheduleShedLogFlush(): void {
 /**
  * Say, in this module, that an upload was shed.
  *
- * This exists because of where the error goes next. src/app/api/media/route.ts
- * rethrows anything that is not a WatermarkError, and logs
- * "[media] watermark service unavailable" on the way — a message written for
- * the fontless-runtime case, where every upload is broken and someone should
- * be woken up. Shedding is not that: it is this gate working as designed, and
- * on a small container it is routine (the 768 MB reference configuration
- * absorbs three concurrent uploads, so the fourth sheds). Without a line of
- * its own, normal operation and a broken deployment produce byte-identical
- * logs and alerting cannot tell them apart.
+ * This exists because of where the error goes next. Before ugcportal-u7g,
+ * src/app/api/media/route.ts rethrew every WatermarkOverloadedError into
+ * console.error("[media] watermark service unavailable") — a message written
+ * for the fontless-runtime case, where every upload is broken and someone
+ * should be woken up. Shedding is not that: it is this gate working as
+ * designed, and on a small container it is routine (the 768 MB reference
+ * configuration absorbs three concurrent uploads, so the fourth sheds).
+ * Without a line of its own, normal operation and a broken deployment would
+ * have produced byte-identical logs, and alerting could not have told them
+ * apart.
  *
- * So this is the line to key alerting on, and its absence is what makes the
- * route's message mean what it says. Deliberately console.warn rather than
- * console.error: a shed upload is a capacity signal, not a fault.
- *
- * Two things it does not fix, both because the route belongs to another
- * change in flight (ugcportal-u7g owns them):
- *
- *  - the status code. The caller still gets a 500 rather than 503 +
- *    Retry-After.
- *  - the volume. The route's console.error is *not* throttled, so the same
- *    52-upload burst that produces one warn line here produces 52
- *    error-level lines there. Until u7g lands, "one warn, many errors" is
- *    the shape to expect, and error-rate alerting will still fire on
- *    ordinary shedding — this line is what lets you tell that apart, not
- *    something that quietens it.
+ * ugcportal-u7g fixed both halves of that on the route's side: it maps
+ * WatermarkOverloadedError to a 503 with Retry-After instead of a bare 500,
+ * and it stopped error-logging the rejection there at all — logging it again
+ * on top of this line would have just moved the unthrottled-volume problem
+ * from "many error lines" to "many lines of some other level." So this
+ * throttled console.warn is now the *only* per-request log line for a shed
+ * upload, and the one to key alerting on: a 52-upload burst produces one line
+ * here (plus a flushed tail count), not 52 anywhere.
  */
 function logShedUpload(error: ConcurrencyLimitError): void {
   const now = Date.now();
@@ -1463,8 +1457,10 @@ function logShedUpload(error: ConcurrencyLimitError): void {
       `shedTotal=${stats?.shed ?? "?"}` +
       (suppressed > 0 ? ` (+${suppressed} more since the last line)` : "") +
       ". This is the gate working, not a broken runtime — see ugcportal-e86. " +
-      "The route additionally logs its generic 5xx for the same event, " +
-      "unthrottled, until ugcportal-u7g maps this to a 503.",
+      "The route maps this to a 503 with Retry-After and logs nothing " +
+      "further for it (ugcportal-u7g) — this is the only *place* a shed is " +
+      "logged, throttled to one line per " +
+      `${SHED_LOG_INTERVAL_MS}ms, not one line per shed.`,
   );
 }
 

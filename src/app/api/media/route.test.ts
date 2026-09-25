@@ -29,8 +29,36 @@ vi.mock("@/lib/s3", () => ({
   getBucketName: () => "test-bucket",
 }));
 
+// Wraps, rather than replaces, the real implementation: every existing test
+// below still exercises actual watermark generation (sharp, the real
+// concurrency gate) unchanged. Only the two ugcportal-u7g tests that need to
+// force WatermarkOverloadedError / WatermarkFontUnavailableError override this
+// for a single call via mockRejectedValueOnce; every other call falls through
+// to the real function.
+vi.mock("@/lib/watermark", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/watermark")>();
+  return {
+    ...actual,
+    generateWatermarkedPreview: vi.fn(actual.generateWatermarkedPreview),
+  };
+});
+
 const { GET, POST } = await import("@/app/api/media/route");
 const { encodeMediaCursor } = await import("@/lib/media-listing");
+const {
+  generateWatermarkedPreview,
+  resetWatermarkConcurrencyGate,
+  watermarkConcurrencyStats,
+  WatermarkOverloadedError,
+  WatermarkFontUnavailableError,
+} = await import("@/lib/watermark");
+// The real, unmocked implementation. Vitest 3.x already restores this as the
+// mock's default on mockReset() below, since it's the implementation
+// generateWatermarkedPreview was created with (vi.fn(impl) tracks impl as the
+// original to fall back to). Imported here anyway so the beforeEach reset can
+// say so explicitly via mockImplementation rather than relying on that.
+const { generateWatermarkedPreview: realGenerateWatermarkedPreview } =
+  await vi.importActual<typeof import("@/lib/watermark")>("@/lib/watermark");
 
 // A valid PNG signature with nothing decodable behind it: enough to pass the
 // magic-byte sniff in src/lib/media.ts, but sharp cannot turn it into an
@@ -177,6 +205,16 @@ beforeEach(() => {
   mediaCreateMock.mockReset();
   mediaFindManyMock.mockReset();
   mediaFindFirstMock.mockReset();
+  // Drops any leftover one-shot mockRejectedValueOnce from a prior test (the
+  // two ugcportal-u7g tests below queue one each) — a future change that made
+  // POST return before reaching this call for their fixture would otherwise
+  // leak an unconsumed rejection into whichever test runs next, failing there
+  // instead of where it was introduced. mockReset() alone already restores
+  // the real implementation as vitest's default for a mock created via
+  // vi.fn(impl); the explicit mockImplementation just says so out loud.
+  vi.mocked(generateWatermarkedPreview)
+    .mockReset()
+    .mockImplementation(realGenerateWatermarkedPreview);
 });
 
 describe("POST /api/media", () => {
@@ -521,6 +559,142 @@ describe("POST /api/media", () => {
       expect.objectContaining({ cause: expect.any(Error) }),
     );
     errorSpy.mockRestore();
+  });
+
+  it("returns 503 with a matching Retry-After when the watermark gate sheds the upload (ugcportal-u7g)", async () => {
+    authMock.mockResolvedValue({ user: { id: "user-1" } });
+    s3SendMock.mockResolvedValue({});
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.mocked(generateWatermarkedPreview).mockRejectedValueOnce(
+      new WatermarkOverloadedError(
+        "Too many previews are being generated right now",
+        { reason: "queue-full", retryAfterSeconds: 7 },
+      ),
+    );
+    const file = new File([REAL_PNG], "photo.png", { type: "image/png" });
+
+    const response = await POST(buildRequest(file));
+
+    // Blame-wise this is a busy-but-healthy server, not a bad upload (K3):
+    // 503, never 422/4xx, with a Retry-After a caller can actually act on.
+    expect(response.status).toBe(503);
+    expect(response.status).not.toBe(422);
+    expect(response.headers.get("Retry-After")).toBe("7");
+
+    // Fails closed exactly like every other watermark failure (ugcportal-44q
+    // K2): nothing lands in the bucket or the DB for a shed upload either.
+    expect(s3SendMock).not.toHaveBeenCalled();
+    expect(mediaCreateMock).not.toHaveBeenCalled();
+
+    // Routine shedding must not produce the fault-level line. watermark.ts
+    // already emits a throttled console.warn for every shed (logShedUpload);
+    // this route logging its own line per rejection on top of that would
+    // reintroduce the exact unthrottled-volume problem this bead removes.
+    expect(errorSpy).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+
+  it("still surfaces a 5xx for a broken (fontless) runtime, distinct from both a shed upload and a bad file (ugcportal-u7g)", async () => {
+    authMock.mockResolvedValue({ user: { id: "user-1" } });
+    s3SendMock.mockResolvedValue({});
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.mocked(generateWatermarkedPreview).mockRejectedValueOnce(
+      new WatermarkFontUnavailableError("No usable font is installed"),
+    );
+    const file = new File([REAL_PNG], "photo.png", { type: "image/png" });
+
+    // Deliberately not a WatermarkError: this is the genuine-outage case and
+    // must still be loud and unrecovered, not turned into a JSON response.
+    await expect(POST(buildRequest(file))).rejects.toThrow(
+      "No usable font is installed",
+    );
+
+    // The same message the fontless-runtime incident this line was written
+    // for produces — that is the point: it must stay reserved for a genuine
+    // fault and not be shared with the shed-upload path above.
+    expect(errorSpy).toHaveBeenCalledWith(
+      "[media] watermark service unavailable",
+      expect.any(WatermarkFontUnavailableError),
+    );
+    expect(s3SendMock).not.toHaveBeenCalled();
+    expect(mediaCreateMock).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+
+  it("maps a real gate rejection to 503, not just a constructed WatermarkOverloadedError (ugcportal-u7g)", async () => {
+    // Round-2 finding 3. The two tests above construct WatermarkOverloadedError
+    // by hand and mock generateWatermarkedPreview to reject with it — they pin
+    // the route's *mapping*, but nothing in this file exercises the other half
+    // of the link: watermark.ts's own ConcurrencyLimitError -> WatermarkOverloadedError
+    // wrapping (generateWatermarkedPreview, around the getGate().run() call).
+    // Deleting that wrapping would silently regress every real shed back to a
+    // bare 500 while both suites stayed green, because neither suite would
+    // still be driving an actual rejection through it. This test does: real
+    // gate, real generateWatermarkedPreview (the beforeEach above restores it
+    // as the mock's default — no mockRejectedValueOnce here), forced into
+    // shedding by a gate sized to admit only one.
+    authMock.mockResolvedValue({ user: { id: "user-1" } });
+    s3SendMock.mockResolvedValue({});
+    mediaCreateMock.mockImplementation(async ({ data }) =>
+      selectedRow({ id: "media-1", kind: data.kind, previewKey: data.previewKey }),
+    );
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const envBackup = { ...process.env };
+    process.env.WATERMARK_MAX_CONCURRENCY = "1";
+    process.env.WATERMARK_QUEUE_LIMIT = "0";
+    resetWatermarkConcurrencyGate();
+
+    try {
+      // Round-3 finding 2: racing both uploads via Promise.all([...]) from the
+      // same tick made "which one sheds" depend on which happened to reach
+      // acquire() first — nothing enforced that ordering, and it stopped being
+      // consistent once other tests warmed the memoised font probe. Instead,
+      // start the first upload, then hold here until the gate's own state
+      // shows it has actually acquired the single slot (inFlight === 1) before
+      // starting the second. That makes the ordering a fact about the gate
+      // rather than a hope about scheduling: the second upload cannot even
+      // begin until the first demonstrably holds the only slot, and limit 1 /
+      // queue 0 means there is nowhere for it to go but shed.
+      const firstUpload = POST(
+        buildRequest(new File([REAL_PNG], "photo-a.png", { type: "image/png" })),
+      );
+
+      const deadline = Date.now() + 2_000;
+      while (watermarkConcurrencyStats().inFlight < 1) {
+        if (Date.now() > deadline) {
+          throw new Error(
+            "Timed out waiting for the first upload to acquire the watermark gate's slot",
+          );
+        }
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+
+      const secondUpload = POST(
+        buildRequest(new File([REAL_PNG], "photo-b.png", { type: "image/png" })),
+      );
+
+      const [first, second] = await Promise.all([firstUpload, secondUpload]);
+
+      expect(first.status).toBe(201);
+      expect(second.status).toBe(503);
+
+      const retryAfterHeader = second.headers.get("Retry-After");
+      expect(retryAfterHeader).not.toBeNull();
+      const retryAfter = Number(retryAfterHeader);
+      expect(Number.isInteger(retryAfter)).toBe(true);
+      expect(retryAfter).toBeGreaterThan(0);
+
+      // Same fail-closed behaviour a mocked shed gets: nothing extra reaches
+      // storage for the rejected upload, and no fault-level line for it.
+      expect(mediaCreateMock).toHaveBeenCalledTimes(1);
+      expect(errorSpy).not.toHaveBeenCalled();
+    } finally {
+      process.env = envBackup;
+      resetWatermarkConcurrencyGate();
+      errorSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
   });
 
   it("deletes both the original and the preview if the DB write fails", async () => {
