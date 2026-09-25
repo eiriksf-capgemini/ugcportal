@@ -144,13 +144,28 @@ export const PREVIEW_BYTES_PER_OPERATION = 128 * 1024 * 1024;
  * Resident memory one upload's request body holds, from the moment the route
  * has read it until the handler returns.
  *
- * Twice the image upload cap, because src/app/api/media/route.ts materialises
- * the body twice before it ever reaches this module: `await
- * request.formData()` produces a File holding the bytes, and
- * `Buffer.from(await file.arrayBuffer())` copies them into a Buffer. Both
- * stay referenced for the whole handler. (There is a third, transient copy —
- * the intermediate ArrayBuffer — but it is garbage immediately, so it is not
- * counted.)
+ * Twice the image upload cap, because src/app/api/media/route.ts holds the
+ * body in two separate allocations before it ever reaches this module, and
+ * holds both for the whole handler:
+ *
+ *  1. `await request.formData()` produces a File, which keeps the bytes in
+ *     its own backing store; `body.value` and `file` both stay in scope.
+ *  2. `await file.arrayBuffer()` allocates a *second* copy of them.
+ *
+ * `Buffer.from(arrayBuffer)` is then a **view** over (2), not a third
+ * allocation — but that also means it keeps (2) alive for as long as the
+ * handler holds the Buffer, which is until it returns.
+ *
+ * Getting that mechanism right matters more than the number, which an
+ * earlier version of this comment got to by accident: it claimed the
+ * ArrayBuffer was a transient third copy that was garbage immediately. It is
+ * neither transient nor third. Believing otherwise would license adding a
+ * real copy — `Buffer.from(buffer)`, a `Buffer.concat`, a re-encode into a
+ * new buffer — while assuming the budget still held. It would not: on the
+ * recommended 1 GB configuration the gate holds up to eight uploads (limit 3
+ * + queue 5), so a third live copy is 80 MB unaccounted for. If a change
+ * ever adds one, this constant goes to 3x and the reference table is
+ * re-derived.
  *
  * Charged to *every* caller the gate is holding, queued or running, and that
  * is the correction to two successive mistakes rather than one:

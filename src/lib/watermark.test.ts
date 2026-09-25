@@ -1,5 +1,14 @@
 import sharp from "sharp";
-import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { MockInstance } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import {
   MAX_INPUT_PIXELS,
@@ -105,6 +114,9 @@ async function diffPixels(a: Buffer, b: Buffer) {
   return { changed, total: width * height, quadrants };
 }
 
+let infoSpy: MockInstance;
+let warnSpy: MockInstance;
+
 /**
  * Pin the concurrency gate, so these tests are about watermarking.
  *
@@ -128,6 +140,14 @@ async function diffPixels(a: Buffer, b: Buffer) {
  * that scrub without weakening it for everyone else.
  */
 beforeEach(() => {
+  // Rebuilding the gate per test means it logs its configuration per test,
+  // and on a workstation with no cgroup the budget comes from host RAM, so
+  // it takes the warn branch: one "no container memory limit found" line per
+  // test, in a file with nothing to say about container sizing. Captured
+  // rather than printed — watermark.concurrency.test.ts, which does assert
+  // on that line, spies the same way.
+  infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
+  warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
   process.env.WATERMARK_MAX_CONCURRENCY = "1";
   process.env.WATERMARK_QUEUE_LIMIT = "64";
   // One libvips thread per preview, for the same reason: vitest runs test
@@ -147,6 +167,8 @@ afterAll(() => {
 });
 
 afterEach(() => {
+  infoSpy.mockRestore();
+  warnSpy.mockRestore();
   delete process.env.WATERMARK_TEXT;
 });
 
