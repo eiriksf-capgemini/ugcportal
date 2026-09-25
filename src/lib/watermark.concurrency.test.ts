@@ -668,12 +668,16 @@ describe("generateWatermarkedPreview under concurrency", () => {
   });
 
   it("logs shedding distinguishably from a broken runtime (K2)", async () => {
-    // Round-5 finding 2. The route rethrows WatermarkOverloadedError into
+    // Round-5 finding 2, resolved by ugcportal-u7g: the route used to rethrow
+    // WatermarkOverloadedError into
     // console.error("[media] watermark service unavailable") — the message
     // written for the fontless-runtime case, where every upload is broken
     // and someone should be paged. Shedding is routine on a small container,
-    // so without a line of its own the two are byte-identical in the logs
-    // and alerting cannot tell normal operation from an outage.
+    // so without a line of its own the two would have been byte-identical in
+    // the logs, and alerting could not have told normal operation from an
+    // outage. The route now maps a shed upload to a 503 with Retry-After and
+    // logs nothing further for it, so this throttled warn is the only
+    // per-shed log line there is.
     process.env.WATERMARK_MAX_CONCURRENCY = "1";
     process.env.WATERMARK_QUEUE_LIMIT = "0";
     resetWatermarkConcurrencyGate();
@@ -691,8 +695,8 @@ describe("generateWatermarkedPreview under concurrency", () => {
     expect(shedLines).toHaveLength(1);
     expect(shedLines[0]).toContain("queue-full");
     expect(shedLines[0]).toContain("not a broken runtime");
-    // Names the follow-up that owns the status code, so the 500 a caller
-    // still sees is traceable from the log rather than mysterious.
+    // Names the bead that maps this to a 503 + Retry-After, so the response
+    // a caller actually sees is traceable from the log rather than mysterious.
     expect(shedLines[0]).toContain("ugcportal-u7g");
   });
 

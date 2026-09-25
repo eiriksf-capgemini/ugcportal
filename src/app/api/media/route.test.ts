@@ -50,6 +50,11 @@ const {
   WatermarkOverloadedError,
   WatermarkFontUnavailableError,
 } = await import("@/lib/watermark");
+// The real, unmocked implementation, kept aside so beforeEach can restore it
+// as the mock's default below — mockReset() alone would drop it and leave
+// generateWatermarkedPreview resolving to undefined for every other test.
+const { generateWatermarkedPreview: realGenerateWatermarkedPreview } =
+  await vi.importActual<typeof import("@/lib/watermark")>("@/lib/watermark");
 
 // A valid PNG signature with nothing decodable behind it: enough to pass the
 // magic-byte sniff in src/lib/media.ts, but sharp cannot turn it into an
@@ -196,6 +201,15 @@ beforeEach(() => {
   mediaCreateMock.mockReset();
   mediaFindManyMock.mockReset();
   mediaFindFirstMock.mockReset();
+  // Drops any leftover one-shot mockRejectedValueOnce from a prior test (the
+  // two ugcportal-u7g tests below queue one each) and restores the real
+  // implementation as the default, exactly like the five mocks above — a
+  // future change that made POST return before reaching this call for their
+  // fixture would otherwise leak an unconsumed rejection into whichever test
+  // runs next, failing there instead of where it was introduced.
+  vi.mocked(generateWatermarkedPreview)
+    .mockReset()
+    .mockImplementation(realGenerateWatermarkedPreview);
 });
 
 describe("POST /api/media", () => {
