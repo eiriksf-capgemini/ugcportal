@@ -365,7 +365,14 @@ export async function GET(request: Request) {
 
   const result = await listMedia(
     request.url,
-    { userId, previewKey: { not: null }, previewId: { not: null } },
+    // `previewKey` only, deliberately. The anonymous feed additionally filters
+    // on `previewId` because that is the handle it hands out; here it would
+    // buy nothing — this projection returns `previewKey` and the owner can
+    // resolve their own — while hiding a row with a real preview object but no
+    // public handle from the person who uploaded it. Fail-closed is right for
+    // the public feed, where being wrong means a leak. On someone's own
+    // library it means their work disappearing. See MediaOwnerScope.
+    { userId, previewKey: { not: null } },
     // The owner's own filenames. The anonymous feed uses the narrower
     // MEDIA_ANONYMOUS_SELECT — see src/lib/media-access.ts.
     MEDIA_OWNER_SELECT,

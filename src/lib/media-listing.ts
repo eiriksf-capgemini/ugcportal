@@ -22,26 +22,31 @@ const DEFAULT_LISTING_LIMIT = 50;
 const MAX_LISTING_LIMIT = 100;
 
 /**
- * Every listing filters on both preview columns: a row without a watermarked
- * representation must never be listed, so the only object any feed can name is
- * the preview and never `key`, the paid original (ugcportal-5d6). Both rather
- * than one, because they are written together and nulled together — a row
- * failing either check has inconsistent preview state, and excluding it is the
- * fail-closed answer.
+ * The owner's own library.
+ *
+ * `userId` is required — this arm exists to be scoped to one account — and
+ * `publishedAt` is deliberately optional, because an owner must keep seeing
+ * their unpublished uploads.
+ *
+ * `previewKey` is the only preview column filtered on, and the omission of
+ * `previewId` is the point. Both arms used to require both, which reads as
+ * consistent and is not: `previewId` is the handle the ANONYMOUS feed hands
+ * out, and it buys this audience nothing, because the owner projection returns
+ * `previewKey` and the owner can resolve their own. Requiring it here meant a
+ * row with a preview object but no public handle — the second-writer case
+ * mediaPreviewColumns (src/lib/media.ts) exists to anticipate, or old code
+ * writing against an already-migrated database — disappeared from its own
+ * uploader's library, with no error and no way to get it back.
+ *
+ * Fail-closed is the right instinct on the anonymous feed, where the cost of
+ * showing the wrong thing is a leak. It is the wrong instinct here, where the
+ * cost is someone's own work vanishing from their own account. Each arm now
+ * filters on what its own projection actually needs.
  */
-type PreviewFilter = {
-  previewKey: { not: null };
-  previewId: { not: null };
-};
-
-/**
- * The owner's own library. `userId` is required — this arm exists to be
- * scoped to one account — and `publishedAt` is deliberately optional, because
- * an owner must keep seeing their unpublished uploads.
- */
-export type MediaOwnerScope = PreviewFilter & {
+export type MediaOwnerScope = {
   userId: string;
   publishedAt?: { not: null };
+  previewKey: { not: null };
 };
 
 /**
@@ -68,9 +73,16 @@ export type MediaOwnerScope = PreviewFilter & {
  * next to this comment. That is the point: the decision belongs beside the
  * rule, not in whichever route copied it.
  */
-export type MediaAnonymousScope = PreviewFilter & {
+export type MediaAnonymousScope = {
   publishedAt: { not: null };
   userId?: never;
+  // Both preview columns, unlike the owner arm above. `previewId` because it
+  // is what this feed exposes, and `previewKey` because it is what proves the
+  // watermarked object exists: a handle that resolves to nothing is worse than
+  // an absent row. Here, fail-closed is correct — the cost of being wrong is a
+  // leak, not a disappearance.
+  previewKey: { not: null };
+  previewId: { not: null };
 };
 
 export type MediaListingScope = MediaOwnerScope | MediaAnonymousScope;
@@ -127,21 +139,19 @@ export type MediaListingSelect =
   | MediaAnonymousListingSelect;
 
 /**
- * The columns listMedia reads for itself, whatever the audience: `id` and
- * `createdAt` to build a cursor, `previewId` for the narrowing below.
+ * The columns listMedia reads for itself whatever the audience: `id` and
+ * `createdAt`, to build a cursor.
  *
- * Required of the type parameter as well as of the union, and that redundancy
- * is the point. If a third projection is added to MediaListingSelect without
- * `previewId`, this constraint fails at the call site rather than leaving the
- * narrowing to read `undefined` — which, since `undefined !== null`, would
- * pass every row through a filter that still looked like a filter. That is the
- * precise shape of the bug this listing already shipped once with
- * `previewKey`; it does not get a second outing one field over.
+ * Each overload additionally requires the column its own guard re-checks —
+ * `previewKey` on the owner arm, `previewId` on the anonymous one — so a
+ * projection that dropped it would fail at the call site rather than leave the
+ * narrowing reading `undefined`. Since `undefined !== null`, that would pass
+ * every row through a filter that still looked like a filter: the precise
+ * shape of the bug this listing already shipped once.
  */
 export type MediaListingRequiredColumns = {
   id: true;
   createdAt: true;
-  previewId: true;
 };
 
 /**
@@ -193,16 +203,20 @@ type MediaListingRow<TSelect extends MediaListingSelect> = Pick<
   Pick<MediaModel, "id" | "createdAt" | "previewId">;
 
 /**
- * The preview columns, narrowed to non-null for the caller — both of them,
- * for whichever projection carries them.
+ * The preview column this arm guarantees, narrowed to non-null.
  *
- * `previewKey` is conditional because only the owner projection selects it.
- * Narrowing it matters: the runtime guard below rejects a row whose
- * `previewKey` is null, and if the type did not say so, an owner-feed consumer
- * would still be handling a null that can no longer reach it.
+ * Deliberately one column, not both, and which one depends on the audience —
+ * because that is what the scope and the guard actually promise. The owner arm
+ * filters and re-checks `previewKey`, so that is what is narrowed; `previewId`
+ * stays nullable there, which is honest, since an owner row is allowed to have
+ * no public handle. The anonymous arm is the mirror: it exposes `previewId`,
+ * so that is narrowed, and `previewKey` is not in its projection at all.
+ *
+ * Claiming both on the owner arm would be the type lying about the very row
+ * this listing now goes out of its way to keep showing.
  */
 type NarrowedPreview<TSelect> = "previewKey" extends SelectedColumnKeys<TSelect>
-  ? { previewId: string; previewKey: string }
+  ? { previewKey: string }
   : { previewId: string };
 
 /** A listing row, narrowed so the preview columns are non-nullable. */
@@ -325,20 +339,32 @@ function decodeMediaCursor(raw: string): MediaCursor | null {
 }
 
 /**
- * Whether a row carries every preview column its projection selected.
+ * Re-checks exactly the preview columns this scope claimed to filter on, as
+ * far as the projection lets us see them.
  *
- * Deliberately tolerant of the column being absent — the anonymous projection
- * has no `previewKey` — and intolerant of it being present and null. Absent
- * and null are the two cases a single `!== null` check conflates, and
- * conflating them is how this guard twice became a no-op for one audience
- * while reading as a guard for both.
+ * Driven by the scope rather than by a fixed column list, because the two arms
+ * legitimately require different things: the owner arm filters on `previewKey`
+ * alone (a row may lack a public handle and still be its uploader's work), the
+ * anonymous arm on both. A guard hardcoded to one column is a guard that is
+ * either a no-op for one audience or an over-reach for the other — this
+ * listing has now shipped each of those once.
+ *
+ * Deliberately tolerant of a column being ABSENT and intolerant of it being
+ * present and null. Those are the two cases a bare `!== null` conflates, and
+ * the conflation is what made earlier versions silently vacuous: the anonymous
+ * projection has no `previewKey` at all, so reading it yields `undefined`, and
+ * `undefined !== null` passes everything.
  */
-function hasCompletePreview(row: {
-  previewId: string | null;
-  previewKey?: string | null;
-}): boolean {
-  if (row.previewId === null) return false;
-  if ("previewKey" in row && row.previewKey === null) return false;
+function hasCompletePreview(
+  row: { previewId?: string | null; previewKey?: string | null },
+  scope: MediaListingScope,
+): boolean {
+  if ("previewKey" in scope && "previewKey" in row && row.previewKey === null) {
+    return false;
+  }
+  if ("previewId" in scope && "previewId" in row && row.previewId === null) {
+    return false;
+  }
   return true;
 }
 
@@ -375,7 +401,8 @@ function keysetAfter(position: MediaCursor) {
 export async function listMedia(
   requestUrl: string,
   scope: MediaOwnerScope,
-  select: MediaOwnerListingSelect & MediaListingRequiredColumns,
+  select: MediaOwnerListingSelect &
+    MediaListingRequiredColumns & { previewKey: true },
 ): Promise<MediaListingResult<MediaOwnerListingSelect>>;
 /**
  * The anonymous arm. Its scope type requires the publish filter, so there is
@@ -385,7 +412,8 @@ export async function listMedia(
 export async function listMedia(
   requestUrl: string,
   scope: MediaAnonymousScope,
-  select: MediaAnonymousListingSelect & MediaListingRequiredColumns,
+  select: MediaAnonymousListingSelect &
+    MediaListingRequiredColumns & { previewId: true },
 ): Promise<MediaListingResult<MediaAnonymousListingSelect>>;
 export async function listMedia<
   TSelect extends MediaListingSelect & MediaListingRequiredColumns,
@@ -480,7 +508,7 @@ export async function listMedia<
     // POST /api/media/[id]/publish refused that same row with 409 — two
     // surfaces disagreeing about whether it has a preview.
     items = page.filter((row): row is MediaListingItem<TSelect> =>
-      hasCompletePreview(row),
+      hasCompletePreview(row, scope),
     );
 
     // Something to emit, or nothing left to look at.

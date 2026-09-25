@@ -1,3 +1,7 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
+
+import { createClient } from "@libsql/client";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -321,5 +325,96 @@ describe("mediaPreviewColumns", () => {
     );
 
     expect(ids.size).toBe(500);
+  });
+});
+
+describe("previewId format agreement between runtime and migration", () => {
+  // previewId is minted in two places: randomUUID() in mediaPreviewColumns for
+  // new uploads, and a SQL expression in the add_media_preview_id migration
+  // for rows that already existed. They must produce the same shape.
+  //
+  // The backfill originally minted `lower(hex(randomblob(16)))` — 32 hex
+  // chars, no dashes — against randomUUID()'s 36 with dashes. Two problems:
+  // ugcportal-a2l, the preview delivery route, routes on previewId and would
+  // reasonably validate a UUID shape, 404-ing every pre-existing row while new
+  // uploads worked; and two distinguishable formats let anyone holding a
+  // handful of ids sort them into "before the migration" and "after", which is
+  // exactly the inference an opaque id exists to deny.
+  //
+  // This executes the migration's real expression rather than asserting on its
+  // text, so the two cannot drift without failing.
+  const UUID_V4 =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+  const MIGRATION = path.join(
+    process.cwd(),
+    "prisma/migrations/20260924190000_add_media_preview_id/migration.sql",
+  );
+
+  /** The SET expression from the backfill, lifted out of the migration. */
+  function backfillExpression(): string {
+    const sql = readFileSync(MIGRATION, "utf8");
+    const match = sql.match(
+      /UPDATE "Media"\s*\nSET "previewId" = ([\s\S]*?)\nWHERE/,
+    );
+    if (!match) {
+      throw new Error("backfill UPDATE not found in the migration");
+    }
+    return match[1];
+  }
+
+  it("mints a v4 UUID at runtime", () => {
+    for (let i = 0; i < 50; i += 1) {
+      const { previewId } = mediaPreviewColumns("previews/user-1/a.webp");
+      expect(previewId).toMatch(UUID_V4);
+    }
+  });
+
+  /**
+   * Runs the backfill expression `count` times against an in-memory database.
+   *
+   * Uses @libsql/client rather than node:sqlite because that is the driver
+   * this app actually runs on (see @prisma/adapter-libsql in package.json), so
+   * the expression is evaluated by the same engine that will execute the
+   * migration — and because CI is on Node 20, where node:sqlite does not
+   * exist.
+   */
+  async function runBackfill(count: number): Promise<string[]> {
+    const db = createClient({ url: ":memory:" });
+    try {
+      const sql = `SELECT ${backfillExpression()} AS id`;
+      const ids: string[] = [];
+      for (let i = 0; i < count; i += 1) {
+        const result = await db.execute(sql);
+        ids.push(String(result.rows[0].id));
+      }
+      return ids;
+    } finally {
+      db.close();
+    }
+  }
+
+  it("mints the same shape in the migration backfill", async () => {
+    const [id] = await runBackfill(1);
+    expect(id).toMatch(UUID_V4);
+  });
+
+  it("agrees on format across many rows of both paths", async () => {
+    const backfilled = await runBackfill(200);
+    const minted = Array.from(
+      { length: 200 },
+      () => mediaPreviewColumns("previews/user-1/a.webp").previewId as string,
+    );
+
+    for (const id of [...backfilled, ...minted]) {
+      expect(id).toMatch(UUID_V4);
+    }
+    // Same length and same dash positions, so a handful of ids cannot be
+    // sorted into "backfilled" and "freshly minted" by inspection.
+    expect(new Set(backfilled.map((id) => id.length))).toEqual(new Set([36]));
+    expect(new Set(minted.map((id) => id.length))).toEqual(new Set([36]));
+    // And the backfill is actually random, not one value repeated — which
+    // also matters for the UNIQUE index the migration creates on the column.
+    expect(new Set(backfilled).size).toBe(backfilled.length);
   });
 });

@@ -646,10 +646,11 @@ describe("GET /api/media", () => {
     expect(args.where).toMatchObject({
       userId: "user-1",
       previewKey: { not: null },
-      // Both halves of "has a watermarked preview", so a row where the two
-      // disagree is excluded rather than half-served (ugcportal-r1d).
-      previewId: { not: null },
     });
+    // NOT previewId. That is the handle the anonymous feed hands out; here it
+    // would buy nothing and would hide a row with a real preview object but no
+    // public handle from the person who uploaded it (ugcportal-r1d round 9).
+    expect(args.where).not.toHaveProperty("previewId");
     expect(args.select).not.toHaveProperty("key");
     expect(args.select.previewKey).toBe(true);
     expect(args.select.previewId).toBe(true);
@@ -839,19 +840,19 @@ describe("GET /api/media", () => {
       .mockResolvedValueOnce([
         selectedRow({
           id: "withheld-1",
-          previewId: null,
+          previewKey: null,
           createdAt: new Date("2026-09-24T10:00:00Z"),
         }),
         selectedRow({
           id: "withheld-2",
-          previewId: null,
+          previewKey: null,
           createdAt: new Date("2026-09-23T10:00:00Z"),
         }),
       ])
       .mockResolvedValueOnce([
         selectedRow({
           id: "real",
-          previewId: "preview-real",
+          previewKey: "previews/user-1/real.webp",
           createdAt: new Date("2026-09-22T10:00:00Z"),
         }),
       ]);
@@ -884,12 +885,12 @@ describe("GET /api/media", () => {
     mediaFindManyMock.mockResolvedValue([
       selectedRow({
         id: "withheld-1",
-        previewId: null,
+        previewKey: null,
         createdAt: new Date("2026-09-24T10:00:00Z"),
       }),
       selectedRow({
         id: "withheld-2",
-        previewId: null,
+        previewKey: null,
         createdAt: new Date("2026-09-23T10:00:00Z"),
       }),
     ]);
@@ -911,7 +912,7 @@ describe("GET /api/media", () => {
   it("reports no cursor when there genuinely is no further page", async () => {
     authMock.mockResolvedValue({ user: { id: "user-1" } });
     mediaFindManyMock.mockResolvedValue([
-      selectedRow({ id: "a", previewId: null }),
+      selectedRow({ id: "a", previewKey: null }),
     ]);
 
     const body = await (await GET(buildListRequest("?limit=1"))).json();
@@ -944,6 +945,35 @@ describe("GET /api/media", () => {
     ]);
     expect(body.items[0].publishedAt).toBeNull();
     expect(body.items[1].publishedAt).toBe("2026-09-24T12:00:00.000Z");
+  });
+
+  it("still shows the owner a row that has no public handle yet", async () => {
+    authMock.mockResolvedValue({ user: { id: "user-1" } });
+    // previewKey set, previewId null: the preview object exists, only the
+    // handle the ANONYMOUS feed hands out is missing. This row belongs in its
+    // uploader's library — the alternative is their own work vanishing from
+    // their own account with no error and no way to get it back
+    // (ugcportal-r1d round 9, finding 1).
+    //
+    // Reachable two ways: a writer bypassing mediaPreviewColumns, which that
+    // helper's doc block names ugcportal-ct0's Instagram sync as, or older
+    // code writing against an already-migrated database.
+    mediaFindManyMock.mockResolvedValueOnce([
+      selectedRow({
+        id: "no-handle",
+        previewKey: "previews/user-1/no-handle.webp",
+        previewId: null,
+      }),
+    ]);
+
+    const body = await (await GET(buildListRequest())).json();
+
+    expect(body.items.map((i: { id: string }) => i.id)).toEqual(["no-handle"]);
+    expect(body.items[0].previewId).toBeNull();
+    // And the row the owner can still see is the same one POST /publish
+    // refuses with 409 — that refusal is correct, because publishing it would
+    // not make it appear on the public feed. The two surfaces disagreeing was
+    // the symptom; the library hiding it was the harm.
   });
 
   it("withholds a row with a preview id but no preview key", async () => {
@@ -1003,7 +1033,7 @@ describe("GET /api/media", () => {
       }),
       selectedRow({
         id: "b",
-        previewId: null,
+        previewKey: null,
         createdAt: new Date("2026-09-23T10:00:00Z"),
       }),
       selectedRow({
