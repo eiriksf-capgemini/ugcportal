@@ -1,0 +1,191 @@
+import { readFileSync, readdirSync } from "node:fs";
+import { join, relative, resolve, sep } from "node:path";
+
+import { describe, expect, it } from "vitest";
+
+/**
+ * ugcportal-0ss K4, the "grep" half: no code path other than the admin
+ * action may write status = CLEARED.
+ *
+ * The runtime half lives in resale-rights-review.test.ts, which proves the
+ * system path is refused. This file is the structural half — it fails when a
+ * *new* file starts talking about CLEARED, so that a sync job, an OAuth
+ * callback or a seed script quietly setting it has to be noticed in review
+ * rather than discovered in production.
+ */
+
+const SRC = resolve(process.cwd(), "src");
+
+/** Generated Prisma output names every enum member; it writes nothing. */
+const IGNORED_DIRS = new Set(["generated"]);
+
+/**
+ * Files allowed to mention CLEARED at all, with why. Adding to this list is
+ * the deliberate act the test exists to force.
+ */
+const ALLOWED = new Map<string, string>([
+  ["lib/resale-rights.ts", "the gate: compares against it, never writes"],
+  [
+    "lib/resale-rights-review.ts",
+    "the only writer — an ADMIN transition, guarded by type and at runtime",
+  ],
+  [
+    "app/api/admin/instagram/rights-decision/route.ts",
+    "the admin-only endpoint that calls the writer; names the status in its docs only",
+  ],
+  [
+    "app/admin/settings/instagram/actions.ts",
+    "documentation only: explains why disconnect revokes rather than leaving CLEARED as the trail's last word",
+  ],
+  [
+    "app/admin/settings/instagram/decision-form.tsx",
+    "UI copy only: tells the reviewer a CLEARED decision with no rights holder sells nothing",
+  ],
+]);
+
+function sourceFiles(dir: string, found: string[] = []): string[] {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.isDirectory()) {
+      if (!IGNORED_DIRS.has(entry.name)) {
+        sourceFiles(join(dir, entry.name), found);
+      }
+      continue;
+    }
+    if (!/\.tsx?$/.test(entry.name) || /\.test\.tsx?$/.test(entry.name)) {
+      continue;
+    }
+    found.push(join(dir, entry.name));
+  }
+  return found;
+}
+
+const files = sourceFiles(SRC).map((path) => ({
+  name: relative(SRC, path).split(sep).join("/"),
+  source: readFileSync(path, "utf8"),
+}));
+
+describe("ugcportal-0ss K4: the only writer of CLEARED", () => {
+  it("found application sources to scan", () => {
+    // Guards the scan itself: a broken path would make every assertion
+    // below vacuously true.
+    expect(files.length).toBeGreaterThan(10);
+    expect(files.map((file) => file.name)).toContain("lib/resale-rights.ts");
+  });
+
+  it("is the admin transition, and no other file even names the status", () => {
+    const mentions = files
+      .filter((file) => /\bCLEARED\b/.test(file.source))
+      .map((file) => file.name)
+      .sort();
+
+    expect(mentions).toEqual([...ALLOWED.keys()].sort());
+  });
+
+  it("has no literal status write to CLEARED outside the writer", () => {
+    // Catches the shape an accidental writer would take:
+    //   prisma.resaleRightsReview.update({ data: { status: "CLEARED" } })
+    const offenders = files.filter(
+      (file) =>
+        file.name !== "lib/resale-rights-review.ts" &&
+        /status\s*:\s*(["']CLEARED["']|ResaleRightsStatus\.CLEARED)/.test(
+          file.source,
+        ),
+    );
+
+    expect(offenders.map((file) => file.name)).toEqual([]);
+  });
+
+  it("has exactly one module that writes ResaleRightsReview at all", () => {
+    const writers = files
+      .filter((file) =>
+        /resaleRightsReview\.(create|update|upsert|updateMany|createMany)\b/.test(
+          file.source,
+        ),
+      )
+      .map((file) => file.name);
+
+    expect(writers).toEqual(["lib/resale-rights-review.ts"]);
+  });
+
+  it("has exactly one module that writes the audit trail", () => {
+    // Same gate on the events table. It matters more since the events lost
+    // their foreign key: a second writer could now create rows pointing at
+    // nothing, and nothing in the database would object.
+    const writers = files
+      .filter((file) =>
+        /resaleRightsEvent\.(create|createMany|update|updateMany|upsert)\b/.test(
+          file.source,
+        ),
+      )
+      .map((file) => file.name);
+
+    expect(writers).toEqual(["lib/resale-rights-review.ts"]);
+  });
+
+  it("never deletes an audit row", () => {
+    // Append-only is a property of the code, not of the schema: SQLite will
+    // happily delete these rows if asked. Nothing may ask.
+    const deleters = files
+      .filter((file) => /resaleRightsEvent\.delete/.test(file.source))
+      .map((file) => file.name);
+
+    expect(deleters).toEqual([]);
+  });
+});
+
+describe("the database's own default", () => {
+  it("is UNREVIEWED in the schema", () => {
+    const schema = readFileSync(
+      resolve(process.cwd(), "prisma/schema.prisma"),
+      "utf8",
+    );
+    expect(schema).toMatch(
+      /status\s+ResaleRightsStatus\s+@default\(UNREVIEWED\)/,
+    );
+    expect(schema).not.toMatch(/@default\(CLEARED\)/);
+  });
+
+  it("is UNREVIEWED in the committed migrations, and no migration sets CLEARED", () => {
+    const migrationsDir = resolve(process.cwd(), "prisma/migrations");
+    const sql = readdirSync(migrationsDir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) =>
+        readFileSync(join(migrationsDir, entry.name, "migration.sql"), "utf8"),
+      )
+      .join("\n");
+
+    expect(sql).toContain(`"status" TEXT NOT NULL DEFAULT 'UNREVIEWED'`);
+    expect(sql).not.toContain("CLEARED");
+  });
+
+  it("gives the audit table no foreign key to cascade from", () => {
+    // ugcportal-lu7's lesson, applied: one click of Disconnect must not
+    // delete the record of who cleared the account. Asserted against the
+    // migration rather than the schema because the migration is what the
+    // database actually gets.
+    const sql = readFileSync(
+      resolve(
+        process.cwd(),
+        "prisma/migrations/20260924172545_add_resale_rights/migration.sql",
+      ),
+      "utf8",
+    );
+    const eventTable = /CREATE TABLE "ResaleRightsEvent" \(([\s\S]*?)\n\);/.exec(
+      sql,
+    );
+
+    expect(eventTable).not.toBeNull();
+    expect(eventTable![1]).not.toContain("FOREIGN KEY");
+    // And it carries the snapshots that let a row stand on its own.
+    for (const column of [
+      "instagramAccountId",
+      "instagramUsername",
+      "actorEmail",
+      "checklistVersion",
+      "evidenceKey",
+      "evidenceSha256",
+    ]) {
+      expect(eventTable![1]).toContain(`"${column}"`);
+    }
+  });
+});
