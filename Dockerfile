@@ -173,52 +173,78 @@ EXPOSE 3000
 # WATERMARK_MAX_CONCURRENCY overrides the derived value outright if the
 # environment cannot supply a cgroup limit.
 #
-# Reference points from the derivation in src/lib/watermark.ts, where "burst"
-# is how many simultaneous uploads are absorbed before any are rejected:
+# Reference points from the two derivations — the preview gate in
+# src/lib/watermark.ts and the upload-body budget in src/lib/upload-memory.ts
+# (ugcportal-05b). "Burst" is how many simultaneous maximum-size (10 MB)
+# image uploads are absorbed before any are refused; "largest upload" is the
+# biggest single file the container can buffer at all:
 #
-#     512 MB -> does not fit a single upload
-#     768 MB -> 2 at once,  1 queued, burst 3
-#       1 GB -> 3 at once,  5 queued, burst 8    <- recommended
-#       2 GB -> 3 at once, 12 queued, burst 15
+#                 previews     burst    upload-body    largest
+#                 at once /    (max-    budget         upload
+#                 queued       size)
+#     512 MB  ->  1 /  0          1       20 MB         57 MB   DOES NOT FIT
+#     768 MB  ->  2 /  1          3       77 MB        166 MB
+#       1 GB  ->  3 /  5          8      166 MB        275 MB   <- recommended
+#       2 GB  ->  3 / 12         15    1_037 MB        710 MB
 #
-# Give it 1 GB. An in-flight upload costs ~148 MB (its decode plus the
-# request body being decoded) and a queued one ~20 MB, on top of a ~320 MB
-# process baseline — and 15% of the limit is held back as headroom, because
-# the per-upload figure was measured on macOS and never validated on this
-# alpine image. Spending the budget to the last byte would turn any
-# under-estimate into the OOM kill the gate exists to replace with shedding.
+# Up to and including 1 GB the two bounds coincide: the upload budget affords
+# exactly the burst the gate can hold (8 x 20 MB = 166 MB at 1 GB), so a
+# burst is refused at the door, before any of it is buffered. At 2 GB the
+# budget affords 51 concurrent bodies while the gate's libuv-bound ceiling
+# still only holds 15, so uploads 16-51 are buffered and then shed by the
+# gate — which is fine, and is the difference this change makes: that memory
+# is now inside a bound instead of outside every one.
 #
-# IMPORTANT — what that figure does NOT cover. It prices the uploads the
-# gate is *holding* and nothing else, so 1 GB is a floor for this gate, not
-# a sufficient size for the upload route as a whole. Four paths are outside
-# it today and can exceed it on their own:
+# Give it 1 GB. An in-flight preview costs ~128 MB of decode on top of the
+# ~320 MB process baseline, each buffered upload body costs twice the file
+# (the parsed File plus the Buffer over it), and 15% of the limit is held
+# back as headroom because the per-preview figure was measured on macOS and
+# never validated on this alpine image (ugcportal-68r). Spending the budget
+# to the last byte would turn any under-estimate into the OOM kill the gate
+# exists to replace with shedding.
 #
-#   - video uploads, which are accepted at up to 200 MB, copied again into a
-#     Buffer (~400 MB resident each), and never reach the gate at all since
-#     preview generation is image-only until ugcportal-pmb. Two concurrent
-#     videos exceed 1 GB while the gate reports inFlight: 0;
-#   - oversized uploads that will ultimately be rejected. The whole body is
-#     buffered against MAX_UPLOAD_BYTES (205 MB) *before* the per-kind cap is
-#     checked, so four concurrent 200 MB POSTs declaring image/jpeg cost
-#     ~820 MB and are then refused;
-#   - image uploads the gate *sheds*, which is a case the gate itself
-#     creates. The route buffers each body before calling in, so 60
-#     concurrent 10 MB POSTs on the 1 GB configuration are 8 admitted or
-#     queued and 52 rejected — but all 60 bodies (~1.2 GB) are resident at
-#     the moment those rejections are decided;
-#   - any combination of the above, since nothing coordinates them.
+# 1 GB is also the smallest size at which *every* upload the app accepts
+# fits: a 200 MB video needs 275 MB of largest-upload headroom and 768 MB
+# affords 166 MB, so a maximum-size video is refused there with a 413 saying
+# so. Below 1 GB, expect bursts to shed (a retryable 503 with Retry-After).
 #
-# Bounding those is ugcportal-05b. Until it lands, size the container for
-# your actual upload mix rather than from the preview table alone — or keep
-# video uploads off this deployment.
+# WHAT THE NUMBERS COVER, AND WHAT THEY DO NOT.
 #
-# Past ~1 GB the limit is bounded by libuv's worker pool rather than by
-# memory, so a larger container needs UV_THREADPOOL_SIZE raised to make use
-# of it — set in this container's environment (docker run -e / compose
-# `environment:` / k8s `env:`), never in a .env file, which Next loads long
-# after libuv has already sized its pool.
+# The figure to size a container from is `projectedUploadPathPeakBytes`
+# (src/lib/upload-memory.ts), which prices the whole of POST /api/media: the
+# process baseline, the previews in flight, and every upload body the route
+# is holding — buffered, queued for a preview, being previewed, or on its way
+# to S3. On a fitting configuration it comes to the container limit less the
+# 15% headroom, by construction.
 #
-# Setting the limit in a real deployment and load-checking against it is
+# It is deliberately NOT the same thing as the gate's own
+# `projectedGatedPeakBytes`, which prices only the uploads the gate is
+# holding, and the two must never be added together — the gate's per-caller
+# body charge is for bodies the upload budget is already holding. Three
+# classes of upload used to sit outside every bound and are now inside this
+# one:
+#
+#   - video, accepted at up to 200 MB and excluded from preview generation
+#     until ugcportal-pmb, so it reaches no gate at all. Now reserved for and
+#     held to one at a time on 1 GB;
+#   - uploads read to MAX_UPLOAD_BYTES (205 MB) and only then rejected for
+#     exceeding their kind's cap. The request stream is now capped at the cap
+#     that kind will be held to, so an oversized image stops at ~10 MB;
+#   - image uploads the gate sheds, which the gate itself creates: 60
+#     concurrent 10 MB POSTs on 1 GB are 8 admitted and 52 refused, and all
+#     60 bodies used to be resident when that was decided. They are now
+#     refused before their bodies are read.
+#
+# Still outside it, knowingly: the admin evidence upload at
+# POST /api/admin/instagram/rights-decision (ugcportal-wa4), undici's
+# transient parsing buffers, memory not yet reclaimed after a request ends
+# (both headroom's job), and anything on another replica — this is one
+# process's bound, and N replicas are N times it, which is correct because
+# each has its own container.
+#
+# Every number above is arithmetic over a per-preview constant measured on
+# darwin, not a measurement of this image. Measuring it here is ugcportal-68r;
+# setting the limit in a real deployment and load-checking against it is
 # ugcportal-jp4.
 
 CMD ["node", "server.js"]

@@ -12,6 +12,31 @@ const MIME_TO_KIND: Record<string, MediaKind> = {
   "video/quicktime": "VIDEO",
 };
 
+/**
+ * The declared MIME type's kind, or undefined — and never something off
+ * Object.prototype.
+ *
+ * A plain `MIME_TO_KIND[type]` is a lookup against the wrong set: the media
+ * type is fully client-controlled (it is a header on a multipart part, and
+ * `new File([], "x", { type: "constructor" }).type` is the string
+ * "constructor"), so `MIME_TO_KIND["constructor"]` answers with the Object
+ * constructor rather than with undefined, and `!kind` is false for it. What
+ * follows then compares against a value that is not a MediaKind at all:
+ * `MAX_SIZE_BYTES[kind]` is undefined and `file.size > undefined` is false,
+ * so an upload declaring one of a handful of Object.prototype names passed
+ * the per-kind size check entirely. It was caught one step later by
+ * sniffKind, which reads the actual bytes and cannot return anything but a
+ * MediaKind or null — so this was latent rather than exploitable — but the
+ * size check was not doing its job, and declaredUploadCapBytes below now
+ * needs the same table to answer a question sniffKind is in no position to
+ * back up: how many bytes to let through before the file exists at all.
+ */
+function kindForDeclaredType(mimeType: string): MediaKind | undefined {
+  return Object.hasOwn(MIME_TO_KIND, mimeType)
+    ? MIME_TO_KIND[mimeType]
+    : undefined;
+}
+
 const MAX_SIZE_BYTES: Record<MediaKind, number> = {
   IMAGE: 10 * 1024 * 1024, // 10 MB
   VIDEO: 200 * 1024 * 1024, // 200 MB
@@ -58,7 +83,7 @@ export function declaredUploadCapBytes(
   // Content-Type may carry parameters (`image/png; charset=binary`); the
   // media type is everything before the first `;`.
   const mediaType = mimeType.split(";")[0].trim().toLowerCase();
-  const kind = MIME_TO_KIND[mediaType];
+  const kind = kindForDeclaredType(mediaType);
   return kind === undefined ? null : MAX_SIZE_BYTES[kind];
 }
 
@@ -119,7 +144,7 @@ export function validateUpload(file: {
   type: string;
   size: number;
 }): UploadValidationResult {
-  const kind = MIME_TO_KIND[file.type];
+  const kind = kindForDeclaredType(file.type);
   if (!kind) {
     return {
       ok: false,

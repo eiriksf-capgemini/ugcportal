@@ -72,6 +72,20 @@ describe("declaredUploadCapBytes", () => {
     expect(declaredUploadCapBytes(null)).toBeNull();
     expect(declaredUploadCapBytes(undefined)).toBeNull();
   });
+
+  // The declared type is a client-controlled string used as an object key, so
+  // the inherited names are part of its input domain. A plain
+  // `MIME_TO_KIND[type]` answers "constructor" with the Object constructor,
+  // which is neither undefined nor a MediaKind — see kindForDeclaredType.
+  it.each(["constructor", "__proto__", "toString", "hasOwnProperty", "valueOf"])(
+    "does not answer %s off Object.prototype",
+    (mimeType) => {
+      expect(declaredUploadCapBytes(mimeType)).toBeNull();
+      // Specifically null and not undefined: the return type says `number |
+      // null`, and a caller writing `cap === null` would not catch undefined.
+      expect(declaredUploadCapBytes(mimeType)).not.toBeUndefined();
+    },
+  );
 });
 
 describe("uploadReadLimitBytes", () => {
@@ -277,7 +291,11 @@ describe("resolveUploadMemorySettings", () => {
 
       expect(settings.projectedUploadPathPeakBytes).toBe(expected);
       if (settings.fitsBudget) {
-        expect(settings.projectedUploadPathPeakBytes).toBeLessThanOrEqual(
+        // Exactly the usable budget, not merely under it — the Dockerfile
+        // says "the container limit less the 15% headroom, by construction",
+        // and this is the construction. Anything less would mean memory the
+        // derivation reserved and then refused to spend.
+        expect(settings.projectedUploadPathPeakBytes).toBe(
           settings.watermark.usableBudgetBytes,
         );
       }

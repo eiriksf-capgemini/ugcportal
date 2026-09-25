@@ -194,6 +194,11 @@ export async function readCappedFormDataFrom(
  * long filename without being a meaningful allocation, and the give-up
  * behaviour is a *looser* cap rather than a rejection, so a client with an
  * unusual preamble still uploads.
+ *
+ * A threshold rather than a hard byte bound: a chunk cannot be half-read, so
+ * the search stops at the first chunk that takes it past this and the bytes
+ * held can exceed it by one chunk. That matters only to the accounting in
+ * src/lib/upload-memory.ts, which says so.
  */
 export const PART_HEADER_PEEK_BYTES = 8 * 1024;
 

@@ -59,9 +59,8 @@ const UPLOAD_FIELD_NAME = "file";
  *
  * The order is the point of ugcportal-05b. Everything down to
  * `reserveUploadMemory` is O(1) in the size of the body — a session lookup, a
- * header, and at most PART_HEADER_PEEK_BYTES of the stream — so an upload
- * that will not fit is answered before the process has committed to holding
- * it. Before this, the body was read to MAX_UPLOAD_BYTES (~205 MB) and *then*
+ * header, and PART_HEADER_PEEK_BYTES or so of the stream — so an upload that
+ * will not fit is answered before the process has committed to holding it. Before this, the body was read to MAX_UPLOAD_BYTES (~205 MB) and *then*
  * checked against its kind's cap, and the only bound on how many requests did
  * that at once was how many a client cared to open.
  *

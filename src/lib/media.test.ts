@@ -60,6 +60,23 @@ describe("validateUpload", () => {
     });
     expect(result).toEqual({ ok: false, status: 413, message: expect.any(String) });
   });
+
+  // `file.type` is whatever the multipart part declared, so these strings are
+  // in its input domain. Looked up naively they resolve off Object.prototype:
+  // `!kind` is false for the Object constructor, and the size check that
+  // follows compares against `MAX_SIZE_BYTES[<constructor>]` — undefined — so
+  // `size > undefined` is false and an upload of any size passed it. Caught
+  // one step later by sniffKind, but the check itself was not working.
+  it.each(["constructor", "__proto__", "toString", "hasOwnProperty", "valueOf"])(
+    "rejects %s as an unsupported type rather than resolving it",
+    (type) => {
+      expect(validateUpload({ type, size: 500 * 1024 * 1024 })).toEqual({
+        ok: false,
+        status: 415,
+        message: expect.any(String),
+      });
+    },
+  );
 });
 
 describe("sniffKind", () => {

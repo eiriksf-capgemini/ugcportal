@@ -55,10 +55,13 @@ import type { WatermarkConcurrencySettings } from "@/lib/watermark";
  *    (`limit x PREVIEW_BYTES_PER_OPERATION`). The gate's own per-caller body
  *    charge is not added on top: those bodies are the same bodies this
  *    budget is holding, so they are counted once, here.
- *    {@link resolveUploadMemorySettings} proves the two fit together —
- *    `budgetBytes` is always at least `(limit + queueLimit) x
- *    UPLOAD_BODY_BYTES`, so this bound never starves the gate's queue of
- *    maximum-size images.
+ *    {@link resolveUploadMemorySettings} proves the two fit together — for
+ *    every *derived* configuration `budgetBytes` is at least
+ *    `(limit + queueLimit) x UPLOAD_BODY_BYTES`, so this bound never starves
+ *    the gate's queue of maximum-size images. An operator who sets
+ *    WATERMARK_QUEUE_LIMIT larger than memory affords (which the gate
+ *    honours and only reports on) makes this the tighter of the two and
+ *    leaves the surplus queue unfillable, which is the safe direction.
  *
  * ## What it does NOT cover
  *
@@ -68,9 +71,12 @@ import type { WatermarkConcurrencySettings } from "@/lib/watermark";
  *  - **Other routes.** This budget is POST /api/media's. The admin evidence
  *    upload (POST /api/admin/instagram/rights-decision) buffers its own body
  *    the same way and is outside it (ugcportal-wa4).
- *  - **The peek itself.** {@link PART_HEADER_PEEK_BYTES} per concurrent
- *    request is read before anything is reserved, so that much *is*
- *    unbounded by request count. It is 8 KiB against the 205 MB it replaces.
+ *  - **The peek itself.** Reading the part header happens before anything is
+ *    reserved, so that much *is* still unbounded by request count. It is a
+ *    small multiple of PART_HEADER_PEEK_BYTES per concurrent request — the
+ *    chunks held, which can overshoot the threshold by one chunk since a
+ *    chunk cannot be half-read, plus a decoded copy of them for the header
+ *    search. Tens of kilobytes against the 205 MB it replaces.
  *  - **The parser's working memory.** The reservation prices the two copies
  *    the handler holds (see UPLOAD_BODY_COPIES), which is the same model
  *    ugcportal-e86 used; whatever undici allocates transiently while parsing
