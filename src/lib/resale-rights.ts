@@ -90,7 +90,9 @@ export type SellabilityBlocker =
   | "checklist_version_retired"
   | "reviewer_not_admin"
   | "triage_incomplete"
+  | "triage_not_signed_by_admin"
   | "model_release_missing"
+  | "model_release_unverified"
   | "third_party_layer_uncleared"
   | "not_owner_supplied_original"
   | "media_not_owned"
@@ -145,6 +147,14 @@ export type GatePost = {
   containsMusic: boolean | null;
   thirdPartyCreator: boolean | null;
   sponsoredContent: boolean | null;
+  /**
+   * Who signed off the triage flags above, with their *current* role. Every
+   * one of those flags is an assertion about someone else's rights — "no
+   * identifiable people", "no music" — and an unattributed assertion is not
+   * one this gate accepts.
+   */
+  triagedByUserId: string | null;
+  triagedBy: { role: Role } | null;
   /** One justification per layer; see layerIsSettled. */
   layerClearances: GateLayerClearance[];
   instagramAccount: { resaleRightsReview: GateReview | null } | null;
@@ -162,6 +172,8 @@ export const CURATED_POST_GATE_SELECT = {
   containsMusic: true,
   thirdPartyCreator: true,
   sponsoredContent: true,
+  triagedByUserId: true,
+  triagedBy: { select: { role: true } },
   layerClearances: {
     select: {
       layer: true,
@@ -344,14 +356,34 @@ export function evaluateSellability(
 
   // (5) Per-post triage (Part C). Account-level clearance covers the Owner's
   // own copyright only.
+  //
+  // The triage has to be attributable before any of its answers count. Each
+  // flag below is an assertion about a third party's rights, and the
+  // dangerous direction is `false`: "this photograph contains no
+  // identifiable person" sells the photograph. Read-time role check, like
+  // everywhere else here, so a demoted admin's assertions stop counting
+  // rather than persisting because someone else signed the account.
   if (post.depictsPeople === null) {
     return { sellable: false, blocker: "triage_incomplete" };
   }
-  // Trimmed, like the mediaId and post-clearance checks: a key of spaces is
-  // not a model release, and storing one would otherwise wave through the
-  // consent requirement for a photograph of a person.
-  if (post.depictsPeople && !post.modelReleaseKey?.trim()) {
-    return { sellable: false, blocker: "model_release_missing" };
+  if (!post.triagedByUserId || post.triagedBy?.role !== "ADMIN") {
+    return { sellable: false, blocker: "triage_not_signed_by_admin" };
+  }
+
+  // People (Part C.2). The strictest layer, because it is the one with a
+  // named individual behind it: it needs the release *file* and an admin
+  // who says that file covers this use. A key alone is free text — it can
+  // point at a document that licenses something else entirely, or at
+  // nothing.
+  if (post.depictsPeople) {
+    // Trimmed like the other string checks: a key of spaces is not a
+    // release.
+    if (!post.modelReleaseKey?.trim()) {
+      return { sellable: false, blocker: "model_release_missing" };
+    }
+    if (!layerIsCleared(post, RightsLayer.PEOPLE)) {
+      return { sellable: false, blocker: "model_release_unverified" };
+    }
   }
   // Each layer answers for itself. Pairing the triage flag with its own
   // RightsLayer is what keeps one justification from covering three

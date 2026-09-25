@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 
-import { PutObjectCommand } from "@aws-sdk/client-s3";
+import { DeleteObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
 
 import { getBucketName, getS3Client } from "@/lib/s3";
 
@@ -89,6 +89,31 @@ export function rightsEvidenceKey(
 }
 
 export type StoredEvidence = { key: string; sha256: string };
+
+/**
+ * Removes an evidence object whose decision was never recorded.
+ *
+ * The upload happens before the database write so that a clearance can never
+ * name evidence that isn't there. The cost is the opposite orphan — an
+ * object with nothing pointing at it — and since these are contracts and
+ * personal data, "left in the bucket forever" is not a neutral outcome.
+ *
+ * Best-effort and never thrown: the caller is already on an error path, and
+ * failing to tidy up must not replace the message explaining what actually
+ * went wrong. A failure is logged with the key so it can be found by hand.
+ */
+export async function deleteRightsEvidence(key: string): Promise<void> {
+  try {
+    await getS3Client().send(
+      new DeleteObjectCommand({ Bucket: getBucketName(), Key: key }),
+    );
+  } catch (cause) {
+    console.error("[resale-rights] failed to remove unused evidence object", {
+      key,
+      cause,
+    });
+  }
+}
 
 /**
  * Upload one evidence file and return what the review row records: where it

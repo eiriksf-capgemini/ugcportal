@@ -3,11 +3,14 @@ import { revalidatePath } from "next/cache";
 
 import type { ResaleRightsRoute } from "@/generated/prisma/enums";
 import { requireAdmin } from "@/lib/admin";
-import { isSameOriginRequest } from "@/lib/origin";
+import { expectedOrigin, isSameOriginRequest } from "@/lib/origin";
 import { readCappedFormData } from "@/lib/request-body";
 import { isResaleRightsRoute, isResaleRightsStatus } from "@/lib/resale-rights";
 import { setResaleRightsStatus } from "@/lib/resale-rights-review";
-import { putRightsEvidence } from "@/lib/rights-evidence";
+import {
+  deleteRightsEvidence,
+  putRightsEvidence,
+} from "@/lib/rights-evidence";
 import { INSTAGRAM_SETTINGS_PATH } from "@/lib/routes";
 
 /**
@@ -39,12 +42,44 @@ const MAX_EVIDENCE_BYTES = 20 * 1024 * 1024;
 const MAX_BODY_BYTES = MAX_EVIDENCE_BYTES + 64 * 1024;
 
 function settingsRedirect(request: Request, query = ""): NextResponse {
+  // Resolved against the configured public origin, not `request.url` — which
+  // behind a TLS-terminating proxy is the internal host, exactly the trap
+  // src/lib/origin.ts exists to point out. Sending that back as an absolute
+  // Location would bounce the admin to an address the browser cannot reach.
+  // `request.url` is the fallback for a dev server with no AUTH_URL set,
+  // where the two are the same thing anyway.
+  //
   // 303: the browser must follow a POST redirect with GET, or the settings
   // page is re-requested as a POST.
   return NextResponse.redirect(
-    new URL(`${INSTAGRAM_SETTINGS_PATH}${query}`, request.url),
+    new URL(`${INSTAGRAM_SETTINGS_PATH}${query}`, expectedOrigin() ?? request.url),
     303,
   );
+}
+
+/**
+ * Reads one optional form field with the same three-way meaning the writer
+ * uses: **absent** leaves the stored value alone, **blank** clears it, a
+ * value sets it.
+ *
+ * `formData.get()` alone collapses the first two into `null`, which is how
+ * `validUntil` became a fail-open twice: a POST that simply omits the field
+ * — a partial request, a future form that drops it — silently cleared a
+ * clearance's expiry. The form's `defaultValue` is what stopped that in a
+ * browser, but the handler should not depend on its own UI being the only
+ * caller. One helper for every optional field, so the next one added gets
+ * the same semantics without anyone remembering to ask for them.
+ */
+function optionalField(
+  formData: FormData,
+  name: string,
+): string | null | undefined {
+  if (!formData.has(name)) {
+    return undefined;
+  }
+  const raw = formData.get(name);
+  const value = typeof raw === "string" ? raw.trim() : "";
+  return value === "" ? null : value;
 }
 
 export async function POST(request: Request) {
@@ -83,17 +118,14 @@ export async function POST(request: Request) {
     );
   }
 
-  const routeValue = formData.get("route");
-  let route: ResaleRightsRoute | null = null;
-  if (routeValue !== null && routeValue !== "") {
-    if (!isResaleRightsRoute(routeValue)) {
-      return NextResponse.json(
-        { error: "Unknown resale-rights route" },
-        { status: 400 },
-      );
-    }
-    route = routeValue;
+  const routeValue = optionalField(formData, "route");
+  if (routeValue != null && !isResaleRightsRoute(routeValue)) {
+    return NextResponse.json(
+      { error: "Unknown resale-rights route" },
+      { status: 400 },
+    );
   }
+  const route = routeValue as ResaleRightsRoute | null | undefined;
 
   const reasonValue = formData.get("reason");
   const reason = typeof reasonValue === "string" ? reasonValue.trim() : "";
@@ -107,9 +139,9 @@ export async function POST(request: Request) {
   // an edit to some other field.
   const restampChecklist = formData.get("restampChecklist") === "yes";
 
-  const validUntilValue = formData.get("validUntil");
-  let validUntil: Date | null = null;
-  if (typeof validUntilValue === "string" && validUntilValue !== "") {
+  const validUntilValue = optionalField(formData, "validUntil");
+  let validUntil: Date | null | undefined;
+  if (validUntilValue != null) {
     // A date input submits YYYY-MM-DD, which Date parses as midnight UTC —
     // so the clearance stops counting at the *start* of the chosen day, not
     // the end of it. Left that way deliberately: of the two readings, it is
@@ -119,24 +151,21 @@ export async function POST(request: Request) {
       return settingsRedirect(request, "?error=rights_invalid_valid_until");
     }
     validUntil = parsed;
+  } else {
+    // null (blank, clear it) or undefined (absent, leave it) — both pass
+    // straight through to the writer, which understands the difference.
+    validUntil = validUntilValue;
   }
 
-  const conditionsValue = formData.get("conditions");
-  const conditions =
-    typeof conditionsValue === "string" && conditionsValue.trim()
-      ? conditionsValue.trim()
-      : null;
+  const conditions = optionalField(formData, "conditions");
 
   // Whose uploads this clearance covers. Not validated against the user
   // table here: setResaleRightsStatus writes it as a foreign key, so a made
-  // up id is refused by the database rather than by a check that could drift
-  // from it. A blank value clears it, and a CLEARED review without one
-  // authorises nothing (see accountClearanceBlocker).
-  const clearedOwnerValue = formData.get("clearedOwnerUserId");
-  const clearedOwnerUserId =
-    typeof clearedOwnerValue === "string" && clearedOwnerValue.trim()
-      ? clearedOwnerValue.trim()
-      : null;
+  // up id is refused by the database (and reported as `missing_reference`)
+  // rather than by a check that could drift from it. A blank value clears
+  // it, and a CLEARED review without one authorises nothing (see
+  // accountClearanceBlocker).
+  const clearedOwnerUserId = optionalField(formData, "clearedOwnerUserId");
 
   // Uploaded before the status write, so a failed upload leaves no clearance
   // claiming evidence that isn't there. The cost of this ordering is the
@@ -181,16 +210,28 @@ export async function POST(request: Request) {
 
   revalidatePath(INSTAGRAM_SETTINGS_PATH);
 
-  if (result.outcome === "account_not_found") {
-    return settingsRedirect(request, "?error=rights_account_not_found");
-  }
-  if (result.outcome === "actor_not_admin") {
+  // Closed set, mapped exhaustively rather than with a default, so a new
+  // outcome fails to compile here instead of silently reporting success.
+  const FAILURE_CODES = {
+    account_not_found: "rights_account_not_found",
     // The session said ADMIN but the database disagrees — the role was
     // revoked between sign-in and now.
-    return settingsRedirect(request, "?error=rights_actor_not_admin");
-  }
-  if (result.outcome === "conflict") {
-    return settingsRedirect(request, "?error=rights_conflict");
+    actor_not_admin: "rights_actor_not_admin",
+    conflict: "rights_conflict",
+    // The rights holder named on the form was deleted before the write.
+    missing_reference: "rights_holder_missing",
+    forbidden_system_transition: "rights_conflict",
+  } as const;
+
+  if (result.outcome in FAILURE_CODES) {
+    const code = FAILURE_CODES[result.outcome as keyof typeof FAILURE_CODES];
+    // Nothing was recorded, so an evidence file uploaded moments ago has
+    // nothing pointing at it. Remove it rather than leaving a contract or a
+    // model release sitting in the bucket unreferenced.
+    if (evidence) {
+      await deleteRightsEvidence(evidence.key);
+    }
+    return settingsRedirect(request, `?error=${code}`);
   }
   // Redirect on success too, so a stale `?error=` from a previous attempt
   // doesn't stay pinned to the URL after a decision that worked.

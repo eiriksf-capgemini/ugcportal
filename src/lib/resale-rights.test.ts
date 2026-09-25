@@ -46,6 +46,10 @@ function sellablePost(overrides: Partial<GatePost> = {}): GatePost {
     containsMusic: false,
     thirdPartyCreator: false,
     sponsoredContent: false,
+    // The triage is signed by a current admin: every flag above is an
+    // assertion about a third party's rights, so the gate wants a name.
+    triagedByUserId: "admin-1",
+    triagedBy: { role: "ADMIN" },
     instagramAccount: { resaleRightsReview: clearedReview() },
     ...overrides,
   };
@@ -167,6 +171,38 @@ describe("per-post triage (checklist Part C)", () => {
     ).toEqual({ sellable: false, blocker: "triage_incomplete" });
   });
 
+  /**
+   * The triage answers are assertions about other people's rights, and the
+   * dangerous direction is `false`: "this photograph contains no
+   * identifiable person" is what sells the photograph. An unattributed
+   * assertion, or one from someone since demoted, is not one the gate takes.
+   */
+  it("refuses a triage nobody signed", () => {
+    expect(
+      evaluateSellability(
+        sellablePost({ triagedByUserId: null, triagedBy: null }),
+        NOW,
+      ),
+    ).toEqual({ sellable: false, blocker: "triage_not_signed_by_admin" });
+  });
+
+  it("refuses a triage signed by someone who is no longer an ADMIN", () => {
+    // The scenario: a curator, or an admin since demoted, marks a
+    // photograph of an identifiable person as depicting nobody.
+    expect(
+      evaluateSellability(
+        sellablePost({ depictsPeople: false, triagedBy: { role: "USER" } }),
+        NOW,
+      ),
+    ).toEqual({ sellable: false, blocker: "triage_not_signed_by_admin" });
+  });
+
+  it("refuses a triage whose signer's account is gone", () => {
+    expect(
+      evaluateSellability(sellablePost({ triagedBy: null }), NOW).sellable,
+    ).toBe(false);
+  });
+
   it("refuses a post showing people with no model release", () => {
     expect(
       evaluateSellability(sellablePost({ depictsPeople: true }), NOW),
@@ -185,12 +221,73 @@ describe("per-post triage (checklist Part C)", () => {
     ).toEqual({ sellable: false, blocker: "model_release_missing" });
   });
 
-  it("accepts a post showing people once a release is on file", () => {
+  /**
+   * People is the strictest of the four layers, not the loosest. An earlier
+   * revision settled it with a free-text key and a boolean — no author, no
+   * role re-check — while the three commercial layers each required an
+   * admin-signed clearance. That had it exactly backwards: this is the one
+   * with a named individual behind it (åndsverkloven § 104, GDPR art 9).
+   */
+  it("refuses a release on file that no admin has verified", () => {
     const post = sellablePost({
       depictsPeople: true,
       modelReleaseKey: "rights-evidence/acc-1/release.pdf",
     });
-    expect(evaluateSellability(post, NOW).sellable).toBe(true);
+    expect(evaluateSellability(post, NOW)).toEqual({
+      sellable: false,
+      blocker: "model_release_unverified",
+    });
+  });
+
+  it("refuses a release verified by someone since demoted", () => {
+    const post = sellablePost({
+      depictsPeople: true,
+      modelReleaseKey: "rights-evidence/acc-1/release.pdf",
+      layerClearances: [
+        {
+          layer: RightsLayer.PEOPLE,
+          reason: "Release covers commercial resale.",
+          clearedByUserId: "admin-1",
+          clearedBy: { role: "USER" },
+        },
+      ],
+    });
+    expect(evaluateSellability(post, NOW).sellable).toBe(false);
+  });
+
+  it("accepts a post showing people with a release and an admin's confirmation", () => {
+    const post = sellablePost({
+      depictsPeople: true,
+      modelReleaseKey: "rights-evidence/acc-1/release.pdf",
+      layerClearances: [
+        {
+          layer: RightsLayer.PEOPLE,
+          reason: "Release read; covers commercial resale, no time limit.",
+          clearedByUserId: "admin-1",
+          clearedBy: { role: "ADMIN" },
+        },
+      ],
+    });
+    expect(evaluateSellability(post, NOW)).toEqual({ sellable: true });
+  });
+
+  it("does not let a music clearance stand in for the people one", () => {
+    const post = sellablePost({
+      depictsPeople: true,
+      modelReleaseKey: "rights-evidence/acc-1/release.pdf",
+      layerClearances: [
+        {
+          layer: RightsLayer.MUSIC,
+          reason: "Licence purchased.",
+          clearedByUserId: "admin-1",
+          clearedBy: { role: "ADMIN" },
+        },
+      ],
+    });
+    expect(evaluateSellability(post, NOW)).toEqual({
+      sellable: false,
+      blocker: "model_release_unverified",
+    });
   });
 
   const LAYERS = [

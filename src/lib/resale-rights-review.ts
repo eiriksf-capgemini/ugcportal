@@ -92,20 +92,44 @@ export type SetResaleRightsStatusResult =
   | { outcome: "actor_not_admin" }
   | { outcome: "forbidden_system_transition" }
   /** Another decision on the same account landed first — retry on a re-read. */
-  | { outcome: "conflict" };
+  | { outcome: "conflict" }
+  /** A row this decision points at (the rights holder) is gone. */
+  | { outcome: "missing_reference" };
 
 /**
- * Prisma's unique-constraint violation. Matched on the documented error code
- * rather than `instanceof PrismaClientKnownRequestError`, because the driver
- * adapter re-wraps errors and an instanceof check across module instances is
- * a coin flip.
+ * Database errors this function answers with an outcome rather than a throw,
+ * because each is a race a user can legitimately lose rather than a fault:
+ *
+ *   P2002 unique violation   — two first decisions on one account
+ *   P2003 foreign key        — the rights holder was deleted mid-form
+ *   P2025 record not found   — the review row vanished between read and write
+ *
+ * Matched on the documented error codes rather than
+ * `instanceof PrismaClientKnownRequestError`, because the driver adapter
+ * re-wraps errors and an instanceof check across module instances is a coin
+ * flip.
+ *
+ * Deliberately an allow-list, and deliberately re-examined: P2002 was mapped
+ * first, then P2003 turned out to be reachable too (libsql does enforce
+ * foreign keys). The temptation after a second surprise is to catch
+ * everything — but "disk I/O error" answered with a tidy message is a fault
+ * that never gets looked at. The list is short and each entry names the race
+ * it stands for; anything else is a real failure and stays loud.
  */
-function isUniqueConstraintError(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    (error as { code?: unknown }).code === "P2002"
-  );
+const RACE_OUTCOMES: Record<string, "conflict" | "missing_reference"> = {
+  P2002: "conflict",
+  P2003: "missing_reference",
+  P2025: "conflict",
+};
+
+function raceOutcome(
+  error: unknown,
+): "conflict" | "missing_reference" | undefined {
+  if (typeof error !== "object" || error === null) {
+    return undefined;
+  }
+  const code = (error as { code?: unknown }).code;
+  return typeof code === "string" ? RACE_OUTCOMES[code] : undefined;
 }
 
 /**
@@ -232,48 +256,52 @@ export async function setResaleRightsStatus(
     // — including fields this transition left alone.
     const snapshot = { id: true, checklistVersion: true, evidenceKey: true, evidenceSha256: true };
     let review;
-    if (existing) {
-      review = await tx.resaleRightsReview.update({
-        where: { id: existing.id },
-        data: { status: transition.status, ...adminFields },
-        select: snapshot,
-      });
-    } else {
-      try {
-        review = await tx.resaleRightsReview.create({
-          data: {
-            instagramAccountId,
-            status: transition.status,
-            // First decision on this account: there is no stored version to
-            // preserve, and the form the reviewer just used is the current
-            // one. (A SYSTEM-created row — a revoke on an account nobody
-            // reviewed — gets the same stamp; it is meaningless there, but
-            // the column is required and the row is never sellable.)
-            checklistVersion: CURRENT_CHECKLIST_VERSION,
-            ...(transition.source === "ADMIN"
-              ? { productDecisionRef: PRODUCT_DECISION_REF }
-              : {}),
-            ...adminFields,
-          },
-          select: snapshot,
-        });
-      } catch (error) {
-        // The read above and this write are not serialised — adapter-libsql
-        // opens `deferred` transactions — so two first decisions on the same
-        // account can both see no existing row and both try to create one.
-        // The unique index on instagramAccountId is what actually prevents
-        // two reviews; without this catch the loser would throw P2002 out of
-        // a function contracted to return outcomes, and the admin would get
-        // an unhandled-error page instead of a message.
-        //
-        // Reported rather than retried here: the winner may have written a
-        // different status, so the right move is to re-read and decide
-        // again, which is what the caller's redirect makes the admin do.
-        if (isUniqueConstraintError(error)) {
-          return { outcome: "conflict" } as const;
-        }
-        throw error;
+    try {
+      review = existing
+        ? await tx.resaleRightsReview.update({
+            where: { id: existing.id },
+            data: { status: transition.status, ...adminFields },
+            select: snapshot,
+          })
+        : await tx.resaleRightsReview.create({
+            data: {
+              instagramAccountId,
+              status: transition.status,
+              // First decision on this account: there is no stored version
+              // to preserve, and the form the reviewer just used is the
+              // current one. (A SYSTEM-created row — a revoke on an account
+              // nobody reviewed — gets the same stamp; it is meaningless
+              // there, but the column is required and the row is never
+              // sellable.)
+              checklistVersion: CURRENT_CHECKLIST_VERSION,
+              ...(transition.source === "ADMIN"
+                ? { productDecisionRef: PRODUCT_DECISION_REF }
+                : {}),
+              ...adminFields,
+            },
+            select: snapshot,
+          });
+    } catch (error) {
+      // Both paths, not just the create. Nothing here is serialised —
+      // adapter-libsql opens `deferred` transactions — so every row this
+      // write depends on can move underneath it:
+      //
+      //   * two first decisions on one account both see no existing row and
+      //     both create one; the unique index picks a winner (P2002)
+      //   * the rights holder named on the form is deleted between render
+      //     and submit; the foreign key refuses the write (P2003 — libsql
+      //     does enforce foreign keys)
+      //   * the review row is deleted between the read above and the update
+      //     (P2025)
+      //
+      // Reported rather than retried: the state that lost the race may say
+      // something different now, so the right move is to re-read and decide
+      // again, which is what the caller's redirect makes the admin do.
+      const outcome = raceOutcome(error);
+      if (outcome) {
+        return { outcome } as const;
       }
+      throw error;
     }
 
     await tx.resaleRightsEvent.create({

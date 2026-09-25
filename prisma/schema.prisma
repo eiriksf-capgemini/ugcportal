@@ -47,6 +47,7 @@ model User {
   // the gate sells a file only to the extent its owner is named here.
   clearedResaleRights ResaleRightsReview[]  @relation("ResaleRightsClearedOwner")
   layerClearances     PostRightsClearance[] @relation("PostRightsClearer")
+  triagedPosts        CuratedPost[]         @relation("CuratedPostTriager")
 }
 
 // One row per linked login provider (Google, Facebook, ...) for a user.
@@ -209,15 +210,19 @@ enum ResaleRightsRoute {
   EXPLICIT_CONSENT
 }
 
-// The rights layers that vary per post (checklist Part C.3–C.5) and can be
+// The rights layers that vary per post (checklist Part C.2–C.5) and can be
 // present but handled. Each is cleared on its own: a licence for the music
 // says nothing about an uncredited third-party creator, and neither says
 // anything about undisclosed sponsorship.
 //
-// Part C.2 (people) is deliberately absent — it is not settled by a written
-// justification but by a model release on file, which is why the gate checks
-// `modelReleaseKey` instead.
+// PEOPLE was initially left out on the grounds that it is settled by a model
+// release on file rather than by a written justification. That was wrong in
+// the direction that matters: it made the one layer with a named individual
+// behind it the *loosest* of the four, settled by a free-text key and a
+// boolean with no author. A release now needs both — the file, and an admin
+// who says it covers this use (åndsverkloven § 104, GDPR art 9).
 enum RightsLayer {
+  PEOPLE
   MUSIC
   THIRD_PARTY_CREATOR
   SPONSORED_CONTENT
@@ -361,10 +366,17 @@ model CuratedPost {
   containsMusic     Boolean?
   thirdPartyCreator Boolean?
   sponsoredContent  Boolean?
-  // Who completed the triage above, and when. Recorded for the audit and
-  // shown by the curation UI; NOT a clearance. A layer that is present is
-  // settled by its own PostRightsClearance row, never by the fact that
-  // somebody ticked the boxes.
+  // Who completed the triage above, and when.
+  //
+  // Read by the gate, not just recorded: every flag here is an assertion
+  // about someone else's rights — "no identifiable people", "no music" —
+  // and an unattributed assertion is not one this instance can stand
+  // behind. The gate requires this to name a user who is an ADMIN *now*,
+  // so a curator, or an admin since demoted, cannot declare a photograph of
+  // a person to be people-free and have it sell.
+  //
+  // It is still not a clearance: a layer that is *present* is settled by
+  // its own PostRightsClearance row.
   triagedByUserId   String?
   triagedAt         DateTime?
 
@@ -372,9 +384,11 @@ model CuratedPost {
   updatedAt DateTime @updatedAt
 
   instagramAccount InstagramAccount      @relation(fields: [instagramAccountId], references: [id], onDelete: Cascade)
+  triagedBy        User?                 @relation("CuratedPostTriager", fields: [triagedByUserId], references: [id])
   layerClearances  PostRightsClearance[]
 
   @@index([instagramAccountId])
+  @@index([triagedByUserId])
 }
 
 // One justification for one rights layer on one post (checklist Part C).

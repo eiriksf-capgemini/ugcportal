@@ -7,6 +7,7 @@ import { accountClearanceBlocker } from "@/lib/resale-rights";
 import {
   INSTAGRAM_CONNECT_PATH,
   INSTAGRAM_RIGHTS_DECISION_PATH,
+  INSTAGRAM_SETTINGS_PATH,
 } from "@/lib/routes";
 
 import { disconnectInstagramAccount } from "./actions";
@@ -17,6 +18,12 @@ import { BLOCKER_MESSAGES, outcomeMessage } from "./outcomes";
 export const metadata = {
   title: "Instagram accounts",
 };
+
+/**
+ * Cap on the rights-holder <select>. Bounds one page render; it is not a
+ * statement about how many users the instance may have.
+ */
+const MAX_RIGHTS_HOLDER_OPTIONS = 200;
 
 const dateFormat = new Intl.DateTimeFormat("en-GB", {
   dateStyle: "medium",
@@ -38,7 +45,7 @@ export default async function InstagramSettingsPage({
     notFound();
   }
 
-  const { connected, error, rights } = await searchParams;
+  const { connected, error, rights, edit } = await searchParams;
   const accounts = await prisma.instagramAccount.findMany({
     orderBy: { createdAt: "asc" },
     select: {
@@ -67,12 +74,27 @@ export default async function InstagramSettingsPage({
     },
   });
 
+  // One account's decision form at a time, chosen by `?edit=`.
+  //
+  // Not a UX preference: the form carries a rights-holder <select> with an
+  // <option> per user, so rendering it for every account put N accounts × M
+  // users option elements on one page — a list that grows with two
+  // unrelated things at once. Opening one form is a page load, which for a
+  // form that records a legal decision is not the expensive part.
+  const editingAccountId = typeof edit === "string" ? edit : null;
+
   // Every user is a candidate rights holder: an upload's owner is whoever
-  // uploaded it, and the clearance has to be able to name them.
-  const rightsHolders = await prisma.user.findMany({
-    orderBy: [{ name: "asc" }, { email: "asc" }],
-    select: { id: true, name: true, email: true },
-  });
+  // uploaded it, and the clearance has to be able to name them. Loaded only
+  // when a form is actually open, and capped — an admin scrolling a
+  // thousand-entry <select> is not choosing carefully anyway, so the cap is
+  // a prompt to add a search rather than a limit to quietly raise.
+  const rightsHolders = editingAccountId
+    ? await prisma.user.findMany({
+        orderBy: [{ name: "asc" }, { email: "asc" }],
+        select: { id: true, name: true, email: true },
+        take: MAX_RIGHTS_HOLDER_OPTIONS,
+      })
+    : [];
 
   const errorMessage = outcomeMessage(error);
 
@@ -230,17 +252,34 @@ export default async function InstagramSettingsPage({
                   ) : null}
                 </div>
 
-                <details className="rounded-lg border border-border p-3 text-sm">
-                  <summary className="cursor-pointer font-medium">
+                {editingAccountId === account.id ? (
+                  <div className="rounded-lg border border-border p-3 text-sm">
+                    <p className="font-medium">
+                      Record a resale-rights decision
+                    </p>
+                    <ResaleRightsDecisionForm
+                      instagramAccountId={account.id}
+                      review={review ?? null}
+                      rightsHolders={rightsHolders}
+                      action={INSTAGRAM_RIGHTS_DECISION_PATH}
+                    />
+                    {rightsHolders.length === MAX_RIGHTS_HOLDER_OPTIONS ? (
+                      <p className="mt-2 text-xs text-muted-foreground">
+                        Showing the first {MAX_RIGHTS_HOLDER_OPTIONS} users.
+                        If the rights holder isn&apos;t listed, this screen
+                        needs a search box before it can record their
+                        clearance.
+                      </p>
+                    ) : null}
+                  </div>
+                ) : (
+                  <a
+                    className="inline-block text-sm font-medium underline underline-offset-4"
+                    href={`${INSTAGRAM_SETTINGS_PATH}?edit=${account.id}`}
+                  >
                     Record a resale-rights decision
-                  </summary>
-                  <ResaleRightsDecisionForm
-                    instagramAccountId={account.id}
-                    review={review ?? null}
-                    rightsHolders={rightsHolders}
-                    action={INSTAGRAM_RIGHTS_DECISION_PATH}
-                  />
-                </details>
+                  </a>
+                )}
               </li>
             );
           })}

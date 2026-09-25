@@ -118,6 +118,10 @@ beforeAll(async () => {
       containsMusic: false,
       thirdPartyCreator: false,
       sponsoredContent: false,
+      // The triage is an assertion about third-party rights, so the gate
+      // requires a current admin behind it.
+      triagedByUserId: "admin-1",
+      triagedAt: new Date(),
     },
   });
 });
@@ -597,6 +601,8 @@ describe("the shapes ugcportal-74w and ugcportal-p3v need", () => {
         mediaId: "media-2",
         // Same cleared account, but this one was never triaged.
         depictsPeople: null,
+        triagedByUserId: "admin-1",
+        triagedAt: new Date(),
       },
     });
 

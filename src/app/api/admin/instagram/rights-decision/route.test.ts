@@ -7,6 +7,7 @@ const authMock = vi.fn();
 const revalidatePathMock = vi.fn();
 const setResaleRightsStatusMock = vi.fn();
 const putRightsEvidenceMock = vi.fn();
+const deleteRightsEvidenceMock = vi.fn();
 
 vi.mock("@/lib/auth", () => ({ auth: authMock }));
 vi.mock("next/cache", () => ({ revalidatePath: revalidatePathMock }));
@@ -15,6 +16,7 @@ vi.mock("@/lib/resale-rights-review", () => ({
 }));
 vi.mock("@/lib/rights-evidence", () => ({
   putRightsEvidence: putRightsEvidenceMock,
+  deleteRightsEvidence: deleteRightsEvidenceMock,
 }));
 
 const { POST } = await import(
@@ -69,6 +71,7 @@ beforeEach(() => {
   putRightsEvidenceMock
     .mockReset()
     .mockResolvedValue({ key: "rights-evidence/acc-1/x.pdf", sha256: "hash" });
+  deleteRightsEvidenceMock.mockReset().mockResolvedValue(undefined);
 });
 
 /**
@@ -219,7 +222,8 @@ describe("recording the decision", () => {
       route: "CONTRACT",
       validUntil: new Date("2027-06-01"),
       conditions: "Editorial use only.",
-      clearedOwnerUserId: null,
+      // Not submitted by this form, so left alone rather than cleared.
+      clearedOwnerUserId: undefined,
       evidence: undefined,
       restampChecklist: false,
     });
@@ -301,6 +305,58 @@ describe("recording the decision", () => {
     );
   });
 
+  it("surfaces a rights holder deleted between render and submit", async () => {
+    setResaleRightsStatusMock.mockResolvedValue({
+      outcome: "missing_reference",
+    });
+
+    expect(outcomeOf(await post(decisionForm()))).toBe(
+      "?error=rights_holder_missing",
+    );
+  });
+
+  /**
+   * Absent field vs blank field. The handler used to collapse both into
+   * `null`, so a partial POST — one that simply omits `validUntil` —
+   * silently cleared a clearance's expiry, defended only by the form's
+   * `defaultValue`. That is the same fail-open as rounds 2 and 3, reached
+   * by not being the form.
+   */
+  it("leaves omitted optional fields alone rather than clearing them", async () => {
+    const partial = new FormData();
+    partial.set("instagramAccountId", "acc-1");
+    partial.set("status", "CLEARED");
+    partial.set("reason", "Partial post.");
+
+    await post(partial);
+
+    const [, transition] = setResaleRightsStatusMock.mock.calls[0];
+    // `undefined` is the writer's "leave it as it was".
+    expect(transition.validUntil).toBeUndefined();
+    expect(transition.conditions).toBeUndefined();
+    expect(transition.route).toBeUndefined();
+    expect(transition.clearedOwnerUserId).toBeUndefined();
+  });
+
+  it("still clears a field that is present but blank", async () => {
+    // The other half of the contract: the form submits empty strings when
+    // an admin deliberately empties a field, and that must still clear it.
+    await post(
+      decisionForm({
+        validUntil: "",
+        conditions: "",
+        route: "",
+        clearedOwnerUserId: "",
+      }),
+    );
+
+    const [, transition] = setResaleRightsStatusMock.mock.calls[0];
+    expect(transition.validUntil).toBeNull();
+    expect(transition.conditions).toBeNull();
+    expect(transition.route).toBeNull();
+    expect(transition.clearedOwnerUserId).toBeNull();
+  });
+
   it("surfaces a concurrent first decision as a retryable message", async () => {
     // Not an unhandled error page: two admins deciding at once is a thing
     // that happens, and the loser needs to be told to re-read and redo.
@@ -352,6 +408,31 @@ describe("evidence upload", () => {
       "?error=rights_evidence_failed",
     );
     expect(setResaleRightsStatusMock).not.toHaveBeenCalled();
+  });
+
+  // The upload happens before the write so a clearance can never name
+  // evidence that isn't there. When the write is then refused, the object
+  // has nothing pointing at it — and it is a contract or a model release,
+  // so leaving it in the bucket forever is not neutral.
+  it("removes the uploaded file when the decision could not be recorded", async () => {
+    setResaleRightsStatusMock.mockResolvedValue({
+      outcome: "missing_reference",
+    });
+    const file = new File([new Uint8Array([1])], "a.pdf");
+
+    await post(decisionForm({ evidence: file }));
+
+    expect(deleteRightsEvidenceMock).toHaveBeenCalledWith(
+      "rights-evidence/acc-1/x.pdf",
+    );
+  });
+
+  it("keeps the uploaded file when the decision was recorded", async () => {
+    const file = new File([new Uint8Array([1])], "a.pdf");
+
+    await post(decisionForm({ evidence: file }));
+
+    expect(deleteRightsEvidenceMock).not.toHaveBeenCalled();
   });
 
   it("refuses an oversized file rather than uploading it", async () => {

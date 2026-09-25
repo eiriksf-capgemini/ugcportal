@@ -25,6 +25,8 @@ const OUTCOME_MESSAGES: Record<string, string> = {
     "Your admin role was revoked since you signed in, so the decision wasn't recorded.",
   disconnect_not_revoked:
     "The account wasn't disconnected: its resale rights couldn't be revoked first, and disconnecting without that would leave the audit trail saying it was still cleared. Try again.",
+  rights_holder_missing:
+    "The rights holder named on that decision no longer exists, so nothing was recorded. Pick someone who is still here and try again.",
   rights_conflict:
     "Another decision on this account was recorded at the same moment. Check what it says, then record yours again if it's still right.",
 };
@@ -56,8 +58,12 @@ export const BLOCKER_MESSAGES: Record<SellabilityBlocker, string> = {
   checklist_version_retired:
     "Cleared against a retired version of the checklist. Re-review against the current one.",
   triage_incomplete: "This post has not been triaged yet.",
+  triage_not_signed_by_admin:
+    "Nobody currently holding admin has signed off this post's triage. Every one of those answers is a statement about someone else's rights, so it needs a name behind it.",
   model_release_missing:
     "This post shows people and has no model release on file.",
+  model_release_unverified:
+    "A model release is on file, but no admin has confirmed it covers this use. Of the four rights layers this is the one with a named individual behind it.",
   third_party_layer_uncleared:
     "Music, a third-party creator or a sponsorship is involved and has not been cleared for this post.",
   not_owner_supplied_original:

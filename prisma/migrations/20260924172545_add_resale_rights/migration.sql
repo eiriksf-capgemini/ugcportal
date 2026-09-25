@@ -55,7 +55,8 @@ CREATE TABLE "CuratedPost" (
     "triagedAt" DATETIME,
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" DATETIME NOT NULL,
-    CONSTRAINT "CuratedPost_instagramAccountId_fkey" FOREIGN KEY ("instagramAccountId") REFERENCES "InstagramAccount" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+    CONSTRAINT "CuratedPost_instagramAccountId_fkey" FOREIGN KEY ("instagramAccountId") REFERENCES "InstagramAccount" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT "CuratedPost_triagedByUserId_fkey" FOREIGN KEY ("triagedByUserId") REFERENCES "User" ("id") ON DELETE SET NULL ON UPDATE CASCADE
 );
 
 -- CreateTable
@@ -90,6 +91,9 @@ CREATE UNIQUE INDEX "CuratedPost_mediaId_key" ON "CuratedPost"("mediaId");
 
 -- CreateIndex
 CREATE INDEX "CuratedPost_instagramAccountId_idx" ON "CuratedPost"("instagramAccountId");
+
+-- CreateIndex
+CREATE INDEX "CuratedPost_triagedByUserId_idx" ON "CuratedPost"("triagedByUserId");
 
 -- CreateIndex
 CREATE INDEX "PostRightsClearance_clearedByUserId_idx" ON "PostRightsClearance"("clearedByUserId");
