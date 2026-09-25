@@ -109,6 +109,28 @@ describe("detectCpuBudget", () => {
     ).toEqual({ cpus: 4, source: "cgroup-v1" });
   });
 
+  it("falls back to the kernel's default v1 period when it is unreadable", () => {
+    // Round-8 finding 3: the code required both files and so discarded a
+    // perfectly good quota when only the period was missing, falling back to
+    // host cores inside a quota-limited container — the exact blind spot
+    // this function exists to close. The quota carries the information; the
+    // period is 100000µs unless someone changed it.
+    expect(
+      detectCpuBudget(fakeCgroup({ [CPU_V1_QUOTA]: "200000" }), 64),
+    ).toEqual({ cpus: 2, source: "cgroup-v1" });
+  });
+
+  it("prefers an explicitly set v1 period over the default", () => {
+    // A non-default period must still win, or the fallback would quietly
+    // misreport every container that tunes it.
+    expect(
+      detectCpuBudget(
+        fakeCgroup({ [CPU_V1_QUOTA]: "200000", [CPU_V1_PERIOD]: "50000" }),
+        64,
+      ),
+    ).toEqual({ cpus: 4, source: "cgroup-v1" });
+  });
+
   it("treats the v1 -1 sentinel as unlimited", () => {
     expect(
       detectCpuBudget(

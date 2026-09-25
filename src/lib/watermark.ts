@@ -716,8 +716,9 @@ export function resolveWatermarkConcurrencySettings(
 const mib = (bytes: number) => `${Math.round(bytes / (1024 * 1024))} MB`;
 
 /**
- * One line at startup describing the configuration and, crucially, where it
- * came from.
+ * One line describing the configuration and, crucially, where it came from.
+ * Emitted when the gate is first built — the first image upload, not
+ * process start; see getGate().
  *
  * Without this the provenance tracked through
  * {@link WatermarkConcurrencySettings} is decoration: detectMemoryBudget()

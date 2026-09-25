@@ -57,9 +57,19 @@ const CGROUP_V1_MEMORY_LIMIT = "/sys/fs/cgroup/memory/memory.limit_in_bytes";
  */
 const CGROUP_V2_CPU_MAX = "/sys/fs/cgroup/cpu.max";
 
-/** cgroup v1 CPU. Quota is -1 when unlimited; period defaults to 100000. */
+/**
+ * cgroup v1 CPU. Quota is -1 when unlimited.
+ *
+ * The period is the kernel's default of 100000µs unless something has
+ * changed it, and it is the quota that carries the information — so an
+ * unreadable period must not discard a readable quota. Doing so would fall
+ * back to host cores inside a `--cpus=2` container, which is the exact
+ * blind spot detectCpuBudget exists to close, and would then inflate
+ * resolveSharpThreads to its 4-thread cap.
+ */
 const CGROUP_V1_CPU_QUOTA = "/sys/fs/cgroup/cpu/cpu.cfs_quota_us";
 const CGROUP_V1_CPU_PERIOD = "/sys/fs/cgroup/cpu/cpu.cfs_period_us";
+const CGROUP_V1_DEFAULT_CPU_PERIOD_US = 100_000;
 
 export type FileReader = (path: string) => string | undefined;
 
@@ -149,8 +159,10 @@ export function detectCpuBudget(
   }
 
   const quota = parsePositive(readFile(CGROUP_V1_CPU_QUOTA));
-  const period = parsePositive(readFile(CGROUP_V1_CPU_PERIOD));
-  if (quota !== undefined && period !== undefined) {
+  if (quota !== undefined) {
+    const period =
+      parsePositive(readFile(CGROUP_V1_CPU_PERIOD)) ??
+      CGROUP_V1_DEFAULT_CPU_PERIOD_US;
     return {
       cpus: Math.min(ceiling, Math.max(1, Math.floor(quota / period))),
       source: "cgroup-v1",
