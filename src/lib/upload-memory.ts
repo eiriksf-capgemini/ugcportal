@@ -327,6 +327,15 @@ export function uploadReservationBytes(readLimitBytes: number): number {
  * than memory affords, which the gate honours and only reports on — makes
  * this bound the tighter of the two, so the surplus queue simply never fills.
  * That is the safe direction and is left alone.
+ *
+ * The proof above assumes `budgetBytes` is the derived value rather than the
+ * {@link MIN_UPLOAD_BUDGET_BYTES} floor, so the floored case needs its own
+ * line: the floor only bites when `spendable - limit x DECODE < MIN`, which
+ * for a derived limit means limit is 1 and `spendable < DECODE + MIN`; then
+ * `forQueue = spendable - (DECODE + BODY) < MIN - BODY`, which is under one
+ * body, so `queueLimit` is 0 and the requirement is `MIN >= 1 x BODY` — true
+ * by MIN's own definition (one maximum-size image *plus* its framing). Both
+ * cases are swept in upload-memory.test.ts rather than left at "should hold".
  */
 export function resolveUploadMemorySettings(
   watermark: WatermarkConcurrencySettings = resolveWatermarkConcurrencySettings(),
