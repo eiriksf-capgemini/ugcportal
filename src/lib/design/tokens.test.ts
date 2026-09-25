@@ -116,7 +116,7 @@ describe("resolveToken", () => {
         "--a",
         tokensFrom(":root { --a: color-mix(in oklch, var(--b), white 5%); }"),
       ),
-    ).toThrow(/only.*bare var\(\)/s);
+    ).toThrow(/only[\s\S]*bare var\(\)/);
   });
 });
 

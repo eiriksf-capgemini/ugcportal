@@ -16,10 +16,10 @@
  * same single token set rather than silently falling back to light defaults.
  * It is an activation hook, not a second palette.
  *
- * src/lib/design/contrast.test.ts parses THIS FILE and fails the build if any
- * documented pairing drops below its WCAG threshold, and if any semantic token
- * is declared in more than one block. Edit the numbers freely; the gate will
- * tell you when you have gone too far.
+ * src/lib/design/contrast.test.ts parses THIS FILE and fails the suite if any
+ * documented non-decorative pairing drops below its WCAG threshold, or if any
+ * custom property is declared in more than one block. Edit the numbers freely;
+ * the gate will tell you when you have gone too far.
  */
 @custom-variant dark (&:is(.dark *));
 
@@ -79,7 +79,8 @@
    *   overwhelmingly warm. A faintly cool surround is also what makes those
    *   warm subjects advance.
    *
-   * Level semantics (hover raises a fill exactly one level):
+   * Level semantics. Hovering a filled surface raises it one level; an
+   * unfilled control (ghost, outline) hovers to level 2.
    *   0  page canvas, and the surround for full-bleed media
    *   1  raised: cards, image mats, muted fills, table headers
    *   2  overlay: popovers, dialogs, menus; hover on level 1
@@ -139,6 +140,8 @@
    */
   --color-danger: oklch(0.78 0.12 25);
   --color-danger-surface: oklch(0.26 0.045 25);
+  /* Hover raises the error well by roughly one step of the neutral scale. */
+  --color-danger-surface-hover: oklch(0.305 0.05 25);
 }
 
 @theme inline {
@@ -170,6 +173,7 @@
   --color-border: var(--border);
   --color-destructive: var(--destructive);
   --color-destructive-surface: var(--destructive-surface);
+  --color-destructive-surface-hover: var(--destructive-surface-hover);
   --color-accent-foreground: var(--accent-foreground);
   --color-accent: var(--accent);
   --color-muted-foreground: var(--muted-foreground);
@@ -224,6 +228,7 @@
 
   --destructive: var(--color-danger);
   --destructive-surface: var(--color-danger-surface);
+  --destructive-surface-hover: var(--color-danger-surface-hover);
   --border: var(--color-line);
   --input: var(--color-line-strong);
   --ring: var(--color-petrol-400);

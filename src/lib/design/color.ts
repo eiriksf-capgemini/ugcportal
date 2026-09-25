@@ -1,10 +1,16 @@
 /**
  * Colour maths for the design-system contrast gate (ugcportal-axu).
  *
- * Deliberately strict: every entry point throws on input it cannot fully
- * understand rather than returning a number. A contrast helper that quietly
- * passes a pair it could not parse is worse than no helper at all, because
- * the build stays green while the guarantee is gone.
+ * Deliberately strict: parseColor, relativeLuminance, compositeOver and
+ * contrastRatio throw on input they cannot fully evaluate rather than
+ * returning a number. A contrast helper that quietly passes a pair it could
+ * not parse is worse than no helper at all, because the build stays green
+ * while the guarantee is gone.
+ *
+ * Two exceptions, both reporting-only: `toHex` clamps rather than throwing,
+ * and `oklchToSrgb` does not range-check its arguments (parseColor does that
+ * before calling it) but does report out-of-gamut results instead of hiding
+ * the clip.
  */
 
 /** A colour resolved to non-linear sRGB channels in 0..1 plus alpha in 0..1. */

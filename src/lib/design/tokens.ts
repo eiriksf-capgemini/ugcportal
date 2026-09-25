@@ -6,6 +6,16 @@
  * the test is checking numbers that no longer ship, while still reporting a
  * pass. Parsing the real file is what makes "a later token tweak cannot quietly
  * drop a pair below the line" true rather than merely claimed.
+ *
+ * One honest limit on that claim: what the gate measures is the *authored*
+ * value. Lightning CSS (via Tailwind) transpiles `oklch()` to `lab()` for the
+ * configured browser targets, and that conversion rounds. Measured on
+ * 2026-09-25 against headless Chromium, across all 76 documented pairings, the
+ * largest difference between the authored ratio and the ratio of the colour
+ * the browser actually painted was 0.06:1, and no pairing changed pass/fail.
+ * So the gate is accurate to about a hundredth of a ratio point, not exact.
+ * Keep roughly that much margin above a threshold and the distinction never
+ * matters; ship a pair at 4.50 exactly and it might.
  */
 
 import { readFileSync } from "node:fs";

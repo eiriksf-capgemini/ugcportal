@@ -7,9 +7,10 @@
  * src/app/globals.css and fails the suite — and therefore CI, and therefore the
  * merge — on any pair below its threshold.
  *
- * Adding a surface level or a foreground token without adding it here also
- * fails: see the coverage tests. The gate is only worth having if it cannot be
- * silently routed around.
+ * Two coverage tests keep this list honest, but only for the shapes they name:
+ * adding a `--color-surface-<n>` level, or any `--*-foreground` token, without
+ * listing it here fails the suite. A token under some other name (a third ink
+ * level, say) is not caught automatically and has to be added here by hand.
  */
 
 import {
@@ -255,34 +256,54 @@ export const PAIRINGS: Pairing[] = [
     "ui",
     "Border of the error callout and of the destructive button.",
   ),
-  {
-    id: "destructive-text-on-destructive-surface",
-    foreground: "--destructive",
-    background: ["--destructive-surface"],
-    requirement: "body",
-    usage: "Error message inside its own well (bg-destructive-surface).",
-  },
-  {
-    id: "ink-on-destructive-surface",
-    foreground: "--foreground",
-    background: ["--destructive-surface"],
-    requirement: "body",
-    usage: "Body copy inside an error well.",
-  },
-  {
-    id: "muted-foreground-on-destructive-surface",
-    foreground: "--muted-foreground",
-    background: ["--destructive-surface"],
-    requirement: "body",
-    usage: "Supporting detail inside an error well.",
-  },
-  {
-    id: "control-edge-on-destructive-surface",
-    foreground: "--input",
-    background: ["--destructive-surface"],
-    requirement: "ui",
-    usage: "An input or outline button rendered inside an error well.",
-  },
+  ...onEverySurface(
+    "destructive-focus-ring",
+    `--destructive/${RING_ALPHA_MODIFIER}`,
+    "ui",
+    "Focus indicator on a destructive control.",
+  ),
+  ...(["--destructive-surface", "--destructive-surface-hover"] as const).flatMap(
+    (well): Pairing[] => {
+      const state = well.endsWith("-hover") ? "-hover" : "";
+      return [
+        {
+          id: `destructive-text-on-destructive-surface${state}`,
+          foreground: "--destructive",
+          background: [well],
+          requirement: "body",
+          usage: `Error text inside its own well${state ? ", hovered" : ""}.`,
+        },
+        {
+          id: `ink-on-destructive-surface${state}`,
+          foreground: "--foreground",
+          background: [well],
+          requirement: "body",
+          usage: `Body copy inside an error well${state ? ", hovered" : ""}.`,
+        },
+        {
+          id: `muted-foreground-on-destructive-surface${state}`,
+          foreground: "--muted-foreground",
+          background: [well],
+          requirement: "body",
+          usage: `Supporting detail inside an error well${state ? ", hovered" : ""}.`,
+        },
+        {
+          id: `control-edge-on-destructive-surface${state}`,
+          foreground: "--input",
+          background: [well],
+          requirement: "ui",
+          usage: `An input or outline button inside an error well${state ? ", hovered" : ""}.`,
+        },
+        {
+          id: `destructive-edge-on-destructive-surface${state}`,
+          foreground: `--destructive/${DESTRUCTIVE_EDGE_ALPHA_MODIFIER}`,
+          background: [well],
+          requirement: "ui",
+          usage: `Border of the destructive button against its own fill${state ? ", hovered" : ""}.`,
+        },
+      ];
+    },
+  ),
 
   // Chart tokens are declared but not yet consumed; they are checked against
   // the two surfaces a chart could sit on so they cannot ship unreadable.

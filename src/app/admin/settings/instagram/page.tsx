@@ -115,7 +115,7 @@ export default async function InstagramSettingsPage({
   const errorMessage = outcomeMessage(error);
 
   return (
-    <main className="mx-auto w-full max-w-3xl flex-1 px-6 py-12">
+    <div className="mx-auto w-full max-w-3xl flex-1 px-4 py-12 sm:px-6">
       <h1 className="text-2xl font-semibold tracking-tight">
         Instagram accounts
       </h1>
@@ -137,7 +137,7 @@ export default async function InstagramSettingsPage({
         </p>
       ) : null}
       {errorMessage ? (
-        <p className="mt-6 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
+        <p className="mt-6 rounded-lg border border-destructive/60 bg-destructive-surface p-3 text-sm text-destructive">
           {errorMessage}
         </p>
       ) : null}
@@ -186,7 +186,7 @@ export default async function InstagramSettingsPage({
                 <div
                   className={
                     blocker
-                      ? "rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm"
+                      ? "rounded-lg border border-destructive/60 bg-destructive-surface p-3 text-sm"
                       : "rounded-lg border border-border bg-muted p-3 text-sm"
                   }
                 >
@@ -290,7 +290,7 @@ export default async function InstagramSettingsPage({
                   </div>
                 ) : (
                   <a
-                    className="inline-block text-sm font-medium underline underline-offset-4"
+                    className="inline-block rounded-sm text-sm font-medium text-primary underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring"
                     href={`${INSTAGRAM_SETTINGS_PATH}?edit=${account.id}`}
                   >
                     Record a resale-rights decision
@@ -301,6 +301,6 @@ export default async function InstagramSettingsPage({
           })}
         </ul>
       )}
-    </main>
+    </div>
   );
 }
