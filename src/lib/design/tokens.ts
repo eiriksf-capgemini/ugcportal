@@ -138,23 +138,40 @@ export function resolveToken(
         (seen.length > 0 ? ` (referenced via ${seen.join(" -> ")})` : ""),
     );
   }
-  const value = declaration.value;
+  return resolveValue(declaration.value, declarations, [...seen, property]);
+}
+
+/**
+ * Resolves one declaration value. Split out from resolveToken so that a
+ * `var()` *fallback* goes through exactly the same path as a declaration:
+ * `var(--missing, var(--b))` used to be returned verbatim as the string
+ * "var(--b)", which parseColor then rejected as unsupported syntax, blaming
+ * the colour parser for a missing token.
+ */
+function resolveValue(
+  rawValue: string,
+  declarations: Map<string, Declaration>,
+  seen: string[],
+): string {
+  const value = rawValue.trim();
   const asVar = VAR_ONLY.exec(value);
   if (asVar) {
     const target = asVar[1];
     const fallback = asVar[2]?.trim();
     if (!declarations.has(target)) {
       if (fallback === undefined || fallback === "") {
-        fail(`${property} references ${target}, which is not declared`);
+        fail(
+          `${seen[seen.length - 1]} references ${target}, which is not declared`,
+        );
       }
-      return fallback;
+      return resolveValue(fallback, declarations, seen);
     }
-    return resolveToken(target, declarations, [...seen, property]);
+    return resolveToken(target, declarations, seen);
   }
   if (value.includes("var(")) {
     fail(
-      `${property} = "${value}" mixes var() with other syntax; this resolver only ` +
-        `handles a bare var() reference, and will not guess at the rest`,
+      `${seen[seen.length - 1]} = "${value}" mixes var() with other syntax; this ` +
+        `resolver only handles a bare var() reference, and will not guess at the rest`,
     );
   }
   return value;

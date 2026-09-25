@@ -87,6 +87,39 @@ describe("resolveToken", () => {
   it("uses a var() fallback only when the target is missing", () => {
     const tokens = tokensFrom(`:root { --a: var(--missing, oklch(0 0 0)); }`);
     expect(resolveToken("--a", tokens)).toBe("oklch(0 0 0)");
+    const present = tokensFrom(
+      `:root { --a: var(--b, oklch(0 0 0)); --b: oklch(1 0 0); }`,
+    );
+    expect(resolveToken("--a", present)).toBe("oklch(1 0 0)");
+  });
+
+  it("resolves a fallback that is itself a var() reference", () => {
+    // Previously returned the literal string "var(--b)", which parseColor
+    // then rejected as unsupported syntax - blaming the colour parser for a
+    // missing token.
+    const tokens = tokensFrom(
+      `:root { --a: var(--missing, var(--b)); --b: oklch(0.5 0 0); }`,
+    );
+    expect(resolveToken("--a", tokens)).toBe("oklch(0.5 0 0)");
+  });
+
+  it("resolves a chain of var() fallbacks", () => {
+    const tokens = tokensFrom(
+      `:root { --a: var(--gone, var(--alsogone, oklch(0.25 0 0))); }`,
+    );
+    expect(resolveToken("--a", tokens)).toBe("oklch(0.25 0 0)");
+  });
+
+  it("throws when a fallback chain ends in nothing declared", () => {
+    const tokens = tokensFrom(`:root { --a: var(--gone, var(--alsogone)); }`);
+    expect(() => resolveToken("--a", tokens)).toThrow(/not declared/);
+  });
+
+  it("detects a cycle reached through a fallback", () => {
+    const tokens = tokensFrom(
+      `:root { --a: var(--gone, var(--b)); } .x { --b: var(--a); }`,
+    );
+    expect(() => resolveToken("--a", tokens)).toThrow(/cyclic/);
   });
 
   it("throws on an unknown token", () => {

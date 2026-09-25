@@ -23,34 +23,44 @@
  */
 @custom-variant dark (&:is(.dark *));
 
+/*
+ * Petrol (ugcportal-eh5) — kept in full, demoted from dominant surface colour
+ * to accent. It now drives links, focus rings, selection and the single
+ * primary action, and nothing else.
+ *
+ * The scale is split across two blocks, and the split is the whole point.
+ *
+ * petrol-600 through petrol-950 fall OUTSIDE the sRGB gamut at hue 205.
+ * Measured, not asserted: the browser clips them, so petrol-950 paints as
+ * #001619 and petrol-800 as #004148, and their real contrast is whatever the
+ * clip happens to produce. They are declared here in :root rather than in
+ * @theme, which keeps every value in eh5's scale present and referenceable
+ * (K4) while stopping Tailwind emitting `bg-petrol-900` and friends — because
+ * a utility that exists is a utility something will eventually use, and the
+ * contrast gate only measures tokens named in PAIRINGS. Filed as
+ * ugcportal-acx; eh5's numbers are left as-shipped rather than quietly
+ * rewritten underneath it.
+ *
+ * `emits no out-of-gamut colour as a usable utility` in contrast.test.ts
+ * enforces this for any future token, not just these five.
+ */
+:root {
+  --color-petrol-600: oklch(0.5 0.09 205);
+  --color-petrol-700: oklch(0.42 0.08 205);
+  --color-petrol-800: oklch(0.34 0.065 205);
+  --color-petrol-900: oklch(0.27 0.05 205);
+  --color-petrol-950: oklch(0.18 0.035 205);
+}
+
 @theme {
-  /*
-   * Petrol (ugcportal-eh5) — kept in full, demoted from dominant surface
-   * colour to accent. It now drives links, focus rings, selection and the
-   * single primary action, and nothing else.
-   */
   --color-petrol-50: oklch(0.98 0.014 205);
   --color-petrol-100: oklch(0.95 0.028 205);
   --color-petrol-200: oklch(0.9 0.045 205);
   --color-petrol-300: oklch(0.82 0.065 205);
   --color-petrol-400: oklch(0.72 0.085 205);
   --color-petrol-500: oklch(0.6 0.095 205);
-  --color-petrol-600: oklch(0.5 0.09 205);
-  --color-petrol-700: oklch(0.42 0.08 205);
-  --color-petrol-800: oklch(0.34 0.065 205);
-  --color-petrol-900: oklch(0.27 0.05 205);
-  --color-petrol-950: oklch(0.18 0.035 205);
 
-  /*
-   * The deepest petrol that actually exists in sRGB.
-   *
-   * Measured, not chosen: petrol-600 through petrol-950 all fall OUTSIDE the
-   * sRGB gamut at hue 205, so a browser clips them — petrol-950 renders as
-   * #001619, petrol-800 as #004148. Their real contrast is whatever the clip
-   * produces, which is why the gate refuses to measure them and why nothing
-   * here uses them as a surface. Tracked separately; eh5's scale is left
-   * as-shipped rather than quietly rewritten under it.
-   */
+  /* The deepest petrol that actually exists in sRGB; see the note above. */
   --color-petrol-deep: oklch(0.32 0.054 205);
 
   /*

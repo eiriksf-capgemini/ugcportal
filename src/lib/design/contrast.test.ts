@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
+import { parseColor } from "./color";
 import {
   PAIRINGS,
   RING_ALPHA_MODIFIER,
@@ -11,7 +12,12 @@ import {
   parseTokenReference,
   type Pairing,
 } from "./contrast";
-import { GLOBALS_CSS_PATH, loadThemeTokens, resolveToken } from "./tokens";
+import {
+  GLOBALS_CSS_PATH,
+  loadThemeTokens,
+  parseDeclarations,
+  resolveToken,
+} from "./tokens";
 import { findAlphaColorUtilities } from "./usage";
 
 const tokens = loadThemeTokens();
@@ -174,6 +180,16 @@ describe("the gate cannot be routed around", () => {
     expect(used.length).toBeGreaterThan(0);
 
     for (const usage of used) {
+      // A Tailwind built-in colour (bg-black/50) resolves to no token at all.
+      // Caught here with its own advice, because letting resolveToken throw
+      // "unknown token --color-black" blames the wrong thing.
+      expect(
+        tokens.has(usage.property),
+        `${usage.file} uses "${usage.utility}", which is not a design token - ` +
+          `${usage.property} is not declared in globals.css. Use a token from the ` +
+          `surface/ink/petrol scales so the gate can measure it.`,
+      ).toBe(true);
+
       const key = `${resolveToken(usage.property, tokens)}@${usage.alphaPercent}`;
       expect(
         measured.has(key),
@@ -181,6 +197,40 @@ describe("the gate cannot be routed around", () => {
           `measures ${usage.property} at ${usage.alphaPercent}% alpha. Add the ` +
           `pairing, or change the utility to an alpha that is already measured.`,
       ).toBe(true);
+    }
+  });
+
+  /**
+   * Finding 3 of round 2. The gamut rejection only fires for tokens named in
+   * PAIRINGS, and the usage scanner only sees alpha-modified utilities, so
+   * `bg-petrol-900` could ship a clipped colour with the suite green. Anything
+   * in a @theme block is a utility Tailwind will emit, so that is the right
+   * place to draw the line: if it can be used, it has to be real.
+   */
+  it("emits no out-of-gamut colour as a usable utility", () => {
+    const themeColors = parseDeclarations(css).filter(
+      (declaration) =>
+        declaration.selector.startsWith("@theme") &&
+        declaration.property.startsWith("--color-"),
+    );
+    expect(themeColors.length).toBeGreaterThan(10);
+
+    for (const declaration of themeColors) {
+      const value = resolveToken(declaration.property, tokens);
+      let color;
+      try {
+        color = parseColor(value);
+      } catch {
+        continue; // not a colour literal; nothing to check
+      }
+      expect(
+        color.outOfGamut,
+        `${declaration.property} (${value}) is outside the sRGB gamut, but is ` +
+          `declared in "${declaration.selector}", so Tailwind emits utilities for ` +
+          `it and a component can use a colour the browser will clip. Either bring ` +
+          `it into gamut or move it out of @theme so it stays a value without ` +
+          `becoming a utility.`,
+      ).toBe(false);
     }
   });
 

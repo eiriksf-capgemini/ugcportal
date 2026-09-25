@@ -40,9 +40,17 @@ export function AppShell({ children }: { children: ReactNode }) {
       in the middle of a short page.
     */
     <div className="flex min-h-dvh flex-col bg-background">
+      {/*
+        `fixed`, not `absolute`. This wrapper is not a containing block, so an
+        absolutely positioned skip link resolves against the initial
+        containing block - i.e. the top of the document. Shift+Tab back to it
+        from halfway down a page then scrolled the whole page to the top to
+        bring it into view. Viewport-relative positioning has no such failure
+        mode, and needs no `relative` ancestor to be correct.
+      */}
       <a
         href="#main-content"
-        className="sr-only rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground focus-visible:not-sr-only focus-visible:absolute focus-visible:top-2 focus-visible:left-2 focus-visible:z-50"
+        className="sr-only rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground focus-visible:not-sr-only focus-visible:fixed focus-visible:top-2 focus-visible:left-2 focus-visible:z-50"
       >
         Skip to content
       </a>
@@ -65,7 +73,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             Auth is the only header action today. Nav links belong here, to
             the left of this, once there is more than one destination.
           */}
-          <div className="ml-auto flex min-w-0 items-center gap-2">
+          <div className="ml-auto flex min-w-0 shrink-0 items-center gap-2">
             <AuthStatus />
           </div>
         </div>

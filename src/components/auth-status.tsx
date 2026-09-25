@@ -12,25 +12,39 @@ export async function AuthStatus() {
           petrol slabs in the header was the single loudest instance of the
           old petrol-dominant treatment, and signing in is not the primary
           action of a page whose job is to show photographs.
+
+          "Sign in with" is visually hidden below 640px and the provider name
+          carries the button on its own. Two full labels plus the wordmark
+          came to roughly 330-340px of content that could not shrink - the
+          labels must not truncate, and the buttons are shrink-0 - so at 320px
+          the document grew a horizontal scrollbar.
+
+          Hidden with sr-only rather than removed, so the accessible name
+          stays "Sign in with Google" at every width. The visible text remains
+          a substring of it, which is what WCAG 2.5.3 asks of a visible label.
         */}
         <form
+          className="min-w-0"
           action={async () => {
             "use server";
             await signIn("google");
           }}
         >
           <Button type="submit" variant="outline" size="sm">
-            Sign in with Google
+            <span className="sr-only sm:not-sr-only">Sign in with&nbsp;</span>
+            Google
           </Button>
         </form>
         <form
+          className="min-w-0"
           action={async () => {
             "use server";
             await signIn("facebook");
           }}
         >
           <Button type="submit" variant="outline" size="sm">
-            Sign in with Facebook
+            <span className="sr-only sm:not-sr-only">Sign in with&nbsp;</span>
+            Facebook
           </Button>
         </form>
       </div>
