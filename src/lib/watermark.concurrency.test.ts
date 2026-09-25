@@ -353,6 +353,37 @@ describe("resolveWatermarkConcurrencySettings", () => {
     expect(settings.projectedGatedPeakBytes).toBe(764 * MiB);
   });
 
+  it("will not let the override exceed a cgroup limit the kernel enforces", () => {
+    // Round-8 finding 1, and the sharpest edge in this whole change: the
+    // knob added to make the budget *honest* was itself a route to the OOM
+    // the gate exists to prevent. A 1 GB container on a 64 GB host asking
+    // for 8 GB used to be accepted with no clamp at all — limit 3, queue 12,
+    // ~1004 MB committed, fitsBudget true, logged at info level, killed.
+    const settings = resolveWatermarkConcurrencySettings(
+      { WATERMARK_MEMORY_BUDGET_MB: "8192" },
+      { bytes: GiB, source: "cgroup-v2" },
+      cpu(8),
+      64 * GiB,
+    );
+    expect(settings.budgetBytes).toBe(GiB);
+    expect(settings.clamped).toHaveLength(1);
+    expect(settings.clamped[0]).toContain("cgroup-v2 memory limit");
+    expect(settings.clamped[0]).toContain("OOM-killed");
+  });
+
+  it("still lets the override lower a budget below the detected one", () => {
+    // The direction the knob exists for is untouched: downwards it is the
+    // operator telling us something the kernel did not.
+    const settings = resolveWatermarkConcurrencySettings(
+      { WATERMARK_MEMORY_BUDGET_MB: "768" },
+      { bytes: 2 * GiB, source: "cgroup-v2" },
+      cpu(8),
+      64 * GiB,
+    );
+    expect(settings.budgetBytes).toBe(768 * MiB);
+    expect(settings.clamped).toEqual([]);
+  });
+
   it("will not accept a budget larger than the machine", () => {
     const hostRam = 8 * GiB;
     const settings = resolveWatermarkConcurrencySettings(

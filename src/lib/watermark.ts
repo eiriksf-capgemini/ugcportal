@@ -596,20 +596,36 @@ export function resolveWatermarkConcurrencySettings(
   //    the detected number is wrong" is the whole reason an escape hatch
   //    exists, and overriding only the *limit* does not escape anything —
   //    the queue would still be sized from a budget everyone agrees is
-  //    fiction. Capped at host RAM for the same reason detectMemoryBudget
-  //    caps the cgroup value: a budget larger than the machine cannot be
-  //    honoured whoever asserts it.
+  //    fiction.
+  //
+  //    Overridable *downwards* only. The variable exists for the case where
+  //    the detected budget is too big — no visible cgroup, so it fell back
+  //    to host RAM — and in that direction it is the operator telling us
+  //    something the kernel did not. Upwards it is the operator contradicting
+  //    something the kernel *did* say, and the kernel wins: a cgroup limit is
+  //    enforced whatever this variable claims. Left unclamped, this knob is a
+  //    direct route to the failure the whole gate exists to prevent —
+  //    WATERMARK_MEMORY_BUDGET_MB=8192 inside a 1 GB container would derive
+  //    limit 3 + queue 12, report fitsBudget: true at info level, and get
+  //    OOM-killed.
+  //
+  //    So the ceiling is the detected budget, whatever its provenance: the
+  //    cgroup limit when there is one, host RAM when there is not (which is
+  //    what detectMemoryBudget already returns in that case).
   const budgetOverrideMb = positiveInt(env.WATERMARK_MEMORY_BUDGET_MB);
   let budgetBytes = detected.bytes;
   let budgetSource: WatermarkConcurrencySettings["budgetSource"] =
     detected.source;
   if (budgetOverrideMb !== undefined) {
     const requested = budgetOverrideMb * 1024 * 1024;
-    budgetBytes = Math.min(requested, hostMemoryBytes);
+    const ceiling = Math.min(detected.bytes, hostMemoryBytes);
+    budgetBytes = Math.min(requested, ceiling);
     budgetSource = "env";
     if (budgetBytes !== requested) {
       clamped.push(
-        `WATERMARK_MEMORY_BUDGET_MB=${budgetOverrideMb} is more memory than the machine has; clamped to ${mib(budgetBytes)}`,
+        detected.source === "host"
+          ? `WATERMARK_MEMORY_BUDGET_MB=${budgetOverrideMb} is more memory than the machine has; clamped to ${mib(budgetBytes)}`
+          : `WATERMARK_MEMORY_BUDGET_MB=${budgetOverrideMb} exceeds this container's own ${detected.source} memory limit of ${mib(detected.bytes)}; clamped to it. The kernel enforces that limit whatever this variable says, so honouring the larger number would only mean being OOM-killed while reporting a fit.`,
       );
     }
   }
