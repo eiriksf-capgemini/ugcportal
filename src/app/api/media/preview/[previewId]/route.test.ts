@@ -119,6 +119,14 @@ const ROGUE_KEY = row({
   publishedAt: new Date("2026-03-04T10:00:00.000Z"),
   previewKey: `media/${OWNER_ID}/rogue-original.png`,
 });
+// Prefixed correctly and still pointing at the originals' shelf. Object
+// storage treats the key literally, but this deployment addresses the bucket
+// path-style, and intermediaries collapse `..` in a request path.
+const TRAVERSAL_KEY = row({
+  id: "traversal",
+  publishedAt: new Date("2026-03-08T10:00:00.000Z"),
+  previewKey: `${PREVIEW_KEY_PREFIX}../media/${OWNER_ID}/rogue-original.png`,
+});
 // Blank rather than null: `"" !== null`, so it satisfies every `not: null`
 // filter in the codebase while pointing at nothing.
 const BLANK_KEY = row({
@@ -148,6 +156,7 @@ const TABLE: Row[] = [
   OTHERS_UNPUBLISHED,
   OTHERS_PUBLISHED,
   ROGUE_KEY,
+  TRAVERSAL_KEY,
   BLANK_KEY,
   ODD_SHAPED_ID,
   VIDEO,
@@ -465,6 +474,17 @@ describe("K4: the original is never served", () => {
     expect(rogue.status).toBe(404);
     // The point of the test: no GetObject at all, so the original's bytes are
     // never even read, let alone returned.
+    expect(s3SendMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses a key that escapes the prefix with a `..` segment", async () => {
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
+    const response = await call(TRAVERSAL_KEY.previewId as string);
+    consoleError.mockRestore();
+
+    expect(response.status).toBe(404);
     expect(s3SendMock).not.toHaveBeenCalled();
   });
 

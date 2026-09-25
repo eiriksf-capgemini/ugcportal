@@ -271,9 +271,21 @@ function ifNoneMatchSatisfied(header: string | null, etag: string): boolean {
  * already on the roadmap (ugcportal-ct0's Instagram sync). Without this, such
  * a row would make this route serve the unwatermarked original to anyone, with
  * a 200 and no sign of trouble.
+ *
+ * The `..` segment check is not decoration on top of the prefix check, it
+ * covers a case the prefix check alone lets through: `previews/../media/x.png`
+ * starts with the prefix and still names the originals' shelf. Object storage
+ * itself treats a key as an opaque string and would simply miss — but this
+ * deployment addresses the bucket path-style (S3_FORCE_PATH_STYLE, see
+ * env.example), so the key becomes path segments in the request line, and
+ * plenty of things between here and the bucket (nginx, HAProxy, a CDN) collapse
+ * `..` in a path before forwarding it. Rejecting the segment costs one line and
+ * does not depend on knowing which intermediary is in front of the bucket
+ * today.
  */
 function isPreviewObjectKey(key: string): boolean {
-  return key.startsWith(PREVIEW_KEY_PREFIX);
+  if (!key.startsWith(PREVIEW_KEY_PREFIX)) return false;
+  return !key.split("/").includes("..");
 }
 
 /** True for the S3 error meaning "the row points at an object that is gone". */
