@@ -47,12 +47,15 @@ const { GET, POST } = await import("@/app/api/media/route");
 const { encodeMediaCursor } = await import("@/lib/media-listing");
 const {
   generateWatermarkedPreview,
+  resetWatermarkConcurrencyGate,
   WatermarkOverloadedError,
   WatermarkFontUnavailableError,
 } = await import("@/lib/watermark");
-// The real, unmocked implementation, kept aside so beforeEach can restore it
-// as the mock's default below — mockReset() alone would drop it and leave
-// generateWatermarkedPreview resolving to undefined for every other test.
+// The real, unmocked implementation. Vitest 3.x already restores this as the
+// mock's default on mockReset() below, since it's the implementation
+// generateWatermarkedPreview was created with (vi.fn(impl) tracks impl as the
+// original to fall back to). Imported here anyway so the beforeEach reset can
+// say so explicitly via mockImplementation rather than relying on that.
 const { generateWatermarkedPreview: realGenerateWatermarkedPreview } =
   await vi.importActual<typeof import("@/lib/watermark")>("@/lib/watermark");
 
@@ -202,11 +205,12 @@ beforeEach(() => {
   mediaFindManyMock.mockReset();
   mediaFindFirstMock.mockReset();
   // Drops any leftover one-shot mockRejectedValueOnce from a prior test (the
-  // two ugcportal-u7g tests below queue one each) and restores the real
-  // implementation as the default, exactly like the five mocks above — a
-  // future change that made POST return before reaching this call for their
-  // fixture would otherwise leak an unconsumed rejection into whichever test
-  // runs next, failing there instead of where it was introduced.
+  // two ugcportal-u7g tests below queue one each) — a future change that made
+  // POST return before reaching this call for their fixture would otherwise
+  // leak an unconsumed rejection into whichever test runs next, failing there
+  // instead of where it was introduced. mockReset() alone already restores
+  // the real implementation as vitest's default for a mock created via
+  // vi.fn(impl); the explicit mockImplementation just says so out loud.
   vi.mocked(generateWatermarkedPreview)
     .mockReset()
     .mockImplementation(realGenerateWatermarkedPreview);
@@ -614,6 +618,71 @@ describe("POST /api/media", () => {
     expect(s3SendMock).not.toHaveBeenCalled();
     expect(mediaCreateMock).not.toHaveBeenCalled();
     errorSpy.mockRestore();
+  });
+
+  it("maps a real gate rejection to 503, not just a constructed WatermarkOverloadedError (ugcportal-u7g)", async () => {
+    // Round-2 finding 3. The two tests above construct WatermarkOverloadedError
+    // by hand and mock generateWatermarkedPreview to reject with it — they pin
+    // the route's *mapping*, but nothing in this file exercises the other half
+    // of the link: watermark.ts's own ConcurrencyLimitError -> WatermarkOverloadedError
+    // wrapping (generateWatermarkedPreview, around the getGate().run() call).
+    // Deleting that wrapping would silently regress every real shed back to a
+    // bare 500 while both suites stayed green, because neither suite would
+    // still be driving an actual rejection through it. This test does: real
+    // gate, real generateWatermarkedPreview (the beforeEach above restores it
+    // as the mock's default — no mockRejectedValueOnce here), forced into
+    // shedding by racing two uploads through a gate sized to admit only one.
+    authMock.mockResolvedValue({ user: { id: "user-1" } });
+    s3SendMock.mockResolvedValue({});
+    mediaCreateMock.mockImplementation(async ({ data }) =>
+      selectedRow({ id: "media-1", kind: data.kind, previewKey: data.previewKey }),
+    );
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const envBackup = { ...process.env };
+    process.env.WATERMARK_MAX_CONCURRENCY = "1";
+    process.env.WATERMARK_QUEUE_LIMIT = "0";
+    resetWatermarkConcurrencyGate();
+
+    try {
+      // Limit 1, queue 0: whichever of these two reaches the gate first is
+      // admitted, and the other has nowhere to wait, so it sheds for real —
+      // deterministic because the gate's admission check runs synchronously
+      // (see acquire() in src/lib/concurrency-gate.ts), regardless of which
+      // request happens to get there first.
+      const [first, second] = await Promise.all([
+        POST(
+          buildRequest(
+            new File([REAL_PNG], "photo-a.png", { type: "image/png" }),
+          ),
+        ),
+        POST(
+          buildRequest(
+            new File([REAL_PNG], "photo-b.png", { type: "image/png" }),
+          ),
+        ),
+      ]);
+
+      const statuses = [first.status, second.status].sort();
+      expect(statuses).toEqual([201, 503]);
+
+      const shed = first.status === 503 ? first : second;
+      const retryAfterHeader = shed.headers.get("Retry-After");
+      expect(retryAfterHeader).not.toBeNull();
+      const retryAfter = Number(retryAfterHeader);
+      expect(Number.isInteger(retryAfter)).toBe(true);
+      expect(retryAfter).toBeGreaterThan(0);
+
+      // Same fail-closed behaviour a mocked shed gets: nothing extra reaches
+      // storage for the rejected upload, and no fault-level line for it.
+      expect(mediaCreateMock).toHaveBeenCalledTimes(1);
+      expect(errorSpy).not.toHaveBeenCalled();
+    } finally {
+      process.env = envBackup;
+      resetWatermarkConcurrencyGate();
+      errorSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
   });
 
   it("deletes both the original and the preview if the DB write fails", async () => {

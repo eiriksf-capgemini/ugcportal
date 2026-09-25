@@ -202,14 +202,20 @@ export async function POST(request: Request) {
       if (error instanceof WatermarkOverloadedError) {
         // Not a fault, and not this route's fault to report as one. The gate
         // (ugcportal-e86) is working as designed, and watermark.ts already
-        // emits a throttled console.warn per shed (logShedUpload) — one line
-        // per SHED_LOG_INTERVAL_MS with the suppressed count folded in, keyed
-        // on reason/limit/queue/shedTotal. Logging again here, even at a
-        // lower level, would reintroduce exactly the volume problem this bead
+        // emits a throttled console.warn per shed (logShedUpload) — at most
+        // one line per SHED_LOG_INTERVAL_MS *in total*, off a single global
+        // timestamp rather than one throttle per reason. The line that fires
+        // does carry that shed's own reason/limit/queue/shedTotal, but a shed
+        // suppressed by the throttle is only ever counted in the next line's
+        // "+N more" tally (or the flush line, which reports a count with no
+        // reason at all) — so e.g. a `timeout` shed a few seconds after a
+        // `queue-full` shed can be folded into a count without its reason
+        // ever appearing in the logs. Logging again here, even at a lower
+        // level, would reintroduce exactly the volume problem this bead
         // exists to remove: a 52-upload shed burst would go from "52 error
         // lines" to "52 lines of some other level," not to a handful. The
-        // operator-facing signal already exists and is already throttled; all
-        // this branch owes the caller is a response that says try again.
+        // operator-facing signal already exists and is already throttled;
+        // all this branch owes the caller is a response that says try again.
         return NextResponse.json(
           {
             error: "Too many uploads are being processed right now",
