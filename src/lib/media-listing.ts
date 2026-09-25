@@ -493,20 +493,14 @@ export async function listMedia<
     // emitted shape non-nullable and means a future query change can't quietly
     // start emitting preview-less rows.
     //
-    // Checks whichever preview columns this projection actually carries, not
-    // one fixed field. `previewId` is on both arms —
-    // MediaListingRequiredColumns guarantees it, which is what makes that half
-    // load-bearing rather than decorative. `previewKey` is on the owner arm
-    // only, so it is tested via `in` rather than read directly: a bare
-    // `row.previewKey !== null` was once the whole guard, and on the anonymous
-    // arm it read `undefined !== null` and passed every row through while
-    // looking like a check.
-    //
-    // Both, because the two columns are one fact (see mediaPreviewColumns in
-    // src/lib/media.ts). Guarding only `previewId` left the owner listing
-    // emitting `previewKey: null` for a half-set row while
-    // POST /api/media/[id]/publish refused that same row with 409 — two
-    // surfaces disagreeing about whether it has a preview.
+    // What gets checked is decided by the SCOPE, not by a fixed list — see
+    // hasCompletePreview. The two arms legitimately require different things:
+    // the owner arm filters on `previewKey` alone, because a row may lack the
+    // public handle and still be its uploader's work; the anonymous arm
+    // requires both. An earlier version checked a hardcoded column and was
+    // therefore a no-op for one audience or an over-reach for the other,
+    // depending on which column it named — this listing has shipped each of
+    // those once.
     items = page.filter((row): row is MediaListingItem<TSelect> =>
       hasCompletePreview(row, scope),
     );

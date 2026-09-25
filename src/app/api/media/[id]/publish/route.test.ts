@@ -276,40 +276,47 @@ describe("POST /api/media/[id]/publish", () => {
   it("is idempotent and never moves an existing 'public since' timestamp", async () => {
     signedInAs(OWNER_ID);
     mediaFindUniqueMock.mockResolvedValue(publishedMedia);
-    // The `publishedAt: null` in the predicate is what makes the re-publish a
-    // no-op: the statement runs, matches nothing, and changes nothing.
-    mediaUpdateManyMock.mockResolvedValue({ count: 0 });
     mediaFindFirstMock.mockResolvedValue(toOwnerShape(publishedMedia));
 
     const body = await (await POST(publishRequest("POST"), context())).json();
 
-    expect(mediaUpdateManyMock.mock.calls[0][0].where).toMatchObject({
-      publishedAt: null,
-    });
+    // No write is issued at all. Publish is a transition from null, and the
+    // gate saw the row already published, so there is nothing to transition.
+    // Issuing the write anyway is what let an interleaved unpublish be undone.
+    expect(mediaUpdateManyMock).not.toHaveBeenCalled();
+    // And the answer comes from the re-read, not from the gate's stale copy.
+    expect(mediaFindFirstMock).toHaveBeenCalledTimes(1);
     expect(body.publishedAt).toBe(PUBLISHED_AT.toISOString());
   });
 
-  it("publishes correctly when an unpublish lands between the gate and the write", async () => {
+  it("does not resurrect an item whose owner unpublished it mid-request", async () => {
     signedInAs(OWNER_ID);
-    // The interleaving: DELETE /publish committed after requireOwnedMedia read
-    // the row, so the gate's copy still says "published" while the database
-    // says null. An earlier version short-circuited on the gate's stale copy,
-    // wrote nothing, and answered 200 with the old timestamp — leaving the
-    // client certain the item was public when it was private, until a reload.
+    // The interleaving: the gate read the row while it was published, then the
+    // owner's DELETE /publish committed. The previous version always ran the
+    // write with `publishedAt: null` in the predicate — which now MATCHED — so
+    // this older request republished the item and answered 200, silently
+    // undoing an explicit withdrawal and putting it back on the public feed
+    // while the owner's UI believed it private.
+    //
+    // This test is the deliberate inverse of an earlier one that asserted the
+    // republish. That earlier test was written against a real bug — answering
+    // 200 with a stale timestamp — but its fix overshot: the answer is neither
+    // "report the stale value" nor "write anyway", it is "do not write, and
+    // report what is actually there".
     mediaFindUniqueMock.mockResolvedValue(publishedMedia);
-    // The database's actual state is null, so the predicate matches and the
-    // write goes through.
-    mediaUpdateManyMock.mockResolvedValue({ count: 1 });
+    mediaFindFirstMock.mockResolvedValue(
+      toOwnerShape({ ...publishedMedia, publishedAt: null }),
+    );
 
-    const before = Date.now();
-    const body = await (await POST(publishRequest("POST"), context())).json();
+    const response = await POST(publishRequest("POST"), context());
+    const body = await response.json();
 
-    // A real write happened...
-    expect(mediaUpdateManyMock).toHaveBeenCalledTimes(1);
-    // ...and the answer reports the timestamp it just wrote, not the stale one
-    // the gate had read.
-    expect(body.publishedAt).not.toBe(PUBLISHED_AT.toISOString());
-    expect(Date.parse(body.publishedAt)).toBeGreaterThanOrEqual(before);
+    // The withdrawal stands.
+    expect(mediaUpdateManyMock).not.toHaveBeenCalled();
+    expect(response.status).toBe(409);
+    expect(body.error).toMatch(/unpublished/i);
+    // And no success body claiming a publish that did not happen.
+    expect(body).not.toHaveProperty("publishedAt");
   });
 
   it("reports the winner's timestamp when a concurrent publish got there first", async () => {
@@ -327,12 +334,14 @@ describe("POST /api/media/[id]/publish", () => {
     expect(body.publishedAt).toBe(PUBLISHED_AT.toISOString());
   });
 
-  it("refuses rather than claiming success when an unpublish wins the race", async () => {
+  it("refuses when the transition is lost and the row then ends up unpublished", async () => {
     signedInAs(OWNER_ID);
-    // The gate saw it published, so the `publishedAt: null` predicate matches
-    // nothing; then an unpublish commits before the re-read. The row exists,
-    // the caller owns it, and it is NOT published.
-    mediaFindUniqueMock.mockResolvedValue(publishedMedia);
+    // A different route to the same answer, reached from the other starting
+    // state: the gate saw the row unpublished, so the write IS attempted —
+    // but a concurrent publish got in first (count 0), and by the time of the
+    // re-read an unpublish had landed too. The row exists, the caller owns it,
+    // and it is not published.
+    mediaFindUniqueMock.mockResolvedValue(unpublishedMedia);
     mediaUpdateManyMock.mockResolvedValue({ count: 0 });
     mediaFindFirstMock.mockResolvedValue(
       toOwnerShape({ ...publishedMedia, publishedAt: null }),
@@ -341,13 +350,13 @@ describe("POST /api/media/[id]/publish", () => {
     const response = await POST(publishRequest("POST"), context());
     const body = await response.json();
 
-    // The bug this replaces: 200 with `publishedAt: null` — a success
-    // describing its own opposite, telling the client the item is public
-    // while handing back a body saying it is not.
+    // Here the write is attempted — the gate saw a transition available — and
+    // simply matches nothing.
+    expect(mediaUpdateManyMock).toHaveBeenCalledTimes(1);
     expect(response.status).toBe(409);
-    expect(body).not.toHaveProperty("publishedAt");
     expect(body.error).toMatch(/unpublished/i);
-    // And it must not overturn the newer instruction by retrying the write.
+    // Not retried: the unpublish is the more recent instruction, and retrying
+    // would let this older request overturn it.
     expect(mediaUpdateManyMock).toHaveBeenCalledTimes(1);
   });
 
@@ -432,14 +441,14 @@ describe("publishing a row with no watermarked preview", () => {
     expect((await response.json()).publishedAt).toBeNull();
   });
 
-  it("refuses a row with a preview key but no public handle", async () => {
+  it("repairs a row with a preview key but no public handle, then publishes it", async () => {
     signedInAs(OWNER_ID);
-    // The half-set pair. mediaPreviewColumns makes this unexpressible, but
-    // that helper is a convention: a writer bypassing it (ugcportal-ct0's
-    // Instagram sync is the named candidate) or a row an earlier backfill
-    // missed could still produce one. Both listings filter on previewId as
-    // well as previewKey, so publishing this would answer 200 and leave the
-    // row in no feed at all.
+    // The watermarked object exists; only the handle the anonymous feed hands
+    // out is missing. This row used to get "no watermarked preview yet" — a
+    // false statement — and a 409 with no way out, because the migration
+    // backfilled only rows existing when it ran and nothing anywhere writes
+    // previewId on an existing row. An ordinary migrate-then-swap deploy mints
+    // exactly this shape (ugcportal-r1d round 10, finding 2).
     mediaFindUniqueMock.mockResolvedValue({
       ...unpublishedMedia,
       previewKey: "previews/user-a/def-photo.webp",
@@ -447,10 +456,69 @@ describe("publishing a row with no watermarked preview", () => {
     });
 
     const response = await POST(publishRequest("POST"), context());
+    const body = await response.json();
 
-    expect(response.status).toBe(409);
-    expect(mediaUpdateManyMock).not.toHaveBeenCalled();
-    expectNoOtherWrites();
+    expect(response.status).toBe(200);
+
+    // Two statements, in order, each writing only its own column.
+    expect(mediaUpdateManyMock).toHaveBeenCalledTimes(2);
+    const [repair, publish] = mediaUpdateManyMock.mock.calls.map((c) => c[0]);
+
+    expect(Object.keys(repair.data)).toEqual(["previewId"]);
+    expect(typeof repair.data.previewId).toBe("string");
+    // Scoped so a concurrent repair is not clobbered.
+    expect(repair.where).toMatchObject({
+      id: MEDIA_ID,
+      userId: OWNER_ID,
+      previewKey: { not: null },
+      previewId: null,
+    });
+
+    // Publishing still writes nothing but publishedAt — the repair is a
+    // separate statement precisely so neither can smuggle the other's columns.
+    expect(Object.keys(publish.data)).toEqual(["publishedAt"]);
+
+    // The response carries the id that was actually written, not a second one.
+    expect(body.previewId).toBe(repair.data.previewId);
+    expect(typeof body.publishedAt).toBe("string");
+  });
+
+  it("does not repair a row that already has a public handle", async () => {
+    signedInAs(OWNER_ID);
+    mediaFindUniqueMock.mockResolvedValue(unpublishedMedia);
+
+    await POST(publishRequest("POST"), context());
+
+    // One statement only: the publish. A repair here would be a pointless
+    // write, and would churn an id that other things may already reference.
+    expect(mediaUpdateManyMock).toHaveBeenCalledTimes(1);
+    expect(Object.keys(mediaUpdateManyMock.mock.calls[0][0].data)).toEqual([
+      "publishedAt",
+    ]);
+  });
+
+  it("falls back to the surviving id when a concurrent repair wins", async () => {
+    signedInAs(OWNER_ID);
+    mediaFindUniqueMock.mockResolvedValue({
+      ...unpublishedMedia,
+      previewId: null,
+    });
+    // The repair matches nothing — another request got there first.
+    mediaUpdateManyMock.mockResolvedValueOnce({ count: 0 });
+    // The publish itself succeeds.
+    mediaUpdateManyMock.mockResolvedValueOnce({ count: 1 });
+    mediaFindFirstMock.mockResolvedValue(
+      toOwnerShape({
+        ...publishedMedia,
+        previewId: "preview-from-the-other-request",
+      }),
+    );
+
+    const body = await (await POST(publishRequest("POST"), context())).json();
+
+    // This request does not know the surviving id, so it re-reads rather than
+    // reporting the one it minted and failed to write.
+    expect(body.previewId).toBe("preview-from-the-other-request");
   });
 
   it("refuses a row with a public handle but no preview key", async () => {

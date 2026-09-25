@@ -5,6 +5,7 @@ import {
   requireOwnedMedia,
   toOwnerMedia,
 } from "@/lib/media-access";
+import { mediaPreviewColumns } from "@/lib/media";
 import { prisma } from "@/lib/prisma";
 
 // App Router hands dynamic segments in as a Promise (Next 16).
@@ -60,37 +61,25 @@ export async function POST(_request: Request, { params }: RouteContext) {
     );
   }
 
-  // Deliberately the same condition both listings filter on, not a subset of
-  // it. GET /api/media and GET /api/public/media each require `previewKey` AND
-  // `previewId` to be non-null, so checking only one here would leave the exact
-  // hole this guard exists to close, moved one field over: a row with a key but
-  // no id would publish with 200 and a real timestamp, then appear in neither
-  // feed — not even its owner's own library — with nothing to distinguish that
-  // from a working publish.
+  // Two different problems hide behind "this row has no usable preview", and
+  // they need different answers.
   //
-  // Such a row should not exist: mediaPreviewColumns (src/lib/media.ts) makes
-  // the pair unexpressible-when-half-set. But that helper is a convention a
-  // second writer has to opt into, and its own comment names ugcportal-ct0's
-  // Instagram sync as the writer that will need to. A guard that trusts a
-  // convention it cannot enforce is not a guard, so this reads both columns
-  // rather than assuming the invariant held.
-  //
-  // Refused rather than silently pointless: publishing a row with no
-  // watermarked preview — today, every VIDEO; poster frames are ugcportal-pmb
-  // — would set publishedAt, answer 200, and still never surface anywhere.
+  // `previewKey` null means there genuinely is no watermarked object — today,
+  // every VIDEO; poster frames are ugcportal-pmb. Publishing would set
+  // publishedAt, answer 200, and still surface nowhere, so it is refused.
   //
   // 409 rather than 400 or 422: the request is well-formed and the caller is
   // authorized. What blocks it is the row's current state, and that state is
   // expected to change when ugcportal-pmb lands, at which point this refusal
   // simply stops firing.
   //
-  // Safe to decide from the gate's read even though that read is a round trip
-  // old, because both columns are write-once: they are set together in the
-  // `prisma.media.create` in POST /api/media and no code path anywhere updates
-  // either (PATCH writes only originalName, and this file writes only
-  // publishedAt). That is the opposite of `publishedAt` below, which is exactly
-  // why that one is decided by the write instead.
-  if (access.media.previewKey === null || access.media.previewId === null) {
+  // Blank is treated as absent rather than handed to mediaPreviewColumns,
+  // which would (correctly) throw on it. A writer-side bug should not become a
+  // 500 on a request that is itself well formed.
+  if (
+    access.media.previewKey === null ||
+    access.media.previewKey.trim() === ""
+  ) {
     return NextResponse.json(
       {
         error:
@@ -100,76 +89,150 @@ export async function POST(_request: Request, { params }: RouteContext) {
     );
   }
 
-  const publishedAt = new Date();
-
-  // `updateMany` scoped by `{ id, userId }` rather than `update` by id: the
-  // gate above read the row in a separate statement, so only a where clause on
-  // the write itself rules out a row that was deleted or re-owned in between.
-  // The gate decides the status code; this decides what changes.
+  // `previewId` null with `previewKey` set is the OTHER problem, and it is not
+  // the same one: the watermarked object exists, only the public handle the
+  // anonymous feed hands out is missing.
   //
-  // `publishedAt: null` is in the predicate as well, so two concurrent
-  // publishes can't both write — the loser falls through to the re-read below
-  // and reports the winner's timestamp instead of overwriting it.
-  const { count } = await prisma.media.updateMany({
-    where: { id, userId: access.userId, publishedAt: null },
-    data: { publishedAt },
-  });
-
-  if (count === 0) {
-    // Three different things cause this, and the answer differs for each, so
-    // the re-read decides on what it actually finds rather than assuming the
-    // common case. Guessing 404 would report a successful publish as a
-    // failure; guessing 200 would report a deleted row as published, or — the
-    // case this branch used to get wrong — answer 200 with a body saying the
-    // item is not published, which is a success describing its own opposite.
-    const current = await prisma.media.findFirst({
-      where: { id, userId: access.userId },
-      select: MEDIA_OWNER_SELECT,
+  // This used to get the message above, which was false, and a 409 with no way
+  // out. The migration backfilled only rows that existed when it ran, and
+  // nothing anywhere writes previewId on an existing row — so an ordinary
+  // migrate-then-swap deploy (migrations applied, previous build still
+  // serving) mints exactly this shape, as would ugcportal-ct0's sync. The
+  // owner feed deliberately still lists such a row with its preview, so the
+  // owner could see an item they were permanently forbidden from publishing,
+  // for a stated reason that was not true.
+  //
+  // So repair it. This is the first moment anything notices the gap, the value
+  // is opaque and derived from nothing about the row, and minting it is cheap
+  // — there is no "wrong" id to mint.
+  //
+  // Scoped to `previewId: null` so a concurrent repair is not clobbered.
+  // `count === 0` is deliberately not an error: either the row was deleted, in
+  // which case the publish below answers 404, or another request repaired it
+  // first, in which case its id stands and is just as good — the re-read at
+  // the bottom reports whichever won.
+  let previewId = access.media.previewId;
+  if (previewId === null) {
+    const minted = mediaPreviewColumns(access.media.previewKey);
+    const { count } = await prisma.media.updateMany({
+      where: {
+        id,
+        userId: access.userId,
+        previewKey: { not: null },
+        previewId: null,
+      },
+      // previewId and nothing else. Publishing still writes only publishedAt;
+      // this is a repair of preview identity, issued as its own statement so
+      // neither write can smuggle the other's columns along.
+      data: { previewId: minted.previewId },
     });
-
-    if (!current) {
-      // Deleted, or re-owned, between the gate and the write. Same answer the
-      // sibling DELETE gives when it loses the same race.
-      return NextResponse.json({ error: "Not found" }, { status: 404 });
-    }
-
-    if (current.publishedAt === null) {
-      // The row exists and is NOT published: an unpublish committed between
-      // the updateMany and this read, so the write matched nothing and the
-      // later request won. Reporting 200 here would tell the client its
-      // publish succeeded while handing back `publishedAt: null`.
-      //
-      // 409 rather than retrying the write: the unpublish is the more recent
-      // instruction, and a retry would let this older request overturn it —
-      // last-writer-wins, backwards. The caller is told what actually holds
-      // and can decide whether it still wants to publish.
-      //
-      // 404 would be wrong too, and is why this is not simply folded into the
-      // branch above: the row is right there, and the caller owns it.
-      return NextResponse.json(
-        {
-          error:
-            "This item was unpublished by another request. Publish it again if that was not intended.",
-        },
-        { status: 409 },
-      );
-    }
-
-    // Published, by an earlier request of this caller's or a concurrent one.
-    // Idempotent success, reporting the winner's timestamp rather than
-    // overwriting it.
-    return NextResponse.json(current);
+    previewId = count === 1 ? minted.previewId : null;
   }
 
-  // No re-read on the happy path: the only column touched is the one just
-  // written, and Media has no DB-derived fields (no updatedAt, no triggers)
-  // that a second round trip would reveal.
+  // Publish is a state TRANSITION — null to a timestamp — and the write is
+  // scoped to the state the gate actually observed, not to whichever state
+  // would let it proceed.
   //
-  // Projected through toOwnerMedia rather than spread: the gate reads the
-  // whole row because DELETE needs the storage keys, and echoing that row
-  // verbatim would hand `key` — the ungated original (ugcportal-5d6) — to the
-  // client, the one column every other handler goes out of its way to withhold.
-  return NextResponse.json(toOwnerMedia({ ...access.media, publishedAt }));
+  // This closes a race the previous version created while fixing its mirror.
+  // That version always ran the write with `publishedAt: null` in the
+  // predicate. If the gate saw the row PUBLISHED and the owner's unpublish
+  // then committed before this statement, the predicate suddenly matched, this
+  // older request republished the item and answered 200 — silently undoing an
+  // explicit withdrawal and putting the item back on the public feed while the
+  // owner's UI believed it private. The ordering argument offered at the time,
+  // that the unpublish is the more recent instruction, only ever governed the
+  // count === 0 branch; on this path nothing enforced it.
+  //
+  // So when the gate observed the row already published there is no transition
+  // to attempt and no write is issued at all. Control falls through to the
+  // re-read below, which reports what is actually there rather than the stale
+  // value the gate held — which is what keeps this from reintroducing the
+  // earlier bug of answering 200 with a timestamp that no longer applies.
+  //
+  // What this does NOT claim: full optimistic concurrency. A row that went
+  // published -> unpublished between the gate and this write is now handled,
+  // but one that went published -> unpublished -> published -> unpublished
+  // would still be published by it, because by then the observed state and the
+  // actual state agree. Closing that needs a version column and a precondition
+  // on every Media writer — a wider change than this route. What is closed
+  // here is the single-step interleaving, which is the one with clear intent
+  // and clear harm.
+  const publishedAt = new Date();
+  let publishedNow = false;
+
+  if (access.media.publishedAt === null) {
+    // `updateMany` scoped by `{ id, userId }` rather than `update` by id: the
+    // gate read the row in a separate statement, so only a where clause on the
+    // write itself rules out a row deleted or re-owned in between. The gate
+    // decides the status code; this decides what changes.
+    //
+    // `publishedAt: null` in the predicate is the transition guard: two
+    // concurrent publishes cannot both write, and the loser falls through to
+    // the re-read and reports the winner's timestamp rather than overwriting.
+    const { count } = await prisma.media.updateMany({
+      where: { id, userId: access.userId, publishedAt: null },
+      data: { publishedAt },
+    });
+    publishedNow = count === 1;
+  }
+
+  if (publishedNow && previewId !== null) {
+    // No re-read on the happy path: the only columns touched are the ones just
+    // written, and Media has no DB-derived fields (no updatedAt, no triggers)
+    // that a second round trip would reveal.
+    //
+    // Projected through toOwnerMedia rather than spread: the gate reads the
+    // whole row because DELETE needs the storage keys, and echoing it verbatim
+    // would hand `key` — the ungated original (ugcportal-5d6) — to the client,
+    // the one column every other handler goes out of its way to withhold.
+    return NextResponse.json(
+      toOwnerMedia({ ...access.media, publishedAt, previewId }),
+    );
+  }
+
+  // Everything else reads the row and answers on what is actually there:
+  // the gate saw it already published, the transition matched nothing, or a
+  // concurrent repair won and this request does not know the surviving
+  // previewId. Guessing 404 would report a successful publish as a failure;
+  // guessing 200 would report a deleted row as published, or answer with a
+  // body saying the item is not published — a success describing its opposite.
+  const current = await prisma.media.findFirst({
+    where: { id, userId: access.userId },
+    select: MEDIA_OWNER_SELECT,
+  });
+
+  if (!current) {
+    // Deleted, or re-owned, between the gate and the write. The same answer
+    // the sibling DELETE gives when it loses the same race.
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+
+  if (current.publishedAt === null) {
+    // The row exists and is NOT published: an unpublish won. Reporting 200
+    // here would tell the client its publish succeeded while handing back
+    // `publishedAt: null`.
+    //
+    // 409 rather than retrying the write: the unpublish is the more recent
+    // instruction and a retry would let this older request overturn it —
+    // last-writer-wins, backwards. The caller is told what actually holds and
+    // can decide whether it still wants to publish.
+    //
+    // 404 would be wrong too, which is why this is not folded into the branch
+    // above: the row is right there, and the caller owns it.
+    return NextResponse.json(
+      {
+        error:
+          "This item was unpublished by another request. Publish it again if that was not intended.",
+      },
+      { status: 409 },
+    );
+  }
+
+  // Published — by an earlier request of this caller's, a concurrent one, or
+  // this one alongside a repair that a competing request also performed.
+  // Idempotent success, reporting the winner's timestamp rather than
+  // overwriting it.
+  return NextResponse.json(current);
 }
 
 /**
