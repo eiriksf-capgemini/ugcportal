@@ -1317,7 +1317,7 @@ export async function generateWatermarkedPreview(
  * quiet period is always logged, so the transition into shedding — the part
  * worth alerting on — is never delayed.
  */
-const SHED_LOG_INTERVAL_MS = 10_000;
+export const SHED_LOG_INTERVAL_MS = 10_000;
 
 let shedLogLastAt = 0;
 let shedLogSuppressed = 0;
@@ -1340,11 +1340,29 @@ let shedLogFlushTimer: ReturnType<typeof setTimeout> | undefined;
  * so a process shutting down before the timer fires still gets a chance).
  */
 function flushShedLog(): void {
+  if (shedLogSuppressed === 0) {
+    if (shedLogFlushTimer) {
+      clearTimeout(shedLogFlushTimer);
+      shedLogFlushTimer = undefined;
+    }
+    return;
+  }
+
+  // Respect the interval even when asked directly. Without this the stats
+  // read becomes the throttle: a health check polling every second during
+  // sustained shedding emitted a line per second, while the line itself
+  // claimed one per 10000ms. Callers get to *ask*; they do not get to reset
+  // the clock. The pending timer is left alone so the tail is still
+  // guaranteed to be reported once the window does elapse.
+  if (Date.now() - shedLogLastAt < SHED_LOG_INTERVAL_MS) {
+    scheduleShedLogFlush();
+    return;
+  }
+
   if (shedLogFlushTimer) {
     clearTimeout(shedLogFlushTimer);
     shedLogFlushTimer = undefined;
   }
-  if (shedLogSuppressed === 0) return;
 
   const suppressed = shedLogSuppressed;
   shedLogSuppressed = 0;
