@@ -97,16 +97,44 @@ model VerificationToken {
 // the gallery. Nullable because VIDEO rows have no preview yet (watermarked
 // poster frames are deferred, see ugcportal-pmb) and because rows created
 // before this column existed have none either.
+//
+// `previewId` is the *public handle* for that preview, and exists because a
+// storage path is not a safe public identifier. `previewKey` is built as
+// `previews/{userId}/{uuid}.webp`, so handing it to an anonymous caller
+// publishes the uploader's account id in plain text — page the public feed,
+// split each key on "/", and you have a per-uploader index of the whole
+// gallery. That is the exact capability withholding `userId` was meant to
+// deny (ugcportal-r1d review, round 2), and it is the same class of mistake
+// ugcportal-44q already avoided one field over when it made the preview's
+// UUID uncorrelated with the original's.
+//
+// So: `previewKey` (a storage path, owner-only) and `previewId` (an opaque
+// random id, safe for anyone) are deliberately separate values with no
+// derivation between them. Set together at upload and null together, so
+// "has a watermarked preview" is one fact, not two that can disagree.
+//
+// `publishedAt` is the visibility switch (ugcportal-r1d): null means the row
+// is private to its owner, a timestamp means it is in the public listing and
+// records since when. Nullable with no default, so the migration that adds it
+// cannot retroactively publish an existing row and every future upload starts
+// private. Unpublishing writes null back rather than deleting anything.
+//
+// Visibility is NOT sellability. Whether an item may be sold is decided by the
+// per-account resale-rights gate (ugcportal-0ss / ugcportal-74w), which reads
+// its own records — nothing about this column feeds that decision, and no
+// publish code path may write price or licence state.
 model Media {
   id           String    @id @default(cuid())
   userId       String
   kind         MediaKind
   key          String    @unique
   previewKey   String?   @unique
+  previewId    String?   @unique
   mimeType     String
   sizeBytes    Int
   originalName String
   createdAt    DateTime  @default(now())
+  publishedAt  DateTime?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -117,6 +145,40 @@ model Media {
   // pagination the endpoint is built around. The plain [userId] index above
   // is kept for the lookups that don't order.
   @@index([userId, createdAt, id])
+  // Matches the public listing in GET /api/public/media: no userId to scope
+  // by, so the ordering columns lead. Verified against SQLite 3 with 20k rows
+  // (EXPLAIN QUERY PLAN): with this index the first page is
+  // "SCAN Media USING INDEX Media_createdAt_id_idx" with no temp B-tree, and a
+  // keyset page becomes a SEARCH. The obvious-looking alternative,
+  // [publishedAt, createdAt, id], is *not* chosen by the planner at all —
+  // `publishedAt IS NOT NULL` is a range over the leading column, so the index
+  // can no longer supply the sort order and SQLite falls back to a full scan
+  // plus a temp B-tree. The publishedAt/previewKey predicates are applied as
+  // filters during the scan instead.
+  //
+  // KNOWN LIMITATION — that EXPLAIN evidence proves *ordering*, not
+  // *selectivity*, and the difference matters. Because publishedAt, previewKey
+  // and previewId are filters applied during the scan rather than part of the
+  // index key, a public-feed page costs work proportional to the total number
+  // of Media rows in the range, not to the published ones. Measured on SQLite 3
+  // with 200,000 rows of which 1% were published, first page of 50: 0.000653s
+  // user against this index, versus 0.000014s against a partial index on the
+  // same columns — ~46x, and widening with table size. Both are sub-millisecond
+  // today, so this is a scaling note rather than a live problem; it is recorded
+  // because GET /api/public/media is unauthenticated, so the work is reachable
+  // without an account, and because the plan above looks clean and hides it.
+  //
+  // The fix is a partial index. Contrary to what is often assumed, Prisma 7.10
+  // *can* express one for sqlite — `@@index([createdAt, id], where: raw(...))`
+  // behind `previewFeatures = ["partialIndexes"]` — and `migrate diff` then
+  // emits the intended `CREATE INDEX ... WHERE ...` with no drift. Verified
+  // 2026-09-24; see ugcportal-ei7 for the exact commands and output. It is not
+  // done here because turning on a preview feature changes generator config for
+  // the whole schema, which is its own decision with its own blast radius, not
+  // a rider on a publish-state PR.
+  //
+  // Tracked as ugcportal-ei7 (perf/media, discovered from ugcportal-r1d).
+  @@index([createdAt, id])
 }
 
 // One connected Instagram account whose media can be synced (ugcportal-ct0)

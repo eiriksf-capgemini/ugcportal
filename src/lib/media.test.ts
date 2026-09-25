@@ -1,7 +1,12 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
+
+import { createClient } from "@libsql/client";
 import { describe, expect, it } from "vitest";
 
 import {
   MAX_ORIGINAL_NAME_LENGTH,
+  mediaPreviewColumns,
   sanitizeOriginalName,
   sniffKind,
   validateOriginalName,
@@ -224,4 +229,192 @@ describe("sanitizeOriginalName", () => {
       });
     },
   );
+});
+
+describe("mediaPreviewColumns", () => {
+  // previewKey (a storage path embedding the uploader's id, owner-only) and
+  // previewId (the opaque handle the public feed exposes) are two columns for
+  // one fact. Both listings filter on both, so a row carrying only one is
+  // invisible in every feed — including its own owner's library — with no
+  // repair path. ugcportal-r1d introduced that coupling; this helper is what
+  // keeps a future second writer (ugcportal-ct0's Instagram sync) from
+  // half-setting it.
+
+  it("returns both columns set when there is a preview", () => {
+    const columns = mediaPreviewColumns("previews/user-1/abc.webp");
+
+    expect(columns.previewKey).toBe("previews/user-1/abc.webp");
+    expect(typeof columns.previewId).toBe("string");
+    expect(columns.previewId).not.toBeNull();
+  });
+
+  it("returns both columns null when there is none", () => {
+    // Every VIDEO today; poster frames are ugcportal-pmb.
+    expect(mediaPreviewColumns(null)).toEqual({
+      previewKey: null,
+      previewId: null,
+    });
+  });
+
+  it("never returns a half-set pair, for any accepted input", () => {
+    for (const key of [
+      null,
+      "previews/user-1/a.webp",
+      "previews/user-2/b.webp",
+      " previews/user-1/leading-space.webp",
+    ]) {
+      const { previewKey, previewId } = mediaPreviewColumns(key);
+      // The invariant stated directly: the two are null together or set
+      // together, never one of each.
+      expect(previewKey === null).toBe(previewId === null);
+    }
+  });
+
+  it("rejects a blank path rather than treating it as a preview", () => {
+    // This list previously included "" as *accepted* input, and the helper
+    // returned { previewKey: "", previewId: <uuid> }. That pair is the one
+    // shape that slips past everything downstream: `"" !== null`, so both
+    // listings' `not: null` filters, hasCompletePreview() and the publish 409
+    // guard all wave it through, and the row publishes and serves with a
+    // preview path that resolves to nothing.
+    for (const blank of ["", " ", "\t", "\n  "]) {
+      expect(() => mediaPreviewColumns(blank)).toThrow(/non-blank/);
+    }
+  });
+
+  it("still distinguishes a blank path from an absent one", () => {
+    // null is the only encoding of "no preview". Blank is a caller bug, and
+    // conflating the two would hide it — and strand any object already
+    // written to storage under the key the caller failed to build.
+    expect(mediaPreviewColumns(null)).toEqual({
+      previewKey: null,
+      previewId: null,
+    });
+    expect(() => mediaPreviewColumns("")).toThrow();
+  });
+
+  it("derives previewId from nothing about the row", () => {
+    // Every distinctive part of this key is outside the hex alphabet, on
+    // purpose. An earlier version used `previews/user-1/abc.webp` and asserted
+    // the id did not contain "abc" — but a UUID is hex, so "abc" is a
+    // perfectly ordinary substring of one. That assertion failed roughly once
+    // in a few hundred runs for a reason that had nothing to do with the code.
+    const key = "previews/user-1/zzz-sunset.webp";
+    const first = mediaPreviewColumns(key);
+    const second = mediaPreviewColumns(key);
+
+    // Same input, different id: it is random, not a function of the key. An
+    // opaque handle that can be recomputed from the thing it hides is not
+    // opaque (the ugcportal-44q decorrelation argument, one field out).
+    expect(first.previewId).not.toBe(second.previewId);
+    expect(first.previewId).not.toContain("user-1");
+    expect(first.previewId).not.toContain("zzz");
+    expect(first.previewId).not.toContain("sunset");
+    expect(first.previewId).not.toContain("previews/");
+    expect(key).not.toContain(String(first.previewId));
+  });
+
+  it("gives every row a distinct previewId", () => {
+    // previewId is @unique in the schema, so a collision is not a cosmetic
+    // problem — it is a failed insert.
+    const ids = new Set(
+      Array.from(
+        { length: 500 },
+        () => mediaPreviewColumns("previews/user-1/a.webp").previewId,
+      ),
+    );
+
+    expect(ids.size).toBe(500);
+  });
+});
+
+describe("previewId format agreement between runtime and migration", () => {
+  // previewId is minted in two places: randomUUID() in mediaPreviewColumns for
+  // new uploads, and a SQL expression in the add_media_preview_id migration
+  // for rows that already existed. They must produce the same shape.
+  //
+  // The backfill originally minted `lower(hex(randomblob(16)))` — 32 hex
+  // chars, no dashes — against randomUUID()'s 36 with dashes. Two problems:
+  // ugcportal-a2l, the preview delivery route, routes on previewId and would
+  // reasonably validate a UUID shape, 404-ing every pre-existing row while new
+  // uploads worked; and two distinguishable formats let anyone holding a
+  // handful of ids sort them into "before the migration" and "after", which is
+  // exactly the inference an opaque id exists to deny.
+  //
+  // This executes the migration's real expression rather than asserting on its
+  // text, so the two cannot drift without failing.
+  const UUID_V4 =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+  const MIGRATION = path.join(
+    process.cwd(),
+    "prisma/migrations/20260924190000_add_media_preview_id/migration.sql",
+  );
+
+  /** The SET expression from the backfill, lifted out of the migration. */
+  function backfillExpression(): string {
+    const sql = readFileSync(MIGRATION, "utf8");
+    const match = sql.match(
+      /UPDATE "Media"\s*\nSET "previewId" = ([\s\S]*?)\nWHERE/,
+    );
+    if (!match) {
+      throw new Error("backfill UPDATE not found in the migration");
+    }
+    return match[1];
+  }
+
+  it("mints a v4 UUID at runtime", () => {
+    for (let i = 0; i < 50; i += 1) {
+      const { previewId } = mediaPreviewColumns("previews/user-1/a.webp");
+      expect(previewId).toMatch(UUID_V4);
+    }
+  });
+
+  /**
+   * Runs the backfill expression `count` times against an in-memory database.
+   *
+   * Uses @libsql/client rather than node:sqlite because that is the driver
+   * this app actually runs on (see @prisma/adapter-libsql in package.json), so
+   * the expression is evaluated by the same engine that will execute the
+   * migration — and because CI is on Node 20, where node:sqlite does not
+   * exist.
+   */
+  async function runBackfill(count: number): Promise<string[]> {
+    const db = createClient({ url: ":memory:" });
+    try {
+      const sql = `SELECT ${backfillExpression()} AS id`;
+      const ids: string[] = [];
+      for (let i = 0; i < count; i += 1) {
+        const result = await db.execute(sql);
+        ids.push(String(result.rows[0].id));
+      }
+      return ids;
+    } finally {
+      db.close();
+    }
+  }
+
+  it("mints the same shape in the migration backfill", async () => {
+    const [id] = await runBackfill(1);
+    expect(id).toMatch(UUID_V4);
+  });
+
+  it("agrees on format across many rows of both paths", async () => {
+    const backfilled = await runBackfill(200);
+    const minted = Array.from(
+      { length: 200 },
+      () => mediaPreviewColumns("previews/user-1/a.webp").previewId as string,
+    );
+
+    for (const id of [...backfilled, ...minted]) {
+      expect(id).toMatch(UUID_V4);
+    }
+    // Same length and same dash positions, so a handful of ids cannot be
+    // sorted into "backfilled" and "freshly minted" by inspection.
+    expect(new Set(backfilled.map((id) => id.length))).toEqual(new Set([36]));
+    expect(new Set(minted.map((id) => id.length))).toEqual(new Set([36]));
+    // And the backfill is actually random, not one value repeated — which
+    // also matters for the UNIQUE index the migration creates on the column.
+    expect(new Set(backfilled).size).toBe(backfilled.length);
+  });
 });

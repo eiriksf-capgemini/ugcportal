@@ -6,11 +6,13 @@ import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import {
   MAX_UPLOAD_BYTES,
+  mediaPreviewColumns,
   sanitizeOriginalName,
   sniffKind,
   validateUpload,
 } from "@/lib/media";
-import { MEDIA_PUBLIC_SELECT } from "@/lib/media-access";
+import { MEDIA_OWNER_SELECT } from "@/lib/media-access";
+import { listMedia } from "@/lib/media-listing";
 import { prisma } from "@/lib/prisma";
 import { getBucketName, getS3Client } from "@/lib/s3";
 import type { PreviewResult } from "@/lib/watermark";
@@ -122,12 +124,9 @@ async function readCappedFormData(
   }
 }
 
-// MEDIA_PUBLIC_SELECT moved to src/lib/media-access.ts when PATCH
-// (ugcportal-bdh) became a third caller that has to honour it — the comment
-// explaining what it guarantees lives with it there.
-
-const DEFAULT_LISTING_LIMIT = 50;
-const MAX_LISTING_LIMIT = 100;
+// The response projections moved to src/lib/media-access.ts when PATCH
+// (ugcportal-bdh) became a third caller that has to honour them — the comment
+// explaining what they guarantee, and why there are two, lives with them there.
 
 export async function POST(request: Request) {
   const session = await auth();
@@ -207,18 +206,28 @@ export async function POST(request: Request) {
     }
   }
 
-  // An independent UUID, deliberately not derived from `key`.
+  // Both preview columns at once, via the one helper that can produce them.
   //
-  // Withholding the original's key from every response is worthless if the
-  // key can simply be recomputed from what we do return. Sharing one id
-  // between the two would mean previewKey + originalName + the (deterministic)
-  // sanitizeFilename above is enough to reconstruct the original's full path —
-  // so the moment ugcportal-71y makes previewKey fetchable against this
-  // bucket, K2 is defeated by string concatenation. Uncorrelated ids make the
-  // original's key unguessable from anything the listing exposes.
-  const previewKey = preview
-    ? `previews/${userId}/${randomUUID()}${PREVIEW_FILE_EXTENSION}`
-    : null;
+  // The preview's own UUID is independent of the original's, deliberately.
+  // Withholding the original's key from every response is worthless if the key
+  // can simply be recomputed from what we do return: sharing one id between the
+  // two would mean previewKey + originalName + the (deterministic)
+  // sanitizeFilename above is enough to reconstruct the original's full path,
+  // so the moment previewKey became fetchable against this bucket, K2 would
+  // fall to string concatenation. Uncorrelated ids make the original's key
+  // unguessable from anything any listing exposes.
+  //
+  // `previewKey` is the storage path and embeds `userId`, so it is owner-only;
+  // `previewId` is the opaque handle the anonymous feed exposes instead
+  // (ugcportal-r1d). They are inseparable — a row with one and not the other
+  // is filtered out of every listing — so they are never written as two
+  // independent expressions. See mediaPreviewColumns in src/lib/media.ts.
+  const previewColumns = mediaPreviewColumns(
+    preview
+      ? `previews/${userId}/${randomUUID()}${PREVIEW_FILE_EXTENSION}`
+      : null,
+  );
+  const { previewKey } = previewColumns;
 
   // Track what actually made it into the bucket so the compensating delete
   // below covers both objects, not just the original.
@@ -252,7 +261,9 @@ export async function POST(request: Request) {
         userId,
         kind: validation.kind,
         key,
-        previewKey,
+        // Spread as a pair, never as two fields, so the columns cannot drift
+        // apart at this call site either.
+        ...previewColumns,
         mimeType: file.type,
         sizeBytes: file.size,
         // Repaired, not rejected — see sanitizeOriginalName in
@@ -261,7 +272,7 @@ export async function POST(request: Request) {
         // the GET listing echoes it back, so it cannot go in raw.
         originalName: sanitizeOriginalName(file.name),
       },
-      select: MEDIA_PUBLIC_SELECT,
+      select: MEDIA_OWNER_SELECT,
     });
 
     return NextResponse.json(media, { status: 201 });
@@ -292,17 +303,8 @@ export async function POST(request: Request) {
   }
 }
 
-function parseLimit(raw: string | null): number {
-  // Number(null) and Number("") are both 0, which would silently clamp an
-  // absent ?limit down to a single row instead of using the default.
-  if (raw === null || raw.trim() === "") return DEFAULT_LISTING_LIMIT;
-  const parsed = Number(raw);
-  if (!Number.isFinite(parsed)) return DEFAULT_LISTING_LIMIT;
-  return Math.min(MAX_LISTING_LIMIT, Math.max(1, Math.floor(parsed)));
-}
-
 /**
- * Listing feed for browsable media.
+ * Listing feed for the signed-in user's own media.
  *
  * This is deliberately the minimum needed to make ugcportal-44q's K2
  * checkable — "the original file URL is never reachable from the gallery" is
@@ -311,109 +313,77 @@ function parseLimit(raw: string | null): number {
  * is not built here; that bead should consume this endpoint's projection
  * rather than querying Media directly.
  *
- * Two rules hold the guarantee up:
- *   1. only rows that have a previewKey are returned, so anything without a
+ * Two rules hold the guarantee up, and both live in listMedia():
+ *   1. only rows that have a preview are returned, so anything without a
  *      protected representation (today: every VIDEO) is invisible; and
- *   2. the response goes through MEDIA_PUBLIC_SELECT, which has no `key` in
+ *   2. the response goes through MEDIA_OWNER_SELECT, which has no `key` in
  *      it — the paid original is never selected, mapped, or serialised.
  *
- * Paginated with an opaque cursor (the last item's id) rather than a bare cap,
- * so nothing becomes permanently unreachable once a user passes the page size,
- * and `hasMore` tells the caller when the list was truncated. Ordering is
- * (createdAt desc, id desc) because pagination needs a unique tiebreak to be
- * stable across rows sharing a timestamp.
+ * Scoped to the signed-in user's own media, and deliberately NOT filtered by
+ * publishedAt: this is the owner's view of their own library, where seeing
+ * their unpublished uploads is the entire point (ugcportal-r1d). The public
+ * feed is a separate endpoint, GET /api/public/media, precisely so that one
+ * handler never has to decide which audience it is answering — that
+ * role-dependent branch is the shape that leaks.
  *
- * The cursor is resolved by hand rather than through Prisma's `cursor`/`skip`,
- * for two reasons. It is a client-supplied id and therefore untrusted: Prisma
- * compiles `cursor` into a subquery that ignores the outer `where`, so a
- * caller could pass the id of a row this endpoint deliberately excludes (a
- * VIDEO row — an id POST hands them) or another user's row, and use the
- * resulting window as an ordering oracle over rows they can't see. And it is
- * wrong even when honest: that subquery's comparison is inclusive, so with
- * rows sharing a `createdAt` the `skip: 1` then silently swallows a real row.
- * Resolving the anchor against the caller's own rows and expressing the window
- * as an explicit keyset predicate fixes both — the predicate lives inside the
- * same `where` as the scoping, so it cannot outrun it.
- *
- * Scoped to the signed-in user's own media. Widening this to a public feed is
- * a deliberate decision for ugcportal-71y to make, not something to inherit by
- * accident. Turning previewKey into a fetchable URL (signed or public) belongs
- * with the delivery work, not here.
+ * Turning previewKey into a fetchable URL (signed or public) belongs with the
+ * delivery work, not here.
  */
+/**
+ * Private to one account, and said so explicitly.
+ *
+ * Deliberately NOT the same header as GET /api/public/media, because the two
+ * endpoints are uncacheable for different reasons and the header should carry
+ * the reason. The public feed is `no-store` because its content changes when
+ * an owner unpublishes and a cache must not outlive that. This one is
+ * `private` because the response belongs to exactly one account: the body is
+ * that user's library, drafts included.
+ *
+ * `private` is the load-bearing word. This route authenticates with a session
+ * *cookie*, and a shared cache does not treat a cookie-bearing response as
+ * unshareable the way RFC 9111 makes it treat an `Authorization`-bearing one.
+ * Absent this header, a misconfigured intermediary keying on the URL alone
+ * could store one user's response and serve it to the next caller — one
+ * person's private uploads handed to a stranger. The preconditions are narrow;
+ * the outcome is not.
+ *
+ * `no-store` alongside it because there is nothing worth keeping even in the
+ * end user's own browser: a list of someone's unpublished work should not
+ * survive on a shared machine after they sign out.
+ */
+const PRIVATE_NO_STORE = { "cache-control": "private, no-store" } as const;
+
 export async function GET(request: Request) {
   const session = await auth();
   const userId = session?.user?.id;
   if (!userId) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return NextResponse.json(
+      { error: "Unauthorized" },
+      { status: 401, headers: PRIVATE_NO_STORE },
+    );
   }
 
-  const params = new URL(request.url).searchParams;
-  const limit = parseLimit(params.get("limit"));
-  // Treat `?cursor=` as absent rather than as the id "", which would otherwise
-  // 400 on a perfectly ordinary first-page request.
-  const cursor = params.get("cursor")?.trim() || null;
-
-  // Everything the listing itself is scoped by. The anchor lookup reuses it
-  // verbatim so a cursor can only ever name a row this caller is already
-  // allowed to see in this feed.
-  const scope = { userId, previewKey: { not: null } } as const;
-
-  let keyset: object | undefined;
-  if (cursor !== null) {
-    const anchor = await prisma.media.findFirst({
-      where: { ...scope, id: cursor },
-      select: { id: true, createdAt: true },
-    });
-
-    if (!anchor) {
-      // Unknown, foreign, or since-deleted. Answering with an empty page would
-      // be a false end-of-list — the caller would stop, believing it had seen
-      // everything. Say so instead, and let it restart pagination.
-      return NextResponse.json(
-        { error: "Invalid or expired cursor" },
-        { status: 400 },
-      );
-    }
-
-    // Strict "after the anchor" in (createdAt desc, id desc) order. No skip
-    // needed: the anchor itself can't satisfy either branch.
-    keyset = {
-      OR: [
-        { createdAt: { lt: anchor.createdAt } },
-        { createdAt: anchor.createdAt, id: { lt: anchor.id } },
-      ],
-    };
-  }
-
-  const rows = await prisma.media.findMany({
-    where: { ...scope, ...keyset },
-    select: MEDIA_PUBLIC_SELECT,
-    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-    // One extra row is a cheap way to know whether another page exists
-    // without a second count query.
-    take: limit + 1,
-  });
-
-  const page = rows.length > limit ? rows.slice(0, limit) : rows;
-
-  // The where-clause already excludes them, but previewKey is still typed
-  // `string | null`; narrowing here makes the emitted shape non-nullable and
-  // means a future query change can't quietly start emitting preview-less rows.
-  const items = page.filter(
-    (row): row is typeof row & { previewKey: string } => row.previewKey !== null,
+  const result = await listMedia(
+    request.url,
+    // `previewKey` only, deliberately. The anonymous feed additionally filters
+    // on `previewId` because that is the handle it hands out; here it would
+    // buy nothing — this projection returns `previewKey` and the owner can
+    // resolve their own — while hiding a row with a real preview object but no
+    // public handle from the person who uploaded it. Fail-closed is right for
+    // the public feed, where being wrong means a leak. On someone's own
+    // library it means their work disappearing. See MediaOwnerScope.
+    { userId, previewKey: { not: null } },
+    // The owner's own filenames. The anonymous feed uses the narrower
+    // MEDIA_ANONYMOUS_SELECT — see src/lib/media-access.ts.
+    MEDIA_OWNER_SELECT,
   );
 
-  // Taken from `items`, not `page`: a cursor naming a row the filter dropped
-  // is a row the *next* request's where-clause also excludes, which is exactly
-  // how a page gets silently skipped. And if the filter emptied the page there
-  // is no cursor to give, so we must not claim there is more — a caller that
-  // sees hasMore with no cursor either loops forever or stalls.
-  const nextCursor =
-    rows.length > limit ? (items.at(-1)?.id ?? null) : null;
+  if (!result.ok) {
+    return NextResponse.json(
+      { error: result.error },
+      { status: result.status, headers: PRIVATE_NO_STORE },
+    );
+  }
 
-  return NextResponse.json({
-    items,
-    hasMore: nextCursor !== null,
-    nextCursor,
-  });
+  return NextResponse.json(result.page, { headers: PRIVATE_NO_STORE });
 }

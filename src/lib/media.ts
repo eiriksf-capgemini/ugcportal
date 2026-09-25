@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import type { MediaKind } from "@/generated/prisma/enums";
 
 const MIME_TO_KIND: Record<string, MediaKind> = {
@@ -233,4 +235,85 @@ export function sanitizeOriginalName(value: string): string {
     .trim();
 
   return truncated.length > 0 ? truncated : FALLBACK_ORIGINAL_NAME;
+}
+
+
+/**
+ * The two preview columns, as one value that cannot be half-set.
+ *
+ * `previewKey` is the watermarked object's storage path; `previewId` is the
+ * opaque handle the public feed exposes in its place, because the path embeds
+ * the uploader's account id (ugcportal-r1d). They are two columns expressing
+ * one fact — "this row has a watermarked preview" — and both listings filter
+ * on both, so a row with only one of them set is invisible in *every* feed,
+ * including its own owner's library, with no repair path short of a manual
+ * backfill.
+ *
+ * Until now that invariant rested on a single `prisma.media.create` remembering
+ * to write both. A second writer is already foreseeable — ugcportal-ct0's
+ * Instagram sync inserts Media rows it did not upload — so the pairing is made
+ * unexpressible-when-wrong here instead of documented and hoped for. The union
+ * return type is the mechanism: there is no member with a string key and a null
+ * id, so `{ previewKey: someKey, previewId: null }` is not a value this
+ * function can produce, and spreading its result into `data` is the only
+ * blessed way to write the columns.
+ *
+ * Not a database CHECK constraint, which would be the stronger answer, for two
+ * verified reasons: SQLite cannot add one to an existing table at all
+ * (`ALTER TABLE … ADD CONSTRAINT` is a parse error — it needs a full 12-step
+ * table rebuild), and Prisma's schema language cannot express one for sqlite,
+ * so it would be invisible to the datamodel and show up as permanent
+ * `migrate diff` drift. If the pairing ever needs enforcing at the storage
+ * layer, that is a deliberate table rebuild, not a line in this file.
+ */
+export type MediaPreviewColumns =
+  | { previewKey: string; previewId: string }
+  | { previewKey: null; previewId: null };
+
+export function mediaPreviewColumns(
+  previewKey: string | null,
+): MediaPreviewColumns {
+  if (previewKey === null) {
+    // No watermarked preview — today, every VIDEO (ugcportal-pmb owns poster
+    // frames). Both columns null, so the row is consistently "no preview"
+    // rather than half-present.
+    return { previewKey: null, previewId: null };
+  }
+
+  if (previewKey.trim() === "") {
+    // A blank path is not "no preview", and must not be quietly treated as
+    // either that or a working one.
+    //
+    // Null is the only encoding of "this row has no preview". A blank string
+    // is a *different* thing: a caller that meant to build a key and produced
+    // nothing. Returning the null pair would hide that bug and, worse, strand
+    // whatever object the caller had already written to storage. Returning
+    // `{ previewKey: "", previewId: <uuid> }` — which this used to do — is
+    // worse still: `"" !== null`, so the row satisfies every downstream check
+    // that exists. Both listings' `not: null` filters pass it, the defensive
+    // hasCompletePreview() in src/lib/media-listing.ts passes it, and the 409
+    // guard in POST /api/media/[id]/publish passes it, so the row publishes
+    // and serves as though it had a working preview that resolves to nothing.
+    //
+    // So: throw. This is a programming error in the caller, not a data
+    // condition, and it is unreachable from the one caller that exists today
+    // (POST /api/media builds `previews/{userId}/{randomUUID()}{ext}`, which
+    // is never blank). It is here for the second writer this helper's contract
+    // is aimed at — ugcportal-ct0's Instagram sync — where a missing remote
+    // asset could plausibly produce an empty string rather than a null.
+    //
+    // Deliberately only a blankness check, not a shape check: requiring a
+    // `previews/` prefix would couple this helper to a storage layout that is
+    // allowed to change, and the failure it would catch is not the one that
+    // slips past every downstream guard.
+    throw new Error(
+      "mediaPreviewColumns: previewKey must be a non-blank path or null",
+    );
+  }
+
+  // Deliberately unrelated to `previewKey`, to `key`, and to the uploader: an
+  // opaque handle that can be transformed back into the thing it stands for is
+  // not opaque. Same reasoning as the uncorrelated preview UUID in
+  // ugcportal-44q, one field further out.
+  return { previewKey, previewId: randomUUID() };
 }

@@ -30,6 +30,7 @@ vi.mock("@/lib/s3", () => ({
 }));
 
 const { GET, POST } = await import("@/app/api/media/route");
+const { encodeMediaCursor } = await import("@/lib/media-listing");
 
 // A valid PNG signature with nothing decodable behind it: enough to pass the
 // magic-byte sniff in src/lib/media.ts, but sharp cannot turn it into an
@@ -68,10 +69,14 @@ function selectedRow(overrides: Record<string, unknown> = {}) {
     id: "media-1",
     kind: "IMAGE",
     previewKey: "previews/user-1/abc.webp",
+    previewId: "preview-abc",
     mimeType: "image/png",
     sizeBytes: 1234,
     originalName: "photo.png",
     createdAt: new Date("2026-09-24T10:00:00Z"),
+    // Owner's own view: unpublished by default, and still listed. See the
+    // regression test at the bottom of the GET block (ugcportal-r1d).
+    publishedAt: null,
     ...overrides,
   };
 }
@@ -422,6 +427,58 @@ describe("POST /api/media", () => {
     expect(`media/user-1/${previewId}-photo.png`).not.toBe(key);
   });
 
+  it("gives the preview an opaque public id that embeds nothing about the row", async () => {
+    authMock.mockResolvedValue({ user: { id: "user-1" } });
+    s3SendMock.mockResolvedValue({});
+    mediaCreateMock.mockImplementation(async ({ data }) =>
+      selectedRow({ previewKey: data.previewKey, previewId: data.previewId }),
+    );
+    const file = new File([REAL_PNG], "photo.png", { type: "image/png" });
+
+    await POST(buildRequest(file));
+
+    const { key, previewKey, previewId } =
+      mediaCreateMock.mock.calls[0][0].data;
+
+    // The same argument as the test above, one field further out. `previewKey`
+    // is a storage path and embeds `userId`, so it is owner-only; `previewId`
+    // is what the anonymous feed publishes instead, and it is only safe there
+    // if nothing about the row can be read back out of it or used to rebuild
+    // the paths it stands in for (ugcportal-r1d review round 2, finding 1).
+    expect(typeof previewId).toBe("string");
+    expect(previewId).not.toContain("user-1");
+    expect(previewId).not.toContain("previews/");
+    expect(previewId).not.toContain("photo");
+    // Independent of both storage paths, in either direction.
+    expect(previewKey).not.toContain(previewId);
+    expect(key).not.toContain(previewId);
+    expect(previewId).not.toBe(previewKey);
+  });
+
+  it("nulls previewId together with previewKey, never one without the other", async () => {
+    authMock.mockResolvedValue({ user: { id: "user-1" } });
+    s3SendMock.mockResolvedValue({});
+    mediaCreateMock.mockImplementation(async ({ data }) =>
+      selectedRow({ previewKey: data.previewKey, previewId: data.previewId }),
+    );
+
+    for (const [file, hasPreview] of [
+      [new File([REAL_PNG], "photo.png", { type: "image/png" }), true],
+      [new File([MP4_HEADER], "clip.mp4", { type: "video/mp4" }), false],
+    ] as const) {
+      mediaCreateMock.mockClear();
+
+      await POST(buildRequest(file));
+
+      const { previewKey, previewId } = mediaCreateMock.mock.calls[0][0].data;
+      // "Has a watermarked preview" must stay one fact. Both listings filter
+      // on both columns, so a row where they disagree would be excluded
+      // everywhere — fail-closed, but a bug worth never writing.
+      expect(previewKey === null).toBe(!hasPreview);
+      expect(previewId === null).toBe(!hasPreview);
+    }
+  });
+
   it("stores no preview for a video upload and leaves previewKey null", async () => {
     authMock.mockResolvedValue({ user: { id: "user-1" } });
     s3SendMock.mockResolvedValue({});
@@ -526,6 +583,49 @@ function buildListRequest(query = "") {
   return new Request(`http://localhost/api/media${query}`);
 }
 
+describe("GET /api/media — caching", () => {
+  it("marks every response private and unstorable, whatever the status", async () => {
+    // All three exits, not just the happy one. A header set on 200 alone is
+    // one refactor away from not being set at all, and the 401 is the
+    // response a signed-out caller is most likely to hit repeatedly.
+    authMock.mockResolvedValue(null);
+    const unauthorized = await GET(buildListRequest());
+    expect(unauthorized.status).toBe(401);
+    expect(unauthorized.headers.get("cache-control")).toBe(
+      "private, no-store",
+    );
+
+    authMock.mockResolvedValue({ user: { id: "user-1" } });
+    const badCursor = await GET(buildListRequest("?cursor=not-a-cursor"));
+    expect(badCursor.status).toBe(400);
+    expect(badCursor.headers.get("cache-control")).toBe("private, no-store");
+
+    mediaFindManyMock.mockResolvedValueOnce([selectedRow({ id: "a" })]);
+    const ok = await GET(buildListRequest());
+    expect(ok.status).toBe(200);
+    expect(ok.headers.get("cache-control")).toBe("private, no-store");
+  });
+
+  it("says `private`, not merely `no-store`, because the body belongs to one account", async () => {
+    // This route authenticates with a session cookie, and a shared cache does
+    // not treat a cookie-bearing response as unshareable the way it treats an
+    // Authorization-bearing one. Without `private`, an intermediary keying on
+    // the URL alone could serve one user's library — drafts included — to the
+    // next caller. The public feed is uncacheable for a different reason and
+    // carries a different header; these two must not be collapsed into one
+    // shared constant on the grounds that they look similar.
+    authMock.mockResolvedValue({ user: { id: "user-1" } });
+    mediaFindManyMock.mockResolvedValueOnce([selectedRow({ id: "a" })]);
+
+    const header = (await GET(buildListRequest())).headers.get(
+      "cache-control",
+    );
+
+    expect(header).toContain("private");
+    expect(header).toContain("no-store");
+  });
+});
+
 describe("GET /api/media", () => {
   it("returns 401 for an unauthenticated request", async () => {
     authMock.mockResolvedValue(null);
@@ -547,8 +647,13 @@ describe("GET /api/media", () => {
       userId: "user-1",
       previewKey: { not: null },
     });
+    // NOT previewId. That is the handle the anonymous feed hands out; here it
+    // would buy nothing and would hide a row with a real preview object but no
+    // public handle from the person who uploaded it (ugcportal-r1d round 9).
+    expect(args.where).not.toHaveProperty("previewId");
     expect(args.select).not.toHaveProperty("key");
     expect(args.select.previewKey).toBe(true);
+    expect(args.select.previewId).toBe(true);
     // Unique tiebreak, otherwise cursor paging skips or repeats rows that
     // share a createdAt.
     expect(args.orderBy).toEqual([{ createdAt: "desc" }, { id: "desc" }]);
@@ -563,6 +668,7 @@ describe("GET /api/media", () => {
       id: "media-2",
       kind: "VIDEO",
       previewKey: null,
+      previewId: null,
       mimeType: "video/mp4",
       originalName: "clip.mp4",
     });
@@ -602,7 +708,12 @@ describe("GET /api/media", () => {
     expect(mediaFindManyMock.mock.calls[0][0].take).toBe(3);
     expect(body.items.map((i: { id: string }) => i.id)).toEqual(["a", "b"]);
     expect(body.hasMore).toBe(true);
-    expect(body.nextCursor).toBe("b");
+    // The cursor is the position the page ended at — (createdAt, id) — not a
+    // row reference (ugcportal-r1d). Decoded here without the library's own
+    // decoder, so the encoding is pinned rather than assumed.
+    expect(Buffer.from(body.nextCursor, "base64url").toString("utf8")).toBe(
+      "2026-09-24T10:00:00.000Z|b",
+    );
   });
 
   it("reports the end of the list", async () => {
@@ -617,14 +728,13 @@ describe("GET /api/media", () => {
 
   it("pages past the first screenful with a keyset predicate, not Prisma's cursor", async () => {
     authMock.mockResolvedValue({ user: { id: "user-1" } });
-    const anchorCreatedAt = new Date("2026-09-24T10:00:00Z");
-    mediaFindFirstMock.mockResolvedValue({
+    const position = {
       id: "media-42",
-      createdAt: anchorCreatedAt,
-    });
+      createdAt: new Date("2026-09-24T10:00:00Z"),
+    };
     mediaFindManyMock.mockResolvedValue([]);
 
-    await GET(buildListRequest("?cursor=media-42"));
+    await GET(buildListRequest(`?cursor=${encodeMediaCursor(position)}`));
 
     const args = mediaFindManyMock.mock.calls[0][0];
     // Prisma's `cursor` compiles to a subquery that ignores the outer `where`,
@@ -635,93 +745,314 @@ describe("GET /api/media", () => {
       userId: "user-1",
       previewKey: { not: null },
       OR: [
-        { createdAt: { lt: anchorCreatedAt } },
-        { createdAt: anchorCreatedAt, id: { lt: "media-42" } },
+        { createdAt: { lt: position.createdAt } },
+        { createdAt: position.createdAt, id: { lt: "media-42" } },
       ],
     });
   });
 
-  it("resolves the cursor only against rows this caller may already see", async () => {
+  it("needs no anchor lookup, so a since-deleted row's cursor still pages", async () => {
     authMock.mockResolvedValue({ user: { id: "user-1" } });
-    mediaFindFirstMock.mockResolvedValue({
+    mediaFindManyMock.mockResolvedValue([selectedRow({ id: "next" })]);
+
+    // Nothing in the table matches this position any more — the row it came
+    // from is gone. Paging must carry on from where it left off rather than
+    // 400-ing the caller back to the top of the feed (ugcportal-r1d).
+    const cursor = encodeMediaCursor({
+      id: "since-deleted",
+      createdAt: new Date("2026-09-24T10:00:00Z"),
+    });
+    const response = await GET(buildListRequest(`?cursor=${cursor}`));
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(mediaFindFirstMock).not.toHaveBeenCalled();
+    expect(body.items.map((i: { id: string }) => i.id)).toEqual(["next"]);
+  });
+
+  it("keeps the window inside the same where as the scoping", async () => {
+    authMock.mockResolvedValue({ user: { id: "user-1" } });
+    mediaFindManyMock.mockResolvedValue([]);
+
+    const cursor = encodeMediaCursor({
       id: "media-42",
       createdAt: new Date("2026-09-24T10:00:00Z"),
     });
-    mediaFindManyMock.mockResolvedValue([]);
+    await GET(buildListRequest(`?cursor=${cursor}`));
 
-    await GET(buildListRequest("?cursor=media-42"));
-
-    // Same scoping as the listing itself, so a cursor can't name a row the
-    // feed excludes and be used as an ordering oracle over it.
-    expect(mediaFindFirstMock.mock.calls[0][0].where).toEqual({
-      userId: "user-1",
-      previewKey: { not: null },
-      id: "media-42",
-    });
+    // A forged cursor can move the window but never widen it: the keyset
+    // predicate sits alongside the userId scoping, not in a subquery that
+    // could outrun it.
+    const where = mediaFindManyMock.mock.calls[0][0].where;
+    expect(where.userId).toBe("user-1");
+    expect(where.previewKey).toEqual({ not: null });
+    expect(where).toHaveProperty("OR");
   });
 
-  it("rejects a cursor naming a row the listing excludes, rather than faking an empty page", async () => {
+  it("rejects a malformed cursor rather than faking an empty page", async () => {
     authMock.mockResolvedValue({ user: { id: "user-1" } });
-    // A VIDEO row's id: the POST response hands these to the client, and the
-    // listing deliberately filters them out. Also covers another user's id and
-    // an id that has since been deleted.
-    mediaFindFirstMock.mockResolvedValue(null);
 
-    const response = await GET(buildListRequest("?cursor=video-row-id"));
+    for (const bad of [
+      // A bare row id, which is what this cursor used to be.
+      "media-42",
+      "not-base64!!",
+      // Well-formed base64url, but not a cursor.
+      Buffer.from("no-separator").toString("base64url"),
+      // Empty id.
+      Buffer.from("2026-09-24T10:00:00.000Z|").toString("base64url"),
+      // Timestamps Date() tolerates but that are not full ISO instants, so
+      // they would silently mean a different position than the row they came
+      // from.
+      Buffer.from("2026|media-42").toString("base64url"),
+      Buffer.from("not-a-date|media-42").toString("base64url"),
+    ]) {
+      mediaFindManyMock.mockClear();
 
-    expect(response.status).toBe(400);
-    // An empty page would read as end-of-list and the caller would stop,
-    // believing it had seen everything.
-    expect(mediaFindManyMock).not.toHaveBeenCalled();
+      const response = await GET(buildListRequest(`?cursor=${bad}`));
+
+      expect(response.status).toBe(400);
+      // An empty page would read as end-of-list and the caller would stop,
+      // believing it had seen everything.
+      expect(mediaFindManyMock).not.toHaveBeenCalled();
+    }
   });
 
-  it("does not consult the anchor lookup when no cursor is supplied", async () => {
+  it("treats an empty ?cursor= as an ordinary first-page request", async () => {
     authMock.mockResolvedValue({ user: { id: "user-1" } });
     mediaFindManyMock.mockResolvedValue([]);
 
     for (const query of ["", "?cursor=", "?cursor=%20"]) {
-      mediaFindFirstMock.mockClear();
       mediaFindManyMock.mockClear();
 
-      await GET(buildListRequest(query));
+      const response = await GET(buildListRequest(query));
 
-      // An empty ?cursor= is an ordinary first-page request, not the id "".
-      expect(mediaFindFirstMock).not.toHaveBeenCalled();
+      expect(response.status).toBe(200);
       expect(mediaFindManyMock.mock.calls[0][0].where).not.toHaveProperty("OR");
     }
   });
 
-  it("never reports hasMore without a usable cursor to go with it", async () => {
+  it("steps past an entirely withheld page instead of stranding the caller", async () => {
     authMock.mockResolvedValue({ user: { id: "user-1" } });
-    // Pathological: the extra row says another page exists, but everything on
-    // this page fails the defensive preview filter. Claiming hasMore here
-    // would leave the caller looping or stalled with nothing to page on.
+    // The query handed back preview-less rows its own where-clause should have
+    // excluded. The advance past them happens server-side, so the caller gets
+    // the next real row rather than a cursor naming a row it never received.
+    mediaFindManyMock
+      .mockResolvedValueOnce([
+        selectedRow({
+          id: "withheld-1",
+          previewKey: null,
+          createdAt: new Date("2026-09-24T10:00:00Z"),
+        }),
+        selectedRow({
+          id: "withheld-2",
+          previewKey: null,
+          createdAt: new Date("2026-09-23T10:00:00Z"),
+        }),
+      ])
+      .mockResolvedValueOnce([
+        selectedRow({
+          id: "real",
+          previewKey: "previews/user-1/real.webp",
+          createdAt: new Date("2026-09-22T10:00:00Z"),
+        }),
+      ]);
+
+    const body = await (await GET(buildListRequest("?limit=1"))).json();
+    const serialized = JSON.stringify(body);
+
+    expect(body.items.map((i: { id: string }) => i.id)).toEqual(["real"]);
+    expect(serialized).not.toContain("withheld-1");
+    expect(serialized).not.toContain("withheld-2");
+    expect(mediaFindManyMock).toHaveBeenCalledTimes(2);
+    // The second window starts strictly after the last row read, and stays
+    // inside the same owner scoping.
+    const second = mediaFindManyMock.mock.calls[1][0].where;
+    expect(second.userId).toBe("user-1");
+    expect(second.OR).toEqual([
+      { createdAt: { lt: new Date("2026-09-24T10:00:00Z") } },
+      {
+        createdAt: new Date("2026-09-24T10:00:00Z"),
+        id: { lt: "withheld-1" },
+      },
+    ]);
+  });
+
+  it("reports the end of the list rather than naming a withheld row", async () => {
+    authMock.mockResolvedValue({ user: { id: "user-1" } });
+    // Every window entirely withheld: the where-clause and the filter
+    // disagree. The scan is bounded and gives up rather than handing back a
+    // position taken from a row the caller never received.
+    mediaFindManyMock.mockResolvedValue([
+      selectedRow({
+        id: "withheld-1",
+        previewKey: null,
+        createdAt: new Date("2026-09-24T10:00:00Z"),
+      }),
+      selectedRow({
+        id: "withheld-2",
+        previewKey: null,
+        createdAt: new Date("2026-09-23T10:00:00Z"),
+      }),
+    ]);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const body = await (await GET(buildListRequest("?limit=1"))).json();
+
+    expect(body.items).toEqual([]);
+    expect(body.hasMore).toBe(false);
+    expect(body.nextCursor).toBeNull();
+    expect(mediaFindManyMock).toHaveBeenCalledTimes(5);
+    expect(errorSpy).toHaveBeenCalledWith(
+      "[media] listing filter withheld every scanned row",
+      expect.objectContaining({ scans: 5 }),
+    );
+    errorSpy.mockRestore();
+  });
+
+  it("reports no cursor when there genuinely is no further page", async () => {
+    authMock.mockResolvedValue({ user: { id: "user-1" } });
     mediaFindManyMock.mockResolvedValue([
       selectedRow({ id: "a", previewKey: null }),
-      selectedRow({ id: "b", previewKey: null }),
     ]);
 
     const body = await (await GET(buildListRequest("?limit=1"))).json();
 
     expect(body.items).toEqual([]);
-    expect(body.nextCursor).toBeNull();
     expect(body.hasMore).toBe(false);
+    expect(body.nextCursor).toBeNull();
   });
 
-  it("takes nextCursor from an emitted row, not from a filtered-out one", async () => {
+  it("still lists the owner's own unpublished rows (ugcportal-r1d)", async () => {
     authMock.mockResolvedValue({ user: { id: "user-1" } });
-    // `b` is dropped by the filter. Pointing the next page at `b` would name a
-    // row the next request's where-clause also excludes — the silent skip.
     mediaFindManyMock.mockResolvedValue([
-      selectedRow({ id: "a", previewKey: "previews/user-1/a.webp" }),
-      selectedRow({ id: "b", previewKey: null }),
-      selectedRow({ id: "c", previewKey: "previews/user-1/c.webp" }),
+      selectedRow({ id: "draft", publishedAt: null }),
+      selectedRow({
+        id: "live",
+        previewKey: "previews/user-1/live.webp",
+        publishedAt: new Date("2026-09-24T12:00:00Z"),
+      }),
+    ]);
+
+    const body = await (await GET(buildListRequest())).json();
+
+    // This is the owner's library, not the public feed. Filtering it by
+    // publishedAt would hide the very rows the publish toggle acts on.
+    const args = mediaFindManyMock.mock.calls[0][0];
+    expect(args.where).not.toHaveProperty("publishedAt");
+    expect(body.items.map((i: { id: string }) => i.id)).toEqual([
+      "draft",
+      "live",
+    ]);
+    expect(body.items[0].publishedAt).toBeNull();
+    expect(body.items[1].publishedAt).toBe("2026-09-24T12:00:00.000Z");
+  });
+
+  it("still shows the owner a row that has no public handle yet", async () => {
+    authMock.mockResolvedValue({ user: { id: "user-1" } });
+    // previewKey set, previewId null: the preview object exists, only the
+    // handle the ANONYMOUS feed hands out is missing. This row belongs in its
+    // uploader's library — the alternative is their own work vanishing from
+    // their own account with no error and no way to get it back
+    // (ugcportal-r1d round 9, finding 1).
+    //
+    // Reachable two ways: a writer bypassing mediaPreviewColumns, which that
+    // helper's doc block names ugcportal-ct0's Instagram sync as, or older
+    // code writing against an already-migrated database.
+    mediaFindManyMock.mockResolvedValueOnce([
+      selectedRow({
+        id: "no-handle",
+        previewKey: "previews/user-1/no-handle.webp",
+        previewId: null,
+      }),
+    ]);
+
+    const body = await (await GET(buildListRequest())).json();
+
+    expect(body.items.map((i: { id: string }) => i.id)).toEqual(["no-handle"]);
+    expect(body.items[0].previewId).toBeNull();
+    // And the row the owner can still see is the same one POST /publish
+    // refuses with 409 — that refusal is correct, because publishing it would
+    // not make it appear on the public feed. The two surfaces disagreeing was
+    // the symptom; the library hiding it was the harm.
+  });
+
+  it("withholds a row with a preview id but no preview key", async () => {
+    authMock.mockResolvedValue({ user: { id: "user-1" } });
+    // The half-set pair, from the owner's side. The owner projection does
+    // select previewKey, so guarding only previewId would emit this row with
+    // `previewKey: null` — while POST /api/media/[id]/publish refuses the very
+    // same row with 409. Two surfaces disagreeing about whether one row has a
+    // preview is worse than either answer on its own (ugcportal-r1d review
+    // round 6, finding 2).
+    mediaFindManyMock.mockResolvedValueOnce([
+      selectedRow({
+        id: "half-set",
+        previewId: "preview-half",
+        previewKey: null,
+        createdAt: new Date("2026-09-24T10:00:00Z"),
+      }),
+      selectedRow({
+        id: "whole",
+        previewId: "preview-whole",
+        previewKey: "previews/user-1/whole.webp",
+        createdAt: new Date("2026-09-23T10:00:00Z"),
+      }),
+    ]);
+
+    const body = await (await GET(buildListRequest())).json();
+
+    expect(body.items.map((i: { id: string }) => i.id)).toEqual(["whole"]);
+    expect(JSON.stringify(body)).not.toContain("half-set");
+  });
+
+  it("still emits rows whose preview columns are both set", async () => {
+    // The guard must not have become so broad it drops ordinary rows — the
+    // anonymous arm has no previewKey at all, and "absent" must not be read
+    // as "null".
+    authMock.mockResolvedValue({ user: { id: "user-1" } });
+    mediaFindManyMock.mockResolvedValueOnce([
+      selectedRow({
+        id: "ok",
+        previewId: "preview-ok",
+        previewKey: "previews/user-1/ok.webp",
+      }),
+    ]);
+
+    const body = await (await GET(buildListRequest())).json();
+
+    expect(body.items.map((i: { id: string }) => i.id)).toEqual(["ok"]);
+  });
+
+  it("never builds nextCursor from a withheld row", async () => {
+    authMock.mockResolvedValue({ user: { id: "user-1" } });
+    mediaFindManyMock.mockResolvedValueOnce([
+      selectedRow({
+        id: "a",
+        previewId: "preview-a",
+        createdAt: new Date("2026-09-24T10:00:00Z"),
+      }),
+      selectedRow({
+        id: "b",
+        previewKey: null,
+        createdAt: new Date("2026-09-23T10:00:00Z"),
+      }),
+      selectedRow({
+        id: "c",
+        previewId: "preview-c",
+        createdAt: new Date("2026-09-22T10:00:00Z"),
+      }),
     ]);
 
     const body = await (await GET(buildListRequest("?limit=2"))).json();
 
+    // The page read is [a, b]; `b` is withheld. The cursor names `a`, the last
+    // row actually emitted. Resuming after `a` re-reads `b`, which is dropped
+    // again, so nothing is skipped and nothing is served twice.
     expect(body.items.map((i: { id: string }) => i.id)).toEqual(["a"]);
-    expect(body.nextCursor).toBe("a");
+    expect(body.hasMore).toBe(true);
+    expect(Buffer.from(body.nextCursor, "base64url").toString("utf8")).toBe(
+      "2026-09-24T10:00:00.000Z|a",
+    );
   });
 
   it("clamps or defaults a bogus limit instead of trusting it", async () => {
