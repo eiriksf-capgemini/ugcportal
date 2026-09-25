@@ -274,6 +274,37 @@ export function mediaPreviewColumns(
     return { previewKey: null, previewId: null };
   }
 
+  if (previewKey.trim() === "") {
+    // A blank path is not "no preview", and must not be quietly treated as
+    // either that or a working one.
+    //
+    // Null is the only encoding of "this row has no preview". A blank string
+    // is a *different* thing: a caller that meant to build a key and produced
+    // nothing. Returning the null pair would hide that bug and, worse, strand
+    // whatever object the caller had already written to storage. Returning
+    // `{ previewKey: "", previewId: <uuid> }` — which this used to do — is
+    // worse still: `"" !== null`, so the row satisfies every downstream check
+    // that exists. Both listings' `not: null` filters pass it, the defensive
+    // hasCompletePreview() in src/lib/media-listing.ts passes it, and the 409
+    // guard in POST /api/media/[id]/publish passes it, so the row publishes
+    // and serves as though it had a working preview that resolves to nothing.
+    //
+    // So: throw. This is a programming error in the caller, not a data
+    // condition, and it is unreachable from the one caller that exists today
+    // (POST /api/media builds `previews/{userId}/{randomUUID()}{ext}`, which
+    // is never blank). It is here for the second writer this helper's contract
+    // is aimed at — ugcportal-ct0's Instagram sync — where a missing remote
+    // asset could plausibly produce an empty string rather than a null.
+    //
+    // Deliberately only a blankness check, not a shape check: requiring a
+    // `previews/` prefix would couple this helper to a storage layout that is
+    // allowed to change, and the failure it would catch is not the one that
+    // slips past every downstream guard.
+    throw new Error(
+      "mediaPreviewColumns: previewKey must be a non-blank path or null",
+    );
+  }
+
   // Deliberately unrelated to `previewKey`, to `key`, and to the uploader: an
   // opaque handle that can be transformed back into the thing it stands for is
   // not opaque. Same reasoning as the uncorrelated preview UUID in

@@ -252,12 +252,12 @@ describe("mediaPreviewColumns", () => {
     });
   });
 
-  it("never returns a half-set pair, for any input", () => {
+  it("never returns a half-set pair, for any accepted input", () => {
     for (const key of [
       null,
       "previews/user-1/a.webp",
       "previews/user-2/b.webp",
-      "",
+      " previews/user-1/leading-space.webp",
     ]) {
       const { previewKey, previewId } = mediaPreviewColumns(key);
       // The invariant stated directly: the two are null together or set
@@ -266,8 +266,36 @@ describe("mediaPreviewColumns", () => {
     }
   });
 
+  it("rejects a blank path rather than treating it as a preview", () => {
+    // This list previously included "" as *accepted* input, and the helper
+    // returned { previewKey: "", previewId: <uuid> }. That pair is the one
+    // shape that slips past everything downstream: `"" !== null`, so both
+    // listings' `not: null` filters, hasCompletePreview() and the publish 409
+    // guard all wave it through, and the row publishes and serves with a
+    // preview path that resolves to nothing.
+    for (const blank of ["", " ", "\t", "\n  "]) {
+      expect(() => mediaPreviewColumns(blank)).toThrow(/non-blank/);
+    }
+  });
+
+  it("still distinguishes a blank path from an absent one", () => {
+    // null is the only encoding of "no preview". Blank is a caller bug, and
+    // conflating the two would hide it — and strand any object already
+    // written to storage under the key the caller failed to build.
+    expect(mediaPreviewColumns(null)).toEqual({
+      previewKey: null,
+      previewId: null,
+    });
+    expect(() => mediaPreviewColumns("")).toThrow();
+  });
+
   it("derives previewId from nothing about the row", () => {
-    const key = "previews/user-1/abc.webp";
+    // Every distinctive part of this key is outside the hex alphabet, on
+    // purpose. An earlier version used `previews/user-1/abc.webp` and asserted
+    // the id did not contain "abc" — but a UUID is hex, so "abc" is a
+    // perfectly ordinary substring of one. That assertion failed roughly once
+    // in a few hundred runs for a reason that had nothing to do with the code.
+    const key = "previews/user-1/zzz-sunset.webp";
     const first = mediaPreviewColumns(key);
     const second = mediaPreviewColumns(key);
 
@@ -276,7 +304,8 @@ describe("mediaPreviewColumns", () => {
     // opaque (the ugcportal-44q decorrelation argument, one field out).
     expect(first.previewId).not.toBe(second.previewId);
     expect(first.previewId).not.toContain("user-1");
-    expect(first.previewId).not.toContain("abc");
+    expect(first.previewId).not.toContain("zzz");
+    expect(first.previewId).not.toContain("sunset");
     expect(first.previewId).not.toContain("previews/");
     expect(key).not.toContain(String(first.previewId));
   });

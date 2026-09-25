@@ -28,33 +28,25 @@ import { prisma } from "@/lib/prisma";
  * first draft of ugcportal-r1d.
  */
 
-const MEDIA_SHARED_SELECT = {
+/**
+ * Owner-facing: everything about the row its own uploader may see.
+ *
+ * Written out in full, with no shared base spread in. See the anonymous select
+ * below for why that duplication is deliberate.
+ */
+export const MEDIA_OWNER_SELECT = {
   id: true,
   // Which sort of artefact this is. True of the original and of anything
   // derived from it, so it reads the same to either audience.
   kind: true,
-  // The opaque public handle for the watermarked preview — safe for anyone.
-  // Its storage path, `previewKey`, is owner-only and lives in the owner
-  // select below; see the note there and on the Media model.
+  // The opaque public handle for the watermarked preview. Its storage path,
+  // `previewKey`, is a separate column below.
   previewId: true,
   createdAt: true,
-  // Visibility state (ugcportal-r1d). On the anonymous feed it is always
-  // non-null and reads as "public since"; a null is only ever visible to the
-  // row's own owner, because that feed filters to non-null rows. The owner's
-  // view needs it to render a publish toggle at all, and the publish endpoint
-  // needs it to report the new state.
+  // Visibility state (ugcportal-r1d). The owner's view needs it to render a
+  // publish toggle at all, and the publish endpoint needs it to report the
+  // new state.
   publishedAt: true,
-  // `userId` is absent from both. On the owner's view it would be redundant
-  // (every row is theirs); on the anonymous feed it would let anyone group the
-  // whole gallery by uploader and enumerate one person's complete published
-  // output from an id they never chose to show. If the gallery later wants
-  // attribution, that is a display name the uploader opted into
-  // (ugcportal-71y's call), not the internal account id.
-} as const;
-
-/** Owner-facing: everything about the row its own uploader may see. */
-export const MEDIA_OWNER_SELECT = {
-  ...MEDIA_SHARED_SELECT,
   // `originalName` is uploader-supplied text. It is how an owner recognises
   // their own file in a list, so it belongs here — and nowhere else. See the
   // anonymous select below for why.
@@ -73,25 +65,43 @@ export const MEDIA_OWNER_SELECT = {
   // anonymous select for why that is worse than useless.
   mimeType: true,
   sizeBytes: true,
+  // `userId` and `key` are absent from both selects and must stay that way.
+  // `key` is the ungated paid original (ugcportal-5d6). `userId` would be
+  // redundant on the owner's own view, and on the anonymous feed it would let
+  // anyone group the whole gallery by uploader.
 } as const;
 
 /**
- * Anonymous-facing: the owner select minus `originalName`, `previewKey`,
- * `mimeType` and `sizeBytes`.
+ * Anonymous-facing: what an unauthenticated visitor may see.
  *
- * The first two are withheld because an anonymous caller must not be able to
- * attribute a gallery item to an account, or read text its uploader never
- * meant to publish. The last two are withheld for a different reason: they are
- * simply not true of the thing this feed serves.
+ * WRITTEN OUT IN FULL, ON PURPOSE. This used to be `= MEDIA_SHARED_SELECT`,
+ * a base the owner select also spread — which made it, structurally, a
+ * subtraction dressed up as a list. The consequence is the one that matters:
+ * a column added to the shared base became world-readable on
+ * GET /api/public/media with no diff in the public route, no test touching
+ * the anonymous payload, and nobody ever asked which audience it was for.
+ *
+ * That is not hypothetical. It is how `publishedAt` arrived in this feed, and
+ * how `mimeType`/`sizeBytes` sat here for three review rounds before anyone
+ * noticed they describe a file the feed cannot serve. Both were fine or fixable;
+ * the next one might not be.
+ *
+ * So the five common columns are duplicated rather than shared. The
+ * duplication IS the forcing function: adding a column to the owner select
+ * does nothing here until someone opens this list and decides. The
+ * `satisfies` clause keeps the relationship honest in the other direction —
+ * this must remain a subset of the owner select, so a column can never appear
+ * to an anonymous caller that the row's own uploader cannot see.
+ *
+ * What is deliberately NOT here, and why:
  *
  * `originalName`: filenames are volunteered, not chosen for publication —
  * `anna-berg-passport-scan.jpg`, `client-acme-draft-v3.png`. Before
- * ugcportal-r1d this column was only ever returned to the row's own owner;
- * shipping the public feed off a shared projection would have made it
- * world-readable for every published row as a side effect. The gallery does
- * not need it, and it is not alt text either — a filename makes poor alt text,
- * and if ugcportal-71y wants captions those should be a field the uploader
- * knowingly fills in, not a string harvested from their local disk.
+ * ugcportal-r1d this column was only ever returned to the row's own owner.
+ * The gallery does not need it, and it is not alt text either — a filename
+ * makes poor alt text, and if ugcportal-71y wants captions those should be a
+ * field the uploader knowingly fills in, not a string harvested from their
+ * local disk.
  *
  * `previewKey`: the storage path embeds the uploader's id
  * (`previews/{userId}/{uuid}.webp`), so publishing it publishes the very thing
@@ -118,14 +128,17 @@ export const MEDIA_OWNER_SELECT = {
  * publishing none — the wrong one gets used. If the gallery (ugcportal-71y)
  * turns out to need the preview's size, that is a new column written at
  * upload time and a deliberate decision, not a reinterpretation of this one.
- *
- * Kept as an explicit list rather than a subtraction from the owner select, so
- * a column added to the owner side does not silently arrive here too. Adding a
- * field means choosing an audience — and `mimeType`/`sizeBytes` sat in the
- * shared base for three rounds precisely because that choice was never made
- * for them.
  */
-export const MEDIA_ANONYMOUS_SELECT = MEDIA_SHARED_SELECT;
+export const MEDIA_ANONYMOUS_SELECT = {
+  id: true,
+  kind: true,
+  // The opaque public handle for the watermarked preview — safe for anyone,
+  // because it is derived from nothing about the row or its uploader.
+  previewId: true,
+  createdAt: true,
+  // Always non-null here (the feed filters on it) and reads as "public since".
+  publishedAt: true,
+} as const satisfies Partial<typeof MEDIA_OWNER_SELECT>;
 
 /**
  * Tied to the selects by construction: widen one and its type widens with it,
