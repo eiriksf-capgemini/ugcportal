@@ -53,7 +53,7 @@ export default async function AdminUsersPage({
   const errorMessage = roleOutcomeMessage(error);
 
   return (
-    <main className="mx-auto w-full max-w-3xl flex-1 px-6 py-12">
+    <div className="mx-auto w-full max-w-3xl flex-1 px-4 py-12 sm:px-6">
       <h1 className="text-2xl font-semibold tracking-tight">Users and roles</h1>
       <p className="mt-2 text-sm text-muted-foreground">
         Admins can reach every admin-only screen, including connected Instagram
@@ -62,7 +62,7 @@ export default async function AdminUsersPage({
       </p>
 
       {errorMessage ? (
-        <p className="mt-6 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
+        <p className="mt-6 rounded-lg border border-destructive/75 bg-destructive-surface p-3 text-sm text-destructive">
           {errorMessage}
         </p>
       ) : null}
@@ -135,6 +135,6 @@ export default async function AdminUsersPage({
           ))}
         </ul>
       )}
-    </main>
+    </div>
   );
 }

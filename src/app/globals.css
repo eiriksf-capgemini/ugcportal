@@ -2,7 +2,55 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 
+/*
+ * ONE THEME (ugcportal-axu).
+ *
+ * Every semantic token below is declared exactly once, in :root. There is no
+ * second (light) token set and no theme switcher — a second theme doubles the
+ * design and test surface before ugcportal-2al has established any browser
+ * testing at all.
+ *
+ * The `dark` class is still defined, and is set on <html> in layout.tsx, for
+ * one reason only: third-party components (shadcn/base-ui output, future
+ * `npx shadcn add`) ship `dark:` utilities, and those must resolve against the
+ * same single token set rather than silently falling back to light defaults.
+ * It is an activation hook, not a second palette.
+ *
+ * src/lib/design/contrast.test.ts parses THIS FILE and fails the suite if any
+ * documented non-decorative pairing drops below its WCAG threshold, or if any
+ * custom property is declared in more than one block. Edit the numbers freely;
+ * the gate will tell you when you have gone too far.
+ */
 @custom-variant dark (&:is(.dark *));
+
+/*
+ * Petrol (ugcportal-eh5) — kept in full, demoted from dominant surface colour
+ * to accent. It now drives links, focus rings, selection and the single
+ * primary action, and nothing else.
+ *
+ * The scale is split across two blocks, and the split is the whole point.
+ *
+ * petrol-600 through petrol-950 fall OUTSIDE the sRGB gamut at hue 205.
+ * Measured, not asserted: the browser clips them, so petrol-950 paints as
+ * #001619 and petrol-800 as #004148, and their real contrast is whatever the
+ * clip happens to produce. They are declared here in :root rather than in
+ * @theme, which keeps every value in eh5's scale present and referenceable
+ * (K4) while stopping Tailwind emitting `bg-petrol-900` and friends — because
+ * a utility that exists is a utility something will eventually use, and the
+ * contrast gate only measures tokens named in PAIRINGS. Filed as
+ * ugcportal-acx; eh5's numbers are left as-shipped rather than quietly
+ * rewritten underneath it.
+ *
+ * `emits no out-of-gamut colour as a usable utility` in contrast.test.ts
+ * enforces this for any future token, not just these five.
+ */
+:root {
+  --color-petrol-600: oklch(0.5 0.09 205);
+  --color-petrol-700: oklch(0.42 0.08 205);
+  --color-petrol-800: oklch(0.34 0.065 205);
+  --color-petrol-900: oklch(0.27 0.05 205);
+  --color-petrol-950: oklch(0.18 0.035 205);
+}
 
 @theme {
   --color-petrol-50: oklch(0.98 0.014 205);
@@ -11,19 +59,112 @@
   --color-petrol-300: oklch(0.82 0.065 205);
   --color-petrol-400: oklch(0.72 0.085 205);
   --color-petrol-500: oklch(0.6 0.095 205);
-  --color-petrol-600: oklch(0.5 0.09 205);
-  --color-petrol-700: oklch(0.42 0.08 205);
-  --color-petrol-800: oklch(0.34 0.065 205);
-  --color-petrol-900: oklch(0.27 0.05 205);
-  --color-petrol-950: oklch(0.18 0.035 205);
+
+  /* The deepest petrol that actually exists in sRGB; see the note above. */
+  --color-petrol-deep: oklch(0.32 0.054 205);
+
+  /*
+   * SURFACE SCALE — the deliverable.
+   *
+   * Five levels, evenly spaced in OKLCH lightness (0.185 -> 0.345, steps of
+   * 0.04), because OKLCH L is perceptually uniform: an even numeric step is an
+   * even visual step, which is what makes elevation readable at near-black.
+   *
+   * Why this range, for photography:
+   *
+   * - Not #000. A well-exposed photograph's own blacks land around #050505 to
+   *   #0a0a0a. On a pure-black page those blacks ARE the page, the image's
+   *   edges dissolve, and the photo appears to float on a void. surface-0 is
+   *   #0f1414 — measurably above a photograph's black point, so every frame
+   *   keeps a boundary without needing a border drawn around it.
+   *
+   * - Not mid-grey either. Past roughly L 0.25 as a page colour the eye adapts
+   *   upward, the surround starts reading as "UI panel" rather than "room",
+   *   and the photographs lose apparent contrast against it.
+   *
+   * - Cool, barely. Chroma runs 0.008 at the bottom down to 0.004 at the top,
+   *   all on petrol's own hue (205). The near-blacks need a trace of colour or
+   *   they read as dead flat video black; the lighter fills need to stay
+   *   neutral so they do not compete with food and wine imagery, which is
+   *   overwhelmingly warm. A faintly cool surround is also what makes those
+   *   warm subjects advance.
+   *
+   * Level semantics. Hovering a filled surface raises it one level; an
+   * unfilled control (ghost, outline) hovers to level 2.
+   *   0  page canvas, and the surround for full-bleed media
+   *   1  raised: cards, image mats, muted fills, table headers
+   *   2  overlay: popovers, dialogs, menus; hover on level 1
+   *   3  wells: inputs; hover on level 2
+   *   4  top: pressed/active fills. Nothing sits above this.
+   */
+  --color-surface-0: oklch(0.185 0.008 205);
+  --color-surface-1: oklch(0.225 0.007 205);
+  --color-surface-2: oklch(0.265 0.006 205);
+  --color-surface-3: oklch(0.305 0.005 205);
+  --color-surface-4: oklch(0.345 0.004 205);
+
+  /*
+   * Opaque backdrop for immersive media (lightbox, full-screen viewer). Sits
+   * below surface-0 so the gallery can drop the room away entirely. Opaque on
+   * purpose: a translucent scrim has no single defined contrast ratio, so
+   * captions over it could not be checked.
+   */
+  --color-scrim: oklch(0.13 0.008 205);
+
+  /*
+   * Ink. Not pure white: #ffffff on a near-black ground haloes, and next to a
+   * photograph it reads brighter than anything in the image, which is exactly
+   * backwards. Two levels only — body and secondary. Both clear 4.5:1 on every
+   * one of the five surfaces, including the lightest.
+   */
+  --color-ink: oklch(0.945 0.004 205);
+  --color-ink-muted: oklch(0.775 0.008 205);
+
+  /*
+   * Lines. Two, deliberately, because they answer different questions.
+   *
+   * --color-line is decorative separation (row dividers, card edges). WCAG
+   * 1.4.11 does not apply to purely decorative boundaries, and a 3:1 hairline
+   * everywhere would draw a bright grid over the photographs.
+   *
+   * --color-line-strong is the boundary of an interactive control (inputs,
+   * outline buttons) — the thing that tells you a control is there. That is a
+   * non-text part of a UI component, so it must clear 3:1 on every surface it
+   * can appear on, and it does. That is why it is this light; it is not a
+   * style choice.
+   */
+  --color-line: oklch(0.325 0.006 205);
+  --color-line-strong: oklch(0.645 0.012 205);
+
+  /*
+   * Danger. Deliberately in-gamut: shadcn's stock dark destructive
+   * (oklch(0.704 0.191 22.216)) falls outside sRGB and gets clipped to
+   * #ff6467 by the browser, which means its real contrast is whatever the clip
+   * happens to produce. The gate rejects out-of-gamut tokens rather than
+   * trusting a clipped ratio, so this one is chosen to fit.
+   *
+   * --color-danger-surface is an opaque error well rather than the tinted
+   * wash shadcn ships. Two reasons: a translucent fill has no single defined
+   * contrast ratio, so error text on it could not be verified; and the tinted
+   * version measured 4.17:1 under this palette, i.e. it was already failing.
+   */
+  --color-danger: oklch(0.78 0.12 25);
+  --color-danger-surface: oklch(0.26 0.045 25);
+  /* Hover raises the error well by roughly one step of the neutral scale. */
+  --color-danger-surface-hover: oklch(0.305 0.05 25);
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-sans);
+  /*
+   * layout.tsx exposes the Geist faces as --font-geist-sans / --font-geist-mono.
+   * These used to read `var(--font-sans)`, which is this variable, so the
+   * `font-sans` utility resolved to nothing.
+   */
+  --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
-  --font-heading: var(--font-sans);
+  --font-heading: var(--font-geist-sans);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -41,6 +182,8 @@
   --color-input: var(--input);
   --color-border: var(--border);
   --color-destructive: var(--destructive);
+  --color-destructive-surface: var(--destructive-surface);
+  --color-destructive-surface-hover: var(--destructive-surface-hover);
   --color-accent-foreground: var(--accent-foreground);
   --color-accent: var(--accent);
   --color-muted-foreground: var(--muted-foreground);
@@ -49,6 +192,7 @@
   --color-secondary: var(--secondary);
   --color-primary-foreground: var(--primary-foreground);
   --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
   --color-popover-foreground: var(--popover-foreground);
   --color-popover: var(--popover);
   --color-card-foreground: var(--card-foreground);
@@ -62,83 +206,103 @@
   --radius-4xl: calc(var(--radius) * 2.6);
 }
 
+/*
+ * Semantic layer. Every shadcn/base-ui token maps onto the surface scale
+ * above; petrol appears only where an accent belongs.
+ */
 :root {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.5 0.09 205);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.95 0.028 205);
-  --accent-foreground: oklch(0.27 0.05 205);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.6 0.095 205);
-  --chart-1: oklch(0.82 0.065 205);
-  --chart-2: oklch(0.6 0.095 205);
-  --chart-3: oklch(0.5 0.09 205);
-  --chart-4: oklch(0.42 0.08 205);
-  --chart-5: oklch(0.27 0.05 205);
-  --radius: 0.625rem;
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.5 0.09 205);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.95 0.028 205);
-  --sidebar-accent-foreground: oklch(0.27 0.05 205);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.6 0.095 205);
-}
+  color-scheme: dark;
 
-.dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.72 0.085 205);
-  --primary-foreground: oklch(0.18 0.035 205);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.34 0.065 205);
-  --accent-foreground: oklch(0.95 0.028 205);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.6 0.095 205);
-  --chart-1: oklch(0.82 0.065 205);
-  --chart-2: oklch(0.6 0.095 205);
-  --chart-3: oklch(0.5 0.09 205);
-  --chart-4: oklch(0.42 0.08 205);
-  --chart-5: oklch(0.27 0.05 205);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.72 0.085 205);
-  --sidebar-primary-foreground: oklch(0.18 0.035 205);
-  --sidebar-accent: oklch(0.34 0.065 205);
-  --sidebar-accent-foreground: oklch(0.95 0.028 205);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.6 0.095 205);
+  --background: var(--color-surface-0);
+  --foreground: var(--color-ink);
+  --card: var(--color-surface-1);
+  --card-foreground: var(--color-ink);
+  --popover: var(--color-surface-2);
+  --popover-foreground: var(--color-ink);
+
+  /*
+   * The one place petrol still fills an area: a single primary action. Its
+   * label is the page colour, not petrol-950 — petrol-950 is out of gamut
+   * (see --color-petrol-deep).
+   *
+   * The hover state is an opaque step along the petrol ramp rather than the
+   * usual alpha fade. A translucent fill would put the button's label on a
+   * background that changes with whatever is behind the button, which has no
+   * one contrast ratio to check; this way both the fill and its label are
+   * verifiable on every surface.
+   *
+   * It brightens rather than darkens. That is the right affordance on a dark
+   * theme (hover raises a surface, as it does throughout the neutral scale),
+   * and darkening to petrol-500 left the hovered fill at only 1.007x the 3:1
+   * it needs against surface-4 - inside the measured authored-vs-rendered
+   * drift, so the gate could not honestly call it a pass.
+   */
+  --primary: var(--color-petrol-400);
+  --primary-hover: var(--color-petrol-300);
+  --primary-foreground: var(--color-surface-0);
+
+  --secondary: var(--color-surface-2);
+  --secondary-foreground: var(--color-ink);
+  --muted: var(--color-surface-1);
+  --muted-foreground: var(--color-ink-muted);
+
+  /* Neutral, not petrol: this is the hover/selected fill for menus and rows. */
+  --accent: var(--color-surface-2);
+  --accent-foreground: var(--color-ink);
+
+  --destructive: var(--color-danger);
+  --destructive-surface: var(--color-danger-surface);
+  --destructive-surface-hover: var(--color-danger-surface-hover);
+  --border: var(--color-line);
+  --input: var(--color-line-strong);
+  --ring: var(--color-petrol-400);
+
+  --selection: var(--color-petrol-deep);
+  --selection-foreground: var(--color-ink);
+
+  /*
+   * Nothing charts yet. These are kept in the petrol family plus one neutral
+   * so the tokens are at least legible on the canvas and in a card, which the
+   * contrast gate enforces. A real categorical ramp is a job for whoever first
+   * ships a chart.
+   */
+  --chart-1: var(--color-petrol-200);
+  --chart-2: var(--color-petrol-300);
+  --chart-3: var(--color-petrol-400);
+  --chart-4: var(--color-petrol-500);
+  --chart-5: var(--color-ink-muted);
+
+  --radius: 0.625rem;
+
+  --sidebar: var(--color-surface-1);
+  --sidebar-foreground: var(--color-ink);
+  --sidebar-primary: var(--color-petrol-400);
+  --sidebar-primary-foreground: var(--color-surface-0);
+  --sidebar-accent: var(--color-surface-2);
+  --sidebar-accent-foreground: var(--color-ink);
+  --sidebar-border: var(--color-line);
+  --sidebar-ring: var(--color-petrol-400);
 }
 
 @layer base {
   * {
-    @apply border-border outline-ring/50;
+    /*
+     * The ring alpha is checked at this exact value by the contrast gate
+     * (RING_ALPHA_MODIFIER in src/lib/design/contrast.ts), and a coverage
+     * test scans the components for alpha-modified colour utilities and fails
+     * on any whose exact alpha the gate has not measured — so this cannot
+     * drift out of step on either side.
+     */
+    @apply border-border outline-ring/80;
   }
   body {
     @apply bg-background text-foreground;
   }
   html {
     @apply font-sans;
+  }
+  ::selection {
+    background-color: var(--selection);
+    color: var(--selection-foreground);
   }
 }

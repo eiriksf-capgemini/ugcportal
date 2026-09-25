@@ -117,7 +117,7 @@ export function ResaleRightsDecisionForm({
         <select
           name="status"
           defaultValue={review?.status ?? "UNREVIEWED"}
-          className="mt-1 block w-full rounded-md border border-border bg-background p-2 text-sm"
+          className="mt-1 block w-full rounded-md border border-input bg-surface-3 p-2 text-sm text-foreground"
         >
           {RESALE_RIGHTS_STATUSES.map((status) => (
             <option key={status} value={status}>
@@ -131,7 +131,7 @@ export function ResaleRightsDecisionForm({
         <select
           name="route"
           defaultValue={review?.route ?? ""}
-          className="mt-1 block w-full rounded-md border border-border bg-background p-2 text-sm"
+          className="mt-1 block w-full rounded-md border border-input bg-surface-3 p-2 text-sm text-foreground"
         >
           <option value="">not recorded</option>
           {RESALE_RIGHTS_ROUTES.map((route) => (
@@ -146,7 +146,7 @@ export function ResaleRightsDecisionForm({
         <select
           name="clearedOwnerUserId"
           defaultValue={review?.clearedOwnerUserId ?? ""}
-          className="mt-1 block w-full rounded-md border border-border bg-background p-2 text-sm"
+          className="mt-1 block w-full rounded-md border border-input bg-surface-3 p-2 text-sm text-foreground"
         >
           <option value="">not recorded</option>
           {holderOptions.map((holder) => (
@@ -173,7 +173,7 @@ export function ResaleRightsDecisionForm({
           type="date"
           name="validUntil"
           defaultValue={toDateInputValue(review?.validUntil ?? null)}
-          className="mt-1 block w-full rounded-md border border-border bg-background p-2 text-sm"
+          className="mt-1 block w-full rounded-md border border-input bg-surface-3 p-2 text-sm text-foreground"
         />
       </label>
       <label className="block text-xs font-medium">
@@ -182,7 +182,7 @@ export function ResaleRightsDecisionForm({
           name="conditions"
           rows={2}
           defaultValue={review?.conditions ?? ""}
-          className="mt-1 block w-full rounded-md border border-border bg-background p-2 text-sm"
+          className="mt-1 block w-full rounded-md border border-input bg-surface-3 p-2 text-sm text-foreground"
         />
       </label>
       <label className="block text-xs font-medium">
@@ -196,7 +196,7 @@ export function ResaleRightsDecisionForm({
           name="reason"
           rows={2}
           required
-          className="mt-1 block w-full rounded-md border border-border bg-background p-2 text-sm"
+          className="mt-1 block w-full rounded-md border border-input bg-surface-3 p-2 text-sm text-foreground"
         />
       </label>
       <label className="block text-xs font-medium">
