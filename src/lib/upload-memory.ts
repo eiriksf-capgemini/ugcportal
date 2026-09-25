@@ -55,13 +55,12 @@ import type { WatermarkConcurrencySettings } from "@/lib/watermark";
  *    (`limit x PREVIEW_BYTES_PER_OPERATION`). The gate's own per-caller body
  *    charge is not added on top: those bodies are the same bodies this
  *    budget is holding, so they are counted once, here.
- *    {@link resolveUploadMemorySettings} proves the two fit together — for
- *    every *derived* configuration `budgetBytes` is at least
- *    `(limit + queueLimit) x UPLOAD_BODY_BYTES`, so this bound never starves
- *    the gate's queue of maximum-size images. An operator who sets
- *    WATERMARK_QUEUE_LIMIT larger than memory affords (which the gate
- *    honours and only reports on) makes this the tighter of the two and
- *    leaves the surplus queue unfillable, which is the safe direction.
+ *    {@link resolveUploadMemorySettings} states exactly how the two compose,
+ *    as two separate claims — a proved one against the gate's own pricing of
+ *    a body, and a measured one against what the route actually reserves,
+ *    which is one queue slot weaker at some container sizes. Read that note
+ *    rather than assuming the stronger of the two; conflating them is the
+ *    mistake the first version of this module shipped.
  *
  * ## What it does NOT cover
  *
@@ -81,6 +80,12 @@ import type { WatermarkConcurrencySettings } from "@/lib/watermark";
  *    the handler holds (see UPLOAD_BODY_COPIES), which is the same model
  *    ugcportal-e86 used; whatever undici allocates transiently while parsing
  *    is left to BUDGET_HEADROOM_FRACTION, as before.
+ *  - **How long one caller may occupy a share of it.** The bytes are bounded;
+ *    the time is only partly. BODY_STALL_TIMEOUT_MS (src/lib/request-body.ts)
+ *    cuts off a body that goes silent, but it is an idle timeout and not a
+ *    deadline — deliberately, so a slow connection is not mistaken for a
+ *    hostile one — so a client that drips a byte inside every window keeps
+ *    its reservation for the whole request lifetime (ugcportal-9qk).
  *  - **Bytes still resident after release.** A reservation is released when
  *    the handler returns; the memory comes back when V8 and the allocator
  *    get round to it. Also headroom's job.
@@ -113,19 +118,53 @@ import type { WatermarkConcurrencySettings } from "@/lib/watermark";
 export const UPLOAD_BODY_COPIES = 2;
 
 /**
- * Multipart framing allowed on top of the file itself.
+ * Everything in the request that is not the file, allowed on top of the
+ * file's own cap.
  *
- * The cap applies to the request *stream*, which carries the boundary lines
- * and part headers as well as the file, so a request whose file is exactly at
- * its kind's cap is a little over it on the wire. 64 KiB is far more than a
- * browser's framing (a few hundred bytes) and leaves room for a long
- * filename.
+ * The cap applies to the request *stream*, and the stream carries the boundary
+ * lines, the part headers **and every other form field** — while the per-kind
+ * cap it is built from describes the file alone. So anything else the form
+ * submits is charged against the file's allowance, and with a 64 KiB
+ * allowance (the first version of this constant) a 10 MB image accompanied by
+ * a 100 KB caption field would have been refused with a 413 for being too
+ * large, which is not what the operator configured and not what the uploader
+ * did.
  *
- * A request whose framing exceeds this is refused with 413 rather than
- * accepted. That is deliberate and fail-closed: the alternative is a cap that
- * a client can inflate at will by padding its own headers, which is not a cap.
+ * 256 KiB is therefore sized for *a whole form*, not for framing: it is three
+ * orders of magnitude above a browser's part framing and leaves room for the
+ * caption/tags/description fields the upload UI (ugcportal-n3c) will submit
+ * alongside the file. It is also deliberately below the point where it starts
+ * to matter to the budget — see the note on resolveUploadMemorySettings about
+ * the one-slot shortfall this allowance causes, which stays at one slot at
+ * this size and becomes two at 1 MiB.
+ *
+ * A request whose non-file content exceeds this is refused with 413 rather
+ * than accepted. That is deliberate and fail-closed: the alternative is a cap
+ * a client can inflate at will by padding fields, which is not a cap.
  */
-export const MULTIPART_ENVELOPE_SLACK_BYTES = 64 * 1024;
+export const MULTIPART_OVERHEAD_ALLOWANCE_BYTES = 256 * 1024;
+
+/**
+ * Cap for an upload whose declared type could not be read at all.
+ *
+ * Reached only when the file part's headers were not within
+ * PART_HEADER_PEEK_BYTES of the start of the body *and* the request sent no
+ * usable Content-Length — i.e. a chunked request with more than 8 KiB of
+ * other fields ahead of the file. No ordinary client produces that shape:
+ * a browser buffers a FormData body and sends Content-Length, and a form puts
+ * its file input within a few hundred bytes of the start.
+ *
+ * Held to the smallest supported size rather than to MAX_UPLOAD_BYTES, which
+ * is what it used to be, because that fallback was wildly disproportionate:
+ * a 100 KB photo reserved ~430 MB, which on a 768 MB container is more than
+ * the whole spendable budget (so the upload was refused outright with a 413
+ * about server capacity) and on 1 GB monopolised the budget and 503'd
+ * everything else for the duration. Capping small instead means such a client
+ * uploads images normally and is told, with a 413, that a larger file needs a
+ * Content-Length header — a diagnosable answer rather than a trap.
+ */
+export const UNDECLARED_UPLOAD_LIMIT_BYTES =
+  MAX_IMAGE_UPLOAD_BYTES + MULTIPART_OVERHEAD_ALLOWANCE_BYTES;
 
 /**
  * Floor on {@link UploadMemorySettings.budgetBytes}: one maximum-size image.
@@ -137,7 +176,7 @@ export const MULTIPART_ENVELOPE_SLACK_BYTES = 64 * 1024;
  * `fitsBudget: false`, exactly as the gate does below MIN_VIABLE_BUDGET_BYTES.
  */
 export const MIN_UPLOAD_BUDGET_BYTES =
-  UPLOAD_BODY_COPIES * (MAX_IMAGE_UPLOAD_BYTES + MULTIPART_ENVELOPE_SLACK_BYTES);
+  UPLOAD_BODY_COPIES * (MAX_IMAGE_UPLOAD_BYTES + MULTIPART_OVERHEAD_ALLOWANCE_BYTES);
 
 /** The upload was refused because the process is already holding its budget. */
 export class UploadMemoryExhaustedError extends Error {
@@ -240,61 +279,68 @@ export interface UploadMemorySettings {
  *
  * Two inputs, and neither is trusted:
  *
- *  - the media type the first multipart part declares, which gives the cap
+ *  - what the file part declares itself to be, which gives the cap
  *    `validateUpload` will apply to it anyway
  *    ({@link declaredUploadCapBytes}); and
  *  - Content-Length, when it is present and sane, which can only make the
  *    answer *smaller*.
  *
  * Both are client-controlled, and that is fine, because neither can widen the
- * cap beyond the route's existing fallback:
+ * answer beyond what the route already allowed everybody:
  *
  *  - declaring `image/png` and sending 200 MB gets the 10 MB cap and a 413 at
  *    ~10 MB, which is the point;
  *  - declaring `video/mp4` and sending an image gets the 200 MB cap, exactly
- *    as today — and then a 415 from sniffKind, which reads the actual bytes;
- *  - declaring something unsupported gets the smallest cap there is, because
- *    such an upload is refused at any size, so the only question is how much
- *    of it to read first;
- *  - declaring nothing readable gets `fallbackBytes` (MAX_UPLOAD_BYTES), the
- *    cap that applied to everything before this existed.
+ *    as before — and then a 415 from sniffKind, which reads the actual bytes;
+ *  - declaring something no kind accepts gets the smallest cap there is,
+ *    because such an upload is refused at any size, so the only question is
+ *    how much of it to read first.
+ *
+ * `declaredContentType` is three-valued, and the three cases are priced
+ * differently because they mean different things:
+ *
+ *  - a media type — the part said what it is;
+ *  - `""` — the part was *found* and declared no Content-Type. RFC 7578 makes
+ *    that `text/plain`, which no kind accepts, so this is a certain 415 and
+ *    gets the smallest cap;
+ *  - `null` — the part was not found within the peek budget, so nothing is
+ *    known. Falls back to Content-Length if there is one, and otherwise to
+ *    {@link UNDECLARED_UPLOAD_LIMIT_BYTES} rather than to MAX_UPLOAD_BYTES:
+ *    see that constant for why the old unconditional fallback was
+ *    disproportionate enough to be a denial-of-service in ordinary use.
  *
  * Content-Length is handled the way ugcportal-i04 established for the same
  * header: as an optimisation, never as the enforcement. Absent, it is
- * `Number(null)` === 0; malformed, it is NaN and `NaN < x` is false. Both
- * fall through to the declared-type cap rather than to a cap of zero or to
- * an unbounded read, which is why the guard tests `> 0` explicitly instead of
- * relying on a comparison that happens to be false for both.
+ * `Number(null)` === 0; malformed, it is NaN and every comparison against NaN
+ * is false. Both fall through to the type-derived cap rather than to a cap of
+ * zero or to an unbounded read, which is why the guard tests `> 0` explicitly
+ * instead of relying on a comparison that happens to be false for both.
  */
 export function uploadReadLimitBytes(options: {
   declaredContentType: string | null;
   contentLengthHeader?: string | null;
-  fallbackBytes?: number;
 }): number {
-  const fallbackBytes = options.fallbackBytes ?? MAX_UPLOAD_BYTES;
-
-  const declaredCap = declaredUploadCapBytes(options.declaredContentType);
-  const byType =
-    options.declaredContentType === null
-      ? fallbackBytes
-      : // A type no kind accepts is a 415 at any size, so read as little of it
-        // as possible: the smallest cap the route has.
-        (declaredCap ?? MAX_IMAGE_UPLOAD_BYTES) +
-        MULTIPART_ENVELOPE_SLACK_BYTES;
-
-  const capByType = Math.min(byType, fallbackBytes);
-
+  const { declaredContentType } = options;
   const declaredLength = Number(options.contentLengthHeader);
-  if (!Number.isFinite(declaredLength) || declaredLength <= 0) {
-    return capByType;
-  }
-  // The slack is added because Content-Length frames the whole request while
-  // a client that got it slightly wrong should still upload; it can only
-  // narrow, never widen, because of the Math.min.
-  return Math.min(
-    capByType,
-    declaredLength + MULTIPART_ENVELOPE_SLACK_BYTES,
-  );
+  const hasLength = Number.isFinite(declaredLength) && declaredLength > 0;
+
+  const byType =
+    declaredContentType === null
+      ? // Nothing known about the file. Content-Length, if honest, is the
+        // only proportionate signal left; failing that, the smallest cap.
+        hasLength
+        ? MAX_UPLOAD_BYTES
+        : UNDECLARED_UPLOAD_LIMIT_BYTES
+      : (declaredUploadCapBytes(declaredContentType) ?? MAX_IMAGE_UPLOAD_BYTES) +
+        MULTIPART_OVERHEAD_ALLOWANCE_BYTES;
+
+  const capped = Math.min(byType, MAX_UPLOAD_BYTES);
+  if (!hasLength) return capped;
+
+  // The allowance is added because Content-Length frames the whole request
+  // while a client that got it slightly wrong should still upload; it can
+  // only narrow, never widen, because of the Math.min.
+  return Math.min(capped, declaredLength + MULTIPART_OVERHEAD_ALLOWANCE_BYTES);
 }
 
 /** Bytes to reserve for a request whose stream is capped at `readLimitBytes`. */
@@ -313,8 +359,15 @@ export function uploadReservationBytes(readLimitBytes: number): number {
  * BUDGET_HEADROOM_FRACTION), `limit`, and `queueTimeoutMs` — and changes
  * none of them.
  *
- * The invariant that makes the two bounds compose, proved rather than
- * asserted (and pinned by a test):
+ * ## How this composes with the gate, stated exactly
+ *
+ * There are two claims here and they are not the same claim. Conflating them
+ * is what the first version of this comment did, which is the defect family
+ * this whole bead is about, so both are spelled out.
+ *
+ * **1. Provable, and exact.** Against the gate's *own* pricing of a body —
+ * `UPLOAD_BODY_BYTES`, which is `UPLOAD_BODY_COPIES x MAX_IMAGE_UPLOAD_BYTES`
+ * and prices the file alone:
  *
  *     budgetBytes  =  spendable - limit x DECODE
  *     forQueue     =  spendable - limit x (DECODE + BODY)
@@ -323,25 +376,42 @@ export function uploadReservationBytes(readLimitBytes: number): number {
  *  => (limit + queueLimit) x BODY  <=  spendable - limit x DECODE
  *                                   =  budgetBytes
  *
- * i.e. this bound always admits at least as many maximum-size images as the
- * gate can hold, so it never renders the gate's queue unreachable. It does
- * *not* follow that the gate stops shedding: on a large container the budget
- * affords many more bodies than the gate's ceiling-bound limit+queue, so a
- * big burst is still shed there. What changed is that the memory held while
- * that happens is now inside a bound, which is the whole of what this bead
- * asked for. The converse case — an explicit WATERMARK_QUEUE_LIMIT bigger
- * than memory affords, which the gate honours and only reports on — makes
- * this bound the tighter of the two, so the surplus queue simply never fills.
- * That is the safe direction and is left alone.
+ * The floored case needs its own line, since the proof assumes `budgetBytes`
+ * is the derived value: the floor only bites when
+ * `spendable - limit x DECODE < MIN`, which for a derived limit means limit
+ * is 1 and `spendable < DECODE + MIN`; then
+ * `forQueue = spendable - (DECODE + BODY) < MIN - BODY`, under one body, so
+ * `queueLimit` is 0 and the requirement is `MIN >= 1 x BODY` — true by MIN's
+ * own definition.
  *
- * The proof above assumes `budgetBytes` is the derived value rather than the
- * {@link MIN_UPLOAD_BUDGET_BYTES} floor, so the floored case needs its own
- * line: the floor only bites when `spendable - limit x DECODE < MIN`, which
- * for a derived limit means limit is 1 and `spendable < DECODE + MIN`; then
- * `forQueue = spendable - (DECODE + BODY) < MIN - BODY`, which is under one
- * body, so `queueLimit` is 0 and the requirement is `MIN >= 1 x BODY` — true
- * by MIN's own definition (one maximum-size image *plus* its framing). Both
- * cases are swept in upload-memory.test.ts rather than left at "should hold".
+ * **2. Measured, and one slot weaker.** What the route actually reserves is
+ * not `BODY`. It is `UPLOAD_BODY_COPIES x (MAX_IMAGE_UPLOAD_BYTES +
+ * MULTIPART_OVERHEAD_ALLOWANCE_BYTES)`, because at reservation time the file's
+ * real size is not yet known and the allowance for the rest of the form has
+ * to be inside the number. That is 512 KiB more per upload than the gate
+ * prices, so at some container sizes the budget affords **one fewer**
+ * maximum-size image than `limit + queueLimit`, and the gate's last queue slot
+ * goes unused. Swept exhaustively at every whole MB from 512 to 4096: the
+ * shortfall is never more than one slot, and the sizes where it happens are a
+ * small minority. The earlier version of this comment asserted claim 1 and
+ * described claim 2, which was simply false at those sizes.
+ *
+ * That shortfall is the safe direction — the tighter bound wins and the cost
+ * is one upload of burst capacity, not a memory overshoot — and it is the
+ * reason {@link MULTIPART_OVERHEAD_ALLOWANCE_BYTES} is 256 KiB rather than
+ * 1 MiB, at which the shortfall reaches two slots. It is not closed by
+ * reserving less, because reserving less than the stream can deliver would
+ * make the reservation a guess rather than a bound, which is the thing this
+ * module exists not to be.
+ *
+ * Neither claim says the gate stops shedding. On a large container the budget
+ * affords many more bodies than the gate's ceiling-bound `limit + queueLimit`,
+ * so a big burst is still buffered and shed there. What changed is that the
+ * memory held while that happens is now inside a bound, which is the whole of
+ * what this bead asked for. The converse case — an explicit
+ * WATERMARK_QUEUE_LIMIT bigger than memory affords, which the gate honours and
+ * only reports on — makes this bound the tighter of the two, so the surplus
+ * queue never fills. Also the safe direction, also left alone.
  */
 export function resolveUploadMemorySettings(
   watermark: WatermarkConcurrencySettings = resolveWatermarkConcurrencySettings(),
@@ -364,7 +434,7 @@ export function resolveUploadMemorySettings(
     maxSingleUploadBytes: Math.max(
       0,
       Math.floor(soloReservationCeilingBytes / UPLOAD_BODY_COPIES) -
-        MULTIPART_ENVELOPE_SLACK_BYTES,
+        MULTIPART_OVERHEAD_ALLOWANCE_BYTES,
     ),
     retryAfterSeconds: Math.max(
       1,
@@ -438,6 +508,7 @@ export function createUploadMemoryBudget(
       const fits = heldBytes + bytes <= settings.budgetBytes;
       if (!fits && heldBytes !== 0) {
         shed += 1;
+        logShedUpload({ wanted: bytes, heldBytes, budgetBytes: settings.budgetBytes, shed });
         throw new UploadMemoryExhaustedError(
           `Upload buffers are at capacity (${heldBytes} of ${settings.budgetBytes} bytes held); try again shortly`,
           { retryAfterSeconds: settings.retryAfterSeconds },
@@ -470,6 +541,49 @@ export function createUploadMemoryBudget(
 }
 
 const mib = (bytes: number) => `${Math.round(bytes / (1024 * 1024))} MB`;
+
+/**
+ * Shortest interval between shed log lines; the rest are counted and reported
+ * on the next one.
+ *
+ * Same shape, and the same reasoning, as logShedUpload in
+ * src/lib/watermark.ts: shedding fires precisely when the service is busiest,
+ * so a line per rejection would add a log storm to a load problem. The first
+ * shed after a quiet period is always logged, so the transition *into*
+ * shedding — the part worth alerting on — is never delayed.
+ *
+ * This route's 503 is deliberately not logged by the route handler, which is
+ * the convention ugcportal-u7g established for the gate's 503. But the gate
+ * already had its own throttled line and this budget had none, so a saturated
+ * upload path was invisible: one stalled client holding the budget produced
+ * nothing but 503s with no record of why. That is what this fixes.
+ */
+export const SHED_LOG_INTERVAL_MS = 10_000;
+
+let shedLogLastAt = 0;
+let shedLogSuppressed = 0;
+
+function logShedUpload(detail: {
+  wanted: number;
+  heldBytes: number;
+  budgetBytes: number;
+  shed: number;
+}): void {
+  const now = Date.now();
+  if (now - shedLogLastAt < SHED_LOG_INTERVAL_MS) {
+    shedLogSuppressed += 1;
+    return;
+  }
+  const suppressed = shedLogSuppressed;
+  shedLogLastAt = now;
+  shedLogSuppressed = 0;
+  console.warn(
+    `[media] upload shed: wanted ${mib(detail.wanted)}, holding ${mib(
+      detail.heldBytes,
+    )} of ${mib(detail.budgetBytes)}; ${detail.shed} shed since start` +
+      (suppressed > 0 ? ` (+${suppressed} more since the last line)` : ""),
+  );
+}
 
 /** One line describing the budget, and where each number came from. */
 export function describeUploadMemory(settings: UploadMemorySettings): string {
@@ -535,4 +649,6 @@ export function uploadMemoryStats() {
 export function resetUploadMemoryBudget(): void {
   budget = undefined;
   budgetSettings = undefined;
+  shedLogLastAt = 0;
+  shedLogSuppressed = 0;
 }

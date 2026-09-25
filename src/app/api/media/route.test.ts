@@ -8,7 +8,7 @@ import {
   MAX_UPLOAD_BYTES,
 } from "@/lib/media";
 import {
-  MULTIPART_ENVELOPE_SLACK_BYTES,
+  MULTIPART_OVERHEAD_ALLOWANCE_BYTES,
   resetUploadMemoryBudget,
   uploadMemoryStats,
   uploadReservationBytes,
@@ -872,7 +872,7 @@ describe("POST /api/media — upload memory (ugcportal-05b)", () => {
     const pulledBytes = pulled() * MULTIPART_CHUNK_BYTES;
     expect(pulledBytes).toBeLessThanOrEqual(
       MAX_IMAGE_UPLOAD_BYTES +
-        MULTIPART_ENVELOPE_SLACK_BYTES +
+        MULTIPART_OVERHEAD_ALLOWANCE_BYTES +
         4 * MULTIPART_CHUNK_BYTES,
     );
     expect(pulledBytes).toBeLessThan(MAX_UPLOAD_BYTES / 10);
@@ -959,7 +959,7 @@ describe("POST /api/media — upload memory (ugcportal-05b)", () => {
     );
 
     const reserved = uploadReservationBytes(
-      200 * 1024 * 1024 + MULTIPART_ENVELOPE_SLACK_BYTES,
+      200 * 1024 * 1024 + MULTIPART_OVERHEAD_ALLOWANCE_BYTES,
     );
     expect(uploadMemoryStats().heldBytes).toBe(reserved);
     // Over-committed by the solo rule, which is why the second is refused
@@ -1094,6 +1094,142 @@ describe("POST /api/media — upload memory (ugcportal-05b)", () => {
     );
 
     expect(uploadMemoryStats().heldBytes).toBe(0);
+  });
+
+  /**
+   * A multipart request with ordinary form fields ahead of the file part,
+   * which is what an upload form actually submits.
+   *
+   * Built here rather than by extending multipartRequest because the shape
+   * *is* the subject of these two tests: the peek has to find the file part
+   * behind the fields, and the cap has to leave room for them.
+   */
+  function formRequest({
+    fields = [] as Array<[string, string]>,
+    payload,
+    payloadBytes,
+    contentType = "image/png",
+    contentLength,
+  }: {
+    fields?: Array<[string, string]>;
+    payload?: Uint8Array;
+    payloadBytes?: number;
+    contentType?: string;
+    contentLength?: string;
+  }) {
+    const encoder = new TextEncoder();
+    const chunks: Uint8Array[] = [];
+    for (const [name, value] of fields) {
+      chunks.push(
+        encoder.encode(
+          `--${MULTIPART_BOUNDARY}\r\n` +
+            `Content-Disposition: form-data; name="${name}"\r\n\r\n` +
+            `${value}\r\n`,
+        ),
+      );
+    }
+    chunks.push(
+      encoder.encode(
+        `--${MULTIPART_BOUNDARY}\r\n` +
+          `Content-Disposition: form-data; name="file"; filename="photo.png"\r\n` +
+          `Content-Type: ${contentType}\r\n\r\n`,
+      ),
+    );
+    if (payload) {
+      chunks.push(payload);
+    } else {
+      const total = payloadBytes ?? 0;
+      for (let sent = 0; sent < total; sent += MULTIPART_CHUNK_BYTES) {
+        chunks.push(
+          new Uint8Array(Math.min(MULTIPART_CHUNK_BYTES, total - sent)).fill(
+            0x41,
+          ),
+        );
+      }
+    }
+    chunks.push(encoder.encode(`\r\n--${MULTIPART_BOUNDARY}--\r\n`));
+
+    let index = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (index >= chunks.length) {
+          controller.close();
+          return;
+        }
+        controller.enqueue(chunks[index++]);
+      },
+    });
+
+    const headers = new Headers({
+      "content-type": `multipart/form-data; boundary=${MULTIPART_BOUNDARY}`,
+    });
+    if (contentLength !== undefined) headers.set("content-length", contentLength);
+
+    return {
+      url: "http://localhost/api/media",
+      method: "POST",
+      headers,
+      body,
+    } as unknown as Request;
+  }
+
+  it("finds the file part behind other form fields (round-1 finding 1)", async () => {
+    // The trigger is an ordinary form: a caption input rendered above the
+    // file input, submitted without a Content-Length (a streamed body).
+    // Reading only the first part meant no declaration was found, the cap
+    // fell back to MAX_UPLOAD_BYTES, and the reservation became ~430 MB —
+    // which on this 512 MB container is more than the whole spendable
+    // budget, so the upload was refused outright.
+    const settings = configureContainer(512);
+    expect(settings.soloReservationCeilingBytes).toBeLessThan(
+      uploadReservationBytes(MAX_UPLOAD_BYTES),
+    );
+
+    const response = await POST(
+      formRequest({
+        fields: [
+          ["caption", "a day at the beach"],
+          ["tags", "summer,sea"],
+        ],
+        payload: REAL_PNG,
+      }),
+    );
+
+    expect(response.status).toBe(201);
+    // Priced as the image it declares itself to be, not as the largest thing
+    // the route accepts from anyone.
+    expect(uploadMemoryStats().peakHeldBytes).toBe(
+      uploadReservationBytes(
+        MAX_IMAGE_UPLOAD_BYTES + MULTIPART_OVERHEAD_ALLOWANCE_BYTES,
+      ),
+    );
+    expect(uploadMemoryStats().refusedTooLarge).toBe(0);
+    expect(uploadMemoryStats().heldBytes).toBe(0);
+  });
+
+  it("does not charge the other form fields against the file's cap (round-1 finding 4)", async () => {
+    // The cap applies to the whole request stream while the per-kind cap it
+    // is built from describes the file alone, so every other field eats into
+    // the file's allowance. A maximum-size image plus a 100 KB caption is a
+    // legitimate upload and used to be refused with a 413 at the old 64 KiB
+    // allowance.
+    configureContainer(1024);
+
+    const response = await POST(
+      formRequest({
+        fields: [["caption", "c".repeat(100 * 1024)]],
+        payloadBytes: MAX_IMAGE_UPLOAD_BYTES,
+      }),
+    );
+
+    // 415, from sniffKind reading the filler bytes — which is the point:
+    // the request got all the way past the stream cap and the per-kind size
+    // check to the content check, rather than being cut off as too large.
+    expect(response.status).toBe(415);
+    expect(response.status).not.toBe(413);
+    await expect(response.json()).resolves.toEqual({
+      error: "File content does not match its declared type",
+    });
   });
 
   it("warns once, naming the shortfall, when the container is too small", async () => {

@@ -16,7 +16,8 @@ import { MEDIA_OWNER_SELECT } from "@/lib/media-access";
 import { listMedia } from "@/lib/media-listing";
 import { prisma } from "@/lib/prisma";
 import {
-  peekFirstMultipartPart,
+  multipartBoundary,
+  peekDeclaredPartType,
   readCappedFormDataFrom,
 } from "@/lib/request-body";
 import { getBucketName, getS3Client } from "@/lib/s3";
@@ -60,20 +61,27 @@ const UPLOAD_FIELD_NAME = "file";
  * The order is the point of ugcportal-05b. Everything down to
  * `reserveUploadMemory` is O(1) in the size of the body — a session lookup, a
  * header, and PART_HEADER_PEEK_BYTES or so of the stream — so an upload that
- * will not fit is answered before the process has committed to holding it. Before this, the body was read to MAX_UPLOAD_BYTES (~205 MB) and *then*
+ * will not fit is answered before the process has committed to holding it.
+ * Before this, the body was read to MAX_UPLOAD_BYTES (~205 MB) and *then*
  * checked against its kind's cap, and the only bound on how many requests did
  * that at once was how many a client cared to open.
  *
- * Three bounds now apply, in this order, and each is narrower than the last:
+ * Four bounds now apply, and each is narrower than the last:
  *
  *  1. Content-Length against MAX_UPLOAD_BYTES — free, and the only one that
  *     can act on a request whose body has not been touched at all;
- *  2. the per-kind cap, from what the first part *declares* it is, applied to
+ *  2. the per-kind cap, from what the file part *declares* it is, applied to
  *     the request stream (see uploadReadLimitBytes for why a lying
- *     declaration cannot widen it); and
+ *     declaration cannot widen it);
  *  3. the process-wide byte budget, which is what turns "each request is
  *     bounded" into "all of them together are bounded" — the dimension
- *     ugcportal-i04's per-request cap deliberately did not cover.
+ *     ugcportal-i04's per-request cap deliberately did not cover; and
+ *  4. BODY_STALL_TIMEOUT_MS, which bounds how *long* a reservation can be
+ *     held by a client that has stopped sending. Without it the first three
+ *     are bounds on bytes with no bound on time, and one stalled connection
+ *     holds its whole reservation until Node's 300-second requestTimeout —
+ *     enough, on a 1 GB container, for a handful of them to 503 every other
+ *     upload for five minutes (round-1 finding 2).
  *
  * On either refusal the remaining body is left unread rather than cancelled.
  * Cancelling a request body by hand has a known failure mode with
@@ -107,7 +115,15 @@ export async function POST(request: Request) {
     );
   }
 
-  const peeked = await peekFirstMultipartPart(request.body, UPLOAD_FIELD_NAME);
+  // The boundary comes from this request's own Content-Type, so the peek can
+  // split on framing rather than guess at it — which is what lets it find the
+  // file part wherever the form put it, instead of only when it happens to be
+  // first (round-1 finding 1: a caption field rendered before the file input
+  // is an ordinary form, and used to cost a ~430 MB reservation).
+  const peeked = await peekDeclaredPartType(request.body, {
+    fieldName: UPLOAD_FIELD_NAME,
+    boundary: multipartBoundary(request.headers.get("content-type")),
+  });
   const readLimitBytes = uploadReadLimitBytes({
     declaredContentType: peeked.declaredContentType,
     contentLengthHeader,

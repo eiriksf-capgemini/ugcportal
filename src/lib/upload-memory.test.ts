@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   MAX_IMAGE_UPLOAD_BYTES,
@@ -7,12 +7,14 @@ import {
 } from "@/lib/media";
 import {
   MIN_UPLOAD_BUDGET_BYTES,
-  MULTIPART_ENVELOPE_SLACK_BYTES,
+  MULTIPART_OVERHEAD_ALLOWANCE_BYTES,
+  UNDECLARED_UPLOAD_LIMIT_BYTES,
   UPLOAD_BODY_COPIES,
   UploadMemoryExhaustedError,
   UploadTooLargeForBudgetError,
   createUploadMemoryBudget,
   describeUploadMemory,
+  resetUploadMemoryBudget,
   resolveUploadMemorySettings,
   uploadReadLimitBytes,
   uploadReservationBytes,
@@ -91,13 +93,13 @@ describe("declaredUploadCapBytes", () => {
 describe("uploadReadLimitBytes", () => {
   it("caps a declared image at the image cap, not at the route's fallback", () => {
     expect(uploadReadLimitBytes({ declaredContentType: "image/png" })).toBe(
-      10 * MiB + MULTIPART_ENVELOPE_SLACK_BYTES,
+      10 * MiB + MULTIPART_OVERHEAD_ALLOWANCE_BYTES,
     );
   });
 
   it("caps a declared video at the video cap", () => {
     expect(uploadReadLimitBytes({ declaredContentType: "video/mp4" })).toBe(
-      200 * MiB + MULTIPART_ENVELOPE_SLACK_BYTES,
+      200 * MiB + MULTIPART_OVERHEAD_ALLOWANCE_BYTES,
     );
   });
 
@@ -105,14 +107,39 @@ describe("uploadReadLimitBytes", () => {
     // An unsupported type is a 415 at any size, so the only question is how
     // much of it to buffer first: the smallest cap the route has.
     expect(uploadReadLimitBytes({ declaredContentType: "application/pdf" })).toBe(
-      MAX_IMAGE_UPLOAD_BYTES + MULTIPART_ENVELOPE_SLACK_BYTES,
+      MAX_IMAGE_UPLOAD_BYTES + MULTIPART_OVERHEAD_ALLOWANCE_BYTES,
     );
   });
 
-  it("falls back to the whole-request cap when nothing was declared", () => {
+  it("holds an upload it could not read a declaration for to the smallest cap", () => {
+    // Round-1 finding 1: this used to be MAX_UPLOAD_BYTES, so a 100 KB photo
+    // behind a caption field on a chunked request reserved ~430 MB — more
+    // than a 768 MB container's whole spendable budget.
     expect(uploadReadLimitBytes({ declaredContentType: null })).toBe(
-      MAX_UPLOAD_BYTES,
+      UNDECLARED_UPLOAD_LIMIT_BYTES,
     );
+    expect(UNDECLARED_UPLOAD_LIMIT_BYTES).toBeLessThan(MAX_UPLOAD_BYTES / 10);
+  });
+
+  it("prices a found-but-untyped part as the certain 415 it is", () => {
+    // "" means the part was located and declared no Content-Type. RFC 7578
+    // makes that text/plain, which no kind accepts, so there is no size at
+    // which it succeeds — read as little of it as possible.
+    expect(uploadReadLimitBytes({ declaredContentType: "" })).toBe(
+      MAX_IMAGE_UPLOAD_BYTES + MULTIPART_OVERHEAD_ALLOWANCE_BYTES,
+    );
+  });
+
+  it("still trusts Content-Length when the declaration is unreadable", () => {
+    // The undeclared floor is a fallback for having no information at all.
+    // An honest Content-Length is information, and a video sent that way is
+    // sized from it rather than refused.
+    expect(
+      uploadReadLimitBytes({
+        declaredContentType: null,
+        contentLengthHeader: String(150 * MiB),
+      }),
+    ).toBe(150 * MiB + MULTIPART_OVERHEAD_ALLOWANCE_BYTES);
   });
 
   it("never exceeds the fallback, whatever is declared", () => {
@@ -124,6 +151,7 @@ describe("uploadReadLimitBytes", () => {
       "video/mp4",
       "application/pdf",
       "video/quicktime",
+      "",
       null,
     ]) {
       expect(
@@ -132,13 +160,26 @@ describe("uploadReadLimitBytes", () => {
     }
   });
 
+  it("leaves room for the rest of the form, not just the framing", () => {
+    // Round-1 finding 4: the cap applies to the whole request stream, so
+    // every other field is charged against the file's per-kind cap. At the
+    // original 64 KiB a 10 MB image plus a 100 KB caption was a 413.
+    const formOverhead = 100 * 1024;
+    const wireBytes = MAX_IMAGE_UPLOAD_BYTES + formOverhead;
+
+    expect(
+      uploadReadLimitBytes({ declaredContentType: "image/png" }),
+    ).toBeGreaterThanOrEqual(wireBytes);
+    expect(MULTIPART_OVERHEAD_ALLOWANCE_BYTES).toBe(256 * 1024);
+  });
+
   it("narrows to an honestly declared Content-Length", () => {
     expect(
       uploadReadLimitBytes({
         declaredContentType: "image/png",
         contentLengthHeader: String(2 * MiB),
       }),
-    ).toBe(2 * MiB + MULTIPART_ENVELOPE_SLACK_BYTES);
+    ).toBe(2 * MiB + MULTIPART_OVERHEAD_ALLOWANCE_BYTES);
   });
 
   it("lets Content-Length narrow but never widen", () => {
@@ -147,7 +188,7 @@ describe("uploadReadLimitBytes", () => {
         declaredContentType: "image/png",
         contentLengthHeader: String(500 * MiB),
       }),
-    ).toBe(10 * MiB + MULTIPART_ENVELOPE_SLACK_BYTES);
+    ).toBe(10 * MiB + MULTIPART_OVERHEAD_ALLOWANCE_BYTES);
   });
 
   // The header shapes ugcportal-i04 was shipped getting wrong. `Number(null)`
@@ -171,7 +212,7 @@ describe("uploadReadLimitBytes", () => {
         declaredContentType: "image/png",
         contentLengthHeader,
       }),
-    ).toBe(10 * MiB + MULTIPART_ENVELOPE_SLACK_BYTES);
+    ).toBe(10 * MiB + MULTIPART_OVERHEAD_ALLOWANCE_BYTES);
   });
 });
 
@@ -190,9 +231,9 @@ describe("uploadReservationBytes", () => {
     );
     expect(
       uploadReservationBytes(
-        MAX_IMAGE_UPLOAD_BYTES + MULTIPART_ENVELOPE_SLACK_BYTES,
+        MAX_IMAGE_UPLOAD_BYTES + MULTIPART_OVERHEAD_ALLOWANCE_BYTES,
       ),
-    ).toBe(UPLOAD_BODY_BYTES + UPLOAD_BODY_COPIES * MULTIPART_ENVELOPE_SLACK_BYTES);
+    ).toBe(UPLOAD_BODY_BYTES + UPLOAD_BODY_COPIES * MULTIPART_OVERHEAD_ALLOWANCE_BYTES);
   });
 });
 
@@ -205,7 +246,7 @@ describe("resolveUploadMemorySettings", () => {
   //   limit     = 3 (libuv-bound), decode 3 x 128 MiB = 402_653_184
   //   budget    = spendable - decode                = 174_483_046  (166.4 MiB)
   //   solo      = spendable                         = 577_136_230  (550.4 MiB)
-  //   maxSingle = floor(solo / 2) - 64 KiB          = 288_502_579  (275.1 MiB)
+  //   maxSingle = floor(solo / 2) - 256 KiB         = 288_305_971  (274.9 MiB)
   //   projected = 320 MiB + max(decode + budget, solo) = usable exactly
   it("derives the recommended 1 GB configuration", () => {
     const settings = uploadFor(1024);
@@ -214,7 +255,7 @@ describe("resolveUploadMemorySettings", () => {
     expect(settings.watermark.limit).toBe(3);
     expect(settings.budgetBytes).toBe(174_483_046);
     expect(settings.soloReservationCeilingBytes).toBe(577_136_230);
-    expect(settings.maxSingleUploadBytes).toBe(288_502_579);
+    expect(settings.maxSingleUploadBytes).toBe(288_305_971);
     expect(settings.projectedUploadPathPeakBytes).toBe(912_680_550);
     expect(settings.fitsBudget).toBe(true);
   });
@@ -234,7 +275,7 @@ describe("resolveUploadMemorySettings", () => {
   it("admits exactly the burst the gate can hold at 1 GB", () => {
     const settings = uploadFor(1024);
     const perMaxImage = uploadReservationBytes(
-      MAX_IMAGE_UPLOAD_BYTES + MULTIPART_ENVELOPE_SLACK_BYTES,
+      MAX_IMAGE_UPLOAD_BYTES + MULTIPART_OVERHEAD_ALLOWANCE_BYTES,
     );
 
     expect(Math.floor(settings.budgetBytes / perMaxImage)).toBe(
@@ -257,29 +298,59 @@ describe("resolveUploadMemorySettings", () => {
     );
   });
 
-  // The invariant the two bounds compose on. Stated on
-  // resolveUploadMemorySettings and proved there for the derived case; this
-  // is the executable half, swept across every container size that matters.
-  //
-  // Without it the outer bound could be tighter than the gate's queue, making
-  // part of the gate's configuration permanently unreachable — the gate would
-  // report a queue depth it could never fill.
-  it.each([512, 640, 768, 1024, 1536, 2048, 4096, 8192])(
-    "never starves the gate's queue at %i MB",
-    (mb) => {
+  // The two claims from resolveUploadMemorySettings, swept exhaustively at
+  // every whole MB rather than at a handful of sampled sizes. Round-1
+  // finding 3: the sampled sweep asserted the stronger claim and all eight
+  // of its samples happened to miss the 26 sizes in 512-2048 MB where the
+  // stronger claim is false. Sampling is how a claim like that survives.
+  const EVERY_MB: number[] = [];
+  for (let mb = 512; mb <= 4096; mb += 1) EVERY_MB.push(mb);
+
+  it("never starves the gate's queue, priced as the gate prices it", () => {
+    // Claim 1, the provable one: budgetBytes >= (limit + queueLimit) x
+    // UPLOAD_BODY_BYTES, where UPLOAD_BODY_BYTES prices the file alone.
+    const failures = EVERY_MB.filter((mb) => {
       const settings = uploadFor(mb);
       const gateHolds =
         settings.watermark.limit + settings.watermark.queueLimit;
+      return settings.budgetBytes < gateHolds * UPLOAD_BODY_BYTES;
+    });
 
-      expect(settings.budgetBytes).toBeGreaterThanOrEqual(
-        gateHolds * UPLOAD_BODY_BYTES,
-      );
-    },
-  );
+    expect(failures).toEqual([]);
+  });
 
-  it.each([512, 640, 768, 1024, 1536, 2048, 4096, 8192])(
-    "keeps the projected peak inside the usable budget whenever it fits, at %i MB",
-    (mb) => {
+  it("is at most one queue slot short of the gate, priced as the route reserves", () => {
+    // Claim 2, the measured one. What the route actually reserves carries
+    // MULTIPART_OVERHEAD_ALLOWANCE_BYTES that the gate's figure does not, so
+    // at some sizes the budget affords one fewer maximum-size image than the
+    // gate could hold. That is the safe direction; what must not happen is
+    // it being worse than one, or the claim saying otherwise.
+    const perMaxImage = uploadReservationBytes(
+      MAX_IMAGE_UPLOAD_BYTES + MULTIPART_OVERHEAD_ALLOWANCE_BYTES,
+    );
+    let worstShortfall = 0;
+    let sizesShort = 0;
+
+    for (const mb of EVERY_MB) {
+      const settings = uploadFor(mb);
+      const gateHolds =
+        settings.watermark.limit + settings.watermark.queueLimit;
+      const affords = Math.floor(settings.budgetBytes / perMaxImage);
+      const shortfall = gateHolds - affords;
+      if (shortfall > 0) {
+        sizesShort += 1;
+        worstShortfall = Math.max(worstShortfall, shortfall);
+      }
+    }
+
+    expect(worstShortfall).toBeLessThanOrEqual(1);
+    // Pinned so that raising the allowance — which would push this to two
+    // slots at 1 MiB — cannot happen silently.
+    expect(sizesShort).toBeLessThan(EVERY_MB.length / 10);
+  });
+
+  it("keeps the projected peak exactly at the usable budget wherever it fits", () => {
+    const failures = EVERY_MB.filter((mb) => {
       const settings = uploadFor(mb);
       const expected =
         PREVIEW_PROCESS_BASELINE_BYTES +
@@ -288,19 +359,19 @@ describe("resolveUploadMemorySettings", () => {
             settings.budgetBytes,
           settings.soloReservationCeilingBytes,
         );
+      if (settings.projectedUploadPathPeakBytes !== expected) return true;
+      // The Dockerfile says "the container limit less the 15% headroom, by
+      // construction". This is the construction, asserted as an equality
+      // rather than as "under it somewhere".
+      return (
+        settings.fitsBudget &&
+        settings.projectedUploadPathPeakBytes !==
+          settings.watermark.usableBudgetBytes
+      );
+    });
 
-      expect(settings.projectedUploadPathPeakBytes).toBe(expected);
-      if (settings.fitsBudget) {
-        // Exactly the usable budget, not merely under it — the Dockerfile
-        // says "the container limit less the 15% headroom, by construction",
-        // and this is the construction. Anything less would mean memory the
-        // derivation reserved and then refused to spend.
-        expect(settings.projectedUploadPathPeakBytes).toBe(
-          settings.watermark.usableBudgetBytes,
-        );
-      }
-    },
-  );
+    expect(failures).toEqual([]);
+  });
 
   it("is at least as large a claim as the gate's own projection", () => {
     // projectedGatedPeakBytes and projectedUploadPathPeakBytes are not
@@ -353,6 +424,20 @@ describe("describeUploadMemory", () => {
 });
 
 describe("createUploadMemoryBudget", () => {
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    // Shedding logs, throttled (round-1 finding 2). Reset so each test sees
+    // its own throttle window, and captured so the block's output is the
+    // assertions rather than the log lines.
+    resetUploadMemoryBudget();
+    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   function budgetOf(
     overrides: Partial<UploadMemorySettings> = {},
   ): UploadMemorySettings {
@@ -462,6 +547,40 @@ describe("createUploadMemoryBudget", () => {
 
     expect(budget.stats().heldBytes).toBe(40);
     expect(() => budget.reserve(61)).toThrow(UploadMemoryExhaustedError);
+  });
+
+  it("logs a shed, so a saturated upload path is diagnosable at all", () => {
+    // Round-1 finding 2. The route deliberately does not log its own 503 —
+    // that is the convention ugcportal-u7g set for the gate's — but the gate
+    // has its own throttled line and this budget had none, so one client
+    // holding the budget produced five minutes of unexplained 503s.
+    const budget = createUploadMemoryBudget(
+      budgetOf({ budgetBytes: 100, soloReservationCeilingBytes: 400 }),
+    );
+    budget.reserve(100);
+
+    expect(() => budget.reserve(50)).toThrow(UploadMemoryExhaustedError);
+
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("[media] upload shed"),
+    );
+  });
+
+  it("throttles the shed log instead of adding a log storm to a load problem", () => {
+    const budget = createUploadMemoryBudget(
+      budgetOf({ budgetBytes: 100, soloReservationCeilingBytes: 400 }),
+    );
+    budget.reserve(100);
+
+    for (let i = 0; i < 50; i += 1) {
+      expect(() => budget.reserve(50)).toThrow(UploadMemoryExhaustedError);
+    }
+
+    // The transition into shedding is never delayed; the other 49 are counted
+    // and reported on the next line rather than each getting one.
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(budget.stats().shed).toBe(50);
   });
 
   it("never holds more than the solo ceiling, under arbitrary interleaving", () => {

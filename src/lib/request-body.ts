@@ -120,7 +120,7 @@ export async function readJsonBody(
 
 export type FormDataResult =
   | { ok: true; value: FormData }
-  | { ok: false; status: 400 | 413; error: string };
+  | { ok: false; status: 400 | 408 | 413; error: string };
 
 /**
  * Reads a multipart body, never letting more than `limit` bytes through.
@@ -147,9 +147,81 @@ export async function readCappedFormData(
 }
 
 /**
+ * Longest a request body may go without delivering a single byte.
+ *
+ * An *idle* timeout, not a deadline: it is reset by every chunk, so a genuinely
+ * slow 200 MB upload on a bad connection is unaffected, while a client that
+ * sends its part headers and then stops is cut off in seconds instead of
+ * holding its reservation until Node's 300-second `requestTimeout`
+ * (ugcportal-05b round 1). That difference matters because a reservation is
+ * held across the read: one stalled client used to be able to hold a whole
+ * container's upload budget, and every other upload took a 503 for five
+ * minutes. 30 seconds is far longer than any real pause in a TCP stream that
+ * is still alive.
+ */
+export const BODY_STALL_TIMEOUT_MS = 30_000;
+
+/** Thrown from inside the body stream when it goes silent for too long. */
+class BodyStalledError extends Error {
+  constructor() {
+    super("Request body stalled");
+    this.name = "BodyStalledError";
+  }
+}
+
+function isBodyStalled(error: unknown): boolean {
+  for (let cursor = error, depth = 0; cursor && depth < 5; depth += 1) {
+    if (cursor instanceof BodyStalledError) return true;
+    cursor = (cursor as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
+/**
+ * Wraps a stream so a read that never produces a chunk fails instead of
+ * waiting forever.
+ *
+ * Deliberately a wrapper around the reader rather than a `TransformStream`
+ * like {@link cappedBody}: a transform's `transform()` only runs when a chunk
+ * arrives, which is exactly the event that is not happening, so a stall is
+ * the one condition a transform structurally cannot observe.
+ */
+function stallGuarded(
+  source: ReadableStream<Uint8Array>,
+  timeoutMs: number,
+): ReadableStream<Uint8Array> {
+  const reader = source.getReader();
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const { done, value } = await Promise.race([
+          reader.read(),
+          new Promise<never>((_resolve, reject) => {
+            timer = setTimeout(() => reject(new BodyStalledError()), timeoutMs);
+            // Never hold the event loop open for a timer nobody is waiting on.
+            timer.unref?.();
+          }),
+        ]);
+        if (done) {
+          controller.close();
+          return;
+        }
+        controller.enqueue(value);
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    },
+    cancel(reason) {
+      return reader.cancel(reason);
+    },
+  });
+}
+
+/**
  * {@link readCappedFormData} for a body stream the caller is already holding.
  *
- * Split out for {@link peekFirstMultipartPart}, which has to consume the head
+ * Split out for {@link peekDeclaredPartType}, which has to consume the head
  * of `request.body` to learn what the upload declares itself to be *before*
  * the cap can be chosen (ugcportal-05b). Once that has happened
  * `request.body` is disturbed and cannot be read again, so the peeked stream
@@ -164,6 +236,7 @@ export async function readCappedFormDataFrom(
   request: Pick<Request, "url" | "method" | "headers">,
   body: ReadableStream<Uint8Array>,
   limit: number,
+  stallTimeoutMs: number = BODY_STALL_TIMEOUT_MS,
 ): Promise<FormDataResult> {
   const headers = new Headers(request.headers);
   headers.delete("content-length");
@@ -171,7 +244,9 @@ export async function readCappedFormDataFrom(
   const reframed = new Request(request.url, {
     method: request.method,
     headers,
-    body: cappedBody(body, limit),
+    // Stall guard outside the cap, so the byte counter only ever sees chunks
+    // that actually arrived.
+    body: cappedBody(stallGuarded(body, stallTimeoutMs), limit),
     // Required by the fetch spec for a streaming request body.
     duplex: "half",
   } as RequestInit & { duplex: "half" });
@@ -182,18 +257,26 @@ export async function readCappedFormDataFrom(
     if (isBodyTooLarge(error)) {
       return { ok: false, status: 413, error: "Request body too large" };
     }
+    if (isBodyStalled(error)) {
+      // 408, not 400: the request was well-formed as far as it got, and the
+      // caller may legitimately retry it. Distinguishing it also means a
+      // stalled upload is diagnosable as a stall rather than showing up in
+      // the same bucket as malformed multipart.
+      return { ok: false, status: 408, error: "Request body stalled" };
+    }
     return { ok: false, status: 400, error: "Malformed multipart form body" };
   }
 }
 
 /**
- * How far into the body the first part's header block is looked for.
+ * How far into the body the declared part's header block is looked for.
  *
  * A part header block is a boundary line plus two short header lines — a few
- * hundred bytes for anything a browser sends. 8 KiB is generous room for a
- * long filename without being a meaningful allocation, and the give-up
- * behaviour is a *looser* cap rather than a rejection, so a client with an
- * unusual preamble still uploads.
+ * hundred bytes for anything a browser sends — and this searches *every* part
+ * in range, not just the first, so a form with a caption or tags field ahead
+ * of the file input is still read correctly. 8 KiB is generous room for those
+ * plus a long filename without being a meaningful allocation, and the give-up
+ * behaviour is the caller's fallback rather than a rejection.
  *
  * A threshold rather than a hard byte bound: a chunk cannot be half-read, so
  * the search stops at the first chunk that takes it past this and the bytes
@@ -204,10 +287,10 @@ export const PART_HEADER_PEEK_BYTES = 8 * 1024;
 
 export interface PeekedMultipartBody {
   /**
-   * Lower-cased media type declared by the first part, when that part is the
-   * one named `fieldName`. Null when the header block could not be found
-   * within {@link PART_HEADER_PEEK_BYTES}, when the first part is some other
-   * field, or when it carries no Content-Type.
+   * Lower-cased media type declared by the part named `fieldName`, with any
+   * parameters left on. Null when that part's header block was not found
+   * within {@link PART_HEADER_PEEK_BYTES}, when the boundary could not be
+   * read, or when the part carries no Content-Type.
    *
    * Client-controlled, and only ever used to choose a **smaller** cap than
    * the caller's fallback — see the note on uploadReadLimitBytes in
@@ -220,39 +303,71 @@ export interface PeekedMultipartBody {
 
 const HEADER_TERMINATOR = "\r\n\r\n";
 
+/** `boundary=...`, quoted or bare, out of a multipart Content-Type header. */
+const BOUNDARY_PARAM = /;\s*boundary\s*=\s*(?:"([^"]*)"|([^\s;]+))/i;
+
 /**
- * Reads the *declaration* at the front of a multipart body without reading
- * the body.
+ * The multipart boundary a request declares, or null if it declares none.
  *
- * Multipart sends each part's headers before its data, so the first part's
- * `Content-Disposition` and `Content-Type` arrive in the first few hundred
- * bytes. Knowing them lets the caller size the cap (and its memory
- * reservation) for the kind of file this actually claims to be, instead of
- * for the largest upload the route accepts from anyone. That is the whole
- * difference between rejecting an oversized image at ~10 MB and rejecting it
- * at ~205 MB, which is what this route used to do (ugcportal-05b).
- *
- * This is a peek, not a parser: it locates one CRLFCRLF and reads two header
- * values out of the bytes before it. The platform still does the real
- * multipart parsing, on a stream that replays everything read here. Anything
- * unexpected — no terminator in range, a different field first, no
- * Content-Type — yields `null` and the caller's fallback cap, so a body this
- * cannot read is bounded exactly as well as it was before, never worse.
+ * Exported because the peek below is useless without it and the caller is
+ * the one holding the headers.
  */
-export async function peekFirstMultipartPart(
+export function multipartBoundary(contentType: string | null): string | null {
+  if (!contentType) return null;
+  const match = BOUNDARY_PARAM.exec(contentType);
+  const boundary = match?.[1] ?? match?.[2];
+  return boundary ? boundary : null;
+}
+
+/**
+ * Reads the *declaration* on one named part without reading the body.
+ *
+ * Multipart sends each part's headers before its data, so the headers of
+ * every part up to and including the file arrive in the first few hundred
+ * bytes. Knowing what the file part declares lets the caller size the cap
+ * (and its memory reservation) for the kind of file this actually claims to
+ * be, instead of for the largest upload the route accepts from anyone. That
+ * is the difference between rejecting an oversized image at ~10 MB and
+ * rejecting it at ~205 MB, which is what this route used to do
+ * (ugcportal-05b).
+ *
+ * Framing is split on the declared `boundary`, not guessed, and every part in
+ * range is searched rather than only the first. The earlier version read the
+ * first part and gave up if it was some other field — so a form that rendered
+ * a caption input before the file input fell back to the whole-request cap
+ * and, on a chunked request, reserved ~430 MB for a 100 KB photo. An ordinary
+ * form shape must not cost that.
+ *
+ * This is still a peek and not a parser: it finds header blocks and reads two
+ * header values out of them. The platform does the real multipart parsing, on
+ * a stream that replays everything read here. Anything unexpected — no
+ * boundary, the part not reached in range, no Content-Type — yields `null`
+ * and the caller's fallback, so a body this cannot read is bounded exactly as
+ * well as it was before, never worse.
+ */
+export async function peekDeclaredPartType(
   body: ReadableStream<Uint8Array>,
-  fieldName: string,
-  maxHeaderBytes: number = PART_HEADER_PEEK_BYTES,
+  options: {
+    fieldName: string;
+    boundary: string | null;
+    maxHeaderBytes?: number;
+  },
 ): Promise<PeekedMultipartBody> {
+  const maxHeaderBytes = options.maxHeaderBytes ?? PART_HEADER_PEEK_BYTES;
   const reader = body.getReader();
   const head: Uint8Array[] = [];
   let headBytes = 0;
   let text = "";
-  let terminator = -1;
+  let declaredContentType: string | null = null;
   let ended = false;
 
+  if (options.boundary === null) {
+    reader.releaseLock();
+    return { declaredContentType: null, body };
+  }
+
   try {
-    while (terminator < 0 && headBytes < maxHeaderBytes) {
+    while (declaredContentType === null && headBytes < maxHeaderBytes) {
       const { done, value } = await reader.read();
       if (done) {
         ended = true;
@@ -261,24 +376,24 @@ export async function peekFirstMultipartPart(
       head.push(value);
       headBytes += value.byteLength;
       // Latin-1 rather than UTF-8 so a multi-byte sequence straddling a chunk
-      // boundary cannot turn into a replacement character and shift the index
-      // this search returns. Header names, the boundary and the media type
-      // are all ASCII; a non-ASCII filename simply decodes to mojibake we
-      // never look at.
+      // boundary cannot turn into a replacement character and shift the
+      // indices this search returns. Header names, the boundary and the media
+      // type are all ASCII; a non-ASCII filename decodes to mojibake we never
+      // look at.
       text += Buffer.from(value).toString("latin1");
-      terminator = text.indexOf(HEADER_TERMINATOR);
+      declaredContentType = findDeclaredType(
+        text,
+        options.boundary,
+        options.fieldName,
+      );
     }
   } catch {
-    // A broken or reset connection is the caller's problem to report from the
-    // parse below, on the replayed stream, rather than a distinct error here.
+    // A broken or reset connection is reported by the parse below, on the
+    // replayed stream, rather than as a distinct error here.
     ended = true;
   }
 
-  return {
-    declaredContentType:
-      terminator < 0 ? null : parseDeclaredContentType(text.slice(0, terminator), fieldName),
-    body: replay(head, ended ? null : reader),
-  };
+  return { declaredContentType, body: replay(head, ended ? null : reader) };
 }
 
 /** `name="file"` out of a Content-Disposition line (RFC 7578 quoted-string). */
@@ -286,19 +401,44 @@ const DISPOSITION_NAME = /;\s*name\s*=\s*"([^"]*)"/i;
 const CONTENT_TYPE_LINE = /^content-type:[ \t]*([^\r\n]+)$/im;
 const CONTENT_DISPOSITION_LINE = /^content-disposition:[ \t]*([^\r\n]+)$/im;
 
-function parseDeclaredContentType(
-  headerBlock: string,
+/**
+ * The media type declared by `fieldName`, from as much of the body as has
+ * arrived, or null if that part's headers are not complete yet.
+ *
+ * Anchored on the delimiter so a part *body* that happens to contain
+ * something shaped like a header cannot be mistaken for one: only the bytes
+ * immediately after a delimiter, up to the first blank line, are read as
+ * headers. Without that, a caption field whose value contained
+ * "Content-Disposition: form-data; name=\"file\"" would choose this
+ * request's cap.
+ */
+function findDeclaredType(
+  text: string,
+  boundary: string,
   fieldName: string,
 ): string | null {
-  const disposition = CONTENT_DISPOSITION_LINE.exec(headerBlock)?.[1];
-  if (!disposition) return null;
-  // Only the named field's declaration is usable: a leading text field says
-  // nothing about how big the file behind it is, and treating its (absent)
-  // type as the file's would cap the request on unrelated information.
-  if (DISPOSITION_NAME.exec(disposition)?.[1] !== fieldName) return null;
+  const delimiter = `--${boundary}\r\n`;
+  let cursor = text.indexOf(delimiter);
+  while (cursor >= 0) {
+    const blockStart = cursor + delimiter.length;
+    const blockEnd = text.indexOf(HEADER_TERMINATOR, blockStart);
+    // Headers not fully arrived; a later chunk may complete them.
+    if (blockEnd < 0) return null;
 
-  const contentType = CONTENT_TYPE_LINE.exec(headerBlock)?.[1];
-  return contentType ? contentType.trim().toLowerCase() : null;
+    const block = text.slice(blockStart, blockEnd);
+    const disposition = CONTENT_DISPOSITION_LINE.exec(block)?.[1];
+    if (disposition && DISPOSITION_NAME.exec(disposition)?.[1] === fieldName) {
+      const contentType = CONTENT_TYPE_LINE.exec(block)?.[1];
+      // The named part was found. Whether or not it declared a type, there is
+      // nothing further to look for — returning "" rather than null says
+      // "found, declared nothing", which the caller prices differently from
+      // "not found".
+      return contentType ? contentType.trim().toLowerCase() : "";
+    }
+
+    cursor = text.indexOf(delimiter, blockEnd);
+  }
+  return null;
 }
 
 /**

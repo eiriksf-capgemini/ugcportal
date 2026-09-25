@@ -182,18 +182,26 @@ EXPOSE 3000
 #                 previews     burst    upload-body    largest
 #                 at once /    (max-    budget         upload
 #                 queued       size)
-#     512 MB  ->  1 /  0          1       20 MB         57 MB   DOES NOT FIT
+#     512 MB  ->  1 /  0          1       21 MB         57 MB   DOES NOT FIT
 #     768 MB  ->  2 /  1          3       77 MB        166 MB
 #       1 GB  ->  3 /  5          8      166 MB        275 MB   <- recommended
 #       2 GB  ->  3 / 12         15    1_037 MB        710 MB
 #
 # Up to and including 1 GB the two bounds coincide: the upload budget affords
-# exactly the burst the gate can hold (8 x 20 MB = 166 MB at 1 GB), so a
+# about the burst the gate can hold (8 x 20.5 MB = 166 MB at 1 GB), so a
 # burst is refused at the door, before any of it is buffered. At 2 GB the
-# budget affords 51 concurrent bodies while the gate's libuv-bound ceiling
-# still only holds 15, so uploads 16-51 are buffered and then shed by the
+# budget affords 50 concurrent bodies while the gate's libuv-bound ceiling
+# still only holds 15, so uploads 16-50 are buffered and then shed by the
 # gate — which is fine, and is the difference this change makes: that memory
 # is now inside a bound instead of outside every one.
+#
+# "About", not "exactly": what the route reserves carries an allowance for
+# the rest of the form that the gate's own per-body figure does not, so at
+# some container sizes the budget affords one fewer maximum-size image than
+# limit+queue and the gate's last queue slot goes unused. Swept at every whole
+# MB from 512 to 4096, the shortfall is never more than one slot. It is the
+# safe direction — the tighter bound wins — and the exact statement lives on
+# resolveUploadMemorySettings in src/lib/upload-memory.ts.
 #
 # Give it 1 GB. An in-flight preview costs ~128 MB of decode on top of the
 # ~320 MB process baseline, each buffered upload body costs twice the file
@@ -234,6 +242,17 @@ EXPOSE 3000
 #     concurrent 10 MB POSTs on 1 GB are 8 admitted and 52 refused, and all
 #     60 bodies used to be resident when that was decided. They are now
 #     refused before their bodies are read.
+#
+# Reservations are bounded in time as well as in bytes: a body that goes
+# 30 seconds without delivering a chunk is cut off with a 408 and its
+# reservation released (BODY_STALL_TIMEOUT_MS). Without that, one client that
+# sends its part headers and then stops holds its whole reservation until
+# Node's 300-second requestTimeout, which on a 1 GB container is enough for a
+# handful of them to 503 every other upload for five minutes. An idle
+# timeout, not a deadline, so a genuinely slow upload is unaffected. A client
+# that drips one byte inside every window still holds its reservation for the
+# whole request lifetime — bounded, but not cheap; that residual is
+# ugcportal-9qk, and belongs at the ingress proxy rather than here.
 #
 # Still outside it, knowingly: the admin evidence upload at
 # POST /api/admin/instagram/rights-decision (ugcportal-wa4), undici's
