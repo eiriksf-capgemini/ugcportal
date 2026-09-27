@@ -831,6 +831,102 @@ describe("createUploadMemoryBudget", () => {
     expect(budget.stats().heldBytes).toBe(3 * grant);
   });
 
+  // Round-3 finding 1. Admission used to check only the fixed grant, so a
+  // large upload streaming past the budget was killed the instant any small
+  // upload was admitted behind it — the policy always sacrificed the
+  // long-running request for the cheap latecomer, and retries never
+  // converged. The right to finish is now earned by delivering bytes.
+  it("keeps a latecomer out once an upload has earned the room to finish", () => {
+    const grant = INITIAL_GRANT_BYTES;
+    const budget = createUploadMemoryBudget(
+      budgetOf({
+        budgetBytes: 4 * grant,
+        soloReservationCeilingBytes: 10 * grant,
+      }),
+    );
+
+    const big = budget.reserve(3 * grant);
+    expect(big.bytes).toBe(grant);
+    // Nothing is held against newcomers yet beyond what it actually has.
+    expect(budget.stats().pledgedBytes).toBe(grant);
+
+    // Delivering past the grant buys the whole ceiling, atomically.
+    expect(big.growTo(grant + 1)).toBe(true);
+    expect(budget.stats().pledgedBytes).toBe(3 * grant);
+    expect(budget.stats().heldBytes).toBe(grant + 1);
+
+    // A latecomer now fits in what is left, and no further.
+    const small = budget.reserve(grant);
+    expect(budget.stats().pledgedBytes).toBe(4 * grant);
+    expect(() => budget.reserve(grant)).toThrow(UploadMemoryExhaustedError);
+
+    // And the incumbent still finishes — which is the whole point. Before
+    // this it was the incumbent that died here, at whatever point it had
+    // reached, however many megabytes in.
+    expect(big.growTo(3 * grant)).toBe(true);
+    expect(budget.stats().heldBytes).toBe(3 * grant + grant);
+
+    small.release();
+    big.release();
+    expect(budget.stats().heldBytes).toBe(0);
+    expect(budget.stats().pledgedBytes).toBe(0);
+  });
+
+  it("refuses a large upload at the crossing, not part-way up the ceiling", () => {
+    // The pledge is for the whole ceiling at once. Checking only the bytes in
+    // hand would let the upload inch past the grant into a budget that could
+    // never have held the rest of it — which is the shape that gets killed
+    // at 87 MB instead of refused at 10.
+    const grant = INITIAL_GRANT_BYTES;
+    const budget = createUploadMemoryBudget(
+      budgetOf({
+        budgetBytes: 3 * grant,
+        soloReservationCeilingBytes: 10 * grant,
+      }),
+    );
+    const blocker = budget.reserve(grant);
+    const big = budget.reserve(5 * grant);
+
+    // 1 grant blocked + 5 pledged is over a 3-grant budget, and `blocker`
+    // means the solo path is closed, so the crossing is refused...
+    expect(big.growTo(grant + 1)).toBe(false);
+    expect(budget.stats().outgrown).toBe(1);
+    // ...at the crossing, with the reservation still where it was, rather
+    // than several grants further along.
+    expect(big.bytes).toBe(grant);
+    expect(budget.stats().heldBytes).toBe(2 * grant);
+
+    // Once the budget frees up, the same upload can buy the room.
+    blocker.release();
+    expect(big.growTo(grant + 1)).toBe(true);
+    expect(budget.stats().pledgedBytes).toBe(5 * grant);
+  });
+
+  it("lets a claimed-large upload that never delivers exclude nobody", () => {
+    // The round-2 property, which the round-3 fix must not undo: pledging at
+    // admission would have made "declare a 200 MB video and stall" a way to
+    // shut the route down. The entry price is real bytes.
+    const grant = INITIAL_GRANT_BYTES;
+    const budget = createUploadMemoryBudget(
+      budgetOf({
+        budgetBytes: 4 * grant,
+        soloReservationCeilingBytes: 10 * grant,
+      }),
+    );
+
+    const claimant = budget.reserve(9 * grant);
+    // Delivered nothing past the grant, so it holds nothing past the grant.
+    expect(budget.stats().pledgedBytes).toBe(grant);
+
+    // Three more ordinary uploads still get in.
+    const others = [0, 1, 2].map(() => budget.reserve(grant));
+    expect(budget.stats().admitted).toBe(4);
+    expect(budget.stats().shed).toBe(0);
+
+    for (const r of others) r.release();
+    claimant.release();
+  });
+
   it("releases whatever it had grown to, not what it started at", () => {
     const budget = createUploadMemoryBudget(
       budgetOf({ budgetBytes: 1000, soloReservationCeilingBytes: 1000 }),

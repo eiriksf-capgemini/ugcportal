@@ -543,6 +543,14 @@ export interface UploadMemoryStats {
   budgetBytes: number;
   /** Bytes reserved right now. May exceed the budget under the solo rule. */
   heldBytes: number;
+  /**
+   * What live reservations hold against *new* ones being admitted: the bytes
+   * they have committed, plus, for any that have grown past the initial
+   * grant, the rest of the ceiling they were promised. Always at least
+   * {@link heldBytes}; the gap is the room reserved for uploads that are
+   * still arriving.
+   */
+  pledgedBytes: number;
   /** Highest `heldBytes` ever observed. The number this budget exists to bound. */
   peakHeldBytes: number;
   /** Reservations granted, cumulative. */
@@ -574,36 +582,121 @@ export interface UploadMemoryBudget {
   stats(): UploadMemoryStats;
 }
 
+/**
+ * A reservation as the budget sees it: what it is really holding, and what it
+ * has been promised it may still take.
+ */
+interface LiveReservation {
+  /** Memory actually committed. Backed by bytes the client has delivered. */
+  bytes: number;
+  /** The most it may ever grow to. */
+  ceiling: number;
+  /**
+   * True once this request has delivered more than its initial grant, at
+   * which point its whole ceiling is held against newcomers — see the note on
+   * {@link createUploadMemoryBudget} about why the right to finish is earned
+   * rather than claimed.
+   */
+  pledged: boolean;
+}
+
+/**
+ * The budget, and the policy for who gets refused when it runs out.
+ *
+ * ## The policy, chosen rather than fallen into
+ *
+ * Two things are scarce, and they are not the same thing: *memory*, which is
+ * only ever committed as bytes actually arrive, and the *right to finish*,
+ * which a long upload needs and a short one does not. Round 2 established the
+ * first half — nothing is committed from what a client claims it will send.
+ * Round 3 pointed out that the first half alone produces a bad second half:
+ * with admission checking only the fixed grant, a 200 MB video streaming past
+ * ~87 MB on a 1 GB container was killed the instant any small upload was
+ * admitted behind it. That policy always sacrifices the long-running request
+ * for the cheap latecomer, so retries do not converge: the busier the server,
+ * the more certain the video is to die at the same point, having uploaded
+ * tens of megabytes each time.
+ *
+ * The policy now is: **a request earns the right to finish by delivering
+ * bytes.**
+ *
+ *  - While a request has delivered no more than {@link INITIAL_GRANT_BYTES},
+ *    it holds only the grant and *pledges* only the grant. A client that
+ *    merely claims a large upload — a declared `video/mp4`, a large
+ *    Content-Length — therefore commits no memory beyond the grant and
+ *    excludes nobody. That is what stops the exclusivity from becoming a
+ *    denial-of-service lever, which is the trap that reserving at admission
+ *    would have walked straight back into.
+ *  - The moment it delivers more than the grant, its whole ceiling is pledged
+ *    — atomically with that growth, so it either gets the room to finish or
+ *    is refused right there. From then on newcomers are admitted against
+ *    what is left, and the upload cannot be killed by one.
+ *
+ * So a large upload is refused at exactly one point: ~10 MB in, where
+ * refusing is cheap and a retry costs the client almost nothing. It is never
+ * refused at 87 MB, and never because somebody arrived later.
+ *
+ * What this does **not** promise, stated because the previous version of this
+ * comment promised something adjacent and untrue: an upload between the grant
+ * and the budget (roughly 10-87 MB on 1 GB) shares the budget rather than
+ * taking the process, so its pledge can fail at the transition if the budget
+ * is busy. It fails early and cheaply, and it is not exclusive on purpose —
+ * taking a whole container for a 20 MB upload would be the worse trade. An
+ * upload at or below the grant — every image, and any video under ~10 MB —
+ * never grows at all, so it can never be refused mid-read.
+ *
+ * A client that delivers the grant and then drips still holds it, and now
+ * also excludes newcomers if its ceiling is large. That is ugcportal-9qk, and
+ * the price of entry is now real bytes rather than a header.
+ */
 export function createUploadMemoryBudget(
   settings: UploadMemorySettings,
 ): UploadMemoryBudget {
-  let heldBytes = 0;
   let peakHeldBytes = 0;
   let admitted = 0;
   let shed = 0;
   let outgrown = 0;
   let refusedTooLarge = 0;
+  const live = new Set<LiveReservation>();
+
+  /** Memory actually committed, across every live reservation. */
+  function heldBytes(): number {
+    let total = 0;
+    for (const r of live) total += r.bytes;
+    return total;
+  }
+
+  /** What a reservation holds against *other* requests being admitted. */
+  function pledgeOf(r: LiveReservation): number {
+    return r.pledged ? r.ceiling : r.bytes;
+  }
+
+  function otherPledges(self: LiveReservation | null): number {
+    let total = 0;
+    for (const r of live) if (r !== self) total += pledgeOf(r);
+    return total;
+  }
 
   /**
-   * Can a holder currently sitting at `mine` move to `want`?
+   * Can `self` (or a newcomer, when null) hold `want` bytes?
    *
    * Two ways, and the second is what makes a 200 MB video possible at all:
-   * take a share of the budget, or take more than the budget when nobody else
-   * holds any. "Nobody else" is the entire precondition for the solo path —
-   * it is what guarantees at most one preview can be running, because the
-   * route holds its reservation across the watermark gate, which is why
-   * `soloReservationCeilingBytes` is a decode short of the spendable region
-   * rather than all of it.
+   * fit alongside what everyone else is holding or promised, or take more
+   * than the budget when nobody else holds anything. "Nobody else" is the
+   * entire precondition for the solo path — it is what guarantees at most one
+   * preview can be running, because the route holds its reservation across
+   * the watermark gate, which is why `soloReservationCeilingBytes` is a
+   * decode short of the spendable region rather than all of it.
    */
-  function admissible(mine: number, want: number): boolean {
-    const others = heldBytes - mine;
+  function admissible(self: LiveReservation | null, want: number): boolean {
+    const others = otherPledges(self);
     if (others + want <= settings.budgetBytes) return true;
     return others === 0 && want <= settings.soloReservationCeilingBytes;
   }
 
-  function take(mine: number, want: number): void {
-    heldBytes += want - mine;
-    if (heldBytes > peakHeldBytes) peakHeldBytes = heldBytes;
+  function recordPeak(): void {
+    const held = heldBytes();
+    if (held > peakHeldBytes) peakHeldBytes = held;
   }
 
   return {
@@ -617,63 +710,80 @@ export function createUploadMemoryBudget(
       }
 
       const grant = Math.min(ceilingBytes, INITIAL_GRANT_BYTES);
-      if (!admissible(0, grant)) {
+      if (!admissible(null, grant)) {
         shed += 1;
         logShedUpload({
           wanted: grant,
-          heldBytes,
+          heldBytes: heldBytes(),
           budgetBytes: settings.budgetBytes,
-          shed,
+          shed: shed + outgrown,
         });
         throw new UploadMemoryExhaustedError(
-          `Upload buffers are at capacity (${heldBytes} of ${settings.budgetBytes} bytes held); try again shortly`,
+          `Upload buffers are at capacity (${heldBytes()} of ${settings.budgetBytes} bytes held); try again shortly`,
           { retryAfterSeconds: settings.retryAfterSeconds },
         );
       }
 
-      take(0, grant);
+      const entry: LiveReservation = {
+        bytes: grant,
+        ceiling: ceilingBytes,
+        pledged: false,
+      };
+      live.add(entry);
       admitted += 1;
+      recordPeak();
 
-      let mine = grant;
       let released = false;
       return {
         get bytes() {
-          return mine;
+          return entry.bytes;
         },
         ceilingBytes,
         retryAfterSeconds: settings.retryAfterSeconds,
         growTo(toBytes: number): boolean {
           if (released) return false;
-          if (toBytes <= mine) return true;
+          if (toBytes <= entry.bytes) return true;
           // The ceiling is enforced by the caller's stream cap too, but a
           // reservation that could exceed it would make that cap and this
           // budget disagree about the same request.
           if (toBytes > ceilingBytes) return false;
-          if (!admissible(mine, toBytes)) {
+
+          // Crossing the grant is where the right to finish is bought, and it
+          // is bought for the *whole* ceiling at once. Checking only `toBytes`
+          // here would let the upload inch past the grant into a budget that
+          // could never have held the rest of it, which is the shape that
+          // gets killed at 87 MB instead of refused at 10.
+          const crossing = !entry.pledged && toBytes > INITIAL_GRANT_BYTES;
+          const needed = crossing ? ceilingBytes : toBytes;
+
+          if (!admissible(entry, needed)) {
             outgrown += 1;
             logShedUpload({
-              wanted: toBytes,
-              heldBytes,
+              wanted: needed,
+              heldBytes: heldBytes(),
               budgetBytes: settings.budgetBytes,
               shed: shed + outgrown,
             });
             return false;
           }
-          take(mine, toBytes);
-          mine = toBytes;
+
+          if (crossing) entry.pledged = true;
+          entry.bytes = toBytes;
+          recordPeak();
           return true;
         },
         release() {
           if (released) return;
           released = true;
-          heldBytes -= mine;
-          mine = 0;
+          live.delete(entry);
+          entry.bytes = 0;
         },
       };
     },
     stats: () => ({
       budgetBytes: settings.budgetBytes,
-      heldBytes,
+      heldBytes: heldBytes(),
+      pledgedBytes: otherPledges(null),
       peakHeldBytes,
       admitted,
       shed,
