@@ -799,22 +799,85 @@ const mib = (bytes: number) => `${Math.round(bytes / (1024 * 1024))} MB`;
  * Shortest interval between shed log lines; the rest are counted and reported
  * on the next one.
  *
- * Same shape, and the same reasoning, as logShedUpload in
- * src/lib/watermark.ts: shedding fires precisely when the service is busiest,
- * so a line per rejection would add a log storm to a load problem. The first
- * shed after a quiet period is always logged, so the transition *into*
- * shedding — the part worth alerting on — is never delayed.
+ * Same reasoning as logShedUpload in src/lib/watermark.ts: shedding fires
+ * precisely when the service is busiest, so a line per rejection would add a
+ * log storm to a load problem. The first shed after a quiet period is always
+ * logged, so the transition *into* shedding — the part worth alerting on — is
+ * never delayed.
  *
  * This route's 503 is deliberately not logged by the route handler, which is
  * the convention ugcportal-u7g established for the gate's 503. But the gate
  * already had its own throttled line and this budget had none, so a saturated
  * upload path was invisible: one stalled client holding the budget produced
- * nothing but 503s with no record of why. That is what this fixes.
+ * nothing but 503s with no record of why.
  */
 export const SHED_LOG_INTERVAL_MS = 10_000;
 
 let shedLogLastAt = 0;
 let shedLogSuppressed = 0;
+let shedLogFlushTimer: ReturnType<typeof setTimeout> | undefined;
+
+/**
+ * Emit the tail of a burst: the sheds that were counted but never printed.
+ *
+ * The first version of this logger copied watermark.ts's *shape* and not its
+ * fix. Without a flush the throttle silently eats the tail: a burst sheds,
+ * the first one logs "1 shed since start", the rest increment a counter, and
+ * if nothing sheds again that counter is never printed — because the only
+ * thing that flushed it was the *next* logged shed, possibly hours later,
+ * which then attributes 59 old rejections to that moment. env.example tells
+ * operators to key a saturation alert on this line, so a line that is wrong
+ * by a factor of 60 is worse than no line at all. ugcportal-u7g fixed exactly
+ * this in the watermark logger two beads ago.
+ *
+ * Called from a timer (so it happens without anyone asking) and from
+ * {@link uploadMemoryStats} (so it is observable synchronously, and so a
+ * process shutting down before the timer fires still gets a chance).
+ */
+function flushShedLog(): void {
+  if (shedLogSuppressed === 0) {
+    if (shedLogFlushTimer) {
+      clearTimeout(shedLogFlushTimer);
+      shedLogFlushTimer = undefined;
+    }
+    return;
+  }
+
+  // Respect the interval even when asked directly: callers get to *ask*, they
+  // do not get to reset the clock, or a health check polling every second
+  // during sustained shedding would emit a line per second while the line
+  // itself claimed one per 10000ms. The pending timer is left alone so the
+  // tail is still reported once the window does elapse.
+  if (Date.now() - shedLogLastAt < SHED_LOG_INTERVAL_MS) {
+    scheduleShedLogFlush();
+    return;
+  }
+
+  if (shedLogFlushTimer) {
+    clearTimeout(shedLogFlushTimer);
+    shedLogFlushTimer = undefined;
+  }
+
+  const suppressed = shedLogSuppressed;
+  shedLogSuppressed = 0;
+  shedLogLastAt = Date.now();
+
+  console.warn(
+    `[media] upload shed ${suppressed} more since the last line. Throttled ` +
+      `to one line per ${SHED_LOG_INTERVAL_MS}ms; see ugcportal-05b.`,
+  );
+}
+
+function scheduleShedLogFlush(): void {
+  if (shedLogFlushTimer) return;
+  const delay = Math.max(0, SHED_LOG_INTERVAL_MS - (Date.now() - shedLogLastAt));
+  shedLogFlushTimer = setTimeout(() => {
+    shedLogFlushTimer = undefined;
+    flushShedLog();
+  }, delay);
+  // Never hold the event loop open just to report a count.
+  shedLogFlushTimer.unref?.();
+}
 
 function logShedUpload(detail: {
   wanted: number;
@@ -823,13 +886,18 @@ function logShedUpload(detail: {
   shed: number;
 }): void {
   const now = Date.now();
-  if (now - shedLogLastAt < SHED_LOG_INTERVAL_MS) {
+  if (shedLogLastAt !== 0 && now - shedLogLastAt < SHED_LOG_INTERVAL_MS) {
     shedLogSuppressed += 1;
+    scheduleShedLogFlush();
     return;
   }
   const suppressed = shedLogSuppressed;
   shedLogLastAt = now;
   shedLogSuppressed = 0;
+  if (shedLogFlushTimer) {
+    clearTimeout(shedLogFlushTimer);
+    shedLogFlushTimer = undefined;
+  }
   console.warn(
     `[media] upload shed: wanted ${mib(detail.wanted)}, holding ${mib(
       detail.heldBytes,
@@ -888,6 +956,9 @@ export function reserveUploadMemory(ceilingBytes: number): UploadReservation {
 
 /** Live view of the budget, for tests and for anything that wants to log it. */
 export function uploadMemoryStats() {
+  // Anyone asking how the budget is doing should not be told a shed count
+  // that is still sitting unprinted in the throttle; see flushShedLog.
+  flushShedLog();
   return {
     ...getBudget().stats(),
     settings: budgetSettings as UploadMemorySettings,
@@ -904,4 +975,8 @@ export function resetUploadMemoryBudget(): void {
   budgetSettings = undefined;
   shedLogLastAt = 0;
   shedLogSuppressed = 0;
+  if (shedLogFlushTimer) {
+    clearTimeout(shedLogFlushTimer);
+    shedLogFlushTimer = undefined;
+  }
 }

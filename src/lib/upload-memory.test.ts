@@ -16,8 +16,10 @@ import {
   UploadTooLargeForBudgetError,
   createUploadMemoryBudget,
   describeUploadMemory,
+  SHED_LOG_INTERVAL_MS,
   resetUploadMemoryBudget,
   resolveUploadMemorySettings,
+  uploadMemoryStats,
   uploadReadLimitBytes,
   uploadReservationBytes,
 } from "@/lib/upload-memory";
@@ -751,6 +753,57 @@ describe("createUploadMemoryBudget", () => {
     // and reported on the next line rather than each getting one.
     expect(warnSpy).toHaveBeenCalledTimes(1);
     expect(budget.stats().shed).toBe(50);
+  });
+
+  // Round-3 finding 2. The first version of this logger copied the shape of
+  // watermark.ts's and not its fix: with nothing to flush the tail, a burst
+  // printed one line saying "1 shed since start" and lost the other 49 until
+  // the next shed — possibly hours later, which then attributed them to that
+  // moment. env.example tells operators to alert on exactly this line.
+  it("reports the tail of a burst rather than losing it until the next shed", async () => {
+    vi.useFakeTimers();
+    try {
+      const budget = createUploadMemoryBudget(
+        budgetOf({ budgetBytes: 100, soloReservationCeilingBytes: 400 }),
+      );
+      budget.reserve(100);
+      for (let i = 0; i < 50; i += 1) {
+        expect(() => budget.reserve(50)).toThrow(UploadMemoryExhaustedError);
+      }
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+
+      // Nothing else happens — no further shed to piggyback on. The timer is
+      // what has to print the rest.
+      await vi.advanceTimersByTimeAsync(SHED_LOG_INTERVAL_MS + 100);
+
+      expect(warnSpy).toHaveBeenCalledTimes(2);
+      expect(warnSpy).toHaveBeenLastCalledWith(
+        expect.stringContaining("upload shed 49 more since the last line"),
+      );
+
+      // And the tail is reported once, not on every tick after it.
+      await vi.advanceTimersByTimeAsync(5 * SHED_LOG_INTERVAL_MS);
+      expect(warnSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not let a stats read reset the throttle clock", () => {
+    // Callers get to ask; they do not get to turn the read into the throttle.
+    // A health check polling during sustained shedding would otherwise emit a
+    // line per poll while the line claimed one per interval.
+    const budget = createUploadMemoryBudget(
+      budgetOf({ budgetBytes: 100, soloReservationCeilingBytes: 400 }),
+    );
+    budget.reserve(100);
+    for (let i = 0; i < 10; i += 1) {
+      expect(() => budget.reserve(50)).toThrow(UploadMemoryExhaustedError);
+    }
+
+    for (let i = 0; i < 10; i += 1) uploadMemoryStats();
+
+    expect(warnSpy).toHaveBeenCalledTimes(1);
   });
 
   it("commits only the initial grant before a byte has been delivered", () => {
