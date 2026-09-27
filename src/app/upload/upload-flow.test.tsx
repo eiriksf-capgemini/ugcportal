@@ -1,0 +1,541 @@
+import { renderToStaticMarkup } from "react-dom/server";
+import { describe, expect, it, vi } from "vitest";
+
+import { MAX_SIZE_BYTES } from "@/lib/media";
+
+import { UploadQueueList } from "./upload-queue-list";
+import {
+  percentComplete,
+  uploadQueueReducer,
+  type QueueItem,
+} from "./upload-queue";
+import { drainQueue, enqueueFiles } from "./upload-runner";
+import { uploadFile, type UploadTransport } from "./upload-transport";
+
+/**
+ * One file, all the way through (ugcportal-n3c K1, K2, K3).
+ *
+ * This drives the real transport, the real runner, the real reducer and the
+ * real list component against a stand-in XMLHttpRequest — so the thing under
+ * test is the whole client path, not a mock of it. What it cannot reach is
+ * React's event wiring: the repo's vitest runs in a node environment (see
+ * vitest.config.ts) with no DOM to dispatch a `drop` or a `change` into, so
+ * the component's handlers are covered only as far as the functions they
+ * call. That gap is recorded as ugcportal-2al's business (cross-browser
+ * verification) and as a known gap on this bead.
+ */
+
+type FakeListener = (event: unknown) => void;
+
+class FakeEventTarget {
+  private listeners = new Map<string, FakeListener[]>();
+
+  addEventListener(type: string, listener: FakeListener): void {
+    const existing = this.listeners.get(type) ?? [];
+    existing.push(listener);
+    this.listeners.set(type, existing);
+  }
+
+  removeEventListener(type: string, listener: FakeListener): void {
+    this.listeners.set(
+      type,
+      (this.listeners.get(type) ?? []).filter((each) => each !== listener),
+    );
+  }
+
+  emit(type: string, event: unknown = {}): void {
+    for (const listener of [...(this.listeners.get(type) ?? [])]) {
+      listener(event);
+    }
+  }
+}
+
+/** Replays the events a real XMLHttpRequest fires, in the order it fires them. */
+class FakeXhr extends FakeEventTarget {
+  readonly upload = new FakeEventTarget();
+  status = 0;
+  responseText = "";
+  responseType = "";
+  method: string | null = null;
+  url: string | null = null;
+  sentBody: FormData | null = null;
+  aborted = false;
+  private readonly headers = new Map<string, string>();
+
+  open(method: string, url: string): void {
+    this.method = method;
+    this.url = url;
+  }
+
+  send(body: FormData): void {
+    this.sentBody = body;
+  }
+
+  abort(): void {
+    this.aborted = true;
+    this.emit("abort");
+  }
+
+  getResponseHeader(name: string): string | null {
+    return this.headers.get(name.toLowerCase()) ?? null;
+  }
+
+  // --- test-side drivers ---------------------------------------------------
+
+  sendProgress(loaded: number, total: number, lengthComputable = true): void {
+    this.upload.emit("progress", { loaded, total, lengthComputable });
+  }
+
+  respond(
+    status: number,
+    body: unknown,
+    headers: Record<string, string> = {},
+  ): void {
+    this.status = status;
+    this.responseText =
+      body === undefined || body === null ? "" : JSON.stringify(body);
+    for (const [name, value] of Object.entries(headers)) {
+      this.headers.set(name.toLowerCase(), value);
+    }
+    this.emit("load");
+  }
+
+  respondWithRawBody(status: number, text: string): void {
+    this.status = status;
+    this.responseText = text;
+    this.emit("load");
+  }
+
+  failToConnect(): void {
+    this.emit("error");
+  }
+}
+
+function transportFor(xhr: FakeXhr): UploadTransport {
+  return (request) =>
+    uploadFile(request, () => xhr as unknown as XMLHttpRequest);
+}
+
+function imageFile(name = "photo.png", size = 2048): File {
+  return new File([new Uint8Array(size)], name, { type: "image/png" });
+}
+
+function idSequence(): () => string {
+  let n = 0;
+  return () => {
+    n += 1;
+    return `q${n}`;
+  };
+}
+
+function render(items: QueueItem[]): string {
+  return renderToStaticMarkup(
+    <UploadQueueList
+      items={items}
+      onRetry={() => {}}
+      onCancel={() => {}}
+      onDismiss={() => {}}
+    />,
+  );
+}
+
+/**
+ * A harness that runs one file through the queue, letting the caller drive
+ * the fake request in between.
+ */
+function startUpload(files: File[]) {
+  let state: QueueItem[] = [];
+  const dispatch = (action: Parameters<typeof uploadQueueReducer>[1]) => {
+    state = uploadQueueReducer(state, action);
+  };
+
+  const { items, entries } = enqueueFiles(files, idSequence());
+  dispatch({ type: "queued", items });
+
+  const xhr = new FakeXhr();
+  const pending = [...entries];
+  const settled = drainQueue(
+    () => pending.shift(),
+    dispatch,
+    transportFor(xhr),
+  );
+
+  return { xhr, settled, state: () => state };
+}
+
+/**
+ * Every `media/...` path in the markup that is NOT under `/api/`.
+ *
+ * The naive form of this check — `expect(markup).not.toContain("media/")` —
+ * cannot be used, because the ONE legitimate media URL this page produces is
+ * `/api/media/preview/{previewId}` and it contains that substring. A check
+ * that cannot pass is a check that gets deleted, so this one is precise
+ * instead: an original's key looks like `media/{userId}/{uuid}-{name}` and is
+ * never reached through `/api/`.
+ *
+ * There is a test below asserting this function actually flags such a path,
+ * because a scanner that can only return an empty array is worse than none.
+ */
+function originalMediaPaths(markup: string): string[] {
+  const found: string[] = [];
+  for (const match of markup.matchAll(/media\/[^"'\s<>]*/g)) {
+    const index = match.index ?? 0;
+    if (markup.slice(Math.max(0, index - 5), index) !== "/api/") {
+      found.push(match[0]);
+    }
+  }
+  return found;
+}
+
+/**
+ * The 201 body, as the database row rather than as the projection
+ * MEDIA_OWNER_SELECT returns — a deliberately hostile fixture. `key`,
+ * `previewKey` and `userId` are all present, so "the markup does not contain
+ * them" is a fact about this page rather than about what the API happened to
+ * send.
+ */
+const CREATED_BODY = {
+  id: "media-1",
+  kind: "IMAGE",
+  previewId: "preview-abc",
+  originalName: "photo.png",
+  key: "media/user-9/11111111-2222-3333-4444-555555555555-photo.png",
+  previewKey: "previews/user-9/66666666-7777-8888-9999-000000000000.webp",
+  userId: "user-9",
+  mimeType: "image/png",
+  sizeBytes: 2048,
+  publishedAt: null,
+};
+
+describe("a valid image uploads, with progress, and shows its preview (K1)", () => {
+  it("reports progress while it is in flight", async () => {
+    const run = startUpload([imageFile("photo.png", 2048)]);
+
+    expect(run.state()[0].status).toBe("uploading");
+    run.xhr.sendProgress(512, 2048);
+    expect(run.state()[0].loadedBytes).toBe(512);
+    expect(percentComplete(run.state()[0])).toBe(25);
+
+    run.xhr.sendProgress(2048, 2048);
+    expect(percentComplete(run.state()[0])).toBe(100);
+
+    run.xhr.respond(201, CREATED_BODY);
+    await run.settled;
+
+    expect(run.state()[0].status).toBe("succeeded");
+  });
+
+  it("puts the file part first in the multipart body", async () => {
+    // POST /api/media peeks at the first few kilobytes to find this part and
+    // size its memory reservation from the type it declares (ugcportal-05b).
+    // A field appended ahead of it pushes the declaration out of that window,
+    // and an ordinary video then 413s.
+    const run = startUpload([imageFile()]);
+    const keys = [...(run.xhr.sentBody as FormData).keys()];
+    expect(keys[0]).toBe("file");
+    expect(keys).toEqual(["file"]);
+
+    run.xhr.respond(201, CREATED_BODY);
+    await run.settled;
+  });
+
+  it("POSTs to the upload route", async () => {
+    const run = startUpload([imageFile()]);
+    expect(run.xhr.method).toBe("POST");
+    expect(run.xhr.url).toBe("/api/media");
+    run.xhr.respond(201, CREATED_BODY);
+    await run.settled;
+  });
+
+  it("renders the watermarked preview in the success state", async () => {
+    const run = startUpload([imageFile()]);
+    run.xhr.respond(201, CREATED_BODY);
+    await run.settled;
+
+    const markup = render(run.state());
+    expect(markup).toContain('src="/api/media/preview/preview-abc"');
+    expect(markup).toContain("Uploaded");
+    expect(markup).toContain("photo.png");
+  });
+
+  it("shows no thumbnail, and says why, for a kind with no preview", async () => {
+    const run = startUpload([imageFile()]);
+    // Every VIDEO today — ugcportal-pmb owns the watermarked poster frame.
+    run.xhr.respond(201, {
+      ...CREATED_BODY,
+      kind: "VIDEO",
+      previewId: null,
+    });
+    await run.settled;
+
+    const markup = render(run.state());
+    expect(markup).not.toContain("<img");
+    expect(markup).toContain("No thumbnail yet");
+  });
+});
+
+describe("the upload page never shows an original (K3)", () => {
+  it("renders no original-key path and no preview storage path", async () => {
+    const run = startUpload([imageFile()]);
+    run.xhr.respond(201, CREATED_BODY);
+    await run.settled;
+
+    const markup = render(run.state());
+    expect(originalMediaPaths(markup)).toEqual([]);
+    expect(markup).not.toContain("previews/");
+    // The storage paths embed the uploader's account id; that is the whole
+    // reason previewId exists.
+    expect(markup).not.toContain("user-9");
+    expect(markup).not.toContain("key");
+  });
+
+  it("flags an original-key path when one is present", () => {
+    // The scanner above, proved able to fail. Without this, a regex that
+    // matched nothing at all would keep the test green forever.
+    expect(
+      originalMediaPaths(
+        '<img src="/media/user-9/1111-photo.png" alt="" />',
+      ),
+    ).toEqual(["media/user-9/1111-photo.png"]);
+    // And the one legitimate URL is not flagged.
+    expect(
+      originalMediaPaths('<img src="/api/media/preview/preview-abc" alt="" />'),
+    ).toEqual([]);
+  });
+});
+
+describe("each refusal reaches the screen as its own sentence (K2)", () => {
+  async function markupForStatus(
+    status: number,
+    body: unknown = { error: "nope" },
+    headers: Record<string, string> = {},
+  ): Promise<string> {
+    const run = startUpload([imageFile()]);
+    run.xhr.respond(status, body, headers);
+    await run.settled;
+    return render(run.state());
+  }
+
+  it("says the session is gone, and offers a way back in, on 401", async () => {
+    const markup = await markupForStatus(401);
+    expect(markup).toContain("not signed in any more");
+    expect(markup).toContain(
+      'href="/api/auth/signin?callbackUrl=%2Fupload"',
+    );
+  });
+
+  it("blames the size on 413", async () => {
+    expect(await markupForStatus(413)).toContain("too large");
+  });
+
+  it("blames the type, and says the contents may be lying, on 415", async () => {
+    const markup = await markupForStatus(415);
+    expect(markup).toContain("not really what the extension says");
+  });
+
+  it("blames the watermarking step, not the user, on 422", async () => {
+    const markup = await markupForStatus(422);
+    expect(markup).toContain("watermarked preview");
+    expect(markup).toContain("Re-exporting it");
+  });
+
+  it("says reload on 400", async () => {
+    expect(await markupForStatus(400)).toContain("Reload the page");
+  });
+
+  it("says the connection stalled on 408", async () => {
+    const markup = await markupForStatus(408);
+    expect(markup).toContain("stopped part-way");
+    expect(markup).toContain("Try again");
+  });
+
+  it("says how long to wait on 503, from the Retry-After header", async () => {
+    const markup = await markupForStatus(
+      503,
+      { error: "Too many uploads are being processed right now" },
+      { "Retry-After": "12" },
+    );
+    expect(markup).toContain("try again in 12 seconds");
+    // The distinction ugcportal-u7g paid for: busy is not broken.
+    expect(markup).toContain("Nothing is wrong with this file");
+    expect(markup).toContain("Try again");
+  });
+
+  it("offers no retry for a refusal that would be refused again", async () => {
+    const markup = await markupForStatus(415);
+    expect(markup).not.toContain("Try again");
+    expect(markup).toContain("Remove");
+  });
+
+  it("blames the server on a 500", async () => {
+    expect(await markupForStatus(500)).toContain("went wrong on the server");
+  });
+
+  it("does not claim success for a 2xx that is not 201", async () => {
+    const markup = await markupForStatus(200, CREATED_BODY);
+    expect(markup).toContain("unexpected 200");
+    expect(markup).not.toContain("src=");
+  });
+
+  it("copes with a refusal whose body is not JSON", async () => {
+    const run = startUpload([imageFile()]);
+    run.xhr.respondWithRawBody(502, "<html>Bad Gateway</html>");
+    await run.settled;
+
+    const markup = render(run.state());
+    expect(markup).toContain("went wrong on the server");
+    expect(markup).not.toContain("Bad Gateway");
+  });
+
+  it("says the request never arrived when the connection fails", async () => {
+    const run = startUpload([imageFile()]);
+    run.xhr.failToConnect();
+    await run.settled;
+
+    expect(run.state()[0].failure?.code).toBe("network_error");
+    expect(render(run.state())).toContain("could not reach the server");
+  });
+
+  it("repeats the server's own explanation below ours", async () => {
+    const markup = await markupForStatus(413, {
+      // Verbatim from POST /api/media's undeclared-kind 413 branch.
+      error:
+        "Could not find the 'file' field near the start of the request, so this upload was limited to 15728640 bytes. Put that field earlier in the form.",
+    });
+    expect(markup).toContain("too large");
+    expect(markup).toContain("Put that field earlier");
+  });
+});
+
+describe("a file the server would refuse is never sent (K2)", () => {
+  it("makes no request for an unsupported type", async () => {
+    const transport = vi.fn<UploadTransport>();
+    const files = [
+      new File(["hello"], "notes.txt", { type: "text/plain" }),
+      imageFile("photo.png"),
+    ];
+    const { items, entries } = enqueueFiles(files, idSequence());
+
+    expect(items[0].status).toBe("failed");
+    expect(items[0].failure?.code).toBe("client_unsupported_type");
+    expect(entries.map((entry) => entry.file.name)).toEqual(["photo.png"]);
+
+    transport.mockResolvedValue({
+      status: 201,
+      body: CREATED_BODY,
+      retryAfter: null,
+    });
+    const pending = [...entries];
+    await drainQueue(() => pending.shift(), () => {}, transport);
+
+    expect(transport).toHaveBeenCalledTimes(1);
+    expect(transport.mock.calls[0][0].file.name).toBe("photo.png");
+  });
+
+  it("DOES send the same file once its type is one the server takes", async () => {
+    /*
+      The fixture mutation for the test above. Changing the production code
+      proves an assertion is wired to the behaviour; it does not prove the
+      assertion is wired to a case that can FAIL. So the same two files, with
+      the only difference being the first one's declared type — and now both
+      are sent.
+    */
+    const transport = vi.fn<UploadTransport>();
+    const files = [
+      new File(["hello"], "notes.txt", { type: "image/png" }),
+      imageFile("photo.png"),
+    ];
+    const { items, entries } = enqueueFiles(files, idSequence());
+
+    expect(items[0].status).toBe("pending");
+    expect(entries.map((entry) => entry.file.name)).toEqual([
+      "notes.txt",
+      "photo.png",
+    ]);
+
+    transport.mockResolvedValue({
+      status: 201,
+      body: CREATED_BODY,
+      retryAfter: null,
+    });
+    const pending = [...entries];
+    await drainQueue(() => pending.shift(), () => {}, transport);
+
+    expect(transport).toHaveBeenCalledTimes(2);
+  });
+
+  it("makes no request for a file over its kind's cap", async () => {
+    const transport = vi.fn<UploadTransport>();
+    const huge = new File([""], "huge.png", { type: "image/png" });
+    // `File.size` is read-only, so the cap is crossed by declaring it rather
+    // than by allocating 10 MB in a unit test.
+    Object.defineProperty(huge, "size", { value: MAX_SIZE_BYTES.IMAGE + 1 });
+
+    const { items, entries } = enqueueFiles([huge], idSequence());
+    expect(items[0].failure?.code).toBe("client_too_large");
+    expect(entries).toEqual([]);
+
+    const pending = [...entries];
+    await drainQueue(() => pending.shift(), () => {}, transport);
+    expect(transport).not.toHaveBeenCalled();
+  });
+
+  it("DOES send the same file one byte under the cap", async () => {
+    // The fixture mutation: only the size changes.
+    const transport = vi.fn<UploadTransport>();
+    const large = new File([""], "huge.png", { type: "image/png" });
+    Object.defineProperty(large, "size", { value: MAX_SIZE_BYTES.IMAGE });
+
+    const { items, entries } = enqueueFiles([large], idSequence());
+    expect(items[0].status).toBe("pending");
+    expect(entries).toHaveLength(1);
+
+    transport.mockResolvedValue({
+      status: 201,
+      body: CREATED_BODY,
+      retryAfter: null,
+    });
+    const pending = [...entries];
+    await drainQueue(() => pending.shift(), () => {}, transport);
+    expect(transport).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("the queue is worked one file at a time", () => {
+  it("does not start the second file until the first has settled", async () => {
+    // Parallel uploads from one tab are the burst POST /api/media's memory
+    // budget exists to shed (ugcportal-e86, ugcportal-05b).
+    const inFlight: string[] = [];
+    const releases: Array<() => void> = [];
+
+    const transport: UploadTransport = ({ file }) => {
+      inFlight.push(file.name);
+      return new Promise((resolve) => {
+        releases.push(() =>
+          resolve({ status: 201, body: CREATED_BODY, retryAfter: null }),
+        );
+      });
+    };
+
+    const { entries } = enqueueFiles(
+      [imageFile("first.png"), imageFile("second.png")],
+      idSequence(),
+    );
+    const pending = [...entries];
+    const settled = drainQueue(() => pending.shift(), () => {}, transport);
+
+    // Both files are queued, and only the first has been handed to the
+    // transport.
+    expect(inFlight).toEqual(["first.png"]);
+    expect(releases).toHaveLength(1);
+
+    releases[0]();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(inFlight).toEqual(["first.png", "second.png"]);
+
+    releases[1]();
+    await settled;
+    expect(inFlight).toEqual(["first.png", "second.png"]);
+  });
+});

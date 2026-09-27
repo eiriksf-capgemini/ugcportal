@@ -15,10 +15,11 @@
  *
  * `src/lib/media.ts` cannot be that module: it imports `node:crypto` for
  * `randomUUID`, so a client component importing it fails to bundle. Splitting
- * the rules out is what makes "the same function" possible at all. Everything
- * here is pure and dependency-free by design — adding a Node built-in (or
- * anything that reaches one) to this file silently re-breaks the client
- * build, so don't.
+ * the rules out is what makes "the same function" possible at all.
+ *
+ * This file therefore has no runtime imports at all — the single import below
+ * is `import type`, which erases. Adding a Node built-in here, or anything
+ * that reaches one, silently re-breaks the client build, so don't.
  *
  * `src/lib/media.ts` re-exports all of it, so server-side callers see no
  * change and there is still one place to look for "everything about media".
