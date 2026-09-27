@@ -23,47 +23,57 @@
  * throw with advice (interpolated alphas, arbitrary alphas, arbitrary colour
  * values). It never just skips.
  *
- * That claim has been wrong twice before (round 2: `.ts` files not walked;
+ * That claim has been wrong four times now (round 2: `.ts` files not walked;
  * round 3: `bg-[var(--x)]/[.5]` fell between three unresolvable-shape
- * patterns). Both times the fix handled the reported case and left the next
- * one unenumerated. ugcportal-j4j's round found a third and fourth: a
- * side/offset-qualified utility (`border-t-border/50`, `ring-offset-ring/50`)
- * mis-resolved to a token that does not exist instead of the real one, and a
- * fractional alpha (`bg-primary/12.5`) matched no pattern at all and was
- * silently dropped.
+ * patterns; ugcportal-j4j round 1: a side/offset-qualified utility
+ * mis-resolved to a token that does not exist, and a fractional alpha matched
+ * no pattern; ugcportal-j4j round 2: `text-shadow-lg/20` - a real namespace
+ * this module did not know about - hard-failed on ordinary Tailwind, and
+ * `placeholder-primary/50` - another one - was silently skipped). Every round
+ * patched the reported cases and left the next shape unenumerated, because
+ * the namespace list was hand-curated: a person recalling Tailwind's utility
+ * namespaces from memory, however carefully, cannot be complete, because
+ * completeness is a property of the *installed Tailwind version*, not of
+ * anyone's memory.
  *
- * So rather than patch those two and stop, here is the syntax space this
- * module claims to cover, as two independent axes - which axis a given
- * utility sits on was checked by actually compiling a candidate for it
- * against Tailwind 4.3.3 (the version vendored in this repo) with
- * `@tailwindcss/postcss` and inspecting the output, not assumed from reading
- * the docs (see the ugcportal-j4j PR description for the compiled examples):
+ * So as of ugcportal-j4j round 2, the namespace list is not hand-curated at
+ * all. `discoverColorNamespaces` below asks the actual installed Tailwind
+ * (via `@tailwindcss/node`'s design-system API, loaded from this repo's own
+ * globals.css) which utility namespaces accept a colour with an alpha
+ * modifier, by checking which ones produce a real completion for a
+ * guaranteed-present reference colour (`red-500`) that carries Tailwind's
+ * alpha-modifier signature. Whatever Tailwind 4.3.3 (or whatever version is
+ * installed when the suite runs) says exists, is what this module covers -
+ * not a list someone wrote down once and Tailwind quietly grew past.
  *
- * Namespace (which CSS custom property it targets), one of:
- *   - a bare namespace: `bg`, `text`, `border`, `ring`, `inset-ring`,
- *     `outline`, `divide`, `fill`, `stroke`, `shadow`, `inset-shadow`,
- *     `accent`, `caret`, `decoration`, `from`, `via`, `to`.
- *   - a border logical/physical side, which is a colour utility in its own
- *     right (`border-top-color`, not "`border` at side `t`"): `border-t`,
- *     `border-r`, `border-b`, `border-l`, `border-s`, `border-e`, `border-x`,
- *     `border-y`. Confirmed compiling; `divide-x-<color>` and
- *     `outline-t-<color>` were tried against the same compiler and do NOT
- *     compile - Tailwind has no side-qualified colour for those namespaces,
- *     so they are deliberately not in this list and fall through to the bare
- *     `divide`/`outline` branch, where an unresolvable name is caught by the
- *     unknown-token check downstream rather than misread as a qualifier.
- *   - `ring-offset`, a distinct custom property (`--tw-ring-offset-color`)
- *     from `ring`, the same way `inset-ring` already was. Confirmed
- *     compiling.
- * Each namespace above the qualified pair shares a literal prefix with a
- * shorter one already in this list (`ring-offset` / `ring`,
- * `border-t` / `border`), so ordering inside COLOR_UTILITY_PREFIXES matters:
- * regex alternation matches the first alternative that fits at a position,
- * not the longest one, so the qualified form must be listed first or it is
- * never reached.
+ * The name-form axis has the same problem one level down: `text-shadow-lg`
+ * and `shadow-lg` are non-colour presets sharing a namespace with a genuine
+ * colour form (`text-shadow-primary`, `shadow-primary`), and which bare words
+ * are presets rather than colours is exactly as unenumerable by hand as the
+ * namespace list was. `isNonColorOverload` below asks the same installed
+ * Tailwind to compile the candidate and checks whether the result actually
+ * mixes a colour (`color-mix(`) - the real, load-bearing difference between
+ * `--tw-text-shadow-alpha` (a preset's own opacity, not a colour) and
+ * `--tw-text-shadow-color: color-mix(...)` (an actual colour token). Derived,
+ * not curated, the same way.
+ *
+ * The syntax space this module covers, as three independent axes:
+ *
+ * Namespace: whatever `discoverColorNamespaces` returns this run. Known
+ * (2026-09-27, Tailwind 4.3.3) to include the bare namespaces (`bg`, `text`,
+ * `border`, `ring`, `inset-ring`, `outline`, `divide`, `fill`, `stroke`,
+ * `shadow`, `inset-shadow`, `accent`, `caret`, `decoration`, `from`, `via`,
+ * `to`, `placeholder`, `drop-shadow`, `text-shadow`, `scrollbar-thumb`,
+ * `scrollbar-track`), the border logical/physical sides (`border-t/r/b/l`,
+ * `border-s/e`, `border-x/y`, and the block-logical `border-bs`/`border-be`),
+ * `ring-offset`, and the mask gradient stops (`mask-t/r/b/l/x/y-from/to`,
+ * `mask-linear-from/to`, `mask-radial-from/to`, `mask-conic-from/to`). This
+ * list is what the derivation found, not what defines it - it will drift as
+ * Tailwind does, and that is the point.
  *
  * Name form, one of:
- *   - a bare scale name (`primary`, `surface-2`), resolved to `--color-<name>`.
+ *   - a bare scale name (`primary`, `surface-2`), resolved to `--color-<name>`
+ *     if `isNonColorOverload` says it mixes a colour, excluded if not.
  *   - an arbitrary value that is a length, number or similar non-colour value
  *     such as `[0.8rem]` (deliberately excluded - `isNonColorArbitraryValue`).
  *   - an arbitrary value that IS a colour, such as `[#fff]` or `[var(--x)]`.
@@ -76,108 +86,167 @@
  *   - an integer percentage (`/50`).
  *   - a fractional percentage (`/12.5`) - confirmed compiling; Tailwind
  *     requires at least one leading digit, so `/.5` alone does not compile
- *     and this module does not need to parse it.
+ *     and this module does not need to parse it. Resolving it end to end
+ *     also needed `contrast.ts`'s `parseTokenReference` and its coverage-key
+ *     construction to stop assuming an integer (ugcportal-j4j round 2
+ *     finding 3) - a fractional alpha that the scanner sees but nothing
+ *     downstream can ever satisfy is not an improvement on skipping it.
  *   - an arbitrary value in brackets (`/[.5]`), refused with advice.
  *   - an interpolation (`` /${alpha} ``), refused with advice.
  *
  * Every (namespace x name-form x alpha-form) cell either resolves to a
- * (token, alpha) pair, is excluded by name with a stated reason, or throws
- * with advice - never silently drops the utility. usage.test.ts pins a
- * representative case of every row of this matrix (not the full cross
- * product, which multiplies out to hundreds of cases for no more coverage of
- * the *logic*), so a change that stops handling one is a red test, not a
- * quiet regression.
+ * (token, alpha) pair, is excluded with a derived reason, or throws with
+ * advice - never silently drops the utility. usage.test.ts pins a
+ * representative case of every row (not the full cross product, which
+ * multiplies out to thousands of cases for no more coverage of the *logic*),
+ * plus a structural test on `discoverColorNamespaces` itself, so a change
+ * that stops handling a row is a red test, not a quiet regression.
  */
 
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-/**
- * Tailwind utility namespaces that take a colour and therefore an alpha
- * modifier. Anything outside this list (`opacity-50`, `w-1/2`) is not a colour
- * and is not this gate's business.
- *
- * Order matters here in a way it would not for a list of literal strings
- * tried in parallel: this feeds a regex alternation, which matches the first
- * alternative that fits at a position, not the longest. `border-t`,
- * `ring-offset` and the rest of the compound entries share a literal prefix
- * with a shorter entry later in this list (`border`, `ring`), so a compound
- * entry must be listed before the shorter one it starts with, or the shorter
- * one always wins and swallows the qualifier as part of the name
- * (ugcportal-j4j finding 1: `border-t-border/50` resolved to the nonexistent
- * `--color-t-border` instead of `--color-border`, because bare `border`
- * matched first and the qualifier `t-` was read as part of the colour name).
- */
-const COLOR_UTILITY_PREFIXES = [
-  // Border side/logical colour qualifiers. Each is a real, distinct property
-  // (`border-top-color`, `border-inline-start-color`, ...), confirmed
-  // compiling against Tailwind 4.3.3. `divide` and `outline` were checked
-  // against the same compiler and have no side-qualified colour form, so they
-  // are deliberately not given entries here - see the module header.
-  "border-t",
-  "border-r",
-  "border-b",
-  "border-l",
-  "border-s",
-  "border-e",
-  "border-x",
-  "border-y",
-  // A distinct custom property (`--tw-ring-offset-color`) from `ring`, the
-  // same way `inset-ring` already is below. Confirmed compiling.
-  "ring-offset",
-  "bg",
-  "text",
-  "border",
-  "ring",
-  "inset-ring",
-  "outline",
-  "divide",
-  "fill",
-  "stroke",
-  "shadow",
-  "inset-shadow",
-  "accent",
-  "caret",
-  "decoration",
-  "from",
-  "via",
-  "to",
-] as const;
+import { __unstable__loadDesignSystem } from "@tailwindcss/node";
+
+import { GLOBALS_CSS_PATH } from "./tokens";
 
 /**
- * Two of those namespaces are overloaded, and their non-colour forms take a
- * slash modifier that has nothing to do with alpha:
- *
- *   text-sm/6      font-size 0.875rem with line-height 1.5rem
- *   shadow-lg/20   shadow size lg at 20% shadow-colour opacity
- *
- * `text-sm/6` is ordinary, idiomatic Tailwind, and ugcportal-71y and
- * ugcportal-n3c will write it. Before this list existed it parsed as the
- * colour `sm` at 6% alpha and failed the suite with "unknown token
- * --color-sm", in a file the author had not touched. These are the complete
- * scale names for both namespaces, so anything else under `text-`/`shadow-`
- * is still treated as a colour and still checked.
+ * The slice of `@tailwindcss/node`'s (marked `__unstable__` by Tailwind
+ * itself) design-system API this module actually uses. Typed locally rather
+ * than importing the upstream type: the package's own shipped `.d.ts` has
+ * broken internal references (`Cannot find module './intellisense'` etc.)
+ * that only stay invisible because this repo's tsconfig sets
+ * `skipLibCheck: true`. A local, minimal type is what this file actually
+ * relies on, and does not depend on that upstream file being fixed.
  */
-const NON_COLOR_SCALE_NAMES: Record<string, readonly string[]> = {
-  text: [
-    "xs",
-    "sm",
-    "base",
-    "lg",
-    "xl",
-    "2xl",
-    "3xl",
-    "4xl",
-    "5xl",
-    "6xl",
-    "7xl",
-    "8xl",
-    "9xl",
-  ],
-  shadow: ["2xs", "xs", "sm", "md", "lg", "xl", "2xl", "none", "inner"],
-  "inset-shadow": ["2xs", "xs", "sm", "none"],
+export type TailwindDesignSystem = {
+  getClassList(): (readonly [string, { modifiers?: readonly string[] }])[];
+  candidatesToCss(classes: string[]): (string | null)[];
 };
+
+/**
+ * A colour Tailwind's default theme always ships, used purely as a probe: it
+ * is never written by a component, only used to ask "does this namespace
+ * accept a colour with an alpha modifier at all". Any real project colour
+ * (`primary`, `border`, ...) would work too since the design system below is
+ * loaded from this repo's own globals.css, but a built-in name means the
+ * probe does not depend on this repo's token names staying the same.
+ */
+const PROBE_COLOR = "red-500";
+
+/**
+ * Tailwind's own answer to "which modifiers does this class accept" is a
+ * generic per-namespace fact - it does not distinguish a genuine colour
+ * completion from a same-namespace preset that also takes a percentage
+ * modifier for an unrelated reason (`text-shadow-lg/50` is a preset at 50%
+ * of its own opacity; `text-shadow-primary/50` is a colour at 50% alpha; both
+ * report the identical modifier list). So this signature only proves a
+ * *namespace* supports colour+alpha somewhere in it (true for both examples
+ * above), never that one specific *name* within it is a colour. That
+ * distinction needs `isNonColorOverload` below, which compiles the specific
+ * candidate instead of reading namespace-level metadata.
+ */
+function hasAlphaModifierSignature(modifiers: readonly string[]): boolean {
+  return modifiers.length > 5 && modifiers.every((m) => /^\d{1,3}$/.test(m));
+}
+
+/**
+ * Every Tailwind utility namespace that accepts a colour and therefore an
+ * alpha modifier, asked of the installed Tailwind rather than recalled from
+ * memory (ugcportal-j4j round 2, findings 1 and 2: `text-shadow` and
+ * `placeholder` are both real namespaces a hand-curated list had missed).
+ *
+ * For every class Tailwind's design system can produce, keeps the ones
+ * ending in `-red-500` (PROBE_COLOR) whose available modifiers carry the
+ * alpha-modifier signature, and strips the probe suffix - i.e. "does
+ * `<candidate>-red-500` exist and take a `/50`-style modifier". `red-500` is
+ * an unambiguous colour (never a preset keyword under any namespace), so a
+ * match here is solid evidence the namespace itself supports colour+alpha,
+ * with none of the preset-vs-colour ambiguity `isNonColorOverload` has to
+ * resolve for a specific bare name.
+ *
+ * Sorted longest-first: this feeds a regex alternation, which matches the
+ * first alternative that fits at a position, not the longest, so a compound
+ * namespace (`ring-offset`, `border-t`) must be tried before a shorter one it
+ * starts with (`ring`, `border`) or the shorter one wins and swallows the
+ * qualifier as part of the colour name (ugcportal-j4j round 1 finding 1).
+ * Sorting derives that ordering instead of relying on someone placing new
+ * entries correctly by hand.
+ */
+export function discoverColorNamespaces(
+  designSystem: TailwindDesignSystem,
+): string[] {
+  const suffix = `-${PROBE_COLOR}`;
+  const namespaces: string[] = [];
+  for (const [name, meta] of designSystem.getClassList()) {
+    if (!name.endsWith(suffix)) continue;
+    if (!hasAlphaModifierSignature(meta.modifiers ?? [])) continue;
+    namespaces.push(name.slice(0, -suffix.length));
+  }
+  return namespaces.sort((a, b) => b.length - a.length);
+}
+
+/**
+ * True if `${prefix}-${name}` is a real Tailwind utility whose modifier means
+ * something other than colour alpha - a preset's own opacity
+ * (`text-shadow-lg/50`, `shadow-lg/20`), a line-height (`text-sm/6`) - rather
+ * than a colour this module should resolve and measure.
+ *
+ * Derived by compiling the actual candidate (at a fixed probe alpha; only
+ * whether it compiles and what it sets matters, not the value) and checking
+ * for Tailwind's own colour-compositing signature, `color-mix(`, in the
+ * result. A genuine colour+alpha utility always emits it (confirmed across
+ * every namespace/token combination compiled while building this); a preset
+ * taking a same-shaped percentage modifier for its own opacity does not.
+ *
+ * Returns false - "treat it as an attempted colour" - when the candidate
+ * does not compile at all. That is not this function's call to make: it
+ * might be a genuinely undeclared token (a typo, or a colour someone forgot
+ * to add to globals.css), and the existing "is this a design token" check in
+ * contrast.test.ts already reports that case with better advice than this
+ * function could. Silently excluding it here would be the exact mistake this
+ * module's header spends so many words warning against.
+ */
+const nonColorOverloadCache = new Map<string, boolean>();
+function isNonColorOverload(
+  designSystem: TailwindDesignSystem,
+  prefix: string,
+  name: string,
+): boolean {
+  const key = `${prefix}-${name}`;
+  const cached = nonColorOverloadCache.get(key);
+  if (cached !== undefined) return cached;
+
+  const [css] = designSystem.candidatesToCss([`${key}/50`]);
+  const result = css !== null && !css.includes("color-mix(");
+  nonColorOverloadCache.set(key, result);
+  return result;
+}
+
+/**
+ * Loaded from this repo's own globals.css (not bare `tailwindcss`), so the
+ * design system knows every project custom token (`primary`, `border`,
+ * `surface-0`, ...) as well as Tailwind's built-in defaults - both matter:
+ * `discoverColorNamespaces` only needs a Tailwind default (PROBE_COLOR) to
+ * exist, but `isNonColorOverload` classifies whatever specific name a
+ * component actually wrote, which is usually a project token.
+ *
+ * Top-level await rather than making `findAlphaColorUtilities` async: every
+ * caller today (usage.test.ts, contrast.test.ts) uses it synchronously, and
+ * loading the design system is a one-time, sub-200ms cost per test file, not
+ * per call (`nonColorOverloadCache` above and the design system itself are
+ * both module-scoped).
+ *
+ * Exported so usage.test.ts's structural checks on the derivation itself can
+ * reuse this instance rather than loading a second copy.
+ */
+export const designSystem: TailwindDesignSystem = await __unstable__loadDesignSystem(
+  `@import ${JSON.stringify(GLOBALS_CSS_PATH)};`,
+  { base: path.dirname(GLOBALS_CSS_PATH) },
+);
+
+const COLOR_UTILITY_PREFIXES = discoverColorNamespaces(designSystem);
 
 /**
  * Which half of a pairing a namespace produces. `bg-primary/80` is a surface
@@ -274,10 +343,6 @@ function fail(message: string): never {
   throw new Error(`[design/usage] ${message}`);
 }
 
-function isNonColorScaleName(prefix: string, name: string): boolean {
-  return NON_COLOR_SCALE_NAMES[prefix]?.includes(name) ?? false;
-}
-
 /**
  * Removes comments so prose about a utility is not mistaken for a use of it.
  * These files are TS/TSX and CSS; neither has a string syntax that survives
@@ -345,8 +410,9 @@ export function findAlphaColorUtilities(
       const [, prefix, name, modifier] = match;
       const written = `${prefix}-${name}/${modifier}`;
 
-      // 1. Is this a colour at all? Two namespaces are overloaded, and an
-      //    arbitrary value may be a length rather than a colour.
+      // 1. Is this a colour at all? Some namespaces are overloaded with a
+      //    preset that also takes a modifier, and an arbitrary value may be
+      //    a length rather than a colour.
       if (name.startsWith("[")) {
         if (isNonColorArbitraryValue(name)) continue;
         fail(
@@ -354,7 +420,7 @@ export function findAlphaColorUtilities(
             `value. Use a design token so the gate can resolve and measure it.`,
         );
       }
-      if (isNonColorScaleName(prefix, name)) continue;
+      if (isNonColorOverload(designSystem, prefix, name)) continue;
 
       // 2. It is a colour. Can the alpha be resolved to a number?
       if (modifier.startsWith("${")) {

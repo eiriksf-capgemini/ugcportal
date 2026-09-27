@@ -337,7 +337,29 @@ export const PAIRINGS: Pairing[] = [
   ),
 ];
 
-export type TokenReference = { property: string; alpha: number };
+export type TokenReference = {
+  property: string;
+  /** The alpha modifier as a 0-1 multiplier, for the colour-compositing math. */
+  alpha: number;
+  /**
+   * The alpha modifier exactly as Tailwind would print the percentage, e.g.
+   * `80`, or `12.5` for a fractional alpha - not `alpha * 100`.
+   *
+   * ugcportal-j4j round 2 finding 3: usage.ts learned to scan a fractional
+   * alpha (`bg-primary/12.5`) without this field existing, and the coverage
+   * key in contrast.test.ts recovered a percentage from `alpha` via
+   * `Math.round(alpha * 100)` to compare against it. That round-trips
+   * through a division and a rounding a usage's own `alphaPercent` never
+   * goes through, so equal alphas parsed on the two sides could print as
+   * different numbers (`ring-ring/80.5` parsed here as `0.805`, and
+   * `Math.round(0.805 * 100)` is `81` or `80` depending on floating-point
+   * rounding, never reliably `80.5`) - a fractional alpha the scanner could
+   * see but the coverage check could never match, which is a worse state
+   * than the silent skip it replaced. Keeping the originally-written
+   * percentage instead of re-deriving it means both sides always agree.
+   */
+  alphaPercent: number;
+};
 
 /** Splits `--ring/70` into its token and its alpha multiplier. */
 export function parseTokenReference(reference: string): TokenReference {
@@ -351,20 +373,22 @@ export function parseTokenReference(reference: string): TokenReference {
       `[design/contrast] "${reference}" is not a custom-property reference`,
     );
   }
-  if (parts.length === 1) return { property, alpha: 1 };
+  if (parts.length === 1) return { property, alpha: 1, alphaPercent: 100 };
   const modifier = parts[1].trim();
-  if (!/^\d{1,3}$/.test(modifier)) {
+  // Mirrors usage.ts's ALPHA_UTILITY numeric branch: Tailwind alpha modifiers
+  // can be fractional (`/12.5`), not just integer.
+  if (!/^\d+(?:\.\d+)?$/.test(modifier)) {
     throw new Error(
-      `[design/contrast] alpha modifier in "${reference}" must be an integer 0-100`,
+      `[design/contrast] alpha modifier in "${reference}" must be a number 0-100`,
     );
   }
-  const alpha = Number(modifier);
-  if (alpha > 100) {
+  const alphaPercent = Number(modifier);
+  if (alphaPercent > 100) {
     throw new Error(
-      `[design/contrast] alpha modifier in "${reference}" must be an integer 0-100`,
+      `[design/contrast] alpha modifier in "${reference}" must be a number 0-100`,
     );
   }
-  return { property, alpha: alpha / 100 };
+  return { property, alpha: alphaPercent / 100, alphaPercent };
 }
 
 function resolveReference(

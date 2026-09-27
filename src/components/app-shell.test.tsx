@@ -46,11 +46,37 @@ function skipLinkClassName(): string {
   return match[1];
 }
 
-/** Compiles `classNames` against the real globals.css with the real (vendored) Tailwind. */
+/**
+ * Compiles `classNames` against the real globals.css with the real (vendored)
+ * Tailwind - restricted to exactly those classes, and nothing else the app
+ * happens to use elsewhere.
+ *
+ * ugcportal-j4j round 2 finding 5: `@import GLOBALS_CSS_PATH` alone pulls in
+ * globals.css's own unrestricted `@import "tailwindcss";`, which by default
+ * scans this entire repo for candidate class names - not just the
+ * `@source inline(...)` this function adds. The compiled output ends up
+ * containing every utility any page uses (`.p-4`, `.py-24`, `.container`,
+ * even a `.sm:px-6` from inside an unrelated `@media` block, treated by
+ * resolvePaddingCascade as unconditional), so an unrelated padding utility
+ * added to some other component could silently change which rule wins here.
+ * Rewriting that one line to add `source(none)` disables the automatic scan
+ * for this compile while leaving the theme and every other import intact, so
+ * only the classes this function explicitly asks for are compiled.
+ */
 async function compile(classNames: string): Promise<string> {
-  const input =
-    `@import ${JSON.stringify(GLOBALS_CSS_PATH)};\n` +
-    `@source inline(${JSON.stringify(classNames)});\n`;
+  const globalsCss = readFileSync(GLOBALS_CSS_PATH, "utf8");
+  const restricted = globalsCss.replace(
+    '@import "tailwindcss";',
+    '@import "tailwindcss" source(none);',
+  );
+  if (restricted === globalsCss) {
+    throw new Error(
+      'app-shell.test.tsx: expected globals.css to start with exactly \'@import "tailwindcss";\' ' +
+        "so this test can disable Tailwind's automatic whole-project source scan for it. " +
+        "If that import line changed shape, update this replacement to match.",
+    );
+  }
+  const input = `${restricted}\n@source inline(${JSON.stringify(classNames)});\n`;
   const result = await postcss([
     tailwindPostcss({ base: path.dirname(GLOBALS_CSS_PATH) }),
   ]).process(input, { from: GLOBALS_CSS_PATH });
@@ -208,5 +234,28 @@ describe("the skip link's focus-visible padding", () => {
 
     expect(padding["padding-left"]).toBe("0");
     expect(padding["padding-top"]).toBe("0");
+  });
+
+  /**
+   * ugcportal-j4j round 2 finding 5. Without `source(none)`, `compile()`
+   * pulled in every utility this repo's other pages and components happen to
+   * use, so this suite's outcome depended on padding classes added somewhere
+   * else entirely - not just the skip link's own classes.
+   */
+  it("compiles only the skip link's own classes, not every utility the app happens to use elsewhere", async () => {
+    const css = await compile(skipLinkClassName());
+    // .p-4, .py-24 and .container are real utilities used elsewhere in this
+    // app (page padding, page shells) but never on the skip link; a
+    // media-gated utility like .sm:px-6 is a sharper check still, since an
+    // unscoped compile would include it as if it were unconditional.
+    for (const unrelated of [".p-4 ", ".py-24 ", ".container ", "sm\\:px-6"]) {
+      expect(css, `unrelated utility "${unrelated}" leaked into the compile`).not.toContain(
+        unrelated,
+      );
+    }
+    // The skip link's own classes must still be there - this is a scoping
+    // check, not a "compile nothing" check.
+    expect(css).toContain("not-sr-only");
+    expect(css).toContain("px-3");
   });
 });

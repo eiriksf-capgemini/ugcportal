@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { findAlphaColorUtilities } from "./usage";
+import { designSystem, discoverColorNamespaces, findAlphaColorUtilities } from "./usage";
 
 const created: string[] = [];
 
@@ -363,5 +363,111 @@ describe("findAlphaColorUtilities", () => {
     // start accepting a shape Tailwind itself rejects.
     const root = fixture({ "a.tsx": `const c = "bg-primary/.5";` });
     expect(findAlphaColorUtilities(root)).toEqual([]);
+  });
+
+  // ugcportal-j4j round 2, findings 1 and 2: a hand-curated namespace list
+  // cannot be complete, because completeness is a property of the installed
+  // Tailwind version, not of anyone's memory. `text-shadow` and `placeholder`
+  // are two namespaces the round-1 list missed; discoverColorNamespaces (see
+  // below) is what closes this class of bug rather than these two names.
+
+  it("resolves text-shadow-<colour>/<alpha> to the real token, not swallowed by `text`", () => {
+    // Before this, `text` matched first and `text-shadow-primary/50` resolved
+    // to the nonexistent `--color-shadow-primary`.
+    const root = fixture({ "a.tsx": `const c = "text-shadow-primary/50";` });
+    expect(findAlphaColorUtilities(root)).toEqual([
+      {
+        file: expect.stringContaining("a.tsx"),
+        utility: "text-shadow-primary/50",
+        property: "--color-primary",
+        alphaPercent: 50,
+        role: "foreground",
+        prefix: "text-shadow",
+      },
+    ]);
+  });
+
+  it("treats text-shadow's own size/opacity presets as non-colour, the same way shadow's are", () => {
+    // text-shadow-lg/20 is a preset shadow at 20% of its own opacity, the
+    // exact same shape of overload as shadow-lg/20 and text-sm/6. Before
+    // this, `text` matched first and this hard-failed as an attempt to
+    // resolve the nonexistent token --color-shadow-lg.
+    //
+    // text-shadow-none is deliberately not in this list: unlike the other
+    // presets, Tailwind refuses a modifier on it entirely (there is no
+    // shadow to fade), so `text-shadow-none/10` does not compile as
+    // anything - a different, already-correctly-handled case (an unresolvable
+    // name is treated as an attempted colour and left for the "is this a
+    // design token" check downstream, not excluded here).
+    const root = fixture({
+      "a.tsx": `const c = "text-shadow-lg/20 text-shadow-md/30 text-shadow-sm/10 text-shadow-xs/10 text-shadow-2xs/10";`,
+    });
+    expect(findAlphaColorUtilities(root)).toEqual([]);
+  });
+
+  it("resolves placeholder-<colour>/<alpha>, a namespace the hand-curated list omitted entirely", () => {
+    const root = fixture({ "a.tsx": `const c = "placeholder-primary/50";` });
+    expect(findAlphaColorUtilities(root)).toEqual([
+      {
+        file: expect.stringContaining("a.tsx"),
+        utility: "placeholder-primary/50",
+        property: "--color-primary",
+        alphaPercent: 50,
+        role: "foreground",
+        prefix: "placeholder",
+      },
+    ]);
+  });
+
+  describe("discoverColorNamespaces", () => {
+    const namespaces = discoverColorNamespaces(designSystem);
+
+    it("finds namespaces a hand-curated list is prone to miss", () => {
+      // The two findings above, plus others turned up while building this
+      // that were never reported because nothing in this codebase uses them
+      // yet - proof the derivation covers more than the two names anyone was
+      // looking for.
+      for (const expected of [
+        "bg",
+        "text",
+        "border",
+        "ring",
+        "border-t",
+        "ring-offset",
+        "text-shadow",
+        "placeholder",
+        "drop-shadow",
+      ]) {
+        expect(namespaces, expected).toContain(expected);
+      }
+    });
+
+    it("excludes a namespace-side-qualifier combination Tailwind does not compile", () => {
+      // divide-x-<colour> and outline-t-<colour> are not real Tailwind
+      // utilities (confirmed: they do not compile), so the derivation must
+      // not invent them.
+      expect(namespaces).not.toContain("divide-x");
+      expect(namespaces).not.toContain("outline-t");
+      expect(namespaces).not.toContain("decoration-t");
+      expect(namespaces).not.toContain("accent-t");
+    });
+
+    it("sorts longest-first, so a compound namespace is tried before the shorter one it starts with", () => {
+      expect(namespaces.indexOf("ring-offset")).toBeLessThan(
+        namespaces.indexOf("ring"),
+      );
+      expect(namespaces.indexOf("border-t")).toBeLessThan(
+        namespaces.indexOf("border"),
+      );
+      for (let i = 1; i < namespaces.length; i += 1) {
+        expect(namespaces[i].length).toBeLessThanOrEqual(
+          namespaces[i - 1].length,
+        );
+      }
+    });
+
+    it("has no duplicates", () => {
+      expect(new Set(namespaces).size).toBe(namespaces.length);
+    });
   });
 });

@@ -25,15 +25,15 @@ const css = readFileSync(GLOBALS_CSS_PATH, "utf8");
 
 /** `--ring/70` (or a bare `--ring`) to `<resolved literal>@<alpha percent>`. */
 function tokenAlphaKey(reference: string): string {
-  const { property, alpha } = parseTokenReference(reference);
-  return `${resolveToken(property, tokens)}@${Math.round(alpha * 100)}`;
+  const { property, alphaPercent } = parseTokenReference(reference);
+  return `${resolveToken(property, tokens)}@${alphaPercent}`;
 }
 
 /**
  * The strongest WCAG threshold any PAIRING has actually verified a given
  * (resolved literal, alpha) combination at, restricted to foreground-role
- * pairings. A decorative pairing proves no ratio at all (no THRESHOLDS entry)
- * and does not contribute.
+ * pairings. A decorative pairing contributes 0 - it proves the colour exists
+ * at that alpha, but proves no ratio - rather than being left out entirely.
  *
  * K2 (ugcportal-j4j finding 2): keying coverage by (literal, alpha, role)
  * alone is not enough. `--ring`, `--primary`, `--sidebar-ring` and
@@ -45,12 +45,24 @@ function tokenAlphaKey(reference: string): string {
  * *usage* needs (see expectedThresholdFor below) rather than merely checking
  * presence, closes that gap without needing every namespace's pairings kept
  * in exact 1:1 lockstep with the tokens they happen to share a literal with.
+ *
+ * ugcportal-j4j round 2 finding 4: the first version of this `continue`d past
+ * decorative pairings instead of contributing 0, which narrowed the set this
+ * map used to cover before K2 existed. A namespace this codebase's own
+ * PAIRINGS treats as exclusively decorative (`divide` - every divider-* and
+ * sidebar-border-* entry) could then never be satisfied at all: the only
+ * pairing that would measure it is decorative by construction (a hairline
+ * deliberately below 3:1, per the reasoning on the `divider-*` pairings
+ * above), the frozen decorative-id test blocks reclassifying it as anything
+ * else, and a `continue`d-past decorative pairing contributes nothing for a
+ * divide usage's expected threshold (see DECORATIVE_PREFIXES below) to clear.
+ * Contributing 0 fixes that without weakening K2: 0 still never satisfies a
+ * `ui` (3) or `body` (4.5) requirement.
  */
 const FOREGROUND_VERIFIED_THRESHOLD = new Map<string, number>();
 for (const pairing of PAIRINGS) {
-  if (pairing.requirement === "decorative") continue;
   const key = tokenAlphaKey(pairing.foreground);
-  const value = THRESHOLDS[pairing.requirement];
+  const value = pairing.requirement === "decorative" ? 0 : THRESHOLDS[pairing.requirement];
   FOREGROUND_VERIFIED_THRESHOLD.set(
     key,
     Math.max(FOREGROUND_VERIFIED_THRESHOLD.get(key) ?? -Infinity, value),
@@ -70,18 +82,29 @@ const MEASURED_BACKGROUND = new Set(
 
 /**
  * What a *usage* (as opposed to a PAIRING) needs to clear, inferred from its
- * namespace. `text` renders glyphs directly and this is a static source
- * scan - it cannot tell body text from large text - so it is held to the
- * stricter of WCAG's two text minimums, `body` (4.5:1), rather than risk
- * under-claiming for a usage that turns out to be normal-size. Every other
- * foreground namespace this gate tracks (a ring, a border, a divider) is a
+ * namespace. `text` and `placeholder` both render glyphs directly, and this
+ * is a static source scan - it cannot tell body text from large text - so
+ * both are held to the stricter of WCAG's two text minimums, `body` (4.5:1),
+ * rather than risk under-claiming for a usage that turns out to be
+ * normal-size.
+ *
+ * `divide` is the one namespace this codebase's own PAIRINGS treats as
+ * exclusively decorative (every `divider-*` and `sidebar-border-*` pairing),
+ * so a divide usage only needs *something* measured at that (literal, alpha)
+ * - decorative included - not a specific numeric floor (ugcportal-j4j round 2
+ * finding 4).
+ *
+ * Every other foreground namespace this gate tracks (a ring, a border) is a
  * non-text UI mark, held to `ui` (3:1) - the same threshold PAIRINGS already
  * uses throughout for exactly these namespaces (focus-ring, control-edge,
  * destructive-edge).
  */
-const TEXT_PREFIXES = new Set(["text"]);
+const TEXT_PREFIXES = new Set(["text", "placeholder"]);
+const DECORATIVE_PREFIXES = new Set(["divide"]);
 function expectedThresholdFor(usage: Pick<AlphaUtilityUsage, "prefix">): number {
-  return TEXT_PREFIXES.has(usage.prefix) ? THRESHOLDS.body : THRESHOLDS.ui;
+  if (TEXT_PREFIXES.has(usage.prefix)) return THRESHOLDS.body;
+  if (DECORATIVE_PREFIXES.has(usage.prefix)) return 0;
+  return THRESHOLDS.ui;
 }
 
 /**
@@ -306,6 +329,95 @@ describe("the gate cannot be routed around", () => {
   });
 
   /**
+   * ugcportal-j4j round 2 finding 3. usage.ts's scanner learned to see a
+   * fractional alpha in round 1, but this file's own `parseTokenReference`
+   * still required an integer, and its coverage key recovered a percentage
+   * via `Math.round(alpha * 100)`. `Math.round(80.5)` is `81`, not `80.5`, so
+   * a PAIRING declared at `--primary/80.5` and a usage scanned as
+   * `ring-primary/80.5` keyed as "…@81" and "…@80.5" respectively - never
+   * equal, so the fractional usage's coverage check could never pass, no
+   * matter what pairing was added. "Add a pairing for it" was advice that
+   * could not be followed. This proves the two sides now key identically.
+   */
+  it("keys a fractional-alpha pairing and a fractional-alpha usage identically", () => {
+    const syntheticPairing: Pairing = {
+      id: "synthetic-fractional",
+      foreground: "--primary/80.5",
+      background: ["--color-surface-0"],
+      requirement: "ui",
+      usage: "Not shipped; proves a fractional-alpha pairing can be declared and evaluated at all.",
+    };
+    // Would have thrown before the fix: parseTokenReference required
+    // /^\d{1,3}$/, an integer only.
+    expect(() => evaluatePairing(syntheticPairing, tokens)).not.toThrow();
+
+    const pairingKey = tokenAlphaKey(syntheticPairing.foreground);
+
+    const usage: AlphaUtilityUsage = {
+      file: "synthetic (not shipped)",
+      utility: "ring-primary/80.5",
+      property: "--color-primary",
+      alphaPercent: 80.5,
+      role: "foreground",
+      prefix: "ring",
+    };
+    const usageKey = `${resolveToken(usage.property, tokens)}@${usage.alphaPercent}`;
+
+    expect(
+      usageKey,
+      "a fractional-alpha usage and the pairing meant to cover it must key identically",
+    ).toBe(pairingKey);
+  });
+
+  /**
+   * ugcportal-j4j round 2 finding 4. The first version of
+   * FOREGROUND_VERIFIED_THRESHOLD skipped decorative pairings entirely
+   * rather than contributing 0, which meant a divider - the one namespace
+   * this codebase's own PAIRINGS treats as exclusively decorative - could
+   * never be satisfied: the frozen decorative-id test blocks promoting a
+   * divider pairing to `ui`, and a `ui`-level pairing for a genuinely
+   * decorative hairline would, by construction, fail the WCAG describe block
+   * above (a deliberately-faint divider does not clear 3:1). This proves a
+   * real decorative pairing's literal+alpha now satisfies a divide usage of
+   * the same key, without that same 0-value satisfying a ui or text usage.
+   */
+  it("lets a decorative pairing satisfy a divide usage, without letting it satisfy a UI or text usage", () => {
+    const dividerPairing = PAIRINGS.find(
+      (pairing) => pairing.requirement === "decorative",
+    );
+    expect(dividerPairing, "at least one decorative pairing ships").toBeDefined();
+
+    const key = tokenAlphaKey(dividerPairing!.foreground);
+    expect(FOREGROUND_VERIFIED_THRESHOLD.get(key)).toBe(0);
+
+    // dividerPairing's foreground is already a bare `--color-<name>`
+    // reference (e.g. "--color-line"), the same shape usage.ts's `property`
+    // field uses, so it doubles directly as a synthetic usage of that token.
+    const { property, alphaPercent } = parseTokenReference(dividerPairing!.foreground);
+    const divideUsage: AlphaUtilityUsage = {
+      file: "synthetic (not shipped)",
+      utility: `divide-x/${alphaPercent}`,
+      property,
+      alphaPercent,
+      role: "foreground",
+      prefix: "divide",
+    };
+    const divideKey = `${resolveToken(divideUsage.property, tokens)}@${divideUsage.alphaPercent}`;
+    expect(divideKey, "sanity: constructed the same key as the pairing").toBe(key);
+
+    expect(expectedThresholdFor(divideUsage)).toBe(0);
+    expect(
+      FOREGROUND_VERIFIED_THRESHOLD.get(divideKey) ?? -Infinity,
+    ).toBeGreaterThanOrEqual(expectedThresholdFor(divideUsage));
+
+    // The same 0 does not satisfy a UI or text usage of that same key.
+    const ringUsage: AlphaUtilityUsage = { ...divideUsage, prefix: "ring" };
+    const textUsage: AlphaUtilityUsage = { ...divideUsage, prefix: "text" };
+    expect(0).toBeLessThan(expectedThresholdFor(ringUsage));
+    expect(0).toBeLessThan(expectedThresholdFor(textUsage));
+  });
+
+  /**
    * Finding 3 of round 2. The gamut rejection only fires for tokens named in
    * PAIRINGS, and the usage scanner only sees alpha-modified utilities, so
    * `bg-petrol-900` could ship a clipped colour with the suite green. Anything
@@ -385,6 +497,7 @@ describe("parseTokenReference", () => {
     expect(parseTokenReference("--ring")).toEqual({
       property: "--ring",
       alpha: 1,
+      alphaPercent: 100,
     });
   });
 
@@ -392,19 +505,43 @@ describe("parseTokenReference", () => {
     expect(parseTokenReference("--ring/70")).toEqual({
       property: "--ring",
       alpha: 0.7,
+      alphaPercent: 70,
     });
     expect(parseTokenReference("--ring/0")).toEqual({
       property: "--ring",
       alpha: 0,
+      alphaPercent: 0,
     });
   });
 
-  it.each(["ring", "--ring/70/10", "--ring/abc", "--ring/101", "--ring/"])(
-    "throws on %s",
-    (reference) => {
-      expect(() => parseTokenReference(reference)).toThrow();
-    },
-  );
+  /**
+   * ugcportal-j4j round 2 finding 3: this used to require an integer
+   * (`/^\d{1,3}$/`), so a fractional alpha usage.ts had already learned to
+   * scan (`bg-primary/12.5`) could never be declared as a PAIRING at all -
+   * "measured" advice the author could not actually follow. `alphaPercent`
+   * preserves the written percentage exactly (not `alpha * 100`, which would
+   * round-trip through a division a usage's own alphaPercent never goes
+   * through), so a coverage key built from a PAIRING and one built from a
+   * scanned usage agree even for a fractional value.
+   */
+  it("reads a fractional Tailwind alpha modifier", () => {
+    expect(parseTokenReference("--ring/12.5")).toEqual({
+      property: "--ring",
+      alpha: 0.125,
+      alphaPercent: 12.5,
+    });
+  });
+
+  it.each([
+    "ring",
+    "--ring/70/10",
+    "--ring/abc",
+    "--ring/101",
+    "--ring/100.5",
+    "--ring/",
+  ])("throws on %s", (reference) => {
+    expect(() => parseTokenReference(reference)).toThrow();
+  });
 });
 
 /**
