@@ -30,18 +30,24 @@ const ALLOWED = new Map<string, string>([
     "the only writer — an ADMIN transition, guarded by type and at runtime",
   ],
   [
-    "app/api/admin/instagram/rights-decision/route.ts",
+    "app/api/admin/rights/decision/route.ts",
     "the admin-only endpoint that calls the writer; names the status in its docs only",
   ],
   [
-    "app/admin/settings/instagram/actions.ts",
-    "documentation only: explains why disconnect revokes rather than leaving CLEARED as the trail's last word",
-  ],
-  [
-    "app/admin/settings/instagram/decision-form.tsx",
-    "UI copy only: tells the reviewer a CLEARED decision with no rights holder sells nothing",
+    "app/admin/settings/rights/page.tsx",
+    "documentation only, on a read-only page: explains why the decision form must render for an uploader outside the listed slice — being unreachable there means never being cleared. Classified here deliberately, which is what this list is for.",
   ],
 ]);
+
+/** The committed migration directories, in apply order. */
+function migrationDirs(): string[] {
+  return readdirSync(resolve(process.cwd(), "prisma/migrations"), {
+    withFileTypes: true,
+  })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort();
+}
 
 function sourceFiles(dir: string, found: string[] = []): string[] {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -159,33 +165,42 @@ describe("the database's own default", () => {
   });
 
   it("gives the audit table no foreign key to cascade from", () => {
-    // ugcportal-lu7's lesson, applied: one click of Disconnect must not
-    // delete the record of who cleared the account. Asserted against the
-    // migration rather than the schema because the migration is what the
-    // database actually gets.
-    const sql = readFileSync(
-      resolve(
-        process.cwd(),
-        "prisma/migrations/20260924172545_add_resale_rights/migration.sql",
-      ),
-      "utf8",
-    );
-    const eventTable = /CREATE TABLE "ResaleRightsEvent" \(([\s\S]*?)\n\);/.exec(
-      sql,
-    );
+    // ugcportal-lu7's lesson, applied: deleting the subject must not delete
+    // the record of who cleared them. Asserted against the migrations rather
+    // than the schema because the migrations are what the database actually
+    // gets — and against the LAST definition of the table rather than a
+    // named file, so a later migration that rebuilds it (as ugcportal-vsm's
+    // did) is the one under test instead of a historical one.
+    const definitions = migrationDirs().flatMap((name) => {
+      const sql = readFileSync(
+        join(resolve(process.cwd(), "prisma/migrations"), name, "migration.sql"),
+        "utf8",
+      );
+      return [
+        ...sql.matchAll(
+          /CREATE TABLE "(?:new_)?ResaleRightsEvent" \(([\s\S]*?)\n\);/g,
+        ),
+      ].map((match) => match[1]);
+    });
 
-    expect(eventTable).not.toBeNull();
-    expect(eventTable![1]).not.toContain("FOREIGN KEY");
-    // And it carries the snapshots that let a row stand on its own.
+    expect(definitions.length).toBeGreaterThan(0);
+    // Every definition, not just the current one: a foreign key added and
+    // then removed would still have cascaded for whoever ran the migration
+    // in between.
+    for (const body of definitions) {
+      expect(body).not.toContain("FOREIGN KEY");
+    }
+    // And the live one carries the snapshots that let a row stand on its own.
     for (const column of [
-      "instagramAccountId",
-      "instagramUsername",
+      "subjectKind",
+      "subjectId",
+      "subjectLabel",
       "actorEmail",
       "checklistVersion",
       "evidenceKey",
       "evidenceSha256",
     ]) {
-      expect(eventTable![1]).toContain(`"${column}"`);
+      expect(definitions.at(-1)).toContain(`"${column}"`);
     }
   });
 });

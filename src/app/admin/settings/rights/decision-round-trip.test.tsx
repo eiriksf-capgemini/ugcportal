@@ -1,7 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import {
   afterAll,
-  afterEach,
   beforeAll,
   beforeEach,
   describe,
@@ -13,7 +12,7 @@ import {
 import {
   ACCEPTED_CHECKLIST_VERSIONS,
   CURRENT_CHECKLIST_VERSION,
-  accountClearanceBlocker,
+  uploaderClearanceBlocker,
 } from "@/lib/resale-rights";
 import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db";
 
@@ -39,17 +38,15 @@ vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 const database = createTemporaryDatabase();
 const { prisma } = await import("@/lib/prisma");
 const { POST: recordDecision } = await import(
-  "@/app/api/admin/instagram/rights-decision/route"
-);
-const { disconnectInstagramAccount } = await import(
-  "@/app/admin/settings/instagram/actions"
+  "@/app/api/admin/rights/decision/route"
 );
 const { ResaleRightsDecisionForm } = await import(
-  "@/app/admin/settings/instagram/decision-form"
+  "@/app/admin/settings/rights/decision-form"
 );
 const { setResaleRightsStatus } = await import("@/lib/resale-rights-review");
 
-const DECISION_URL = "http://localhost/api/admin/instagram/rights-decision";
+const DECISION_URL = "http://localhost/api/admin/rights/decision";
+const UPLOADER = "uploader-1";
 
 /**
  * Submits the form the way a browser would: a multipart POST to the route
@@ -94,7 +91,7 @@ function attribute(tag: string, name: string): string | undefined {
  * What a browser would submit for this form, read out of the rendered HTML:
  * every named input's value, the selected option of every select, and the
  * body of every textarea. File inputs are skipped — an empty file picker
- * sends an empty file, which the action ignores.
+ * sends an empty file, which the handler ignores.
  *
  * Deliberately parsed from the markup rather than rebuilt from the props: a
  * field the server never rendered is exactly the bug under test, and a
@@ -141,37 +138,24 @@ function formDataFromMarkup(markup: string): FormData {
   return data;
 }
 
-/**
- * Renders the form exactly as page.tsx does, from the stored review.
- *
- * `rightsHolders` is a parameter because the page caps that list, so the
- * recorded holder can legitimately fall outside it — and a form rendered
- * without them submits a blank, which the handler reads as "clear it".
- * Passing the holder every time is what hid that for a round.
- */
-async function renderFormForAccount(
-  rightsHolders: { id: string; name: string | null; email: string | null }[] = [
-    { id: "owner-1", name: "Owner One", email: "owner@example.com" },
-  ],
-): Promise<FormData> {
+/** Renders the form exactly as page.tsx does, from the stored review. */
+async function renderFormForUploader(): Promise<FormData> {
   const review = await prisma.resaleRightsReview.findUnique({
-    where: { instagramAccountId: "acc-1" },
+    where: { uploaderUserId: UPLOADER },
     select: {
       status: true,
       route: true,
       validUntil: true,
       conditions: true,
       checklistVersion: true,
-      clearedOwnerUserId: true,
     },
   });
 
   const markup = renderToStaticMarkup(
     <ResaleRightsDecisionForm
-      instagramAccountId="acc-1"
+      uploaderUserId={UPLOADER}
       review={review}
-      rightsHolders={rightsHolders}
-      action="/api/admin/instagram/rights-decision"
+      action="/api/admin/rights/decision"
     />,
   );
   return formDataFromMarkup(markup);
@@ -179,7 +163,19 @@ async function renderFormForAccount(
 
 async function storedReview() {
   return prisma.resaleRightsReview.findUniqueOrThrow({
-    where: { instagramAccountId: "acc-1" },
+    where: { uploaderUserId: UPLOADER },
+  });
+}
+
+/** The uploader-level blocker for the stored row, as the page computes it. */
+async function blockerForStoredReview() {
+  const review = await storedReview();
+  return uploaderClearanceBlocker({
+    status: review.status,
+    checklistVersion: review.checklistVersion,
+    reviewedByUserId: review.reviewedByUserId,
+    validUntil: review.validUntil,
+    reviewedBy: { role: "ADMIN" },
   });
 }
 
@@ -189,18 +185,7 @@ beforeAll(async () => {
     data: { id: "admin-1", email: "admin@example.com", role: "ADMIN" },
   });
   await prisma.user.create({
-    data: { id: "owner-1", email: "owner@example.com", role: "USER" },
-  });
-  await prisma.instagramAccount.create({
-    data: {
-      id: "acc-1",
-      instagramUserId: "ig-1",
-      username: "owner",
-      accessTokenEncrypted: "sealed",
-      tokenExpiresAt: new Date("2027-01-01T00:00:00.000Z"),
-      scopes: "instagram_business_basic",
-      connectedByUserId: "admin-1",
-    },
+    data: { id: UPLOADER, email: "uploader@example.com", role: "USER" },
   });
 });
 
@@ -214,7 +199,7 @@ beforeEach(async () => {
   await prisma.resaleRightsEvent.deleteMany({});
   await prisma.resaleRightsReview.deleteMany({});
   // A time-limited clearance, as an admin would have recorded it.
-  await setResaleRightsStatus("acc-1", {
+  await setResaleRightsStatus(UPLOADER, {
     source: "ADMIN",
     actorUserId: "admin-1",
     actorEmail: "admin@example.com",
@@ -223,14 +208,13 @@ beforeEach(async () => {
     route: "CONTRACT",
     validUntil: VALID_UNTIL,
     conditions: "Editorial use only.",
-    clearedOwnerUserId: "owner-1",
   });
 });
 
 describe("the whole row round-trips", () => {
   /**
-   * The generalised version of the two fail-opens found in review, and the
-   * reason this is a loop rather than a list of fields: both bugs were "a
+   * The generalised version of the fail-opens found in review, and the
+   * reason this is a loop rather than a list of fields: all of them were "a
    * form field that does not round-trip its stored value", and a per-field
    * assertion only catches the fields someone thought to name. This walks
    * every column of the stored review, so a field added later is covered
@@ -238,7 +222,7 @@ describe("the whole row round-trips", () => {
    */
   it("changes nothing but the reviewer stamp when only the reason is edited", async () => {
     // Populate every writable column first, so nothing is trivially null.
-    await setResaleRightsStatus("acc-1", {
+    await setResaleRightsStatus(UPLOADER, {
       source: "ADMIN",
       actorUserId: "admin-1",
       actorEmail: "admin@example.com",
@@ -247,14 +231,16 @@ describe("the whole row round-trips", () => {
       route: "CONTRACT",
       validUntil: VALID_UNTIL,
       conditions: "Editorial use only.",
-      clearedOwnerUserId: "owner-1",
-      evidence: { key: "rights-evidence/acc-1/contract.pdf", sha256: "abc123" },
+      evidence: {
+        key: "rights-evidence/uploader-1/contract.pdf",
+        sha256: "abc123",
+      },
       restampChecklist: true,
     });
 
     const before = await storedReview();
 
-    const form = await renderFormForAccount();
+    const form = await renderFormForUploader();
     form.set("reason", "Filing the same decision again, with a clearer note.");
     await expectRedirect(form, "rights=recorded");
 
@@ -276,15 +262,45 @@ describe("the whole row round-trips", () => {
     );
     expect(after.reviewedByUserId).toBe("admin-1");
   });
+
+  /**
+   * ugcportal-vsm: the anchor is not a form field, and the round-trip has to
+   * say so. `uploaderUserId` is rendered as a hidden input carrying the
+   * uploader the page opened the form for — it identifies the record rather
+   * than being a value the reviewer edits, and a POST naming a different
+   * uploader writes a different row rather than re-pointing this one.
+   */
+  it("writes the uploader the form was rendered for, and no other", async () => {
+    await prisma.user.create({
+      data: { id: "uploader-2", email: "second@example.com", role: "USER" },
+    });
+
+    const form = await renderFormForUploader();
+    expect(form.get("uploaderUserId")).toBe(UPLOADER);
+    form.set("uploaderUserId", "uploader-2");
+    form.set("status", "CLEARED");
+    form.set("reason", "A decision about a different person entirely.");
+    await expectRedirect(form, "rights=recorded");
+
+    // The first uploader's clearance is untouched...
+    expect((await storedReview()).status).toBe("CLEARED");
+    // ...and the second got their own row rather than inheriting one.
+    const second = await prisma.resaleRightsReview.findUniqueOrThrow({
+      where: { uploaderUserId: "uploader-2" },
+    });
+    expect(second.id).not.toBe((await storedReview()).id);
+
+    await prisma.user.delete({ where: { id: "uploader-2" } });
+  });
 });
 
 describe("editing one field does not silently change the others", () => {
   it("keeps validUntil when an admin only edits the conditions", async () => {
-    const form = await renderFormForAccount();
+    const form = await renderFormForUploader();
     // Exactly what the reviewer does: retype the conditions, state a reason,
     // submit. Nothing else is touched.
     form.set("conditions", "Editorial use only. No political advertising.");
-    form.set("reason", "Owner clarified the permitted uses.");
+    form.set("reason", "Uploader clarified the permitted uses.");
 
     await expectRedirect(form, "rights=recorded");
 
@@ -298,7 +314,7 @@ describe("editing one field does not silently change the others", () => {
   });
 
   it("keeps validUntil across a status change too", async () => {
-    const form = await renderFormForAccount();
+    const form = await renderFormForUploader();
     form.set("status", "IN_REVIEW");
     form.set("reason", "Re-checking the music layer.");
 
@@ -314,7 +330,7 @@ describe("editing one field does not silently change the others", () => {
   // rendered defaultValue is load-bearing rather than cosmetic — with the
   // field blank, every edit would take this branch.
   it("still lets an admin remove the expiry deliberately", async () => {
-    const form = await renderFormForAccount();
+    const form = await renderFormForUploader();
     form.set("validUntil", "");
     form.set("reason", "Contract renewed with no end date.");
 
@@ -326,108 +342,52 @@ describe("editing one field does not silently change the others", () => {
   // Same bug, different field. `checklistVersion` decides *which* checklist
   // a clearance was granted under, and dropping a version from
   // ACCEPTED_CHECKLIST_VERSIONS is how a revision to the legal process
-  // forces every account to be re-reviewed. Re-stamping it on any edit
+  // forces every uploader to be re-reviewed. Re-stamping it on any edit
   // quietly undoes that.
   it("keeps a retired checklistVersion when an admin only edits the conditions", async () => {
-    // The account was cleared, then the checklist was revised and the
-    // version it was cleared under retired.
+    // The uploader was cleared, then the checklist was revised and the
+    // version they were cleared under retired.
     await prisma.resaleRightsReview.update({
-      where: { instagramAccountId: "acc-1" },
+      where: { uploaderUserId: UPLOADER },
       data: { checklistVersion: RETIRED_VERSION },
     });
     expect(ACCEPTED_CHECKLIST_VERSIONS.has(RETIRED_VERSION)).toBe(false);
 
-    const form = await renderFormForAccount();
+    const form = await renderFormForUploader();
     form.set("conditions", "Editorial use only. No political advertising.");
-    form.set("reason", "Owner clarified the permitted uses.");
+    form.set("reason", "Uploader clarified the permitted uses.");
 
     await expectRedirect(form, "rights=recorded");
 
-    const review = await storedReview();
-    expect(review.checklistVersion).toBe(RETIRED_VERSION);
-    // And the account is still not sellable, which is the point of retiring
-    // a version in the first place.
-    expect(
-      accountClearanceBlocker({
-        status: review.status,
-        checklistVersion: review.checklistVersion,
-        reviewedByUserId: review.reviewedByUserId,
-        validUntil: review.validUntil,
-        reviewedBy: { role: "ADMIN" },
-        clearedOwnerUserId: review.clearedOwnerUserId,
-      }),
-    ).toBe("checklist_version_retired");
+    expect((await storedReview()).checklistVersion).toBe(RETIRED_VERSION);
+    // And nothing of theirs is sellable, which is the point of retiring a
+    // version in the first place.
+    expect(await blockerForStoredReview()).toBe("checklist_version_retired");
   });
 
   it("re-stamps only when the reviewer says they re-ran the checklist", async () => {
     await prisma.resaleRightsReview.update({
-      where: { instagramAccountId: "acc-1" },
+      where: { uploaderUserId: UPLOADER },
       data: { checklistVersion: RETIRED_VERSION },
     });
 
-    const form = await renderFormForAccount();
+    const form = await renderFormForUploader();
     form.set("reason", "Re-reviewed against the new checklist; still clear.");
     // What ticking the checkbox submits.
     form.set("restampChecklist", "yes");
 
     await expectRedirect(form, "rights=recorded");
 
-    const review = await storedReview();
-    expect(review.checklistVersion).toBe(CURRENT_CHECKLIST_VERSION);
-    expect(
-      accountClearanceBlocker({
-        status: review.status,
-        checklistVersion: review.checklistVersion,
-        reviewedByUserId: review.reviewedByUserId,
-        validUntil: review.validUntil,
-        reviewedBy: { role: "ADMIN" },
-        clearedOwnerUserId: review.clearedOwnerUserId,
-      }),
-    ).toBeNull();
-  });
-
-  /**
-   * The page caps the rights-holder list, so an instance with more users
-   * than the cap renders a form whose select does not contain the recorded
-   * holder. The browser then submits the blank first option and the handler
-   * reads it as "clear it" — erasing whose rights were cleared, and making
-   * the account unsellable, because someone edited the conditions text.
-   *
-   * Same bug family as validUntil, one level up: the field round-trips
-   * correctly and the *option list* is what loses the value.
-   */
-  it("keeps a rights holder who is outside the page's slice of users", async () => {
-    // The form as an instance past the cap would render it: the recorded
-    // holder is not among the users handed to the component.
-    const form = await renderFormForAccount([
-      { id: "someone-else", name: "Someone Else", email: "else@example.com" },
-    ]);
-    expect(form.get("clearedOwnerUserId")).toBe("owner-1");
-
-    form.set("conditions", "Editorial use only. Updated.");
-    form.set("reason", "Clarified the permitted uses.");
-    await expectRedirect(form, "rights=recorded");
-
-    const review = await storedReview();
-    expect(review.clearedOwnerUserId).toBe("owner-1");
-    // And the account is still sellable at the account level, which is what
-    // the erasure would have broken.
-    expect(
-      accountClearanceBlocker({
-        status: review.status,
-        checklistVersion: review.checklistVersion,
-        reviewedByUserId: review.reviewedByUserId,
-        validUntil: review.validUntil,
-        reviewedBy: { role: "ADMIN" },
-        clearedOwnerUserId: review.clearedOwnerUserId,
-      }),
-    ).toBeNull();
+    expect((await storedReview()).checklistVersion).toBe(
+      CURRENT_CHECKLIST_VERSION,
+    );
+    expect(await blockerForStoredReview()).toBeNull();
   });
 
   it("carries the rendered expiry through as the same instant", async () => {
-    // Guards the format seam: the form writes YYYY-MM-DD, the action parses
+    // Guards the format seam: the form writes YYYY-MM-DD, the handler parses
     // it back. A local-time formatter on either side moves the expiry a day.
-    const form = await renderFormForAccount();
+    const form = await renderFormForUploader();
     expect(form.get("validUntil")).toBe("2027-06-01");
     form.set("reason", "No change.");
 
@@ -437,93 +397,64 @@ describe("editing one field does not silently change the others", () => {
       "2027-06-01T00:00:00.000Z",
     );
   });
+
+  /**
+   * The handler must not depend on its own UI being the only caller. A POST
+   * that simply omits an optional field — a partial request, a future form
+   * that drops it — leaves the stored value alone; only an explicit blank
+   * clears it.
+   */
+  it("leaves every optional field alone on a POST that omits them", async () => {
+    const form = new FormData();
+    form.set("uploaderUserId", UPLOADER);
+    form.set("status", "CLEARED");
+    form.set("reason", "A partial POST that is not this form.");
+
+    await expectRedirect(form, "rights=recorded");
+
+    const review = await storedReview();
+    expect(review.validUntil?.toISOString()).toBe(VALID_UNTIL.toISOString());
+    expect(review.route).toBe("CONTRACT");
+    expect(review.conditions).toBe("Editorial use only.");
+  });
 });
 
-describe("disconnecting revokes before it deletes", () => {
+describe("the audit trail outlives the uploader", () => {
   /**
-   * Checklist Part E.3: admin disconnect → REVOKED. Without it, the audit
-   * trail for a disconnected account ends on `toStatus = CLEARED` — the
-   * trail survives the account (it has no foreign keys, by design) but its
-   * last entry describes rights that ended when the account went away.
+   * ugcportal-0ss protected this against one click of Disconnect. The
+   * re-anchoring moves the trigger — deleting a user now cascades the review
+   * away — so the same property is asserted against the new anchor rather
+   * than assumed to have survived the move.
    */
-  function disconnectForm(id = "acc-1"): FormData {
-    const data = new FormData();
-    data.set("id", id);
-    return data;
-  }
+  it("keeps every event when the uploader's account is deleted", async () => {
+    const before = await prisma.resaleRightsEvent.findMany({
+      where: { subjectId: UPLOADER },
+    });
+    expect(before.length).toBeGreaterThan(0);
 
-  it("ends the trail at REVOKED, naming the admin who disconnected", async () => {
-    expect((await storedReview()).status).toBe("CLEARED");
+    await prisma.user.delete({ where: { id: UPLOADER } });
 
-    await disconnectInstagramAccount(disconnectForm());
-
-    expect(
-      await prisma.instagramAccount.findUnique({ where: { id: "acc-1" } }),
-    ).toBeNull();
-    // Cascades with the account, as intended: this is current state.
+    // Cascades with the user, as intended: this is current state.
     expect(
       await prisma.resaleRightsReview.findUnique({
-        where: { instagramAccountId: "acc-1" },
+        where: { uploaderUserId: UPLOADER },
       }),
     ).toBeNull();
 
-    const trail = await prisma.resaleRightsEvent.findMany({
-      where: { instagramAccountId: "acc-1" },
-      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    const after = await prisma.resaleRightsEvent.findMany({
+      where: { subjectId: UPLOADER },
     });
-    const last = trail.at(-1)!;
-    expect(last).toMatchObject({
-      fromStatus: "CLEARED",
-      toStatus: "REVOKED",
-      reason: "Account disconnected by an admin.",
-      // Named as the trigger...
+    expect(after).toHaveLength(before.length);
+    expect(after.at(-1)).toMatchObject({
+      subjectKind: "UPLOADER",
+      subjectLabel: "uploader@example.com",
+      toStatus: "CLEARED",
       actorUserId: "admin-1",
-      actorEmail: "admin@example.com",
-      instagramUsername: "owner",
     });
-    // ...but never as the reviewer: disconnecting is not reviewing. The
-    // clearing decision above is still the one that carries selfReview.
-    expect(last.selfReview).toBe(false);
-  });
 
-  it("is a no-op on an account that is already gone", async () => {
-    await disconnectInstagramAccount(disconnectForm());
-    const before = await prisma.resaleRightsEvent.count();
-
-    // Double submit, or a stale tab.
-    await disconnectInstagramAccount(disconnectForm());
-
-    expect(await prisma.resaleRightsEvent.count()).toBe(before);
-  });
-
-  it("refuses a non-admin, leaving both the account and the trail alone", async () => {
-    authMock.mockResolvedValue({ user: { id: "admin-1", role: "USER" } });
-
-    await expect(
-      disconnectInstagramAccount(disconnectForm()),
-    ).rejects.toThrow("Forbidden");
-
-    expect(
-      await prisma.instagramAccount.findUnique({ where: { id: "acc-1" } }),
-    ).not.toBeNull();
-    expect((await storedReview()).status).toBe("CLEARED");
-  });
-
-  // Restores the account for whatever runs next, since beforeEach only
-  // rebuilds the review.
-  afterEach(async () => {
-    await prisma.instagramAccount.upsert({
-      where: { id: "acc-1" },
-      update: {},
-      create: {
-        id: "acc-1",
-        instagramUserId: "ig-1",
-        username: "owner",
-        accessTokenEncrypted: "sealed",
-        tokenExpiresAt: new Date("2027-01-01T00:00:00.000Z"),
-        scopes: "instagram_business_basic",
-        connectedByUserId: "admin-1",
-      },
+    // Restore for whatever runs next; beforeEach only rebuilds the review.
+    await prisma.user.create({
+      data: { id: UPLOADER, email: "uploader@example.com", role: "USER" },
     });
   });
 });

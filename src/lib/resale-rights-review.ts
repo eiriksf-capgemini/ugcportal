@@ -17,13 +17,18 @@ import {
 /**
  * The only writer of ResaleRightsReview.status in the codebase
  * (ugcportal-0ss K4, checklist Part E.3). Everything that changes an
- * account's resale-rights position goes through here so that:
+ * uploader's resale-rights position goes through here so that:
  *
  *   - `CLEARED` is unreachable except from an authenticated ADMIN. It is not
  *     merely "not done elsewhere": the SYSTEM branch of the input type cannot
- *     express it, so a sync job or callback that tried would not compile, and
- *     a JS caller that bypassed the types is refused at runtime below.
+ *     express it, so a sweep or callback that tried would not compile, and a
+ *     JS caller that bypassed the types is refused at runtime below.
  *   - every transition leaves a ResaleRightsEvent row behind.
+ *
+ * The subject is the uploader (ugcportal-vsm), not a connected Instagram
+ * account. The audit rows written here are stamped `UPLOADER`; rows written
+ * before the re-anchoring are stamped `INSTAGRAM_ACCOUNT` and are still
+ * there, which is the point of a table with no foreign keys.
  *
  * Authorization is the caller's job (see requireAdmin in src/lib/admin.ts) —
  * the same split roles.ts uses. What this module does add is a second,
@@ -45,23 +50,17 @@ export type ResaleRightsTransition =
       route?: ResaleRightsRoute | null;
       validUntil?: Date | null;
       conditions?: string | null;
-      /**
-       * The user whose uploads this clearance covers. Absent leaves it as it
-       * was; explicit null clears it. A CLEARED review without one sells
-       * nothing — the gate has no owner to compare a file against.
-       */
-      clearedOwnerUserId?: string | null;
       evidence?: { key: string; sha256: string } | null;
       /**
        * Re-stamp `checklistVersion` (and `productDecisionRef`) to what is
        * currently in force — an assertion that the reviewer has just worked
-       * the account through *today's* checklist, not last year's.
+       * the uploader through *today's* checklist, not last year's.
        *
        * Default false, and that matters. Retiring a checklist version is how
        * a revision to the legal process forces re-review: the gate stops
        * accepting clearances granted under the old one. If every admin write
        * re-stamped the version, an admin fixing a typo in the conditions
-       * would silently re-validate an account the process had deliberately
+       * would silently re-validate an uploader the process had deliberately
        * suspended — the same shape of bug as a form field that resets to its
        * permissive value. A re-stamp has to be asked for.
        *
@@ -72,20 +71,19 @@ export type ResaleRightsTransition =
     }
   | {
       /**
-       * Deauthorize callbacks (ugcportal-69p), the validity sweep, and admin
-       * disconnect. May only move an account *away* from sellable.
+       * The validity sweep, and any future unattended path. May only move an
+       * uploader *away* from sellable.
        */
       source: "SYSTEM";
       status: SystemSettableStatus;
       reason: string;
       /**
-       * The human who triggered it, where there is one — an admin clicking
-       * Disconnect. Recorded on the audit row only, never as
-       * `reviewedByUserId`: triggering a revocation is not reviewing an
-       * account, and writing them in as the reviewer of record would forge
-       * a review that never happened.
+       * The human who triggered it, where there is one. Recorded on the audit
+       * row only, never as `reviewedByUserId`: triggering a revocation is not
+       * reviewing an uploader, and writing them in as the reviewer of record
+       * would forge a review that never happened.
        *
-       * Null for a genuinely unattended transition (a callback, a sweep).
+       * Null for a genuinely unattended transition (a sweep, a callback).
        */
       triggeredByUserId?: string | null;
       triggeredByEmail?: string | null;
@@ -94,19 +92,19 @@ export type ResaleRightsTransition =
 export type SetResaleRightsStatusResult =
   | { outcome: "recorded"; reviewId: string; selfReview: boolean }
   | { outcome: "unchanged"; reviewId: string }
-  | { outcome: "account_not_found" }
+  | { outcome: "uploader_not_found" }
   | { outcome: "actor_not_admin" }
   | { outcome: "forbidden_system_transition" }
-  /** Another decision on the same account landed first — retry on a re-read. */
+  /** Another decision on the same uploader landed first — retry on a re-read. */
   | { outcome: "conflict" }
-  /** A user this decision points at (rights holder, reviewer) is gone. */
+  /** A user this decision points at (the uploader, the reviewer) is gone. */
   | { outcome: "missing_reference" };
 
 /**
  * Database errors this function answers with an outcome rather than a throw,
  * because each is a race a user can legitimately lose rather than a fault:
  *
- *   P2002 unique violation   — two first decisions on one account
+ *   P2002 unique violation   — two first decisions on one uploader
  *   P2003 foreign key        — a row this decision names was deleted
  *                              mid-form; which one decides the outcome, see
  *                              foreignKeyOutcome below
@@ -124,7 +122,7 @@ export type SetResaleRightsStatusResult =
  * that never gets looked at. The list is short and each entry names the race
  * it stands for; anything else is a real failure and stays loud.
  */
-type RaceOutcome = "conflict" | "missing_reference" | "account_not_found";
+type RaceOutcome = "conflict" | "missing_reference" | "uploader_not_found";
 
 const RACE_OUTCOMES: Record<string, RaceOutcome> = {
   [PRISMA_UNIQUE_VIOLATION]: "conflict",
@@ -135,23 +133,22 @@ const RACE_OUTCOMES: Record<string, RaceOutcome> = {
 /**
  * Which foreign key a P2003 was about, if the driver said.
  *
- * Three FKs on this row can raise it — the account, the rights holder and
- * the reviewer — and they need different answers. Reporting all of them as
- * "the rights holder no longer exists, pick someone still here" is advice
- * that cannot work when the account is what vanished, and points the admin
- * at the wrong record.
+ * Two FKs on this row can raise it — the uploader and the reviewer — and
+ * they need different answers. Reporting both as "the reviewer no longer
+ * exists" is advice that cannot work when the uploader is what vanished, and
+ * points the admin at the wrong record.
  *
  * The field name is matched loosely because its shape differs by connector:
  * SQLite reports something like
- * `ResaleRightsReview_instagramAccountId_fkey (index)`, Postgres the bare
- * column. When it cannot be attributed, the fallback is a message that
- * names both possibilities rather than guessing one.
+ * `ResaleRightsReview_uploaderUserId_fkey (index)`, Postgres the bare
+ * column. When it cannot be attributed, the fallback is a message that names
+ * both possibilities rather than guessing one.
  */
 function foreignKeyOutcome(error: unknown): RaceOutcome {
   const field = (error as { meta?: { field_name?: unknown } })?.meta
     ?.field_name;
-  return typeof field === "string" && field.includes("instagramAccountId")
-    ? "account_not_found"
+  return typeof field === "string" && field.includes("uploaderUserId")
+    ? "uploader_not_found"
     : "missing_reference";
 }
 
@@ -167,10 +164,10 @@ function raceOutcome(error: unknown): RaceOutcome | undefined {
 }
 
 /**
- * Record a resale-rights decision for one connected account.
+ * Record a resale-rights decision for one uploader.
  *
  * Returned outcomes rather than thrown errors, matching setUserRole: "that
- * account is gone" and "you are no longer an admin" are ordinary answers the
+ * user is gone" and "you are no longer an admin" are ordinary answers the
  * caller renders, not exceptional conditions.
  *
  * Concurrency, honestly: the read of the current status and the write of the
@@ -185,7 +182,7 @@ function raceOutcome(error: unknown): RaceOutcome | undefined {
  * transaction opens, not by what the read returned.
  */
 export async function setResaleRightsStatus(
-  instagramAccountId: string,
+  uploaderUserId: string,
   transition: ResaleRightsTransition,
 ): Promise<SetResaleRightsStatusResult> {
   // Runtime half of the type-level guarantee above: a plain-JS caller, or a
@@ -209,12 +206,12 @@ export async function setResaleRightsStatus(
   }
 
   return prisma.$transaction(async (tx) => {
-    const account = await tx.instagramAccount.findUnique({
-      where: { id: instagramAccountId },
-      select: { id: true, username: true, connectedByUserId: true },
+    const uploader = await tx.user.findUnique({
+      where: { id: uploaderUserId },
+      select: { id: true, email: true },
     });
-    if (!account) {
-      return { outcome: "account_not_found" } as const;
+    if (!uploader) {
+      return { outcome: "uploader_not_found" } as const;
     }
 
     if (transition.source === "ADMIN") {
@@ -228,14 +225,14 @@ export async function setResaleRightsStatus(
     }
 
     const existing = await tx.resaleRightsReview.findUnique({
-      where: { instagramAccountId },
+      where: { uploaderUserId },
       select: { id: true, status: true },
     });
 
-    // A system transition that changes nothing writes nothing: a deauthorize
-    // callback retried five times should not produce five REVOKED rows. An
-    // admin re-affirming the same status *is* recorded, because re-clearing
-    // with fresh evidence or a new validity window is a real decision.
+    // A system transition that changes nothing writes nothing: a sweep run
+    // five times should not produce five REVOKED rows. An admin re-affirming
+    // the same status *is* recorded, because re-clearing with fresh evidence
+    // or a new validity window is a real decision.
     if (
       transition.source === "SYSTEM" &&
       existing &&
@@ -245,9 +242,13 @@ export async function setResaleRightsStatus(
     }
 
     const now = new Date();
+    // Separation of duties, re-anchored (ugcportal-vsm): the conflict of
+    // interest is now an admin clearing their OWN uploads for sale, which is
+    // the same shape of conflict as ugcportal-0ss's "reviewed by the admin
+    // who connected the account" and a more direct one.
     const selfReview =
       transition.source === "ADMIN" &&
-      transition.actorUserId === account.connectedByUserId;
+      transition.actorUserId === uploaderUserId;
 
     const adminFields =
       transition.source === "ADMIN"
@@ -256,13 +257,12 @@ export async function setResaleRightsStatus(
             reviewedAt: now,
             // Absent (`undefined`) leaves the column as it was; an explicit
             // `null` clears it. Spelled this way so that rejecting or
-            // revoking an account doesn't silently wipe the evidence pointer
-            // to the contract it was cleared under — that object still
-            // exists in the bucket, and losing the key loses the audit.
+            // revoking an uploader doesn't silently wipe the evidence
+            // pointer to the contract it was cleared under — that object
+            // still exists in the bucket, and losing the key loses the audit.
             route: transition.route,
             validUntil: transition.validUntil,
             conditions: transition.conditions,
-            clearedOwnerUserId: transition.clearedOwnerUserId,
             evidenceKey:
               transition.evidence === null ? null : transition.evidence?.key,
             evidenceSha256:
@@ -271,7 +271,7 @@ export async function setResaleRightsStatus(
             // are only written when the reviewer says they have just worked
             // through X — otherwise `undefined` leaves the stored answer
             // alone. Restamping them on every edit would let a typo fix
-            // re-validate an account whose checklist version had been
+            // re-validate an uploader whose checklist version had been
             // retired, or silently re-attribute a clearance to a product
             // decision that was taken after it.
             //
@@ -290,7 +290,12 @@ export async function setResaleRightsStatus(
     // The written row is read back rather than reconstructed, so the audit
     // snapshot below records what the review *actually* says after the write
     // — including fields this transition left alone.
-    const snapshot = { id: true, checklistVersion: true, evidenceKey: true, evidenceSha256: true };
+    const snapshot = {
+      id: true,
+      checklistVersion: true,
+      evidenceKey: true,
+      evidenceSha256: true,
+    };
     let review;
     try {
       review = existing
@@ -301,11 +306,11 @@ export async function setResaleRightsStatus(
           })
         : await tx.resaleRightsReview.create({
             data: {
-              instagramAccountId,
+              uploaderUserId,
               status: transition.status,
-              // First decision on this account: there is no stored version
+              // First decision on this uploader: there is no stored version
               // to preserve, and the form the reviewer just used is the
-              // current one. (A SYSTEM-created row — a revoke on an account
+              // current one. (A SYSTEM-created row — a revoke on an uploader
               // nobody reviewed — gets the same stamp; it is meaningless
               // there, but the column is required and the row is never
               // sellable.)
@@ -322,11 +327,11 @@ export async function setResaleRightsStatus(
       // adapter-libsql opens `deferred` transactions — so every row this
       // write depends on can move underneath it:
       //
-      //   * two first decisions on one account both see no existing row and
+      //   * two first decisions on one uploader both see no existing row and
       //     both create one; the unique index picks a winner (P2002)
-      //   * the rights holder named on the form is deleted between render
-      //     and submit; the foreign key refuses the write (P2003 — libsql
-      //     does enforce foreign keys)
+      //   * the uploader or the reviewer is deleted between render and
+      //     submit; the foreign key refuses the write (P2003 — libsql does
+      //     enforce foreign keys)
       //   * the review row is deleted between the read above and the update
       //     (P2025)
       //
@@ -344,16 +349,16 @@ export async function setResaleRightsStatus(
       data: {
         reviewId: review.id,
         // Snapshotted, not joined: this row has to still read sensibly after
-        // the account is disconnected and both it and the review are gone.
-        instagramAccountId,
-        instagramUsername: account.username,
-        // No row yet means the account was UNREVIEWED by definition, which is
-        // what the gate treated it as — so record that, not null.
+        // the uploader is deleted and both they and the review are gone.
+        subjectKind: "UPLOADER",
+        subjectId: uploaderUserId,
+        subjectLabel: uploader.email,
+        // No row yet means the uploader was UNREVIEWED by definition, which
+        // is what the gate treated them as — so record that, not null.
         fromStatus: existing ? existing.status : "UNREVIEWED",
         toStatus: transition.status,
         // For a system transition this is whoever triggered it, if anyone —
-        // an admin clicking Disconnect is named here without being recorded
-        // as the account's reviewer.
+        // named here without being recorded as the reviewer of record.
         actorUserId:
           transition.source === "ADMIN"
             ? transition.actorUserId

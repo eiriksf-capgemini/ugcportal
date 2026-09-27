@@ -8,11 +8,7 @@ import {
 } from "@/lib/prisma-errors";
 import { readJsonBody } from "@/lib/request-body";
 import { prisma } from "@/lib/prisma";
-import {
-  CURATED_POST_GATE_SELECT,
-  evaluateSellability,
-  loadGateMedia,
-} from "@/lib/resale-rights";
+import { MEDIA_GATE_SELECT, evaluateSellability } from "@/lib/resale-rights";
 
 // App Router hands dynamic segments in as a Promise (Next 16).
 type RouteContext = { params: Promise<{ id: string }> };
@@ -82,19 +78,21 @@ function parsePriceInput(body: unknown): ParseResult {
 }
 
 /**
- * Set (or clear) the price on a curated post — the price-setting endpoint
- * ugcportal-0ss K1 gates and ugcportal-74w will drive from its UI.
+ * Set (or clear) the price on one listed upload — the price-setting endpoint
+ * ugcportal-0ss K1 gates and ugcportal-74w will drive from its UI. `[id]` is
+ * a MediaListing id (ugcportal-vsm renamed the model from CuratedPost; the
+ * endpoint's contract is unchanged).
  *
  * Three refusals, deliberately distinct:
  *   403 — not an admin. Same answer for signed-out and signed-in non-admin.
- *   404 — no such curated post.
- *   422 — the post exists and the caller is allowed, but the account it
- *         belongs to has no closed resale-rights clearance (or the post is
- *         not triaged). The request is well-formed; the state forbids it.
+ *   404 — no such listing.
+ *   422 — the listing exists and the caller is allowed, but its uploader has
+ *         no current resale-rights clearance, or the upload itself is not
+ *         triaged. The request is well-formed; the state forbids it.
  *
  * `{"priceCents": null}` — un-pricing — is **not** gated. The gate exists to
  * stop things being offered for sale; refusing to *withdraw* an offer would
- * point it backwards, and would strand a price on exactly the accounts that
+ * point it backwards, and would strand a price on exactly the uploaders that
  * just lost their clearance. An admin can always take something off sale.
  *
  * The gate read and the write share a transaction. Note honestly what that
@@ -102,7 +100,7 @@ function parsePriceInput(body: unknown): ParseResult {
  * as `deferred` (the known issue recorded on ugcportal-lu7 about
  * src/lib/roles.ts), so this does not serialise against a concurrent
  * revocation — a revoke committing between the read and the write can leave
- * a price set on a no-longer-cleared post. Two things make that survivable,
+ * a price set on a no-longer-cleared upload. Two things make that survivable,
  * and both are load-bearing: a price is not a sale, because the catalogue and
  * checkout evaluate this same gate again at render and at payment (Part E.3,
  * and an acceptance criterion on ugcportal-74w and ugcportal-p3v); and the
@@ -138,28 +136,30 @@ export async function POST(request: Request, { params }: RouteContext) {
   const unpricing = parsed.value.priceCents === null;
 
   const result = await prisma.$transaction(async (tx) => {
-    const post = await tx.curatedPost.findUnique({
-      where: { id },
-      select: CURATED_POST_GATE_SELECT,
+    // Read from the Media side, not the listing side, and with the shared
+    // select rather than a local one. That is what makes the clearance this
+    // endpoint checks the clearance of the file's own uploader: the path
+    // from the file to its review lives in MEDIA_GATE_SELECT, so there is
+    // nothing here that could point somewhere else. One query, no reshaping.
+    const upload = await tx.media.findFirst({
+      where: { listing: { id } },
+      select: MEDIA_GATE_SELECT,
     });
-    if (!post) {
+    // No listing with that id — or, impossible behind the foreign key but
+    // answered the same way, no file behind it.
+    if (!upload) {
       return { kind: "not_found" } as const;
     }
 
     if (!unpricing) {
-      // Second read, inside the same transaction, because mediaId has no
-      // foreign key to join on yet. The gate needs the Media row to check
-      // that the file being priced belongs to the party the clearance
-      // covers.
-      const media = await loadGateMedia(tx, post.mediaId);
-      const gate = evaluateSellability({ ...post, media });
+      const gate = evaluateSellability(upload);
       if (!gate.sellable) {
         return { kind: "blocked", blocker: gate.blocker } as const;
       }
     }
 
     try {
-      const updated = await tx.curatedPost.update({
+      const updated = await tx.mediaListing.update({
         where: { id },
         data: {
           priceCents: parsed.value.priceCents,
@@ -174,7 +174,7 @@ export async function POST(request: Request, { params }: RouteContext) {
       return { kind: "ok", post: updated } as const;
     } catch (error) {
       // The gate read above and this write are not serialised (deferred
-      // transactions again), so the post can be deleted in between. That is
+      // transactions again), so the listing can be deleted in between. That is
       // the same 404 the caller would have got a moment earlier, not a
       // server fault — and answering it as one on an endpoint that maps
       // 403/404/422 deliberately would be the odd one out.

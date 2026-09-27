@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  BLOCKER_MESSAGES,
-  outcomeMessage,
-} from "@/app/admin/settings/instagram/outcomes";
+import { outcomeMessage } from "@/app/admin/settings/instagram/outcomes";
 
 describe("outcomeMessage", () => {
   it("resolves every code the callback can redirect with", () => {
@@ -12,22 +9,21 @@ describe("outcomeMessage", () => {
       "invalid_state",
       "missing_code",
       "exchange_failed",
-      "rights_reason_required",
-      "rights_invalid_valid_until",
-      "rights_evidence_too_large",
-      "rights_evidence_failed",
-      "rights_account_not_found",
-      "rights_actor_not_admin",
     ]) {
       expect(outcomeMessage(code)).toBeTypeOf("string");
     }
   });
 
-  it("has a sentence for every sellability blocker", () => {
-    // The Record type makes a missing key a compile error; this checks the
-    // values are real sentences rather than empty strings.
-    for (const message of Object.values(BLOCKER_MESSAGES)) {
-      expect(message.length).toBeGreaterThan(10);
+  it("no longer answers for resale-rights codes", () => {
+    // They moved to ../rights/outcomes.ts with the gate (ugcportal-vsm).
+    // Asserted so the two modules cannot quietly both claim a code and
+    // disagree about what it means.
+    for (const code of [
+      "rights_reason_required",
+      "rights_actor_not_admin",
+      "rights_uploader_not_found",
+    ]) {
+      expect(outcomeMessage(code)).toBeUndefined();
     }
   });
 

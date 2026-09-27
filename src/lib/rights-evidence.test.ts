@@ -25,33 +25,33 @@ beforeEach(() => {
 });
 
 describe("rightsEvidenceKey", () => {
-  it("puts every file under the account's own private prefix", () => {
-    const key = rightsEvidenceKey("acc-1", "assignment.pdf");
-    expect(key.startsWith(`${RIGHTS_EVIDENCE_PREFIX}/acc-1/`)).toBe(true);
+  it("puts every file under the uploader's own private prefix", () => {
+    const key = rightsEvidenceKey("uploader-1", "assignment.pdf");
+    expect(key.startsWith(`${RIGHTS_EVIDENCE_PREFIX}/uploader-1/`)).toBe(true);
     expect(key.endsWith("-assignment.pdf")).toBe(true);
   });
 
   it("cannot be walked out of the prefix by a hostile filename", () => {
-    const key = rightsEvidenceKey("acc-1", "../../../uploads/original.jpg");
+    const key = rightsEvidenceKey("uploader-1", "../../../uploads/original.jpg");
     expect(key).not.toContain("..");
-    // prefix / account / object — three segments, no more.
+    // prefix / uploader / object — three segments, no more.
     expect(key.split("/")).toHaveLength(3);
   });
 
   it("keeps a usable name when the filename sanitises to nothing", () => {
-    const key = rightsEvidenceKey("acc-1", "…");
+    const key = rightsEvidenceKey("uploader-1", "…");
     expect(key.endsWith("-evidence")).toBe(true);
   });
 
-  it("rejects an account id that isn't one", () => {
-    for (const id of ["../acc-2", "acc/1", "", "a".repeat(65), "acc 1"]) {
+  it("rejects an uploader id that isn't one", () => {
+    for (const id of ["../user-2", "user/1", "", "a".repeat(65), "user 1"]) {
       expect(() => rightsEvidenceKey(id, "x.pdf")).toThrow("Unsafe");
     }
   });
 
   it("never collides two uploads of the same filename", () => {
-    expect(rightsEvidenceKey("acc-1", "c.pdf")).not.toBe(
-      rightsEvidenceKey("acc-1", "c.pdf"),
+    expect(rightsEvidenceKey("uploader-1", "c.pdf")).not.toBe(
+      rightsEvidenceKey("uploader-1", "c.pdf"),
     );
   });
 });
@@ -61,7 +61,7 @@ describe("putRightsEvidence", () => {
 
   it("stores the file privately and returns its hash", async () => {
     const result = await putRightsEvidence({
-      instagramAccountId: "acc-1",
+      uploaderUserId: "uploader-1",
       filename: "assignment.pdf",
       body,
       contentType: "application/pdf",
@@ -77,7 +77,7 @@ describe("putRightsEvidence", () => {
       Key: result.key,
       ContentType: "application/pdf",
     });
-    expect(input.Key?.startsWith("rights-evidence/acc-1/")).toBe(true);
+    expect(input.Key?.startsWith("rights-evidence/uploader-1/")).toBe(true);
   });
 
   // A bucket with Object Ownership = "bucket owner enforced" rejects any ACL
@@ -87,7 +87,7 @@ describe("putRightsEvidence", () => {
   // the bucket's job. The media upload path sends none either.
   it("sends no ACL header at all", async () => {
     await putRightsEvidence({
-      instagramAccountId: "acc-1",
+      uploaderUserId: "uploader-1",
       filename: "a.pdf",
       body,
     });
@@ -101,7 +101,7 @@ describe("putRightsEvidence", () => {
   // fresh checkout, so it is opt-in.
   it("sends no encryption header unless one is configured", async () => {
     await putRightsEvidence({
-      instagramAccountId: "acc-1",
+      uploaderUserId: "uploader-1",
       filename: "a.pdf",
       body,
     });
@@ -113,7 +113,7 @@ describe("putRightsEvidence", () => {
     process.env.S3_EVIDENCE_SSE = "AES256";
 
     await putRightsEvidence({
-      instagramAccountId: "acc-1",
+      uploaderUserId: "uploader-1",
       filename: "a.pdf",
       body,
     });
@@ -127,7 +127,7 @@ describe("putRightsEvidence", () => {
     process.env.S3_EVIDENCE_SSE = "aes256";
 
     await putRightsEvidence({
-      instagramAccountId: "acc-1",
+      uploaderUserId: "uploader-1",
       filename: "a.pdf",
       body,
     });
@@ -137,7 +137,7 @@ describe("putRightsEvidence", () => {
 
   it("falls back to a neutral content type", async () => {
     await putRightsEvidence({
-      instagramAccountId: "acc-1",
+      uploaderUserId: "uploader-1",
       filename: "a.pdf",
       body,
       contentType: "",
@@ -145,10 +145,10 @@ describe("putRightsEvidence", () => {
     expect(lastPutInput().ContentType).toBe("application/octet-stream");
   });
 
-  it("uploads nothing when the account id is unsafe", async () => {
+  it("uploads nothing when the uploader id is unsafe", async () => {
     await expect(
       putRightsEvidence({
-        instagramAccountId: "../media",
+        uploaderUserId: "../media",
         filename: "a.pdf",
         body,
       }),

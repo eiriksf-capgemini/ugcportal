@@ -6,37 +6,71 @@ import {
 } from "@/generated/prisma/enums";
 
 /**
- * The sellability gate (ugcportal-0ss), implementing Part E.3 of
+ * The sellability gate (ugcportal-0ss, re-anchored by ugcportal-vsm),
+ * implementing Part E.3 of
  * docs/legal/instagram-resale-rights-checklist.md.
  *
- * Nothing from a connected Instagram account may be offered for sale until a
- * human ADMIN has recorded a clearance against that account. This module is
- * the single place that decides that, so curation (ugcportal-74w), checkout
- * (ugcportal-p3v) and the public catalogue cannot each grow their own
- * slightly different version of the rule.
+ * Nothing may be offered for sale until a human ADMIN has recorded a
+ * clearance for the person who uploaded it AND signed off what is in the
+ * file itself. This module is the single place that decides that, so
+ * curation (ugcportal-74w), checkout (ugcportal-p3v) and the public
+ * catalogue cannot each grow their own slightly different version of the
+ * rule.
  *
- * Everything here fails closed: a missing review row, an un-triaged post, an
- * unknown checklist version and a demoted reviewer all mean "not sellable".
- * There is no input that produces `true` by default.
+ * The grain is a hybrid, and the two halves answer different questions at
+ * different frequencies:
+ *
+ *   1. PER UPLOADER — ResaleRightsReview. "May this person's own work be
+ *      resold at all?" Asked once per person, expires, and stops counting
+ *      when the checklist version it was granted under is retired.
+ *   2. PER UPLOAD — MediaListing's triage plus a MediaRightsClearance per
+ *      rights layer that is actually present. "What is in this file?" An
+ *      identifiable person, licensed music, an uncredited collaborator and
+ *      undisclosed sponsorship are properties of the file, not of the
+ *      uploader, so a cleared uploader does not get to sell whatever they
+ *      upload next.
+ *
+ * WHERE THE REVIEW COMES FROM IS THE SECURITY PROPERTY. The gate starts at
+ * a Media row and follows `media.user.resaleRightsReview`. Nobody assembling
+ * a listing picks which clearance applies, so there is no second value for
+ * the owner check to disagree with — which is why ugcportal-0ss's
+ * `clearedOwnerUserId` comparison (and its `media_not_owned` /
+ * `rights_holder_not_recorded` blockers) are gone rather than ported. The
+ * only relation in MEDIA_GATE_SELECT that reaches a review is the file's own
+ * `user`, so a caller using it is reading the uploader's clearance by
+ * construction rather than by remembering to.
+ *
+ * Everything here fails closed: a missing review row, a missing listing, an
+ * un-triaged upload, an unknown checklist version and a demoted reviewer all
+ * mean "not sellable". There is no input that produces `true` by default.
  *
  * The predicate is pure; callers load the row themselves with
- * CURATED_POST_GATE_SELECT below (inside the same transaction as any write
- * they are gating) and pass it in. That keeps the rule in one place without
- * forcing every caller through one query shape.
+ * MEDIA_GATE_SELECT below (inside the same transaction as any write they are
+ * gating) and pass it in. That keeps the rule in one place without forcing
+ * every caller through one query shape.
  */
 
 /**
  * Checklist version currently in force — the string at the top of
  * docs/legal/instagram-resale-rights-checklist.md. New clearances are
  * recorded against this one.
+ *
+ * Bumped from `2026-09-24.1` by ugcportal-vsm. That version asked about the
+ * content of one connected Instagram account; this one asks about an
+ * uploader, and a clearance against an uploader authorises their entire past
+ * and future upload history. A different question about a different subject
+ * with a wider blast radius is precisely what retiring a version is for — see
+ * E.0 in the checklist. The bump retires nothing in practice, because the
+ * migration discarded every account-level clearance, which is exactly why it
+ * was cheap to do now and would not have been later.
  */
-export const CURRENT_CHECKLIST_VERSION = "2026-09-24.1";
+export const CURRENT_CHECKLIST_VERSION = "2026-09-27.1";
 
 /**
  * Versions a *past* clearance may still rely on. Revising the checklist in a
  * way that changes what the reviewer had to check means dropping the old
- * version from this set, which immediately makes every account cleared under
- * it unsellable until someone re-reviews it. That is the intended blast
+ * version from this set, which immediately makes every uploader cleared under
+ * it unsellable until someone re-reviews them. That is the intended blast
  * radius: the alternative is selling under a review that never asked the
  * question the revision added.
  */
@@ -46,10 +80,9 @@ export const ACCEPTED_CHECKLIST_VERSIONS: ReadonlySet<string> = new Set([
 
 /**
  * The product decision every clearance is currently made under: ugcportal-2eh
- * Option A — the Instagram API is used for DISCOVERY ONLY, and the file sold
- * is always the owner-uploaded original from ugcportal-8wa. Recorded on the
- * review row so a later reader can tell which decision the human was
- * applying.
+ * Option A — the file sold is always the owner-uploaded original from
+ * ugcportal-8wa. Recorded on the review row so a later reader can tell which
+ * decision the human was applying.
  */
 export const PRODUCT_DECISION_REF = "ugcportal-2eh";
 
@@ -82,21 +115,20 @@ export function isResaleRightsRoute(value: unknown): value is ResaleRightsRoute 
   );
 }
 
-/** Why a post is not sellable. Closed set, safe to render and to log. */
+/** Why an upload is not sellable. Closed set, safe to render and to log. */
 export type SellabilityBlocker =
   | "no_review"
   | "status_not_cleared"
   | "clearance_expired"
   | "checklist_version_retired"
   | "reviewer_not_admin"
+  | "upload_owner_unknown"
+  | "not_listed_for_sale"
   | "triage_incomplete"
   | "triage_not_signed_by_admin"
   | "model_release_missing"
   | "model_release_unverified"
-  | "third_party_layer_uncleared"
-  | "not_owner_supplied_original"
-  | "media_not_owned"
-  | "rights_holder_not_recorded";
+  | "third_party_layer_uncleared";
 
 export type SellabilityResult =
   | { sellable: true }
@@ -109,13 +141,11 @@ export type GateReview = {
   reviewedByUserId: string | null;
   validUntil: Date | null;
   reviewedBy: { role: Role } | null;
-  /** The user whose uploads this clearance covers. See `media` on GatePost. */
-  clearedOwnerUserId: string | null;
 };
 
 /**
  * One layer's justification, with the clearer's *current* role — re-read for
- * the same reason the account reviewer's is: a demotion has to take effect
+ * the same reason the uploader reviewer's is: a demotion has to take effect
  * on the clearances that person signed.
  */
 export type GateLayerClearance = {
@@ -126,22 +156,11 @@ export type GateLayerClearance = {
 };
 
 /**
- * A curated post as the gate sees it. Shaped like the Prisma row plus its
- * account's review, so callers can pass the result of
- * `CURATED_POST_GATE_SELECT` straight in.
+ * The sale record for one upload, as the gate sees it: the Part C triage and
+ * the per-layer justifications. Absent (`null` on the upload) means nobody
+ * has put this file forward for sale, which is not sellable.
  */
-export type GatePost = {
-  mediaId: string | null;
-  /**
-   * The referenced Media row, or null if there isn't one.
-   *
-   * Loaded separately by the caller (see `loadGateMedia`) because
-   * CuratedPost.mediaId has no Prisma relation yet — the Media model belongs
-   * to an in-flight branch. It is part of the gate input rather than an
-   * afterthought precisely because "does this file exist, and is it the
-   * right person's file" is a rights question, not a tidiness one.
-   */
-  media: { userId: string } | null;
+export type GateListing = {
   depictsPeople: boolean | null;
   modelReleaseKey: string | null;
   containsMusic: boolean | null;
@@ -157,41 +176,67 @@ export type GatePost = {
   triagedBy: { role: Role } | null;
   /** One justification per layer; see layerIsSettled. */
   layerClearances: GateLayerClearance[];
-  instagramAccount: { resaleRightsReview: GateReview | null } | null;
 };
 
 /**
- * Prisma `select` matching GatePost exactly. Shared so a caller can't forget
- * to load `reviewedBy.role` and quietly get `reviewer_not_admin` — or, worse,
- * hand-roll a narrower select that omits a field the gate checks.
+ * An upload as the gate sees it: the Media row, its uploader's standing
+ * review, and its sale record.
+ *
+ * Shaped like the Prisma row so callers can pass the result of
+ * MEDIA_GATE_SELECT straight in. Note the direction — the review hangs off
+ * `user`, i.e. off the column that says who uploaded the file. That is the
+ * anchor, and it is why this type has no "whose rights were cleared" field
+ * to compare against.
  */
-export const CURATED_POST_GATE_SELECT = {
-  mediaId: true,
-  depictsPeople: true,
-  modelReleaseKey: true,
-  containsMusic: true,
-  thirdPartyCreator: true,
-  sponsoredContent: true,
-  triagedByUserId: true,
-  triagedBy: { select: { role: true } },
-  layerClearances: {
+export type GateUpload = {
+  userId: string | null;
+  user: { resaleRightsReview: GateReview | null } | null;
+  listing: GateListing | null;
+};
+
+/**
+ * The review columns the gate reads, named separately from the select below
+ * so the nesting stays legible — this is the part that hangs off `user`,
+ * which is the whole argument of this module.
+ */
+const REVIEW_GATE_SELECT = {
+  status: true,
+  checklistVersion: true,
+  reviewedByUserId: true,
+  validUntil: true,
+  reviewedBy: { select: { role: true } },
+} as const;
+
+/**
+ * Prisma `select` matching GateUpload exactly, rooted at Media. Shared so a
+ * caller can't forget to load `reviewedBy.role` and quietly get
+ * `reviewer_not_admin` — or, worse, hand-roll a narrower select that omits a
+ * field the gate checks.
+ *
+ * Rooted at Media rather than at the listing on purpose: the path from the
+ * file to the clearance that governs it (`user.resaleRightsReview`) is
+ * written down here, once, instead of being re-derived by each caller. A
+ * caller cannot substitute a different user's review without abandoning this
+ * constant, which is a visible act rather than an omission.
+ */
+export const MEDIA_GATE_SELECT = {
+  userId: true,
+  user: { select: { resaleRightsReview: { select: REVIEW_GATE_SELECT } } },
+  listing: {
     select: {
-      layer: true,
-      reason: true,
-      clearedByUserId: true,
-      clearedBy: { select: { role: true } },
-    },
-  },
-  instagramAccount: {
-    select: {
-      resaleRightsReview: {
+      depictsPeople: true,
+      modelReleaseKey: true,
+      containsMusic: true,
+      thirdPartyCreator: true,
+      sponsoredContent: true,
+      triagedByUserId: true,
+      triagedBy: { select: { role: true } },
+      layerClearances: {
         select: {
-          status: true,
-          checklistVersion: true,
-          reviewedByUserId: true,
-          validUntil: true,
-          clearedOwnerUserId: true,
-          reviewedBy: { select: { role: true } },
+          layer: true,
+          reason: true,
+          clearedByUserId: true,
+          clearedBy: { select: { role: true } },
         },
       },
     },
@@ -222,62 +267,28 @@ function isTriaged(value: unknown): value is boolean {
   return typeof value === "boolean";
 }
 
-/** Just enough of a Media row for the gate; never `key`, never the bytes. */
-export const GATE_MEDIA_SELECT = { userId: true } as const;
-
-/**
- * Loads the Media row a curated post points at, for the ownership check.
- *
- * A second query rather than a join because CuratedPost.mediaId has no
- * Prisma relation — the Media model is owned by an in-flight branch
- * (ugcportal-r1d), and ugcportal-vsm will re-anchor all of this to uploads
- * anyway. Collapse it into a single read with an `include` once one of those
- * has landed; the predicate does not care which way the row arrived.
- *
- * Takes the client so a caller can pass a transaction and have the
- * ownership check see the same snapshot as the rest of its work.
- */
-export async function loadGateMedia(
-  client: {
-    media: {
-      findUnique: (args: {
-        where: { id: string };
-        select: typeof GATE_MEDIA_SELECT;
-      }) => Promise<{ userId: string } | null>;
-    };
-  },
-  mediaId: string | null,
-): Promise<{ userId: string } | null> {
-  if (!mediaId || !mediaId.trim()) {
-    return null;
-  }
-  return client.media.findUnique({
-    where: { id: mediaId },
-    select: GATE_MEDIA_SELECT,
-  });
-}
-
 /**
  * True when *this specific layer* carries a justification an admin signed.
  *
- * Per layer, not per post. An earlier revision took any post-level clearance
- * as settling all three, so a post cleared with "music licence purchased"
- * became sellable with an untriaged third-party creator and an untriaged
- * sponsorship attached — one answer standing in for three unrelated
- * questions, in a module whose contract is that nothing passes by default.
+ * Per layer, not per upload. An earlier revision took any item-level
+ * clearance as settling all three, so an upload cleared with "music licence
+ * purchased" became sellable with an untriaged third-party creator and an
+ * untriaged sponsorship attached — one answer standing in for three
+ * unrelated questions, in a module whose contract is that nothing passes by
+ * default.
  *
  * The clearer's role is re-read here rather than trusted from write time,
- * exactly as accountClearanceBlocker does for the account reviewer: a
- * justification signed by someone since demoted is not one this instance
- * stands behind. Without it, a demoted admin's layer clearances quietly
- * survive as long as some *other* admin signed the account.
+ * exactly as uploaderClearanceBlocker does for the reviewer: a justification
+ * signed by someone since demoted is not one this instance stands behind.
+ * Without it, a demoted admin's layer clearances quietly survive as long as
+ * some *other* admin signed the uploader.
  */
-function layerIsCleared(post: GatePost, layer: RightsLayer): boolean {
+function layerIsCleared(listing: GateListing, layer: RightsLayer): boolean {
   // `?? []` and `?.trim()` for the same reason as everything else in this
   // module: a missing relation or a null column must answer "not cleared",
   // not throw a TypeError that some caller might catch and treat as a
   // transient failure.
-  const clearance = (post.layerClearances ?? []).find(
+  const clearance = (listing.layerClearances ?? []).find(
     (candidate) => candidate.layer === layer,
   );
   if (!clearance) {
@@ -297,29 +308,29 @@ function layerIsCleared(post: GatePost, layer: RightsLayer): boolean {
  */
 function layerIsSettled(
   value: boolean,
-  post: GatePost,
+  listing: GateListing,
   layer: RightsLayer,
 ): boolean {
   // `value` is a real boolean by the time this is called (see isTriaged at
   // the call site), so absent is not a case here — only "not present" and
   // "present, and therefore needing its own clearance".
-  return value === false || layerIsCleared(post, layer);
+  return value === false || layerIsCleared(listing, layer);
 }
 
 /**
- * Steps 1–4 of Part E.3: is the *account* cleared right now. Returns the
- * blocker, or null when the account-level clearance holds.
+ * Steps 1–4 of Part E.3: is this *uploader* cleared right now. Returns the
+ * blocker, or null when the standing clearance holds.
  *
  * Split out because the admin screen needs exactly this question — "is this
- * account's clearance currently good?" — and a screen that answered it with
+ * uploader's clearance currently good?" — and a screen that answered it with
  * its own copy of the rule would eventually disagree with the gate.
  */
-export function accountClearanceBlocker(
+export function uploaderClearanceBlocker(
   review: GateReview | null,
   now: Date = new Date(),
 ): SellabilityBlocker | null {
-  // (1) Fail closed. A missing review row is UNREVIEWED — an account nobody
-  // has looked at, which is the state every account starts in.
+  // (1) Fail closed. A missing review row is UNREVIEWED — an uploader nobody
+  // has looked at, which is the state everyone starts in.
   if (!review) {
     return "no_review";
   }
@@ -361,14 +372,11 @@ export function accountClearanceBlocker(
     return "checklist_version_retired";
   }
 
-  // (5) A clearance has to say whose rights were cleared, or it authorises
-  // nothing in particular. The gate compares the file's owner against this
-  // (see evaluateSellability), so without it every ownership check would
-  // have nothing to check against.
-  if (!review.clearedOwnerUserId) {
-    return "rights_holder_not_recorded";
-  }
-
+  // There is deliberately no (5) "does the clearance say whose rights it
+  // covers". It always does, and it cannot say anything else: the review row
+  // hangs off the uploader, so the only way to reach it is through the file's
+  // own owner. ugcportal-0ss needed `rights_holder_not_recorded` because its
+  // review hung off a connected account and had to name a user separately.
   return null;
 }
 
@@ -381,33 +389,53 @@ export function accountClearanceBlocker(
  * clock globally.
  */
 export function evaluateSellability(
-  post: GatePost,
+  upload: GateUpload,
   now: Date = new Date(),
 ): SellabilityResult {
-  const review = post.instagramAccount?.resaleRightsReview ?? null;
-
-  const accountBlocker = accountClearanceBlocker(review, now);
-  // `!review` is redundant with the blocker above — a null review always
-  // produces "no_review" — but it is what narrows the type for the
-  // ownership comparison at the end, and a redundant fail-closed check is
-  // the right kind of redundant.
-  if (accountBlocker || !review) {
-    return { sellable: false, blocker: accountBlocker ?? "no_review" };
+  // (0) A file with no owner has no uploader to have been cleared. Under the
+  // real schema `Media.userId` is a non-null foreign key, so an ordinary
+  // Prisma read is not expected to produce this — the guard is for a
+  // hand-assembled input (a fixture, a hand-written query, a future select
+  // that maps the column wrong), which is exactly how the
+  // `undefined === null` fail-open got in last time. It claims nothing about
+  // what the column can hold; it says that if the value is ever not a
+  // non-blank string — a number, an object, undefined — the answer is no
+  // rather than a TypeError.
+  if (typeof upload.userId !== "string" || !upload.userId.trim()) {
+    return { sellable: false, blocker: "upload_owner_unknown" };
   }
 
-  // (5) Per-post triage (Part C). Account-level clearance covers the Owner's
-  // own copyright only.
+  // (1–4) The uploader's standing clearance, reached through the file's own
+  // owner. `user` being absent is the same answer as the review being
+  // absent: nobody has cleared the person who uploaded this.
+  const review = upload.user?.resaleRightsReview ?? null;
+  const uploaderBlocker = uploaderClearanceBlocker(review, now);
+  if (uploaderBlocker) {
+    return { sellable: false, blocker: uploaderBlocker };
+  }
+
+  // (5) The upload has to have been put forward for sale at all. The
+  // clearance above says the *person* may resell their work; it says nothing
+  // about this particular file, and an upload nobody has triaged is an
+  // upload nobody has looked at.
+  const listing = upload.listing;
+  if (!listing) {
+    return { sellable: false, blocker: "not_listed_for_sale" };
+  }
+
+  // (6) Per-upload triage (Part C). The uploader-level clearance covers the
+  // owner's own copyright only.
   //
   // The triage has to be attributable before any of its answers count. Each
   // flag below is an assertion about a third party's rights, and the
   // dangerous direction is `false`: "this photograph contains no
   // identifiable person" sells the photograph. Read-time role check, like
   // everywhere else here, so a demoted admin's assertions stop counting
-  // rather than persisting because someone else signed the account.
-  if (!isTriaged(post.depictsPeople)) {
+  // rather than persisting because someone else signed the uploader.
+  if (!isTriaged(listing.depictsPeople)) {
     return { sellable: false, blocker: "triage_incomplete" };
   }
-  if (!post.triagedByUserId || post.triagedBy?.role !== "ADMIN") {
+  if (!listing.triagedByUserId || listing.triagedBy?.role !== "ADMIN") {
     return { sellable: false, blocker: "triage_not_signed_by_admin" };
   }
 
@@ -416,13 +444,13 @@ export function evaluateSellability(
   // who says that file covers this use. A key alone is free text — it can
   // point at a document that licenses something else entirely, or at
   // nothing.
-  if (post.depictsPeople) {
+  if (listing.depictsPeople) {
     // Trimmed like the other string checks: a key of spaces is not a
     // release.
-    if (!post.modelReleaseKey?.trim()) {
+    if (!listing.modelReleaseKey?.trim()) {
       return { sellable: false, blocker: "model_release_missing" };
     }
-    if (!layerIsCleared(post, RightsLayer.PEOPLE)) {
+    if (!layerIsCleared(listing, RightsLayer.PEOPLE)) {
       return { sellable: false, blocker: "model_release_unverified" };
     }
   }
@@ -430,56 +458,34 @@ export function evaluateSellability(
   // RightsLayer is what keeps one justification from covering three
   // unrelated questions.
   const layers: [boolean | null, RightsLayer][] = [
-    [post.containsMusic, RightsLayer.MUSIC],
-    [post.thirdPartyCreator, RightsLayer.THIRD_PARTY_CREATOR],
-    [post.sponsoredContent, RightsLayer.SPONSORED_CONTENT],
+    [listing.containsMusic, RightsLayer.MUSIC],
+    [listing.thirdPartyCreator, RightsLayer.THIRD_PARTY_CREATOR],
+    [listing.sponsoredContent, RightsLayer.SPONSORED_CONTENT],
   ];
   for (const [value, layer] of layers) {
     if (!isTriaged(value)) {
       return { sellable: false, blocker: "triage_incomplete" };
     }
-    if (!layerIsSettled(value, post, layer)) {
+    if (!layerIsSettled(value, listing, layer)) {
       return { sellable: false, blocker: "third_party_layer_uncleared" };
     }
   }
 
-  // (6) The file sold is the owner-uploaded original (ugcportal-8wa), never
-  // anything fetched from graph.instagram.com — the ugcportal-2eh Option A
-  // boundary. Part E.3 phrases this as "unless productDecisionRef records a
-  // different decision"; no such decision exists, and a data-driven bypass of
-  // a Platform-Terms boundary is not something this gate offers. If one is
-  // ever taken, it belongs in code, in review, not in a database column.
-  if (!post.mediaId || !post.mediaId.trim()) {
-    return { sellable: false, blocker: "not_owner_supplied_original" };
-  }
-  // The pointer has to resolve. `mediaId` has no foreign key behind it (the
-  // Media model belongs to another branch), so "there is a row with this id"
-  // is a question only the loaded row can answer — and an unresolvable
-  // pointer is not an owner-supplied original, it is nothing at all.
-  if (!post.media) {
-    return { sellable: false, blocker: "not_owner_supplied_original" };
-  }
-  // And it has to be the file of the person the *clearance* names.
+  // The file sold is the owner-uploaded original (ugcportal-8wa), which is
+  // now a structural fact rather than a check: this predicate starts at a
+  // Media row, and MediaListing.mediaId is a real foreign key to it. Under
+  // ugcportal-0ss the listing carried an unconstrained `mediaId` string and
+  // the gate had to prove the pointer resolved and pointed at the right
+  // person's file. There is no pointer left to get wrong.
   //
-  // Compared against the review, not against a second column on this same
-  // row. An earlier revision put an `ownerUserId` on CuratedPost and checked
-  // the two against each other — but both were written by whoever created
-  // the listing, so it only proved a row was self-consistent. Whoever can
-  // set `mediaId` can set that too. The clearance is the only party to this
-  // that a listing's author does not control, so it is the one that decides
-  // whose uploads may be sold.
-  // `clearedOwnerUserId` is already known non-empty (the account-level
-  // check above), so an absent media owner cannot compare equal to it — but
-  // the explicit guard says so rather than relying on that reading.
-  if (!post.media.userId || post.media.userId !== review.clearedOwnerUserId) {
-    return { sellable: false, blocker: "media_not_owned" };
-  }
-
+  // Part E.3 phrases the Option A boundary as "unless productDecisionRef
+  // records a different decision"; no such decision exists, and a
+  // data-driven bypass of a Platform-Terms boundary is not something this
+  // gate offers. If one is ever taken, it belongs in code, in review.
   return { sellable: true };
 }
 
 /** Boolean form of {@link evaluateSellability}, for call sites that only branch. */
-export function isSellable(post: GatePost, now: Date = new Date()): boolean {
-  return evaluateSellability(post, now).sellable;
+export function isSellable(upload: GateUpload, now: Date = new Date()): boolean {
+  return evaluateSellability(upload, now).sellable;
 }
-

@@ -1,23 +1,26 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { redirect } from "next/navigation";
 
 import { requireAdmin } from "@/lib/admin";
 import { prisma } from "@/lib/prisma";
-import { setResaleRightsStatus } from "@/lib/resale-rights-review";
 import { INSTAGRAM_SETTINGS_PATH } from "@/lib/routes";
-
-// Recording a resale-rights decision is NOT a server action: it carries an
-// evidence file, and the only way to give a server action a body larger than
-// 1 MB is `experimental.serverActions.bodySizeLimit`, which is global and
-// enforced before any action's own auth check runs. See next.config.ts and
-// src/app/api/admin/instagram/rights-decision/route.ts.
 
 /**
  * Disconnect a connected Instagram account (ugcportal-5ce). Re-checks admin
  * here rather than trusting the page that rendered the form — a server
  * action is a public endpoint, reachable without ever loading that page.
+ *
+ * Under ugcportal-0ss this first drove the account's resale-rights review to
+ * REVOKED, because the review hung off the account and one click of
+ * Disconnect would otherwise have left the audit trail's last word reading
+ * "cleared" for an account that no longer existed. ugcportal-vsm moved the
+ * review to the uploader, so disconnecting an account now decides nothing
+ * about resale rights and must not pretend to: revoking an uploader's
+ * standing clearance because an unrelated Instagram connection was removed
+ * would be a decision no human made. The events recorded under the old
+ * anchor are still there — ResaleRightsEvent has never had a foreign key to
+ * anything here.
  */
 export async function disconnectInstagramAccount(formData: FormData) {
   const session = await requireAdmin();
@@ -28,46 +31,6 @@ export async function disconnectInstagramAccount(formData: FormData) {
   const id = formData.get("id");
   if (typeof id !== "string" || !id) {
     throw new Error("Missing account id");
-  }
-
-  // Revoke *before* deleting, so the audit trail ends where the account's
-  // rights actually ended (checklist Part E.3: admin disconnect → REVOKED).
-  //
-  // Without this the last event for a disconnected account still reads
-  // `toStatus = CLEARED` — a trail that outlives the account, as it should,
-  // but whose final entry is then a lie. The row itself cascades away with
-  // the account; the event does not, which is the whole point of it having
-  // no foreign keys.
-  //
-  // SYSTEM rather than ADMIN, with the admin named as the trigger: clicking
-  // Disconnect revokes an account, it does not review one, and the ADMIN
-  // path would stamp this admin in as `reviewedBy`.
-  const revoked = await setResaleRightsStatus(id, {
-    source: "SYSTEM",
-    status: "REVOKED",
-    reason: "Account disconnected by an admin.",
-    triggeredByUserId: session.user.id,
-    triggeredByEmail: session.user.email,
-  });
-
-  // "account_not_found" is a double submit or a stale tab — the account is
-  // already gone, so there is nothing to revoke and nothing to delete.
-  if (revoked.outcome === "account_not_found") {
-    revalidatePath(INSTAGRAM_SETTINGS_PATH);
-    return;
-  }
-
-  // Anything other than a successful write means the revocation was NOT
-  // recorded, and deleting the account anyway would leave the trail's last
-  // word as whatever it was before — `CLEARED`, for an account that no
-  // longer exists. Allow-list the two success outcomes rather than
-  // excluding the failures known today: `conflict` was added to this union
-  // after this code was first written, and it is exactly the case that
-  // would have slipped through. A new outcome must now be considered here
-  // to be let past.
-  if (revoked.outcome !== "recorded" && revoked.outcome !== "unchanged") {
-    revalidatePath(INSTAGRAM_SETTINGS_PATH);
-    redirect(`${INSTAGRAM_SETTINGS_PATH}?error=disconnect_not_revoked`);
   }
 
   // deleteMany, not delete: deleting an already-removed account (double
