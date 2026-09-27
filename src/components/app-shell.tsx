@@ -50,7 +50,23 @@ export function AppShell({ children }: { children: ReactNode }) {
       */}
       <a
         href="#main-content"
-        className="sr-only rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground focus-visible:not-sr-only focus-visible:fixed focus-visible:top-2 focus-visible:left-2 focus-visible:z-50"
+        /*
+          ugcportal-j4j finding 4: `focus-visible:not-sr-only` un-hides the
+          link by resetting position/width/height/padding/margin/etc in one
+          rule, `.focus-visible\:not-sr-only:focus-visible { padding: 0; ... }`.
+          That selector has specificity (0,2,0) - a class plus a pseudo-class
+          - which beats plain `px-3`/`py-2` at (0,1,0), so the padding
+          resetting is what wins the instant the link becomes visible: it
+          rendered with zero padding at exactly the moment a keyboard user
+          could see it. Repeating the padding utilities under the same
+          `focus-visible:` variant ties the specificity instead, and Tailwind
+          emits them after `not-sr-only` (spacing utilities sort after the
+          accessibility category), so source order then decides it in their
+          favour. Confirmed against the compiled CSS in
+          app-shell.test.ts, not just the class list - see that file's
+          comment for why the class list alone does not prove this.
+        */
+        className="sr-only rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground focus-visible:not-sr-only focus-visible:fixed focus-visible:top-2 focus-visible:left-2 focus-visible:z-50 focus-visible:px-3 focus-visible:py-2"
       >
         Skip to content
       </a>
