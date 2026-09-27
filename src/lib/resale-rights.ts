@@ -35,9 +35,10 @@ import {
  * a listing picks which clearance applies, so there is no second value for
  * the owner check to disagree with — which is why ugcportal-0ss's
  * `clearedOwnerUserId` comparison (and its `media_not_owned` /
- * `rights_holder_not_recorded` blockers) are gone rather than ported. See
- * MEDIA_GATE_SELECT: a caller that uses it cannot load somebody else's
- * review by accident.
+ * `rights_holder_not_recorded` blockers) are gone rather than ported. The
+ * only relation in MEDIA_GATE_SELECT that reaches a review is the file's own
+ * `user`, so a caller using it is reading the uploader's clearance by
+ * construction rather than by remembering to.
  *
  * Everything here fails closed: a missing review row, a missing listing, an
  * un-triaged upload, an unknown checklist version and a demoted reviewer all
@@ -184,7 +185,11 @@ export type GateUpload = {
   listing: GateListing | null;
 };
 
-/** The review columns the gate reads. Shared so the two selects agree. */
+/**
+ * The review columns the gate reads, named separately from the select below
+ * so the nesting stays legible — this is the part that hangs off `user`,
+ * which is the whole argument of this module.
+ */
 const REVIEW_GATE_SELECT = {
   status: true,
   checklistVersion: true,
@@ -379,13 +384,15 @@ export function evaluateSellability(
   now: Date = new Date(),
 ): SellabilityResult {
   // (0) A file with no owner has no uploader to have been cleared. Under the
-  // real schema `Media.userId` is a non-null foreign key, so Prisma cannot
-  // produce this — the guard is for a hand-assembled input (a fixture, a
-  // hand-written query, a future select that maps the column wrong), which
-  // is exactly how the `undefined === null` fail-open got in last time. It
-  // does not claim the column can be blank; it claims that if it ever is,
-  // the answer is no.
-  if (!upload.userId || !upload.userId.trim()) {
+  // real schema `Media.userId` is a non-null foreign key, so an ordinary
+  // Prisma read is not expected to produce this — the guard is for a
+  // hand-assembled input (a fixture, a hand-written query, a future select
+  // that maps the column wrong), which is exactly how the
+  // `undefined === null` fail-open got in last time. It claims nothing about
+  // what the column can hold; it says that if the value is ever not a
+  // non-blank string — a number, an object, undefined — the answer is no
+  // rather than a TypeError.
+  if (typeof upload.userId !== "string" || !upload.userId.trim()) {
     return { sellable: false, blocker: "upload_owner_unknown" };
   }
 

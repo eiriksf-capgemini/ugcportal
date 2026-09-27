@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   ResaleRightsDecisionForm,
   type DecisionFormReview,
-} from "@/app/admin/settings/instagram/decision-form";
+} from "@/app/admin/settings/rights/decision-form";
 import { CURRENT_CHECKLIST_VERSION } from "@/lib/resale-rights";
 
 /**
@@ -24,21 +24,14 @@ const EXISTING: DecisionFormReview = {
   validUntil: new Date("2027-06-01T00:00:00.000Z"),
   conditions: "Editorial use only.",
   checklistVersion: CURRENT_CHECKLIST_VERSION,
-  clearedOwnerUserId: "owner-1",
 };
-
-const RIGHTS_HOLDERS = [
-  { id: "owner-1", name: "Owner One", email: "owner@example.com" },
-  { id: "owner-2", name: null, email: "second@example.com" },
-];
 
 function render(review: DecisionFormReview | null): string {
   return renderToStaticMarkup(
     <ResaleRightsDecisionForm
-      instagramAccountId="acc-1"
+      uploaderUserId="uploader-1"
       review={review}
-      rightsHolders={RIGHTS_HOLDERS}
-      action="/api/admin/instagram/rights-decision"
+      action="/api/admin/rights/decision"
     />,
   );
 }
@@ -104,8 +97,8 @@ describe("the decision form round-trips the existing review", () => {
     }
   });
 
-  it("carries the account id it was rendered for", () => {
-    expect(inputValue(render(null), "instagramAccountId")).toBe("acc-1");
+  it("carries the uploader id it was rendered for", () => {
+    expect(inputValue(render(null), "uploaderUserId")).toBe("uploader-1");
   });
 
   it("posts multipart to the route handler, not a server action", () => {
@@ -120,7 +113,7 @@ describe("the decision form round-trips the existing review", () => {
     // ASCII case-insensitive so browsers read it the same, but the
     // assertion has to be.
     expect(form).toMatch(/enctype="multipart\/form-data"/i);
-    expect(form).toContain('action="/api/admin/instagram/rights-decision"');
+    expect(form).toContain('action="/api/admin/rights/decision"');
   });
 });
 
@@ -131,15 +124,19 @@ describe("every field on the form is classified", () => {
    * one has to be classified here — and, if it is stored, covered by the
    * whole-row round-trip in decision-round-trip.test.tsx.
    *
-   *   instagramAccountId — identity, from props, not stored by the action
-   *   clearedOwnerUserId — round-trips (defaultValue); blank clears, on purpose
-   *   status             — round-trips (defaultValue)
-   *   route              — round-trips (defaultValue)
-   *   validUntil         — round-trips (defaultValue); blank clears, on purpose
-   *   conditions         — round-trips (defaultValue); blank clears, on purpose
-   *   reason             — intentionally blank: an assertion about this decision
-   *   evidence           — intentionally blank: absent means "keep what's stored"
-   *   restampChecklist   — intentionally unticked: absent means "don't re-stamp"
+   *   uploaderUserId   — identity, from props, not stored by the handler
+   *   status           — round-trips (defaultValue)
+   *   route            — round-trips (defaultValue); blank clears, on purpose
+   *   validUntil       — round-trips (defaultValue); blank clears, on purpose
+   *   conditions       — round-trips (defaultValue); blank clears, on purpose
+   *   reason           — intentionally blank: an assertion about this decision
+   *   evidence         — intentionally blank: absent means "keep what's stored"
+   *   restampChecklist — intentionally unticked: absent means "don't re-stamp"
+   *
+   * ugcportal-0ss also had `clearedOwnerUserId` here, and it produced two of
+   * the round-trip bugs on its own. ugcportal-vsm removed the field rather
+   * than fixing it a third time: the gate reaches a clearance through the
+   * file's own uploader, so there is nothing for a human to pick.
    */
   it("renders exactly the fields listed above", () => {
     const names = new Set(
@@ -149,28 +146,26 @@ describe("every field on the form is classified", () => {
     );
 
     expect([...names].sort()).toEqual([
-      "clearedOwnerUserId",
       "conditions",
       "evidence",
-      "instagramAccountId",
       "reason",
       "restampChecklist",
       "route",
       "status",
+      "uploaderUserId",
       "validUntil",
     ]);
   });
 });
 
 /**
- * The fourth variant of "a field that does not round-trip its stored value",
- * after validUntil, checklistVersion and productDecisionRef — and the first
- * where the field itself is fine and the *option list* is lossy. A select
- * whose stored value is missing from its options submits the blank first
- * entry, which the handler correctly reads as "clear it".
+ * The generic form of "a field that does not round-trip its stored value" —
+ * the family that produced four separate bugs in ugcportal-0ss, the last of
+ * which was a select whose *option list* was lossy rather than the field.
  *
- * So the assertion is made generically: for every select on the form, the
- * stored value must appear among its options. A new select inherits it.
+ * Deliberately not a list of select names: the names are read off the
+ * rendered markup, so a select added later inherits the assertion without
+ * anyone remembering to add it.
  */
 describe("no select can silently drop its stored value", () => {
   /** `{ name -> { selected, values } }` for every select in the markup. */
@@ -197,18 +192,14 @@ describe("no select can silently drop its stored value", () => {
   }
 
   it("offers, and selects, the stored value of every select", () => {
-    const stored = {
-      status: "REJECTED",
-      route: "EXPLICIT_CONSENT",
-      clearedOwnerUserId: "owner-2",
-    };
+    const stored = { status: "REJECTED", route: "EXPLICIT_CONSENT" };
     const rendered = selects(
       render({ ...EXISTING, ...stored, validUntil: null, conditions: null }),
     );
 
-    // Not a hand-written list: read the names off the form, so a select
-    // added later is covered without anyone remembering to add it.
-    expect(rendered.size).toBe(3);
+    // Read off the form rather than hand-listed, so a select added later is
+    // covered whether or not anyone updates this test.
+    expect(rendered.size).toBe(2);
     for (const [name, select] of rendered) {
       const expected = stored[name as keyof typeof stored];
       expect(select.values).toContain(expected);
@@ -216,27 +207,32 @@ describe("no select can silently drop its stored value", () => {
     }
   });
 
-  // The regression: the page caps the rights-holder list, so the recorded
-  // holder can fall outside the slice it was given.
-  it("renders a recorded rights holder who is not in the supplied list", () => {
-    const markup = render({
-      ...EXISTING,
-      clearedOwnerUserId: "owner-outside-the-page",
-    });
-    const holder = selects(markup).get("clearedOwnerUserId")!;
+  it("renders both selects from the full generated enums", () => {
+    // Which is why neither can lose a stored value the way the old
+    // rights-holder select did: the option list is the whole domain, not a
+    // capped slice of a table.
+    const rendered = selects(render(EXISTING));
 
-    expect(holder.values).toContain("owner-outside-the-page");
-    expect(holder.selected).toBe("owner-outside-the-page");
+    expect(rendered.get("status")!.values.sort()).toEqual([
+      "CLEARED",
+      "EXPIRED",
+      "IN_REVIEW",
+      "REJECTED",
+      "REVOKED",
+      "UNREVIEWED",
+    ]);
+    expect(rendered.get("route")!.values.sort()).toEqual([
+      "",
+      "CONTRACT",
+      "EXPLICIT_CONSENT",
+      "OWN_TERMS_ACCEPTANCE",
+    ]);
   });
 
-  it("does not invent an option when no holder is recorded", () => {
-    const holder = selects(
-      render({ ...EXISTING, clearedOwnerUserId: null }),
-    ).get("clearedOwnerUserId")!;
+  it("selects the blank option when nothing is recorded", () => {
+    const route = selects(render({ ...EXISTING, route: null })).get("route")!;
 
-    // Blank plus the two supplied users, and blank is what is selected.
-    expect(holder.values).toEqual(["", "owner-1", "owner-2"]);
-    expect(holder.selected ?? "").toBe("");
+    expect(route.selected ?? "").toBe("");
   });
 });
 
@@ -256,7 +252,7 @@ describe("the checklist re-stamp is an assertion, not a default", () => {
     expect(checkbox![0]).not.toContain("checked");
   });
 
-  it("shows which version the account currently stands on", () => {
+  it("shows which version the uploader currently stands on", () => {
     expect(render(EXISTING)).toContain(CURRENT_CHECKLIST_VERSION);
   });
 
@@ -267,7 +263,7 @@ describe("the checklist re-stamp is an assertion, not a default", () => {
     expect(markup).toContain("retired version");
   });
 
-  it("does not offer a re-stamp for an account with no review yet", () => {
+  it("does not offer a re-stamp for an uploader with no review yet", () => {
     // Nothing to preserve, and the first decision is necessarily made
     // against the current checklist.
     expect(render(null)).not.toContain('name="restampChecklist"');

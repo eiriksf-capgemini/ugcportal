@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  * The write races at the price endpoint.
  *
  * The gate read and the update share a transaction, but adapter-libsql opens
- * SQLite transactions as `deferred`, so the post can be deleted in between.
+ * SQLite transactions as `deferred`, so the listing can be deleted in between.
  * Before this was mapped, that threw P2025 out of `$transaction` as an
  * unhandled 500 — on an endpoint whose whole design is answering 403, 404
  * and 422 deliberately.
@@ -19,34 +19,33 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const authMock = vi.fn();
 const updateMock = vi.fn();
 
-const SELLABLE_POST = {
-  mediaId: "media-1",
-  depictsPeople: false,
-  modelReleaseKey: null,
-  containsMusic: false,
-  thirdPartyCreator: false,
-  sponsoredContent: false,
-  triagedByUserId: "admin-1",
-  triagedBy: { role: "ADMIN" },
-  layerClearances: [],
-  instagramAccount: {
+/** What MEDIA_GATE_SELECT returns for an upload that clears the gate. */
+const SELLABLE_UPLOAD = {
+  userId: "owner-1",
+  user: {
     resaleRightsReview: {
       status: "CLEARED",
       checklistVersion: "2026-09-24.1",
       reviewedByUserId: "admin-1",
       validUntil: null,
-      clearedOwnerUserId: "owner-1",
       reviewedBy: { role: "ADMIN" },
     },
+  },
+  listing: {
+    depictsPeople: false,
+    modelReleaseKey: null,
+    containsMusic: false,
+    thirdPartyCreator: false,
+    sponsoredContent: false,
+    triagedByUserId: "admin-1",
+    triagedBy: { role: "ADMIN" },
+    layerClearances: [],
   },
 };
 
 const tx = {
-  curatedPost: {
-    findUnique: vi.fn().mockResolvedValue(SELLABLE_POST),
-    update: updateMock,
-  },
-  media: { findUnique: vi.fn().mockResolvedValue({ userId: "owner-1" }) },
+  media: { findFirst: vi.fn().mockResolvedValue(SELLABLE_UPLOAD) },
+  mediaListing: { update: updateMock },
 };
 
 vi.mock("@/lib/auth", () => ({ auth: authMock }));
@@ -57,14 +56,14 @@ vi.mock("@/lib/prisma", () => ({
 const { POST } = await import("@/app/api/admin/curation/[id]/price/route");
 
 function priceRequest(body: unknown) {
-  return new Request("http://localhost/api/admin/curation/post-1/price", {
+  return new Request("http://localhost/api/admin/curation/listing-1/price", {
     method: "POST",
     headers: { "content-type": "application/json", origin: "http://localhost" },
     body: JSON.stringify(body),
   });
 }
 
-const context = { params: Promise.resolve({ id: "post-1" }) };
+const context = { params: Promise.resolve({ id: "listing-1" }) };
 
 beforeEach(() => {
   process.env.AUTH_URL = "http://localhost";
@@ -72,10 +71,10 @@ beforeEach(() => {
     .mockReset()
     .mockResolvedValue({ user: { id: "admin-1", role: "ADMIN" } });
   updateMock.mockReset();
-  tx.curatedPost.findUnique.mockClear().mockResolvedValue(SELLABLE_POST);
+  tx.media.findFirst.mockClear().mockResolvedValue(SELLABLE_UPLOAD);
 });
 
-describe("a post deleted between the gate read and the write", () => {
+describe("a listing deleted between the gate read and the write", () => {
   it("answers 404 rather than throwing", async () => {
     // The same answer the caller would have got a moment earlier, and the
     // honest one: the thing they asked to price is gone.

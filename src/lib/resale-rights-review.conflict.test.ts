@@ -6,9 +6,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  * `setResaleRightsStatus` reads whether a review row exists and then creates
  * one, and `@prisma/adapter-libsql` opens SQLite transactions as `deferred`,
  * so that read is not serialised against a concurrent writer. Two admins
- * deciding on the same never-reviewed account at the same moment can both
+ * deciding on the same never-reviewed uploader at the same moment can both
  * see no row and both try to create one. The unique index on
- * `instagramAccountId` is what actually prevents two reviews existing; the
+ * `uploaderUserId` is what actually prevents two reviews existing; the
  * loser gets P2002.
  *
  * Mocked rather than raced, deliberately: forcing the interleaving against a
@@ -23,14 +23,13 @@ const updateMock = vi.fn();
 const eventCreateMock = vi.fn();
 
 const tx = {
-  instagramAccount: {
-    findUnique: vi.fn().mockResolvedValue({
-      id: "acc-1",
-      username: "owner",
-      connectedByUserId: "admin-2",
-    }),
+  // The subject lookup and the actor role check share this mock: both read
+  // `user`, and every test here wants a real uploader and an admin actor.
+  user: {
+    findUnique: vi
+      .fn()
+      .mockResolvedValue({ id: "uploader-1", email: "u@example.com", role: "ADMIN" }),
   },
-  user: { findUnique: vi.fn().mockResolvedValue({ role: "ADMIN" }) },
   resaleRightsReview: {
     findUnique: vi.fn().mockResolvedValue(null),
     create: createMock,
@@ -51,12 +50,12 @@ const { setResaleRightsStatus } = await import("@/lib/resale-rights-review");
 function uniqueViolation() {
   return Object.assign(new Error("Unique constraint failed"), {
     code: "P2002",
-    meta: { target: ["instagramAccountId"] },
+    meta: { target: ["uploaderUserId"] },
   });
 }
 
 /** What Prisma raises when a foreign key has nothing to point at. */
-function foreignKeyViolation(fieldName = "clearedOwnerUserId") {
+function foreignKeyViolation(fieldName = "reviewedByUserId") {
   return Object.assign(new Error("Foreign key constraint violated"), {
     code: "P2003",
     meta: { field_name: fieldName },
@@ -82,7 +81,7 @@ describe("a concurrent first decision", () => {
     createMock.mockRejectedValue(uniqueViolation());
 
     await expect(
-      setResaleRightsStatus("acc-1", DECISION),
+      setResaleRightsStatus("uploader-1", DECISION),
     ).resolves.toEqual({ outcome: "conflict" });
   });
 
@@ -91,7 +90,7 @@ describe("a concurrent first decision", () => {
     // row for a write that never landed would be a false trail.
     createMock.mockRejectedValue(uniqueViolation());
 
-    await setResaleRightsStatus("acc-1", DECISION);
+    await setResaleRightsStatus("uploader-1", DECISION);
 
     expect(eventCreateMock).not.toHaveBeenCalled();
   });
@@ -104,7 +103,7 @@ describe("a concurrent first decision", () => {
       Object.assign(new Error("disk I/O error"), { code: "P1017" }),
     );
 
-    await expect(setResaleRightsStatus("acc-1", DECISION)).rejects.toThrow(
+    await expect(setResaleRightsStatus("uploader-1", DECISION)).rejects.toThrow(
       "disk I/O error",
     );
   });
@@ -112,24 +111,24 @@ describe("a concurrent first decision", () => {
   it("does not mistake a plain error carrying no code for a conflict", async () => {
     createMock.mockRejectedValue(new Error("boom"));
 
-    await expect(setResaleRightsStatus("acc-1", DECISION)).rejects.toThrow(
+    await expect(setResaleRightsStatus("uploader-1", DECISION)).rejects.toThrow(
       "boom",
     );
   });
 });
 
 /**
- * `clearedOwnerUserId` is a real foreign key and libsql enforces foreign
- * keys, so a rights holder deleted between page render and form submit is a
- * write the database refuses. Before this was mapped it came out of
- * `$transaction` as an unhandled 500 — no message, and the evidence file
+ * `uploaderUserId` and `reviewedByUserId` are real foreign keys and libsql
+ * enforces foreign keys, so a user deleted between page render and form
+ * submit is a write the database refuses. Before this was mapped it came out
+ * of `$transaction` as an unhandled 500 — no message, and the evidence file
  * uploaded moments earlier left orphaned in the bucket.
  */
-describe("a rights holder deleted mid-form", () => {
+describe("a named user deleted mid-form", () => {
   it("is reported as missing_reference on the create path", async () => {
     createMock.mockRejectedValue(foreignKeyViolation());
 
-    await expect(setResaleRightsStatus("acc-1", DECISION)).resolves.toEqual({
+    await expect(setResaleRightsStatus("uploader-1", DECISION)).resolves.toEqual({
       outcome: "missing_reference",
     });
   });
@@ -143,7 +142,7 @@ describe("a rights holder deleted mid-form", () => {
     });
     updateMock.mockRejectedValue(foreignKeyViolation());
 
-    await expect(setResaleRightsStatus("acc-1", DECISION)).resolves.toEqual({
+    await expect(setResaleRightsStatus("uploader-1", DECISION)).resolves.toEqual({
       outcome: "missing_reference",
     });
     expect(eventCreateMock).not.toHaveBeenCalled();
@@ -158,27 +157,26 @@ describe("a rights holder deleted mid-form", () => {
       Object.assign(new Error("Record to update not found"), { code: "P2025" }),
     );
 
-    await expect(setResaleRightsStatus("acc-1", DECISION)).resolves.toEqual({
+    await expect(setResaleRightsStatus("uploader-1", DECISION)).resolves.toEqual({
       outcome: "conflict",
     });
   });
 
   /**
-   * Three foreign keys on this row can raise P2003 — the account, the
-   * rights holder and the reviewer. Reporting all of them as "the rights
-   * holder no longer exists, pick someone still here" is advice that cannot
-   * work when the *account* is what vanished, and points at the wrong
-   * record.
+   * Two foreign keys on this row can raise P2003 — the uploader and the
+   * reviewer — and they need different answers. Reporting both as "the
+   * reviewer no longer exists" is advice that cannot work when the
+   * *uploader* is what vanished, and points at the wrong record.
    */
-  it("reports a vanished account as account_not_found, not as a bad holder", async () => {
+  it("reports a vanished uploader as uploader_not_found, not as a bad reviewer", async () => {
     // SQLite names the constraint rather than the bare column.
     createMock.mockRejectedValue(
-      foreignKeyViolation("ResaleRightsReview_instagramAccountId_fkey (index)"),
+      foreignKeyViolation("ResaleRightsReview_uploaderUserId_fkey (index)"),
     );
 
-    await expect(setResaleRightsStatus("acc-1", DECISION)).resolves.toEqual({
-      outcome: "account_not_found",
-    });
+    await expect(
+      setResaleRightsStatus("uploader-1", DECISION),
+    ).resolves.toEqual({ outcome: "uploader_not_found" });
   });
 
   it("falls back to the user-facing message when the driver says nothing", async () => {
@@ -190,7 +188,7 @@ describe("a rights holder deleted mid-form", () => {
       }),
     );
 
-    await expect(setResaleRightsStatus("acc-1", DECISION)).resolves.toEqual({
+    await expect(setResaleRightsStatus("uploader-1", DECISION)).resolves.toEqual({
       outcome: "missing_reference",
     });
   });
@@ -203,7 +201,7 @@ describe("a rights holder deleted mid-form", () => {
       Object.assign(new Error("database is locked"), { code: "P2034" }),
     );
 
-    await expect(setResaleRightsStatus("acc-1", DECISION)).rejects.toThrow(
+    await expect(setResaleRightsStatus("uploader-1", DECISION)).rejects.toThrow(
       "database is locked",
     );
   });

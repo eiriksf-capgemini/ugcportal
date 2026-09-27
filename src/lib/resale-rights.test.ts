@@ -150,6 +150,21 @@ describe("ugcportal-vsm: the clearance is the uploader's, reached through the fi
     ).toEqual({ sellable: false, blocker: "upload_owner_unknown" });
   });
 
+  it("blocks rather than throws when the owner column is not a string", () => {
+    // `!value` is false for a number, and `.trim()` on one is a TypeError —
+    // the same shape as the `undefined === null` fail-open, one type over.
+    // A caller catching that TypeError and treating it as transient is how
+    // a crash becomes a retry becomes a sale.
+    for (const userId of [7, {}, [], true]) {
+      expect(
+        evaluateSellability(
+          sellableUpload({ userId: userId as unknown as string }),
+          NOW,
+        ),
+      ).toEqual({ sellable: false, blocker: "upload_owner_unknown" });
+    }
+  });
+
   it("refuses an upload nobody has put forward for sale", () => {
     // A cleared uploader is a precondition, not a standing offer: an upload
     // with no listing has had no triage, so nobody has looked at what is in

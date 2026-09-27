@@ -187,6 +187,22 @@ Once Part D is complete, the reviewer records the outcome in the system (Part E)
 
 ## Part E — The per-account record, evidence store, and how `ugcportal-74w` enforces it
 
+> **E.0 — AMENDMENT (`ugcportal-vsm`, 2026-09-27): the record hangs off the uploader, not the connected account.**
+>
+> Everything below was written when the sellable catalogue was expected to come from connected Instagram accounts. Instagram was deferred on 2026-09-24 and the product is built around manually uploaded images and video, so `ResaleRightsReview` is now one row per **uploader** (`User`), and the per-post triage is one row per **upload** (`MediaListing`, 1:1 with `Media`). The gate finds the governing review by following `Media.userId` — the file's own owner — rather than by comparing the file against a rights holder named on the review.
+>
+> What that changes in E.3, item by item:
+>
+> - **(1)** reads "`ResaleRightsReview.status == CLEARED` for the **uploader of the file**". `ResaleRightsReview.instagramAccountId` and `clearedOwnerUserId` are both gone; `uploaderUserId` replaces them.
+> - **(2)–(5)** are unchanged, including the per-layer clearances added after this section was written (`MediaRightsClearance`, one row per `RightsLayer`) and the requirement that the triage itself name a current ADMIN.
+> - **(6)** is now structural rather than a check: the gate starts at a real `Media` row and `MediaListing.mediaId` is a foreign key to it, so there is no unresolved pointer left to validate. An upload with no `MediaListing` is not sellable (`not_listed_for_sale`).
+> - **Revocation cascades** now means revoking the **uploader's** clearance, which immediately unsells every file they uploaded. Disconnecting an Instagram account no longer revokes anything, because a connected account no longer confers any right to sell.
+> - **Separation of duties (soft)** now warns when `reviewedByUserId == uploaderUserId` — an admin clearing their own uploads for sale.
+> - **Evidence store**: the private prefix is `rights-evidence/<uploaderUserId>/…`. Objects written before this amendment sit under a connected account's id; nothing rewrites them, and the key snapshotted on each `ResaleRightsEvent` row is still what finds them.
+> - **`ResaleRightsEvent`** carries generic subject columns (`subjectKind`, `subjectId`, `subjectLabel`) so that rows written under the old anchor survive unaltered, marked `INSTAGRAM_ACCOUNT`. The migration carried **no** clearance forward and wrote a transition to `UNREVIEWED` for each one, so nothing is sellable that a human has not decided about under the new anchor.
+>
+> **The checklist version is deliberately unchanged.** Retiring a version is how a revision to what the reviewer must *check* forces re-review; this amendment changes only where the answer is recorded, and no clearance exists that it could wrongly re-validate. The authority for the gate's behaviour is `src/lib/resale-rights.ts`, not this section.
+
 This section is the implementation requirement that `ugcportal-74w` K2 depends on ("curation UI/API checks per-account rights-confirmation status before allowing price-setting"). It is filed as its own bead (see §7).
 
 ### E.1 Data model (proposal)

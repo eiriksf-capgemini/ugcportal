@@ -4,7 +4,7 @@ import {
   formatClearanceExpiry,
   formatReviewTimestamp,
   toDateInputValue,
-} from "@/app/admin/settings/instagram/dates";
+} from "@/app/admin/settings/rights/dates";
 
 /**
  * `validUntil` is a date-only decision stored as midnight UTC. It is shown on

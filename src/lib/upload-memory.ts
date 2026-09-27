@@ -80,7 +80,7 @@ import type { WatermarkConcurrencySettings } from "@/lib/watermark";
  * that claims more than it delivers is the failure this whole bead is about:
  *
  *  - **Other routes.** This budget is POST /api/media's. The admin evidence
- *    upload (POST /api/admin/instagram/rights-decision) buffers its own body
+ *    upload (POST /api/admin/rights/decision) buffers its own body
  *    the same way and is outside it (ugcportal-wa4).
  *  - **The peek itself.** Reading the part header happens before anything is
  *    reserved, so that much *is* still unbounded by request count. It is a

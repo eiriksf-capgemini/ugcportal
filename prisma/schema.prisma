@@ -460,9 +460,15 @@ model ResaleRightsEvent {
 // follows the relation, which removes the question rather than answering it.
 //
 // The triage lives here rather than on Media because it is a decision an
-// admin records, not a property of the file the uploader gave us - and
-// because `Media` is written by the upload path, which must never be able to
-// write anything the gate reads.
+// admin records, not a property of the file the uploader gave us. The upload
+// path therefore writes nothing on this table at all.
+//
+// It does write the one Media column the gate reads - `userId`, the anchor -
+// and that is fine rather than an exception: POST /api/media takes it from
+// the session, never from the request body, so an uploader can only ever
+// attach their own clearance to their own file. An earlier draft of this
+// comment claimed the upload path "must never be able to write anything the
+// gate reads", which was simply false.
 model MediaListing {
   id      String @id @default(cuid())
   mediaId String @unique
