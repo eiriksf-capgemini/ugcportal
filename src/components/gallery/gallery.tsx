@@ -7,6 +7,11 @@ import {
   GALLERY_TILE_CLASS,
   GALLERY_TILE_IMAGE_CLASS,
 } from "@/components/gallery/containment";
+import {
+  UNKNOWN_PREVIEW_SIZE,
+  openGalleryViewer,
+  type PixelSize,
+} from "@/components/gallery/lightbox";
 import { Button } from "@/components/ui/button";
 import {
   appendGalleryItems,
@@ -36,25 +41,6 @@ export type GalleryProps = {
   initialCursor: string | null;
   initialHasMore: boolean;
 };
-
-/**
- * Intrinsic size of a preview whose real size could not be read.
- *
- * Reached only when the browser could not read a size off the image — it
- * failed to load (a deleted object, a 404 from the delivery route) or reported
- * zero dimensions. In the first case the slide shows PhotoSwipe's error state
- * and these numbers decide nothing anyone can see; in the second there is no
- * better answer available.
- *
- * It is NOT a stand-in for "not measured yet": see ensureSizes, which waits
- * for the real value rather than guessing at one, because PhotoSwipe sizes a
- * slide from the numbers it is given, so a guessed ratio over a perfectly
- * loadable image distorts it. Square, because a wrong ratio is wrong in every
- * direction and this one at least does not pretend to know the orientation.
- */
-const UNKNOWN_PREVIEW_SIZE = { width: 1280, height: 1280 } as const;
-
-type PixelSize = { width: number; height: number };
 
 type LoadState = "idle" | "loading" | "error";
 
@@ -103,58 +89,8 @@ export function Gallery({
 
   const openLightbox = useCallback(
     async (index: number) => {
-      const [{ default: PhotoSwipeLightbox }, sizes] = await Promise.all([
-        import("photoswipe/lightbox"),
-        ensureSizes(items, measured.current),
-      ]);
-
-      const lightbox = new PhotoSwipeLightbox({
-        dataSource: items.map((item, position) => ({
-          src: item.previewSrc,
-          alt: galleryItemLabel(item),
-          ...sizes[position],
-        })),
-        pswpModule: () => import("photoswipe"),
-        /*
-         * Fade, not zoom-from-thumbnail.
-         *
-         * PhotoSwipe's zoom transition animates from the thumbnail's
-         * rectangle to the full frame, and it is the better effect — but it
-         * assumes the thumbnail shows the WHOLE image. These tiles are
-         * `object-cover` centre crops (see containment.ts), so the rectangle
-         * it would fly out of holds a different picture from the one it lands
-         * on, and the transition reads as a jump. Telling PhotoSwipe about
-         * the crop means handing it an `innerRect` per slide, which needs the
-         * intrinsic size *and* the laid-out size of every tile at animation
-         * time. Not worth it for a transition; fade is honest about what it
-         * knows.
-         */
-        showHideAnimationType: "fade",
-        // The preview is at most 1280px on its longest edge (ugcportal-44q),
-        // so there is nothing to gain from zooming past its own resolution.
-        maxZoomLevel: 1,
-        // The whole overlay is the backdrop; closing by clicking outside the
-        // image is the behaviour everybody already expects from a lightbox.
-        bgClickAction: "close",
-      });
-      /*
-       * A fresh instance per activation, torn down when the viewer closes.
-       *
-       * With no `gallery` option, `init()` binds no DOM listeners and
-       * `destroy()` unbinds none — the instance is already collectable once
-       * PhotoSwipe clears its own reference. This is here to make the lifetime
-       * explicit rather than to fix a leak: reusing one instance would mean
-       * keeping its `dataSource` in step with a list that grows on every
-       * "Load more", which is a second copy of the item list to get wrong.
-       *
-       * Focus returns to the tile by itself: PhotoSwipe records
-       * `document.activeElement` at init — the button that was just activated
-       * — and restores it on destroy, but only for a visitor who actually
-       * moved focus into the viewer. A mouse user's focus is left alone.
-       */
-      lightbox.on("destroy", () => lightbox.destroy());
-      lightbox.init();
-      lightbox.loadAndOpen(index);
+      const sizes = await ensureSizes(items, measured.current);
+      await openGalleryViewer(items, sizes, index);
     },
     [items],
   );
@@ -226,7 +162,7 @@ export function Gallery({
             <button
               type="button"
               className={GALLERY_TILE_CLASS}
-              aria-label={galleryItemLabel(item)}
+              aria-label={galleryItemLabel(item, index)}
               data-gallery-tile={item.id}
               onClick={() => activate(index)}
             >
@@ -245,6 +181,17 @@ export function Gallery({
                 src={item.previewSrc}
                 alt=""
                 className={GALLERY_TILE_IMAGE_CLASS}
+                /*
+                  The default page is 50 items, and on a phone roughly 46 of
+                  them are below the fold — so without this, first paint opens
+                  up to 50 simultaneous requests against a route that PROXIES
+                  every byte through the Node process rather than redirecting
+                  to storage (ugcportal-a2l). `loading` and `decoding` cost
+                  nothing and need no new derivatives; that is what separates
+                  them from `srcset`, which does and is ugcportal-dex's.
+                */
+                loading="lazy"
+                decoding="async"
                 // The button carries the accessible name; the image inside it
                 // would otherwise announce the same thing twice.
                 aria-hidden="true"
@@ -371,14 +318,17 @@ function readListingPage(payload: unknown): {
  * square guess over a 3:2 photograph distorts it.
  *
  * So each size is either one a tile already reported through `onLoad`, or one
- * read by loading the same URL again — which comes from the browser cache, as
- * the tile has already requested it. UNKNOWN_PREVIEW_SIZE is used only when
+ * read by loading the same URL again. UNKNOWN_PREVIEW_SIZE is used only when
  * the image cannot be loaded at all.
  *
  * KNOWN GAP (ugcportal-8dn): this waits for EVERY item, not just the one being
- * opened, so on a slow connection with several pages loaded the lightbox does
- * not open until the last tile has finished downloading. Correct, but it can
- * be slow; filed rather than hidden.
+ * opened, so the lightbox does not open until the slowest preview in the list
+ * has arrived. Adding `loading="lazy"` to the tiles widened that gap rather
+ * than narrowing it, and the trade is deliberate: a tile below the fold is now
+ * never requested until it is scrolled to, so its size is a real network round
+ * trip here rather than a cache hit. Paying it on the rare activation is worth
+ * not firing fifty proxied requests at first paint — but it is the reason 8dn
+ * is worth doing, not a reason to have left the tiles eager.
  */
 async function ensureSizes(
   items: GalleryItem[],

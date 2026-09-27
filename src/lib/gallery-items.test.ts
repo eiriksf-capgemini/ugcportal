@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   appendGalleryItems,
+  galleryItemAlt,
   galleryItemLabel,
   toGalleryItem,
   toGalleryItems,
@@ -157,28 +158,79 @@ describe("appendGalleryItems", () => {
 });
 
 describe("galleryItemLabel", () => {
-  it("names the publication date, formatted identically on server and client", () => {
-    expect(galleryItemLabel(item())).toBe("Open photograph published 4 March 2026");
+  it("names the position and the publication date", () => {
+    expect(galleryItemLabel(item(), 0)).toBe(
+      "Open photograph 1, published 4 March 2026",
+    );
   });
 
-  it("gives items published on different days different names", () => {
-    expect(galleryItemLabel(item())).not.toBe(
-      galleryItemLabel(item({ publishedAt: "2026-03-05T10:00:00.000Z" })),
+  it("counts from one, not from zero", () => {
+    // "Open photograph 0" is a developer's index leaking into a screen reader.
+    expect(galleryItemLabel(item(), 11)).toContain("photograph 12,");
+  });
+
+  /*
+   * THE REGRESSION THIS FUNCTION WAS CHANGED FOR.
+   *
+   * The label used to be the publication date alone, and the test that was
+   * supposed to prove names differ only ever compared items published on
+   * DIFFERENT days. The feed publishes in batches, so the realistic case is
+   * the opposite one — and the old fixture could not construct it. Both items
+   * here are published at the same instant, which is the shape that used to
+   * produce forty identical names in one grid.
+   */
+  it("gives two items published at the very same instant different names", () => {
+    const sameInstant = "2026-03-04T10:00:00.000Z";
+    expect(galleryItemLabel(item({ publishedAt: sameInstant }), 0)).not.toBe(
+      galleryItemLabel(item({ publishedAt: sameInstant }), 1),
     );
+  });
+
+  it("gives every item in a realistic same-day batch a unique name", () => {
+    const batch = Array.from({ length: 40 }, (_, position) =>
+      galleryItemLabel(item({ publishedAt: "2026-03-04T10:00:00.000Z" }), position),
+    );
+    expect(new Set(batch).size).toBe(batch.length);
   });
 
   it("reads the date in UTC rather than the runtime's zone", () => {
     // 23:30 UTC is already the next day in most of Europe. A label that moved
     // with the renderer's zone would be a hydration mismatch.
-    expect(galleryItemLabel(item({ publishedAt: "2026-03-04T23:30:00.000Z" }))).toBe(
-      "Open photograph published 4 March 2026",
-    );
+    expect(
+      galleryItemLabel(item({ publishedAt: "2026-03-04T23:30:00.000Z" }), 0),
+    ).toBe("Open photograph 1, published 4 March 2026");
   });
 
-  it("still names the control when there is no date", () => {
-    const label = galleryItemLabel(item({ publishedAt: null }));
-    expect(label).toBe("Open photograph");
+  it("still names the control, uniquely, when there is no date", () => {
+    const label = galleryItemLabel(item({ publishedAt: null }), 0);
+    expect(label).toBe("Open photograph 1");
     expect(label).not.toContain("Invalid Date");
     expect(label).not.toContain("null");
+    expect(label).not.toBe(galleryItemLabel(item({ publishedAt: null }), 1));
+  });
+});
+
+describe("galleryItemAlt", () => {
+  it("describes the image without instructing the reader to open it", () => {
+    // A tile is a control, so its name is an action. A lightbox slide is an
+    // image, and alt text that reads "Open photograph 1" tells a screen-reader
+    // user to do something they have already done.
+    expect(galleryItemAlt(item(), 0)).toBe("Photograph 1, published 4 March 2026");
+    expect(galleryItemAlt(item(), 0)).not.toContain("Open");
+  });
+
+  it("agrees with the tile's label on position and date", () => {
+    // The same number in the grid and in the viewer, so "photograph 12" means
+    // one thing in both places.
+    const alt = galleryItemAlt(item(), 11);
+    const label = galleryItemLabel(item(), 11);
+    expect(label).toBe(`Open ${alt.charAt(0).toLowerCase()}${alt.slice(1)}`);
+  });
+
+  it("is unique across a same-day batch too", () => {
+    const batch = Array.from({ length: 40 }, (_, position) =>
+      galleryItemAlt(item({ publishedAt: "2026-03-04T10:00:00.000Z" }), position),
+    );
+    expect(new Set(batch).size).toBe(batch.length);
   });
 });

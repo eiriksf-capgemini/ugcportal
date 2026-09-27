@@ -203,6 +203,27 @@ describe("K1 — the gallery renders published previews to an anonymous visitor"
     }
   });
 
+  it("gives no two tiles the same accessible name", async () => {
+    /*
+     * Note what the fixture already does: seedMedia publishes every row at the
+     * SAME instant, because that is what the product does — publishing is a
+     * batch action. So this is the collision case by construction rather than
+     * by contrivance, and it is the one an earlier version of the label failed:
+     * naming only the publication date gave a whole day's uploads the identical
+     * accessible name, in a grid whose entire purpose is choosing between them.
+     */
+    for (const id of ["a", "b", "c", "d"]) {
+      await seedMedia({ id, createdAt: new Date(`2026-03-0${id === "a" ? 1 : 2}T00:00:00Z`) });
+    }
+
+    const labels = [
+      ...(await renderGallery()).matchAll(/aria-label="([^"]+)"/g),
+    ].map((match) => match[1]);
+
+    expect(labels.length).toBeGreaterThanOrEqual(4);
+    expect(new Set(labels).size).toBe(labels.length);
+  });
+
   it("renders no <main> of its own — the app shell owns the only one", async () => {
     await seedMedia({ id: "a", createdAt: new Date("2026-03-01T00:00:00Z") });
     expect(await renderGallery()).not.toContain("<main");

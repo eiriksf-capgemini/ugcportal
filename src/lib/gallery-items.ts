@@ -143,16 +143,46 @@ const PUBLISHED_ON = new Intl.DateTimeFormat("en-GB", {
 });
 
 /**
- * The accessible name of a tile, and the lightbox slide's alt text.
+ * What a tile and its lightbox slide are called.
  *
- * A PLACEHOLDER, and worth naming as one: a publication date is not a
- * description of a photograph, and a screen-reader user learns nothing about
- * the image from it. Real alt text needs a field the uploader fills in, which
- * is ugcportal-gwr. What this does buy in the meantime is that every tile has
- * *some* accessible name and that the names differ from each other, so the
- * grid does not read as a list of identical unlabelled buttons.
+ * A PLACEHOLDER, and worth naming as one: neither a position nor a publication
+ * date describes a photograph, and a screen-reader user learns nothing about
+ * the image from either. Real alt text needs a field the uploader fills in,
+ * which is ugcportal-gwr.
+ *
+ * What it does buy is that every tile has an accessible name and that no two
+ * names collide. THE POSITION IS WHAT MAKES THAT TRUE, and it is here because
+ * the date alone did not: the first version of this named the publication date
+ * and nothing else, and the feed publishes in batches, so a day's uploads all
+ * got the identical name — "Open photograph published 4 March 2026", forty
+ * times, in a grid whose whole purpose is choosing between them. The test that
+ * was supposed to cover it only ever compared items published on *different*
+ * days, so the fixture could not construct the collision it existed to rule
+ * out.
+ *
+ * The date stays because it is the only meaningful thing the anonymous feed
+ * knows about a row; the position is what disambiguates. `position` is the
+ * item's index in the rendered list, which is also its slide index in the
+ * viewer — the same number in both places, so a listener who hears
+ * "photograph 12" in the grid hears the same in the lightbox.
  */
-export function galleryItemLabel(item: GalleryItem): string {
-  if (item.publishedAt === null) return "Open photograph";
-  return `Open photograph published ${PUBLISHED_ON.format(new Date(item.publishedAt))}`;
+function describeGalleryItem(item: GalleryItem, position: number): string {
+  const subject = `photograph ${position + 1}`;
+  if (item.publishedAt === null) return subject;
+  return `${subject}, published ${PUBLISHED_ON.format(new Date(item.publishedAt))}`;
+}
+
+/** The accessible name of a tile, which is a control that opens the viewer. */
+export function galleryItemLabel(item: GalleryItem, position: number): string {
+  return `Open ${describeGalleryItem(item, position)}`;
+}
+
+/**
+ * The lightbox slide's alt text. The same description without "Open", because
+ * a slide is an image rather than a control and alt text that reads as an
+ * instruction is worse than alt text that reads as a label.
+ */
+export function galleryItemAlt(item: GalleryItem, position: number): string {
+  const description = describeGalleryItem(item, position);
+  return description.charAt(0).toUpperCase() + description.slice(1);
 }

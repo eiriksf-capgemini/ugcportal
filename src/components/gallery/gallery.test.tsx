@@ -160,6 +160,19 @@ describe("K6 — the grid reflows across widths", () => {
     }
   });
 
+  it("defers off-screen tiles instead of requesting a whole page at once", () => {
+    // The default page is 50 items and the preview route PROXIES every byte
+    // through the Node process (ugcportal-a2l) rather than redirecting to
+    // storage, so an eager grid opens up to 50 simultaneous requests against
+    // it at first paint — most of them below the fold on a phone. Unlike
+    // `srcset`, these two attributes need no new derivatives and so are not
+    // ugcportal-dex's to add.
+    for (const image of images(render())) {
+      expect(image).toContain('loading="lazy"');
+      expect(image).toContain('decoding="async"');
+    }
+  });
+
   it("gives no image an intrinsic width or height attribute", () => {
     // An `<img>` carrying both attributes and no object-fit is stretched to
     // them — the exact failure K6 names. None are written, and the fit rule
