@@ -30,34 +30,28 @@ function tokenAlphaKey(reference: string): string {
 }
 
 /**
- * The strongest WCAG threshold any PAIRING has actually verified a given
- * (resolved literal, alpha) combination at, restricted to foreground-role
- * pairings. A decorative pairing contributes 0 - it proves the colour exists
- * at that alpha, but proves no ratio - rather than being left out entirely.
+ * The weakest WCAG threshold any PAIRING declares for a given (resolved
+ * literal, alpha) combination, restricted to foreground-role pairings. A
+ * decorative pairing contributes 0 - it proves the colour exists at that
+ * alpha, but proves no ratio - rather than being left out entirely.
  *
  * K2 (ugcportal-j4j finding 2): keying coverage by (literal, alpha, role)
  * alone is not enough. `--ring`, `--primary`, `--sidebar-ring` and
  * `--sidebar-primary` all resolve to the same literal, and are all
  * foreground-role, so a pairing that measures one at some alpha used to read
  * as covering ANY of the others at that alpha - including link-on-surface at
- * body's 4.5:1 being "covered" by focus-ring at ui's 3:1. Taking the maximum
- * threshold actually verified per key, and comparing it against what the
- * *usage* needs (see expectedThresholdFor below) rather than merely checking
- * presence, closes that gap without needing every namespace's pairings kept
- * in exact 1:1 lockstep with the tokens they happen to share a literal with.
+ * body's 4.5:1 being "covered" by focus-ring at ui's 3:1.
  *
- * ugcportal-j4j round 2 finding 4: the first version of this `continue`d past
- * decorative pairings instead of contributing 0, which narrowed the set this
- * map used to cover before K2 existed. A namespace this codebase's own
- * PAIRINGS treats as exclusively decorative (`divide` - every divider-* and
- * sidebar-border-* entry) could then never be satisfied at all: the only
- * pairing that would measure it is decorative by construction (a hairline
- * deliberately below 3:1, per the reasoning on the `divider-*` pairings
- * above), the frozen decorative-id test blocks reclassifying it as anything
- * else, and a `continue`d-past decorative pairing contributes nothing for a
- * divide usage's expected threshold (see DECORATIVE_PREFIXES below) to clear.
- * Contributing 0 fixes that without weakening K2: 0 still never satisfies a
- * `ui` (3) or `body` (4.5) requirement.
+ * Aggregated by MIN, not MAX, across every PAIRING sharing a key
+ * (ugcportal-j4j round 3 finding 4): a usage in source carries no
+ * information about which background it renders against, so it cannot be
+ * matched to one specific PAIRING among several that share a foreground
+ * reference (`onEverySurface` generates one per surface level). MIN gives
+ * the weakest guarantee actually declared for that key across all of them,
+ * which is the conservative reading given that ambiguity - it happens to
+ * equal MAX for everything shipped today, because `onEverySurface` always
+ * assigns one uniform requirement across the surfaces it generates, but that
+ * is a property of today's PAIRINGS, not something this map should assume.
  */
 const FOREGROUND_VERIFIED_THRESHOLD = new Map<string, number>();
 for (const pairing of PAIRINGS) {
@@ -65,7 +59,7 @@ for (const pairing of PAIRINGS) {
   const value = pairing.requirement === "decorative" ? 0 : THRESHOLDS[pairing.requirement];
   FOREGROUND_VERIFIED_THRESHOLD.set(
     key,
-    Math.max(FOREGROUND_VERIFIED_THRESHOLD.get(key) ?? -Infinity, value),
+    Math.min(FOREGROUND_VERIFIED_THRESHOLD.get(key) ?? Infinity, value),
   );
 }
 
@@ -88,23 +82,35 @@ const MEASURED_BACKGROUND = new Set(
  * rather than risk under-claiming for a usage that turns out to be
  * normal-size.
  *
- * `divide` is the one namespace this codebase's own PAIRINGS treats as
- * exclusively decorative (every `divider-*` and `sidebar-border-*` pairing),
- * so a divide usage only needs *something* measured at that (literal, alpha)
- * - decorative included - not a specific numeric floor (ugcportal-j4j round 2
- * finding 4).
+ * Every other namespace defaults to needing only *something* measured at
+ * that (literal, alpha) - decorative included, i.e. 0 - not a numeric floor.
  *
- * Every other foreground namespace this gate tracks (a ring, a border) is a
- * non-text UI mark, held to `ui` (3:1) - the same threshold PAIRINGS already
- * uses throughout for exactly these namespaces (focus-ring, control-edge,
- * destructive-edge).
+ * ugcportal-j4j round 3 finding 1 (MAJOR, a regression against `main`): the
+ * first version of this defaulted every non-text namespace to `ui` (3:1).
+ * That is not something a static scan can know - a `border`, `outline`,
+ * `shadow`, `fill`, `stroke`, `mask-*` or `scrollbar-*` usage is at least as
+ * often purely decorative (a hairline, a drop shadow, an illustrative icon)
+ * as it is a control boundary, and there is no reliable way to tell which
+ * from the class name alone. `divide` was special-cased back to 0 because
+ * it is the one namespace this codebase's PAIRINGS happens to use
+ * exclusively decoratively today, but that only patched the one namespace a
+ * reviewer had a concrete example for - a decorative `border-border/50`
+ * hairline, or any `outline`/`fill`/`stroke`/`shadow`/`mask-*`/`scrollbar-*`
+ * usage, was left requiring a 3:1 pairing that, being genuinely decorative,
+ * cannot exist (the K1 WCAG block would fail it) and is blocked from being
+ * reclassified (the frozen decorative-id test) - unsatisfiable, and
+ * strictly worse than `main`, where presence alone always sufficed.
+ *
+ * `text`/`placeholder` are the only namespaces this scan can be certain
+ * about: rendering glyphs is unconditional on WCAG 1.4.3 regardless of
+ * where or how a component uses them. Everything else keeps the weaker,
+ * `main`-equivalent floor of "measured at all" - the K2 protection above
+ * still applies in full for text, which is where the bug it fixes actually
+ * lived.
  */
 const TEXT_PREFIXES = new Set(["text", "placeholder"]);
-const DECORATIVE_PREFIXES = new Set(["divide"]);
 function expectedThresholdFor(usage: Pick<AlphaUtilityUsage, "prefix">): number {
-  if (TEXT_PREFIXES.has(usage.prefix)) return THRESHOLDS.body;
-  if (DECORATIVE_PREFIXES.has(usage.prefix)) return 0;
-  return THRESHOLDS.ui;
+  return TEXT_PREFIXES.has(usage.prefix) ? THRESHOLDS.body : 0;
 }
 
 /**
@@ -278,19 +284,20 @@ describe("the gate cannot be routed around", () => {
         continue;
       }
 
-      // Foreground: presence is not enough (K2). The pairing that measures
-      // this (literal, alpha) has to have checked it at or above the
-      // threshold *this usage's namespace* needs, not merely some threshold.
+      // Foreground: presence is not enough for text (K2). The pairing that
+      // measures this (literal, alpha) has to have checked it at or above
+      // the threshold *this usage's namespace* needs (0 - mere presence -
+      // for everything except text/placeholder; see expectedThresholdFor).
       const verified = FOREGROUND_VERIFIED_THRESHOLD.get(usageKey) ?? -Infinity;
       const required = expectedThresholdFor(usage);
       expect(
         verified >= required,
         `${usage.file} uses "${usage.utility}", but no pairing in PAIRINGS measures ` +
-          `${usage.property} at ${usage.alphaPercent}% alpha as a foreground at or ` +
-          `above the ${required}:1 this usage's namespace needs. ` +
+          `${usage.property} at ${usage.alphaPercent}% alpha as a foreground` +
+          (required > 0 ? ` at or above the ${required}:1 this usage's namespace needs. ` : ". ") +
           (verified === -Infinity
             ? "It is not measured as a foreground at that alpha at all."
-            : `The strongest pairing that measures it there is only checked at ` +
+            : `The weakest pairing that measures it there is only checked at ` +
               `${verified}:1 - a different token that happens to share this ` +
               `literal is not proof this one clears the bar.`) +
           " Add a pairing for it.",
@@ -370,18 +377,27 @@ describe("the gate cannot be routed around", () => {
   });
 
   /**
-   * ugcportal-j4j round 2 finding 4. The first version of
-   * FOREGROUND_VERIFIED_THRESHOLD skipped decorative pairings entirely
-   * rather than contributing 0, which meant a divider - the one namespace
-   * this codebase's own PAIRINGS treats as exclusively decorative - could
-   * never be satisfied: the frozen decorative-id test blocks promoting a
-   * divider pairing to `ui`, and a `ui`-level pairing for a genuinely
-   * decorative hairline would, by construction, fail the WCAG describe block
-   * above (a deliberately-faint divider does not clear 3:1). This proves a
-   * real decorative pairing's literal+alpha now satisfies a divide usage of
-   * the same key, without that same 0-value satisfying a ui or text usage.
+   * ugcportal-j4j round 2 finding 4, and round 3 finding 1 in the same test.
+   * The first version of FOREGROUND_VERIFIED_THRESHOLD (round 2) skipped
+   * decorative pairings entirely rather than contributing 0, which meant a
+   * divider - the one namespace this codebase's own PAIRINGS treats as
+   * exclusively decorative - could never be satisfied. The fix for that
+   * (contributing 0) only helps if *usages of a decorative-only namespace*
+   * also only need 0 - and the round-2 fix's expectedThresholdFor still
+   * defaulted every non-text namespace to `ui` (3), so a decorative
+   * `border-border/50` hairline, or an `outline`/`fill`/`stroke`/`shadow`/
+   * `mask-*`/`scrollbar-*` usage, was left needing a 3:1 pairing that a
+   * genuinely decorative one cannot be (K1 would fail it) and cannot be
+   * promoted to (the frozen decorative-id test) - unsatisfiable, and worse
+   * than `main`, where presence alone always sufficed.
+   *
+   * This proves a real decorative pairing's literal+alpha now satisfies
+   * usages under several different non-text namespaces - not only `divide`,
+   * the one namespace a concrete example happened to name - while a text
+   * usage of that same key still is not satisfied (K2's protection, which
+   * only ever needed to apply to text, is untouched).
    */
-  it("lets a decorative pairing satisfy a divide usage, without letting it satisfy a UI or text usage", () => {
+  it("lets a decorative pairing satisfy any non-text usage, without letting it satisfy a text usage", () => {
     const dividerPairing = PAIRINGS.find(
       (pairing) => pairing.requirement === "decorative",
     );
@@ -394,26 +410,28 @@ describe("the gate cannot be routed around", () => {
     // reference (e.g. "--color-line"), the same shape usage.ts's `property`
     // field uses, so it doubles directly as a synthetic usage of that token.
     const { property, alphaPercent } = parseTokenReference(dividerPairing!.foreground);
-    const divideUsage: AlphaUtilityUsage = {
+    const baseUsage: Omit<AlphaUtilityUsage, "prefix" | "utility"> = {
       file: "synthetic (not shipped)",
-      utility: `divide-x/${alphaPercent}`,
       property,
       alphaPercent,
       role: "foreground",
-      prefix: "divide",
     };
-    const divideKey = `${resolveToken(divideUsage.property, tokens)}@${divideUsage.alphaPercent}`;
-    expect(divideKey, "sanity: constructed the same key as the pairing").toBe(key);
 
-    expect(expectedThresholdFor(divideUsage)).toBe(0);
-    expect(
-      FOREGROUND_VERIFIED_THRESHOLD.get(divideKey) ?? -Infinity,
-    ).toBeGreaterThanOrEqual(expectedThresholdFor(divideUsage));
+    // divide, plus a spread of namespaces finding 1 named as unsatisfiable:
+    // a real decorative pairing's key now covers all of them.
+    for (const prefix of ["divide", "border", "outline", "fill", "stroke", "shadow"]) {
+      const usage: AlphaUtilityUsage = { ...baseUsage, prefix, utility: `${prefix}-x/${alphaPercent}` };
+      const usageKey = `${resolveToken(usage.property, tokens)}@${usage.alphaPercent}`;
+      expect(usageKey, prefix).toBe(key);
+      expect(expectedThresholdFor(usage), prefix).toBe(0);
+      expect(
+        FOREGROUND_VERIFIED_THRESHOLD.get(usageKey) ?? -Infinity,
+        prefix,
+      ).toBeGreaterThanOrEqual(expectedThresholdFor(usage));
+    }
 
-    // The same 0 does not satisfy a UI or text usage of that same key.
-    const ringUsage: AlphaUtilityUsage = { ...divideUsage, prefix: "ring" };
-    const textUsage: AlphaUtilityUsage = { ...divideUsage, prefix: "text" };
-    expect(0).toBeLessThan(expectedThresholdFor(ringUsage));
+    // The same 0 does not satisfy a text usage of that same key.
+    const textUsage: AlphaUtilityUsage = { ...baseUsage, prefix: "text", utility: `text-x/${alphaPercent}` };
     expect(0).toBeLessThan(expectedThresholdFor(textUsage));
   });
 

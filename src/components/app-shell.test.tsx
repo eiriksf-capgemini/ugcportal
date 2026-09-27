@@ -109,10 +109,14 @@ function compareSpecificity(a: Specificity, b: Specificity): number {
 
 /**
  * Physical padding longhands, the level the cascade actually resolves at.
- * `padding` and the logical `padding-inline`/`padding-block` shorthands all
- * expand to some subset of these four; two rules setting different Tailwind
- * property *names* can still be competing for the same physical property.
- * LTR-only, which matches this app (no `dir="rtl"` support exists yet).
+ * `padding`, the logical `padding-inline`/`padding-block` shorthands, and the
+ * directional `padding-inline-start`/`padding-inline-end` (Tailwind's
+ * `ps-*`/`pe-*`) all expand to some subset of these four; two rules setting
+ * different Tailwind property *names* can still be competing for the same
+ * physical property. LTR-only, which matches this app (no `dir="rtl"`
+ * support exists yet) - under LTR, inline-start is left and inline-end is
+ * right; an RTL-aware switch to `ps-*`/`pe-*` would need this updated, not
+ * just expandPaddingDeclaration, since the mapping itself would flip.
  */
 const PHYSICAL_PADDING = [
   "padding-top",
@@ -137,6 +141,17 @@ function expandPaddingDeclaration(
   }
   if (property === "padding-block") {
     return { "padding-top": value, "padding-bottom": value };
+  }
+  // ugcportal-j4j round 3 finding 5: the logical ps-/pe- (padding-inline-
+  // start/-end) properties were missing entirely, so an RTL-aware component
+  // switching px-3 to ps-3/pe-3 would have resolved to "no padding was ever
+  // set" here - a false failure, not the true positive this resolver exists
+  // to report.
+  if (property === "padding-inline-start") {
+    return { "padding-left": value };
+  }
+  if (property === "padding-inline-end") {
+    return { "padding-right": value };
   }
   if ((PHYSICAL_PADDING as readonly string[]).includes(property)) {
     return { [property]: value };
@@ -257,5 +272,21 @@ describe("the skip link's focus-visible padding", () => {
     // check, not a "compile nothing" check.
     expect(css).toContain("not-sr-only");
     expect(css).toContain("px-3");
+  });
+
+  /**
+   * ugcportal-j4j round 3 finding 5 (nit). Without handling for the
+   * logical `ps-`/`pe-` (padding-inline-start/-end) utilities,
+   * resolvePaddingCascade could not see the padding an RTL-aware component
+   * had actually set, so it would report "no padding at all" - a false
+   * failure of this exact test, on a component that never shipped the bug
+   * K4 guards against.
+   */
+  it("resolves the logical ps-/pe- utilities (padding-inline-start/-end), not just px-/py-", async () => {
+    const css = await compile("sr-only focus-visible:not-sr-only focus-visible:ps-3 focus-visible:pe-3 focus-visible:py-2");
+    const padding = resolvePaddingCascade(css);
+
+    expect(padding["padding-left"], "padding-inline-start (ps-3)").not.toBe("0");
+    expect(padding["padding-right"], "padding-inline-end (pe-3)").not.toBe("0");
   });
 });

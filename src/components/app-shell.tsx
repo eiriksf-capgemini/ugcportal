@@ -63,7 +63,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           emits them after `not-sr-only` (spacing utilities sort after the
           accessibility category), so source order then decides it in their
           favour. Confirmed against the compiled CSS in
-          app-shell.test.ts, not just the class list - see that file's
+          app-shell.test.tsx, not just the class list - see that file's
           comment for why the class list alone does not prove this.
         */
         className="sr-only rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground focus-visible:not-sr-only focus-visible:fixed focus-visible:top-2 focus-visible:left-2 focus-visible:z-50 focus-visible:px-3 focus-visible:py-2"

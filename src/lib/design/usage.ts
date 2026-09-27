@@ -23,18 +23,24 @@
  * throw with advice (interpolated alphas, arbitrary alphas, arbitrary colour
  * values). It never just skips.
  *
- * That claim has been wrong four times now (round 2: `.ts` files not walked;
+ * That claim has been wrong five times now (round 2: `.ts` files not walked;
  * round 3: `bg-[var(--x)]/[.5]` fell between three unresolvable-shape
  * patterns; ugcportal-j4j round 1: a side/offset-qualified utility
  * mis-resolved to a token that does not exist, and a fractional alpha matched
  * no pattern; ugcportal-j4j round 2: `text-shadow-lg/20` - a real namespace
  * this module did not know about - hard-failed on ordinary Tailwind, and
- * `placeholder-primary/50` - another one - was silently skipped). Every round
- * patched the reported cases and left the next shape unenumerated, because
- * the namespace list was hand-curated: a person recalling Tailwind's utility
- * namespaces from memory, however carefully, cannot be complete, because
- * completeness is a property of the *installed Tailwind version*, not of
- * anyone's memory.
+ * `placeholder-primary/50` - another one - was silently skipped; ugcportal-j4j
+ * round 3: `scrollbar-track` and every `mask-*-from`/`mask-*-to` - real
+ * namespaces the same round-2 derivation had already found - were still
+ * routed through a hand-written 5-entry background/foreground Set and came
+ * out misclassified). Every round patched the reported cases and left the
+ * next shape unenumerated, because first the namespace list, then the
+ * background/foreground classification, was hand-curated: a person
+ * recalling Tailwind's utility namespaces from memory, however carefully,
+ * cannot be complete, because completeness is a property of the *installed
+ * Tailwind version*, not of anyone's memory - and the lesson generalises to
+ * any set in this file with that same property, not only the one most
+ * recently named.
  *
  * So as of ugcportal-j4j round 2, the namespace list is not hand-curated at
  * all. `discoverColorNamespaces` below asks the actual installed Tailwind
@@ -52,10 +58,21 @@
  * are presets rather than colours is exactly as unenumerable by hand as the
  * namespace list was. `isNonColorOverload` below asks the same installed
  * Tailwind to compile the candidate and checks whether the result actually
- * mixes a colour (`color-mix(`) - the real, load-bearing difference between
- * `--tw-text-shadow-alpha` (a preset's own opacity, not a colour) and
- * `--tw-text-shadow-color: color-mix(...)` (an actual colour token). Derived,
- * not curated, the same way.
+ * assigns a colour (`color-mix(` on a non-alpha declaration) - the real,
+ * load-bearing difference between `--tw-text-shadow-alpha` (a preset's own
+ * opacity, not a colour) and `--tw-text-shadow-color: color-mix(...)` (an
+ * actual colour token). Derived, not curated, the same way.
+ *
+ * Background/foreground role (ugcportal-j4j round 3 finding 2) is the one
+ * set in this space Tailwind genuinely has no opinion on - "which side of a
+ * WCAG pairing does this namespace's colour play" is this codebase's own
+ * modelling decision, not a structural fact - so it cannot be derived the
+ * same way the two axes above are. `isBackgroundRole` below still avoids
+ * memorising specific namespace names: it is expressed as rules over the
+ * *shape* of whatever namespace `discoverColorNamespaces` returns (does it
+ * end in `from`/`via`/`to`, `-track`, `-offset`), so a namespace matching one
+ * of those shapes is covered automatically, including ones Tailwind adds
+ * after this was written.
  *
  * The syntax space this module covers, as three independent axes:
  *
@@ -108,6 +125,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { __unstable__loadDesignSystem } from "@tailwindcss/node";
+import postcss from "postcss";
 
 import { GLOBALS_CSS_PATH } from "./tokens";
 
@@ -194,11 +212,32 @@ export function discoverColorNamespaces(
  * than a colour this module should resolve and measure.
  *
  * Derived by compiling the actual candidate (at a fixed probe alpha; only
- * whether it compiles and what it sets matters, not the value) and checking
- * for Tailwind's own colour-compositing signature, `color-mix(`, in the
- * result. A genuine colour+alpha utility always emits it (confirmed across
- * every namespace/token combination compiled while building this); a preset
- * taking a same-shaped percentage modifier for its own opacity does not.
+ * whether it compiles and what it sets matters, not the value) and looking
+ * for a *declaration* - a specific property being assigned, not just a
+ * substring anywhere in the output - that carries Tailwind's own
+ * colour-compositing signature (`color-mix(`), on a property that is not
+ * itself the alpha slot (anything ending `-alpha`, which every preset this
+ * gate has found sets alongside its own hardcoded fallback colour, and which
+ * would trivially "contain" whatever value it holds regardless of whether a
+ * real colour is involved).
+ *
+ * ugcportal-j4j round 3 finding 3: the first version of this checked whether
+ * `color-mix(` appeared anywhere in the whole compiled string, which is
+ * right for every case actually compiled while building this (confirmed:
+ * every genuine colour+alpha combination emits it, on every discovered
+ * namespace, including keyword colours - `current`, `transparent`, `black`,
+ * `white` - which a var()-only check would have missed), but is checking a
+ * specific implementation detail of the current Tailwind minor version
+ * rather than a structural fact. Scoping the check to an actual declaration,
+ * excluding the alpha slot by name, is the closest available approximation
+ * of "does this assign a colour" without a stable public API for it -
+ * Tailwind's own `@property` registrations for these custom properties are
+ * inconsistently typed (`syntax: "<color>"` only for a few namespaces,
+ * `syntax: "*"` for most, including some that are genuinely colours), so
+ * that path was tried and does not generalise either. usage.test.ts pins
+ * this behaviour with a live sweep across every namespace `discoverColorNamespaces`
+ * finds, specifically so that a future Tailwind version changing this
+ * internal mechanism turns into a red test rather than a silent narrowing.
  *
  * Returns false - "treat it as an attempted colour" - when the candidate
  * does not compile at all. That is not this function's call to make: it
@@ -209,7 +248,8 @@ export function discoverColorNamespaces(
  * module's header spends so many words warning against.
  */
 const nonColorOverloadCache = new Map<string, boolean>();
-function isNonColorOverload(
+/** Exported for usage.test.ts's live sweep across every discovered namespace. */
+export function isNonColorOverload(
   designSystem: TailwindDesignSystem,
   prefix: string,
   name: string,
@@ -219,7 +259,17 @@ function isNonColorOverload(
   if (cached !== undefined) return cached;
 
   const [css] = designSystem.candidatesToCss([`${key}/50`]);
-  const result = css !== null && !css.includes("color-mix(");
+  let result: boolean;
+  if (css === null) {
+    result = false;
+  } else {
+    let sawColorAssignment = false;
+    postcss.parse(css).walkDecls((decl) => {
+      if (/-alpha$/i.test(decl.prop)) return;
+      if (decl.value.includes("color-mix(")) sawColorAssignment = true;
+    });
+    result = !sawColorAssignment;
+  }
   nonColorOverloadCache.set(key, result);
   return result;
 }
@@ -251,18 +301,57 @@ const COLOR_UTILITY_PREFIXES = discoverColorNamespaces(designSystem);
 /**
  * Which half of a pairing a namespace produces. `bg-primary/80` is a surface
  * that text will sit ON; `ring-ring/80` is a mark drawn OVER one. Round 3 of
- * review: without this distinction the coverage check only asked "is this
- * colour measured at this alpha anywhere", and --ring and --primary resolve
- * to the same literal — so a `bg-primary/80` text background read as already
- * covered by the --ring/80 focus-ring pairing, which is checked at 3:1.
- * Reproduced before fixing: the suite stayed green with muted text on that
- * fill at 1.71:1.
+ * ugcportal-axu review: without this distinction the coverage check only
+ * asked "is this colour measured at this alpha anywhere", and --ring and
+ * --primary resolve to the same literal — so a `bg-primary/80` text
+ * background read as already covered by the --ring/80 focus-ring pairing,
+ * which is checked at 3:1. Reproduced before fixing: the suite stayed green
+ * with muted text on that fill at 1.71:1.
  *
- * `ring-offset` is included too: `--tw-ring-offset-color` is the colour
- * exposed in the gap between an element and its focus ring, i.e. the surface
- * a ring is drawn OVER, the same relationship `bg` has to text.
+ * Unlike COLOR_UTILITY_PREFIXES, this is NOT something Tailwind's design
+ * system exposes: "which side of a contrast pairing does this namespace's
+ * colour play" is a WCAG-pairing modelling decision this codebase makes, not
+ * a structural fact - there is no Tailwind API that says "ring-offset is a
+ * backdrop". ugcportal-j4j round 3 finding 2: a hand-written 5-entry Set
+ * still has exactly the hand-curation problem this bead exists to close -
+ * `scrollbar-track` (the channel a scrollbar thumb slides in - a backdrop,
+ * same relationship `bg` has to text) and every `mask-*-from`/`mask-*-to`
+ * (a mask gradient stop - the same backdrop role as the plain gradient
+ * stops `from`/`via`/`to` already covered) were missing, defaulting to
+ * foreground and routed through the wrong threshold.
+ *
+ * So this is expressed as rules over the *shape* of whatever namespace
+ * string `discoverColorNamespaces` returns, not a memorised list of specific
+ * names - a namespace matching one of these shapes is background-role
+ * automatically, including one Tailwind adds after this was written, without
+ * anyone updating a list by hand:
+ *
+ *   - `bg` exactly: the one namespace that sets `background-color` directly.
+ *   - ends in `from`, `via` or `to` (a gradient stop, `-` separated or bare):
+ *     covers the plain background gradient (`from`/`via`/`to`) and every
+ *     `mask-*-from`/`mask-*-to` mask-gradient stop the same way - a gradient
+ *     stop is a backdrop whether it feeds `background-image` or `mask-image`.
+ *   - ends in `-track`: the channel a thumb/handle slides in
+ *     (`scrollbar-track`), the backdrop to `scrollbar-thumb`.
+ *   - ends in `-offset`: the colour exposed in the gap around a mark
+ *     (`ring-offset`) - the backdrop that mark is drawn over.
+ *
+ * Everything else defaults to foreground. That default is itself a
+ * deliberate, bounded choice, not a silent one: a namespace this reasoning
+ * cannot place is far more likely to be a mark drawn on something (the
+ * common case - text, borders, rings, shadows, fills, strokes) than a fill
+ * itself, and usage.test.ts sweeps every namespace `discoverColorNamespaces`
+ * currently returns through this function, so a new namespace landing on
+ * the wrong side of that default is a visible test failure to reconsider,
+ * not a silent misclassification.
  */
-const BACKGROUND_PREFIXES = new Set(["bg", "from", "via", "to", "ring-offset"]);
+export function isBackgroundRole(prefix: string): boolean {
+  if (prefix === "bg") return true;
+  if (/(?:^|-)(?:from|via|to)$/.test(prefix)) return true;
+  if (prefix.endsWith("-track")) return true;
+  if (prefix.endsWith("-offset")) return true;
+  return false;
+}
 
 const PREFIX_ALTERNATION = COLOR_UTILITY_PREFIXES.join("|");
 
@@ -447,7 +536,7 @@ export function findAlphaColorUtilities(
         utility: written,
         property: `--color-${name}`,
         alphaPercent,
-        role: BACKGROUND_PREFIXES.has(prefix) ? "background" : "foreground",
+        role: isBackgroundRole(prefix) ? "background" : "foreground",
         prefix,
       });
     }

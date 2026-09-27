@@ -4,7 +4,13 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { designSystem, discoverColorNamespaces, findAlphaColorUtilities } from "./usage";
+import {
+  designSystem,
+  discoverColorNamespaces,
+  findAlphaColorUtilities,
+  isBackgroundRole,
+  isNonColorOverload,
+} from "./usage";
 
 const created: string[] = [];
 
@@ -468,6 +474,79 @@ describe("findAlphaColorUtilities", () => {
 
     it("has no duplicates", () => {
       expect(new Set(namespaces).size).toBe(namespaces.length);
+    });
+  });
+
+  // ugcportal-j4j round 3 finding 2: BACKGROUND_PREFIXES was a hand-written
+  // 5-entry Set even after the namespace list itself was derived - the same
+  // hand-curation problem one level over. scrollbar-track and every
+  // mask-*-from/to were missing (misclassified foreground) as a result.
+  // isBackgroundRole replaces the Set with shape-based rules so a namespace
+  // matching one of them is covered automatically, not only the ones named
+  // here.
+
+  describe("isBackgroundRole", () => {
+    it("classifies the namespaces finding 2 named", () => {
+      expect(isBackgroundRole("bg")).toBe(true);
+      expect(isBackgroundRole("from")).toBe(true);
+      expect(isBackgroundRole("via")).toBe(true);
+      expect(isBackgroundRole("to")).toBe(true);
+      expect(isBackgroundRole("ring-offset")).toBe(true);
+      expect(isBackgroundRole("scrollbar-track")).toBe(true);
+      // The paired foreground half of scrollbar-track: the handle drawn
+      // over the track, not the track itself.
+      expect(isBackgroundRole("scrollbar-thumb")).toBe(false);
+    });
+
+    it("classifies every mask-*-from/-to gradient stop as background, by shape rather than by name", () => {
+      const maskStops = discoverColorNamespaces(designSystem).filter((ns) =>
+        ns.startsWith("mask-"),
+      );
+      expect(maskStops.length).toBeGreaterThan(0);
+      for (const ns of maskStops) {
+        expect(isBackgroundRole(ns), ns).toBe(true);
+      }
+    });
+
+    it("defaults everything else to foreground", () => {
+      for (const ns of ["text", "border", "ring", "outline", "text-shadow", "placeholder"]) {
+        expect(isBackgroundRole(ns), ns).toBe(false);
+      }
+    });
+  });
+
+  // ugcportal-j4j round 3 finding 3: the first version of isNonColorOverload
+  // checked for `color-mix(` anywhere in the compiled text - right for every
+  // case tried while building it, but a specific implementation detail of
+  // this Tailwind minor version rather than a structural fact, and a false
+  // "non-colour" verdict is a silent skip (this module's forbidden outcome),
+  // not a loud one. This sweeps every namespace discoverColorNamespaces
+  // currently finds against both a real project token and a Tailwind
+  // built-in keyword colour, live against whatever Tailwind is installed -
+  // so a future version narrowing this silently is a red test here, not a
+  // quiet regression.
+
+  describe("isNonColorOverload", () => {
+    const namespaces = discoverColorNamespaces(designSystem);
+
+    it.each(namespaces)("resolves %s-primary as a colour, not an overload", (ns) => {
+      expect(isNonColorOverload(designSystem, ns, "primary")).toBe(false);
+    });
+
+    it.each(namespaces)(
+      "resolves %s-current (a Tailwind keyword colour) as a colour, not an overload",
+      (ns) => {
+        expect(isNonColorOverload(designSystem, ns, "current")).toBe(false);
+      },
+    );
+
+    it("still excludes every known preset/opacity overload", () => {
+      // The exact cases this function exists to exclude - confirmed by
+      // direct compilation not to assign a colour anywhere in their output.
+      expect(isNonColorOverload(designSystem, "shadow", "lg")).toBe(true);
+      expect(isNonColorOverload(designSystem, "text-shadow", "lg")).toBe(true);
+      expect(isNonColorOverload(designSystem, "drop-shadow", "lg")).toBe(true);
+      expect(isNonColorOverload(designSystem, "text", "sm")).toBe(true);
     });
   });
 });
