@@ -23,7 +23,7 @@
  * throw with advice (interpolated alphas, arbitrary alphas, arbitrary colour
  * values). It never just skips.
  *
- * That claim has been wrong six times now (round 2: `.ts` files not walked;
+ * That claim has been wrong eight times now (round 2: `.ts` files not walked;
  * round 3: `bg-[var(--x)]/[.5]` fell between three unresolvable-shape
  * patterns; ugcportal-j4j round 1: a side/offset-qualified utility
  * mis-resolved to a token that does not exist, and a fractional alpha matched
@@ -38,11 +38,24 @@
  * `bg-[var(--x)]`, compiling identically - matched nothing at all, on both
  * the name and the alpha axis, so `bg-(--primary)/50` shipped unmeasured
  * with the suite green: not an unenumerated namespace this time, but an
- * unenumerated *spelling* of a shape this module already claimed to handle).
- * Every round patched the reported cases and left the next shape
- * unenumerated, because first the namespace list, then the
- * background/foreground classification, then the syntax used to spell an
- * arbitrary value, was hand-curated: a person recalling Tailwind's syntax
+ * unenumerated *spelling* of a shape this module already claimed to handle;
+ * ugcportal-j4j round 5: two more, both in code a hand-curated set or a
+ * hand-written character class had quietly kept alive. The arbitrary-value
+ * hint allowlist (`length:`/`number:`/`percentage:`/`integer:`/`angle:`/
+ * `ratio:`) was wrong in both directions - `size:`/`absolute-size:`/
+ * `relative-size:` all compile to `font-size` too and were missing, hard-
+ * failing `text-[size:var(--x)]/6` as an "arbitrary colour"; `number:`/
+ * `ratio:`/`angle:`/`integer:` still compile to `color-mix(...)` under a
+ * colour namespace and were being silently skipped as if hinted non-colour.
+ * And the legacy leading `!important` spelling (`!ring-ring/80`) compiled
+ * and composited correctly in 4.3.3 but matched nothing at all, because `!`
+ * was never a recognised boundary character - a live route around the gate,
+ * not merely an unenumerated shape). Every round patched the reported cases
+ * and left the next shape, set, or character class unenumerated, because
+ * first the namespace list, then the background/foreground classification,
+ * then the syntax used to spell an arbitrary value, then the arbitrary
+ * value's own type-hint vocabulary, was hand-curated: a person recalling
+ * Tailwind's syntax
  * from memory, however carefully, cannot be complete, because completeness
  * is a property of the *installed Tailwind version*, not of anyone's memory
  * - and the lesson generalises to any shape or set in this file with that
@@ -97,9 +110,10 @@
  * Name form, one of:
  *   - a bare scale name (`primary`, `surface-2`), resolved to `--color-<name>`
  *     if `isNonColorOverload` says it mixes a colour, excluded if not.
- *   - an arbitrary value that is a length, number or similar non-colour value
- *     such as `[0.8rem]` or the parenthesised equivalent `(length:--x)`
- *     (deliberately excluded - `isNonColorArbitraryValue`).
+ *   - an arbitrary value that is a length, font-size or similar non-colour
+ *     value, such as `[0.8rem]`, `(length:--x)` or `[size:var(--x)]`
+ *     (deliberately excluded - by `isNonColorOverload`, the same function
+ *     that classifies a bare name; see ugcportal-j4j round 5 finding 1).
  *   - an arbitrary value that IS a colour, in either of its two spellings:
  *     brackets (`[#fff]`, `[var(--x)]`) or the parenthesised CSS-variable
  *     shorthand (`(--x)`, `(color:--x)`) - the same shape, and this module
@@ -225,8 +239,36 @@ export function discoverColorNamespaces(
 /**
  * True if `${prefix}-${name}` is a real Tailwind utility whose modifier means
  * something other than colour alpha - a preset's own opacity
- * (`text-shadow-lg/50`, `shadow-lg/20`), a line-height (`text-sm/6`) - rather
- * than a colour this module should resolve and measure.
+ * (`text-shadow-lg/50`, `shadow-lg/20`), a line-height (`text-sm/6`), an
+ * arbitrary font-size (`text-[size:var(--x)]/6`, `text-(size:--x)/6`,
+ * `text-[absolute-size:large]/6`) - rather than a colour this module should
+ * resolve and measure.
+ *
+ * `name` may be a bare scale name (`primary`) or either spelling of an
+ * arbitrary value (`[var(--x)]`, `(--x)`, with or without a type hint) - this
+ * function does not need to know or care which, because it never inspects
+ * `name`'s text at all, only what compiling it actually produces.
+ *
+ * ugcportal-j4j round 5 finding 1 (MAJOR, "the last hand-curated set in the
+ * file"): arbitrary values used to be classified separately, by a hand-kept
+ * allowlist of Tailwind's type-hint keywords (`length:`, `number:`,
+ * `percentage:`, `integer:`, `angle:`, `ratio:`) presumed to always mean
+ * "not a colour". Wrong in both directions, confirmed by compiling: `size:`,
+ * `absolute-size:` and `relative-size:` all compile to `font-size` too and
+ * were missing from the list, so `text-[size:var(--x)]/6` hard-failed as an
+ * "arbitrary colour" - and `number:`, `ratio:`, `angle:` and `integer:` all
+ * still compile to `color-mix(...)` when the namespace is a colour namespace
+ * (`bg-[number:var(--x)]/50`, `ring-(ratio:--x)/50`, `via-(angle:--x)/50`),
+ * because within a colour-accepting namespace a hint only tells Tailwind's
+ * engine what CSS data type the raw value is, not "treat this as a
+ * non-colour" - so these were silently skipped despite being real colours.
+ * A hand-kept list of hint keywords has exactly the same completeness
+ * problem as a hand-kept list of namespaces: it depends on Tailwind's
+ * vocabulary, not on anyone's memory of it. Deleted rather than extended -
+ * this function already answers the only question that matters
+ * ("does compiling this actually assign a colour") for a bare name, and
+ * answers it identically for an arbitrary one, so no separate function or
+ * allowlist is needed for that shape at all.
  *
  * Derived by compiling the actual candidate (at a fixed probe alpha; only
  * whether it compiles and what it sets matters, not the value) and looking
@@ -374,7 +416,21 @@ const PREFIX_ALTERNATION = COLOR_UTILITY_PREFIXES.join("|");
 
 // A utility may carry any number of variant prefixes (`focus-visible:`,
 // `aria-invalid:`, `dark:hover:`), so match on the boundary before it.
-const BOUNDARY = String.raw`(?:^|[\s"'\`:\[(])`;
+//
+// `!` and `}` (ugcportal-j4j round 5 finding 2 - MAJOR): the legacy leading
+// `!important` spelling (`!ring-ring/80`, `hover:!text-primary/50`) compiles
+// in 4.3.3 - confirmed emitting `!important` on the composited declaration -
+// but was a live route around the gate, because `!` was not a recognised
+// boundary character: the utility right after it never matched at all, not
+// even as an unresolvable shape. Unlike a new namespace or a new arbitrary-
+// value spelling, this is a missing *boundary* character - the utility text
+// itself (`ring-ring/80`) is identical to a case already handled; only what
+// can legally precede it was incomplete. `}` covers the same gap for a
+// template-literal interpolation ending a class list open
+// (`` `${x}bg-primary/50` ``), which the boundary class already handled on
+// the *opening* side (`` `${ `` via the backtick and `$`... but not the
+// closing `}` before a literal continuation).
+const BOUNDARY = String.raw`(?:^|[\s"'\`:\[(!}])`;
 
 /**
  * One pattern for the whole space, rather than a resolvable pattern plus a
@@ -418,29 +474,6 @@ const ALPHA_UTILITY = new RegExp(
   String.raw`${BOUNDARY}(${PREFIX_ALTERNATION})-(\[[^\]]*\]|\([^)]*\)|[a-z0-9][a-z0-9-]*)\/(\$\{|\[[^\]]*\]|\([^)]*\)|\d+(?:\.\d+)?(?![\w.-]))`,
   "g",
 );
-
-/**
- * An arbitrary value that is a length or a bare number, so not a colour.
- * Shared by both arbitrary-value spellings, `[...]` and the parenthesised
- * variable shorthand `(...)` - `bg-[var(--x)]` and `bg-(--x)` compile
- * identically, and the parenthesised form's inner text (a bare
- * `--custom-ident`, optionally hinted the same way: `length:--x`,
- * `color:--x`) happens to fail this function's numeric-literal check for
- * exactly the same reason a bracket colour reference does - it does not
- * start with a digit - so no shorthand-specific branch is needed here, only
- * in the caller that recognises `(...)` as a second delimiter pair.
- *
- * `text-[0.8rem]/5` is a font size with a line height, and button.tsx already
- * ships `text-[0.8rem]`. Treating it as a colour made the suite hard-fail with
- * advice about PAIRINGS, one character away from code already in the repo.
- * Tailwind's own `length:`/`number:`/`percentage:` hints are honoured too.
- */
-function isNonColorArbitraryValue(value: string): boolean {
-  const inner = value.slice(1, -1).trim();
-  if (/^(length|number|percentage|integer|angle|ratio):/.test(inner)) return true;
-  if (/^(color|image|url):/.test(inner)) return false;
-  return /^-?[\d.]+([a-z%]*)$/.test(inner);
-}
 
 export type AlphaUtilityUsage = {
   /** Path relative to the scanned root's parent, for error messages. */
@@ -542,15 +575,20 @@ export function findAlphaColorUtilities(
       //    either spelling, `[...]` or the parenthesised variable shorthand
       //    `(...)` (ugcportal-j4j round 4 finding 1: `bg-(--primary)` is
       //    `bg-[var(--primary)]` by another name, and compiles identically)
-      //    - may be a length rather than a colour.
+      //    - may be a length, font-size or similar non-colour value rather
+      //    than a colour. One check answers this for every name form
+      //    (ugcportal-j4j round 5 finding 1: arbitrary values used to be
+      //    classified by a separate, hand-kept hint allowlist that was wrong
+      //    in both directions - deleted, not extended, since this compiles
+      //    the actual candidate regardless of whether `name` is bare or
+      //    arbitrary and needs no allowlist to do it).
+      if (isNonColorOverload(designSystem, prefix, name)) continue;
       if (name.startsWith("[") || name.startsWith("(")) {
-        if (isNonColorArbitraryValue(name)) continue;
         fail(
           `${relative}: "${written}..." applies an alpha to an arbitrary colour ` +
             `value. Use a design token so the gate can resolve and measure it.`,
         );
       }
-      if (isNonColorOverload(designSystem, prefix, name)) continue;
 
       // 2. It is a colour. Can the alpha be resolved to a number?
       if (modifier.startsWith("${")) {

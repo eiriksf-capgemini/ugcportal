@@ -97,6 +97,61 @@ describe("findAlphaColorUtilities", () => {
     expect(findAlphaColorUtilities(root)).toEqual([]);
   });
 
+  // ugcportal-j4j round 5 finding 2 (MAJOR): the legacy leading `!important`
+  // spelling compiles in 4.3.3 (confirmed emitting `!important` on the
+  // composited declaration) but `!` was not a recognised boundary character,
+  // so the utility right after it never matched at all - a live route
+  // around the gate for any component reaching for `!ring-ring/80` instead
+  // of the modern trailing-`!` spelling.
+
+  it("finds a utility behind the legacy leading !important spelling", () => {
+    const root = fixture({
+      "a.tsx": `const c = "!ring-ring/80";`,
+    });
+    expect(findAlphaColorUtilities(root)).toEqual([
+      {
+        file: expect.stringContaining("a.tsx"),
+        utility: "ring-ring/80",
+        property: "--color-ring",
+        alphaPercent: 80,
+        role: "foreground",
+        prefix: "ring",
+      },
+    ]);
+  });
+
+  it("finds a utility behind !important after a variant prefix too", () => {
+    const root = fixture({
+      "a.tsx": `const c = "hover:!text-primary/50";`,
+    });
+    expect(findAlphaColorUtilities(root)).toEqual([
+      {
+        file: expect.stringContaining("a.tsx"),
+        utility: "text-primary/50",
+        property: "--color-primary",
+        alphaPercent: 50,
+        role: "foreground",
+        prefix: "text",
+      },
+    ]);
+  });
+
+  it("finds a utility immediately after a template-literal interpolation closes", () => {
+    const root = fixture({
+      "a.tsx": "const c = `${dynamic}bg-primary/50`;",
+    });
+    expect(findAlphaColorUtilities(root)).toEqual([
+      {
+        file: expect.stringContaining("a.tsx"),
+        utility: "bg-primary/50",
+        property: "--color-primary",
+        alphaPercent: 50,
+        role: "background",
+        prefix: "bg",
+      },
+    ]);
+  });
+
   it("skips test files and generated output", () => {
     const root = fixture({
       "a.test.tsx": `const c = "ring-ring/10";`,
@@ -207,10 +262,26 @@ describe("findAlphaColorUtilities", () => {
   it("does not treat an arbitrary length as a colour", () => {
     // button.tsx already ships text-[0.8rem]; adding a line height to it is
     // one character away, and used to hard-fail with advice about PAIRINGS.
+    // A unit (rem, px) or an explicit hint (length:) is what disambiguates -
+    // see the next test for the unhinted, unitless case, which does not.
     const root = fixture({
-      "a.tsx": `const c = "text-[0.8rem]/5 text-[14px]/6 text-[length:var(--x)]/5 text-[1.6]/7";`,
+      "a.tsx": `const c = "text-[0.8rem]/5 text-[14px]/6 text-[length:var(--x)]/5";`,
     });
     expect(findAlphaColorUtilities(root)).toEqual([]);
+  });
+
+  it("treats a bare, unhinted, unitless bracket value as an attempted colour, not a length", () => {
+    // ugcportal-j4j round 5 finding 1: confirmed against the compiler -
+    // text-[1.6]/7, with neither a unit nor a `length:` hint, compiles to
+    // `color: color-mix(in oklab, 1.6 7%, transparent)` - Tailwind itself
+    // treats an ambiguous bare number under a colour namespace as an
+    // attempted colour, not a length. The old hint-allowlist classified
+    // this as non-colour purely because it looked numeric, which happened
+    // to match Tailwind's behaviour for `text-[0.8rem]` (has a unit) but not
+    // for this one - exactly the kind of case a compile-based check gets
+    // right without needing to special-case it.
+    const root = fixture({ "a.tsx": `const c = "text-[1.6]/7";` });
+    expect(() => findAlphaColorUtilities(root)).toThrow(/arbitrary colour/);
   });
 
   it("refuses an arbitrary colour carrying an arbitrary alpha", () => {
@@ -590,9 +661,25 @@ describe("findAlphaColorUtilities", () => {
 
   it("honours an explicit non-colour hint inside the parenthesised shorthand", () => {
     // (length:--x) is Tailwind's parenthesised spelling of [length:var(--x)] -
-    // a length, not a colour, the same shape as the existing bracket hint test.
-    const root = fixture({ "a.tsx": `const c = "bg-(length:--x)/50";` });
+    // a length, not a colour, the same shape as the existing bracket hint
+    // test. Under `text-`, which is overloaded between font-size and colour;
+    // under `bg-`, which is colour-only, Tailwind refuses a `length:` hint
+    // entirely (confirmed: bg-(length:--x) does not compile at all), so that
+    // combination is not this test's concern - see the next test for it.
+    const root = fixture({ "a.tsx": `const c = "text-(length:--x)/50";` });
     expect(findAlphaColorUtilities(root)).toEqual([]);
+  });
+
+  it("treats a hint Tailwind refuses for this namespace as an unresolvable colour attempt, not a silent exclusion", () => {
+    // bg- only ever means background-color, so a `length:` hint is a type
+    // mismatch Tailwind itself rejects - confirmed: bg-(length:--x)/50 does
+    // not compile to anything at all. isNonColorOverload returns false for a
+    // candidate that fails to compile (deliberately - it might be a typo or
+    // a forgotten token, not this function's call to make), so this falls
+    // through to the same "arbitrary colour value" refusal as any other
+    // unresolvable arbitrary colour, rather than being silently dropped.
+    const root = fixture({ "a.tsx": `const c = "bg-(length:--x)/50";` });
+    expect(() => findAlphaColorUtilities(root)).toThrow(/arbitrary colour/);
   });
 
   it("refuses a parenthesised variable shorthand carrying an explicit colour hint", () => {
@@ -607,4 +694,42 @@ describe("findAlphaColorUtilities", () => {
     const root = fixture({ "a.tsx": `const c = "bg-primary/(--a)";` });
     expect(() => findAlphaColorUtilities(root)).toThrow(/parenthesised CSS-variable shorthand/);
   });
+
+  // ugcportal-j4j round 5 finding 1 (MAJOR, "the last hand-curated set in
+  // the file"): the hint allowlist was wrong in both directions. Confirmed
+  // against the compiler for every case the review named; deleted rather
+  // than extended, in favour of the same compile-and-check isNonColorOverload
+  // already uses for bare names.
+
+  it.each(["size", "absolute-size", "relative-size"])(
+    "excludes the %s: font-size hint, which the old allowlist did not know about",
+    (hint) => {
+      const root = fixture({
+        "a.tsx": `const c = "text-[${hint}:var(--x)]/6 text-(${hint}:--x)/6";`,
+      });
+      expect(findAlphaColorUtilities(root)).toEqual([]);
+    },
+  );
+
+  it.each(["number", "ratio", "angle", "integer"])(
+    "treats the %s: hint as an attempted colour under a colour namespace, which the old allowlist silently skipped",
+    (hint) => {
+      // The old allowlist treated these four hints as always meaning
+      // "not a colour", because they can describe a non-colour CSS value in
+      // general. But within a namespace this scanner already restricts
+      // itself to (one confirmed to accept colour+alpha), Tailwind still
+      // composites the hinted value as a colour - the hint only tells its
+      // engine what raw CSS type the bracket/paren content is, not "give up
+      // on treating this as this utility's colour argument". An arbitrary
+      // value never resolves to a token regardless (there is nothing in
+      // globals.css to measure it against), so the correctly-classified
+      // outcome is the same "arbitrary colour" refusal every other
+      // arbitrary colour gets - the old allowlist's bug was reaching
+      // "excluded, say nothing" instead of this refusal at all.
+      const root = fixture({
+        "a.tsx": `const c = "ring-[${hint}:var(--x)]/50";`,
+      });
+      expect(() => findAlphaColorUtilities(root)).toThrow(/arbitrary colour/);
+    },
+  );
 });

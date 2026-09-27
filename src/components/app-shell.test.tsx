@@ -103,8 +103,8 @@ async function compile(classNames: string): Promise<string> {
  * type-or-pseudo-element). Scoped deliberately to what Tailwind actually
  * emits for a single utility-with-variants selector - one compound selector,
  * escaped classes, zero or more trailing *simple* pseudo-classes, no
- * combinators, no IDs, no element selectors. A general CSS selector parser
- * is out of scope; this is not one.
+ * combinators, no IDs, no element selectors, no pseudo-elements. A general
+ * CSS selector parser is out of scope; this is not one.
  *
  * That scope excludes functional pseudo-classes (`:is()`, `:where()`,
  * `:not()`) on purpose: their specificity is that of their most specific
@@ -122,6 +122,17 @@ async function compile(classNames: string): Promise<string> {
  * (0,2,0) - a resolver silently picking the winner the browser would not.
  * Refusing is what usage.ts does for everything genuinely out of its scope;
  * this function does the same rather than guess.
+ *
+ * The docstring's exclusion of pseudo-elements was the same unenforced kind
+ * of claim (ugcportal-j4j round 5 finding 3, sibling of finding 3 above): a
+ * `::before`/`::after` (double-colon) contributes to the *third* tuple slot
+ * (elements/pseudo-elements), not the second, and a future
+ * `before:`/`after:` padding utility on the skip link would have been
+ * counted as (0,2,0) instead of the real (0,1,1) - close enough to the
+ * padding-carrying utility's own (0,2,0) that this resolver could pick the
+ * wrong winner, and worse, a pseudo-element's padding does not affect the
+ * *element's* box at all, so attributing it here is doubly wrong regardless
+ * of the count. Refused for the same reason as a functional pseudo-class.
  */
 type Specificity = readonly [number, number, number];
 
@@ -137,6 +148,17 @@ function specificityOf(selector: string): Specificity {
         `\`dark:\` is exactly such a case, via \`@custom-variant dark ` +
         `(&:is(.dark *))\`), this resolver needs teaching how to evaluate it, ` +
         `not a guess.`,
+    );
+  }
+  const pseudoElement = /(?<!\\)::[a-zA-Z-]+/.exec(selector);
+  if (pseudoElement) {
+    throw new Error(
+      `specificityOf: "${selector}" contains a pseudo-element (${pseudoElement[0]}) - ` +
+        `out of scope for this hand-rolled calculator, which only counts classes and ` +
+        `simple pseudo-classes into the second specificity slot. A pseudo-element ` +
+        `contributes to the third slot instead, and its padding does not affect the ` +
+        `real element's box at all - this resolver needs teaching how to evaluate ` +
+        `that, not a guess.`,
     );
   }
   const ids = (selector.match(/(?<!\\)#/g) ?? []).length;
@@ -224,29 +246,66 @@ function resolvePaddingCascade(
   > = {};
   let order = 0;
 
-  root.walkAtRules("layer", (atRule) => {
-    if (atRule.params !== "utilities") return;
-    atRule.walkRules((rule: Rule) => {
-      const currentOrder = order;
-      order += 1;
-      const specificity = specificityOf(rule.selector);
-      rule.walkDecls((decl) => {
-        const expanded = expandPaddingDeclaration(decl.prop, decl.value);
-        for (const [prop, value] of Object.entries(expanded)) {
-          const key = prop as PhysicalPadding;
-          const existing = winners[key];
-          const specificityCompare = existing
-            ? compareSpecificity(specificity, existing.specificity)
-            : 1;
-          if (
-            !existing ||
-            specificityCompare > 0 ||
-            (specificityCompare === 0 && currentOrder >= existing.order)
-          ) {
-            winners[key] = { value, specificity, order: currentOrder };
-          }
+  function processRule(rule: Rule): void {
+    const currentOrder = order;
+    order += 1;
+    const specificity = specificityOf(rule.selector);
+    rule.walkDecls((decl) => {
+      const expanded = expandPaddingDeclaration(decl.prop, decl.value);
+      for (const [prop, value] of Object.entries(expanded)) {
+        const key = prop as PhysicalPadding;
+        const existing = winners[key];
+        const specificityCompare = existing
+          ? compareSpecificity(specificity, existing.specificity)
+          : 1;
+        if (
+          !existing ||
+          specificityCompare > 0 ||
+          (specificityCompare === 0 && currentOrder >= existing.order)
+        ) {
+          winners[key] = { value, specificity, order: currentOrder };
         }
-      });
+      }
+    });
+  }
+
+  root.walkAtRules("layer", (layerAtRule) => {
+    if (layerAtRule.params !== "utilities") return;
+    layerAtRule.each((node) => {
+      if (node.type === "rule") {
+        processRule(node as Rule);
+        return;
+      }
+      if (node.type === "atrule") {
+        // ugcportal-j4j round 5 finding 4: a conditional at-rule nested in
+        // @layer utilities (@media for a responsive variant like
+        // sm:focus-visible:px-3, @supports, @container, ...) makes every
+        // rule inside it conditionally active, not unconditional. The old
+        // unqualified `atRule.walkRules` on the whole `@layer utilities`
+        // block walked straight into it and counted its rules as always-on,
+        // which could make this test green about a padding fix that only
+        // applies above one breakpoint - the skip link would still render
+        // with no padding below it. Whether the condition holds depends on
+        // evaluating it against a specific viewport/environment, which this
+        // resolver does not do; refuse rather than guess, the same as
+        // specificityOf now does for a selector shape it cannot evaluate.
+        let containsPaddingDeclaration = false;
+        node.walkDecls((decl) => {
+          if (Object.keys(expandPaddingDeclaration(decl.prop, decl.value)).length > 0) {
+            containsPaddingDeclaration = true;
+          }
+        });
+        if (containsPaddingDeclaration) {
+          throw new Error(
+            `resolvePaddingCascade: found a padding declaration inside "@${node.name} ` +
+              `${node.params}" nested in @layer utilities. Whether that rule applies ` +
+              `depends on evaluating the condition against a specific environment, ` +
+              `which this hand-rolled resolver does not do - out of scope, not a guess.`,
+          );
+        }
+        // No padding declaration inside - safe to ignore regardless of the
+        // condition, since nothing in it can win a padding property either way.
+      }
     });
   });
 
@@ -392,5 +451,36 @@ describe("the skip link's focus-visible padding", () => {
     const css = await compile("dark:px-4");
     expect(css).toContain(":is(.dark *)"); // sanity: the mutation actually reached this shape
     expect(() => resolvePaddingCascade(css)).toThrow(/functional pseudo-class/);
+  });
+
+  /**
+   * ugcportal-j4j round 5 finding 3 (nit, harness family). Fixture mutation:
+   * `before:px-3` compiles to `.before\:px-3::before { padding-inline: ...; }`
+   * - a real, reachable shape - and the unguarded specificityOf counted the
+   * pseudo-element into the class column (0,2,0) instead of the real
+   * (0,1,1), on top of attributing a pseudo-element's padding to the real
+   * element's box at all. Confirms the guard actually fires rather than
+   * trusting the docstring's stated scope.
+   */
+  it("refuses to guess the specificity of a pseudo-element like ::before", async () => {
+    const css = await compile("before:px-3");
+    expect(css).toContain("::before"); // sanity: the mutation actually reached this shape
+    expect(() => resolvePaddingCascade(css)).toThrow(/pseudo-element/);
+  });
+
+  /**
+   * ugcportal-j4j round 5 finding 4 (nit, harness family). Fixture mutation:
+   * `sm:px-3` compiles to a rule nested inside `@media (width >= 40rem)`,
+   * which the old unqualified `atRule.walkRules` on the whole
+   * `@layer utilities` block walked into and counted as unconditionally
+   * active - the same shape `source(none)` (round 2 finding 5) fixed for
+   * leaking *unrelated* utilities in, but not for a *relevant* one nested
+   * inside a real, deliberately-added media condition. Confirms the guard
+   * fires rather than silently treating a responsive variant as always-on.
+   */
+  it("refuses to guess whether a media-conditional padding utility like sm:px-3 applies", async () => {
+    const css = await compile("sm:px-3");
+    expect(css).toContain("@media"); // sanity: the mutation actually reached this shape
+    expect(() => resolvePaddingCascade(css)).toThrow(/nested in @layer utilities/);
   });
 });

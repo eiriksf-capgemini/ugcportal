@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 
+import postcss from "postcss";
 import { describe, expect, it } from "vitest";
 
 import { parseColor } from "./color";
@@ -18,7 +19,12 @@ import {
   parseDeclarations,
   resolveToken,
 } from "./tokens";
-import { findAlphaColorUtilities, type AlphaUtilityUsage } from "./usage";
+import {
+  designSystem,
+  discoverColorNamespaces,
+  findAlphaColorUtilities,
+  type AlphaUtilityUsage,
+} from "./usage";
 
 const tokens = loadThemeTokens();
 const css = readFileSync(GLOBALS_CSS_PATH, "utf8");
@@ -134,8 +140,30 @@ const MEASURED_BACKGROUND = new Set(
  * `main`-equivalent floor of "measured at all" - the K2 protection above
  * still applies in full for text, which is where the bug it fixes actually
  * lived.
+ *
+ * Which namespaces those are is derived, not hand-written, for the same
+ * reason usage.ts derives its own sets rather than curating them
+ * (ugcportal-j4j round 5): compiling `${namespace}-red-500/50` and checking
+ * whether the declared CSS property is the bare `color` property - not
+ * `background-color`, `border-color`, `--tw-ring-color`, `fill`, `stroke`,
+ * or any of the other colour-bearing properties every other namespace
+ * compiles to - identifies exactly `text` and `placeholder` (confirmed
+ * against every namespace `discoverColorNamespaces` currently finds) without
+ * naming either one. A namespace that starts rendering glyphs some other
+ * way in a future Tailwind version would be picked up automatically; one
+ * that stops would drop out the same way.
  */
-const TEXT_PREFIXES = new Set(["text", "placeholder"]);
+const TEXT_PREFIXES = new Set(
+  discoverColorNamespaces(designSystem).filter((prefix) => {
+    const [css] = designSystem.candidatesToCss([`${prefix}-red-500/50`]);
+    if (css === null) return false;
+    let isColorProperty = false;
+    postcss.parse(css).walkDecls((decl) => {
+      if (decl.prop === "color") isColorProperty = true;
+    });
+    return isColorProperty;
+  }),
+);
 function expectedThresholdFor(usage: Pick<AlphaUtilityUsage, "prefix">): number {
   return TEXT_PREFIXES.has(usage.prefix) ? THRESHOLDS.body : 0;
 }
@@ -580,6 +608,16 @@ describe("the gate cannot be routed around", () => {
         tokens,
       ),
     ).toThrow(/translucent/);
+  });
+});
+
+describe("TEXT_PREFIXES (derived, not curated)", () => {
+  it("finds exactly text and placeholder, not any other colour-bearing namespace", () => {
+    // Pins the derivation's result, not just that it runs: caret, accent,
+    // fill and stroke all compile a colour too (caret-color, accent-color,
+    // fill, stroke), but none of them compile to the bare `color` property,
+    // so none should be in this set.
+    expect([...TEXT_PREFIXES].sort()).toEqual(["placeholder", "text"]);
   });
 });
 
