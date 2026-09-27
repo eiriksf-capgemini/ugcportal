@@ -5,7 +5,8 @@ import { DeleteObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
 import { getBucketName, getS3Client } from "@/lib/s3";
 
 /**
- * The rights-evidence store (ugcportal-0ss, checklist Part E.2).
+ * The rights-evidence store (ugcportal-0ss, checklist Part E.2; re-anchored
+ * to uploaders by ugcportal-vsm).
  *
  * Signed instruments, model releases and filled-in checklists are contracts
  * and personal data. They live under their own private prefix, are never
@@ -15,9 +16,11 @@ import { getBucketName, getS3Client } from "@/lib/s3";
  * into the database, on ResaleRightsReview.
  *
  * What this module guarantees and what it does not:
- *  - it always writes under `rights-evidence/<instagramAccountId>/`, and the
- *    account id is checked against a strict pattern first, so a caller cannot
- *    traverse out of the prefix;
+ *  - it always writes under `rights-evidence/<uploaderUserId>/`, and the id
+ *    is checked against a strict pattern first, so a caller cannot traverse
+ *    out of the prefix. Objects written before ugcportal-vsm sit under a
+ *    connected account's id instead; nothing rewrites them, and the key on
+ *    the audit row is still what finds them;
  *  - it sends no ACL at all (see the note at the PutObjectCommand) and asks
  *    for server-side encryption when `S3_EVIDENCE_SSE=AES256` is set (see
  *    below — off by default so the KMS-less dev MinIO works out of the box);
@@ -59,7 +62,7 @@ function encryptionSetting(): "AES256" | undefined {
 }
 
 /** cuid/cuid2-ish: the ids this app generates, and nothing with a slash. */
-const SAFE_ACCOUNT_ID = /^[A-Za-z0-9_-]{1,64}$/;
+const SAFE_SUBJECT_ID = /^[A-Za-z0-9_-]{1,64}$/;
 
 /**
  * Object keys get a strict allowlist rather than a blocklist: `..`, slashes,
@@ -80,13 +83,13 @@ function safeFilenamePart(filename: string): string {
 }
 
 export function rightsEvidenceKey(
-  instagramAccountId: string,
+  uploaderUserId: string,
   filename: string,
 ): string {
-  if (!SAFE_ACCOUNT_ID.test(instagramAccountId)) {
-    throw new Error("Unsafe Instagram account id for an evidence key");
+  if (!SAFE_SUBJECT_ID.test(uploaderUserId)) {
+    throw new Error("Unsafe uploader id for an evidence key");
   }
-  return `${RIGHTS_EVIDENCE_PREFIX}/${instagramAccountId}/${randomUUID()}-${safeFilenamePart(filename)}`;
+  return `${RIGHTS_EVIDENCE_PREFIX}/${uploaderUserId}/${randomUUID()}-${safeFilenamePart(filename)}`;
 }
 
 export type StoredEvidence = { key: string; sha256: string };
@@ -121,17 +124,17 @@ export async function deleteRightsEvidence(key: string): Promise<void> {
  * is, and a hash proving it is the file that was reviewed.
  */
 export async function putRightsEvidence({
-  instagramAccountId,
+  uploaderUserId,
   filename,
   body,
   contentType,
 }: {
-  instagramAccountId: string;
+  uploaderUserId: string;
   filename: string;
   body: Uint8Array;
   contentType?: string;
 }): Promise<StoredEvidence> {
-  const key = rightsEvidenceKey(instagramAccountId, filename);
+  const key = rightsEvidenceKey(uploaderUserId, filename);
   const sha256 = createHash("sha256").update(body).digest("hex");
 
   await getS3Client().send(

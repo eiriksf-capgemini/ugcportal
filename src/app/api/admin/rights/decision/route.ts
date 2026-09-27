@@ -11,12 +11,12 @@ import {
   deleteRightsEvidence,
   putRightsEvidence,
 } from "@/lib/rights-evidence";
-import { INSTAGRAM_SETTINGS_PATH } from "@/lib/routes";
+import { RIGHTS_SETTINGS_PATH } from "@/lib/routes";
 
 /**
- * Record a resale-rights decision for one connected account (ugcportal-0ss,
- * checklist Part E). This is the *only* path that can write
- * status = CLEARED.
+ * Record a resale-rights decision for one uploader (ugcportal-0ss, checklist
+ * Part E; re-anchored from connected accounts to uploaders by
+ * ugcportal-vsm). This is the *only* path that can write status = CLEARED.
  *
  * A route handler rather than a server action, which is the unusual choice
  * here and the deliberate one. The decision can carry an evidence file, and
@@ -52,7 +52,7 @@ function settingsRedirect(request: Request, query = ""): NextResponse {
   // 303: the browser must follow a POST redirect with GET, or the settings
   // page is re-requested as a POST.
   return NextResponse.redirect(
-    new URL(`${INSTAGRAM_SETTINGS_PATH}${query}`, expectedOrigin() ?? request.url),
+    new URL(`${RIGHTS_SETTINGS_PATH}${query}`, expectedOrigin() ?? request.url),
     303,
   );
 }
@@ -103,9 +103,14 @@ export async function POST(request: Request) {
   }
   const formData = body.value;
 
-  const instagramAccountId = formData.get("instagramAccountId");
-  if (typeof instagramAccountId !== "string" || !instagramAccountId) {
-    return NextResponse.json({ error: "Missing account id" }, { status: 400 });
+  // Whose uploads this decision is about. Not validated against the user
+  // table here: setResaleRightsStatus reads the row inside its transaction
+  // and writes this as a foreign key, so a made-up id is refused there (and
+  // reported as `uploader_not_found`) rather than by a check that could
+  // drift from it.
+  const uploaderUserId = formData.get("uploaderUserId");
+  if (typeof uploaderUserId !== "string" || !uploaderUserId) {
+    return NextResponse.json({ error: "Missing uploader id" }, { status: 400 });
   }
 
   const status = formData.get("status");
@@ -159,14 +164,6 @@ export async function POST(request: Request) {
 
   const conditions = optionalField(formData, "conditions");
 
-  // Whose uploads this clearance covers. Not validated against the user
-  // table here: setResaleRightsStatus writes it as a foreign key, so a made
-  // up id is refused by the database (and reported as `missing_reference`)
-  // rather than by a check that could drift from it. A blank value clears
-  // it, and a CLEARED review without one authorises nothing (see
-  // accountClearanceBlocker).
-  const clearedOwnerUserId = optionalField(formData, "clearedOwnerUserId");
-
   // Uploaded before the status write, so a failed upload leaves no clearance
   // claiming evidence that isn't there. The cost of this ordering is the
   // other kind of orphan: if the write below is then refused, the object
@@ -180,14 +177,14 @@ export async function POST(request: Request) {
     }
     try {
       evidence = await putRightsEvidence({
-        instagramAccountId,
+        uploaderUserId,
         filename: file.name,
         body: new Uint8Array(await file.arrayBuffer()),
         contentType: file.type,
       });
     } catch (cause) {
       console.error("[resale-rights] evidence upload failed", {
-        instagramAccountId,
+        uploaderUserId,
         cause,
       });
       return settingsRedirect(request, "?error=rights_evidence_failed");
@@ -196,7 +193,7 @@ export async function POST(request: Request) {
 
   let result;
   try {
-    result = await setResaleRightsStatus(instagramAccountId, {
+    result = await setResaleRightsStatus(uploaderUserId, {
       source: "ADMIN",
       actorUserId: session.user.id,
       actorEmail: session.user.email,
@@ -205,7 +202,6 @@ export async function POST(request: Request) {
       route,
       validUntil,
       conditions,
-      clearedOwnerUserId,
       evidence,
       restampChecklist,
     });
@@ -220,17 +216,18 @@ export async function POST(request: Request) {
     throw error;
   }
 
-  revalidatePath(INSTAGRAM_SETTINGS_PATH);
+  revalidatePath(RIGHTS_SETTINGS_PATH);
 
   // Closed set, mapped exhaustively rather than with a default, so a new
   // outcome fails to compile here instead of silently reporting success.
   const FAILURE_CODES = {
-    account_not_found: "rights_account_not_found",
+    uploader_not_found: "rights_uploader_not_found",
     // The session said ADMIN but the database disagrees — the role was
     // revoked between sign-in and now.
     actor_not_admin: "rights_actor_not_admin",
     conflict: "rights_conflict",
-    // The rights holder named on the form was deleted before the write.
+    // A user this decision names — the uploader, or the reviewer — was
+    // deleted before the write landed.
     missing_reference: "rights_holder_missing",
     forbidden_system_transition: "rights_conflict",
   } as const;

@@ -9,7 +9,8 @@ import {
 import { toDateInputValue } from "./dates";
 
 /**
- * The resale-rights decision form (ugcportal-0ss).
+ * The resale-rights decision form (ugcportal-0ss, re-anchored to uploaders
+ * by ugcportal-vsm).
  *
  * A separate module from page.tsx so it can be rendered on its own in a
  * test. That is not tidiness: this form is an *edit* form for a record whose
@@ -26,31 +27,28 @@ export type DecisionFormReview = {
   validUntil: Date | null;
   conditions: string | null;
   checklistVersion: string;
-  clearedOwnerUserId: string | null;
-};
-
-/** A user this clearance could name as the rights holder. */
-export type RightsHolderOption = {
-  id: string;
-  name: string | null;
-  email: string | null;
 };
 
 export function ResaleRightsDecisionForm({
-  instagramAccountId,
+  uploaderUserId,
   review,
-  rightsHolders,
   action,
 }: {
-  instagramAccountId: string;
+  /**
+   * The uploader this decision is about. Identity from the page, not a
+   * choice the form offers: the gate reaches a clearance through the file's
+   * own owner, so there is no "whose rights does this cover" field to get
+   * wrong. ugcportal-0ss had one (`clearedOwnerUserId`) and it produced two
+   * separate round-trip bugs — a lossy option list, then a truncation notice
+   * that suppressed itself.
+   */
+  uploaderUserId: string;
   review: DecisionFormReview | null;
-  /** Users whose uploads a clearance could cover. */
-  rightsHolders: RightsHolderOption[];
   /**
    * The URL of the route handler that records the decision — a string, not
    * a server action. The evidence file needs a body limit that belongs to
    * one endpoint rather than to every server action in the app; see
-   * src/app/api/admin/instagram/rights-decision/route.ts.
+   * src/app/api/admin/rights/decision/route.ts.
    */
   action: string;
 }) {
@@ -58,29 +56,6 @@ export function ResaleRightsDecisionForm({
   const versionRetired = Boolean(
     storedVersion && !ACCEPTED_CHECKLIST_VERSIONS.has(storedVersion),
   );
-
-  /**
-   * The recorded rights holder is always an option, even when the caller's
-   * list doesn't contain them.
-   *
-   * The list is capped (the page renders it per account), so a holder
-   * outside that slice would otherwise render no matching <option>; the
-   * browser submits the first one, which is blank, and the handler
-   * faithfully reads that as "clear it". Editing an unrelated field would
-   * then erase whose rights were cleared and make the account unsellable.
-   *
-   * Handled here rather than only in the page because it is a property of
-   * the *control* — a select whose stored value is missing from its options
-   * is lossy no matter who assembled the list.
-   */
-  const recordedHolder = review?.clearedOwnerUserId ?? null;
-  const holderOptions =
-    recordedHolder && !rightsHolders.some((one) => one.id === recordedHolder)
-      ? [
-          { id: recordedHolder, name: null, email: null },
-          ...rightsHolders,
-        ]
-      : rightsHolders;
 
   return (
     // encType is required: without it the browser posts
@@ -92,7 +67,7 @@ export function ResaleRightsDecisionForm({
       encType="multipart/form-data"
       className="mt-3 space-y-3"
     >
-      <input type="hidden" name="instagramAccountId" value={instagramAccountId} />
+      <input type="hidden" name="uploaderUserId" value={uploaderUserId} />
       <p className="text-xs text-muted-foreground">
         The decision is recorded against you by name. The current checklist is
         version {CURRENT_CHECKLIST_VERSION} (
@@ -106,9 +81,9 @@ export function ResaleRightsDecisionForm({
               : "text-xs text-muted-foreground"
           }
         >
-          This account was last reviewed against version {storedVersion}
+          This uploader was last reviewed against version {storedVersion}
           {versionRetired
-            ? " — a retired version, so nothing from it is sellable until it is reviewed again."
+            ? " — a retired version, so nothing of theirs is sellable until they are reviewed again."
             : "."}
         </p>
       ) : null}
@@ -140,24 +115,11 @@ export function ResaleRightsDecisionForm({
             </option>
           ))}
         </select>
-      </label>
-      <label className="block text-xs font-medium">
-        Rights holder — whose uploads this clearance covers
-        <select
-          name="clearedOwnerUserId"
-          defaultValue={review?.clearedOwnerUserId ?? ""}
-          className="mt-1 block w-full rounded-md border border-input bg-surface-3 p-2 text-sm text-foreground"
-        >
-          <option value="">not recorded</option>
-          {holderOptions.map((holder) => (
-            <option key={holder.id} value={holder.id}>
-              {holder.name ?? holder.email ?? holder.id}
-            </option>
-          ))}
-        </select>
         <span className="mt-1 block font-normal text-muted-foreground">
-          Only this user&apos;s own uploads can be sold under the clearance.
-          A CLEARED decision with nobody named here sells nothing.
+          A clearance here covers this uploader&apos;s own work only. What is
+          <em> in</em> each file — a recognisable person, music, a
+          collaborator, a sponsorship — is triaged and cleared per upload, and
+          nothing sells until both are done.
         </span>
       </label>
       <label className="block text-xs font-medium">
@@ -218,7 +180,7 @@ export function ResaleRightsDecisionForm({
             className="mt-0.5"
           />
           <span>
-            I have just worked this account through checklist version{" "}
+            I have just worked this uploader through checklist version{" "}
             {CURRENT_CHECKLIST_VERSION}. Leave unticked to keep the recorded
             version ({storedVersion}) — an edit to the fields above does not
             count as a re-review.
