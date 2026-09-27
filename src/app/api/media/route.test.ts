@@ -1326,6 +1326,61 @@ describe("POST /api/media — upload memory (ugcportal-05b)", () => {
     });
   });
 
+  it("says which limit cut off an upload it could not read a declaration for", async () => {
+    // Round-3 finding 3. A chunked client with the file field out of peek
+    // range is held to the smallest supported size — which is the right
+    // answer, but a bare "Request body too large" is indistinguishable from
+    // being over a per-kind cap, so a 50 MB video cut at ~10 MB had no
+    // indication why or what to change. The constant's own comment claimed
+    // the client was told; nothing told it.
+    configureContainer(1024);
+    const fields: Array<[string, string]> = [
+      ["caption", "c".repeat(9 * 1024)],
+    ];
+
+    const response = await POST(
+      formRequest({
+        fields,
+        payloadBytes: 20 * 1024 * 1024,
+        contentType: "video/mp4",
+      }),
+    );
+
+    expect(response.status).toBe(413);
+    const payload = (await response.json()) as {
+      error: string;
+      maxBytes: number;
+    };
+    expect(payload.error).toContain("Could not read the upload's declared type");
+    expect(payload.error).toContain("Content-Length");
+    expect(payload.error).toContain("'file' field earlier in the form");
+    expect(payload.maxBytes).toBe(
+      MAX_IMAGE_UPLOAD_BYTES + MULTIPART_OVERHEAD_ALLOWANCE_BYTES,
+    );
+
+    expect(uploadMemoryStats().heldBytes).toBe(0);
+  });
+
+  it("keeps the plain 413 for an upload that simply exceeds its own kind's cap", async () => {
+    // The new message must not leak onto the ordinary case, where the limit
+    // that applied *is* the declared kind's and naming Content-Length would
+    // be misleading advice.
+    configureContainer(1024);
+
+    const response = await POST(
+      multipartRequest({
+        payloadBytes: 30 * 1024 * 1024,
+        filename: "huge.jpg",
+        contentType: "image/jpeg",
+      }).request,
+    );
+
+    expect(response.status).toBe(413);
+    await expect(response.json()).resolves.toEqual({
+      error: "Request body too large",
+    });
+  });
+
   it("warns once, naming the shortfall, when the container is too small", async () => {
     configureContainer(512);
     const settings = uploadMemoryStats().settings;

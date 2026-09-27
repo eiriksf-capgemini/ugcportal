@@ -172,8 +172,17 @@ export const MULTIPART_OVERHEAD_ALLOWANCE_BYTES = 256 * 1024;
  * the whole spendable budget (so the upload was refused outright with a 413
  * about server capacity) and on 1 GB monopolised the budget and 503'd
  * everything else for the duration. Capping small instead means such a client
- * uploads images normally and is told, with a 413, that a larger file needs a
- * Content-Length header — a diagnosable answer rather than a trap.
+ * uploads images normally, and a larger one is refused rather than served
+ * from a disproportionate commitment.
+ *
+ * Being refused has to be *diagnosable*, which is a separate obligation and
+ * is met in POST /api/media rather than here: a 413 reached through this
+ * constant carries a message naming the limit that applied and the two ways
+ * out of it (send Content-Length, or move the file field earlier), because a
+ * bare "Request body too large" is indistinguishable from being over a
+ * per-kind cap and would leave a chunked client cut off at ~10 MB with no
+ * idea why. An earlier version of this comment asserted the client was told;
+ * nothing told it.
  */
 export const UNDECLARED_UPLOAD_LIMIT_BYTES =
   MAX_IMAGE_UPLOAD_BYTES + MULTIPART_OVERHEAD_ALLOWANCE_BYTES;

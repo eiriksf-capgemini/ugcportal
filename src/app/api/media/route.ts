@@ -173,6 +173,10 @@ export async function POST(request: Request) {
     return await handleUpload(request, peeked.body, userId, {
       readLimitBytes,
       reservation,
+      // Null means the peek could not find the file part, so `readLimitBytes`
+      // is the undeclared floor rather than this upload's own kind's cap. The
+      // 413 has to say so — see below.
+      declarationRead: peeked.declaredContentType !== null,
     });
   } finally {
     // Held for the whole handler, not just the read: the File's backing store
@@ -188,7 +192,11 @@ async function handleUpload(
   request: Request,
   requestBody: ReadableStream<Uint8Array>,
   userId: string,
-  admission: { readLimitBytes: number; reservation: UploadReservation },
+  admission: {
+    readLimitBytes: number;
+    reservation: UploadReservation;
+    declarationRead: boolean;
+  },
 ) {
   const { readLimitBytes, reservation } = admission;
   const body = await readCappedFormDataFrom(request, requestBody, readLimitBytes, {
@@ -215,6 +223,26 @@ async function handleUpload(
             "Retry-After": String(reservation.retryAfterSeconds),
           },
         },
+      );
+    }
+    if (body.status === 413 && !admission.declarationRead) {
+      // The cap that cut this body off was not this upload's own kind's cap:
+      // the file part was not found in the first PART_HEADER_PEEK_BYTES and
+      // no usable Content-Length was sent, so it was held to the smallest
+      // supported size. A bare "Request body too large" is indistinguishable
+      // from being over a per-kind cap, and a chunked client sending a 50 MB
+      // video would be cut at ~10 MB with no idea why — the exact trap
+      // UNDECLARED_UPLOAD_LIMIT_BYTES's own comment claims to have removed.
+      // So say which limit applied, and both ways out of it.
+      return NextResponse.json(
+        {
+          error:
+            "Could not read the upload's declared type, so it was limited to " +
+            `${readLimitBytes} bytes. Send a Content-Length header, or put ` +
+            `the '${UPLOAD_FIELD_NAME}' field earlier in the form.`,
+          maxBytes: readLimitBytes,
+        },
+        { status: 413 },
       );
     }
     return NextResponse.json({ error: body.error }, { status: body.status });
