@@ -399,19 +399,26 @@ export interface WatermarkConcurrencySettings {
    * Named "gated" because that is the whole of what it bounds, and the
    * unqualified version of this claim was wrong. The route buffers each
    * request body *before* calling in, so uploads the gate has not admitted
-   * are not counted and are not bounded by anything: 60 concurrent 10 MB
-   * POSTs on the recommended 1 GB configuration are 8 admitted or queued
-   * (limit 3 + queue 5) and 52 shed, but all 60 bodies — ~1.2 GB — are
-   * resident at the moment those shed decisions are taken. The same figures
-   * appear in the Dockerfile's sizing note; if you change one, change both.
-   * Video uploads and oversized-then-rejected bodies are outside it
-   * too. Bounding the upload path as a whole — including the shed-image case
-   * this gate itself creates — is ugcportal-05b.
+   * are not counted here and never were: 60 concurrent 10 MB POSTs on the
+   * recommended 1 GB configuration are 8 admitted or queued (limit 3 +
+   * queue 5) and 52 shed, and every one of those 52 bodies used to be
+   * resident at the moment its shed decision was taken. Video uploads and
+   * oversized-then-rejected bodies were outside it too.
+   *
+   * Those three are now bounded — one step earlier, by the byte budget in
+   * src/lib/upload-memory.ts (ugcportal-05b), which refuses an upload before
+   * its body is read. This field is unchanged and still means exactly what
+   * it says; what changed is that it is no longer the *outermost* number.
+   * `projectedUploadPathPeakBytes` over there is, and the two are **not
+   * additive**: the per-caller body charge below is for bodies that budget
+   * is already holding, so summing them double-counts. Size a container from
+   * that figure, not from this one.
    */
   projectedGatedPeakBytes: number;
   /**
    * False when `projectedGatedPeakBytes` exceeds `usableBudgetBytes`. Read
-   * it as "the gated part fits, with headroom", not "the process fits".
+   * it as "the gated part fits, with headroom", not "the process fits" —
+   * for the process, see `fitsBudget` on UploadMemorySettings.
    */
   fitsBudget: boolean;
   /**

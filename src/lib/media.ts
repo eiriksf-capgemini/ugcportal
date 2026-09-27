@@ -12,6 +12,31 @@ const MIME_TO_KIND: Record<string, MediaKind> = {
   "video/quicktime": "VIDEO",
 };
 
+/**
+ * The declared MIME type's kind, or undefined — and never something off
+ * Object.prototype.
+ *
+ * A plain `MIME_TO_KIND[type]` is a lookup against the wrong set: the media
+ * type is fully client-controlled (it is a header on a multipart part, and
+ * `new File([], "x", { type: "constructor" }).type` is the string
+ * "constructor"), so `MIME_TO_KIND["constructor"]` answers with the Object
+ * constructor rather than with undefined, and `!kind` is false for it. What
+ * follows then compares against a value that is not a MediaKind at all:
+ * `MAX_SIZE_BYTES[kind]` is undefined and `file.size > undefined` is false,
+ * so an upload declaring one of a handful of Object.prototype names passed
+ * the per-kind size check entirely. It was caught one step later by
+ * sniffKind, which reads the actual bytes and cannot return anything but a
+ * MediaKind or null — so this was latent rather than exploitable — but the
+ * size check was not doing its job, and declaredUploadCapBytes below now
+ * needs the same table to answer a question sniffKind is in no position to
+ * back up: how many bytes to let through before the file exists at all.
+ */
+function kindForDeclaredType(mimeType: string): MediaKind | undefined {
+  return Object.hasOwn(MIME_TO_KIND, mimeType)
+    ? MIME_TO_KIND[mimeType]
+    : undefined;
+}
+
 const MAX_SIZE_BYTES: Record<MediaKind, number> = {
   IMAGE: 10 * 1024 * 1024, // 10 MB
   VIDEO: 200 * 1024 * 1024, // 200 MB
@@ -27,6 +52,42 @@ export const MAX_UPLOAD_BYTES =
 // request body alive, and the gate's memory arithmetic has to account for
 // it. Kept derived from MAX_SIZE_BYTES so the two cannot drift.
 export const MAX_IMAGE_UPLOAD_BYTES = MAX_SIZE_BYTES.IMAGE;
+
+/**
+ * The size cap {@link validateUpload} *will* apply to a file declaring
+ * `mimeType`, or null when it will refuse that type at any size.
+ *
+ * Exists so the upload route can apply that cap to the request **stream**,
+ * before the body has been materialised, instead of only to the `File` it
+ * already paid to build (ugcportal-05b).
+ *
+ * That is only sound if the two answers are the same answer, so this does not
+ * consult the tables itself — it asks `validateUpload`, with a size chosen so
+ * that the type is the only thing it can possibly refuse for. Anything else
+ * is a second implementation of the same rule, and the first version of this
+ * function proved the point: it normalised the media type by splitting off
+ * Content-Type parameters, which `validateUpload` does not do. `File.type`
+ * really does carry parameters on this runtime, so
+ * `video/mp4; codecs="avc1.42E01E"` was given a 200 MB stream cap and then
+ * refused with a 415 by validateUpload — the read-to-the-maximum-then-reject
+ * pattern this bead exists to remove, available to anyone who appends a
+ * parameter. The doc even claimed the two were provably identical while that
+ * was true.
+ *
+ * Returns null, rather than a fallback number, for a type validateUpload will
+ * not accept: such an upload is refused at *any* size, so what the caller
+ * should do with it is a policy decision (see uploadReadLimitBytes) rather
+ * than a cap.
+ */
+export function declaredUploadCapBytes(
+  mimeType: string | null | undefined,
+): number | null {
+  if (typeof mimeType !== "string") return null;
+  // size 1 is deliberately neither 0 (which validateUpload refuses as empty)
+  // nor above any cap, so `ok` is a statement about the type alone.
+  const validation = validateUpload({ type: mimeType, size: 1 });
+  return validation.ok ? MAX_SIZE_BYTES[validation.kind] : null;
+}
 
 // Signature checks against the actual bytes, so a mismatched or spoofed
 // Content-Type (fully client-controlled) can't smuggle a file past the
@@ -85,7 +146,7 @@ export function validateUpload(file: {
   type: string;
   size: number;
 }): UploadValidationResult {
-  const kind = MIME_TO_KIND[file.type];
+  const kind = kindForDeclaredType(file.type);
   if (!kind) {
     return {
       ok: false,
