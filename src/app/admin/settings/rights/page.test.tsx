@@ -285,6 +285,84 @@ describe("the decision form is opened one at a time", () => {
   });
 });
 
+/**
+ * The cap is a display limit, not a limit on who can be decided about.
+ *
+ * This screen is the only path in the codebase that can write
+ * `status = CLEARED`, so an uploader whose form cannot be opened is an
+ * uploader whose work can never be sold. Before this, ranking past the cap
+ * by email did exactly that and did it silently: a hand-typed `?edit=<id>`
+ * rendered an ordinary page with no form and nothing to say why.
+ */
+describe("the admin area is navigable without the deferred feature", () => {
+  it("links to users and roles", async () => {
+    // There is no admin nav. Until ugcportal-vsm the only in-app route to
+    // this screen sat on the Instagram settings page — a deferred feature —
+    // so an operator who never connected an account had no discoverable way
+    // to reach the one screen that gates all selling.
+    expect(await renderPage()).toContain('href="/admin/settings/users"');
+  });
+});
+
+describe("an uploader outside the listed slice can still be decided about", () => {
+  it("renders the form for someone ranked past the cap", async () => {
+    await createUploaders(MAX_UPLOADERS + 1);
+    // Sorted last by email, so they fall outside the slice the page lists.
+    const outside = `u${String(MAX_UPLOADERS).padStart(4, "0")}@example.com`;
+    const outsideId = `u-${String(MAX_UPLOADERS).padStart(4, "0")}`;
+
+    const closed = await renderPage();
+    expect(listedEmails(closed)).not.toContain(outside);
+
+    const markup = await renderPage({ edit: outsideId });
+
+    const hidden = [
+      ...markup.matchAll(/<input[^>]*name="uploaderUserId"[^>]*>/g),
+    ];
+    expect(hidden).toHaveLength(1);
+    expect(hidden[0][0]).toContain(`value="${outsideId}"`);
+    // And they are visible on the page, not just present in a hidden field.
+    expect(listedEmails(markup)).toContain(outside);
+  });
+
+  it("says why that uploader appears at the top", async () => {
+    await createUploaders(MAX_UPLOADERS + 1);
+    const outsideId = `u-${String(MAX_UPLOADERS).padStart(4, "0")}`;
+
+    const markup = await renderPage({ edit: outsideId });
+
+    expect(markup).toContain("fall outside the first");
+    // Pinned, not sorted into place: the admin came here to act on them.
+    expect(listedEmails(markup)[0]).toBe(
+      `u${String(MAX_UPLOADERS).padStart(4, "0")}@example.com`,
+    );
+  });
+
+  it("does not duplicate an uploader who is already listed", async () => {
+    await createUploaders(3);
+
+    const markup = await renderPage({ edit: "u-0001" });
+
+    const listed = listedEmails(markup);
+    expect(listed.filter((email) => email === "u0001@example.com")).toHaveLength(
+      1,
+    );
+    expect(markup).not.toContain("fall outside the first");
+  });
+
+  it("explains a ?edit= that names nobody, rather than rendering nothing", async () => {
+    // A stale tab, a deleted account, a typo. Silently rendering an ordinary
+    // page leaves the admin unable to tell the difference between "no form"
+    // and "no such person".
+    await createUploaders(2);
+
+    const markup = await renderPage({ edit: "ghost" });
+
+    expect(markup).toContain("no longer has an account");
+    expect(markup).not.toContain('name="uploaderUserId"');
+  });
+});
+
 describe("authorization", () => {
   it("is not found for a signed-out caller, and reads nothing", async () => {
     authMock.mockResolvedValue(null);

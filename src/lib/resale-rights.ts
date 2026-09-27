@@ -54,8 +54,17 @@ import {
  * Checklist version currently in force — the string at the top of
  * docs/legal/instagram-resale-rights-checklist.md. New clearances are
  * recorded against this one.
+ *
+ * Bumped from `2026-09-24.1` by ugcportal-vsm. That version asked about the
+ * content of one connected Instagram account; this one asks about an
+ * uploader, and a clearance against an uploader authorises their entire past
+ * and future upload history. A different question about a different subject
+ * with a wider blast radius is precisely what retiring a version is for — see
+ * E.0 in the checklist. The bump retires nothing in practice, because the
+ * migration discarded every account-level clearance, which is exactly why it
+ * was cheap to do now and would not have been later.
  */
-export const CURRENT_CHECKLIST_VERSION = "2026-09-24.1";
+export const CURRENT_CHECKLIST_VERSION = "2026-09-27.1";
 
 /**
  * Versions a *past* clearance may still rely on. Revising the checklist in a

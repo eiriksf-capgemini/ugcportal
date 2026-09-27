@@ -51,10 +51,35 @@ async function post(form: FormData, init?: RequestInit) {
   return POST(request(form, init));
 }
 
-/** The `?error=` / `?rights=` a 303 carries back to the settings page. */
-function outcomeOf(response: Response): string {
+/**
+ * What a 303 carries back to the settings page, as fields rather than as a
+ * raw query string.
+ *
+ * `edit` matters as much as `error` does: the settings page only renders the
+ * decision form for whoever `?edit=` names, so a redirect that drops it puts
+ * the admin on a long list with the form closed and no indication which
+ * uploader the error concerned.
+ */
+function outcomeOf(response: Response): {
+  error: string | null;
+  rights: string | null;
+  edit: string | null;
+} {
   expect(response.status).toBe(303);
-  return new URL(response.headers.get("location")!).search;
+  const params = new URL(response.headers.get("location")!).searchParams;
+  return {
+    error: params.get("error"),
+    rights: params.get("rights"),
+    edit: params.get("edit"),
+  };
+}
+
+/** A recoverable failure must name the code AND reopen the uploader's form. */
+function expectReopened(
+  outcome: ReturnType<typeof outcomeOf>,
+  error: string,
+): void {
+  expect(outcome).toEqual({ error, rights: null, edit: "uploader-1" });
 }
 
 beforeEach(() => {
@@ -208,7 +233,13 @@ describe("recording the decision", () => {
       }),
     );
 
-    expect(outcomeOf(response)).toBe("?rights=recorded");
+    // Success closes the form: the decision is written, and re-opening it
+    // for a record that was just saved invites submitting it twice.
+    expect(outcomeOf(response)).toEqual({
+      error: null,
+      rights: "recorded",
+      edit: null,
+    });
     expect(setResaleRightsStatusMock).toHaveBeenCalledWith("uploader-1", {
       source: "ADMIN",
       // Taken from the session, never from the form: the form cannot name
@@ -272,14 +303,14 @@ describe("recording the decision", () => {
   it("insists on a reason", async () => {
     const response = await post(decisionForm({ reason: "   " }));
 
-    expect(outcomeOf(response)).toBe("?error=rights_reason_required");
+    expectReopened(outcomeOf(response), "rights_reason_required");
     expect(setResaleRightsStatusMock).not.toHaveBeenCalled();
   });
 
   it("rejects an unparseable validUntil", async () => {
     const response = await post(decisionForm({ validUntil: "whenever" }));
 
-    expect(outcomeOf(response)).toBe("?error=rights_invalid_valid_until");
+    expectReopened(outcomeOf(response), "rights_invalid_valid_until");
     expect(setResaleRightsStatusMock).not.toHaveBeenCalled();
   });
 
@@ -288,16 +319,18 @@ describe("recording the decision", () => {
       outcome: "uploader_not_found",
     });
 
-    expect(outcomeOf(await post(decisionForm()))).toBe(
-      "?error=rights_uploader_not_found",
+    expectReopened(
+      outcomeOf(await post(decisionForm())),
+      "rights_uploader_not_found",
     );
   });
 
   it("surfaces an admin whose role was revoked mid-session", async () => {
     setResaleRightsStatusMock.mockResolvedValue({ outcome: "actor_not_admin" });
 
-    expect(outcomeOf(await post(decisionForm()))).toBe(
-      "?error=rights_actor_not_admin",
+    expectReopened(
+      outcomeOf(await post(decisionForm())),
+      "rights_actor_not_admin",
     );
   });
 
@@ -306,8 +339,9 @@ describe("recording the decision", () => {
       outcome: "missing_reference",
     });
 
-    expect(outcomeOf(await post(decisionForm()))).toBe(
-      "?error=rights_holder_missing",
+    expectReopened(
+      outcomeOf(await post(decisionForm())),
+      "rights_holder_missing",
     );
   });
 
@@ -349,9 +383,52 @@ describe("recording the decision", () => {
     // that happens, and the loser needs to be told to re-read and redo.
     setResaleRightsStatusMock.mockResolvedValue({ outcome: "conflict" });
 
-    expect(outcomeOf(await post(decisionForm()))).toBe(
-      "?error=rights_conflict",
+    expectReopened(outcomeOf(await post(decisionForm())), "rights_conflict");
+  });
+});
+
+/**
+ * ugcportal-0ss rendered the decision form inline for every account, so an
+ * error simply re-rendered the page with the form still in front of you.
+ * This screen opens one form at a time via `?edit=`, which made losing that
+ * parameter a regression: the admin landed on a hundred-row list with the
+ * form closed, their typed reason gone, and nothing saying which uploader
+ * the message was about.
+ */
+describe("a recoverable failure puts the admin back in front of the form", () => {
+  it("reopens the form for the uploader the decision was about", async () => {
+    const response = await post(decisionForm({ reason: "   " }));
+
+    expect(outcomeOf(response).edit).toBe("uploader-1");
+  });
+
+  it("carries the uploader id safely rather than splicing it into a string", async () => {
+    // A cuid today, but a value concatenated into a query string raw is one
+    // schema change away from being an injection into the admin's own URL.
+    const data = decisionForm();
+    data.set("uploaderUserId", "a&error=denied#x");
+    data.set("reason", "   ");
+
+    const location = new URL(
+      (await post(data)).headers.get("location")!,
     );
+
+    expect(location.searchParams.get("edit")).toBe("a&error=denied#x");
+    expect(location.searchParams.get("error")).toBe("rights_reason_required");
+  });
+
+  it("does not carry the typed reason back through the URL", async () => {
+    // Deliberate. A reason is free text that may quote contract terms or
+    // name people, and a query parameter lands in server logs, proxy logs,
+    // browser history and Referer headers. Retyping a sentence is the
+    // cheaper failure; tracked as ugcportal-40s.
+    const secret = "Contract clause 4.2 with Jane Doe";
+    const response = await post(
+      decisionForm({ reason: secret, validUntil: "whenever" }),
+    );
+
+    expect(response.headers.get("location")).not.toContain("Jane");
+    expect(response.headers.get("location")).not.toContain("Contract");
   });
 });
 
@@ -361,8 +438,8 @@ describe("evidence upload", () => {
       type: "application/pdf",
     });
 
-    expect(outcomeOf(await post(decisionForm({ evidence: file })))).toBe(
-      "?rights=recorded",
+    expect(outcomeOf(await post(decisionForm({ evidence: file })))).toMatchObject(
+      { rights: "recorded" },
     );
     expect(putRightsEvidenceMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -391,8 +468,9 @@ describe("evidence upload", () => {
     putRightsEvidenceMock.mockRejectedValue(new Error("bucket on fire"));
     const file = new File([new Uint8Array([1])], "a.pdf");
 
-    expect(outcomeOf(await post(decisionForm({ evidence: file })))).toBe(
-      "?error=rights_evidence_failed",
+    expectReopened(
+      outcomeOf(await post(decisionForm({ evidence: file }))),
+      "rights_evidence_failed",
     );
     expect(setResaleRightsStatusMock).not.toHaveBeenCalled();
   });
@@ -441,8 +519,9 @@ describe("evidence upload", () => {
   it("refuses an oversized file rather than uploading it", async () => {
     const tooBig = new File([new Uint8Array(20 * 1024 * 1024 + 1)], "huge.pdf");
 
-    expect(outcomeOf(await post(decisionForm({ evidence: tooBig })))).toBe(
-      "?error=rights_evidence_too_large",
+    expectReopened(
+      outcomeOf(await post(decisionForm({ evidence: tooBig }))),
+      "rights_evidence_too_large",
     );
     expect(putRightsEvidenceMock).not.toHaveBeenCalled();
     expect(setResaleRightsStatusMock).not.toHaveBeenCalled();
@@ -463,7 +542,13 @@ describe("evidence upload", () => {
       }),
     );
 
-    expect(outcomeOf(response)).toBe("?error=rights_evidence_too_large");
+    // No uploader to reopen for: the body was refused before any field of
+    // it was read, which is the whole point of the cap.
+    expect(outcomeOf(response)).toEqual({
+      error: "rights_evidence_too_large",
+      rights: null,
+      edit: null,
+    });
     expect(setResaleRightsStatusMock).not.toHaveBeenCalled();
   });
 

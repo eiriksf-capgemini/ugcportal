@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { CURRENT_CHECKLIST_VERSION } from "@/lib/resale-rights";
+
 /**
  * The write races at the price endpoint.
  *
@@ -25,7 +27,11 @@ const SELLABLE_UPLOAD = {
   user: {
     resaleRightsReview: {
       status: "CLEARED",
-      checklistVersion: "2026-09-24.1",
+      // The constant, not a literal: a hard-coded version silently stops
+      // matching ACCEPTED_CHECKLIST_VERSIONS the day it is bumped, and this
+      // fixture's whole job is to clear the gate so the write race is what
+      // is under test.
+      checklistVersion: CURRENT_CHECKLIST_VERSION,
       reviewedByUserId: "admin-1",
       validUntil: null,
       reviewedBy: { role: "ADMIN" },

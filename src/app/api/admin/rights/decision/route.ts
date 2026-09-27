@@ -41,20 +41,53 @@ const MAX_EVIDENCE_BYTES = 20 * 1024 * 1024;
 /** The form's own fields are tiny; the file is the only bulk. */
 const MAX_BODY_BYTES = MAX_EVIDENCE_BYTES + 64 * 1024;
 
-function settingsRedirect(request: Request, query = ""): NextResponse {
+/**
+ * Send the admin back to the settings screen.
+ *
+ * `reopenFor` is the uploader whose form should be open when they land, and
+ * it is only omitted on success. The settings page renders the decision form
+ * for whoever `?edit=` names, so a redirect without it drops the admin on a
+ * long list with the form closed and nothing saying which uploader the error
+ * was about — after they had typed a reason and picked an expiry. That was a
+ * regression against ugcportal-0ss, where the form was rendered inline per
+ * account and an error put you back in front of it.
+ *
+ * On success the form is deliberately left closed: the decision is recorded,
+ * and re-opening the form for a record that has just been written invites
+ * submitting it twice.
+ *
+ * The typed reason is deliberately NOT carried back. It is free text that
+ * may quote contract terms or name people, and a query parameter lands in
+ * server logs, proxy logs, browser history and `Referer` headers. Losing a
+ * sentence the admin retypes is the cheaper failure; see ugcportal-40s.
+ */
+function settingsRedirect(
+  request: Request,
+  params: { error?: string; rights?: string; reopenFor?: string } = {},
+): NextResponse {
   // Resolved against the configured public origin, not `request.url` — which
   // behind a TLS-terminating proxy is the internal host, exactly the trap
   // src/lib/origin.ts exists to point out. Sending that back as an absolute
   // Location would bounce the admin to an address the browser cannot reach.
   // `request.url` is the fallback for a dev server with no AUTH_URL set,
   // where the two are the same thing anyway.
-  //
+  const url = new URL(RIGHTS_SETTINGS_PATH, expectedOrigin() ?? request.url);
+  // URLSearchParams rather than string concatenation: a uploader id is a
+  // cuid today, but a value spliced into a query string raw is one schema
+  // change away from being an injection into the admin's own URL.
+  if (params.error) {
+    url.searchParams.set("error", params.error);
+  }
+  if (params.rights) {
+    url.searchParams.set("rights", params.rights);
+  }
+  if (params.reopenFor) {
+    url.searchParams.set("edit", params.reopenFor);
+  }
+
   // 303: the browser must follow a POST redirect with GET, or the settings
   // page is re-requested as a POST.
-  return NextResponse.redirect(
-    new URL(`${RIGHTS_SETTINGS_PATH}${query}`, expectedOrigin() ?? request.url),
-    303,
-  );
+  return NextResponse.redirect(url, 303);
 }
 
 /**
@@ -97,7 +130,9 @@ export async function POST(request: Request) {
   const body = await readCappedFormData(request, MAX_BODY_BYTES);
   if (!body.ok) {
     if (body.status === 413) {
-      return settingsRedirect(request, "?error=rights_evidence_too_large");
+      // No uploader to reopen for: the body was refused before any field of
+      // it was read, which is the entire point of the cap.
+      return settingsRedirect(request, { error: "rights_evidence_too_large" });
     }
     return NextResponse.json({ error: body.error }, { status: body.status });
   }
@@ -135,7 +170,10 @@ export async function POST(request: Request) {
   const reasonValue = formData.get("reason");
   const reason = typeof reasonValue === "string" ? reasonValue.trim() : "";
   if (!reason) {
-    return settingsRedirect(request, "?error=rights_reason_required");
+    return settingsRedirect(request, {
+      error: "rights_reason_required",
+      reopenFor: uploaderUserId,
+    });
   }
 
   // An unticked checkbox submits nothing at all, so absence is "no" — which
@@ -153,7 +191,10 @@ export async function POST(request: Request) {
     // the one that stops selling sooner.
     const parsed = new Date(validUntilValue);
     if (Number.isNaN(parsed.getTime())) {
-      return settingsRedirect(request, "?error=rights_invalid_valid_until");
+      return settingsRedirect(request, {
+        error: "rights_invalid_valid_until",
+        reopenFor: uploaderUserId,
+      });
     }
     validUntil = parsed;
   } else {
@@ -173,7 +214,10 @@ export async function POST(request: Request) {
   const file = formData.get("evidence");
   if (file instanceof File && file.size > 0) {
     if (file.size > MAX_EVIDENCE_BYTES) {
-      return settingsRedirect(request, "?error=rights_evidence_too_large");
+      return settingsRedirect(request, {
+        error: "rights_evidence_too_large",
+        reopenFor: uploaderUserId,
+      });
     }
     try {
       evidence = await putRightsEvidence({
@@ -187,7 +231,10 @@ export async function POST(request: Request) {
         uploaderUserId,
         cause,
       });
-      return settingsRedirect(request, "?error=rights_evidence_failed");
+      return settingsRedirect(request, {
+        error: "rights_evidence_failed",
+        reopenFor: uploaderUserId,
+      });
     }
   }
 
@@ -240,9 +287,14 @@ export async function POST(request: Request) {
     if (evidence) {
       await deleteRightsEvidence(evidence.key);
     }
-    return settingsRedirect(request, `?error=${code}`);
+    return settingsRedirect(request, {
+      error: code,
+      // Including rights_uploader_not_found: the page explains a ?edit=
+      // naming nobody, which is more use than a list with no form.
+      reopenFor: uploaderUserId,
+    });
   }
   // Redirect on success too, so a stale `?error=` from a previous attempt
   // doesn't stay pinned to the URL after a decision that worked.
-  return settingsRedirect(request, "?rights=recorded");
+  return settingsRedirect(request, { rights: "recorded" });
 }

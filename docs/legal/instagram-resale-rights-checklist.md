@@ -1,8 +1,11 @@
-# Instagram resale-rights review — per-account checklist
+# Resale-rights review — per-uploader checklist
 
 **Bead:** `ugcportal-zec` (blocks `ugcportal-74w`, the curation-for-sale UI)
-**Checklist version:** `2026-09-24.1` — bump this string whenever the form changes; each completed review records the version it was done against.
-**Status of this document:** working instrument, prepared by an agent for the human reviewer. **It is not legal advice**, and nothing in it establishes that any account's media may be resold. The sign-off decision is made by a named human, per account, by completing Part D below. `ugcportal-zec` itself is that human decision gate and stays open until a human closes it.
+**Checklist version:** `2026-09-27.1` — bump this string whenever the form changes; each completed review records the version it was done against.
+**Previous version:** `2026-09-24.1` (per-connected-account). Retired by `ugcportal-vsm` — see E.0. It is **not** in `ACCEPTED_CHECKLIST_VERSIONS`, so any clearance still carrying it is refused by the gate.
+**Status of this document:** working instrument, prepared by an agent for the human reviewer. **It is not legal advice**, and nothing in it establishes that any uploader's media may be resold. The sign-off decision is made by a named human, per uploader, by completing Part D below. `ugcportal-zec` itself is that human decision gate and stays open until a human closes it.
+
+> **THE SUBJECT OF THIS CHECKLIST CHANGED ON 2026-09-27 AND THE QUESTIONS HAVE NOT CAUGHT UP.** Version `2026-09-24.1` asked about the content of one connected Instagram account. This version asks about an **uploader** — and a clearance recorded against an uploader authorises their *entire past and future upload history*, which is a materially broader claim than any question below was written to establish. The subject-naming items have been corrected mechanically (§1.1, C.2.1, Part D) so the form is coherent; **whether the set of questions is now sufficient for that wider subject is an open legal question and is filed as `ugcportal-9cs`.** In particular nothing here yet asks on what basis an uploader warrants rights in material they have not uploaded yet. Until that is answered by a human, treat a `CLEARED` decision under this version as covering material the reviewer actually examined, and set `Valid until` accordingly short.
 
 ---
 
@@ -51,9 +54,9 @@ Background (US law, not binding in Norway, but the fact pattern is identical): i
 
 ## 1. How to use this checklist
 
-1. Make one copy per connected account (one `InstagramAccount` row). Keep the filled copy **outside git** — it will contain names, contract excerpts and possibly personal data — in the evidence store described in Part E. This file in the repo is the blank template only.
-2. Work through Parts A–C. Every item is answered **Yes / No / N/A** with a pointer to evidence. Any **No** on a required item means the account is not cleared.
-3. Part D is the decision. It is signed by a human admin who is not the person who connected the account, where staffing allows.
+1. Make one copy per uploader (one `User` row who has uploaded, or may upload, media). Keep the filled copy **outside git** — it will contain names, contract excerpts and possibly personal data — in the evidence store described in Part E. This file in the repo is the blank template only.
+2. Work through Parts A–C. Every item is answered **Yes / No / N/A** with a pointer to evidence. Any **No** on a required item means the uploader is not cleared.
+3. Part D is the decision. It is signed by a human admin who is not the uploader being cleared, where staffing allows.
 4. Part E describes what gets stored and how `ugcportal-74w` reads it. That part is an implementation requirement, not a form.
 
 Terminology: **Owner** = the natural or legal person who controls the connected Instagram account and is licensing to ugcportal. **Operator** = ugcportal. **Buyer** = the person purchasing a licence through checkout.
@@ -131,7 +134,7 @@ An account-level clearance covers C.1 only. **C.2–C.5 vary per post and must a
 
 | # | Item | Yes / No / N/A | Evidence |
 |---|---|---|---|
-| C.2.1 | Does the account's content typically show identifiable people (including the Owner)? If **No** for the whole account, record why (e.g. product-only / landscape account) and skip to C.3. | | |
+| C.2.1 | Does this uploader's material typically show identifiable people (including the uploader)? If **No** across their uploads, record why (e.g. product-only / landscape work) and skip to C.3. Note this is a statement about their material in general; each individual upload is still triaged separately (Part E.3 item 5), so a **No** here never settles a specific file. | | |
 | C.2.2 | **åvl § 104** — "Fotografi som avbilder en person, kan ikke gjengis eller vises offentlig uten samtykke av den avbildede" (quote via secondary source; verify on Lovdata). Protection lasts the person's lifetime + 15 years. The statutory exceptions (current public interest; person of secondary importance; gatherings/events of general interest; photographer's own advertising; investigation/biography) are not designed for commercial resale and should not be relied on. Has the Owner provided **model releases** (or equivalent written consent) for depicted people, or undertaken to supply one per post before that post is listed? | | |
 | C.2.3 | Does the model release cover **commercial resale by a third party (the Buyer)**, not just the Owner's own posting? Consent given for one use does not extend to another. | | |
 | C.2.4 | **GDPR**: an image of an identifiable person is personal data (art. 4(1)). Operator is a controller for the catalogue. Which **art. 6 lawful basis** is relied on for depicted persons? For commercial resale, consent (art. 6(1)(a), art. 7) is the realistic basis; document if legitimate interest is asserted instead and attach the balancing test. Datatilsynet's guidance (updated 16.09.2025): "Samtykke skal hentes inn før bildet eller filmen deles" for portrait images, and GDPR applies to situation images too if people are identifiable. | | |
@@ -164,12 +167,12 @@ An account-level clearance covers C.1 only. **C.2–C.5 vary per post and must a
 
 ## Part D — Decision (human only)
 
-**This part is completed by a human admin. The system must never set the account to `CLEARED` on its own.**
+**This part is completed by a human admin. The system must never set an uploader to `CLEARED` on its own.**
 
 | Field | Entry |
 |---|---|
-| Account (`instagramUserId` / `@username`) | |
-| Checklist version applied | `2026-09-24.1` |
+| Uploader (`User.id` / email) | |
+| Checklist version applied | `2026-09-27.1` |
 | Route selected (B.0) | Contract / Own-ToS acceptance / Explicit consent |
 | Any required item answered **No**? | Yes → **not cleared** / No |
 | Product-decision reference for A.6 (if the API-sourced-asset question was decided) | bead id / date |
@@ -178,10 +181,10 @@ An account-level clearance covers C.1 only. **C.2–C.5 vary per post and must a
 | Decision | **CLEARED with conditions** / **REJECTED** / **NEEDS MORE INFORMATION** |
 | Reviewer (name, user id, role = ADMIN) | |
 | Date | |
-| Independent from the admin who connected the account? | Yes / No (explain) |
+| Independent from the uploader being cleared? | Yes / No (explain) — recorded automatically as `selfReview` when the reviewer *is* the uploader |
 | Evidence bundle location and SHA-256 | |
 
-Once Part D is complete, the reviewer records the outcome in the system (Part E) **and** appends a one-line note to `ugcportal-zec` (`bd update ugcportal-zec --append-notes="@handle CLEARED/REJECTED on <date> by <name>, evidence <hash>"`). Closing `ugcportal-zec` is reserved for the human who decides the *process* is adopted — not for any single account clearance.
+Once Part D is complete, the reviewer records the outcome in the system (Part E) **and** appends a one-line note to `ugcportal-zec` (`bd update ugcportal-zec --append-notes="<uploader email> CLEARED/REJECTED on <date> by <name>, evidence <hash>"`). Closing `ugcportal-zec` is reserved for the human who decides the *process* is adopted — not for any single uploader clearance.
 
 ---
 
@@ -201,7 +204,13 @@ Once Part D is complete, the reviewer records the outcome in the system (Part E)
 > - **Evidence store**: the private prefix is `rights-evidence/<uploaderUserId>/…`. Objects written before this amendment sit under a connected account's id; nothing rewrites them, and the key snapshotted on each `ResaleRightsEvent` row is still what finds them.
 > - **`ResaleRightsEvent`** carries generic subject columns (`subjectKind`, `subjectId`, `subjectLabel`) so that rows written under the old anchor survive unaltered, marked `INSTAGRAM_ACCOUNT`. The migration carried **no** clearance forward and wrote a transition to `UNREVIEWED` for each one, so nothing is sellable that a human has not decided about under the new anchor.
 >
-> **The checklist version is deliberately unchanged.** Retiring a version is how a revision to what the reviewer must *check* forces re-review; this amendment changes only where the answer is recorded, and no clearance exists that it could wrongly re-validate. The authority for the gate's behaviour is `src/lib/resale-rights.ts`, not this section.
+> **THE CHECKLIST VERSION WAS BUMPED TO `2026-09-27.1`, AND AN EARLIER REVISION OF THIS AMENDMENT WAS WRONG TO SAY OTHERWISE.** It claimed the change moved only *where* the answer is recorded, not *what* the reviewer must check. That was a mistake, and it was the material one: moving the subject from "the content of one connected account" to "an uploader" widens what a single `CLEARED` decision authorises to that person's entire past **and future** upload history. That is a different question, asked of a different subject, with a larger blast radius — which is exactly the condition `ACCEPTED_CHECKLIST_VERSIONS` exists to detect.
+>
+> Both halves were needed and neither alone would do. Amending the questions *without* bumping would have left the string `2026-09-24.1` silently meaning something different from what it meant the day before, which destroys the only property a version string has. Bumping *without* amending would have left a reviewer filling in `Account (instagramUserId / @username)` for an uploader. So: the subject-naming items are corrected, and the old version is retired.
+>
+> The bump costs nothing today and more every day after: `ugcportal-vsm`'s migration discarded every account-level clearance, so no live record carries `2026-09-24.1` and nothing is being retired in practice. Had this shipped without the bump, the first clearance recorded afterwards would have been stamped with a version whose questions named an Instagram handle.
+>
+> **What the bump does not fix**, stated plainly because it is the limit of what an agent should decide here: the questions below were written for a narrower subject, and making them *coherent* is not the same as making them *sufficient*. Whether clearing a person for everything they may upload in future needs questions that do not exist yet — a warranty over unseen material, a mandatory re-review interval — is a legal judgment for `ugcportal-zec`'s process owner, and is filed as `ugcportal-9cs`. The authority for the gate's *behaviour* is `src/lib/resale-rights.ts`; the authority for whether these questions are enough is a human.
 
 This section is the implementation requirement that `ugcportal-74w` K2 depends on ("curation UI/API checks per-account rights-confirmation status before allowing price-setting"). It is filed as its own bead (see §7).
 
@@ -230,7 +239,7 @@ model ResaleRightsReview {
   instagramAccountId  String             @unique
   status              ResaleRightsStatus @default(UNREVIEWED)
   route               ResaleRightsRoute?
-  checklistVersion    String             // e.g. "2026-09-24.1"
+  checklistVersion    String             // e.g. "2026-09-27.1"
   reviewedByUserId    String?            // must be role ADMIN; never a service principal
   reviewedAt          DateTime?
   validUntil          DateTime?

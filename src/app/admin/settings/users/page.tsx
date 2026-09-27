@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { requireAdmin } from "@/lib/admin";
 import { prisma } from "@/lib/prisma";
+import { RIGHTS_SETTINGS_PATH } from "@/lib/routes";
 
 import { changeUserRole } from "./actions";
 import { roleOutcomeMessage } from "./outcomes";
@@ -56,10 +57,24 @@ export default async function AdminUsersPage({
     <div className="mx-auto w-full max-w-3xl flex-1 px-4 py-12 sm:px-6">
       <h1 className="text-2xl font-semibold tracking-tight">Users and roles</h1>
       <p className="mt-2 text-sm text-muted-foreground">
-        Admins can reach every admin-only screen, including connected Instagram
-        accounts. A role change takes effect on the user&apos;s next request —
-        they do not have to sign out and back in.
+        Admins can reach every admin-only screen, including{" "}
+        <a
+          className="rounded-sm font-medium text-primary underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring"
+          href={RIGHTS_SETTINGS_PATH}
+        >
+          resale rights
+        </a>{" "}
+        and connected Instagram accounts. A role change takes effect on the
+        user&apos;s next request — they do not have to sign out and back in.
       </p>
+      {/*
+        The link above is not decoration. Until ugcportal-vsm the only route
+        to the resale-rights screen sat on the Instagram settings page — a
+        deferred feature — and there is no admin nav, so an operator who never
+        connects an account had no discoverable way to reach the one screen
+        that gates all selling. This screen is the one an operator visits
+        regardless.
+      */}
 
       {errorMessage ? (
         <p className="mt-6 rounded-lg border border-destructive/75 bg-destructive-surface p-3 text-sm text-destructive">

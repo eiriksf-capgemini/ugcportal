@@ -33,6 +33,10 @@ const ALLOWED = new Map<string, string>([
     "app/api/admin/rights/decision/route.ts",
     "the admin-only endpoint that calls the writer; names the status in its docs only",
   ],
+  [
+    "app/admin/settings/rights/page.tsx",
+    "documentation only, on a read-only page: explains why the decision form must render for an uploader outside the listed slice — being unreachable there means never being cleared. Classified here deliberately, which is what this list is for.",
+  ],
 ]);
 
 /** The committed migration directories, in apply order. */
