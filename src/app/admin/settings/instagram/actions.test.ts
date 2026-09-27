@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const authMock = vi.fn();
@@ -75,13 +78,21 @@ describe("disconnectInstagramAccount", () => {
    * writer at all, so nobody re-adds the coupling by reflex when Instagram
    * work resumes.
    */
-  it("records no resale-rights decision, because it is not one", async () => {
-    const source = await import("node:fs").then(({ readFileSync }) =>
-      readFileSync(
-        new URL("./actions.ts", import.meta.url).pathname,
-        "utf8",
-      ),
+  it("records no resale-rights decision, because it is not one", () => {
+    // fileURLToPath, not `new URL(...).pathname`: a file URL is
+    // percent-encoded, so a checkout under a directory containing a space
+    // (or any other escaped character) yields a path that does not exist and
+    // readFileSync throws ENOENT. A source-scan guard that throws is a guard
+    // that never checked — it fails, but for the wrong reason, and the thing
+    // it was watching for goes unexamined.
+    const source = readFileSync(
+      fileURLToPath(new URL("./actions.ts", import.meta.url)),
+      "utf8",
     );
+
+    // Guards the scan itself, so a path that silently read the wrong file
+    // could not make the assertions below vacuously true.
+    expect(source).toContain("disconnectInstagramAccount");
 
     expect(source).not.toContain("setResaleRightsStatus");
     expect(source).not.toContain("resaleRightsReview");

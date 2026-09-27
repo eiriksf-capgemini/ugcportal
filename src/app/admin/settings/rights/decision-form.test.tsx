@@ -236,6 +236,77 @@ describe("no select can silently drop its stored value", () => {
   });
 });
 
+/**
+ * A <label>'s content IS its control's accessible name. Explanatory prose
+ * parked inside one is read out as the name of the combobox or the checkbox
+ * it sits next to, which is invisible to anyone looking at the rendered page
+ * and obvious to anyone using a screen reader.
+ *
+ * That is not hypothetical here: the paragraph explaining the uploader/upload
+ * split was left inside the Route label when the rights-holder field it
+ * originally belonged to was deleted, so the route combobox announced four
+ * lines of unrelated text as its name.
+ *
+ * The rule asserted is the one that actually distinguishes the two cases,
+ * rather than a length limit that would flag the legitimate long checkbox
+ * label: a label's text sits on ONE side of its control. Text before it (a
+ * name, as on every select and textarea here) or text after it (a checkbox's
+ * label) are both fine; both at once means the second part is a description
+ * that does not belong inside the label at all.
+ *
+ * Labels are read out of the rendered markup, so a field added later
+ * inherits the assertion.
+ */
+describe("no label smuggles prose into a control's accessible name", () => {
+  const CONTROL = "\u0000";
+
+  /** The label's text with its control replaced by a marker. */
+  function labelParts(inner: string): { before: string; after: string } | null {
+    const withMarker = inner
+      .replace(/<select\b[^>]*>[\s\S]*?<\/select>/g, CONTROL)
+      .replace(/<textarea\b[^>]*>[\s\S]*?<\/textarea>/g, CONTROL)
+      .replace(/<input\b[^>]*\/?>/g, CONTROL);
+    if (!withMarker.includes(CONTROL)) {
+      return null;
+    }
+    const [before, ...rest] = withMarker.split(CONTROL);
+    const text = (part: string) => part.replace(/<[^>]*>/g, "").trim();
+    return { before: text(before), after: text(rest.join(" ")) };
+  }
+
+  it("keeps each label's text on one side of its control", () => {
+    const labels = [
+      ...render(EXISTING).matchAll(/<label\b[^>]*>([\s\S]*?)<\/label>/g),
+    ].map((match) => match[1]);
+
+    // Guards the scan: a markup change that stopped matching would make
+    // every assertion below vacuously true.
+    expect(labels.length).toBeGreaterThan(4);
+
+    for (const inner of labels) {
+      const parts = labelParts(inner);
+      if (!parts) continue;
+      // Keyed so a failure prints the offending text rather than `false`.
+      expect({
+        bothSides: Boolean(parts.before && parts.after),
+        text: `${parts.before} | ${parts.after}`.slice(0, 120),
+      }).toMatchObject({ bothSides: false });
+    }
+  });
+
+  it("still carries the explanation, outside every label", () => {
+    // The prose is useful and must not simply have been deleted: it is what
+    // tells a reviewer that clearing an uploader is not clearing their files.
+    const markup = render(EXISTING);
+    const outsideLabels = markup.replace(
+      /<label\b[^>]*>[\s\S]*?<\/label>/g,
+      "",
+    );
+
+    expect(outsideLabels).toContain("triaged and cleared per upload");
+  });
+});
+
 describe("the checklist re-stamp is an assertion, not a default", () => {
   // The sibling of the validUntil fail-open: checklistVersion decides which
   // checklist a clearance was granted under, and retiring a version is how a

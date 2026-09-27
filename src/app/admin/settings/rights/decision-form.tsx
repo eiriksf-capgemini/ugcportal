@@ -73,6 +73,20 @@ export function ResaleRightsDecisionForm({
         version {CURRENT_CHECKLIST_VERSION} (
         docs/legal/instagram-resale-rights-checklist.md).
       </p>
+      {/*
+        A paragraph, not a <span> inside one of the labels below. It describes
+        the whole decision rather than any one control, and anything inside a
+        <label> becomes part of that control's accessible name — this text
+        spent a revision inside the Route label, where a screen reader read
+        four lines of unrelated prose as the name of the route combobox. It
+        looked fine rendered, which is exactly why it survived.
+      */}
+      <p className="text-xs text-muted-foreground">
+        A clearance here covers this uploader&apos;s own work only. What is
+        <em> in</em> each file — a recognisable person, music, a collaborator,
+        a sponsorship — is triaged and cleared per upload, and nothing sells
+        until both are done.
+      </p>
       {storedVersion ? (
         <p
           className={
@@ -115,12 +129,6 @@ export function ResaleRightsDecisionForm({
             </option>
           ))}
         </select>
-        <span className="mt-1 block font-normal text-muted-foreground">
-          A clearance here covers this uploader&apos;s own work only. What is
-          <em> in</em> each file — a recognisable person, music, a
-          collaborator, a sponsorship — is triaged and cleared per upload, and
-          nothing sells until both are done.
-        </span>
       </label>
       <label className="block text-xs font-medium">
         Valid until (optional — the clearance stops counting at the start of
