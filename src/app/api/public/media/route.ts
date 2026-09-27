@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { MEDIA_ANONYMOUS_SELECT } from "@/lib/media-access";
-import { listMedia } from "@/lib/media-listing";
+import { listPublicMedia } from "@/lib/public-media";
 
 /**
  * The public gallery feed (ugcportal-r1d). Readable by anyone, signed in or
@@ -85,15 +84,15 @@ import { listMedia } from "@/lib/media-listing";
 const NO_STORE = { "cache-control": "no-store" } as const;
 
 export async function GET(request: Request) {
-  const result = await listMedia(
-    request.url,
-    {
-      publishedAt: { not: null },
-      previewKey: { not: null },
-      previewId: { not: null },
-    },
-    MEDIA_ANONYMOUS_SELECT,
-  );
+  /*
+   * The scope and the projection moved to src/lib/public-media.ts when
+   * ugcportal-71y became a second caller: the gallery renders its first page
+   * on the server and must not HTTP-fetch this route to get it. Nothing about
+   * the contract changed — `listMedia`'s anonymous overload still requires the
+   * publish filter structurally — but there is now one copy of the filter
+   * rather than one per caller.
+   */
+  const result = await listPublicMedia(request.url);
 
   if (!result.ok) {
     return NextResponse.json(

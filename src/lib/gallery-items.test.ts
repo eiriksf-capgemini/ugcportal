@@ -1,0 +1,184 @@
+import { describe, expect, it } from "vitest";
+
+import {
+  appendGalleryItems,
+  galleryItemLabel,
+  toGalleryItem,
+  toGalleryItems,
+  type GalleryItem,
+} from "@/lib/gallery-items";
+import { MEDIA_PREVIEW_PATH } from "@/lib/routes";
+
+/**
+ * The boundary where a feed row becomes something the gallery can draw
+ * (ugcportal-71y).
+ *
+ * Two of its jobs are security-adjacent and are tested as such: the image URL
+ * must come from the opaque `previewId` and nothing else, and a row with no
+ * usable preview must not be rendered — K2 and K3 re-checked one layer below
+ * the markup, so a future component change cannot reintroduce either.
+ */
+
+const ROW = {
+  id: "media-1",
+  previewId: "pv-1",
+  publishedAt: "2026-03-04T10:00:00.000Z",
+};
+
+function item(overrides: Partial<GalleryItem> = {}): GalleryItem {
+  return {
+    id: "media-1",
+    previewSrc: `${MEDIA_PREVIEW_PATH}/pv-1`,
+    publishedAt: "2026-03-04T10:00:00.000Z",
+    ...overrides,
+  };
+}
+
+describe("toGalleryItem", () => {
+  it("builds the image source from previewId alone", () => {
+    expect(toGalleryItem(ROW)).toEqual({
+      id: "media-1",
+      previewSrc: `${MEDIA_PREVIEW_PATH}/pv-1`,
+      publishedAt: "2026-03-04T10:00:00.000Z",
+    });
+  });
+
+  it("carries no field the anonymous projection withholds", () => {
+    // Even handed a row that somehow arrived with owner-only columns on it,
+    // the mapped item must not pick them up. `previewKey` is the one that
+    // matters: it embeds the uploader's account id.
+    const contaminated = {
+      ...ROW,
+      previewKey: "previews/user-7/secret.webp",
+      key: "media/user-7/original.jpg",
+      userId: "user-7",
+      originalName: "passport.jpg",
+    };
+
+    const mapped = toGalleryItem(contaminated);
+
+    expect(mapped).not.toBeNull();
+    expect(Object.keys(mapped as GalleryItem).sort()).toEqual([
+      "id",
+      "previewSrc",
+      "publishedAt",
+    ]);
+    expect(JSON.stringify(mapped)).not.toContain("user-7");
+    expect(JSON.stringify(mapped)).not.toContain("previews/");
+  });
+
+  it("escapes a previewId that would otherwise climb out of the route", () => {
+    const mapped = toGalleryItem({ ...ROW, previewId: "../../etc/passwd" });
+    expect(mapped?.previewSrc).toBe(`${MEDIA_PREVIEW_PATH}/..%2F..%2Fetc%2Fpasswd`);
+    expect(mapped?.previewSrc).not.toContain("../");
+  });
+
+  it.each([
+    { label: "null", previewId: null },
+    { label: "undefined", previewId: undefined },
+    { label: "empty", previewId: "" },
+    { label: "a number", previewId: 42 },
+  ])("drops a row whose previewId is $label", ({ previewId }) => {
+    expect(toGalleryItem({ ...ROW, previewId })).toBeNull();
+  });
+
+  it("drops a row with no usable id", () => {
+    expect(toGalleryItem({ ...ROW, id: "" })).toBeNull();
+    expect(toGalleryItem({ ...ROW, id: undefined })).toBeNull();
+  });
+
+  it("reads a Date and an ISO string to the same instant", () => {
+    const fromDate = toGalleryItem({
+      ...ROW,
+      publishedAt: new Date("2026-03-04T10:00:00.000Z"),
+    });
+    expect(fromDate?.publishedAt).toBe(toGalleryItem(ROW)?.publishedAt);
+  });
+
+  it.each([
+    { label: "null", publishedAt: null },
+    { label: "an unparseable string", publishedAt: "not a date" },
+    { label: "an invalid Date", publishedAt: new Date("nonsense") },
+  ])("keeps the item but nulls a publishedAt that is $label", ({ publishedAt }) => {
+    const mapped = toGalleryItem({ ...ROW, publishedAt });
+    // The date decorates a label; a bad one must not delete a photograph from
+    // the gallery.
+    expect(mapped?.id).toBe("media-1");
+    expect(mapped?.publishedAt).toBeNull();
+  });
+});
+
+describe("toGalleryItems", () => {
+  it("keeps the renderable rows and drops the rest, preserving order", () => {
+    const mapped = toGalleryItems([
+      { ...ROW, id: "a", previewId: "pv-a" },
+      { ...ROW, id: "b", previewId: null },
+      { ...ROW, id: "c", previewId: "pv-c" },
+      null,
+      "not a row",
+    ]);
+
+    expect(mapped.map((entry) => entry.id)).toEqual(["a", "c"]);
+  });
+
+  it("returns an empty page for a body that is not a list", () => {
+    for (const payload of [undefined, null, {}, "items", 7]) {
+      expect(toGalleryItems(payload)).toEqual([]);
+    }
+  });
+});
+
+describe("appendGalleryItems", () => {
+  it("appends new items in order", () => {
+    const first = [item({ id: "a" }), item({ id: "b" })];
+    const second = [item({ id: "c" })];
+    expect(appendGalleryItems(first, second).map((entry) => entry.id)).toEqual([
+      "a",
+      "b",
+      "c",
+    ]);
+  });
+
+  it("drops an id already on screen, so React keys stay unique", () => {
+    const first = [item({ id: "a" }), item({ id: "b" })];
+    const overlapping = [item({ id: "b" }), item({ id: "c" })];
+    expect(
+      appendGalleryItems(first, overlapping).map((entry) => entry.id),
+    ).toEqual(["a", "b", "c"]);
+  });
+
+  it("returns the same array when a page adds nothing", () => {
+    // Identity, not just equality: re-rendering the whole grid because the
+    // last page repeated is a visible flicker.
+    const first = [item({ id: "a" })];
+    expect(appendGalleryItems(first, [item({ id: "a" })])).toBe(first);
+    expect(appendGalleryItems(first, [])).toBe(first);
+  });
+});
+
+describe("galleryItemLabel", () => {
+  it("names the publication date, formatted identically on server and client", () => {
+    expect(galleryItemLabel(item())).toBe("Open photograph published 4 March 2026");
+  });
+
+  it("gives items published on different days different names", () => {
+    expect(galleryItemLabel(item())).not.toBe(
+      galleryItemLabel(item({ publishedAt: "2026-03-05T10:00:00.000Z" })),
+    );
+  });
+
+  it("reads the date in UTC rather than the runtime's zone", () => {
+    // 23:30 UTC is already the next day in most of Europe. A label that moved
+    // with the renderer's zone would be a hydration mismatch.
+    expect(galleryItemLabel(item({ publishedAt: "2026-03-04T23:30:00.000Z" }))).toBe(
+      "Open photograph published 4 March 2026",
+    );
+  });
+
+  it("still names the control when there is no date", () => {
+    const label = galleryItemLabel(item({ publishedAt: null }));
+    expect(label).toBe("Open photograph");
+    expect(label).not.toContain("Invalid Date");
+    expect(label).not.toContain("null");
+  });
+});

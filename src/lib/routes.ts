@@ -12,3 +12,55 @@ export const RIGHTS_SETTINGS_PATH = "/admin/settings/rights";
 // A route handler rather than a server action, so the evidence upload can
 // have its own body cap instead of raising the global one (ugcportal-0ss).
 export const RIGHTS_DECISION_PATH = "/api/admin/rights/decision";
+
+// The public gallery feed (ugcportal-r1d) and the preview bytes it points at
+// (ugcportal-a2l). Named here rather than spelled inline because ugcportal-71y
+// reaches for both from three places — the server-rendered first page, the
+// browser's next-page fetch, and the `src` of every tile — and a path typed
+// three times is a path that eventually differs once.
+export const PUBLIC_MEDIA_PATH = "/api/public/media";
+export const MEDIA_PREVIEW_PATH = "/api/media/preview";
+
+/**
+ * The delivery URL for a watermarked preview, keyed on its OPAQUE handle.
+ *
+ * `previewId` and nothing else, ever. The storage path (`previewKey`) is
+ * `previews/{userId}/{uuid}.webp`, so a URL built from it publishes the
+ * uploader's account id to every visitor's address bar and every access log in
+ * between — the exact capability the `previewId` indirection exists to remove
+ * (see src/lib/media-access.ts and the header of the delivery route). There is
+ * no client-side way back from `previewId` to the key, which is the point.
+ *
+ * Encoded rather than interpolated raw: today's ids are UUIDs from the
+ * watermark service, so nothing needs escaping, but this function does not get
+ * to assume that about every id the column will ever hold.
+ */
+export function mediaPreviewPath(previewId: string): string {
+  return `${MEDIA_PREVIEW_PATH}/${encodeURIComponent(previewId)}`;
+}
+
+/** The listing parameters GET /api/public/media reads out of its query string. */
+export type PublicMediaListingParams = { limit?: number; cursor?: string };
+
+/**
+ * The public feed as a same-origin path plus query.
+ *
+ * Lives in THIS module — which imports nothing — rather than next to
+ * `listPublicMedia`, and that placement is load-bearing rather than tidy. The
+ * gallery is a client component and calls this from the browser; importing it
+ * from src/lib/public-media.ts would pull that module's graph (media-access,
+ * and through it @/lib/auth and @/lib/prisma) into a "use client" boundary.
+ *
+ * One builder for both callers, so the browser cannot ask for `?after=` while
+ * the server reads `?cursor=` — a mismatch that does not error, it just serves
+ * page one forever.
+ */
+export function publicMediaListingPath(
+  params: PublicMediaListingParams = {},
+): string {
+  const query = new URLSearchParams();
+  if (params.limit !== undefined) query.set("limit", String(params.limit));
+  if (params.cursor !== undefined) query.set("cursor", params.cursor);
+  const search = query.toString();
+  return search === "" ? PUBLIC_MEDIA_PATH : `${PUBLIC_MEDIA_PATH}?${search}`;
+}
