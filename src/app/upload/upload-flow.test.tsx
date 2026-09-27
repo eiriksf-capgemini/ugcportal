@@ -319,9 +319,33 @@ describe("each refusal reaches the screen as its own sentence (K2)", () => {
   it("says the session is gone, and offers a way back in, on 401", async () => {
     const markup = await markupForStatus(401);
     expect(markup).toContain("not signed in any more");
-    expect(markup).toContain(
-      'href="/api/auth/signin?callbackUrl=%2Fupload"',
-    );
+    expect(markup).toContain('href="/api/auth/signin?callbackUrl=%2Fupload"');
+  });
+
+  it("opens sign-in in a new tab, because the queue cannot survive leaving", async () => {
+    /*
+      The 401 copy promises "nothing here is lost". The queue is useReducer
+      state plus two refs and nothing is persisted — and a File handle cannot
+      survive a navigation at all — so a same-tab link makes that sentence
+      false and destroys every queued upload on the way out.
+
+      Asserted on the markup rather than trusted to the copy, because the
+      sentence and the anchor are in different files and only one of them was
+      right.
+    */
+    const markup = await markupForStatus(401);
+    const anchor = /<a[^>]*href="\/api\/auth\/signin[^"]*"[^>]*>/.exec(markup);
+    expect(anchor).not.toBe(null);
+    expect(anchor?.[0]).toContain('target="_blank"');
+    // window.opener would otherwise be handed to the opened page.
+    expect(anchor?.[0]).toContain("noopener");
+    // And the accessible name has to carry the warning too, not just the prose.
+    expect(markup).toContain("opens in a new tab");
+  });
+
+  it("offers a retry on 401, since the file is still in hand", async () => {
+    const markup = await markupForStatus(401);
+    expect(markup).toContain("Try again");
   });
 
   it("blames the size on 413", async () => {
@@ -498,6 +522,42 @@ describe("a file the server would refuse is never sent (K2)", () => {
     const pending = [...entries];
     await drainQueue(() => pending.shift(), () => {}, transport);
     expect(transport).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("a queued file can be taken back out before it is sent", () => {
+  it("offers Cancel on a row that is only waiting, not just one in flight", () => {
+    /*
+      The form's cancel() has always had a branch for a file still waiting its
+      turn — it drops the entry before any request is made. Nothing could
+      reach it: this list rendered Cancel for `uploading` alone, so a 40-file
+      mis-drop could only be undone by reloading the page, which also
+      discarded whatever had already uploaded.
+    */
+    const { items } = enqueueFiles(
+      [imageFile("first.png"), imageFile("second.png")],
+      idSequence(),
+    );
+    const waiting = uploadQueueReducer(
+      uploadQueueReducer([], { type: "queued", items }),
+      { type: "started", id: "q1" },
+    );
+
+    expect(waiting[1].status).toBe("pending");
+    const markup = render(waiting);
+    // Two rows, two Cancel controls: the one uploading and the one waiting.
+    expect([...markup.matchAll(/>Cancel</g)]).toHaveLength(2);
+  });
+
+  it("offers no Cancel once a row has settled", async () => {
+    // The fixture mutation: the same list, with the row settled instead of
+    // waiting. A control shown on a finished row is the stale-button problem
+    // the reducer guard exists to survive.
+    const run = startUpload([imageFile()]);
+    run.xhr.respond(201, CREATED_BODY);
+    await run.settled;
+
+    expect(render(run.state())).not.toContain(">Cancel<");
   });
 });
 

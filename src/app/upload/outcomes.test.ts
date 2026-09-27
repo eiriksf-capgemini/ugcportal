@@ -149,6 +149,58 @@ describe("the 503 carries its Retry-After through to the sentence", () => {
     expect(failure?.retryAfterSeconds).toBe(7);
   });
 
+  it("prefers the body when the header resolves to zero", () => {
+    /*
+      `Retry-After: 0` is "now", and a `??` chain treats 0 as a perfectly good
+      answer because it is not nullish — so the body's real number was thrown
+      away and the sentence read "try again in 0 seconds".
+    */
+    const failure = failureForResponse({
+      status: 503,
+      body: { retryAfterSeconds: 9 },
+      retryAfter: "0",
+    });
+    expect(failure?.retryAfterSeconds).toBe(9);
+    expect(failure?.message).toContain("9 seconds");
+  });
+
+  it("prefers the body when a proxy left a stale date in the header", () => {
+    // The same zero by a different road: an absolute time already in the
+    // past, which parseRetryAfter clamps.
+    const failure = failureForResponse(
+      {
+        status: 503,
+        body: { retryAfterSeconds: 9 },
+        retryAfter: "Sun, 27 Sep 2026 11:00:00 GMT",
+      },
+      Date.parse("2026-09-27T12:00:00.000Z"),
+    );
+    expect(failure?.retryAfterSeconds).toBe(9);
+  });
+
+  it("STILL prefers the header when it says something positive", () => {
+    // The fixture mutation for the two above: only the header changes, from
+    // a zero to a real wait, and the body's 9 must now lose.
+    const failure = failureForResponse({
+      status: 503,
+      body: { retryAfterSeconds: 9 },
+      retryAfter: "30",
+    });
+    expect(failure?.retryAfterSeconds).toBe(30);
+  });
+
+  it("never says to try again in zero seconds", () => {
+    for (const retryAfter of ["0", "Sun, 27 Sep 2026 11:00:00 GMT"]) {
+      const failure = failureForResponse(
+        { status: 503, body: null, retryAfter },
+        Date.parse("2026-09-27T12:00:00.000Z"),
+      );
+      expect(failure?.retryAfterSeconds).toBe(null);
+      expect(failure?.message).not.toContain("0 seconds");
+      expect(failure?.message).toContain("try again shortly");
+    }
+  });
+
   it("still says something useful when neither is present", () => {
     const failure = failureForResponse({
       status: 503,

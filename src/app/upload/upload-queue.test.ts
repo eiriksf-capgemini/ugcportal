@@ -2,12 +2,13 @@ import { describe, expect, it } from "vitest";
 
 import { MAX_SIZE_BYTES } from "@/lib/media";
 
-import { networkFailure } from "./outcomes";
+import { cancelledFailure, networkFailure, precheckFile } from "./outcomes";
 import {
   makeQueueItem,
   percentComplete,
   pendingItems,
   queueSummary,
+  releasedFileId,
   toQueueMedia,
   uploadQueueReducer,
   type QueueItem,
@@ -109,20 +110,87 @@ describe("the queue reducer", () => {
     expect(state[0].status).toBe("succeeded");
   });
 
-  it("drops a previous success when the same row later fails", () => {
-    let state = [queued()];
+  it("will not relabel a stored upload as a failure", () => {
+    /*
+      The regression test for the live defect. The drain loop settles file A
+      and advances to file B before React commits either, so A's Cancel button
+      is still painted; clicking it reaches cancel() naming a row that has
+      already succeeded. Before the guard, that turned a file the server had
+      STORED into "You cancelled this upload, so nothing was kept", and nulled
+      its preview on the way past.
+    */
+    const stored = {
+      id: "m1",
+      kind: "IMAGE" as const,
+      previewId: "p1",
+      originalName: "a",
+    };
+    let state = uploadQueueReducer([queued()], {
+      type: "succeeded",
+      id: "f1",
+      media: stored,
+    });
+    state = uploadQueueReducer(state, {
+      type: "failed",
+      id: "f1",
+      failure: cancelledFailure(),
+    });
+
+    expect(state[0].status).toBe("succeeded");
+    expect(state[0].media).toBe(stored);
+    expect(state[0].failure).toBe(null);
+  });
+
+  it("will not turn a settled failure into a success either", () => {
+    // The mirror of the above, and the same one-line guard. A late 201 from a
+    // request whose row was already cancelled must not resurrect it.
+    let state = uploadQueueReducer([queued()], {
+      type: "failed",
+      id: "f1",
+      failure: cancelledFailure(),
+    });
     state = uploadQueueReducer(state, {
       type: "succeeded",
       id: "f1",
       media: { id: "m1", kind: "IMAGE", previewId: "p1", originalName: "a" },
     });
-    state = uploadQueueReducer(state, {
+
+    expect(state[0].status).toBe("failed");
+    expect(state[0].media).toBe(null);
+  });
+
+  it("STILL settles a row that has not settled yet", () => {
+    /*
+      The fixture mutation for the two tests above: the only change is the
+      row's starting status. A guard that refused everything would pass both
+      of them and break the feature, so the same transitions have to be shown
+      working from an unsettled row.
+    */
+    const uploading = uploadQueueReducer([queued()], {
+      type: "started",
+      id: "f1",
+    });
+
+    const succeeded = uploadQueueReducer(uploading, {
+      type: "succeeded",
+      id: "f1",
+      media: { id: "m1", kind: "IMAGE", previewId: "p1", originalName: "a" },
+    });
+    expect(succeeded[0].status).toBe("succeeded");
+
+    const failed = uploadQueueReducer(uploading, {
       type: "failed",
       id: "f1",
       failure: networkFailure(),
     });
-    // Or the row would render a thumbnail beside its own error.
-    expect(state[0].media).toBe(null);
+    expect(failed[0].status).toBe("failed");
+    // And a row still waiting its turn may be cancelled out of the queue.
+    const cancelled = uploadQueueReducer([queued()], {
+      type: "failed",
+      id: "f1",
+      failure: cancelledFailure(),
+    });
+    expect(cancelled[0].status).toBe("failed");
   });
 
   it("only re-queues a failure that said it was worth retrying", () => {
@@ -161,6 +229,61 @@ describe("the queue reducer", () => {
       id: "f1",
     });
     expect(state.map((item) => item.id)).toEqual(["f2"]);
+  });
+});
+
+describe("releasedFileId", () => {
+  /*
+    The File handles live in a ref beside the reducer, and `retry` is the only
+    reader. They used to be pruned on dismissal alone, so a succeeded row and
+    a non-retryable failure each kept their file — and its backing blob, up to
+    200 MB for a video — for the tab's lifetime, unreachable and unbounded.
+  */
+  it("lets go once a row has succeeded", () => {
+    expect(releasedFileId({ type: "succeeded", id: "f1", media: null })).toBe(
+      "f1",
+    );
+  });
+
+  it("lets go of a failure that is not worth retrying", () => {
+    const refused = precheckFile({ type: "text/plain", size: 10 });
+    expect(refused?.retryable).toBe(false);
+    expect(
+      releasedFileId({
+        type: "failed",
+        id: "f1",
+        failure: refused ?? networkFailure(),
+      }),
+    ).toBe("f1");
+  });
+
+  it("KEEPS the file for a failure the user can retry", () => {
+    /*
+      The fixture mutation, and the case that matters: the only difference
+      from the test above is which failure the action carries. Releasing here
+      would make Try again silently do nothing — the button would render,
+      because the failure says retryable, and the file it needs would be gone.
+    */
+    expect(networkFailure().retryable).toBe(true);
+    expect(
+      releasedFileId({ type: "failed", id: "f1", failure: networkFailure() }),
+    ).toBe(null);
+    // A cancelled upload is retryable too, and keeps its file for the same
+    // reason.
+    expect(
+      releasedFileId({ type: "failed", id: "f1", failure: cancelledFailure() }),
+    ).toBe(null);
+  });
+
+  it("keeps the file through every transition that is not an outcome", () => {
+    expect(releasedFileId({ type: "started", id: "f1" })).toBe(null);
+    expect(
+      releasedFileId({ type: "progress", id: "f1", loadedBytes: 1 }),
+    ).toBe(null);
+    expect(releasedFileId({ type: "retried", id: "f1" })).toBe(null);
+    // `queued` carries no id at all — the reason this returns an id rather
+    // than a boolean.
+    expect(releasedFileId({ type: "queued", items: [] })).toBe(null);
   });
 });
 
@@ -225,7 +348,31 @@ describe("queueSummary", () => {
       succeeded: 1,
       failed: 1,
     });
-    expect(summary.message).toBe("1 uploading, 1 uploaded, 1 failed.");
+    // "waiting", not "uploading": nothing is in flight in this state.
+    expect(summary.message).toBe("1 waiting, 1 uploaded, 1 failed.");
+  });
+
+  it("never announces more uploads in flight than there can be", () => {
+    /*
+      The queue is strictly sequential, so at most one file is ever uploading.
+      This used to add pending to uploading and announce "5 uploading" into a
+      live region while four of the five rows on screen said "Waiting".
+    */
+    let state = uploadQueueReducer([], {
+      type: "queued",
+      items: [
+        queued(PNG, "f1"),
+        queued(PNG, "f2"),
+        queued(PNG, "f3"),
+        queued(PNG, "f4"),
+        queued(PNG, "f5"),
+      ],
+    });
+    state = uploadQueueReducer(state, { type: "started", id: "f1" });
+
+    const summary = queueSummary(state);
+    expect(summary.uploading).toBe(1);
+    expect(summary.message).toBe("1 uploading, 4 waiting.");
   });
 
   it("says nothing is queued when nothing is", () => {

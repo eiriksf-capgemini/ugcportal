@@ -117,15 +117,30 @@ function Failure({
         {failure.needsSignIn ? (
           /*
             An anchor wearing the button's clothes, rather than the Button
-            component: this navigates, and a real <a> is what gives middle-
-            click, "open in new tab" and the browser's own affordances. The
-            shared `buttonVariants` keeps it visually identical.
+            component: this navigates, and a real <a> is what gives
+            middle-click, "open in new tab" and the browser's own affordances.
+            The shared `buttonVariants` keeps it visually identical.
+
+            target="_blank" IS LOAD-BEARING, not a preference. This queue is
+            useReducer state plus two refs, none of it persisted, and a File
+            handle cannot survive a navigation at all — so a same-tab sign-in
+            discards every queued and completed upload on the page. The new
+            tab gets the session cookie, which is shared, and this tab keeps
+            its files so "Try again" can actually re-send them. The failure
+            message says the link opens a tab, so this is not a surprise.
+
+            rel="noopener noreferrer" because target="_blank" otherwise hands
+            the opened page a reference to this one via window.opener.
           */
           <a
             href={signInPath(UPLOAD_PATH)}
+            target="_blank"
+            rel="noopener noreferrer"
             className={buttonVariants({ variant: "default", size: "sm" })}
           >
             Sign in
+            {/* The accessible name has to carry it too, not just the prose. */}
+            <span className="sr-only"> (opens in a new tab)</span>
           </a>
         ) : null}
         {failure.retryable ? (
@@ -223,7 +238,15 @@ export function UploadQueueList({
               <ProgressBar item={item} />
             ) : null}
 
-            {item.status === "uploading" ? (
+            {/*
+              Offered while WAITING as well as while uploading. The form's
+              cancel() has always handled both — the branch that takes a
+              still-queued file back out of the queue was written, tested and
+              then unreachable, because this condition was `uploading` alone.
+              A 40-file mis-drop could only be undone by reloading the page,
+              which also discarded the uploads that had already succeeded.
+            */}
+            {item.status === "uploading" || item.status === "pending" ? (
               <div className="mt-2">
                 <Button
                   type="button"

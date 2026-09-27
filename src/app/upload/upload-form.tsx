@@ -8,7 +8,9 @@ import { acceptedTypesSummary, cancelledFailure } from "./outcomes";
 import { UploadQueueList } from "./upload-queue-list";
 import {
   queueSummary,
+  releasedFileId,
   uploadQueueReducer,
+  type QueueAction,
   type QueueItem,
 } from "./upload-queue";
 import { drainQueue, enqueueFiles, type QueueEntry } from "./upload-runner";
@@ -59,6 +61,22 @@ export function UploadForm() {
     null,
   );
 
+  /**
+   * Dispatch, plus releasing the File once nothing can ask for it again.
+   *
+   * `filesRef` used to be pruned only by `dismiss`, so every succeeded row and
+   * every non-retryable failure kept its File — and therefore its backing
+   * blob, which for video is the whole 200 MB — alive for the lifetime of the
+   * tab, with no remaining reader. `retry` is the only thing that reads the
+   * map, and it refuses both of those states, so the entries were unreachable
+   * as well as unbounded.
+   */
+  const dispatchAndRelease = useCallback((action: QueueAction) => {
+    const released = releasedFileId(action);
+    if (released !== null) filesRef.current.delete(released);
+    dispatch(action);
+  }, []);
+
   const drain = useCallback(() => {
     if (drainingRef.current) return;
     drainingRef.current = true;
@@ -71,11 +89,11 @@ export function UploadForm() {
       const controller = new AbortController();
       inFlightRef.current = { id: entry.id, controller };
       return { ...entry, signal: controller.signal };
-    }, dispatch).finally(() => {
+    }, dispatchAndRelease).finally(() => {
       drainingRef.current = false;
       inFlightRef.current = null;
     });
-  }, []);
+  }, [dispatchAndRelease]);
 
   const addFiles = useCallback(
     (fileList: FileList | null) => {
@@ -103,16 +121,31 @@ export function UploadForm() {
 
   const cancel = useCallback(
     (id: string) => {
+      /*
+        The same condition the reducer now applies, checked here so the two
+        agree rather than one catching the other. Without it, a Cancel button
+        painted in a previous commit — the drain loop settles one file and
+        moves to the next before React commits either — reaches this function
+        naming a row that has since finished, misses the in-flight check
+        below, and falls through to `failed` on an upload the server has
+        already stored.
+      */
+      const item = items.find((each) => each.id === id);
+      if (item?.status !== "uploading" && item?.status !== "pending") return;
+
       if (inFlightRef.current?.id === id) {
         // The transport rejects with UploadAbortedError, which uploadItem
         // turns into the cancelled failure — one path, not two.
         inFlightRef.current.controller.abort();
         return;
       }
+      // Still waiting its turn: take it out of the queue before it is ever
+      // sent. This branch is what the Cancel control on a pending row
+      // reaches.
       removeFromQueue(id);
       dispatch({ type: "failed", id, failure: cancelledFailure() });
     },
-    [removeFromQueue],
+    [items, removeFromQueue],
   );
 
   const retry = useCallback(

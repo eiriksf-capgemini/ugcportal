@@ -345,8 +345,25 @@ export function failureForResponse(
       return {
         ...base,
         code: "unauthenticated",
+        /*
+          THE SECOND SENTENCE IS A PROMISE THE MARKUP HAS TO KEEP.
+
+          It used to read "Sign in and the file is still here to retry",
+          alongside a same-tab link. That was false, and expensively so: the
+          whole queue is useReducer state plus two refs, nothing is persisted,
+          and a File handle cannot survive a navigation even if the rest were
+          — so following that link destroyed every queued upload and landed
+          the user back on a freshly mounted, empty page. The sentence only
+          held for someone who thought to middle-click it.
+
+          The fix is the link, not the words: it opens in a new tab (see
+          upload-queue-list.tsx), the session cookie it sets is shared with
+          this one, and "Try again" then re-sends the File this tab is still
+          holding. The copy says which, because a link that steals a tab
+          without warning is its own small betrayal.
+        */
         message:
-          "You are not signed in any more, so nothing was uploaded. Sign in and the file is still here to retry.",
+          "You are not signed in any more, so nothing was uploaded. Sign in — the link opens a new tab, so nothing here is lost — then try again.",
         needsSignIn: true,
         retryable: true,
       };
@@ -382,9 +399,27 @@ export function failureForResponse(
         retryable: false,
       };
     case 503: {
+      /*
+        A header that resolves to ZERO is not a plan, and `??` does not treat
+        it as one: 0 is not nullish, so it short-circuited the body fallback
+        and produced the sentence "try again in 0 seconds".
+
+        Two inputs reach it. `Retry-After: 0` is literally "now". A date
+        already in the past — a proxy rewrote the delta into an absolute time,
+        and the response then sat in a queue or the clocks disagree — clamps
+        to the same 0. In both cases the route's own `retryAfterSeconds` in
+        the body is the better number, and it is discarded by a `??` chain.
+
+        So the header wins only when it says something POSITIVE. Since
+        retryAfterFromBody already refuses anything that is not a positive
+        finite number, `seconds` here is either null or a real wait, and the
+        "in 0 seconds" sentence is now unspellable.
+      */
+      const fromHeader = parseRetryAfter(response.retryAfter, now);
       const seconds =
-        parseRetryAfter(response.retryAfter, now) ??
-        retryAfterFromBody(response.body);
+        fromHeader !== null && fromHeader > 0
+          ? fromHeader
+          : retryAfterFromBody(response.body);
       return {
         ...base,
         code: "busy",

@@ -127,6 +127,29 @@ function patch(
   return items.map((item) => (item.id === id ? change(item) : item));
 }
 
+/**
+ * Has this row reached an outcome it should keep?
+ *
+ * THE POINT IS THAT A SETTLED ROW IS FINISHED WITH. Every dispatch in this
+ * reducer is fired from an async callback, and React does not commit state
+ * between the `succeeded` for one file and the drain loop advancing to the
+ * next — so a control rendered from a *previous* commit is still on screen,
+ * still clickable, and still naming a row that has since finished.
+ *
+ * That is not hypothetical, and it was live here: file A's 201 resolves,
+ * `succeeded` dispatches, `take()` advances the in-flight pointer to B, and
+ * A's stale Cancel button is still painted. Clicking it missed the in-flight
+ * check, fell through to `failed`, and relabelled a file that WAS STORED ON
+ * THE SERVER as "You cancelled this upload, so nothing was kept" — nulling
+ * the preview with it. The row lied about the one thing it exists to report.
+ *
+ * `started`, `progress` and `retried` each had a guard of their own; the two
+ * that could destroy an outcome did not.
+ */
+function isSettled(item: QueueItem): boolean {
+  return item.status === "succeeded" || item.status === "failed";
+}
+
 export function uploadQueueReducer(
   items: QueueItem[],
   action: QueueAction,
@@ -153,20 +176,30 @@ export function uploadQueueReducer(
           : item,
       );
     case "succeeded":
-      return patch(items, action.id, (item) => ({
-        ...item,
-        status: "succeeded",
-        loadedBytes: item.sizeBytes,
-        failure: null,
-        media: action.media,
-      }));
+      return patch(items, action.id, (item) =>
+        // A row that has already settled keeps its outcome. See isSettled.
+        isSettled(item)
+          ? item
+          : {
+              ...item,
+              status: "succeeded",
+              loadedBytes: item.sizeBytes,
+              failure: null,
+              media: action.media,
+            },
+      );
     case "failed":
-      return patch(items, action.id, (item) => ({
-        ...item,
-        status: "failed",
-        failure: action.failure,
-        media: null,
-      }));
+      return patch(items, action.id, (item) =>
+        // The one that was live: a stale Cancel relabelling a stored upload.
+        isSettled(item)
+          ? item
+          : {
+              ...item,
+              status: "failed",
+              failure: action.failure,
+              media: null,
+            },
+      );
     case "retried":
       return patch(items, action.id, (item) =>
         // Only a failure may be retried, and only one the failure itself said
@@ -179,6 +212,34 @@ export function uploadQueueReducer(
     case "dismissed":
       return items.filter((item) => item.id !== action.id);
   }
+}
+
+/**
+ * The row whose File this action makes unreachable, or null.
+ *
+ * The queue keeps the File objects in a ref, because they are not
+ * serialisable into reducer state, and exactly one thing reads that map:
+ * `retry`. Retry refuses a row that succeeded, and refuses a failure whose own
+ * `retryable` flag says re-sending is pointless — so for those two outcomes
+ * the entry is not merely unused, it is unreachable, while still pinning the
+ * file's backing blob (up to 200 MB for a video) for the lifetime of the tab.
+ *
+ * Returns the id rather than a boolean for two reasons: it is what the caller
+ * actually needs, and `QueueAction` is a union in which `queued` carries no
+ * `id` at all — so a boolean would leave the component reaching for a
+ * property the type does not have.
+ *
+ * A function rather than a line inside the component, so the rule can be
+ * stated once and checked. The component cannot be driven in this repo's
+ * node-environment tests; this can.
+ */
+export function releasedFileId(action: QueueAction): string | null {
+  if (action.type === "succeeded") return action.id;
+  // The flag, not a second opinion about which failures are final: it is the
+  // same one the Try again control and the reducer's "retried" guard read, so
+  // the three cannot disagree about which failures keep their file.
+  if (action.type === "failed") return action.failure.retryable ? null : action.id;
+  return null;
 }
 
 /** Files still waiting to be sent, oldest first. */
@@ -229,9 +290,17 @@ export function queueSummary(items: QueueItem[]): QueueSummary {
   };
   for (const item of items) counts[item.status] += 1;
 
-  const active = counts.pending + counts.uploading;
+  /*
+    Waiting is counted separately from uploading, because the queue is
+    strictly sequential: at most ONE file is ever in flight (see drainQueue).
+    Folding the two together announced "5 uploading" to a screen-reader user
+    while four of the five rows on screen read "Waiting" — a live region
+    contradicting the thing it is describing is worse than no live region,
+    because it is believed.
+  */
   const parts: string[] = [];
-  if (active > 0) parts.push(`${active} uploading`);
+  if (counts.uploading > 0) parts.push(`${counts.uploading} uploading`);
+  if (counts.pending > 0) parts.push(`${counts.pending} waiting`);
   if (counts.succeeded > 0) parts.push(`${counts.succeeded} uploaded`);
   if (counts.failed > 0) parts.push(`${counts.failed} failed`);
 
