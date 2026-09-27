@@ -18,7 +18,7 @@ const nextConfig: NextConfig = {
   // feature.
   //
   // File upload now goes to a route handler instead
-  // (src/app/api/admin/instagram/rights-decision/route.ts), which reads its
+  // (src/app/api/admin/rights/decision/route.ts), which reads its
   // body through readCappedFormData in src/lib/request-body.ts and so owns
   // its own limit without moving anyone else's. Keep it that way: if a
   // server action ever needs a large body, give it a route handler.

@@ -64,6 +64,58 @@ describe("splitStatements", () => {
     expect(statements[1]).toBe('DROP TABLE "b"');
   });
 
+  it("ignores a semicolon inside a block comment", () => {
+    // The residue of the first fix, one syntax over: the scanner modelled
+    // `--` and `'…'` but not slash-star, so a `;` in a block comment still
+    // halved a statement. Same silent-mangling class the rewrite existed to
+    // eliminate.
+    const sql = [
+      'CREATE TABLE "a" (',
+      "  /* an id; nothing more",
+      "     and it spans lines; still not a terminator */",
+      '  "id" TEXT',
+      ");",
+    ].join("\n");
+
+    expect(splitStatements(sql)).toHaveLength(1);
+  });
+
+  it("ignores a semicolon inside a quoted identifier", () => {
+    // Prisma emits double-quoted identifiers everywhere, so this is the one
+    // of the three identifier forms actually in use.
+    const statements = splitStatements(
+      'CREATE TABLE "od;d" ("i;d" TEXT);\nDROP TABLE "b";',
+    );
+
+    expect(statements).toHaveLength(2);
+    expect(statements[0]).toContain('"od;d"');
+    expect(statements[1]).toBe('DROP TABLE "b"');
+  });
+
+  it("treats \"\" as an escaped quote inside an identifier", () => {
+    const statements = splitStatements(
+      'CREATE TABLE "a""b;c" ("id" TEXT);\nDROP TABLE "b";',
+    );
+
+    expect(statements).toHaveLength(2);
+  });
+
+  it.each([
+    ["backtick", "CREATE TABLE `od;d` (`id` TEXT);\nDROP TABLE `b`;"],
+    ["square bracket", "CREATE TABLE [od;d] ([id] TEXT);\nDROP TABLE [b];"],
+  ])("ignores a semicolon inside a %s identifier", (_name, sql) => {
+    // Neither form is emitted by Prisma today. They are modelled because
+    // being selectively complete is how the original defect came back one
+    // syntax over.
+    expect(splitStatements(sql)).toHaveLength(2);
+  });
+
+  it("drops a block-comment-only tail rather than executing it", () => {
+    expect(splitStatements('DROP TABLE "b";\n/* done; finished */\n')).toEqual([
+      'DROP TABLE "b"',
+    ]);
+  });
+
   it("drops a comment-only tail rather than executing it", () => {
     expect(splitStatements('DROP TABLE "b";\n-- done\n')).toEqual([
       'DROP TABLE "b"',

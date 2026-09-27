@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -486,6 +486,28 @@ describe("evidence upload", () => {
 
     // Named only in the comment explaining why it is absent.
     expect(config).not.toMatch(/^\s*bodySizeLimit\s*:/m);
+  });
+
+  it("points at a route handler that exists", () => {
+    // The comment above is the only thing carrying that reasoning forward,
+    // and a comment naming a path that no longer exists sends the next
+    // reader nowhere. This PR renamed the handler out from under it, so the
+    // path is now checked rather than trusted: every src/ path named in
+    // next.config.ts must resolve on disk.
+    const config = readFileSync(
+      resolve(process.cwd(), "next.config.ts"),
+      "utf8",
+    );
+    const paths = [...config.matchAll(/src\/[\w./[\]-]+\.tsx?/g)].map(
+      (match) => match[0],
+    );
+
+    expect(paths.length).toBeGreaterThan(0);
+    for (const path of paths) {
+      expect({ path, exists: existsSync(resolve(process.cwd(), path)) }).toEqual(
+        { path, exists: true },
+      );
+    }
   });
 
   it("rejects a body that is not multipart at all", async () => {

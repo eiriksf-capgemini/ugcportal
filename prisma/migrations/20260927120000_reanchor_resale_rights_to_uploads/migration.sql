@@ -25,10 +25,13 @@
 --     for the same reason.
 --
 --     Rather than let those decisions vanish without explanation, each one
---     is written into the append-only trail as a transition to UNREVIEWED
---     before the table is rebuilt, carrying its own checklist version and
---     evidence pointer. The trail therefore says why the clearance stopped
---     applying, which is the question an auditor asks.
+--     that actually recorded something is written into the append-only trail
+--     as a transition to UNREVIEWED before the table is rebuilt, carrying its
+--     own checklist version, evidence pointer and the rights holder it named.
+--     The trail therefore says why the clearance stopped applying, which is
+--     the question an auditor asks. A review still at UNREVIEWED gets no
+--     event: it recorded nothing, and a row saying otherwise would be the
+--     audit trail asserting something that never happened.
 --
 --  3. CuratedPost / PostRightsClearance are dropped rather than migrated.
 --     They had a required foreign key to InstagramAccount, so under the
@@ -133,9 +136,46 @@ CREATE INDEX "ResaleRightsEvent_createdAt_idx" ON "ResaleRightsEvent"("createdAt
 -- each row actually said. The id needs a value because Prisma generates
 -- cuids client-side and the column has no default; randomblob is opaque and
 -- unique, which is all an audit id has to be.
+--
+-- THE TIMESTAMP IS NOT `CURRENT_TIMESTAMP`, and that is the whole point of
+-- this row working at all. SQLite's CURRENT_TIMESTAMP renders
+-- 'YYYY-MM-DD HH:MM:SS' while @prisma/adapter-libsql writes ISO text with a
+-- 'T' and milliseconds, and `createdAt` is TEXT, so ORDER BY compares them
+-- lexicographically. ' ' sorts before 'T', so on the same UTC date this row
+-- sorted BEFORE every Prisma-written row no matter how much later it
+-- happened — leaving the trail's last word as the clearance this row exists
+-- to retire, which is exactly the failure it was added to prevent. The same
+-- naive format is also read back as LOCAL time by the driver, so on a server
+-- east of UTC the row claimed to have happened hours before it did.
+-- strftime with an explicit 'T' and 'Z' fixes both: one sortable, unambiguous
+-- format for every writer of this table.
+--
+-- Only rows that actually recorded a decision get an event. A review still
+-- sitting at UNREVIEWED said nothing, and a missing row reads as UNREVIEWED
+-- to the gate, so deleting one changes nothing a reader could care about —
+-- while writing `fromStatus = toStatus = 'UNREVIEWED'` with a reason
+-- asserting a discarded decision would put something in the audit trail that
+-- never happened.
+--
+-- The reason names the rights holder the old clearance covered, where it had
+-- one, in a fixed `[rights-holder:<userId>]` form. The subject of these rows
+-- is genuinely the connected account, not the user — stamping them
+-- 'UPLOADER' would claim that person had been cleared as an uploader, which
+-- they never were — but an auditor starting from a user still needs a way
+-- back to this history, and the reason is the only field that can carry it
+-- without misstating the subject.
 INSERT INTO "ResaleRightsEvent" ("id", "reviewId", "subjectKind", "subjectId", "subjectLabel", "fromStatus", "toStatus", "actorUserId", "actorEmail", "reason", "selfReview", "checklistVersion", "evidenceKey", "evidenceSha256", "createdAt")
-SELECT 'vsm' || lower(hex(randomblob(14))), r."id", 'INSTAGRAM_ACCOUNT', r."instagramAccountId", a."username", r."status", 'UNREVIEWED', NULL, NULL, 'ugcportal-vsm: the resale-rights gate moved from connected Instagram accounts to uploaders and uploads. This account-level decision was discarded rather than re-pointed at a user, because a decision about one connected account is not a decision about everything that person has ever uploaded. Nothing from this subject is sellable until an admin records a new decision against the uploader.', false, r."checklistVersion", r."evidenceKey", r."evidenceSha256", CURRENT_TIMESTAMP
-FROM "ResaleRightsReview" r LEFT JOIN "InstagramAccount" a ON a."id" = r."instagramAccountId";
+SELECT 'vsm' || lower(hex(randomblob(14))), r."id", 'INSTAGRAM_ACCOUNT', r."instagramAccountId", a."username", r."status", 'UNREVIEWED', NULL, NULL,
+  'ugcportal-vsm: the resale-rights gate moved from connected Instagram accounts to uploaders and uploads. This account-level decision was discarded rather than re-pointed at a user, because a decision about one connected account is not a decision about everything that person has ever uploaded. Nothing from this subject is sellable until an admin records a new decision against the uploader.'
+  || CASE WHEN r."clearedOwnerUserId" IS NOT NULL
+       THEN ' The discarded clearance covered the uploads of [rights-holder:' || r."clearedOwnerUserId" || ']' || COALESCE(' (' || u."email" || ')', '') || '.'
+       ELSE ' The discarded clearance named no rights holder, so it covered nobody.'
+     END,
+  false, r."checklistVersion", r."evidenceKey", r."evidenceSha256", strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+FROM "ResaleRightsReview" r
+  LEFT JOIN "InstagramAccount" a ON a."id" = r."instagramAccountId"
+  LEFT JOIN "User" u ON u."id" = r."clearedOwnerUserId"
+WHERE r."status" <> 'UNREVIEWED';
 CREATE TABLE "new_ResaleRightsReview" (
     "id" TEXT NOT NULL PRIMARY KEY,
     "uploaderUserId" TEXT NOT NULL,

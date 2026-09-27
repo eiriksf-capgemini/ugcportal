@@ -57,16 +57,41 @@ export function migrationNames(): string[] {
  *
  * Neither failure is theoretical: a hand-written migration is exactly where
  * explanatory comments live, and this helper is what decides whether the
- * committed SQL is ever exercised by a test at all. So the scanner tracks
- * the two places a semicolon does not end a statement — inside a single
- * quoted string, and after `--` to end of line — and splits everywhere else.
- * `''` is the SQL escape for a quote inside a string and does not close it.
+ * committed SQL is ever exercised by a test at all. A splitter that mangles
+ * a migration silently is worse than one that fails, because the suite keeps
+ * running — against a database that was never migrated the way production
+ * will be.
+ *
+ * So the scanner models EVERY construct in which SQLite does not treat `;`
+ * as a statement terminator, rather than the two that happened to bite
+ * first. Being selectively complete here is how the original bug came back
+ * one syntax over, so the list is the full one from the SQLite grammar:
+ *
+ *   - single-quoted string literal; `''` is an escaped quote, not the end
+ *   - double-quoted identifier; `""` likewise
+ *   - backtick identifier (MySQL-compat, accepted by SQLite)
+ *   - square-bracket identifier (MSSQL-compat; no escape form, `]` closes)
+ *   - `--` line comment, to end of line
+ *   - slash-star block comment, which may span lines and does not nest
+ *
+ * Prisma emits `"…"` identifiers and `'…'` literals, so those two are the
+ * ones in use today; the rest cost a branch each and remove the question.
  */
+/** Closing delimiter for each quoting form, keyed by its opener. */
+const QUOTE_CLOSERS: Record<string, string> = {
+  "'": "'",
+  '"': '"',
+  "`": "`",
+  "[": "]",
+};
+
 export function splitStatements(sql: string): string[] {
   const statements: string[] = [];
   let current = "";
-  let inString = false;
+  /** The delimiter that would close the quote we are inside, or null. */
+  let closer: string | null = null;
   let inLineComment = false;
+  let inBlockComment = false;
 
   for (let index = 0; index < sql.length; index += 1) {
     const char = sql[index];
@@ -79,14 +104,27 @@ export function splitStatements(sql: string): string[] {
       current += char;
       continue;
     }
-    if (inString) {
+    if (inBlockComment) {
       current += char;
-      if (char === "'") {
-        if (next === "'") {
+      // Block comments do not nest in SQLite: the first `*/` ends it.
+      if (char === "*" && next === "/") {
+        current += next;
+        index += 1;
+        inBlockComment = false;
+      }
+      continue;
+    }
+    if (closer !== null) {
+      current += char;
+      if (char === closer) {
+        // A doubled delimiter is an escaped one and does not close the
+        // quote — true for '' and "" and ``. `[…]` has no escape form, so
+        // `]` always closes it, which is SQLite's own rule.
+        if (next === closer && closer !== "]") {
           current += next;
           index += 1;
         } else {
-          inString = false;
+          closer = null;
         }
       }
       continue;
@@ -96,8 +134,14 @@ export function splitStatements(sql: string): string[] {
       current += char;
       continue;
     }
-    if (char === "'") {
-      inString = true;
+    if (char === "/" && next === "*") {
+      inBlockComment = true;
+      current += char + next;
+      index += 1;
+      continue;
+    }
+    if (QUOTE_CLOSERS[char] !== undefined) {
+      closer = QUOTE_CLOSERS[char];
       current += char;
       continue;
     }
@@ -115,10 +159,12 @@ export function splitStatements(sql: string): string[] {
     // A trailing chunk of comments carries no SQL. Comments are stripped
     // only to decide that — the statement itself is executed as written, so
     // a `--` inside a string literal cannot change what runs.
-    .filter(
-      (statement) =>
-        statement.replace(/--[^\n]*/g, "").trim().length > 0,
-    );
+    .filter((statement) => withoutComments(statement).trim().length > 0);
+}
+
+/** Comment-free view of a chunk, for deciding whether it carries any SQL. */
+function withoutComments(statement: string): string {
+  return statement.replace(/\/\*[\s\S]*?\*\//g, "").replace(/--[^\n]*/g, "");
 }
 
 /** Apply one committed migration by directory name. */

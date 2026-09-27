@@ -43,7 +43,20 @@ const REANCHOR_MIGRATION = migrationNames().find((name) =>
 const database = createTemporaryDatabase();
 const { prisma } = await import("@/lib/prisma");
 
-const CLEARED_AT = "2026-09-25T09:00:00.000Z";
+/**
+ * The pre-change audit row is dated EARLY ON THE SAME UTC DAY the migration
+ * runs, and that is load-bearing rather than incidental.
+ *
+ * `createdAt` is TEXT and SQLite orders TEXT lexicographically. SQLite's
+ * `CURRENT_TIMESTAMP` renders `YYYY-MM-DD HH:MM:SS` while the Prisma libsql
+ * adapter writes ISO with a `T`, and `' ' < 'T'` — so a migration row stamped
+ * the naive way sorted *before* every Prisma row on the same date, however
+ * much later it actually happened. An earlier revision of this test dated the
+ * fixture two days back, which made the collision unreachable: it asserted the
+ * right outcome while never constructing the case that breaks it. Same shape
+ * as the harness problems that ran through ugcportal-0ss.
+ */
+const CLEARED_AT = `${new Date().toISOString().slice(0, 10)}T00:00:00.000Z`;
 
 beforeAll(async () => {
   // Derived rather than hard-coded, but still asserted: if the migration is
@@ -59,7 +72,9 @@ beforeAll(async () => {
             ('owner-1','owner@example.com','USER',0,0)`,
     `INSERT INTO "InstagramAccount"
        ("id","instagramUserId","username","accessTokenEncrypted","tokenExpiresAt","scopes","connectedByUserId","createdAt","updatedAt")
-     VALUES ('acc-1','ig-1','ownerhandle','sealed',0,'instagram_business_basic','admin-1',0,0)`,
+     VALUES ('acc-1','ig-1','ownerhandle','sealed',0,'instagram_business_basic','admin-1',0,0),
+            ('acc-2','ig-2','untouched','sealed',0,'instagram_business_basic','admin-1',0,0),
+            ('acc-3','ig-3','partway','sealed',0,'instagram_business_basic','admin-1',0,0)`,
     // A file the cleared party uploaded. After the migration it must not be
     // sellable, which is the concrete form of "no row silently becomes
     // CLEARED for any uploader or upload".
@@ -69,6 +84,16 @@ beforeAll(async () => {
     `INSERT INTO "ResaleRightsReview"
        ("id","instagramAccountId","status","route","checklistVersion","reviewedByUserId","clearedOwnerUserId","reviewedAt","validUntil","conditions","evidenceKey","evidenceSha256","productDecisionRef","createdAt","updatedAt")
      VALUES ('rev-1','acc-1','CLEARED','CONTRACT','2026-09-24.1','admin-1','owner-1',0,NULL,'Editorial use only.','rights-evidence/acc-1/contract.pdf','deadbeef','ugcportal-2eh',0,0)`,
+    // A review that never recorded a decision. Deleting it changes nothing a
+    // reader could care about — a missing row reads as UNREVIEWED to the gate
+    // — so it must NOT produce a discard event claiming one was discarded.
+    `INSERT INTO "ResaleRightsReview"
+       ("id","instagramAccountId","status","checklistVersion","evidenceKey","createdAt","updatedAt")
+     VALUES ('rev-2','acc-2','UNREVIEWED','2026-09-24.1','rights-evidence/acc-2/stray.pdf',0,0)`,
+    // A review part-way through. Something WAS recorded, so this one does.
+    `INSERT INTO "ResaleRightsReview"
+       ("id","instagramAccountId","status","checklistVersion","createdAt","updatedAt")
+     VALUES ('rev-3','acc-3','IN_REVIEW','2026-09-24.1',0,0)`,
     `INSERT INTO "ResaleRightsEvent"
        ("id","reviewId","instagramAccountId","instagramUsername","fromStatus","toStatus","actorUserId","actorEmail","reason","selfReview","checklistVersion","evidenceKey","evidenceSha256","createdAt")
      VALUES ('ev-1','rev-1','acc-1','ownerhandle','UNREVIEWED','CLEARED','admin-1','admin@example.com','Signed assignment on file.',0,'2026-09-24.1','rights-evidence/acc-1/contract.pdf','deadbeef','${CLEARED_AT}')`,
@@ -184,12 +209,109 @@ describe("ugcportal-vsm K2: the audit trail survives intact", () => {
     expect(discard.reason).toContain("ugcportal-vsm");
   });
 
+  /**
+   * THE ORDERING, asked of a trail whose two rows land on the same UTC date.
+   *
+   * This is the assertion the earlier fixture could not make, because it
+   * dated the pre-change row two days back and the lexicographic collision
+   * never arose. A migration row stamped with SQLite's `CURRENT_TIMESTAMP`
+   * sorts before every Prisma-written row on the same date — leaving the
+   * trail's last word as the clearance the discard row exists to retire,
+   * which is exactly the failure that row was added to prevent.
+   */
+  it("sorts after the clearance it retires, on the same UTC date", async () => {
+    const trail = await prisma.resaleRightsEvent.findMany({
+      where: { reviewId: "rev-1" },
+      orderBy: { createdAt: "asc" },
+    });
+
+    // The fixture really is on today's date, so the collision is reachable
+    // rather than assumed away.
+    expect(trail[0].createdAt.toISOString().slice(0, 10)).toBe(
+      new Date().toISOString().slice(0, 10),
+    );
+    expect(trail.map((event) => event.toStatus)).toEqual([
+      "CLEARED",
+      "UNREVIEWED",
+    ]);
+    expect(trail[1].createdAt.getTime()).toBeGreaterThan(
+      trail[0].createdAt.getTime(),
+    );
+  });
+
+  it("stamps the discard in the same format every other writer uses", async () => {
+    // Read as plain text rather than as a date: concatenating with '' strips
+    // the column's affinity, so this sees the bytes on disk instead of
+    // whatever the driver would coerce them to. The naive
+    // `YYYY-MM-DD HH:MM:SS` form is also read back as LOCAL time, so on a
+    // server east of UTC it claimed to have happened hours before it did —
+    // invisible to a wall-clock assertion running in UTC, visible here.
+    const [row] = await prisma.$queryRawUnsafe<{ raw: string }[]>(
+      `SELECT "createdAt" || '' AS raw FROM "ResaleRightsEvent"
+       WHERE "toStatus" = 'UNREVIEWED' AND "reviewId" = 'rev-1'`,
+    );
+
+    expect(row.raw).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+  });
+
+  /**
+   * An audit row has to describe something that happened. A review still
+   * sitting at UNREVIEWED recorded nothing, and `fromStatus = toStatus =
+   * UNREVIEWED` with a reason asserting a discarded decision — plus a copied
+   * evidence pointer — is the trail claiming an event that never occurred.
+   */
+  it("writes no discard event for a review that never decided anything", async () => {
+    expect(
+      await prisma.resaleRightsEvent.count({ where: { reviewId: "rev-2" } }),
+    ).toBe(0);
+  });
+
+  it("does write one for a review that was part-way through", async () => {
+    // The other half, so the WHERE is not simply excluding everything: a
+    // review someone had started IS a record, and it stopped applying.
+    const [event, ...rest] = await prisma.resaleRightsEvent.findMany({
+      where: { reviewId: "rev-3" },
+    });
+
+    expect(rest).toHaveLength(0);
+    expect(event).toMatchObject({
+      subjectId: "acc-3",
+      fromStatus: "IN_REVIEW",
+      toStatus: "UNREVIEWED",
+    });
+    // It named nobody, and the row says so rather than implying a holder.
+    expect(event.reason).toContain("named no rights holder");
+  });
+
+  /**
+   * The link back to a person. These rows are genuinely about a connected
+   * account — stamping them `UPLOADER` would claim that user had been cleared
+   * as an uploader, which never happened — but an auditor starting from a
+   * user still needs a way to reach the history, and the reason is the only
+   * field that can carry it without misstating the subject.
+   */
+  it("names the rights holder the discarded clearance covered", async () => {
+    const found = await prisma.resaleRightsEvent.findMany({
+      where: { reason: { contains: "[rights-holder:owner-1]" } },
+    });
+
+    expect(found).toHaveLength(1);
+    expect(found[0].reviewId).toBe("rev-1");
+    // The snapshotted email too, so the row reads without the User table.
+    expect(found[0].reason).toContain("owner@example.com");
+  });
+
   it("gives the new audit table no foreign key to cascade from", async () => {
     // Asked of the live database rather than the schema file: deleting the
     // uploader must take the current-state row and leave the history.
+    const before = await prisma.resaleRightsEvent.count();
+    expect(before).toBeGreaterThan(0);
+
     await prisma.user.delete({ where: { id: "owner-1" } });
 
-    expect(await prisma.resaleRightsEvent.count()).toBe(2);
+    // Derived rather than hard-coded: adding a fixture above must not turn
+    // this into a number nobody rechecks.
+    expect(await prisma.resaleRightsEvent.count()).toBe(before);
     expect(
       await prisma.media.findUnique({ where: { id: "media-1" } }),
     ).toBeNull();
