@@ -199,6 +199,36 @@ export const UNDECLARED_UPLOAD_LIMIT_BYTES =
 export const MIN_UPLOAD_BUDGET_BYTES =
   UPLOAD_BODY_COPIES * (MAX_IMAGE_UPLOAD_BYTES + MULTIPART_OVERHEAD_ALLOWANCE_BYTES);
 
+/**
+ * Average rate an upload must sustain to keep holding more than the whole
+ * shared budget.
+ *
+ * Only ever applies to a reservation that is *excluding other people* — one
+ * whose pledge exceeds {@link UploadMemorySettings.budgetBytes}. An upload
+ * that fits inside the budget alongside others is policed by nothing here,
+ * however slowly it trickles, because it is costing nobody anything.
+ *
+ * 512 KiB/s is deliberately generous (a 4 Mbit/s uplink), because it is not
+ * the load-bearing part of the defence — see the note on
+ * {@link createUploadMemoryBudget} about revocation being driven by the
+ * arrival of the requests being blocked. A legitimate large upload on a slow
+ * link should not be killed for being slow; a connection holding the route
+ * shut while sending nothing should be.
+ *
+ * Measured as a cumulative average from the moment exclusivity was taken, not
+ * instantaneously, so a momentary stall on a real connection is absorbed.
+ */
+export const EXCLUSIVE_MIN_THROUGHPUT_BYTES_PER_SEC = 512 * 1024;
+
+/**
+ * How long a newly exclusive upload is left alone before its rate is judged.
+ *
+ * Without a grace window the very first check — taken microseconds after the
+ * pledge, with no elapsed time to have delivered anything in — would be
+ * arithmetic noise.
+ */
+export const EXCLUSIVE_GRACE_MS = 5_000;
+
 /** The upload was refused because the process is already holding its budget. */
 export class UploadMemoryExhaustedError extends Error {
   /** Suggested backoff, suitable for a Retry-After header. */
@@ -568,6 +598,11 @@ export interface UploadMemoryStats {
   shed: number;
   /** Reservations refused an increase mid-read, cumulative. */
   outgrown: number;
+  /**
+   * Exclusive reservations taken back for not sustaining
+   * {@link EXCLUSIVE_MIN_THROUGHPUT_BYTES_PER_SEC}, cumulative.
+   */
+  revoked: number;
   /** Uploads refused with {@link UploadTooLargeForBudgetError}, cumulative. */
   refusedTooLarge: number;
 }
@@ -607,10 +642,48 @@ interface LiveReservation {
    * rather than claimed.
    */
   pledged: boolean;
+  /**
+   * When this reservation's pledge first exceeded the whole shared budget,
+   * i.e. when it started excluding everybody, and what it held at that
+   * moment. Undefined while it is only taking a share.
+   */
+  exclusiveSince?: number;
+  exclusiveFrom?: number;
+  /**
+   * True once exclusivity has been taken away for not being earned. The
+   * reservation keeps the memory it has (that cannot be handed back until
+   * the handler returns) but stops holding anything against newcomers, and
+   * its next growth fails, which ends the request.
+   */
+  revoked: boolean;
 }
 
 /**
  * The budget, and the policy for who gets refused when it runs out.
+ *
+ * ## The one rule, arrived at the hard way
+ *
+ * Three consecutive reviews each found a denial-of-service path here, each
+ * through a different door, and all three were the same mistake:
+ *
+ *  - a reservation sized from a declared `Content-Length` (round 2);
+ *  - a reservation sized from a declared media type (round 2, same fix);
+ *  - exclusivity granted once at the crossing and then held for as long as
+ *    the connection stayed open (round 4).
+ *
+ * The rule those converge on, and the one to test any future change here
+ * against:
+ *
+ *   **A declaration may only ever narrow what this process will read.
+ *   Nothing else is decided from one — not memory, not admission, not
+ *   exclusivity, not rejection. Those are decided by bytes that have
+ *   actually arrived, and any privilege granted on that basis has to keep
+ *   being earned for as long as it is held.**
+ *
+ * The last clause is the round-4 addition and is the one that is easy to
+ * forget: "earned once" is not the same as "earned", and a privilege that
+ * excludes other people is exactly the kind that has to be re-checked. About
+ * 10 MB of traffic used to buy five minutes of the whole upload route.
  *
  * ## The policy, chosen rather than fallen into
  *
@@ -640,6 +713,25 @@ interface LiveReservation {
  *    — atomically with that growth, so it either gets the room to finish or
  *    is refused right there. From then on newcomers are admitted against
  *    what is left, and the upload cannot be killed by one.
+ *  - A pledge that exceeds the whole shared budget is *exclusive* — it shuts
+ *    everybody else out — and is therefore conditional on continuing to earn
+ *    it: {@link EXCLUSIVE_MIN_THROUGHPUT_BYTES_PER_SEC} sustained on average
+ *    since it was taken, after {@link EXCLUSIVE_GRACE_MS}. Falling behind
+ *    loses the pledge, and losing the pledge ends the request at its next
+ *    chunk. A pledge that fits *inside* the budget is not policed at all,
+ *    because it is costing nobody anything.
+ *
+ * Revocation is checked before every admission and every growth, but never
+ * against the reservation doing the asking — a reservation calling in is
+ * reporting progress, and the bytes it has just delivered are not counted yet.
+ * So it is driven by the requests being excluded rather than by a timer, which
+ * also means a squatter alone on an idle server is left alone: it is harming
+ * nobody, and the idle timeout still has it. That
+ * matters for how quickly the route recovers: a squatter has by definition
+ * delivered almost nothing, so it is holding almost no *memory* — the pledge
+ * was the whole of the harm — and taking the pledge back lets the blocked
+ * traffic straight through, without waiting for the squatter to notice it is
+ * dead.
  *
  * So a large upload is refused at exactly one point: ~10 MB in, where
  * refusing is cheap and a retry costs the client almost nothing. It is never
@@ -654,9 +746,10 @@ interface LiveReservation {
  * upload at or below the grant — every image, and any video under ~10 MB —
  * never grows at all, so it can never be refused mid-read.
  *
- * A client that delivers the grant and then drips still holds it, and now
- * also excludes newcomers if its ceiling is large. That is ugcportal-9qk, and
- * the price of entry is now real bytes rather than a header.
+ * A client that delivers the grant and then drips still holds *its own* grant
+ * until the idle timeout or the end of the request — that is ugcportal-9qk,
+ * and it is bounded by the grant, which is one image's worth. What it can no
+ * longer do is hold everybody else's share with it.
  */
 export function createUploadMemoryBudget(
   settings: UploadMemorySettings,
@@ -666,6 +759,7 @@ export function createUploadMemoryBudget(
   let shed = 0;
   let outgrown = 0;
   let refusedTooLarge = 0;
+  let revoked = 0;
   const live = new Set<LiveReservation>();
 
   /** Memory actually committed, across every live reservation. */
@@ -677,7 +771,63 @@ export function createUploadMemoryBudget(
 
   /** What a reservation holds against *other* requests being admitted. */
   function pledgeOf(r: LiveReservation): number {
-    return r.pledged ? r.ceiling : r.bytes;
+    return r.pledged && !r.revoked ? r.ceiling : r.bytes;
+  }
+
+  /**
+   * Has an exclusive holder stopped earning it?
+   *
+   * Measured as a cumulative average from the moment exclusivity was taken,
+   * in reservation bytes (so {@link UPLOAD_BODY_COPIES} times the wire rate),
+   * after a grace window. Only ever asked of a reservation that is actually
+   * excluding other people.
+   */
+  function overdue(r: LiveReservation, now: number): boolean {
+    if (r.exclusiveSince === undefined || r.revoked) return false;
+    const elapsedMs = now - r.exclusiveSince;
+    if (elapsedMs <= EXCLUSIVE_GRACE_MS) return false;
+    const delivered = r.bytes - (r.exclusiveFrom ?? 0);
+    const required =
+      (elapsedMs / 1000) *
+      EXCLUSIVE_MIN_THROUGHPUT_BYTES_PER_SEC *
+      UPLOAD_BODY_COPIES;
+    return delivered < required;
+  }
+
+  /**
+   * Take exclusivity back from anyone who has stopped earning it.
+   *
+   * Run before every admission and every growth, which means it is run *by
+   * the requests being excluded*. That is the load-bearing part: a connection
+   * squatting on exclusivity is evicted by the arrival of the very traffic it
+   * is blocking, rather than having to wait to be noticed. Revoking the
+   * pledge alone unblocks them immediately, because a squatter has by
+   * definition delivered almost nothing and so is holding almost no memory —
+   * the pledge was the whole of the harm.
+   */
+  function reapExclusive(except: LiveReservation | null): void {
+    const now = Date.now();
+    for (const r of live) {
+      // Never judge the reservation that is asking, because it is asking in
+      // order to report progress: the bytes it has just delivered are not in
+      // `r.bytes` yet, so judging it here would convict it of the silence it
+      // is in the middle of ending. It is other people's arrival that
+      // evicts a squatter, which is also the only moment the squatting is
+      // doing any harm.
+      if (r === except) continue;
+      if (!overdue(r, now)) continue;
+      r.revoked = true;
+      r.pledged = false;
+      r.exclusiveSince = undefined;
+      revoked += 1;
+      console.warn(
+        `[media] revoked an exclusive upload reservation: ${mib(
+          r.bytes - (r.exclusiveFrom ?? 0),
+        )} delivered since it took the budget, below the ${mib(
+          EXCLUSIVE_MIN_THROUGHPUT_BYTES_PER_SEC,
+        )}/s it has to sustain to keep excluding other uploads`,
+      );
+    }
   }
 
   function otherPledges(self: LiveReservation | null): number {
@@ -698,6 +848,7 @@ export function createUploadMemoryBudget(
    * decode short of the spendable region rather than all of it.
    */
   function admissible(self: LiveReservation | null, want: number): boolean {
+    reapExclusive(self);
     const others = otherPledges(self);
     if (others + want <= settings.budgetBytes) return true;
     return others === 0 && want <= settings.soloReservationCeilingBytes;
@@ -737,6 +888,7 @@ export function createUploadMemoryBudget(
         bytes: grant,
         ceiling: ceilingBytes,
         pledged: false,
+        revoked: false,
       };
       live.add(entry);
       admitted += 1;
@@ -750,7 +902,7 @@ export function createUploadMemoryBudget(
         ceilingBytes,
         retryAfterSeconds: settings.retryAfterSeconds,
         growTo(toBytes: number): boolean {
-          if (released) return false;
+          if (released || entry.revoked) return false;
           if (toBytes <= entry.bytes) return true;
           // The ceiling is enforced by the caller's stream cap too, but a
           // reservation that could exceed it would make that cap and this
@@ -776,9 +928,20 @@ export function createUploadMemoryBudget(
             return false;
           }
 
-          if (crossing) entry.pledged = true;
+          if (crossing) {
+            entry.pledged = true;
+            // Only a pledge that exceeds the whole shared budget excludes
+            // anyone, and only that kind has to keep being earned.
+            if (ceilingBytes > settings.budgetBytes) {
+              entry.exclusiveSince = Date.now();
+              entry.exclusiveFrom = toBytes;
+            }
+          }
           entry.bytes = toBytes;
           recordPeak();
+          // A reservation that has just been revoked by its own admissibility
+          // check must not then act on the grant it was refused.
+          if (entry.revoked) return false;
           return true;
         },
         release() {
@@ -797,6 +960,7 @@ export function createUploadMemoryBudget(
       admitted,
       shed,
       outgrown,
+      revoked,
       refusedTooLarge,
     }),
   };

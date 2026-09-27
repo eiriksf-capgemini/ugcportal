@@ -7,6 +7,8 @@ import {
   validateUpload,
 } from "@/lib/media";
 import {
+  EXCLUSIVE_GRACE_MS,
+  EXCLUSIVE_MIN_THROUGHPUT_BYTES_PER_SEC,
   INITIAL_GRANT_BYTES,
   MIN_UPLOAD_BUDGET_BYTES,
   MULTIPART_OVERHEAD_ALLOWANCE_BYTES,
@@ -978,6 +980,131 @@ describe("createUploadMemoryBudget", () => {
 
     for (const r of others) r.release();
     claimant.release();
+  });
+
+  // Round-4 finding 1, and the third denial-of-service path found here in
+  // three rounds. Exclusivity granted once at the crossing was held for as
+  // long as the connection stayed open: ~10.3 MB bought the whole upload
+  // route for five minutes, because the stall timer is an idle timer and one
+  // byte every 29 seconds resets it. Cheaper than the burst this module
+  // exists to bound. Exclusivity is now conditional on continuing to earn it.
+  describe("exclusivity has to keep being earned", () => {
+    const grant = INITIAL_GRANT_BYTES;
+    // A budget small enough that one reservation can exceed it, which is what
+    // makes a pledge exclusive in the first place.
+    const exclusiveSettings = () =>
+      budgetOf({
+        budgetBytes: 3 * grant,
+        soloReservationCeilingBytes: 10 * grant,
+      });
+
+    it("takes the pledge back from an upload that stops delivering", () => {
+      vi.useFakeTimers();
+      try {
+        const budget = createUploadMemoryBudget(exclusiveSettings());
+        const squatter = budget.reserve(6 * grant);
+        // Crossing the grant while alone buys exclusivity: 6 grants pledged
+        // against a 2-grant budget.
+        expect(squatter.growTo(grant + 1)).toBe(true);
+        expect(budget.stats().pledgedBytes).toBe(6 * grant);
+        expect(() => budget.reserve(grant)).toThrow(UploadMemoryExhaustedError);
+
+        // Inside the grace window it is still left alone.
+        vi.advanceTimersByTime(EXCLUSIVE_GRACE_MS - 1);
+        expect(() => budget.reserve(grant)).toThrow(UploadMemoryExhaustedError);
+        expect(budget.stats().revoked).toBe(0);
+
+        // Past it, having delivered nothing, the pledge is taken back — and
+        // taken back *by the arrival of the request it was blocking*, which
+        // is why the route recovers immediately rather than when the squatter
+        // next notices.
+        vi.advanceTimersByTime(EXCLUSIVE_GRACE_MS + 2_000);
+        const victim = budget.reserve(grant);
+
+        expect(budget.stats().revoked).toBe(1);
+        expect(victim.bytes).toBe(grant);
+        // And the squatter's own next chunk ends its request.
+        expect(squatter.growTo(2 * grant)).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("leaves an upload alone while it is delivering fast enough", () => {
+      vi.useFakeTimers();
+      try {
+        const budget = createUploadMemoryBudget(exclusiveSettings());
+        const uploading = budget.reserve(6 * grant);
+        expect(uploading.growTo(grant + 1)).toBe(true);
+
+        // Ten seconds of honest work at well above the floor.
+        const seconds = 10;
+        vi.advanceTimersByTime(EXCLUSIVE_GRACE_MS + seconds * 1000);
+        const delivered =
+          2 * EXCLUSIVE_MIN_THROUGHPUT_BYTES_PER_SEC * (seconds + 5) * 2;
+
+        expect(uploading.growTo(grant + 1 + delivered)).toBe(true);
+        expect(budget.stats().revoked).toBe(0);
+        // Still exclusive, so still nobody else.
+        expect(() => budget.reserve(grant)).toThrow(UploadMemoryExhaustedError);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("does not police a pledge that excludes nobody", () => {
+      vi.useFakeTimers();
+      try {
+        // Ceiling inside the budget, so this upload is sharing rather than
+        // excluding. However slowly it trickles it is costing nobody
+        // anything, and killing it would be gratuitous.
+        const budget = createUploadMemoryBudget(
+          budgetOf({
+            budgetBytes: 6 * grant,
+            soloReservationCeilingBytes: 10 * grant,
+          }),
+        );
+        const slow = budget.reserve(2 * grant);
+        expect(slow.growTo(grant + 1)).toBe(true);
+
+        vi.advanceTimersByTime(10 * 60 * 1000);
+        const other = budget.reserve(grant);
+
+        expect(budget.stats().revoked).toBe(0);
+        expect(other.bytes).toBe(grant);
+        expect(slow.growTo(2 * grant)).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("costs a squatter the whole route for seconds rather than minutes", () => {
+      // The shape of the finding, as arithmetic rather than prose: the window
+      // in which one connection can hold everybody out, having delivered
+      // nothing since taking the budget, is the grace window and not the
+      // request lifetime.
+      vi.useFakeTimers();
+      try {
+        const budget = createUploadMemoryBudget(exclusiveSettings());
+        const squatter = budget.reserve(6 * grant);
+        squatter.growTo(grant + 1);
+
+        let deniedForMs = 0;
+        for (let step = 0; step < 600; step += 1) {
+          vi.advanceTimersByTime(1_000);
+          try {
+            budget.reserve(grant).release();
+            break;
+          } catch {
+            deniedForMs += 1_000;
+          }
+        }
+
+        expect(deniedForMs).toBeLessThanOrEqual(EXCLUSIVE_GRACE_MS + 1_000);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   it("releases whatever it had grown to, not what it started at", () => {
