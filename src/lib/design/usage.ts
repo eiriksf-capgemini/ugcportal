@@ -23,7 +23,7 @@
  * throw with advice (interpolated alphas, arbitrary alphas, arbitrary colour
  * values). It never just skips.
  *
- * That claim has been wrong five times now (round 2: `.ts` files not walked;
+ * That claim has been wrong six times now (round 2: `.ts` files not walked;
  * round 3: `bg-[var(--x)]/[.5]` fell between three unresolvable-shape
  * patterns; ugcportal-j4j round 1: a side/offset-qualified utility
  * mis-resolved to a token that does not exist, and a fractional alpha matched
@@ -33,14 +33,20 @@
  * round 3: `scrollbar-track` and every `mask-*-from`/`mask-*-to` - real
  * namespaces the same round-2 derivation had already found - were still
  * routed through a hand-written 5-entry background/foreground Set and came
- * out misclassified). Every round patched the reported cases and left the
- * next shape unenumerated, because first the namespace list, then the
- * background/foreground classification, was hand-curated: a person
- * recalling Tailwind's utility namespaces from memory, however carefully,
- * cannot be complete, because completeness is a property of the *installed
- * Tailwind version*, not of anyone's memory - and the lesson generalises to
- * any set in this file with that same property, not only the one most
- * recently named.
+ * out misclassified; ugcportal-j4j round 4: the parenthesised CSS-variable
+ * shorthand, `bg-(--x)` - Tailwind's own preferred spelling of
+ * `bg-[var(--x)]`, compiling identically - matched nothing at all, on both
+ * the name and the alpha axis, so `bg-(--primary)/50` shipped unmeasured
+ * with the suite green: not an unenumerated namespace this time, but an
+ * unenumerated *spelling* of a shape this module already claimed to handle).
+ * Every round patched the reported cases and left the next shape
+ * unenumerated, because first the namespace list, then the
+ * background/foreground classification, then the syntax used to spell an
+ * arbitrary value, was hand-curated: a person recalling Tailwind's syntax
+ * from memory, however carefully, cannot be complete, because completeness
+ * is a property of the *installed Tailwind version*, not of anyone's memory
+ * - and the lesson generalises to any shape or set in this file with that
+ * same property, not only the one most recently named.
  *
  * So as of ugcportal-j4j round 2, the namespace list is not hand-curated at
  * all. `discoverColorNamespaces` below asks the actual installed Tailwind
@@ -92,12 +98,18 @@
  *   - a bare scale name (`primary`, `surface-2`), resolved to `--color-<name>`
  *     if `isNonColorOverload` says it mixes a colour, excluded if not.
  *   - an arbitrary value that is a length, number or similar non-colour value
- *     such as `[0.8rem]` (deliberately excluded - `isNonColorArbitraryValue`).
- *   - an arbitrary value that IS a colour, such as `[#fff]` or `[var(--x)]`.
- *     This gate has no token to measure it against - an arbitrary value is
- *     definitionally not one of the declared design tokens - so it always
- *     refuses with advice rather than resolving, the same as an unresolvable
- *     alpha does.
+ *     such as `[0.8rem]` or the parenthesised equivalent `(length:--x)`
+ *     (deliberately excluded - `isNonColorArbitraryValue`).
+ *   - an arbitrary value that IS a colour, in either of its two spellings:
+ *     brackets (`[#fff]`, `[var(--x)]`) or the parenthesised CSS-variable
+ *     shorthand (`(--x)`, `(color:--x)`) - the same shape, and this module
+ *     did not recognise the second spelling at all until ugcportal-j4j round
+ *     4 finding 1 (MAJOR): `bg-(--primary)/50` compiles identically to
+ *     `bg-[var(--primary)]/50` but matched nothing, a live route around the
+ *     gate rather than merely an unhandled shape. This gate has no token to
+ *     measure an arbitrary value against - it is definitionally not one of
+ *     the declared design tokens - so it always refuses with advice rather
+ *     than resolving, the same as an unresolvable alpha does.
  *
  * Alpha form, one of:
  *   - an integer percentage (`/50`).
@@ -109,6 +121,11 @@
  *     finding 3) - a fractional alpha that the scanner sees but nothing
  *     downstream can ever satisfy is not an improvement on skipping it.
  *   - an arbitrary value in brackets (`/[.5]`), refused with advice.
+ *   - the parenthesised CSS-variable shorthand (`/(--a)`) - refused with
+ *     advice, and for a stronger reason than the bracket form: this is a
+ *     variable, not a literal, so its value cannot be known from the source
+ *     at all, the same as an interpolated alpha (ugcportal-j4j round 4
+ *     finding 1).
  *   - an interpolation (`` /${alpha} ``), refused with advice.
  *
  * Every (namespace x name-form x alpha-form) cell either resolves to a
@@ -370,14 +387,27 @@ const BOUNDARY = String.raw`(?:^|[\s"'\`:\[(])`;
  * Three patterns, three near-misses, silently skipped — in a file whose header
  * promises it never just skips.
  *
- * A Tailwind alpha modifier is exactly one of three things: a number (integer
+ * A Tailwind arbitrary value has two spellings that mean the same thing:
+ * `[var(--x)]` and the parenthesised CSS-variable shorthand `(--x)` -
+ * ugcportal-j4j round 4 finding 1 (MAJOR): `bg-(--primary)/50` renders
+ * identically to `bg-[var(--primary)]/50`, which already threw, but the
+ * parenthesised spelling matched nothing at all and was silently skipped -
+ * a live route around the gate, not merely an unhandled shape, because a
+ * component author reaching for the shorthand (Tailwind's own docs prefer it
+ * over the bracket spelling for a bare variable) would ship an unmeasured
+ * colour with the suite green. The same shorthand applies to the alpha
+ * modifier too (`bg-primary/(--a)`), where it is even less resolvable than a
+ * bracketed one - the value is a variable, not a literal, so its numeric
+ * alpha cannot be known at scan time at all.
+ *
+ * A Tailwind alpha modifier is exactly one of four things: a number (integer
  * or fractional - `/50`, `/12.5`; Tailwind requires at least one leading
  * digit, `/.5` alone does not compile, see the module header), an arbitrary
- * value in brackets, or an interpolation. Enumerating all three against both
- * name forms means a colour utility carrying an alpha cannot miss. Anything
- * whose modifier is none of those (`bg-linear-to-r/oklch`, the gradient
- * interpolation keyword) is not an alpha at all, and is correctly not
- * matched.
+ * value in brackets, the parenthesised variable shorthand, or an
+ * interpolation. Enumerating all four against both name forms means a
+ * colour utility carrying an alpha cannot miss. Anything whose modifier is
+ * none of those (`bg-linear-to-r/oklch`, the gradient interpolation keyword)
+ * is not an alpha at all, and is correctly not matched.
  *
  * ugcportal-j4j finding 3: the numeric branch used to be `\d{1,3}`, an
  * integer only. `bg-primary/12.5` matched none of the three alternatives -
@@ -385,12 +415,20 @@ const BOUNDARY = String.raw`(?:^|[\s"'\`:\[(])`;
  * dropped, the exact "never just skips" contract this module claims to hold.
  */
 const ALPHA_UTILITY = new RegExp(
-  String.raw`${BOUNDARY}(${PREFIX_ALTERNATION})-(\[[^\]]*\]|[a-z0-9][a-z0-9-]*)\/(\$\{|\[[^\]]*\]|\d+(?:\.\d+)?(?![\w.-]))`,
+  String.raw`${BOUNDARY}(${PREFIX_ALTERNATION})-(\[[^\]]*\]|\([^)]*\)|[a-z0-9][a-z0-9-]*)\/(\$\{|\[[^\]]*\]|\([^)]*\)|\d+(?:\.\d+)?(?![\w.-]))`,
   "g",
 );
 
 /**
  * An arbitrary value that is a length or a bare number, so not a colour.
+ * Shared by both arbitrary-value spellings, `[...]` and the parenthesised
+ * variable shorthand `(...)` - `bg-[var(--x)]` and `bg-(--x)` compile
+ * identically, and the parenthesised form's inner text (a bare
+ * `--custom-ident`, optionally hinted the same way: `length:--x`,
+ * `color:--x`) happens to fail this function's numeric-literal check for
+ * exactly the same reason a bracket colour reference does - it does not
+ * start with a digit - so no shorthand-specific branch is needed here, only
+ * in the caller that recognises `(...)` as a second delimiter pair.
  *
  * `text-[0.8rem]/5` is a font size with a line height, and button.tsx already
  * ships `text-[0.8rem]`. Treating it as a colour made the suite hard-fail with
@@ -500,9 +538,12 @@ export function findAlphaColorUtilities(
       const written = `${prefix}-${name}/${modifier}`;
 
       // 1. Is this a colour at all? Some namespaces are overloaded with a
-      //    preset that also takes a modifier, and an arbitrary value may be
-      //    a length rather than a colour.
-      if (name.startsWith("[")) {
+      //    preset that also takes a modifier, and an arbitrary value - in
+      //    either spelling, `[...]` or the parenthesised variable shorthand
+      //    `(...)` (ugcportal-j4j round 4 finding 1: `bg-(--primary)` is
+      //    `bg-[var(--primary)]` by another name, and compiles identically)
+      //    - may be a length rather than a colour.
+      if (name.startsWith("[") || name.startsWith("(")) {
         if (isNonColorArbitraryValue(name)) continue;
         fail(
           `${relative}: "${written}..." applies an alpha to an arbitrary colour ` +
@@ -517,6 +558,14 @@ export function findAlphaColorUtilities(
           `${relative}: "${written}" interpolates its alpha modifier. The contrast ` +
             `gate cannot know what it resolves to, so write the alpha literally ` +
             `and add the pairing to PAIRINGS.`,
+        );
+      }
+      if (modifier.startsWith("(")) {
+        fail(
+          `${relative}: "${written}" uses the parenthesised CSS-variable shorthand ` +
+            `as its alpha modifier. That is a variable, not a literal - the contrast ` +
+            `gate cannot know what it resolves to any more than an interpolated one, ` +
+            `so write the alpha literally and add the pairing to PAIRINGS.`,
         );
       }
       if (modifier.startsWith("[")) {

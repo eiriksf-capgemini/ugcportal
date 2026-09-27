@@ -30,38 +30,65 @@ function tokenAlphaKey(reference: string): string {
 }
 
 /**
- * The weakest WCAG threshold any PAIRING declares for a given (resolved
- * literal, alpha) combination, restricted to foreground-role pairings. A
- * decorative pairing contributes 0 - it proves the colour exists at that
- * alpha, but proves no ratio - rather than being left out entirely.
+ * The strongest WCAG threshold any PAIRING *reference* actually proves for a
+ * given (resolved literal, alpha) combination, restricted to foreground-role
+ * pairings. A decorative pairing contributes 0 - it proves the colour exists
+ * at that alpha, but proves no ratio - rather than being left out entirely.
  *
- * K2 (ugcportal-j4j finding 2): keying coverage by (literal, alpha, role)
- * alone is not enough. `--ring`, `--primary`, `--sidebar-ring` and
- * `--sidebar-primary` all resolve to the same literal, and are all
- * foreground-role, so a pairing that measures one at some alpha used to read
- * as covering ANY of the others at that alpha - including link-on-surface at
- * body's 4.5:1 being "covered" by focus-ring at ui's 3:1.
+ * Two aggregation steps, over two different things that can share a key, for
+ * two different reasons:
  *
- * Aggregated by MIN, not MAX, across every PAIRING sharing a key
- * (ugcportal-j4j round 3 finding 4): a usage in source carries no
- * information about which background it renders against, so it cannot be
- * matched to one specific PAIRING among several that share a foreground
- * reference (`onEverySurface` generates one per surface level). MIN gives
- * the weakest guarantee actually declared for that key across all of them,
- * which is the conservative reading given that ambiguity - it happens to
- * equal MAX for everything shipped today, because `onEverySurface` always
- * assigns one uniform requirement across the surfaces it generates, but that
- * is a property of today's PAIRINGS, not something this map should assume.
+ * 1. MIN within every PAIRING sharing the exact same `foreground` reference
+ *    string (ugcportal-j4j round 3 finding 4). `onEverySurface` generates
+ *    one PAIRING per surface for a single reference like `--ring/80`, and a
+ *    usage in source carries no information about which surface it renders
+ *    against - it cannot be matched to one specific PAIRING among several
+ *    that share that reference. MIN gives the weakest guarantee actually
+ *    declared across all of them for that one reference, the conservative
+ *    reading given that ambiguity.
+ * 2. MAX across every *distinct* reference that happens to resolve to the
+ *    same key (ugcportal-j4j round 4 finding 2). `--ring` and `--primary`
+ *    resolve to the same literal but are unrelated design intents, not the
+ *    same mark measured against different surfaces - collapsing step 1's
+ *    per-reference result with another MIN here reintroduced K2 in reverse:
+ *    once any decorative pairing existed at a shared key, the map pinned at
+ *    0 forever, and no stronger pairing *for a different reference* at that
+ *    same key could ever be added to fix it, because MIN cannot rise. A
+ *    text/placeholder usage sharing that key would then be permanently
+ *    unsatisfiable even though a genuine body-level PAIRING for it exists -
+ *    latent today only because no shipped decorative pairing happens to
+ *    share a literal+alpha with a text pairing. MAX across references is
+ *    exactly K2's original reasoning restored one level up: coverage asks
+ *    "does *some* declared measurement justify this usage", and a stronger
+ *    reference existing must not be defeated by a weaker, unrelated one
+ *    that happens to collide on colour value alone.
  */
-const FOREGROUND_VERIFIED_THRESHOLD = new Map<string, number>();
-for (const pairing of PAIRINGS) {
-  const key = tokenAlphaKey(pairing.foreground);
-  const value = pairing.requirement === "decorative" ? 0 : THRESHOLDS[pairing.requirement];
-  FOREGROUND_VERIFIED_THRESHOLD.set(
-    key,
-    Math.min(FOREGROUND_VERIFIED_THRESHOLD.get(key) ?? Infinity, value),
-  );
+/**
+ * Pure, so the two-step aggregation itself - not just its result over the
+ * real PAIRINGS - can be exercised directly with synthetic pairings that
+ * deliberately collide, the same way K2's fix was proved against a
+ * synthetic collision rather than only trusted against real data.
+ */
+function buildForegroundVerifiedThreshold(pairings: readonly Pairing[]): Map<string, number> {
+  const perReference = new Map<string, number>();
+  for (const pairing of pairings) {
+    const value = pairing.requirement === "decorative" ? 0 : THRESHOLDS[pairing.requirement];
+    perReference.set(
+      pairing.foreground,
+      Math.min(perReference.get(pairing.foreground) ?? Infinity, value),
+    );
+  }
+
+  const perKey = new Map<string, number>();
+  for (const pairing of pairings) {
+    const key = tokenAlphaKey(pairing.foreground);
+    const value = perReference.get(pairing.foreground)!;
+    perKey.set(key, Math.max(perKey.get(key) ?? -Infinity, value));
+  }
+  return perKey;
 }
+
+const FOREGROUND_VERIFIED_THRESHOLD = buildForegroundVerifiedThreshold(PAIRINGS);
 
 /**
  * Background coverage has no threshold dimension: a surface itself is not
@@ -433,6 +460,52 @@ describe("the gate cannot be routed around", () => {
     // The same 0 does not satisfy a text usage of that same key.
     const textUsage: AlphaUtilityUsage = { ...baseUsage, prefix: "text", utility: `text-x/${alphaPercent}` };
     expect(0).toBeLessThan(expectedThresholdFor(textUsage));
+  });
+
+  /**
+   * ugcportal-j4j round 4 finding 2. Aggregating by MIN across every PAIRING
+   * sharing a *key* (rather than only within pairings sharing the same
+   * *reference*, round 3's actual concern) meant one decorative pairing at a
+   * key pinned the whole key at 0 forever - a stronger PAIRING for a
+   * different, unrelated reference that happened to resolve to the same
+   * literal+alpha could never raise it, because MIN cannot rise. A synthetic
+   * collision proves the fix directly, the way K2's own fix was proved,
+   * rather than relying on today's real PAIRINGS happening not to trigger it
+   * (they do not - this is why the bug was latent).
+   */
+  it("does not let a decorative pairing at a shared key suppress a stronger pairing for a different reference", () => {
+    const decorativeReference: Pairing = {
+      id: "synthetic-decorative",
+      // --ring resolves to the same literal as --primary in this codebase
+      // (both var(--color-petrol-400)) - the same real collision K2's own
+      // test uses, reused here as a synthetic decorative pairing.
+      foreground: "--ring",
+      background: ["--color-surface-0"],
+      requirement: "decorative",
+      usage: "Not shipped; a synthetic collision partner.",
+      why: "Synthetic - exists only to prove the aggregation fix, not a real exemption.",
+    };
+    const bodyReference: Pairing = {
+      id: "synthetic-body",
+      foreground: "--primary",
+      background: ["--color-surface-0"],
+      requirement: "body",
+      usage: "Not shipped; a synthetic collision partner.",
+    };
+    // Precondition: these two really do share a key, or the test proves nothing.
+    expect(tokenAlphaKey(decorativeReference.foreground)).toBe(
+      tokenAlphaKey(bodyReference.foreground),
+    );
+
+    const map = buildForegroundVerifiedThreshold([decorativeReference, bodyReference]);
+    const key = tokenAlphaKey(bodyReference.foreground);
+    expect(map.get(key), "the stronger reference's guarantee must survive the collision").toBe(
+      THRESHOLDS.body,
+    );
+
+    // Order must not matter either.
+    const reversed = buildForegroundVerifiedThreshold([bodyReference, decorativeReference]);
+    expect(reversed.get(key)).toBe(THRESHOLDS.body);
   });
 
   /**

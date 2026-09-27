@@ -82,6 +82,21 @@ describe("findAlphaColorUtilities", () => {
     expect(findAlphaColorUtilities(root)).toEqual([]);
   });
 
+  it("does not false-positive on a spread of ordinary Tailwind sharing shapes with what this gate tracks", () => {
+    // Round 3 review's own verification: a probe component of everyday
+    // Tailwind, none of it a colour+alpha utility, confirmed compiling in
+    // 4.3.3 and confirmed here not to trip the gate. divide-x-2 in
+    // particular shares divide's namespace with the colour form divide-x
+    // would need if it existed (it does not - see the "no side-qualified
+    // colour form" test above) but is itself a border *width*, not a colour.
+    const root = fixture({
+      "a.tsx":
+        `const c = "text-sm/6 w-1/2 aspect-16/9 divide-x-2 ring-offset-background ` +
+        `basis-1/3 group/button opacity-50 size-3.5";`,
+    });
+    expect(findAlphaColorUtilities(root)).toEqual([]);
+  });
+
   it("skips test files and generated output", () => {
     const root = fixture({
       "a.test.tsx": `const c = "ring-ring/10";`,
@@ -548,5 +563,48 @@ describe("findAlphaColorUtilities", () => {
       expect(isNonColorOverload(designSystem, "drop-shadow", "lg")).toBe(true);
       expect(isNonColorOverload(designSystem, "text", "sm")).toBe(true);
     });
+  });
+
+  // ugcportal-j4j round 4 finding 1 (MAJOR): the parenthesised CSS-variable
+  // shorthand - `bg-(--x)`, Tailwind's own preferred spelling of
+  // `bg-[var(--x)]` for a bare variable reference - matched nothing at all.
+  // Confirmed compiling identically to the bracket spelling in 4.3.3, on
+  // both the name and the alpha axis, with the same type-hint vocabulary.
+  // This was a live route around the gate, not merely an unhandled shape:
+  // `bg-(--primary)/50` renders identically to `bg-primary/50` and would
+  // have shipped unmeasured with the suite green.
+
+  it("refuses the parenthesised variable shorthand as a name, the same as the bracket spelling", () => {
+    const root = fixture({
+      "a.tsx": `const c = "bg-(--primary)/50";`,
+    });
+    expect(() => findAlphaColorUtilities(root)).toThrow(/arbitrary colour/);
+  });
+
+  it("refuses a qualified namespace's parenthesised variable shorthand too", () => {
+    const root = fixture({
+      "a.tsx": `const c = "border-t-(--border)/50";`,
+    });
+    expect(() => findAlphaColorUtilities(root)).toThrow(/arbitrary colour/);
+  });
+
+  it("honours an explicit non-colour hint inside the parenthesised shorthand", () => {
+    // (length:--x) is Tailwind's parenthesised spelling of [length:var(--x)] -
+    // a length, not a colour, the same shape as the existing bracket hint test.
+    const root = fixture({ "a.tsx": `const c = "bg-(length:--x)/50";` });
+    expect(findAlphaColorUtilities(root)).toEqual([]);
+  });
+
+  it("refuses a parenthesised variable shorthand carrying an explicit colour hint", () => {
+    const root = fixture({ "a.tsx": `const c = "bg-(color:--primary)/50";` });
+    expect(() => findAlphaColorUtilities(root)).toThrow(/arbitrary colour/);
+  });
+
+  it("refuses the parenthesised variable shorthand as an alpha modifier, distinctly from an interpolated one", () => {
+    // The alpha is a variable, not a literal - even less resolvable than a
+    // bracketed arbitrary alpha, since its value cannot be read from the
+    // source at all.
+    const root = fixture({ "a.tsx": `const c = "bg-primary/(--a)";` });
+    expect(() => findAlphaColorUtilities(root)).toThrow(/parenthesised CSS-variable shorthand/);
   });
 });

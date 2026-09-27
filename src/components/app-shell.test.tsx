@@ -29,21 +29,36 @@ const APP_SHELL_PATH = path.join(HERE, "app-shell.tsx");
 const GLOBALS_CSS_PATH = path.resolve(HERE, "..", "app", "globals.css");
 
 /**
- * Pulls the skip link's className directly out of the shipped component, so
- * this test always exercises what ships rather than a copy that can drift
- * out of step with it.
+ * Pulls the skip link's className out of component source, so this test
+ * always exercises what ships rather than a copy that can drift out of step
+ * with it. Exported from `skipLinkClassName` as a pure function taking the
+ * source text, so a test can mutate the *fixture* (a synthetic source
+ * string) rather than only the production file, to prove the parser is
+ * actually robust rather than merely happening to work on today's comments.
+ *
+ * ugcportal-j4j round 4 finding 4: matching against raw, unstripped source
+ * means any comment between `href="#main-content"` and the real
+ * `className="..."` that itself quotes a `className="..."` - and this file's
+ * own comments do that constantly, including the one two fixes up in this
+ * same file - would be matched instead, silently asserting against a string
+ * that never renders. Comments are stripped first for the same reason
+ * usage.ts strips them before scanning for utility classes.
  */
-function skipLinkClassName(): string {
-  const source = readFileSync(APP_SHELL_PATH, "utf8");
-  const match = /href="#main-content"[\s\S]*?className="([^"]+)"/.exec(
-    source,
-  );
+function extractSkipLinkClassName(source: string): string {
+  const stripped = source
+    .replace(/\/\*[\s\S]*?\*\//g, " ")
+    .replace(/(^|[^:])\/\/[^\n]*/g, "$1");
+  const match = /href="#main-content"[\s\S]*?className="([^"]+)"/.exec(stripped);
   if (!match) {
     throw new Error(
-      "app-shell.test.tsx: could not find the skip link's className in app-shell.tsx",
+      "app-shell.test.tsx: could not find the skip link's className",
     );
   }
   return match[1];
+}
+
+function skipLinkClassName(): string {
+  return extractSkipLinkClassName(readFileSync(APP_SHELL_PATH, "utf8"));
 }
 
 /**
@@ -87,13 +102,43 @@ async function compile(classNames: string): Promise<string> {
  * A minimal CSS specificity tuple (id, class-or-attr-or-pseudo-class,
  * type-or-pseudo-element). Scoped deliberately to what Tailwind actually
  * emits for a single utility-with-variants selector - one compound selector,
- * escaped classes, zero or more trailing pseudo-classes, no combinators, no
- * IDs, no element selectors. A general CSS selector parser is out of scope;
- * this is not one.
+ * escaped classes, zero or more trailing *simple* pseudo-classes, no
+ * combinators, no IDs, no element selectors. A general CSS selector parser
+ * is out of scope; this is not one.
+ *
+ * That scope excludes functional pseudo-classes (`:is()`, `:where()`,
+ * `:not()`) on purpose: their specificity is that of their most specific
+ * argument per the Selectors spec, not "one pseudo-class", and computing
+ * that correctly means parsing an arbitrary selector list recursively - the
+ * general parser this function deliberately is not. ugcportal-j4j round 4
+ * finding 3: the docstring said so, but nothing enforced it - `specificityOf`
+ * would silently miscount one anyway. This repo's own globals.css defines
+ * `@custom-variant dark (&:is(.dark *));`, so `dark:px-4` compiles to
+ * `.dark\:px-4:is(.dark *)`, which the old unguarded version counted as
+ * (0,3,0) (one class for the literal `.dark\:px-4`, one point for the `.dark`
+ * *inside* the parens on top of that, one point for `:is` itself) when the
+ * real answer, `:is(.dark *)` contributing the specificity of its single
+ * most-specific argument (`.dark`, since `*` contributes nothing), is
+ * (0,2,0) - a resolver silently picking the winner the browser would not.
+ * Refusing is what usage.ts does for everything genuinely out of its scope;
+ * this function does the same rather than guess.
  */
 type Specificity = readonly [number, number, number];
 
 function specificityOf(selector: string): Specificity {
+  const functionalPseudoClass = /(?<!\\):[a-zA-Z-]+\(/.exec(selector);
+  if (functionalPseudoClass) {
+    throw new Error(
+      `specificityOf: "${selector}" contains a functional pseudo-class ` +
+        `(${functionalPseudoClass[0]}...) - out of scope for this hand-rolled ` +
+        `calculator, whose specificity depends on its argument list per the ` +
+        `Selectors spec rather than counting as a single pseudo-class. If the ` +
+        `skip link starts using a variant that compiles to one (this repo's ` +
+        `\`dark:\` is exactly such a case, via \`@custom-variant dark ` +
+        `(&:is(.dark *))\`), this resolver needs teaching how to evaluate it, ` +
+        `not a guess.`,
+    );
+  }
   const ids = (selector.match(/(?<!\\)#/g) ?? []).length;
   const classes = (selector.match(/(?<!\\)\./g) ?? []).length;
   const pseudoClasses = (selector.match(/(?<!\\):[a-zA-Z-]+/g) ?? []).length;
@@ -213,6 +258,49 @@ function resolvePaddingCascade(
   };
 }
 
+describe("extractSkipLinkClassName", () => {
+  /**
+   * ugcportal-j4j round 4 finding 4 (nit, harness family). A fixture
+   * mutation, not a production-code change: constructs a synthetic source
+   * string shaped exactly like the failure mode - a comment between `href`
+   * and the real `className` that itself quotes a `className="..."` - and
+   * confirms the parser still finds the real one. This is the harness's own
+   * comments doing that (this file's docstrings quote `className="..."`
+   * constantly), reproduced deliberately rather than trusted not to recur.
+   */
+  it("ignores a className mentioned inside a comment between href and the real one", () => {
+    const source = `
+      <a
+        href="#main-content"
+        /*
+          Some prose about why this exists that happens to quote
+          className="totally-wrong-classes-from-the-comment" as an example
+          of what NOT to do.
+        */
+        className="sr-only real-classes-here"
+      >
+        Skip to content
+      </a>
+    `;
+    expect(extractSkipLinkClassName(source)).toBe("sr-only real-classes-here");
+  });
+
+  it("ignores a className mentioned inside a line comment between href and the real one", () => {
+    const source = `
+      href="#main-content"
+      // old value was className="stale-classes", now it is:
+      className="sr-only real-classes-here"
+    `;
+    expect(extractSkipLinkClassName(source)).toBe("sr-only real-classes-here");
+  });
+
+  it("throws with an actionable message when it truly cannot find a skip link", () => {
+    expect(() => extractSkipLinkClassName("no skip link here")).toThrow(
+      /could not find the skip link/,
+    );
+  });
+});
+
 describe("the skip link's focus-visible padding", () => {
   it("resolves the classes it actually ships to something (sanity check on the test itself)", () => {
     const className = skipLinkClassName();
@@ -288,5 +376,21 @@ describe("the skip link's focus-visible padding", () => {
 
     expect(padding["padding-left"], "padding-inline-start (ps-3)").not.toBe("0");
     expect(padding["padding-right"], "padding-inline-end (pe-3)").not.toBe("0");
+  });
+
+  /**
+   * ugcportal-j4j round 4 finding 3 (nit, harness family). Fixture mutation,
+   * not a production-code change: this repo's own `@custom-variant dark
+   * (&:is(.dark *));` means `dark:` is a real, reachable variant, and the
+   * unguarded specificityOf silently miscounted its compiled selector's
+   * specificity (0,3,0) instead of the real (0,2,0). Rather than trust the
+   * docstring's stated scope, this mutates the compiled input to actually
+   * contain the shape the docstring says is out of scope, and confirms the
+   * function notices rather than silently computing a wrong answer.
+   */
+  it("refuses to guess the specificity of a functional pseudo-class like dark's :is(.dark *)", async () => {
+    const css = await compile("dark:px-4");
+    expect(css).toContain(":is(.dark *)"); // sanity: the mutation actually reached this shape
+    expect(() => resolvePaddingCascade(css)).toThrow(/functional pseudo-class/);
   });
 });
