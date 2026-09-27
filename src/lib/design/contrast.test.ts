@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 
+import postcss from "postcss";
 import { describe, expect, it } from "vitest";
 
 import { parseColor } from "./color";
@@ -18,10 +19,154 @@ import {
   parseDeclarations,
   resolveToken,
 } from "./tokens";
-import { findAlphaColorUtilities } from "./usage";
+import {
+  designSystem,
+  discoverColorNamespaces,
+  findAlphaColorUtilities,
+  type AlphaUtilityUsage,
+} from "./usage";
 
 const tokens = loadThemeTokens();
 const css = readFileSync(GLOBALS_CSS_PATH, "utf8");
+
+/** `--ring/70` (or a bare `--ring`) to `<resolved literal>@<alpha percent>`. */
+function tokenAlphaKey(reference: string): string {
+  const { property, alphaPercent } = parseTokenReference(reference);
+  return `${resolveToken(property, tokens)}@${alphaPercent}`;
+}
+
+/**
+ * The strongest WCAG threshold any PAIRING *reference* actually proves for a
+ * given (resolved literal, alpha) combination, restricted to foreground-role
+ * pairings. A decorative pairing contributes 0 - it proves the colour exists
+ * at that alpha, but proves no ratio - rather than being left out entirely.
+ *
+ * Two aggregation steps, over two different things that can share a key, for
+ * two different reasons:
+ *
+ * 1. MIN within every PAIRING sharing the exact same `foreground` reference
+ *    string (ugcportal-j4j round 3 finding 4). `onEverySurface` generates
+ *    one PAIRING per surface for a single reference like `--ring/80`, and a
+ *    usage in source carries no information about which surface it renders
+ *    against - it cannot be matched to one specific PAIRING among several
+ *    that share that reference. MIN gives the weakest guarantee actually
+ *    declared across all of them for that one reference, the conservative
+ *    reading given that ambiguity.
+ * 2. MAX across every *distinct* reference that happens to resolve to the
+ *    same key (ugcportal-j4j round 4 finding 2). `--ring` and `--primary`
+ *    resolve to the same literal but are unrelated design intents, not the
+ *    same mark measured against different surfaces - collapsing step 1's
+ *    per-reference result with another MIN here reintroduced K2 in reverse:
+ *    once any decorative pairing existed at a shared key, the map pinned at
+ *    0 forever, and no stronger pairing *for a different reference* at that
+ *    same key could ever be added to fix it, because MIN cannot rise. A
+ *    text/placeholder usage sharing that key would then be permanently
+ *    unsatisfiable even though a genuine body-level PAIRING for it exists -
+ *    latent today only because no shipped decorative pairing happens to
+ *    share a literal+alpha with a text pairing. MAX across references is
+ *    exactly K2's original reasoning restored one level up: coverage asks
+ *    "does *some* declared measurement justify this usage", and a stronger
+ *    reference existing must not be defeated by a weaker, unrelated one
+ *    that happens to collide on colour value alone.
+ */
+/**
+ * Pure, so the two-step aggregation itself - not just its result over the
+ * real PAIRINGS - can be exercised directly with synthetic pairings that
+ * deliberately collide, the same way K2's fix was proved against a
+ * synthetic collision rather than only trusted against real data.
+ */
+function buildForegroundVerifiedThreshold(pairings: readonly Pairing[]): Map<string, number> {
+  const perReference = new Map<string, number>();
+  for (const pairing of pairings) {
+    const value = pairing.requirement === "decorative" ? 0 : THRESHOLDS[pairing.requirement];
+    perReference.set(
+      pairing.foreground,
+      Math.min(perReference.get(pairing.foreground) ?? Infinity, value),
+    );
+  }
+
+  const perKey = new Map<string, number>();
+  for (const pairing of pairings) {
+    const key = tokenAlphaKey(pairing.foreground);
+    const value = perReference.get(pairing.foreground)!;
+    perKey.set(key, Math.max(perKey.get(key) ?? -Infinity, value));
+  }
+  return perKey;
+}
+
+const FOREGROUND_VERIFIED_THRESHOLD = buildForegroundVerifiedThreshold(PAIRINGS);
+
+/**
+ * Background coverage has no threshold dimension: a surface itself is not
+ * independently held to a ratio, only whatever sits on it is, and no shipped
+ * PAIRINGS background is alpha-modified. If that stops being true, the
+ * background side of this needs the same threshold treatment as the
+ * foreground side above.
+ */
+const MEASURED_BACKGROUND = new Set(
+  PAIRINGS.flatMap((pairing) => pairing.background.map(tokenAlphaKey)),
+);
+
+/**
+ * What a *usage* (as opposed to a PAIRING) needs to clear, inferred from its
+ * namespace. `text` and `placeholder` both render glyphs directly, and this
+ * is a static source scan - it cannot tell body text from large text - so
+ * both are held to the stricter of WCAG's two text minimums, `body` (4.5:1),
+ * rather than risk under-claiming for a usage that turns out to be
+ * normal-size.
+ *
+ * Every other namespace defaults to needing only *something* measured at
+ * that (literal, alpha) - decorative included, i.e. 0 - not a numeric floor.
+ *
+ * ugcportal-j4j round 3 finding 1 (MAJOR, a regression against `main`): the
+ * first version of this defaulted every non-text namespace to `ui` (3:1).
+ * That is not something a static scan can know - a `border`, `outline`,
+ * `shadow`, `fill`, `stroke`, `mask-*` or `scrollbar-*` usage is at least as
+ * often purely decorative (a hairline, a drop shadow, an illustrative icon)
+ * as it is a control boundary, and there is no reliable way to tell which
+ * from the class name alone. `divide` was special-cased back to 0 because
+ * it is the one namespace this codebase's PAIRINGS happens to use
+ * exclusively decoratively today, but that only patched the one namespace a
+ * reviewer had a concrete example for - a decorative `border-border/50`
+ * hairline, or any `outline`/`fill`/`stroke`/`shadow`/`mask-*`/`scrollbar-*`
+ * usage, was left requiring a 3:1 pairing that, being genuinely decorative,
+ * cannot exist (the K1 WCAG block would fail it) and is blocked from being
+ * reclassified (the frozen decorative-id test) - unsatisfiable, and
+ * strictly worse than `main`, where presence alone always sufficed.
+ *
+ * `text`/`placeholder` are the only namespaces this scan can be certain
+ * about: rendering glyphs is unconditional on WCAG 1.4.3 regardless of
+ * where or how a component uses them. Everything else keeps the weaker,
+ * `main`-equivalent floor of "measured at all" - the K2 protection above
+ * still applies in full for text, which is where the bug it fixes actually
+ * lived.
+ *
+ * Which namespaces those are is derived, not hand-written, for the same
+ * reason usage.ts derives its own sets rather than curating them
+ * (ugcportal-j4j round 5): compiling `${namespace}-red-500/50` and checking
+ * whether the declared CSS property is the bare `color` property - not
+ * `background-color`, `border-color`, `--tw-ring-color`, `fill`, `stroke`,
+ * or any of the other colour-bearing properties every other namespace
+ * compiles to - identifies exactly `text` and `placeholder` (confirmed
+ * against every namespace `discoverColorNamespaces` currently finds) without
+ * naming either one. A namespace that starts rendering glyphs some other
+ * way in a future Tailwind version would be picked up automatically; one
+ * that stops would drop out the same way.
+ */
+const TEXT_PREFIXES = new Set(
+  discoverColorNamespaces(designSystem).filter((prefix) => {
+    const [css] = designSystem.candidatesToCss([`${prefix}-red-500/50`]);
+    if (css === null) return false;
+    let isColorProperty = false;
+    postcss.parse(css).walkDecls((decl) => {
+      if (decl.prop === "color") isColorProperty = true;
+    });
+    return isColorProperty;
+  }),
+);
+function expectedThresholdFor(usage: Pick<AlphaUtilityUsage, "prefix">): number {
+  return TEXT_PREFIXES.has(usage.prefix) ? THRESHOLDS.body : 0;
+}
 
 /**
  * K1 (ugcportal-axu). Every documented pairing, evaluated against the values
@@ -167,22 +312,6 @@ describe("the gate cannot be routed around", () => {
    * follow the stylesheet.
    */
   it("measures every alpha-modified colour utility the components ship", () => {
-    // Keyed by role, not just by colour. --ring and --primary resolve to the
-    // same literal, so a single set made `bg-primary/80` - a surface text
-    // sits on, needing 4.5:1 - read as covered by the --ring/80 focus-ring
-    // pairing, which is checked at 3:1. Reproduced before fixing: muted text
-    // on that fill measures 1.71:1 and the suite stayed green.
-    const key = (reference: string) => {
-      const { property, alpha } = parseTokenReference(reference);
-      return `${resolveToken(property, tokens)}@${Math.round(alpha * 100)}`;
-    };
-    const measured = {
-      foreground: new Set(PAIRINGS.map((pairing) => key(pairing.foreground))),
-      background: new Set(
-        PAIRINGS.flatMap((pairing) => pairing.background.map(key)),
-      ),
-    } as const;
-
     const used = findAlphaColorUtilities();
     expect(used.length).toBeGreaterThan(0);
 
@@ -198,16 +327,213 @@ describe("the gate cannot be routed around", () => {
       ).toBe(true);
 
       const usageKey = `${resolveToken(usage.property, tokens)}@${usage.alphaPercent}`;
+
+      if (usage.role === "background") {
+        expect(
+          MEASURED_BACKGROUND.has(usageKey),
+          `${usage.file} uses "${usage.utility}", but no pairing in PAIRINGS ` +
+            `measures ${usage.property} at ${usage.alphaPercent}% alpha as a ` +
+            `background. Add that pairing - a colour measured as a foreground ` +
+            `does not cover it, because the two sit against different things.`,
+        ).toBe(true);
+        continue;
+      }
+
+      // Foreground: presence is not enough for text (K2). The pairing that
+      // measures this (literal, alpha) has to have checked it at or above
+      // the threshold *this usage's namespace* needs (0 - mere presence -
+      // for everything except text/placeholder; see expectedThresholdFor).
+      const verified = FOREGROUND_VERIFIED_THRESHOLD.get(usageKey) ?? -Infinity;
+      const required = expectedThresholdFor(usage);
       expect(
-        measured[usage.role].has(usageKey),
-        `${usage.file} uses "${usage.utility}", but no pairing in PAIRINGS ` +
-          `measures ${usage.property} at ${usage.alphaPercent}% alpha as a ` +
-          `${usage.role}. Add that pairing - a colour measured as a ${
-            usage.role === "background" ? "foreground" : "background"
-          } does not cover it, because the two are held to different thresholds ` +
-          `and sit against different things.`,
+        verified >= required,
+        `${usage.file} uses "${usage.utility}", but no pairing in PAIRINGS measures ` +
+          `${usage.property} at ${usage.alphaPercent}% alpha as a foreground` +
+          (required > 0 ? ` at or above the ${required}:1 this usage's namespace needs. ` : ". ") +
+          (verified === -Infinity
+            ? "It is not measured as a foreground at that alpha at all."
+            : `The weakest pairing that measures it there is only checked at ` +
+              `${verified}:1 - a different token that happens to share this ` +
+              `literal is not proof this one clears the bar.`) +
+          " Add a pairing for it.",
       ).toBe(true);
     }
+  });
+
+  /**
+   * K2 (ugcportal-j4j finding 2), reproduced directly: --ring and --primary
+   * resolve to the same literal, and the focus-ring pairing measures
+   * --ring/80 only at ui's 3:1. A hypothetical text-primary/80 - link text
+   * turned translucent, needing body's 4.5:1 - must not read as covered by
+   * that measurement just because the literal and alpha match.
+   */
+  it("does not let a UI-boundary pairing cover a text usage of the same literal and alpha", () => {
+    expect(resolveToken("--ring", tokens)).toBe(resolveToken("--primary", tokens));
+
+    const ringKey = tokenAlphaKey(`--ring/${RING_ALPHA_MODIFIER}`);
+    expect(FOREGROUND_VERIFIED_THRESHOLD.get(ringKey)).toBe(THRESHOLDS.ui);
+
+    const hypotheticalTextUsage: AlphaUtilityUsage = {
+      file: "synthetic (not shipped)",
+      utility: `text-primary/${RING_ALPHA_MODIFIER}`,
+      property: "--color-primary",
+      alphaPercent: RING_ALPHA_MODIFIER,
+      role: "foreground",
+      prefix: "text",
+    };
+    const usageKey = `${resolveToken(hypotheticalTextUsage.property, tokens)}@${hypotheticalTextUsage.alphaPercent}`;
+    expect(usageKey, "same literal, same alpha - the collision K2 closes").toBe(
+      ringKey,
+    );
+
+    const verified = FOREGROUND_VERIFIED_THRESHOLD.get(usageKey) ?? -Infinity;
+    expect(verified).toBeLessThan(expectedThresholdFor(hypotheticalTextUsage));
+  });
+
+  /**
+   * ugcportal-j4j round 2 finding 3. usage.ts's scanner learned to see a
+   * fractional alpha in round 1, but this file's own `parseTokenReference`
+   * still required an integer, and its coverage key recovered a percentage
+   * via `Math.round(alpha * 100)`. `Math.round(80.5)` is `81`, not `80.5`, so
+   * a PAIRING declared at `--primary/80.5` and a usage scanned as
+   * `ring-primary/80.5` keyed as "…@81" and "…@80.5" respectively - never
+   * equal, so the fractional usage's coverage check could never pass, no
+   * matter what pairing was added. "Add a pairing for it" was advice that
+   * could not be followed. This proves the two sides now key identically.
+   */
+  it("keys a fractional-alpha pairing and a fractional-alpha usage identically", () => {
+    const syntheticPairing: Pairing = {
+      id: "synthetic-fractional",
+      foreground: "--primary/80.5",
+      background: ["--color-surface-0"],
+      requirement: "ui",
+      usage: "Not shipped; proves a fractional-alpha pairing can be declared and evaluated at all.",
+    };
+    // Would have thrown before the fix: parseTokenReference required
+    // /^\d{1,3}$/, an integer only.
+    expect(() => evaluatePairing(syntheticPairing, tokens)).not.toThrow();
+
+    const pairingKey = tokenAlphaKey(syntheticPairing.foreground);
+
+    const usage: AlphaUtilityUsage = {
+      file: "synthetic (not shipped)",
+      utility: "ring-primary/80.5",
+      property: "--color-primary",
+      alphaPercent: 80.5,
+      role: "foreground",
+      prefix: "ring",
+    };
+    const usageKey = `${resolveToken(usage.property, tokens)}@${usage.alphaPercent}`;
+
+    expect(
+      usageKey,
+      "a fractional-alpha usage and the pairing meant to cover it must key identically",
+    ).toBe(pairingKey);
+  });
+
+  /**
+   * ugcportal-j4j round 2 finding 4, and round 3 finding 1 in the same test.
+   * The first version of FOREGROUND_VERIFIED_THRESHOLD (round 2) skipped
+   * decorative pairings entirely rather than contributing 0, which meant a
+   * divider - the one namespace this codebase's own PAIRINGS treats as
+   * exclusively decorative - could never be satisfied. The fix for that
+   * (contributing 0) only helps if *usages of a decorative-only namespace*
+   * also only need 0 - and the round-2 fix's expectedThresholdFor still
+   * defaulted every non-text namespace to `ui` (3), so a decorative
+   * `border-border/50` hairline, or an `outline`/`fill`/`stroke`/`shadow`/
+   * `mask-*`/`scrollbar-*` usage, was left needing a 3:1 pairing that a
+   * genuinely decorative one cannot be (K1 would fail it) and cannot be
+   * promoted to (the frozen decorative-id test) - unsatisfiable, and worse
+   * than `main`, where presence alone always sufficed.
+   *
+   * This proves a real decorative pairing's literal+alpha now satisfies
+   * usages under several different non-text namespaces - not only `divide`,
+   * the one namespace a concrete example happened to name - while a text
+   * usage of that same key still is not satisfied (K2's protection, which
+   * only ever needed to apply to text, is untouched).
+   */
+  it("lets a decorative pairing satisfy any non-text usage, without letting it satisfy a text usage", () => {
+    const dividerPairing = PAIRINGS.find(
+      (pairing) => pairing.requirement === "decorative",
+    );
+    expect(dividerPairing, "at least one decorative pairing ships").toBeDefined();
+
+    const key = tokenAlphaKey(dividerPairing!.foreground);
+    expect(FOREGROUND_VERIFIED_THRESHOLD.get(key)).toBe(0);
+
+    // dividerPairing's foreground is already a bare `--color-<name>`
+    // reference (e.g. "--color-line"), the same shape usage.ts's `property`
+    // field uses, so it doubles directly as a synthetic usage of that token.
+    const { property, alphaPercent } = parseTokenReference(dividerPairing!.foreground);
+    const baseUsage: Omit<AlphaUtilityUsage, "prefix" | "utility"> = {
+      file: "synthetic (not shipped)",
+      property,
+      alphaPercent,
+      role: "foreground",
+    };
+
+    // divide, plus a spread of namespaces finding 1 named as unsatisfiable:
+    // a real decorative pairing's key now covers all of them.
+    for (const prefix of ["divide", "border", "outline", "fill", "stroke", "shadow"]) {
+      const usage: AlphaUtilityUsage = { ...baseUsage, prefix, utility: `${prefix}-x/${alphaPercent}` };
+      const usageKey = `${resolveToken(usage.property, tokens)}@${usage.alphaPercent}`;
+      expect(usageKey, prefix).toBe(key);
+      expect(expectedThresholdFor(usage), prefix).toBe(0);
+      expect(
+        FOREGROUND_VERIFIED_THRESHOLD.get(usageKey) ?? -Infinity,
+        prefix,
+      ).toBeGreaterThanOrEqual(expectedThresholdFor(usage));
+    }
+
+    // The same 0 does not satisfy a text usage of that same key.
+    const textUsage: AlphaUtilityUsage = { ...baseUsage, prefix: "text", utility: `text-x/${alphaPercent}` };
+    expect(0).toBeLessThan(expectedThresholdFor(textUsage));
+  });
+
+  /**
+   * ugcportal-j4j round 4 finding 2. Aggregating by MIN across every PAIRING
+   * sharing a *key* (rather than only within pairings sharing the same
+   * *reference*, round 3's actual concern) meant one decorative pairing at a
+   * key pinned the whole key at 0 forever - a stronger PAIRING for a
+   * different, unrelated reference that happened to resolve to the same
+   * literal+alpha could never raise it, because MIN cannot rise. A synthetic
+   * collision proves the fix directly, the way K2's own fix was proved,
+   * rather than relying on today's real PAIRINGS happening not to trigger it
+   * (they do not - this is why the bug was latent).
+   */
+  it("does not let a decorative pairing at a shared key suppress a stronger pairing for a different reference", () => {
+    const decorativeReference: Pairing = {
+      id: "synthetic-decorative",
+      // --ring resolves to the same literal as --primary in this codebase
+      // (both var(--color-petrol-400)) - the same real collision K2's own
+      // test uses, reused here as a synthetic decorative pairing.
+      foreground: "--ring",
+      background: ["--color-surface-0"],
+      requirement: "decorative",
+      usage: "Not shipped; a synthetic collision partner.",
+      why: "Synthetic - exists only to prove the aggregation fix, not a real exemption.",
+    };
+    const bodyReference: Pairing = {
+      id: "synthetic-body",
+      foreground: "--primary",
+      background: ["--color-surface-0"],
+      requirement: "body",
+      usage: "Not shipped; a synthetic collision partner.",
+    };
+    // Precondition: these two really do share a key, or the test proves nothing.
+    expect(tokenAlphaKey(decorativeReference.foreground)).toBe(
+      tokenAlphaKey(bodyReference.foreground),
+    );
+
+    const map = buildForegroundVerifiedThreshold([decorativeReference, bodyReference]);
+    const key = tokenAlphaKey(bodyReference.foreground);
+    expect(map.get(key), "the stronger reference's guarantee must survive the collision").toBe(
+      THRESHOLDS.body,
+    );
+
+    // Order must not matter either.
+    const reversed = buildForegroundVerifiedThreshold([bodyReference, decorativeReference]);
+    expect(reversed.get(key)).toBe(THRESHOLDS.body);
   });
 
   /**
@@ -285,11 +611,22 @@ describe("the gate cannot be routed around", () => {
   });
 });
 
+describe("TEXT_PREFIXES (derived, not curated)", () => {
+  it("finds exactly text and placeholder, not any other colour-bearing namespace", () => {
+    // Pins the derivation's result, not just that it runs: caret, accent,
+    // fill and stroke all compile a colour too (caret-color, accent-color,
+    // fill, stroke), but none of them compile to the bare `color` property,
+    // so none should be in this set.
+    expect([...TEXT_PREFIXES].sort()).toEqual(["placeholder", "text"]);
+  });
+});
+
 describe("parseTokenReference", () => {
   it("reads a bare token as fully opaque", () => {
     expect(parseTokenReference("--ring")).toEqual({
       property: "--ring",
       alpha: 1,
+      alphaPercent: 100,
     });
   });
 
@@ -297,19 +634,43 @@ describe("parseTokenReference", () => {
     expect(parseTokenReference("--ring/70")).toEqual({
       property: "--ring",
       alpha: 0.7,
+      alphaPercent: 70,
     });
     expect(parseTokenReference("--ring/0")).toEqual({
       property: "--ring",
       alpha: 0,
+      alphaPercent: 0,
     });
   });
 
-  it.each(["ring", "--ring/70/10", "--ring/abc", "--ring/101", "--ring/"])(
-    "throws on %s",
-    (reference) => {
-      expect(() => parseTokenReference(reference)).toThrow();
-    },
-  );
+  /**
+   * ugcportal-j4j round 2 finding 3: this used to require an integer
+   * (`/^\d{1,3}$/`), so a fractional alpha usage.ts had already learned to
+   * scan (`bg-primary/12.5`) could never be declared as a PAIRING at all -
+   * "measured" advice the author could not actually follow. `alphaPercent`
+   * preserves the written percentage exactly (not `alpha * 100`, which would
+   * round-trip through a division a usage's own alphaPercent never goes
+   * through), so a coverage key built from a PAIRING and one built from a
+   * scanned usage agree even for a fractional value.
+   */
+  it("reads a fractional Tailwind alpha modifier", () => {
+    expect(parseTokenReference("--ring/12.5")).toEqual({
+      property: "--ring",
+      alpha: 0.125,
+      alphaPercent: 12.5,
+    });
+  });
+
+  it.each([
+    "ring",
+    "--ring/70/10",
+    "--ring/abc",
+    "--ring/101",
+    "--ring/100.5",
+    "--ring/",
+  ])("throws on %s", (reference) => {
+    expect(() => parseTokenReference(reference)).toThrow();
+  });
 });
 
 /**
