@@ -379,10 +379,27 @@ export interface UploadMemorySettings {
  * zero or to an unbounded read, which is why the guard tests `> 0` explicitly
  * instead of relying on a comparison that happens to be false for both.
  */
+export interface UploadReadLimit {
+  /** Bytes of request stream this upload may deliver. */
+  bytes: number;
+  /**
+   * True when Content-Length fixed the answer, so it describes *this request*
+   * rather than the largest thing its declared kind is allowed to be.
+   *
+   * The distinction is what separates a refusal that is certainly right from
+   * one that is a guess. A client that says "I am sending 200 MB" can be told
+   * immediately that this container cannot buffer that. A client that merely
+   * says "this is a video" has said nothing about its size, and refusing it
+   * up front — which this route used to do — turns a 2 MB chunked upload into
+   * a non-retryable 413 quoting a limit two orders of magnitude above it.
+   */
+  fromContentLength: boolean;
+}
+
 export function uploadReadLimitBytes(options: {
   declaredContentType: string | null;
   contentLengthHeader?: string | null;
-}): number {
+}): UploadReadLimit {
   const { declaredContentType } = options;
   const declaredLength = Number(options.contentLengthHeader);
   const hasLength = Number.isFinite(declaredLength) && declaredLength > 0;
@@ -394,12 +411,16 @@ export function uploadReadLimitBytes(options: {
         MULTIPART_OVERHEAD_ALLOWANCE_BYTES;
 
   const capped = Math.min(byType, MAX_UPLOAD_BYTES);
-  if (!hasLength) return capped;
+  if (!hasLength) return { bytes: capped, fromContentLength: false };
 
   // The allowance is added because Content-Length frames the whole request
   // while a client that got it slightly wrong should still upload; it can
   // only narrow, never widen, because of the Math.min.
-  return Math.min(capped, declaredLength + MULTIPART_OVERHEAD_ALLOWANCE_BYTES);
+  const withLength = declaredLength + MULTIPART_OVERHEAD_ALLOWANCE_BYTES;
+  return {
+    bytes: Math.min(capped, withLength),
+    fromContentLength: withLength <= capped,
+  };
 }
 
 /** Bytes to reserve for a request whose stream is capped at `readLimitBytes`. */
@@ -552,6 +573,9 @@ export function resolveUploadMemorySettings(
  */
 export const INITIAL_GRANT_BYTES = MIN_UPLOAD_BUDGET_BYTES;
 
+/** @see UploadReservation.growTo */
+export type GrowOutcome = "ok" | "over-budget" | "too-large";
+
 export interface UploadReservation {
   /** Bytes held right now: the initial grant, plus whatever has been grown. */
   readonly bytes: number;
@@ -560,20 +584,24 @@ export interface UploadReservation {
   /** Suggested backoff if a later {@link growTo} is refused. */
   readonly retryAfterSeconds: number;
   /**
-   * Raises the reservation to `toBytes`, or reports that it cannot be raised.
+   * Raises the reservation to `toBytes`, or says why it cannot be raised.
    *
-   * Returns true when the reservation now covers `toBytes` — including when
-   * it already did, so a caller charging cumulative progress can call this on
-   * every chunk without tracking what it last asked for. Returns false when
-   * the budget cannot afford the increase, which is the caller's signal to
-   * stop reading and answer 503: the bytes have not been committed, so
-   * reading them anyway would put the process over the bound.
+   * `"ok"` when the reservation now covers `toBytes` — including when it
+   * already did, so a caller charging cumulative progress can call this on
+   * every chunk without tracking what it last asked for.
+   *
+   * `"over-budget"` when the process cannot spare the increase now; the
+   * caller should stop reading and answer 503. `"too-large"` when no state of
+   * the process could ever hold it, which is a 413 — and it is reported
+   * *here*, from bytes that have arrived, rather than guessed at admission
+   * from a declared kind's cap. Either way the bytes have not been committed,
+   * so reading them anyway would put the process over the bound.
    *
    * Never shrinks. A reservation only releases when the handler returns,
    * because what it is pricing — the parsed File and the Buffer over its
    * arrayBuffer copy — stays reachable until then.
    */
-  growTo(toBytes: number): boolean;
+  growTo(toBytes: number): GrowOutcome;
   /** Idempotent: a double release cannot hand the budget back twice. */
   release(): void;
 }
@@ -614,15 +642,19 @@ export interface UploadMemoryBudget {
    * Never waits — see the note at the top of this file on why the outer of
    * two bounds in series does not queue.
    *
-   * @throws {UploadTooLargeForBudgetError} when `ceilingBytes` could not be
-   *   held even on an idle process (413; retrying will not help). Checked
-   *   against the ceiling rather than the grant so a request that cannot
-   *   possibly finish is told so immediately, instead of part-way through
-   *   uploading.
+   * `certain` says whether `ceilingBytes` describes *this request* — it came
+   * from a Content-Length — or merely the largest thing its declared kind may
+   * be. Only a certain ceiling may be refused up front, because only then is
+   * the refusal about a size the client itself has stated. An uncertain one
+   * is admitted and judged by what arrives; see {@link UploadReadLimit}.
+   *
+   * @throws {UploadTooLargeForBudgetError} when a *certain* `ceilingBytes`
+   *   could not be held even on an idle process (413; retrying will not
+   *   help).
    * @throws {UploadMemoryExhaustedError} when the process is currently
    *   holding too much to grant even the initial share (503; retrying will).
    */
-  reserve(ceilingBytes: number): UploadReservation;
+  reserve(ceilingBytes: number, options?: { certain?: boolean }): UploadReservation;
   stats(): UploadMemoryStats;
 }
 
@@ -860,8 +892,14 @@ export function createUploadMemoryBudget(
   }
 
   return {
-    reserve(ceilingBytes: number): UploadReservation {
-      if (ceilingBytes > settings.soloReservationCeilingBytes) {
+    reserve(
+      ceilingBytes: number,
+      options: { certain?: boolean } = {},
+    ): UploadReservation {
+      if (
+        options.certain &&
+        ceilingBytes > settings.soloReservationCeilingBytes
+      ) {
         refusedTooLarge += 1;
         throw new UploadTooLargeForBudgetError(
           `Upload of up to ${ceilingBytes} bytes exceeds what this container can buffer (${settings.soloReservationCeilingBytes} bytes)`,
@@ -901,13 +939,22 @@ export function createUploadMemoryBudget(
         },
         ceilingBytes,
         retryAfterSeconds: settings.retryAfterSeconds,
-        growTo(toBytes: number): boolean {
-          if (released || entry.revoked) return false;
-          if (toBytes <= entry.bytes) return true;
+        growTo(toBytes: number): GrowOutcome {
+          if (released || entry.revoked) return "over-budget";
+          if (toBytes <= entry.bytes) return "ok";
+          // Nothing this process could ever hold, whatever else is going on.
+          // Reported from delivered bytes rather than guessed from the
+          // declaration at admission (round-4 finding 2), which is what used
+          // to refuse a 2 MB chunked video for being "larger than this server
+          // can buffer".
+          if (toBytes > settings.soloReservationCeilingBytes) {
+            refusedTooLarge += 1;
+            return "too-large";
+          }
           // The ceiling is enforced by the caller's stream cap too, but a
           // reservation that could exceed it would make that cap and this
           // budget disagree about the same request.
-          if (toBytes > ceilingBytes) return false;
+          if (toBytes > ceilingBytes) return "over-budget";
 
           // Crossing the grant is where the right to finish is bought, and it
           // is bought for the *whole* ceiling at once. Checking only `toBytes`
@@ -915,7 +962,13 @@ export function createUploadMemoryBudget(
           // could never have held the rest of it, which is the shape that
           // gets killed at 87 MB instead of refused at 10.
           const crossing = !entry.pledged && toBytes > INITIAL_GRANT_BYTES;
-          const needed = crossing ? ceilingBytes : toBytes;
+          // Pledging the whole ceiling is what buys the right to finish, but
+          // an uncertain ceiling can be far beyond anything this container
+          // could hold, and pledging *that* would be pledging a claim rather
+          // than a need. Capped at what one caller may ever hold.
+          const needed = crossing
+            ? Math.min(ceilingBytes, settings.soloReservationCeilingBytes)
+            : toBytes;
 
           if (!admissible(entry, needed)) {
             outgrown += 1;
@@ -925,14 +978,14 @@ export function createUploadMemoryBudget(
               budgetBytes: settings.budgetBytes,
               shed: shed + outgrown,
             });
-            return false;
+            return "over-budget";
           }
 
           if (crossing) {
             entry.pledged = true;
             // Only a pledge that exceeds the whole shared budget excludes
             // anyone, and only that kind has to keep being earned.
-            if (ceilingBytes > settings.budgetBytes) {
+            if (needed > settings.budgetBytes) {
               entry.exclusiveSince = Date.now();
               entry.exclusiveFrom = toBytes;
             }
@@ -941,8 +994,8 @@ export function createUploadMemoryBudget(
           recordPeak();
           // A reservation that has just been revoked by its own admissibility
           // check must not then act on the grant it was refused.
-          if (entry.revoked) return false;
-          return true;
+          if (entry.revoked) return "over-budget";
+          return "ok";
         },
         release() {
           if (released) return;
@@ -1123,8 +1176,11 @@ function getBudget(): UploadMemoryBudget {
 }
 
 /** @see UploadMemoryBudget.reserve */
-export function reserveUploadMemory(ceilingBytes: number): UploadReservation {
-  return getBudget().reserve(ceilingBytes);
+export function reserveUploadMemory(
+  ceilingBytes: number,
+  options: { certain?: boolean } = {},
+): UploadReservation {
+  return getBudget().reserve(ceilingBytes, options);
 }
 
 /** Live view of the budget, for tests and for anything that wants to log it. */

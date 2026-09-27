@@ -40,6 +40,17 @@ import type { WatermarkConcurrencyEnv } from "@/lib/watermark";
 const MiB = 1024 * 1024;
 
 /**
+ * uploadReadLimitBytes' byte answer alone.
+ *
+ * It returns a pair now — the bytes, and whether Content-Length fixed them —
+ * because only a limit the client itself stated may be refused before the
+ * body is read (round-4 finding 2). Most of the cases below are about the
+ * number, so they say so.
+ */
+const limitOf = (options: Parameters<typeof uploadReadLimitBytes>[0]) =>
+  uploadReadLimitBytes(options).bytes;
+
+/**
  * Real gate settings for a container of `mb`, with every input injected so
  * nothing here reads the host.
  *
@@ -99,7 +110,7 @@ describe("declaredUploadCapBytes", () => {
     // before its 415 instead of ~200 MB.
     expect(declaredUploadCapBytes('video/mp4; codecs="avc1.42E01E"')).toBeNull();
     expect(
-      uploadReadLimitBytes({
+      limitOf({
         declaredContentType: 'video/mp4; codecs="avc1.42E01E"',
       }),
     ).toBe(MAX_IMAGE_UPLOAD_BYTES + MULTIPART_OVERHEAD_ALLOWANCE_BYTES);
@@ -129,13 +140,13 @@ describe("declaredUploadCapBytes", () => {
 
 describe("uploadReadLimitBytes", () => {
   it("caps a declared image at the image cap, not at the route's fallback", () => {
-    expect(uploadReadLimitBytes({ declaredContentType: "image/png" })).toBe(
+    expect(limitOf({ declaredContentType: "image/png" })).toBe(
       10 * MiB + MULTIPART_OVERHEAD_ALLOWANCE_BYTES,
     );
   });
 
   it("caps a declared video at the video cap", () => {
-    expect(uploadReadLimitBytes({ declaredContentType: "video/mp4" })).toBe(
+    expect(limitOf({ declaredContentType: "video/mp4" })).toBe(
       200 * MiB + MULTIPART_OVERHEAD_ALLOWANCE_BYTES,
     );
   });
@@ -143,7 +154,7 @@ describe("uploadReadLimitBytes", () => {
   it("reads as little as possible of a type that will be refused anyway", () => {
     // An unsupported type is a 415 at any size, so the only question is how
     // much of it to buffer first: the smallest cap the route has.
-    expect(uploadReadLimitBytes({ declaredContentType: "application/pdf" })).toBe(
+    expect(limitOf({ declaredContentType: "application/pdf" })).toBe(
       MAX_IMAGE_UPLOAD_BYTES + MULTIPART_OVERHEAD_ALLOWANCE_BYTES,
     );
   });
@@ -152,7 +163,7 @@ describe("uploadReadLimitBytes", () => {
     // Round-1 finding 1: this used to be MAX_UPLOAD_BYTES, so a 100 KB photo
     // behind a caption field on a chunked request reserved ~430 MB — more
     // than a 768 MB container's whole spendable budget.
-    expect(uploadReadLimitBytes({ declaredContentType: null })).toBe(
+    expect(limitOf({ declaredContentType: null })).toBe(
       UNDECLARED_UPLOAD_LIMIT_BYTES,
     );
     expect(UNDECLARED_UPLOAD_LIMIT_BYTES).toBeLessThan(MAX_UPLOAD_BYTES / 10);
@@ -162,7 +173,7 @@ describe("uploadReadLimitBytes", () => {
     // "" means the part was located and declared no Content-Type. RFC 7578
     // makes that text/plain, which no kind accepts, so there is no size at
     // which it succeeds — read as little of it as possible.
-    expect(uploadReadLimitBytes({ declaredContentType: "" })).toBe(
+    expect(limitOf({ declaredContentType: "" })).toBe(
       MAX_IMAGE_UPLOAD_BYTES + MULTIPART_OVERHEAD_ALLOWANCE_BYTES,
     );
   });
@@ -177,10 +188,10 @@ describe("uploadReadLimitBytes", () => {
     ["a declared image", "image/png"],
     ["a declared video", "video/mp4"],
   ])("never lets Content-Length widen the cap, with %s", (_label, declared) => {
-    const withoutHeader = uploadReadLimitBytes({
+    const withoutHeader = limitOf({
       declaredContentType: declared,
     });
-    const withHugeHeader = uploadReadLimitBytes({
+    const withHugeHeader = limitOf({
       declaredContentType: declared,
       contentLengthHeader: String(4 * 1024 * MiB),
     });
@@ -190,7 +201,7 @@ describe("uploadReadLimitBytes", () => {
 
   it("keeps an undeclared upload at the smallest cap however big it claims to be", () => {
     expect(
-      uploadReadLimitBytes({
+      limitOf({
         declaredContentType: null,
         contentLengthHeader: String(150 * MiB),
       }),
@@ -210,7 +221,7 @@ describe("uploadReadLimitBytes", () => {
       null,
     ]) {
       expect(
-        uploadReadLimitBytes({ declaredContentType }),
+        limitOf({ declaredContentType }),
       ).toBeLessThanOrEqual(MAX_UPLOAD_BYTES);
     }
   });
@@ -223,14 +234,14 @@ describe("uploadReadLimitBytes", () => {
     const wireBytes = MAX_IMAGE_UPLOAD_BYTES + formOverhead;
 
     expect(
-      uploadReadLimitBytes({ declaredContentType: "image/png" }),
+      limitOf({ declaredContentType: "image/png" }),
     ).toBeGreaterThanOrEqual(wireBytes);
     expect(MULTIPART_OVERHEAD_ALLOWANCE_BYTES).toBe(256 * 1024);
   });
 
   it("narrows to an honestly declared Content-Length", () => {
     expect(
-      uploadReadLimitBytes({
+      limitOf({
         declaredContentType: "image/png",
         contentLengthHeader: String(2 * MiB),
       }),
@@ -239,7 +250,7 @@ describe("uploadReadLimitBytes", () => {
 
   it("lets Content-Length narrow but never widen", () => {
     expect(
-      uploadReadLimitBytes({
+      limitOf({
         declaredContentType: "image/png",
         contentLengthHeader: String(500 * MiB),
       }),
@@ -263,11 +274,38 @@ describe("uploadReadLimitBytes", () => {
     ["NaN", "NaN"],
   ])("ignores a %s Content-Length", (_label, contentLengthHeader) => {
     expect(
-      uploadReadLimitBytes({
+      limitOf({
         declaredContentType: "image/png",
         contentLengthHeader,
       }),
     ).toBe(10 * MiB + MULTIPART_OVERHEAD_ALLOWANCE_BYTES);
+  });
+});
+
+describe("uploadReadLimitBytes — where the number came from", () => {
+  it("is certain only when Content-Length is what fixed it", () => {
+    // The flag the up-front 413 turns on. A kind cap says nothing about this
+    // request's size; a length the client stated does.
+    expect(
+      uploadReadLimitBytes({
+        declaredContentType: "video/mp4",
+        contentLengthHeader: String(2 * MiB),
+      }).fromContentLength,
+    ).toBe(true);
+
+    expect(
+      uploadReadLimitBytes({ declaredContentType: "video/mp4" })
+        .fromContentLength,
+    ).toBe(false);
+
+    // A Content-Length so large that the kind cap is what bound the answer
+    // is not "certain" either: the number in force is the cap, not the claim.
+    expect(
+      uploadReadLimitBytes({
+        declaredContentType: "image/png",
+        contentLengthHeader: String(4 * 1024 * MiB),
+      }).fromContentLength,
+    ).toBe(false);
   });
 });
 
@@ -508,16 +546,16 @@ describe("resolveUploadMemorySettings", () => {
     // admitted and then cut off part-way for no reason it could have known.
     const branches = (mb: number) => ({
       declaredImage: uploadReservationBytes(
-        uploadReadLimitBytes({ declaredContentType: "image/png" }),
+        limitOf({ declaredContentType: "image/png" }),
       ),
       declaredVideo: uploadReservationBytes(
-        uploadReadLimitBytes({ declaredContentType: "video/mp4" }),
+        limitOf({ declaredContentType: "video/mp4" }),
       ),
       undeclared: uploadReservationBytes(
-        uploadReadLimitBytes({ declaredContentType: null }),
+        limitOf({ declaredContentType: null }),
       ),
       undeclaredWithLength: uploadReservationBytes(
-        uploadReadLimitBytes({
+        limitOf({
           declaredContentType: null,
           contentLengthHeader: String(4 * 1024 * MiB),
         }),
@@ -684,7 +722,7 @@ describe("createUploadMemoryBudget", () => {
     expect(() => budget.reserve(400)).not.toThrow();
   });
 
-  it("refuses an upload no amount of idleness would fit, as a distinct error", () => {
+  it("refuses a stated size no amount of idleness would fit, as a distinct error", () => {
     const budget = createUploadMemoryBudget(
       budgetOf({
         budgetBytes: 100,
@@ -694,7 +732,10 @@ describe("createUploadMemoryBudget", () => {
     );
 
     try {
-      budget.reserve(401);
+      // `certain` means the ceiling came from the client's own
+      // Content-Length, so refusing it before reading is a statement about a
+      // size the client asserted rather than a guess from its declared kind.
+      budget.reserve(401, { certain: true });
       expect.unreachable("expected the reservation to be refused outright");
     } catch (error) {
       // Not UploadMemoryExhaustedError: retrying this will never work, and
@@ -706,6 +747,38 @@ describe("createUploadMemoryBudget", () => {
     expect(budget.stats().refusedTooLarge).toBe(1);
     expect(budget.stats().shed).toBe(0);
     expect(budget.stats().heldBytes).toBe(0);
+  });
+
+  // Round-4 finding 2. reserve() derived the ceiling from the declared
+  // *kind*, so any video without a usable Content-Length asked for ~420 MB
+  // and was refused outright on a 768 MB container — turning a 2 MB chunked
+  // POST into a non-retryable 413 quoting a limit two orders of magnitude
+  // above it. An uncertain ceiling is now admitted and judged by what
+  // arrives.
+  it("admits an uncertain ceiling and judges it by what arrives", () => {
+    const grant = INITIAL_GRANT_BYTES;
+    const budget = createUploadMemoryBudget(
+      budgetOf({
+        budgetBytes: 3 * grant,
+        soloReservationCeilingBytes: 4 * grant,
+      }),
+    );
+
+    // A ceiling far above what this container could ever hold, asked for
+    // without the client having said it will send that much.
+    const reservation = budget.reserve(10 * grant);
+    expect(reservation.bytes).toBe(grant);
+    expect(budget.stats().refusedTooLarge).toBe(0);
+
+    // A small body finishes normally — which is the whole point, since most
+    // requests with an uncertain ceiling are nothing like their kind's cap.
+    expect(reservation.growTo(grant)).toBe("ok");
+
+    // And one that really does outgrow the container is refused then, with
+    // the outcome that maps to a 413 rather than to a retryable 503.
+    expect(reservation.growTo(5 * grant)).toBe("too-large");
+    expect(budget.stats().refusedTooLarge).toBe(1);
+    expect(budget.stats().outgrown).toBe(0);
   });
 
   it("does not hand the budget back twice for one reservation", () => {
@@ -835,11 +908,11 @@ describe("createUploadMemoryBudget", () => {
     expect(reservation.bytes).toBe(500);
     // Already covered; a caller charging cumulative progress can call this
     // on every chunk without tracking what it last asked for.
-    expect(reservation.growTo(100)).toBe(true);
+    expect(reservation.growTo(100)).toBe("ok");
     expect(budget.stats().heldBytes).toBe(500);
     // Past the ceiling is refused even with the budget wide open, so the
     // stream cap and this budget cannot disagree about the same request.
-    expect(reservation.growTo(501)).toBe(false);
+    expect(reservation.growTo(501)).toBe("over-budget");
     expect(budget.stats().heldBytes).toBe(500);
   });
 
@@ -850,7 +923,7 @@ describe("createUploadMemoryBudget", () => {
     const solo = budget.reserve(400);
 
     expect(solo.bytes).toBe(100 > INITIAL_GRANT_BYTES ? INITIAL_GRANT_BYTES : 400);
-    expect(solo.growTo(400)).toBe(true);
+    expect(solo.growTo(400)).toBe("ok");
     expect(budget.stats().heldBytes).toBe(400);
     // Over-committed now, so nothing else joins it.
     expect(() => budget.reserve(1)).toThrow(UploadMemoryExhaustedError);
@@ -874,7 +947,7 @@ describe("createUploadMemoryBudget", () => {
 
     // a holds one grant, so b growing to three would put the pair at four
     // against a budget of three. Refused rather than the process going over.
-    expect(b.growTo(3 * grant)).toBe(false);
+    expect(b.growTo(3 * grant)).toBe("over-budget");
     expect(budget.stats().heldBytes).toBe(2 * grant);
     expect(budget.stats().outgrown).toBe(1);
     // Counted separately from a refused admission: one is a request that
@@ -882,7 +955,7 @@ describe("createUploadMemoryBudget", () => {
     expect(budget.stats().shed).toBe(0);
 
     a.release();
-    expect(b.growTo(3 * grant)).toBe(true);
+    expect(b.growTo(3 * grant)).toBe("ok");
     expect(budget.stats().heldBytes).toBe(3 * grant);
   });
 
@@ -906,7 +979,7 @@ describe("createUploadMemoryBudget", () => {
     expect(budget.stats().pledgedBytes).toBe(grant);
 
     // Delivering past the grant buys the whole ceiling, atomically.
-    expect(big.growTo(grant + 1)).toBe(true);
+    expect(big.growTo(grant + 1)).toBe("ok");
     expect(budget.stats().pledgedBytes).toBe(3 * grant);
     expect(budget.stats().heldBytes).toBe(grant + 1);
 
@@ -918,7 +991,7 @@ describe("createUploadMemoryBudget", () => {
     // And the incumbent still finishes — which is the whole point. Before
     // this it was the incumbent that died here, at whatever point it had
     // reached, however many megabytes in.
-    expect(big.growTo(3 * grant)).toBe(true);
+    expect(big.growTo(3 * grant)).toBe("ok");
     expect(budget.stats().heldBytes).toBe(3 * grant + grant);
 
     small.release();
@@ -944,7 +1017,7 @@ describe("createUploadMemoryBudget", () => {
 
     // 1 grant blocked + 5 pledged is over a 3-grant budget, and `blocker`
     // means the solo path is closed, so the crossing is refused...
-    expect(big.growTo(grant + 1)).toBe(false);
+    expect(big.growTo(grant + 1)).toBe("over-budget");
     expect(budget.stats().outgrown).toBe(1);
     // ...at the crossing, with the reservation still where it was, rather
     // than several grants further along.
@@ -953,7 +1026,7 @@ describe("createUploadMemoryBudget", () => {
 
     // Once the budget frees up, the same upload can buy the room.
     blocker.release();
-    expect(big.growTo(grant + 1)).toBe(true);
+    expect(big.growTo(grant + 1)).toBe("ok");
     expect(budget.stats().pledgedBytes).toBe(5 * grant);
   });
 
@@ -1005,7 +1078,7 @@ describe("createUploadMemoryBudget", () => {
         const squatter = budget.reserve(6 * grant);
         // Crossing the grant while alone buys exclusivity: 6 grants pledged
         // against a 2-grant budget.
-        expect(squatter.growTo(grant + 1)).toBe(true);
+        expect(squatter.growTo(grant + 1)).toBe("ok");
         expect(budget.stats().pledgedBytes).toBe(6 * grant);
         expect(() => budget.reserve(grant)).toThrow(UploadMemoryExhaustedError);
 
@@ -1024,7 +1097,7 @@ describe("createUploadMemoryBudget", () => {
         expect(budget.stats().revoked).toBe(1);
         expect(victim.bytes).toBe(grant);
         // And the squatter's own next chunk ends its request.
-        expect(squatter.growTo(2 * grant)).toBe(false);
+        expect(squatter.growTo(2 * grant)).toBe("over-budget");
       } finally {
         vi.useRealTimers();
       }
@@ -1035,7 +1108,7 @@ describe("createUploadMemoryBudget", () => {
       try {
         const budget = createUploadMemoryBudget(exclusiveSettings());
         const uploading = budget.reserve(6 * grant);
-        expect(uploading.growTo(grant + 1)).toBe(true);
+        expect(uploading.growTo(grant + 1)).toBe("ok");
 
         // Ten seconds of honest work at well above the floor.
         const seconds = 10;
@@ -1043,7 +1116,7 @@ describe("createUploadMemoryBudget", () => {
         const delivered =
           2 * EXCLUSIVE_MIN_THROUGHPUT_BYTES_PER_SEC * (seconds + 5) * 2;
 
-        expect(uploading.growTo(grant + 1 + delivered)).toBe(true);
+        expect(uploading.growTo(grant + 1 + delivered)).toBe("ok");
         expect(budget.stats().revoked).toBe(0);
         // Still exclusive, so still nobody else.
         expect(() => budget.reserve(grant)).toThrow(UploadMemoryExhaustedError);
@@ -1065,14 +1138,14 @@ describe("createUploadMemoryBudget", () => {
           }),
         );
         const slow = budget.reserve(2 * grant);
-        expect(slow.growTo(grant + 1)).toBe(true);
+        expect(slow.growTo(grant + 1)).toBe("ok");
 
         vi.advanceTimersByTime(10 * 60 * 1000);
         const other = budget.reserve(grant);
 
         expect(budget.stats().revoked).toBe(0);
         expect(other.bytes).toBe(grant);
-        expect(slow.growTo(2 * grant)).toBe(true);
+        expect(slow.growTo(2 * grant)).toBe("ok");
       } finally {
         vi.useRealTimers();
       }
@@ -1121,7 +1194,7 @@ describe("createUploadMemoryBudget", () => {
     // leak the difference on every large upload, shrinking the budget until
     // the route refused everything.
     expect(budget.stats().heldBytes).toBe(0);
-    expect(reservation.growTo(900)).toBe(false);
+    expect(reservation.growTo(900)).toBe("over-budget");
   });
 
   it("never holds more than the solo ceiling, under arbitrary interleaving, with growth", () => {

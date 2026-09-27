@@ -1078,17 +1078,46 @@ describe("POST /api/media — upload memory (ugcportal-05b)", () => {
     expect(uploadMemoryStats().heldBytes).toBe(0);
   });
 
-  it("refuses an upload this container could never buffer with a 413, not a 503", async () => {
-    // 768 MB cannot hold two copies of a 200 MB video plus the process
-    // baseline, at any level of idleness. Telling that caller to retry would
-    // be telling them to retry forever.
+  it("accepts a small chunked video instead of refusing it for its kind's cap", async () => {
+    // Round-4 finding 2. reserve() derived the ceiling from the declared
+    // *kind*, so any video without a usable Content-Length asked for ~420 MB
+    // and was refused outright on this container — a 2 MB chunked POST got a
+    // non-retryable 413 quoting a limit two orders of magnitude above it.
+    // `fetch` with a ReadableStream body, OkHttp with an unknown-length body
+    // and a re-chunking proxy all produce exactly this shape.
+    //
+    // The previous test here pinned that behaviour with an 8-byte payload
+    // under a comment describing a 200 MB video, so it read as validating
+    // something it did not.
     const settings = configureContainer(768);
     expect(settings.maxSingleUploadBytes).toBeLessThan(200 * 1024 * 1024);
+
+    const { request } = multipartRequest({
+      payload: MP4_HEADER,
+      filename: "clip.mp4",
+      contentType: "video/mp4",
+      // No content-length: the whole point of the shape.
+    });
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(201);
+    expect(uploadMemoryStats().refusedTooLarge).toBe(0);
+    expect(uploadMemoryStats().heldBytes).toBe(0);
+  });
+
+  it("still refuses a size the client itself states as too large, before reading it", async () => {
+    // The early 413 is kept where it is certainly right: the client said how
+    // much it is about to send, and this container cannot buffer that. No
+    // guesswork, and the caller learns before uploading anything.
+    const settings = configureContainer(768);
+    const declaredBytes = 200 * 1024 * 1024;
 
     const { request, pulled } = multipartRequest({
       payload: MP4_HEADER,
       filename: "clip.mp4",
       contentType: "video/mp4",
+      contentLength: String(declaredBytes),
     });
 
     const response = await POST(request);
@@ -1099,11 +1128,35 @@ describe("POST /api/media — upload memory (ugcportal-05b)", () => {
       error: "Upload is larger than this server can buffer",
       maxBytes: settings.maxSingleUploadBytes,
     });
-    // Header only, plus the stream's one-chunk read-ahead; the body itself
-    // was never read.
     expect(pulled()).toBeLessThanOrEqual(2);
     expect(uploadMemoryStats().refusedTooLarge).toBe(1);
-    expect(uploadMemoryStats().shed).toBe(0);
+  });
+
+  it("refuses a body that really does outgrow the container, from the bytes that arrived", async () => {
+    // The other half: with no stated length there is nothing to refuse up
+    // front, so the 413 comes from delivered bytes. On this container a
+    // single upload may hold about 10 MB, so a 12 MB body is cut somewhere
+    // past that — and answered 413, not the retryable 503 that a busy
+    // process gets, because retrying will not make it fit.
+    const settings = configureContainer(512);
+    expect(settings.maxSingleUploadBytes).toBe(MAX_IMAGE_UPLOAD_BYTES);
+
+    const payload = new Uint8Array(12 * 1024 * 1024);
+    payload.set(MP4_HEADER);
+    const { request, pulled } = multipartRequest({
+      payload,
+      filename: "clip.mp4",
+      contentType: "video/mp4",
+    });
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(413);
+    expect(response.headers.get("Retry-After")).toBeNull();
+    expect(uploadMemoryStats().refusedTooLarge).toBe(1);
+    // Cut off near the limit rather than read to the end.
+    expect(pulled() * MULTIPART_CHUNK_BYTES).toBeLessThan(12 * 1024 * 1024);
+    expect(uploadMemoryStats().heldBytes).toBe(0);
   });
 
   it("lets a small honest upload through where a maximum-size one would not fit", async () => {

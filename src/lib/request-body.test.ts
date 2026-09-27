@@ -388,7 +388,7 @@ describe("readCappedFormDataFrom — stalls and metered reads", () => {
     const result = await readCappedFormDataFrom(request, body, 10 * 1024 * 1024, {
       admitBytes: (received) => {
         seen.push(received);
-        return received <= 300;
+        return received <= 300 ? "ok" : "over-budget";
       },
     });
 
@@ -410,7 +410,7 @@ describe("readCappedFormDataFrom — stalls and metered reads", () => {
     // about.
     const body = streamOf([partHeader(), "A".repeat(4096)]);
     const result = await readCappedFormDataFrom(request, body, 10 * 1024 * 1024, {
-      admitBytes: () => false,
+      admitBytes: () => "over-budget",
     });
 
     expect(result).toMatchObject({ ok: false, status: 503 });

@@ -130,14 +130,21 @@ export async function POST(request: Request) {
     fieldName: UPLOAD_FIELD_NAME,
     boundary: multipartBoundary(request.headers.get("content-type")),
   });
-  const readLimitBytes = uploadReadLimitBytes({
+  const readLimit = uploadReadLimitBytes({
     declaredContentType: peeked.declaredContentType,
     contentLengthHeader,
   });
+  const readLimitBytes = readLimit.bytes;
 
   let reservation;
   try {
-    reservation = reserveUploadMemory(uploadReservationBytes(readLimitBytes));
+    reservation = reserveUploadMemory(uploadReservationBytes(readLimitBytes), {
+      // Only a limit the client itself stated may be refused before the body
+      // is read. A limit derived from the declared *kind* says nothing about
+      // this request's size, and refusing on it turned a 2 MB chunked video
+      // into a non-retryable 413 (round-4 finding 2).
+      certain: readLimit.fromContentLength,
+    });
   } catch (error) {
     if (error instanceof UploadTooLargeForBudgetError) {
       // Not a load condition: this upload would not fit even on an idle
@@ -207,6 +214,7 @@ async function handleUpload(
     // the bytes are never forwarded to the parser.
     admitBytes: (received) =>
       reservation.growTo(uploadReservationBytes(received)),
+    // (growTo's outcomes are the ones readCappedFormDataFrom expects.)
   });
   if (!body.ok) {
     if (body.status === 503) {

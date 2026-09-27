@@ -66,7 +66,7 @@ function isOverBudget(error: unknown): boolean {
 function cappedBody(
   source: ReadableStream<Uint8Array>,
   limit: number,
-  admitBytes?: (received: number) => boolean,
+  admitBytes?: (received: number) => "ok" | "over-budget" | "too-large",
 ): ReadableStream<Uint8Array> {
   let received = 0;
   return source.pipeThrough(
@@ -77,9 +77,16 @@ function cappedBody(
           controller.error(new BodyTooLargeError());
           return;
         }
-        if (admitBytes && !admitBytes(received)) {
-          controller.error(new BodyOverBudgetError());
-          return;
+        if (admitBytes) {
+          const verdict = admitBytes(received);
+          if (verdict === "too-large") {
+            controller.error(new BodyTooLargeError());
+            return;
+          }
+          if (verdict === "over-budget") {
+            controller.error(new BodyOverBudgetError());
+            return;
+          }
         }
         controller.enqueue(chunk);
       },
@@ -280,13 +287,19 @@ export interface CappedReadOptions {
   /** Overrides {@link BODY_STALL_TIMEOUT_MS}; exposed for tests. */
   stallTimeoutMs?: number;
   /**
-   * Called with the running byte total before each chunk is forwarded;
-   * return false to refuse the rest of the body with a 503.
+   * Called with the running byte total before each chunk is forwarded.
+   *
+   * `"ok"` forwards it. `"over-budget"` refuses the rest of the body with a
+   * 503 — the caller cannot spare the memory now. `"too-large"` refuses it
+   * with a 413 — this body is bigger than the caller could ever hold, which
+   * is a fact about the request rather than about the moment.
    *
    * This is how the upload route keeps its memory reservation in step with
-   * what has actually been delivered. See cappedBody.
+   * what has actually been delivered, and how it reaches a 413 from bytes
+   * that arrived rather than from what the request claimed to be. See
+   * cappedBody.
    */
-  admitBytes?: (received: number) => boolean;
+  admitBytes?: (received: number) => "ok" | "over-budget" | "too-large";
 }
 
 export async function readCappedFormDataFrom(
