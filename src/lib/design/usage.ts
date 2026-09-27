@@ -22,6 +22,67 @@
  * with a reason (Tailwind's non-colour `text-sm/6` shorthands) or made to
  * throw with advice (interpolated alphas, arbitrary alphas, arbitrary colour
  * values). It never just skips.
+ *
+ * That claim has been wrong twice before (round 2: `.ts` files not walked;
+ * round 3: `bg-[var(--x)]/[.5]` fell between three unresolvable-shape
+ * patterns). Both times the fix handled the reported case and left the next
+ * one unenumerated. ugcportal-j4j's round found a third and fourth: a
+ * side/offset-qualified utility (`border-t-border/50`, `ring-offset-ring/50`)
+ * mis-resolved to a token that does not exist instead of the real one, and a
+ * fractional alpha (`bg-primary/12.5`) matched no pattern at all and was
+ * silently dropped.
+ *
+ * So rather than patch those two and stop, here is the syntax space this
+ * module claims to cover, as two independent axes - which axis a given
+ * utility sits on is checked against Tailwind 4.3.3 (the version vendored in
+ * this repo; see `.tw-check` notes in the ugcportal-j4j PR description for how
+ * each row was compiled and confirmed) rather than assumed:
+ *
+ * Namespace (which CSS custom property it targets), one of:
+ *   - a bare namespace: `bg`, `text`, `border`, `ring`, `inset-ring`,
+ *     `outline`, `divide`, `fill`, `stroke`, `shadow`, `inset-shadow`,
+ *     `accent`, `caret`, `decoration`, `from`, `via`, `to`.
+ *   - a border logical/physical side, which is a colour utility in its own
+ *     right (`border-top-color`, not "`border` at side `t`"): `border-t`,
+ *     `border-r`, `border-b`, `border-l`, `border-s`, `border-e`, `border-x`,
+ *     `border-y`. Confirmed compiling; `divide-x-<color>` and
+ *     `outline-t-<color>` were tried against the same compiler and do NOT
+ *     compile - Tailwind has no side-qualified colour for those namespaces,
+ *     so they are deliberately not in this list and fall through to the bare
+ *     `divide`/`outline` branch, where an unresolvable name is caught by the
+ *     unknown-token check downstream rather than misread as a qualifier.
+ *   - `ring-offset`, a distinct custom property (`--tw-ring-offset-color`)
+ *     from `ring`, the same way `inset-ring` already was. Confirmed
+ *     compiling.
+ * Each namespace above the qualified pair shares a literal prefix with a
+ * shorter one already in this list (`ring-offset` / `ring`,
+ * `border-t` / `border`), so ordering inside COLOR_UTILITY_PREFIXES matters:
+ * regex alternation matches the first alternative that fits at a position,
+ * not the longest one, so the qualified form must be listed first or it is
+ * never reached.
+ *
+ * Name form, one of:
+ *   - a bare scale name (`primary`, `surface-2`), resolved to `--color-<name>`.
+ *   - an arbitrary value that is a length, number or similar non-colour value
+ *     such as `[0.8rem]` (deliberately excluded - `isNonColorArbitraryValue`).
+ *   - an arbitrary value that IS a colour, such as `[#fff]` or `[var(--x)]`.
+ *     This gate has no token to measure it against - an arbitrary value is
+ *     definitionally not one of the declared design tokens - so it always
+ *     refuses with advice rather than resolving, the same as an unresolvable
+ *     alpha does.
+ *
+ * Alpha form, one of:
+ *   - an integer percentage (`/50`).
+ *   - a fractional percentage (`/12.5`) - confirmed compiling; Tailwind
+ *     requires at least one leading digit, so `/.5` alone does not compile
+ *     and this module does not need to parse it.
+ *   - an arbitrary value in brackets (`/[.5]`), refused with advice.
+ *   - an interpolation (`` /${alpha} ``), refused with advice.
+ *
+ * Every (namespace x name-form x alpha-form) cell either resolves to a
+ * (token, alpha) pair, is excluded by name with a stated reason, or throws
+ * with advice. usage.test.ts asserts each cell directly rather than trusting
+ * this list to stay in sync with the code on its own.
  */
 
 import { readdirSync, readFileSync, statSync } from "node:fs";
@@ -32,8 +93,35 @@ import { fileURLToPath } from "node:url";
  * Tailwind utility namespaces that take a colour and therefore an alpha
  * modifier. Anything outside this list (`opacity-50`, `w-1/2`) is not a colour
  * and is not this gate's business.
+ *
+ * Order matters here in a way it would not for a list of literal strings
+ * tried in parallel: this feeds a regex alternation, which matches the first
+ * alternative that fits at a position, not the longest. `border-t`,
+ * `ring-offset` and the rest of the compound entries share a literal prefix
+ * with a shorter entry later in this list (`border`, `ring`), so a compound
+ * entry must be listed before the shorter one it starts with, or the shorter
+ * one always wins and swallows the qualifier as part of the name
+ * (ugcportal-j4j finding 1: `border-t-border/50` resolved to the nonexistent
+ * `--color-t-border` instead of `--color-border`, because bare `border`
+ * matched first and the qualifier `t-` was read as part of the colour name).
  */
 const COLOR_UTILITY_PREFIXES = [
+  // Border side/logical colour qualifiers. Each is a real, distinct property
+  // (`border-top-color`, `border-inline-start-color`, ...), confirmed
+  // compiling against Tailwind 4.3.3. `divide` and `outline` were checked
+  // against the same compiler and have no side-qualified colour form, so they
+  // are deliberately not given entries here - see the module header.
+  "border-t",
+  "border-r",
+  "border-b",
+  "border-l",
+  "border-s",
+  "border-e",
+  "border-x",
+  "border-y",
+  // A distinct custom property (`--tw-ring-offset-color`) from `ring`, the
+  // same way `inset-ring` already is below. Confirmed compiling.
+  "ring-offset",
   "bg",
   "text",
   "border",
@@ -96,8 +184,12 @@ const NON_COLOR_SCALE_NAMES: Record<string, readonly string[]> = {
  * covered by the --ring/80 focus-ring pairing, which is checked at 3:1.
  * Reproduced before fixing: the suite stayed green with muted text on that
  * fill at 1.71:1.
+ *
+ * `ring-offset` is included too: `--tw-ring-offset-color` is the colour
+ * exposed in the gap between an element and its focus ring, i.e. the surface
+ * a ring is drawn OVER, the same relationship `bg` has to text.
  */
-const BACKGROUND_PREFIXES = new Set(["bg", "from", "via", "to"]);
+const BACKGROUND_PREFIXES = new Set(["bg", "from", "via", "to", "ring-offset"]);
 
 const PREFIX_ALTERNATION = COLOR_UTILITY_PREFIXES.join("|");
 
@@ -116,15 +208,22 @@ const BOUNDARY = String.raw`(?:^|[\s"'\`:\[(])`;
  * Three patterns, three near-misses, silently skipped — in a file whose header
  * promises it never just skips.
  *
- * A Tailwind alpha modifier is exactly one of three things: a number, an
- * arbitrary value in brackets, or an interpolation. Enumerating all three
- * against both name forms means a colour utility carrying an alpha cannot
- * miss. Anything whose modifier is none of those (`bg-linear-to-r/oklch`, the
- * gradient interpolation keyword) is not an alpha at all, and is correctly
- * not matched.
+ * A Tailwind alpha modifier is exactly one of three things: a number (integer
+ * or fractional - `/50`, `/12.5`; Tailwind requires at least one leading
+ * digit, `/.5` alone does not compile, see the module header), an arbitrary
+ * value in brackets, or an interpolation. Enumerating all three against both
+ * name forms means a colour utility carrying an alpha cannot miss. Anything
+ * whose modifier is none of those (`bg-linear-to-r/oklch`, the gradient
+ * interpolation keyword) is not an alpha at all, and is correctly not
+ * matched.
+ *
+ * ugcportal-j4j finding 3: the numeric branch used to be `\d{1,3}`, an
+ * integer only. `bg-primary/12.5` matched none of the three alternatives -
+ * not an integer, not bracketed, not an interpolation - and was silently
+ * dropped, the exact "never just skips" contract this module claims to hold.
  */
 const ALPHA_UTILITY = new RegExp(
-  String.raw`${BOUNDARY}(${PREFIX_ALTERNATION})-(\[[^\]]*\]|[a-z0-9][a-z0-9-]*)\/(\$\{|\[[^\]]*\]|\d{1,3}(?![\w.-]))`,
+  String.raw`${BOUNDARY}(${PREFIX_ALTERNATION})-(\[[^\]]*\]|[a-z0-9][a-z0-9-]*)\/(\$\{|\[[^\]]*\]|\d+(?:\.\d+)?(?![\w.-]))`,
   "g",
 );
 
@@ -150,10 +249,21 @@ export type AlphaUtilityUsage = {
   utility: string;
   /** The custom property it reads, e.g. `--color-ring`. */
   property: string;
-  /** The Tailwind modifier as an integer percentage, e.g. 80. */
+  /**
+   * The Tailwind modifier as a percentage, e.g. 80, or 12.5 for a fractional
+   * alpha (ugcportal-j4j finding 3). Not necessarily an integer.
+   */
   alphaPercent: number;
   /** Whether the colour is painted behind content or over it. */
   role: "background" | "foreground";
+  /**
+   * The matched namespace exactly as it appears in COLOR_UTILITY_PREFIXES,
+   * e.g. `text`, `border-t`, `ring-offset`. Exposed so a consumer that cares
+   * about more than background/foreground - the contrast gate's threshold
+   * check, which `text` and `ring` hold to different bars - can tell them
+   * apart without re-deriving it from `utility`.
+   */
+  prefix: string;
 };
 
 function fail(message: string): never {
@@ -268,6 +378,7 @@ export function findAlphaColorUtilities(
         property: `--color-${name}`,
         alphaPercent,
         role: BACKGROUND_PREFIXES.has(prefix) ? "background" : "foreground",
+        prefix,
       });
     }
   }

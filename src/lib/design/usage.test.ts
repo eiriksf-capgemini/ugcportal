@@ -164,6 +164,7 @@ describe("findAlphaColorUtilities", () => {
         property: "--color-black",
         alphaPercent: 50,
         role: "background",
+        prefix: "bg",
       },
     ]);
   });
@@ -235,5 +236,132 @@ describe("findAlphaColorUtilities", () => {
   it("throws rather than returning nothing when pointed at an empty tree", () => {
     const root = fixture({});
     expect(() => findAlphaColorUtilities(root)).toThrow(/no source files/);
+  });
+
+  // ugcportal-j4j finding 1 / K1: side- and offset-qualified colour
+  // utilities. `border-t-border/50` used to resolve to the nonexistent
+  // token `--color-t-border` and hard-fail CI with misleading advice.
+
+  it("resolves every border side/logical colour qualifier to the real token, not a qualifier-prefixed one", () => {
+    const root = fixture({
+      "a.tsx": `const c = "border-t-border/50 border-r-border/50 border-b-border/50 border-l-border/50 border-x-border/50 border-y-border/50 border-s-border/50 border-e-border/50";`,
+    });
+    const found = findAlphaColorUtilities(root);
+    expect(found.map((u) => u.property)).toEqual(
+      new Array(8).fill("--color-border"),
+    );
+    expect(found.map((u) => u.alphaPercent)).toEqual(new Array(8).fill(50));
+    // A border qualifier is still a boundary, not a fill text sits on.
+    expect(found.every((u) => u.role === "foreground")).toBe(true);
+  });
+
+  it("resolves ring-offset to its own token, distinct from ring", () => {
+    const root = fixture({
+      "a.tsx": `const c = "ring-offset-ring/50 ring-ring/50";`,
+    });
+    const found = findAlphaColorUtilities(root);
+    expect(found.map((u) => [u.utility, u.property, u.role])).toEqual([
+      ["ring-offset-ring/50", "--color-ring", "background"],
+      ["ring-ring/50", "--color-ring", "foreground"],
+    ]);
+  });
+
+  it("still catches a genuinely unmeasured qualified pairing", () => {
+    // The K1 "deliberate failing case": a qualified utility naming a token
+    // that truly is not declared must still surface as an unknown token, the
+    // same as the unqualified form does, not be waved through because it is
+    // qualified.
+    const root = fixture({
+      "a.tsx": `const c = "border-t-not-a-real-token/50";`,
+    });
+    expect(findAlphaColorUtilities(root)).toEqual([
+      {
+        file: expect.stringContaining("a.tsx"),
+        utility: "border-t-not-a-real-token/50",
+        property: "--color-not-a-real-token",
+        alphaPercent: 50,
+        role: "foreground",
+        prefix: "border-t",
+      },
+    ]);
+  });
+
+  it.each(["border-t-[var(--border)]/50", "border-t-[#ff0000]/50"])(
+    "refuses a qualified utility carrying an arbitrary colour value, the same as the bare form does (%s)",
+    (utility) => {
+      // Both compile in real Tailwind (confirmed), but this gate cannot
+      // resolve an arbitrary value to a declared token to measure it, so it
+      // refuses with advice rather than guessing - exactly what the bare
+      // (unqualified) form already does for `bg-[var(--ring)]/50`.
+      const root = fixture({ "a.tsx": `const c = "${utility}";` });
+      expect(() => findAlphaColorUtilities(root)).toThrow(/arbitrary colour/);
+    },
+  );
+
+  it("has no side-qualified colour form for a namespace Tailwind does not give one to", () => {
+    // Confirmed against the vendored compiler: divide-x-<color>,
+    // outline-t-<color>, decoration-t-<color> and accent-t-<color> do not
+    // compile - Tailwind has no per-side colour for these namespaces. They
+    // are deliberately absent from COLOR_UTILITY_PREFIXES, so `divide-x-`
+    // falls through to bare `divide` and resolves to the (wrong, but
+    // loudly wrong) token `--color-x-border`, which the contrast gate's
+    // "is this a design token" check then rejects - not silently accepted
+    // as if `divide` had gained a qualifier it does not have.
+    const root = fixture({
+      "a.tsx": `const c = "divide-x-border/50";`,
+    });
+    expect(findAlphaColorUtilities(root)).toEqual([
+      {
+        file: expect.stringContaining("a.tsx"),
+        utility: "divide-x-border/50",
+        property: "--color-x-border",
+        alphaPercent: 50,
+        role: "foreground",
+        prefix: "divide",
+      },
+    ]);
+  });
+
+  // ugcportal-j4j finding 3 / K3: a fractional alpha used to match none of
+  // the three modifier patterns and was silently dropped.
+
+  it("measures a fractional alpha rather than skipping it", () => {
+    const root = fixture({ "a.tsx": `const c = "bg-primary/12.5";` });
+    expect(findAlphaColorUtilities(root)).toEqual([
+      {
+        file: expect.stringContaining("a.tsx"),
+        utility: "bg-primary/12.5",
+        property: "--color-primary",
+        alphaPercent: 12.5,
+        role: "background",
+        prefix: "bg",
+      },
+    ]);
+  });
+
+  it.each(["bg-primary/0.5", "bg-primary/5.25", "bg-primary/100.5"])(
+    "measures the fractional alpha in %s",
+    (utility) => {
+      const root = fixture({ "a.tsx": `const c = "${utility}";` });
+      if (utility.endsWith("100.5")) {
+        // Preserves the existing above-100 guard; a fractional alpha does
+        // not get a pass on the sanity check an integer one is held to.
+        expect(() => findAlphaColorUtilities(root)).toThrow(/above 100/);
+        return;
+      }
+      expect(findAlphaColorUtilities(root)[0].alphaPercent).toBe(
+        Number(utility.split("/")[1]),
+      );
+    },
+  );
+
+  it("does not match a fractional alpha with no leading digit, because Tailwind does not compile one", () => {
+    // Confirmed against the vendored compiler: bg-primary/.5 produces no
+    // utility at all. Nothing to measure, so nothing should match here
+    // either - nothing to fix on the compiler's side of this line, but worth
+    // pinning so a future "helpful" widening of the modifier pattern does not
+    // start accepting a shape Tailwind itself rejects.
+    const root = fixture({ "a.tsx": `const c = "bg-primary/.5";` });
+    expect(findAlphaColorUtilities(root)).toEqual([]);
   });
 });
