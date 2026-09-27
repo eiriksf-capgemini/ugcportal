@@ -1404,9 +1404,12 @@ describe("POST /api/media — upload memory (ugcportal-05b)", () => {
       error: string;
       maxBytes: number;
     };
-    expect(payload.error).toContain("Could not read the upload's declared type");
-    expect(payload.error).toContain("Content-Length");
-    expect(payload.error).toContain("'file' field earlier in the form");
+    expect(payload.error).toContain("Could not find the 'file' field");
+    expect(payload.error).toContain("Put that field earlier in the form");
+    // Round-4 finding 3: Content-Length cannot widen this limit, so advising
+    // it is unactionable — and a browser form with a large leading field,
+    // which is the client that hits this, has already sent one.
+    expect(payload.error).not.toContain("Content-Length");
     expect(payload.maxBytes).toBe(
       MAX_IMAGE_UPLOAD_BYTES + MULTIPART_OVERHEAD_ALLOWANCE_BYTES,
     );

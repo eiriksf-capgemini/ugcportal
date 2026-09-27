@@ -231,6 +231,15 @@ EXPOSE 3000
 # Content-Length could hold the whole budget of a 1 GB container for the
 # lifetime of the request, for a few hundred bytes of real traffic.
 #
+# A request that sends a Content-Length is reserved from that instead, so the
+# "burst absorbed" column above is what a chunked client gets and an ordinary
+# browser form goes considerably further. An upload that grows past the whole
+# shared budget shuts everybody else out for as long as it runs, and so has to
+# keep earning it: 512 KiB/s sustained, or the exclusivity is taken back and
+# the request ends. A container big enough to hold your largest upload inside
+# the shared budget — about 1.5 GB for a 200 MB video — never reaches that
+# path at all.
+#
 # WHAT THE NUMBERS COVER, AND WHAT THEY DO NOT.
 #
 # The figure to size a container from is `projectedUploadPathPeakBytes`

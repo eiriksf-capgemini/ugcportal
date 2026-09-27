@@ -235,19 +235,22 @@ async function handleUpload(
     }
     if (body.status === 413 && !admission.declarationRead) {
       // The cap that cut this body off was not this upload's own kind's cap:
-      // the file part was not found in the first PART_HEADER_PEEK_BYTES and
-      // no usable Content-Length was sent, so it was held to the smallest
-      // supported size. A bare "Request body too large" is indistinguishable
-      // from being over a per-kind cap, and a chunked client sending a 50 MB
-      // video would be cut at ~10 MB with no idea why — the exact trap
-      // UNDECLARED_UPLOAD_LIMIT_BYTES's own comment claims to have removed.
-      // So say which limit applied, and both ways out of it.
+      // the file part was not found within PART_HEADER_PEEK_BYTES, so it was
+      // held to the limit for an upload of unknown kind. A bare "Request body
+      // too large" is indistinguishable from being over a per-kind cap, so
+      // say which limit applied and what would change it.
+      //
+      // Deliberately does *not* suggest sending Content-Length (round-4
+      // finding 3): that header cannot widen this limit — uploadReadLimitBytes
+      // only ever lets it narrow — so advising it would be unactionable, and
+      // the client that hits this most often, a browser form with a large
+      // field before the file input, has already sent one.
       return NextResponse.json(
         {
           error:
-            "Could not read the upload's declared type, so it was limited to " +
-            `${readLimitBytes} bytes. Send a Content-Length header, or put ` +
-            `the '${UPLOAD_FIELD_NAME}' field earlier in the form.`,
+            `Could not find the '${UPLOAD_FIELD_NAME}' field near the start ` +
+            `of the request, so this upload was limited to ${readLimitBytes} ` +
+            "bytes. Put that field earlier in the form.",
           maxBytes: readLimitBytes,
         },
         { status: 413 },

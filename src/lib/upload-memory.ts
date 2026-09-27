@@ -177,12 +177,12 @@ export const MULTIPART_OVERHEAD_ALLOWANCE_BYTES = 256 * 1024;
  *
  * Being refused has to be *diagnosable*, which is a separate obligation and
  * is met in POST /api/media rather than here: a 413 reached through this
- * constant carries a message naming the limit that applied and the two ways
- * out of it (send Content-Length, or move the file field earlier), because a
- * bare "Request body too large" is indistinguishable from being over a
- * per-kind cap and would leave a chunked client cut off at ~10 MB with no
- * idea why. An earlier version of this comment asserted the client was told;
- * nothing told it.
+ * constant carries a message naming the limit that applied and the one thing
+ * that would change it — moving the file field nearer the front of the form.
+ * Not Content-Length: that header can only ever narrow this limit, so
+ * advising it would be unactionable, and an earlier version of this comment
+ * both promised a message that did not exist and then described one giving
+ * advice that could not work.
  */
 export const UNDECLARED_UPLOAD_LIMIT_BYTES =
   MAX_IMAGE_UPLOAD_BYTES + MULTIPART_OVERHEAD_ALLOWANCE_BYTES;
