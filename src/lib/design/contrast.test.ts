@@ -18,10 +18,71 @@ import {
   parseDeclarations,
   resolveToken,
 } from "./tokens";
-import { findAlphaColorUtilities } from "./usage";
+import { findAlphaColorUtilities, type AlphaUtilityUsage } from "./usage";
 
 const tokens = loadThemeTokens();
 const css = readFileSync(GLOBALS_CSS_PATH, "utf8");
+
+/** `--ring/70` (or a bare `--ring`) to `<resolved literal>@<alpha percent>`. */
+function tokenAlphaKey(reference: string): string {
+  const { property, alpha } = parseTokenReference(reference);
+  return `${resolveToken(property, tokens)}@${Math.round(alpha * 100)}`;
+}
+
+/**
+ * The strongest WCAG threshold any PAIRING has actually verified a given
+ * (resolved literal, alpha) combination at, restricted to foreground-role
+ * pairings. A decorative pairing proves no ratio at all (no THRESHOLDS entry)
+ * and does not contribute.
+ *
+ * K2 (ugcportal-j4j finding 2): keying coverage by (literal, alpha, role)
+ * alone is not enough. `--ring`, `--primary`, `--sidebar-ring` and
+ * `--sidebar-primary` all resolve to the same literal, and are all
+ * foreground-role, so a pairing that measures one at some alpha used to read
+ * as covering ANY of the others at that alpha - including link-on-surface at
+ * body's 4.5:1 being "covered" by focus-ring at ui's 3:1. Taking the maximum
+ * threshold actually verified per key, and comparing it against what the
+ * *usage* needs (see expectedThresholdFor below) rather than merely checking
+ * presence, closes that gap without needing every namespace's pairings kept
+ * in exact 1:1 lockstep with the tokens they happen to share a literal with.
+ */
+const FOREGROUND_VERIFIED_THRESHOLD = new Map<string, number>();
+for (const pairing of PAIRINGS) {
+  if (pairing.requirement === "decorative") continue;
+  const key = tokenAlphaKey(pairing.foreground);
+  const value = THRESHOLDS[pairing.requirement];
+  FOREGROUND_VERIFIED_THRESHOLD.set(
+    key,
+    Math.max(FOREGROUND_VERIFIED_THRESHOLD.get(key) ?? -Infinity, value),
+  );
+}
+
+/**
+ * Background coverage has no threshold dimension: a surface itself is not
+ * independently held to a ratio, only whatever sits on it is, and no shipped
+ * PAIRINGS background is alpha-modified. If that stops being true, the
+ * background side of this needs the same threshold treatment as the
+ * foreground side above.
+ */
+const MEASURED_BACKGROUND = new Set(
+  PAIRINGS.flatMap((pairing) => pairing.background.map(tokenAlphaKey)),
+);
+
+/**
+ * What a *usage* (as opposed to a PAIRING) needs to clear, inferred from its
+ * namespace. `text` renders glyphs directly and this is a static source
+ * scan - it cannot tell body text from large text - so it is held to the
+ * stricter of WCAG's two text minimums, `body` (4.5:1), rather than risk
+ * under-claiming for a usage that turns out to be normal-size. Every other
+ * foreground namespace this gate tracks (a ring, a border, a divider) is a
+ * non-text UI mark, held to `ui` (3:1) - the same threshold PAIRINGS already
+ * uses throughout for exactly these namespaces (focus-ring, control-edge,
+ * destructive-edge).
+ */
+const TEXT_PREFIXES = new Set(["text"]);
+function expectedThresholdFor(usage: Pick<AlphaUtilityUsage, "prefix">): number {
+  return TEXT_PREFIXES.has(usage.prefix) ? THRESHOLDS.body : THRESHOLDS.ui;
+}
 
 /**
  * K1 (ugcportal-axu). Every documented pairing, evaluated against the values
@@ -167,22 +228,6 @@ describe("the gate cannot be routed around", () => {
    * follow the stylesheet.
    */
   it("measures every alpha-modified colour utility the components ship", () => {
-    // Keyed by role, not just by colour. --ring and --primary resolve to the
-    // same literal, so a single set made `bg-primary/80` - a surface text
-    // sits on, needing 4.5:1 - read as covered by the --ring/80 focus-ring
-    // pairing, which is checked at 3:1. Reproduced before fixing: muted text
-    // on that fill measures 1.71:1 and the suite stayed green.
-    const key = (reference: string) => {
-      const { property, alpha } = parseTokenReference(reference);
-      return `${resolveToken(property, tokens)}@${Math.round(alpha * 100)}`;
-    };
-    const measured = {
-      foreground: new Set(PAIRINGS.map((pairing) => key(pairing.foreground))),
-      background: new Set(
-        PAIRINGS.flatMap((pairing) => pairing.background.map(key)),
-      ),
-    } as const;
-
     const used = findAlphaColorUtilities();
     expect(used.length).toBeGreaterThan(0);
 
@@ -198,16 +243,66 @@ describe("the gate cannot be routed around", () => {
       ).toBe(true);
 
       const usageKey = `${resolveToken(usage.property, tokens)}@${usage.alphaPercent}`;
+
+      if (usage.role === "background") {
+        expect(
+          MEASURED_BACKGROUND.has(usageKey),
+          `${usage.file} uses "${usage.utility}", but no pairing in PAIRINGS ` +
+            `measures ${usage.property} at ${usage.alphaPercent}% alpha as a ` +
+            `background. Add that pairing - a colour measured as a foreground ` +
+            `does not cover it, because the two sit against different things.`,
+        ).toBe(true);
+        continue;
+      }
+
+      // Foreground: presence is not enough (K2). The pairing that measures
+      // this (literal, alpha) has to have checked it at or above the
+      // threshold *this usage's namespace* needs, not merely some threshold.
+      const verified = FOREGROUND_VERIFIED_THRESHOLD.get(usageKey) ?? -Infinity;
+      const required = expectedThresholdFor(usage);
       expect(
-        measured[usage.role].has(usageKey),
-        `${usage.file} uses "${usage.utility}", but no pairing in PAIRINGS ` +
-          `measures ${usage.property} at ${usage.alphaPercent}% alpha as a ` +
-          `${usage.role}. Add that pairing - a colour measured as a ${
-            usage.role === "background" ? "foreground" : "background"
-          } does not cover it, because the two are held to different thresholds ` +
-          `and sit against different things.`,
+        verified >= required,
+        `${usage.file} uses "${usage.utility}", but no pairing in PAIRINGS measures ` +
+          `${usage.property} at ${usage.alphaPercent}% alpha as a foreground at or ` +
+          `above the ${required}:1 this usage's namespace needs. ` +
+          (verified === -Infinity
+            ? "It is not measured as a foreground at that alpha at all."
+            : `The strongest pairing that measures it there is only checked at ` +
+              `${verified}:1 - a different token that happens to share this ` +
+              `literal is not proof this one clears the bar.`) +
+          " Add a pairing for it.",
       ).toBe(true);
     }
+  });
+
+  /**
+   * K2 (ugcportal-j4j finding 2), reproduced directly: --ring and --primary
+   * resolve to the same literal, and the focus-ring pairing measures
+   * --ring/80 only at ui's 3:1. A hypothetical text-primary/80 - link text
+   * turned translucent, needing body's 4.5:1 - must not read as covered by
+   * that measurement just because the literal and alpha match.
+   */
+  it("does not let a UI-boundary pairing cover a text usage of the same literal and alpha", () => {
+    expect(resolveToken("--ring", tokens)).toBe(resolveToken("--primary", tokens));
+
+    const ringKey = tokenAlphaKey(`--ring/${RING_ALPHA_MODIFIER}`);
+    expect(FOREGROUND_VERIFIED_THRESHOLD.get(ringKey)).toBe(THRESHOLDS.ui);
+
+    const hypotheticalTextUsage: AlphaUtilityUsage = {
+      file: "synthetic (not shipped)",
+      utility: `text-primary/${RING_ALPHA_MODIFIER}`,
+      property: "--color-primary",
+      alphaPercent: RING_ALPHA_MODIFIER,
+      role: "foreground",
+      prefix: "text",
+    };
+    const usageKey = `${resolveToken(hypotheticalTextUsage.property, tokens)}@${hypotheticalTextUsage.alphaPercent}`;
+    expect(usageKey, "same literal, same alpha - the collision K2 closes").toBe(
+      ringKey,
+    );
+
+    const verified = FOREGROUND_VERIFIED_THRESHOLD.get(usageKey) ?? -Infinity;
+    expect(verified).toBeLessThan(expectedThresholdFor(hypotheticalTextUsage));
   });
 
   /**
