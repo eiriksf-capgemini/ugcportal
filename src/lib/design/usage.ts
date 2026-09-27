@@ -34,9 +34,10 @@
  *
  * So rather than patch those two and stop, here is the syntax space this
  * module claims to cover, as two independent axes - which axis a given
- * utility sits on is checked against Tailwind 4.3.3 (the version vendored in
- * this repo; see `.tw-check` notes in the ugcportal-j4j PR description for how
- * each row was compiled and confirmed) rather than assumed:
+ * utility sits on was checked by actually compiling a candidate for it
+ * against Tailwind 4.3.3 (the version vendored in this repo) with
+ * `@tailwindcss/postcss` and inspecting the output, not assumed from reading
+ * the docs (see the ugcportal-j4j PR description for the compiled examples):
  *
  * Namespace (which CSS custom property it targets), one of:
  *   - a bare namespace: `bg`, `text`, `border`, `ring`, `inset-ring`,
@@ -81,8 +82,11 @@
  *
  * Every (namespace x name-form x alpha-form) cell either resolves to a
  * (token, alpha) pair, is excluded by name with a stated reason, or throws
- * with advice. usage.test.ts asserts each cell directly rather than trusting
- * this list to stay in sync with the code on its own.
+ * with advice - never silently drops the utility. usage.test.ts pins a
+ * representative case of every row of this matrix (not the full cross
+ * product, which multiplies out to hundreds of cases for no more coverage of
+ * the *logic*), so a change that stops handling one is a red test, not a
+ * quiet regression.
  */
 
 import { readdirSync, readFileSync, statSync } from "node:fs";

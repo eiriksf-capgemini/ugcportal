@@ -155,7 +155,7 @@ function resolvePaddingCascade(
           if (
             !existing ||
             specificityCompare > 0 ||
-            (specificityCompare === 0 && currentOrder > existing.order)
+            (specificityCompare === 0 && currentOrder >= existing.order)
           ) {
             winners[key] = { value, specificity, order: currentOrder };
           }
