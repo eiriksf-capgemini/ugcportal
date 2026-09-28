@@ -11,10 +11,17 @@ import { galleryItemAlt, type GalleryItem } from "@/lib/gallery-items";
  * lifetime bug that no assertion in the suite could reach, because nothing
  * opened the viewer at all. See lightbox.test.ts.
  *
- * The import of `photoswipe/lightbox` below is a `import type`, and the real
- * one inside `openGalleryViewer` is dynamic, so neither the library nor its
- * stylesheet is in the initial bundle. A visitor who never opens a photograph
- * never downloads the viewer.
+ * The import of `photoswipe/lightbox` below is an `import type`, and the real
+ * one inside `openGalleryViewer` is dynamic, so the library's JAVASCRIPT is
+ * not in the initial bundle: a visitor who never opens a photograph never
+ * downloads the viewer's code.
+ *
+ * Its STYLESHEET is not deferred, and this comment used to claim it was.
+ * `src/app/globals.css` does `@import "photoswipe/style.css"` unconditionally,
+ * so the viewer's CSS is part of the global stylesheet served on every route,
+ * the admin screens included. Only the JavaScript is split out. Said plainly
+ * because the wrong version of it was the sort of claim a reader sizing the
+ * initial payload would take at face value.
  */
 
 export type PixelSize = { width: number; height: number };
@@ -139,8 +146,35 @@ export function galleryLightboxOptions(
  * alternative to a bound is an `await` that can hang forever behind a spinner
  * the visitor cannot dismiss. Generous, because exceeding it is a bug report,
  * not a slow network: by this point every module is already loaded.
+ *
+ * NOT the bound that matters most, and for two rounds it was the only one
+ * there. The genuinely I/O-bound wait in this feature is the measurement —
+ * see MEASURE_TIMEOUT_MS — and a bound on the step whose own comment says
+ * nothing observed can hang on it, next to an unbounded network round trip,
+ * is a bound in the wrong place.
  */
 const OPEN_TIMEOUT_MS = 10_000;
+
+/**
+ * How long ONE preview's measurement may take before it is given up on.
+ *
+ * This is the bound on the step that can actually hang. A STALLED preview
+ * request — connection accepted, bytes never delivered, no reset — fires
+ * neither `onload` nor `onerror`, so `measureImage`'s promise never settles.
+ * Unbounded, that pended `ensureSizes` forever and took the whole activation
+ * with it: `openLightbox` never reached `openGalleryViewer`, so nothing
+ * opened, nothing rejected, `activate`'s `.catch` never ran, `viewerFailed`
+ * stayed false and there was no busy state either. The click produced NOTHING
+ * AT ALL, which is the one outcome a visitor cannot interpret or act on.
+ *
+ * Shorter than OPEN_TIMEOUT_MS on purpose. That one bounds a step where every
+ * module is already loaded; this one bounds a real network round trip through
+ * a route that proxies every byte through the Node process (ugcportal-a2l),
+ * with the visitor looking at a grid that has not answered their click yet.
+ * Four seconds is long enough that an ordinary slow response still arrives and
+ * short enough that a stall does not read as a dead page.
+ */
+const MEASURE_TIMEOUT_MS = 4_000;
 
 /** Whether a PhotoSwipe viewer is on screen right now. */
 export function isViewerOpen(): boolean {
@@ -267,14 +301,34 @@ export async function openGalleryViewer(
  * with no way back but a reload. A failure is a fact about one moment, not
  * about the image; the next activation asks again.
  *
- * KNOWN GAP (ugcportal-8dn): this waits for EVERY item, not just the one being
- * opened, so the lightbox does not open until the slowest preview in the list
- * has arrived. Adding `loading="lazy"` to the tiles widened that gap rather
- * than narrowing it, and the trade is deliberate: a tile below the fold is now
- * never requested until it is scrolled to, so its size is a real network round
- * trip here rather than a cache hit. Paying it on the rare activation is worth
- * not firing fifty proxied requests at first paint — but it is the reason 8dn
- * is worth doing, not a reason to have left the tiles eager.
+ * EVERY MEASUREMENT IS BOUNDED, and the bound is PER ITEM rather than over the
+ * whole list. That matters twice. A stall no longer pends this function
+ * forever (see MEASURE_TIMEOUT_MS for what that cost the visitor), and because
+ * the items are measured concurrently and each carries its own deadline, one
+ * stalled preview costs a single MEASURE_TIMEOUT_MS no matter how many others
+ * are in the list, and does not stop the healthy ones reporting their real
+ * sizes. A bound over the aggregate would have let one slow item downgrade
+ * every slide in the gallery to the fallback.
+ *
+ * A TIMED-OUT MEASUREMENT FALLS BACK RATHER THAN FAILING THE OPEN. That is a
+ * choice, and not the obvious one, so: PhotoSwipe needs *a* width and height
+ * or it will not load the slide at all, but it does not need the RIGHT ones —
+ * a wrong ratio costs a distorted frame and a worse zoom transition on that
+ * one slide. Failing would instead cost the visitor the photograph they
+ * actually asked for, because some other thumbnail in the list was slow. And
+ * the wrong ratio is temporary, since the fallback is not cached (below): the
+ * next activation measures again and gets it right. A refused open is the
+ * visitor's whole answer; a squashed slide is a bad frame that heals itself.
+ *
+ * KNOWN GAP (ugcportal-8dn): this still measures EVERY item, not just the one
+ * being opened, so an activation waits on previews nobody is looking at.
+ * Adding `loading="lazy"` to the tiles widened that gap rather than narrowing
+ * it, and the trade is deliberate: a tile below the fold is now never
+ * requested until it is scrolled to, so its size is a real network round trip
+ * here rather than a cache hit. Paying it on the rare activation is worth not
+ * firing fifty proxied requests at first paint — but it is the reason 8dn is
+ * worth doing, not a reason to have left the tiles eager. The bound above caps
+ * what that gap can cost; it does not close it.
  */
 export async function ensureSizes(
   items: GalleryItem[],
@@ -284,20 +338,69 @@ export async function ensureSizes(
    * `measureImage` below decodes a real image, which no headless environment
    * does, so the CACHING POLICY — the part with a bug in it — would otherwise
    * be untestable and was. The default is the real thing, so production has no
-   * seam; the tests supply a measurer that can fail on demand.
+   * seam; the tests supply a measurer that can fail or stall on demand.
    */
   measure: (src: string) => Promise<PixelSize | null> = measureImage,
+  /*
+   * The per-item deadline. Injectable so a test can prove the bound exists
+   * without spending the real four seconds to do it — the default is the one
+   * production uses.
+   */
+  timeoutMs: number = MEASURE_TIMEOUT_MS,
 ): Promise<PixelSize[]> {
   return Promise.all(
     items.map(async (item) => {
       const known = cache.get(item.previewSrc);
       if (known !== undefined) return known;
-      const measurement = await measure(item.previewSrc);
+      const measurement = await measureWithin(
+        () => measure(item.previewSrc),
+        timeoutMs,
+      );
+      // Covers both "the browser could not read a size" and "the request never
+      // answered", deliberately on the same path: neither is a fact about the
+      // image, so neither is cached and the next activation asks again.
       if (measurement === null) return UNKNOWN_PREVIEW_SIZE;
       cache.set(item.previewSrc, measurement);
       return measurement;
     }),
   );
+}
+
+/**
+ * `measure()`, resolving null rather than waiting forever.
+ *
+ * The timeout resolves NULL — the same value the measurer itself uses for "no
+ * size could be read" — so a stall lands on the fallback path `ensureSizes`
+ * already has, instead of needing a second one.
+ *
+ * A REJECTION IS STILL PROPAGATED rather than folded into that null. This
+ * bounds the WAIT and changes nothing about what counts as a failure: a
+ * measurer that throws is a bug in the measurer, and turning every such bug
+ * into a silently squashed slide is how it would go unnoticed. `measureImage`
+ * does not throw, so in production only the timeout arm is reachable.
+ *
+ * The abandoned promise is not cancellable — there is no abort signal on an
+ * `<img>` load — so a stalled measurement keeps its own closure alive until
+ * the browser gives up on the request. One dead closure per stalled preview,
+ * for the lifetime of a page view, is the price of not hanging the viewer.
+ */
+function measureWithin(
+  measure: () => Promise<PixelSize | null>,
+  timeoutMs: number,
+): Promise<PixelSize | null> {
+  return new Promise<PixelSize | null>((resolve, reject) => {
+    const timer = setTimeout(() => resolve(null), timeoutMs);
+    measure().then(
+      (size) => {
+        clearTimeout(timer);
+        resolve(size);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      },
+    );
+  });
 }
 
 /** The image's intrinsic size, or null if the browser could not read one. */

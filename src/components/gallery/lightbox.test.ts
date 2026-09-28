@@ -422,6 +422,124 @@ describe("ensureSizes", () => {
     }
   });
 
+  /*
+   * The round-4 finding: the only bound in this module was on `afterInit`, the
+   * step whose own comment says nothing observed can hang on it, while the
+   * genuinely I/O-bound wait right here had none.
+   *
+   * A STALL is the case, and it is not the same as an error. A preview request
+   * that is accepted and then never answered fires neither `onload` nor
+   * `onerror`, so `measureImage` never settles — `ensureSizes` pended forever,
+   * `openLightbox` never reached `openGalleryViewer`, nothing rejected,
+   * `activate`'s `.catch` never ran, and the click produced no viewer, no error
+   * and no busy state. The fixture below is therefore a promise that never
+   * settles, NOT one that resolves null: a measurer that failed cleanly took
+   * the already-covered path and could not have caught this.
+   */
+  describe("when a measurement stalls", () => {
+    /** A measurement that is accepted and never answered. */
+    const stalls = () => new Promise<PixelSize | null>(() => {});
+
+    it("gives up and falls back instead of pending forever", async () => {
+      const cache = new Map<string, PixelSize>();
+
+      const sizes = await ensureSizes(ITEMS, cache, stalls, 20);
+
+      expect(sizes).toEqual(ITEMS.map(() => UNKNOWN_PREVIEW_SIZE));
+    });
+
+    it("lets the healthy previews report their real sizes anyway", async () => {
+      // One stalled item used to wedge the whole activation. It must now cost
+      // that item its exact dimensions and nothing else.
+      const cache = new Map<string, PixelSize>();
+      const measure = (url: string) =>
+        url === src(ITEMS[0]) ? stalls() : Promise.resolve({ width: url.length, height: 100 });
+
+      const sizes = await ensureSizes(ITEMS, cache, measure, 20);
+
+      expect(sizes[0]).toEqual(UNKNOWN_PREVIEW_SIZE);
+      // Their own lengths, which differ from each other and from 1280 — so
+      // these assertions fail if either slide were handed the fallback.
+      expect(sizes[1]).toEqual({ width: src(ITEMS[1]).length, height: 100 });
+      expect(sizes[2]).toEqual({ width: src(ITEMS[2]).length, height: 100 });
+    });
+
+    it("does not cache the fallback, so the next activation asks again", async () => {
+      // Same reasoning as a failed measurement: a stall is a fact about one
+      // moment, not about the image. Caching 1280x1280 for it would pin that
+      // slide to a square for the rest of the session.
+      const cache = new Map<string, PixelSize>();
+      let attempts = 0;
+      const stallsOnce = () => {
+        attempts += 1;
+        return attempts === 1 ? stalls() : Promise.resolve({ width: 1600, height: 900 });
+      };
+
+      const first = await ensureSizes([ITEMS[0]], cache, stallsOnce, 20);
+      expect(first[0]).toEqual(UNKNOWN_PREVIEW_SIZE);
+      expect(cache.has(src(ITEMS[0]))).toBe(false);
+
+      const second = await ensureSizes([ITEMS[0]], cache, stallsOnce, 20);
+      expect(second[0]).toEqual({ width: 1600, height: 900 });
+      expect(cache.get(src(ITEMS[0]))).toEqual({ width: 1600, height: 900 });
+    });
+
+    it("costs one deadline for the whole list, not one per item", async () => {
+      /*
+       * The bound is per item, and the items are measured concurrently — so
+       * every measurement is already in flight before the first deadline
+       * expires. A bound applied serially, or one item at a time, would make
+       * a stalled gallery take N deadlines to answer a click.
+       *
+       * Asserted through the peak number of in-flight measurements rather than
+       * through elapsed time, which would be a flaky way to say the same
+       * thing.
+       */
+      let inFlight = 0;
+      let peak = 0;
+      const countingStall = () => {
+        inFlight += 1;
+        peak = Math.max(peak, inFlight);
+        return stalls();
+      };
+
+      await ensureSizes(ITEMS, new Map(), countingStall, 20);
+
+      expect(peak).toBe(ITEMS.length);
+    });
+
+    it("still waits for a slow measurement that does arrive", async () => {
+      /*
+       * Guards the bound against being the new bug. One set tight enough to
+       * discard real measurements would pass every assertion above and turn
+       * every photograph in the gallery into a 1280x1280 square — the exact
+       * distortion UNKNOWN_PREVIEW_SIZE's comment says a guess causes.
+       */
+      const slow = async () => {
+        await new Promise((resolve) => setTimeout(resolve, 15));
+        return { width: 1600, height: 900 };
+      };
+
+      const sizes = await ensureSizes([ITEMS[0]], new Map(), slow, 500);
+
+      expect(sizes[0]).toEqual({ width: 1600, height: 900 });
+    });
+
+    it("still lets a thrown error through rather than calling it a fallback", async () => {
+      // The bound is on the WAIT only. Folding rejections into the fallback as
+      // well would be the cheaper implementation and would hide a broken
+      // measurer behind a silently squashed slide for the rest of the session.
+      await expect(
+        ensureSizes(
+          [ITEMS[0]],
+          new Map(),
+          () => Promise.reject(new Error("measurer is broken")),
+          500,
+        ),
+      ).rejects.toThrow("measurer is broken");
+    });
+  });
+
   it("keeps sizes aligned with the items that asked for them", async () => {
     // Positional, so a reordering bug would hand slide 2 slide 1's shape.
     const sizes = await ensureSizes(ITEMS, new Map(), async (url) => ({
