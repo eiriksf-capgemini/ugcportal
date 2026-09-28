@@ -166,6 +166,41 @@ describe("K2 — the owner may set the tags on their own media", () => {
     expect(tag?.name).toBe("Ceramics");
   });
 
+  it("keeps two different non-Latin names as two different subjects", async () => {
+    /*
+     * The round-2 finding, end to end rather than at the slug function.
+     *
+     * `tagSlug` used to strip combining marks, so कफी and कफ both slugged to
+     * कफ. `resolveTagRows` upserts on the slug with `update: {}`, so the
+     * SECOND uploader's item would render the FIRST uploader's spelling —
+     * a chip saying something they never typed. That is the harm; distinct
+     * slugs are only the mechanism.
+     *
+     * Spelled from code points, because the two names differ by one mark
+     * and are indistinguishable in a diff.
+     */
+    const KAPH = String.fromCodePoint(0x915, 0x92b);
+    const KAPHI = KAPH + String.fromCodePoint(0x940);
+
+    await PUT(request({ tags: [KAPHI] }), context());
+    await seedMedia("media-2");
+    await PUT(request({ tags: [KAPH] }, "media-2"), context("media-2"));
+
+    // Two rows, not one.
+    expect(await prisma.tag.count()).toBe(2);
+    // And each item shows the name its own uploader chose.
+    const first = await prisma.media.findUnique({
+      where: { id: MEDIA_ID },
+      select: { tags: { select: { name: true } } },
+    });
+    const second = await prisma.media.findUnique({
+      where: { id: "media-2" },
+      select: { tags: { select: { name: true } } },
+    });
+    expect(first?.tags.map((tag) => tag.name)).toEqual([KAPHI]);
+    expect(second?.tags.map((tag) => tag.name)).toEqual([KAPH]);
+  });
+
   it("never returns the original's storage key or the uploader's id", async () => {
     const response = await PUT(request({ tags: ["Food"] }), context());
     const body = (await response.json()) as Record<string, unknown>;

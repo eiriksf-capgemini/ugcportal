@@ -61,17 +61,58 @@ export type TagListValidation =
   | { ok: false; message: string };
 
 /**
- * Everything that is neither a letter nor a digit, in any script.
+ * Everything that is not a letter, a digit, or a COMBINING MARK, in any
+ * script.
  *
- * `\p{L}` rather than `a-z` is what keeps this usable outside English:
- * "Bøker" slugs to "bøker", where an ASCII-only slugger would produce
- * "b-ker" and quietly merge it with anything else that lost a middle
- * character. The cost is that a slug is not guaranteed URL-safe — which is
- * fine, because nothing puts one in a URL (K4), and `mediaPreviewPath` in
- * src/lib/routes.ts is the only path builder that takes a value off a row at
- * all.
+ * `\p{L}` rather than `a-z` is what gets this out of English: "Bøker" slugs
+ * to "bøker", where an ASCII-only slugger produces "b-ker" and quietly
+ * merges it with anything else that lost a middle character.
+ *
+ * `\p{M}` IS THE OTHER HALF, and leaving it out was a real bug rather than a
+ * tidy simplification. Latin gets away with it because NFC composes its
+ * accents into single code points — "Café" survives either way — but a
+ * script whose vowels, tones or niqqud are separate code points does not,
+ * and the failure is not a cosmetic one:
+ *
+ *   कफी -> कफ   and   कफ -> कफ      two different names, one row
+ *   ข้าว -> ข-าว                      a word cut in half by a hyphen
+ *   עִבְרִית -> ע-ב-ר-ית                 likewise, once per niqqud
+ *   İstanbul -> i-stanbul            toLowerCase() decomposes U+0130
+ *
+ * The first line is the one with teeth. `resolveTagRows` upserts on the
+ * shared slug with `update: {}`, so the second uploader's photograph would
+ * render the FIRST uploader's spelling — the exact failure the "Food"/"food"
+ * unification exists to prevent, arriving for names that are genuinely
+ * different. That is a collision, not a deliberate collapse like
+ * "Wine & drink" and "Wine, drink".
+ *
+ * What this function does NOT promise, said plainly because the sentence
+ * that used to be here promised more than it delivered: it normalises
+ * SPELLING, not meaning and not orthography. A name with niqqud and the same
+ * name without are two subjects, because they are two strings; "İstanbul"
+ * slugs to an i with a combining dot rather than to "istanbul", because
+ * dotted-vs-dotless i is a locale question this has no locale to answer
+ * with. Both are honest outcomes. Mangling was not.
+ *
+ * A slug is not guaranteed URL-safe, which is fine: nothing puts one in a
+ * URL (K4), and `mediaPreviewPath` in src/lib/routes.ts is the only path
+ * builder that takes a value off a row at all.
  */
-const NON_ALPHANUMERIC = /[^\p{L}\p{N}]+/gu;
+const NON_ALPHANUMERIC = /[^\p{L}\p{N}\p{M}]+/gu;
+
+/**
+ * At least one real character, as opposed to marks that have nothing to
+ * attach to.
+ *
+ * Needed BECAUSE of the `\p{M}` above, and this is the case that fix opened:
+ * a name made entirely of combining marks used to strip to the empty string
+ * and be refused by the emptiness check below. Keeping marks makes its slug
+ * non-empty, so the check stopped firing and a chip that renders as a row of
+ * dotted circles became storable. The requirement the error message states —
+ * "at least one letter or number" — is now asserted rather than inferred
+ * from a side effect of the strip.
+ */
+const HAS_ALPHANUMERIC = /[\p{L}\p{N}]/u;
 
 /**
  * The identity key for a tag name: case-folded, with runs of punctuation and
@@ -82,9 +123,10 @@ const NON_ALPHANUMERIC = /[^\p{L}\p{N}]+/gu;
  * What it does guarantee is that "Food" and "food" are the same row, which
  * SQLite's case-sensitive unique index would not give on `name` alone.
  *
- * Returns the empty string for a name with no letters or digits in it at all;
- * `validateTagName` treats that as a refusal rather than storing a tag whose
- * identity is "".
+ * Returns the empty string for a name with nothing but punctuation in it;
+ * `validateTagName` refuses that, and separately refuses a slug made only of
+ * combining marks, rather than storing a tag whose identity is "" or is
+ * unrenderable.
  */
 export function tagSlug(name: string): string {
   return name
@@ -136,7 +178,11 @@ export function validateTagName(value: unknown): TagNameValidation {
   }
 
   const slug = tagSlug(name);
-  if (slug === "") {
+  // One condition, not two. `slug === ""` reads like it covers the
+  // punctuation-only case separately, and cannot: the empty string contains
+  // no letter or digit either, so the predicate already decides it and the
+  // extra clause can never be the one that fires.
+  if (!HAS_ALPHANUMERIC.test(slug)) {
     return {
       ok: false,
       message: "A tag must contain at least one letter or number",
@@ -271,6 +317,35 @@ export const MAX_PICKER_TAGS = 24;
  * by a proof. Anyone with direct database access can write any `createdAt`
  * they like, and this does not stop them — it stops the writers that are
  * actually reachable, which is every one an account on the internet has.
+ *
+ * AND THE ORDERING IS TEXT, NOT TIME, which took a live query to establish
+ * rather than an argument. SQLite has no date type, so `createdAt` is a TEXT
+ * column holding TWO DIFFERENT FORMATS at once. Read straight out of a
+ * database built from these migrations, with `quote()` so the driver could
+ * not tidy them on the way past:
+ *
+ *   books        '2026-09-28 10:34:39'              <- DEFAULT CURRENT_TIMESTAMP
+ *   food         '2026-09-28 10:34:39'
+ *   technology   '2026-09-28 10:34:39'
+ *   wine-drink   '2026-09-28 10:34:39'
+ *   aaa-minted   '2026-09-28T10:34:39.023+00:00'    <- Prisma via libSQL
+ *
+ * `ORDER BY` compares those bytewise, and that run is the awkward case
+ * rather than a lucky one: the minted row was written in the SAME SECOND as
+ * the seeds, so the date decides nothing. It still sorted last. The two
+ * shapes agree up to the tenth character, where the seed has a SPACE and
+ * Prisma has a `T`, and 0x20 < 0x54.
+ *
+ * So the invariant holds, by an accident of ASCII rather than by the
+ * argument above it. Recorded because it is load-bearing and because nobody
+ * would guess it: the expectation going in was that two formats in one
+ * ordering column would invert the sort.
+ *
+ * Anything that changes either format — a migration writing an ISO literal,
+ * a driver that stops emitting the `T`, a move off SQLite — has to re-check
+ * this rather than trust the tests, which pass for rows created in either
+ * format and would keep passing if the tie broke the other way on a date
+ * they do not share.
  *
  * Presentation order is decided by the caller — oldest-first is a security
  * property, not a sensible way to read a list.

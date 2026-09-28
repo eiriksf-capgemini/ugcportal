@@ -86,6 +86,90 @@ describe("tagSlug", () => {
     expect(tagSlug("---")).toBe("");
     expect(tagSlug("!!!")).toBe("");
   });
+
+  /**
+   * Combining marks (round-2 review finding).
+   *
+   * The regex used to keep only `\p{L}` and `\p{N}`, which treats every
+   * combining mark as punctuation. Latin hides that, because NFC composes
+   * its accents into single code points — so a suite built from "Bøker" and
+   * "Café" passed while the function mangled every script whose vowels,
+   * tones or niqqud are separate code points. The fixtures below are chosen
+   * to be the ones that can fail.
+   */
+  describe("scripts whose marks are separate code points", () => {
+    /*
+     * Spelled from code points rather than pasted, for the same reason the
+     * bidi override is: a reader cannot tell "\u0915\u092b\u0940" from
+     * "\u0915\u092b" by looking, and the whole point of these cases is
+     * that the difference is one invisible-ish mark.
+     */
+    /** कफ — Devanagari KA + PHA. */
+    const KAPH = String.fromCodePoint(0x915, 0x92b);
+    /** कफी — the same, plus the vowel sign II (U+0940, category Mc). */
+    const KAPHI = KAPH + String.fromCodePoint(0x940);
+    /** ขาว — Thai, no tone mark. */
+    const KHAO_PLAIN = String.fromCodePoint(0xe02, 0xe32, 0xe27);
+    /** ข้าว — the same with MAI THO (U+0E49, category Mn). */
+    const KHAO_TONE =
+      String.fromCodePoint(0xe02, 0xe49) + String.fromCodePoint(0xe32, 0xe27);
+    /** עברית — Hebrew, unpointed. */
+    const HEBREW = String.fromCodePoint(0x5e2, 0x5d1, 0x5e8, 0x5d9, 0x5ea);
+
+    it("does not collide two different names onto one tag", () => {
+      /*
+       * THE ONE WITH TEETH. `resolveTagRows` upserts on the slug with
+       * `update: {}`, so a collision means the second uploader's photograph
+       * renders the FIRST uploader's spelling — the failure the
+       * "Food"/"food" unification exists to prevent, arriving for names
+       * that are genuinely different.
+       *
+       * Put `\p{M}` back into NON_ALPHANUMERIC and this fails: both sides
+       * become "कफ".
+       */
+      expect(tagSlug(KAPHI)).not.toBe(tagSlug(KAPH));
+      expect(tagSlug(KHAO_TONE)).not.toBe(tagSlug(KHAO_PLAIN));
+    });
+
+    it("keeps the marks rather than cutting the word into pieces", () => {
+      // Not merely "different": the slug has to be a faithful lowercase of
+      // the name. `not.toBe` above would also pass for "ข-าว", which is the
+      // old, mangled output.
+      expect(tagSlug(KAPHI)).toBe(KAPHI);
+      expect(tagSlug(KHAO_TONE)).toBe(KHAO_TONE);
+      expect(tagSlug(HEBREW)).toBe(HEBREW);
+      // And no hyphen was inserted anywhere a mark used to be.
+      for (const slug of [tagSlug(KAPHI), tagSlug(KHAO_TONE)]) {
+        expect(slug).not.toContain("-");
+      }
+    });
+
+    it("does not cut a name apart at a mark case-folding introduced", () => {
+      /*
+       * `"İ".toLowerCase()` is "i" followed by COMBINING DOT ABOVE, so the
+       * mark appears during lowercasing rather than in the input. Stripping
+       * marks turned this into "i-stanbul".
+       *
+       * What it slugs to is NOT "istanbul", and that is deliberate rather
+       * than a remaining bug: dotted-vs-dotless i is a locale question, and
+       * this function has no locale. Asserted as a distinct value from the
+       * plain spelling so the choice is recorded rather than assumed.
+       */
+      const turkish = tagSlug("\u0130stanbul");
+
+      expect(turkish).not.toContain("-");
+      expect(turkish.startsWith("i")).toBe(true);
+      expect(turkish).not.toBe(tagSlug("Istanbul"));
+    });
+
+    it("still collapses punctuation, which is the whole job", () => {
+      // Guards the fix from over-reaching: keeping marks must not have
+      // turned the strip off.
+      expect(tagSlug("Wine & drink")).toBe("wine-drink");
+      expect(tagSlug("Café")).toBe("café");
+      expect(tagSlug("Bøker")).toBe("bøker");
+    });
+  });
 });
 
 describe("validateTagName", () => {
@@ -193,6 +277,37 @@ describe("validateTagName", () => {
     const result = validateTagName("!!!");
     expect(result.ok).toBe(false);
     expect(result.ok === false && result.message).toContain("letter or number");
+  });
+
+  it("refuses a name that is only combining marks", () => {
+    /*
+     * THE CASE THE ROUND-2 FIX OPENED, and the reason the emptiness check
+     * is no longer the whole of the rule.
+     *
+     * Before combining marks were kept, this slugged to "" and the check
+     * below caught it. Keeping them makes the slug non-empty, so a name
+     * that renders as a row of dotted circles — nothing to attach to —
+     * became storable. The message always claimed "at least one letter or
+     * number"; now the code asserts it.
+     *
+     * COMBINING ACUTE and COMBINING CIRCUMFLEX, with no base character.
+     */
+    const marksOnly = String.fromCodePoint(0x301, 0x302);
+
+    // The fixture really is what the test says it is: non-empty, and made
+    // of characters the strip now keeps.
+    expect(tagSlug(marksOnly)).not.toBe("");
+
+    const result = validateTagName(marksOnly);
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.message).toContain("letter or number");
+  });
+
+  it("still accepts a name whose marks sit on a real letter", () => {
+    // The other side of it: the refusal above must not catch ordinary
+    // pointed or toned text.
+    const devanagari = String.fromCodePoint(0x915, 0x92b, 0x940);
+    expect(validateTagName(devanagari).ok).toBe(true);
   });
 });
 
