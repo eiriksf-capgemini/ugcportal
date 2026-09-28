@@ -435,11 +435,15 @@ describe("a changed provider address is recoverable from configuration", () => {
 });
 
 describe("isPermittedSignIn", () => {
-  it("answers with a boolean, never undefined", () => {
+  it("answers with a boolean, and a different one for each case", () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
 
-    // A callback that returns undefined ALLOWS the sign-in in Auth.js, which
-    // is how the defect worked. Both answers are asserted to be booleans.
+    // `toBe(true)`/`toBe(false)` rather than truthiness, for the reason
+    // src/lib/auth.test.ts states at greater length: @auth/core's
+    // handleAuthorized treats every falsy answer as a refusal but reads a
+    // STRING as a redirect URL, so a boolean is the only answer with exactly
+    // one meaning. (The defect was not a callback returning the wrong thing
+    // — there was no callback, and @auth/core's default returns `true`.)
     expect(isPermittedSignIn({ user: { email: LISTED } }, env())).toBe(true);
     expect(
       isPermittedSignIn({ user: { email: "stranger@example.com" } }, env()),
