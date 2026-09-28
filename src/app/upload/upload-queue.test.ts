@@ -9,6 +9,7 @@ import {
   pendingItems,
   queueSummary,
   releasedFileId,
+  settledChange,
   toQueueMedia,
   uploadQueueReducer,
   type QueueItem,
