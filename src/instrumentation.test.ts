@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { checkEvidenceEncryption } from "@/instrumentation";
+import {
+  checkEvidenceEncryption,
+  checkSignInConfiguration,
+} from "@/instrumentation";
+import { PERMITTED_EMAILS_VAR } from "@/lib/sign-in-policy";
 
 const PROD = { NODE_ENV: "production" } as NodeJS.ProcessEnv;
 
@@ -46,5 +50,70 @@ describe("the evidence-encryption startup check", () => {
     // to ignore it.
     expect(checkEvidenceEncryption({ NODE_ENV: "development" })).toBeNull();
     expect(checkEvidenceEncryption({ NODE_ENV: "test" })).toBeNull();
+  });
+});
+
+/**
+ * ugcportal-egp: sign-in is refused by default, which is the correct default
+ * and the wrong thing to be quiet about. Both configuration states that
+ * permit nobody are announced before the first request.
+ */
+describe("the sign-in configuration startup check", () => {
+  it("says loudly that nobody can sign in when nothing is configured", () => {
+    const warning = checkSignInConfiguration({ NODE_ENV: "production" });
+
+    expect(warning).toContain("NOBODY can sign in");
+    expect(warning).toContain(PERMITTED_EMAILS_VAR);
+    expect(warning).toContain("docs/access-control.md");
+  });
+
+  it("is quiet once an address is permitted", () => {
+    // The needle-can-be-absent control for every case in this block.
+    expect(
+      checkSignInConfiguration({
+        [PERMITTED_EMAILS_VAR]: "owner@example.com",
+      }),
+    ).toBeNull();
+  });
+
+  it("is quiet when only the bootstrap variable is set", () => {
+    // A fresh deployment following env.example's ugcportal-lu7 instructions
+    // is configured, not broken.
+    expect(
+      checkSignInConfiguration({ ADMIN_BOOTSTRAP_EMAILS: "admin@example.com" }),
+    ).toBeNull();
+  });
+
+  it("names an entry it cannot use rather than silently permitting nobody", () => {
+    // The more dangerous of the two quiet states: `*@example.com` reads like
+    // it works, and would otherwise look configured while permitting nobody.
+    const warning = checkSignInConfiguration({
+      [PERMITTED_EMAILS_VAR]: "*@example.com",
+    });
+
+    expect(warning).toContain("*@example.com");
+    expect(warning).toContain("wildcards and domain patterns are not supported");
+    expect(warning).toContain("NOBODY can sign in");
+  });
+
+  it("reports a partly-usable list without claiming nobody can sign in", () => {
+    // The claim has to match the situation: one bad entry alongside a good
+    // one is worth reporting, but "NOBODY can sign in" would be false.
+    const warning = checkSignInConfiguration({
+      [PERMITTED_EMAILS_VAR]: "nobody, owner@example.com",
+    });
+
+    expect(warning).toContain("nobody");
+    expect(warning).not.toContain("NOBODY can sign in");
+    expect(warning).toContain("1 address(es) remain permitted");
+  });
+
+  it("warns outside production too", () => {
+    // Unlike the encryption check above: a fresh local checkout is exactly
+    // where this is hit first, and env.example ships the variable empty.
+    expect(checkSignInConfiguration({ NODE_ENV: "development" })).toContain(
+      "NOBODY can sign in",
+    );
+    expect(checkSignInConfiguration({})).toContain("NOBODY can sign in");
   });
 });

@@ -1,24 +1,19 @@
 import { prisma } from "@/lib/prisma";
 import { setUserRole } from "@/lib/roles";
+import { bootstrapAdminEmails } from "@/lib/sign-in-policy";
 
 /**
- * Emails listed in ADMIN_BOOTSTRAP_EMAILS, normalised for comparison.
+ * Re-exported, not defined here, since ugcportal-egp.
  *
- * Matching on the email rather than a user id is what makes this usable on a
- * fresh deployment: the operator has no id to name until someone has signed
- * in, and by then they'd need a way to look it up. The cost is that this
- * trusts the email the OAuth provider asserts — fine for Google and Facebook,
- * which verify it, but it means an address that can be registered at a
- * provider by someone else should never be listed here.
+ * The list moved to src/lib/sign-in-policy.ts because the permitted-sign-in
+ * set unions it in, and that module must not import this one: this one
+ * imports Prisma, and src/instrumentation.ts reads the sign-in configuration
+ * at boot — including in the Edge instrumentation bundle, where the Prisma
+ * client cannot be loaded at all. One definition rather than a second parser
+ * for the same variable, because the two lists agreeing is what makes the
+ * bootstrap a subset of the permitted set rather than a way around it.
  */
-export function bootstrapAdminEmails(
-  raw: string | undefined = process.env.ADMIN_BOOTSTRAP_EMAILS,
-): string[] {
-  return (raw ?? "")
-    .split(",")
-    .map((email) => email.trim().toLowerCase())
-    .filter((email) => email.length > 0);
-}
+export { bootstrapAdminEmails };
 
 /**
  * Promote a listed user to ADMIN at sign-in, once.

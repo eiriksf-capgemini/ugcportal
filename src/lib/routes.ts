@@ -27,6 +27,25 @@ export const PUBLIC_MEDIA_PATH = "/api/public/media";
 export const MEDIA_PREVIEW_PATH = "/api/media/preview";
 
 /**
+ * Where Auth.js sends a failed sign-in (ugcportal-egp).
+ *
+ * Wired as `pages.error` in src/lib/auth.ts, which replaces @auth/core's
+ * built-in error page for every auth error — not only the AccessDenied a
+ * refused sign-in produces. Lives here rather than being inlined so the page
+ * and the config cannot drift.
+ *
+ * THIS PATH MUST STAY OUTSIDE EVERY AUTH GATE, and that is an invariant this
+ * repo has to keep rather than one the library enforces. @auth/core never
+ * fetches the page and cannot know whether it is gated; its only related
+ * check compares the current request's `callbackUrl` QUERY PARAMETER against
+ * `pages.error` (index.js:93-96), and only on the config-error branch. Gate
+ * this page and a refused visitor gets a real loop — 302 to /auth/error, the
+ * gate sends them to sign in, the sign-in is refused, 302 to /auth/error —
+ * with nothing detecting it (PR #45 review, round 3).
+ */
+export const AUTH_ERROR_PATH = "/auth/error";
+
+/**
  * Where to send a visitor who has to sign in first.
  *
  * Auth.js mounts its own provider-picker at `/api/auth/signin`

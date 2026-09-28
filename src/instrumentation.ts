@@ -3,8 +3,13 @@
  *
  * Used here for configuration warnings that would otherwise only surface as
  * a quiet difference in how data is stored — the kind nobody discovers until
- * an audit.
+ * an audit — or, for the sign-in gate below, as an unexplained refusal.
  */
+import {
+  PERMITTED_EMAILS_VAR,
+  type SignInEnv,
+  permittedIdentities,
+} from "@/lib/sign-in-policy";
 
 /**
  * Resale-rights evidence (ugcportal-0ss) is contracts and personal data:
@@ -43,9 +48,65 @@ export function checkEvidenceEncryption(
   );
 }
 
+/**
+ * Who may sign in (ugcportal-egp).
+ *
+ * The gate in src/lib/sign-in-policy.ts is closed by default: with no
+ * configuration, every sign-in is refused. That is the correct default and
+ * the wrong thing to be quiet about — an operator who deploys without
+ * setting the variable would otherwise discover it as an unexplained "Access
+ * Denied" on their own first sign-in, with the server saying nothing until
+ * they tried. So both configuration states that permit nobody are announced
+ * before the first request:
+ *
+ *  - nothing set at all, which refuses everybody; and
+ *  - entries set but none of them usable, which also refuses everybody while
+ *    looking configured. That one is the more dangerous of the two, because
+ *    `*@example.com` reads like it works.
+ *
+ * A warning rather than a refusal to boot, for the same reason as the
+ * encryption check above: the app is useful to a signed-out visitor — the
+ * public gallery is the point — and taking the whole site offline because
+ * nobody can sign in would be a worse failure than the one it reports.
+ *
+ * Unconditional, not production-only: a fresh local checkout is exactly
+ * where someone hits this first, and env.example ships the variable empty.
+ */
+export function checkSignInConfiguration(
+  env: SignInEnv = process.env,
+): string | null {
+  const { emails, malformed, configured } = permittedIdentities(env);
+
+  if (malformed.length > 0) {
+    return (
+      `[auth] ${malformed.length} entr${malformed.length === 1 ? "y" : "ies"} ` +
+      `in ${PERMITTED_EMAILS_VAR}/ADMIN_BOOTSTRAP_EMAILS ` +
+      `cannot be used and ${malformed.length === 1 ? "was" : "were"} ignored: ` +
+      `${malformed.join(", ")}. Each entry must be one exact email address; ` +
+      "wildcards and domain patterns are not supported. " +
+      `${emails.length === 0 ? "NOBODY can sign in to this instance." : `${emails.length} address(es) remain permitted.`} ` +
+      "See docs/access-control.md."
+    );
+  }
+
+  if (!configured) {
+    return (
+      "[auth] NOBODY can sign in to this instance: neither " +
+      `${PERMITTED_EMAILS_VAR} nor ADMIN_BOOTSTRAP_EMAILS is set, and ` +
+      "sign-in is refused by default (ugcportal-egp). Set " +
+      `${PERMITTED_EMAILS_VAR} to a comma-separated list of the email ` +
+      "addresses allowed to sign in and upload. See docs/access-control.md " +
+      "and env.example."
+    );
+  }
+
+  return null;
+}
+
 export async function register(): Promise<void> {
-  const warning = checkEvidenceEncryption();
-  if (warning) {
-    console.error(warning);
+  for (const warning of [checkEvidenceEncryption(), checkSignInConfiguration()]) {
+    if (warning) {
+      console.error(warning);
+    }
   }
 }
