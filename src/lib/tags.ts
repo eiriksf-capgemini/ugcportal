@@ -1,4 +1,8 @@
-import { hasUnsafeText } from "@/lib/media-rules";
+import {
+  MAX_TAGS_PER_ITEM,
+  MAX_TAG_NAME_LENGTH,
+  hasUnsafeText,
+} from "@/lib/media-rules";
 import { prisma } from "@/lib/prisma";
 import { PRISMA_UNIQUE_VIOLATION, prismaErrorCode } from "@/lib/prisma-errors";
 
@@ -18,29 +22,32 @@ import { PRISMA_UNIQUE_VIOLATION, prismaErrorCode } from "@/lib/prisma-errors";
  */
 
 /**
- * How many tags one item may carry.
- *
- * Six rather than unbounded for two reasons that pull the same way. A tile in
- * a four-column grid has room for a couple of short labels and no more, so a
- * twenty-tag item is a layout problem before it is a data problem; and every
- * signed-in account can write these (see the note on `resolveTagRows` about
- * what "authenticated" does and does not mean in this app today), so an
- * unbounded list is an unbounded write.
- *
- * Four subject areas are in use, so six leaves room to be wrong about that
- * without leaving room to abuse it.
+ * The two numeric caps moved to src/lib/media-rules.ts, which has no runtime
+ * imports and so can be loaded by the upload page's picker — a "use client"
+ * component, which cannot load THIS module, because it imports the Prisma
+ * client. Re-exported so every server-side reader is unchanged. See the note
+ * beside them there for why sharing a constant with the browser is not the
+ * same thing as duplicating a rule.
  */
-export const MAX_TAGS_PER_ITEM = 6;
+export { MAX_TAGS_PER_ITEM, MAX_TAG_NAME_LENGTH } from "@/lib/media-rules";
 
 /**
- * Longest tag name, in CODE POINTS rather than UTF-16 units — the same
- * counting `MAX_ORIGINAL_NAME_LENGTH` uses, so a name is never truncated
- * through the middle of a surrogate pair.
+ * The two fields of a Tag that any audience is given: what it is called, and
+ * the handle that identifies it. `Tag.id` is in neither, on purpose.
  *
- * Short on purpose: this string is rendered as a chip under a thumbnail, and
- * the longest of the four subjects in use ("Wine & drink") is twelve.
+ * DEFINED HERE AND IMPORTED BY src/lib/media-access.ts, rather than the other
+ * way round, and the direction is not arbitrary. What a tag discloses is a
+ * fact about tags; media-access composes it into `MEDIA_TAGS_SELECT` for the
+ * two audience projections. Written the other way, this module would import
+ * media-access — which imports `@/lib/auth`, and so drags `next-auth` and
+ * `next/server` into the module graph of every reader, including a node test
+ * run that has no business loading either. That is not a hypothetical: it is
+ * how the first attempt at this failed to collect.
  */
-export const MAX_TAG_NAME_LENGTH = 32;
+export const TAG_PUBLIC_FIELDS = { slug: true, name: true } as const;
+
+/** A tag as every audience sees it. */
+export type TagLabel = { slug: string; name: string };
 
 /** A tag name that has been checked, with the identity key it resolves to. */
 export type ParsedTag = { name: string; slug: string };
@@ -222,4 +229,74 @@ export async function resolveTagRows(
   }
 
   return tags.map((tag) => ({ slug: tag.slug }));
+}
+
+/**
+ * How many subjects the picker will ever offer.
+ *
+ * A BOUND ON THE READ, because the WRITE is not bounded and this bead is not
+ * the place that decides it should be. `resolveTagRows` creates a row for any
+ * name that passes validation; both writers are reachable by any
+ * authenticated account; sign-in has no allowlist (ugcportal-egp); and
+ * nothing deletes a tag. `MAX_TAGS_PER_ITEM` caps a REQUEST, not the
+ * vocabulary — six fresh names per call, in a loop, grows the table without
+ * limit.
+ *
+ * Unbounded, that was a denial of service on the only page media comes in
+ * through, and not a subtle one: an unbounded `SELECT` plus one checkbox per
+ * row in the server-rendered HTML, on every `/upload` render, for every user,
+ * caused by any one of them. Bounding the read does not stop the table
+ * growing — that is ugcportal-x0l's decision about who may mint a subject —
+ * but it does mean nothing renders in proportion to it.
+ *
+ * Twenty-four is far more subjects than a photography site has and far fewer
+ * than a page can choke on.
+ */
+export const MAX_PICKER_TAGS = 24;
+
+/**
+ * The subjects the upload page offers, bounded and filtered.
+ *
+ * ORDERED OLDEST-FIRST, WHICH IS THE HALF THAT MAKES THE BOUND WORTH
+ * ANYTHING. With `take` alone and an alphabetical order, an attacker mints
+ * twenty-four subjects beginning with "a" and the four real ones fall off the
+ * end — the page no longer melts, is exactly as unusable, and the cap would
+ * have hidden it. The seeded subjects are inserted by the migration, so they
+ * are the oldest rows in the table, and `createdAt` is not a value any
+ * WRITER IN THIS CODEBASE chooses: `resolveTagRows` is the only way a tag is
+ * created and it lets the column default. `id` is the tiebreak, because the
+ * four seeds share one `CURRENT_TIMESTAMP`.
+ *
+ * State the limit rather than overclaiming it: this orders by a column, not
+ * by a proof. Anyone with direct database access can write any `createdAt`
+ * they like, and this does not stop them — it stops the writers that are
+ * actually reachable, which is every one an account on the internet has.
+ *
+ * Presentation order is decided by the caller — oldest-first is a security
+ * property, not a sensible way to read a list.
+ *
+ * `hasUnsafeText` is applied here for the reason it is applied in
+ * `toGalleryTags`, and the omission was a real gap: this is a third surface
+ * that renders a tag, so leaving it out meant the "one denylist, checked at
+ * every end" rule had an end nobody was checking. Both fields are tested,
+ * not just the name — `slug` reaches the DOM too, as the checkbox's `value`.
+ * A row is dropped rather than repaired, and a dropped row is NOT backfilled
+ * from further down the table; the list is simply shorter. Both are
+ * deliberate: repairing invents a subject nobody named, and backfilling
+ * would let a bad row pull an arbitrary later one into the page.
+ *
+ * Projected through TAG_PUBLIC_FIELDS, the same two fields every other
+ * audience gets — `MEDIA_TAGS_SELECT` is built from the same constant — so
+ * the picker cannot become the one surface that hands out `Tag.id`.
+ */
+export async function listPickerTags(): Promise<TagLabel[]> {
+  const rows = await prisma.tag.findMany({
+    select: TAG_PUBLIC_FIELDS,
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    take: MAX_PICKER_TAGS,
+  });
+
+  return rows.filter(
+    (tag) => !hasUnsafeText(tag.name) && !hasUnsafeText(tag.slug),
+  );
 }

@@ -27,6 +27,12 @@ import {
   type QueueItem,
 } from "./upload-queue";
 import { drainQueue, enqueueFiles, type QueueEntry } from "./upload-runner";
+import {
+  tagCapMessage,
+  tagPickerRows,
+  toggleTagSlug,
+  type SelectableTag,
+} from "./tag-selection";
 
 /**
  * The upload surface (ugcportal-n3c) — and the app's first client component.
@@ -53,8 +59,7 @@ function nextQueueId(): string {
 
 const ACCEPT_ATTRIBUTE = ACCEPTED_MIME_TYPES.join(",");
 
-/** A tag the picker can offer, as the upload page read it out of the DB. */
-export type SelectableTag = { slug: string; name: string };
+export type { SelectableTag };
 
 export type UploadFormProps = {
   /**
@@ -335,6 +340,30 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
 
   return (
     <div>
+      {/*
+        ABOVE THE DROP ZONE, and the order is the feature rather than a
+        layout preference.
+
+        There is no staging step on this page: dropping a file starts its
+        upload immediately. So a picker rendered after the drop zone is a
+        control the user meets only once it can no longer affect anything
+        they have done — drop four photographs, scroll past the queue, find
+        the checkboxes, and those four are permanently untagged, because
+        there is no owner-facing retag screen yet (ugcportal-1wz).
+
+        Its own copy already says "Applies to files you add from now on",
+        which is only an honest sentence if the reader has met it before they
+        add anything. Rendered second, the sentence was true and useless.
+      */}
+      <TagPicker
+        labelId={tagsLabelId}
+        availableTags={availableTags}
+        selectedSlugs={selectedSlugs}
+        onToggle={(slug) =>
+          setSelectedSlugs((current) => toggleTagSlug(current, slug))
+        }
+      />
+
       <div
         onDragEnter={(event) => {
           event.preventDefault();
@@ -393,19 +422,6 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
         </p>
       </div>
 
-      <TagPicker
-        labelId={tagsLabelId}
-        availableTags={availableTags}
-        selectedSlugs={selectedSlugs}
-        onToggle={(slug) =>
-          setSelectedSlugs((current) =>
-            current.includes(slug)
-              ? current.filter((each) => each !== slug)
-              : [...current, slug],
-          )
-        }
-      />
-
       {/*
         The overall state, announced. Counted from the rows rather than kept
         beside them, so it cannot disagree with what is on screen.
@@ -436,12 +452,29 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
  * Files already sent are re-tagged through PUT /api/media/[id]/tags, not
  * here.
  *
- * Checkboxes rather than a combo box or a free-text field: the vocabulary is
- * four items, all of them are worth seeing at once, and a text field would
- * put the browser in the business of deciding what a valid tag name is —
- * which is the server's job (src/lib/tags.ts) and should not have a second
- * implementation. Creating a tag that is not in this list is an API-level
- * capability today; a management screen for it is ugcportal-x0l.
+ * Checkboxes rather than a combo box or a free-text field: the list is short
+ * and bounded (MAX_PICKER_TAGS), all of it is worth seeing at once, and a
+ * text field would put the browser in the business of deciding what a valid
+ * tag name IS — which is the server's job (src/lib/tags.ts) and must not
+ * have a second implementation. Creating a subject that is not in this list
+ * is an API-level capability today; who may do it is ugcportal-x0l.
+ *
+ * THE CAP IS A SHARED CONSTANT, NOT A SECOND RULE, and the distinction is
+ * the one that decides what may live in a client component at all. This does
+ * not re-implement `parseTagNames`; it reads the same `MAX_TAGS_PER_ITEM`
+ * the server enforces, out of the dependency-free module that exists for
+ * exactly that (the upload rules do the same with `validateUpload`). Without
+ * it a seventh tick is accepted here and refused by POST /api/media — after
+ * the entire multipart body has been buffered, once per file in the batch,
+ * and again on every retry, with nothing on screen suggesting the tag picker
+ * is the cause. Unreachable with the four seeded subjects and reachable the
+ * moment the vocabulary grows past six.
+ *
+ * Enforced by disabling the UNTICKED boxes at the cap, never by refusing a
+ * click silently and never by disabling the ticked ones — the way out of the
+ * cap has to stay available, or the control becomes a trap. The server still
+ * enforces the same number: a disabled checkbox is an affordance, not a
+ * security boundary.
  *
  * A `<fieldset>` with a `<legend>`, so a screen reader announces what the
  * group of checkboxes is FOR before reading the first one. `aria-labelledby`
@@ -476,6 +509,9 @@ function TagPicker({
     );
   }
 
+  const rows = tagPickerRows(availableTags, selectedSlugs);
+  const capMessage = tagCapMessage(selectedSlugs.length);
+
   return (
     <fieldset className="mt-6" data-upload-tag-picker="">
       <legend id={labelId} className="text-sm font-medium text-ink">
@@ -486,23 +522,45 @@ function TagPicker({
         photograph in the gallery.
       </p>
       <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2">
-        {availableTags.map((tag) => (
+        {rows.map((row) => (
           <label
-            key={tag.slug}
-            className="flex cursor-pointer items-center gap-2 text-sm text-ink"
+            key={row.slug}
+            className={[
+              "flex items-center gap-2 text-sm",
+              row.disabled
+                ? "cursor-not-allowed text-ink-muted"
+                : "cursor-pointer text-ink",
+            ].join(" ")}
           >
             <input
               type="checkbox"
               name="upload-tag"
-              value={tag.slug}
-              checked={selectedSlugs.includes(tag.slug)}
-              onChange={() => onToggle(tag.slug)}
+              value={row.slug}
+              checked={row.checked}
+              disabled={row.disabled}
+              onChange={() => onToggle(row.slug)}
               className="size-4 accent-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
             />
-            {tag.name}
+            {row.name}
           </label>
         ))}
       </div>
+      {/*
+        Says WHY the boxes went grey, and only while they are. A control that
+        stops responding without explaining itself reads as a bug, and this
+        one would be an especially confusing one — the boxes are greyed by
+        something the user did to a different box.
+
+        `aria-live` so it is announced rather than only seen: the change a
+        screen-reader user notices is the next checkbox reporting itself as
+        disabled, with no stated reason anywhere near it. Rendered
+        unconditionally, empty when there is nothing to say, because a live
+        region inserted at the same moment as its text is frequently not
+        announced at all — the same rule GalleryPaging follows.
+      */}
+      <p aria-live="polite" className="mt-2 text-xs text-ink-muted">
+        {capMessage}
+      </p>
     </fieldset>
   );
 }

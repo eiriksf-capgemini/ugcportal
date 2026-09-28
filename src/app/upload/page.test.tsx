@@ -35,12 +35,18 @@ vi.mock("@/lib/prisma", () => ({
 }));
 
 const { default: UploadPage } = await import("./page");
-const { MEDIA_TAGS_SELECT } = await import("@/lib/media-access");
+const { MAX_PICKER_TAGS, TAG_PUBLIC_FIELDS } = await import("@/lib/tags");
 
+/*
+  Returned OLDEST-FIRST, the order `listPickerTags` actually produces — which
+  is deliberately NOT the order they should be read in. The page sorts for
+  display, and a fixture that arrived pre-sorted would make that sort
+  unfalsifiable.
+*/
 const SEEDED_TAGS = [
-  { slug: "books", name: "Books" },
-  { slug: "food", name: "Food" },
   { slug: "wine-drink", name: "Wine & drink" },
+  { slug: "food", name: "Food" },
+  { slug: "books", name: "Books" },
 ];
 
 const SIGN_IN_URL = "/api/auth/signin?callbackUrl=%2Fupload";
@@ -176,18 +182,49 @@ describe("the tag picker on the upload page", () => {
     }
   });
 
-  it("reads only the two fields every audience gets, never Tag.id", async () => {
+  it("asks for a BOUNDED page of the vocabulary, oldest first", async () => {
+    /*
+     * The round-1 medium. The tag table has no ceiling — any authenticated
+     * account can add to it and nothing deletes — so an unbounded SELECT
+     * rendered one-checkbox-per-row made this page a denial of service on
+     * itself.
+     *
+     * This asserts the query that is ISSUED. That the bound and the ordering
+     * actually bite is a claim about SQLite, and is covered against a real
+     * database in src/lib/tags.vocabulary.test.ts.
+     */
     await renderPage();
 
     expect(tagFindManyMock).toHaveBeenCalledWith({
-      select: MEDIA_TAGS_SELECT.select,
-      orderBy: MEDIA_TAGS_SELECT.orderBy,
+      select: TAG_PUBLIC_FIELDS,
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      take: MAX_PICKER_TAGS,
     });
-    // Guards the guard: the assertion above is only worth anything while that
+  });
+
+  it("reads only the two fields every audience gets, never Tag.id", async () => {
+    await renderPage();
+
+    // Guards the guard: the assertion above is only worth anything while the
     // shared projection really is the narrow one. If `id` is ever added to
     // it, this fails here rather than quietly widening the picker, the owner
     // feed and the public gallery at once.
-    expect(MEDIA_TAGS_SELECT.select).toEqual({ slug: true, name: true });
+    expect(TAG_PUBLIC_FIELDS).toEqual({ slug: true, name: true });
+  });
+
+  it("puts the subjects in a readable order, not the order they were created", async () => {
+    /*
+     * `listPickerTags` returns oldest-first because that is what makes the
+     * cap unspoofable — a later writer cannot choose to be older. Nobody
+     * wants to READ a list of subjects in insertion order, so the page sorts
+     * by name. The fixture is deliberately unsorted, or this could not fail.
+     */
+    const markup = await renderPage();
+
+    const rendered = [...markup.matchAll(/value="([^"]+)"/g)].map(
+      (match) => match[1],
+    );
+    expect(rendered).toEqual(["books", "food", "wine-drink"]);
   });
 
   it("says so, rather than rendering an empty group, when there are none", async () => {
@@ -198,5 +235,53 @@ describe("the tag picker on the upload page", () => {
     expect(markup).toContain("No subjects have been set up yet");
     expect(markup).not.toContain('type="checkbox"');
     expect(markup).not.toContain("<fieldset");
+  });
+
+  it("renders the picker BEFORE the drop zone", async () => {
+    /*
+     * The round-1 low, and the reason it is a correctness question rather
+     * than a layout preference: there is no staging step on this page, so
+     * dropping a file starts its upload. A picker the user meets AFTER the
+     * drop zone is one they meet after it can no longer affect anything they
+     * have done — and there is no owner-facing retag screen yet
+     * (ugcportal-1wz), so those uploads stay untagged with no remedy in the
+     * product.
+     *
+     * The picker's own copy says "Applies to files you add from now on",
+     * which is only an honest sentence if it is read before anything is
+     * added. Asserted on DOCUMENT ORDER, since that is both the visual order
+     * and the order a screen reader takes them in.
+     */
+    const markup = await renderPage();
+
+    const picker = markup.indexOf("Tag what you add next");
+    const dropZone = markup.indexOf("drag them here");
+
+    // Both present, so the comparison is between two real positions rather
+    // than two -1s, which would compare equal and prove nothing.
+    expect(picker).toBeGreaterThan(-1);
+    expect(dropZone).toBeGreaterThan(-1);
+    expect(picker).toBeLessThan(dropZone);
+  });
+
+  it("starts with no cap message, because nothing is selected", async () => {
+    // The live region is rendered unconditionally and empty — one inserted
+    // at the same moment as its text is frequently not announced at all.
+    const markup = await renderPage();
+
+    expect(markup).toContain('aria-live="polite"');
+    expect(markup).not.toContain("Untick one to choose another");
+  });
+
+  it("disables nothing on first render", async () => {
+    // Three subjects in the fixture and a cap of six: the picker must not
+    // arrive with boxes already greyed out.
+    const markup = await renderPage();
+
+    const checkboxes = [...markup.matchAll(/<input[^>]*type="checkbox"[^>]*>/g)];
+    expect(checkboxes).toHaveLength(SEEDED_TAGS.length);
+    for (const [input] of checkboxes) {
+      expect(input).not.toContain("disabled");
+    }
   });
 });

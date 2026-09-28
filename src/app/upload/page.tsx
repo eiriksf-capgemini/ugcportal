@@ -1,9 +1,8 @@
 import { redirect } from "next/navigation";
 
 import { auth } from "@/lib/auth";
-import { MEDIA_TAGS_SELECT } from "@/lib/media-access";
-import { prisma } from "@/lib/prisma";
 import { UPLOAD_PATH, signInPath } from "@/lib/routes";
+import { listPickerTags } from "@/lib/tags";
 
 import { UploadForm } from "./upload-form";
 
@@ -50,14 +49,21 @@ export default async function UploadPage() {
     published item is on the public gallery — but there is no reason for an
     unauthenticated request that is about to be redirected to run a query.
 
-    Projected through MEDIA_TAGS_SELECT.select, the same two fields every
-    other audience gets, so the picker cannot become the one surface that
-    hands out `Tag.id`.
+    BOUNDED AND FILTERED BY `listPickerTags`, not by a `findMany` spelled
+    here. The bound is a security property rather than a tidiness one — the
+    tag table has no ceiling and any authenticated account can add to it, so
+    an unbounded SELECT rendered one-checkbox-per-row made this page a denial
+    of service on itself. The rule lives next to the rest of the tag rules so
+    a second reader cannot be added without it; see the note there for the
+    ordering, which is the half that makes the cap useful.
+
+    Sorted for DISPLAY here, by name. `listPickerTags` returns oldest-first
+    because that is what makes the cap unspoofable, and that is not an order
+    anybody wants to read a list of subjects in.
   */
-  const availableTags = await prisma.tag.findMany({
-    select: MEDIA_TAGS_SELECT.select,
-    orderBy: MEDIA_TAGS_SELECT.orderBy,
-  });
+  const availableTags = [...(await listPickerTags())].sort((left, right) =>
+    left.name.localeCompare(right.name),
+  );
 
   return (
     /*

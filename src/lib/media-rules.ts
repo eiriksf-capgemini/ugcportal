@@ -160,11 +160,56 @@ export const LONE_SURROGATE =
 /**
  * True when a string carries anything from either class above.
  *
- * The predicate, not just the two patterns, because there are now three
- * readers — the rename validator, the tag validator, and the gallery's
- * render-side drop — and "test both, and remember neither is global" is
- * precisely the two-line ritual that gets copied with one line missing.
+ * The predicate, not just the two patterns, because there are now four
+ * readers — the rename validator, the tag validator, the gallery's
+ * render-side drop and the upload page's tag picker — and "test both, and
+ * remember neither is global" is precisely the two-line ritual that gets
+ * copied with one line missing.
  */
 export function hasUnsafeText(value: string): boolean {
   return UNSAFE_TEXT_CHARS.test(value) || LONE_SURROGATE.test(value);
 }
+
+// --- tag limits (ugcportal-jsc) ---------------------------------------------
+//
+// THE NUMBERS LIVE HERE, THE RULES DO NOT. The distinction is the one this
+// module was created for (see the header): the browser must not carry a
+// second copy of a validation rule the server owns, but it may — and should —
+// share the server's own CONSTANT, the same way the upload page runs the
+// server's `validateUpload` rather than a matching copy of MAX_SIZE_BYTES.
+//
+// They cannot stay in src/lib/tags.ts, which imports the Prisma client and so
+// cannot be bundled for the browser at all. That module re-exports both, so
+// every server-side reader is unchanged and "everything about tags" is still
+// one address.
+
+/**
+ * How many tags one item may carry.
+ *
+ * Six rather than unbounded for two reasons that pull the same way. A tile in
+ * a four-column grid has room for a couple of short labels and no more, so a
+ * twenty-tag item is a layout problem before it is a data problem; and every
+ * signed-in account can write these (sign-in has no allowlist — see
+ * ugcportal-egp), so an unbounded list is an unbounded write.
+ *
+ * Four subject areas are in use, so six leaves room to be wrong about that
+ * without leaving room to abuse it.
+ *
+ * READ BY THE BROWSER AS WELL AS THE SERVER, and that is the point of it
+ * being here. `parseTagNames` refuses a seventh tag *after* POST /api/media
+ * has buffered the entire multipart body — so a picker that let seven be
+ * ticked would spend a whole video upload to earn a 400, once per file and
+ * again on every retry. The picker stops at this number instead; the server
+ * still enforces it, because a disabled checkbox is not a security control.
+ */
+export const MAX_TAGS_PER_ITEM = 6;
+
+/**
+ * Longest tag name, in CODE POINTS rather than UTF-16 units — the same
+ * counting `MAX_ORIGINAL_NAME_LENGTH` uses, so a name is never truncated
+ * through the middle of a surrogate pair.
+ *
+ * Short on purpose: this string is rendered as a chip under a thumbnail, and
+ * the longest of the four subjects in use ("Wine & drink") is twelve.
+ */
+export const MAX_TAG_NAME_LENGTH = 32;

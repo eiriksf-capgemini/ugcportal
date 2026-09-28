@@ -1,6 +1,7 @@
 import type { MediaModel } from "@/generated/prisma/models";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { TAG_PUBLIC_FIELDS, type TagLabel } from "@/lib/tags";
 
 /**
  * Two projections, deliberately not one.
@@ -49,12 +50,17 @@ import { prisma } from "@/lib/prisma";
  * rendering assertion becomes flaky for a reason nobody enjoys finding.
  */
 export const MEDIA_TAGS_SELECT = {
-  select: { slug: true, name: true },
+  // Composed from TAG_PUBLIC_FIELDS rather than spelled again, so the picker
+  // on the upload page and the two audience projections here cannot come to
+  // disagree about what a tag discloses. The constant lives in
+  // src/lib/tags.ts and is imported in this direction on purpose — see the
+  // note there about what importing this module would drag along.
+  select: TAG_PUBLIC_FIELDS,
   orderBy: { slug: "asc" },
 } as const;
 
 /** A tag as every audience sees it. */
-export type MediaTagLabel = { slug: string; name: string };
+export type MediaTagLabel = TagLabel;
 
 /**
  * The keys a Media projection is allowed to name: a real column, or the one
