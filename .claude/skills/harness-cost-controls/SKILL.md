@@ -41,6 +41,18 @@ estimate, because Sonnet 5 is exactly 0.4x Opus 5 on every published pricing
 line (base input, 5m cache write, 1h cache write, cache read, output). 6 of 15
 sampled `general-purpose` spawns passed no `model` argument at all.
 
+**These are Eirik's original point-in-time figures (bead-filing time,
+2026-09-28), not the current reproducible baseline.** § 4 below re-derives
+the same measurement with a runnable command, and its numbers are larger and
+still growing (more time and traffic have passed, and three rounds of review
+found real undercounting bugs in the tool that produced them — see § 5). The
+figure to compare against the **$539** above is § 4's own savings-available
+number, computed the same way (Opus subagent spend minus the Sonnet-rate
+counterfactual): as of round 3 that is $1,321.04 − $528.42 ≈ **$792** on the
+all-projects baseline in § 4 — not $539, and not the same window measured
+twice. Re-run § 4's command for a current figure rather than trusting either
+number as current; the two will keep diverging as more time passes.
+
 **Two mechanisms close this, and they are not redundant — use both:**
 
 1. **Pass an explicit `model` argument on every worker-shaped spawn.** This is
@@ -141,7 +153,7 @@ whatever window you actually ran it against: what the window's cache-write
 spend actually was, and what it would have been under an all-1-hour or
 all-5-minute hypothetical. On the since-2026-09-24 window (snapshot,
 2026-09-28 — re-run the command for a current figure): actual cache-write
-spend $768.65, all-1-hour hypothetical $1,229.84, i.e. a **$461.19** premium
+spend $777.58, all-1-hour hypothetical $1,244.13, i.e. a **$466.55** premium
 for hedging the *entire* window's cache writes against TTL-expiry rewrites —
 not $46, and not comparable to the older window's figure. This also means
 the 1-hour cache tier's premium is usually **not** a saving to take back — a
@@ -183,34 +195,50 @@ It uses `isSidechain` (present on every assistant turn in a Claude Code
 transcript) to identify subagent turns, and the same published per-MTok rates
 `claude-usage-report.py` uses. For subscription or seat-based access the
 dollar figures this produces are **notional** — see the note in the module
-docstring and in `AI-USAGE-ECONOMICS.md` — but the *ratios* (read:write,
-subagent share, cache-tier mix) describe real resource use regardless of
-whether the dollar figure is a real invoice.
+docstring and in `AI-USAGE-ECONOMICS.md`.
+
+Two of the five indicators are pure token ratios and hold regardless of
+whether the dollar figures are real: the cache read:write ratio (1) and the
+cache-write tier mix (5). **Subagent share (4) is not one of these** — it is
+reported here list-price-dollar-weighted, and that is a different number
+from the request-count-weighted version: on the round-3 baseline below,
+subagent spend is 68.4% of dollars but 9,888 of 11,674 requests — **84.7%**
+by request count. On a subscription, the dollar-weighted figure is exactly
+as notional as any other dollar figure in this file; the request-count
+figure is the plan-neutral one, and that is the whole reason this
+distinction matters enough to spell out rather than lump into "ratios that
+don't depend on the dollar figures being real."
 
 **Baseline captured 2026-09-28, all projects, since 2026-09-24 (all-projects
-run):** 11,552 requests, $2,133.97 list-price. Subagent (isSidechain) spend:
-$1,463.17 (68.6%) partitioned into Opus $1,321.04 across 8,259 requests,
-Sonnet $104.45 across 1,389 requests, and other (Fable/Haiku) $37.67 across
-134 requests — reconciling exactly to $1,463.17 (a round-2 review finding:
-an earlier version of this partition only had Opus and Sonnet lines, so the
-Fable/Haiku $37.67 was in the total and in no sub-line at all). Opus-5
-subagent spend at Sonnet-5 rates would be ~$528.42. Scoped to `--project
-ugcportal` specifically: 11,011 requests, $2,067.28, subagent spend
-$1,450.82 (70.2%) across 9,623 requests, of which Opus $1,309.85 across
-8,127 requests, Sonnet $103.30 across 1,362, and other $37.67 across 134 —
-a non-zero, non-trivial result, which is itself the round-1-review
-regression test for the P1 fix below (an earlier version of this script
-printed `$0.00 … 0 of N requests` for this exact invocation).
+run):** 11,674 requests, $2,154.17 list-price. The scan also reports 45
+requests with an unrecognized model (`lines_unrecognized_model` in the
+anomalies ledger § 5 describes) — a real, counted gap, not silently absorbed.
+Subagent (isSidechain) spend: $1,474.36 (68.4% of dollars, **84.7%** of
+requests — see the note above on why those two numbers differ) partitioned
+into Opus $1,325.09 across 8,301 requests, Sonnet $111.60 across 1,453
+requests, and other (Fable/Haiku) $37.67 across 134 requests — reconciling
+exactly to $1,474.36. Opus-5 subagent spend at Sonnet-5 rates would be
+~$530.04. Scoped to `--project ugcportal` specifically: 11,132 requests,
+$2,086.96, subagent spend $1,462.04 (70.1%) across 9,729 requests, of which
+Opus $1,313.90 across 8,169 requests, Sonnet $110.47 across 1,426, and other
+$37.67 across 134 — a non-zero, non-trivial result, which is itself the
+round-1-review regression test for the P1 fix below (an earlier version of
+this script printed `$0.00 … 0 of N requests` for this exact invocation).
 
 This is **larger** than the bead's originally-cited $1,558 / 8,370 requests /
-5,955-Opus-subagent-requests figures, for several reasons: more time and
-further work had passed by the time this was captured; an earlier version of
-this script undercounted output tokens by roughly half and silently dropped
-every nested subagent transcript when `--project` was used (round 1); and an
-earlier version's Opus/Sonnet partition excluded Fable/Haiku spend from
-every sub-line while still counting it in the total (round 2) — see § 5.
-Every reading still agrees on the qualitative finding: most subagent spend
-was still running on Opus at measurement time.
+5,955-Opus-subagent-requests figures (§ 1), for several reasons: more time
+and further work had passed by the time this was captured; an earlier
+version of this script undercounted output tokens (measured 64.0% on this
+window, 48.8% over this machine's full available history — a different,
+wider denominator, not a discrepancy) and silently dropped every nested
+subagent transcript when `--project` was used (round 1); an earlier
+version's Opus/Sonnet partition excluded Fable/Haiku spend from every
+sub-line while still counting it in the total (round 2); and an earlier
+version's model-id normalizer only recognized two hardcoded date suffixes,
+so any other date-stamped model id fell through to "unpriced" instead of
+being priced (round 3) — see § 5. Every reading still agrees on the
+qualitative finding: most subagent spend was still running on Opus at
+measurement time.
 
 **This baseline is a "before" figure, not a "before and after."** Nothing in
 this PR changes runtime behavior — § 1 mechanism 2 (the actual backstop)
@@ -223,15 +251,19 @@ command above then and compare against the baseline in this section.
 
 ## 5. When this measurement itself is wrong
 
-Two full rounds of PR review on the PR that added this file found twelve
-bugs total in `usage_indicators.py`, and the pattern held across both
-rounds: nearly every one of them made a **real regression, or a real gap in
-the script's own coverage, look like a clean result** instead of an error.
-That is not a coincidence of what reviewers happened to look for — it is
-what this class of bug looks like. A script whose job is to notice a cost
-regression is, structurally, the easiest kind of tool to get silently wrong
-in the reassuring direction, because "the number went down" is exactly what
-everyone hopes to see.
+Three full rounds of PR review on the PR that added this file found
+nineteen bugs total in `usage_indicators.py`, and the pattern held across
+all three: nearly every one of them made a **real regression, or a real gap
+in the script's own coverage, look like a clean result** instead of an
+error. That is not a coincidence of what reviewers happened to look for —
+it is what this class of bug looks like. A script whose job is to notice a
+cost regression is, structurally, the easiest kind of tool to get silently
+wrong in the reassuring direction, because "the number went down" is
+exactly what everyone hopes to see. By round 3, the reviewer said it more
+sharply than this file had: two of that round's seven findings were, again,
+the same family this section already named, and the right response to a
+lesson recurring for the third time is not a fourth writeup — it's a
+structural change (see below).
 
 **Round 1:** a wrong project-slug path (subagent transcripts nest two levels
 deeper than main-thread ones; taking the immediate parent directory read
@@ -259,6 +291,39 @@ everything from September onward and `--since 2026-9-24` silently matched
 nothing — with the effective window never echoed anywhere, so neither
 mistake was visible in the output.
 
+**Round 3, the two mediums:** `norm_model` only stripped two hardcoded date
+suffixes, so any other date-stamped model id (a new snapshot, or one this
+file just hadn't seen yet) fell through unpriced and rendered as
+`of which Opus: $0.00 (N reqs)` — the THIRD instance of this same pricing
+gap rendering as a reassuring zero, which is the finding that forced the
+structural fix below rather than a fourth patch. And this file claimed the
+self-test "passes the same way in CI" — false: `ci.yml` has no Python step
+at all, so reverting any fix here (the dedup, say) merges green. **That
+claim is corrected below, and a Python CI step is tracked as `ugcportal-d4z`
+rather than added in this PR** (`.github/workflows/**` is a sensitive path;
+pulling it into an already-large PR would need its own review).
+
+**Round 3, the five lows:** `valid_since_date` returned the raw input
+string, so on Python ≥ 3.11 (where `date.fromisoformat` itself became
+lenient enough to accept `--since 20260924` or `--since 2026-W40-1`) the
+validator "passed" but the comparison then silently matched nothing —
+reproduced on Python 3.14.7: `no requests matched` over 11,608 matching
+requests; fixed by returning the parsed date's own `.isoformat()`. The
+`base_dir` computation cut the glob pattern at the first literal `*`
+character, which is wrong the moment a `*` lands mid-component rather than
+at a component boundary (a narrowing glob like `projects/ugc*/**/*.jsonl`)
+— every resolved project slug came out as `".."` and `--project` matched
+nothing; fixed by walking whole path components and stopping at the first
+one containing a glob metacharacter. Three more silent `continue` paths
+(non-assistant lines that still contain the substring `"usage"`, a
+non-dict `usage` field, an unrecognized model) had no tally — 45 real
+records on the actual tree today — contradicting the coverage this section
+already claimed. § 1's headline $539/5,955-request figures sit next to § 4's
+own reproducible, much larger baseline with no caveat connecting them —
+now added, see § 4. And "subagent share" was listed among the ratios that
+don't depend on dollar figures being real, but it's dollar-weighted
+(68.4%), not request-count-weighted (84.7%) — also fixed, see § 4.
+
 **The fixes**, round 1: resolve the project slug from the path relative to
 the glob's own root rather than one parent directory; keep the maximum
 `output_tokens` seen per `requestId`; track unpriced models from the final
@@ -266,30 +331,44 @@ filtered row set and print them prominently. Round 2: partition subagent
 spend into Opus / Sonnet / other so the parts always reconcile to the total
 (printed explicitly); correct the inverted comment; track the Fable pricing
 question as `ugcportal-xwt` instead of an unverifiable claim; validate
-`--since` against a real ISO date (`argparse` `type=`, rejects a partial or
-malformed date instead of silently mis-scoping the window); and have
-`report()` echo the scan itself — files matched, files unreadable, lines
-skipped and why, the filters actually used, and the date range the kept
-requests actually cover — **before** printing a single indicator, so a bad
-filter or an unreadable file is visible instead of merely absent from the
-number. Indicator 5 also grew a same-window, reproducible dollar comparison
-(actual cache-write spend vs. an all-1-hour or all-5-minute hypothetical),
-replacing a cross-window figure in § 3 above that this script could not
-reproduce.
+`--since` against a real ISO date; and have `report()` echo the scan itself
+before printing a single indicator. Indicator 5 also grew a same-window,
+reproducible dollar comparison (actual cache-write spend vs. an all-1-hour
+or all-5-minute hypothetical), replacing a cross-window figure in § 3 above
+that this script could not reproduce.
 
-**A committed self-test** now backs the coverage claim this file makes:
+**Round 3's fix is structural, not seven more patches.** Every path in
+`load_rows` that drops, skips, or fails to price a record now increments a
+key in a single `ANOMALY_KEYS` counter, and `report()`'s first output —
+before it prints a single dollar figure, and unconditionally, including as
+an explicit `0` — is every one of those keys plus the unpriced-models dict.
+Silence and "checked, found nothing" can no longer look the same. `norm_model`
+now strips any 8-digit date suffix by regex instead of two hardcoded ones;
+`glob_base_dir` walks whole path components; `valid_since_date` returns the
+canonical `isoformat()`; and indicator 4's Opus/Sonnet/other line now
+annotates inline when a bucket's `$0.00` is because its rows are unpriced,
+rather than relying solely on the top-of-report banner — "loud wherever it
+appears," not just tallied at the end.
+
+**A committed self-test** backs the coverage claim this file makes:
 `test_usage_indicators.py`, alongside this file — run
-`python3 -m unittest test_usage_indicators -v` from this directory. It builds
-synthetic transcript trees (including the real nested subagent path layout)
-rather than depending on any machine's actual history, so it passes the same
-way in CI or on a laptop. Every fix above has a named test that fails when
-the fix is reverted (verified by hand for each one while writing this
+`python3 -m unittest test_usage_indicators -v` from this directory (29
+tests as of round 3, verified passing on both Python 3.9 and 3.14). It
+builds synthetic transcript trees (including the real nested subagent path
+layout) rather than depending on any machine's actual history, so it
+produces the same result wherever it's run. **What is true, precisely:** it
+runs the same way anywhere it IS run. **What is not true, and was claimed
+here until round 3 caught it:** that this includes CI. Nothing in
+`.github/workflows/ci.yml` runs it — it is run by hand, and only by hand,
+until `ugcportal-d4z` closes. Every fix above has a named test that fails
+when the fix is reverted (verified by hand for each one while writing this
 section — revert the one line, watch the specific test fail, restore).
 
-If you touch this file again: before asking "does the number look right",
+If you touch this file again: run the self-test by hand (nothing else will),
 ask which direction a mistake in this computation would point the reader,
-run the self-test, and prefer a failure that prints a warning over one that
-quietly prints a smaller, more reassuring number.
+and ask whether that mistake would actually show up in the `ANOMALY_KEYS`
+ledger — if it wouldn't, the ledger is missing a key, which is how three of
+these nineteen bugs were found.
 
 ## What this does not do
 

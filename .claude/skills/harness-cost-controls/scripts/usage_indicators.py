@@ -33,24 +33,30 @@ used in claude-usage-report.py. For subscription/seat-based access these
 dollar figures are notional -- see the note in this skill's SKILL.md. The
 *ratios* (1, 4, 5 above) do not depend on the dollar figures being real.
 
-A NOTE ON FAILURE DIRECTION (round-1 and round-2 PR review, 2026-09-28): an
-earlier version of this script had several bugs -- a wrong project-slug path,
-a first-seen-wins dedup, a silently-zeroed unpriced-model cost, an inverted
-comment, a subagent breakdown that didn't reconcile to its own total, and
-silent skip paths with no tally -- and every one of them failed in the SAME
-direction: each made a real regression, or a real gap in the script's own
-coverage, look like a clean result instead of an error. Round 2 also found
-that the round-1 fix's own docstring overclaimed test coverage that didn't
-exist yet. This is now a committed self-test
-(test_usage_indicators.py, alongside this file -- run it with
-`python3 -m unittest test_usage_indicators -v` from this directory), plus:
-every filter and scan step below counts what it skipped and why, `report()`
-echoes the scan (files matched, files unreadable, lines skipped and why, the
-filters used, the date range actually covered) before printing a single
-indicator, and `--since` rejects a malformed date instead of silently
-matching the wrong window. If you change this file: run the self-test, and
-ask which direction a mistake here would point the reader before asking
-whether the printed number looks right.
+A NOTE ON FAILURE DIRECTION (three rounds of PR review, 2026-09-28): earlier
+versions of this script had a long list of bugs -- a wrong project-slug
+path, a first-seen-wins dedup, a silently-zeroed unpriced-model cost, an
+inverted comment, a subagent breakdown that didn't reconcile to its own
+total, silent skip paths with no tally, a model-id normalizer that only
+covered two hardcoded date stamps, an unvalidated --since that a newer
+Python parses more leniently than this script expected, and a glob-base-dir
+computation that broke on a narrowing glob -- and nearly every one of them
+failed in the SAME direction: each made a real regression, or a real gap in
+the script's own coverage, look like a clean result instead of an error.
+That recurrence, across three separate review rounds, is the reason the
+fix below is structural rather than one more patch: every path that drops,
+skips, or fails to price a record increments a key in the single
+`ANOMALY_KEYS` ledger, and `report()`'s first job -- before it prints a
+single dollar figure -- is to print all of them, including as an explicit
+zero. A committed self-test (test_usage_indicators.py, alongside this file
+-- run `python3 -m unittest test_usage_indicators -v` from this directory)
+backs every fix with a test that fails when the fix is reverted; that self-
+test is run BY HAND, and nothing in this repo's CI runs it (tracked as a
+known gap, not a claim otherwise -- see SKILL.md). If you change this file:
+run the self-test, ask which direction a mistake here would point the
+reader, and ask whether the mistake would actually show up in the
+`ANOMALY_KEYS` ledger -- if it wouldn't, the ledger is missing a key, which
+is exactly how three of these bugs were found.
 """
 import argparse
 import collections
@@ -58,6 +64,7 @@ import datetime
 import glob as globmod
 import json
 import os
+import re
 import sys
 
 # USD per million tokens: (base_input, write_5m, write_1h, cache_read, output)
@@ -102,36 +109,88 @@ VERIFIED_OPUS_TO_SONNET_RATIO = {
 }
 
 
+_DATE_SUFFIX_RE = re.compile(r"-\d{8}$")
+_GLOB_META_CHARS = frozenset("*?[")
+
+
 def norm_model(m):
+    """Strip a trailing date-snapshot suffix (e.g. "-20260401") and an
+    inference-region bracket suffix (e.g. "[1m]") from a raw model id.
+
+    Round 3 found this hardcoded a two-entry list of exact suffixes seen so
+    far. Any OTHER date stamp -- a new snapshot like "-20260601", or one
+    that just hadn't been added yet -- falls straight through unstripped,
+    fails the PRICES lookup, and reports as an unpriced/unrecognized model:
+    a real request landing in "of which Opus: $0.00 (N reqs)" instead of
+    being priced. A regex on the actual shape of the suffix (8 digits) fixes
+    the whole class instead of one entry at a time.
+    """
     if not m:
         return None
     m = m.split("[")[0]
-    for suf in ("-20260401", "-20251001"):
-        if m.endswith(suf):
-            m = m[: -len(suf)]
+    m = _DATE_SUFFIX_RE.sub("", m)
     return m
 
 
 def valid_since_date(s):
-    """argparse type= validator: reject anything that isn't a full YYYY-MM-DD.
+    """argparse type= validator: reject anything that isn't a full YYYY-MM-DD,
+    and return the CANONICAL isoformat string rather than the input verbatim.
 
     load_rows compares this string against a row's local date with a plain
     `>=`, which only means what it looks like it means if both sides are a
-    full ISO date. Before this validator existed, `--since 2026-09` compared
-    as a string prefix and silently matched (and therefore INCLUDED) every
-    day in September and every month after it, and `--since 2026-9-24`
-    (missing zero-padding) silently matched nothing -- neither mistake was
-    visible anywhere in the output.
+    full, canonical ISO date. Before this validator existed at all,
+    `--since 2026-09` compared as a string prefix and silently matched (and
+    therefore INCLUDED) every day in September and every month after it, and
+    `--since 2026-9-24` (missing zero-padding) silently matched nothing.
+
+    Returning `s` unchanged (an earlier version of this validator) reintroduces
+    a narrower version of the same bug on Python >= 3.11, where
+    `date.fromisoformat` itself became lenient enough to accept
+    `--since 20260924` (basic ISO 8601, no dashes) and `--since 2026-W40-1`
+    (an ISO week date) -- both parse to valid dates, but the ORIGINAL string
+    is not `YYYY-MM-DD`, so comparing it against `row["day"]` compares
+    "20260924" or "2026-W40-1" against "2026-09-24" and silently matches
+    nothing. Reproduced on Python 3.14.7: both inputs pass this validator and
+    then `--since 2026-09-24`-equivalent data reports "no requests matched"
+    over thousands of requests that actually match. Returning
+    `d.isoformat()` normalizes to `YYYY-MM-DD` regardless of which
+    ISO-8601 variant the caller typed or which Python version parsed it.
     """
     try:
-        datetime.date.fromisoformat(s)
+        d = datetime.date.fromisoformat(s)
     except ValueError:
         raise argparse.ArgumentTypeError(
             f"must be a full date, YYYY-MM-DD (got {s!r}); a partial date like "
             f"'2026-09' silently widens the window instead of erroring, which is "
             f"exactly the failure mode this validator exists to prevent"
         )
-    return s
+    return d.isoformat()
+
+
+def glob_base_dir(expanded_pattern):
+    """The deepest directory in `expanded_pattern` containing no glob
+    metacharacter -- the root every matched file's project slug is resolved
+    relative to.
+
+    An earlier version cut the pattern at the first literal '*' character
+    (`pattern.split("*", 1)[0]`), which is correct only when that '*' starts
+    its own path component. A narrowing glob like
+    "~/.claude/projects/ugc*/**/*.jsonl" puts the '*' MID-COMPONENT, so that
+    approach produced the partial, non-existent path ".../projects/ugc" as
+    the base. `os.path.relpath` then treats "ugc" as a sibling rather than
+    an ancestor of the real "ugcportal" directory, so every resolved
+    project slug comes out as "..", and any --project filter matches
+    nothing. Reproduced with such a glob. Walking whole path components and
+    stopping at the first one containing a glob metacharacter fixes this
+    for a glob anchored anywhere, not just at "**".
+    """
+    parts = expanded_pattern.split(os.sep)
+    base_parts = []
+    for part in parts:
+        if any(ch in part for ch in _GLOB_META_CHARS):
+            break
+        base_parts.append(part)
+    return os.sep.join(base_parts) or os.sep
 
 
 def _price_row(row, model, u):
@@ -169,6 +228,27 @@ def _price_row(row, model, u):
     return True
 
 
+# Every one of these keys is printed by report() UNCONDITIONALLY, including
+# when its count is zero. Round 3 found three more silent `continue` paths
+# (non-assistant, non-dict usage, unrecognized model) alongside the ones
+# round 2 had already started counting -- the recurrence across three
+# rounds is the point: a per-case fix does not generalize, because the next
+# silent path is just as easy to add as the last one was to miss. The fix
+# that generalizes is structural: every path that drops or fails to price a
+# record increments a key in THIS dict, and report()'s first job, before it
+# prints a single dollar figure, is to print all of them. An unlisted drop
+# path is a bug in this list, not a silent number.
+ANOMALY_KEYS = (
+    "files_unreadable",
+    "lines_json_error",
+    "lines_missing_id",
+    "lines_missing_timestamp",
+    "lines_not_assistant_with_usage",
+    "lines_usage_not_dict",
+    "lines_unrecognized_model",
+)
+
+
 def load_rows(pattern, since, project_substr):
     """
     Returns (rows, unpriced, diagnostics).
@@ -177,29 +257,30 @@ def load_rows(pattern, since, project_substr):
     PRICES (excluded from every dollar figure, still counted in `n` and in
     the token-based indicators), tallied from the FINAL filtered row set.
 
-    diagnostics is a dict describing the scan itself -- files matched, files
-    that could not be opened, and lines dropped during parsing and why --
-    so a partially-unreadable transcript tree is visible in the output
+    diagnostics is a dict describing the scan itself -- files matched, an
+    anomalies sub-dict keyed by ANOMALY_KEYS (see above), and the filters
+    actually used -- so a partially-unreadable transcript tree, an
+    unparseable record, or an unrecognized model is visible in the output
     rather than silently producing a smaller, confident number.
 
     Project-slug resolution: transcripts for a given project all live under
-    one directory tree rooted at the non-wildcard prefix of `pattern` (by
-    default ~/.claude/projects/<slug>/...), but subagent transcripts nest an
-    extra two levels down (<slug>/<session-uuid>/subagents/agent-*.jsonl).
-    Taking the immediate parent directory name -- the earlier approach --
-    reads "subagents" for every one of those files instead of the actual
-    slug, so a --project filter silently drops all subagent traffic instead
-    of matching it. Walking the path relative to the pattern's root and
-    taking the FIRST component fixes this regardless of nesting depth, and
-    still works against a --glob pointing at a flat test fixture.
+    one directory tree rooted at the deepest glob-metacharacter-free prefix
+    of `pattern` (by default ~/.claude/projects/<slug>/...; see
+    glob_base_dir), but subagent transcripts nest an extra two levels down
+    (<slug>/<session-uuid>/subagents/agent-*.jsonl). Taking the immediate
+    parent directory name -- an earlier approach -- reads "subagents" for
+    every one of those files instead of the actual slug, so a --project
+    filter silently drops all subagent traffic instead of matching it.
+    Walking the path relative to the base dir and taking the FIRST
+    component fixes this regardless of nesting depth, and still works
+    against a --glob pointing at a flat test fixture.
     """
     expanded_pattern = os.path.expanduser(pattern)
-    base_dir = expanded_pattern.split("*", 1)[0].rstrip(os.sep)
+    base_dir = glob_base_dir(expanded_pattern)
 
     best = {}  # requestId -> row dict, keeping the highest output_tokens seen
-    skipped = collections.Counter()  # reason -> count, see the loop below
+    anomalies = collections.Counter()  # key from ANOMALY_KEYS -> count
     files_matched = 0
-    files_unreadable = 0
 
     for path in globmod.glob(expanded_pattern, recursive=True):
         files_matched += 1
@@ -208,7 +289,7 @@ def load_rows(pattern, since, project_substr):
         try:
             fh = open(path, encoding="utf-8", errors="replace")
         except OSError:
-            files_unreadable += 1
+            anomalies["files_unreadable"] += 1
             continue
         with fh:
             for line in fh:
@@ -217,27 +298,36 @@ def load_rows(pattern, since, project_substr):
                 try:
                     d = json.loads(line)
                 except Exception:
-                    skipped["json_error"] += 1
+                    anomalies["lines_json_error"] += 1
                     continue
                 if d.get("type") != "assistant":
+                    # Contains the substring '"usage"' but isn't an
+                    # assistant turn -- e.g. a tool result embedding the
+                    # word elsewhere in its payload. Not necessarily a
+                    # problem, but round 3 found 45 of these in the real
+                    # tree with nothing counting them; tallied rather than
+                    # silently absorbed.
+                    anomalies["lines_not_assistant_with_usage"] += 1
                     continue
                 msg = d.get("message") or {}
                 u = msg.get("usage")
                 if not isinstance(u, dict):
+                    anomalies["lines_usage_not_dict"] += 1
                     continue
                 rid = d.get("requestId") or d.get("uuid")
                 if not rid:
-                    skipped["missing_id"] += 1
+                    anomalies["lines_missing_id"] += 1
                     continue
                 ts = d.get("timestamp")
                 if not ts:
-                    skipped["missing_timestamp"] += 1
+                    anomalies["lines_missing_timestamp"] += 1
                     continue
 
                 is_sidechain = bool(d.get("isSidechain"))
 
                 model = norm_model(msg.get("model"))
                 if model is None or model == "<synthetic>":
+                    anomalies["lines_unrecognized_model"] += 1
                     continue
 
                 # Claude Code writes one "assistant" line per content block
@@ -245,8 +335,12 @@ def load_rows(pattern, since, project_substr):
                 # cache_read repeat identically across them but output_tokens
                 # grows to its final value only on the last line. Keeping the
                 # first-seen line (or any but the max) undercounts output --
-                # measured 48% understated across the real transcript tree.
-                # Keep whichever line has the highest output_tokens.
+                # measured 64.0% understated on the since-2026-09-24 window
+                # this file's own baseline uses (48.8% understated over this
+                # machine's full available history, a different, wider
+                # denominator -- both are real, re-measured 2026-09-28, not
+                # a discrepancy). Keep whichever line has the highest
+                # output_tokens.
                 output = u.get("output_tokens", 0) or 0
                 prev = best.get(rid)
                 if prev is not None and output <= prev["_output"]:
@@ -309,10 +403,7 @@ def load_rows(pattern, since, project_substr):
     diagnostics = {
         "glob_pattern": pattern,
         "files_matched": files_matched,
-        "files_unreadable": files_unreadable,
-        "skipped_json_error": skipped["json_error"],
-        "skipped_missing_id": skipped["missing_id"],
-        "skipped_missing_timestamp": skipped["missing_timestamp"],
+        "anomalies": {key: anomalies[key] for key in ANOMALY_KEYS},
         "since_filter": since,
         "project_filter": project_substr,
     }
@@ -326,25 +417,21 @@ def report(rows, unpriced, diagnostics):
     # file, or a malformed date all still produce a plausible-looking
     # (small) result if this isn't printed, which is the whole reason it
     # is here rather than left as a diagnostic someone has to ask for.
-    unreadable_note = (
-        f" ({diagnostics['files_unreadable']:,} unreadable)" if diagnostics["files_unreadable"] else ""
-    )
-    print(
-        f"scanned {diagnostics['files_matched']:,} files matching "
-        f"{diagnostics['glob_pattern']!r}{unreadable_note}"
-    )
-    skip_total = (
-        diagnostics["skipped_json_error"]
-        + diagnostics["skipped_missing_id"]
-        + diagnostics["skipped_missing_timestamp"]
-    )
-    if skip_total:
-        print(
-            f"skipped {skip_total:,} lines while parsing: "
-            f"{diagnostics['skipped_json_error']:,} unparseable JSON, "
-            f"{diagnostics['skipped_missing_id']:,} missing a request id, "
-            f"{diagnostics['skipped_missing_timestamp']:,} missing a timestamp"
-        )
+    print(f"scanned {diagnostics['files_matched']:,} files matching {diagnostics['glob_pattern']!r}")
+
+    # THE CHOKEPOINT: every anomaly key from ANOMALY_KEYS, printed
+    # unconditionally -- including as an explicit 0 -- so that "nothing is
+    # wrong" and "we didn't check" never look the same. This one block is
+    # what round 3 asked for instead of one more per-case tally: whatever
+    # the next silent drop path turns out to be, it has to increment a key
+    # in `anomalies` to be counted at all, and once it does, it prints here
+    # by construction, not because someone remembered to add a print
+    # statement next to it.
+    print("anomalies while scanning (0 = clean; see ANOMALY_KEYS for what each counts):")
+    for key in ANOMALY_KEYS:
+        print(f"   {key}: {diagnostics['anomalies'][key]:,}")
+    print(f"   unpriced_models: {dict(unpriced) if unpriced else '{}'}")
+
     print(
         f"filters used: --since={diagnostics['since_filter'] or 'none'}  "
         f"--project={diagnostics['project_filter'] or 'none'}"
@@ -426,10 +513,23 @@ def report(rows, unpriced, diagnostics):
     sonnet_sub_cost = sum(r["cost"] for r in sonnet_rows)
     other_sub_cost = sum(r["cost"] for r in other_rows)
     other_models = sorted({r["model"] for r in other_rows})
+
+    def _unpriced_note(group_rows):
+        # "Loud wherever it appears", not just in the top-of-report banner:
+        # a bucket whose cost is $0 because every row in it is unpriced
+        # (round 3, medium 1) must say so on the SAME line as that $0,
+        # since a reader looking at "of which Opus: $0.00 (N reqs)" in
+        # isolation has no reason to scroll back up to the anomalies ledger.
+        n_unpriced = sum(1 for r in group_rows if not r["_priced"])
+        return f", {n_unpriced} unpriced" if n_unpriced else ""
+
     print(
-        f"   of which Opus: ${opus_sub_cost:,.2f} ({len(opus_rows):,} reqs), "
-        f"Sonnet: ${sonnet_sub_cost:,.2f} ({len(sonnet_rows):,} reqs), "
-        f"other ({other_models or 'none'}): ${other_sub_cost:,.2f} ({len(other_rows):,} reqs) "
+        f"   of which Opus: ${opus_sub_cost:,.2f} ({len(opus_rows):,} reqs"
+        f"{_unpriced_note(opus_rows)}), "
+        f"Sonnet: ${sonnet_sub_cost:,.2f} ({len(sonnet_rows):,} reqs"
+        f"{_unpriced_note(sonnet_rows)}), "
+        f"other ({other_models or 'none'}): ${other_sub_cost:,.2f} ({len(other_rows):,} reqs"
+        f"{_unpriced_note(other_rows)}) "
         f"-- reconciles to ${opus_sub_cost + sonnet_sub_cost + other_sub_cost:,.2f} of "
         f"${sub_cost:,.2f}"
     )
