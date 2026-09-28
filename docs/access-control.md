@@ -43,10 +43,16 @@ upload surface will not rediscover it.
    row ownership, rights clearance) are separate questions and stay where they
    are.
 4. **Refusal happens at sign-in, not at each surface.** A refused identity
-   never gets a `User`, `Account` or `Session` row, so `auth()` returns null
-   and every existing gate answers 401 or redirects without knowing this rule
-   exists. A new surface that gates on `session.user.id` is therefore already
-   covered — that is the point of putting the decision here.
+   never gets a `User`, `Account` or `Session` row — `@auth/core` throws
+   `AccessDenied` before `handleLoginOrRegister` runs — so `auth()` returns
+   null and every existing gate answers 401 or redirects without knowing this
+   rule exists. A new surface that gates on `session.user.id` is therefore
+   already covered, and that is the point of putting the decision here.
+
+   The cost of deciding it once, at the door, is that it is also decided
+   *only* at the door: a session minted before the rule changed keeps working
+   until it expires. See "Deploying this does not evict anyone already signed
+   in" below, and `ugcportal-mzr`.
 
 ## What is provisional
 
@@ -83,6 +89,59 @@ Deliberately **not** implemented, because each would silently be the decision:
 Neither set: nobody can sign in, and the server says so loudly at startup
 (`checkSignInConfiguration` in `src/instrumentation.ts`). See `env.example`
 for the full notes.
+
+### Deploying this does not evict anyone already signed in
+
+**Setting `ALLOWED_SIGNIN_EMAILS` is not the whole deployment step.** The gate
+runs at sign-in, and nothing here revokes a session that already exists.
+
+`session: { strategy: "database" }` with no `maxAge` override means
+`@auth/core`'s default: **30 days** of idle life per session
+(`node_modules/@auth/core/lib/init.js:38`), stored in the `Session` table. An
+account that signed in while `defaultCallbacks.signIn` was permitting
+everybody keeps a valid cookie, `auth()` still resolves it out of that table,
+and `POST /api/media` still sees a `session.user.id` and still lets them
+upload and publish — for up to 30 days after this fix ships.
+
+So, on the deploy that first carries this:
+
+1. **Revoke every session.** This is the part that is always correct, and it
+   is enough to make the gate effective: everyone signs in again and the new
+   callback decides.
+
+   ```bash
+   npx prisma db execute --url "$DATABASE_URL" --stdin <<'SQL'
+   DELETE FROM Session;
+   SQL
+   ```
+
+2. **Then decide, per account, whether it should exist at all.** List them
+   first — this is also how you check the allowlist you just wrote covers the
+   people you meant:
+
+   ```bash
+   npx prisma db execute --url "$DATABASE_URL" --stdin <<'SQL'
+   SELECT u.email, u.role, COUNT(m.id) AS uploads FROM User u
+   LEFT JOIN Media m ON m.userId = u.id GROUP BY u.id ORDER BY u.email;
+   SQL
+   ```
+
+   **Do not reflexively delete the `User` rows.** `Account`, `Session`,
+   `Media` and (through `Media`) `MediaListing` all declare
+   `onDelete: Cascade`, so deleting a user silently destroys their upload
+   records — while leaving the actual objects in the bucket, originals and
+   watermarked previews both, with nothing left referencing them. Leaving an
+   unwanted account in place with no session and no way to sign in is the
+   safer default; it can reach nothing.
+
+Today this is very likely a no-op — nothing has been deployed (`ugcportal-321`)
+— but it is written here because the doc is what the next operator reads, and
+"the gate is live" and "nobody unwanted holds a session" are two different
+facts.
+
+Doing any of this **in code** — purging sessions on boot, re-checking the
+policy per request, or shortening `maxAge` — is deliberately *not* in the PR
+that added the gate. See `ugcportal-mzr`, filed for it.
 
 ## How the email is compared
 
@@ -134,10 +193,19 @@ fresh deployment stops working and the instance cannot get its first admin.
 
 ## What a refused visitor sees
 
-HTTP 403 and a first-party page at `/auth/error`
+A 302 to a first-party page at `/auth/error`
 ([`src/app/auth/error/page.tsx`](../src/app/auth/error/page.tsx), wired as
-`pages.error`), saying the instance is private, that there is nothing to
-retry, and to ask the operator for access.
+`pages.error`), which then answers an ordinary **200**, saying the instance is
+private, that there is nothing to retry, and to ask the operator for access.
+
+**A refusal is not a 403, and nothing should monitor or assert one.** Setting
+`pages.error` is precisely what gives that status up: `@auth/core` serves its
+built-in card with `toResponse(renderPage().error(...))` at HTTP 403, but with
+`pages.error` set it takes the other branch of the same catch block
+(`node_modules/@auth/core/index.js:135-141`) and returns `Response.redirect()`
+— a 302, whose default status is unmodified. The user-visible outcome is
+better and the trade is deliberate, but a monitor keyed on "403 means
+refused" would report a wide-open instance as healthy.
 
 The wording is **identical for every refusal**, and is worded to be true of
 all of them. The gate distinguishes "not on the list" from "the provider would

@@ -48,10 +48,18 @@ export const authConfig = {
   // A first-party Access Denied screen (src/app/auth/error/page.tsx). Without
   // this, a refused sign-in lands on @auth/core's built-in page, which says
   // "You do not have permission to sign in" above a Sign in button that
-  // starts the same refused journey over again. Same HTTP 403 either way and
-  // the same words for every refusal — the reason is only ever logged
-  // server-side — but this one explains that the instance is private and
-  // stops offering the loop.
+  // starts the same refused journey over again. This one explains that the
+  // instance is private and stops offering the loop, with the same words for
+  // every refusal — the reason is only ever logged server-side.
+  //
+  // MIND THE STATUS CODE, because setting this is what changes it. @auth/core
+  // renders its built-in card with `toResponse(renderPage().error(...))`,
+  // which is HTTP 403; with `pages.error` set it takes the other branch in
+  // its catch block (index.js:135-141) and returns `Response.redirect()` — a
+  // 302 to `${pages.error}?error=AccessDenied`, after which this Next page
+  // answers an ordinary 200. So a refusal is a 302-then-200, never a 403, and
+  // nothing should be written to monitor or assert one (PR #45 review,
+  // round 1 finding 3).
   pages: { error: AUTH_ERROR_PATH },
   callbacks: {
     /**

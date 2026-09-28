@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   PERMITTED_EMAILS_VAR,
   type SignInEnv,
+  bootstrapAdminEmails,
   decideSignIn,
   isPermittedSignIn,
   permittedIdentities,
@@ -13,9 +14,13 @@ import {
  * configuration nobody may.
  *
  * Every test passes its own `env` object rather than mutating process.env, so
- * a developer or CI runner who happens to export ALLOWED_SIGNIN_EMAILS cannot
- * change an answer here. The one test that exercises the process.env default
- * says so and restores it.
+ * a developer or CI runner who happens to export ALLOWED_SIGNIN_EMAILS *or*
+ * ADMIN_BOOTSTRAP_EMAILS cannot change an answer here. That claim was not
+ * true when this file was first written — `permittedIdentities` honoured the
+ * injected env for one variable and fell through to `process.env` for the
+ * other — so "the injected env is the only source" now has its own test
+ * below rather than being an assumption of the harness. The two tests that
+ * exercise the process.env default say so and restore it.
  */
 
 const LISTED = "owner@example.com";
@@ -80,7 +85,7 @@ describe("permittedIdentities", () => {
     ]);
   });
 
-  it("unions in ADMIN_BOOTSTRAP_EMAILS, so the bootstrap list is always a subset", () => {
+  it("unions in ADMIN_BOOTSTRAP_EMAILS, whatever the allowlist says", () => {
     // ugcportal-egp K3, as a property rather than an example: the bootstrap
     // cannot admit an identity sign-in would refuse, because being listed for
     // bootstrap IS a grant. If a future mechanism stops unioning this in, this
@@ -113,6 +118,51 @@ describe("permittedIdentities", () => {
     expect(
       permittedIdentities({ ADMIN_BOOTSTRAP_EMAILS: "admin" }).malformed,
     ).toEqual(["admin"]);
+  });
+
+  it("reads both variables out of the injected env and neither out of the ambient one", () => {
+    // PR #45 round 1, medium 1. `bootstrapAdminEmails` has a default
+    // parameter reading process.env, so `bootstrapAdminEmails(
+    // env.ADMIN_BOOTSTRAP_EMAILS)` on an env object without that key passed
+    // `undefined`, TRIGGERED the default, and unioned in addresses the caller
+    // never mentioned. A gate granting from a source its caller believed it
+    // had overridden.
+    const AMBIENT = "ambient-leak@evil.example.com";
+    const original = process.env.ADMIN_BOOTSTRAP_EMAILS;
+    try {
+      process.env.ADMIN_BOOTSTRAP_EMAILS = AMBIENT;
+
+      // The needle is provably present at the source: the ambient value IS
+      // readable through the default parameter, so the assertions below are
+      // about permittedIdentities ignoring it, not about the value being
+      // absent everywhere.
+      expect(bootstrapAdminEmails()).toEqual([AMBIENT]);
+
+      // An env object that mentions neither variable is UNCONFIGURED, even
+      // though the ambient one names an address.
+      const nothingInjected = permittedIdentities({});
+      expect(nothingInjected.emails).toEqual([]);
+      expect(nothingInjected.configured).toBe(false);
+
+      // And one that mentions only the allowlist permits only the allowlist.
+      expect(permittedIdentities(env()).emails).toEqual([LISTED]);
+
+      // Right through the decision, which is where it would have mattered.
+      expect(decideSignIn({ user: { email: AMBIENT } }, env())).toEqual({
+        permitted: false,
+        reason: "not-permitted",
+      });
+      expect(decideSignIn({ user: { email: AMBIENT } }, {})).toEqual({
+        permitted: false,
+        reason: "no-configuration",
+      });
+    } finally {
+      if (original === undefined) {
+        delete process.env.ADMIN_BOOTSTRAP_EMAILS;
+      } else {
+        process.env.ADMIN_BOOTSTRAP_EMAILS = original;
+      }
+    }
   });
 
   it("defaults to process.env", () => {

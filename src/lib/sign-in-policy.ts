@@ -119,11 +119,20 @@ function splitList(raw: string | undefined): string[] {
  * (ugcportal-lu7). Also re-exported from src/lib/admin-bootstrap.ts, which is
  * where it used to live and where its consumer is.
  *
- * It lives HERE rather than there because the permitted-sign-in set unions it
- * in, and this module must not import that one: admin-bootstrap.ts imports
- * Prisma, and src/instrumentation.ts reads the sign-in configuration at boot,
- * including in the Edge instrumentation bundle where the Prisma client cannot
- * be loaded.
+ * It lives HERE rather than there for two reasons. The permitted-sign-in set
+ * reads the same variable, and one `splitList` shared by both is what keeps
+ * the two from disagreeing about where an entry begins and ends — rather than
+ * two parsers happening to agree. (Not a subset relation: an entry that fails
+ * the shape check is in this list and not in the permitted one. It grants
+ * nothing either way — the gate refuses it, so the promotion downstream of
+ * the gate is never reached.) And this module
+ * must not import that one: admin-bootstrap.ts imports Prisma, and
+ * src/instrumentation.ts reads the sign-in configuration at boot, including in
+ * the Edge instrumentation bundle where the Prisma client cannot be loaded.
+ *
+ * Note the default parameter. `permittedIdentities` deliberately does NOT call
+ * this function, precisely because the default silently reads the ambient
+ * `process.env` when a caller passes an env object without the key.
  *
  * Matching on the email rather than a user id is what makes the bootstrap
  * usable on a fresh deployment: the operator has no id to name until someone
@@ -156,9 +165,11 @@ export type PermittedIdentities = {
 /**
  * The permitted set, from configuration.
  *
- * Pure: it takes the environment and logs nothing, so the decision can be
- * tested without capturing console output, and the logging lives at the one
- * edge that has a request to attach it to.
+ * Pure: it logs nothing, so the decision can be tested without capturing
+ * console output, and the logging lives at the one edge that has a request to
+ * attach it to. It also reads BOTH variables out of the `env` it was handed
+ * and neither out of the ambient `process.env` — see the note on `splitList`
+ * below for the way that was quietly untrue at first.
  *
  * ADMIN_BOOTSTRAP_EMAILS is folded in, and that is the whole answer to how
  * this composes with the first-admin bootstrap (ugcportal-lu7) — see
@@ -179,10 +190,15 @@ export function permittedIdentities(
 ): PermittedIdentities {
   const entries = [
     ...splitList(env[PERMITTED_EMAILS_VAR]),
-    // Already trimmed and lowercased by bootstrapAdminEmails; re-running the
-    // shape check on them is not redundant, because a malformed entry there
-    // would otherwise just never match and never be mentioned.
-    ...bootstrapAdminEmails(env.ADMIN_BOOTSTRAP_EMAILS),
+    // `splitList` directly, NOT `bootstrapAdminEmails(env.ADMIN_BOOTSTRAP_EMAILS)`
+    // — that function has a default parameter reading `process.env`, so passing
+    // the key of an env object that does not have it passes `undefined`, which
+    // *triggers* the default and reads the ambient environment instead. The
+    // result was a permitted set containing addresses the injected `env` never
+    // mentioned: a gate granting from a source its caller believed it had
+    // overridden (PR #45 review, round 1). Both lists are parsed by the same
+    // `splitList`, so they still cannot drift.
+    ...splitList(env.ADMIN_BOOTSTRAP_EMAILS),
   ];
 
   const emails: string[] = [];
