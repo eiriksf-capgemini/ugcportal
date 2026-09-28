@@ -89,8 +89,18 @@ export function AppShell({ children }: { children: ReactNode }) {
               shrinkage in proportion to base-size x shrink-factor, so an
               outsized factor here means the wordmark is fully consumed before
               any pressure reaches the actions.
+
+              min-w-12 (3rem), not min-w-0 (ugcportal-t0y round 2 finding):
+              the nav slot this bead added is shrink-0, so it and its gap now
+              take a fixed ~70px out of the row before any shrinkage is
+              distributed at all, and at a 320px viewport with a long
+              signed-in email, a shrink-[999] item with NO floor can be
+              squeezed to zero width - taking the only link back to "/" with
+              it. A small floor keeps a truncated sliver of the wordmark on
+              screen (and clickable) in that case; it does not fully solve
+              narrow-viewport layout, which is ugcportal-2al's job.
             */
-            className="min-w-0 shrink-[999] truncate rounded-sm text-sm font-medium tracking-tight text-foreground transition-colors hover:text-primary focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring"
+            className="min-w-12 shrink-[999] truncate rounded-sm text-sm font-medium tracking-tight text-foreground transition-colors hover:text-primary focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring"
           >
             {SITE_NAME}
           </Link>

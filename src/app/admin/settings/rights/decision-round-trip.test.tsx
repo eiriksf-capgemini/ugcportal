@@ -32,7 +32,7 @@ import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db"
 
 const authMock = vi.fn();
 
-vi.mock("@/lib/auth", () => ({ auth: authMock }));
+vi.mock("@/lib/auth", () => ({ auth: authMock, getSession: authMock }));
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 
 const database = createTemporaryDatabase();

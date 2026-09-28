@@ -2,6 +2,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 
+import { SITE_NAME } from "@/lib/site";
+
 /**
  * ugcportal-t0y round 1 medium finding: AppShell must stay a plain
  * synchronous function. React can only start rendering a component's
@@ -51,12 +53,23 @@ describe("AppShell (ugcportal-t0y)", () => {
   });
 
   it("places the nav slot between the wordmark and the auth widget", () => {
+    // SITE_NAME imported rather than the literal "UGC Portal" spelled again:
+    // app-shell.tsx already imports the same constant (ugcportal-t0y round 2
+    // finding), so a site rename can never desync this test from what the
+    // component actually renders.
     const markup = renderShell();
-    const wordmark = markup.indexOf(">UGC Portal<");
+    const wordmark = markup.indexOf(`>${SITE_NAME}<`);
     const nav = markup.indexOf('data-testid="nav-stub"');
     const auth = markup.indexOf('data-testid="auth-stub"');
 
-    expect(wordmark).toBeGreaterThan(-1);
+    // Explicit presence checks, not just the `-1` floor the ordering
+    // comparisons below rely on: without these, `wordmark === -1` (not
+    // found) would still satisfy `nav > wordmark` and `auth > nav` for any
+    // real index, making the ordering claim pass vacuously.
+    expect(wordmark, "wordmark not found in markup").toBeGreaterThan(-1);
+    expect(nav, "nav stub not found in markup").toBeGreaterThan(-1);
+    expect(auth, "auth stub not found in markup").toBeGreaterThan(-1);
+
     expect(nav).toBeGreaterThan(wordmark);
     expect(auth).toBeGreaterThan(nav);
   });

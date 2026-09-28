@@ -24,7 +24,7 @@ import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db"
  */
 
 const authMock = vi.fn();
-vi.mock("@/lib/auth", () => ({ auth: authMock }));
+vi.mock("@/lib/auth", () => ({ auth: authMock, getSession: authMock }));
 
 const database = createTemporaryDatabase();
 const { prisma } = await import("@/lib/prisma");

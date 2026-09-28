@@ -9,7 +9,7 @@ const setResaleRightsStatusMock = vi.fn();
 const putRightsEvidenceMock = vi.fn();
 const deleteRightsEvidenceMock = vi.fn();
 
-vi.mock("@/lib/auth", () => ({ auth: authMock }));
+vi.mock("@/lib/auth", () => ({ auth: authMock, getSession: authMock }));
 vi.mock("next/cache", () => ({ revalidatePath: revalidatePathMock }));
 vi.mock("@/lib/resale-rights-review", () => ({
   setResaleRightsStatus: setResaleRightsStatusMock,

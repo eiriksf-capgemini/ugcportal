@@ -1,13 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const authMock = vi.fn();
+const getSessionMock = vi.fn();
 
-vi.mock("@/lib/auth", () => ({ auth: authMock }));
+vi.mock("@/lib/auth", () => ({ getSession: getSessionMock }));
 
 const { requireAdmin } = await import("@/lib/admin");
 
 beforeEach(() => {
-  authMock.mockReset();
+  getSessionMock.mockReset();
 });
 
 describe("requireAdmin", () => {
@@ -16,7 +16,7 @@ describe("requireAdmin", () => {
   // /admin/settings/instagram) consults on the user's next request.
   it("returns the session for a signed-in admin", async () => {
     const session = { user: { id: "admin-1", role: "ADMIN" } };
-    authMock.mockResolvedValue(session);
+    getSessionMock.mockResolvedValue(session);
 
     await expect(requireAdmin()).resolves.toBe(session);
   });
@@ -29,7 +29,7 @@ describe("requireAdmin", () => {
       { user: { id: "user-1" } },
       { user: { role: "ADMIN" } },
     ]) {
-      authMock.mockResolvedValue(session);
+      getSessionMock.mockResolvedValue(session);
       await expect(requireAdmin()).resolves.toBeNull();
     }
   });

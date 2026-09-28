@@ -11,7 +11,7 @@ const exchangeCodeMock = vi.fn();
 const exchangeLongLivedMock = vi.fn();
 const fetchProfileMock = vi.fn();
 
-vi.mock("@/lib/auth", () => ({ auth: authMock }));
+vi.mock("@/lib/auth", () => ({ auth: authMock, getSession: authMock }));
 vi.mock("@/lib/prisma", () => ({
   prisma: { instagramAccount: { upsert: upsertMock } },
 }));

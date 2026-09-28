@@ -5,7 +5,7 @@ const setUserRoleMock = vi.fn();
 const revalidatePathMock = vi.fn();
 const redirectMock = vi.fn();
 
-vi.mock("@/lib/auth", () => ({ auth: authMock }));
+vi.mock("@/lib/auth", () => ({ auth: authMock, getSession: authMock }));
 // Only setUserRole is stubbed — the real isRole is the input validation under
 // test, and stubbing it would let a tampered role through unnoticed.
 vi.mock("@/lib/prisma", () => ({ prisma: {} }));
