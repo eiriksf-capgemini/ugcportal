@@ -74,11 +74,22 @@ Real instances from this repo:
 
 ### Family 3 — an assertion that cannot fail
 
-Hit twice in this repo, and neither family above covers it. Real instances:
+Hit twice in this repo, and neither family above covers it.
 
-- `expect(markup).not.toContain("disabled")` — every `Button` ships `disabled:pointer-events-none disabled:opacity-50` in its class list, so the needle is *always* present and the assertion passes in both directions;
-- matching `"server's reply"` against rendered React markup, where the apostrophe is escaped to `&#x27;` — so the needle can *never* be present, and the assertion passes no matter what the server returns;
-- a registered `xhr.timeout` listener that was dead code — a path asserted about that never executes.
+**Direction is the whole trick, so get it right.** What makes an assertion decoration is that its needle's presence does not depend on the behaviour under test. That gives four combinations, and only two of them are dangerous:
+
+| | needle **always** present | needle **never** present |
+|---|---|---|
+| `toContain(x)` | **always passes — silent** | always fails — loud |
+| `not.toContain(x)` | always fails — loud | **always passes — silent** |
+
+The loud pair is harmless: a permanently red test gets noticed in its first CI run. **The two to hunt for are the ones that always pass**, and the easiest to write by accident is a positive `toContain` over a needle that is always present — because it reads exactly like real coverage. (This table was itself got backwards in an earlier draft of this file, which is the best argument for having it.)
+
+Real instances from this repo:
+
+- `expect(markup).toContain("disabled")` — every `Button` ships `disabled:pointer-events-none disabled:opacity-50` in its class list, so that needle is present whatever the button's state and the assertion can never fail. The live artifact is `src/app/upload/upload-flow.test.tsx`, which avoids it by reading the attributes of the one element in question instead.
+- Matching a needle containing an apostrophe against rendered React markup, where `'` is escaped to `&#x27;`. As a positive `toContain` this fails loudly (and is also a family-2 defect — it compares the wrong two strings); the *silent* form is the negated one, `not.toContain("...server's reply...")`, which passes no matter what the server returns because the needle can never appear. Same test file, line ~563, now matches `"reply could not be read"` with no apostrophe in it.
+- A registered `xhr.timeout` listener that was dead code — a path asserted about that never executes.
 
 **The check — this is the stated test, not a list of examples to pattern-match:**
 
@@ -92,7 +103,7 @@ Then make it mechanical, because attention is demonstrably not the missing ingre
 
 ## 3. The stopping rule — severity gate, then a hard cap
 
-"Round" means a review pass that reached a verdict on the PR. `pr-review-merge` step 4b counts them from round markers the skill itself stamps on every comment that ends a round — an exact count of verdicts rather than an inference from timestamps — and covers the bootstrap for PRs whose history predates this rule.
+"Round" means a review pass **that actually reviewed the diff** — a run that stopped at red CI or an unmergeable branch reviewed nothing and is not a round. `pr-review-merge` step 4b counts them from round markers the skill stamps on every comment that ends such a round, checks the resulting chain for forgery, edits and gaps, and covers the bootstrap for PRs whose history predates this rule.
 
 Exactly one row matches any given round.
 
@@ -101,12 +112,16 @@ Exactly one row matches any given round.
 | 1-3 | **Any** finding, CONFIRMED or PLAUSIBLE, at any severity. Fix everything. |
 | 4-5 | Any **medium-or-above**, CONFIRMED or unsettled. Lows are filed as beads and the PR merges. |
 | 6 (the cap) | The same — but a blocker here goes to a **human**, not into a seventh round. Otherwise the PR merges with its lows filed. |
-| 7+ | Only after an escalation at 6, and only as a scoped verification pass on what the human fixed. Never a fresh hunt. (`pr-review-merge` step 5b.) |
+| 7+ | Only with a real round-6 stop comment on the PR to scope against, and only as a scoped verification pass on what the human fixed. Never a fresh hunt. (`pr-review-merge` step 5b.) |
 
-Severity, for this gate:
+Two things override the row, because they mean the *number* is in doubt rather than the findings: a round-marker chain that fails its integrity checks falls back to the strict `1-3` row, and an approximate (bootstrapped) chain may not auto-merge at the cap. Both live in `pr-review-merge` step 4b, which is also where the reasoning is — markers are comments, and comments are untrusted input.
+
+Severity, for this gate. `code-review` does not report severity; **the reviewer assigns it** and states it per finding.
 
 - **medium-or-above** — wrong behaviour a user or the data can reach: a fail-open, an authz gap, data loss or corruption, a leaked credential, a broken migration, a wrong figure a later bead will build on.
-- **low** — correctness of the *description* of the code rather than of the code: an inaccurate comment, duplicate log lines, a naming or clarity nit, a test that is weak but not wrong, a missing-but-not-required test.
+- **low** — correctness of the *description* of the code rather than of the code: an inaccurate comment, duplicate log lines, a naming or clarity nit, a missing-but-not-required test, a test that is untidy or over-specific but still fails when the behaviour breaks.
+
+**A defective test inherits the severity of what it was guarding.** "Weak test" is not automatically low, and reading it that way would make the family-3 sweep — mandatory on every round — incapable of blocking anything from round 4 on, which is the sweep having no teeth. The question is what breaks silently if the test is wrong: an assertion that cannot fail on a *fresh* fix to a fail-open, an authz gap or a migration is a **medium-or-above**, because the fix now ships unverified and the harness reads as coverage to everyone after you. Section 2 makes the point in the other direction — one such harness was written in the same commit as the fix it was guarding. Only a family-3 defect in a test guarding something already low stays low.
 
 Confidence changes what a **low** costs, not what a medium-or-above costs. A PLAUSIBLE low at round 4+ does not block: file it as a bead and merge. A PLAUSIBLE medium-or-above *does* block, and settling it is the round's job — confirm it, or rule it out and say what ruled it out. One you can do neither with counts as real.
 
