@@ -126,9 +126,27 @@ context gets rewritten at 1.25x on the next turn:
 
 At ~950k tokens of context, stepping away for a coffee costs about two
 dollars in cache-write charges alone before the next turn does anything.
-This also means the 1-hour cache tier's ~$46 premium (over the 24-day window)
-is usually **not** a saving to take back — a single avoided TTL-expiry rewrite
-at this context size is worth several 1h-tier premiums.
+
+An earlier draft of this section quoted a "~$46 1-hour-tier premium" figure
+here. That number was real but came from a **different window** (the full
+24-day report, 09-05 through 09-28) than the one this file's own baseline
+documents (since 2026-09-24), is off by roughly 10x if read against the
+window this file actually covers, and — the sharper problem — cannot be
+reproduced by the command § 4 gives you: indicator 5 on the documented window
+reads **1-hour 0.0%**, because 1-hour cache-tier usage genuinely stopped on
+2026-09-18, before this window even starts. A number a reader cannot
+reproduce with the command they were just given is worse than no number, so
+indicator 5 now computes and prints the relevant comparison directly from
+whatever window you actually ran it against: what the window's cache-write
+spend actually was, and what it would have been under an all-1-hour or
+all-5-minute hypothetical. On the since-2026-09-24 window (snapshot,
+2026-09-28 — re-run the command for a current figure): actual cache-write
+spend $768.65, all-1-hour hypothetical $1,229.84, i.e. a **$461.19** premium
+for hedging the *entire* window's cache writes against TTL-expiry rewrites —
+not $46, and not comparable to the older window's figure. This also means
+the 1-hour cache tier's premium is usually **not** a saving to take back — a
+single avoided TTL-expiry rewrite at this context size is worth several
+1h-tier premiums.
 
 **Practice:** finish or explicitly close a large orchestration session rather
 than leaving it parked mid-task. If a gap is unavoidable, the 1-hour cache
@@ -151,7 +169,7 @@ exactly the "ad-hoc" state this bead's K4 was written against.
 `scripts/usage_indicators.py`, alongside this file, closes that gap without
 touching or reimplementing `claude-usage-report.py` — it reads the same
 transcripts independently and prints all five indicators directly, plus an
-Opus-vs-Sonnet breakdown of subagent spend (the § 1 finding):
+Opus/Sonnet/other breakdown of subagent spend (the § 1 finding):
 
 ```bash
 python3 .claude/skills/harness-cost-controls/scripts/usage_indicators.py --since 2026-09-24
@@ -170,23 +188,29 @@ subagent share, cache-tier mix) describe real resource use regardless of
 whether the dollar figure is a real invoice.
 
 **Baseline captured 2026-09-28, all projects, since 2026-09-24 (all-projects
-run):** 11,344 requests, $2,105.60 list-price. Subagent (isSidechain) spend:
-$1,445.98 (68.7%) of which Opus $1,314.22 across 8,173 requests and Sonnet
-$94.08 across 1,286 requests — Opus-5 subagent spend at Sonnet-5 rates would
-be ~$525.69. Scoped to `--project ugcportal` specifically: 10,802 requests,
-$2,038.84, subagent spend $1,433.57 (70.3%) across 9,433 requests, of which
-Opus $1,303.03 across 8,041 requests and Sonnet $92.86 across 1,258 — a
-non-zero, non-trivial result, which is itself the round-1-review regression
-test for the P1 fix below (an earlier version of this script printed `$0.00
-… 0 of N requests` for this exact invocation).
+run):** 11,552 requests, $2,133.97 list-price. Subagent (isSidechain) spend:
+$1,463.17 (68.6%) partitioned into Opus $1,321.04 across 8,259 requests,
+Sonnet $104.45 across 1,389 requests, and other (Fable/Haiku) $37.67 across
+134 requests — reconciling exactly to $1,463.17 (a round-2 review finding:
+an earlier version of this partition only had Opus and Sonnet lines, so the
+Fable/Haiku $37.67 was in the total and in no sub-line at all). Opus-5
+subagent spend at Sonnet-5 rates would be ~$528.42. Scoped to `--project
+ugcportal` specifically: 11,011 requests, $2,067.28, subagent spend
+$1,450.82 (70.2%) across 9,623 requests, of which Opus $1,309.85 across
+8,127 requests, Sonnet $103.30 across 1,362, and other $37.67 across 134 —
+a non-zero, non-trivial result, which is itself the round-1-review
+regression test for the P1 fix below (an earlier version of this script
+printed `$0.00 … 0 of N requests` for this exact invocation).
 
 This is **larger** than the bead's originally-cited $1,558 / 8,370 requests /
-5,955-Opus-subagent-requests figures, for two reasons: more time and further
-work had passed by the time this was captured, and — found in round-1 PR
-review, see § 5 below — an earlier version of this script undercounted output
-tokens by roughly half and silently dropped every nested subagent transcript
-when `--project` was used. Both readings still agree on the qualitative
-finding: most subagent spend was still running on Opus at measurement time.
+5,955-Opus-subagent-requests figures, for several reasons: more time and
+further work had passed by the time this was captured; an earlier version of
+this script undercounted output tokens by roughly half and silently dropped
+every nested subagent transcript when `--project` was used (round 1); and an
+earlier version's Opus/Sonnet partition excluded Fable/Haiku spend from
+every sub-line while still counting it in the total (round 2) — see § 5.
+Every reading still agrees on the qualitative finding: most subagent spend
+was still running on Opus at measurement time.
 
 **This baseline is a "before" figure, not a "before and after."** Nothing in
 this PR changes runtime behavior — § 1 mechanism 2 (the actual backstop)
@@ -199,33 +223,73 @@ command above then and compare against the baseline in this section.
 
 ## 5. When this measurement itself is wrong
 
-Round-1 review of the PR that added this file found six bugs in
-`usage_indicators.py`, three of which shared one shape: a wrong project-slug
-path, a first-seen-wins dedup that kept a partial (lower) output-token count,
-and an unpriced model silently costing `$0` — each one made a **real
-regression look like a clean result** rather than an error. The `--project`
-bug is the sharpest example: it made every subagent transcript invisible to
-the filter, so the exact invocation this file documented would have printed
-`$0.00 … 0 of N requests` after the settings.json fix lands — reading as "the
-fix worked," when the truth would have been "the tool broke." A monitor whose
-failure mode is silently reporting the good outcome is worse than no monitor,
-because it actively argues against looking further.
+Two full rounds of PR review on the PR that added this file found twelve
+bugs total in `usage_indicators.py`, and the pattern held across both
+rounds: nearly every one of them made a **real regression, or a real gap in
+the script's own coverage, look like a clean result** instead of an error.
+That is not a coincidence of what reviewers happened to look for — it is
+what this class of bug looks like. A script whose job is to notice a cost
+regression is, structurally, the easiest kind of tool to get silently wrong
+in the reassuring direction, because "the number went down" is exactly what
+everyone hopes to see.
 
-The fixes: resolve the project slug from the path relative to the glob's own
-root rather than one parent directory (works regardless of subagent nesting
-depth, and prints a loud warning if a `--project` filter zeroes out subagent
-traffic that exists elsewhere in the scanned set); keep the maximum
-`output_tokens` seen per `requestId` rather than the first; track unpriced
-models from the final filtered row set and print them prominently rather than
-folding them into `$0`; derive a fast-speed cache-read reprice from each
-model's own ratio instead of assuming the common 10%; bucket days and the
-`--since` cutoff on local time (`.astimezone()`), matching
-`claude-usage-report.py`, instead of raw UTC; and restrict the Opus→Sonnet
-cost counterfactual to model pairs actually verified line-by-line, rather
-than applying one ratio to every `claude-opus*` row. If you touch this file
-again: before asking "does the number look right", ask which direction a
-mistake in this computation would point the reader, and prefer a failure
-that prints a warning over one that quietly prints zero.
+**Round 1:** a wrong project-slug path (subagent transcripts nest two levels
+deeper than main-thread ones; taking the immediate parent directory read
+`"subagents"` for every one of them, so `--project` silently excluded all
+subagent traffic — the documented invocation would have printed `$0.00 … 0
+of N requests` and read as "the fix worked" instead of "the tool broke"); a
+first-seen-wins dedup that kept a partial (lower) output-token count instead
+of the final one; an unpriced model silently costing `$0` while still
+counting toward the request total.
+
+**Round 2:** the round-1 fix's own docstring claimed test coverage
+(`"covered by the self-test in this directory"`) that did not exist yet —
+now it does, see below; four silent skip paths (an unreadable file, a line
+that fails JSON parsing, a missing request id, a missing timestamp) had no
+tally, so a partially-unreadable transcript tree would have reported a
+smaller, confident number with nothing to show for it; the Opus/Sonnet
+subagent partition excluded Fable and Haiku from every sub-line while still
+counting their spend in the total, so the parts didn't sum to the whole; a
+code comment stated an inverted ratio (would have argued *for* using more
+Opus, had anyone followed it to extend this file); the Fable pricing anomaly
+was claimed to be "flagged upstream in the PR" when it was only in a review
+reply, not the PR body or a bead (now it is: `ugcportal-xwt`); and `--since`
+was an unvalidated string compare, so `--since 2026-09` silently widened to
+everything from September onward and `--since 2026-9-24` silently matched
+nothing — with the effective window never echoed anywhere, so neither
+mistake was visible in the output.
+
+**The fixes**, round 1: resolve the project slug from the path relative to
+the glob's own root rather than one parent directory; keep the maximum
+`output_tokens` seen per `requestId`; track unpriced models from the final
+filtered row set and print them prominently. Round 2: partition subagent
+spend into Opus / Sonnet / other so the parts always reconcile to the total
+(printed explicitly); correct the inverted comment; track the Fable pricing
+question as `ugcportal-xwt` instead of an unverifiable claim; validate
+`--since` against a real ISO date (`argparse` `type=`, rejects a partial or
+malformed date instead of silently mis-scoping the window); and have
+`report()` echo the scan itself — files matched, files unreadable, lines
+skipped and why, the filters actually used, and the date range the kept
+requests actually cover — **before** printing a single indicator, so a bad
+filter or an unreadable file is visible instead of merely absent from the
+number. Indicator 5 also grew a same-window, reproducible dollar comparison
+(actual cache-write spend vs. an all-1-hour or all-5-minute hypothetical),
+replacing a cross-window figure in § 3 above that this script could not
+reproduce.
+
+**A committed self-test** now backs the coverage claim this file makes:
+`test_usage_indicators.py`, alongside this file — run
+`python3 -m unittest test_usage_indicators -v` from this directory. It builds
+synthetic transcript trees (including the real nested subagent path layout)
+rather than depending on any machine's actual history, so it passes the same
+way in CI or on a laptop. Every fix above has a named test that fails when
+the fix is reverted (verified by hand for each one while writing this
+section — revert the one line, watch the specific test fail, restore).
+
+If you touch this file again: before asking "does the number look right",
+ask which direction a mistake in this computation would point the reader,
+run the self-test, and prefer a failure that prints a warning over one that
+quietly prints a smaller, more reassuring number.
 
 ## What this does not do
 
