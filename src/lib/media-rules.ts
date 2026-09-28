@@ -111,3 +111,60 @@ export function validateUpload(file: {
 
   return { ok: true, kind };
 }
+
+// --- text safety: one denylist, now three readers ---------------------------
+//
+// These two patterns started life in src/lib/media.ts guarding `originalName`,
+// the only user-controlled string the product stored and later rendered. Tag
+// names (ugcportal-jsc) are the second, so the denylist moved HERE rather than
+// being copied — and this is the module that can hold it, for exactly the
+// reason the header above gives: it has no runtime imports, so a "use client"
+// component can load it, while src/lib/media.ts imports `node:crypto` and
+// cannot be bundled for the browser at all.
+//
+// src/lib/media.ts re-exports both, so every existing server-side reader is
+// unchanged and "everything about media" is still one address.
+
+/**
+ * Characters that would survive into every UI rendering the string and lie
+ * about what it says: C0 and C1 controls, DEL, the bidi marks and overrides,
+ * and the invisibles that render as nothing at all. The bidi group is why this
+ * is wider than it looks — a right-to-left override in the middle of
+ * "invoicegnp.exe" renders it as "invoice exe.png", the exact deception it
+ * exists to stop.
+ *
+ * The invisible group (soft hyphen, ZWSP, line/paragraph separators, word
+ * joiner, Hangul filler, BOM) is denied rather than merely trimmed because a
+ * string built only from them is not empty by length yet renders as blank.
+ *
+ * Zero-width JOINER (U+200D) is deliberately absent: emoji sequences need it,
+ * and it neither reorders nor hides text.
+ */
+export const UNSAFE_TEXT_CHARS =
+  /[\u0000-\u001F\u007F-\u009F\u00AD\u061C\u200B\u200E\u200F\u202A-\u202E\u2028\u2029\u2060\u2066-\u2069\u3164\uFEFF]/;
+
+/**
+ * Unpaired surrogates cannot join the class above: at code-unit level every
+ * astral character (so every emoji) is MADE of surrogates, and a naive
+ * [\uD800-\uDFFF] would reject exactly the strings that comment promises to
+ * allow. Only the unpaired ones are a problem, and they are a real one. JSON
+ * permits a lone high surrogate; it is neither a control nor a bidi character,
+ * and the @libsql/client driver this repo uses silently substitutes U+FFFD on
+ * write, so a handler that echoes what was submitted disagrees with what a
+ * later read returns. A strict-UTF-8 driver would throw instead, turning the
+ * same input into a 500.
+ */
+export const LONE_SURROGATE =
+  /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
+/**
+ * True when a string carries anything from either class above.
+ *
+ * The predicate, not just the two patterns, because there are now three
+ * readers — the rename validator, the tag validator, and the gallery's
+ * render-side drop — and "test both, and remember neither is global" is
+ * precisely the two-line ritual that gets copied with one line missing.
+ */
+export function hasUnsafeText(value: string): boolean {
+  return UNSAFE_TEXT_CHARS.test(value) || LONE_SURROGATE.test(value);
+}

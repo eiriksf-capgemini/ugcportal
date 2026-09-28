@@ -1,7 +1,12 @@
 import { randomUUID } from "node:crypto";
 
 import type { MediaKind } from "@/generated/prisma/enums";
-import { MAX_SIZE_BYTES, validateUpload } from "@/lib/media-rules";
+import {
+  LONE_SURROGATE,
+  MAX_SIZE_BYTES,
+  UNSAFE_TEXT_CHARS,
+  validateUpload,
+} from "@/lib/media-rules";
 
 /**
  * The accepted types, the per-kind caps and the check that applies them now
@@ -19,7 +24,10 @@ import { MAX_SIZE_BYTES, validateUpload } from "@/lib/media-rules";
  */
 export {
   ACCEPTED_MIME_TYPES,
+  LONE_SURROGATE,
   MAX_SIZE_BYTES,
+  UNSAFE_TEXT_CHARS,
+  hasUnsafeText,
   kindForDeclaredType,
   validateUpload,
 } from "@/lib/media-rules";
@@ -140,35 +148,22 @@ export function sniffKind(buffer: Buffer): MediaKind | null {
 // could still fail validation.
 export const MAX_ORIGINAL_NAME_LENGTH = 255;
 
-// Characters that would survive into every UI rendering the name and lie
-// about what it says: C0 and C1 controls, DEL, and the bidi marks and
-// overrides, and the invisibles that render as nothing at all. The bidi
-// group is why this is wider than it looks —
-// "invoice\u202Egnp.exe" renders as "invoice exe.png", the exact deception
-// it exists to stop.
+// The denylist itself now lives in src/lib/media-rules.ts and is imported at
+// the top of this file — ONE copy, because tag names (ugcportal-jsc) became
+// its second writer and the gallery's render-side drop its third. It moved
+// rather than being duplicated for the same reason the upload rules did: that
+// module has no runtime imports, so a "use client" component can load it,
+// while this one imports `node:crypto` and cannot be bundled for the browser
+// at all. See the note over UNSAFE_TEXT_CHARS there for what each character
+// class covers and why zero-width JOINER is deliberately absent.
 //
-// The invisible group (soft hyphen, ZWSP, line/paragraph separators, word
-// joiner, Hangul filler, BOM) is denied rather than merely trimmed because a
-// name built only from them is not empty by length yet renders as a blank
-// row — FALLBACK_ORIGINAL_NAME below could not fire without this.
+// Both names are re-exported above, so every existing reader of
+// `@/lib/media` is unchanged.
 //
-// Zero-width JOINER (U+200D) is deliberately absent: emoji sequences need it,
-// and it neither reorders nor hides text.
-const UNSAFE_NAME_CHARS =
-  /[\u0000-\u001F\u007F-\u009F\u00AD\u061C\u200B\u200E\u200F\u202A-\u202E\u2028\u2029\u2060\u2066-\u2069\u3164\uFEFF]/;
-const UNSAFE_NAME_CHARS_GLOBAL = new RegExp(UNSAFE_NAME_CHARS, "gu");
-
-// Unpaired surrogates cannot join the class above: at code-unit level every
-// astral character (so every emoji) is MADE of surrogates, and a naive
-// [\uD800-\uDFFF] would reject exactly the names that comment promises to
-// allow. Only the unpaired ones are a problem, and they are a real one. JSON
-// permits "\ud800"; it is neither a control nor a bidi character, and the
-// @libsql/client driver this repo uses silently substitutes U+FFFD on write.
-// Because PATCH deliberately skips a re-read and echoes the submitted name, the
-// 200 response would then disagree with what a later GET returns. A strict-UTF-8
-// driver would throw instead, turning the same input into a 500.
-const LONE_SURROGATE =
-  /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+// The GLOBAL variants stay here, because only the sanitizing path needs them
+// and building them from the shared patterns is what stops the stripping form
+// and the testing form drifting apart.
+const UNSAFE_NAME_CHARS_GLOBAL = new RegExp(UNSAFE_TEXT_CHARS, "gu");
 const LONE_SURROGATE_GLOBAL = new RegExp(LONE_SURROGATE, "g");
 
 // Used when sanitizing leaves nothing behind — a name made entirely of
@@ -200,7 +195,7 @@ export function validateOriginalName(value: unknown): OriginalNameValidation {
       message: `Field 'originalName' must be at most ${MAX_ORIGINAL_NAME_LENGTH} characters`,
     };
   }
-  if (UNSAFE_NAME_CHARS.test(trimmed)) {
+  if (UNSAFE_TEXT_CHARS.test(trimmed)) {
     return {
       ok: false,
       message:

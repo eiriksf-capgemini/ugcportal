@@ -18,6 +18,11 @@ import {
 const authMock = vi.fn();
 const s3SendMock = vi.fn();
 const mediaCreateMock = vi.fn();
+// Subject tags (ugcportal-jsc). POST upserts a Tag row per name before it
+// creates the Media row, so the mocked client needs the model. Recorded as a
+// mock rather than stubbed inline so a test can assert WHICH tags were
+// resolved, and in what shape.
+const tagUpsertMock = vi.fn();
 const mediaFindManyMock = vi.fn();
 const mediaFindFirstMock = vi.fn();
 
@@ -31,6 +36,9 @@ vi.mock("@/lib/prisma", () => ({
       create: mediaCreateMock,
       findMany: mediaFindManyMock,
       findFirst: mediaFindFirstMock,
+    },
+    tag: {
+      upsert: tagUpsertMock,
     },
   },
 }));
@@ -56,6 +64,10 @@ vi.mock("@/lib/watermark", async (importOriginal) => {
 
 const { GET, POST } = await import("@/app/api/media/route");
 const { encodeMediaCursor } = await import("@/lib/media-listing");
+// Dynamic, after the vi.mock calls: @/lib/tags imports the Prisma client at
+// module scope, so a static import here would evaluate that mock factory
+// before its top-level bindings exist.
+const { MAX_TAGS_PER_ITEM } = await import("@/lib/tags");
 const {
   generateWatermarkedPreview,
   resetWatermarkConcurrencyGate,
@@ -116,14 +128,27 @@ function selectedRow(overrides: Record<string, unknown> = {}) {
     // Owner's own view: unpublished by default, and still listed. See the
     // regression test at the bottom of the GET block (ugcportal-r1d).
     publishedAt: null,
+    // Subject tags (ugcportal-jsc). Part of the owner projection, so the
+    // select really does return them and a fixture without the field would
+    // be describing a row the query cannot produce.
+    tags: [],
     ...overrides,
   };
 }
 
-function buildRequest(file: File | null) {
+/**
+ * `tags` parts go AFTER the file part, which is the order the browser sends
+ * and the order POST /api/media depends on: it finds the file part by peeking
+ * at the first PART_HEADER_PEEK_BYTES, and a field ahead of it pushes the
+ * declaration out of that window (ugcportal-05b).
+ */
+function buildRequest(file: File | null, tags: readonly string[] = []) {
   const formData = new FormData();
   if (file) {
     formData.set("file", file);
+  }
+  for (const tag of tags) {
+    formData.append("tags", tag);
   }
   return new Request("http://localhost/api/media", {
     method: "POST",
@@ -214,6 +239,8 @@ beforeEach(() => {
   authMock.mockReset();
   s3SendMock.mockReset();
   mediaCreateMock.mockReset();
+  tagUpsertMock.mockReset();
+  tagUpsertMock.mockImplementation(async ({ create }) => create);
   mediaFindManyMock.mockReset();
   mediaFindFirstMock.mockReset();
   // Drops any leftover one-shot mockRejectedValueOnce from a prior test (the
@@ -1942,5 +1969,120 @@ describe("GET /api/media", () => {
       await GET(buildListRequest(query));
       expect(mediaFindManyMock.mock.calls[0][0].take).toBe(expectedTake);
     }
+  });
+});
+
+/**
+ * Subject tags at upload time (ugcportal-jsc).
+ *
+ * The write itself is owner-scoped by construction rather than by a check:
+ * `userId` comes from the session and never from the body, so an uploader can
+ * only ever tag their own new row. What is worth testing here is the other
+ * half — that a bad tag is refused BEFORE the watermark and the two
+ * PutObjects, so a refusal leaves nothing in the bucket to compensate for.
+ */
+describe("POST /api/media — subject tags", () => {
+  const RTL_OVERRIDE = String.fromCodePoint(0x202e);
+
+  function imageFile() {
+    return new File([REAL_PNG], "photo.png", { type: "image/png" });
+  }
+
+  beforeEach(() => {
+    authMock.mockResolvedValue({ user: { id: "user-1" } });
+    s3SendMock.mockResolvedValue({});
+    mediaCreateMock.mockImplementation(async () => selectedRow());
+  });
+
+  it("connects the tags it was sent, having made sure the rows exist", async () => {
+    const response = await POST(buildRequest(imageFile(), ["Food", "Books"]));
+
+    expect(response.status).toBe(201);
+    // Every name upserted by slug first...
+    expect(tagUpsertMock.mock.calls.map((call) => call[0].where)).toEqual([
+      { slug: "food" },
+      { slug: "books" },
+    ]);
+    // ...and the row connected to them, never `connectOrCreate`: one place
+    // decides how a Tag comes into existence, and both writers go through it.
+    expect(mediaCreateMock.mock.calls[0][0].data.tags).toEqual({
+      connect: [{ slug: "food" }, { slug: "books" }],
+    });
+  });
+
+  it("upserts with an empty update, so an existing tag is not renamed", async () => {
+    await POST(buildRequest(imageFile(), ["FOOD"]));
+
+    // `update: {}` is what stops one uploader typing different capitals from
+    // renaming the chip under everybody else's photographs. Asserted on the
+    // call because the round trip through a real database lives in
+    // src/app/api/media/[id]/tags/route.test.ts.
+    expect(tagUpsertMock.mock.calls[0][0]).toEqual({
+      where: { slug: "food" },
+      create: { slug: "food", name: "FOOD" },
+      update: {},
+    });
+  });
+
+  it("uploads with no tags exactly as it always did", async () => {
+    const response = await POST(buildRequest(imageFile()));
+
+    expect(response.status).toBe(201);
+    expect(tagUpsertMock).not.toHaveBeenCalled();
+    expect(mediaCreateMock.mock.calls[0][0].data.tags).toEqual({ connect: [] });
+  });
+
+  it("refuses a bad tag BEFORE watermarking or storing anything", async () => {
+    /*
+     * The position of the check, not just its existence. Run after the
+     * PutObjects, the same 400 would leave an original and a watermarked
+     * preview in the bucket for a request that created no row to name them —
+     * storage that grows with ordinary use and that nothing can ever clean
+     * up, because nothing knows the keys.
+     */
+    const response = await POST(
+      buildRequest(imageFile(), [`Food${RTL_OVERRIDE}skoob`]),
+    );
+
+    expect(response.status).toBe(400);
+    expect(s3SendMock).not.toHaveBeenCalled();
+    expect(tagUpsertMock).not.toHaveBeenCalled();
+    expect(mediaCreateMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses more tags than an item may carry", async () => {
+    const tooMany = Array.from(
+      { length: MAX_TAGS_PER_ITEM + 1 },
+      (_, index) => `subject-${index}`,
+    );
+
+    const overCap = await POST(buildRequest(imageFile(), tooMany));
+    expect(overCap.status).toBe(400);
+    expect(s3SendMock).not.toHaveBeenCalled();
+
+    // At the cap is accepted, so the refusal is about the boundary rather
+    // than about the endpoint disliking tags in general.
+    const atCap = await POST(
+      buildRequest(imageFile(), tooMany.slice(0, MAX_TAGS_PER_ITEM)),
+    );
+    expect(atCap.status).toBe(201);
+  });
+
+  it("refuses a 'tags' part sent as a file rather than as text", async () => {
+    /*
+     * `getAll` hands back a File for a file part, and `String(file)` is
+     * "[object File]" — a perfectly valid-looking tag name. This is the
+     * branch that stops a stringifying implementation from creating it.
+     */
+    const form = new FormData();
+    form.set("file", imageFile());
+    form.append("tags", new File(["x"], "tags.txt", { type: "text/plain" }));
+
+    const response = await POST(
+      new Request("http://localhost/api/media", { method: "POST", body: form }),
+    );
+
+    expect(response.status).toBe(400);
+    expect(mediaCreateMock).not.toHaveBeenCalled();
   });
 });

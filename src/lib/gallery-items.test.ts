@@ -31,6 +31,7 @@ function item(overrides: Partial<GalleryItem> = {}): GalleryItem {
     id: "media-1",
     previewSrc: `${MEDIA_PREVIEW_PATH}/pv-1`,
     publishedAt: "2026-03-04T10:00:00.000Z",
+    tags: [],
     ...overrides,
   };
 }
@@ -41,6 +42,7 @@ describe("toGalleryItem", () => {
       id: "media-1",
       previewSrc: `${MEDIA_PREVIEW_PATH}/pv-1`,
       publishedAt: "2026-03-04T10:00:00.000Z",
+      tags: [],
     });
   });
 
@@ -63,6 +65,7 @@ describe("toGalleryItem", () => {
       "id",
       "previewSrc",
       "publishedAt",
+      "tags",
     ]);
     expect(JSON.stringify(mapped)).not.toContain("user-7");
     expect(JSON.stringify(mapped)).not.toContain("previews/");
@@ -280,5 +283,106 @@ describe("galleryItemAlt", () => {
       galleryItemAlt(item({ publishedAt: "2026-03-04T10:00:00.000Z" }), position),
     );
     expect(new Set(batch).size).toBe(batch.length);
+  });
+});
+
+/**
+ * The tags on a row, at the boundary where a feed row becomes something the
+ * gallery draws (ugcportal-jsc).
+ *
+ * This is the READ side of K5, and it is a second line of defence rather than
+ * the fix: src/lib/tags.ts refuses these names at the write path. It is still
+ * worth having, because that validator has only ever governed rows written
+ * since it existed, any authenticated account can mint a tag row
+ * (ugcportal-egp), and this function is the single boundary every rendered
+ * row crosses.
+ */
+describe("the tags on a mapped item", () => {
+  /** RIGHT-TO-LEFT OVERRIDE, by code point — see src/lib/tags.test.ts. */
+  const RTL_OVERRIDE = String.fromCodePoint(0x202e);
+
+  /** The tags `toGalleryItem` kept, given whatever the feed sent. */
+  function mappedTags(tags: unknown): { slug: string; name: string }[] {
+    return toGalleryItem({ ...ROW, tags })?.tags ?? [];
+  }
+
+  it("carries an ordinary tag list through unchanged", () => {
+    expect(
+      mappedTags([
+        { slug: "books", name: "Books" },
+        { slug: "food", name: "Food" },
+      ]),
+    ).toEqual([
+      { slug: "books", name: "Books" },
+      { slug: "food", name: "Food" },
+    ]);
+  });
+
+  it("is an empty list, never undefined, when the feed sent no tags", () => {
+    // A `tags` that can be undefined is a `.map` waiting to throw in a
+    // component with no reason to check — so every shape of absence has to
+    // produce the same empty array.
+    for (const absent of [undefined, null, "food", 7, {}]) {
+      expect(mappedTags(absent)).toEqual([]);
+    }
+  });
+
+  it("drops entries that are not a slug-and-name pair", () => {
+    expect(
+      mappedTags([
+        { slug: "food", name: "Food" },
+        null,
+        "books",
+        { slug: "no-name" },
+        { name: "No slug" },
+        { slug: "", name: "Blank slug" },
+        { slug: "blank-name", name: "   " },
+      ]),
+    ).toEqual([{ slug: "food", name: "Food" }]);
+  });
+
+  it("drops a name carrying a bidi override, and keeps the rest (K5)", () => {
+    /*
+     * DROPPED, NOT STRIPPED. A name with the override removed is a different
+     * name that nobody chose, and rendering it asserts the uploader labelled
+     * the photograph something they did not.
+     *
+     * Escaping does not cover this case at all: U+202E is not markup, React
+     * passes it through untouched, and it reverses the reading order of
+     * everything after it — the chips beside it, the paging message, the
+     * heading.
+     */
+    expect(
+      mappedTags([
+        { slug: "bidi", name: `Food${RTL_OVERRIDE}skoob` },
+        { slug: "food", name: "Food" },
+      ]),
+    ).toEqual([{ slug: "food", name: "Food" }]);
+  });
+
+  it("drops an unsafe SLUG as well as an unsafe name", () => {
+    // The slug reaches the DOM too, as `data-gallery-tag` and as the React
+    // key. Checking only the name would leave the attribute unguarded.
+    expect(
+      mappedTags([{ slug: `food${RTL_OVERRIDE}`, name: "Food" }]),
+    ).toEqual([]);
+  });
+
+  it("keeps a name containing HTML, because React escapes it", () => {
+    // The renderer's job, not this function's — and stripping it here would
+    // be the same "a name nobody chose" mistake as above. The escaping is
+    // asserted against real markup in src/app/page.tags.test.tsx.
+    expect(mappedTags([{ slug: "markup", name: "<b>food</b>" }])).toEqual([
+      { slug: "markup", name: "<b>food</b>" },
+    ]);
+  });
+
+  it("drops a repeated slug, which would be a repeated React key", () => {
+    expect(
+      mappedTags([
+        { slug: "food", name: "Food" },
+        { slug: "food", name: "FOOD" },
+      ]),
+    ).toEqual([{ slug: "food", name: "Food" }]);
   });
 });

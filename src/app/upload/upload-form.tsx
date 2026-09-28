@@ -53,10 +53,33 @@ function nextQueueId(): string {
 
 const ACCEPT_ATTRIBUTE = ACCEPTED_MIME_TYPES.join(",");
 
-export function UploadForm() {
+/** A tag the picker can offer, as the upload page read it out of the DB. */
+export type SelectableTag = { slug: string; name: string };
+
+export type UploadFormProps = {
+  /**
+   * The subject vocabulary (ugcportal-jsc), read on the server and handed
+   * down — this component never fetches it. Empty is a legitimate state and
+   * the picker says so rather than rendering an empty fieldset.
+   */
+  availableTags?: readonly SelectableTag[];
+};
+
+export function UploadForm({ availableTags = [] }: UploadFormProps) {
   const inputId = useId();
+  const tagsLabelId = useId();
   const [items, dispatch] = useReducer(uploadQueueReducer, [] as QueueItem[]);
   const [isDraggingOver, setDraggingOver] = useState(false);
+  /**
+   * Which subjects the next batch of files gets, by slug.
+   *
+   * Slugs rather than names, because that is what the checkbox inputs are
+   * keyed on and what survives a tag being renamed underneath the page. The
+   * NAMES are what goes on the wire — POST /api/media validates and
+   * normalises the name itself, so the browser is not a second authority on
+   * what a tag is called.
+   */
+  const [selectedSlugs, setSelectedSlugs] = useState<readonly string[]>([]);
 
   /**
    * The authoritative work queue, OUTSIDE React state on purpose.
@@ -69,6 +92,16 @@ export function UploadForm() {
   const queueRef = useRef<QueueEntry[]>([]);
   /** The File objects, which are not serialisable into reducer state. */
   const filesRef = useRef(new Map<string, File>());
+  /**
+   * The tags each queued row was added with (ugcportal-jsc).
+   *
+   * Kept beside `filesRef` and for the same reason: RETRY has to re-send what
+   * the original attempt sent. Reading the picker's current state on retry
+   * would re-tag a file the user chose subjects for ten minutes ago with
+   * whatever happens to be ticked now — a silent edit to a request they are
+   * asking to repeat.
+   */
+  const tagsRef = useRef(new Map<string, readonly string[]>());
   const drainingRef = useRef(false);
   const inFlightRef = useRef<{ id: string; controller: AbortController } | null>(
     null,
@@ -107,7 +140,13 @@ export function UploadForm() {
     for (const id of unsettled) settledRef.current.delete(id);
 
     const released = releasedFileId(action);
-    if (released !== null) filesRef.current.delete(released);
+    if (released !== null) {
+      filesRef.current.delete(released);
+      // Released together: a row whose File is gone can never be retried, so
+      // keeping its tag list is a leak of exactly the same shape, just a
+      // smaller one.
+      tagsRef.current.delete(released);
+    }
 
     dispatch(action);
   }, []);
@@ -135,19 +174,35 @@ export function UploadForm() {
       const files = fileList === null ? [] : Array.from(fileList);
       if (files.length === 0) return;
 
+      /*
+       * The tag NAMES for this batch, resolved from the ticked slugs at the
+       * moment the files are added. A slug that is no longer in
+       * `availableTags` resolves to nothing and is dropped rather than sent
+       * as a slug — sending "wine-drink" where the vocabulary says
+       * "Wine & drink" would create a second tag whose name is a slug.
+       */
+      const tagNames = availableTags
+        .filter((tag) => selectedSlugs.includes(tag.slug))
+        .map((tag) => tag.name);
+
       // `entries` omits anything the pre-check already refused, so no request
       // is ever made for those files (K2). See enqueueFiles.
-      const { items: queued, entries } = enqueueFiles(files, nextQueueId);
+      const { items: queued, entries } = enqueueFiles(
+        files,
+        nextQueueId,
+        tagNames,
+      );
       dispatchQueue({ type: "queued", items: queued });
 
       for (const entry of entries) {
         filesRef.current.set(entry.id, entry.file);
+        tagsRef.current.set(entry.id, entry.tags);
         queueRef.current.push(entry);
       }
 
       drain();
     },
-    [drain, dispatchQueue],
+    [availableTags, drain, dispatchQueue, selectedSlugs],
   );
 
   const removeFromQueue = useCallback((id: string) => {
@@ -221,7 +276,8 @@ export function UploadForm() {
       if (!mayRetry(item.failure, Date.now())) return;
 
       dispatchQueue({ type: "retried", id });
-      queueRef.current.push({ id, file });
+      // The tags the FIRST attempt carried, not whatever is ticked now.
+      queueRef.current.push({ id, file, tags: tagsRef.current.get(id) ?? [] });
       drain();
     },
     [dispatchQueue, drain, items],
@@ -234,6 +290,7 @@ export function UploadForm() {
       }
       removeFromQueue(id);
       filesRef.current.delete(id);
+      tagsRef.current.delete(id);
       dispatchQueue({ type: "dismissed", id });
     },
     [dispatchQueue, removeFromQueue],
@@ -336,6 +393,19 @@ export function UploadForm() {
         </p>
       </div>
 
+      <TagPicker
+        labelId={tagsLabelId}
+        availableTags={availableTags}
+        selectedSlugs={selectedSlugs}
+        onToggle={(slug) =>
+          setSelectedSlugs((current) =>
+            current.includes(slug)
+              ? current.filter((each) => each !== slug)
+              : [...current, slug],
+          )
+        }
+      />
+
       {/*
         The overall state, announced. Counted from the rows rather than kept
         beside them, so it cannot disagree with what is on screen.
@@ -352,5 +422,87 @@ export function UploadForm() {
         onDismiss={dismiss}
       />
     </div>
+  );
+}
+
+/**
+ * Which subjects the next files get (ugcportal-jsc).
+ *
+ * IT APPLIES TO WHAT YOU ADD NEXT, not to what is already in the queue, and
+ * the wording says so out loud because the alternative reading is the one a
+ * user would otherwise make. The queue starts uploading the instant a file is
+ * dropped — there is no staging step to attach tags to afterwards — so the
+ * only honest thing a picker above the drop zone can mean is "from here on".
+ * Files already sent are re-tagged through PUT /api/media/[id]/tags, not
+ * here.
+ *
+ * Checkboxes rather than a combo box or a free-text field: the vocabulary is
+ * four items, all of them are worth seeing at once, and a text field would
+ * put the browser in the business of deciding what a valid tag name is —
+ * which is the server's job (src/lib/tags.ts) and should not have a second
+ * implementation. Creating a tag that is not in this list is an API-level
+ * capability today; a management screen for it is ugcportal-x0l.
+ *
+ * A `<fieldset>` with a `<legend>`, so a screen reader announces what the
+ * group of checkboxes is FOR before reading the first one. `aria-labelledby`
+ * on the list is not a substitute: a legend is what associates a name with a
+ * set of form controls.
+ */
+function TagPicker({
+  labelId,
+  availableTags,
+  selectedSlugs,
+  onToggle,
+}: {
+  labelId: string;
+  availableTags: readonly SelectableTag[];
+  selectedSlugs: readonly string[];
+  onToggle: (slug: string) => void;
+}) {
+  if (availableTags.length === 0) {
+    /*
+     * No vocabulary yet. Rendering an empty fieldset would be a group
+     * control with nothing in it — announced as a group, focusable past,
+     * and meaningless. Say what is going on instead.
+     *
+     * Reachable in practice: the four subjects are seeded by a migration, so
+     * this is what a database that has not been migrated, or one where they
+     * were deleted, looks like.
+     */
+    return (
+      <p className="mt-4 max-w-prose text-sm text-ink-muted">
+        No subjects have been set up yet, so these uploads will have no tags.
+      </p>
+    );
+  }
+
+  return (
+    <fieldset className="mt-6" data-upload-tag-picker="">
+      <legend id={labelId} className="text-sm font-medium text-ink">
+        Tag what you add next
+      </legend>
+      <p className="mt-1 max-w-prose text-xs text-ink-muted">
+        Applies to files you add from now on. Tags are shown under the
+        photograph in the gallery.
+      </p>
+      <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2">
+        {availableTags.map((tag) => (
+          <label
+            key={tag.slug}
+            className="flex cursor-pointer items-center gap-2 text-sm text-ink"
+          >
+            <input
+              type="checkbox"
+              name="upload-tag"
+              value={tag.slug}
+              checked={selectedSlugs.includes(tag.slug)}
+              onChange={() => onToggle(tag.slug)}
+              className="size-4 accent-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+            />
+            {tag.name}
+          </label>
+        ))}
+      </div>
+    </fieldset>
   );
 }

@@ -1,6 +1,8 @@
 import { redirect } from "next/navigation";
 
 import { auth } from "@/lib/auth";
+import { MEDIA_TAGS_SELECT } from "@/lib/media-access";
+import { prisma } from "@/lib/prisma";
 import { UPLOAD_PATH, signInPath } from "@/lib/routes";
 
 import { UploadForm } from "./upload-form";
@@ -38,6 +40,25 @@ export default async function UploadPage() {
     redirect(signInPath(UPLOAD_PATH));
   }
 
+  /*
+    The subject vocabulary (ugcportal-jsc), read here rather than fetched by
+    the form: this page is already a server component and already awaiting a
+    session, so the picker arrives populated in the first HTML instead of
+    appearing a round trip later.
+
+    AFTER the auth gate, deliberately. It is not secret — every tag on a
+    published item is on the public gallery — but there is no reason for an
+    unauthenticated request that is about to be redirected to run a query.
+
+    Projected through MEDIA_TAGS_SELECT.select, the same two fields every
+    other audience gets, so the picker cannot become the one surface that
+    hands out `Tag.id`.
+  */
+  const availableTags = await prisma.tag.findMany({
+    select: MEDIA_TAGS_SELECT.select,
+    orderBy: MEDIA_TAGS_SELECT.orderBy,
+  });
+
   return (
     /*
       max-w-3xl, narrower than the shell's max-w-6xl: this is a single column
@@ -58,7 +79,7 @@ export default async function UploadPage() {
       </p>
 
       <div className="mt-8">
-        <UploadForm />
+        <UploadForm availableTags={availableTags} />
       </div>
     </div>
   );

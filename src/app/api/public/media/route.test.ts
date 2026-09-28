@@ -432,9 +432,18 @@ describe("GET /api/public/media — no original key, no preview-less row (K3)", 
     expect(MEDIA_ANONYMOUS_SELECT).not.toHaveProperty("previewKey");
     // Both audiences get the opaque handle; only the owner gets the path.
     expect(MEDIA_ANONYMOUS_SELECT).toHaveProperty("previewId", true);
-    // Anonymous must stay a strict subset of owner.
-    for (const field of Object.keys(MEDIA_ANONYMOUS_SELECT)) {
-      expect(MEDIA_OWNER_SELECT).toHaveProperty(field, true);
+    /*
+     * Anonymous must stay a strict subset of owner — and a subset in VALUE,
+     * not just in key. This compared against the literal `true` until
+     * ugcportal-jsc added `tags`, whose projection is a nested
+     * `{ select, orderBy }` object rather than a boolean. Comparing each
+     * field against the anonymous select's own value keeps the assertion
+     * honest for both shapes: it now also catches the case a `true`
+     * comparison never could, an audience being given a WIDER nested
+     * projection of the same relation than the other.
+     */
+    for (const [field, projection] of Object.entries(MEDIA_ANONYMOUS_SELECT)) {
+      expect(MEDIA_OWNER_SELECT).toHaveProperty(field, projection);
     }
   });
 

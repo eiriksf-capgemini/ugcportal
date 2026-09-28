@@ -2,6 +2,7 @@ import type { MediaModel } from "@/generated/prisma/models";
 import {
   MEDIA_ANONYMOUS_SELECT,
   MEDIA_OWNER_SELECT,
+  type MediaTagLabel,
 } from "@/lib/media-access";
 import { prisma } from "@/lib/prisma";
 
@@ -187,6 +188,28 @@ type SelectedColumnKeys<TSelect> = {
   keyof MediaModel;
 
 /**
+ * The tag relation, when — and only when — the projection asked for it.
+ *
+ * A RELATION, NOT A COLUMN, which is why it cannot ride along in
+ * `SelectedColumnKeys` above. Two things follow from that and both are load
+ * bearing. Its value in a select is `{ select: …, orderBy: … }` rather than
+ * `true`, so the `extends true` filter excludes it — correctly, since
+ * `Pick<MediaModel, "tags">` is an error: `MediaModel` is the model's default
+ * selection and carries no relation fields at all. And because it is excluded
+ * there, the row type has to gain it here or a caller would receive `tags` at
+ * runtime with no type saying so — the exact "a type lie like this ships
+ * green" failure the comment on `SelectedColumnKeys` is about, pointing the
+ * other way.
+ *
+ * `unknown` rather than `{}` on the false branch: intersecting with `unknown`
+ * is the identity, and `{}` would make `null` and `undefined` assignable to
+ * the whole row type.
+ */
+type TagProjection<TSelect> = "tags" extends keyof TSelect
+  ? { tags: MediaTagLabel[] }
+  : unknown;
+
+/**
  * A row exactly as the query returns it — `previewId` still nullable, because
  * the column is.
  *
@@ -200,7 +223,8 @@ type MediaListingRow<TSelect extends MediaListingSelect> = Pick<
   MediaModel,
   SelectedColumnKeys<TSelect>
 > &
-  Pick<MediaModel, "id" | "createdAt" | "previewId">;
+  Pick<MediaModel, "id" | "createdAt" | "previewId"> &
+  TagProjection<TSelect>;
 
 /**
  * The preview column this arm guarantees, narrowed to non-null.

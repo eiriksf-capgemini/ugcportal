@@ -29,6 +29,45 @@ import { prisma } from "@/lib/prisma";
  */
 
 /**
+ * Every subject tag on a row, as the only two fields any audience gets
+ * (ugcportal-jsc).
+ *
+ * `Tag.id` is deliberately NOT here. It is not secret, but it is also not
+ * useful to anybody outside the database: a visitor draws the name, and a
+ * later writer addresses a tag by slug. Leaving it out keeps the rule this
+ * file is built on — a column reaches an audience because somebody decided it
+ * should — true of the relation as well as of the columns.
+ *
+ * ONE constant for both audiences, unlike the two selects below, and the
+ * difference is not an inconsistency. Those two are split because the
+ * *audiences* differ; a tag's name is the same public label whoever is
+ * looking, and there is no owner-only tag field for a shared base to leak.
+ *
+ * Ordered by slug so the chips under a tile are in a stable order rather than
+ * whatever order the join happened to return — otherwise the same photograph
+ * reads "Books Food" on one request and "Food Books" on the next, and every
+ * rendering assertion becomes flaky for a reason nobody enjoys finding.
+ */
+export const MEDIA_TAGS_SELECT = {
+  select: { slug: true, name: true },
+  orderBy: { slug: "asc" },
+} as const;
+
+/** A tag as every audience sees it. */
+export type MediaTagLabel = { slug: string; name: string };
+
+/**
+ * The keys a Media projection is allowed to name: a real column, or the one
+ * relation that is projected (`tags`).
+ *
+ * Spelled out so the `satisfies` clauses below reject a typo. Without it a
+ * misspelled column would be silently dropped by the `Extract` in
+ * `SelectedScalars`, and the resulting type would simply not carry the field
+ * the author thought they had added.
+ */
+type MediaProjectionKey = keyof MediaModel | "tags";
+
+/**
  * Owner-facing: everything about the row its own uploader may see.
  *
  * Written out in full, with no shared base spread in. See the anonymous select
@@ -65,11 +104,17 @@ export const MEDIA_OWNER_SELECT = {
   // anonymous select for why that is worse than useless.
   mimeType: true,
   sizeBytes: true,
+  // Subject tags (ugcportal-jsc). In BOTH selects, which is the unusual case
+  // in this file and is the point: a tag is a label chosen to be published,
+  // so there is no audience it is for and another it is not. The nested
+  // projection is the shared MEDIA_TAGS_SELECT above, so the two audiences
+  // cannot come to disagree about which tag fields exist.
+  tags: MEDIA_TAGS_SELECT,
   // `userId` and `key` are absent from both selects and must stay that way.
   // `key` is the ungated paid original (ugcportal-5d6). `userId` would be
   // redundant on the owner's own view, and on the anonymous feed it would let
   // anyone group the whole gallery by uploader.
-} as const;
+} as const satisfies Partial<Record<MediaProjectionKey, unknown>>;
 
 /**
  * Anonymous-facing: what an unauthenticated visitor may see.
@@ -138,6 +183,23 @@ export const MEDIA_ANONYMOUS_SELECT = {
   createdAt: true,
   // Always non-null here (the feed filters on it) and reads as "public since".
   publishedAt: true,
+  // Subject tags (ugcportal-jsc), and the one field this select has ever
+  // gained that was added FOR this audience rather than inherited by one.
+  //
+  // It is safe to publish for a reason worth stating rather than assuming: a
+  // tag carries no storage path, no account id and nothing derived from
+  // either. `Tag.slug` is computed from `Tag.name` and from nothing else (see
+  // `tagSlug` in src/lib/tags.ts), and `Tag.id` is not projected at all. The
+  // rule this whole file exists to keep — that `previewId` is the ONLY handle
+  // an anonymous caller is given, and `mediaPreviewPath` the only URL anyone
+  // builds — is untouched by it.
+  //
+  // What a tag DOES publish is the uploader's own description of the subject.
+  // That is the intended disclosure: the item is published, and a label
+  // saying "Food" is why ugcportal-jsc exists. It is not a channel for
+  // anything else, which is what MAX_TAG_NAME_LENGTH and the character
+  // denylist in src/lib/tags.ts are for.
+  tags: MEDIA_TAGS_SELECT,
 } as const satisfies Partial<typeof MEDIA_OWNER_SELECT>;
 
 /**
@@ -179,15 +241,52 @@ export const MEDIA_PREVIEW_DELIVERY_SELECT = {
 } as const satisfies Partial<typeof MEDIA_OWNER_SELECT>;
 
 /**
+ * The COLUMNS a select names, as opposed to the relation it also names.
+ *
+ * `Pick<MediaModel, keyof S>` was enough while every key was a scalar. It
+ * stopped compiling the moment `tags` arrived, because `MediaModel` is the
+ * default selection of the Media payload and carries no relation fields —
+ * `Pick` over a key that is not in the model is an error, not an omission.
+ *
+ * `Extract` is what narrows to the keys the model actually has. It is a real
+ * weakening and worth naming: a MISSPELLED column would also be extracted
+ * away, leaving a type that silently lacks the field its author thought they
+ * had added. That is why both selects carry
+ * `satisfies Partial<Record<MediaProjectionKey, unknown>>` (directly, or via
+ * `Partial<typeof MEDIA_OWNER_SELECT>`) — the typo is rejected there, so by
+ * the time it reaches here there is nothing left to drop but `tags`.
+ */
+type SelectedScalars<TSelect> = Pick<
+  MediaModel,
+  Extract<keyof TSelect, keyof MediaModel>
+>;
+
+/**
  * Tied to the selects by construction: widen one and its type widens with it,
  * so toOwnerMedia below stops compiling until it is updated too. That is the
  * point — they can't silently disagree.
+ *
+ * Both audiences get `tags`, because both selects ask for it; see
+ * MEDIA_TAGS_SELECT for why that is one decision rather than two.
  */
-export type OwnerMedia = Pick<MediaModel, keyof typeof MEDIA_OWNER_SELECT>;
-export type AnonymousMedia = Pick<
-  MediaModel,
-  keyof typeof MEDIA_ANONYMOUS_SELECT
->;
+export type OwnerMedia = SelectedScalars<typeof MEDIA_OWNER_SELECT> & {
+  tags: MediaTagLabel[];
+};
+export type AnonymousMedia = SelectedScalars<typeof MEDIA_ANONYMOUS_SELECT> & {
+  tags: MediaTagLabel[];
+};
+
+/**
+ * A whole Media row as the ownership gate reads it: every column, plus the
+ * tags.
+ *
+ * The gate loads the relation because both of its echoing callers need it —
+ * PATCH and publish project the row they were handed through `toOwnerMedia`
+ * rather than paying for a second query — and because a gate that returned
+ * "the row" while quietly meaning "the row minus one field" is the kind of
+ * half-truth that only surfaces as an `undefined` in a response body.
+ */
+export type OwnedMediaRow = MediaModel & { tags: MediaTagLabel[] };
 
 /**
  * Projects a full row down to the owner-facing shape, for the caller that
@@ -200,7 +299,7 @@ export type AnonymousMedia = Pick<
  * at the database layer, so `originalName` and `key` are never read, let alone
  * mapped away afterwards.
  */
-export function toOwnerMedia(media: MediaModel): OwnerMedia {
+export function toOwnerMedia(media: OwnedMediaRow): OwnerMedia {
   return {
     id: media.id,
     kind: media.kind,
@@ -211,11 +310,15 @@ export function toOwnerMedia(media: MediaModel): OwnerMedia {
     originalName: media.originalName,
     createdAt: media.createdAt,
     publishedAt: media.publishedAt,
+    // Copied rather than aliased, so a caller spreading a change over the
+    // gate's row cannot hand the same array to two responses and have one
+    // mutate the other's. Cheap: six entries at most.
+    tags: media.tags.map((tag) => ({ slug: tag.slug, name: tag.name })),
   };
 }
 
 export type MediaAccessResult =
-  | { ok: true; userId: string; media: MediaModel }
+  | { ok: true; userId: string; media: OwnedMediaRow }
   | { ok: false; status: 401 | 403 | 404; error: string };
 
 /**
@@ -249,7 +352,13 @@ export async function requireOwnedMedia(
     return { ok: false, status: 401, error: "Unauthorized" };
   }
 
-  const media = await prisma.media.findUnique({ where: { id: mediaId } });
+  // `include` rather than a bare findUnique: the tags come back alongside
+  // every column, which is what `OwnedMediaRow` promises and what lets PATCH
+  // and publish echo the row they already hold instead of re-reading it.
+  const media = await prisma.media.findUnique({
+    where: { id: mediaId },
+    include: { tags: MEDIA_TAGS_SELECT },
+  });
   if (!media) {
     return { ok: false, status: 404, error: "Not found" };
   }

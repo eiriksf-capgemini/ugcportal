@@ -20,7 +20,9 @@ import {
   peekDeclaredPartType,
   readCappedFormDataFrom,
 } from "@/lib/request-body";
+import { MEDIA_TAGS_FIELD } from "@/lib/routes";
 import { getBucketName, getS3Client } from "@/lib/s3";
+import { parseTagNames, resolveTagRows } from "@/lib/tags";
 import type { UploadReservation } from "@/lib/upload-memory";
 import {
   UploadMemoryExhaustedError,
@@ -275,6 +277,30 @@ async function handleUpload(
     );
   }
 
+  /*
+   * Subject tags (ugcportal-jsc), read from repeated `tags` parts.
+   *
+   * REFUSED HERE, BEFORE ANY WORK. `getAll` returns [] for a form with no
+   * tags at all, which parseTagNames accepts as "no tags" — so an untagged
+   * upload is unaffected. A tag that is too long, or carries a bidi override,
+   * fails the whole upload rather than being dropped, and that is the
+   * opposite of what `sanitizeOriginalName` does one field over. The
+   * asymmetry is deliberate: a filename is incidental metadata the user often
+   * did not choose (a phone's picker wrote it), while a tag is a label they
+   * typed on purpose, so silently storing a different one is worse than
+   * saying no. The position matters too — this runs before the watermark and
+   * before either PutObject, so a refusal leaves nothing in the bucket to
+   * compensate for.
+   *
+   * `String(...)` is not used: a `tags` part sent as a file arrives as a File
+   * and would stringify to "[object File]", which is a perfectly valid tag
+   * name. parseTagNames refuses a non-string outright.
+   */
+  const tags = parseTagNames(body.value.getAll(MEDIA_TAGS_FIELD));
+  if (!tags.ok) {
+    return NextResponse.json({ error: tags.message }, { status: 400 });
+  }
+
   const buffer = Buffer.from(await file.arrayBuffer());
   if (sniffKind(buffer) !== validation.kind) {
     return NextResponse.json(
@@ -405,6 +431,12 @@ async function handleUpload(
       storedKeys.push(previewKey);
     }
 
+    // Tag rows exist before the media row does, so `connect` below can never
+    // be handed a slug that is not there. Inside the try, because it is the
+    // first statement that can fail after the objects are in the bucket and
+    // the compensating delete has to cover it.
+    const tagRefs = await resolveTagRows(tags.value);
+
     const media = await prisma.media.create({
       data: {
         userId,
@@ -420,6 +452,10 @@ async function handleUpload(
         // rename path refuses. `file.name` is fully client-controlled and
         // the GET listing echoes it back, so it cannot go in raw.
         originalName: sanitizeOriginalName(file.name),
+        // `connect`, not `connectOrCreate`: resolveTagRows already made sure
+        // every row exists, so one place decides how a Tag comes into
+        // existence and both writers (here and PUT .../tags) go through it.
+        tags: { connect: tagRefs },
       },
       select: MEDIA_OWNER_SELECT,
     });
