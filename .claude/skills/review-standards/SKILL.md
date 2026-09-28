@@ -17,7 +17,7 @@ But review value decayed **unevenly**, which is why a flat round cap is the wron
 - `ugcportal-r1d` round 9 found the migration backfill minting 32-char hex while the runtime minted 36-char dashed UUIDs for the same public-id column, which would have broken `ugcportal-a2l` for every pre-existing row.
 - `ugcportal-e86` rounds 8 and 9, by contrast, found an inaccurate code comment and 27 duplicate stderr lines.
 
-A five-round cap would have stopped the two that were still earning and kept funding the one that wasn't. So gate on **severity**, and attack the recurring **families** rather than their instances.
+A flat round cap cannot tell those cases apart, and that — not "it would have funded the wrong one" — is the argument. Set at five it stops `0ss` and `r1d` *before* their round-7 and round-9 defects surface, and it also stops `e86`'s rounds 8-9, which found a wrong comment and some duplicate log lines. Set high enough to reach round 9 it funds all three. There is no setting that keeps the two that were still earning and drops the one that wasn't, because the number of rounds carries no information about what a round is finding. So gate on **severity**, which does, and attack the recurring **families** rather than their instances.
 
 Full rationale: `ugcportal-2yj`. The same lifecycle framing lives in the global `bead-template` skill, which is read when a bead is *authored*; this file is the repo-local copy that governs a PR while it is *in review*.
 
