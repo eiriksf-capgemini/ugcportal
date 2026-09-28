@@ -33,15 +33,6 @@ export const MEDIA_UPLOAD_PATH = "/api/media";
  */
 export const MEDIA_TAGS_FIELD = "tags";
 
-// The request header src/proxy.ts stamps with the current request's
-// pathname (ugcportal-t0y round 3 finding 2), so src/components/upload-nav-
-// link.tsx can mark its own link aria-current="page" without re-spelling
-// the header name in both places. It has no first-class way to ask the App
-// Router this otherwise: `params` only carries a DYNAMIC segment's own
-// value, and the shell is rendered from the ROOT layout, wrapping every
-// route, with no segment of its own to read.
-export const CURRENT_PATH_HEADER = "x-pathname";
-
 // The public gallery feed (ugcportal-r1d) and the preview bytes it points at
 // (ugcportal-a2l). Named here rather than spelled inline because ugcportal-71y
 // reaches for both from three places — the server-rendered first page, the

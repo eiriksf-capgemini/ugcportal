@@ -1,8 +1,5 @@
-import { headers } from "next/headers";
-import Link from "next/link";
-
+import { UploadLink } from "@/components/upload-link";
 import { getSession } from "@/lib/auth";
-import { CURRENT_PATH_HEADER, UPLOAD_PATH } from "@/lib/routes";
 import { hasSignedInUser } from "@/lib/session";
 
 /**
@@ -40,37 +37,22 @@ import { hasSignedInUser } from "@/lib/session";
  * the link inside it: a landmark with no content is a known screen-reader
  * anti-pattern, so a signed-out visitor gets no <nav> here at all rather than
  * one that resolves to empty.
+ *
+ * The auth gate lives here, server-side; whether the link is the CURRENT
+ * page does not, and lives in the Client Component it renders
+ * (src/components/upload-link.tsx) instead — see that file's comment for
+ * why a round 3 attempt at answering that server-side (a request-scoped
+ * proxy stamping the path onto a header) was wrong on two counts, one of
+ * them a high-severity upload-body-truncation regression.
  */
 export async function UploadNavLink() {
   const session = await getSession();
 
   if (!hasSignedInUser(session)) return null;
 
-  /*
-    ugcportal-t0y round 3 finding 2: aria-current="page" when a signed-in
-    user is already on /upload — the conventional expectation for a nav
-    landmark's active item, and without it, clicking the link while already
-    there is a no-op navigation with no indication why. Read from the
-    request header src/proxy.ts stamps (see CURRENT_PATH_HEADER's own
-    comment for why a header, not some other App Router mechanism, is what
-    exists for a component this far up the tree to learn the current path
-    at all). `undefined`, not `false`, when it isn't the current page:
-    aria-current is only ever removed by omitting it, since the ARIA spec
-    defines "false" as its own (falsy but present) token rather than a
-    synonym for absent.
-  */
-  const pathname = (await headers()).get(CURRENT_PATH_HEADER);
-  const isCurrentPage = pathname === UPLOAD_PATH;
-
   return (
     <nav aria-label="Primary" className="shrink-0">
-      <Link
-        href={UPLOAD_PATH}
-        aria-current={isCurrentPage ? "page" : undefined}
-        className="rounded-sm text-sm font-medium text-foreground transition-colors hover:text-primary focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring"
-      >
-        Upload
-      </Link>
+      <UploadLink />
     </nav>
   );
 }

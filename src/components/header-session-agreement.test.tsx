@@ -28,9 +28,6 @@ vi.mock("@/lib/auth", () => ({
   signIn: vi.fn(),
   signOut: vi.fn(),
 }));
-vi.mock("next/headers", () => ({
-  headers: vi.fn().mockResolvedValue(new Headers()),
-}));
 
 const { UploadNavLink } = await import("./upload-nav-link");
 const { AuthStatus } = await import("./auth-status");
