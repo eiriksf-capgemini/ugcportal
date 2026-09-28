@@ -1,9 +1,21 @@
-import { auth, signIn, signOut } from "@/lib/auth";
+import type { Session } from "next-auth";
+
+import { signIn, signOut } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 
-export async function AuthStatus() {
-  const session = await auth();
-
+/**
+ * Renders the sign-in/sign-out affordance for a session the caller already
+ * resolved.
+ *
+ * Takes `session` as a prop rather than calling `auth()` itself
+ * (ugcportal-t0y): the app shell (src/components/app-shell.tsx) now needs the
+ * same session to decide whether to show the upload nav link, and this app's
+ * session strategy is `"database"` (src/lib/auth.ts), so every `auth()` call
+ * is a real adapter round trip to the DB, not a free cookie read. A second
+ * independent call here would pay that twice on every single page render for
+ * no reason - the shell already has the answer by the time this renders.
+ */
+export function AuthStatus({ session }: { session: Session | null }) {
   if (!session?.user) {
     return (
       <div className="flex items-center gap-2">

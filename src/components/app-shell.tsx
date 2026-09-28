@@ -2,6 +2,8 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 
 import { AuthStatus } from "@/components/auth-status";
+import { auth } from "@/lib/auth";
+import { UPLOAD_PATH } from "@/lib/routes";
 import { SITE_NAME } from "@/lib/site";
 
 /**
@@ -31,7 +33,11 @@ import { SITE_NAME } from "@/lib/site";
  * so it is exactly the thing the contrast gate in src/lib/design cannot check
  * and a reader cannot rely on.
  */
-export function AppShell({ children }: { children: ReactNode }) {
+export async function AppShell({ children }: { children: ReactNode }) {
+  // Resolved once, here, and threaded down to AuthStatus rather than fetched
+  // twice (ugcportal-t0y) - see the comment on AuthStatus's `session` prop.
+  const session = await auth();
+
   return (
     /*
       min-h-dvh, not min-h-full: a percentage min-height needs a definite
@@ -84,20 +90,49 @@ export function AppShell({ children }: { children: ReactNode }) {
             /*
               shrink-[999] sets an explicit yield order for the header row:
               the wordmark gives way first, then the signed-in user's name,
-              and the button labels never do. Flexbox distributes shrinkage in
-              proportion to base-size x shrink-factor, so an outsized factor
-              here means the wordmark is fully consumed before any pressure
-              reaches the actions.
+              and the nav link and button labels never do. Flexbox distributes
+              shrinkage in proportion to base-size x shrink-factor, so an
+              outsized factor here means the wordmark is fully consumed before
+              any pressure reaches the actions.
             */
             className="min-w-0 shrink-[999] truncate rounded-sm text-sm font-medium tracking-tight text-foreground transition-colors hover:text-primary focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring"
           >
             {SITE_NAME}
           </Link>
           {/*
-            Auth is the only header action today. Nav links belong here, to
-            the left of this, once there is more than one destination.
+            The nav slot (ugcportal-t0y). /upload was the second destination
+            in the app, after the gallery at "/", and this is the first link
+            into it from the app's own chrome rather than a typed URL.
 
-            min-w-0, and no shrink-0. The two together used to cancel:
+            A real <nav> landmark, not a bare <a>, so a screen reader user can
+            jump to it directly; aria-label distinguishes it from a future
+            second nav region rather than leaving both as an unlabelled
+            "navigation" landmark. It sits in DOM order between the wordmark
+            and the auth actions, so tab order reads left to right exactly as
+            the row is laid out - no tabIndex tricks, and no change to the
+            skip link's target or position.
+
+            Gated on the exact same expression the /upload page itself gates
+            on - `session?.user?.id`, not the weaker `session?.user` - so this
+            link's visibility can never disagree with what the page would
+            actually do: anyone this shows the link to is someone the page
+            would let straight through, and anyone it hides the link from is
+            someone the page would redirect to sign-in.
+          */}
+          {session?.user?.id ? (
+            <nav aria-label="Primary" className="shrink-0">
+              <Link
+                href={UPLOAD_PATH}
+                className="rounded-sm text-sm font-medium text-foreground transition-colors hover:text-primary focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring"
+              >
+                Upload
+              </Link>
+            </nav>
+          ) : null}
+
+          {/*
+            Auth is the other header action. min-w-0, and no shrink-0. The
+            two together used to cancel:
             shrink-0 sized this to max-content, which made the truncate on the
             signed-in user's name inert and sent a long email off the right
             edge at 320-375px.
@@ -113,7 +148,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             explicitly on the wordmark above rather than left to min-content.
           */}
           <div className="ml-auto flex min-w-0 items-center gap-2">
-            <AuthStatus />
+            <AuthStatus session={session} />
           </div>
         </div>
       </header>
