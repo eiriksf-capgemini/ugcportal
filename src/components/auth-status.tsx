@@ -1,5 +1,6 @@
 import { getSession, signIn, signOut } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
+import { hasSignedInUser } from "@/lib/session";
 
 /**
  * Renders the sign-in/sign-out affordance for the current request's
@@ -16,11 +17,21 @@ import { Button } from "@/components/ui/button";
  * `{children}` — serialising the session lookup ahead of the page's own
  * data fetching on every render. `cache()` gets both: no duplicate query,
  * and no component forced to block its siblings on it.
+ *
+ * Gated on `hasSignedInUser` (src/lib/session.ts), not a hand-spelled
+ * `!session?.user` (ugcportal-t0y round 3 finding 1): that used to disagree
+ * with src/components/upload-nav-link.tsx's own `session?.user?.id` check
+ * for a session with a user but no id, so a visitor could see "Sign out"
+ * here while the header's own link to /upload silently vanished. Latent
+ * today because the session callback always sets `user.id` under the
+ * `"database"` strategy; live the moment that ever changes, for exactly one
+ * of these two components and not the other, unless both read the same
+ * predicate.
  */
 export async function AuthStatus() {
   const session = await getSession();
 
-  if (!session?.user) {
+  if (!hasSignedInUser(session)) {
     return (
       <div className="flex items-center gap-2">
         {/*

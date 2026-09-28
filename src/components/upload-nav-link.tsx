@@ -1,14 +1,19 @@
+import { headers } from "next/headers";
 import Link from "next/link";
 
 import { getSession } from "@/lib/auth";
-import { UPLOAD_PATH } from "@/lib/routes";
+import { CURRENT_PATH_HEADER, UPLOAD_PATH } from "@/lib/routes";
+import { hasSignedInUser } from "@/lib/session";
 
 /**
  * The header's nav landmark for /upload (ugcportal-t0y), shown only to
  * exactly the population src/app/upload/page.tsx:37 itself would let
- * through — gated on the identical `session?.user?.id` expression, not a
- * weaker stand-in, so this link's visibility can never disagree with what
- * that page would actually do to the visitor it is shown to.
+ * through — gated on `hasSignedInUser` (src/lib/session.ts), the same
+ * predicate src/components/auth-status.tsx uses (ugcportal-t0y round 3
+ * finding 1: the two used to hand-spell their own, different expressions,
+ * and disagreed for a session with a user but no id), so this link's
+ * visibility can never disagree with what that page, or the rest of the
+ * header, would do for the same visitor.
  *
  * A standalone async component, not inlined into app-shell.tsx, for two
  * reasons:
@@ -39,12 +44,29 @@ import { UPLOAD_PATH } from "@/lib/routes";
 export async function UploadNavLink() {
   const session = await getSession();
 
-  if (!session?.user?.id) return null;
+  if (!hasSignedInUser(session)) return null;
+
+  /*
+    ugcportal-t0y round 3 finding 2: aria-current="page" when a signed-in
+    user is already on /upload — the conventional expectation for a nav
+    landmark's active item, and without it, clicking the link while already
+    there is a no-op navigation with no indication why. Read from the
+    request header src/proxy.ts stamps (see CURRENT_PATH_HEADER's own
+    comment for why a header, not some other App Router mechanism, is what
+    exists for a component this far up the tree to learn the current path
+    at all). `undefined`, not `false`, when it isn't the current page:
+    aria-current is only ever removed by omitting it, since the ARIA spec
+    defines "false" as its own (falsy but present) token rather than a
+    synonym for absent.
+  */
+  const pathname = (await headers()).get(CURRENT_PATH_HEADER);
+  const isCurrentPage = pathname === UPLOAD_PATH;
 
   return (
     <nav aria-label="Primary" className="shrink-0">
       <Link
         href={UPLOAD_PATH}
+        aria-current={isCurrentPage ? "page" : undefined}
         className="rounded-sm text-sm font-medium text-foreground transition-colors hover:text-primary focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring"
       >
         Upload
