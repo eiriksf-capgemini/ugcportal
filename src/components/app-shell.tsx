@@ -2,6 +2,7 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 
 import { AuthStatus } from "@/components/auth-status";
+import { UploadNavLink } from "@/components/upload-nav-link";
 import { SITE_NAME } from "@/lib/site";
 
 /**
@@ -84,20 +85,58 @@ export function AppShell({ children }: { children: ReactNode }) {
             /*
               shrink-[999] sets an explicit yield order for the header row:
               the wordmark gives way first, then the signed-in user's name,
-              and the button labels never do. Flexbox distributes shrinkage in
-              proportion to base-size x shrink-factor, so an outsized factor
-              here means the wordmark is fully consumed before any pressure
-              reaches the actions.
+              and the nav link and button labels never do. Flexbox distributes
+              shrinkage in proportion to base-size x shrink-factor, so an
+              outsized factor here means the wordmark is fully consumed before
+              any pressure reaches the actions.
+
+              min-w-12 (3rem), not min-w-0 (ugcportal-t0y round 2 finding):
+              the nav slot this bead added is shrink-0, so it and its gap now
+              take a fixed ~70px out of the row before any shrinkage is
+              distributed at all, and at a 320px viewport with a long
+              signed-in email, a shrink-[999] item with NO floor can be
+              squeezed to zero width - taking the only link back to "/" with
+              it. A small floor keeps a truncated sliver of the wordmark on
+              screen (and clickable) in that case; it does not fully solve
+              narrow-viewport layout, which is ugcportal-2al's job.
             */
-            className="min-w-0 shrink-[999] truncate rounded-sm text-sm font-medium tracking-tight text-foreground transition-colors hover:text-primary focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring"
+            className="min-w-12 shrink-[999] truncate rounded-sm text-sm font-medium tracking-tight text-foreground transition-colors hover:text-primary focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring"
           >
             {SITE_NAME}
           </Link>
           {/*
-            Auth is the only header action today. Nav links belong here, to
-            the left of this, once there is more than one destination.
+            The nav slot (ugcportal-t0y). /upload is the first destination
+            reachable from the app's own chrome - the three admin settings
+            screens (users, rights, instagram) are real destinations too and
+            still have none of their own, a gap this bead's scope does not
+            cover.
 
-            min-w-0, and no shrink-0. The two together used to cancel:
+            UploadNavLink is its own component (src/components/upload-nav-
+            link.tsx), not inlined here, so this function can stay a plain
+            synchronous one: React only starts rendering `children` once
+            AppShell itself has returned, so an `await` in *this* function's
+            body - the shape round 1 of this bead shipped with - would
+            serialise the session lookup ahead of the page's own data
+            fetching for every page, including an anonymous gallery visitor
+            on "/" who will never see this link at all. Kept as a sibling
+            element instead, it renders concurrently with `{children}` and
+            with AuthStatus - see that component's own comment for how the
+            two avoid paying for the session twice between them despite
+            neither awaiting the other.
+
+            A real <nav> landmark, not a bare <a>, so a screen reader user can
+            jump to it directly; aria-label distinguishes it from a future
+            second nav region rather than leaving both as an unlabelled
+            "navigation" landmark. It sits in DOM order between the wordmark
+            and the auth actions, so tab order reads left to right exactly as
+            the row is laid out - no tabIndex tricks, and no change to the
+            skip link's target or position.
+          */}
+          <UploadNavLink />
+
+          {/*
+            Auth is the other header action. min-w-0, and no shrink-0. The
+            two together used to cancel:
             shrink-0 sized this to max-content, which made the truncate on the
             signed-in user's name inert and sent a long email off the right
             edge at 320-375px.

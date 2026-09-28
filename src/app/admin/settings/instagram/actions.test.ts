@@ -7,7 +7,7 @@ const authMock = vi.fn();
 const deleteManyMock = vi.fn();
 const revalidatePathMock = vi.fn();
 
-vi.mock("@/lib/auth", () => ({ auth: authMock }));
+vi.mock("@/lib/auth", () => ({ auth: authMock, getSession: authMock }));
 vi.mock("@/lib/prisma", () => ({
   prisma: { instagramAccount: { deleteMany: deleteManyMock } },
 }));

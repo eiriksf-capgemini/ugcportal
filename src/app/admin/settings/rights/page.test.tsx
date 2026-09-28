@@ -30,7 +30,7 @@ import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db"
  */
 
 const authMock = vi.fn();
-vi.mock("@/lib/auth", () => ({ auth: authMock }));
+vi.mock("@/lib/auth", () => ({ auth: authMock, getSession: authMock }));
 
 const notFoundMock = vi.fn(() => {
   // next/navigation's notFound() throws so the caller stops; a stand-in that

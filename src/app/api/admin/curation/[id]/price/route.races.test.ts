@@ -54,7 +54,7 @@ const tx = {
   mediaListing: { update: updateMock },
 };
 
-vi.mock("@/lib/auth", () => ({ auth: authMock }));
+vi.mock("@/lib/auth", () => ({ auth: authMock, getSession: authMock }));
 vi.mock("@/lib/prisma", () => ({
   prisma: { $transaction: (fn: (client: typeof tx) => unknown) => fn(tx) },
 }));

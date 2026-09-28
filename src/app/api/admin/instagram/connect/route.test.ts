@@ -4,7 +4,7 @@ import { STATE_COOKIE } from "@/lib/instagram-oauth-state";
 
 const authMock = vi.fn();
 
-vi.mock("@/lib/auth", () => ({ auth: authMock }));
+vi.mock("@/lib/auth", () => ({ auth: authMock, getSession: authMock }));
 
 const { GET } = await import("@/app/api/admin/instagram/connect/route");
 
