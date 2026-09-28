@@ -180,17 +180,32 @@ def glob_base_dir(expanded_pattern):
     the base. `os.path.relpath` then treats "ugc" as a sibling rather than
     an ancestor of the real "ugcportal" directory, so every resolved
     project slug comes out as "..", and any --project filter matches
-    nothing. Reproduced with such a glob. Walking whole path components and
-    stopping at the first one containing a glob metacharacter fixes this
-    for a glob anchored anywhere, not just at "**".
+    nothing. Walking whole path components and stopping at the first one
+    containing a glob metacharacter fixed THAT case, but introduced a
+    second bug (round 4): the `or os.sep` fallback assumed an empty
+    `base_parts` (the FIRST component itself has a metacharacter, e.g. the
+    relative pattern "*/*.jsonl") must mean an absolute root. For a
+    relative pattern it doesn't -- `os.sep` ("/") is the filesystem root,
+    not the current directory, so `os.path.relpath` resolved every matched
+    file against "/" instead of ".", making `proj` come out as the first
+    component of the process's OWN working directory (e.g. "private" or
+    "home") for every row. Reproduced:
+    `load_rows("*/*.jsonl", None, "ugcportal")` returned 0 rows where the
+    version before the round-3 fix returned 1. Fixed by tracking whether
+    the pattern was absolute to begin with and falling back to "." rather
+    than "/" when it wasn't.
     """
+    is_absolute = expanded_pattern.startswith(os.sep)
     parts = expanded_pattern.split(os.sep)
     base_parts = []
     for part in parts:
         if any(ch in part for ch in _GLOB_META_CHARS):
             break
         base_parts.append(part)
-    return os.sep.join(base_parts) or os.sep
+    joined = os.sep.join(base_parts)
+    if joined:
+        return joined
+    return os.sep if is_absolute else "."
 
 
 def _price_row(row, model, u):
@@ -229,23 +244,40 @@ def _price_row(row, model, u):
 
 
 # Every one of these keys is printed by report() UNCONDITIONALLY, including
-# when its count is zero. Round 3 found three more silent `continue` paths
-# (non-assistant, non-dict usage, unrecognized model) alongside the ones
-# round 2 had already started counting -- the recurrence across three
-# rounds is the point: a per-case fix does not generalize, because the next
-# silent path is just as easy to add as the last one was to miss. The fix
-# that generalizes is structural: every path that drops or fails to price a
-# record increments a key in THIS dict, and report()'s first job, before it
-# prints a single dollar figure, is to print all of them. An unlisted drop
-# path is a bug in this list, not a silent number.
+# when its count is zero. Round 3 found three silent `continue` paths
+# (non-assistant, non-dict usage, unrecognized model) with no tally at all;
+# round 4 found FOUR MORE (the cheap "usage" substring prefilter, the dedup
+# supersede, and the --since/--project filters) that this list still didn't
+# cover, plus the enforcement gap that let a listed-but-uncounted path go
+# unnoticed in the first place -- see the assertion in load_rows below. The
+# recurrence across four rounds is the point: a per-case fix does not
+# generalize, because the next silent path is just as easy to add as the
+# last one was to miss. What generalizes is: every path that drops, skips,
+# supersedes, or fails to price a record increments a key in THIS dict;
+# load_rows asserts every key it actually used is listed here (fails loudly
+# rather than silently dropping an unlisted key); and report()'s first job,
+# before it prints a single dollar figure, is to print all of them.
+#
+# NOTE ON SCOPE: everything here except unpriced_models (printed alongside,
+# see report()) is counted across the WHOLE matched glob, independent of
+# --since/--project -- several of these paths (an unreadable file, a line
+# that never parses, a missing timestamp) have no date to filter by in the
+# first place, so scoping some counters to the window and not others would
+# be a worse kind of misleading than not scoping any of them. rows_*_filtered
+# ARE inherently in requests-removed-by-that-filter units, i.e. they describe
+# what the filter itself did, not the pre-scan tree.
 ANOMALY_KEYS = (
     "files_unreadable",
+    "lines_no_usage_substring",
     "lines_json_error",
-    "lines_missing_id",
-    "lines_missing_timestamp",
     "lines_not_assistant_with_usage",
     "lines_usage_not_dict",
+    "lines_missing_id",
+    "lines_missing_timestamp",
     "lines_unrecognized_model",
+    "lines_dedup_superseded",
+    "rows_since_filtered",
+    "rows_project_filtered",
 )
 
 
@@ -294,6 +326,16 @@ def load_rows(pattern, since, project_substr):
         with fh:
             for line in fh:
                 if '"usage"' not in line:
+                    # The overwhelming majority of lines in a real
+                    # transcript (user turns, tool calls, etc.) -- cheap to
+                    # skip without a full json.loads, and expected to be a
+                    # large number on every run, not a red flag. Still
+                    # tallied, because "expected to be large" is not the
+                    # same claim as "doesn't need to be counted" -- the
+                    # whole point of this ledger is that every dropped line
+                    # is accounted for somewhere, not that every count is
+                    # alarming.
+                    anomalies["lines_no_usage_substring"] += 1
                     continue
                 try:
                     d = json.loads(line)
@@ -303,10 +345,7 @@ def load_rows(pattern, since, project_substr):
                 if d.get("type") != "assistant":
                     # Contains the substring '"usage"' but isn't an
                     # assistant turn -- e.g. a tool result embedding the
-                    # word elsewhere in its payload. Not necessarily a
-                    # problem, but round 3 found 45 of these in the real
-                    # tree with nothing counting them; tallied rather than
-                    # silently absorbed.
+                    # word elsewhere in its payload.
                     anomalies["lines_not_assistant_with_usage"] += 1
                     continue
                 msg = d.get("message") or {}
@@ -327,6 +366,10 @@ def load_rows(pattern, since, project_substr):
 
                 model = norm_model(msg.get("model"))
                 if model is None or model == "<synthetic>":
+                    # Round 3 found 45 of these on the real tree with
+                    # nothing counting them -- a `None`/"<synthetic>"
+                    # model, distinct from an unpriced-but-recognized one
+                    # (which unpriced_models covers separately, downstream).
                     anomalies["lines_unrecognized_model"] += 1
                     continue
 
@@ -344,6 +387,7 @@ def load_rows(pattern, since, project_substr):
                 output = u.get("output_tokens", 0) or 0
                 prev = best.get(rid)
                 if prev is not None and output <= prev["_output"]:
+                    anomalies["lines_dedup_superseded"] += 1
                     continue
 
                 # claude-usage-report.py buckets days with `.astimezone()`
@@ -376,7 +420,9 @@ def load_rows(pattern, since, project_substr):
 
     rows = list(best.values())
     if since:
+        before = len(rows)
         rows = [r for r in rows if r["day"] >= since]
+        anomalies["rows_since_filtered"] += before - len(rows)
 
     if project_substr:
         unfiltered_sidechain = sum(1 for r in rows if r["is_sidechain"])
@@ -392,6 +438,7 @@ def load_rows(pattern, since, project_substr):
                 f"subagent share.",
                 file=sys.stderr,
             )
+        anomalies["rows_project_filtered"] += len(rows) - len(kept)
         rows = kept
 
     # Tally unpriced models from the FINAL filtered row set, not the raw
@@ -400,10 +447,31 @@ def load_rows(pattern, since, project_substr):
     # next to a set of numbers that has nothing to do with X.
     unpriced = collections.Counter(r["model"] for r in rows if not r["_priced"])
 
+    # The guarantee this ledger makes is only real if an unlisted key
+    # cannot silently vanish. `{key: anomalies[key] for key in ANOMALY_KEYS}`
+    # -- projecting through the declared list -- was exactly that silent
+    # vanishing: any counter incremented under a key NOT in ANOMALY_KEYS
+    # would be dropped here with no error, which is the same failure shape
+    # as never counting it at all. Asserting the actual keys match, and
+    # failing loudly on a mismatch, is what makes "has to increment a key
+    # to be counted, and once it does it prints" true rather than aspirational.
+    unexpected = set(anomalies) - set(ANOMALY_KEYS)
+    if unexpected:
+        raise RuntimeError(
+            f"anomalies counter used key(s) not in ANOMALY_KEYS: {sorted(unexpected)}. "
+            f"Add them to ANOMALY_KEYS so they are guaranteed to print -- do not silently "
+            f"drop them by projecting through the old list."
+        )
+
     diagnostics = {
         "glob_pattern": pattern,
         "files_matched": files_matched,
-        "anomalies": {key: anomalies[key] for key in ANOMALY_KEYS},
+        # Iterate the ACTUAL keys observed (falling back to 0 for any
+        # ANOMALY_KEYS entry that never fired this run), not a projection
+        # through the declared list -- the assertion above is what
+        # guarantees completeness; this dict just needs every declared key
+        # present so report() can print it even at zero.
+        "anomalies": {key: anomalies.get(key, 0) for key in ANOMALY_KEYS},
         "since_filter": since,
         "project_filter": project_substr,
     }
@@ -424,13 +492,29 @@ def report(rows, unpriced, diagnostics):
     # wrong" and "we didn't check" never look the same. This one block is
     # what round 3 asked for instead of one more per-case tally: whatever
     # the next silent drop path turns out to be, it has to increment a key
-    # in `anomalies` to be counted at all, and once it does, it prints here
-    # by construction, not because someone remembered to add a print
-    # statement next to it.
-    print("anomalies while scanning (0 = clean; see ANOMALY_KEYS for what each counts):")
+    # in `anomalies` to be counted at all (load_rows asserts this), and
+    # once it does, it prints here by construction, not because someone
+    # remembered to add a print statement next to it.
+    #
+    # SCOPE, stated explicitly because it is easy to misread otherwise
+    # (round 4 finding): every count below except `rows_*_filtered` is
+    # tallied across the WHOLE glob this run scanned, NOT limited to
+    # --since/--project -- most of these paths (an unreadable file, a line
+    # that never parses, a missing timestamp) have no date to filter by,
+    # so there is no way to scope some of these counters to the window
+    # without misleadingly failing to scope the rest the same way. Do not
+    # read `lines_unrecognized_model: 45` as "45 in this window" -- it is
+    # "45 across everything this glob matched, whatever window that is".
+    # `rows_since_filtered`/`rows_project_filtered` are the opposite shape
+    # on purpose: they describe what that specific filter removed, in
+    # request units, from the row set built by everything above them.
+    print(
+        "anomalies across the WHOLE matched glob, not limited to --since/--project below "
+        "(0 = clean; see ANOMALY_KEYS for what each counts):"
+    )
     for key in ANOMALY_KEYS:
         print(f"   {key}: {diagnostics['anomalies'][key]:,}")
-    print(f"   unpriced_models: {dict(unpriced) if unpriced else '{}'}")
+    print(f"   unpriced_models (from the FILTERED rows below): {dict(unpriced) if unpriced else '{}'}")
 
     print(
         f"filters used: --since={diagnostics['since_filter'] or 'none'}  "

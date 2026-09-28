@@ -13,17 +13,21 @@ directly, rather than against a real machine's transcripts -- so this passes
 the same way on any machine or CI runner regardless of what's actually been
 run there.
 
-These tests exist because three rounds of ugcportal-9ak's PR review found
-bugs in usage_indicators.py that, overwhelmingly, look like good news instead
-of an error (see that module's docstring). Round 1 found six; round 2 found
+These tests exist because four rounds of ugcportal-9ak's PR review found bugs
+in usage_indicators.py that, overwhelmingly, look like good news instead of
+an error (see that module's docstring). Round 1 found six; round 2 found
 that the round-1 fix's own docstring claimed test coverage that didn't exist
 yet (this file is what makes that claim true) plus five more, including a
 subagent breakdown that silently dropped Fable/Haiku from its own total;
 round 3 found seven more, including a model-id normalizer that only covered
-two hardcoded date suffixes and a glob-base-dir computation that broke on a
-narrowing glob. Nothing in this repo's CI runs this file -- see SKILL.md and
-the bead tracking that gap -- so it is run by hand, and must be run by hand
-before trusting a change to usage_indicators.py.
+two hardcoded date suffixes; round 4 found that round 3's OWN fixes had two
+new bugs of their own (a glob_base_dir fallback that broke on a relative
+glob, and an anomalies-ledger projection that could silently discard an
+unlisted key -- the exact failure the ledger exists to prevent) plus a test
+in this file that no-ops on this repo's own Python (3.9.6) rather than
+covering the fix it claims to. Nothing in this repo's CI runs this file --
+see SKILL.md and the bead tracking that gap -- so it is run by hand, and
+must be run by hand before trusting a change to usage_indicators.py.
 """
 import datetime
 import os
@@ -31,6 +35,7 @@ import sys
 import unittest
 from io import StringIO
 from contextlib import redirect_stdout, redirect_stderr
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import usage_indicators as ui  # noqa: E402
@@ -327,6 +332,31 @@ class GlobBaseDirResolution(unittest.TestCase):
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["proj"], "ugcportal")
 
+    def test_relative_pattern_falls_back_to_current_dir_not_filesystem_root(self):
+        # Round 4 regression: when the metacharacter is in the FIRST path
+        # component (a relative pattern like "*/*.jsonl"), base_parts ends
+        # up empty, and `os.sep.join([]) or os.sep` fell back to "/" even
+        # though the pattern was never absolute. os.path.relpath then
+        # resolves every matched (relative) file against the filesystem
+        # root instead of the current directory, so `proj` comes out as
+        # the first component of the process's OWN cwd (e.g. "private" or
+        # "home") for every row, and any --project filter matches nothing.
+        self.assertEqual(ui.glob_base_dir("*/*.jsonl"), ".")
+        self.assertEqual(ui.glob_base_dir("*.jsonl"), ".")
+
+    def test_relative_pattern_resolves_correct_project_slug_end_to_end(self):
+        with TemporaryDirectory() as root:
+            write(root, "ugcportal/session.jsonl",
+                  line("r1", "2026-09-24T10:00:00Z", "claude-opus-5"))
+            cwd = os.getcwd()
+            os.chdir(root)
+            try:
+                rows, _, _ = ui.load_rows("*/*.jsonl", None, "ugcportal")
+            finally:
+                os.chdir(cwd)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["proj"], "ugcportal")
+
 
 class SinceDateValidation(unittest.TestCase):
     """Round 2: --since must reject a partial or malformed date instead of
@@ -352,23 +382,45 @@ class SinceDateValidation(unittest.TestCase):
         with self.assertRaises(Exception):
             ui.valid_since_date("not-a-date")
 
-    def test_lenient_iso_variants_normalize_to_canonical_form(self):
-        # These two inputs are only accepted by date.fromisoformat on
-        # Python >= 3.11 (this suite runs the way `python3` resolves on the
-        # host, so the sub-tests below are skipped on an interpreter old
-        # enough to reject them outright at the try/except -- see
-        # SinceDateValidationPy311Plus for the version-gated behavioral
-        # check). This test only asserts the FUNCTION's contract: whatever
-        # date.fromisoformat successfully parses, the return value must be
-        # that date's own `.isoformat()`, never the raw input string.
+    def test_lenient_iso_variants_normalize_to_canonical_form_when_python_accepts_them(self):
+        # Supplementary, real-world check: on an interpreter lenient enough
+        # to accept these (Python >= 3.11), confirm the RETURNED value is
+        # canonical rather than the raw input. This is NOT the test that
+        # proves the fix -- on Python < 3.11 (this repo's own `python3` is
+        # 3.9.6) date.fromisoformat rejects both inputs outright, so both
+        # iterations skip via `continue` and the test passes vacuously,
+        # having exercised nothing. See the white-box test below for the
+        # one that actually holds on every version.
         import datetime as _dt
         for candidate in ("20260924", "2026-W40-1"):
             try:
                 parsed = _dt.date.fromisoformat(candidate)
             except ValueError:
-                continue  # this Python version doesn't accept it; nothing to check
+                continue  # this Python version doesn't accept it; nothing to check here
             self.assertEqual(ui.valid_since_date(candidate), parsed.isoformat())
             self.assertNotEqual(ui.valid_since_date(candidate), candidate)
+
+    def test_returns_canonical_isoformat_not_the_raw_input_string(self):
+        # THE test that actually proves the round-3 fix, on any Python
+        # version. Round 4 found that the test above (relying on
+        # date.fromisoformat's own version-dependent leniency to produce an
+        # input whose accepted form differs from its canonical form) is a
+        # no-op on this repo's interpreter (3.9.6): every string
+        # date.fromisoformat accepts there is ALREADY exactly "YYYY-MM-DD",
+        # so a passthrough bug (`return s`) and the correct fix
+        # (`return d.isoformat()`) are indistinguishable on any real input
+        # on that version -- mutation-verified: reverting to `return s`
+        # left all tests green. Patching the parser itself to return a
+        # controlled date, independent of what string was actually passed
+        # or what any given Python version's parser would accept, makes the
+        # CONTRACT ("call fromisoformat, return ITS OWN isoformat(), never
+        # the verbatim input") observable everywhere, not just on 3.11+.
+        fake_date = datetime.date(2026, 9, 24)
+        with mock.patch.object(ui.datetime, "date") as mock_date_cls:
+            mock_date_cls.fromisoformat.return_value = fake_date
+            result = ui.valid_since_date("not-the-canonical-string")
+        self.assertEqual(result, fake_date.isoformat())
+        self.assertNotEqual(result, "not-the-canonical-string")
 
 
 class ScanDiagnostics(unittest.TestCase):
@@ -434,7 +486,7 @@ class ScanDiagnostics(unittest.TestCase):
                 ui.report(rows, unpriced, diag)
             text = out.getvalue()
             self.assertIn("scanned 1 files", text)
-            self.assertIn("anomalies while scanning", text)
+            self.assertIn("anomalies across the WHOLE matched glob", text)
             for key in ui.ANOMALY_KEYS:
                 self.assertIn(f"{key}: ", text)
 
@@ -449,10 +501,64 @@ class ScanDiagnostics(unittest.TestCase):
             with redirect_stdout(out):
                 ui.report(rows, unpriced, diag)
             text = out.getvalue()
-            self.assertIn("anomalies while scanning", text)
+            self.assertIn("anomalies across the WHOLE matched glob", text)
             for key in ui.ANOMALY_KEYS:
                 self.assertIn(f"{key}: 0", text)
-            self.assertIn("unpriced_models: {}", text)
+            self.assertIn("unpriced_models (from the FILTERED rows below): {}", text)
+
+    def test_dedup_and_filter_drops_are_tallied(self):
+        # Round 4: lines_dedup_superseded, rows_since_filtered and
+        # rows_project_filtered were four of the "still untallied" drop
+        # paths named in round 4 review -- confirm each increments.
+        # The THIRD line here is what actually exercises supersession: the
+        # first line establishes "d1" with output=2, the second raises it
+        # to 99 (that one is a normal update, not a supersession -- it
+        # WINS), and only the third, output=5 <= 99, is the one that gets
+        # dropped and must be tallied.
+        with TemporaryDirectory() as root:
+            dup = (
+                line("d1", "2026-09-24T10:00:00Z", "claude-opus-5", output_tokens=2)
+                + line("d1", "2026-09-24T10:00:01Z", "claude-opus-5", output_tokens=99)
+                + line("d1", "2026-09-24T10:00:02Z", "claude-opus-5", output_tokens=5)
+            )
+            write(root, "proj-a/session.jsonl", dup)
+            write(root, "proj-b/session.jsonl", line("d2", "2026-09-24T10:00:00Z", "claude-opus-5"))
+            # A raw line with no "usage" substring at all -- the cheap
+            # prefilter's own drop path.
+            with open(os.path.join(root, "proj-a", "non_usage.jsonl"), "w", encoding="utf-8") as f:
+                f.write('{"type": "user", "note": "no usage field here"}\n')
+
+            _, _, diag_nofilter = ui.load_rows(f"{root}/**/*.jsonl", None, None)
+            self.assertEqual(diag_nofilter["anomalies"]["lines_dedup_superseded"], 1)
+            self.assertGreater(diag_nofilter["anomalies"]["lines_no_usage_substring"], 0)
+
+            _, _, diag_since = ui.load_rows(f"{root}/**/*.jsonl", "2099-01-01", None)
+            self.assertEqual(diag_since["anomalies"]["rows_since_filtered"], 2)
+
+            _, _, diag_proj = ui.load_rows(f"{root}/**/*.jsonl", None, "proj-a")
+            self.assertEqual(diag_proj["anomalies"]["rows_project_filtered"], 1)
+
+    def test_unexpected_anomaly_key_fails_loudly_instead_of_vanishing(self):
+        # Round 4, the projection bug: {key: anomalies[key] for key in
+        # ANOMALY_KEYS} silently discarded any key NOT in that list -- the
+        # exact failure this ledger exists to prevent, just moved one level
+        # up. load_rows now asserts the keys match and raises rather than
+        # drop. Verified here by monkeypatching ANOMALY_KEYS down to a
+        # subset that excludes a key a REAL record in this fixture will
+        # actually increment (missing_id) -- a fixture that increments
+        # nothing leaves `anomalies` empty, and an empty Counter is
+        # trivially a subset of anything, which would make this test pass
+        # vacuously without exercising the assertion at all.
+        import json as _json
+        with TemporaryDirectory() as root:
+            missing_id = _json.dumps({
+                "type": "assistant", "timestamp": "2026-09-24T10:00:00Z",
+                "message": {"model": "claude-opus-5", "usage": {"input_tokens": 1, "output_tokens": 1}},
+            }) + "\n"
+            write(root, "proj-a/session.jsonl", missing_id)
+            with mock.patch.object(ui, "ANOMALY_KEYS", ("files_unreadable",)):
+                with self.assertRaises(RuntimeError):
+                    ui.load_rows(f"{root}/**/*.jsonl", None, None)
 
     def test_filters_and_date_range_echoed(self):
         with TemporaryDirectory() as root:
