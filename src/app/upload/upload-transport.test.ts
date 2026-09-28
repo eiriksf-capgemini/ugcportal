@@ -381,13 +381,13 @@ describe("a connection that goes quiet is given up on (round 2, finding 1)", () 
     controller.abort();
     await expect(cancelledPromise).rejects.toBeInstanceOf(UploadAbortedError);
 
-    expect(failureForTransportError(new UploadStalledError(30_000)).code).toBe(
+    expect(failureForTransportError(new UploadStalledError(30_000, "partial")).code).toBe(
       "connection_stalled",
     );
-    expect(failureForTransportError(new UploadAbortedError()).code).toBe(
+    expect(failureForTransportError(new UploadAbortedError("partial")).code).toBe(
       "cancelled",
     );
-    expect(failureForTransportError(new UploadNetworkError()).code).toBe(
+    expect(failureForTransportError(new UploadNetworkError("partial")).code).toBe(
       "network_error",
     );
   });

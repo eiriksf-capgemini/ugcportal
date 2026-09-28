@@ -1,10 +1,22 @@
 "use client";
 
-import { useCallback, useId, useReducer, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useReducer,
+  useRef,
+  useState,
+} from "react";
 
 import { ACCEPTED_MIME_TYPES } from "@/lib/media-rules";
 
-import { acceptedTypesSummary, cancelledFailure } from "./outcomes";
+import {
+  acceptedTypesSummary,
+  cancelledFailure,
+  mayRetry,
+  secondsUntilRetry,
+} from "./outcomes";
 import { UploadQueueList } from "./upload-queue-list";
 import {
   queueSummary,
@@ -198,7 +210,15 @@ export function UploadForm() {
         work queue for a refusal that would only be repeated.
       */
       const item = items.find((each) => each.id === id);
-      if (item?.status !== "failed" || item.failure?.retryable !== true) return;
+      if (item?.status !== "failed" || item.failure === null) return;
+      /*
+        `mayRetry`, not `retryable` alone — the same predicate the button's
+        disabled state uses, so the control and the handler cannot disagree
+        about whether the server's Retry-After window has passed. Read against
+        Date.now() rather than the ticking `now` below, because this runs on a
+        click and should judge the moment of the click.
+      */
+      if (!mayRetry(item.failure, Date.now())) return;
 
       dispatchQueue({ type: "retried", id });
       queueRef.current.push({ id, file });
@@ -228,6 +248,33 @@ export function UploadForm() {
   const dragDepth = useRef(0);
 
   const summary = queueSummary(items);
+
+  /**
+   * A clock, ticking only while some row is inside a Retry-After window.
+   *
+   * The countdown on a throttled "Try again" has to stay true as it runs, and
+   * nothing else on this page re-renders while the user waits. The interval
+   * exists only for as long as there is something to count down, so an idle
+   * page does no work.
+   *
+   * Initialised from a function so the first value is read at mount rather
+   * than at module scope, and never rendered when the queue is empty — which
+   * it always is on the server — so there is nothing here to mismatch during
+   * hydration.
+   */
+  const [now, setNow] = useState(() => Date.now());
+  const throttled = items.some(
+    (item) =>
+      item.failure !== null && secondsUntilRetry(item.failure, now) > 0,
+  );
+
+  useEffect(() => {
+    if (!throttled) return;
+    // Twice a second, so the displayed number is never more than half a
+    // second stale.
+    const ticker = setInterval(() => setNow(Date.now()), 500);
+    return () => clearInterval(ticker);
+  }, [throttled]);
 
   return (
     <div>
@@ -299,6 +346,7 @@ export function UploadForm() {
 
       <UploadQueueList
         items={items}
+        now={now}
         onRetry={retry}
         onCancel={cancel}
         onDismiss={dismiss}

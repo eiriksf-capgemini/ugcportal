@@ -47,8 +47,13 @@ export type UploadFailureCode =
   | "network_error"
   /** Stopped moving mid-flight and never recovered. See UPLOAD_STALL_TIMEOUT_MS. */
   | "connection_stalled"
-  // Stopped by the person doing it.
-  | "cancelled";
+  // Stopped by the person doing it, before the body had all gone out.
+  | "cancelled"
+  /**
+   * The file had already been sent when this went wrong, so whether it was
+   * stored is not something the client can know. See unknownOutcomeFailure.
+   */
+  | "outcome_unknown";
 
 export type UploadFailure = {
   code: UploadFailureCode;
@@ -66,6 +71,18 @@ export type UploadFailure = {
    * the `retryAfterSeconds` field in the body.
    */
   retryAfterSeconds: number | null;
+  /**
+   * The wall-clock moment before which a retry must not be offered, or null
+   * when there is nothing to wait for.
+   *
+   * A separate field rather than something derived on the fly from
+   * `retryAfterSeconds`, because that number is a duration measured from when
+   * the RESPONSE ARRIVED, and the UI needs to know how much of it is left now.
+   * Printing "try again in 12 seconds" while enabling the button immediately
+   * — which is what this page did — tells the user about a shed window and
+   * then walks them straight back into it.
+   */
+  retryNotBefore: number | null;
   /** Whether the only way forward is signing in again. */
   needsSignIn: boolean;
   /**
@@ -186,6 +203,7 @@ export function precheckFile(file: {
         message: "This file is empty, so there is nothing to upload.",
         retryable: false,
         retryAfterSeconds: null,
+        retryNotBefore: null,
         needsSignIn: false,
         detail: null,
       };
@@ -201,6 +219,7 @@ export function precheckFile(file: {
               )}, so it was not sent.`,
         retryable: false,
         retryAfterSeconds: null,
+        retryNotBefore: null,
         needsSignIn: false,
         detail: null,
       };
@@ -213,6 +232,7 @@ export function precheckFile(file: {
         } is not a type this site accepts, so it was not sent.`,
         retryable: false,
         retryAfterSeconds: null,
+        retryNotBefore: null,
         needsSignIn: false,
         detail: null,
       };
@@ -230,6 +250,7 @@ export function precheckFile(file: {
         message: validation.message,
         retryable: false,
         retryAfterSeconds: null,
+        retryNotBefore: null,
         needsSignIn: false,
         detail: null,
       };
@@ -358,6 +379,7 @@ export function failureForResponse(
   const base = {
     retryable: false,
     retryAfterSeconds: null,
+    retryNotBefore: null,
     needsSignIn: false,
     detail,
   } as const;
@@ -462,6 +484,14 @@ export function failureForResponse(
               }.`,
         retryable: true,
         retryAfterSeconds: seconds,
+        /*
+          The moment the retry becomes available, so the control can be held
+          shut for the window the header describes. Printing the number while
+          enabling the button immediately told the user about the shed window
+          and then walked them straight back into it — the header exists to
+          spread load out, and nothing was spreading anything.
+        */
+        retryNotBefore: seconds === null ? null : now + seconds * 1000,
       };
     }
     default:
@@ -483,6 +513,31 @@ export function failureForResponse(
   }
 }
 
+/**
+ * Seconds still to wait before a retry may be offered; 0 when it may be now.
+ *
+ * Computed against a `now` passed in rather than read from the clock, so both
+ * the component and its tests are looking at the same moment.
+ */
+export function secondsUntilRetry(failure: UploadFailure, now: number): number {
+  if (failure.retryNotBefore === null) return 0;
+  // Math.max, so a window that has passed reads 0 rather than a negative
+  // count that would render as "try again in -3s".
+  return Math.max(0, Math.ceil((failure.retryNotBefore - now) / 1000));
+}
+
+/**
+ * May a retry be offered for this failure at this moment?
+ *
+ * Both halves matter: `retryable` is about whether re-sending could ever
+ * work, and the window is about whether now is the time. The control and the
+ * handler both ask this, so a disabled button and a refused click cannot
+ * disagree.
+ */
+export function mayRetry(failure: UploadFailure, now: number): boolean {
+  return failure.retryable && secondsUntilRetry(failure, now) === 0;
+}
+
 /** The request never completed — offline, DNS, a dropped socket, a timeout. */
 export function networkFailure(): UploadFailure {
   return {
@@ -491,6 +546,7 @@ export function networkFailure(): UploadFailure {
       "The upload could not reach the server. Check your connection and try again.",
     retryable: true,
     retryAfterSeconds: null,
+    retryNotBefore: null,
     needsSignIn: false,
     detail: null,
   };
@@ -513,15 +569,69 @@ export function stalledConnectionFailure(afterMs: number): UploadFailure {
     )} seconds, so it was given up on. Check your connection and try again.`,
     retryable: true,
     retryAfterSeconds: null,
+    retryNotBefore: null,
+    needsSignIn: false,
+    detail: null,
+  };
+}
+
+/** What interrupted an upload whose body had already been delivered. */
+export type UnknownOutcomeCause = "cancelled" | "stalled" | "network";
+
+const UNKNOWN_OUTCOME_CAUSES: Record<UnknownOutcomeCause, string> = {
+  cancelled: "You cancelled this upload after the file had finished sending.",
+  stalled:
+    "The connection went quiet after the file had finished sending, and the answer never arrived.",
+  network:
+    "The connection failed after the file had finished sending, so the answer never arrived.",
+};
+
+/**
+ * THE HONEST ANSWER WHEN THE CLIENT CANNOT KNOW.
+ *
+ * `POST /api/media` does not read `request.signal` (ugcportal-ax3). Once the
+ * last byte is delivered, the handler runs to completion whatever the browser
+ * does: it watermarks, writes both objects to storage and inserts the Media
+ * row. So for anything that goes wrong from that moment on, the client has
+ * two facts — the file was sent, and no response came back — and the one
+ * thing it does NOT have is whether the upload was stored.
+ *
+ * Both of the confident answers are wrong here, in opposite directions:
+ *
+ *   "You cancelled this upload, so nothing was kept" says the file is not
+ *   there when it very likely is. That is the message this replaces.
+ *
+ *   "Upload failed, try again" is worse. The route has no idempotency key, so
+ *   a retry inserts a SECOND Media row for the same file, and the user has no
+ *   way to tell the duplicate from the original.
+ *
+ * Hence `retryable: false` — not because retrying could not work, but because
+ * this client cannot offer it without risking a silent duplicate. The row
+ * tells the user where to look instead. That is a worse experience than a
+ * working retry and a better one than either lie; a real retry needs the
+ * route to accept an idempotency key, which is ugcportal-ax3's business.
+ */
+export function unknownOutcomeFailure(
+  cause: UnknownOutcomeCause,
+): UploadFailure {
+  return {
+    code: "outcome_unknown",
+    message: `${UNKNOWN_OUTCOME_CAUSES[cause]} The server does not stop working when the browser gives up, so this file may or may not have been stored. Check your library before uploading it again — retrying now could store it twice.`,
+    retryable: false,
+    retryAfterSeconds: null,
+    retryNotBefore: null,
     needsSignIn: false,
     detail: null,
   };
 }
 
 /**
- * Stopped deliberately. Not an error, but it lands in the same slot on the
- * row, because "this file is not uploaded and here is why" is the same
- * sentence either way.
+ * Stopped deliberately, and early enough to say so.
+ *
+ * Only for an upload whose body had NOT finished sending: the request is cut
+ * off mid-stream, the route's multipart read fails, and nothing is stored. A
+ * cancellation after the last byte goes to unknownOutcomeFailure above,
+ * because it is not this.
  */
 export function cancelledFailure(): UploadFailure {
   return {
@@ -529,6 +639,7 @@ export function cancelledFailure(): UploadFailure {
     message: "You cancelled this upload, so nothing was kept.",
     retryable: true,
     retryAfterSeconds: null,
+    retryNotBefore: null,
     needsSignIn: false,
     detail: null,
   };

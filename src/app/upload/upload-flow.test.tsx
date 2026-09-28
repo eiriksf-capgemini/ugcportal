@@ -120,6 +120,13 @@ function imageFile(name = "photo.png", size = 2048): File {
   return new File([new Uint8Array(size)], name, { type: "image/png" });
 }
 
+/**
+ * A fixed render moment. The retry countdown is a function of `now`, so the
+ * list takes it as a prop rather than reading the clock — which is what makes
+ * the throttled state assertable at all.
+ */
+const NOW = Date.parse("2026-09-28T12:00:00.000Z");
+
 function idSequence(): () => string {
   let n = 0;
   return () => {
@@ -135,6 +142,7 @@ function render(items: QueueItem[]): string {
       onRetry={() => {}}
       onCancel={() => {}}
       onDismiss={() => {}}
+      now={NOW}
     />,
   );
 }

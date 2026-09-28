@@ -30,9 +30,31 @@ import type { UploadResponseSummary } from "./outcomes";
 /** Bytes sent so far. `totalBytes` is null when the browser can't say. */
 export type UploadProgress = { loadedBytes: number; totalBytes: number | null };
 
+/**
+ * WHETHER THE LAST BYTE HAD GONE OUT WHEN THIS WENT WRONG.
+ *
+ * Carried on every failure that produces no status, because it is the
+ * difference between a claim the client can make and one it cannot.
+ *
+ * POST /api/media does not read `request.signal`. So once the body is fully
+ * sent, aborting the XHR stops the BROWSER waiting — it does not stop the
+ * server: the handler goes on to watermark, run both PutObjects and write the
+ * Media row. "You cancelled this upload, so nothing was kept" is then simply
+ * false, and offering a retry stores the same file a second time, because the
+ * route has no idempotency key.
+ *
+ * Before the body is fully sent the client is on firm ground: the request was
+ * cut off mid-stream, the route's multipart read fails, and nothing is
+ * stored. That case keeps its confident message and its retry.
+ *
+ * Making the route honour the abort is ugcportal-ax3, not this bead. What is
+ * fixed here is the client asserting an outcome it is in no position to know.
+ */
+export type BodyDelivery = "partial" | "fully-sent";
+
 /** The request never completed: offline, DNS failure, a dropped socket. */
 export class UploadNetworkError extends Error {
-  constructor() {
+  constructor(readonly bodyDelivery: BodyDelivery) {
     super("The upload request did not complete");
     this.name = "UploadNetworkError";
   }
@@ -46,7 +68,10 @@ export class UploadNetworkError extends Error {
  * fine and then silently stopped.
  */
 export class UploadStalledError extends Error {
-  constructor(readonly afterMs: number) {
+  constructor(
+    readonly afterMs: number,
+    readonly bodyDelivery: BodyDelivery,
+  ) {
     super(`The upload sent nothing for ${afterMs}ms`);
     this.name = "UploadStalledError";
   }
@@ -82,15 +107,30 @@ export const UPLOAD_STALL_TIMEOUT_MS = 30_000;
 
 /**
  * Once the last byte is sent, progress events stop and the server goes to
- * work: the watermark gate may queue an image behind others before the
- * S3 puts and the database write. That is legitimately quiet time, so it gets
- * its own, larger budget rather than tripping the sending timeout.
+ * work: buffering the body, waiting for a watermark slot (ugcportal-e86's
+ * gate legitimately queues an upload behind others), sharp decoding it, up to
+ * two PutObjects for a 200 MB video, then the database write. All of that is
+ * legitimately quiet time, so it gets its own budget rather than tripping the
+ * sending timeout.
+ *
+ * ANCHORED TO THE SERVER'S OWN LIMIT rather than guessed at. Node gives up on
+ * a request after its 300-second `requestTimeout` (see the note on
+ * BODY_STALL_TIMEOUT_MS in src/app/api/media/route.ts), so past that point
+ * there is nothing left to wait for. The previous 120s was a guess, and a bad
+ * one in one specific way: it was the only bound on the server's post-body
+ * work, so a HEALTHY upload that spent two minutes in the watermark queue was
+ * aborted, reported as a retryable stall, and then duplicated by the retry
+ * while the server finished storing the first copy.
+ *
+ * Even at 300s that outcome is no longer misreported — anything that goes
+ * wrong after the last byte is now `outcome_unknown` and offers no retry —
+ * but the timeout should not be the thing that manufactures the ambiguity.
  */
-export const RESPONSE_TIMEOUT_MS = 120_000;
+export const RESPONSE_TIMEOUT_MS = 300_000;
 
 /** The caller aborted it — a navigation, or a cancel control. */
 export class UploadAbortedError extends Error {
-  constructor() {
+  constructor(readonly bodyDelivery: BodyDelivery) {
     super("The upload was aborted");
     this.name = "UploadAbortedError";
   }
@@ -142,7 +182,8 @@ export function uploadFile(
 ): Promise<UploadResponseSummary> {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) {
-      reject(new UploadAbortedError());
+      // Nothing was sent at all, so this one is certain.
+      reject(new UploadAbortedError("partial"));
       return;
     }
 
@@ -166,6 +207,13 @@ export function uploadFile(
 
     const xhr = createRequest();
     let settled = false;
+
+    /*
+      Flipped by `upload`'s own load event, which fires once the last byte of
+      the body has gone out. Everything that fails from then on has an outcome
+      the client cannot know — see BodyDelivery above.
+    */
+    let bodyDelivery: BodyDelivery = "partial";
 
     /*
       The watchdog. `stalledAfterMs` doubles as the flag that tells the `abort`
@@ -200,7 +248,7 @@ export function uploadFile(
       settled = true;
       disarm();
       xhr.abort();
-      reject(new UploadAbortedError());
+      reject(new UploadAbortedError(bodyDelivery));
     };
     signal?.addEventListener("abort", onAbort, { once: true });
 
@@ -230,7 +278,7 @@ export function uploadFile(
         if (xhr.status === 0) {
           // A completed load with no status is not a response; the browser
           // reports some cross-origin and network failures this way.
-          reject(new UploadNetworkError());
+          reject(new UploadNetworkError(bodyDelivery));
           return;
         }
         resolve({
@@ -241,25 +289,33 @@ export function uploadFile(
       });
     });
 
-    // The body is fully sent; from here the server is thinking, and quiet is
-    // expected. Hand over to the larger budget.
-    xhr.upload.addEventListener("load", () => arm(RESPONSE_TIMEOUT_MS));
+    /*
+      The body is fully sent; from here the server is thinking, and quiet is
+      expected. Two things change: the watchdog hands over to the larger
+      budget, and every subsequent failure becomes one whose outcome only the
+      server knows, because POST /api/media does not stop work when the
+      browser gives up (ugcportal-ax3).
+    */
+    xhr.upload.addEventListener("load", () => {
+      bodyDelivery = "fully-sent";
+      arm(RESPONSE_TIMEOUT_MS);
+    });
 
     xhr.addEventListener("error", () => {
-      finish(() => reject(new UploadNetworkError()));
+      finish(() => reject(new UploadNetworkError(bodyDelivery)));
     });
     xhr.addEventListener("timeout", () => {
       // Only reachable if someone sets xhr.timeout; the watchdog above is what
       // actually bounds this request. Kept so that setting it later does not
       // produce an unhandled request.
-      finish(() => reject(new UploadNetworkError()));
+      finish(() => reject(new UploadNetworkError(bodyDelivery)));
     });
     xhr.addEventListener("abort", () => {
       finish(() =>
         reject(
           stalledAfterMs === null
-            ? new UploadAbortedError()
-            : new UploadStalledError(stalledAfterMs),
+            ? new UploadAbortedError(bodyDelivery)
+            : new UploadStalledError(stalledAfterMs, bodyDelivery),
         ),
       );
     });

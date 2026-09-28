@@ -1,7 +1,7 @@
 import { Button, buttonVariants } from "@/components/ui/button";
 import { UPLOAD_PATH, mediaPreviewPath, signInPath } from "@/lib/routes";
 
-import { formatBytes } from "./outcomes";
+import { formatBytes, mayRetry, secondsUntilRetry } from "./outcomes";
 import {
   percentComplete,
   type QueueItem,
@@ -20,6 +20,15 @@ import {
 
 export type UploadQueueListProps = {
   items: QueueItem[];
+  /**
+   * The moment the list is being rendered at, for the retry countdown.
+   *
+   * Passed in rather than read from the clock inside, so the component stays
+   * a pure function of its props: renderToStaticMarkup is the only rendering
+   * this repo can do in tests, and a Date.now() inside would make the
+   * throttled state unassertable.
+   */
+  now: number;
   onRetry: (id: string) => void;
   onCancel: (id: string) => void;
   onDismiss: (id: string) => void;
@@ -42,6 +51,41 @@ export type UploadQueueListProps = {
 function previewSrc(media: QueueMedia | null): string | null {
   if (media === null || media.previewId === null) return null;
   return mediaPreviewPath(media.previewId);
+}
+
+/**
+ * What to say beside a stored upload, and WHY THIS IS NOT ONE SENTENCE WITH A
+ * FALLBACK.
+ *
+ * It used to be "is there a preview? no -> watermarked video stills are not
+ * generated". That reads as a considered explanation and is one only for
+ * VIDEO. A missing preview has a second, unrelated cause: `toQueueMedia`
+ * refuses a 201 body it cannot read — truncated, or not JSON — and returns
+ * null, so `media` is null and there is no `kind` at all. An image upload
+ * then got a confident explanation about video stills, which is the kind of
+ * wrong answer nobody debugs because it sounds deliberate.
+ *
+ * So each cause gets its own sentence, keyed off what is actually known.
+ */
+function successNote(item: QueueItem): string {
+  const media = item.media;
+  if (media === null) {
+    // Stored — the 201 says so — but the body was unreadable, so there is no
+    // previewId to render and nothing more this page can tell the user.
+    return "Stored, but the server's reply could not be read, so there is no thumbnail to show. Check your library.";
+  }
+  if (previewSrc(media) !== null) {
+    return "Stored. The thumbnail is the watermarked preview; the original is never shown here.";
+  }
+  if (media.kind === "VIDEO") {
+    // The watermarked poster frame is ugcportal-pmb's job, and until it
+    // exists there is nothing safe to show. Saying so is better than a blank
+    // square that looks like a failure.
+    return "Stored. No thumbnail yet — watermarked video stills are not generated.";
+  }
+  // An IMAGE with no preview should not happen: the route watermarks every
+  // image or refuses it with a 422. If it does, say only what is true.
+  return "Stored, but no thumbnail was returned for this image.";
 }
 
 function statusLabel(item: QueueItem): string {
@@ -88,10 +132,12 @@ function ProgressBar({ item }: { item: QueueItem }) {
 }
 
 function Failure({
+  now,
   item,
   onRetry,
   onDismiss,
 }: {
+  now: number;
   item: QueueItem;
   onRetry: (id: string) => void;
   onDismiss: (id: string) => void;
@@ -144,13 +190,24 @@ function Failure({
           </a>
         ) : null}
         {failure.retryable ? (
+          /*
+            Held shut for the window the server asked for. The 503 path
+            already parsed, clamped and printed `Retry-After`, and then
+            enabled this button immediately — so the page told the user about
+            a shed window and handed them a control that walked straight back
+            into it. `mayRetry` is the same predicate the handler uses, so a
+            disabled button and a refused click cannot disagree.
+          */
           <Button
             type="button"
             variant="outline"
             size="sm"
+            disabled={!mayRetry(failure, now)}
             onClick={() => onRetry(item.id)}
           >
-            Try again
+            {secondsUntilRetry(failure, now) === 0
+              ? "Try again"
+              : `Try again in ${secondsUntilRetry(failure, now)}s`}
           </Button>
         ) : null}
         <Button
@@ -202,6 +259,7 @@ function Thumbnail({ item }: { item: QueueItem }) {
 
 export function UploadQueueList({
   items,
+  now,
   onRetry,
   onCancel,
   onDismiss,
@@ -261,15 +319,7 @@ export function UploadQueueList({
 
             {item.status === "succeeded" ? (
               <div className="mt-2 flex flex-wrap items-center gap-2">
-                <p className="text-xs text-ink-muted">
-                  {previewSrc(item.media) === null
-                    ? // Today this is every VIDEO: the watermarked poster
-                      // frame is ugcportal-pmb's job, and until it exists
-                      // there is nothing safe to show. Saying so is better
-                      // than a blank square that looks like a failure.
-                      "Stored. No thumbnail yet — watermarked video stills are not generated."
-                    : "Stored. The thumbnail is the watermarked preview; the original is never shown here."}
-                </p>
+                <p className="text-xs text-ink-muted">{successNote(item)}</p>
                 <Button
                   type="button"
                   variant="ghost"
@@ -281,7 +331,12 @@ export function UploadQueueList({
               </div>
             ) : null}
 
-            <Failure item={item} onRetry={onRetry} onDismiss={onDismiss} />
+            <Failure
+              now={now}
+              item={item}
+              onRetry={onRetry}
+              onDismiss={onDismiss}
+            />
           </div>
         </li>
       ))}

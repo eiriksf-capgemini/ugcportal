@@ -3,6 +3,7 @@ import {
   failureForResponse,
   networkFailure,
   stalledConnectionFailure,
+  unknownOutcomeFailure,
   type UploadFailure,
 } from "./outcomes";
 import {
@@ -13,6 +14,7 @@ import {
 } from "./upload-queue";
 import {
   UploadAbortedError,
+  UploadNetworkError,
   UploadStalledError,
   uploadFile,
   type UploadTransport,
@@ -29,19 +31,43 @@ import {
 export type Dispatch = (action: QueueAction) => void;
 
 /**
- * The three ways a request can fail without ever producing a status, told
- * apart.
+ * The ways a request can fail without ever producing a status, told apart on
+ * TWO axes — what interrupted it, and whether the file had already been sent.
  *
- * A stall and a user cancellation both arrive as an `abort` — xhr.abort() is
- * the only way to stop a request — so without the distinction the transport
- * draws, a connection that died on its own would be reported as "You
- * cancelled this upload", which is both wrong and unactionable.
+ * The second axis is the one that decides what may be claimed at all. POST
+ * /api/media does not read `request.signal` (ugcportal-ax3), so once the body
+ * is delivered the handler watermarks, stores both objects and inserts the
+ * Media row no matter what the browser does. Past that point the client knows
+ * the file was sent and that no answer came back, and does NOT know whether it
+ * was stored — so all three causes collapse onto one honest outcome rather
+ * than three confident wrong ones.
+ *
+ * Before the body is delivered, the distinctions are real and worth drawing:
+ * a stall and a user cancellation both arrive as an `abort`, because
+ * xhr.abort() is the only way to stop a request, and without the transport's
+ * flag a connection that died on its own would read "You cancelled this
+ * upload".
  */
 export function failureForTransportError(error: unknown): UploadFailure {
   if (error instanceof UploadStalledError) {
-    return stalledConnectionFailure(error.afterMs);
+    return error.bodyDelivery === "fully-sent"
+      ? unknownOutcomeFailure("stalled")
+      : stalledConnectionFailure(error.afterMs);
   }
-  if (error instanceof UploadAbortedError) return cancelledFailure();
+  if (error instanceof UploadAbortedError) {
+    return error.bodyDelivery === "fully-sent"
+      ? unknownOutcomeFailure("cancelled")
+      : cancelledFailure();
+  }
+  if (error instanceof UploadNetworkError) {
+    return error.bodyDelivery === "fully-sent"
+      ? unknownOutcomeFailure("network")
+      : networkFailure();
+  }
+  // Something threw that is not one of the transport's own errors — a bug
+  // rather than a connection problem. Reported as a network failure because
+  // that is the truthful shape (no response arrived) and it is retryable;
+  // nothing was sent, so a retry cannot duplicate anything.
   return networkFailure();
 }
 
