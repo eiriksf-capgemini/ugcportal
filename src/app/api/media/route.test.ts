@@ -30,16 +30,43 @@ vi.mock("@/lib/auth", () => ({
   auth: authMock,
 }));
 
+/*
+  The transaction client POST hands to `resolveTagRows` and `media.create`.
+  Separate from the top-level client on purpose — see the tripwire below.
+*/
+const txClient = {
+  media: { create: mediaCreateMock },
+  tag: { upsert: tagUpsertMock },
+};
+
+/**
+ * Fails the test if the route creates media OUTSIDE the transaction.
+ *
+ * The orphan-Tag fix is "the tag rows and the media row are written in one
+ * transaction". A mock whose `$transaction` simply hands back the same
+ * client cannot tell that apart from two adjacent statements — both call
+ * the same spies and both pass. Making the non-transactional
+ * `prisma.media.create` throw is what turns "the route happens to call
+ * $transaction" into "the route's write actually goes through it".
+ */
+const mediaCreateOutsideTransaction = vi.fn(() => {
+  throw new Error(
+    "media.create ran outside the transaction; tag rows would orphan on failure",
+  );
+});
+
 vi.mock("@/lib/prisma", () => ({
   prisma: {
     media: {
-      create: mediaCreateMock,
+      create: mediaCreateOutsideTransaction,
       findMany: mediaFindManyMock,
       findFirst: mediaFindFirstMock,
     },
     tag: {
       upsert: tagUpsertMock,
     },
+    $transaction: async (run: (tx: typeof txClient) => unknown) =>
+      run(txClient),
   },
 }));
 
@@ -239,6 +266,7 @@ beforeEach(() => {
   authMock.mockReset();
   s3SendMock.mockReset();
   mediaCreateMock.mockReset();
+  mediaCreateOutsideTransaction.mockClear();
   tagUpsertMock.mockReset();
   tagUpsertMock.mockImplementation(async ({ create }) => create);
   mediaFindManyMock.mockReset();
@@ -2022,6 +2050,32 @@ describe("POST /api/media — subject tags", () => {
       create: { slug: "food", name: "FOOD" },
       update: {},
     });
+  });
+
+  it("writes the tag rows and the media row in ONE transaction", async () => {
+    /*
+     * The round-3 medium. Before this, `resolveTagRows` ran and then
+     * `media.create` ran, and a failure in the second left the first
+     * committed — Tag rows for an upload that never existed, permanent
+     * because nothing in this product deletes a tag. The compensating
+     * cleanup below only removes S3 objects.
+     *
+     * The assertion is that BOTH writes went through the transaction
+     * client. `mediaCreateOutsideTransaction` is wired to throw, so a route
+     * that created the media row on the plain client fails here rather than
+     * passing quietly — which a `$transaction` mock that handed back the
+     * same client could not have told apart.
+     *
+     * That the transaction actually rolls the tag rows back is a claim
+     * about SQLite, and is covered against a real database in
+     * src/lib/tags.vocabulary.test.ts.
+     */
+    const response = await POST(buildRequest(imageFile(), ["Food"]));
+
+    expect(response.status).toBe(201);
+    expect(mediaCreateOutsideTransaction).not.toHaveBeenCalled();
+    expect(tagUpsertMock).toHaveBeenCalledTimes(1);
+    expect(mediaCreateMock).toHaveBeenCalledTimes(1);
   });
 
   it("uploads with no tags exactly as it always did", async () => {

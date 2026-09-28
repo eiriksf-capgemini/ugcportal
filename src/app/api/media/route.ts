@@ -431,33 +431,51 @@ async function handleUpload(
       storedKeys.push(previewKey);
     }
 
-    // Tag rows exist before the media row does, so `connect` below can never
-    // be handed a slug that is not there. Inside the try, because it is the
-    // first statement that can fail after the objects are in the bucket and
-    // the compensating delete has to cover it.
-    const tagRefs = await resolveTagRows(tags.value);
+    /*
+     * ONE TRANSACTION FOR THE TAG ROWS AND THE MEDIA ROW.
+     *
+     * The tag rows have to exist before `connect` can name them, so they are
+     * written first — and an earlier version left it at that, inside the
+     * `try` on the theory that the compensating cleanup below would cover
+     * them. It does not: that cleanup deletes the OBJECTS in `storedKeys`,
+     * which is a different kind of debris. A `media.create` that threw on
+     * the next line (a unique violation on `previewId`, a dropped libSQL
+     * connection, a full disk) left the bucket tidy and the Tag rows behind
+     * forever, vocabulary minted by an upload that never existed — and
+     * nothing in this product deletes a tag.
+     *
+     * A transaction rather than tracking created-versus-found slugs and
+     * deleting them on the compensating path, which was the other way to do
+     * it. Deleting a Tag is not a safe compensation: `_MediaToTag` cascades,
+     * so a concurrent upload that attached the same new subject in between
+     * would silently lose it. Rolling back never touches a row somebody else
+     * committed.
+     */
+    const media = await prisma.$transaction(async (tx) => {
+      const tagRefs = await resolveTagRows(tags.value, tx);
 
-    const media = await prisma.media.create({
-      data: {
-        userId,
-        kind: validation.kind,
-        key,
-        // Spread as a pair, never as two fields, so the columns cannot drift
-        // apart at this call site either.
-        ...previewColumns,
-        mimeType: file.type,
-        sizeBytes: file.size,
-        // Repaired, not rejected — see sanitizeOriginalName in
-        // src/lib/media.ts for why the upload path is lenient where the
-        // rename path refuses. `file.name` is fully client-controlled and
-        // the GET listing echoes it back, so it cannot go in raw.
-        originalName: sanitizeOriginalName(file.name),
-        // `connect`, not `connectOrCreate`: resolveTagRows already made sure
-        // every row exists, so one place decides how a Tag comes into
-        // existence and both writers (here and PUT .../tags) go through it.
-        tags: { connect: tagRefs },
-      },
-      select: MEDIA_OWNER_SELECT,
+      return tx.media.create({
+        data: {
+          userId,
+          kind: validation.kind,
+          key,
+          // Spread as a pair, never as two fields, so the columns cannot
+          // drift apart at this call site either.
+          ...previewColumns,
+          mimeType: file.type,
+          sizeBytes: file.size,
+          // Repaired, not rejected — see sanitizeOriginalName in
+          // src/lib/media.ts for why the upload path is lenient where the
+          // rename path refuses. `file.name` is fully client-controlled and
+          // the GET listing echoes it back, so it cannot go in raw.
+          originalName: sanitizeOriginalName(file.name),
+          // `connect`, not `connectOrCreate`: resolveTagRows already made
+          // sure every row exists, so one place decides how a Tag comes into
+          // existence and both writers (here and PUT .../tags) go through it.
+          tags: { connect: tagRefs },
+        },
+        select: MEDIA_OWNER_SELECT,
+      });
     });
 
     return NextResponse.json(media, { status: 201 });

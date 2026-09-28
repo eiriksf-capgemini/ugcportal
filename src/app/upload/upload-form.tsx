@@ -72,7 +72,6 @@ export type UploadFormProps = {
 
 export function UploadForm({ availableTags = [] }: UploadFormProps) {
   const inputId = useId();
-  const tagsLabelId = useId();
   const [items, dispatch] = useReducer(uploadQueueReducer, [] as QueueItem[]);
   const [isDraggingOver, setDraggingOver] = useState(false);
   /**
@@ -356,7 +355,6 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
         add anything. Rendered second, the sentence was true and useless.
       */}
       <TagPicker
-        labelId={tagsLabelId}
         availableTags={availableTags}
         selectedSlugs={selectedSlugs}
         onToggle={(slug) =>
@@ -480,14 +478,18 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
  * group of checkboxes is FOR before reading the first one. `aria-labelledby`
  * on the list is not a substitute: a legend is what associates a name with a
  * set of form controls.
+ *
+ * And the legend carries NO `id`, because nothing points at one. An earlier
+ * version generated one with `useId`, threaded it down as a prop and wrote
+ * it out — the leftover of the `aria-labelledby` approach this rejected. An
+ * unused id on an accessibility element is worse than no id: the next reader
+ * has to go and find out what depends on it, and nothing does.
  */
 function TagPicker({
-  labelId,
   availableTags,
   selectedSlugs,
   onToggle,
 }: {
-  labelId: string;
   availableTags: readonly SelectableTag[];
   selectedSlugs: readonly string[];
   onToggle: (slug: string) => void;
@@ -514,7 +516,7 @@ function TagPicker({
 
   return (
     <fieldset className="mt-6" data-upload-tag-picker="">
-      <legend id={labelId} className="text-sm font-medium text-ink">
+      <legend className="text-sm font-medium text-ink">
         Tag what you add next
       </legend>
       <p className="mt-1 max-w-prose text-xs text-ink-muted">

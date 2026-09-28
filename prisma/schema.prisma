@@ -230,6 +230,30 @@ model Tag {
   // different capitals is a worse outcome than one fixed at first use.
   name String
 
+  // Whether this subject is offered to everyone in the upload page's picker.
+  //
+  // THE PICKER IS A SHARED SURFACE AND THE TAG TABLE IS NOT A TRUSTED ONE.
+  // Any authenticated account can mint a tag by naming it on its own upload,
+  // and sign-in has no allowlist (ugcportal-egp) — so without this column the
+  // picker showed whichever names happened to be created first, to every
+  // user, permanently. Four subjects ship; the rest of the window was free
+  // and first-come.
+  //
+  // Defaults to FALSE, so minting a tag is exactly as available as it was and
+  // reaches exactly one place: the item its author put it on. Their own
+  // published photograph carrying their own label is the feature. Everybody
+  // else's upload form is not.
+  //
+  // A FLAG RATHER THAN A DELETE PATH, which was the other obvious remedy and
+  // is the more dangerous one: `_MediaToTag` cascades, so deleting a Tag row
+  // silently strips that subject from every item pointing at it, including
+  // other people's. Un-curating is reversible and touches nobody's media.
+  //
+  // Who may set it is ugcportal-x0l's decision. Until that lands the answer
+  // is "the migration that seeds the four subjects", which is a deliberate
+  // set rather than a race.
+  curated Boolean @default(false)
+
   createdAt DateTime @default(now())
 
   media Media[]

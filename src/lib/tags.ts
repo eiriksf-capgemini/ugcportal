@@ -261,11 +261,30 @@ export function parseTagNames(value: unknown): TagListValidation {
  */
 export async function resolveTagRows(
   tags: ParsedTag[],
+  /**
+   * The client to write through — a transaction, wherever the caller has one.
+   *
+   * REQUIRED FOR CORRECTNESS, not offered for tidiness. Both callers create
+   * tag rows and then write a Media row that points at them, and the two
+   * statements can fail independently. Run outside a transaction, a failing
+   * `media.create` leaves behind Tag rows for an upload that never existed —
+   * and nothing in this product deletes a tag, so they are permanent. The
+   * upload route's compensating cleanup does not help: it removes the
+   * objects it put in the bucket, which is a different kind of debris.
+   *
+   * Defaulted to the global client so a caller with nothing to be atomic
+   * with is not forced to invent a transaction, but every caller that
+   * follows this with a write should pass one.
+   */
+  client: Pick<typeof prisma, "tag"> = prisma,
 ): Promise<{ slug: string }[]> {
   for (const tag of tags) {
     try {
-      await prisma.tag.upsert({
+      await client.tag.upsert({
         where: { slug: tag.slug },
+        // `curated` is left to its `false` default. Minting a subject puts
+        // it on your own item; it does not put it in everybody's picker.
+        // See the column's note in prisma/schema.prisma.
         create: { slug: tag.slug, name: tag.name },
         update: {},
       });
@@ -278,22 +297,24 @@ export async function resolveTagRows(
 }
 
 /**
- * How many subjects the picker will ever offer.
+ * A ceiling on how many subjects the picker will render, whatever the
+ * curated set turns out to contain.
  *
- * A BOUND ON THE READ, because the WRITE is not bounded and this bead is not
- * the place that decides it should be. `resolveTagRows` creates a row for any
- * name that passes validation; both writers are reachable by any
- * authenticated account; sign-in has no allowlist (ugcportal-egp); and
- * nothing deletes a tag. `MAX_TAGS_PER_ITEM` caps a REQUEST, not the
- * vocabulary — six fresh names per call, in a loop, grows the table without
- * limit.
+ * SECOND LINE, NOT THE FIRST, and this is worth being exact about because an
+ * earlier version of this comment got it wrong in a way that read
+ * convincingly. What keeps arbitrary names off everybody's upload page is
+ * `curated`, not this number. A cap alone bounds the SIZE of the defacement
+ * and nothing else: the table ships with four subjects, so an oldest-24
+ * window left twenty slots free and first-come, and any authenticated
+ * account (sign-in has no allowlist — ugcportal-egp) could fill them with
+ * 32-code-point names that every other uploader would then see, forever,
+ * with no un-mint path anywhere in the product. "The page no longer melts"
+ * is not the same claim as "the page is not defaced", and the first one is
+ * the easier to mistake for the second.
  *
- * Unbounded, that was a denial of service on the only page media comes in
- * through, and not a subtle one: an unbounded `SELECT` plus one checkbox per
- * row in the server-rendered HTML, on every `/upload` render, for every user,
- * caused by any one of them. Bounding the read does not stop the table
- * growing — that is ugcportal-x0l's decision about who may mint a subject —
- * but it does mean nothing renders in proportion to it.
+ * What this still buys, once curation is doing the real work: the render
+ * cost cannot grow in proportion to a table nothing deletes from, even if
+ * curation is later widened to something more generous than a migration.
  *
  * Twenty-four is far more subjects than a photography site has and far fewer
  * than a page can choke on.
@@ -301,64 +322,68 @@ export async function resolveTagRows(
 export const MAX_PICKER_TAGS = 24;
 
 /**
- * The subjects the upload page offers, bounded and filtered.
+ * The subjects the upload page offers: the CURATED ones, capped, filtered.
  *
- * ORDERED OLDEST-FIRST, WHICH IS THE HALF THAT MAKES THE BOUND WORTH
- * ANYTHING. With `take` alone and an alphabetical order, an attacker mints
- * twenty-four subjects beginning with "a" and the four real ones fall off the
- * end — the page no longer melts, is exactly as unusable, and the cap would
- * have hidden it. The seeded subjects are inserted by the migration, so they
- * are the oldest rows in the table, and `createdAt` is not a value any
- * WRITER IN THIS CODEBASE chooses: `resolveTagRows` is the only way a tag is
- * created and it lets the column default. `id` is the tiebreak, because the
- * four seeds share one `CURRENT_TIMESTAMP`.
+ * `curated` IS THE BOUND THAT MATTERS, and it replaced an argument that was
+ * true about the wrong thing. The previous version took the twenty-four
+ * OLDEST rows and reasoned that this made the set unspoofable because the
+ * seeded subjects are the oldest. The seeds were indeed safe — but only four
+ * ship, so slots five through twenty-four were free and first-come. Any
+ * authenticated account (sign-in has no allowlist — ugcportal-egp) could
+ * mint twenty 32-code-point names against its own upload and have them
+ * rendered as checkboxes on every other user's upload page. Permanently:
+ * nothing in this product deletes a tag.
  *
- * State the limit rather than overclaiming it: this orders by a column, not
- * by a proof. Anyone with direct database access can write any `createdAt`
- * they like, and this does not stop them — it stops the writers that are
- * actually reachable, which is every one an account on the internet has.
+ * So the read now asks for the subjects somebody DECIDED to offer, rather
+ * than the ones that happened to be created first. Today that decision is
+ * the seeding migration; who else may make it is ugcportal-x0l's, and this
+ * function does not need to change when that lands.
  *
- * AND THE ORDERING IS TEXT, NOT TIME, which took a live query to establish
- * rather than an argument. SQLite has no date type, so `createdAt` is a TEXT
- * column holding TWO DIFFERENT FORMATS at once. Read straight out of a
- * database built from these migrations, with `quote()` so the driver could
- * not tidy them on the way past:
+ * WHY A FLAG AND NOT A DELETE PATH, the other obvious remedy: `_MediaToTag`
+ * cascades, so removing a Tag row strips that subject from every item
+ * pointing at it — including other people's published photographs. A
+ * curation flag is reversible and touches nobody's media. A delete path may
+ * still be worth having, but it is a destructive admin capability and not
+ * the fix for a picker that shows too much.
  *
- *   books        '2026-09-28 10:34:39'              <- DEFAULT CURRENT_TIMESTAMP
- *   food         '2026-09-28 10:34:39'
- *   technology   '2026-09-28 10:34:39'
- *   wine-drink   '2026-09-28 10:34:39'
- *   aaa-minted   '2026-09-28T10:34:39.023+00:00'    <- Prisma via libSQL
+ * MINTING IS UNCHANGED AND STILL ALLOWED. An uploader naming a new subject
+ * on their own item still gets a Tag row and still sees it under their own
+ * photograph in the gallery. What they no longer get is a line in everyone
+ * else's form. That split is the point: their label on their work is the
+ * feature; the shared control is not theirs to write to.
  *
- * `ORDER BY` compares those bytewise, and that run is the awkward case
- * rather than a lucky one: the minted row was written in the SAME SECOND as
- * the seeds, so the date decides nothing. It still sorted last. The two
- * shapes agree up to the tenth character, where the seed has a SPACE and
- * Prisma has a `T`, and 0x20 < 0x54.
+ * ORDERING is oldest-first with `id` as the tiebreak. It is no longer
+ * carrying a security argument — curation is — but it is still worth being
+ * deliberate about: it is stable across requests, it does not let a later
+ * curated subject displace an earlier one if the set ever exceeds the cap,
+ * and the seeds carry explicit timestamps from 2026-01-01 so they sort ahead
+ * of anything curated later. Presentation order is the caller's problem;
+ * insertion order is not a sensible way to read a list.
  *
- * So the invariant holds, by an accident of ASCII rather than by the
- * argument above it. Recorded because it is load-bearing and because nobody
- * would guess it: the expectation going in was that two formats in one
- * ordering column would invert the sort.
+ * ONE HISTORICAL NOTE, KEPT BECAUSE IT NEARLY BIT. `createdAt` is TEXT in
+ * SQLite, and the seed used to let `DEFAULT CURRENT_TIMESTAMP` write
+ * `2026-09-28 10:34:39` while the libSQL adapter writes
+ * `2026-09-28T10:34:39.023+00:00` — two formats in one ordering column,
+ * compared bytewise. It happened to sort correctly, and only because the
+ * shapes agree to the tenth character where one has a SPACE and the other a
+ * `T`, and 0x20 < 0x54; confirmed by reading a real database with `quote()`,
+ * in a run where the minted row landed in the same second as the seeds so
+ * the date decided nothing. The migration now writes explicit ISO literals,
+ * so the comparison is chronological and that accident is no longer
+ * load-bearing. Recorded so nobody reintroduces a defaulted timestamp here
+ * thinking it is equivalent.
  *
- * Anything that changes either format — a migration writing an ISO literal,
- * a driver that stops emitting the `T`, a move off SQLite — has to re-check
- * this rather than trust the tests, which pass for rows created in either
- * format and would keep passing if the tie broke the other way on a date
- * they do not share.
- *
- * Presentation order is decided by the caller — oldest-first is a security
- * property, not a sensible way to read a list.
- *
- * `hasUnsafeText` is applied here for the reason it is applied in
- * `toGalleryTags`, and the omission was a real gap: this is a third surface
+ * `hasUnsafeText` is applied for the reason it is applied in
+ * `toGalleryTags`, and its omission was a real gap: this is a third surface
  * that renders a tag, so leaving it out meant the "one denylist, checked at
  * every end" rule had an end nobody was checking. Both fields are tested,
  * not just the name — `slug` reaches the DOM too, as the checkbox's `value`.
  * A row is dropped rather than repaired, and a dropped row is NOT backfilled
  * from further down the table; the list is simply shorter. Both are
  * deliberate: repairing invents a subject nobody named, and backfilling
- * would let a bad row pull an arbitrary later one into the page.
+ * would let a bad row pull an arbitrary later one into the page. It stays
+ * even though curation now gates the set, because a curated row is a
+ * trusted DECISION and not trusted TEXT.
  *
  * Projected through TAG_PUBLIC_FIELDS, the same two fields every other
  * audience gets — `MEDIA_TAGS_SELECT` is built from the same constant — so
@@ -366,6 +391,7 @@ export const MAX_PICKER_TAGS = 24;
  */
 export async function listPickerTags(): Promise<TagLabel[]> {
   const rows = await prisma.tag.findMany({
+    where: { curated: true },
     select: TAG_PUBLIC_FIELDS,
     orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     take: MAX_PICKER_TAGS,

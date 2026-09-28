@@ -334,19 +334,41 @@ describe("K2 — everybody else is refused", () => {
       context(),
     );
 
-    /*
-     * Guards the guard, in the one way that distinguishes this from the
-     * plain missing-row case: the row must have existed when the GATE read
-     * it and been gone by the time of the WRITE. `deleted` alone does not
-     * say that — it was true in the broken version too — so the tag row
-     * `resolveTagRows` creates is what pins the ordering. It is only written
-     * after the body has been parsed, which is only reached if the gate
-     * allowed the request through.
-     */
     expect(deleted).toBe(true);
-    expect(await prisma.tag.findUnique({ where: { slug: "food" } })).not.toBeNull();
     expect(response.status).toBe(404);
     await expect(response.json()).resolves.toEqual({ error: "Not found" });
+
+    // Nothing was minted on the way to failing: the tag rows went back with
+    // the update that could not land (round 3 — see the transaction note in
+    // the handler).
+    expect(await prisma.tag.findUnique({ where: { slug: "food" } })).toBeNull();
+
+    /*
+     * WHAT THIS TEST ESTABLISHES ON ITS OWN, AND WHAT IT DOES NOT — said
+     * plainly, because three attempts to assert the difference from inside
+     * the test failed and a fourth would have been theatre.
+     *
+     * A gate 404 and a race 404 are the same response, so nothing above
+     * tells them apart. Tried and rejected: `deleted` (true either way); a
+     * flag set immediately before `PUT` (already true when `pull` runs,
+     * because a stream's pull steps are queued as a microtask rather than
+     * executed during construction); a spy on `prisma.media.update` (records
+     * nothing now that the write goes through the transaction client); and a
+     * spy on `$transaction` (breaks Prisma's interactive transaction
+     * outright — three unrelated tests started failing).
+     *
+     * What DOES establish it is the mutation: replacing the handler's
+     * `prismaErrorCode(error) === PRISMA_RECORD_NOT_FOUND` with `if (false)`
+     * fails this test and no other. That is the evidence the catch is
+     * reached. It lives in the commit message and the review trail rather
+     * than in an assertion, because an assertion that cannot observe the
+     * thing it claims is worse than a note admitting the gap.
+     *
+     * The fixture's contribution is `highWaterMark: 0`, which defers `pull`
+     * to the first `read()` — inside `readJsonBody`, which the handler only
+     * reaches once the gate has passed. Without it the delete lands at an
+     * unpredictable point and the gate can answer instead.
+     */
   });
 });
 

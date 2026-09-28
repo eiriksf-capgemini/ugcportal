@@ -10,6 +10,7 @@ CREATE TABLE "Tag" (
     "id" TEXT NOT NULL PRIMARY KEY,
     "slug" TEXT NOT NULL,
     "name" TEXT NOT NULL,
+    "curated" BOOLEAN NOT NULL DEFAULT false,
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -36,20 +37,45 @@ CREATE INDEX "_MediaToTag_B_index" ON "_MediaToTag"("B");
 -- These four are the vocabulary the product ships with; without them the
 -- upload page's tag picker is empty on day one and the first uploader has to
 -- invent the site's taxonomy. They are rows and not an enum precisely so a
--- fifth is an INSERT rather than a migration — seeding the first four does not
--- change that, and nothing in the application treats these ids or slugs as
--- special.
+-- fifth is an INSERT rather than a migration — seeding the first four does
+-- not change that.
 --
--- `INSERT OR IGNORE`, keyed on the unique `slug`, so applying this against a
--- database where somebody already created "food" leaves their row (and its
--- existing associations) alone instead of failing the migration.
+-- `curated` is TRUE here and defaults to false everywhere else, so these are
+-- the only subjects the shared picker offers until something deliberately
+-- curates another. See the column's note in prisma/schema.prisma for why the
+-- picker needs a curated set at all, and ugcportal-x0l for who may extend it.
+--
+-- `createdAt` IS WRITTEN OUT, not left to DEFAULT CURRENT_TIMESTAMP, and the
+-- reason is a format mismatch rather than a preference. SQLite's default
+-- writes `2026-09-28 10:34:39`; the libSQL adapter writes ISO-8601 with an
+-- offset, `2026-09-28T10:34:39.023+00:00`. Both land in the same TEXT column,
+-- and `listPickerTags` orders by it — so the ordering held only because
+-- `' '` (0x20) sorts before `'T'` (0x54) at index 10. One literal removes the
+-- dependency on that accident and makes the comparison a chronological one.
+--
+-- It also fixes a latent bug with nothing to do with ordering: reading a
+-- seeded row back through Prisma parses the value in JavaScript, and
+-- `new Date("2026-09-28 10:34:39")` is parsed by V8 as SERVER-LOCAL time, so
+-- the timestamp came back silently shifted by the host's UTC offset. That
+-- read happens on the first tagged upload, when `resolveTagRows` upserts
+-- against slug `food`.
+--
+-- A fixed date in the past rather than "now": these four predate every row a
+-- user will ever create, which is what keeps them at the front of the
+-- oldest-first window even if curation is ever widened.
 --
 -- The ids are fixed strings rather than cuids because a migration has no
--- generator to call; nothing derives meaning from their shape, and `Tag.id` is
--- never serialised to any audience (see MEDIA_TAGS_SELECT in
--- src/lib/media-access.ts, which projects slug and name only).
-INSERT OR IGNORE INTO "Tag" ("id", "slug", "name") VALUES
-    ('tagseed000food', 'food', 'Food'),
-    ('tagseed000wine', 'wine-drink', 'Wine & drink'),
-    ('tagseed000tech', 'technology', 'Technology'),
-    ('tagseed000book', 'books', 'Books');
+-- generator to call; nothing derives meaning from their shape, and `Tag.id`
+-- is never serialised to any audience (see TAG_PUBLIC_FIELDS in
+-- src/lib/tags.ts, which projects slug and name only).
+--
+-- A plain INSERT, deliberately. An earlier draft used `INSERT OR IGNORE` and
+-- justified it as surviving a database where somebody had already created
+-- `food` — which cannot happen: `CREATE TABLE "Tag"` runs four statements
+-- above, so the table is empty by construction and the clause could never
+-- fire. A conflict here would be a broken migration and should say so.
+INSERT INTO "Tag" ("id", "slug", "name", "curated", "createdAt") VALUES
+    ('tagseed000food', 'food', 'Food', true, '2026-01-01T00:00:00.000+00:00'),
+    ('tagseed000wine', 'wine-drink', 'Wine & drink', true, '2026-01-01T00:00:01.000+00:00'),
+    ('tagseed000tech', 'technology', 'Technology', true, '2026-01-01T00:00:02.000+00:00'),
+    ('tagseed000book', 'books', 'Books', true, '2026-01-01T00:00:03.000+00:00');

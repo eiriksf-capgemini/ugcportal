@@ -95,8 +95,6 @@ export async function PUT(request: Request, { params }: RouteContext) {
     return NextResponse.json({ error: parsed.message }, { status: 400 });
   }
 
-  const refs = await resolveTagRows(parsed.value);
-
   try {
     /*
      * `update` with `userId` IN THE WHERE CLAUSE, which is the same rule the
@@ -114,14 +112,27 @@ export async function PUT(request: Request, { params }: RouteContext) {
      *
      * `set` replaces the whole relation in one statement: no read-then-diff,
      * so two concurrent edits cannot interleave into a union of both.
+     *
+     * IN ONE TRANSACTION WITH `resolveTagRows`, for the reason POST
+     * /api/media gives at length: the tag rows have to exist before `set`
+     * can name them, and if the update then fails — a concurrent delete
+     * making the where-clause match nothing is the ordinary case — any tag
+     * row just minted would survive as vocabulary for an edit that never
+     * happened. Nothing in this product deletes a tag, so "survive" means
+     * permanently.
      */
-    const updated = await prisma.media.update({
-      where: { id, userId: access.userId },
-      data: { tags: { set: refs } },
-      // Re-read through the owner projection rather than echoing the row the
-      // gate held: that row's tags are the OLD ones, and it carries `key`,
-      // the ungated original (ugcportal-5d6), which no response may return.
-      select: MEDIA_OWNER_SELECT,
+    const updated = await prisma.$transaction(async (tx) => {
+      const refs = await resolveTagRows(parsed.value, tx);
+
+      return tx.media.update({
+        where: { id, userId: access.userId },
+        data: { tags: { set: refs } },
+        // Re-read through the owner projection rather than echoing the row
+        // the gate held: that row's tags are the OLD ones, and it carries
+        // `key`, the ungated original (ugcportal-5d6), which no response may
+        // return.
+        select: MEDIA_OWNER_SELECT,
+      });
     });
 
     return NextResponse.json(updated);

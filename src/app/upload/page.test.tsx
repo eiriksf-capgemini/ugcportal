@@ -182,20 +182,27 @@ describe("the tag picker on the upload page", () => {
     }
   });
 
-  it("asks for a BOUNDED page of the vocabulary, oldest first", async () => {
+  it("asks only for CURATED subjects, bounded and oldest first", async () => {
     /*
-     * The round-1 medium. The tag table has no ceiling — any authenticated
-     * account can add to it and nothing deletes — so an unbounded SELECT
-     * rendered one-checkbox-per-row made this page a denial of service on
-     * itself.
+     * Rounds 1 and 3 together. The tag table has no ceiling — any
+     * authenticated account can add to it and nothing deletes — so an
+     * unbounded SELECT rendered one-checkbox-per-row made this page a denial
+     * of service on itself (round 1); and a bare cap over the OLDEST rows
+     * still left the twenty slots the four seeds do not occupy free and
+     * first-come, so the picker could be defaced permanently, for every
+     * user, by any one of them (round 3).
      *
-     * This asserts the query that is ISSUED. That the bound and the ordering
-     * actually bite is a claim about SQLite, and is covered against a real
-     * database in src/lib/tags.vocabulary.test.ts.
+     * `where: { curated: true }` is what fixes the second. The cap and the
+     * ordering are what is left of the first.
+     *
+     * This asserts the query that is ISSUED. That it actually bites is a
+     * claim about SQLite, covered against a real database in
+     * src/lib/tags.vocabulary.test.ts.
      */
     await renderPage();
 
     expect(tagFindManyMock).toHaveBeenCalledWith({
+      where: { curated: true },
       select: TAG_PUBLIC_FIELDS,
       orderBy: [{ createdAt: "asc" }, { id: "asc" }],
       take: MAX_PICKER_TAGS,
