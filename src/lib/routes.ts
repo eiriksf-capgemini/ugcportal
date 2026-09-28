@@ -13,6 +13,11 @@ export const RIGHTS_SETTINGS_PATH = "/admin/settings/rights";
 // have its own body cap instead of raising the global one (ugcportal-0ss).
 export const RIGHTS_DECISION_PATH = "/api/admin/rights/decision";
 
+// Manual upload (ugcportal-n3c). Since the Instagram integration was
+// deferred, this page is the only door media comes in through.
+export const UPLOAD_PATH = "/upload";
+export const MEDIA_UPLOAD_PATH = "/api/media";
+
 // The public gallery feed (ugcportal-r1d) and the preview bytes it points at
 // (ugcportal-a2l). Named here rather than spelled inline because ugcportal-71y
 // reaches for both from three places — the server-rendered first page, the
@@ -22,18 +27,38 @@ export const PUBLIC_MEDIA_PATH = "/api/public/media";
 export const MEDIA_PREVIEW_PATH = "/api/media/preview";
 
 /**
- * The delivery URL for a watermarked preview, keyed on its OPAQUE handle.
+ * Where to send a visitor who has to sign in first.
  *
- * `previewId` and nothing else, ever. The storage path (`previewKey`) is
+ * Auth.js mounts its own provider-picker at `/api/auth/signin`
+ * (src/app/api/auth/[...nextauth]/route.ts); there is no first-party sign-in
+ * page yet, and inventing one is not this bead's job.
+ *
+ * `callbackUrl` is encoded, and is only ever a path this module named. A
+ * callbackUrl taken from user input is an open redirect — Auth.js does filter
+ * it against its own origin, but the filtering is not the reason this is
+ * safe; not accepting the input is.
+ */
+export function signInPath(callbackPath: string): string {
+  return `/api/auth/signin?callbackUrl=${encodeURIComponent(callbackPath)}`;
+}
+
+/**
+ * The delivery URL for a watermarked preview, keyed on its OPAQUE handle
+ * (ugcportal-a2l).
+ *
+ * The ONLY media URL any surface may build. `previewId` and nothing else,
+ * ever. `Media.key` — the ungated original — is never selected into a
+ * response (MEDIA_OWNER_SELECT in src/lib/media-access.ts) and has no route
+ * in front of it. `previewKey` must not reach the markup either: it is
  * `previews/{userId}/{uuid}.webp`, so a URL built from it publishes the
- * uploader's account id to every visitor's address bar and every access log in
- * between — the exact capability the `previewId` indirection exists to remove
- * (see src/lib/media-access.ts and the header of the delivery route). There is
- * no client-side way back from `previewId` to the key, which is the point.
+ * uploader's account id to every visitor's address bar and every access log
+ * in between — the exact capability the `previewId` indirection exists to
+ * remove. There is no client-side way back from `previewId` to the key,
+ * which is the point.
  *
  * Encoded rather than interpolated raw: today's ids are UUIDs from the
- * watermark service, so nothing needs escaping, but this function does not get
- * to assume that about every id the column will ever hold.
+ * watermark service, so nothing needs escaping, but this function does not
+ * get to assume that about every id the column will ever hold.
  */
 export function mediaPreviewPath(previewId: string): string {
   return `${MEDIA_PREVIEW_PATH}/${encodeURIComponent(previewId)}`;
