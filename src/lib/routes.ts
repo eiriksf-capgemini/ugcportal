@@ -18,6 +18,14 @@ export const RIGHTS_DECISION_PATH = "/api/admin/rights/decision";
 export const UPLOAD_PATH = "/upload";
 export const MEDIA_UPLOAD_PATH = "/api/media";
 
+// The public gallery feed (ugcportal-r1d) and the preview bytes it points at
+// (ugcportal-a2l). Named here rather than spelled inline because ugcportal-71y
+// reaches for both from three places — the server-rendered first page, the
+// browser's next-page fetch, and the `src` of every tile — and a path typed
+// three times is a path that eventually differs once.
+export const PUBLIC_MEDIA_PATH = "/api/public/media";
+export const MEDIA_PREVIEW_PATH = "/api/media/preview";
+
 /**
  * Where to send a visitor who has to sign in first.
  *
@@ -35,14 +43,49 @@ export function signInPath(callbackPath: string): string {
 }
 
 /**
- * The watermarked preview's bytes, by opaque handle (ugcportal-a2l).
+ * The delivery URL for a watermarked preview, keyed on its OPAQUE handle
+ * (ugcportal-a2l).
  *
- * The ONLY media URL any surface may build. `Media.key` — the ungated
- * original — is never selected into a response (MEDIA_OWNER_SELECT in
- * src/lib/media-access.ts) and has no route in front of it; `previewKey` is
- * a storage path embedding the uploader's account id and must not reach the
- * markup either. `previewId` is the handle that carries neither.
+ * The ONLY media URL any surface may build. `previewId` and nothing else,
+ * ever. `Media.key` — the ungated original — is never selected into a
+ * response (MEDIA_OWNER_SELECT in src/lib/media-access.ts) and has no route
+ * in front of it. `previewKey` must not reach the markup either: it is
+ * `previews/{userId}/{uuid}.webp`, so a URL built from it publishes the
+ * uploader's account id to every visitor's address bar and every access log
+ * in between — the exact capability the `previewId` indirection exists to
+ * remove. There is no client-side way back from `previewId` to the key,
+ * which is the point.
+ *
+ * Encoded rather than interpolated raw: today's ids are UUIDs from the
+ * watermark service, so nothing needs escaping, but this function does not
+ * get to assume that about every id the column will ever hold.
  */
 export function mediaPreviewPath(previewId: string): string {
-  return `/api/media/preview/${encodeURIComponent(previewId)}`;
+  return `${MEDIA_PREVIEW_PATH}/${encodeURIComponent(previewId)}`;
+}
+
+/** The listing parameters GET /api/public/media reads out of its query string. */
+export type PublicMediaListingParams = { limit?: number; cursor?: string };
+
+/**
+ * The public feed as a same-origin path plus query.
+ *
+ * Lives in THIS module — which imports nothing — rather than next to
+ * `listPublicMedia`, and that placement is load-bearing rather than tidy. The
+ * gallery is a client component and calls this from the browser; importing it
+ * from src/lib/public-media.ts would pull that module's graph (media-access,
+ * and through it @/lib/auth and @/lib/prisma) into a "use client" boundary.
+ *
+ * One builder for both callers, so the browser cannot ask for `?after=` while
+ * the server reads `?cursor=` — a mismatch that does not error, it just serves
+ * page one forever.
+ */
+export function publicMediaListingPath(
+  params: PublicMediaListingParams = {},
+): string {
+  const query = new URLSearchParams();
+  if (params.limit !== undefined) query.set("limit", String(params.limit));
+  if (params.cursor !== undefined) query.set("cursor", params.cursor);
+  const search = query.toString();
+  return search === "" ? PUBLIC_MEDIA_PATH : `${PUBLIC_MEDIA_PATH}?${search}`;
 }

@@ -1,6 +1,17 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
+/*
+ * PhotoSwipe's own stylesheet (ugcportal-71y). Imported here rather than from
+ * the gallery component so nothing in src/ has to import a .css file — the
+ * vitest suite renders those components in a node environment that cannot
+ * parse one, and the whole gallery would then be untestable to save one line.
+ *
+ * The package ships every colour as a `--pswp-*` custom property, which is why
+ * this is a stock import with no fork: the theme is applied in the `.pswp`
+ * block at the bottom of this file.
+ */
+@import "photoswipe/style.css";
 
 /*
  * ONE THEME (ugcportal-axu).
@@ -305,4 +316,32 @@
     background-color: var(--selection);
     color: var(--selection-foreground);
   }
+}
+
+/*
+ * The lightbox (ugcportal-71y), themed onto the surface scale.
+ *
+ * PhotoSwipe declares these defaults on `.pswp` itself, so overriding them has
+ * to happen at the same specificity or higher — setting them in `:root` would
+ * be shadowed by the package's own block and silently do nothing.
+ *
+ * --color-scrim rather than --color-surface-0, and that is the token's whole
+ * reason for existing: the lightbox is the one surface that should drop the
+ * room away entirely, so it sits one step BELOW the page canvas. It is opaque,
+ * which is what lets the contrast gate measure anything drawn over it — every
+ * `*-on-scrim` pairing in src/lib/design/contrast.ts is checked against this
+ * exact colour.
+ */
+.pswp {
+  --pswp-bg: var(--color-scrim);
+  --pswp-placeholder-bg: var(--color-surface-1);
+  --pswp-icon-color: var(--color-ink);
+  /*
+   * The icons are drawn as a light glyph with a dark halo behind it, so this
+   * pair has to stay a real light/dark pair: the halo is what keeps the
+   * controls legible when a slide's own bright edge sits under them.
+   */
+  --pswp-icon-color-secondary: var(--color-scrim);
+  --pswp-icon-stroke-color: var(--color-scrim);
+  --pswp-error-text-color: var(--color-ink-muted);
 }

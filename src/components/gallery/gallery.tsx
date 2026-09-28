@@ -1,0 +1,528 @@
+"use client";
+
+import type PhotoSwipeLightbox from "photoswipe/lightbox";
+import { useCallback, useEffect, useRef, useState } from "react";
+
+import {
+  GALLERY_GRID_CLASS,
+  GALLERY_TILE_CLASS,
+  GALLERY_TILE_IMAGE_CLASS,
+} from "@/components/gallery/containment";
+import {
+  createActivationGate,
+  ensureSizes,
+  isViewerOpen,
+  openGalleryViewer,
+  type PixelSize,
+} from "@/components/gallery/lightbox";
+import { Button } from "@/components/ui/button";
+import {
+  appendGalleryItems,
+  galleryItemLabel,
+  toGalleryItems,
+  type GalleryItem,
+} from "@/lib/gallery-items";
+import { publicMediaListingPath } from "@/lib/routes";
+import { SITE_DESCRIPTION } from "@/lib/site";
+
+/**
+ * The public gallery (ugcportal-71y): a grid of watermarked previews, a
+ * PhotoSwipe lightbox, and cursor pagination over GET /api/public/media.
+ *
+ * The first page is rendered on the server (src/app/page.tsx) and handed in as
+ * props, so the gallery is visible without JavaScript and without a loading
+ * flash. Everything after it is fetched here. The two halves go through the
+ * same mapping function (src/lib/gallery-items.ts) so they cannot disagree
+ * about the shape of a row.
+ *
+ * This component renders into the app shell's single <main>
+ * (src/components/app-shell.tsx). It does not, and must not, introduce a
+ * second one.
+ */
+
+export type GalleryProps = {
+  initialItems: GalleryItem[];
+  initialCursor: string | null;
+  initialHasMore: boolean;
+};
+
+type LoadState = "idle" | "loading" | "error";
+
+export function Gallery({
+  initialItems,
+  initialCursor,
+  initialHasMore,
+}: GalleryProps) {
+  const [items, setItems] = useState<GalleryItem[]>(initialItems);
+  const [cursor, setCursor] = useState<string | null>(initialCursor);
+  /*
+   * Both halves of the server's contract, kept together deliberately.
+   *
+   * listMedia sets `hasMore: nextCursor !== null`, so the two always agree
+   * there — but this state is also written from a parsed HTTP body, where
+   * they might not. Requiring a cursor as well as the flag means a response
+   * claiming `hasMore: true` with no cursor renders as the end of the list
+   * rather than as a button that can never do anything.
+   */
+  const [hasMore, setHasMore] = useState<boolean>(
+    initialHasMore && initialCursor !== null,
+  );
+  const [loadState, setLoadState] = useState<LoadState>("idle");
+  /** Set when the viewer itself could not be opened — see `activate`. */
+  const [viewerFailed, setViewerFailed] = useState(false);
+
+  /**
+   * Intrinsic pixel size per preview URL, filled in by the tiles themselves as
+   * they load. PhotoSwipe needs a width and a height for every slide before it
+   * will load one at all (see ensureSizes), and the feed cannot supply them:
+   * the anonymous projection carries no dimensions, and `mimeType`/`sizeBytes`
+   * are deliberately withheld and describe the original anyway.
+   *
+   * A ref, not state: nothing here should re-render the grid.
+   */
+  const measured = useRef(new Map<string, PixelSize>());
+
+  const remember = useCallback((src: string, image: HTMLImageElement) => {
+    if (image.naturalWidth > 0 && image.naturalHeight > 0) {
+      measured.current.set(src, {
+        width: image.naturalWidth,
+        height: image.naturalHeight,
+      });
+    }
+  }, []);
+
+  /**
+   * Which activation the visitor actually wants: the most recent one.
+   *
+   * Opening is not instantaneous. `ensureSizes` can wait on a network round
+   * trip (ugcportal-8dn), and the first activation also downloads two
+   * JavaScript chunks — all of it with the grid still clickable, because
+   * nothing covers it until the viewer appears. Two clicks in that window are
+   * ordinary, not pathological.
+   *
+   * Left unguarded, the second click was worse than ignored. Both activations
+   * reached `loadAndOpen`, which does NOT serialise them — `window.pswp` is
+   * only assigned later, inside `preload`'s `.then` — so both were accepted,
+   * the earlier one won, and the later one's `afterInit` never fired. The
+   * visitor got the FIRST photograph they clicked and, ten seconds later, an
+   * error message about a viewer that was open and working.
+   *
+   * WHAT MATTERS IS THE SPAN, NOT THE GUARD. The round-2 version of this had a
+   * counter and checked it once, before the awaits — so it read correct and
+   * covered none of the window the race lives in. The predicate is now handed
+   * down into `openGalleryViewer` and re-checked after its imports and again
+   * against `loadAndOpen` itself.
+   */
+  const activations = useRef(createActivationGate());
+
+  /**
+   * The viewer that is on screen right now, so it can be taken down.
+   *
+   * PhotoSwipe appends its root to `document.body` — OUTSIDE React's tree — so
+   * React unmounting this component removes the grid and leaves the overlay
+   * exactly where it was. A visitor reaches that without trying: press Back
+   * with the lightbox open and, because there is no history integration, Back
+   * is an ordinary client-side navigation rather than a close. The next page
+   * then renders underneath a full-screen `.pswp` overlay, with `window.pswp`
+   * still set — which also makes every later activation a silent no-op, since
+   * `loadAndOpen` refuses while it is set. Nothing but a reload recovers.
+   *
+   * So the instance `openGalleryViewer` hands back is kept instead of
+   * discarded. A ref rather than state: it must not re-render the grid, and
+   * the cleanup has to read the LATEST instance rather than one captured at
+   * mount.
+   *
+   * At most one stale entry is held — a viewer the visitor closed themselves,
+   * which the next activation overwrites. Calling `destroy()` on one of those
+   * is a no-op (its `pswp` is already undefined), so nothing needs to clear it
+   * on close. Registering a `destroy` listener to do so would mean touching
+   * the one event this feature already blew the stack on; see lightbox.ts.
+   */
+  const viewer = useRef<PhotoSwipeLightbox | null>(null);
+
+  /**
+   * Set once this component is gone, and asked at every await in the open path.
+   *
+   * SUPERSESSION AND TEARDOWN ARE DIFFERENT QUESTIONS, which is why this is
+   * not folded into the gate above. "A newer click superseded you" means stand
+   * down and leave the viewer that replaced you alone. "This component is
+   * gone" means there must be no viewer at all afterwards. Answer the second
+   * with the first and an older activation would tear down a viewer the newer
+   * one is using; answer the first with the second and Back would leave the
+   * overlay up.
+   *
+   * WHAT MATTERS IS THE SPAN, and this path has four awaits, not one:
+   * `ensureSizes`, then inside `openGalleryViewer` two dynamic imports and
+   * PhotoSwipe's own initialisation. An unmount can land in any of them. So
+   * this is folded into the predicate handed DOWN to `openGalleryViewer`,
+   * which re-checks it after its imports and again immediately before
+   * `loadAndOpen`; and because the last window ends with a viewer already
+   * constructed and on screen, `openLightbox` asks once more after the open
+   * resolves and destroys what it was handed. A check that stopped at the
+   * first await would read correct and cover one window out of four.
+   */
+  const tornDown = useRef(false);
+
+  useEffect(() => {
+    /*
+     * Reset on mount as well as set on unmount. React's StrictMode mounts,
+     * unmounts and remounts every component in development, so a flag that
+     * only ever went true would leave the remounted gallery permanently unable
+     * to open anything — a fix for Back that broke every dev session instead.
+     */
+    tornDown.current = false;
+    return () => {
+      tornDown.current = true;
+      const live = viewer.current;
+      viewer.current = null;
+      /*
+       * `destroy()`, not `pswp.close()`. Close plays the hide animation, and
+       * there is nothing left for it to play over; worse, it is asynchronous,
+       * so the overlay would still be up for the duration. `destroy()` is
+       * immediate: it forwards to `pswp?.destroy()`, which clears
+       * `window.pswp` through the listener PhotoSwipe registers on itself, and
+       * it sets `shouldOpen = false` — which additionally cancels an open that
+       * `loadAndOpen` has filed but whose `preload().then` has not run yet.
+       */
+      live?.destroy();
+    };
+  }, []);
+
+  const openLightbox = useCallback(
+    async (index: number, isLive: () => boolean) => {
+      // `index` is not decoration: it is what puts the slide the visitor
+      // clicked in the first wave of measurements rather than somewhere in a
+      // queue of fifty, which is the difference between the right aspect ratio
+      // and a squared frame on the one photograph they asked for. See
+      // MEASURE_CONCURRENCY in lightbox.ts.
+      const sizes = await ensureSizes(items, measured.current, index);
+      // Someone clicked again while we were measuring, or the gallery went
+      // away underneath us. Their open is the one that should happen — or none
+      // should — and this one must not also fire, or PhotoSwipe gets two
+      // overlapping requests and answers the earlier of them.
+      if (!isLive()) return;
+      // Handed DOWN rather than checked once here: openGalleryViewer awaits two
+      // dynamic imports of its own, and on the first activation that is a real
+      // chunk download with the grid still clickable underneath. A guard that
+      // stops at this line leaves the window where the race actually lives
+      // unguarded — which is what the round-2 version of this did.
+      const opened = await openGalleryViewer(items, sizes, index, isLive);
+      // null is "this activation stood down": nothing was constructed, so
+      // there is nothing to own and nothing to take down.
+      if (opened === null) return;
+      if (tornDown.current) {
+        /*
+         * The last window, and the only one a predicate cannot cover: between
+         * `loadAndOpen` and PhotoSwipe reporting itself initialised, the
+         * overlay is on screen but no reference to it has reached this
+         * component yet — so the unmount cleanup above ran and found nothing
+         * to destroy. Take it down here, at the first instant that is
+         * possible, rather than handing it to a ref nobody will read again.
+         *
+         * NO TEST DRIVES THIS BRANCH, and that is a fact about the window
+         * rather than a gap in the suite. In photoswipe@5.4.4 the window is
+         * microtasks wide and nothing else: `preload` awaits a `Promise.all`
+         * over an ALREADY-RESOLVED module (the core is handed over as a class,
+         * see lightbox.ts), and `_openPhotoswipe` then constructs, registers
+         * and `init()`s synchronously, dispatching `afterInit` before control
+         * returns to the event loop. A React unmount is a task, so it cannot
+         * land inside. Kept anyway, because what makes it unreachable is a
+         * detail of a vendored library — an `openPromise` option, or a future
+         * version that awaits anything in `preload`, reopens it — and the cost
+         * of keeping it is four lines.
+         */
+        opened.destroy();
+        return;
+      }
+      viewer.current = opened;
+    },
+    [items],
+  );
+
+  /**
+   * Opens the viewer, and says so when it cannot.
+   *
+   * `openGalleryViewer` resolves when the viewer is actually open and rejects
+   * when it is not — see the long note in lightbox.ts for why that took
+   * arranging. A dynamic `import()` fails on a flaky connection and on a stale
+   * tab whose chunk a deploy has replaced; left unobserved, that is an
+   * unhandled rejection plus a button that visibly does nothing, which is the
+   * worst pair, since the visitor gets no reason and the log gets no context.
+   *
+   * The wording matters too: the photograph is on screen and perfectly fine,
+   * so the message says the VIEWER failed rather than implying the item is
+   * broken.
+   */
+  const activate = useCallback(
+    (index: number) => {
+      const isCurrent = activations.current.begin();
+      /*
+       * One predicate, both questions, because every checkpoint in the open
+       * path has to ask both: "is this still the activation the visitor wants"
+       * and "is this gallery still here". See `tornDown` for why they are not
+       * the same thing.
+       */
+      const isLive = () => isCurrent() && !tornDown.current;
+      setViewerFailed(false);
+      openLightbox(index, isLive).catch(() => {
+        // Three conditions now, and none is redundant. A superseded activation
+        // must not paint an error over the viewer that replaced it; an
+        // unmounted gallery must not report anything at all, since the only
+        // thing that could read the message is gone; and no activation should
+        // announce "could not open the viewer" while a viewer is plainly on
+        // screen, whatever the sequencing says. Telling a visitor something
+        // failed while they are looking at it working is worse than saying
+        // nothing.
+        if (isLive() && !isViewerOpen()) setViewerFailed(true);
+      });
+    },
+    [openLightbox],
+  );
+
+  const loadMore = useCallback(async () => {
+    if (cursor === null || loadState === "loading") return;
+    setLoadState("loading");
+    try {
+      const response = await fetch(publicMediaListingPath({ cursor }), {
+        headers: { accept: "application/json" },
+      });
+      if (!response.ok) {
+        throw new Error(`the gallery feed answered ${response.status}`);
+      }
+      const payload: unknown = await response.json();
+      const page = readListingPage(payload);
+      setItems((current) => appendGalleryItems(current, page.items));
+      setCursor(page.nextCursor);
+      setHasMore(page.hasMore && page.nextCursor !== null);
+      setLoadState("idle");
+    } catch {
+      // Deliberately keeps `cursor` and `hasMore` as they were, so the retry
+      // asks for the same page rather than silently skipping it.
+      setLoadState("error");
+    }
+  }, [cursor, loadState]);
+
+  /*
+   * `&& !hasMore`, not `items.length === 0` alone.
+   *
+   * The two are the same thing today: `listMedia` only ever builds a cursor
+   * from a row it emitted, so a first page with no items always comes back
+   * with `hasMore: false`. But they are not the same *claim* — "there is
+   * nothing published" and "this page happened to be empty" are different
+   * statements, and the early return says the first out loud. If the feed ever
+   * did answer with an empty page and a cursor, returning here would strand
+   * the visitor on "nothing is published yet" with no way to ask for the rest.
+   */
+  if (items.length === 0 && !hasMore) {
+    return <GalleryEmpty />;
+  }
+
+  return (
+    <div className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6">
+      {/*
+        The page's heading, and the reason it is here rather than assumed.
+
+        app-shell.tsx's skip link moves focus to <main> and its comment reasons
+        about landing "past the <h1> on both admin screens" — i.e. the shell
+        takes for granted that a page HAS one. The gallery shipped without:
+        every heading level below h1 was absent too, so the document outline
+        began at the grid, and the empty state was the only branch that kept a
+        heading at all.
+
+        It is the site description rather than the word "Gallery", because
+        this IS the site's front page and the tagline says what the
+        photographs are of. Sized modestly on purpose — the surround is
+        supposed to recede behind the pictures.
+      */}
+      <h1 className="max-w-2xl text-xl leading-tight font-medium tracking-tight text-balance text-foreground sm:text-2xl">
+        {SITE_DESCRIPTION}
+      </h1>
+
+      <ul className={`mt-6 ${GALLERY_GRID_CLASS}`}>
+        {items.map((item, index) => (
+          <li key={item.id}>
+            <button
+              type="button"
+              className={GALLERY_TILE_CLASS}
+              aria-label={galleryItemLabel(item, index)}
+              data-gallery-tile={item.id}
+              onClick={() => activate(index)}
+            >
+              {/*
+                A plain <img>, not next/image, and on purpose.
+                These bytes are already proxied through a Node route
+                (ugcportal-a2l serves them so the storage key never reaches the
+                browser); next/image would add a second proxy hop over the
+                first. Its other draw — srcset and lazy loading — needs
+                derivatives that do not exist yet and belongs to ugcportal-dex,
+                which also owns the per-upload memory budget that generating
+                them would move.
+              */}
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={item.previewSrc}
+                alt=""
+                className={GALLERY_TILE_IMAGE_CLASS}
+                /*
+                  The default page is 50 items, and on a phone roughly 46 of
+                  them are below the fold — so without this, first paint opens
+                  up to 50 simultaneous requests against a route that PROXIES
+                  every byte through the Node process rather than redirecting
+                  to storage (ugcportal-a2l). `loading` and `decoding` cost
+                  nothing and need no new derivatives; that is what separates
+                  them from `srcset`, which does and is ugcportal-dex's.
+                */
+                loading="lazy"
+                decoding="async"
+                // The button carries the accessible name; the image inside it
+                // would otherwise announce the same thing twice.
+                aria-hidden="true"
+                draggable={false}
+                onLoad={(event) => remember(item.previewSrc, event.currentTarget)}
+              />
+            </button>
+          </li>
+        ))}
+      </ul>
+
+      <GalleryPaging
+        hasMore={hasMore}
+        loadState={loadState}
+        viewerFailed={viewerFailed}
+        count={items.length}
+        onLoadMore={() => {
+          void loadMore();
+        }}
+      />
+    </div>
+  );
+}
+
+function GalleryEmpty() {
+  return (
+    <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col justify-center px-4 py-24 sm:px-6">
+      <h1 className="max-w-2xl text-2xl leading-tight font-medium tracking-tight text-balance text-foreground sm:text-3xl">
+        Nothing is published yet.
+      </h1>
+      <p className="mt-4 max-w-prose text-sm text-muted-foreground">
+        Photographs appear here as soon as they are published. Nothing is
+        hidden from you — the gallery is genuinely empty.
+      </p>
+    </div>
+  );
+}
+
+/**
+ * "1 photograph", "2 photographs".
+ *
+ * A gallery with exactly one published item is not a corner case worth
+ * shrugging at — it is what this gallery looks like on its first day, and
+ * "Showing all 1 photographs." was what it said.
+ */
+function photographs(count: number): string {
+  return count === 1 ? "1 photograph" : `${count} photographs`;
+}
+
+/** What the paging region says, given the state it is in. */
+function pagingMessage(
+  loadState: LoadState,
+  hasMore: boolean,
+  count: number,
+): string {
+  if (loadState === "loading") return "Loading more photographs…";
+  if (loadState === "error") {
+    return "Could not load more photographs. Check your connection and try again.";
+  }
+  if (hasMore) return `Showing ${photographs(count)}.`;
+  // "Showing all 1 photograph." is grammatical and still reads oddly, so the
+  // single-item end-of-list gets its own sentence rather than a pluralisation
+  // trick.
+  return count === 1
+    ? "Showing the only photograph."
+    : `Showing all ${count} photographs.`;
+}
+
+/**
+ * The end of the grid: the load-more control, the busy announcement and the
+ * error state, or the end-of-list note.
+ *
+ * TWO live regions, not one, and they are always in the DOM. Always-present
+ * because a live region inserted at the same moment as its text is frequently
+ * not announced at all. Separate because they report unrelated things, and
+ * sharing one made the viewer error SUPPRESS paging entirely: `viewerFailed`
+ * is cleared only by the next activation, and it was the first branch of a
+ * single ternary, so after one failed open every "Loading more photographs…"
+ * and every "Showing all N photographs." went unannounced for the rest of the
+ * session. Two regions, each answering for itself.
+ */
+function GalleryPaging({
+  hasMore,
+  loadState,
+  viewerFailed,
+  count,
+  onLoadMore,
+}: {
+  hasMore: boolean;
+  loadState: LoadState;
+  viewerFailed: boolean;
+  count: number;
+  onLoadMore: () => void;
+}) {
+  return (
+    <div className="mt-8 flex flex-col items-center gap-3">
+      {/*
+        Assertive, and rendered empty when there is nothing wrong: this
+        answers an action the visitor just took and got no response to, which
+        is the case a polite queue is wrong for.
+      */}
+      <p aria-live="assertive" className="text-sm text-destructive">
+        {viewerFailed
+          ? "Could not open the viewer. The photograph itself is fine — reload the page and try again."
+          : ""}
+      </p>
+      <p aria-live="polite" className="text-sm text-muted-foreground">
+        {pagingMessage(loadState, hasMore, count)}
+      </p>
+      {hasMore ? (
+        <Button
+          type="button"
+          size="lg"
+          variant={loadState === "error" ? "outline" : "default"}
+          disabled={loadState === "loading"}
+          aria-busy={loadState === "loading"}
+          onClick={onLoadMore}
+        >
+          {loadState === "error" ? "Try again" : "Load more"}
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * The listing page, read out of an untrusted JSON body.
+ *
+ * Every field is checked for its own type rather than destructured and
+ * trusted. A `nextCursor` that arrived as `undefined` would otherwise be
+ * spelled into the next request as the literal string "undefined", which the
+ * endpoint answers with 400 — an error that looks like a server fault and is
+ * not one.
+ */
+function readListingPage(payload: unknown): {
+  items: GalleryItem[];
+  hasMore: boolean;
+  nextCursor: string | null;
+} {
+  const body = (
+    typeof payload === "object" && payload !== null ? payload : {}
+  ) as Record<string, unknown>;
+  const nextCursor =
+    typeof body.nextCursor === "string" && body.nextCursor !== ""
+      ? body.nextCursor
+      : null;
+  return {
+    items: toGalleryItems(body.items),
+    hasMore: body.hasMore === true,
+    nextCursor,
+  };
+}
