@@ -20,6 +20,7 @@ import {
   type GalleryItem,
 } from "@/lib/gallery-items";
 import { publicMediaListingPath } from "@/lib/routes";
+import { SITE_DESCRIPTION } from "@/lib/site";
 
 /**
  * The public gallery (ugcportal-71y): a grid of watermarked previews, a
@@ -87,9 +88,32 @@ export function Gallery({
     }
   }, []);
 
+  /**
+   * Which activation is the current one.
+   *
+   * Opening is not instantaneous — `ensureSizes` can wait on a network round
+   * trip, which ugcportal-8dn is about — and the grid stays clickable the
+   * whole time, because nothing covers it until the viewer appears. So two
+   * clicks in that window are ordinary, not pathological.
+   *
+   * Without this counter the second click was worse than ignored. PhotoSwipe's
+   * `loadAndOpen` refuses a second open by returning false, the return value
+   * was discarded, and the viewer opened on whichever tile won the race — the
+   * FIRST one clicked. The visitor asked for one photograph and silently got
+   * another.
+   *
+   * The counter makes the LAST click win, which is what a second click means.
+   * A superseded open stops before touching the viewer rather than racing it.
+   */
+  const activation = useRef(0);
+
   const openLightbox = useCallback(
-    async (index: number) => {
+    async (index: number, request: number) => {
       const sizes = await ensureSizes(items, measured.current);
+      // Someone clicked again while we were measuring. Their open is the one
+      // that should happen; this one must not also fire, or PhotoSwipe gets
+      // two overlapping requests and answers the earlier of them.
+      if (activation.current !== request) return;
       await openGalleryViewer(items, sizes, index);
     },
     [items],
@@ -98,11 +122,12 @@ export function Gallery({
   /**
    * Opens the viewer, and says so when it cannot.
    *
-   * The dynamic `import()` in openLightbox is a network request, so it fails
-   * on a flaky connection and on a stale tab whose chunk a deploy has since
-   * replaced. Left as a floating promise, that failure is an unhandled
-   * rejection plus a button that visibly does nothing — the worst pair, since
-   * the visitor gets no reason and the log gets no context.
+   * `openGalleryViewer` resolves when the viewer is actually open and rejects
+   * when it is not — see the long note in lightbox.ts for why that took
+   * arranging. A dynamic `import()` fails on a flaky connection and on a stale
+   * tab whose chunk a deploy has replaced; left unobserved, that is an
+   * unhandled rejection plus a button that visibly does nothing, which is the
+   * worst pair, since the visitor gets no reason and the log gets no context.
    *
    * The wording matters too: the photograph is on screen and perfectly fine,
    * so the message says the VIEWER failed rather than implying the item is
@@ -110,8 +135,14 @@ export function Gallery({
    */
   const activate = useCallback(
     (index: number) => {
+      const request = (activation.current += 1);
       setViewerFailed(false);
-      openLightbox(index).catch(() => setViewerFailed(true));
+      openLightbox(index, request).catch(() => {
+        // Only the current activation may report a failure. A superseded one
+        // that fails would otherwise paint an error over a viewer that opened
+        // perfectly well.
+        if (activation.current === request) setViewerFailed(true);
+      });
     },
     [openLightbox],
   );
@@ -156,7 +187,26 @@ export function Gallery({
 
   return (
     <div className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6">
-      <ul className={GALLERY_GRID_CLASS}>
+      {/*
+        The page's heading, and the reason it is here rather than assumed.
+
+        app-shell.tsx's skip link moves focus to <main> and its comment reasons
+        about landing "past the <h1> on both admin screens" — i.e. the shell
+        takes for granted that a page HAS one. The gallery shipped without:
+        every heading level below h1 was absent too, so the document outline
+        began at the grid, and the empty state was the only branch that kept a
+        heading at all.
+
+        It is the site description rather than the word "Gallery", because
+        this IS the site's front page and the tagline says what the
+        photographs are of. Sized modestly on purpose — the surround is
+        supposed to recede behind the pictures.
+      */}
+      <h1 className="max-w-2xl text-xl leading-tight font-medium tracking-tight text-balance text-foreground sm:text-2xl">
+        {SITE_DESCRIPTION}
+      </h1>
+
+      <ul className={`mt-6 ${GALLERY_GRID_CLASS}`}>
         {items.map((item, index) => (
           <li key={item.id}>
             <button
@@ -230,13 +280,33 @@ function GalleryEmpty() {
   );
 }
 
+/** What the paging region says, given the state it is in. */
+function pagingMessage(
+  loadState: LoadState,
+  hasMore: boolean,
+  count: number,
+): string {
+  if (loadState === "loading") return "Loading more photographs…";
+  if (loadState === "error") {
+    return "Could not load more photographs. Check your connection and try again.";
+  }
+  return hasMore
+    ? `Showing ${count} photographs.`
+    : `Showing all ${count} photographs.`;
+}
+
 /**
  * The end of the grid: the load-more control, the busy announcement and the
  * error state, or the end-of-list note.
  *
- * `aria-live="polite"` on a region that is always in the DOM, rather than one
- * mounted when the state changes — a live region inserted at the same moment
- * as its text is frequently not announced at all.
+ * TWO live regions, not one, and they are always in the DOM. Always-present
+ * because a live region inserted at the same moment as its text is frequently
+ * not announced at all. Separate because they report unrelated things, and
+ * sharing one made the viewer error SUPPRESS paging entirely: `viewerFailed`
+ * is cleared only by the next activation, and it was the first branch of a
+ * single ternary, so after one failed open every "Loading more photographs…"
+ * and every "Showing all N photographs." went unannounced for the rest of the
+ * session. Two regions, each answering for itself.
  */
 function GalleryPaging({
   hasMore,
@@ -253,16 +323,18 @@ function GalleryPaging({
 }) {
   return (
     <div className="mt-8 flex flex-col items-center gap-3">
-      <p aria-live="polite" className="text-sm text-muted-foreground">
+      {/*
+        Assertive, and rendered empty when there is nothing wrong: this
+        answers an action the visitor just took and got no response to, which
+        is the case a polite queue is wrong for.
+      */}
+      <p aria-live="assertive" className="text-sm text-destructive">
         {viewerFailed
           ? "Could not open the viewer. The photograph itself is fine — reload the page and try again."
-          : loadState === "loading"
-            ? "Loading more photographs…"
-            : loadState === "error"
-              ? "Could not load more photographs. Check your connection and try again."
-              : hasMore
-                ? `Showing ${count} photographs.`
-                : `Showing all ${count} photographs.`}
+          : ""}
+      </p>
+      <p aria-live="polite" className="text-sm text-muted-foreground">
+        {pagingMessage(loadState, hasMore, count)}
       </p>
       {hasMore ? (
         <Button
@@ -321,6 +393,14 @@ function readListingPage(payload: unknown): {
  * read by loading the same URL again. UNKNOWN_PREVIEW_SIZE is used only when
  * the image cannot be loaded at all.
  *
+ * ONLY SUCCESSES ARE CACHED. Caching the fallback looks like the same thing
+ * and is not: the preview route proxies every byte through the Node process,
+ * so a single transient 5xx or a dropped connection is an ordinary event — and
+ * writing 1280x1280 into the cache for it would pin that slide to a square for
+ * the rest of the session, rendering a landscape photograph visibly stretched
+ * with no way back but a reload. A failure is a fact about one moment, not
+ * about the image; the next activation asks again.
+ *
  * KNOWN GAP (ugcportal-8dn): this waits for EVERY item, not just the one being
  * opened, so the lightbox does not open until the slowest preview in the list
  * has arrived. Adding `loading="lazy"` to the tiles widened that gap rather
@@ -338,24 +418,26 @@ async function ensureSizes(
     items.map(async (item) => {
       const known = cache.get(item.previewSrc);
       if (known !== undefined) return known;
-      const size = await measureImage(item.previewSrc);
-      cache.set(item.previewSrc, size);
-      return size;
+      const measurement = await measureImage(item.previewSrc);
+      if (measurement === null) return UNKNOWN_PREVIEW_SIZE;
+      cache.set(item.previewSrc, measurement);
+      return measurement;
     }),
   );
 }
 
-function measureImage(src: string): Promise<PixelSize> {
-  return new Promise<PixelSize>((resolve) => {
+/** The image's intrinsic size, or null if the browser could not read one. */
+function measureImage(src: string): Promise<PixelSize | null> {
+  return new Promise<PixelSize | null>((resolve) => {
     const image = new Image();
     image.onload = () => {
       resolve(
         image.naturalWidth > 0 && image.naturalHeight > 0
           ? { width: image.naturalWidth, height: image.naturalHeight }
-          : UNKNOWN_PREVIEW_SIZE,
+          : null,
       );
     };
-    image.onerror = () => resolve(UNKNOWN_PREVIEW_SIZE);
+    image.onerror = () => resolve(null);
     image.src = src;
   });
 }

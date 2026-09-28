@@ -59,6 +59,26 @@ const UPLOADER = "uploader-71y";
  */
 const UPLOADER_MARKER = "u71yAcct7f3c9d";
 
+/*
+ * The three strings a row is seeded with that K2 then looks for, each built by
+ * ONE function used by both the seeder and the assertion.
+ *
+ * Spelling them twice is how K2's original-key check became unfalsifiable: the
+ * seeder wrote `media/{UPLOADER_MARKER}/a-original.jpg` and the assertion
+ * looked for `media/a-original.jpg`, a string that was never in the database,
+ * so it could not have appeared in the markup however badly the gallery
+ * behaved. The leak check that `r1d` spent three review rounds establishing
+ * was, at the render layer, asserting the absence of a string nothing could
+ * produce.
+ *
+ * Deriving both ends from these functions removes the possibility.
+ */
+const originalKeyFor = (id: string) =>
+  `media/${UPLOADER_MARKER}/${id}-original.jpg`;
+const previewKeyFor = (id: string) =>
+  `previews/${UPLOADER_MARKER}/${id}-preview.webp`;
+const originalNameFor = (id: string) => `holiday-passport-scan-${id}.jpg`;
+
 type SeedOptions = {
   id: string;
   createdAt: Date;
@@ -81,14 +101,12 @@ async function seedMedia({
       kind,
       // The exact shape src/app/api/media/route.ts writes, so K2 is checking
       // for the string the product would actually leak.
-      key: `media/${UPLOADER_MARKER}/${id}-original.jpg`,
-      previewKey: withPreview
-        ? `previews/${UPLOADER_MARKER}/${id}-preview.webp`
-        : null,
+      key: originalKeyFor(id),
+      previewKey: withPreview ? previewKeyFor(id) : null,
       previewId: withPreview ? `pv-${id}` : null,
       mimeType: "image/jpeg",
       sizeBytes: 4096,
-      originalName: `holiday-passport-scan-${id}.jpg`,
+      originalName: originalNameFor(id),
       createdAt,
       publishedAt: published ? new Date("2026-03-04T10:00:00.000Z") : null,
     },
@@ -252,15 +270,38 @@ describe("K2 — nothing about the original or its uploader reaches the markup",
     // The tile exists — otherwise every assertion below passes vacuously.
     expect(renderedIds(markup)).toEqual(["a"]);
 
-    expect(markup).not.toContain("media/a-original.jpg");
+    /*
+     * Each forbidden string is the one actually written to the row, taken
+     * from the same helper the seeder used. Re-typing them here is how this
+     * assertion previously came to look for `media/a-original.jpg`, which the
+     * database never held — so it could not have failed. Asserting the absence
+     * of a string nothing can produce is not a leak check.
+     */
+    expect(markup).not.toContain(originalKeyFor("a"));
+    expect(markup).not.toContain(previewKeyFor("a"));
+    expect(markup).not.toContain(originalNameFor("a"));
     expect(markup).not.toContain("previews/");
     expect(markup).not.toContain(UPLOADER_MARKER);
     expect(markup).not.toContain(UPLOADER);
-    // The uploader-supplied filename is owner-only (src/lib/media-access.ts),
-    // and is emphatically not alt text.
-    expect(markup).not.toContain("holiday-passport-scan");
     // No field named `key` survives to the DOM in any attribute form.
     expect(markup).not.toMatch(/\bkey="/);
+  });
+
+  it("is looking for strings the seeded row really contains", () => {
+    /*
+     * Guards the guard. The assertions above are all `not.toContain`, so they
+     * hold trivially if the strings drift away from what seedMedia writes —
+     * which is exactly what happened once. This pins the helpers to the shape
+     * src/app/api/media/route.ts actually produces, so a rename that made the
+     * leak check vacuous fails HERE, loudly, instead of passing everywhere.
+     */
+    expect(originalKeyFor("a")).toBe(`media/${UPLOADER_MARKER}/a-original.jpg`);
+    expect(previewKeyFor("a")).toBe(
+      `previews/${UPLOADER_MARKER}/a-preview.webp`,
+    );
+    for (const key of [originalKeyFor("a"), previewKeyFor("a")]) {
+      expect(key).toContain(UPLOADER_MARKER);
+    }
   });
 
   it("builds every image source from the opaque previewId alone", async () => {

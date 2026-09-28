@@ -55,7 +55,6 @@ export function galleryLightboxOptions(
       alt: galleryItemAlt(item, position),
       ...(sizes[position] ?? UNKNOWN_PREVIEW_SIZE),
     })),
-    pswpModule: () => import("photoswipe"),
     /*
      * Fade, not zoom-from-thumbnail.
      *
@@ -104,15 +103,84 @@ export function galleryLightboxOptions(
  * `document.activeElement` when its keyboard handler binds — the button that
  * was just activated — and restores it on destroy, but only for a visitor who
  * actually moved focus into the viewer, so a mouse user's focus is left alone.
+ *
+ * THE RETURNED PROMISE RESOLVES WHEN THE VIEWER IS ACTUALLY OPEN, not when the
+ * request to open it has been filed, and the difference is the whole reason
+ * this function is shaped the way it is. Two things in photoswipe@5.4.4 make
+ * the naive version silently wrong:
+ *
+ *   - `loadAndOpen()` is SYNCHRONOUS. It returns a boolean and does the real
+ *     work in `preload()`, which builds a `Promise.all([...]).then(...)` with
+ *     NO `.catch`. So an `async` wrapper that just calls it resolves
+ *     immediately, the caller's `.catch` can never observe a failed open, and
+ *     a rejected `import("photoswipe")` — a stale chunk after a deploy, a
+ *     flaky connection — is an unhandled rejection plus a button that does
+ *     nothing. That is the same shape as the recursion bug above: a failure
+ *     path nothing can reach.
+ *
+ *   - That boolean is the only report of a REFUSED open. `loadAndOpen` returns
+ *     false when `window.pswp` is already set, and discarding it means a
+ *     second activation while one is pending resolves as a success while the
+ *     viewer shows the first tile — the wrong photograph, no error anywhere.
+ *
+ * So the core module is imported HERE, on this function's own awaited path,
+ * and handed to the lightbox as a class rather than as a loader.
+ * `isPswpClass()` (a function with `prototype.goTo`) makes `preload` wrap it in
+ * `Promise.resolve` instead of calling an importer, which removes the
+ * un-caught rejection at its source rather than trying to observe it. Both
+ * imports stay dynamic, so neither module is in the initial bundle.
  */
+
+/**
+ * How long to wait for `afterInit` before treating the open as failed.
+ *
+ * Only reachable if PhotoSwipe stops short between `loadAndOpen` returning
+ * true and its own initialisation, which nothing observed does — but the
+ * alternative to a bound is an `await` that can hang forever behind a spinner
+ * the visitor cannot dismiss. Generous, because exceeding it is a bug report,
+ * not a slow network: by this point every module is already loaded.
+ */
+const OPEN_TIMEOUT_MS = 10_000;
+
 export async function openGalleryViewer(
   items: GalleryItem[],
   sizes: PixelSize[],
   index: number,
 ): Promise<PhotoSwipeLightbox> {
-  const { default: Lightbox } = await import("photoswipe/lightbox");
-  const lightbox = new Lightbox(galleryLightboxOptions(items, sizes));
+  const [{ default: Lightbox }, { default: PhotoSwipe }] = await Promise.all([
+    import("photoswipe/lightbox"),
+    import("photoswipe"),
+  ]);
+
+  const lightbox = new Lightbox({
+    ...galleryLightboxOptions(items, sizes),
+    pswpModule: PhotoSwipe,
+  });
+
+  // Registered before `loadAndOpen`, because `afterInit` is dispatched from a
+  // microtask continuation that a later `.on()` would already have missed.
+  let stopWaiting = () => {};
+  const opened = new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error("PhotoSwipe did not finish opening")),
+      OPEN_TIMEOUT_MS,
+    );
+    stopWaiting = () => clearTimeout(timer);
+    lightbox.on("afterInit", () => {
+      stopWaiting();
+      resolve();
+    });
+  });
+
   lightbox.init();
-  lightbox.loadAndOpen(index);
+  if (!lightbox.loadAndOpen(index)) {
+    // Leaves `opened` permanently pending, which is correct and not a leak:
+    // nothing is awaiting it on this path, and cancelling the timer is what
+    // stops it rejecting into nobody's hands later.
+    stopWaiting();
+    throw new Error("a viewer is already open");
+  }
+  await opened;
+
   return lightbox;
 }
