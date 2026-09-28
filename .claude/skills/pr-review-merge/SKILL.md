@@ -93,14 +93,16 @@ This applies regardless of whether the PR ends up merged or left for a human —
 
 Step 5 gates on the round number, so establish it from facts on the PR rather than from memory — a review run is often a fresh session with no knowledge of earlier rounds.
 
-**Authoritative source, when present.** Every comment this skill posts in step 5 carries a round marker (`<!-- ugcportal-review-round: N -->`). Take the highest `N` stamped so far and add 1:
+**Authoritative source, when present.** Every *blocking* comment this skill posts in step 5 carries a round marker (`<!-- ugcportal-review-round: N -->`); an approving comment does not, because a merge ends the PR and no later round needs to count it. Take the highest `N` stamped so far and add 1:
 
 ```bash
 gh api repos/:owner/:repo/issues/<n>/comments --paginate \
   --jq '[.[] | .body | capture("<!-- ugcportal-review-round: (?<r>[0-9]+) -->") | .r | tonumber] | max // 0'
 ```
 
-**Fallback for PRs with no marker yet** (any PR opened before this rule, or one whose earlier rounds merged cleanly without a blocking comment). Each `code-review --comment` pass submits its inline comments as a burst of separate review submissions seconds apart, and rounds are separated by tens of minutes. So cluster the non-approval review submissions with a 10-minute gap threshold; the number of clusters is the number of completed rounds:
+**Fallback, used whenever that returns `0`** — either a genuinely fresh PR, or one opened before this rule existed. Note that `0` on its own does not mean round 1: a pre-rule PR can have eight rounds of review and no markers at all, so always run the fallback and take the larger of the two answers rather than trusting the marker count alone.
+
+Each `code-review --comment` pass submits its inline comments as a burst of separate review submissions seconds apart, and rounds are separated by tens of minutes. So cluster the non-approval review submissions with a 10-minute gap threshold; the number of clusters is the number of completed rounds:
 
 ```bash
 gh api repos/:owner/:repo/pulls/<n>/reviews --paginate \
@@ -110,7 +112,7 @@ gh api repos/:owner/:repo/pulls/<n>/reviews --paginate \
      else . as $t | 1 + ([range(1;length) | select($t[.] - $t[.-1] > 600)] | length) end'
 ```
 
-Current round = that count + 1.
+Each command yields a count of *completed* rounds. **Current round = max(marker count, cluster count) + 1.**
 
 **How reliable this is, measured against real PRs in this repo (2026-09-28).** Verified on `gh-24` (0, correct — no review activity), `gh-25` (0, correct), `gh-31` (8, matching the 8 rounds recorded in `ugcportal-2yj`'s notes), `gh-32` (11) and `gh-33` (8). Known error modes, both of which inflate the count:
 
