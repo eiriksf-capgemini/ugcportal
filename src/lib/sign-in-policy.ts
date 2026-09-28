@@ -224,7 +224,6 @@ export type SignInRefusal =
   | "no-configuration"
   | "no-email"
   | "unverified-email"
-  | "email-mismatch"
   | "not-permitted";
 
 export type SignInDecision =
@@ -240,7 +239,16 @@ export type SignInDecision =
  */
 export type SignInAttempt = {
   user: { email?: string | null };
-  profile?: { email?: unknown; email_verified?: unknown } | null;
+  profile?: {
+    email?: unknown;
+    email_verified?: unknown;
+    // The index signature mirrors @auth/core's own `Profile` (types.d.ts:158).
+    // Without it this type is stricter than the thing it models, and a
+    // realistic fixture — a Facebook profile carrying `name` and `id` and no
+    // `email` — would not typecheck, which pushes tests towards unrealistic
+    // ones.
+    [claim: string]: unknown;
+  } | null;
 };
 
 /**
@@ -260,36 +268,71 @@ function assertedUnverified(claim: unknown): boolean {
 }
 
 /**
+ * WHICH address this sign-in is judged on.
+ *
+ * The one the provider vouched for in THIS exchange, falling back to the one
+ * the adapter has persisted only when the provider asserts none (Facebook's
+ * Graph profile omits `email` when the app was not granted it).
+ *
+ * The two can differ, and the case is not exotic: `@auth/core` links an
+ * account by `providerAccountId` — the provider's stable subject — not by
+ * email (`getUserByAccount` in lib/actions/callback/index.js:55-61), and it
+ * never refreshes `User.email` for an already-linked OAuth account
+ * (`handleLoginOrRegister` returns `userByAccount` untouched,
+ * lib/actions/callback/handle-login.js:121-127; the only `updateUser` on that
+ * path is the email-provider branch). So anyone who changes their Google
+ * address arrives, forever after, with a stale row and a fresh profile.
+ *
+ * Preferring the fresh one is a decision, not an ordering accident:
+ *
+ *  - the identity has not changed. The subject is the same; the email is an
+ *    attribute of it, and the stale row is a cache of that attribute;
+ *  - `profile.email` is not a weaker source. It is fetched server-side from
+ *    the provider in the same exchange that produced `email_verified`, and
+ *    for a new user the adapter derives `user.email` from exactly this value.
+ *    It is the same source, fresher;
+ *  - it keeps verification and authorisation about the SAME string, which is
+ *    the property the old `email-mismatch` branch existed to protect — and it
+ *    gets it by construction instead of by refusing;
+ *  - every refusal it can produce is recoverable from configuration. The
+ *    branch it replaces was not: it returned before the permitted set was
+ *    ever consulted, so adding the new address did nothing, and with the row
+ *    never refreshing, the only fix was editing the database. On a
+ *    single-operator instance that was a permanent self-lockout of the only
+ *    operator, triggered by something outside their control (PR #45 review,
+ *    round 2).
+ *
+ * What it does NOT do is write the fresh address back. `User.email` stays
+ * stale, which matters in exactly one place — `reconcileBootstrapAdmin`
+ * matches the persisted address — and is recorded in docs/access-control.md.
+ */
+export function authorisedEmail(attempt: SignInAttempt): string | null {
+  return (
+    normalizeEmail(attempt.profile?.email) ?? normalizeEmail(attempt.user.email)
+  );
+}
+
+/**
  * Permit or refuse one sign-in attempt.
  *
- * The address compared against the list is `user.email`, because that is the
- * address the adapter will persist and every downstream gate will see. But it
- * is only trusted once the provider's own profile agrees with it: a profile
- * that asserts `email_verified: false`, or that names a different address
- * than the one being authorised, is refused rather than reconciled. Without
- * that the verification signal would be about one address while the
- * authorisation decision was about another.
- *
- * The mismatch branch is fail-closed, and it can fire on a legitimate
- * change: someone whose Google address changes arrives with a profile email
- * that no longer matches their stored one, and is refused until the operator
- * adds the new address. That is the right side to fail on for a private
- * instance, and the log line names the reason.
+ * Reads as the order it decides in: is there an address at all, does the
+ * provider stand behind it, is anything configured, is it on the list.
  */
 export function decideSignIn(
   attempt: SignInAttempt,
   env: SignInEnv = process.env,
 ): SignInDecision {
-  const email = normalizeEmail(attempt.user.email);
+  const email = authorisedEmail(attempt);
   if (!email) {
     return { permitted: false, reason: "no-email" };
   }
+  // Safe to read as being about `email` above: when the provider asserts an
+  // address, that is the address chosen, so the claim and the subject of the
+  // decision are the same string. When it asserts none it asserts no
+  // verification either, and the persisted address stands on the same footing
+  // as it did the day the provider supplied it.
   if (assertedUnverified(attempt.profile?.email_verified)) {
     return { permitted: false, reason: "unverified-email" };
-  }
-  const asserted = normalizeEmail(attempt.profile?.email);
-  if (asserted && asserted !== email) {
-    return { permitted: false, reason: "email-mismatch" };
   }
 
   const identities = permittedIdentities(env);
@@ -333,7 +376,10 @@ export function isPermittedSignIn(
     return true;
   }
 
-  const domain = emailDomain(normalizeEmail(attempt.user.email));
+  // The address the decision was actually about, not `user.email` — those
+  // differ for anyone whose provider address has changed, and a log line
+  // naming a domain the gate did not judge is worse than no log line.
+  const domain = emailDomain(authorisedEmail(attempt));
   if (decision.reason === "no-configuration") {
     console.error(
       `[auth] Refused a sign-in from ${domain}: neither ${PERMITTED_EMAILS_VAR} ` +

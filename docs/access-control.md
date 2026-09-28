@@ -103,28 +103,48 @@ everybody keeps a valid cookie, `auth()` still resolves it out of that table,
 and `POST /api/media` still sees a `session.user.id` and still lets them
 upload and publish — for up to 30 days after this fix ships.
 
-So, on the deploy that first carries this:
+So, on the deploy that first carries this — **look first, then revoke**, since
+deleting the sessions also deletes the evidence of who held one:
 
-1. **Revoke every session.** This is the part that is always correct, and it
-   is enough to make the gate effective: everyone signs in again and the new
-   callback decides.
+1. **Audit who got in while the door was open.** Read-only. The datasource is
+   `sqlite` (`prisma/schema.prisma`), so `DATABASE_URL` is a `file:` URL, not
+   a connection string, and `${DATABASE_URL#file:}` is the path:
 
    ```bash
-   npx prisma db execute --url "$DATABASE_URL" --stdin <<'SQL'
+   DB="${DATABASE_URL:-file:./dev.db}"
+   sqlite3 -header -column "${DB#file:}" \
+     'SELECT u.email, u.role, COUNT(DISTINCT m.id) AS uploads,
+             COUNT(DISTINCT s.id) AS sessions
+        FROM User u
+        LEFT JOIN Media m ON m.userId = u.id
+        LEFT JOIN Session s ON s.userId = u.id
+       GROUP BY u.id ORDER BY u.email;'
+   ```
+
+   The `#file:` strips the scheme, because `sqlite3` takes a path and only
+   some builds accept a `file:` URI. On a remote libsql deployment, run the
+   same query through that provider's shell — the query is the point, not
+   the client.
+
+   **Do not reach for `prisma db execute` here.** It is documented as "not
+   meant for returning data", and it is worse than useless for an audit: a
+   `SELECT` through it prints `Script executed successfully.` and no rows.
+   The natural reading of that is "no accounts", at exactly the moment you
+   are deciding whether anyone unwanted got in. (Verified against Prisma
+   7.10. It also has no `--url` flag — it reads the datasource from
+   `prisma7.config.ts`, which reads `DATABASE_URL`.)
+
+2. **Revoke every session.** This is the part that is always correct, and it
+   is enough to make the gate effective: everyone signs in again and the new
+   callback decides. A write, so `prisma db execute` is fine:
+
+   ```bash
+   npx prisma db execute --stdin <<'SQL'
    DELETE FROM Session;
    SQL
    ```
 
-2. **Then decide, per account, whether it should exist at all.** List them
-   first — this is also how you check the allowlist you just wrote covers the
-   people you meant:
-
-   ```bash
-   npx prisma db execute --url "$DATABASE_URL" --stdin <<'SQL'
-   SELECT u.email, u.role, COUNT(m.id) AS uploads FROM User u
-   LEFT JOIN Media m ON m.userId = u.id GROUP BY u.id ORDER BY u.email;
-   SQL
-   ```
+3. **Then decide, per account, whether it should exist at all.**
 
    **Do not reflexively delete the `User` rows.** `Account`, `Session`,
    `Media` and (through `Media`) `MediaListing` all declare
@@ -156,13 +176,40 @@ Small things, each of which has been a real bug somewhere:
   one from being the second one's twin;
 - `user.email` is optional on the Auth.js user object, so it is normalised to
   `null` when absent or empty and an absent address cannot match anything;
-- the address compared is the one the adapter will persist and every
-  downstream gate will see — but it is only trusted once the provider's own
-  profile agrees with it. A profile asserting `email_verified: false`, or
-  naming a different address than the one being authorised, is refused rather
-  than reconciled. Authorising address A while admitting address B is the
-  "compares the wrong two things" family, and it is the one that matters most
-  here.
+- **the address judged is the one the provider vouched for in this exchange**,
+  falling back to the stored one only when the provider asserts none (Facebook
+  omits `email` unless the app was granted it). A profile asserting
+  `email_verified: false` is refused rather than reconciled. Authorising
+  address A while admitting address B is the "compares the wrong two things"
+  family and it is the one that matters most here; preferring the freshly
+  verified address keeps the verification and the authorisation about the
+  same string by construction.
+
+### If your provider email changes
+
+You are judged on your **new** address, so **add it to
+`ALLOWED_SIGNIN_EMAILS`** and you are back in. You do not have to keep the old
+one listed.
+
+This is worth stating because the obvious alternative is a trap, and this
+module shipped it briefly: refusing whenever the stored and asserted addresses
+differ. `@auth/core` links an account by the provider's stable subject, not by
+email, and **never refreshes `User.email` for an already-linked OAuth
+account** (`handleLoginOrRegister` returns `userByAccount` untouched). So the
+mismatch is permanent from the first address change onward, and a refusal on
+it could not be cleared by any configuration — on a single-operator instance,
+a permanent self-lockout of the only operator, fixable only by editing the
+database.
+
+**Known limitation, accepted:** nothing writes the new address back, so
+`User.email` stays at the old value forever. It authorises nothing —
+ownership is by `user.id`, admin by `role`, and sign-in by the address above
+— but it is what gets *displayed and recorded*: the header
+(`src/components/auth-status.tsx`), the actor on a role change
+(`RoleChange.actorEmail`), the uploader label on the rights screen, and the
+address `reconcileBootstrapAdmin` matches. So a bootstrap entry must name the
+address that was stored when the account was created, and an audit trail may
+name an address its owner no longer uses.
 
 ## How this composes with the first-admin bootstrap
 

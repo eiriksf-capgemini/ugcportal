@@ -274,9 +274,10 @@ describe("decideSignIn trusts only what the provider verified", () => {
     ).toEqual({ permitted: false, reason: "unverified-email" });
   });
 
-  it("refuses when the profile names a different address than the one being authorised", () => {
-    // The account being signed in to is the listed one; the provider just
-    // verified something else. Authorising A while admitting B is the bug.
+  it("judges the address the provider asserted, not the stale persisted one", () => {
+    // The direction that matters: the STORED address is listed, the provider
+    // now asserts something else, and the something else is not listed. If
+    // the decision were made on `user.email` this would be permitted.
     expect(
       decideSignIn(
         {
@@ -285,10 +286,10 @@ describe("decideSignIn trusts only what the provider verified", () => {
         },
         env(),
       ),
-    ).toEqual({ permitted: false, reason: "email-mismatch" });
+    ).toEqual({ permitted: false, reason: "not-permitted" });
   });
 
-  it("does not call a difference in case or whitespace a mismatch", () => {
+  it("is unbothered by a difference in case or whitespace", () => {
     expect(
       decideSignIn(
         {
@@ -309,10 +310,127 @@ describe("decideSignIn trusts only what the provider verified", () => {
     ).toBe(true);
   });
 
+  it("falls back to the persisted address when the provider asserts none", () => {
+    // Facebook without the email permission. The fallback is what keeps the
+    // "judge the asserted address" rule from refusing every such sign-in.
+    expect(
+      decideSignIn(
+        // Shaped like a real Facebook Graph profile with the email
+        // permission withheld: an id and a name, and no email at all.
+        { user: { email: LISTED }, profile: { id: "12345", name: "A Person" } },
+        env(),
+      ).permitted,
+    ).toBe(true);
+  });
+
   it("does not require a profile at all", () => {
     expect(decideSignIn({ user: { email: LISTED } }, env()).permitted).toBe(
       true,
     );
+  });
+});
+
+describe("a changed provider address is recoverable from configuration", () => {
+  /*
+    PR #45 round 2, medium. @auth/core links an account by providerAccountId
+    and never refreshes User.email for an already-linked OAuth account, so
+    once someone changes their Google address they arrive with a stale row
+    and a fresh profile on EVERY subsequent sign-in — permanently.
+
+    The first version of this module compared the two and refused on any
+    difference, and did it BEFORE consulting the permitted set. The
+    documented remedy ("add the new address") therefore did nothing, and on
+    a single-operator instance that was a permanent self-lockout of the only
+    operator with no configuration-level escape.
+
+    These tests pin the remedy, not just the branch. Both run the same
+    fixture — the operator, mid-address-change — and differ only in what the
+    operator has put in the allowlist.
+  */
+  const STALE_ROW = { email: "operator-old@example.com" };
+  const FRESH_PROFILE = {
+    email: "operator-new@example.com",
+    email_verified: true,
+  };
+  const attempt = { user: STALE_ROW, profile: FRESH_PROFILE };
+
+  it("is refused while the allowlist names only the old address", () => {
+    const decision = decideSignIn(attempt, {
+      [PERMITTED_EMAILS_VAR]: STALE_ROW.email,
+    });
+
+    // `not-permitted`, specifically: a refusal the operator can act on. Any
+    // reason that does not consult the permitted set is by definition one
+    // that editing the permitted set cannot fix, which is the whole bug.
+    expect(decision).toEqual({ permitted: false, reason: "not-permitted" });
+  });
+
+  it("and is permitted the moment the operator adds the new one", () => {
+    // THE REMEDY, as documented in env.example and docs/access-control.md.
+    // Same fixture, one variable changed.
+    expect(
+      decideSignIn(attempt, {
+        [PERMITTED_EMAILS_VAR]: `${STALE_ROW.email}, ${FRESH_PROFILE.email}`,
+      }),
+    ).toEqual({ permitted: true, email: FRESH_PROFILE.email });
+
+    // And the old address is not load-bearing — dropping it still works, so
+    // the operator is not obliged to keep a dead address listed forever.
+    expect(
+      decideSignIn(attempt, { [PERMITTED_EMAILS_VAR]: FRESH_PROFILE.email })
+        .permitted,
+    ).toBe(true);
+  });
+
+  it("still refuses the changed address when the provider will not vouch for it", () => {
+    // Recoverability must not have cost the verification check: same
+    // address-change fixture, allowlist naming the new address, but the
+    // provider says it is unverified.
+    expect(
+      decideSignIn(
+        { user: STALE_ROW, profile: { ...FRESH_PROFILE, email_verified: false } },
+        { [PERMITTED_EMAILS_VAR]: FRESH_PROFILE.email },
+      ),
+    ).toEqual({ permitted: false, reason: "unverified-email" });
+  });
+
+  it("never refuses for a reason the permitted set cannot influence", () => {
+    // The property behind all of the above, stated once. Across every
+    // combination of stored/asserted address, the only refusals possible for
+    // a verified address are the two the operator can fix by editing
+    // configuration. `no-email` is excluded by both addresses being present.
+    const recoverable = new Set(["no-configuration", "not-permitted"]);
+    const seen = { permitted: 0, refused: 0 };
+    for (const stored of [STALE_ROW.email, FRESH_PROFILE.email]) {
+      for (const asserted of [STALE_ROW.email, FRESH_PROFILE.email]) {
+        for (const configured of [
+          undefined,
+          STALE_ROW.email,
+          FRESH_PROFILE.email,
+        ]) {
+          const decision = decideSignIn(
+            {
+              user: { email: stored },
+              profile: { email: asserted, email_verified: true },
+            },
+            { [PERMITTED_EMAILS_VAR]: configured },
+          );
+          if (decision.permitted) {
+            seen.permitted += 1;
+          } else {
+            seen.refused += 1;
+            expect(recoverable).toContain(decision.reason);
+          }
+        }
+      }
+    }
+
+    // Without this the loop above is a family-3 assertion: if every
+    // combination came back permitted, the `expect` inside it would never
+    // run and the test would pass by never looking at anything. Both
+    // outcomes have to actually occur for the property to mean something.
+    expect(seen.refused).toBeGreaterThan(0);
+    expect(seen.permitted).toBeGreaterThan(0);
   });
 });
 

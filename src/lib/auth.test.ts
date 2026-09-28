@@ -113,7 +113,13 @@ describe("the signIn callback is the authorisation gate", () => {
     // before any behaviour is reached — and if the config object stops being
     // the one passed to NextAuth, the rest of this file would be testing a
     // dead object.
-    expect(nextAuthConfigs).toEqual([authConfig]);
+    // `toBe`, not `toEqual`: structural equality would be satisfied by
+    // `NextAuth({ ...authConfig })`, and a clone is exactly the case this
+    // needs to catch — every other test in this file drives `authConfig`, so
+    // if NextAuth were handed a copy they would all be describing an object
+    // the library never saw.
+    expect(nextAuthConfigs).toHaveLength(1);
+    expect(nextAuthConfigs[0]).toBe(authConfig);
     expect(typeof authConfig.callbacks.signIn).toBe("function");
   });
 
