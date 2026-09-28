@@ -550,8 +550,8 @@ describe("K5 — a tag name cannot become markup or reorder the page", () => {
      * The write path refuses this name (src/lib/tags.test.ts), so the row is
      * created directly here — which is the only way to construct the case,
      * and is also a real one: rows can predate the validator, and any
-     * authenticated account can mint a tag (ugcportal-egp). What is asserted
-     * is the second line of defence, `toGalleryTags`.
+     * account permitted to sign in can mint a tag (ugcportal-egp). What is
+     * asserted is the second line of defence, `toGalleryTags`.
      *
      * Escaping does NOT cover this. U+202E is not markup; React passes it
      * through untouched, and it reverses the reading order of everything

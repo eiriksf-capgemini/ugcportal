@@ -233,11 +233,13 @@ model Tag {
   // Whether this subject is offered to everyone in the upload page's picker.
   //
   // THE PICKER IS A SHARED SURFACE AND THE TAG TABLE IS NOT A TRUSTED ONE.
-  // Any authenticated account can mint a tag by naming it on its own upload,
-  // and sign-in has no allowlist (ugcportal-egp) — so without this column the
-  // picker showed whichever names happened to be created first, to every
-  // user, permanently. Four subjects ship; the rest of the window was free
-  // and first-come.
+  // Any account permitted to sign in can mint a tag by naming it on its own
+  // upload — so without this column the picker showed whichever names
+  // happened to be created first, to every user, permanently. Four subjects
+  // ship; the rest of the window was free and first-come. ugcportal-egp
+  // decides who may sign in at all and closed the "anyone with a Google
+  // account" hole, which narrows the set but does not change the shape: an
+  // uploader is not an administrator of everybody else's form.
   //
   // Defaults to FALSE, so minting a tag is exactly as available as it was and
   // reaches exactly one place: the item its author put it on. Their own

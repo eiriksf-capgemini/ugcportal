@@ -12,9 +12,11 @@ import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db"
  * certainly not that the right ones do.
  *
  * The finding this file is mostly about, restated so the fixtures read as
- * the thing they are: the picker is a SHARED surface, and any authenticated
- * account can mint a Tag row by naming it on its own upload (sign-in has no
- * allowlist — ugcportal-egp). Round 1 bounded how many rows were rendered.
+ * the thing they are: the picker is a SHARED surface, and any account
+ * permitted to sign in can mint a Tag row by naming it on its own upload.
+ * ugcportal-egp bounds who that is; it does not make one uploader the right
+ * author of every other uploader's form. Round 1 bounded how many rows were
+ * rendered.
  * That was not enough: only four subjects ship, so the rest of the window
  * was free and first-come, and nothing in this product deletes a tag. What
  * bounds it now is `curated`.

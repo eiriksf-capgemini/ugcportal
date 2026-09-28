@@ -189,8 +189,8 @@ export function hasUnsafeText(value: string): boolean {
  * Six rather than unbounded for two reasons that pull the same way. A tile in
  * a four-column grid has room for a couple of short labels and no more, so a
  * twenty-tag item is a layout problem before it is a data problem; and every
- * signed-in account can write these (sign-in has no allowlist — see
- * ugcportal-egp), so an unbounded list is an unbounded write.
+ * permitted account can write these (ugcportal-egp decides which accounts
+ * those are), so an unbounded list is an unbounded write.
  *
  * Four subject areas are in use, so six leaves room to be wrong about that
  * without leaving room to abuse it.

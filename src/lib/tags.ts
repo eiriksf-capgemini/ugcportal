@@ -244,9 +244,13 @@ export function parseTagNames(value: unknown): TagListValidation {
  * see happening.
  *
  * WHO CAN REACH THIS. Both callers are owner-scoped writes by an
- * authenticated account, and that is deliberately not described as "trusted":
- * sign-in currently has no allowlist (ugcportal-egp), so any account that can
- * upload can also mint a tag row. That is why `MAX_TAGS_PER_ITEM` and
+ * authenticated account, and that is deliberately not described as
+ * "trusted". ugcportal-egp has since closed the door that let any Google or
+ * Facebook account in, so this is now every account the OPERATOR HAS
+ * PERMITTED rather than everyone — but permitted is not the same as trusted
+ * to reshape shared state, the permitted set is whatever an operator
+ * configured and is not necessarily small, and the rule itself is
+ * provisional by its own module's account. That is why `MAX_TAGS_PER_ITEM` and
  * `MAX_TAG_NAME_LENGTH` are small and why the name is validated rather than
  * sanitised. It is also why nothing here deletes a tag: removing a row that
  * other people's media point at is a wider capability than attaching a label
@@ -305,10 +309,11 @@ export async function resolveTagRows(
  * convincingly. What keeps arbitrary names off everybody's upload page is
  * `curated`, not this number. A cap alone bounds the SIZE of the defacement
  * and nothing else: the table ships with four subjects, so an oldest-24
- * window left twenty slots free and first-come, and any authenticated
- * account (sign-in has no allowlist — ugcportal-egp) could fill them with
- * 32-code-point names that every other uploader would then see, forever,
- * with no un-mint path anywhere in the product. "The page no longer melts"
+ * window left twenty slots free and first-come, and any account permitted
+ * to sign in could fill them with 32-code-point names that every other
+ * uploader would then see, forever, with no un-mint path anywhere in the
+ * product. ugcportal-egp bounds WHO that is; it does not make one uploader
+ * the right author of everybody else's form. "The page no longer melts"
  * is not the same claim as "the page is not defaced", and the first one is
  * the easier to mistake for the second.
  *
@@ -329,9 +334,11 @@ export const MAX_PICKER_TAGS = 24;
  * OLDEST rows and reasoned that this made the set unspoofable because the
  * seeded subjects are the oldest. The seeds were indeed safe — but only four
  * ship, so slots five through twenty-four were free and first-come. Any
- * authenticated account (sign-in has no allowlist — ugcportal-egp) could
- * mint twenty 32-code-point names against its own upload and have them
- * rendered as checkboxes on every other user's upload page. Permanently:
+ * account permitted to sign in (ugcportal-egp decides which; it is not an
+ * empty set, and being let in is not the same as being trusted with a
+ * shared control) could mint twenty 32-code-point names against its own
+ * upload and have them rendered as checkboxes on every other user's upload
+ * page. Permanently:
  * nothing in this product deletes a tag.
  *
  * So the read now asks for the subjects somebody DECIDED to offer, rather

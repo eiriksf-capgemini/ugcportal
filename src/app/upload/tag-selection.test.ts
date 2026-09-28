@@ -19,9 +19,8 @@ import {
  * screen suggesting the tag picker was the cause.
  *
  * Unreachable with the four seeded subjects and reachable the moment the
- * vocabulary grows past six, which any authenticated account can arrange
- * (ugcportal-egp). So the fixtures here are built from MAX_TAGS_PER_ITEM
- * rather than from the number four.
+ * curated vocabulary grows past six. So the fixtures here are built from
+ * MAX_TAGS_PER_ITEM rather than from the number four.
  */
 
 /** A vocabulary of `count` distinct subjects. */

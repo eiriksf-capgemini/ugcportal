@@ -87,7 +87,7 @@ export type PublicMediaRowish = {
  * the WRITE path, which is where the real fix lives. This is the second half
  * of the same rule applied at the READ path, and it is not redundant: the
  * write path has only ever governed rows written since it existed, a tag row
- * is reachable by any authenticated account (ugcportal-egp), and this
+ * is reachable by any account permitted to sign in (ugcportal-egp), and this
  * function is the single boundary every rendered row crosses. One denylist,
  * checked at both ends.
  *
