@@ -45,9 +45,11 @@ upload surface will not rediscover it.
 4. **Refusal happens at sign-in, not at each surface.** A refused identity
    never gets a `User`, `Account` or `Session` row — `@auth/core` throws
    `AccessDenied` before `handleLoginOrRegister` runs — so `auth()` returns
-   null and every existing gate answers 401 or redirects without knowing this
-   rule exists. A new surface that gates on `session.user.id` is therefore
-   already covered, and that is the point of putting the decision here.
+   null and every existing gate refuses without knowing this rule exists
+   (401 from the media routes, a redirect from `/upload`, `notFound()` from
+   the admin screens; each surface keeps its own answer). A new surface that
+   gates on `session.user.id` is therefore already covered, and that is the
+   point of putting the decision here.
 
    The cost of deciding it once, at the door, is that it is also decided
    *only* at the door: a session minted before the rule changed keeps working
@@ -65,12 +67,14 @@ made**. The allowlist is the smallest mechanism that is correct under all four
 answers, chosen so that the default could be fixed immediately without
 pre-empting the choice.
 
-**The seam to replace:** `permittedIdentities` and `decideSignIn` in
-`src/lib/sign-in-policy.ts`. Swapping the mechanism means rewriting those two
-functions — plus widening `decideSignIn`'s input if the new rule needs more
-than an email address, and making it async if it needs a database. Everything
-else, including the closed-by-default property and every downstream gate,
-stays as it is.
+**The seam to replace:** three functions in
+`src/lib/sign-in-policy.ts` — `permittedIdentities` (what the permitted set
+is), `authorisedEmail` (which of the identity's addresses is judged) and
+`decideSignIn` (the decision itself). A new rule that needs more than an
+email also means widening `SignInAttempt`, and one that needs a database
+means making `decideSignIn` async and the callback in `src/lib/auth.ts`
+await it. Everything else, including the closed-by-default property and
+every downstream gate, stays as it is.
 
 Deliberately **not** implemented, because each would silently be the decision:
 
@@ -146,13 +150,34 @@ deleting the sessions also deletes the evidence of who held one:
 
 3. **Then decide, per account, whether it should exist at all.**
 
-   **Do not reflexively delete the `User` rows.** `Account`, `Session`,
-   `Media` and (through `Media`) `MediaListing` all declare
-   `onDelete: Cascade`, so deleting a user silently destroys their upload
-   records — while leaving the actual objects in the bucket, originals and
-   watermarked previews both, with nothing left referencing them. Leaving an
-   unwanted account in place with no session and no way to sign in is the
-   safer default; it can reach nothing.
+   **Do not reflexively delete the `User` rows.** `DELETE FROM User` is not
+   a narrow operation. Enumerated from `prisma/schema.prisma` as of 457323d
+   (`ugcportal-vsm`, the last commit to touch it) by walking every
+   `onDelete: Cascade` relation transitively from `User` — re-derive it the
+   same way rather than trusting this list to have aged well:
+
+   | Destroyed | Reached via | What is actually lost |
+   | --- | --- | --- |
+   | `Session` | `Session.user` | sign-in state only |
+   | `Account` | `Account.user` | the OAuth link |
+   | `Media` | `Media.user` | every upload record |
+   | `MediaListing` | `Media` | price and sale state |
+   | `MediaRightsClearance` | `MediaListing` | the clearance on each upload |
+   | `ResaleRightsReview` | `ResaleRightsReview.uploader` | **the uploader's standing rights clearance**, with its `evidenceKey`/`evidenceSha256` pointers into `rights-evidence/` |
+   | `InstagramAccount` | `InstagramAccount.connectedBy` | **the connected account including `accessTokenEncrypted`** — note this is whoever *ran* the connect, not a property of the account being deleted |
+
+   The last two are the expensive ones and the least obvious: an operator
+   tidying up a stranger's account can destroy the Instagram connection and a
+   rights clearance that have nothing to do with that stranger's uploads. And
+   none of it touches S3 — the originals and watermarked previews stay in the
+   bucket with nothing referencing them.
+
+   Nothing blocks the delete and nothing warns. `RoleChange` has no relation
+   at all and `ResaleRightsEvent.reviewId` is deliberately not one, so the
+   audit trail survives — pointing at rows that no longer exist.
+
+   Leaving an unwanted account in place with no session and no way to sign in
+   is the safer default; it can reach nothing.
 
 Today this is very likely a no-op — nothing has been deployed (`ugcportal-321`)
 — but it is written here because the doc is what the next operator reads, and
@@ -174,8 +199,10 @@ Small things, each of which has been a real bug somewhere:
   silently disappear either. Silently permitting nobody and silently
   permitting everybody are both bad, and the reporting is what keeps the first
   one from being the second one's twin;
-- `user.email` is optional on the Auth.js user object, so it is normalised to
-  `null` when absent or empty and an absent address cannot match anything;
+- every address is optional on the Auth.js objects, so absent, empty and
+  whitespace-only all normalise to `null` and are refused before any
+  comparison happens — an absent address cannot match a blank list entry from
+  either side, and blank entries are dropped from the list anyway;
 - **the address judged is the one the provider vouched for in this exchange**,
   falling back to the stored one only when the provider asserts none (Facebook
   omits `email` unless the app was granted it). A profile asserting
@@ -245,14 +272,26 @@ A 302 to a first-party page at `/auth/error`
 `pages.error`), which then answers an ordinary **200**, saying the instance is
 private, that there is nothing to retry, and to ask the operator for access.
 
-**A refusal is not a 403, and nothing should monitor or assert one.** Setting
-`pages.error` is precisely what gives that status up: `@auth/core` serves its
-built-in card with `toResponse(renderPage().error(...))` at HTTP 403, but with
-`pages.error` set it takes the other branch of the same catch block
-(`node_modules/@auth/core/index.js:135-141`) and returns `Response.redirect()`
-— a 302, whose default status is unmodified. The user-visible outcome is
-better and the trade is deliberate, but a monitor keyed on "403 means
-refused" would report a wide-open instance as healthy.
+**Do not monitor this app's auth by status code.** Setting `pages.error` is
+precisely what gives those statuses up. `@auth/core` serves its built-in card
+with `toResponse(renderPage().error(...))`, which carries a real status; with
+`pages.error` set, both of its error paths instead return
+`Response.redirect()` — a 302 to an ordinary Next page that answers 200:
+
+| Situation | Without `pages.error` | With it (this app) |
+| --- | --- | --- |
+| Sign-in refused | 403 (`index.js:135-141`) | 302 → 200 |
+| Auth config broken | 500 (`index.js:97-106`) | 302 → 200 |
+
+The second matters more than the first. A deployment that is missing
+`AUTH_SECRET` — where **nobody can sign in at all** — used to answer 500 and
+now answers a redirect to a page that renders fine, so a 5xx-keyed uptime
+check calls it healthy. The user-visible trade is deliberate and good; the
+monitoring consequence is not, and is the reason this is written down.
+
+What *can* still be keyed on: the config branch only rewrites HTML `GET`s to
+the auth pages, so a non-GET or a non-page action such as
+`GET /api/auth/session` still answers JSON 500 (`index.js:86-88`).
 
 The wording is **identical for every refusal**, and is worded to be true of
 all of them. The gate distinguishes "not on the list" from "the provider would
@@ -269,5 +308,15 @@ permitted, by trying it. What is hidden is everything about *other* addresses
 
 The page replaces `@auth/core`'s built-in error card, which offered a "Sign
 in" button underneath "You do not have permission to sign in" — the identical
-journey, refused identically. It must stay reachable without authentication;
-`@auth/core` detects a `pages.error` that requires auth and abandons it.
+journey, refused identically.
+
+**`/auth/error` must never be put behind an auth gate, and nothing will stop
+you.** `@auth/core` never fetches the page and cannot tell whether it is
+gated. Its only related check compares the current request's `callbackUrl`
+query parameter against `pages.error` (`index.js:93-96`), and only on the
+config-error branch — it catches one specific `?callbackUrl=/auth/error`
+loop, not a gated page. Gate this page and a refused visitor loops: 302 to
+`/auth/error`, the gate redirects them to sign in, the sign-in is refused,
+302 to `/auth/error`, forever. Calling `auth()` is not itself the hazard —
+`AppShell` → `AuthStatus` already does, on every page — redirecting on its
+result is.

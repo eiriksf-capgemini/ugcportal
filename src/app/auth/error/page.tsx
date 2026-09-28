@@ -17,10 +17,16 @@ export const metadata = {
  * refused sign-in produces — hence the switch in ./outcomes rather than a
  * single hardcoded message.
  *
- * Renders for anyone, signed in or not, and MUST stay that way: @auth/core
- * detects a `pages.error` that requires authentication and, rather than
- * looping, abandons it and renders its own Configuration page. An auth gate
- * added here would silently take this page out of service.
+ * Renders for anyone, signed in or not, and MUST stay that way — an
+ * invariant this repo keeps, not one @auth/core enforces. It never fetches
+ * this page and cannot tell whether it is gated; its only related check
+ * compares the request's `callbackUrl` query parameter against `pages.error`
+ * (index.js:93-96) and runs only on the config-error branch. So adding
+ * `await auth()` plus a redirect here would not be caught: it would loop a
+ * refused visitor between this page and the sign-in they cannot complete.
+ *
+ * Note that merely CALLING `auth()` is not the hazard — the shell above this
+ * page already does, in AuthStatus. Redirecting on its result is.
  *
  * It does not render the refusal reason, and there is nothing in the URL to
  * render: Auth.js puts only the error *type* in the query string, and every

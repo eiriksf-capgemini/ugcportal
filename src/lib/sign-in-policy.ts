@@ -5,12 +5,17 @@
  * "may this identity use this instance at all?"; `isPermittedSignIn` is the
  * thin wrapper around it that adds the server-side log line and the boolean
  * Auth.js wants, and `src/lib/auth.ts`'s `signIn` callback is that wrapper's
- * only production caller. Replacing the *rule*
- * — an invite table, a domain match, a manual approval queue — means
- * rewriting `permittedIdentities` and, if the new rule needs more than an
- * email, widening `decideSignIn`'s input. Nothing else should grow its own
- * opinion about who is allowed in; see docs/access-control.md for the
- * decision this implements and the one it deliberately does not make.
+ * only production caller.
+ *
+ * Replacing the *rule* — an invite table, a domain match, a manual approval
+ * queue — means rewriting three functions here: `permittedIdentities` (what
+ * the permitted set is), `authorisedEmail` (which of the identity's
+ * addresses is judged) and `decideSignIn` (the decision). A rule needing
+ * more than an email also widens `SignInAttempt`; one needing a database
+ * also makes `decideSignIn` async and the callback await it. Nothing else
+ * should grow its own opinion about who is allowed in; see
+ * docs/access-control.md for the decision this implements and the one it
+ * deliberately does not make.
  *
  * WHY IT EXISTS: before this there was no `signIn` callback at all — the
  * first-admin bootstrap ran as an Auth.js *event*, and nothing occupied the

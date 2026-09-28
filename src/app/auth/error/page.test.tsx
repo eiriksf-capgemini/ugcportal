@@ -45,11 +45,22 @@ describe("the sign-in error page", () => {
     expect(markup).toContain(RETRY_HREF);
   });
 
-  it("renders with no session and reads nothing from one", async () => {
-    // It MUST work unauthenticated: @auth/core detects a pages.error that
-    // requires authentication and abandons it for its own Configuration
-    // page. This file mocks no session provider at all, so a call to auth()
-    // creeping into the page would fail here rather than in production.
+  it("renders without reaching for a session", async () => {
+    /*
+      It MUST work unauthenticated — see the note in page.tsx: @auth/core
+      does not detect a gated error page, so gating this one loops a refused
+      visitor forever and nothing catches it.
+
+      What this test does and does not prove, stated carefully because the
+      first version of this comment overclaimed. It mocks no session
+      provider, so the page importing `@/lib/auth` and calling `auth()`
+      would fail HERE. It does NOT prove the page is safe in production by
+      that route — in production the page renders inside AppShell →
+      AuthStatus, which calls `auth()` on every page and tolerates a null
+      session fine. Calling auth() is not the hazard; redirecting on it is,
+      and no unit test of this page can see that. The invariant is held by
+      the note in page.tsx and by review.
+    */
     await expect(render("AccessDenied")).resolves.toContain("Access denied");
   });
 

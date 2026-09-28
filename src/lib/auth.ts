@@ -52,14 +52,22 @@ export const authConfig = {
   // instance is private and stops offering the loop, with the same words for
   // every refusal — the reason is only ever logged server-side.
   //
-  // MIND THE STATUS CODE, because setting this is what changes it. @auth/core
-  // renders its built-in card with `toResponse(renderPage().error(...))`,
-  // which is HTTP 403; with `pages.error` set it takes the other branch in
-  // its catch block (index.js:135-141) and returns `Response.redirect()` — a
-  // 302 to `${pages.error}?error=AccessDenied`, after which this Next page
-  // answers an ordinary 200. So a refusal is a 302-then-200, never a 403, and
-  // nothing should be written to monitor or assert one (PR #45 review,
-  // round 1 finding 3).
+  // MIND THE STATUS CODES, because setting this is what changes them. Both
+  // of @auth/core's error paths render their built-in card with
+  // `toResponse(renderPage().error(...))`, which carries a real status; with
+  // `pages.error` set, both instead return `Response.redirect()` — a 302 to
+  // this app's own page, which answers an ordinary 200.
+  //
+  //   refused sign-in   403 -> 302 then 200   (catch block, index.js:135-141)
+  //   broken auth config 500 -> 302 then 200  (index.js:97-106)
+  //
+  // The second is the one worth losing sleep over: a deployment missing
+  // AUTH_SECRET, where NOBODY can sign in, now answers an uptime check as
+  // healthy. Nothing should monitor or assert either status as a signal
+  // about this app. (The config branch only rewrites HTML GETs to the auth
+  // pages; a non-GET or a non-page action such as /api/auth/session still
+  // answers JSON 500 at index.js:86-88, so that is the one an uptime check
+  // can still key on.) PR #45 review, rounds 1 and 3.
   pages: { error: AUTH_ERROR_PATH },
   callbacks: {
     /**
