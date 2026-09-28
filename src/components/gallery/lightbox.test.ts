@@ -4,6 +4,7 @@ import { afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import {
   UNKNOWN_PREVIEW_SIZE,
+  createActivationGate,
   ensureSizes,
   galleryLightboxOptions,
   measureImage,
@@ -125,7 +126,12 @@ async function open(index: number): Promise<PhotoSwipeLightbox> {
   // No `waitUntil` here any more, deliberately: openGalleryViewer's promise
   // now resolves when the viewer is genuinely open, so polling afterwards
   // would hide a regression in exactly that guarantee.
-  return openGalleryViewer(ITEMS, SIZES, index);
+  const lightbox = await openGalleryViewer(ITEMS, SIZES, index);
+  // Null means "a newer activation superseded this one", which none of these
+  // tests arrange. Failing here says so, instead of leaving every assertion
+  // below to fail separately on a null.
+  if (lightbox === null) throw new Error("the viewer stood down unexpectedly");
+  return lightbox;
 }
 
 async function close(lightbox: PhotoSwipeLightbox): Promise<void> {
@@ -157,7 +163,7 @@ describe("opening the viewer", () => {
    * here and there is no `.pswp` element in the document.
    */
   it("resolves only once the viewer is really open", async () => {
-    const lightbox = await openGalleryViewer(ITEMS, SIZES, 0);
+    const lightbox = await open(0);
 
     expect(lightbox.pswp).toBeDefined();
     expect(openInstance()).toBeDefined();
@@ -257,6 +263,105 @@ describe("closing the viewer", () => {
       await close(lightbox);
       expect(openInstance(), `close #${index}`).toBeUndefined();
     }
+  });
+});
+
+describe("superseding an activation in flight", () => {
+  /*
+   * The round-3 finding, and the reason these assert on WHERE the guard is
+   * rather than that one exists.
+   *
+   * Round 2 added an activation counter and checked it once, before
+   * openGalleryViewer — ahead of the two dynamic imports, which on a first
+   * activation are a real chunk download with the grid still clickable. The
+   * guard read correct and covered none of the window the race lives in.
+   *
+   * These flip `current` to false AFTER calling openGalleryViewer but BEFORE
+   * awaiting it. Because the function is async, the call runs synchronously up
+   * to its first await — the imports — and then hands control back, so the
+   * flip lands precisely inside the window under test. A guard placed at
+   * function entry would have read `true` and opened anyway, which is the
+   * behaviour these tests exist to reject.
+   */
+  it("does not open when superseded during the module load", async () => {
+    let current = true;
+    const pending = openGalleryViewer(ITEMS, SIZES, 0, () => current);
+
+    // Synchronous, so this happens while `pending` is parked on its imports.
+    current = false;
+
+    await expect(pending).resolves.toBeNull();
+    expect(openInstance()).toBeUndefined();
+    expect(document.querySelector(".pswp")).toBeNull();
+  });
+
+  it("does not report a failure when it stands down", async () => {
+    // Standing aside for a newer click is a normal outcome, not an error. If
+    // this rejected, the caller would paint "could not open the viewer" over
+    // the viewer that replaced it.
+    let current = true;
+    const pending = openGalleryViewer(ITEMS, SIZES, 0, () => current);
+    current = false;
+    await expect(pending).resolves.not.toThrow();
+  });
+
+  it("lets the newer activation open on ITS tile, not the older one's", async () => {
+    // The whole point, end to end: two overlapping activations, and the one
+    // the visitor asked for last is the one on screen. Under the round-2
+    // shape the earlier activation won and showed tile 1.
+    const gate = createActivationGate();
+
+    const firstIsCurrent = gate.begin();
+    const first = openGalleryViewer(ITEMS, SIZES, 0, firstIsCurrent);
+    const secondIsCurrent = gate.begin();
+    const second = openGalleryViewer(ITEMS, SIZES, 2, secondIsCurrent);
+
+    expect(await first).toBeNull();
+    const viewer = await second;
+    expect(viewer).not.toBeNull();
+    expect(viewer?.pswp?.currSlide?.data.src).toBe(mediaPreviewPath("pv-three"));
+
+    await close(viewer as PhotoSwipeLightbox);
+  });
+
+  it("opens normally when nothing supersedes it", async () => {
+    // Guards the guard: if `isCurrent` were wired up wrongly and always
+    // answered false, every test above would pass and the viewer would never
+    // open at all.
+    const gate = createActivationGate();
+    const viewer = await openGalleryViewer(ITEMS, SIZES, 1, gate.begin());
+
+    expect(viewer).not.toBeNull();
+    expect(viewer?.pswp?.currSlide?.data.src).toBe(mediaPreviewPath("pv-two"));
+
+    await close(viewer as PhotoSwipeLightbox);
+  });
+});
+
+describe("createActivationGate", () => {
+  it("treats only the most recent activation as current", () => {
+    const gate = createActivationGate();
+    const first = gate.begin();
+    expect(first()).toBe(true);
+
+    const second = gate.begin();
+    expect(first()).toBe(false);
+    expect(second()).toBe(true);
+
+    const third = gate.begin();
+    expect(first()).toBe(false);
+    expect(second()).toBe(false);
+    expect(third()).toBe(true);
+  });
+
+  it("keeps separate gates independent", () => {
+    // One gate per component instance; beginning on one must not supersede
+    // an activation on another.
+    const a = createActivationGate();
+    const b = createActivationGate();
+    const onA = a.begin();
+    b.begin();
+    expect(onA()).toBe(true);
   });
 });
 

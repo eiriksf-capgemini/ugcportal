@@ -243,6 +243,46 @@ describe("the states around the grid", () => {
     expect(markup).not.toContain("Load more");
   });
 
+  /*
+   * A gallery with exactly one published photograph is not a corner case: it
+   * is what this gallery looks like on its first day, and it announced
+   * "Showing all 1 photographs."
+   *
+   * The three-item fixture the rest of this file uses could never have caught
+   * it, so these override it — the same family as the timestamp collision in
+   * K4 and the same-day batch in the label tests: a fixture that cannot
+   * construct the case the assertion is about.
+   */
+  const ONE = MIXED_SHAPES.slice(0, 1);
+  const TWO = MIXED_SHAPES.slice(0, 2);
+
+  it("counts one photograph in the singular", () => {
+    expect(render({ initialItems: ONE })).toContain(
+      "Showing the only photograph.",
+    );
+    expect(render({ initialItems: ONE })).not.toContain("1 photographs");
+  });
+
+  it("counts one photograph in the singular mid-list too", () => {
+    // The `hasMore` branch has its own sentence and its own chance to be wrong.
+    const markup = render({
+      initialItems: ONE,
+      initialCursor: "cursor-1",
+      initialHasMore: true,
+    });
+    expect(markup).toContain("Showing 1 photograph.");
+    expect(markup).not.toContain("1 photographs");
+  });
+
+  it("still pluralises everything above one", () => {
+    expect(render({ initialItems: TWO })).toContain(
+      "Showing all 2 photographs.",
+    );
+    expect(
+      render({ initialItems: TWO, initialCursor: "c", initialHasMore: true }),
+    ).toContain("Showing 2 photographs.");
+  });
+
   it("renders the empty state instead of an empty grid", () => {
     const markup = render({ initialItems: [] });
     expect(markup).toContain("Nothing is published yet.");

@@ -8,7 +8,9 @@ import {
   GALLERY_TILE_IMAGE_CLASS,
 } from "@/components/gallery/containment";
 import {
+  createActivationGate,
   ensureSizes,
+  isViewerOpen,
   openGalleryViewer,
   type PixelSize,
 } from "@/components/gallery/lightbox";
@@ -89,32 +91,42 @@ export function Gallery({
   }, []);
 
   /**
-   * Which activation is the current one.
+   * Which activation the visitor actually wants: the most recent one.
    *
-   * Opening is not instantaneous — `ensureSizes` can wait on a network round
-   * trip, which ugcportal-8dn is about — and the grid stays clickable the
-   * whole time, because nothing covers it until the viewer appears. So two
-   * clicks in that window are ordinary, not pathological.
+   * Opening is not instantaneous. `ensureSizes` can wait on a network round
+   * trip (ugcportal-8dn), and the first activation also downloads two
+   * JavaScript chunks — all of it with the grid still clickable, because
+   * nothing covers it until the viewer appears. Two clicks in that window are
+   * ordinary, not pathological.
    *
-   * Without this counter the second click was worse than ignored. PhotoSwipe's
-   * `loadAndOpen` refuses a second open by returning false, the return value
-   * was discarded, and the viewer opened on whichever tile won the race — the
-   * FIRST one clicked. The visitor asked for one photograph and silently got
-   * another.
+   * Left unguarded, the second click was worse than ignored. Both activations
+   * reached `loadAndOpen`, which does NOT serialise them — `window.pswp` is
+   * only assigned later, inside `preload`'s `.then` — so both were accepted,
+   * the earlier one won, and the later one's `afterInit` never fired. The
+   * visitor got the FIRST photograph they clicked and, ten seconds later, an
+   * error message about a viewer that was open and working.
    *
-   * The counter makes the LAST click win, which is what a second click means.
-   * A superseded open stops before touching the viewer rather than racing it.
+   * WHAT MATTERS IS THE SPAN, NOT THE GUARD. The round-2 version of this had a
+   * counter and checked it once, before the awaits — so it read correct and
+   * covered none of the window the race lives in. The predicate is now handed
+   * down into `openGalleryViewer` and re-checked after its imports and again
+   * against `loadAndOpen` itself.
    */
-  const activation = useRef(0);
+  const activations = useRef(createActivationGate());
 
   const openLightbox = useCallback(
-    async (index: number, request: number) => {
+    async (index: number, isCurrent: () => boolean) => {
       const sizes = await ensureSizes(items, measured.current);
       // Someone clicked again while we were measuring. Their open is the one
       // that should happen; this one must not also fire, or PhotoSwipe gets
       // two overlapping requests and answers the earlier of them.
-      if (activation.current !== request) return;
-      await openGalleryViewer(items, sizes, index);
+      if (!isCurrent()) return;
+      // Handed DOWN rather than checked once here: openGalleryViewer awaits two
+      // dynamic imports of its own, and on the first activation that is a real
+      // chunk download with the grid still clickable underneath. A guard that
+      // stops at this line leaves the window where the race actually lives
+      // unguarded — which is what the round-2 version of this did.
+      await openGalleryViewer(items, sizes, index, isCurrent);
     },
     [items],
   );
@@ -135,13 +147,16 @@ export function Gallery({
    */
   const activate = useCallback(
     (index: number) => {
-      const request = (activation.current += 1);
+      const isCurrent = activations.current.begin();
       setViewerFailed(false);
-      openLightbox(index, request).catch(() => {
-        // Only the current activation may report a failure. A superseded one
-        // that fails would otherwise paint an error over a viewer that opened
-        // perfectly well.
-        if (activation.current === request) setViewerFailed(true);
+      openLightbox(index, isCurrent).catch(() => {
+        // Two conditions, and the second is not redundant. A superseded
+        // activation must not paint an error over the viewer that replaced it;
+        // and no activation should announce "could not open the viewer" while
+        // a viewer is plainly on screen, whatever the sequencing says. Telling
+        // a visitor something failed while they are looking at it working is
+        // worse than saying nothing.
+        if (isCurrent() && !isViewerOpen()) setViewerFailed(true);
       });
     },
     [openLightbox],
@@ -280,6 +295,17 @@ function GalleryEmpty() {
   );
 }
 
+/**
+ * "1 photograph", "2 photographs".
+ *
+ * A gallery with exactly one published item is not a corner case worth
+ * shrugging at — it is what this gallery looks like on its first day, and
+ * "Showing all 1 photographs." was what it said.
+ */
+function photographs(count: number): string {
+  return count === 1 ? "1 photograph" : `${count} photographs`;
+}
+
 /** What the paging region says, given the state it is in. */
 function pagingMessage(
   loadState: LoadState,
@@ -290,8 +316,12 @@ function pagingMessage(
   if (loadState === "error") {
     return "Could not load more photographs. Check your connection and try again.";
   }
-  return hasMore
-    ? `Showing ${count} photographs.`
+  if (hasMore) return `Showing ${photographs(count)}.`;
+  // "Showing all 1 photograph." is grammatical and still reads oddly, so the
+  // single-item end-of-list gets its own sentence rather than a pluralisation
+  // trick.
+  return count === 1
+    ? "Showing the only photograph."
     : `Showing all ${count} photographs.`;
 }
 

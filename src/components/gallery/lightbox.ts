@@ -142,15 +142,66 @@ export function galleryLightboxOptions(
  */
 const OPEN_TIMEOUT_MS = 10_000;
 
+/** Whether a PhotoSwipe viewer is on screen right now. */
+export function isViewerOpen(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    (window as unknown as { pswp?: unknown }).pswp !== undefined
+  );
+}
+
+/**
+ * Sequences activations so the LAST one wins.
+ *
+ * `begin()` supersedes every earlier activation and returns the predicate that
+ * one asks "am I still the activation the visitor wants?". A plain counter,
+ * but behind a function so the rule is testable on its own — the previous
+ * version of it was three lines inline in a component and was wrong in a way
+ * no test could see.
+ */
+export function createActivationGate(): { begin: () => () => boolean } {
+  let latest = 0;
+  return {
+    begin() {
+      const mine = (latest += 1);
+      return () => latest === mine;
+    },
+  };
+}
+
+/**
+ * Opens the viewer, or returns null if a newer activation superseded this one.
+ *
+ * `isCurrent` is checked AFTER the dynamic imports and immediately before
+ * `loadAndOpen`, and the placement is the entire point — a guard before the
+ * awaits does not guard anything. The first activation downloads two chunks
+ * here, which is a real wait with the grid still clickable underneath, so that
+ * window is exactly where a second click lands.
+ *
+ * What went wrong when the check sat further up, verified against
+ * photoswipe@5.4.4 rather than reasoned about: `loadAndOpen`'s own
+ * `if (window.pswp) return false` does NOT serialise two overlapping opens,
+ * because `window.pswp` is not assigned until `_openPhotoswipe` runs inside
+ * `preload`'s `.then`. So both activations saw it unset, both returned true,
+ * the earlier one's `_openPhotoswipe` won and set it, the later one's
+ * early-returned — and the later one's `afterInit` therefore never fired, so
+ * its promise pended the full OPEN_TIMEOUT_MS and then reported failure over a
+ * viewer that was open and working, showing the wrong photograph.
+ */
 export async function openGalleryViewer(
   items: GalleryItem[],
   sizes: PixelSize[],
   index: number,
-): Promise<PhotoSwipeLightbox> {
+  isCurrent: () => boolean = () => true,
+): Promise<PhotoSwipeLightbox | null> {
   const [{ default: Lightbox }, { default: PhotoSwipe }] = await Promise.all([
     import("photoswipe/lightbox"),
     import("photoswipe"),
   ]);
+
+  // The await above is the window. Standing down here costs the visitor
+  // nothing: nothing has been constructed and nothing is on screen.
+  if (!isCurrent()) return null;
 
   const lightbox = new Lightbox({
     ...galleryLightboxOptions(items, sizes),
@@ -173,6 +224,16 @@ export async function openGalleryViewer(
   });
 
   lightbox.init();
+
+  // Re-checked immediately before the one irreversible step. Between the check
+  // after the imports and this line there is only synchronous construction, so
+  // in practice the two agree — but `loadAndOpen` is the call that puts a
+  // viewer on screen, and the guard belongs against it rather than near it.
+  if (!isCurrent()) {
+    stopWaiting();
+    return null;
+  }
+
   if (!lightbox.loadAndOpen(index)) {
     // Leaves `opened` permanently pending, which is correct and not a leak:
     // nothing is awaiting it on this path, and cancelling the timer is what
