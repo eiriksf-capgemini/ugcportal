@@ -156,7 +156,7 @@ export function galleryLightboxOptions(
 const OPEN_TIMEOUT_MS = 10_000;
 
 /**
- * How long ONE preview's measurement may take before it is given up on.
+ * How long the measurement may take, in total, before the rest is given up on.
  *
  * This is the bound on the step that can actually hang. A STALLED preview
  * request — connection accepted, bytes never delivered, no reset — fires
@@ -168,13 +168,49 @@ const OPEN_TIMEOUT_MS = 10_000;
  * AT ALL, which is the one outcome a visitor cannot interpret or act on.
  *
  * Shorter than OPEN_TIMEOUT_MS on purpose. That one bounds a step where every
- * module is already loaded; this one bounds a real network round trip through
- * a route that proxies every byte through the Node process (ugcportal-a2l),
- * with the visitor looking at a grid that has not answered their click yet.
- * Four seconds is long enough that an ordinary slow response still arrives and
+ * module is already loaded; this one bounds real network round trips through a
+ * route that proxies every byte through the Node process (ugcportal-a2l), with
+ * the visitor looking at a grid that has not answered their click yet. Four
+ * seconds is long enough that an ordinary slow response still arrives and
  * short enough that a stall does not read as a dead page.
+ *
+ * ONE DEADLINE FOR THE ACTIVATION, not one per item, and the difference is the
+ * round-5 finding. Round 4 wrote this as a per-item bound and argued that "one
+ * slow thumbnail costs that slide a bad frame" — sound, but only if the
+ * per-item timers are independent, and they were not. See MEASURE_CONCURRENCY.
+ * What the visitor experiences is the total wait, so that is what this bounds;
+ * what protects an individual slide from a neighbour is the dispatch order and
+ * the concurrency bound, not a private timer.
  */
 const MEASURE_TIMEOUT_MS = 4_000;
+
+/**
+ * How many previews are measured at once.
+ *
+ * SIX, BECAUSE THE DEADLINE ABOVE HAS TO MEASURE A REQUEST RATHER THAN A PLACE
+ * IN A QUEUE. A default page is 50 items, so the round-4 shape started fifty
+ * `new Image()` loads — and fifty timers — simultaneously, while the browser
+ * dispatches roughly six at a time to one origin and gives no priority to the
+ * slide the visitor actually clicked. A request still queued when its private
+ * deadline passed took UNKNOWN_PREVIEW_SIZE WITHOUT EVER HAVING BEEN SENT, so
+ * the cost of a crowded page was not slowness, it was a squared slide — and on
+ * a 50-item page it was the squared slide roughly 44 times out of 50, because
+ * the activated index was as likely as any other to be at the back. That is a
+ * different defect from ugcportal-8dn, which records the slowness of measuring
+ * items nobody is looking at, not a wrong aspect ratio on the one they are.
+ *
+ * Bounding the dispatch here is what makes the timer start when the request
+ * goes out, since nothing is handed to the browser until a slot frees. Six
+ * matches what a browser will actually run against one origin over HTTP/1.1,
+ * so the queue this replaces is the browser's own rather than an extra one.
+ *
+ * Paired with `measurementOrder`, which puts the activated index in the first
+ * wave. Both halves are needed: the order alone would be leaning on the
+ * browser dispatching in the sequence `src` was assigned, which is a
+ * convention rather than a guarantee, and the bound alone would leave the
+ * activated slide wherever in the list it happened to sit.
+ */
+export const MEASURE_CONCURRENCY = 6;
 
 /** Whether a PhotoSwipe viewer is on screen right now. */
 export function isViewerOpen(): boolean {
@@ -206,6 +242,11 @@ export function createActivationGate(): { begin: () => () => boolean } {
 /**
  * Opens the viewer, or returns null if a newer activation superseded this one.
  *
+ * A RETURNED INSTANCE IS THE CALLER'S TO DESTROY, and nothing else is: every
+ * other exit from this function destroys what it built before leaving. See the
+ * note over the `try`/`finally` below for what the partial version of that
+ * rule cost.
+ *
  * `isCurrent` is checked AFTER the dynamic imports and immediately before
  * `loadAndOpen`, and the placement is the entire point — a guard before the
  * awaits does not guard anything. The first activation downloads two chunks
@@ -227,6 +268,13 @@ export async function openGalleryViewer(
   sizes: PixelSize[],
   index: number,
   isCurrent: () => boolean = () => true,
+  /*
+   * The open deadline. Injectable for the same reason `ensureSizes`'s is: a
+   * test proving that a timed-out open leaves nothing behind should not have
+   * to spend the real ten seconds doing it. The default is what production
+   * uses, so there is no seam in the shipped path.
+   */
+  openTimeoutMs: number = OPEN_TIMEOUT_MS,
 ): Promise<PhotoSwipeLightbox | null> {
   const [{ default: Lightbox }, { default: PhotoSwipe }] = await Promise.all([
     import("photoswipe/lightbox"),
@@ -248,7 +296,7 @@ export async function openGalleryViewer(
   const opened = new Promise<void>((resolve, reject) => {
     const timer = setTimeout(
       () => reject(new Error("PhotoSwipe did not finish opening")),
-      OPEN_TIMEOUT_MS,
+      openTimeoutMs,
     );
     stopWaiting = () => clearTimeout(timer);
     lightbox.on("afterInit", () => {
@@ -259,25 +307,55 @@ export async function openGalleryViewer(
 
   lightbox.init();
 
-  // Re-checked immediately before the one irreversible step. Between the check
-  // after the imports and this line there is only synchronous construction, so
-  // in practice the two agree — but `loadAndOpen` is the call that puts a
-  // viewer on screen, and the guard belongs against it rather than near it.
-  if (!isCurrent()) {
-    stopWaiting();
-    return null;
-  }
+  /*
+   * FROM HERE, EVERY EXIT OWNS THE INSTANCE. The totality is the fix — not a
+   * third special case beside the two that already cleaned up. `init()` is the
+   * line after which there is something to own, and the rule below is the
+   * whole of the policy: THE CALLER OWNS THE LIGHTBOX IF AND ONLY IF THIS
+   * FUNCTION RETURNS IT. Stand-down, refusal, timeout, or any throw — the
+   * `finally` destroys it.
+   *
+   * Three exits used to fall through that rule, and the timeout was the one
+   * with teeth. `loadAndOpen` returns TRUE and then does the real work later,
+   * inside `preload`'s `.then`, so a rejection at `openTimeoutMs` left an
+   * instance with `shouldOpen` still set and no reference to it anywhere: it
+   * never reached `viewer.current`, so gallery.tsx's unmount cleanup had
+   * nothing to take down, and the late `_openPhotoswipe` then put a
+   * full-screen overlay on `document.body` that nothing in the application
+   * could remove. `activate`'s `.catch` swallowed the rejection into the
+   * bargain, because by that point `isViewerOpen()` answered true.
+   *
+   * `destroy()` is what closes it, on both halves: it forwards to
+   * `pswp?.destroy()` for the case where the viewer did mount, and it sets
+   * `shouldOpen = false`, which `preload`'s `.then` re-reads before calling
+   * `_openPhotoswipe` — so an open that has been FILED but not yet performed
+   * is cancelled rather than orphaned. On the refusal path it touches nothing
+   * else: `this.pswp` is undefined there, and the viewer that IS open belongs
+   * to a different instance.
+   */
+  let handedOver = false;
+  try {
+    // Re-checked immediately before the one irreversible step. Between the
+    // check after the imports and this line there is only synchronous
+    // construction, so in practice the two agree — but `loadAndOpen` is the
+    // call that puts a viewer on screen, and the guard belongs against it
+    // rather than near it.
+    if (!isCurrent()) return null;
 
-  if (!lightbox.loadAndOpen(index)) {
-    // Leaves `opened` permanently pending, which is correct and not a leak:
-    // nothing is awaiting it on this path, and cancelling the timer is what
-    // stops it rejecting into nobody's hands later.
-    stopWaiting();
-    throw new Error("a viewer is already open");
-  }
-  await opened;
+    if (!lightbox.loadAndOpen(index)) {
+      throw new Error("a viewer is already open");
+    }
+    await opened;
 
-  return lightbox;
+    handedOver = true;
+    return lightbox;
+  } finally {
+    // `opened` stays permanently pending on the exits that never awaited it,
+    // which is correct and not a leak: nothing holds it, and clearing the
+    // timer is what stops it rejecting into nobody's hands later.
+    stopWaiting();
+    if (!handedOver) lightbox.destroy();
+  }
 }
 
 /**
@@ -301,14 +379,18 @@ export async function openGalleryViewer(
  * with no way back but a reload. A failure is a fact about one moment, not
  * about the image; the next activation asks again.
  *
- * EVERY MEASUREMENT IS BOUNDED, and the bound is PER ITEM rather than over the
- * whole list. That matters twice. A stall no longer pends this function
- * forever (see MEASURE_TIMEOUT_MS for what that cost the visitor), and because
- * the items are measured concurrently and each carries its own deadline, one
- * stalled preview costs a single MEASURE_TIMEOUT_MS no matter how many others
- * are in the list, and does not stop the healthy ones reporting their real
- * sizes. A bound over the aggregate would have let one slow item downgrade
- * every slide in the gallery to the fallback.
+ * THE ACTIVATED SLIDE IS MEASURED FIRST AND THE REST ARE DISPATCHED A FEW AT A
+ * TIME, which is the round-5 correction and is about correctness rather than
+ * speed. Round 4 gave each item a private deadline on the reasoning that "one
+ * slow thumbnail costs that slide a bad frame". The trade was right; the
+ * implementation did not deliver it, because the timers were not independent:
+ * fifty were started at once against a browser that dispatches about six, so
+ * the ones at the back expired while still queued and took the fallback
+ * without ever having been requested — and the slide the visitor was looking
+ * at was as likely as any other to be one of them. See MEASURE_CONCURRENCY.
+ *
+ * So `activeIndex` goes out in the first wave. Whatever else this gives up to
+ * the deadline, it does not give up the photograph that was actually clicked.
  *
  * A TIMED-OUT MEASUREMENT FALLS BACK RATHER THAN FAILING THE OPEN. That is a
  * choice, and not the obvious one, so: PhotoSwipe needs *a* width and height
@@ -320,6 +402,14 @@ export async function openGalleryViewer(
  * next activation measures again and gets it right. A refused open is the
  * visitor's whole answer; a squashed slide is a bad frame that heals itself.
  *
+ * WHAT THE DEADLINE COSTS, said plainly: on a page whose previews are all
+ * stalled, the items behind the first wave are never dispatched at all and
+ * every one of them takes the fallback. That is not a regression — under the
+ * round-4 shape they were queued in the browser and took the fallback too —
+ * but it is the reason the ordering above is load-bearing rather than a
+ * refinement. Nothing here promises that a slide the visitor swipes to five
+ * slides later was measured.
+ *
  * KNOWN GAP (ugcportal-8dn): this still measures EVERY item, not just the one
  * being opened, so an activation waits on previews nobody is looking at.
  * Adding `loading="lazy"` to the tiles widened that gap rather than narrowing
@@ -327,12 +417,18 @@ export async function openGalleryViewer(
  * requested until it is scrolled to, so its size is a real network round trip
  * here rather than a cache hit. Paying it on the rare activation is worth not
  * firing fifty proxied requests at first paint — but it is the reason 8dn is
- * worth doing, not a reason to have left the tiles eager. The bound above caps
- * what that gap can cost; it does not close it.
+ * worth doing, not a reason to have left the tiles eager. The bounds above cap
+ * what that gap can cost; they do not close it.
  */
 export async function ensureSizes(
   items: GalleryItem[],
   cache: Map<string, PixelSize>,
+  /*
+   * The slide the visitor asked for, so it can be measured before the rest.
+   * Defaults to the first item, which is what a caller with no particular
+   * slide in mind is showing anyway.
+   */
+  activeIndex: number = 0,
   /*
    * How a size is read when the cache has none. Injectable for one reason:
    * `measureImage` below decodes a real image, which no headless environment
@@ -342,63 +438,133 @@ export async function ensureSizes(
    */
   measure: (src: string) => Promise<PixelSize | null> = measureImage,
   /*
-   * The per-item deadline. Injectable so a test can prove the bound exists
-   * without spending the real four seconds to do it — the default is the one
-   * production uses.
+   * The deadline for the whole batch. Injectable so a test can prove the bound
+   * exists without spending the real four seconds to do it — the default is
+   * the one production uses.
    */
   timeoutMs: number = MEASURE_TIMEOUT_MS,
 ): Promise<PixelSize[]> {
-  return Promise.all(
-    items.map(async (item) => {
-      const known = cache.get(item.previewSrc);
-      if (known !== undefined) return known;
-      const measurement = await measureWithin(
+  const sizes = new Array<PixelSize | undefined>(items.length).fill(undefined);
+
+  // Cached items cost nothing and must not take a slot from one that would.
+  const queue: number[] = [];
+  for (const position of measurementOrder(items.length, activeIndex)) {
+    const known = cache.get(items[position].previewSrc);
+    if (known !== undefined) sizes[position] = known;
+    else queue.push(position);
+  }
+
+  /*
+   * The batch deadline, started once. `overdue` is registered on it before any
+   * measurement is, so a worker's `while` sees the expiry on the same tick the
+   * measurement it was waiting on resolves null — it stops pulling work rather
+   * than starting one more request nobody will wait for.
+   */
+  let stopWaiting = () => {};
+  const expired = new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, timeoutMs);
+    stopWaiting = () => clearTimeout(timer);
+  });
+  let overdue = false;
+  void expired.then(() => {
+    overdue = true;
+  });
+
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < queue.length && !overdue) {
+      const position = queue[next];
+      next += 1;
+      const item = items[position];
+      const measurement = await measureBefore(
         () => measure(item.previewSrc),
-        timeoutMs,
+        expired,
       );
-      // Covers both "the browser could not read a size" and "the request never
-      // answered", deliberately on the same path: neither is a fact about the
+      // Covers "the browser could not read a size" and "the request never
+      // answered" on the same path, deliberately: neither is a fact about the
       // image, so neither is cached and the next activation asks again.
-      if (measurement === null) return UNKNOWN_PREVIEW_SIZE;
+      if (measurement === null) {
+        sizes[position] = UNKNOWN_PREVIEW_SIZE;
+        continue;
+      }
       cache.set(item.previewSrc, measurement);
-      return measurement;
-    }),
-  );
+      sizes[position] = measurement;
+    }
+  };
+
+  try {
+    await Promise.all(
+      /*
+       * Not injectable, deliberately: a caller who could pass 0 here would
+       * turn every slide in the gallery into a square and nothing would say
+       * so. The tests read MEASURE_CONCURRENCY instead, which is the number
+       * production uses, so what they assert is the shipped bound rather than
+       * one they chose.
+       */
+      Array.from({ length: Math.min(MEASURE_CONCURRENCY, queue.length) }, worker),
+    );
+  } finally {
+    stopWaiting();
+  }
+
+  // Everything the deadline cut off before it was ever dispatched.
+  return sizes.map((size) => size ?? UNKNOWN_PREVIEW_SIZE);
 }
 
 /**
- * `measure()`, resolving null rather than waiting forever.
+ * Positions to measure, the activated one first and the rest in order.
  *
- * The timeout resolves NULL — the same value the measurer itself uses for "no
- * size could be read" — so a stall lands on the fallback path `ensureSizes`
- * already has, instead of needing a second one.
+ * Its own function so the rule is testable without a measurer, and because
+ * "first" has to survive an index the caller got wrong: a list is rendered
+ * from the same array the index came from, but this is the one place where a
+ * stale index would silently demote the slide it was supposed to promote. An
+ * out-of-range or non-integer index clamps rather than dropping an item.
+ */
+function measurementOrder(count: number, activeIndex: number): number[] {
+  const first =
+    count === 0 || !Number.isFinite(activeIndex)
+      ? -1
+      : Math.min(Math.max(Math.trunc(activeIndex), 0), count - 1);
+  const order: number[] = first >= 0 ? [first] : [];
+  for (let position = 0; position < count; position += 1) {
+    if (position !== first) order.push(position);
+  }
+  return order;
+}
+
+/**
+ * `measure()`, resolving null once the batch deadline has passed.
+ *
+ * The deadline resolves NULL — the same value the measurer itself uses for "no
+ * size could be read" — so an abandoned measurement lands on the fallback path
+ * `ensureSizes` already has, instead of needing a second one.
  *
  * A REJECTION IS STILL PROPAGATED rather than folded into that null. This
  * bounds the WAIT and changes nothing about what counts as a failure: a
  * measurer that throws is a bug in the measurer, and turning every such bug
  * into a silently squashed slide is how it would go unnoticed. `measureImage`
- * does not throw, so in production only the timeout arm is reachable.
+ * does not throw, so in production only the deadline arm is reachable.
+ *
+ * Both of the measurement's outcomes are handled even when the deadline won,
+ * which is why the losing arm is a no-op resolve rather than a dangling
+ * promise: a measurer that rejects after the batch gave up would otherwise be
+ * an unhandled rejection.
  *
  * The abandoned promise is not cancellable — there is no abort signal on an
  * `<img>` load — so a stalled measurement keeps its own closure alive until
  * the browser gives up on the request. One dead closure per stalled preview,
  * for the lifetime of a page view, is the price of not hanging the viewer.
  */
-function measureWithin(
+function measureBefore(
   measure: () => Promise<PixelSize | null>,
-  timeoutMs: number,
+  expired: Promise<void>,
 ): Promise<PixelSize | null> {
   return new Promise<PixelSize | null>((resolve, reject) => {
-    const timer = setTimeout(() => resolve(null), timeoutMs);
+    void expired.then(() => resolve(null));
     measure().then(
-      (size) => {
-        clearTimeout(timer);
-        resolve(size);
-      },
-      (error: unknown) => {
-        clearTimeout(timer);
-        reject(error instanceof Error ? error : new Error(String(error)));
-      },
+      (size) => resolve(size),
+      (error: unknown) =>
+        reject(error instanceof Error ? error : new Error(String(error))),
     );
   });
 }

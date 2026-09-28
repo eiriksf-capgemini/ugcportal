@@ -122,6 +122,27 @@ describe("toGalleryItems", () => {
     expect(mapped.map((entry) => entry.id)).toEqual(["a", "c"]);
   });
 
+  it("drops a row whose id repeats inside the same page", () => {
+    /*
+     * The round-5 finding, on the half nothing else covers: the
+     * server-rendered first page never goes through `appendGalleryItems`, so
+     * this is the ONLY place a duplicate inside it can be caught. Two rows
+     * with one id is a repeated React key, which React answers by dropping a
+     * tile and warning — not by rendering "one tile rather than a crash".
+     */
+    const mapped = toGalleryItems([
+      { ...ROW, id: "a", previewId: "pv-a" },
+      { ...ROW, id: "a", previewId: "pv-a-again" },
+      { ...ROW, id: "b", previewId: "pv-b" },
+    ]);
+
+    expect(mapped.map((entry) => entry.id)).toEqual(["a", "b"]);
+    // The FIRST occurrence survives, so the page keeps the order the feed
+    // sent. Distinct previewIds are what make that checkable at all — with
+    // identical ones the assertion would pass whichever copy was kept.
+    expect(mapped[0].previewSrc).toBe(`${MEDIA_PREVIEW_PATH}/pv-a`);
+  });
+
   it("returns an empty page for a body that is not a list", () => {
     for (const payload of [undefined, null, {}, "items", 7]) {
       expect(toGalleryItems(payload)).toEqual([]);
@@ -146,6 +167,33 @@ describe("appendGalleryItems", () => {
     expect(
       appendGalleryItems(first, overlapping).map((entry) => entry.id),
     ).toEqual(["a", "b", "c"]);
+  });
+
+  it("drops an id repeated WITHIN the incoming page, not only against the screen", () => {
+    /*
+     * The round-5 finding. `seen` was built from `existing` and never grew, so
+     * a page containing the same id twice put both on screen — the duplicate
+     * React key this function's comment claimed to be the net for. A broken
+     * cursor is as likely to repeat a row inside one page as across two.
+     */
+    const first = [item({ id: "a" })];
+    const page = [item({ id: "b" }), item({ id: "b" }), item({ id: "c" })];
+
+    expect(appendGalleryItems(first, page).map((entry) => entry.id)).toEqual([
+      "a",
+      "b",
+      "c",
+    ]);
+  });
+
+  it("drops a page that is nothing but one id repeated", () => {
+    // The identity guarantee has to survive the same fix: a page of
+    // duplicates of something already on screen still adds nothing, so the
+    // grid must not re-render.
+    const first = [item({ id: "a" })];
+    expect(appendGalleryItems(first, [item({ id: "a" }), item({ id: "a" })])).toBe(
+      first,
+    );
   });
 
   it("returns the same array when a page adds nothing", () => {

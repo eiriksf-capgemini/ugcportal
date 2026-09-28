@@ -92,28 +92,49 @@ export function toGalleryItem(row: PublicMediaRowish): GalleryItem | null {
  * Converts a page of feed rows. Non-array input yields an empty page rather
  * than throwing: it is reachable from a malformed HTTP response, and an empty
  * "load more" is a better failure than a blank page.
+ *
+ * A REPEATED ID INSIDE ONE PAGE IS DROPPED HERE, not only across pages. Two
+ * rows sharing an id is not a shape the query can produce, but this function
+ * is also the boundary a parsed HTTP body crosses, and it is the ONLY place
+ * the server-rendered first page crosses at all — `appendGalleryItems` never
+ * sees it. Left in, the duplicate is a repeated React key on the grid, which
+ * React answers by rendering one of the two and warning, and the tile that
+ * disappears is not the one anybody would predict. The first occurrence is the
+ * one kept, so the page keeps the order the feed sent.
  */
 export function toGalleryItems(rows: unknown): GalleryItem[] {
   if (!Array.isArray(rows)) return [];
   const items: GalleryItem[] = [];
+  const seen = new Set<string>();
   for (const row of rows) {
     if (typeof row !== "object" || row === null) continue;
     const item = toGalleryItem(row as PublicMediaRowish);
-    if (item !== null) items.push(item);
+    if (item === null || seen.has(item.id)) continue;
+    seen.add(item.id);
+    items.push(item);
   }
   return items;
 }
 
 /**
- * Appends a page, dropping any id already on screen.
+ * Appends a page, dropping any id already on screen or already in the page.
  *
  * Read the guarantee here narrowly, because it is easy to overstate. The
  * keyset cursor in src/lib/media-listing.ts is what makes paging produce each
  * item exactly once; that contract is tested against the real endpoint
  * (src/app/page.test.tsx, K4), not here. This function does NOT verify it and
- * cannot: it only sees what it is handed. What it does is keep React's keys
- * unique if the contract is ever broken, so a duplicate shows up as one tile
- * rather than as a crash — a display safety net, not a proof.
+ * cannot: it only sees what it is handed.
+ *
+ * WHAT IT DOES GUARANTEE is that no id appears twice in the array it returns,
+ * whichever of the two ways the repeat arrived — an id already on screen, or
+ * an id repeated inside the incoming page. Until round 5 it only covered the
+ * first: `seen` was built from `existing` and never grew, so two rows sharing
+ * an id within one page both survived, and the comment here claimed a net that
+ * was not under that half of the fall. The failure it claimed to catch —
+ * duplicate React keys — was therefore exactly the failure it let through.
+ *
+ * Still a display safety net rather than a proof: it keeps the keys unique if
+ * the cursor contract is ever broken, and says nothing about whether it is.
  *
  * It returns the existing array unchanged when there is nothing new, so a
  * repeated final page does not re-render the grid.
@@ -123,7 +144,12 @@ export function appendGalleryItems(
   incoming: GalleryItem[],
 ): GalleryItem[] {
   const seen = new Set(existing.map((item) => item.id));
-  const fresh = incoming.filter((item) => !seen.has(item.id));
+  const fresh: GalleryItem[] = [];
+  for (const item of incoming) {
+    if (seen.has(item.id)) continue;
+    seen.add(item.id);
+    fresh.push(item);
+  }
   return fresh.length === 0 ? existing : [...existing, ...fresh];
 }
 

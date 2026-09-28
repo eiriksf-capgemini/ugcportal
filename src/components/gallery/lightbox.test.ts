@@ -1,8 +1,16 @@
 // @vitest-environment jsdom
-import type PhotoSwipeLightbox from "photoswipe/lightbox";
+/*
+ * A VALUE import, not a type-only one, and the difference is load-bearing:
+ * the ownership tests below patch `PhotoSwipeLightbox.prototype`, and that
+ * only reaches `openGalleryViewer` because its `await import(...)` resolves to
+ * this same module record. Patching a copy would make those tests assert
+ * nothing at all.
+ */
+import PhotoSwipeLightbox from "photoswipe/lightbox";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import {
+  MEASURE_CONCURRENCY,
   UNKNOWN_PREVIEW_SIZE,
   createActivationGate,
   ensureSizes,
@@ -26,9 +34,15 @@ import { mediaPreviewPath } from "@/lib/routes";
  * reopening. Sixteen assertions covered the grid's markup and not one of them
  * could see it, because none of them opened anything.
  *
- * So this runs the real library in a DOM. It is the only jsdom file in the
- * suite — everything else is a node test — which is why the environment is
- * pinned per-file rather than globally.
+ * So this runs the real library in a DOM. It is one of the suite's two jsdom
+ * files — this one and gallery.unmount.test.tsx; everything else is a node
+ * test — which is why the environment is pinned per-file rather than globally.
+ *
+ * jsdom is pinned at ^26 deliberately (ugcportal-71y): 30 breaks on CI's Node
+ * 20, and the way it breaks is SILENT DE-COLLECTION — every file carrying this
+ * pragma stops being collected at all, and the run reports fewer files with no
+ * failures. Both files, not just this one, which is why the count above is
+ * worth keeping accurate.
  *
  * What it does NOT claim: that the viewer *looks* right. jsdom has no layout
  * and no image decoding, so zoom, panning, the fade and the rendered slide are
@@ -338,6 +352,155 @@ describe("superseding an activation in flight", () => {
   });
 });
 
+describe("owning the viewer on every exit path", () => {
+  /*
+   * The round-5 finding, and the reason the rule in openGalleryViewer is "the
+   * caller owns the instance if and only if the function returns it" rather
+   * than a cleanup at each exit that someone remembered.
+   *
+   * Once `init()` has been called there is something to own, and three exits
+   * owned nothing: the post-init stand-down, the refusal, and — the one with
+   * teeth — the OPEN_TIMEOUT_MS rejection. `loadAndOpen` returns TRUE and does
+   * the real work later inside `preload`'s `.then`, so a rejection at the
+   * deadline left `shouldOpen` set on an instance no reference in the
+   * application pointed at. gallery.tsx's unmount cleanup reads
+   * `viewer.current`, which that instance never reached.
+   *
+   * These assert on the DAMAGE rather than on `destroy` having been called,
+   * wherever the damage is reachable: an overlay on `document.body` and a set
+   * `window.pswp`, which is what makes every later activation anywhere in the
+   * application a silent no-op.
+   */
+
+  /** Records every real `destroy()`, and still performs it. */
+  function watchDestroys(): {
+    destroyed: PhotoSwipeLightbox[];
+    restore: () => void;
+  } {
+    const destroyed: PhotoSwipeLightbox[] = [];
+    const real = PhotoSwipeLightbox.prototype.destroy;
+    PhotoSwipeLightbox.prototype.destroy = function (this: PhotoSwipeLightbox) {
+      destroyed.push(this);
+      real.call(this);
+    };
+    return {
+      destroyed,
+      restore: () => {
+        PhotoSwipeLightbox.prototype.destroy = real;
+      },
+    };
+  }
+
+  it("leaves a timed-out open nothing to mount later", async () => {
+    /*
+     * `preload` is stubbed to HOLD the open rather than perform it, which is
+     * precisely the state the deadline exists for: `loadAndOpen` has returned
+     * true and `shouldOpen` is set, but `_openPhotoswipe` has not run yet.
+     * Nothing about the stub is fictional — it is the same suspension a slow
+     * `Promise.all` inside `preload` produces.
+     *
+     * Releasing it AFTERWARDS is what makes this a test about the leak rather
+     * than about the rejection. Without the fix the late `_openPhotoswipe`
+     * finds `shouldOpen` still true and puts a full-screen overlay on
+     * `document.body` with `window.pswp` set, and nothing in the application
+     * holds a reference with which to take it down.
+     */
+    const realPreload = PhotoSwipeLightbox.prototype.preload;
+    const filed: (() => void)[] = [];
+    PhotoSwipeLightbox.prototype.preload = function (
+      this: PhotoSwipeLightbox,
+      index: number,
+    ) {
+      filed.push(() => realPreload.call(this, index));
+    };
+    const watch = watchDestroys();
+    try {
+      await expect(
+        openGalleryViewer(ITEMS, SIZES, 0, () => true, 20),
+      ).rejects.toThrow(/did not finish opening/);
+
+      // The premise, asserted rather than assumed: the open really was filed,
+      // so there really is something that could still mount.
+      expect(filed).toHaveLength(1);
+      expect(watch.destroyed).toHaveLength(1);
+      // `shouldOpen` is the flag `preload`'s `.then` re-reads before calling
+      // `_openPhotoswipe`, so this is the mechanism, not a proxy for it.
+      expect(watch.destroyed[0].shouldOpen).toBe(false);
+
+      filed[0]();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(document.querySelector(".pswp")).toBeNull();
+      expect(openInstance()).toBeUndefined();
+    } finally {
+      PhotoSwipeLightbox.prototype.preload = realPreload;
+      watch.restore();
+    }
+  });
+
+  it("destroys what it built when superseded between init and loadAndOpen", async () => {
+    /*
+     * The other post-`init()` stand-down. `isCurrent` answers true at the
+     * check after the imports and false at the check against `loadAndOpen`,
+     * which is the only way to reach it: between the two there is nothing but
+     * synchronous construction, so no test can flip a flag in between.
+     */
+    let asked = 0;
+    const watch = watchDestroys();
+    try {
+      const viewer = await openGalleryViewer(ITEMS, SIZES, 0, () => {
+        asked += 1;
+        return asked === 1;
+      });
+
+      expect(viewer).toBeNull();
+      expect(asked).toBe(2);
+      expect(watch.destroyed).toHaveLength(1);
+      expect(openInstance()).toBeUndefined();
+    } finally {
+      watch.restore();
+    }
+  });
+
+  it("destroys the instance it built when the open is refused", async () => {
+    // The refusal path: `loadAndOpen` returns false because a viewer is
+    // already up. The refused instance is still a constructed lightbox, and
+    // the throw took it out of the caller's reach.
+    const first = await open(0);
+    const watch = watchDestroys();
+    try {
+      await expect(openGalleryViewer(ITEMS, SIZES, 2)).rejects.toThrow(
+        /already open/,
+      );
+
+      expect(watch.destroyed).toHaveLength(1);
+      // And destroying the refused one did not disturb the viewer that IS
+      // open — it belongs to a different instance.
+      expect(first.pswp?.currSlide?.data.src).toBe(mediaPreviewPath("pv-one"));
+    } finally {
+      watch.restore();
+    }
+    await close(first);
+  });
+
+  it("does NOT destroy the instance it hands back", async () => {
+    // Guards the rule in the other direction. An implementation that simply
+    // destroyed on the way out would pass every assertion above and close the
+    // viewer the instant it opened.
+    const watch = watchDestroys();
+    try {
+      const viewer = await open(1);
+
+      expect(watch.destroyed).toHaveLength(0);
+      expect(viewer.pswp?.currSlide?.data.src).toBe(mediaPreviewPath("pv-two"));
+
+      await close(viewer);
+    } finally {
+      watch.restore();
+    }
+  });
+});
+
 describe("createActivationGate", () => {
   it("treats only the most recent activation as current", () => {
     const gate = createActivationGate();
@@ -376,8 +539,8 @@ describe("ensureSizes", () => {
       return { width: 640, height: 480 };
     };
 
-    await ensureSizes(ITEMS, cache, measure);
-    await ensureSizes(ITEMS, cache, measure);
+    await ensureSizes(ITEMS, cache, 0, measure);
+    await ensureSizes(ITEMS, cache, 0, measure);
 
     expect(calls).toHaveLength(ITEMS.length);
     expect(cache.get(src(ITEMS[0]))).toEqual({ width: 640, height: 480 });
@@ -404,18 +567,18 @@ describe("ensureSizes", () => {
       return attempts === 1 ? null : { width: 1600, height: 900 };
     };
 
-    const first = await ensureSizes([ITEMS[0]], cache, flaky);
+    const first = await ensureSizes([ITEMS[0]], cache, 0, flaky);
     expect(first[0]).toEqual(UNKNOWN_PREVIEW_SIZE);
     expect(cache.has(src(ITEMS[0]))).toBe(false);
 
     // The next activation asks again, and gets the real shape.
-    const second = await ensureSizes([ITEMS[0]], cache, flaky);
+    const second = await ensureSizes([ITEMS[0]], cache, 0, flaky);
     expect(second[0]).toEqual({ width: 1600, height: 900 });
     expect(cache.get(src(ITEMS[0]))).toEqual({ width: 1600, height: 900 });
   });
 
   it("never yields a zero dimension, which PhotoSwipe would refuse to load", async () => {
-    const sizes = await ensureSizes(ITEMS, new Map(), async () => null);
+    const sizes = await ensureSizes(ITEMS, new Map(), 0, async () => null);
     for (const size of sizes) {
       expect(size.width).toBeGreaterThan(0);
       expect(size.height).toBeGreaterThan(0);
@@ -443,7 +606,7 @@ describe("ensureSizes", () => {
     it("gives up and falls back instead of pending forever", async () => {
       const cache = new Map<string, PixelSize>();
 
-      const sizes = await ensureSizes(ITEMS, cache, stalls, 20);
+      const sizes = await ensureSizes(ITEMS, cache, 0, stalls, 20);
 
       expect(sizes).toEqual(ITEMS.map(() => UNKNOWN_PREVIEW_SIZE));
     });
@@ -455,7 +618,7 @@ describe("ensureSizes", () => {
       const measure = (url: string) =>
         url === src(ITEMS[0]) ? stalls() : Promise.resolve({ width: url.length, height: 100 });
 
-      const sizes = await ensureSizes(ITEMS, cache, measure, 20);
+      const sizes = await ensureSizes(ITEMS, cache, 0, measure, 20);
 
       expect(sizes[0]).toEqual(UNKNOWN_PREVIEW_SIZE);
       // Their own lengths, which differ from each other and from 1280 — so
@@ -475,21 +638,22 @@ describe("ensureSizes", () => {
         return attempts === 1 ? stalls() : Promise.resolve({ width: 1600, height: 900 });
       };
 
-      const first = await ensureSizes([ITEMS[0]], cache, stallsOnce, 20);
+      const first = await ensureSizes([ITEMS[0]], cache, 0, stallsOnce, 20);
       expect(first[0]).toEqual(UNKNOWN_PREVIEW_SIZE);
       expect(cache.has(src(ITEMS[0]))).toBe(false);
 
-      const second = await ensureSizes([ITEMS[0]], cache, stallsOnce, 20);
+      const second = await ensureSizes([ITEMS[0]], cache, 0, stallsOnce, 20);
       expect(second[0]).toEqual({ width: 1600, height: 900 });
       expect(cache.get(src(ITEMS[0]))).toEqual({ width: 1600, height: 900 });
     });
 
     it("costs one deadline for the whole list, not one per item", async () => {
       /*
-       * The bound is per item, and the items are measured concurrently — so
-       * every measurement is already in flight before the first deadline
-       * expires. A bound applied serially, or one item at a time, would make
-       * a stalled gallery take N deadlines to answer a click.
+       * A short list is measured all at once, so a stalled page costs one
+       * deadline rather than one per item. Three items fit inside
+       * MEASURE_CONCURRENCY, which is what makes "all at once" the expected
+       * answer here; the bound itself is asserted separately below, on a list
+       * long enough to reach it.
        *
        * Asserted through the peak number of in-flight measurements rather than
        * through elapsed time, which would be a flaky way to say the same
@@ -503,7 +667,7 @@ describe("ensureSizes", () => {
         return stalls();
       };
 
-      await ensureSizes(ITEMS, new Map(), countingStall, 20);
+      await ensureSizes(ITEMS, new Map(), 0, countingStall, 20);
 
       expect(peak).toBe(ITEMS.length);
     });
@@ -520,7 +684,7 @@ describe("ensureSizes", () => {
         return { width: 1600, height: 900 };
       };
 
-      const sizes = await ensureSizes([ITEMS[0]], new Map(), slow, 500);
+      const sizes = await ensureSizes([ITEMS[0]], new Map(), 0, slow, 500);
 
       expect(sizes[0]).toEqual({ width: 1600, height: 900 });
     });
@@ -533,6 +697,7 @@ describe("ensureSizes", () => {
         ensureSizes(
           [ITEMS[0]],
           new Map(),
+          0,
           () => Promise.reject(new Error("measurer is broken")),
           500,
         ),
@@ -540,9 +705,133 @@ describe("ensureSizes", () => {
     });
   });
 
+  /*
+   * The round-5 finding. Round 4's per-item deadline was justified as "one
+   * slow thumbnail costs that slide a bad frame", which assumed the timers
+   * were independent — and they are not. A default page is 50 items, so all
+   * fifty timers started at once against a browser that dispatches about six
+   * to an origin at a time and gives no priority to the slide that was
+   * clicked. Requests at the back of that queue expired BEFORE BEING SENT and
+   * took UNKNOWN_PREVIEW_SIZE, so a crowded page did not cost slowness, it
+   * cost a squared slide — and the squared one was as likely as not to be the
+   * photograph the visitor had asked for.
+   *
+   * These assert the outcome that actually goes wrong — a slide taking the
+   * fallback size while healthy ones did not — rather than elapsed time, which
+   * would be both flaky and a different claim.
+   */
+  describe("when the page is long enough to queue", () => {
+    const MANY = toGalleryItems(
+      Array.from({ length: 50 }, (_, position) => ({
+        id: `id-${position}`,
+        previewId: `pv-${position}`,
+        publishedAt: "2026-03-01T00:00:00.000Z",
+      })),
+    );
+    const OPENED = 40;
+
+    /**
+     * A measurer that behaves like a browser connection pool: it accepts every
+     * call immediately, but only `parallelism` of them are ever in flight, and
+     * the rest wait their turn in arrival order.
+     *
+     * THE WAITING IS THE POINT. A measurer that answered everything at once
+     * could not express the defect at all, because the defect is entirely
+     * about what happens to a request that has been handed over but not yet
+     * sent.
+     */
+    function connectionPool(parallelism: number, serviceMs: number) {
+      let active = 0;
+      const waiting: (() => void)[] = [];
+      return async (url: string): Promise<PixelSize> => {
+        if (active >= parallelism) {
+          await new Promise<void>((resolve) => waiting.push(resolve));
+        }
+        active += 1;
+        await new Promise((resolve) => setTimeout(resolve, serviceMs));
+        active -= 1;
+        waiting.shift()?.();
+        return { width: url.length, height: 100 };
+      };
+    }
+
+    it("measures the slide being opened rather than leaving it in the queue", async () => {
+      // Six at a time, 10ms each, so item 40 is in the seventh wave — roughly
+      // 60ms away — if the list is measured in order. The deadline is 40ms.
+      const sizes = await ensureSizes(
+        MANY,
+        new Map(),
+        OPENED,
+        connectionPool(MEASURE_CONCURRENCY, 10),
+        40,
+      );
+
+      expect(sizes[OPENED]).toEqual({
+        width: MANY[OPENED].previewSrc.length,
+        height: 100,
+      });
+      // Said the other way round too, because the failure is specifically the
+      // fallback and 1280x1280 is a value a real measurement could never be
+      // here (the widths above are URL lengths).
+      expect(sizes[OPENED]).not.toEqual(UNKNOWN_PREVIEW_SIZE);
+    });
+
+    it("never hands the browser more than it will dispatch", async () => {
+      /*
+       * The other half, and the one the ordering leans on. Measuring the
+       * activated item first only helps if it is genuinely SENT first, and
+       * with fifty measurements handed over at once that depends on the
+       * browser draining its own queue in the order `src` was assigned — a
+       * convention, not a guarantee. Bounding the dispatch here is what makes
+       * the deadline time a request instead of a place in a queue.
+       *
+       * The needle is a peak of 50. Asserting the exact bound rules out the
+       * other wrong answer as well: a serial implementation would peak at 1
+       * and would make a stalled page cost fifty deadlines.
+       */
+      let inFlight = 0;
+      let peak = 0;
+      const countingStall = () => {
+        inFlight += 1;
+        peak = Math.max(peak, inFlight);
+        return new Promise<PixelSize | null>(() => {});
+      };
+
+      const sizes = await ensureSizes(MANY, new Map(), OPENED, countingStall, 20);
+
+      expect(peak).toBe(MEASURE_CONCURRENCY);
+      // Nothing was measured, so nothing may be missing either: an item the
+      // deadline cut off before dispatch still needs a size PhotoSwipe will
+      // load.
+      expect(sizes).toHaveLength(MANY.length);
+      expect(sizes.every((size) => size.width > 0 && size.height > 0)).toBe(true);
+    });
+
+    it("measures every item when the activated index is out of range", async () => {
+      // A stale index must demote nothing and, above all, must not index past
+      // the end of the list and hand `measure` an undefined source.
+      const asked: string[] = [];
+      const sizes = await ensureSizes(
+        ITEMS,
+        new Map(),
+        99,
+        async (url) => {
+          asked.push(url);
+          return { width: url.length, height: 100 };
+        },
+        500,
+      );
+
+      expect(asked).toHaveLength(ITEMS.length);
+      expect(sizes.map((size) => size.width)).toEqual(
+        ITEMS.map((item) => item.previewSrc.length),
+      );
+    });
+  });
+
   it("keeps sizes aligned with the items that asked for them", async () => {
     // Positional, so a reordering bug would hand slide 2 slide 1's shape.
-    const sizes = await ensureSizes(ITEMS, new Map(), async (url) => ({
+    const sizes = await ensureSizes(ITEMS, new Map(), 0, async (url) => ({
       width: url.length,
       height: 100,
     }));

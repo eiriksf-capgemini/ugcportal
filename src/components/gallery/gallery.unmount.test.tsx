@@ -28,7 +28,8 @@ import { toGalleryItems } from "@/lib/gallery-items";
  * reason.
  *
  * jsdom is pinned at ^26 deliberately (ugcportal-71y): 30 breaks on CI's Node
- * 20 and silently drops every file with this pragma, this one included.
+ * 20 and silently drops every file with this pragma — this one and
+ * lightbox.test.ts, the suite's only two.
  */
 
 const ITEMS = toGalleryItems([
@@ -52,13 +53,25 @@ const ITEMS = toGalleryItems([
  */
 const measurements: (() => void)[] = [];
 
+/**
+ * Every preview URL handed to the stub, in the order it was handed over.
+ *
+ * That order is the whole content of the round-5 fix on this side of the
+ * boundary: `ensureSizes` puts the ACTIVATED index in the first wave, and
+ * `Gallery` is the only thing that knows which index that is. Recording the
+ * order is what makes "the component passes the index" assertable without
+ * reaching into the component.
+ */
+const requested: string[] = [];
+
 function installImageStub(mode: "immediate" | "deferred"): void {
   class FakeImage {
     naturalWidth = 1600;
     naturalHeight = 900;
     onload: (() => void) | null = null;
     onerror: (() => void) | null = null;
-    set src(_value: string) {
+    set src(value: string) {
+      requested.push(value);
       const answer = () => this.onload?.();
       if (mode === "immediate") queueMicrotask(answer);
       else measurements.push(answer);
@@ -128,6 +141,7 @@ afterEach(async () => {
   });
   container.remove();
   measurements.length = 0;
+  requested.length = 0;
   (globalThis as unknown as { Image: unknown }).Image = realImage;
   /*
    * A test that left a viewer behind would otherwise fail the NEXT one by
@@ -251,6 +265,33 @@ describe("a viewer that is open when the gallery unmounts", () => {
       });
       secondContainer.remove();
     }
+  });
+});
+
+describe("which preview an activation measures first", () => {
+  /*
+   * The gallery's half of the round-5 measurement fix. `ensureSizes` measures
+   * the activated index first and bounds how many go out at once, so that a
+   * page of fifty cannot leave the clicked photograph queued behind
+   * forty-four others and square it at the deadline — but none of that reaches
+   * a visitor unless `Gallery` tells it WHICH index was clicked.
+   *
+   * Asserted here rather than in lightbox.test.ts because this is the only
+   * place the index exists: it is the argument `activate` was called with.
+   */
+  it("measures the tile that was clicked before any other", async () => {
+    installImageStub("deferred");
+    await mount();
+    await clickTile(1);
+
+    // Every tile is still measured — this is an ordering, not a narrowing.
+    expect(requested).toHaveLength(ITEMS.length);
+    expect(requested[0]).toBe(ITEMS[1].previewSrc);
+
+    // And the activation still completes, so the ordering is not bought with
+    // a viewer that never opens.
+    await release();
+    await waitUntil(() => openInstance() !== undefined, "the viewer to open");
   });
 });
 

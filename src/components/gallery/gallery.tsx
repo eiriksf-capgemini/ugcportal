@@ -190,7 +190,12 @@ export function Gallery({
 
   const openLightbox = useCallback(
     async (index: number, isLive: () => boolean) => {
-      const sizes = await ensureSizes(items, measured.current);
+      // `index` is not decoration: it is what puts the slide the visitor
+      // clicked in the first wave of measurements rather than somewhere in a
+      // queue of fifty, which is the difference between the right aspect ratio
+      // and a squared frame on the one photograph they asked for. See
+      // MEASURE_CONCURRENCY in lightbox.ts.
+      const sizes = await ensureSizes(items, measured.current, index);
       // Someone clicked again while we were measuring, or the gallery went
       // away underneath us. Their open is the one that should happen — or none
       // should — and this one must not also fire, or PhotoSwipe gets two
