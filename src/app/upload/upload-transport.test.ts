@@ -393,6 +393,121 @@ describe("a connection that goes quiet is given up on (round 2, finding 1)", () 
   });
 });
 
+describe("what the client may claim once the body is sent (round 3, 1 and 2)", () => {
+  /*
+    POST /api/media never reads request.signal (ugcportal-2u9), so after the
+    last byte the handler watermarks, stores both objects and inserts the
+    Media row whatever the browser does. "You cancelled this upload, so
+    nothing was kept" was therefore false — and, being retryable, it offered a
+    Try again that stored the file a SECOND time, the route having no
+    idempotency key.
+  */
+  it("reports a partial cancellation confidently, because nothing was stored", async () => {
+    const xhr = new FakeXhr();
+    const controller = new AbortController();
+    const promise = send(xhr, controller.signal);
+
+    // Mid-stream: the request is cut off, the route's multipart read fails.
+    xhr.upload.emit("progress", {
+      loaded: 2,
+      total: 4,
+      lengthComputable: true,
+    });
+    controller.abort();
+
+    await expect(promise).rejects.toMatchObject({
+      name: "UploadAbortedError",
+      bodyDelivery: "partial",
+    });
+    const failure = failureForTransportError(
+      await promise.catch((error: unknown) => error),
+    );
+    expect(failure.code).toBe("cancelled");
+    // Safe to offer: re-sending cannot duplicate what was never stored.
+    expect(failure.retryable).toBe(true);
+  });
+
+  it("admits it does not know once the last byte has gone out", async () => {
+    const xhr = new FakeXhr();
+    const controller = new AbortController();
+    const promise = send(xhr, controller.signal);
+
+    // The body is fully delivered; the server is now working on it.
+    xhr.upload.emit("load");
+    controller.abort();
+
+    await expect(promise).rejects.toMatchObject({
+      bodyDelivery: "fully-sent",
+    });
+    const failure = failureForTransportError(
+      await promise.catch((error: unknown) => error),
+    );
+    expect(failure.code).toBe("outcome_unknown");
+    expect(failure.message).toContain("may or may not have been stored");
+    expect(failure.message).toContain("Check your library");
+    // THE ASSERTION THAT MATTERS: no retry, because a retry would insert a
+    // second Media row for a file that is probably already there.
+    expect(failure.retryable).toBe(false);
+    // And it must not go on claiming the file was discarded.
+    expect(failure.message).not.toContain("nothing was kept");
+  });
+
+  it("says the same of a network failure and a stall after delivery", async () => {
+    // All three causes collapse onto one honest outcome, because the thing
+    // the client does not know is the same in all three.
+    const dropped = new FakeXhr();
+    const droppedPromise = send(dropped);
+    dropped.upload.emit("load");
+    dropped.emit("error");
+    const networkFailureAfter = failureForTransportError(
+      await droppedPromise.catch((error: unknown) => error),
+    );
+    expect(networkFailureAfter.code).toBe("outcome_unknown");
+    expect(networkFailureAfter.retryable).toBe(false);
+
+    vi.useFakeTimers();
+    try {
+      const quiet = new FakeXhr();
+      const quietPromise = send(quiet);
+      const caught = quietPromise.catch((error: unknown) => error);
+      quiet.upload.emit("load");
+      await vi.advanceTimersByTimeAsync(RESPONSE_TIMEOUT_MS);
+      const stalledAfter = failureForTransportError(await caught);
+      expect(stalledAfter.code).toBe("outcome_unknown");
+      expect(stalledAfter.retryable).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("STILL reports a pre-delivery network failure as retryable", async () => {
+    /*
+      The fixture mutation for the three above: the only difference is that
+      `upload`'s load event never fires, so nothing was delivered. A blanket
+      "we never know" would pass those tests and strip the retry from every
+      genuine mid-stream failure, which is most of them.
+    */
+    const xhr = new FakeXhr();
+    const promise = send(xhr);
+    xhr.emit("error");
+
+    const failure = failureForTransportError(
+      await promise.catch((error: unknown) => error),
+    );
+    expect(failure.code).toBe("network_error");
+    expect(failure.retryable).toBe(true);
+  });
+
+  it("gives the server its own request-timeout's worth of quiet", async () => {
+    // Round 3 finding 2: 120s was the only bound on the server's post-body
+    // work — buffering, the watermark queue, two PutObjects for a 200 MB
+    // video, the DB write — so a healthy upload got aborted and duplicated.
+    // Anchored to Node's own 300s requestTimeout instead.
+    expect(RESPONSE_TIMEOUT_MS).toBe(300_000);
+    expect(RESPONSE_TIMEOUT_MS).toBeGreaterThan(UPLOAD_STALL_TIMEOUT_MS);
+  });
+});
+
 describe("a cancelled upload is reported as cancelled, not as an error", () => {
   it("turns the abort into the cancelled failure", async () => {
     let state: QueueItem[] = [

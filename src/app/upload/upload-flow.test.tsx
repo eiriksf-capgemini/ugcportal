@@ -533,6 +533,155 @@ describe("a file the server would refuse is never sent (K2)", () => {
   });
 });
 
+describe("a stored upload with no thumbnail says why, correctly (round 3, 3)", () => {
+  it("blames video stills only when the row is actually a video", async () => {
+    const run = startUpload([imageFile()]);
+    run.xhr.respond(201, { ...CREATED_BODY, kind: "VIDEO", previewId: null });
+    await run.settled;
+
+    const markup = render(run.state());
+    expect(markup).toContain("watermarked video stills are not generated");
+  });
+
+  it("does NOT blame video stills when the 201 body could not be read", async () => {
+    /*
+      The bug. The note fired on `previewSrc === null`, which is also true
+      when toQueueMedia refuses an unreadable 201 body — so an IMAGE upload
+      was given a confident, video-specific explanation for something else
+      entirely. The kind of wrong answer nobody debugs, because it sounds
+      deliberate.
+    */
+    const run = startUpload([imageFile()]);
+    run.xhr.respondWithRawBody(201, "{truncated");
+    await run.settled;
+
+    expect(run.state()[0].status).toBe("succeeded");
+    expect(run.state()[0].media).toBe(null);
+
+    const markup = render(run.state());
+    expect(markup).not.toContain("video");
+    // No apostrophe in the needle: React escapes it to &#x27; in the markup,
+    // so matching the prose as written compares the wrong two strings.
+    expect(markup).toContain("reply could not be read");
+    // Still says it was stored, because the 201 said so.
+    expect(markup).toContain("Stored");
+  });
+
+  it("does not blame video stills for an image with no preview either", async () => {
+    // Should not happen — the route watermarks every image or 422s — but if
+    // it does, the sentence must not invent a reason.
+    const run = startUpload([imageFile()]);
+    run.xhr.respond(201, { ...CREATED_BODY, kind: "IMAGE", previewId: null });
+    await run.settled;
+
+    const markup = render(run.state());
+    expect(markup).not.toContain("video");
+    expect(markup).toContain("no thumbnail was returned for this image");
+  });
+
+  it("STILL describes the preview when there is one", async () => {
+    // The fixture mutation: only previewId changes, and the ordinary sentence
+    // must come back. A rewrite that always hedged would pass the three above.
+    const run = startUpload([imageFile()]);
+    run.xhr.respond(201, CREATED_BODY);
+    await run.settled;
+
+    const markup = render(run.state());
+    expect(markup).toContain("the watermarked preview");
+    expect(markup).not.toContain("could not be read");
+  });
+});
+
+describe("the 503's Retry-After actually throttles the retry (round 3, 4)", () => {
+  /**
+   * The Try again button's own attributes.
+   *
+   * NOT `markup.toContain("disabled")`. Every Button in this design system
+   * ships `disabled:pointer-events-none disabled:opacity-50` in its class
+   * list, so that needle is present whatever the button's state — an
+   * assertion that passes in both directions and proves nothing. This reads
+   * the attributes of the one element in question.
+   */
+  function tryAgainAttributes(markup: string): string {
+    const match = /<button([^>]*)>Try again[^<]*<\/button>/.exec(markup);
+    if (match === null) throw new Error("no Try again button in the markup");
+    return match[1];
+  }
+
+  function isDisabled(markup: string): boolean {
+    return /\sdisabled(=|\s|$)/.test(tryAgainAttributes(markup));
+  }
+
+  async function shedRow(retryAfter: string) {
+    const run = startUpload([imageFile()]);
+    run.xhr.respond(
+      503,
+      { error: "Too many uploads are being processed right now" },
+      { "Retry-After": retryAfter },
+    );
+    await run.settled;
+    return run.state();
+  }
+
+  it("disables Try again for as long as the server asked", async () => {
+    /*
+      The page parsed, clamped and PRINTED the number, then enabled the button
+      immediately — telling the user about a shed window and handing them the
+      control that walks straight back into it. The header exists to spread
+      load out; nothing was spreading anything.
+    */
+    const state = await shedRow("12");
+    const failure = state[0].failure;
+    expect(failure?.code).toBe("busy");
+    expect(failure?.retryAfterSeconds).toBe(12);
+
+    // Rendered the instant the response arrived.
+    const markup = renderToStaticMarkup(
+      <UploadQueueList
+        items={state}
+        now={Date.now()}
+        onRetry={() => {}}
+        onCancel={() => {}}
+        onDismiss={() => {}}
+      />,
+    );
+    expect(isDisabled(markup)).toBe(true);
+    expect(markup).toMatch(/Try again in 1[12]s/);
+  });
+
+  it("re-enables it once the window has passed", async () => {
+    // The fixture mutation: the same row, rendered at a later moment. A
+    // button disabled for good would pass the test above and break the retry.
+    const state = await shedRow("12");
+    const past = (state[0].failure?.retryNotBefore ?? 0) + 1;
+
+    const markup = renderToStaticMarkup(
+      <UploadQueueList
+        items={state}
+        now={past}
+        onRetry={() => {}}
+        onCancel={() => {}}
+        onDismiss={() => {}}
+      />,
+    );
+    expect(isDisabled(markup)).toBe(false);
+    expect(markup).toContain(">Try again<");
+  });
+
+  it("does not throttle a retryable failure the server set no window on", async () => {
+    // A stall or a network failure has no Retry-After, so there is nothing to
+    // wait for and the button must be live at once.
+    const run = startUpload([imageFile()]);
+    run.xhr.failToConnect();
+    await run.settled;
+
+    expect(run.state()[0].failure?.retryNotBefore).toBe(null);
+    const markup = render(run.state());
+    expect(markup).toContain(">Try again<");
+    expect(isDisabled(markup)).toBe(false);
+  });
+});
+
 describe("a queued file can be taken back out before it is sent", () => {
   it("offers Cancel on a row that is only waiting, not just one in flight", () => {
     /*

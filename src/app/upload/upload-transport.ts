@@ -47,7 +47,7 @@ export type UploadProgress = { loadedBytes: number; totalBytes: number | null };
  * cut off mid-stream, the route's multipart read fails, and nothing is
  * stored. That case keeps its confident message and its retry.
  *
- * Making the route honour the abort is ugcportal-ax3, not this bead. What is
+ * Making the route honour the abort is ugcportal-2u9, not this bead. What is
  * fixed here is the client asserting an outcome it is in no position to know.
  */
 export type BodyDelivery = "partial" | "fully-sent";
@@ -294,7 +294,7 @@ export function uploadFile(
       expected. Two things change: the watchdog hands over to the larger
       budget, and every subsequent failure becomes one whose outcome only the
       server knows, because POST /api/media does not stop work when the
-      browser gives up (ugcportal-ax3).
+      browser gives up (ugcportal-2u9).
     */
     xhr.upload.addEventListener("load", () => {
       bodyDelivery = "fully-sent";

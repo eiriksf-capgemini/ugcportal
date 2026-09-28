@@ -35,7 +35,7 @@ export type Dispatch = (action: QueueAction) => void;
  * TWO axes — what interrupted it, and whether the file had already been sent.
  *
  * The second axis is the one that decides what may be claimed at all. POST
- * /api/media does not read `request.signal` (ugcportal-ax3), so once the body
+ * /api/media does not read `request.signal` (ugcportal-2u9), so once the body
  * is delivered the handler watermarks, stores both objects and inserts the
  * Media row no matter what the browser does. Past that point the client knows
  * the file was sent and that no answer came back, and does NOT know whether it

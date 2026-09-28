@@ -589,7 +589,7 @@ const UNKNOWN_OUTCOME_CAUSES: Record<UnknownOutcomeCause, string> = {
 /**
  * THE HONEST ANSWER WHEN THE CLIENT CANNOT KNOW.
  *
- * `POST /api/media` does not read `request.signal` (ugcportal-ax3). Once the
+ * `POST /api/media` does not read `request.signal` (ugcportal-2u9). Once the
  * last byte is delivered, the handler runs to completion whatever the browser
  * does: it watermarks, writes both objects to storage and inserts the Media
  * row. So for anything that goes wrong from that moment on, the client has
@@ -609,7 +609,7 @@ const UNKNOWN_OUTCOME_CAUSES: Record<UnknownOutcomeCause, string> = {
  * this client cannot offer it without risking a silent duplicate. The row
  * tells the user where to look instead. That is a worse experience than a
  * working retry and a better one than either lie; a real retry needs the
- * route to accept an idempotency key, which is ugcportal-ax3's business.
+ * route to accept an idempotency key, which is ugcportal-2u9's business.
  */
 export function unknownOutcomeFailure(
   cause: UnknownOutcomeCause,
