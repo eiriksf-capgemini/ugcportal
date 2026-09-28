@@ -1,0 +1,356 @@
+"use client";
+
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useReducer,
+  useRef,
+  useState,
+} from "react";
+
+import { ACCEPTED_MIME_TYPES } from "@/lib/media-rules";
+
+import {
+  acceptedTypesSummary,
+  cancelledFailure,
+  mayRetry,
+  secondsUntilRetry,
+} from "./outcomes";
+import { UploadQueueList } from "./upload-queue-list";
+import {
+  queueSummary,
+  releasedFileId,
+  settledChange,
+  uploadQueueReducer,
+  type QueueAction,
+  type QueueItem,
+} from "./upload-queue";
+import { drainQueue, enqueueFiles, type QueueEntry } from "./upload-runner";
+
+/**
+ * The upload surface (ugcportal-n3c) — and the app's first client component.
+ *
+ * It deliberately holds almost no logic. Which files are refused before
+ * sending, what each HTTP status means, how a response becomes a success row,
+ * and how the queue is worked all live in the four sibling modules, because
+ * the repo's vitest runs in a node environment with no DOM: anything that can
+ * only be reached through a React event handler is, in practice, untested
+ * here. What is left in this file is state wiring and drag-and-drop plumbing.
+ */
+
+/**
+ * Local, per-page ids for queue rows. Not `crypto.randomUUID()`, which is
+ * unavailable on an insecure origin (a LAN dev host over plain http is the
+ * ordinary case), and a counter is sufficient: these ids never leave the tab
+ * and never reach the server.
+ */
+let queueSequence = 0;
+function nextQueueId(): string {
+  queueSequence += 1;
+  return `queued-${queueSequence}`;
+}
+
+const ACCEPT_ATTRIBUTE = ACCEPTED_MIME_TYPES.join(",");
+
+export function UploadForm() {
+  const inputId = useId();
+  const [items, dispatch] = useReducer(uploadQueueReducer, [] as QueueItem[]);
+  const [isDraggingOver, setDraggingOver] = useState(false);
+
+  /**
+   * The authoritative work queue, OUTSIDE React state on purpose.
+   *
+   * Picking the next file out of the rendered `items` races the re-render the
+   * previous file's dispatches caused: `started` has not landed yet, the row
+   * still reads "pending", and the same file is uploaded twice. A ref is read
+   * at the instant it is asked, which is what the loop needs.
+   */
+  const queueRef = useRef<QueueEntry[]>([]);
+  /** The File objects, which are not serialisable into reducer state. */
+  const filesRef = useRef(new Map<string, File>());
+  const drainingRef = useRef(false);
+  const inFlightRef = useRef<{ id: string; controller: AbortController } | null>(
+    null,
+  );
+
+  /**
+   * Which rows have reached an outcome, tracked from the ACTIONS rather than
+   * from the rendered list.
+   *
+   * An event handler closes over the `items` array of the render that drew its
+   * button. A guard written as `items.find(...)` inside a handler therefore
+   * re-reads the very snapshot the stale button came from, and in the one race
+   * it exists to catch — a file's `succeeded` dispatched, React not yet
+   * committed, that file's old Cancel clicked — it agrees with the stale
+   * button and waves it through. It looks like a second lock and is a copy of
+   * the first one's key.
+   *
+   * This set is written synchronously as each action is dispatched, so it is
+   * current regardless of what React has committed.
+   */
+  const settledRef = useRef(new Set<string>());
+
+  /**
+   * The single door every dispatch goes through, so the two things that have
+   * to track the action stream actually see all of it.
+   *
+   * Besides the settled set, it releases the row's File once nothing can ask
+   * for it again. `filesRef` used to be pruned only by `dismiss`, so every
+   * succeeded row and every non-retryable failure kept its File — and its
+   * backing blob, up to 200 MB for a video — alive for the tab's lifetime with
+   * no reader left.
+   */
+  const dispatchQueue = useCallback((action: QueueAction) => {
+    const { settled, unsettled } = settledChange(action);
+    for (const id of settled) settledRef.current.add(id);
+    for (const id of unsettled) settledRef.current.delete(id);
+
+    const released = releasedFileId(action);
+    if (released !== null) filesRef.current.delete(released);
+
+    dispatch(action);
+  }, []);
+
+  const drain = useCallback(() => {
+    if (drainingRef.current) return;
+    drainingRef.current = true;
+    void drainQueue(() => {
+      const entry = queueRef.current.shift();
+      if (entry === undefined) {
+        inFlightRef.current = null;
+        return undefined;
+      }
+      const controller = new AbortController();
+      inFlightRef.current = { id: entry.id, controller };
+      return { ...entry, signal: controller.signal };
+    }, dispatchQueue).finally(() => {
+      drainingRef.current = false;
+      inFlightRef.current = null;
+    });
+  }, [dispatchQueue]);
+
+  const addFiles = useCallback(
+    (fileList: FileList | null) => {
+      const files = fileList === null ? [] : Array.from(fileList);
+      if (files.length === 0) return;
+
+      // `entries` omits anything the pre-check already refused, so no request
+      // is ever made for those files (K2). See enqueueFiles.
+      const { items: queued, entries } = enqueueFiles(files, nextQueueId);
+      dispatchQueue({ type: "queued", items: queued });
+
+      for (const entry of entries) {
+        filesRef.current.set(entry.id, entry.file);
+        queueRef.current.push(entry);
+      }
+
+      drain();
+    },
+    [drain, dispatchQueue],
+  );
+
+  const removeFromQueue = useCallback((id: string) => {
+    queueRef.current = queueRef.current.filter((entry) => entry.id !== id);
+  }, []);
+
+  const cancel = useCallback(
+    (id: string) => {
+      /*
+        Read from the settled SET, not from `items`. A Cancel button painted
+        in a previous commit — the drain loop settles one file and moves to
+        the next before React commits either — calls this with the id of a row
+        that has since finished. `items` here is that same stale render's
+        array, so it would report the row as still uploading and agree with
+        the button; the set was written when `succeeded` was dispatched and
+        says otherwise.
+
+        Without this, the call falls through the in-flight check below to
+        `failed`, and an upload the server has already stored is relabelled
+        "You cancelled this upload, so nothing was kept". The reducer refuses
+        that too, and would have caught it — but a guard here that cannot
+        disagree with the thing it is guarding is not a second lock, and
+        leaving it looking like one invites someone to remove the first.
+      */
+      if (settledRef.current.has(id)) return;
+
+      if (inFlightRef.current?.id === id) {
+        // The transport rejects with UploadAbortedError, which uploadItem
+        // turns into the cancelled failure — one path, not two.
+        inFlightRef.current.controller.abort();
+        return;
+      }
+      // Still waiting its turn: take it out of the queue before it is ever
+      // sent. This branch is what the Cancel control on a pending row
+      // reaches.
+      removeFromQueue(id);
+      dispatchQueue({ type: "failed", id, failure: cancelledFailure() });
+    },
+    [dispatchQueue, removeFromQueue],
+  );
+
+  const retry = useCallback(
+    (id: string) => {
+      const file = filesRef.current.get(id);
+      if (file === undefined) return;
+      /*
+        Must be settled to be retried, read from the set rather than from
+        `items` for the same reason cancel() does — and `retried` removes the
+        id from the set, so a second click on the same button finds it absent
+        and stops here rather than queueing the file twice.
+      */
+      if (!settledRef.current.has(id)) return;
+
+      /*
+        The retryable flag still comes from `items`, because it is the
+        reducer's own record of WHY the row failed and there is nowhere
+        fresher to read it: a row that is failed-and-retryable cannot become
+        failed-and-not while the user is clicking. The reducer applies the
+        same condition to "retried"; this stops the file being pushed onto the
+        work queue for a refusal that would only be repeated.
+      */
+      const item = items.find((each) => each.id === id);
+      if (item?.status !== "failed" || item.failure === null) return;
+      /*
+        `mayRetry`, not `retryable` alone — the same predicate the button's
+        disabled state uses, so the control and the handler cannot disagree
+        about whether the server's Retry-After window has passed. Read against
+        Date.now() rather than the ticking `now` below, because this runs on a
+        click and should judge the moment of the click.
+      */
+      if (!mayRetry(item.failure, Date.now())) return;
+
+      dispatchQueue({ type: "retried", id });
+      queueRef.current.push({ id, file });
+      drain();
+    },
+    [dispatchQueue, drain, items],
+  );
+
+  const dismiss = useCallback(
+    (id: string) => {
+      if (inFlightRef.current?.id === id) {
+        inFlightRef.current.controller.abort();
+      }
+      removeFromQueue(id);
+      filesRef.current.delete(id);
+      dispatchQueue({ type: "dismissed", id });
+    },
+    [dispatchQueue, removeFromQueue],
+  );
+
+  /*
+    A depth counter, not a boolean. `dragenter`/`dragleave` fire for every
+    descendant the pointer crosses, so a plain `setDraggingOver(false)` on
+    leave un-highlights the zone the moment the cursor passes over the label
+    inside it.
+  */
+  const dragDepth = useRef(0);
+
+  const summary = queueSummary(items);
+
+  /**
+   * A clock, ticking only while some row is inside a Retry-After window.
+   *
+   * The countdown on a throttled "Try again" has to stay true as it runs, and
+   * nothing else on this page re-renders while the user waits. The interval
+   * exists only for as long as there is something to count down, so an idle
+   * page does no work.
+   *
+   * Initialised from a function so the first value is read at mount rather
+   * than at module scope, and never rendered when the queue is empty — which
+   * it always is on the server — so there is nothing here to mismatch during
+   * hydration.
+   */
+  const [now, setNow] = useState(() => Date.now());
+  const throttled = items.some(
+    (item) =>
+      item.failure !== null && secondsUntilRetry(item.failure, now) > 0,
+  );
+
+  useEffect(() => {
+    if (!throttled) return;
+    // Twice a second, so the displayed number is never more than half a
+    // second stale.
+    const ticker = setInterval(() => setNow(Date.now()), 500);
+    return () => clearInterval(ticker);
+  }, [throttled]);
+
+  return (
+    <div>
+      <div
+        onDragEnter={(event) => {
+          event.preventDefault();
+          dragDepth.current += 1;
+          setDraggingOver(true);
+        }}
+        onDragOver={(event) => {
+          // Required: without preventDefault on dragover the browser refuses
+          // the drop and navigates to the file instead.
+          event.preventDefault();
+        }}
+        onDragLeave={() => {
+          dragDepth.current = Math.max(dragDepth.current - 1, 0);
+          if (dragDepth.current === 0) setDraggingOver(false);
+        }}
+        onDrop={(event) => {
+          event.preventDefault();
+          dragDepth.current = 0;
+          setDraggingOver(false);
+          addFiles(event.dataTransfer.files);
+        }}
+        className={[
+          "flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed px-6 py-14 text-center transition-colors",
+          // has-[:focus-visible], because the real control is a visually
+          // hidden <input type="file">: keeping it in the DOM is what keeps
+          // the keyboard and the file picker working, and this is how its
+          // focus becomes visible on the thing the eye is actually on.
+          "has-[:focus-visible]:border-ring has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-ring",
+          isDraggingOver
+            ? "border-ring bg-surface-2"
+            : "border-line-strong bg-surface-1",
+        ].join(" ")}
+      >
+        <input
+          id={inputId}
+          type="file"
+          multiple
+          accept={ACCEPT_ATTRIBUTE}
+          className="sr-only"
+          onChange={(event) => {
+            addFiles(event.target.files);
+            // Reset, or picking the same file twice in a row fires no change
+            // event the second time.
+            event.target.value = "";
+          }}
+        />
+        <label
+          htmlFor={inputId}
+          className="cursor-pointer rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary-hover"
+        >
+          Choose files
+        </label>
+        <p className="text-sm text-ink-muted">or drag them here</p>
+        <p className="max-w-prose text-xs text-ink-muted">
+          {acceptedTypesSummary("IMAGE")}. {acceptedTypesSummary("VIDEO")}.
+        </p>
+      </div>
+
+      {/*
+        The overall state, announced. Counted from the rows rather than kept
+        beside them, so it cannot disagree with what is on screen.
+      */}
+      <p role="status" aria-live="polite" className="mt-4 text-sm text-ink-muted">
+        {summary.message}
+      </p>
+
+      <UploadQueueList
+        items={items}
+        now={now}
+        onRetry={retry}
+        onCancel={cancel}
+        onDismiss={dismiss}
+      />
+    </div>
+  );
+}

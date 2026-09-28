@@ -1,46 +1,29 @@
 import { randomUUID } from "node:crypto";
 
 import type { MediaKind } from "@/generated/prisma/enums";
-
-const MIME_TO_KIND: Record<string, MediaKind> = {
-  "image/jpeg": "IMAGE",
-  "image/png": "IMAGE",
-  "image/webp": "IMAGE",
-  "image/gif": "IMAGE",
-  "video/mp4": "VIDEO",
-  "video/webm": "VIDEO",
-  "video/quicktime": "VIDEO",
-};
+import { MAX_SIZE_BYTES, validateUpload } from "@/lib/media-rules";
 
 /**
- * The declared MIME type's kind, or undefined — and never something off
- * Object.prototype.
+ * The accepted types, the per-kind caps and the check that applies them now
+ * live in src/lib/media-rules.ts, and are re-exported here.
  *
- * A plain `MIME_TO_KIND[type]` is a lookup against the wrong set: the media
- * type is fully client-controlled (it is a header on a multipart part, and
- * `new File([], "x", { type: "constructor" }).type` is the string
- * "constructor"), so `MIME_TO_KIND["constructor"]` answers with the Object
- * constructor rather than with undefined, and `!kind` is false for it. What
- * follows then compares against a value that is not a MediaKind at all:
- * `MAX_SIZE_BYTES[kind]` is undefined and `file.size > undefined` is false,
- * so an upload declaring one of a handful of Object.prototype names passed
- * the per-kind size check entirely. It was caught one step later by
- * sniffKind, which reads the actual bytes and cannot return anything but a
- * MediaKind or null — so this was latent rather than exploitable — but the
- * size check was not doing its job, and declaredUploadCapBytes below now
- * needs the same table to answer a question sniffKind is in no position to
- * back up: how many bytes to let through before the file exists at all.
+ * They moved for one reason: ugcportal-n3c's upload page runs the same rules
+ * in the browser, and this module imports `node:crypto`, which a client
+ * bundle cannot resolve. Splitting the rules into a dependency-free module is
+ * what lets the client run the server's own `validateUpload` instead of a
+ * copy of its numbers — see the header of that file.
+ *
+ * The re-export is not a courtesy to existing importers, though it is that
+ * too: `@/lib/media` remains the address of "everything about media", so the
+ * split is invisible to every server-side caller and nothing had to change.
  */
-function kindForDeclaredType(mimeType: string): MediaKind | undefined {
-  return Object.hasOwn(MIME_TO_KIND, mimeType)
-    ? MIME_TO_KIND[mimeType]
-    : undefined;
-}
-
-const MAX_SIZE_BYTES: Record<MediaKind, number> = {
-  IMAGE: 10 * 1024 * 1024, // 10 MB
-  VIDEO: 200 * 1024 * 1024, // 200 MB
-};
+export {
+  ACCEPTED_MIME_TYPES,
+  MAX_SIZE_BYTES,
+  kindForDeclaredType,
+  validateUpload,
+} from "@/lib/media-rules";
+export type { UploadValidationResult } from "@/lib/media-rules";
 
 // Upper bound for the whole multipart request, used to reject oversized
 // uploads from the Content-Length header before buffering the body.
@@ -136,38 +119,6 @@ const MAGIC_CHECKS: Array<{ kind: MediaKind; matches: (buf: Buffer) => boolean }
 
 export function sniffKind(buffer: Buffer): MediaKind | null {
   return MAGIC_CHECKS.find((check) => check.matches(buffer))?.kind ?? null;
-}
-
-export type UploadValidationResult =
-  | { ok: true; kind: MediaKind }
-  | { ok: false; status: number; message: string };
-
-export function validateUpload(file: {
-  type: string;
-  size: number;
-}): UploadValidationResult {
-  const kind = kindForDeclaredType(file.type);
-  if (!kind) {
-    return {
-      ok: false,
-      status: 415,
-      message: `Unsupported file type: ${file.type || "unknown"}`,
-    };
-  }
-
-  if (file.size <= 0) {
-    return { ok: false, status: 400, message: "Empty file" };
-  }
-
-  if (file.size > MAX_SIZE_BYTES[kind]) {
-    return {
-      ok: false,
-      status: 413,
-      message: `File exceeds maximum size of ${MAX_SIZE_BYTES[kind]} bytes for ${kind.toLowerCase()} uploads`,
-    };
-  }
-
-  return { ok: true, kind };
 }
 
 // --- originalName: one implementation, two call sites -----------------------
