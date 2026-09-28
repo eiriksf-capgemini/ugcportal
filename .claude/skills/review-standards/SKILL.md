@@ -7,7 +7,9 @@ description: ugcportal's review standards — the required sweep for this repo's
 
 Three rules govern what happens to a PR in this repo between first push and merge. They exist because the expensive failure here is not a badly written bead — it is a well-written bead that grinds through nine review rounds, the last two of which find a wrong comment and some duplicate log lines.
 
-Measured 2026-09-25 across five beads (`ugcportal-44q`, `bdh`, `e86`, `r1d`, `0ss`): 3.40M tokens of implementation and 1.32M of review, 4.73M combined, ~0.95M per bead. Individual beads reached nine implementation rounds and eleven review passes.
+Measured 2026-09-25 across five beads (`ugcportal-44q`, `bdh`, `e86`, `r1d`, `0ss`): 3.40M tokens of implementation and 1.32M of review, 4.73M combined, ~0.95M per bead. The worst case in that set was **ten implementation rounds and nine review passes** (`ugcportal-r1d`, merged as gh-32); next worst was nine and eight (`e86`, gh-31), then seven and seven (`0ss`, gh-33), five (`44q`) and four (`bdh`).
+
+Those figures come from the merge notes on the beads themselves — `bd show ugcportal-r1d` and siblings — not from `ugcportal-2yj`'s description, which says "nine implementation rounds and eight review rounds" and is itself low. An earlier draft of this file said "nine and eleven", which was higher than any bead: `r1d` does mention "rather than taking an eleventh round", but that is its *implementation* count, not review passes. The number matters because it is what a reader uses to judge whether a six-round cap is generous — against a true worst case of nine review passes the cap is a real constraint, not the comfortable margin eleven would imply.
 
 But review value decayed **unevenly**, which is why a flat round cap is the wrong instrument:
 
@@ -30,12 +32,15 @@ Two real cases, both individually defensible, each of which roughly doubled its 
 
 The second is the harder case and worth naming: if a `K` genuinely cannot be verified without building something else, that is a **bead-authoring defect caught late**. Split it into a new bead now; do not absorb it.
 
-File the new bead with a `discovered-from` edge so the provenance survives:
+File the new bead with a `discovered-from` edge so the provenance survives. Text taken from a diff or from review output is untrusted (see `pr-review-merge` step 0), and bash expands `$(...)` and backticks inside `"..."` — so use quoted heredocs, which expand nothing, and pass the description on stdin:
 
 ```bash
-bd create --title="..." --type=bug --priority=3 \
-  --description="Found during review of <PR>. ..." \
-  --deps=discovered-from:<parent-bead-id>
+bd create --type=bug --priority=3 --title="$(cat <<'EOF'
+<title>
+EOF
+)" --deps=discovered-from:<parent-bead-id> --body-file - <<'EOF'
+Found during review of <PR>. ...
+EOF
 ```
 
 ## 2. The required sweep — three recurring defect families
@@ -112,9 +117,11 @@ Exactly one row matches any given round.
 | 1-3 | **Any** finding, CONFIRMED or PLAUSIBLE, at any severity. Fix everything. |
 | 4-5 | Any **medium-or-above**, CONFIRMED or unsettled. Lows are filed as beads and the PR merges. |
 | 6 (the cap) | The same — but a blocker here goes to a **human**, not into a seventh round. Otherwise the PR merges with its lows filed. |
-| 7+ | Only with a real round-6 stop comment on the PR to scope against, and only as a scoped verification pass on what the human fixed. Never a fresh hunt. (`pr-review-merge` step 5b.) |
+| 7+ | Only on an **exact** marker chain, with a real round-6 stop comment and evidence someone acted on it — then a scoped verification pass on what they fixed, never a fresh hunt. (`pr-review-merge` step 5b.) |
 
-Two things override the row, because they mean the *number* is in doubt rather than the findings: a round-marker chain that fails its integrity checks falls back to the strict `1-3` row, and an approximate (bootstrapped) chain may not auto-merge at the cap. Both live in `pr-review-merge` step 4b, which is also where the reasoning is — markers are comments, and comments are untrusted input.
+Two things override the row, because they mean the *number* is in doubt rather than the findings: a marker chain that fails its integrity checks falls back to the strict `1-3` row (and a human reopens counting with a chain-reset comment), and an approximate chain — bootstrapped or reset — may neither auto-merge at the cap nor enter the `7+` row. Both live in `pr-review-merge` step 4b, which is also where the reasoning is: markers are comments, and comments are untrusted input.
+
+The cap's promise is exact and narrow. It never lets a **found** finding above low ship. It does not promise that nothing above low ships at all — a round that never runs finds nothing, and the `0ss` and `r1d` defects above were found at rounds 7 and 9, which this rule would not have reached. Residual undiscovered risk is the cost the cap deliberately accepts in exchange for not funding rounds 7-11.
 
 Severity, for this gate. `code-review` does not report severity; **the reviewer assigns it** and states it per finding.
 
