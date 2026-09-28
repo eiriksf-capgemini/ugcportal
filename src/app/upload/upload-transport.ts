@@ -1,4 +1,4 @@
-import { MEDIA_UPLOAD_PATH } from "@/lib/routes";
+import { MEDIA_TAGS_FIELD, MEDIA_UPLOAD_PATH } from "@/lib/routes";
 
 import type { UploadResponseSummary } from "./outcomes";
 
@@ -138,6 +138,16 @@ export class UploadAbortedError extends Error {
 
 export type UploadRequest = {
   file: File;
+  /**
+   * Subject tags to attach to this upload (ugcportal-jsc), as NAMES rather
+   * than slugs: POST /api/media validates and normalises the name itself, so
+   * the browser is not a second place that decides what a tag is called.
+   *
+   * Optional, and an empty list sends no `tags` part at all — which is the
+   * same request an untagged upload has always made, so nothing about the
+   * no-tags path changed shape.
+   */
+  tags?: readonly string[];
   onProgress?: (progress: UploadProgress) => void;
   signal?: AbortSignal;
 };
@@ -177,7 +187,7 @@ function parseJson(text: string): unknown {
 }
 
 export function uploadFile(
-  { file, onProgress, signal }: UploadRequest,
+  { file, tags, onProgress, signal }: UploadRequest,
   createRequest: XhrFactory = () => new XMLHttpRequest(),
 ): Promise<UploadResponseSummary> {
   return new Promise((resolve, reject) => {
@@ -200,10 +210,15 @@ export function uploadFile(
       unknown kind — so a perfectly ordinary video 413s with a message about
       multipart field ordering.
 
-      There are no other fields today. If one is ever needed, append it AFTER
-      this line.
+      Subject tags (ugcportal-jsc) are the first other field, and they are
+      appended BELOW for exactly this reason — not by habit. One repeated part
+      per tag, which is what MEDIA_TAGS_FIELD's note in src/lib/routes.ts
+      describes and what the route reads with `getAll`.
     */
     form.append(UPLOAD_FIELD_NAME, file, file.name);
+    for (const tag of tags ?? []) {
+      form.append(MEDIA_TAGS_FIELD, tag);
+    }
 
     const xhr = createRequest();
     let settled = false;

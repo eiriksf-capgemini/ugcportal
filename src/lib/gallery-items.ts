@@ -1,3 +1,4 @@
+import { hasUnsafeText } from "@/lib/media-rules";
 import { mediaPreviewPath } from "@/lib/routes";
 
 /**
@@ -27,12 +28,27 @@ import { mediaPreviewPath } from "@/lib/routes";
  * for that reason. See `galleryItemLabel` for what is used instead and why it
  * is a placeholder.
  */
+/** One subject label on an item (ugcportal-jsc). */
+export type GalleryTag = {
+  /** Identity, and the React key. Never put in a URL — there is no tag route. */
+  slug: string;
+  /** What the chip says. */
+  name: string;
+};
+
 export type GalleryItem = {
   id: string;
   /** Delivery URL for the watermarked preview, built from `previewId` alone. */
   previewSrc: string;
   /** ISO-8601, or null when the feed sent something that was not a date. */
   publishedAt: string | null;
+  /**
+   * The item's subject tags, in the order the feed sent them (by slug — see
+   * MEDIA_TAGS_SELECT). EMPTY IS ORDINARY, not an error state: most of the
+   * library predates tagging and an untagged item renders as a tile with no
+   * chips under it rather than as a gap or an empty label.
+   */
+  tags: GalleryTag[];
 };
 
 /**
@@ -46,7 +62,55 @@ export type PublicMediaRowish = {
   id?: unknown;
   previewId?: unknown;
   publishedAt?: unknown;
+  tags?: unknown;
 };
+
+/**
+ * The tags on one row, filtered down to the ones that can safely be drawn.
+ *
+ * TWO JOBS, and only one of them is about malformed JSON.
+ *
+ * The first is the ordinary one this module already does for every field:
+ * a parsed HTTP body is not a Prisma row, so `slug` and `name` are checked
+ * for being non-empty strings rather than destructured and trusted.
+ *
+ * The second is the one worth reading twice. A tag name is user-supplied text
+ * that is rendered next to other text, and the character class that makes
+ * that dangerous is not markup — React escapes markup, and a name containing
+ * `<b>` draws as the four characters `<b>`. It is the BIDI OVERRIDES. A
+ * U+202E inside a tag name reverses the reading order of everything after it,
+ * so one chip can make the chips beside it, the paging message and the
+ * heading read as something their authors did not write, and no amount of
+ * HTML escaping touches it.
+ *
+ * `hasUnsafeText` is the denylist src/lib/tags.ts refuses those names with at
+ * the WRITE path, which is where the real fix lives. This is the second half
+ * of the same rule applied at the READ path, and it is not redundant: the
+ * write path has only ever governed rows written since it existed, a tag row
+ * is reachable by any account permitted to sign in (ugcportal-egp), and this
+ * function is the single boundary every rendered row crosses. One denylist,
+ * checked at both ends.
+ *
+ * Dropping is the right answer rather than stripping. A name with the
+ * override removed is a DIFFERENT name that nobody chose, and showing it
+ * asserts that the uploader labelled the photograph something they did not.
+ */
+function toGalleryTags(value: unknown): GalleryTag[] {
+  if (!Array.isArray(value)) return [];
+  const tags: GalleryTag[] = [];
+  const seen = new Set<string>();
+  for (const entry of value) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const { slug, name } = entry as { slug?: unknown; name?: unknown };
+    if (typeof slug !== "string" || slug === "") continue;
+    if (typeof name !== "string" || name.trim() === "") continue;
+    if (hasUnsafeText(name) || hasUnsafeText(slug)) continue;
+    if (seen.has(slug)) continue;
+    seen.add(slug);
+    tags.push({ slug, name });
+  }
+  return tags;
+}
 
 function asIsoString(value: unknown): string | null {
   if (value instanceof Date) {
@@ -85,6 +149,11 @@ export function toGalleryItem(row: PublicMediaRowish): GalleryItem | null {
     id,
     previewSrc: mediaPreviewPath(previewId),
     publishedAt: asIsoString(row.publishedAt),
+    // Absent tags are an empty list, never a missing field: a row from before
+    // tagging existed and a row somebody untagged are the same thing to draw,
+    // and a `tags` that can be `undefined` is a `.map` waiting to throw in a
+    // component that has no reason to check.
+    tags: toGalleryTags(row.tags),
   };
 }
 

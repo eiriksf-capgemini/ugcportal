@@ -5,6 +5,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   GALLERY_GRID_CLASS,
+  GALLERY_TAG_CLASS,
+  GALLERY_TAG_LIST_CLASS,
   GALLERY_TILE_CLASS,
   GALLERY_TILE_IMAGE_CLASS,
 } from "@/components/gallery/containment";
@@ -381,6 +383,7 @@ export function Gallery({
                 onLoad={(event) => remember(item.previewSrc, event.currentTarget)}
               />
             </button>
+            <GalleryItemTags item={item} />
           </li>
         ))}
       </ul>
@@ -395,6 +398,41 @@ export function Gallery({
         }}
       />
     </div>
+  );
+}
+
+/**
+ * The subject tags under one tile (ugcportal-jsc).
+ *
+ * RENDERS NOTHING AT ALL when there are none — not an empty `<ul>`, not a
+ * spacer, not a dash. An untagged item is the ordinary case for everything
+ * uploaded before tagging existed, and an empty element still carries this
+ * list's `mt-1.5`, so the untagged tiles in a mixed grid would sit six pixels
+ * higher than their neighbours for no reason a visitor could see. An empty
+ * list is also announced as a list with no items, which is worse than
+ * silence.
+ *
+ * A `<ul>`, because it is a list of labels about the item beside it, and
+ * screen readers announce its length — "list, 2 items" is exactly the useful
+ * thing to hear here.
+ *
+ * `name` goes in as text and nothing else. React escapes it, so a tag called
+ * `<img onerror=…>` renders as those characters rather than as an element;
+ * the characters escaping does NOT neutralise — the bidi overrides — are
+ * refused at the write path (src/lib/tags.ts) and dropped again at the read
+ * path (`toGalleryTags`), so there is nothing left here that needs handling.
+ * Nothing on this path uses `dangerouslySetInnerHTML`, and nothing should.
+ */
+function GalleryItemTags({ item }: { item: GalleryItem }) {
+  if (item.tags.length === 0) return null;
+  return (
+    <ul className={GALLERY_TAG_LIST_CLASS}>
+      {item.tags.map((tag) => (
+        <li key={tag.slug} className={GALLERY_TAG_CLASS} data-gallery-tag={tag.slug}>
+          {tag.name}
+        </li>
+      ))}
+    </ul>
   );
 }
 

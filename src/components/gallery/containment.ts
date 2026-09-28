@@ -91,3 +91,46 @@ export const GALLERY_TILE_CLASS = `group relative block w-full cursor-zoom-in ov
  */
 export const GALLERY_TILE_IMAGE_CLASS =
   "h-full w-full object-cover transition-transform duration-300 ease-out group-hover:scale-[1.04] motion-reduce:transform-none motion-reduce:transition-none";
+
+/**
+ * SUBJECT TAGS (ugcportal-jsc), and the three decisions behind where they sit.
+ *
+ * WHY UNDER THE TILE AND NOT OVER IT. An overlay reads better on a
+ * photography-first page, and it was the first thing tried. It is wrong for
+ * this content: a centre-cropped square already hides the edges of a wide
+ * photograph (see the containment note above), and putting a label on top
+ * covers a second piece of it. A hover-only overlay is worse still — on a
+ * touch screen there is no hover, so the labels would be invisible on the
+ * device most of this grid is looked at on, and "visible on all elements" is
+ * the requirement.
+ *
+ * WHY NOT INSIDE THE <button>. The tile's accessible name comes from its
+ * `aria-label`, and an `aria-label` REPLACES the element's contents for
+ * assistive technology — so tags rendered inside the button would be visible
+ * and simultaneously unreadable to a screen reader. As a sibling they are
+ * ordinary content in the list item, announced once, in the reading order
+ * they appear in.
+ *
+ * WHY NOT A SECTION PER TAG. Because that is the thing ugcportal-jsc was
+ * rescoped to avoid. The grid is one continuous list whatever tags are
+ * present; a tag is a property of an item, not a bucket items are sorted
+ * into. What keeps it that way when somebody later reaches for the obvious
+ * refactor is the K4 block in src/app/page.tags.test.tsx — "has no page whose
+ * path is a tag" walks src/app for page files, and "emits one continuous item
+ * set however many distinct tags are present" asserts the order stays
+ * chronological rather than clustering.
+ *
+ * The chips are quiet on purpose — small, muted, no background fill, no
+ * border. They are a caption, and the photograph is the thing on the page.
+ */
+export const GALLERY_TAG_LIST_CLASS =
+  "mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-0.5";
+
+/**
+ * One chip. Not a link and not a button: clicking a tag does nothing, which
+ * is a decision rather than an omission — see the bead's note on filtering,
+ * and ugcportal-8rm for the follow-up. Styling it as interactive when it is
+ * not would be the worse half of both options.
+ */
+export const GALLERY_TAG_CLASS =
+  "text-[0.6875rem] leading-4 font-medium tracking-wide text-ink-muted uppercase";

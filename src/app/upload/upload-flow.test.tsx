@@ -151,13 +151,13 @@ function render(items: QueueItem[]): string {
  * A harness that runs one file through the queue, letting the caller drive
  * the fake request in between.
  */
-function startUpload(files: File[]) {
+function startUpload(files: File[], tags: readonly string[] = []) {
   let state: QueueItem[] = [];
   const dispatch = (action: Parameters<typeof uploadQueueReducer>[1]) => {
     state = uploadQueueReducer(state, action);
   };
 
-  const { items, entries } = enqueueFiles(files, idSequence());
+  const { items, entries } = enqueueFiles(files, idSequence(), tags);
   dispatch({ type: "queued", items });
 
   const xhr = new FakeXhr();
@@ -245,6 +245,75 @@ describe("a valid image uploads, with progress, and shows its preview (K1)", () 
 
     run.xhr.respond(201, CREATED_BODY);
     await run.settled;
+  });
+
+  it("still puts the file first once tags are attached (ugcportal-jsc)", async () => {
+    /*
+     * The case the comment above warns about, now that there IS another
+     * field. A `tags` part appended BEFORE the file pushes the file part's
+     * Content-Type declaration past PART_HEADER_PEEK_BYTES, the route finds
+     * no declaration, and a perfectly ordinary video is held to the
+     * undeclared-kind floor and 413s with a message about field ordering.
+     * The order is the assertion, not an incidental property of it.
+     */
+    const run = startUpload([imageFile()], ["Food", "Books"]);
+    const keys = [...(run.xhr.sentBody as FormData).keys()];
+
+    expect(keys[0]).toBe("file");
+    expect(keys).toEqual(["file", "tags", "tags"]);
+
+    run.xhr.respond(201, CREATED_BODY);
+    await run.settled;
+  });
+
+  it("sends each tag as its own part, with the names as typed", async () => {
+    // One repeated field rather than a JSON array in one part, which is what
+    // the route reads with `getAll` — and NAMES rather than slugs, because
+    // the server normalises and the browser must not be a second authority
+    // on what a tag is called.
+    const run = startUpload([imageFile()], ["Wine & drink", "Food"]);
+
+    expect((run.xhr.sentBody as FormData).getAll("tags")).toEqual([
+      "Wine & drink",
+      "Food",
+    ]);
+
+    run.xhr.respond(201, CREATED_BODY);
+    await run.settled;
+  });
+
+  it("sends no tags part at all when nothing is selected", async () => {
+    // The untagged upload has to be byte-for-byte the request it always was:
+    // an empty `tags` part would arrive as the empty string, which the tag
+    // validator refuses — turning every untagged upload into a 400.
+    const run = startUpload([imageFile()], []);
+
+    expect((run.xhr.sentBody as FormData).has("tags")).toBe(false);
+
+    run.xhr.respond(201, CREATED_BODY);
+    await run.settled;
+  });
+
+  it("gives the same tags to every file in the batch", async () => {
+    const files = [imageFile("first.png"), imageFile("second.png")];
+    const { entries } = enqueueFiles(files, idSequence(), ["Food"]);
+
+    expect(entries.map((entry) => entry.tags)).toEqual([["Food"], ["Food"]]);
+  });
+
+  it("copies the selection into each entry rather than sharing it", async () => {
+    /*
+     * The queue drains one file at a time and a large video can hold it for
+     * minutes, with the picker still live. If the entries shared the caller's
+     * array, ticking another box mid-queue would retag every file still
+     * waiting — including ones the user had already chosen subjects for.
+     */
+    const selection = ["Food"];
+    const { entries } = enqueueFiles([imageFile()], idSequence(), selection);
+
+    selection.push("Books");
+
+    expect(entries[0].tags).toEqual(["Food"]);
   });
 
   it("POSTs to the upload route", async () => {

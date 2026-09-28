@@ -140,6 +140,18 @@ model Media {
   publishedAt  DateTime?
 
   user    User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // Subject tags (ugcportal-jsc). Many-to-many, because one photograph really
+  // is more than one subject — a wine shot for a cookbook is food and books —
+  // and forcing a single choice would make the label a lie rather than a
+  // simplification.
+  //
+  // An IMPLICIT relation (Prisma manages `_MediaToTag`) rather than an
+  // explicit join model, because there is nothing to record about the pairing
+  // itself: who attached a tag and when is not a question this product asks,
+  // and an explicit model would be a third table and a nested select to store
+  // no additional fact. If that changes it is a migration, not a reason to
+  // pre-build one now.
+  tags    Tag[]
   // The sale record for this upload, if an admin has put it forward
   // (ugcportal-vsm). Optional, and its absence is not sellable — see
   // `not_listed_for_sale` in src/lib/resale-rights.ts.
@@ -186,6 +198,67 @@ model Media {
   //
   // Tracked as ugcportal-ei7 (perf/media, discovered from ugcportal-r1d).
   @@index([createdAt, id])
+}
+
+// One subject tag (ugcportal-jsc). A TABLE rather than an enum, deliberately:
+// the four subject areas in use — food, wine & drink, technology, books — are
+// the ones expected today, not a closed set decided here, and adding a fifth
+// must not be a migration. It is a row.
+//
+// Tags are LABELS ON ITEMS in one gallery. There is no per-tag page, no
+// per-tag navigation entry and no per-tag section, and that is the product
+// decision this bead was rescoped around rather than an omission: with an
+// uneven library (fifteen food, one coffee, one technology) per-section pages
+// present nearly empty rooms and the navigation permanently advertises the
+// thin ones.
+model Tag {
+  id String @id @default(cuid())
+
+  // The identity key: `name` case-folded, with every run of non-letter,
+  // non-digit characters collapsed to a hyphen (see `tagSlug` in
+  // src/lib/tags.ts). It exists so "Food" and "food" are one tag rather than
+  // two — SQLite's unique index is case-sensitive, so uniqueness on `name`
+  // would not give that.
+  //
+  // NOT a URL component, and nothing builds one from it. K4 forbids a per-tag
+  // route, so the only thing this value addresses is a row.
+  slug String @unique
+
+  // What a visitor actually reads, as the first writer to use the tag spelled
+  // it. A later writer whose name normalises to the same slug does NOT rewrite
+  // it: a display name that changes under everyone because somebody typed
+  // different capitals is a worse outcome than one fixed at first use.
+  name String
+
+  // Whether this subject is offered to everyone in the upload page's picker.
+  //
+  // THE PICKER IS A SHARED SURFACE AND THE TAG TABLE IS NOT A TRUSTED ONE.
+  // Any account permitted to sign in can mint a tag by naming it on its own
+  // upload — so without this column the picker showed whichever names
+  // happened to be created first, to every user, permanently. Four subjects
+  // ship; the rest of the window was free and first-come. ugcportal-egp
+  // decides who may sign in at all and closed the "anyone with a Google
+  // account" hole, which narrows the set but does not change the shape: an
+  // uploader is not an administrator of everybody else's form.
+  //
+  // Defaults to FALSE, so minting a tag is exactly as available as it was and
+  // reaches exactly one place: the item its author put it on. Their own
+  // published photograph carrying their own label is the feature. Everybody
+  // else's upload form is not.
+  //
+  // A FLAG RATHER THAN A DELETE PATH, which was the other obvious remedy and
+  // is the more dangerous one: `_MediaToTag` cascades, so deleting a Tag row
+  // silently strips that subject from every item pointing at it, including
+  // other people's. Un-curating is reversible and touches nobody's media.
+  //
+  // Who may set it is ugcportal-x0l's decision. Until that lands the answer
+  // is "the migration that seeds the four subjects", which is a deliberate
+  // set rather than a race.
+  curated Boolean @default(false)
+
+  createdAt DateTime @default(now())
+
+  media Media[]
 }
 
 // One connected Instagram account whose media can be synced (ugcportal-ct0)

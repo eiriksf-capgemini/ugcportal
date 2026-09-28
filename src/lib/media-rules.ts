@@ -111,3 +111,105 @@ export function validateUpload(file: {
 
   return { ok: true, kind };
 }
+
+// --- text safety: one denylist, now three readers ---------------------------
+//
+// These two patterns started life in src/lib/media.ts guarding `originalName`,
+// the only user-controlled string the product stored and later rendered. Tag
+// names (ugcportal-jsc) are the second, so the denylist moved HERE rather than
+// being copied — and this is the module that can hold it, for exactly the
+// reason the header above gives: it has no runtime imports, so a "use client"
+// component can load it, while src/lib/media.ts imports `node:crypto` and
+// cannot be bundled for the browser at all.
+//
+// src/lib/media.ts re-exports both, so every existing server-side reader is
+// unchanged and "everything about media" is still one address.
+
+/**
+ * Characters that would survive into every UI rendering the string and lie
+ * about what it says: C0 and C1 controls, DEL, the bidi marks and overrides,
+ * and the invisibles that render as nothing at all. The bidi group is why this
+ * is wider than it looks — a right-to-left override in the middle of
+ * "invoicegnp.exe" renders it as "invoice exe.png", the exact deception it
+ * exists to stop.
+ *
+ * The invisible group (soft hyphen, ZWSP, line/paragraph separators, word
+ * joiner, Hangul filler, BOM) is denied rather than merely trimmed because a
+ * string built only from them is not empty by length yet renders as blank.
+ *
+ * Zero-width JOINER (U+200D) is deliberately absent: emoji sequences need it,
+ * and it neither reorders nor hides text.
+ */
+export const UNSAFE_TEXT_CHARS =
+  /[\u0000-\u001F\u007F-\u009F\u00AD\u061C\u200B\u200E\u200F\u202A-\u202E\u2028\u2029\u2060\u2066-\u2069\u3164\uFEFF]/;
+
+/**
+ * Unpaired surrogates cannot join the class above: at code-unit level every
+ * astral character (so every emoji) is MADE of surrogates, and a naive
+ * [\uD800-\uDFFF] would reject exactly the strings that comment promises to
+ * allow. Only the unpaired ones are a problem, and they are a real one. JSON
+ * permits a lone high surrogate; it is neither a control nor a bidi character,
+ * and the @libsql/client driver this repo uses silently substitutes U+FFFD on
+ * write, so a handler that echoes what was submitted disagrees with what a
+ * later read returns. A strict-UTF-8 driver would throw instead, turning the
+ * same input into a 500.
+ */
+export const LONE_SURROGATE =
+  /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
+/**
+ * True when a string carries anything from either class above.
+ *
+ * The predicate, not just the two patterns, because there are now four
+ * readers — the rename validator, the tag validator, the gallery's
+ * render-side drop and the upload page's tag picker — and "test both, and
+ * remember neither is global" is precisely the two-line ritual that gets
+ * copied with one line missing.
+ */
+export function hasUnsafeText(value: string): boolean {
+  return UNSAFE_TEXT_CHARS.test(value) || LONE_SURROGATE.test(value);
+}
+
+// --- tag limits (ugcportal-jsc) ---------------------------------------------
+//
+// THE NUMBERS LIVE HERE, THE RULES DO NOT. The distinction is the one this
+// module was created for (see the header): the browser must not carry a
+// second copy of a validation rule the server owns, but it may — and should —
+// share the server's own CONSTANT, the same way the upload page runs the
+// server's `validateUpload` rather than a matching copy of MAX_SIZE_BYTES.
+//
+// They cannot stay in src/lib/tags.ts, which imports the Prisma client and so
+// cannot be bundled for the browser at all. That module re-exports both, so
+// every server-side reader is unchanged and "everything about tags" is still
+// one address.
+
+/**
+ * How many tags one item may carry.
+ *
+ * Six rather than unbounded for two reasons that pull the same way. A tile in
+ * a four-column grid has room for a couple of short labels and no more, so a
+ * twenty-tag item is a layout problem before it is a data problem; and every
+ * permitted account can write these (ugcportal-egp decides which accounts
+ * those are), so an unbounded list is an unbounded write.
+ *
+ * Four subject areas are in use, so six leaves room to be wrong about that
+ * without leaving room to abuse it.
+ *
+ * READ BY THE BROWSER AS WELL AS THE SERVER, and that is the point of it
+ * being here. `parseTagNames` refuses a seventh tag *after* POST /api/media
+ * has buffered the entire multipart body — so a picker that let seven be
+ * ticked would spend a whole video upload to earn a 400, once per file and
+ * again on every retry. The picker stops at this number instead; the server
+ * still enforces it, because a disabled checkbox is not a security control.
+ */
+export const MAX_TAGS_PER_ITEM = 6;
+
+/**
+ * Longest tag name, in CODE POINTS rather than UTF-16 units — the same
+ * counting `MAX_ORIGINAL_NAME_LENGTH` uses, so a name is never truncated
+ * through the middle of a surrogate pair.
+ *
+ * Short on purpose: this string is rendered as a chip under a thumbnail, and
+ * the longest of the four subjects in use ("Wine & drink") is twelve.
+ */
+export const MAX_TAG_NAME_LENGTH = 32;

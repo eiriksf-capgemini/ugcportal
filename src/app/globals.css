@@ -345,3 +345,44 @@
   --pswp-icon-stroke-color: var(--color-scrim);
   --pswp-error-text-color: var(--color-ink-muted);
 }
+
+/*
+ * The subject tags on the open slide (ugcportal-jsc).
+ *
+ * PhotoSwipe builds its own DOM outside React, so this element cannot carry
+ * Tailwind utilities from a component — see registerTagCaption in
+ * src/components/gallery/lightbox.ts, which is where the class name comes
+ * from and where the "textContent, never innerHTML" rule lives.
+ *
+ * --color-ink-muted over the scrim is an already-measured pairing
+ * (`ink-muted-on-scrim` in src/lib/design/contrast.ts), so this reuses a
+ * combination the contrast gate checks rather than introducing one it does
+ * not know about.
+ *
+ * Centred at the bottom, above the slide but clear of the arrows, and
+ * `pointer-events: none` so it can never swallow a click meant for the
+ * backdrop — closing by clicking outside the photograph is what
+ * `bgClickAction: "close"` promises, and a caption strip that eats that click
+ * would break it along the bottom edge of every tagged slide.
+ */
+.pswp__gallery-tags {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 10;
+  margin: 0;
+  padding: 1rem 1.25rem calc(1rem + env(safe-area-inset-bottom));
+  color: var(--color-ink-muted);
+  font-size: 0.75rem;
+  line-height: 1rem;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-align: center;
+  text-transform: uppercase;
+  pointer-events: none;
+}
+
+.pswp__gallery-tags[hidden] {
+  display: none;
+}

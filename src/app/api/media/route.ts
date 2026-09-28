@@ -20,7 +20,9 @@ import {
   peekDeclaredPartType,
   readCappedFormDataFrom,
 } from "@/lib/request-body";
+import { MEDIA_TAGS_FIELD } from "@/lib/routes";
 import { getBucketName, getS3Client } from "@/lib/s3";
+import { parseTagNames, resolveTagRows } from "@/lib/tags";
 import type { UploadReservation } from "@/lib/upload-memory";
 import {
   UploadMemoryExhaustedError,
@@ -275,6 +277,30 @@ async function handleUpload(
     );
   }
 
+  /*
+   * Subject tags (ugcportal-jsc), read from repeated `tags` parts.
+   *
+   * REFUSED HERE, BEFORE ANY WORK. `getAll` returns [] for a form with no
+   * tags at all, which parseTagNames accepts as "no tags" — so an untagged
+   * upload is unaffected. A tag that is too long, or carries a bidi override,
+   * fails the whole upload rather than being dropped, and that is the
+   * opposite of what `sanitizeOriginalName` does one field over. The
+   * asymmetry is deliberate: a filename is incidental metadata the user often
+   * did not choose (a phone's picker wrote it), while a tag is a label they
+   * typed on purpose, so silently storing a different one is worse than
+   * saying no. The position matters too — this runs before the watermark and
+   * before either PutObject, so a refusal leaves nothing in the bucket to
+   * compensate for.
+   *
+   * `String(...)` is not used: a `tags` part sent as a file arrives as a File
+   * and would stringify to "[object File]", which is a perfectly valid tag
+   * name. parseTagNames refuses a non-string outright.
+   */
+  const tags = parseTagNames(body.value.getAll(MEDIA_TAGS_FIELD));
+  if (!tags.ok) {
+    return NextResponse.json({ error: tags.message }, { status: 400 });
+  }
+
   const buffer = Buffer.from(await file.arrayBuffer());
   if (sniffKind(buffer) !== validation.kind) {
     return NextResponse.json(
@@ -405,23 +431,51 @@ async function handleUpload(
       storedKeys.push(previewKey);
     }
 
-    const media = await prisma.media.create({
-      data: {
-        userId,
-        kind: validation.kind,
-        key,
-        // Spread as a pair, never as two fields, so the columns cannot drift
-        // apart at this call site either.
-        ...previewColumns,
-        mimeType: file.type,
-        sizeBytes: file.size,
-        // Repaired, not rejected — see sanitizeOriginalName in
-        // src/lib/media.ts for why the upload path is lenient where the
-        // rename path refuses. `file.name` is fully client-controlled and
-        // the GET listing echoes it back, so it cannot go in raw.
-        originalName: sanitizeOriginalName(file.name),
-      },
-      select: MEDIA_OWNER_SELECT,
+    /*
+     * ONE TRANSACTION FOR THE TAG ROWS AND THE MEDIA ROW.
+     *
+     * The tag rows have to exist before `connect` can name them, so they are
+     * written first — and an earlier version left it at that, inside the
+     * `try` on the theory that the compensating cleanup below would cover
+     * them. It does not: that cleanup deletes the OBJECTS in `storedKeys`,
+     * which is a different kind of debris. A `media.create` that threw on
+     * the next line (a unique violation on `previewId`, a dropped libSQL
+     * connection, a full disk) left the bucket tidy and the Tag rows behind
+     * forever, vocabulary minted by an upload that never existed — and
+     * nothing in this product deletes a tag.
+     *
+     * A transaction rather than tracking created-versus-found slugs and
+     * deleting them on the compensating path, which was the other way to do
+     * it. Deleting a Tag is not a safe compensation: `_MediaToTag` cascades,
+     * so a concurrent upload that attached the same new subject in between
+     * would silently lose it. Rolling back never touches a row somebody else
+     * committed.
+     */
+    const media = await prisma.$transaction(async (tx) => {
+      const tagRefs = await resolveTagRows(tags.value, tx);
+
+      return tx.media.create({
+        data: {
+          userId,
+          kind: validation.kind,
+          key,
+          // Spread as a pair, never as two fields, so the columns cannot
+          // drift apart at this call site either.
+          ...previewColumns,
+          mimeType: file.type,
+          sizeBytes: file.size,
+          // Repaired, not rejected — see sanitizeOriginalName in
+          // src/lib/media.ts for why the upload path is lenient where the
+          // rename path refuses. `file.name` is fully client-controlled and
+          // the GET listing echoes it back, so it cannot go in raw.
+          originalName: sanitizeOriginalName(file.name),
+          // `connect`, not `connectOrCreate`: resolveTagRows already made
+          // sure every row exists, so one place decides how a Tag comes into
+          // existence and both writers (here and PUT .../tags) go through it.
+          tags: { connect: tagRefs },
+        },
+        select: MEDIA_OWNER_SELECT,
+      });
     });
 
     return NextResponse.json(media, { status: 201 });

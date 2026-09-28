@@ -1,7 +1,7 @@
 import { DeleteObjectCommand } from "@aws-sdk/client-s3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { MediaModel } from "@/generated/prisma/models";
+import type { OwnedMediaRow } from "@/lib/media-access";
 
 const authMock = vi.fn();
 const s3SendMock = vi.fn();
@@ -34,12 +34,16 @@ vi.mock("@/lib/s3", () => ({
 }));
 
 const { DELETE, PATCH } = await import("@/app/api/media/[id]/route");
+// Imported dynamically, after the vi.mock calls above: media-access pulls in
+// @/lib/auth at module scope, so a static import here would evaluate that
+// mock factory before its `authMock` binding exists.
+const { MEDIA_TAGS_SELECT } = await import("@/lib/media-access");
 
 const OWNER_ID = "user-a";
 const OTHER_ID = "user-b";
 const MEDIA_ID = "media-1";
 
-const ownedMedia: MediaModel = {
+const ownedMedia: OwnedMediaRow = {
   id: MEDIA_ID,
   userId: OWNER_ID,
   kind: "IMAGE",
@@ -58,11 +62,16 @@ const ownedMedia: MediaModel = {
   // deleting are indifferent to publish state; publishing lives in
   // ./publish/route.ts.
   publishedAt: null,
+  // The ownership gate loads the subject tags alongside the columns
+  // (ugcportal-jsc), because PATCH and publish echo the row it hands back.
+  // Deliberately non-empty: a row with no tags would let a handler that
+  // dropped the field entirely still produce a matching response body.
+  tags: [{ slug: "food", name: "Food" }],
 };
 
 // A VIDEO row, which gets no preview yet (ugcportal-pmb owns the poster
 // frame), so DELETE has only one object to remove.
-const ownedVideo: MediaModel = {
+const ownedVideo: OwnedMediaRow = {
   ...ownedMedia,
   id: "media-2",
   kind: "VIDEO",
@@ -146,8 +155,17 @@ function chunkedPatchRequest(
 
 // The gate must read exactly the row the handler then writes; if a refactor
 // let those ids drift apart, every other assertion here would still pass.
+//
+// The `include` is asserted alongside the `where` rather than ignored with an
+// `expect.anything()`: the gate's contract is that the row it hands back
+// carries the subject tags (ugcportal-jsc), and a gate that quietly stopped
+// loading them would leave every `toOwnerMedia` caller echoing `tags:
+// undefined` into a 200.
 function expectGateReadRow(id: string = MEDIA_ID) {
-  expect(mediaFindUniqueMock).toHaveBeenCalledWith({ where: { id } });
+  expect(mediaFindUniqueMock).toHaveBeenCalledWith({
+    where: { id },
+    include: { tags: MEDIA_TAGS_SELECT },
+  });
 }
 
 function expectNoWrites() {
@@ -159,7 +177,7 @@ function expectNoWrites() {
 // Answers from the stored row set rather than unconditionally, so passing
 // the wrong id to the gate surfaces as a 404 instead of silently
 // authorizing against whatever the mock was told to return.
-function seedMedia(...rows: MediaModel[]) {
+function seedMedia(...rows: OwnedMediaRow[]) {
   mediaFindUniqueMock.mockImplementation(
     async (args: { where: { id: string } }) =>
       rows.find((row) => row.id === args.where.id) ?? null,
@@ -335,6 +353,11 @@ describe("PATCH /api/media/[id] as the owner", () => {
         // public.
         "publishedAt",
         "sizeBytes",
+        // Added by ugcportal-jsc. A rename does not change the tags either,
+        // but the owner projection carries them for the same reason it
+        // carries publishedAt: the owner's UI is looking at the row it just
+        // edited and should not have to re-read it to know what is on it.
+        "tags",
       ].sort(),
     );
   });

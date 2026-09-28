@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { MediaModel } from "@/generated/prisma/models";
+import type { OwnedMediaRow } from "@/lib/media-access";
 
 const authMock = vi.fn();
 
@@ -67,7 +67,7 @@ const MEDIA_ID = "media-1";
 
 const PUBLISHED_AT = new Date("2026-03-01T09:00:00.000Z");
 
-const unpublishedMedia: MediaModel = {
+const unpublishedMedia: OwnedMediaRow = {
   id: MEDIA_ID,
   userId: OWNER_ID,
   kind: "IMAGE",
@@ -83,15 +83,20 @@ const unpublishedMedia: MediaModel = {
   createdAt: new Date("2026-01-01T00:00:00.000Z"),
   // The default for every row: private until its owner says otherwise.
   publishedAt: null,
+  // The ownership gate loads the subject tags alongside the columns
+  // (ugcportal-jsc), because this handler echoes the row it hands back.
+  // Deliberately non-empty, so a handler that dropped the field entirely
+  // could not still produce a matching response body.
+  tags: [{ slug: "food", name: "Food" }],
 };
 
-const publishedMedia: MediaModel = {
+const publishedMedia: OwnedMediaRow = {
   ...unpublishedMedia,
   publishedAt: PUBLISHED_AT,
 };
 
 // No watermarked preview yet — every VIDEO, until ugcportal-pmb lands.
-const previewLessMedia: MediaModel = {
+const previewLessMedia: OwnedMediaRow = {
   ...unpublishedMedia,
   id: "media-2",
   kind: "VIDEO",
@@ -118,6 +123,9 @@ const OWNER_FIELDS = [
   "previewKey",
   "publishedAt",
   "sizeBytes",
+  // Subject tags (ugcportal-jsc). In the owner projection as well as the
+  // anonymous one, because a tag is a label chosen to be published.
+  "tags",
 ];
 
 /**
@@ -125,7 +133,7 @@ const OWNER_FIELDS = [
  * already absent at the DB layer, so the re-read path is fed exactly what that
  * select would actually yield.
  */
-function toOwnerShape(media: MediaModel) {
+function toOwnerShape(media: OwnedMediaRow) {
   return {
     id: media.id,
     kind: media.kind,
@@ -136,6 +144,7 @@ function toOwnerShape(media: MediaModel) {
     originalName: media.originalName,
     createdAt: media.createdAt,
     publishedAt: media.publishedAt,
+    tags: media.tags,
   };
 }
 

@@ -18,6 +18,21 @@ export const RIGHTS_DECISION_PATH = "/api/admin/rights/decision";
 export const UPLOAD_PATH = "/upload";
 export const MEDIA_UPLOAD_PATH = "/api/media";
 
+/**
+ * The multipart field POST /api/media reads the subject tags out of
+ * (ugcportal-jsc), named here because the browser writes it and the route
+ * reads it and a field name spelled twice is one that eventually differs —
+ * silently, because an unrecognised multipart part is simply ignored rather
+ * than refused.
+ *
+ * The VALUE is sent as one repeated field, not as a JSON array in a single
+ * part: `form.append(MEDIA_TAGS_FIELD, name)` per tag, read back with
+ * `getAll`. That is what a multipart form is for, and it avoids a second
+ * parser (and a second set of "what if this is not valid JSON" answers)
+ * inside a handler that already has enough of them.
+ */
+export const MEDIA_TAGS_FIELD = "tags";
+
 // The public gallery feed (ugcportal-r1d) and the preview bytes it points at
 // (ugcportal-a2l). Named here rather than spelled inline because ugcportal-71y
 // reaches for both from three places — the server-rendered first page, the

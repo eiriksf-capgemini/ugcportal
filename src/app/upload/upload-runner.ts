@@ -77,6 +77,12 @@ export async function uploadItem(
   dispatch: Dispatch,
   transport: UploadTransport = uploadFile,
   signal?: AbortSignal,
+  /**
+   * The subject tags chosen for this file (ugcportal-jsc). LAST and optional,
+   * so every existing caller and every existing test keeps working unchanged
+   * and an untagged upload is still literally the same request.
+   */
+  tags: readonly string[] = [],
 ): Promise<void> {
   dispatch({ type: "started", id });
 
@@ -84,6 +90,7 @@ export async function uploadItem(
   try {
     response = await transport({
       file,
+      tags,
       signal,
       onProgress: ({ loadedBytes }) =>
         dispatch({ type: "progress", id, loadedBytes }),
@@ -110,7 +117,23 @@ export async function uploadItem(
  * `signal` is per entry, not per drain: cancelling one file must not tear
  * down the queue behind it.
  */
-export type QueueEntry = { id: string; file: File; signal?: AbortSignal };
+export type QueueEntry = {
+  id: string;
+  file: File;
+  signal?: AbortSignal;
+  /**
+   * The tags chosen at the moment the file was ADDED, captured per entry
+   * rather than read from the form when the file's turn comes round.
+   *
+   * The queue is drained one file at a time and a large video can hold it for
+   * minutes, during which the picker is still live. Reading the current
+   * selection at send time would mean changing it mid-queue silently
+   * retagged everything still waiting — including files the user had already
+   * chosen tags for and moved on from. Captured per entry, the selection the
+   * user could see when they dropped the files is the one those files get.
+   */
+  tags: readonly string[];
+};
 
 /**
  * Files in, rows and work out — and the gap between the two lists is the
@@ -129,6 +152,12 @@ export type QueueEntry = { id: string; file: File; signal?: AbortSignal };
 export function enqueueFiles(
   files: File[],
   nextId: () => string,
+  /**
+   * The tags to attach to this batch (ugcportal-jsc). Copied into each entry
+   * rather than shared, so a later change to the picker cannot reach back
+   * into work already queued — see `QueueEntry.tags`.
+   */
+  tags: readonly string[] = [],
 ): { items: QueueItem[]; entries: QueueEntry[] } {
   const pairs = files.map((file) => ({
     item: makeQueueItem(nextId(), file),
@@ -139,7 +168,11 @@ export function enqueueFiles(
     items: pairs.map((pair) => pair.item),
     entries: pairs
       .filter((pair) => pair.item.status === "pending")
-      .map((pair) => ({ id: pair.item.id, file: pair.file })),
+      .map((pair) => ({
+        id: pair.item.id,
+        file: pair.file,
+        tags: [...tags],
+      })),
   };
 }
 
@@ -167,6 +200,13 @@ export async function drainQueue(
   for (;;) {
     const entry = take();
     if (entry === undefined) return;
-    await uploadItem(entry.id, entry.file, dispatch, transport, entry.signal);
+    await uploadItem(
+      entry.id,
+      entry.file,
+      dispatch,
+      transport,
+      entry.signal,
+      entry.tags,
+    );
   }
 }

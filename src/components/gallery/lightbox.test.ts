@@ -34,14 +34,15 @@ import { mediaPreviewPath } from "@/lib/routes";
  * reopening. Sixteen assertions covered the grid's markup and not one of them
  * could see it, because none of them opened anything.
  *
- * So this runs the real library in a DOM. It is one of the suite's two jsdom
- * files — this one and gallery.unmount.test.tsx; everything else is a node
- * test — which is why the environment is pinned per-file rather than globally.
+ * So this runs the real library in a DOM. It is one of the suite's three jsdom
+ * files — this one, gallery.unmount.test.tsx and lightbox.caption.test.ts;
+ * everything else is a node test — which is why the environment is pinned
+ * per-file rather than globally.
  *
  * jsdom is pinned at ^26 deliberately (ugcportal-71y): 30 breaks on CI's Node
  * 20, and the way it breaks is SILENT DE-COLLECTION — every file carrying this
  * pragma stops being collected at all, and the run reports fewer files with no
- * failures. Both files, not just this one, which is why the count above is
+ * failures. All three, not just this one, which is why the count above is
  * worth keeping accurate.
  *
  * What it does NOT claim: that the viewer *looks* right. jsdom has no layout

@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 
 import { auth } from "@/lib/auth";
 import { UPLOAD_PATH, signInPath } from "@/lib/routes";
+import { listPickerTags } from "@/lib/tags";
 
 import { UploadForm } from "./upload-form";
 
@@ -38,6 +39,32 @@ export default async function UploadPage() {
     redirect(signInPath(UPLOAD_PATH));
   }
 
+  /*
+    The subject vocabulary (ugcportal-jsc), read here rather than fetched by
+    the form: this page is already a server component and already awaiting a
+    session, so the picker arrives populated in the first HTML instead of
+    appearing a round trip later.
+
+    AFTER the auth gate, deliberately. It is not secret — every tag on a
+    published item is on the public gallery — but there is no reason for an
+    unauthenticated request that is about to be redirected to run a query.
+
+    BOUNDED AND FILTERED BY `listPickerTags`, not by a `findMany` spelled
+    here. The bound is a security property rather than a tidiness one — the
+    tag table has no ceiling and any authenticated account can add to it, so
+    an unbounded SELECT rendered one-checkbox-per-row made this page a denial
+    of service on itself. The rule lives next to the rest of the tag rules so
+    a second reader cannot be added without it; see the note there for the
+    ordering, which is the half that makes the cap useful.
+
+    Sorted for DISPLAY here, by name. `listPickerTags` returns oldest-first
+    because that is what makes the cap unspoofable, and that is not an order
+    anybody wants to read a list of subjects in.
+  */
+  const availableTags = [...(await listPickerTags())].sort((left, right) =>
+    left.name.localeCompare(right.name),
+  );
+
   return (
     /*
       max-w-3xl, narrower than the shell's max-w-6xl: this is a single column
@@ -58,7 +85,7 @@ export default async function UploadPage() {
       </p>
 
       <div className="mt-8">
-        <UploadForm />
+        <UploadForm availableTags={availableTags} />
       </div>
     </div>
   );

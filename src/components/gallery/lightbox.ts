@@ -86,6 +86,104 @@ export function galleryLightboxOptions(
 }
 
 /**
+ * The class the caption element carries, and the hook its CSS is written
+ * against (src/app/globals.css). Exported so the test asserts the same string
+ * the viewer renders rather than a copy of it.
+ */
+export const LIGHTBOX_TAG_CAPTION_CLASS = "pswp__gallery-tags";
+
+/** What separates two tag names in the caption. */
+const CAPTION_SEPARATOR = " · ";
+
+/**
+ * The caption for each slide, positionally — `captions[n]` belongs to
+ * `items[n]`, the same arrangement `sizes` uses, and built by mapping over the
+ * same array so the two cannot come apart.
+ *
+ * An untagged item gets the empty string rather than a placeholder, and the
+ * caption element hides itself for it. There is nothing truthful to put there:
+ * the alt text already names the photograph and its date, and "Untagged" is a
+ * statement about our database rather than about the picture.
+ */
+export function galleryTagCaptions(items: GalleryItem[]): string[] {
+  return items.map((item) =>
+    item.tags.map((tag) => tag.name).join(CAPTION_SEPARATOR),
+  );
+}
+
+/**
+ * Puts the subject tags on the open slide (ugcportal-jsc).
+ *
+ * PhotoSwipe renders its own DOM outside React, so this is the one place in
+ * the feature that builds an element by hand — and the reason the whole
+ * caption is `textContent` and never `innerHTML`. A tag name is
+ * user-supplied text; assigning it as text is inert by construction, with no
+ * escaping step for anyone to forget, remove or double-apply. React gives the
+ * grid the same guarantee for free; here it has to be chosen.
+ *
+ * WHY POSITIONAL RATHER THAN OFF THE SLIDE'S OWN DATA. PhotoSwipe will carry
+ * arbitrary extra fields on a `dataSource` entry through to
+ * `pswp.currSlide.data`, and reading a `tags` field off it would be the
+ * shorter version of this. It is also the version where the caption silently
+ * reads `undefined` the first time somebody changes how `dataSource` is
+ * built, because nothing types that round trip. `captions[pswp.currIndex]` is
+ * checked against the array this module built.
+ *
+ * `?? ""` rather than a non-null assertion: `currIndex` is PhotoSwipe's, and
+ * an index past the end of the array would otherwise print "undefined" over
+ * the photograph.
+ *
+ * Registered through `uiRegister`, which is dispatched while the viewer's UI
+ * is being assembled — so this has to be attached BEFORE `loadAndOpen`, for
+ * the same reason `afterInit` does.
+ */
+export function registerTagCaption(
+  lightbox: PhotoSwipeLightbox,
+  captions: string[],
+): void {
+  lightbox.on("uiRegister", () => {
+    lightbox.pswp?.ui?.registerElement({
+      name: "gallery-tags",
+      className: LIGHTBOX_TAG_CAPTION_CLASS,
+      appendTo: "root",
+      // After the default controls, so it cannot be inserted between the
+      // close button and the counter.
+      order: 9,
+      isButton: false,
+      tagName: "p",
+      onInit: (element, pswp) => {
+        const show = () => {
+          const caption = captions[pswp.currIndex] ?? "";
+          element.textContent = caption;
+          // `hidden`, not an empty string alone: the element has padding, so
+          // an empty one still darkens a strip across the bottom of an
+          // untagged photograph.
+          element.hidden = caption === "";
+        };
+        /*
+         * `change` ALONE IS ENOUGH, and that is a measured claim rather than
+         * an assumption. The obvious extra `show()` call here — on the theory
+         * that `change` only fires for slides after the first, so the
+         * photograph the visitor clicked would open uncaptioned — is dead
+         * code in photoswipe@5.4.4: `init()` reaches `goTo()` for the opening
+         * slide after the UI has been registered, so this listener runs for
+         * it too.
+         *
+         * Verified by deleting the extra call and watching the suite: nothing
+         * failed, which is what identified it as dead. It was removed rather
+         * than kept "just in case" — an unreachable line next to a comment
+         * explaining the case it handles is a claim about behaviour that is
+         * not true. If a future PhotoSwipe stops dispatching `change` on
+         * open, "names the tags of the slide the visitor actually opened" in
+         * lightbox.caption.test.ts fails, because it opens at index 2.
+         */
+        pswp.on("change", show);
+      },
+    });
+  });
+}
+
+/**
  * Opens the viewer at `index` and hands back the instance.
  *
  * A fresh instance per activation. Reusing one would mean keeping its
@@ -289,6 +387,10 @@ export async function openGalleryViewer(
     ...galleryLightboxOptions(items, sizes),
     pswpModule: PhotoSwipe,
   });
+
+  // Also before `loadAndOpen`: `uiRegister` is dispatched while PhotoSwipe
+  // assembles its controls, which happens inside the open.
+  registerTagCaption(lightbox, galleryTagCaptions(items));
 
   // Registered before `loadAndOpen`, because `afterInit` is dispatched from a
   // microtask continuation that a later `.on()` would already have missed.
