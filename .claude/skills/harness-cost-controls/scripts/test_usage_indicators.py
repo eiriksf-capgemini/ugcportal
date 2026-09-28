@@ -13,11 +13,17 @@ directly, rather than against a real machine's transcripts -- so this passes
 the same way on any machine or CI runner regardless of what's actually been
 run there.
 
-These tests exist because round 1 of ugcportal-9ak's PR review found six bugs
-in usage_indicators.py that each look like good news instead of an error
-(see that module's docstring), and round 2 found that the round-1 fix's own
-docstring claimed test coverage that didn't exist yet. This file is what
-makes that claim true.
+These tests exist because three rounds of ugcportal-9ak's PR review found
+bugs in usage_indicators.py that, overwhelmingly, look like good news instead
+of an error (see that module's docstring). Round 1 found six; round 2 found
+that the round-1 fix's own docstring claimed test coverage that didn't exist
+yet (this file is what makes that claim true) plus five more, including a
+subagent breakdown that silently dropped Fable/Haiku from its own total;
+round 3 found seven more, including a model-id normalizer that only covered
+two hardcoded date suffixes and a glob-base-dir computation that broke on a
+narrowing glob. Nothing in this repo's CI runs this file -- see SKILL.md and
+the bead tracking that gap -- so it is run by hand, and must be run by hand
+before trusting a change to usage_indicators.py.
 """
 import datetime
 import os
@@ -265,9 +271,71 @@ class SubagentBreakdownReconciles(unittest.TestCase):
             self.assertIn("reconciles to", text)
 
 
+class ModelIdNormalization(unittest.TestCase):
+    """Round 3, medium 1: norm_model must strip ANY 8-digit date suffix, not
+    just the two hardcoded ones seen so far -- an unstripped suffix makes a
+    real model look unpriced and its cost silently render as $0.00 while its
+    request count stays nonzero (the third instance of this file's pricing
+    gap rendering as a reassuring zero)."""
+
+    def test_known_suffixes_still_stripped(self):
+        self.assertEqual(ui.norm_model("claude-opus-5-20260401"), "claude-opus-5")
+        self.assertEqual(ui.norm_model("claude-sonnet-5-20251001"), "claude-sonnet-5")
+
+    def test_unseen_date_suffix_also_stripped(self):
+        # The whole point of the regex fix: a date this file has never seen
+        # before must normalize the same way as the two it happened to see.
+        self.assertEqual(ui.norm_model("claude-opus-5-20260601"), "claude-opus-5")
+
+    def test_model_with_previously_unstripped_suffix_now_prices_correctly(self):
+        with TemporaryDirectory() as root:
+            write(root, "proj-a/session.jsonl",
+                  line("d1", "2026-09-24T10:00:00Z", "claude-opus-5-20260601", is_sidechain=True))
+            rows, unpriced, _ = ui.load_rows(f"{root}/**/*.jsonl", None, None)
+            self.assertEqual(len(rows), 1)
+            self.assertTrue(rows[0]["_priced"])
+            self.assertGreater(rows[0]["cost"], 0)
+            self.assertEqual(dict(unpriced), {})
+
+    def test_inference_geo_bracket_still_stripped_alongside_date_suffix(self):
+        self.assertEqual(ui.norm_model("claude-opus-5-20260601[1m]"), "claude-opus-5")
+
+
+class GlobBaseDirResolution(unittest.TestCase):
+    """Round 3: base_dir must be the deepest directory containing no glob
+    metacharacter, not just the text before the first literal '*' --
+    otherwise a narrowing glob with a '*' mid-component (e.g.
+    "projects/ugc*/**/*.jsonl") makes every resolved project slug ".."."""
+
+    def test_wildcard_at_component_boundary(self):
+        self.assertEqual(
+            ui.glob_base_dir("/x/y/.claude/projects/**/*.jsonl"),
+            "/x/y/.claude/projects",
+        )
+
+    def test_wildcard_mid_component_narrowing_glob(self):
+        self.assertEqual(
+            ui.glob_base_dir("/x/y/.claude/projects/ugc*/**/*.jsonl"),
+            "/x/y/.claude/projects",
+        )
+
+    def test_narrowing_glob_resolves_correct_project_slug(self):
+        with TemporaryDirectory() as root:
+            write(root, "ugcportal/session.jsonl",
+                  line("n1", "2026-09-24T10:00:00Z", "claude-opus-5"))
+            rows, _, _ = ui.load_rows(f"{root}/ugc*/*.jsonl", None, None)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["proj"], "ugcportal")
+
+
 class SinceDateValidation(unittest.TestCase):
     """Round 2: --since must reject a partial or malformed date instead of
-    silently widening or narrowing the window."""
+    silently widening or narrowing the window. Round 3: it must also return
+    the CANONICAL YYYY-MM-DD string, not whatever variant the caller typed
+    -- on Python >= 3.11, date.fromisoformat itself accepts basic-format
+    ("20260924") and ISO week-date ("2026-W40-1") strings, and returning
+    those unchanged would silently break the plain string compare in
+    load_rows on newer interpreters even though this validator "passed"."""
 
     def test_valid_full_date_accepted(self):
         self.assertEqual(ui.valid_since_date("2026-09-24"), "2026-09-24")
@@ -284,10 +352,30 @@ class SinceDateValidation(unittest.TestCase):
         with self.assertRaises(Exception):
             ui.valid_since_date("not-a-date")
 
+    def test_lenient_iso_variants_normalize_to_canonical_form(self):
+        # These two inputs are only accepted by date.fromisoformat on
+        # Python >= 3.11 (this suite runs the way `python3` resolves on the
+        # host, so the sub-tests below are skipped on an interpreter old
+        # enough to reject them outright at the try/except -- see
+        # SinceDateValidationPy311Plus for the version-gated behavioral
+        # check). This test only asserts the FUNCTION's contract: whatever
+        # date.fromisoformat successfully parses, the return value must be
+        # that date's own `.isoformat()`, never the raw input string.
+        import datetime as _dt
+        for candidate in ("20260924", "2026-W40-1"):
+            try:
+                parsed = _dt.date.fromisoformat(candidate)
+            except ValueError:
+                continue  # this Python version doesn't accept it; nothing to check
+            self.assertEqual(ui.valid_since_date(candidate), parsed.isoformat())
+            self.assertNotEqual(ui.valid_since_date(candidate), candidate)
+
 
 class ScanDiagnostics(unittest.TestCase):
-    """Round 2: silent skip paths (unreadable file, bad JSON, missing id,
-    missing timestamp) must be counted and surfaced, not just absorbed."""
+    """Round 2 + round 3: every silent skip path (unreadable file, bad JSON,
+    missing id, missing timestamp, non-assistant-with-usage-substring,
+    non-dict usage, unrecognized model) must be counted in the single
+    ANOMALY_KEYS ledger and surfaced unconditionally, never just absorbed."""
 
     def test_skip_counters_and_file_counts(self):
         import json
@@ -306,25 +394,65 @@ class ScanDiagnostics(unittest.TestCase):
                 "type": "assistant", "requestId": "no-ts",
                 "message": {"model": "claude-opus-5", "usage": {"input_tokens": 1, "output_tokens": 1}},
             }) + "\n"
-            write(root, "proj-a/session.jsonl", good + bad_json + missing_id + missing_ts)
+            # Round 3: three more silent paths, previously untallied.
+            not_assistant = json.dumps({
+                "type": "tool_result", "requestId": "not-asst",
+                "timestamp": "2026-09-24T10:00:00Z",
+                "note": "mentions usage elsewhere in its payload",
+                "message": {"model": "claude-opus-5", "usage": {"input_tokens": 1, "output_tokens": 1}},
+            }) + "\n"
+            usage_not_dict = json.dumps({
+                "type": "assistant", "requestId": "bad-usage",
+                "timestamp": "2026-09-24T10:00:00Z",
+                "message": {"model": "claude-opus-5", "usage": "not-a-dict"},
+            }) + "\n"
+            unrecognized_model = json.dumps({
+                "type": "assistant", "requestId": "no-model",
+                "timestamp": "2026-09-24T10:00:00Z",
+                "message": {"model": None, "usage": {"input_tokens": 1, "output_tokens": 1}},
+            }) + "\n"
+            write(
+                root, "proj-a/session.jsonl",
+                good + bad_json + missing_id + missing_ts
+                + not_assistant + usage_not_dict + unrecognized_model,
+            )
 
             rows, unpriced, diag = ui.load_rows(f"{root}/**/*.jsonl", None, None)
             self.assertEqual(len(rows), 1)
             self.assertEqual(diag["files_matched"], 1)
-            self.assertEqual(diag["files_unreadable"], 0)
-            self.assertEqual(diag["skipped_json_error"], 1)
-            self.assertEqual(diag["skipped_missing_id"], 1)
-            self.assertEqual(diag["skipped_missing_timestamp"], 1)
+            anomalies = diag["anomalies"]
+            self.assertEqual(anomalies["files_unreadable"], 0)
+            self.assertEqual(anomalies["lines_json_error"], 1)
+            self.assertEqual(anomalies["lines_missing_id"], 1)
+            self.assertEqual(anomalies["lines_missing_timestamp"], 1)
+            self.assertEqual(anomalies["lines_not_assistant_with_usage"], 1)
+            self.assertEqual(anomalies["lines_usage_not_dict"], 1)
+            self.assertEqual(anomalies["lines_unrecognized_model"], 1)
 
             out = StringIO()
             with redirect_stdout(out):
                 ui.report(rows, unpriced, diag)
             text = out.getvalue()
             self.assertIn("scanned 1 files", text)
-            self.assertIn("skipped 3 lines while parsing", text)
-            self.assertIn("unparseable JSON", text)
-            self.assertIn("missing a request id", text)
-            self.assertIn("missing a timestamp", text)
+            self.assertIn("anomalies while scanning", text)
+            for key in ui.ANOMALY_KEYS:
+                self.assertIn(f"{key}: ", text)
+
+    def test_anomalies_block_prints_even_when_everything_is_clean(self):
+        # The chokepoint's whole point: zero anomalies must still be VISIBLE
+        # as zero, not simply absent from the output -- absence and "checked,
+        # found nothing" must not look the same.
+        with TemporaryDirectory() as root:
+            write(root, "proj-a/session.jsonl", line("ok1", "2026-09-24T10:00:00Z", "claude-opus-5"))
+            rows, unpriced, diag = ui.load_rows(f"{root}/**/*.jsonl", None, None)
+            out = StringIO()
+            with redirect_stdout(out):
+                ui.report(rows, unpriced, diag)
+            text = out.getvalue()
+            self.assertIn("anomalies while scanning", text)
+            for key in ui.ANOMALY_KEYS:
+                self.assertIn(f"{key}: 0", text)
+            self.assertIn("unpriced_models: {}", text)
 
     def test_filters_and_date_range_echoed(self):
         with TemporaryDirectory() as root:
@@ -370,6 +498,26 @@ class CacheWriteTierHypothetical(unittest.TestCase):
             self.assertIn("1-hour 0.0%", text)
             self.assertIn("actual cache-write spend", text)
             self.assertIn("hypothetical if ALL cache-write tokens", text)
+
+
+class UnpricedNoteAppearsInline(unittest.TestCase):
+    """Round 3, medium 1: an unpriced model's $0.00 must be flagged on the
+    SAME line it appears on (indicator 4's Opus/Sonnet/other breakdown), not
+    only in the top-of-report banner -- a reader looking at one partition
+    line has no reason to scroll back up."""
+
+    def test_unpriced_opus_row_flagged_on_its_own_breakdown_line(self):
+        with TemporaryDirectory() as root:
+            write(root, "proj-a/session.jsonl",
+                  # Unpriced (unknown generation) but still groups under Opus
+                  # by prefix -- this is the concrete case medium-1 named.
+                  line("z1", "2026-09-24T10:00:00Z", "claude-opus-6", is_sidechain=True))
+            rows, unpriced, diag = ui.load_rows(f"{root}/**/*.jsonl", None, None)
+            out = StringIO()
+            with redirect_stdout(out):
+                ui.report(rows, unpriced, diag)
+            text = out.getvalue()
+            self.assertIn("of which Opus: $0.00 (1 reqs, 1 unpriced)", text)
 
 
 if __name__ == "__main__":
