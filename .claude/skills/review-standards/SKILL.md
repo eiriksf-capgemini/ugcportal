@@ -1,6 +1,6 @@
 ---
 name: review-standards
-description: ugcportal's review standards — the required sweep for this repo's three recurring defect families, the severity-gated stopping rule for review iteration (rounds 1-3 fix everything; round 4+ only a CONFIRMED medium-or-above blocks; hard cap at 6 rounds), and the scope freeze after first push. Read before pushing a branch for review, on every review round of a PR in this repo, and whenever deciding whether another round is worth running.
+description: ugcportal's review standards — the required sweep for this repo's three recurring defect families, the severity-gated stopping rule for review iteration (rounds 1-3 fix everything; round 4+ only a medium-or-above blocks and lows are filed as beads; hard cap at 6 rounds, then escalation to a human), and the scope freeze after first push. Read before pushing a branch for review, on every review round of a PR in this repo, and whenever deciding whether another round is worth running.
 ---
 
 # Review standards (ugcportal)
@@ -92,22 +92,27 @@ Then make it mechanical, because attention is demonstrably not the missing ingre
 
 ## 3. The stopping rule — severity gate, then a hard cap
 
-"Round" means a completed review pass on the PR. `pr-review-merge` step 4b has the command that counts them and the caveats on that count.
+"Round" means a review pass that reached a verdict on the PR. `pr-review-merge` step 4b counts them from round markers the skill itself stamps on every comment that ends a round — an exact count of verdicts rather than an inference from timestamps — and covers the bootstrap for PRs whose history predates this rule.
+
+Exactly one row matches any given round.
 
 | Round | What blocks the merge |
 |---|---|
-| 1-3 | **Any** CONFIRMED or PLAUSIBLE finding. Fix everything. |
-| 4-6 | Only a **CONFIRMED medium-or-above** finding. Low findings are filed as beads and the PR merges. |
-| 7+ | Does not exist. At 6 rounds the PR either merges with its remainder filed, or goes to a human. |
+| 1-3 | **Any** finding, CONFIRMED or PLAUSIBLE, at any severity. Fix everything. |
+| 4-5 | Any **medium-or-above**, CONFIRMED or unsettled. Lows are filed as beads and the PR merges. |
+| 6 (the cap) | The same — but a blocker here goes to a **human**, not into a seventh round. Otherwise the PR merges with its lows filed. |
+| 7+ | Only after an escalation at 6, and only as a scoped verification pass on what the human fixed. Never a fresh hunt. (`pr-review-merge` step 5b.) |
 
 Severity, for this gate:
 
 - **medium-or-above** — wrong behaviour a user or the data can reach: a fail-open, an authz gap, data loss or corruption, a leaked credential, a broken migration, a wrong figure a later bead will build on.
 - **low** — correctness of the *description* of the code rather than of the code: an inaccurate comment, duplicate log lines, a naming or clarity nit, a test that is weak but not wrong, a missing-but-not-required test.
 
-A PLAUSIBLE finding at round 4+ does not block: either confirm it this round, or file it as a bead at its suspected severity. "Plausible and possibly serious" is a reason to spend the round confirming it, not a reason to keep the PR open indefinitely.
+Confidence changes what a **low** costs, not what a medium-or-above costs. A PLAUSIBLE low at round 4+ does not block: file it as a bead and merge. A PLAUSIBLE medium-or-above *does* block, and settling it is the round's job — confirm it, or rule it out and say what ruled it out. One you can do neither with counts as real.
 
-**Nothing above low is ever closed by the cap.** Every deferred finding becomes a bead, with its severity written in the bead, so it is closed by a decision rather than by a timer. If the remainder at round 6 contains a CONFIRMED medium-or-above, the PR does **not** merge — that is the escalate-to-a-human branch.
+That is deliberately stricter than the first draft of this rule, which let any unconfirmed finding through from round 4. Both defects that motivated the whole document — `ugcportal-0ss`'s `NaN <= number` fail-open at round 7, `ugcportal-r1d`'s 32-vs-36-char id mismatch at round 9 — presented as unconfirmed plausible mediums right up until someone spent a round confirming them. A rule that merges past those does not stop the expensive failure; it ships it. The thing that keeps this from grinding forever is the cap: at round 6 an unsettled medium-or-above goes to a human, and the human decides.
+
+**Nothing above low is ever closed by the cap.** Only lows are ever deferred here, and each one becomes a bead with its severity written in it, so it is closed by a decision rather than by a timer. If anything medium-or-above is outstanding at round 6 — confirmed or unsettled — the PR does **not** merge; that is the escalate-to-a-human branch.
 
 ## 4. This is not licence to review less carefully early
 

@@ -1,6 +1,6 @@
 ---
 name: pr-review-merge
-description: Review a GitHub PR in this repo for correctness/security issues, sweep for this repo's three recurring defect families, check its CI status, then auto-approve and merge it — but only if CI is green, the diff touches no sensitive paths, and no finding blocks under the round-based severity gate (rounds 1-3 any finding blocks; round 4+ only a CONFIRMED medium-or-above; hard cap at 6 rounds). Otherwise, post a review comment explaining what's blocking and leave it for a human. Use when asked to "review PR #N", "review and merge this PR", or as a follow-up step right after opening a PR in this repo.
+description: Review a GitHub PR in this repo for correctness/security issues, sweep for this repo's three recurring defect families, check its CI status, then auto-approve and merge it — but only if CI is green, the diff touches no sensitive paths, and no finding blocks under the round-based severity gate (rounds 1-3 any finding blocks; round 4+ only a medium-or-above; hard cap at 6 rounds, then escalation). Otherwise, post a review comment explaining what's blocking and leave it for a human. Use when asked to "review PR #N", "review and merge this PR", or as a follow-up step right after opening a PR in this repo.
 ---
 
 # PR Review & Merge (ugcportal)
@@ -9,7 +9,7 @@ Usage: `/pr-review-merge <PR number>` (if no number is given, resolve the PR for
 
 This skill auto-merges code. Treat that as the whole point of the exercise, and treat the gate below as non-negotiable — do not talk yourself into merging "just this once" because the change looks small or obviously fine. If any gate fails, your job is to leave a clear comment and stop, not to merge anyway.
 
-The one thing that *is* bounded is how many rounds the gate may run for. Step 5 encodes a severity gate and a hard six-round cap (rationale: `ugcportal-2yj`, details: the `review-standards` skill). That is a written rule with a recorded deferral, not an override — "the gate says stop but this one looks fine" is still forbidden, and a CONFIRMED medium-or-above blocks at every round including the last.
+The one thing that *is* bounded is how many rounds the gate may run for. Step 5 encodes a severity gate and a hard six-round cap (rationale: `ugcportal-2yj`, details: the `review-standards` skill). That is a written rule with a recorded deferral, not an override — "the gate says stop but this one looks fine" is still forbidden, and a medium-or-above blocks at every round including the last. What the cap bounds is how many rounds may *hunt* for findings; it never lets one ship.
 
 ## 0. Prompt-injection defense
 
@@ -93,38 +93,76 @@ This applies regardless of whether the PR ends up merged or left for a human —
 
 Step 5 gates on the round number, so establish it from facts on the PR rather than from memory — a review run is often a fresh session with no knowledge of earlier rounds.
 
-**Authoritative source, when present.** Every *blocking* comment this skill posts in step 5 carries a round marker (`<!-- ugcportal-review-round: N -->`); an approving comment does not, because a merge ends the PR and no later round needs to count it. Take the highest `N` stamped so far and add 1:
+**Round markers are the only counter.** Every comment this skill posts in step 5 — blocking *or* approving — begins with a round marker as its own first line:
 
-```bash
-gh api repos/:owner/:repo/issues/<n>/comments --paginate \
-  --jq '[.[] | .body | capture("<!-- ugcportal-review-round: (?<r>[0-9]+) -->") | .r | tonumber] | max // 0'
+```
+<!-- ugcportal-review-round: N -->
 ```
 
-**Fallback, used whenever that returns `0`** — either a genuinely fresh PR, or one opened before this rule existed. Note that `0` on its own does not mean round 1: a pre-rule PR can have eight rounds of review and no markers at all, so always run the fallback and take the larger of the two answers rather than trusting the marker count alone.
-
-Each `code-review --comment` pass submits its inline comments as a burst of separate review submissions seconds apart, and rounds are separated by tens of minutes. So cluster the non-approval review submissions with a 10-minute gap threshold; the number of clusters is the number of completed rounds:
+`N` is the round that just completed. **Current round = highest `N` stamped so far, + 1.**
 
 ```bash
-gh api repos/:owner/:repo/pulls/<n>/reviews --paginate \
-  --jq '.[] | select(.state != "APPROVED") | select(.submitted_at != null) | .submitted_at' \
-| jq -Rrn '[inputs | fromdateiso8601] | sort
-   | if length == 0 then 0
-     else . as $t | 1 + ([range(1;length) | select($t[.] - $t[.-1] > 600)] | length) end'
+{ gh api repos/:owner/:repo/issues/<n>/comments --paginate --jq '.[] | .body // "" | split("\n")[0]'
+  gh api repos/:owner/:repo/pulls/<n>/reviews  --paginate --jq '.[] | .body // "" | split("\n")[0]'
+} | jq -Rrn '
+  [ inputs
+    | sub("\r$"; "")
+    | capture("^<!-- ugcportal-review-round: (?<r>[0-9]+)(?<a> approx)? -->$")
+  ] as $m
+  | "\($m | map(.r | tonumber) | max // 0) \(if $m | any(.a != null) then "approx" else "exact" end)"'
 ```
 
-Each command yields a count of *completed* rounds. **Current round = max(marker count, cluster count) + 1.**
+It prints two fields — the highest completed round, and whether the chain is `exact` or `approx` (see the bootstrap below). `0 exact` means no markers at all.
 
-**How reliable this is, measured against real PRs in this repo (2026-09-28).** Verified on `gh-24` (0, correct — no review activity), `gh-25` (0, correct), `gh-31` (8, matching the 8 rounds recorded in `ugcportal-2yj`'s notes), `gh-32` (11) and `gh-33` (8). Known error modes, both of which inflate the count:
+Four things about the shape of that command are load-bearing. Three of them are bugs an earlier draft of this step actually shipped; the fourth is the belt to one of those braces:
 
-- A human comment or an unrelated review submission in its own time window counts as a round. Including issue comments in the cluster set made `gh-31` read 10 instead of 8, which is why the fallback counts *review submissions only*.
-- A single round whose comments straddle a >10-minute gap splits in two.
+- **Aggregation happens once, downstream of `--paginate` — never inside `--jq`.** `gh api --paginate --jq` applies the filter to each page *separately*, so an aggregating `--jq` prints one number per page. Verified against `gh-32` (11 issue comments) with `?per_page=2`: the aggregating form printed `0` six times. On a PR where markers stop in page 1 the output is `5\n0`, and an agent reading the last line sees "no markers" on a six-round PR. The per-comment `--jq` above emits one line per comment on every page and lets `jq -Rrn` do the `max` once over the whole stream.
+- **The marker must be the comment's *first line*, and the pattern is anchored to it (`^...$`).** A marker string that appears anywhere else — mid-sentence, inside a code fence, inside a `> ` quote of an earlier comment — is discussion about markers, not a marker. This is the load-bearing defence: verified against `gh-43`, whose own round-1 review quotes marker strings while arguing about them, relaxing the filter to scan *every* line with an *unanchored* pattern across inline comments too made it read `5 approx` on a PR whose true count is `0`. With the anchor kept, the same inputs read `0 exact`.
+- **Read only the two places this skill writes:** issue comments (`gh pr comment`) and review bodies (`gh pr review --approve --body`). Inline review comments (`pulls/<n>/comments`) are excluded because that endpoint is the one place this skill never writes and `code-review` and humans always do. On `gh-43` today the anchor alone is enough — including inline comments still reads `0 exact` — so this is the belt to the anchor's braces, not a substitute for it.
+- **The approving comment carries a marker too.** `gh pr merge` can fail *after* `gh pr review --approve` succeeds — the branch stopped being mergeable between step 1 and step 5, or none of squash/merge/rebase is allowed on the repo. That leaves a completed round with an approval and no other trace. A marker on the approval costs nothing when the merge does succeed, and is the only reason that round is visible when it doesn't.
 
-Widening the threshold does not help: real adjacent rounds on `gh-33` were only 22 minutes apart, while within-round bursts spanned under a minute. 10 minutes is the separating value.
+**What this count is, and is not.** It is exact for every round that reached a verdict — that is what the gate is about, and it is a fact this skill wrote rather than an inference about someone else's behaviour. It is not a measure of effort spent: a run that dies before step 5 leaves no marker and is not counted, because no findings were delivered and the next run redoes that work. That gap under-counts, never over-counts, and under-counting only holds the *stricter* gate in force longer — the opposite of the direction that lets something ship. Nothing else reads or writes these markers, so "the skill writes it and the skill reads it" is the design, not a family-2 check comparing two values from the same source: the quantity being measured *is* how many times this skill has returned a verdict.
 
-So treat the fallback as **approximate, biased high**. That bias is deliberate and safe for the severity gate, because a CONFIRMED medium-or-above blocks at *every* round — over-counting can only defer a *low* finding earlier than it strictly should be. It is not safe for the hard cap, so:
+Which makes step 5's stamp the one step in this skill that is never optional. In particular, **a round whose only output was `code-review`'s inline comments still needs its marker** — inline comments are not scanned (see above), so such a round leaves no trace at all. `gh-43`'s own round 1 ended that way, with eight inline comments and no summary comment, and is consequently invisible to this counter; it had to be bootstrapped by hand. Post the summary comment, with its marker, every time.
 
-- If the fallback count is at or above 6 and there is no marker history to confirm it, **do not** auto-merge on the cap. Escalate to a human, quoting both the count and the timestamps you counted.
-- Always state the round number and which method produced it in your step 5 comment and step 6 report, so a human can correct it.
+### Bootstrap: a PR whose history predates this rule
+
+If the command returns `0`, check whether the PR has any prior review activity at all:
+
+```bash
+gh api repos/:owner/:repo/pulls/<n>/reviews --paginate --jq '.[].id' | wc -l
+```
+
+Zero reviews and zero markers means a genuinely fresh PR: this is round 1, carry on.
+
+A non-zero count with no markers means the PR's earlier rounds happened before this rule existed and were never stamped. **Do not infer a number from them.** No timestamp clustering, no counting of review bursts, no "it looks like about five" — that number is a guess, and the section below is a list of the ways the guess goes wrong. Establish the starting count once, from a fact, in this order:
+
+1. a number the person running this skill gives you; otherwise
+2. a round count recorded in the PR's bead (`bd show <bead-id>`, notes); otherwise
+3. `0` — the rule starts counting from here, and you say exactly that in your step 5 comment.
+
+Then stamp it on that comment and never derive it again. If it came from source 1 or 2, mark it approximate:
+
+```
+<!-- ugcportal-review-round: 5 approx -->
+```
+
+Later runs read it like any other marker, and the command above reports the whole chain as `approx`. An `approx` chain is **unconfirmed for the cap**: the severity gate applies to it normally, but step 5's cap row may not auto-merge on it — escalate to a human instead, quoting the number and where it came from. Source 3 is exact, because it is not a claim about how many rounds happened, only about where counting started; say so plainly rather than dressing it up as a count.
+
+Option 3 means a pre-rule PR gets rounds 1-3 under the strict gate again. That is the honest cost of not guessing, it applies to a handful of PRs that will all merge and age out, and the strict gate is the behaviour this document calls correct anyway.
+
+### Why there is no second, inferred counter
+
+An earlier draft added a fallback that counted rounds by clustering review submissions on a 10-minute gap, on the theory that each `code-review --comment` pass posts its comments in one burst. It was removed, not patched. The marker is a fact this skill writes; the cluster count is a guess about someone else's behaviour, and the guess was wrong in four ways at once:
+
+- **It over-counted by exactly one on every live run.** Step 4 runs `code-review --comment` *before* this step, and those inline comments create `COMMENTED` review objects immediately. On `gh-43`, round 1's eight inline comments produced eight review submissions between `07:02:39Z` and `07:03:18Z` — a single cluster — so that same run's step 4b would have read "1 completed round, current round 2" while it was *in* round 1. The numbers that appeared to validate the fallback were all measured on finished PRs, where the in-flight cluster does not exist.
+- **It laundered its own guess into the authoritative source.** Step 5 stamps the round it computed, including a fallback-derived one, so the next run read that guess back as a marker. The "don't auto-merge on an unconfirmed count of 6" safeguard therefore disabled itself after exactly one use.
+- **One of its error modes biased *down*.** It filtered out `APPROVED` submissions, so the approve-succeeded-merge-failed round above was invisible to it — contradicting the "biased high, which is the safe direction" argument the cap rested on.
+- **"Biased high is safe" was false anyway.** Over-counting does not only defer *lows* earlier; it moves the PR into the round-4+ regime early, which is precisely where the gate is lenient.
+
+Pre-rule PRs were the only thing the fallback bought. The bootstrap above covers them with a recorded fact instead of a re-derived guess, so do not add it back.
+
+Always state the round number and whether the chain is exact or approx in your step 5 comment and step 6 report, so a human can correct it.
 
 ## 5. Decide
 
@@ -136,44 +174,54 @@ First, the gates that apply at every round without exception. Approve and merge 
 
 Then apply the severity gate to the findings from steps 4 and 4.1, using the round from step 4b. Severity definitions are in `review-standards` section 3; in short, **medium-or-above** is wrong behaviour a user or the data can reach (fail-open, authz gap, data loss, leaked credential, broken migration, a wrong figure a later bead builds on), and **low** is the correctness of the code's *description* rather than of the code (inaccurate comment, duplicate log lines, naming nit, a test that is weak but not wrong).
 
+Exactly one row matches any given round.
+
 | Round | Blocks the merge | Merges |
 |---|---|---|
-| 1-3 | Any CONFIRMED **or** PLAUSIBLE finding | Only with zero findings |
-| 4-6 | Only a CONFIRMED **medium-or-above** finding | With low findings filed as beads (step 5a) |
-| 6 (the cap) | A CONFIRMED medium-or-above — escalate to a human | With the remainder filed as beads |
-| 7+ | — | Does not exist. Never start a seventh round. |
+| 1-3 | Any finding, CONFIRMED **or** PLAUSIBLE, at any severity | Only with zero findings |
+| 4-5 | Any **medium-or-above**: CONFIRMED, or PLAUSIBLE and not settled this round | With **low** findings filed as beads (step 5a) |
+| 6 (the cap) | The same set — but a blocker here ends in **escalation to a human**, not another round | With the remainder, which at this point can only be lows, filed as beads |
+| 7+ | Reachable only after round 6 handed the PR to a human, and not a review round. See step 5b. | |
+
+**On an `approx` marker chain (step 4b bootstrap), the cap row may not auto-merge.** The severity gate applies to an approximate round number normally — over- or under-counting by a round or two only shifts *low* findings between "fix now" and "file as a bead", and a medium-or-above blocks at every round regardless. The cap is the one decision where being off by one changes the outcome from "keep reviewing" to "stop", so at round 6 on an `approx` chain, escalate to a human, quoting the number and the source the bootstrap took it from.
 
 Three things this table must not be misread as:
 
-- **A PLAUSIBLE finding at round 4+ does not block.** Either confirm it inside this round, or file it as a bead at its suspected severity and say so. It is not grounds to keep the PR open indefinitely.
-- **Nothing above low is ever closed by the cap.** If round 6 ends with a CONFIRMED medium-or-above outstanding, the PR does *not* merge — comment and escalate. The cap bounds the number of rounds, not the severity that may ship.
+- **"Settled" means confirmed or ruled out — not deferred.** A PLAUSIBLE **low** at round 4+ does not block: file it as a bead and merge. A PLAUSIBLE **medium-or-above** does block, and the round's job is to settle it: confirm it (then it blocks as a confirmed finding), or rule it out and say what ruled it out. A medium-or-above you can do neither with is treated as real and blocks. What is never allowed is filing an unsettled medium-or-above as a bead and merging past it — `ugcportal-0ss`'s `NaN <= number` fail-open and `ugcportal-r1d`'s 32-vs-36-char id mismatch, the two round-7/round-9 defects this whole rule is built on, both looked exactly like an unconfirmed plausible medium until someone spent the round confirming them. The cap, not a leniency about confidence, is what stops this from running forever: at round 6 an unsettled medium-or-above goes to a human.
+- **Nothing above low is ever closed by the cap.** Only lows are ever deferred by this gate. If round 6 ends with *any* outstanding medium-or-above, confirmed or unsettled, the PR does **not** merge — comment and escalate. The cap bounds the number of hunting rounds, not the severity that may ship.
 - **This is not licence to review less carefully in rounds 1-3.** The gate changes what happens *to* findings from round 4 on; it changes nothing about how hard they are looked for, and it does not apply to rounds 1-3 at all. Real defects were found at round 7 and round 9 on this repo. If per-bead first-round finding counts drop after adopting this rule, the rule is being misused — say so in your report rather than quietly benefiting from it.
 
-To merge:
+To merge — note the round marker in the approval body, for the reason given in step 4b:
 
 ```bash
-gh pr review <n> --approve --body "Auto-approved (review round <N>): CI green, no sensitive paths touched, no blocking findings."
+gh pr review <n> --approve --body "$(cat <<'EOF'
+<!-- ugcportal-review-round: 4 -->
+Auto-approved (review round 4, exact from round markers): CI green, no sensitive paths touched, no blocking findings.
+EOF
+)"
 gh repo view --json squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed   # pick an allowed method, prefer squash
 gh pr merge <n> --squash --delete-branch   # fall back to --merge or --rebase if squash isn't allowed
 ```
 
+If `gh pr merge` fails after the approval lands, the marker is already on the PR, so the next run counts this round correctly — report the failure and stop rather than re-approving.
+
 If the PR merges at round 4+ with low findings deferred, say so explicitly in the approval body and list the bead ids from step 5a.
 
-If anything blocks: do not approve, do not merge. Post a single clear comment stating exactly which gate(s) failed (sensitive path / CI red / findings, with severities), the round number and how it was determined, and what a human or the implementer needs to do next. **Stamp the round marker** so the next round can count itself:
+If anything blocks: do not approve, do not merge. Post a single clear comment stating exactly which gate(s) failed (sensitive path / CI red / findings, with severities), the round number and whether it is exact or approx, and what a human or the implementer needs to do next. **Stamp the round marker** so the next round can count itself:
 
 ```bash
 gh pr comment <n> --body "$(cat <<'EOF'
 <!-- ugcportal-review-round: 4 -->
-Review round 4 (counted from round markers). Blocking: ...
+Review round 4 (exact, from round markers). Blocking: ...
 EOF
 )"
 ```
 
-The marker must be the literal string `<!-- ugcportal-review-round: N -->` with `N` the round that just completed — that is what step 4b's first command greps for. Stamp it on every blocking comment, whether the blocker was a finding, red CI, or a sensitive path.
+The marker must be the literal string `<!-- ugcportal-review-round: N -->` (or `<!-- ugcportal-review-round: N approx -->` for a bootstrap, step 4b) with `N` the round that just completed, and it must be the **first line** of the comment body — that is exactly what step 4b's command matches. Stamp it on every comment this skill posts that ends a round: every blocking comment, whether the blocker was a finding, red CI, or a sensitive path, and every approval.
 
 ## 5a. File every deferred finding as a bead
 
-A finding must never be closed by a timer. Anything not fixed in the PR — every low deferred at round 4+, and everything remaining at the cap — becomes a bead before the merge, with its severity recorded in the bead itself:
+A finding must never be closed by a timer. Every low deferred at round 4+ becomes a bead before the merge, with its severity recorded in the bead itself. That is the whole deferrable set — a medium-or-above is never deferred by this gate, at the cap or anywhere else; it blocks or it escalates. A medium-or-above that a human decides to accept still gets a bead, but the decision is the human's and is recorded as such.
 
 ```bash
 bd create --title="<finding>" --type=bug --priority=3 \
@@ -190,12 +238,27 @@ Then list the new bead ids in the approval body and in your step 6 report. If yo
 
 Scope freeze still applies: these are new beads, not additions to the PR. See `review-standards` section 1.
 
+## 5b. Round 7 and after — the return path from an escalation
+
+Escalating at the cap hands the PR to a human. It does not retire the PR, and it must not make the PR permanently unmergeable — bounding the rounds by making the work unfinishable is not a stopping rule, it is a dead end.
+
+So: the human (or the implementer) addresses the blocker and `/pr-review-merge` runs again. Step 4b reports 6, and this is round 7. Round 7+ is reachable *only* after round 6 handed the PR to a human, because those are round 6's only two outcomes — it merges, or it stops for a human (an outstanding medium-or-above, red CI, or a sensitive path). (That deduction holds only because the round number is now an exact marker count; it would not have been safe when the number could be inferred from timestamps and read 6 on a PR at true round 4.)
+
+Round 7+ is therefore **not a new review round** and must not be used as one:
+
+- Re-run steps 1-4.1 as a **verification pass scoped** to the blocker that stopped round 6 and to the commits pushed since that comment. Not a fresh hunt across the whole diff — that is the seventh hunting round the cap forbids.
+- If that blocker is resolved and the scoped pass turns up no new medium-or-above: merge on step 5's always-applies gates, filing any low under 5a. In the approval body, say this is a post-escalation verification pass and link the comment it answers. (If the round-6 blocker was a *sensitive path*, step 2 still stands and the PR still goes to a human — the always-applies gates are not relaxed here, only the hunting is.)
+- Otherwise: do not merge, and do not start another round. Comment and hand it back to the same human. The PR stays escalated, and the next run is another verification pass under this same rule.
+
+Stamp the round marker as usual, on whichever comment ends the pass.
+
 ## 6. Report back
 
 State plainly:
 
 - PR number and decision (merged / left for human), with the exact reason.
-- **The review round number, and whether it came from round markers or the timestamp-clustering fallback.**
+- **The review round number, whether the marker chain is `exact` or `approx`, and — if this was a bootstrap (step 4b) — which of the three sources the starting number came from.**
+- If this was round 7+, that it was a scoped post-escalation verification pass (step 5b), and which escalation it answers.
 - **All three recurring families from step 4.1, named, each with what it found (including "nothing").**
 - Findings with their severities, and which were fixed versus deferred.
 - Bead ids filed in step 5a, if any.
