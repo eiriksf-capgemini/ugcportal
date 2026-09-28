@@ -155,7 +155,10 @@ Opus-vs-Sonnet breakdown of subagent spend (the § 1 finding):
 
 ```bash
 python3 .claude/skills/harness-cost-controls/scripts/usage_indicators.py --since 2026-09-24
-# optionally: --project ugcportal   (substring match on the project dir name)
+# scope to one project's slug (the directory directly under ~/.claude/projects,
+# not necessarily a matched file's immediate parent -- subagent transcripts
+# nest two levels deeper, at <slug>/<session-uuid>/subagents/agent-*.jsonl):
+python3 .claude/skills/harness-cost-controls/scripts/usage_indicators.py --since 2026-09-24 --project ugcportal
 ```
 
 It uses `isSidechain` (present on every assistant turn in a Claude Code
@@ -166,17 +169,24 @@ docstring and in `AI-USAGE-ECONOMICS.md` — but the *ratios* (read:write,
 subagent share, cache-tier mix) describe real resource use regardless of
 whether the dollar figure is a real invoice.
 
-**Baseline captured when this file was added (2026-09-28, all projects, since
-2026-09-24):** 10,998 requests, $1,911.68 list-price. Subagent (isSidechain)
-spend: $1,265.04 (66.2%) of which Opus $1,162.30 across 8,044 requests and
-Sonnet $73.16 across 1,098 requests — Opus subagent spend at Sonnet rates
-would be ~$465. This is **larger** than the bead's originally-cited $1,558 /
-8,370 requests / 5,955-Opus-subagent-requests figures, because more time and
-further work has passed since the bead was filed earlier the same day, and
-because this run's method (an independent `isSidechain`-based script) is not
-guaranteed to reproduce Eirik's original ad-hoc aggregation number-for-number
-even over the same window. Both readings agree on the qualitative finding:
-most subagent spend was still running on Opus at measurement time.
+**Baseline captured 2026-09-28, all projects, since 2026-09-24 (all-projects
+run):** 11,344 requests, $2,105.60 list-price. Subagent (isSidechain) spend:
+$1,445.98 (68.7%) of which Opus $1,314.22 across 8,173 requests and Sonnet
+$94.08 across 1,286 requests — Opus-5 subagent spend at Sonnet-5 rates would
+be ~$525.69. Scoped to `--project ugcportal` specifically: 10,802 requests,
+$2,038.84, subagent spend $1,433.57 (70.3%) across 9,433 requests, of which
+Opus $1,303.03 across 8,041 requests and Sonnet $92.86 across 1,258 — a
+non-zero, non-trivial result, which is itself the round-1-review regression
+test for the P1 fix below (an earlier version of this script printed `$0.00
+… 0 of N requests` for this exact invocation).
+
+This is **larger** than the bead's originally-cited $1,558 / 8,370 requests /
+5,955-Opus-subagent-requests figures, for two reasons: more time and further
+work had passed by the time this was captured, and — found in round-1 PR
+review, see § 5 below — an earlier version of this script undercounted output
+tokens by roughly half and silently dropped every nested subagent transcript
+when `--project` was used. Both readings still agree on the qualitative
+finding: most subagent spend was still running on Opus at measurement time.
 
 **This baseline is a "before" figure, not a "before and after."** Nothing in
 this PR changes runtime behavior — § 1 mechanism 2 (the actual backstop)
@@ -186,6 +196,36 @@ subagent requests has fallen") needs a second run, after the settings.json
 change lands and/or the explicit-model practice is actually adopted in spawns
 against this repo, over a window that postdates that adoption. Re-run the
 command above then and compare against the baseline in this section.
+
+## 5. When this measurement itself is wrong
+
+Round-1 review of the PR that added this file found six bugs in
+`usage_indicators.py`, three of which shared one shape: a wrong project-slug
+path, a first-seen-wins dedup that kept a partial (lower) output-token count,
+and an unpriced model silently costing `$0` — each one made a **real
+regression look like a clean result** rather than an error. The `--project`
+bug is the sharpest example: it made every subagent transcript invisible to
+the filter, so the exact invocation this file documented would have printed
+`$0.00 … 0 of N requests` after the settings.json fix lands — reading as "the
+fix worked," when the truth would have been "the tool broke." A monitor whose
+failure mode is silently reporting the good outcome is worse than no monitor,
+because it actively argues against looking further.
+
+The fixes: resolve the project slug from the path relative to the glob's own
+root rather than one parent directory (works regardless of subagent nesting
+depth, and prints a loud warning if a `--project` filter zeroes out subagent
+traffic that exists elsewhere in the scanned set); keep the maximum
+`output_tokens` seen per `requestId` rather than the first; track unpriced
+models from the final filtered row set and print them prominently rather than
+folding them into `$0`; derive a fast-speed cache-read reprice from each
+model's own ratio instead of assuming the common 10%; bucket days and the
+`--since` cutoff on local time (`.astimezone()`), matching
+`claude-usage-report.py`, instead of raw UTC; and restrict the Opus→Sonnet
+cost counterfactual to model pairs actually verified line-by-line, rather
+than applying one ratio to every `claude-opus*` row. If you touch this file
+again: before asking "does the number look right", ask which direction a
+mistake in this computation would point the reader, and prefer a failure
+that prints a warning over one that quietly prints zero.
 
 ## What this does not do
 
