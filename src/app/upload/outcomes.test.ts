@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { MAX_SIZE_BYTES } from "@/lib/media";
 
@@ -338,6 +338,62 @@ describe("the pre-check refuses what the server would refuse", () => {
   });
 });
 
+describe("a refusal this file has not been taught to phrase (round 2, finding 3)", () => {
+  afterEach(() => {
+    vi.doUnmock("@/lib/media-rules");
+    vi.resetModules();
+  });
+
+  it("shows validateUpload's own words under a code of its own", async () => {
+    /*
+      `validateUpload` returns only 400, 413 and 415 today, so this branch is
+      unreachable without mutating the fixture — which is the point. Passing
+      the message through while stamping it `client_unsupported_type` would
+      leave the machine label and the visible sentence saying different
+      things, and a code exists precisely so they agree.
+    */
+    const real =
+      await vi.importActual<typeof import("@/lib/media-rules")>(
+        "@/lib/media-rules",
+      );
+
+    vi.resetModules();
+    vi.doMock("@/lib/media-rules", () => ({
+      ...real,
+      validateUpload: () => ({
+        ok: false as const,
+        status: 451,
+        message: "Unavailable for legal reasons",
+      }),
+    }));
+
+    const { precheckFile: mutatedPrecheck } = await import("./outcomes");
+    const failure = mutatedPrecheck({ type: "image/png", size: 10 });
+
+    expect(failure?.code).toBe("client_refused");
+    // Not relabelled as one of the three it does know.
+    expect(failure?.code).not.toBe("client_unsupported_type");
+    // And the sentence is the validator's, not an invented one.
+    expect(failure?.message).toBe("Unavailable for legal reasons");
+    expect(failure?.retryable).toBe(false);
+  });
+
+  it("STILL uses the specific codes for the statuses it does know", async () => {
+    // The fixture mutation in the other direction: with the real validator
+    // back, none of the three known refusals may collapse to the catch-all.
+    const { precheckFile: realPrecheck } = await import("./outcomes");
+    expect(realPrecheck({ type: "text/plain", size: 10 })?.code).toBe(
+      "client_unsupported_type",
+    );
+    expect(realPrecheck({ type: "image/png", size: 0 })?.code).toBe(
+      "client_empty_file",
+    );
+    expect(
+      realPrecheck({ type: "image/png", size: MAX_SIZE_BYTES.IMAGE + 1 })?.code,
+    ).toBe("client_too_large");
+  });
+});
+
 describe("formatBytes", () => {
   it("prints the caps the way the code comments name them", () => {
     expect(formatBytes(MAX_SIZE_BYTES.IMAGE)).toBe("10 MB");
@@ -349,6 +405,35 @@ describe("formatBytes", () => {
     expect(formatBytes(1024)).toBe("1 KB");
     expect(formatBytes(512)).toBe("512 B");
     expect(formatBytes(0)).toBe("0 B");
+  });
+
+  it("never prints a magnitude that belongs to the next unit", () => {
+    /*
+      Round 2 finding 4. Rounding happened after the unit loop had already
+      stopped, so a value just under the boundary printed the next unit's
+      number with this unit's label: 1 048 300 bytes is 1023.73 KB, which does
+      not clear `>= 1024`, and then rounded to the string "1024 KB".
+
+      The sibling of the "10 GB" bug in round 1, and it lands in the same two
+      places — the size hint under the drop zone and the "too large" sentence.
+    */
+    expect(formatBytes(1_048_300)).toBe("1 MB");
+    // The same boundary one unit down, and one unit up.
+    expect(formatBytes(1023.6)).toBe("1 KB");
+    expect(formatBytes(1024 * 1024 * 1024 - 1)).toBe("1 GB");
+
+    // Nothing in the range may print "1024 <unit>".
+    for (const bytes of [1023, 1023.5, 1_048_000, 1_048_575, 1_073_741_000]) {
+      expect(formatBytes(bytes)).not.toMatch(/\b1024\b/);
+    }
+  });
+
+  it("still labels a value that really is just under the boundary", () => {
+    // The fixture mutation: a hair further from the boundary, and the smaller
+    // unit is still the right answer. A fix that always promoted would pass
+    // the test above and print everything one unit too large.
+    expect(formatBytes(1000 * 1024)).toBe("1000 KB");
+    expect(formatBytes(1020 * 1024)).toBe("1020 KB");
   });
 
   it("says so rather than printing NaN", () => {
