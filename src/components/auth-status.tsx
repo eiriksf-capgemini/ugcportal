@@ -1,21 +1,25 @@
-import type { Session } from "next-auth";
-
-import { signIn, signOut } from "@/lib/auth";
+import { getSession, signIn, signOut } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 
 /**
- * Renders the sign-in/sign-out affordance for a session the caller already
- * resolved.
+ * Renders the sign-in/sign-out affordance for the current request's
+ * session.
  *
- * Takes `session` as a prop rather than calling `auth()` itself
- * (ugcportal-t0y): the app shell (src/components/app-shell.tsx) now needs the
- * same session to decide whether to show the upload nav link, and this app's
- * session strategy is `"database"` (src/lib/auth.ts), so every `auth()` call
- * is a real adapter round trip to the DB, not a free cookie read. A second
- * independent call here would pay that twice on every single page render for
- * no reason - the shell already has the answer by the time this renders.
+ * Calls `getSession()` — the `cache()`-memoized `auth()` in src/lib/auth.ts —
+ * rather than a plain `auth()` (ugcportal-t0y round 1 medium finding): this
+ * and src/components/upload-nav-link.tsx both need the session, both render
+ * as independent children of AppShell, and both calling the memoized version
+ * means the two cost one adapter round trip between them rather than two.
+ * A first attempt at avoiding that duplication instead had AppShell resolve
+ * the session itself and pass it down as a prop, which removed the
+ * duplicate but forced AppShell to `await` before it could return
+ * `{children}` — serialising the session lookup ahead of the page's own
+ * data fetching on every render. `cache()` gets both: no duplicate query,
+ * and no component forced to block its siblings on it.
  */
-export function AuthStatus({ session }: { session: Session | null }) {
+export async function AuthStatus() {
+  const session = await getSession();
+
   if (!session?.user) {
     return (
       <div className="flex items-center gap-2">

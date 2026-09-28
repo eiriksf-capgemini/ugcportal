@@ -2,8 +2,7 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 
 import { AuthStatus } from "@/components/auth-status";
-import { auth } from "@/lib/auth";
-import { UPLOAD_PATH } from "@/lib/routes";
+import { UploadNavLink } from "@/components/upload-nav-link";
 import { SITE_NAME } from "@/lib/site";
 
 /**
@@ -33,11 +32,7 @@ import { SITE_NAME } from "@/lib/site";
  * so it is exactly the thing the contrast gate in src/lib/design cannot check
  * and a reader cannot rely on.
  */
-export async function AppShell({ children }: { children: ReactNode }) {
-  // Resolved once, here, and threaded down to AuthStatus rather than fetched
-  // twice (ugcportal-t0y) - see the comment on AuthStatus's `session` prop.
-  const session = await auth();
-
+export function AppShell({ children }: { children: ReactNode }) {
   return (
     /*
       min-h-dvh, not min-h-full: a percentage min-height needs a definite
@@ -100,9 +95,24 @@ export async function AppShell({ children }: { children: ReactNode }) {
             {SITE_NAME}
           </Link>
           {/*
-            The nav slot (ugcportal-t0y). /upload was the second destination
-            in the app, after the gallery at "/", and this is the first link
-            into it from the app's own chrome rather than a typed URL.
+            The nav slot (ugcportal-t0y). /upload is the first destination
+            reachable from the app's own chrome - the three admin settings
+            screens (users, rights, instagram) are real destinations too and
+            still have none of their own, a gap this bead's scope does not
+            cover.
+
+            UploadNavLink is its own component (src/components/upload-nav-
+            link.tsx), not inlined here, so this function can stay a plain
+            synchronous one: React only starts rendering `children` once
+            AppShell itself has returned, so an `await` in *this* function's
+            body - the shape round 1 of this bead shipped with - would
+            serialise the session lookup ahead of the page's own data
+            fetching for every page, including an anonymous gallery visitor
+            on "/" who will never see this link at all. Kept as a sibling
+            element instead, it renders concurrently with `{children}` and
+            with AuthStatus - see that component's own comment for how the
+            two avoid paying for the session twice between them despite
+            neither awaiting the other.
 
             A real <nav> landmark, not a bare <a>, so a screen reader user can
             jump to it directly; aria-label distinguishes it from a future
@@ -111,24 +121,8 @@ export async function AppShell({ children }: { children: ReactNode }) {
             and the auth actions, so tab order reads left to right exactly as
             the row is laid out - no tabIndex tricks, and no change to the
             skip link's target or position.
-
-            Gated on the exact same expression the /upload page itself gates
-            on - `session?.user?.id`, not the weaker `session?.user` - so this
-            link's visibility can never disagree with what the page would
-            actually do: anyone this shows the link to is someone the page
-            would let straight through, and anyone it hides the link from is
-            someone the page would redirect to sign-in.
           */}
-          {session?.user?.id ? (
-            <nav aria-label="Primary" className="shrink-0">
-              <Link
-                href={UPLOAD_PATH}
-                className="rounded-sm text-sm font-medium text-foreground transition-colors hover:text-primary focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring"
-              >
-                Upload
-              </Link>
-            </nav>
-          ) : null}
+          <UploadNavLink />
 
           {/*
             Auth is the other header action. min-w-0, and no shrink-0. The
@@ -148,7 +142,7 @@ export async function AppShell({ children }: { children: ReactNode }) {
             explicitly on the wordmark above rather than left to min-content.
           */}
           <div className="ml-auto flex min-w-0 items-center gap-2">
-            <AuthStatus session={session} />
+            <AuthStatus />
           </div>
         </div>
       </header>

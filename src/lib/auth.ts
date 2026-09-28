@@ -5,6 +5,7 @@ import NextAuth, {
 } from "next-auth";
 import Facebook from "next-auth/providers/facebook";
 import Google from "next-auth/providers/google";
+import { cache } from "react";
 
 import type { Role } from "@/generated/prisma/enums";
 import { reconcileBootstrapAdmin } from "@/lib/admin-bootstrap";
@@ -134,3 +135,33 @@ export const authConfig = {
 } satisfies NextAuthConfig;
 
 export const { handlers, auth, signIn, signOut } = NextAuth(authConfig);
+
+/**
+ * `auth()`, memoized for the lifetime of one React render (ugcportal-t0y
+ * round 1 medium finding).
+ *
+ * Only for use from inside a React Server Component render — React's
+ * `cache()` dedupes calls made during the same render pass; called from
+ * outside one (a route handler, a server action) it has no render to key
+ * its memoization against, so it transparently falls through to an
+ * ordinary, uncached call, identical to calling `auth()` directly. Safe
+ * either way, just not cheaper outside a render.
+ *
+ * Within a render, src/components/upload-nav-link.tsx, src/components/
+ * auth-status.tsx and (via `requireAdmin` in src/lib/admin.ts) the three
+ * admin/settings/{users,rights,instagram}/page.tsx pages all call this
+ * independently — none awaits another's result first — so they render
+ * concurrently with whatever else the page is fetching (see the comment on
+ * AppShell in src/components/app-shell.tsx for why a *parent* awaiting the
+ * session before returning its children would undo that), and this app's
+ * `"database"` session strategy means every one of those calls shares a
+ * single adapter round trip instead of paying for its own.
+ *
+ * Not yet universal: src/app/upload/page.tsx:24 still calls plain `auth()`
+ * (ugcportal-t0y round 2 finding) — migrating it needs coordinating with the
+ * concurrently open PR #46, which also touches that file, so it stayed
+ * out of scope here and is filed separately as ugcportal-asg. A signed-in
+ * visit to /upload therefore still costs two session queries, not one,
+ * until that bead lands.
+ */
+export const getSession = cache(() => auth());
