@@ -9,6 +9,7 @@ import { UploadQueueList } from "./upload-queue-list";
 import {
   queueSummary,
   releasedFileId,
+  settledChange,
   uploadQueueReducer,
   type QueueAction,
   type QueueItem,
@@ -62,18 +63,40 @@ export function UploadForm() {
   );
 
   /**
-   * Dispatch, plus releasing the File once nothing can ask for it again.
+   * Which rows have reached an outcome, tracked from the ACTIONS rather than
+   * from the rendered list.
    *
-   * `filesRef` used to be pruned only by `dismiss`, so every succeeded row and
-   * every non-retryable failure kept its File — and therefore its backing
-   * blob, which for video is the whole 200 MB — alive for the lifetime of the
-   * tab, with no remaining reader. `retry` is the only thing that reads the
-   * map, and it refuses both of those states, so the entries were unreachable
-   * as well as unbounded.
+   * An event handler closes over the `items` array of the render that drew its
+   * button. A guard written as `items.find(...)` inside a handler therefore
+   * re-reads the very snapshot the stale button came from, and in the one race
+   * it exists to catch — a file's `succeeded` dispatched, React not yet
+   * committed, that file's old Cancel clicked — it agrees with the stale
+   * button and waves it through. It looks like a second lock and is a copy of
+   * the first one's key.
+   *
+   * This set is written synchronously as each action is dispatched, so it is
+   * current regardless of what React has committed.
    */
-  const dispatchAndRelease = useCallback((action: QueueAction) => {
+  const settledRef = useRef(new Set<string>());
+
+  /**
+   * The single door every dispatch goes through, so the two things that have
+   * to track the action stream actually see all of it.
+   *
+   * Besides the settled set, it releases the row's File once nothing can ask
+   * for it again. `filesRef` used to be pruned only by `dismiss`, so every
+   * succeeded row and every non-retryable failure kept its File — and its
+   * backing blob, up to 200 MB for a video — alive for the tab's lifetime with
+   * no reader left.
+   */
+  const dispatchQueue = useCallback((action: QueueAction) => {
+    const { settled, unsettled } = settledChange(action);
+    for (const id of settled) settledRef.current.add(id);
+    for (const id of unsettled) settledRef.current.delete(id);
+
     const released = releasedFileId(action);
     if (released !== null) filesRef.current.delete(released);
+
     dispatch(action);
   }, []);
 
@@ -89,11 +112,11 @@ export function UploadForm() {
       const controller = new AbortController();
       inFlightRef.current = { id: entry.id, controller };
       return { ...entry, signal: controller.signal };
-    }, dispatchAndRelease).finally(() => {
+    }, dispatchQueue).finally(() => {
       drainingRef.current = false;
       inFlightRef.current = null;
     });
-  }, [dispatchAndRelease]);
+  }, [dispatchQueue]);
 
   const addFiles = useCallback(
     (fileList: FileList | null) => {
@@ -103,7 +126,7 @@ export function UploadForm() {
       // `entries` omits anything the pre-check already refused, so no request
       // is ever made for those files (K2). See enqueueFiles.
       const { items: queued, entries } = enqueueFiles(files, nextQueueId);
-      dispatch({ type: "queued", items: queued });
+      dispatchQueue({ type: "queued", items: queued });
 
       for (const entry of entries) {
         filesRef.current.set(entry.id, entry.file);
@@ -112,7 +135,7 @@ export function UploadForm() {
 
       drain();
     },
-    [drain],
+    [drain, dispatchQueue],
   );
 
   const removeFromQueue = useCallback((id: string) => {
@@ -122,16 +145,22 @@ export function UploadForm() {
   const cancel = useCallback(
     (id: string) => {
       /*
-        The same condition the reducer now applies, checked here so the two
-        agree rather than one catching the other. Without it, a Cancel button
-        painted in a previous commit — the drain loop settles one file and
-        moves to the next before React commits either — reaches this function
-        naming a row that has since finished, misses the in-flight check
-        below, and falls through to `failed` on an upload the server has
-        already stored.
+        Read from the settled SET, not from `items`. A Cancel button painted
+        in a previous commit — the drain loop settles one file and moves to
+        the next before React commits either — calls this with the id of a row
+        that has since finished. `items` here is that same stale render's
+        array, so it would report the row as still uploading and agree with
+        the button; the set was written when `succeeded` was dispatched and
+        says otherwise.
+
+        Without this, the call falls through the in-flight check below to
+        `failed`, and an upload the server has already stored is relabelled
+        "You cancelled this upload, so nothing was kept". The reducer refuses
+        that too, and would have caught it — but a guard here that cannot
+        disagree with the thing it is guarding is not a second lock, and
+        leaving it looking like one invites someone to remove the first.
       */
-      const item = items.find((each) => each.id === id);
-      if (item?.status !== "uploading" && item?.status !== "pending") return;
+      if (settledRef.current.has(id)) return;
 
       if (inFlightRef.current?.id === id) {
         // The transport rejects with UploadAbortedError, which uploadItem
@@ -143,30 +172,39 @@ export function UploadForm() {
       // sent. This branch is what the Cancel control on a pending row
       // reaches.
       removeFromQueue(id);
-      dispatch({ type: "failed", id, failure: cancelledFailure() });
+      dispatchQueue({ type: "failed", id, failure: cancelledFailure() });
     },
-    [items, removeFromQueue],
+    [dispatchQueue, removeFromQueue],
   );
 
   const retry = useCallback(
     (id: string) => {
       const file = filesRef.current.get(id);
       if (file === undefined) return;
-      const item = items.find((each) => each.id === id);
       /*
-        The same condition the reducer applies to "retried", checked here too
-        so the two cannot disagree. The reducer would refuse to reopen a
-        non-retryable row, but this function would still have pushed the file
-        onto the work queue — and the uploader would then send a file whose
-        row says, correctly, that sending it is pointless.
+        Must be settled to be retried, read from the set rather than from
+        `items` for the same reason cancel() does — and `retried` removes the
+        id from the set, so a second click on the same button finds it absent
+        and stops here rather than queueing the file twice.
       */
+      if (!settledRef.current.has(id)) return;
+
+      /*
+        The retryable flag still comes from `items`, because it is the
+        reducer's own record of WHY the row failed and there is nowhere
+        fresher to read it: a row that is failed-and-retryable cannot become
+        failed-and-not while the user is clicking. The reducer applies the
+        same condition to "retried"; this stops the file being pushed onto the
+        work queue for a refusal that would only be repeated.
+      */
+      const item = items.find((each) => each.id === id);
       if (item?.status !== "failed" || item.failure?.retryable !== true) return;
 
-      dispatch({ type: "retried", id });
+      dispatchQueue({ type: "retried", id });
       queueRef.current.push({ id, file });
       drain();
     },
-    [drain, items],
+    [dispatchQueue, drain, items],
   );
 
   const dismiss = useCallback(
@@ -176,9 +214,9 @@ export function UploadForm() {
       }
       removeFromQueue(id);
       filesRef.current.delete(id);
-      dispatch({ type: "dismissed", id });
+      dispatchQueue({ type: "dismissed", id });
     },
-    [removeFromQueue],
+    [dispatchQueue, removeFromQueue],
   );
 
   /*

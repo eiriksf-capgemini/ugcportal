@@ -287,6 +287,64 @@ describe("releasedFileId", () => {
   });
 });
 
+describe("settledChange", () => {
+  /*
+    The form keeps a set of finished ids built from these, because a guard
+    written as `items.find(...)` inside an event handler re-reads the same
+    render snapshot the stale button came from — so in the exact race it
+    exists to catch, it agrees with the stale button and waves it through.
+  */
+  it("records a row as settled when it succeeds or fails", () => {
+    expect(settledChange({ type: "succeeded", id: "f1", media: null })).toEqual(
+      { settled: ["f1"], unsettled: [] },
+    );
+    expect(
+      settledChange({ type: "failed", id: "f1", failure: networkFailure() }),
+    ).toEqual({ settled: ["f1"], unsettled: [] });
+  });
+
+  it("puts a row back in play when it is retried or dismissed", () => {
+    // Retry needs this, or a second click on Try again would find the row
+    // still settled and queue the same file twice.
+    expect(settledChange({ type: "retried", id: "f1" })).toEqual({
+      settled: [],
+      unsettled: ["f1"],
+    });
+    expect(settledChange({ type: "dismissed", id: "f1" })).toEqual({
+      settled: [],
+      unsettled: ["f1"],
+    });
+  });
+
+  it("records a pre-check refusal, which never gets a 'failed' action", () => {
+    /*
+      The case that would otherwise be missed entirely: makeQueueItem bakes
+      the refusal into the row at enqueue time, so the id never appears as the
+      subject of a `failed` action and would look unsettled for the session.
+    */
+    const refused = makeQueueItem("f1", {
+      name: "notes.txt",
+      type: "text/plain",
+      size: 10,
+    });
+    const accepted = makeQueueItem("f2", PNG);
+
+    expect(
+      settledChange({ type: "queued", items: [refused, accepted] }),
+    ).toEqual({ settled: ["f1"], unsettled: [] });
+  });
+
+  it("leaves a row alone while it is still in flight", () => {
+    expect(settledChange({ type: "started", id: "f1" })).toEqual({
+      settled: [],
+      unsettled: [],
+    });
+    expect(
+      settledChange({ type: "progress", id: "f1", loadedBytes: 1 }),
+    ).toEqual({ settled: [], unsettled: [] });
+  });
+});
+
 describe("percentComplete", () => {
   function uploading(loadedBytes: number, sizeBytes: number): QueueItem {
     return {

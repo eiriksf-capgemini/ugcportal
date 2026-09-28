@@ -2,6 +2,8 @@ import {
   cancelledFailure,
   failureForResponse,
   networkFailure,
+  stalledConnectionFailure,
+  type UploadFailure,
 } from "./outcomes";
 import {
   makeQueueItem,
@@ -11,6 +13,7 @@ import {
 } from "./upload-queue";
 import {
   UploadAbortedError,
+  UploadStalledError,
   uploadFile,
   type UploadTransport,
 } from "./upload-transport";
@@ -24,6 +27,23 @@ import {
  * contributes only React state and event wiring on top of this.
  */
 export type Dispatch = (action: QueueAction) => void;
+
+/**
+ * The three ways a request can fail without ever producing a status, told
+ * apart.
+ *
+ * A stall and a user cancellation both arrive as an `abort` — xhr.abort() is
+ * the only way to stop a request — so without the distinction the transport
+ * draws, a connection that died on its own would be reported as "You
+ * cancelled this upload", which is both wrong and unactionable.
+ */
+export function failureForTransportError(error: unknown): UploadFailure {
+  if (error instanceof UploadStalledError) {
+    return stalledConnectionFailure(error.afterMs);
+  }
+  if (error instanceof UploadAbortedError) return cancelledFailure();
+  return networkFailure();
+}
 
 export async function uploadItem(
   id: string,
@@ -46,10 +66,7 @@ export async function uploadItem(
     dispatch({
       type: "failed",
       id,
-      failure:
-        error instanceof UploadAbortedError
-          ? cancelledFailure()
-          : networkFailure(),
+      failure: failureForTransportError(error),
     });
     return;
   }

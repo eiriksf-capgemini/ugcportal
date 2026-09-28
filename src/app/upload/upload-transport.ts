@@ -38,6 +38,56 @@ export class UploadNetworkError extends Error {
   }
 }
 
+/**
+ * Nothing moved for long enough that the connection is presumed dead.
+ *
+ * Its own error, not a network error, because the cause and the advice differ:
+ * a refused connection failed immediately and loudly, whereas this one looked
+ * fine and then silently stopped.
+ */
+export class UploadStalledError extends Error {
+  constructor(readonly afterMs: number) {
+    super(`The upload sent nothing for ${afterMs}ms`);
+    this.name = "UploadStalledError";
+  }
+}
+
+/**
+ * How long to wait for SOMETHING to happen before giving up on a request.
+ *
+ * WHY A WATCHDOG AND NOT `xhr.timeout`. XMLHttpRequest's own `timeout` is a
+ * budget for the WHOLE request, start to finish. Any value large enough not
+ * to kill a legitimate 200 MB video on a slow connection is far too large to
+ * notice a dead one, so it cannot do this job — which is presumably why it
+ * was left at its default of 0, meaning no timeout at all, with a "timeout"
+ * listener below that could never fire.
+ *
+ * What that cost: on a half-open connection — wifi dropped, laptop slept, a
+ * NAT entry expired — the socket is gone but neither `load` nor `error` ever
+ * fires. The promise never settled. And because drainQueue is sequential by
+ * design, one such request parked THE ENTIRE QUEUE: every remaining file sat
+ * at "Waiting" forever with no error anywhere on the page. The server's own
+ * stall timeout cannot rescue this, because the bytes never arrive for it to
+ * time out on.
+ *
+ * So the bound is on INACTIVITY instead, which is what actually distinguishes
+ * a slow upload from a dead one, and it is armed in two phases:
+ */
+
+/**
+ * While the body is going out, `upload.progress` fires continuously — so any
+ * real connection resets this long before it expires, however slow it is.
+ */
+export const UPLOAD_STALL_TIMEOUT_MS = 30_000;
+
+/**
+ * Once the last byte is sent, progress events stop and the server goes to
+ * work: the watermark gate may queue an image behind others before the
+ * S3 puts and the database write. That is legitimately quiet time, so it gets
+ * its own, larger budget rather than tripping the sending timeout.
+ */
+export const RESPONSE_TIMEOUT_MS = 120_000;
+
 /** The caller aborted it — a navigation, or a cancel control. */
 export class UploadAbortedError extends Error {
   constructor() {
@@ -117,9 +167,38 @@ export function uploadFile(
     const xhr = createRequest();
     let settled = false;
 
+    /*
+      The watchdog. `stalledAfterMs` doubles as the flag that tells the `abort`
+      handler below which kind of abort this was: the only way to stop an XHR
+      is xhr.abort(), so a timed-out request and a user-cancelled one arrive
+      through the same event and would otherwise be reported identically —
+      "You cancelled this upload" for a connection that died on its own.
+    */
+    let watchdog: ReturnType<typeof setTimeout> | null = null;
+    let stalledAfterMs: number | null = null;
+
+    const disarm = () => {
+      if (watchdog !== null) {
+        clearTimeout(watchdog);
+        watchdog = null;
+      }
+    };
+
+    const arm = (afterMs: number) => {
+      disarm();
+      watchdog = setTimeout(() => {
+        if (settled) return;
+        stalledAfterMs = afterMs;
+        // Goes through abort() so the request is actually torn down rather
+        // than left running behind a rejected promise.
+        xhr.abort();
+      }, afterMs);
+    };
+
     const onAbort = () => {
       if (settled) return;
       settled = true;
+      disarm();
       xhr.abort();
       reject(new UploadAbortedError());
     };
@@ -128,11 +207,15 @@ export function uploadFile(
     const finish = (settle: () => void) => {
       if (settled) return;
       settled = true;
+      disarm();
       signal?.removeEventListener("abort", onAbort);
       settle();
     };
 
     xhr.upload.addEventListener("progress", (event: ProgressEvent) => {
+      // Every byte acknowledged is proof the connection is alive, so a slow
+      // upload is never mistaken for a dead one however long it takes.
+      arm(UPLOAD_STALL_TIMEOUT_MS);
       onProgress?.({
         loadedBytes: event.loaded,
         // `lengthComputable` is the browser saying whether `total` means
@@ -158,14 +241,27 @@ export function uploadFile(
       });
     });
 
+    // The body is fully sent; from here the server is thinking, and quiet is
+    // expected. Hand over to the larger budget.
+    xhr.upload.addEventListener("load", () => arm(RESPONSE_TIMEOUT_MS));
+
     xhr.addEventListener("error", () => {
       finish(() => reject(new UploadNetworkError()));
     });
     xhr.addEventListener("timeout", () => {
+      // Only reachable if someone sets xhr.timeout; the watchdog above is what
+      // actually bounds this request. Kept so that setting it later does not
+      // produce an unhandled request.
       finish(() => reject(new UploadNetworkError()));
     });
     xhr.addEventListener("abort", () => {
-      finish(() => reject(new UploadAbortedError()));
+      finish(() =>
+        reject(
+          stalledAfterMs === null
+            ? new UploadAbortedError()
+            : new UploadStalledError(stalledAfterMs),
+        ),
+      );
     });
 
     xhr.open("POST", MEDIA_UPLOAD_PATH);
@@ -173,6 +269,9 @@ export function uploadFile(
     // multipart boundary the FormData body generated, and the route's boundary
     // parse (multipartBoundary) then has nothing to split on.
     xhr.responseType = "text";
+    // Armed before send, not on the first progress event: a connection that
+    // dies during the handshake never produces one.
+    arm(UPLOAD_STALL_TIMEOUT_MS);
     xhr.send(form);
   });
 }

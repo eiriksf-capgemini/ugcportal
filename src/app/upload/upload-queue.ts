@@ -242,6 +242,52 @@ export function releasedFileId(action: QueueAction): string | null {
   return null;
 }
 
+/**
+ * Which rows this action settles, and which it reopens.
+ *
+ * Exists so the component can keep a set of finished ids that is updated AT
+ * DISPATCH TIME rather than at render time.
+ *
+ * The distinction is the whole point. An event handler closes over the
+ * `items` array from the render that produced its button, so a guard written
+ * as `items.find(...)` inside a handler re-reads the SAME stale snapshot the
+ * stale button came from — it cannot possibly disagree with it. In the exact
+ * race it was meant to catch (a file's `succeeded` dispatched, React not yet
+ * committed, that file's old Cancel button clicked) such a guard passes,
+ * every time. It reads like a second lock and is a copy of the first one's
+ * key.
+ *
+ * A set maintained from the action stream has no such problem: `succeeded`
+ * has already gone through by the time the click is handled, whatever React
+ * has or has not committed.
+ */
+export type SettledChange = { settled: string[]; unsettled: string[] };
+
+export function settledChange(action: QueueAction): SettledChange {
+  switch (action.type) {
+    case "succeeded":
+    case "failed":
+      return { settled: [action.id], unsettled: [] };
+    // Both put a row back in play: retried re-queues it, dismissed removes it
+    // from the list entirely and frees the id's bookkeeping.
+    case "retried":
+    case "dismissed":
+      return { settled: [], unsettled: [action.id] };
+    case "queued":
+      // A file the pre-check refused arrives ALREADY failed, without ever
+      // being the subject of a `failed` action — so it has to be recorded
+      // here or it would look unsettled for the rest of the session.
+      return {
+        settled: action.items
+          .filter((item) => item.status === "failed")
+          .map((item) => item.id),
+        unsettled: [],
+      };
+    default:
+      return { settled: [], unsettled: [] };
+  }
+}
+
 /** Files still waiting to be sent, oldest first. */
 export function pendingItems(items: QueueItem[]): QueueItem[] {
   return items.filter((item) => item.status === "pending");

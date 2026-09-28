@@ -26,6 +26,13 @@ export type UploadFailureCode =
   | "client_unsupported_type"
   | "client_empty_file"
   | "client_too_large"
+  /**
+   * `validateUpload` refused it for a reason this file has not been taught to
+   * phrase. Its own message is shown; the code says only "refused", because a
+   * code is a machine label and labelling an unknown refusal as a type
+   * problem makes the label and the visible sentence disagree.
+   */
+  | "client_refused"
   // Refused by POST /api/media.
   | "unauthenticated" // 401
   | "bad_request" // 400
@@ -38,6 +45,8 @@ export type UploadFailureCode =
   | "unexpected_status" // anything else, including a 2xx that isn't 201
   // Never reached the server, or the answer never came back.
   | "network_error"
+  /** Stopped moving mid-flight and never recovered. See UPLOAD_STALL_TIMEOUT_MS. */
+  | "connection_stalled"
   // Stopped by the person doing it.
   | "cancelled";
 
@@ -81,23 +90,40 @@ export function formatBytes(bytes: number): string {
   // Not `bytes < 0`: that comparison is false for NaN, so a NaN size would
   // fall through and print "NaN B".
   if (!Number.isFinite(bytes) || !(bytes >= 0)) return "unknown size";
-  if (bytes < 1024) return `${Math.round(bytes)} B`;
 
-  const units = ["KB", "MB", "GB", "TB"];
-  // The first division is unconditional — everything reaching here is at
-  // least 1 KB — so the loop only has to handle the steps ABOVE that. Folding
-  // it into the loop instead puts `units[0]` one step ahead of `value` and
-  // prints 10 MB as "10 GB".
-  let value = bytes / 1024;
+  const units = ["B", "KB", "MB", "GB", "TB"];
+
+  /**
+   * One decimal below 10 (1.4 MB reads better than 1 MB), none above, and
+   * never a trailing ".0".
+   */
+  const display = (value: number): number =>
+    value < 10 ? Math.round(value * 10) / 10 : Math.round(value);
+
+  /*
+    THE LOOP TESTS THE ROUNDED VALUE, NOT THE RAW ONE, and that is the whole
+    subtlety here. Rounding after the loop has stopped lets a value just under
+    the boundary print the NEXT unit's magnitude: 1 048 300 bytes is 1023.73
+    KB, which does not clear the `>= 1024` test, and then rounds to the string
+    "1024 KB". Deciding on the number that will actually be printed makes the
+    two agree, and 1 048 300 comes out as "1 MB".
+
+    Starting at "B" with no unconditional first division, because the same
+    boundary exists between bytes and kilobytes. The previous shape divided
+    once before the loop and had `units[0]` one step ahead of `value`, which
+    printed the 10 MB image cap as "10 GB".
+  */
+  let value = bytes;
   let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
+  while (display(value) >= 1024 && unit < units.length - 1) {
     value /= 1024;
     unit += 1;
   }
-  // One decimal below 10 (1.4 MB reads better than 1 MB), none above, and
-  // never a trailing ".0".
-  const rounded = value < 10 ? Math.round(value * 10) / 10 : Math.round(value);
-  return `${rounded} ${units[unit]}`;
+
+  // Bytes are whole things; "1.5 B" is not a size.
+  return unit === 0
+    ? `${Math.round(value)} B`
+    : `${display(value)} ${units[unit]}`;
 }
 
 /**
@@ -191,11 +217,16 @@ export function precheckFile(file: {
         detail: null,
       };
     default:
-      // `validateUpload` produces only 400, 413 and 415 today. A status it
-      // grows later must not be silently relabelled as one of those, so this
-      // branch repeats what it actually said rather than inventing a reason.
+      /*
+        `validateUpload` produces only 400, 413 and 415 today. A status it
+        grows later must not be silently relabelled as one of those, so this
+        branch repeats what it actually said rather than inventing a reason —
+        AND carries its own code. Passing the message through while stamping
+        it `client_unsupported_type` would leave the label and the sentence on
+        screen saying different things, which is the one thing a code is for.
+      */
       return {
-        code: "client_unsupported_type",
+        code: "client_refused",
         message: validation.message,
         retryable: false,
         retryAfterSeconds: null,
@@ -458,6 +489,28 @@ export function networkFailure(): UploadFailure {
     code: "network_error",
     message:
       "The upload could not reach the server. Check your connection and try again.",
+    retryable: true,
+    retryAfterSeconds: null,
+    needsSignIn: false,
+    detail: null,
+  };
+}
+
+/**
+ * The connection went quiet and stayed quiet, and the client gave up on it.
+ *
+ * Distinct from `network_error`, which is a request that failed loudly and
+ * at once. This one looked healthy and then stopped — the half-open socket a
+ * dropped wifi connection or a slept laptop leaves behind — and until the
+ * transport grew a watchdog it did not fail at all: it hung, and took the
+ * rest of the sequential queue with it.
+ */
+export function stalledConnectionFailure(afterMs: number): UploadFailure {
+  return {
+    code: "connection_stalled",
+    message: `The upload stopped sending and nothing happened for ${Math.round(
+      afterMs / 1000,
+    )} seconds, so it was given up on. Check your connection and try again.`,
     retryable: true,
     retryAfterSeconds: null,
     needsSignIn: false,
