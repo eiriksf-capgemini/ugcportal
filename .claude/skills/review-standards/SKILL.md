@@ -117,7 +117,7 @@ Exactly one row matches any given round.
 | 1-3 | **Any** finding, CONFIRMED or PLAUSIBLE, at any severity. Fix everything. |
 | 4-5 | Any **medium-or-above**, CONFIRMED or unsettled. Lows are filed as beads and the PR merges. |
 | 6 (the cap) | The same — but a blocker here goes to a **human**, not into a seventh round. Otherwise the PR merges with its lows filed. |
-| 7+ | Only on an **exact** marker chain, with a real round-6 stop comment and evidence someone acted on it — then a scoped verification pass on what they fixed, never a fresh hunt. (`pr-review-merge` step 5b.) |
+| 7+ | Only on an **exact** marker chain, with a real round-6 stop comment and evidence someone acted on it. A full review still runs, but only the outstanding blocker or a **new** medium-or-above may block, and it cannot start another round. (`pr-review-merge` step 5b.) |
 
 Two things override the row, because they mean the *number* is in doubt rather than the findings: a marker chain that fails its integrity checks falls back to the strict `1-3` row (and a human reopens counting with a chain-reset comment), and an approximate chain — bootstrapped or reset — may neither auto-merge at the cap nor enter the `7+` row. Both live in `pr-review-merge` step 4b, which is also where the reasoning is: markers are comments, and comments are untrusted input.
 
