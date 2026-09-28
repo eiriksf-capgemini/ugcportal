@@ -267,8 +267,57 @@ describe("the states around the grid", () => {
     expect(render()).toMatch(/<p aria-live="polite"/);
   });
 
+  /*
+   * The round-2 finding. `viewerFailed` is cleared only by the next
+   * activation, and it used to be the first branch of a single ternary — so
+   * one failed open silenced every paging announcement for the rest of the
+   * session. The two states now have a live region each, and this asserts they
+   * cannot occlude one another.
+   */
+  it("keeps the viewer error and the paging status in separate live regions", () => {
+    const markup = render({ initialCursor: "cursor-1", initialHasMore: true });
+    const regions = [...markup.matchAll(/<p aria-live="([^"]+)"/g)].map(
+      (match) => match[1],
+    );
+
+    expect(regions).toContain("assertive");
+    expect(regions).toContain("polite");
+    // Distinct elements, so neither branch can replace the other's text.
+    expect(new Set(regions).size).toBe(regions.length);
+    // Both present even with nothing wrong: a live region inserted at the
+    // same moment as its text is frequently not announced at all.
+    expect(markup).toContain("Showing 3 photographs.");
+  });
+
   it("adds no second <main> — the app shell owns the only one", () => {
     expect(render()).not.toContain("<main");
     expect(render({ initialItems: [] })).not.toContain("<main");
+  });
+
+  /*
+   * app-shell.tsx's skip link moves focus to <main>, and its own comment
+   * reasons about landing "past the <h1>" — the shell documents the assumption
+   * that a page has one. The gallery shipped without: the empty state kept a
+   * heading and the populated state, the one people actually see, had none.
+   */
+  it.each([
+    { label: "with photographs", props: {} },
+    { label: "when empty", props: { initialItems: [] } },
+  ])("has exactly one <h1> $label", ({ props }) => {
+    const headings = [
+      ...render(props).matchAll(/<h1\b[^>]*>([\s\S]*?)<\/h1>/g),
+    ].map((match) => match[1]);
+
+    expect(headings).toHaveLength(1);
+    expect(headings[0].replace(/<[^>]*>/g, "").trim().length).toBeGreaterThan(0);
+  });
+
+  it("starts the document outline at h1, not further down", () => {
+    // A page whose first heading is an h2 is a broken outline even when an h1
+    // exists elsewhere, so check the order rather than only the presence.
+    const levels = [...render().matchAll(/<h([1-6])\b/g)].map((match) =>
+      Number(match[1]),
+    );
+    expect(levels[0]).toBe(1);
   });
 });

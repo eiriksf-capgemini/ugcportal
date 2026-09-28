@@ -8,7 +8,7 @@ import {
   GALLERY_TILE_IMAGE_CLASS,
 } from "@/components/gallery/containment";
 import {
-  UNKNOWN_PREVIEW_SIZE,
+  ensureSizes,
   openGalleryViewer,
   type PixelSize,
 } from "@/components/gallery/lightbox";
@@ -378,66 +378,4 @@ function readListingPage(payload: unknown): {
     hasMore: body.hasMore === true,
     nextCursor,
   };
-}
-
-/**
- * Intrinsic sizes for every slide, in the order the items are in.
- *
- * PhotoSwipe will not load a slide whose width is falsy — `Content.load()`
- * starts the image "only after width is defined" — so a missing size is not a
- * cosmetic problem, it is a blank slide. And a *guessed* size is worse than a
- * missing one: PhotoSwipe sizes the slide from the numbers it is given, so a
- * square guess over a 3:2 photograph distorts it.
- *
- * So each size is either one a tile already reported through `onLoad`, or one
- * read by loading the same URL again. UNKNOWN_PREVIEW_SIZE is used only when
- * the image cannot be loaded at all.
- *
- * ONLY SUCCESSES ARE CACHED. Caching the fallback looks like the same thing
- * and is not: the preview route proxies every byte through the Node process,
- * so a single transient 5xx or a dropped connection is an ordinary event — and
- * writing 1280x1280 into the cache for it would pin that slide to a square for
- * the rest of the session, rendering a landscape photograph visibly stretched
- * with no way back but a reload. A failure is a fact about one moment, not
- * about the image; the next activation asks again.
- *
- * KNOWN GAP (ugcportal-8dn): this waits for EVERY item, not just the one being
- * opened, so the lightbox does not open until the slowest preview in the list
- * has arrived. Adding `loading="lazy"` to the tiles widened that gap rather
- * than narrowing it, and the trade is deliberate: a tile below the fold is now
- * never requested until it is scrolled to, so its size is a real network round
- * trip here rather than a cache hit. Paying it on the rare activation is worth
- * not firing fifty proxied requests at first paint — but it is the reason 8dn
- * is worth doing, not a reason to have left the tiles eager.
- */
-async function ensureSizes(
-  items: GalleryItem[],
-  cache: Map<string, PixelSize>,
-): Promise<PixelSize[]> {
-  return Promise.all(
-    items.map(async (item) => {
-      const known = cache.get(item.previewSrc);
-      if (known !== undefined) return known;
-      const measurement = await measureImage(item.previewSrc);
-      if (measurement === null) return UNKNOWN_PREVIEW_SIZE;
-      cache.set(item.previewSrc, measurement);
-      return measurement;
-    }),
-  );
-}
-
-/** The image's intrinsic size, or null if the browser could not read one. */
-function measureImage(src: string): Promise<PixelSize | null> {
-  return new Promise<PixelSize | null>((resolve) => {
-    const image = new Image();
-    image.onload = () => {
-      resolve(
-        image.naturalWidth > 0 && image.naturalHeight > 0
-          ? { width: image.naturalWidth, height: image.naturalHeight }
-          : null,
-      );
-    };
-    image.onerror = () => resolve(null);
-    image.src = src;
-  });
 }

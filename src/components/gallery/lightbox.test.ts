@@ -4,7 +4,9 @@ import { afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import {
   UNKNOWN_PREVIEW_SIZE,
+  ensureSizes,
   galleryLightboxOptions,
+  measureImage,
   openGalleryViewer,
   type PixelSize,
 } from "@/components/gallery/lightbox";
@@ -120,9 +122,10 @@ async function waitUntil(condition: () => boolean, what: string): Promise<void> 
 }
 
 async function open(index: number): Promise<PhotoSwipeLightbox> {
-  const lightbox = await openGalleryViewer(ITEMS, SIZES, index);
-  await waitUntil(() => lightbox.pswp !== undefined, "open");
-  return lightbox;
+  // No `waitUntil` here any more, deliberately: openGalleryViewer's promise
+  // now resolves when the viewer is genuinely open, so polling afterwards
+  // would hide a regression in exactly that guarantee.
+  return openGalleryViewer(ITEMS, SIZES, index);
 }
 
 async function close(lightbox: PhotoSwipeLightbox): Promise<void> {
@@ -143,6 +146,43 @@ afterEach(async () => {
 });
 
 describe("opening the viewer", () => {
+  /*
+   * The round-2 finding. `loadAndOpen()` is synchronous and does the real work
+   * in `preload()`, whose `Promise.all([...]).then(...)` carries no `.catch` —
+   * so an `async` wrapper that merely called it resolved before anything had
+   * opened, and the caller's `.catch` could never see a failure.
+   *
+   * Asserted by checking the state at the moment the promise resolves, with no
+   * polling in between. Under the old shape `lightbox.pswp` is still undefined
+   * here and there is no `.pswp` element in the document.
+   */
+  it("resolves only once the viewer is really open", async () => {
+    const lightbox = await openGalleryViewer(ITEMS, SIZES, 0);
+
+    expect(lightbox.pswp).toBeDefined();
+    expect(openInstance()).toBeDefined();
+    expect(document.querySelector(".pswp")).not.toBeNull();
+    // Not merely mounted — initialised far enough to have a current slide.
+    expect(lightbox.pswp?.currSlide?.data.src).toBe(mediaPreviewPath("pv-one"));
+
+    await close(lightbox);
+  });
+
+  it("rejects rather than quietly showing the wrong photograph", async () => {
+    // PhotoSwipe refuses a second open while one is live, and reports it only
+    // through `loadAndOpen`'s return value. Discarding that turned a refusal
+    // into an apparent success showing whichever tile won the race.
+    const first = await open(0);
+
+    await expect(openGalleryViewer(ITEMS, SIZES, 2)).rejects.toThrow(
+      /already open/,
+    );
+    // And the refusal did not disturb the viewer that IS open.
+    expect(first.pswp?.currSlide?.data.src).toBe(mediaPreviewPath("pv-one"));
+
+    await close(first);
+  });
+
   it("mounts PhotoSwipe and shows the item that was activated", async () => {
     const lightbox = await open(1);
 
@@ -217,6 +257,124 @@ describe("closing the viewer", () => {
       await close(lightbox);
       expect(openInstance(), `close #${index}`).toBeUndefined();
     }
+  });
+});
+
+describe("ensureSizes", () => {
+  const src = (item: (typeof ITEMS)[number]) => item.previewSrc;
+
+  it("reads a size once and then serves it from the cache", async () => {
+    const cache = new Map<string, PixelSize>();
+    const calls: string[] = [];
+    const measure = async (url: string) => {
+      calls.push(url);
+      return { width: 640, height: 480 };
+    };
+
+    await ensureSizes(ITEMS, cache, measure);
+    await ensureSizes(ITEMS, cache, measure);
+
+    expect(calls).toHaveLength(ITEMS.length);
+    expect(cache.get(src(ITEMS[0]))).toEqual({ width: 640, height: 480 });
+  });
+
+  /*
+   * The round-2 finding, and the whole reason `measure` is injectable.
+   *
+   * The preview route proxies every byte through the Node process, so one
+   * transient 5xx is an ordinary event — and caching the fallback for it
+   * pinned that slide to 1280x1280 for the rest of the session, rendering a
+   * landscape photograph visibly stretched with no way back but a reload.
+   *
+   * The fixture is what makes this checkable: a measurer that fails ONCE and
+   * then succeeds. One that always failed could not tell "the failure was
+   * cached" from "the image is genuinely unreadable" — which is the version of
+   * this test that would have passed over the bug.
+   */
+  it("does not cache a failed measurement", async () => {
+    const cache = new Map<string, PixelSize>();
+    let attempts = 0;
+    const flaky = async () => {
+      attempts += 1;
+      return attempts === 1 ? null : { width: 1600, height: 900 };
+    };
+
+    const first = await ensureSizes([ITEMS[0]], cache, flaky);
+    expect(first[0]).toEqual(UNKNOWN_PREVIEW_SIZE);
+    expect(cache.has(src(ITEMS[0]))).toBe(false);
+
+    // The next activation asks again, and gets the real shape.
+    const second = await ensureSizes([ITEMS[0]], cache, flaky);
+    expect(second[0]).toEqual({ width: 1600, height: 900 });
+    expect(cache.get(src(ITEMS[0]))).toEqual({ width: 1600, height: 900 });
+  });
+
+  it("never yields a zero dimension, which PhotoSwipe would refuse to load", async () => {
+    const sizes = await ensureSizes(ITEMS, new Map(), async () => null);
+    for (const size of sizes) {
+      expect(size.width).toBeGreaterThan(0);
+      expect(size.height).toBeGreaterThan(0);
+    }
+  });
+
+  it("keeps sizes aligned with the items that asked for them", async () => {
+    // Positional, so a reordering bug would hand slide 2 slide 1's shape.
+    const sizes = await ensureSizes(ITEMS, new Map(), async (url) => ({
+      width: url.length,
+      height: 100,
+    }));
+    expect(sizes.map((size) => size.width)).toEqual(
+      ITEMS.map((item) => item.previewSrc.length),
+    );
+  });
+});
+
+describe("measureImage", () => {
+  /**
+   * A stand-in for the browser's `Image`, because jsdom loads no resources —
+   * `new Image()` there never fires `load` or `error`, so the real one cannot
+   * be exercised at all. This covers the three branches that decide whether a
+   * measurement counts: loaded with dimensions, loaded with none, and failed.
+   */
+  function stubImage(outcome: "ok" | "zero" | "error"): void {
+    class FakeImage {
+      naturalWidth = outcome === "ok" ? 1600 : 0;
+      naturalHeight = outcome === "ok" ? 900 : 0;
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      set src(_value: string) {
+        queueMicrotask(() => {
+          if (outcome === "error") this.onerror?.();
+          else this.onload?.();
+        });
+      }
+    }
+    (globalThis as unknown as { Image: unknown }).Image = FakeImage;
+  }
+
+  const realImage = (globalThis as unknown as { Image: unknown }).Image;
+  afterEach(() => {
+    (globalThis as unknown as { Image: unknown }).Image = realImage;
+  });
+
+  it("reports the intrinsic size of an image that loads", async () => {
+    stubImage("ok");
+    await expect(measureImage("/api/media/preview/pv-one")).resolves.toEqual({
+      width: 1600,
+      height: 900,
+    });
+  });
+
+  it("reports null when the image fails to load", async () => {
+    stubImage("error");
+    await expect(measureImage("/api/media/preview/pv-one")).resolves.toBeNull();
+  });
+
+  it("reports null rather than zero when the image loads with no dimensions", async () => {
+    // Zero is not a measurement, and PhotoSwipe treats a falsy width as "do
+    // not load this slide" — so it must travel as null and reach the fallback.
+    stubImage("zero");
+    await expect(measureImage("/api/media/preview/pv-one")).resolves.toBeNull();
   });
 });
 
