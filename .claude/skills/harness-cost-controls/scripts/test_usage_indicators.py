@@ -543,22 +543,38 @@ class ScanDiagnostics(unittest.TestCase):
         # ANOMALY_KEYS} silently discarded any key NOT in that list -- the
         # exact failure this ledger exists to prevent, just moved one level
         # up. load_rows now asserts the keys match and raises rather than
-        # drop. Verified here by monkeypatching ANOMALY_KEYS down to a
-        # subset that excludes a key a REAL record in this fixture will
-        # actually increment (missing_id) -- a fixture that increments
-        # nothing leaves `anomalies` empty, and an empty Counter is
-        # trivially a subset of anything, which would make this test pass
-        # vacuously without exercising the assertion at all.
-        import json as _json
+        # drop, as a SECOND, independent backstop behind `drop()`'s own
+        # call-site assertion (K5's chokepoint refactor) -- this backstop
+        # is what still catches an unlisted key reaching `anomalies` by a
+        # route OTHER than `drop()`, e.g. the rows_since_filtered/
+        # rows_project_filtered counters below, which describe what a
+        # whole-row-set filter removed rather than a single line's early
+        # exit and so are not routed through `drop()`. Exercised here via
+        # `--since`, which increments `rows_since_filtered` directly:
+        # monkeypatching ANOMALY_KEYS down to a subset that excludes it
+        # reproduces the pre-fix silent-discard shape and confirms
+        # load_rows still raises instead of quietly dropping the count.
         with TemporaryDirectory() as root:
-            missing_id = _json.dumps({
-                "type": "assistant", "timestamp": "2026-09-24T10:00:00Z",
-                "message": {"model": "claude-opus-5", "usage": {"input_tokens": 1, "output_tokens": 1}},
-            }) + "\n"
-            write(root, "proj-a/session.jsonl", missing_id)
-            with mock.patch.object(ui, "ANOMALY_KEYS", ("files_unreadable",)):
+            write(root, "proj-a/session.jsonl",
+                  line("s1", "2026-09-24T10:00:00Z", "claude-opus-5"))
+            with mock.patch.object(
+                ui, "ANOMALY_KEYS",
+                tuple(k for k in ui.ANOMALY_KEYS if k != "rows_since_filtered"),
+            ):
                 with self.assertRaises(RuntimeError):
-                    ui.load_rows(f"{root}/**/*.jsonl", None, None)
+                    ui.load_rows(f"{root}/**/*.jsonl", "2099-01-01", None)
+
+    def test_drop_rejects_a_reason_not_in_anomaly_keys_at_the_call_site(self):
+        # K5's chokepoint itself: `drop()` (used for every early exit from
+        # the per-line/per-file scan loop) fails immediately, naming the
+        # exact bad key, rather than only after the whole scan finishes via
+        # the load_rows-level assertion tested above.
+        anomalies = ui.collections.Counter()
+        drop = ui._make_drop(anomalies)
+        drop("files_unreadable")
+        self.assertEqual(anomalies["files_unreadable"], 1)
+        with self.assertRaises(AssertionError):
+            drop("not_a_declared_key")
 
     def test_filters_and_date_range_echoed(self):
         with TemporaryDirectory() as root:
