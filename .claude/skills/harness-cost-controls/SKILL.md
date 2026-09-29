@@ -379,53 +379,59 @@ predicting cost, per `CLAUDE.md`'s own calibration test ("if a sonnet bead
 consistently costs what an opus bead costs, the estimate was wrong — fix the
 bead, and the guidance here")?
 
-Measured 2026-09-29, across the 30 closed beads carrying at least one token
-figure (`bd list --status closed --json`):
+Measured 2026-09-29, across the 31 closed beads carrying at least one token
+figure (`bd list --status closed --json`; re-run that query verbatim rather
+than trusting this snapshot — beads keep closing, and one, `ugcportal-2pnq`,
+closed mid-analysis and changed the sonnet row below by the time this was
+double-checked):
 
 | tier | n impl | avg tokens_impl | n qa | avg tokens_qa |
 |---|---:|---:|---:|---:|
-| sonnet | 9 | 731,065 | 5 | 307,643 |
+| sonnet | 10 | 662,458 | 5 | 307,643 |
 | opus | 11 | 717,546 | 10 | 320,884 |
 | haiku | 4 | 27,399 | 2 | 53,554 |
 | fable | 2 | 170,524 | 1 | 193,870 |
 | (untagged) | 2 | 856,015 | 1 | 202,003 |
 
-**Sonnet-tagged and opus-tagged beads cost almost exactly the same to build
-and to review** (731k vs 718k impl; 308k vs 321k qa) — not the ~2.5x-apart
-figures the list-price ratio would predict if the tags had routed to
-genuinely different models. Read this as confirmation of §1's root cause, at
-full-dataset scale rather than the two anecdotal beads (`r1d`, `lu7`)
-already named in this bead's own dependency history: **the tag was
-decorative until `ugcportal-2tc` set `CLAUDE_CODE_SUBAGENT_MODEL=sonnet`
-globally, closed 2026-09-29.** Before that fix, a `sonnet`-tagged
-worker-shaped spawn with no explicit `model` argument inherited the parent's
-Opus exactly as §1 describes, so most of this dataset's "sonnet" beads
-plausibly ran on Opus regardless of their tag. `haiku` (n=4, all small
-mechanical CI/scaffold beads — `25x`, `0hc`, `e5zf`, `97y`) is the one tier
-that does show a large gap from the rest, but this dataset can't tell
-whether that's the tag being honored at runtime or just that haiku-tier work
-is inherently smaller in scope — it would take knowing which model actually
-ran to separate the two.
+**Sonnet-tagged and opus-tagged beads cost close to the same to build and to
+review** (662k vs 718k impl — sonnet about 8% cheaper, not the ~2.5x the
+list-price ratio would predict; 308k vs 321k qa — closer still). Read this
+as confirmation of §1's root cause, at full-dataset scale rather than the
+two anecdotal beads (`r1d`, `lu7`) already named in this bead's own
+dependency history: **the tag was decorative until `ugcportal-2tc` set
+`CLAUDE_CODE_SUBAGENT_MODEL=sonnet` globally, closed 2026-09-29.** Before
+that fix, a `sonnet`-tagged worker-shaped spawn with no explicit `model`
+argument inherited the parent's Opus exactly as §1 describes, so most of
+this dataset's "sonnet" beads plausibly ran on Opus regardless of their
+tag. `haiku` (n=4, all small mechanical CI/scaffold beads — `25x`, `0hc`,
+`e5zf`, `97y`) is the one tier that does show a large gap from the rest,
+but this dataset can't tell whether that's the tag being honored at runtime
+or just that haiku-tier work is inherently smaller in scope — it would take
+knowing which model actually ran to separate the two.
 
 **Do not use this historical dataset to recalibrate `CLAUDE.md`'s
 model-fit table.** Sonnet and opus assignments were not a clean experiment
 here. Re-run this comparison after a meaningful number of beads (a dozen or
 so) have closed with `2tc`'s fix in effect, and only treat a persisting
-sonnet-equals-opus cost equality as a real finding if it survives that
-re-run — right now it's most likely an artifact of the inheritance bug, not
-evidence that tier choice doesn't matter.
+sonnet-close-to-opus cost figure as a real finding if it survives that
+re-run — right now the closeness is most likely an artifact of the
+inheritance bug, not evidence that tier choice doesn't matter.
 
-**Round count alone is a weak predictor of `tokens_qa`.** Across the 13
+**Round count alone is a weak predictor of `tokens_qa`.** Across the 17
 closed beads with both a recorded review-pass count and a measured
-`tokens_qa` (`lu7` 1, `vsm` 4, `97y` 2, `u7g` 4, `axu` 4, `egp` 4, `bdh` 4,
-`44q` 5, `j4j` 5, `0ss` 7, `e86` 8, `2yj` 6, `r1d` 9 — each figure from that
-bead's own close reason), the Pearson correlation between round count and
-`tokens_qa` is **r ≈ 0.47** (r² ≈ 0.22): moderate and positive, consistent
+`tokens_qa` — `e5zf` 1, `lu7` 1, `97y` 2, `u7g` 4, `axu` 4, `bdh` 4, `egp` 4,
+`vsm` 4, `44q` 5, `05b` 5, `j4j` 5, `2yj` 6, `71y` 6, `9cs` 6, `0ss` 7, `e86`
+8, `r1d` 9 — each figure cited from that bead's own close reason where it
+states one, or (`97y`, `lu7`) from `ugcportal-ws3`'s per-bead round table
+where it does not — the Pearson correlation between round count and
+`tokens_qa` is **r ≈ 0.49** (r² ≈ 0.24): moderate and positive, consistent
 with this bead's own finding that review cost tracks pass count more than
-diff size, but round count alone explains barely a fifth of the variance.
+diff size, but round count alone explains under a quarter of the variance.
 `j4j` (5 rounds, `tokens_qa` 590,000) cost more to review than `r1d` (9
-rounds, 415,357) or `0ss` (7 rounds, 459,771) — per-round severity dominates
-over round count.
+rounds, 415,357), `0ss` (7 rounds, 459,771) or `e86` (8 rounds, 310,432) —
+per-round severity dominates over round count. (`ugcportal-8wa` and
+`ugcportal-r9q` also carry `tokens_qa` but no round count anywhere in their
+own record, so they're excluded rather than guessed at.)
 
 **The two largest single outliers are scope-ambiguity stories, not
 tier-mismatch stories, and re-tagging would not have prevented either.**
