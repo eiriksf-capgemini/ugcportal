@@ -1,6 +1,6 @@
 ---
 name: harness-cost-controls
-description: Reference for the three harness-level Claude Code cost levers measured on this project (ugcportal-9ak, 2026-09-28) — name an explicit model on every worker-shaped subagent spawn instead of letting it inherit the parent's tier, cap an orchestration session's context before it gets expensive to carry, and don't leave a large session parked. Read this before spawning a subagent for implementation, a fix round, review, search, or verification work, and before starting or resuming a long-running orchestration session against this repo. Also documents how to re-run the underlying cost measurement so a regression is visible rather than found weeks later. Does not change review depth or review process — see review-standards / pr-review-merge for that.
+description: Reference for the three harness-level Claude Code cost levers measured on this project (ugcportal-9ak, 2026-09-28) — name an explicit model on every worker-shaped subagent spawn instead of letting it inherit the parent's tier, cap an orchestration session's context before it gets expensive to carry, and don't leave a large session parked. Read this before spawning a subagent for implementation, a fix round, review, search, or verification work, and before starting or resuming a long-running orchestration session against this repo. Also documents how to re-run the underlying cost measurement so a regression is visible rather than found weeks later, and (§6, ugcportal-bf7) why this repo's own bead-level tokens_impl/tokens_qa metadata can't yet be used to recalibrate CLAUDE.md's model-fit tiers. Does not change review depth or review process — see review-standards / pr-review-merge for that.
 ---
 
 # Harness cost controls (ugcportal)
@@ -369,6 +369,107 @@ ask which direction a mistake in this computation would point the reader,
 and ask whether that mistake would actually show up in the `ANOMALY_KEYS`
 ledger — if it wouldn't, the ledger is missing a key, which is how three of
 these nineteen bugs were found.
+
+## 6. Bead-level cost vs assigned tier (ugcportal-bf7)
+
+§§1-5 measure the harness from outside the project. This section answers a
+different question, from inside it: does this repo's own bead metadata
+(`tokens_impl`/`tokens_qa`, `model`) show the assigned tier actually
+predicting cost, per `CLAUDE.md`'s own calibration test ("if a sonnet bead
+consistently costs what an opus bead costs, the estimate was wrong — fix the
+bead, and the guidance here")?
+
+Measured 2026-09-29, across the 31 closed beads carrying at least one token
+figure (`bd list --status closed --json`; re-run that query verbatim rather
+than trusting this snapshot — beads keep closing, and one, `ugcportal-2pnq`,
+closed mid-analysis and changed the sonnet row below by the time this was
+double-checked):
+
+| tier | n impl | avg tokens_impl | n qa | avg tokens_qa |
+|---|---:|---:|---:|---:|
+| sonnet | 10 | 662,458 | 5 | 307,643 |
+| opus | 11 | 717,546 | 10 | 320,884 |
+| haiku | 4 | 27,399 | 2 | 53,554 |
+| fable | 2 | 170,524 | 1 | 193,870 |
+| (untagged) | 2 | 856,015 | 1 | 202,003 |
+
+**Sonnet-tagged and opus-tagged beads cost close to the same to build and to
+review** (662k vs 718k impl — sonnet about 8% cheaper, not the ~2.5x the
+list-price ratio would predict; 308k vs 321k qa — closer still). Read this
+as confirmation of §1's root cause, at full-dataset scale rather than the
+two anecdotal beads (`r1d`, `lu7`) already named in this bead's own
+dependency history: **the tag was decorative until `ugcportal-2tc` set
+`CLAUDE_CODE_SUBAGENT_MODEL=sonnet` globally, closed 2026-09-29.** Before
+that fix, a `sonnet`-tagged worker-shaped spawn with no explicit `model`
+argument inherited the parent's Opus exactly as §1 describes, so most of
+this dataset's "sonnet" beads plausibly ran on Opus regardless of their
+tag. `haiku` (n=4, all small mechanical CI/scaffold beads — `25x`, `0hc`,
+`e5zf`, `97y`) is the one tier that does show a large gap from the rest,
+but this dataset can't tell whether that's the tag being honored at runtime
+or just that haiku-tier work is inherently smaller in scope — it would take
+knowing which model actually ran to separate the two.
+
+**Do not use this historical dataset to recalibrate `CLAUDE.md`'s
+model-fit table.** Sonnet and opus assignments were not a clean experiment
+here. Re-run this comparison after a meaningful number of beads (a dozen or
+so) have closed with `2tc`'s fix in effect, and only treat a persisting
+sonnet-close-to-opus cost figure as a real finding if it survives that
+re-run — right now the closeness is most likely an artifact of the
+inheritance bug, not evidence that tier choice doesn't matter.
+
+**Round count alone is a weak predictor of `tokens_qa`.** Across the 17
+closed beads with both a recorded review-pass count and a measured
+`tokens_qa` — `e5zf` 1, `lu7` 1, `97y` 2, `u7g` 4, `axu` 4, `bdh` 4, `egp` 4,
+`vsm` 4, `44q` 5, `05b` 5, `j4j` 5, `2yj` 6, `71y` 6, `9cs` 6, `0ss` 7, `e86`
+8, `r1d` 9 — each figure cited from that bead's own close reason where it
+states one, or (`97y`, `lu7`) from `ugcportal-ws3`'s per-bead round table
+where it does not — the Pearson correlation between round count and
+`tokens_qa` is **r ≈ 0.49** (r² ≈ 0.24): moderate and positive, consistent
+with this bead's own finding that review cost tracks pass count more than
+diff size, but round count alone explains under a quarter of the variance.
+`j4j` (5 rounds, `tokens_qa` 590,000) cost more to review than `r1d` (9
+rounds, 415,357), `0ss` (7 rounds, 459,771) or `e86` (8 rounds, 310,432) —
+per-round severity dominates over round count. (`ugcportal-8wa` and
+`ugcportal-r9q` also carry `tokens_qa` but no round count anywhere in their
+own record, so they're excluded rather than guessed at.)
+
+**The two largest single outliers are scope-ambiguity stories, not
+tier-mismatch stories, and re-tagging would not have prevented either.**
+
+- `ugcportal-jsc` (tagged `sonnet`/`medium`) recorded 2.10M `tokens_impl` —
+  the largest implementation figure in the dataset, ahead of every
+  `opus`-tagged bead including the P0 auth-bypass fix (`egp`, 1.6M). Its own
+  close reason already names why: "this was the most expensive bead of the
+  phase." The cost traces to real multi-system scope — a many-to-many schema
+  with cascade-delete implications for other users' published work, a
+  same-transaction write chosen specifically to avoid a concurrent-upload
+  data loss, and a contested claim on the app's first site-wide navigation
+  that was granted and then explicitly un-granted mid-bead — plus two
+  same-day rescopes by Eirik before implementation even started. A same-day
+  rescope stacked with a contested claim on a cross-cutting resource is a
+  cheaper, earlier signal to watch for than tier mismatch.
+- `ugcportal-t0y` ("Nothing links to the upload page", **no tier assigned at
+  all**) recorded 1.5M `tokens_impl` over five rounds for what reads as a
+  one-line nav-link addition. Its own close reason names the mechanism:
+  round 3 added request-level middleware to satisfy a reviewer's "cheap to
+  add" `aria-current` request; round 4 found that middleware's matcher also
+  intercepted `/api/*` and truncated request bodies over 10MB — a regression
+  on this app's 200MB video-upload path, introduced by a PR whose only job
+  was adding a link. This corroborates `ugcportal-9ak`'s own dependency-note
+  finding that follow-up beads filed by implementing agents mid-PR are
+  systematically the ones with no tier assigned, and are exactly the
+  "small, cheap, mechanical" work most at risk of silently growing — not
+  from over-provisioning here, but from an unsized in-review mechanism
+  decision.
+
+Neither outlier is a lever this bead can encode as a rule with a measured
+saving (per its own K3, a lever must show what it would have saved against
+real history): re-tagging `jsc` to `opus`, or assigning `t0y` a tier at
+authoring time, would not have changed either cost driver. They're recorded
+here as the concrete instances behind the caution above — bead-level
+`tokens_impl`/`tokens_qa` isn't yet a clean signal for tier calibration, and
+the actual top costs in this dataset came from scope ambiguity and
+in-review mechanism growth, not from picking the wrong model tier.
 
 ## What this does not do
 
