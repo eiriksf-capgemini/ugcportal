@@ -30,7 +30,7 @@ The managed Beads block is task-tracking guidance, not permission to override re
 
 - **Conservative (default)**: Use `bd` for task tracking. Do not run git commits, git pushes, or Dolt remote sync unless explicitly asked. At handoff, report changed files, validation, and suggested next commands.
 - **Minimal**: Keep tool instruction files as pointers to `bd prime`; use the same conservative git policy unless active instructions say otherwise.
-- **Team-maintainer (active for this repo — opted in 2026-09-18 by Eirik Sander-Fjeld)**: When a feature/bead's implementation is complete and quality gates (lint, test, typecheck, build) pass, agents commit, push a branch, and open a PR (Conventional Commit title, see below) without waiting for a separate go-ahead per change. Then run the code-review process (the `pr-review-merge` skill) against that PR: if CI is green, the diff touches no sensitive paths (see settings.json guard above), and the review finds zero blocking issues, auto-approve and squash-merge into `main`; otherwise leave a review comment explaining the blocker and stop for a human. Close the bead (with `cc_type`/`cc_scope`/`prs` metadata set) once merged. A current "do not commit" / "do not push" / "do not merge" instruction in the conversation always overrides this default for that instance.
+- **Team-maintainer (active for this repo — opted in 2026-09-18 by Eirik Sander-Fjeld)**: When a feature/bead's implementation is complete and quality gates (lint, test, typecheck, build) pass, agents commit, push a branch, and open a PR (Conventional Commit title, see below) without waiting for a separate go-ahead per change. Then run the code-review process (the `pr-review-merge` skill) against that PR: if CI is green, the diff touches no sensitive paths (see settings.json guard above), and no finding blocks under the severity gate below, auto-approve and squash-merge into `main`; otherwise leave a review comment explaining the blocker and stop for a human. Close the bead (with `cc_type`/`cc_scope`/`prs` metadata set) once merged. A current "do not commit" / "do not push" / "do not merge" instruction in the conversation always overrides this default for that instance.
 
 ## Session Completion
 
@@ -78,6 +78,37 @@ If a task genuinely needs a change here:
   human review, **or** stop and hand the exact change (diff/snippet) to Eirik to apply manually.
 - Never bundle a settings.json/settings.local.json change into an unrelated work branch — the
   Refinery does not treat these files specially and will merge them like any other diff.
+
+## Review iteration: severity gate and round cap
+
+Review rounds on a PR are bounded. Rationale and the measurement behind it:
+`ugcportal-2yj`. Operative detail: `.claude/skills/review-standards/SKILL.md`
+and `.claude/skills/pr-review-merge/SKILL.md` (steps 4, 4.1, 4b, 5, 5a, 5b).
+A "round" is a pass that actually reviewed the diff — a run that stopped at red
+CI reviewed nothing and does not count. Exactly one row below matches each round.
+
+| Round      | What blocks the merge |
+|------------|------------------------|
+| 1-3        | **Any** finding, CONFIRMED or PLAUSIBLE, at any severity. Fix everything. |
+| 4-5        | Any **medium-or-above**, confirmed or unsettled. Lows are filed as beads and the PR merges. |
+| 6 (cap)    | The same — but a blocker here goes to a **human**, not into a seventh round. Otherwise the PR merges with its lows filed. |
+| 7+         | Only on an **exact** marker chain, with a real round-6 stop comment and evidence someone acted on it. Then a scoped verification pass on what they fixed — never a fresh hunt. |
+
+Confidence changes what a **low** costs, not what a medium-or-above costs: from
+round 4 an unsettled plausible medium blocks exactly as a confirmed one does.
+`code-review` does not report severity — **the reviewer assigns it** and states
+it per finding. A defective test inherits the severity of what it guards, so an
+assertion that cannot fail over a fresh fail-open fix is medium-or-above, not a
+"weak test" nit.
+
+Every deferred finding becomes a bead with its severity recorded and a
+`discovered-from` edge to the parent — nothing above low is ever closed by the
+cap rather than by a decision. Implementers: from round 4, stop grinding on low
+findings and file them. Reviewers: this is not licence to review less carefully
+in rounds 1-3; if first-round finding counts drop, the rule is being misused.
+
+Scope freeze applies from first push: work discovered during review becomes its
+own bead, not an addition to the PR in flight.
 
 ## Conventional Commits & Release Notes
 
