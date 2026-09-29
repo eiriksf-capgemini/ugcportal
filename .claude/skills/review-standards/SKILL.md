@@ -108,7 +108,7 @@ Then make it mechanical, because attention is demonstrably not the missing ingre
 
 ## 3. The stopping rule — severity gate, then a hard cap
 
-"Round" means a review pass **that actually reviewed the diff** — a run that stopped at red CI or an unmergeable branch reviewed nothing and is not a round. `pr-review-merge` step 4b counts them from round markers the skill stamps on every comment that ends such a round, checks the resulting chain for forgery, edits and gaps, and covers the bootstrap for PRs whose history predates this rule.
+"Round" means a review pass **that actually reviewed the diff** — a run that stopped at red CI or an unmergeable branch reviewed nothing and is not a round. `pr-review-merge` step 4b counts them from round markers the skill stamps on every comment that ends such a round, checks the resulting chain for forgery, edits, gaps and implausible round numbers, and covers the bootstrap for PRs whose history predates this rule. Step 1a serialises overlapping runs on a per-PR lock, so two of them cannot both stamp the same round and break the chain.
 
 Exactly one row matches any given round.
 
@@ -117,9 +117,16 @@ Exactly one row matches any given round.
 | 1-3 | **Any** finding, CONFIRMED or PLAUSIBLE, at any severity. Fix everything. |
 | 4-5 | Any **medium-or-above**, CONFIRMED or unsettled. Lows are filed as beads and the PR merges. |
 | 6 (the cap) | The same — but a blocker here goes to a **human**, not into a seventh round. Otherwise the PR merges with its lows filed. |
-| 7+ | Only on an **exact** marker chain, with a real round-6 stop comment and evidence someone acted on it. A full review still runs, but only the outstanding blocker or a **new** medium-or-above may block, and it cannot start another round. (`pr-review-merge` step 5b.) |
+| 7+ | Only on an **exact** marker chain, anchored to the **latest** stop comment at or above round 6, with evidence someone acted since it. A full review still runs at full depth, but the only things that may block are the outstanding escalated blocker and any **medium-or-above** that is outstanding — whenever it was first raised. Severity, never age. It cannot start another round. (`pr-review-merge` step 5b.) |
 
-Two things override the row, because they mean the *number* is in doubt rather than the findings: a marker chain that fails its integrity checks falls back to the strict `1-3` row (and a human reopens counting with a chain-reset comment), and an approximate chain — bootstrapped or reset — may neither auto-merge at the cap nor enter the `7+` row. Both live in `pr-review-merge` step 4b, which is also where the reasoning is: markers are comments, and comments are untrusted input.
+Two things override the row, because they mean the *number* is in doubt rather than the findings. Both live in `pr-review-merge` step 4b, which is also where the reasoning is: markers are comments, and comments are untrusted input.
+
+- **A `broken` chain does not merge at all.** A marker chain that fails its integrity checks is reviewed under the strict `1-3` rules and then, whatever they say, **does not merge — not even on a round that finds nothing**. A chain that cannot be read is a review history that cannot be read, and approving on it is approving on an unknown number of prior rounds. A human reopens counting with a chain-reset comment.
+- **An `approx` chain uses the strict `1-3` rules at every round.** Whatever number it carries, any finding blocks and it merges only with zero findings; it may not auto-merge at the cap (it escalates to a human instead), and it may not enter the `7+` row. A chain is `approx` if it was bootstrapped, if a human reset it, **or if its markers were written by the PR's own author** — a count the beneficiary wrote is an asserted count, not a recorded one. An asserted count can bring the cap, and therefore a human, closer; it can never loosen the gate.
+
+When the `7+` row's three requirements are not all met, `pr-review-merge` step 5 states the two outcomes: a chain that is not `exact`, or one with no stop comment at or above round 6 to anchor to, is **treated as round 6** — the cap; an anchor that *does* exist with nothing having happened since it means the escalation is **still outstanding**, so the PR does not merge and no new round is counted.
+
+**What that means in this repo today:** the reviewer authenticates as the same account that opens the PRs (verified 2026-09-29 — `gh api user` and `gh pr view <n> --json author` both return `eiriksf-capgemini`), so every chain reads `approx` and **the lenient rounds 4-5 row is currently unreachable**: any finding blocks at every round, and a PR that still has one at round 6 goes to a human rather than merging with its lows filed. That is deliberate — the alternative is leniency unlocked by a number its beneficiary typed, which one forged comment can produce — and it is reversed by an identity change, not a code change: run review under a separate bot account or GitHub App and `exact` becomes reachable again.
 
 The cap's promise is exact and narrow. It never lets a **found** finding above low ship. It does not promise that nothing above low ships at all — a round that never runs finds nothing, and the `0ss` and `r1d` defects above were found at rounds 7 and 9, which this rule would not have reached. Residual undiscovered risk is the cost the cap deliberately accepts in exchange for not funding rounds 7-11.
 
