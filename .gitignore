@@ -4,6 +4,7 @@
 *.db
 .beads-credential-key
 .beads/proxieddb/
+/.beads.gate.lock
 
 # Gas Town / Claude Code local runtime and private instructions
 .runtime/
