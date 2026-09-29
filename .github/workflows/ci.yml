@@ -76,6 +76,38 @@ jobs:
             exit 1
           fi
 
+  usage-indicators-selftest:
+    name: harness-cost-controls self-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check whether harness-cost-controls scripts changed
+        id: changed
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            CHANGED=$(git diff --name-only "origin/${BASE_REF}...HEAD")
+          else
+            CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || echo "")
+          fi
+          echo "Changed files:"
+          echo "$CHANGED"
+          if echo "$CHANGED" | grep -q '^\.claude/skills/harness-cost-controls/scripts/'; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run usage_indicators.py self-test
+        if: steps.changed.outputs.run == 'true'
+        working-directory: .claude/skills/harness-cost-controls/scripts
+        run: python3 -m unittest test_usage_indicators -v
+
   quality:
     name: Lint, test, typecheck, build
     runs-on: ubuntu-latest
