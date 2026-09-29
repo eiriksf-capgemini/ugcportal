@@ -47,11 +47,14 @@ the same measurement with a runnable command, and its numbers are larger and
 still growing (more time and traffic have passed, and three rounds of review
 found real undercounting bugs in the tool that produced them — see § 5). The
 figure to compare against the **$539** above is § 4's own savings-available
-number, computed the same way (Opus subagent spend minus the Sonnet-rate
-counterfactual): as of round 3 that is $1,321.04 − $528.42 ≈ **$792** on the
-all-projects baseline in § 4 — not $539, and not the same window measured
-twice. Re-run § 4's command for a current figure rather than trusting either
-number as current; the two will keep diverging as more time passes.
+number, computed the same way (Opus-5 subagent spend minus the Sonnet-5-rate
+counterfactual): as of the § 4 baseline captured 2026-09-28 that is
+$1,325.09 − $530.04 ≈ **$795** on the all-projects baseline in § 4 — not
+$539, and not the same window measured twice. This figure was previously
+misquoted here as $792 using an earlier round's inputs ($1,321.04 − $528.42);
+corrected 2026-09-29 (ugcportal-4il). Re-run § 4's command for a current
+figure rather than trusting either number as current; the two will keep
+diverging as more time passes.
 
 **Two mechanisms close this, and they are not redundant — use both:**
 
