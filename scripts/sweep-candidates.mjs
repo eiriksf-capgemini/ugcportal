@@ -54,20 +54,50 @@ const CONTROL_FLOW_KEYWORDS = new Set(["if", "for", "while", "function", "else",
  */
 export function findToContainCandidates(content, filePath) {
   const candidates = [];
-  const lines = content.split("\n");
-  const re = /(\.not)?\.toContain\(\s*([\s\S]*?)\s*\)/g;
-  lines.forEach((lineText, idx) => {
-    re.lastIndex = 0;
-    let m;
-    while ((m = re.exec(lineText)) !== null) {
-      candidates.push({
-        file: filePath,
-        line: idx + 1,
-        negated: Boolean(m[1]),
-        needle: m[2],
-      });
+  // Scanned over the whole content, not split by line, so a call spanning
+  // multiple lines is still found -- a real shape in this codebase (e.g.
+  // src/lib/sign-in-policy.test.ts). The argument's closing paren is found
+  // by depth-counting rather than a non-greedy match to the first `)`, so a
+  // needle containing its own call (e.g. `toContain(String(count))`) isn't
+  // truncated.
+  const callRe = /(\.not)?\.toContain\(/g;
+  let m;
+  while ((m = callRe.exec(content)) !== null) {
+    const argStart = m.index + m[0].length;
+    let depth = 1;
+    let j = argStart;
+    let inS = false;
+    let inD = false;
+    let inT = false;
+    while (j < content.length && depth > 0) {
+      const ch = content[j];
+      const pv = content[j - 1];
+      if (inS) {
+        if (ch === "'" && pv !== "\\") inS = false;
+      } else if (inD) {
+        if (ch === '"' && pv !== "\\") inD = false;
+      } else if (inT) {
+        if (ch === "`" && pv !== "\\") inT = false;
+      } else if (ch === "'") {
+        inS = true;
+      } else if (ch === '"') {
+        inD = true;
+      } else if (ch === "`") {
+        inT = true;
+      } else if (ch === "(") {
+        depth++;
+      } else if (ch === ")") {
+        depth--;
+      }
+      if (depth > 0) j++;
     }
-  });
+    candidates.push({
+      file: filePath,
+      line: content.slice(0, m.index).split("\n").length,
+      negated: Boolean(m[1]),
+      needle: content.slice(argStart, j).trim(),
+    });
+  }
   return candidates;
 }
 
@@ -82,6 +112,35 @@ export function findToContainCandidates(content, filePath) {
  * @param {string} content
  * @returns {{startLine: number, endLine: number, fieldLines: Map<string, number>}[]}
  */
+// A `/` starts a regex literal (rather than division or the start of a
+// comment, both handled separately) when the last significant character
+// suggests an operand is expected next, not a value just finished --
+// mirrors the standard lexer heuristic every JS tokenizer uses for this
+// ambiguity. Not exhaustive (this is "simple textual matching", not a real
+// lexer -- see this file's header), but covers the shapes this codebase
+// actually uses (`key: /pattern/`, `foo(/pattern/)`, `x = /pattern/`, a
+// regex as the first thing on a line or after `return`/`(`/`,`/`[`).
+const REGEX_PRECEDERS = new Set(["(", ",", "=", ":", "[", "!", "&", "|", "?", "{", ";", "+", "-", "*", "%", "<", ">", "~", ""]);
+
+// A brace introduces a class/interface/enum body, not an object/type
+// literal, when the text immediately before it -- back to the previous
+// statement boundary -- looks like `class Foo`, `interface Foo<T>`, or
+// `enum Foo`, optionally followed by `extends`/`implements`. Checked
+// against a bounded lookback window, not the whole file, for performance
+// and so an unrelated `;`/`{`/`}` earlier in the same file can't leak in.
+const TYPE_DECL_RE = /\b(class|interface|enum)\s+[A-Za-z_$][\w$]*(\s*<[^{}]*>)?(\s+(extends|implements)\s+[^{}]+)?\s*$/;
+const TYPE_DECL_LOOKBACK = 300;
+
+function looksLikeTypeDeclarationHeader(content, bracePos) {
+  let start = bracePos;
+  while (start > 0 && bracePos - start < TYPE_DECL_LOOKBACK) {
+    const ch = content[start - 1];
+    if (ch === "}" || ch === ";") break;
+    start--;
+  }
+  return TYPE_DECL_RE.test(content.slice(start, bracePos));
+}
+
 export function findObjectLikeBlocks(content) {
   const blocks = [];
   const stack = [];
@@ -91,13 +150,18 @@ export function findObjectLikeBlocks(content) {
   let inTemplate = false;
   let inLineComment = false;
   let inBlockComment = false;
+  let inRegex = false;
+  let inRegexClass = false; // inside a regex's [...] character class, where `/` doesn't end it
+  let lastSignificant = ""; // last non-whitespace char seen outside a string/comment/regex
 
   // `{` preceded (after whitespace) by `)` is virtually always a code block
   // -- an if/for/while/catch condition or a function's parameter list --
   // never an object literal, so it's treated as control-flow without
   // needing to identify which keyword introduced it. `=> {` (an arrow
-  // function body) is the same case with no parens. Anything else falls
-  // through to reading the single word immediately before `{`.
+  // function body) is the same case with no parens. A class/interface/enum
+  // body is excluded by looksLikeTypeDeclarationHeader, since the token
+  // immediately before its `{` is the type's own name, not a keyword.
+  // Anything else falls through to reading the single word before `{`.
   const isControlFlowBrace = (i) => {
     let j = i - 1;
     while (j >= 0 && /\s/.test(content[j])) j--;
@@ -107,7 +171,8 @@ export function findObjectLikeBlocks(content) {
     let end = j + 1;
     while (j >= 0 && /[\w$]/.test(content[j])) j--;
     const w = content.slice(j + 1, end);
-    return CONTROL_FLOW_KEYWORDS.has(w);
+    if (CONTROL_FLOW_KEYWORDS.has(w)) return true;
+    return looksLikeTypeDeclarationHeader(content, i);
   };
 
   for (let i = 0; i < content.length; i++) {
@@ -136,6 +201,20 @@ export function findObjectLikeBlocks(content) {
       if (c === "`" && prev !== "\\") inTemplate = false;
       continue;
     }
+    if (inRegex) {
+      if (c === "\\") {
+        i++; // skip the escaped character, whatever it is
+        continue;
+      }
+      if (c === "[") inRegexClass = true;
+      else if (c === "]") inRegexClass = false;
+      else if (c === "/" && !inRegexClass) {
+        inRegex = false;
+        while (i + 1 < content.length && /[a-z]/i.test(content[i + 1])) i++; // trailing flags
+        lastSignificant = "/";
+      }
+      continue;
+    }
     if (c === "/" && content[i + 1] === "/") {
       inLineComment = true;
       continue;
@@ -146,19 +225,31 @@ export function findObjectLikeBlocks(content) {
     }
     if (c === "'") {
       inSingle = true;
+      lastSignificant = c;
       continue;
     }
     if (c === '"') {
       inDouble = true;
+      lastSignificant = c;
       continue;
     }
     if (c === "`") {
       inTemplate = true;
+      lastSignificant = c;
+      continue;
+    }
+    if (c === "/") {
+      if (REGEX_PRECEDERS.has(lastSignificant)) {
+        inRegex = true;
+        continue;
+      }
+      lastSignificant = c;
       continue;
     }
 
     if (c === "{") {
       stack.push({ startLine: line, startIndex: i, isControlFlow: isControlFlowBrace(i) });
+      lastSignificant = c;
     } else if (c === "}") {
       const open = stack.pop();
       if (open && !open.isControlFlow) {
@@ -169,6 +260,9 @@ export function findObjectLikeBlocks(content) {
           fieldLines: extractFieldLines(text, open.startLine),
         });
       }
+      lastSignificant = c;
+    } else if (!/\s/.test(c)) {
+      lastSignificant = c;
     }
   }
 
@@ -184,11 +278,15 @@ export function findObjectLikeBlocks(content) {
 function extractFieldLines(blockText, blockStartLine) {
   const fieldLines = new Map();
   const lines = blockText.split("\n");
-  const fieldRe = /(^|[{,(])\s*([A-Za-z_$][\w$]*)\s*:/;
+  const fieldRe = /(^|[{,(])\s*([A-Za-z_$][\w$]*)\s*:/g;
   lines.forEach((lineText, idx) => {
-    const m = fieldRe.exec(lineText);
-    if (m && !fieldLines.has(m[2])) {
-      fieldLines.set(m[2], blockStartLine + idx);
+    fieldRe.lastIndex = 0;
+    let m;
+    while ((m = fieldRe.exec(lineText)) !== null) {
+      if (!fieldLines.has(m[2])) {
+        fieldLines.set(m[2], blockStartLine + idx);
+      }
+      if (m[0].length === 0) fieldRe.lastIndex++; // guard against a zero-width match stalling the loop
     }
   });
   return fieldLines;

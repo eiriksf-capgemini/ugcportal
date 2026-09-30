@@ -30,6 +30,19 @@ describe("findToContainCandidates", () => {
     const content = `test("something else", () => {\n  expect(value).toBe(true);\n});\n`;
     expect(findToContainCandidates(content, "example.test.tsx")).toEqual([]);
   });
+
+  it("finds a call whose argument spans multiple lines", () => {
+    // Real shape in this repo: src/lib/sign-in-policy.test.ts:172.
+    const content = 'expect(x).toContain(\n  "foo"\n);\n';
+    const candidates = findToContainCandidates(content, "example.test.ts");
+    expect(candidates).toEqual([{ file: "example.test.ts", line: 1, negated: false, needle: '"foo"' }]);
+  });
+
+  it("does not truncate a needle that itself contains a call with nested parens", () => {
+    const content = "expect(x).toContain(String(count));\n";
+    const candidates = findToContainCandidates(content, "example.test.ts");
+    expect(candidates).toEqual([{ file: "example.test.ts", line: 1, negated: false, needle: "String(count)" }]);
+  });
 });
 
 describe("findObjectLikeBlocks", () => {
@@ -50,6 +63,30 @@ describe("findObjectLikeBlocks", () => {
     const blocks = findObjectLikeBlocks(content);
     expect(blocks).toHaveLength(1);
     expect([...blocks[0].fieldLines.keys()]).toEqual(["id", "label", "tpl"]);
+  });
+
+  it("ignores a brace inside a regex literal field value", () => {
+    const content = "const real = {\n  id: true,\n  re: /foo}/,\n  name: true,\n};\n";
+    const blocks = findObjectLikeBlocks(content);
+    expect(blocks).toHaveLength(1);
+    expect([...blocks[0].fieldLines.keys()]).toEqual(["id", "re", "name"]);
+  });
+
+  it("finds every field on a compact one-line literal, not just the first", () => {
+    const content = "const x = { id: true, name: true, extra: true };\n";
+    const blocks = findObjectLikeBlocks(content);
+    expect(blocks).toHaveLength(1);
+    expect([...blocks[0].fieldLines.keys()]).toEqual(["id", "name", "extra"]);
+  });
+
+  it("does not mistake an interface body for an object literal", () => {
+    const content = "interface FooProps {\n  id: string;\n  name: string;\n  role: string;\n}\n";
+    expect(findObjectLikeBlocks(content)).toEqual([]);
+  });
+
+  it("does not mistake a class body for an object literal", () => {
+    const content = "class Foo extends Bar {\n  id: string;\n  name: string;\n  role: string;\n}\n";
+    expect(findObjectLikeBlocks(content)).toEqual([]);
   });
 });
 

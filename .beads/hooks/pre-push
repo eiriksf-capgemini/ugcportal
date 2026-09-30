@@ -54,53 +54,74 @@ else
   npm run typecheck || exit 1
   npm test || exit 1
 
-  # Fall back to CI's placeholder secrets only where .env.local doesn't
-  # already provide a real value -- never override a real local value,
-  # since Next.js would otherwise silently prefer this placeholder over
-  # what .env.local defines.
+  # Fall back to CI's placeholder secrets only where neither .env.local nor
+  # plain .env already provides a real value -- never override a real local
+  # value, since Next.js would otherwise silently prefer this placeholder
+  # over what those files define. Kept in sync by hand with the same five
+  # names in .github/workflows/ci.yml's "Build" step; check both places if
+  # you change either.
   _ugcportal_env_local="$_ugcportal_repo_root/.env.local"
-  if [ -z "$AUTH_SECRET" ] && { [ ! -f "$_ugcportal_env_local" ] || ! grep -q '^AUTH_SECRET=' "$_ugcportal_env_local"; }; then
+  _ugcportal_env_plain="$_ugcportal_repo_root/.env"
+  _ugcportal_has_env_var() {
+    # $1 = var name
+    { [ -f "$_ugcportal_env_local" ] && grep -q "^$1=" "$_ugcportal_env_local"; } \
+      || { [ -f "$_ugcportal_env_plain" ] && grep -q "^$1=" "$_ugcportal_env_plain"; }
+  }
+  if [ -z "$AUTH_SECRET" ] && ! _ugcportal_has_env_var AUTH_SECRET; then
     export AUTH_SECRET=ci-placeholder-secret-not-for-real-use
   fi
-  if [ -z "$AUTH_GOOGLE_ID" ] && { [ ! -f "$_ugcportal_env_local" ] || ! grep -q '^AUTH_GOOGLE_ID=' "$_ugcportal_env_local"; }; then
+  if [ -z "$AUTH_GOOGLE_ID" ] && ! _ugcportal_has_env_var AUTH_GOOGLE_ID; then
     export AUTH_GOOGLE_ID=ci-placeholder
   fi
-  if [ -z "$AUTH_GOOGLE_SECRET" ] && { [ ! -f "$_ugcportal_env_local" ] || ! grep -q '^AUTH_GOOGLE_SECRET=' "$_ugcportal_env_local"; }; then
+  if [ -z "$AUTH_GOOGLE_SECRET" ] && ! _ugcportal_has_env_var AUTH_GOOGLE_SECRET; then
     export AUTH_GOOGLE_SECRET=ci-placeholder
   fi
-  if [ -z "$AUTH_FACEBOOK_ID" ] && { [ ! -f "$_ugcportal_env_local" ] || ! grep -q '^AUTH_FACEBOOK_ID=' "$_ugcportal_env_local"; }; then
+  if [ -z "$AUTH_FACEBOOK_ID" ] && ! _ugcportal_has_env_var AUTH_FACEBOOK_ID; then
     export AUTH_FACEBOOK_ID=ci-placeholder
   fi
-  if [ -z "$AUTH_FACEBOOK_SECRET" ] && { [ ! -f "$_ugcportal_env_local" ] || ! grep -q '^AUTH_FACEBOOK_SECRET=' "$_ugcportal_env_local"; }; then
+  if [ -z "$AUTH_FACEBOOK_SECRET" ] && ! _ugcportal_has_env_var AUTH_FACEBOOK_SECRET; then
     export AUTH_FACEBOOK_SECRET=ci-placeholder
   fi
   npm run build || exit 1
 
-  # Conditionally run the harness-cost-controls self-test, mirroring CI's
-  # own path-conditional job (ugcportal-d4z) -- only when this branch has
-  # actually changed that directory relative to its upstream (falling back
-  # to origin/main for a branch with no upstream configured yet, e.g. its
-  # first push).
+  # Conditionally run the harness-cost-controls self-test -- intended to
+  # mirror CI's own path-conditional job (ugcportal-d4z, gh-56), but that PR
+  # is not yet merged as of this writing, so until it lands THIS is the only
+  # place this self-test runs at all: do not rely on `--no-verify` to skip
+  # past a real regression in harness-cost-controls/scripts/. Only runs when
+  # this branch has actually changed that directory relative to its
+  # upstream (falling back to origin/main for a branch with no upstream
+  # configured yet, e.g. its first push).
   _ugcportal_upstream=$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null)
   if [ -z "$_ugcportal_upstream" ] || ! git rev-parse --verify "$_ugcportal_upstream" >/dev/null 2>&1; then
     _ugcportal_upstream="origin/main"
   fi
-  if git rev-parse --verify "$_ugcportal_upstream" >/dev/null 2>&1; then
-    _ugcportal_scripts_changed=$(git diff --name-only "${_ugcportal_upstream}...HEAD" 2>/dev/null | grep -c '^\.claude/skills/harness-cost-controls/scripts/')
+  if git rev-parse --verify "$_ugcportal_upstream" >/dev/null 2>&1 \
+    && _ugcportal_diff_out=$(git diff --name-only "${_ugcportal_upstream}...HEAD" 2>&1); then
+    _ugcportal_scripts_changed=$(printf '%s\n' "$_ugcportal_diff_out" | grep -c '^\.claude/skills/harness-cost-controls/scripts/')
   else
-    # Can't determine a comparison range at all -- fail safe, assume
+    # Either no comparison ref, or the diff itself failed (e.g. no
+    # computable merge-base in a shallow clone) -- fail safe, assume
     # relevant rather than silently skip.
     _ugcportal_scripts_changed=1
   fi
   if [ "${_ugcportal_scripts_changed:-0}" -gt 0 ]; then
-    echo "ugcportal: harness-cost-controls/scripts changed, running its self-test..."
-    ( cd .claude/skills/harness-cost-controls/scripts && python3 -m unittest test_usage_indicators -v ) || exit 1
+    if command -v python3 >/dev/null 2>&1; then
+      echo "ugcportal: harness-cost-controls/scripts changed, running its self-test..."
+      ( cd .claude/skills/harness-cost-controls/scripts && python3 -m unittest test_usage_indicators -v ) || exit 1
+    else
+      echo "ugcportal: python3 not found, skipping harness-cost-controls self-test" >&2
+    fi
   fi
 
   # Advisory only, per its own header (ugcportal-plp6) -- never affects
-  # this hook's exit status.
+  # this hook's exit status. No --base given: sweep-candidates.mjs's own
+  # default (origin/main, falling back to HEAD~1) covers the whole PR's
+  # diff against main, not just this push's incremental range against
+  # $_ugcportal_upstream -- the latter would silently narrow the sweep to
+  # only the newest commits on push 2+ of a multi-push branch.
   if command -v node >/dev/null 2>&1 && [ -f scripts/sweep-candidates.mjs ]; then
-    node scripts/sweep-candidates.mjs --base "$_ugcportal_upstream" || true
+    node scripts/sweep-candidates.mjs || true
   fi
 
   echo "ugcportal: local mechanical checks passed."
