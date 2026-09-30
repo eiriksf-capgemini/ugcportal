@@ -59,6 +59,20 @@ describe("findToContainCandidates", () => {
     const candidates = findToContainCandidates(content, "example.test.ts");
     expect(candidates).toEqual([{ file: "example.test.ts", line: 1, negated: false, needle: "/[(]/" }]);
   });
+
+  it("does not let a `)` inside a comment inside the call desync the argument", () => {
+    const content = "expect(x).toContain(\n  someFunc(a, b) // returns extra )\n);\nexpect(y).toBe(true);\n";
+    const candidates = findToContainCandidates(content, "example.test.ts");
+    // A real parser excludes the trailing comment from the argument's own
+    // text span -- correctly, since it's trivia, not part of the expression.
+    expect(candidates).toEqual([{ file: "example.test.ts", line: 1, negated: false, needle: "someFunc(a, b)" }]);
+  });
+
+  it("does not let a nested template interpolation desync the argument", () => {
+    const content = 'expect(x).toContain(`outer ${someFn("a`b")} end`);\nexpect(y).toBe(true);\n';
+    const candidates = findToContainCandidates(content, "example.test.ts");
+    expect(candidates).toHaveLength(1);
+  });
 });
 
 describe("findObjectLikeBlocks", () => {
@@ -102,6 +116,29 @@ describe("findObjectLikeBlocks", () => {
 
   it("does not mistake a class body for an object literal", () => {
     const content = "class Foo extends Bar {\n  id: string;\n  name: string;\n  role: string;\n}\n";
+    expect(findObjectLikeBlocks(content)).toEqual([]);
+  });
+
+  it("does not mistake a regex quantifier after `return` for an object literal", () => {
+    const content = "function f() {\n  return /\\d{4}/;\n}\nconst real = { id: true, name: true, role: true };\n";
+    const blocks = findObjectLikeBlocks(content);
+    expect(blocks).toHaveLength(1);
+    expect([...blocks[0].fieldLines.keys()]).toEqual(["id", "name", "role"]);
+  });
+
+  it("does not attribute a nested object literal's fields to its parent", () => {
+    const content = [
+      "export const A = { id: true, meta: { x: true, y: true, z: true } };",
+      "export const B = { x: true, y: true, z: true };",
+    ].join("\n");
+    const blocks = findObjectLikeBlocks(content);
+    expect(blocks).toHaveLength(3); // A, A.meta, B
+    const aTop = blocks.find((b) => [...b.fieldLines.keys()].includes("id"));
+    expect([...aTop.fieldLines.keys()]).toEqual(["id", "meta"]);
+  });
+
+  it("does not mistake a bare nested block statement (of labeled statements) for an object literal", () => {
+    const content = "function f() {\n  {\n    id: 1;\n    name: 2;\n    role: 3;\n  }\n}\n";
     expect(findObjectLikeBlocks(content)).toEqual([]);
   });
 

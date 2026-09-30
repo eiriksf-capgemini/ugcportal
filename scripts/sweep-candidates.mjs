@@ -35,32 +35,45 @@
  *     ref can't be resolved (e.g. no network, or a shallow/fresh clone).
  *
  * Self-test: npm test -- runs scripts/sweep-candidates.test.mjs (vitest).
+ *
+ * Both checks below parse with the TypeScript compiler API (`typescript`,
+ * already a project dependency for `tsc --noEmit`) rather than hand-rolled
+ * string/regex scanning. An earlier version hand-rolled a
+ * string/template/regex/comment-aware character scanner for both checks;
+ * three rounds of review on ugcportal-5dr6/plp6 found a new edge case in it
+ * almost every round (an escaped backslash before a closing quote, a regex
+ * character class containing a paren, nested template interpolation, a
+ * bare block statement, `return`/`typeof` as valid regex-literal
+ * precedents...), because hand-written JS/TS tokenizing is an open-ended
+ * bug surface, not a finite one. A real parser closes the whole class by
+ * construction instead of requiring each new syntax shape to be
+ * hand-patched in as it's discovered.
  */
 
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 
+import ts from "typescript";
+
 const TEST_FILE_RE = /\.(test|spec)\.[cm]?[jt]sx?$/;
 const SOURCE_FILE_RE = /\.[cm]?[jt]sx?$/;
 
-const CONTROL_FLOW_KEYWORDS = new Set(["if", "for", "while", "function", "else", "try", "switch", "catch", "do", "finally"]);
+function scriptKindFor(filePath) {
+  if (/\.tsx$/.test(filePath)) return ts.ScriptKind.TSX;
+  if (/\.ts$/.test(filePath)) return ts.ScriptKind.TS;
+  if (/\.jsx$/.test(filePath)) return ts.ScriptKind.JSX;
+  if (/\.[cm]?js$/.test(filePath)) return ts.ScriptKind.JS;
+  // Lenient default: TSX parses plain JS/JSX fine too, for a filePath the
+  // caller didn't give a recognizable extension for (e.g. a test fixture).
+  return ts.ScriptKind.TSX;
+}
 
-// True if the character at `pos` is escaped by the backslash(es) immediately
-// preceding it -- counts them and checks parity, since a naive "is the prior
-// character a backslash" check gets a value ending in an escaped backslash
-// wrong (e.g. `"value\\"`: the quote is preceded by a backslash, but that
-// backslash is itself escaped by the one before it, so the quote is NOT
-// escaped and the string really does end there). Shared by both scanners
-// below, which had this exact bug independently before round 2 of review on
-// ugcportal-5dr6/plp6 found it in both.
-function isEscapedAt(content, pos) {
-  let count = 0;
-  let i = pos - 1;
-  while (i >= 0 && content[i] === "\\") {
-    count++;
-    i--;
-  }
-  return count % 2 === 1;
+function parse(content, filePath) {
+  return ts.createSourceFile(filePath, content, ts.ScriptTarget.Latest, /* setParentNodes */ true, scriptKindFor(filePath));
+}
+
+function lineOf(sourceFile, pos) {
+  return sourceFile.getLineAndCharacterOfPosition(pos).line + 1;
 }
 
 // --- Check 1: toContain / not.toContain enumeration ---------------------
@@ -72,304 +85,95 @@ function isEscapedAt(content, pos) {
  */
 export function findToContainCandidates(content, filePath) {
   const candidates = [];
-  // Scanned over the whole content, not split by line, so a call spanning
-  // multiple lines is still found -- a real shape in this codebase (e.g.
-  // src/lib/sign-in-policy.test.ts). scanBalancedArgs finds the argument's
-  // closing paren by depth-counting (string/template/regex-aware) rather
-  // than a non-greedy match to the first `)`, so a needle containing its
-  // own call (e.g. `toContain(String(count))`) isn't truncated.
-  const callRe = /(\.not)?\.toContain\(/g;
-  let m;
-  while ((m = callRe.exec(content)) !== null) {
-    const argStart = m.index + m[0].length;
-    const argEnd = scanBalancedArgs(content, argStart);
-    candidates.push({
-      file: filePath,
-      line: content.slice(0, m.index).split("\n").length,
-      negated: Boolean(m[1]),
-      needle: content.slice(argStart, argEnd).trim(),
-    });
+  const sourceFile = parse(content, filePath);
+
+  function visit(node) {
+    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === "toContain") {
+      const callee = node.expression.expression;
+      const negated = ts.isPropertyAccessExpression(callee) && callee.name.text === "not";
+      const [arg] = node.arguments;
+      if (arg) {
+        candidates.push({
+          file: filePath,
+          line: lineOf(sourceFile, node.expression.name.getStart(sourceFile)),
+          negated,
+          needle: arg.getText(sourceFile),
+        });
+      }
+    }
+    ts.forEachChild(node, visit);
   }
+
+  visit(sourceFile);
   return candidates;
-}
-
-/**
- * Scans forward from `start` (the position right after a call's own open
- * paren, so depth begins at 1) for the matching close paren, tracking
- * string/template/regex-literal state so a paren, quote, or brace inside
- * one of those doesn't desync the count. Shares the string/regex handling
- * `findObjectLikeBlocks` uses, so a fix to one doesn't leave the other
- * vulnerable to the same input shape (round 2 of review on
- * ugcportal-5dr6/plp6 found the escape-parity bug duplicated exactly that
- * way).
- *
- * @param {string} content
- * @param {number} start
- * @returns {number} index of the matching close paren, or content.length if
- *   the call is unterminated
- */
-function scanBalancedArgs(content, start) {
-  let depth = 1;
-  let inSingle = false;
-  let inDouble = false;
-  let inTemplate = false;
-  let inRegex = false;
-  let inRegexClass = false;
-  let lastSignificant = "("; // just past the call's own open paren
-
-  let j = start;
-  for (; j < content.length; j++) {
-    const c = content[j];
-    if (inSingle) {
-      if (c === "'" && !isEscapedAt(content, j)) inSingle = false;
-      continue;
-    }
-    if (inDouble) {
-      if (c === '"' && !isEscapedAt(content, j)) inDouble = false;
-      continue;
-    }
-    if (inTemplate) {
-      if (c === "`" && !isEscapedAt(content, j)) inTemplate = false;
-      continue;
-    }
-    if (inRegex) {
-      if (c === "\\") {
-        j++;
-        continue;
-      }
-      if (c === "[") inRegexClass = true;
-      else if (c === "]") inRegexClass = false;
-      else if (c === "/" && !inRegexClass) {
-        inRegex = false;
-        while (j + 1 < content.length && /[a-z]/i.test(content[j + 1])) j++;
-        lastSignificant = "/";
-      }
-      continue;
-    }
-    if (c === "'") {
-      inSingle = true;
-      lastSignificant = c;
-      continue;
-    }
-    if (c === '"') {
-      inDouble = true;
-      lastSignificant = c;
-      continue;
-    }
-    if (c === "`") {
-      inTemplate = true;
-      lastSignificant = c;
-      continue;
-    }
-    if (c === "/" && REGEX_PRECEDERS.has(lastSignificant)) {
-      inRegex = true;
-      continue;
-    }
-    if (c === "(") {
-      depth++;
-      lastSignificant = c;
-      continue;
-    }
-    if (c === ")") {
-      depth--;
-      if (depth === 0) break;
-      lastSignificant = c;
-      continue;
-    }
-    if (!/\s/.test(c)) lastSignificant = c;
-  }
-  return j;
 }
 
 // --- Check 2: sibling object/type-literal guard omissions ---------------
 
 /**
- * Finds brace-delimited blocks that look like an object/type literal
- * (preceded by `=`, `:`, `(`, `,`, `return`, or nothing -- not a control-flow
- * keyword), tracking string/template literal state so braces inside strings
- * don't confuse the depth counter.
- *
- * @param {string} content
- * @returns {{startLine: number, endLine: number, fieldLines: Map<string, number>}[]}
+ * @param {ts.ObjectLiteralExpression | ts.TypeLiteralNode} member's container
+ * @returns {string | null}
  */
-// A `/` starts a regex literal (rather than division or the start of a
-// comment, both handled separately) when the last significant character
-// suggests an operand is expected next, not a value just finished --
-// mirrors the standard lexer heuristic every JS tokenizer uses for this
-// ambiguity. Not exhaustive (this is "simple textual matching", not a real
-// lexer -- see this file's header), but covers the shapes this codebase
-// actually uses (`key: /pattern/`, `foo(/pattern/)`, `x = /pattern/`, a
-// regex as the first thing on a line or after `return`/`(`/`,`/`[`).
-const REGEX_PRECEDERS = new Set(["(", ",", "=", ":", "[", "!", "&", "|", "?", "{", ";", "+", "-", "*", "%", "<", ">", "~", ""]);
-
-// A brace introduces a class/interface/enum body, not an object/type
-// literal, when the text immediately before it -- back to the previous
-// statement boundary -- looks like `class Foo`, `interface Foo<T>`, or
-// `enum Foo`, optionally followed by `extends`/`implements`. Checked
-// against a bounded lookback window, not the whole file, for performance
-// and so an unrelated `;`/`{`/`}` earlier in the same file can't leak in.
-const TYPE_DECL_RE = /\b(class|interface|enum)\s+[A-Za-z_$][\w$]*(\s*<[^{}]*>)?(\s+(extends|implements)\s+[^{}]+)?\s*$/;
-const TYPE_DECL_LOOKBACK = 300;
-
-function looksLikeTypeDeclarationHeader(content, bracePos) {
-  let start = bracePos;
-  while (start > 0 && bracePos - start < TYPE_DECL_LOOKBACK) {
-    const ch = content[start - 1];
-    if (ch === "}" || ch === ";") break;
-    start--;
-  }
-  return TYPE_DECL_RE.test(content.slice(start, bracePos));
-}
-
-export function findObjectLikeBlocks(content) {
-  const blocks = [];
-  const stack = [];
-  let line = 1;
-  let inSingle = false;
-  let inDouble = false;
-  let inTemplate = false;
-  let inLineComment = false;
-  let inBlockComment = false;
-  let inRegex = false;
-  let inRegexClass = false; // inside a regex's [...] character class, where `/` doesn't end it
-  let lastSignificant = ""; // last non-whitespace char seen outside a string/comment/regex
-
-  // `{` preceded (after whitespace) by `)` is virtually always a code block
-  // -- an if/for/while/catch condition or a function's parameter list --
-  // never an object literal, so it's treated as control-flow without
-  // needing to identify which keyword introduced it. `=> {` (an arrow
-  // function body) is the same case with no parens. A class/interface/enum
-  // body is excluded by looksLikeTypeDeclarationHeader, since the token
-  // immediately before its `{` is the type's own name, not a keyword.
-  // Anything else falls through to reading the single word before `{`.
-  const isControlFlowBrace = (i) => {
-    let j = i - 1;
-    while (j >= 0 && /\s/.test(content[j])) j--;
-    if (j < 0) return false;
-    if (content[j] === ")") return true;
-    if (content[j] === ">" && content[j - 1] === "=") return true;
-    let end = j + 1;
-    while (j >= 0 && /[\w$]/.test(content[j])) j--;
-    const w = content.slice(j + 1, end);
-    if (CONTROL_FLOW_KEYWORDS.has(w)) return true;
-    return looksLikeTypeDeclarationHeader(content, i);
-  };
-
-  for (let i = 0; i < content.length; i++) {
-    const c = content[i];
-    const prev = content[i - 1];
-
-    if (c === "\n") line++;
-
-    if (inLineComment) {
-      if (c === "\n") inLineComment = false;
-      continue;
-    }
-    if (inBlockComment) {
-      if (prev === "*" && c === "/") inBlockComment = false;
-      continue;
-    }
-    if (inSingle) {
-      if (c === "'" && !isEscapedAt(content, i)) inSingle = false;
-      continue;
-    }
-    if (inDouble) {
-      if (c === '"' && !isEscapedAt(content, i)) inDouble = false;
-      continue;
-    }
-    if (inTemplate) {
-      if (c === "`" && !isEscapedAt(content, i)) inTemplate = false;
-      continue;
-    }
-    if (inRegex) {
-      if (c === "\\") {
-        i++; // skip the escaped character, whatever it is
-        continue;
-      }
-      if (c === "[") inRegexClass = true;
-      else if (c === "]") inRegexClass = false;
-      else if (c === "/" && !inRegexClass) {
-        inRegex = false;
-        while (i + 1 < content.length && /[a-z]/i.test(content[i + 1])) i++; // trailing flags
-        lastSignificant = "/";
-      }
-      continue;
-    }
-    if (c === "/" && content[i + 1] === "/") {
-      inLineComment = true;
-      continue;
-    }
-    if (c === "/" && content[i + 1] === "*") {
-      inBlockComment = true;
-      continue;
-    }
-    if (c === "'") {
-      inSingle = true;
-      lastSignificant = c;
-      continue;
-    }
-    if (c === '"') {
-      inDouble = true;
-      lastSignificant = c;
-      continue;
-    }
-    if (c === "`") {
-      inTemplate = true;
-      lastSignificant = c;
-      continue;
-    }
-    if (c === "/") {
-      if (REGEX_PRECEDERS.has(lastSignificant)) {
-        inRegex = true;
-        continue;
-      }
-      lastSignificant = c;
-      continue;
-    }
-
-    if (c === "{") {
-      stack.push({ startLine: line, startIndex: i, isControlFlow: isControlFlowBrace(i) });
-      lastSignificant = c;
-    } else if (c === "}") {
-      const open = stack.pop();
-      if (open && !open.isControlFlow) {
-        const text = content.slice(open.startIndex, i + 1);
-        blocks.push({
-          startLine: open.startLine,
-          endLine: line,
-          fieldLines: extractFieldLines(text, open.startLine),
-        });
-      }
-      lastSignificant = c;
-    } else if (!/\s/.test(c)) {
-      lastSignificant = c;
+function propertyName(member) {
+  if (
+    ts.isPropertyAssignment(member) ||
+    ts.isPropertySignature(member) ||
+    ts.isShorthandPropertyAssignment(member) ||
+    ts.isMethodDeclaration(member) ||
+    ts.isMethodSignature(member) ||
+    ts.isGetAccessorDeclaration(member) ||
+    ts.isSetAccessorDeclaration(member)
+  ) {
+    const { name } = member;
+    if (ts.isIdentifier(name) || ts.isStringLiteral(name) || ts.isNumericLiteral(name)) {
+      return name.text;
     }
   }
-
-  return blocks;
+  return null;
 }
 
 /**
- * @param {string} blockText
- * @param {number} blockStartLine
- * @returns {Map<string, number>} field name -> absolute line number of its
- *   first occurrence in the block
+ * Finds object literals (`{ a: 1, b: 2 }`) and type literals (`type X = { a:
+ * string }`) -- but deliberately NOT interface or class bodies. An earlier
+ * version included interfaces too and round 1 of review found that two
+ * unrelated interfaces sharing common prop names (id/name/role, extremely
+ * common in a React codebase) produced constant false-positive "siblings"
+ * unrelated to any real defect; excluding them is a deliberate precision
+ * trade-off, not an oversight. Each object literal's fieldLines contains
+ * only its OWN direct properties -- a nested object literal used as a
+ * field's value is a separate node, visited (and reported) separately, so
+ * its fields are never misattributed to the parent.
+ *
+ * @param {string} content
+ * @param {string} filePath
+ * @returns {{startLine: number, endLine: number, fieldLines: Map<string, number>}[]}
  */
-function extractFieldLines(blockText, blockStartLine) {
-  const fieldLines = new Map();
-  const lines = blockText.split("\n");
-  const fieldRe = /(^|[{,(])\s*([A-Za-z_$][\w$]*)\s*:/g;
-  lines.forEach((lineText, idx) => {
-    fieldRe.lastIndex = 0;
-    let m;
-    while ((m = fieldRe.exec(lineText)) !== null) {
-      if (!fieldLines.has(m[2])) {
-        fieldLines.set(m[2], blockStartLine + idx);
+export function findObjectLikeBlocks(content, filePath = "input.tsx") {
+  const sourceFile = parse(content, filePath);
+  const blocks = [];
+
+  function visit(node) {
+    if (ts.isObjectLiteralExpression(node) || ts.isTypeLiteralNode(node)) {
+      const fieldLines = new Map();
+      for (const member of node.members ?? node.properties) {
+        const name = propertyName(member);
+        if (name !== null && !fieldLines.has(name)) {
+          fieldLines.set(name, lineOf(sourceFile, member.getStart(sourceFile)));
+        }
       }
-      if (m[0].length === 0) fieldRe.lastIndex++; // guard against a zero-width match stalling the loop
+      if (fieldLines.size > 0) {
+        blocks.push({
+          startLine: lineOf(sourceFile, node.getStart(sourceFile)),
+          endLine: lineOf(sourceFile, node.getEnd()),
+          fieldLines,
+        });
+      }
     }
-  });
-  return fieldLines;
+    ts.forEachChild(node, visit);
+  }
+
+  visit(sourceFile);
+  return blocks;
 }
 
 /**
@@ -428,26 +232,41 @@ function getChangedFiles(base) {
   return out.split("\n").filter(Boolean);
 }
 
-/** @returns {Set<number>} */
-function getChangedLineNumbers(base, filePath) {
-  const out = execFileSync("git", ["diff", "-U0", `${base}...HEAD`, "--", filePath], { encoding: "utf8" });
-  const changed = new Set();
+/**
+ * One `git diff` call for the whole PR, not one per file (an earlier
+ * version spawned a `git diff -U0 base...HEAD -- <file>` per changed file,
+ * which review found could mean ~100 subprocess spawns on a 50-file PR for
+ * data a single whole-diff parse already has).
+ *
+ * @returns {Map<string, Set<number>>} filePath -> changed absolute line numbers
+ */
+function getChangedLineNumbersByFile(base) {
+  const out = execFileSync("git", ["diff", "-U0", `${base}...HEAD`], { encoding: "utf8" });
+  const result = new Map();
+  let currentFile = null;
   let newLine = null;
   for (const line of out.split("\n")) {
+    const fileHeader = /^\+\+\+ b\/(.+)$/.exec(line);
+    if (fileHeader) {
+      currentFile = fileHeader[1];
+      if (!result.has(currentFile)) result.set(currentFile, new Set());
+      newLine = null;
+      continue;
+    }
     const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/.exec(line);
     if (hunk) {
       newLine = Number(hunk[1]);
       continue;
     }
-    if (newLine === null) continue;
+    if (currentFile === null || newLine === null) continue;
     if (line.startsWith("+") && !line.startsWith("+++")) {
-      changed.add(newLine);
+      result.get(currentFile).add(newLine);
       newLine++;
     } else if (!line.startsWith("-")) {
       newLine++;
     }
   }
-  return changed;
+  return result;
 }
 
 function readFile(filePath) {
@@ -465,6 +284,14 @@ function main() {
   } catch (err) {
     console.error(`sweep-candidates: could not diff against ${base}: ${err.message}`);
     process.exit(0); // advisory tool -- never block on its own failure
+  }
+
+  let changedLinesByFile;
+  try {
+    changedLinesByFile = getChangedLineNumbersByFile(base);
+  } catch (err) {
+    console.error(`sweep-candidates: could not diff line ranges against ${base}: ${err.message}`);
+    changedLinesByFile = new Map();
   }
 
   const toContainCandidates = [];
@@ -488,12 +315,7 @@ function main() {
       } catch {
         continue;
       }
-      let changedLines;
-      try {
-        changedLines = getChangedLineNumbers(base, filePath);
-      } catch {
-        continue;
-      }
+      const changedLines = changedLinesByFile.get(filePath) ?? new Set();
       siblingCandidates.push(...findSiblingGuardOmissions(content, changedLines, filePath));
     }
   }
