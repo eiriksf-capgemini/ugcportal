@@ -325,13 +325,48 @@ describe("an uploader outside the listed slice can still be decided about", () =
     expect(listedEmails(markup)).toContain(outside);
   });
 
-  it("says why that uploader appears at the top", async () => {
+  it("says why that uploader appears at the top — beyond the cap case", async () => {
     await createUploaders(MAX_UPLOADERS + 1);
     const outsideId = `u-${String(MAX_UPLOADERS).padStart(4, "0")}`;
 
     const markup = await renderPage({ edit: outsideId });
 
     expect(markup).toContain("fall outside the first");
+    // Pinned, not sorted into place: the admin came here to act on them.
+    expect(listedEmails(markup)[0]).toBe(
+      `u${String(MAX_UPLOADERS).padStart(4, "0")}@example.com`,
+    );
+  });
+
+  it("distinguishes exclusion by query from exclusion by cap: query-excluded case (K1)", async () => {
+    // Seed uploaders within the cap, so the truncation notice would not appear.
+    await createUploaders(5);
+    // Create a user with no uploads and no review — excluded by the page query.
+    await prisma.user.create({
+      data: {
+        id: "excluded-by-query",
+        email: "excluded@example.com",
+        role: "USER",
+      },
+    });
+
+    const markup = await renderPage({ edit: "excluded-by-query" });
+
+    // Should show the query-exclusion reason, not the cap reason.
+    expect(markup).toContain("no uploads and no prior review yet");
+    expect(markup).not.toContain("fall outside the first");
+    // The uploader should still be pinned and visible.
+    expect(listedEmails(markup)[0]).toBe("excluded@example.com");
+  });
+
+  it("shows the truncation reason when beyond the cap (K2)", async () => {
+    await createUploaders(MAX_UPLOADERS + 1);
+    const outsideId = `u-${String(MAX_UPLOADERS).padStart(4, "0")}`;
+
+    const markup = await renderPage({ edit: outsideId });
+
+    expect(markup).toContain("fall outside the first");
+    expect(markup).not.toContain("no uploads and no prior review yet");
     // Pinned, not sorted into place: the admin came here to act on them.
     expect(listedEmails(markup)[0]).toBe(
       `u${String(MAX_UPLOADERS).padStart(4, "0")}@example.com`,
