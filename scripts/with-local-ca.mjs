@@ -76,7 +76,12 @@ export function resolveLocalCa({ certsDir, env, cwd }) {
       isFile = false;
     }
     return {
-      path: resolved,
+      // Only forward a path we've confirmed is a readable file. Returning
+      // the bad path anyway (with just a warning attached) would still land
+      // it in the child's NODE_EXTRA_CA_CERTS, producing a second, Node-
+      // level "no such file" warning instead of a single clean fallback to
+      // the default trust store.
+      path: isFile ? resolved : null,
       source: "env",
       warning: isFile ? null : `NODE_EXTRA_CA_CERTS points at ${resolved}, which is not a readable file. ${DEFAULT_TRUST_STORE_WARNING}`,
     };
@@ -135,7 +140,24 @@ export function resolveLocalCa({ certsDir, env, cwd }) {
     cleanUpLeftoverBundle();
     return { path: null, source: "none", warning: null };
   }
-  if (pems.length === 1) return { path: pems[0], source: "single", warning: null };
+  if (pems.length === 1) {
+    // Re-check right before returning, not just via the isFile() filter
+    // above -- that filter and this return are two different points in
+    // time, and the multi-PEM path two branches down guards this exact
+    // window. Without it, a file deleted in between produces a false
+    // "trusting ..." success with NODE_EXTRA_CA_CERTS pointing at nothing.
+    try {
+      fs.accessSync(pems[0], fs.constants.R_OK);
+      return { path: pems[0], source: "single", warning: null };
+    } catch {
+      cleanUpLeftoverBundle();
+      return {
+        path: null,
+        source: "none",
+        warning: `${pems[0]} disappeared before it could be used. ${DEFAULT_TRUST_STORE_WARNING}`,
+      };
+    }
+  }
 
   // NODE_EXTRA_CA_CERTS takes ONE path, so several PEMs have to be
   // concatenated. Handing it only the first would trust some of the
@@ -156,6 +178,19 @@ export function resolveLocalCa({ certsDir, env, cwd }) {
       }
     })
     .join("");
+
+  if (missing.length === pems.length) {
+    // Every PEM vanished between the filter and the read -- there is
+    // nothing left to bundle. Writing and reporting an empty file as a
+    // successful "trusting ..." bundle would be the worst version of the
+    // failure this whole concatenation path exists to avoid.
+    cleanUpLeftoverBundle();
+    return {
+      path: null,
+      source: "none",
+      warning: `All ${pems.length} PEM file(s) disappeared before they could be used: ${pems.join(", ")}. ${DEFAULT_TRUST_STORE_WARNING}`,
+    };
+  }
 
   // The bundle's NAME is deterministic (a hash of the certs dir path) so
   // repeated runs reuse one path instead of leaking a new temp file every
@@ -189,7 +224,7 @@ export function resolveLocalCa({ certsDir, env, cwd }) {
 // (any command + args), so refuse rather than silently forward one through
 // a shell on the one platform where that shell is unavoidable (a .cmd
 // shim can't be exec'd without it).
-const WINDOWS_SHELL_METACHARACTERS = /[&|<>^%!"]/;
+const WINDOWS_SHELL_METACHARACTERS = /[&|<>^%!"()]/;
 
 /* c8 ignore start -- process wiring, exercised by `npm run dev` itself */
 function main() {
@@ -210,11 +245,25 @@ function main() {
     }
   }
 
-  const { path: caPath, source, warning } = resolveLocalCa({
-    certsDir: DEFAULT_CERTS_DIR,
-    env: process.env,
-    cwd: process.cwd(),
-  });
+  // resolveLocalCa can throw -- deliberately, for the cases where fail-
+  // closed is correct (e.g. the wx-flag EEXIST refusal when something is
+  // already at the bundle's temp-write path). Left uncaught, that surfaces
+  // as a raw stack trace instead of this file's own [local-ca]-prefixed
+  // messages; catch it here so a real misconfiguration still gets a clear
+  // message and a non-zero exit instead of an unhandled exception.
+  let caPath;
+  let source;
+  let warning;
+  try {
+    ({ path: caPath, source, warning } = resolveLocalCa({
+      certsDir: DEFAULT_CERTS_DIR,
+      env: process.env,
+      cwd: process.cwd(),
+    }));
+  } catch (error) {
+    console.error(`[local-ca] failed to resolve a local CA: ${error.message}`);
+    process.exit(1);
+  }
 
   if (warning) console.warn(`[local-ca] ${warning}`);
   // Announced only when this script actually changed something, so the
@@ -263,6 +312,16 @@ function main() {
   for (const sig of ["SIGINT", "SIGTERM"]) {
     process.on(sig, () => child.kill(sig));
   }
+  // SIGKILL is deliberately uncatchable at the OS level, so it can never be
+  // forwarded this way -- `kill -9 <wrapper-pid>` (or any supervisor that
+  // escalates to it) still orphans the child, the same failure this
+  // forwarding otherwise fixes for SIGINT/SIGTERM. Closing that fully needs
+  // an init-style process (spawning detached, in its own process group, so
+  // the group can be signalled as a unit) rather than signal forwarding.
+  // Not done here: `npm run start` isn't this app's actual production entry
+  // point (the Docker image's CMD runs `node server.js` directly, unwrapped,
+  // since production isn't behind the proxy this wrapper exists for), so
+  // this gap is real but currently unexercised.
 }
 
 if (isMainModule(import.meta.url)) main();

@@ -118,6 +118,41 @@ describe("certs directory", () => {
     }
   });
 
+  it("falls back to none, rather than writing an empty bundle, when every PEM vanishes mid-run", () => {
+    const aPath = write("certs/a-root.pem", CERT_A);
+    const bPath = write("certs/b-intermediate.pem", CERT_B);
+    const spy = vi.spyOn(fs, "readFileSync").mockImplementation(() => {
+      throw Object.assign(new Error("ENOENT (simulated)"), { code: "ENOENT" });
+    });
+    try {
+      const result = resolve();
+      expect(result).toEqual({
+        path: null,
+        source: "none",
+        warning: expect.stringContaining("disappeared"),
+      });
+      expect(result.warning).toContain(aPath);
+      expect(result.warning).toContain(bPath);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("falls back to none, rather than a false success, when the single PEM vanishes right before use", () => {
+    const file = write("certs/corp.pem", CERT_A);
+    const spy = vi.spyOn(fs, "accessSync").mockImplementation(() => {
+      throw Object.assign(new Error("ENOENT (simulated)"), { code: "ENOENT" });
+    });
+    try {
+      const result = resolve();
+      expect(result.path).toBeNull();
+      expect(result.source).toBe("none");
+      expect(result.warning).toContain(file);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("removes a leftover bundle once certs/ is emptied, rather than leaving stale CA material behind", () => {
     write("certs/a-root.pem", CERT_A);
     write("certs/b-intermediate.pem", CERT_B);
@@ -215,6 +250,10 @@ describe("explicit NODE_EXTRA_CA_CERTS", () => {
     const result = resolve({ NODE_EXTRA_CA_CERTS: "./missing/none.pem" });
     expect(result.source).toBe("env");
     expect(result.warning).toContain("not a readable file");
+    // A known-bad path must not still be forwarded to the child -- that
+    // would trade this warning for a second, differently-formatted
+    // Node-level one instead of a clean fallback to the default trust store.
+    expect(result.path).toBeNull();
   });
 
   it("warns when the named path is a directory, not a file", () => {
@@ -222,6 +261,7 @@ describe("explicit NODE_EXTRA_CA_CERTS", () => {
     fs.mkdirSync(dir, { recursive: true });
     const result = resolve({ NODE_EXTRA_CA_CERTS: dir });
     expect(result.warning).toContain("not a readable file");
+    expect(result.path).toBeNull();
   });
 
   it("falls back to the certs directory when the value is blank", () => {
