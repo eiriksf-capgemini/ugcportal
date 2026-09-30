@@ -56,7 +56,13 @@ known gap, not a claim otherwise -- see SKILL.md). If you change this file:
 run the self-test, ask which direction a mistake here would point the
 reader, and ask whether the mistake would actually show up in the
 `ANOMALY_KEYS` ledger -- if it wouldn't, the ledger is missing a key, which
-is exactly how three of these bugs were found.
+is exactly how three of these bugs were found. Every early exit from the
+per-line/per-file scan loop in `load_rows` goes through the single
+`_make_drop`-produced `drop(reason)` helper rather than a bare
+`anomalies[key] += 1` -- not a runtime guarantee (Python cannot forbid a
+plain `continue`), but a uniform shape for the loop that makes a new exit
+which skips it the one line that looks different in a review diff, instead
+of blending in as one more easy-to-miss increment (ugcportal-4il, K5).
 """
 import argparse
 import collections
@@ -258,6 +264,15 @@ def _price_row(row, model, u):
 # rather than silently dropping an unlisted key); and report()'s first job,
 # before it prints a single dollar figure, is to print all of them.
 #
+# That assertion is a floor, not the endpoint: it guarantees a LISTED key
+# cannot silently vanish, but not that a new drop path inside the per-line
+# scan loop gets listed in the first place -- a bare `continue` added next
+# month, with no counter at all, still satisfies it. `_make_drop` (below)
+# and its use as `drop("key"); continue` at every exit from that loop is
+# the endpoint: once the loop is uniform, a new exit that skips `drop()`
+# is the one line that looks different from everything around it in a
+# review diff, rather than one more easy-to-miss `anomalies[...] += 1`.
+#
 # NOTE ON SCOPE: everything here except unpriced_models (printed alongside,
 # see report()) is counted across the WHOLE matched glob, independent of
 # --since/--project -- several of these paths (an unreadable file, a line
@@ -279,6 +294,39 @@ ANOMALY_KEYS = (
     "rows_since_filtered",
     "rows_project_filtered",
 )
+
+
+def _make_drop(anomalies):
+    """Factory for the ONE function load_rows's per-file/per-line scan loop
+    is allowed to call on its way to a `continue`. `ANOMALY_KEYS` and the
+    end-of-scan assertion in load_rows guarantee a key that gets used is
+    declared and printed; they do NOT guarantee every exit path from that
+    loop uses one -- a bare `continue` added next month, with no counter,
+    still passes both of those unchanged (round-4 review named this gap
+    explicitly and left it for a follow-up rather than claiming the
+    assertion alone closed it).
+
+    This closes the gap the other way: once every existing exit in the loop
+    below reads `drop("some_key"); continue`, a new exit written as a bare
+    `continue` -- or as `anomalies["key"] += 1; continue` again, bypassing
+    this helper -- is the one line that does not match the pattern
+    surrounding it, in a diff a reviewer is already reading line-by-line.
+    That is a review-visible signal, not a runtime guarantee: Python has no
+    way to forbid a bare `continue` inside this loop. What `drop()` adds
+    beyond that convention is an immediate, precise failure right at the
+    call site if the reason string itself is wrong -- a typo'd or
+    forgotten-to-declare key raises here, naming the exact key, rather than
+    only surfacing (correctly, but less specifically) from the end-of-scan
+    assertion in load_rows after the whole tree has already been scanned.
+    """
+    def drop(reason):
+        assert reason in ANOMALY_KEYS, (
+            f"drop({reason!r}) used a key not in ANOMALY_KEYS -- add it there "
+            f"so it is guaranteed to print instead of silently discounting "
+            f"this drop"
+        )
+        anomalies[reason] += 1
+    return drop
 
 
 def load_rows(pattern, since, project_substr):
@@ -312,6 +360,7 @@ def load_rows(pattern, since, project_substr):
 
     best = {}  # requestId -> row dict, keeping the highest output_tokens seen
     anomalies = collections.Counter()  # key from ANOMALY_KEYS -> count
+    drop = _make_drop(anomalies)  # the only sanctioned way to `continue` below
     files_matched = 0
 
     for path in globmod.glob(expanded_pattern, recursive=True):
@@ -321,7 +370,7 @@ def load_rows(pattern, since, project_substr):
         try:
             fh = open(path, encoding="utf-8", errors="replace")
         except OSError:
-            anomalies["files_unreadable"] += 1
+            drop("files_unreadable")
             continue
         with fh:
             for line in fh:
@@ -335,31 +384,31 @@ def load_rows(pattern, since, project_substr):
                     # whole point of this ledger is that every dropped line
                     # is accounted for somewhere, not that every count is
                     # alarming.
-                    anomalies["lines_no_usage_substring"] += 1
+                    drop("lines_no_usage_substring")
                     continue
                 try:
                     d = json.loads(line)
                 except Exception:
-                    anomalies["lines_json_error"] += 1
+                    drop("lines_json_error")
                     continue
                 if d.get("type") != "assistant":
                     # Contains the substring '"usage"' but isn't an
                     # assistant turn -- e.g. a tool result embedding the
                     # word elsewhere in its payload.
-                    anomalies["lines_not_assistant_with_usage"] += 1
+                    drop("lines_not_assistant_with_usage")
                     continue
                 msg = d.get("message") or {}
                 u = msg.get("usage")
                 if not isinstance(u, dict):
-                    anomalies["lines_usage_not_dict"] += 1
+                    drop("lines_usage_not_dict")
                     continue
                 rid = d.get("requestId") or d.get("uuid")
                 if not rid:
-                    anomalies["lines_missing_id"] += 1
+                    drop("lines_missing_id")
                     continue
                 ts = d.get("timestamp")
                 if not ts:
-                    anomalies["lines_missing_timestamp"] += 1
+                    drop("lines_missing_timestamp")
                     continue
 
                 is_sidechain = bool(d.get("isSidechain"))
@@ -370,7 +419,7 @@ def load_rows(pattern, since, project_substr):
                     # nothing counting them -- a `None`/"<synthetic>"
                     # model, distinct from an unpriced-but-recognized one
                     # (which unpriced_models covers separately, downstream).
-                    anomalies["lines_unrecognized_model"] += 1
+                    drop("lines_unrecognized_model")
                     continue
 
                 # Claude Code writes one "assistant" line per content block
@@ -387,7 +436,7 @@ def load_rows(pattern, since, project_substr):
                 output = u.get("output_tokens", 0) or 0
                 prev = best.get(rid)
                 if prev is not None and output <= prev["_output"]:
-                    anomalies["lines_dedup_superseded"] += 1
+                    drop("lines_dedup_superseded")
                     continue
 
                 # claude-usage-report.py buckets days with `.astimezone()`

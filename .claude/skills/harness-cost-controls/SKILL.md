@@ -210,10 +210,16 @@ distinction matters enough to spell out rather than lump into "ratios that
 don't depend on the dollar figures being real."
 
 **Baseline captured 2026-09-28, all projects, since 2026-09-24 (all-projects
-run):** 11,674 requests, $2,154.17 list-price. The scan also reports 45
-requests with an unrecognized model (`lines_unrecognized_model` in the
-anomalies ledger § 5 describes) — a real, counted gap, not silently absorbed.
-Subagent (isSidechain) spend: $1,474.36 (68.4% of dollars, **84.7%** of
+run):** 11,674 requests, $2,154.17 list-price. Separately — and NOT scoped to
+this `--since 2026-09-24` window, or to any window at all — the scan also
+reports 45 requests with an unrecognized model (`lines_unrecognized_model` in
+the anomalies ledger § 5 describes): a real, counted gap, not silently
+absorbed, but a **whole-history** count accumulated over everything the glob
+matched on this machine, not a count of what happened since 2026-09-24. (See
+`usage_indicators.py`'s `ANOMALY_KEYS` comment and `report()`'s own "anomalies
+across the WHOLE matched glob, not limited to `--since`/`--project`" banner —
+the underlying counter has no window concept to be scoped to in the first
+place.) Subagent (isSidechain) spend: $1,474.36 (68.4% of dollars, **84.7%** of
 requests — see the note above on why those two numbers differ) partitioned
 into Opus $1,325.09 across 8,301 requests, Sonnet $111.60 across 1,453
 requests, and other (Fable/Haiku) $37.67 across 134 requests — reconciling
