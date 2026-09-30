@@ -6,6 +6,7 @@
  * non-file entry that ends in .pem, several files needing concatenation), and
  * a mock would let the resolver pass while the real thing failed.
  */
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -40,6 +41,25 @@ const resolve = (env = {}) => resolveLocalCa({ certsDir: "certs", env, cwd: root
 describe("no local CA configured", () => {
   it("is silent when the certs directory does not exist", () => {
     expect(resolve()).toEqual({ path: null, source: "none", warning: null });
+  });
+
+  it("warns rather than staying silent when certs/ exists but isn't readable", () => {
+    if (process.platform === "win32" || process.getuid?.() === 0) {
+      // chmod-based permission denial isn't reliable on Windows, and root
+      // bypasses permission checks entirely -- skip rather than flake.
+      return;
+    }
+    const dir = path.join(root, "certs");
+    fs.mkdirSync(dir);
+    fs.writeFileSync(path.join(dir, "corp.pem"), CERT_A);
+    fs.chmodSync(dir, 0o000);
+    try {
+      const result = resolve();
+      expect(result.path).toBeNull();
+      expect(result.warning).toContain("Could not read");
+    } finally {
+      fs.chmodSync(dir, 0o755); // afterEach's rmSync needs it readable again
+    }
   });
 
   it("is silent when the certs directory exists but holds no PEM", () => {
@@ -95,6 +115,31 @@ describe("certs directory", () => {
     const file = write("certs/corp.pem", CERT_A);
     expect(resolve().path).toBe(file);
   });
+
+  it("replaces, rather than trusts, anything already at the bundle's well-known path", () => {
+    write("certs/a-root.pem", CERT_A);
+    write("certs/b-intermediate.pem", CERT_B);
+
+    // Predict the deterministic bundle path the same way the resolver
+    // computes it, and pre-place a wrong-content, wrong-mode file there --
+    // simulating a stale or maliciously-planted file at a predictable
+    // /tmp path (round-1 review finding: a non-atomic write trusted
+    // whatever was already there).
+    const dir = path.resolve(root, "certs");
+    const bundlePath = path.join(
+      os.tmpdir(),
+      `ugcportal-local-ca-${createHash("sha256").update(dir).digest("hex").slice(0, 12)}.pem`,
+    );
+    fs.writeFileSync(bundlePath, "PLANTED-GARBAGE", { mode: 0o644 });
+
+    const result = resolve();
+    expect(result.path).toBe(bundlePath);
+    const content = fs.readFileSync(bundlePath, "utf8");
+    expect(content).not.toContain("PLANTED-GARBAGE");
+    expect(content).toContain("AAAA-first");
+    expect(content).toContain("BBBB-second");
+    expect(fs.statSync(bundlePath).mode & 0o777).toBe(0o600);
+  });
 });
 
 describe("explicit NODE_EXTRA_CA_CERTS", () => {
@@ -116,7 +161,14 @@ describe("explicit NODE_EXTRA_CA_CERTS", () => {
   it("warns when the named file does not exist, instead of failing silently", () => {
     const result = resolve({ NODE_EXTRA_CA_CERTS: "./missing/none.pem" });
     expect(result.source).toBe("env");
-    expect(result.warning).toContain("does not exist");
+    expect(result.warning).toContain("not a readable file");
+  });
+
+  it("warns when the named path is a directory, not a file", () => {
+    const dir = path.join(root, "elsewhere", "not-a-file.pem");
+    fs.mkdirSync(dir, { recursive: true });
+    const result = resolve({ NODE_EXTRA_CA_CERTS: dir });
+    expect(result.warning).toContain("not a readable file");
   });
 
   it("falls back to the certs directory when the value is blank", () => {

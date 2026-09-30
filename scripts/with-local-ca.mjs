@@ -9,6 +9,10 @@
  * SELF_SIGNED_CERT_IN_CHAIN. The visitor sees the generic "Sign-in is
  * misconfigured" page (the `Configuration` branch in
  * src/app/auth/error/outcomes.ts), because @auth/core will not disclose why.
+ * `next build` hits the same failure mode for an unrelated reason:
+ * src/app/layout.tsx imports next/font/google, which fetches the font files
+ * over HTTPS at build time — so `build`, not just `dev`/`start`, goes
+ * through this wrapper too.
  *
  * The fix is Node's NODE_EXTRA_CA_CERTS. The trap is WHERE it has to be set.
  * Node reads that variable once, at process start, when it builds its TLS
@@ -27,6 +31,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 /** Directory scanned for PEM files, relative to the repo root. */
 export const DEFAULT_CERTS_DIR = "certs";
@@ -49,15 +54,23 @@ export function resolveLocalCa({ certsDir, env, cwd }) {
     // this changes no semantics, but it stops the value silently pointing at
     // nothing if the command is ever started from another directory.
     const resolved = path.resolve(cwd, explicit);
+    // Unlike a missing certs/ directory, an explicitly-named path that does
+    // not resolve to a readable file is a misconfiguration, and staying
+    // quiet about it would reproduce the exact silent failure this script
+    // was written for. fs.existsSync alone accepts a directory too (Node
+    // would then fail opening it as a cert bundle) -- require isFile().
+    let isFile = false;
+    try {
+      isFile = fs.statSync(resolved).isFile();
+    } catch {
+      isFile = false;
+    }
     return {
       path: resolved,
       source: "env",
-      // Unlike a missing certs/ directory, an explicitly-named file that does
-      // not exist is a misconfiguration, and staying quiet about it would
-      // reproduce the exact silent failure this script was written for.
-      warning: fs.existsSync(resolved)
+      warning: isFile
         ? null
-        : `NODE_EXTRA_CA_CERTS points at ${resolved}, which does not exist. ` +
+        : `NODE_EXTRA_CA_CERTS points at ${resolved}, which is not a readable file. ` +
           "TLS connections will use the default trust store only.",
     };
   }
@@ -66,10 +79,17 @@ export function resolveLocalCa({ certsDir, env, cwd }) {
   let entries;
   try {
     entries = fs.readdirSync(dir);
-  } catch {
+  } catch (error) {
     // No certs directory at all: the ordinary case for anyone not behind a
-    // proxy. Silent on purpose.
-    return { path: null, source: "none", warning: null };
+    // proxy. Silent on purpose. Anything else (e.g. EACCES, a permissions
+    // problem on a directory that DOES exist) is a real misconfiguration
+    // and should not be indistinguishable from "no proxy".
+    if (error.code === "ENOENT") return { path: null, source: "none", warning: null };
+    return {
+      path: null,
+      source: "none",
+      warning: `Could not read ${dir}: ${error.message}. TLS connections will use the default trust store only.`,
+    };
   }
 
   const pems = entries
@@ -89,19 +109,37 @@ export function resolveLocalCa({ certsDir, env, cwd }) {
 
   // NODE_EXTRA_CA_CERTS takes ONE path, so several PEMs have to be
   // concatenated. Handing it only the first would trust some of the
-  // configured CAs while reporting success for all of them.
+  // configured CAs while reporting success for all of them. A file can
+  // vanish between the statSync filter above and here (another process
+  // editing certs/ mid-run) -- skip it rather than crash the wrapper over a
+  // file that no longer matters.
+  const content = pems
+    .map((file) => {
+      try {
+        return fs.readFileSync(file, "utf8").trimEnd() + "\n";
+      } catch {
+        return "";
+      }
+    })
+    .join("");
+
+  // NAME is deterministic (a hash of the certs dir path) so repeated runs
+  // reuse one bundle instead of leaking a new temp file every invocation.
+  // The WRITE is not: two concurrent `dev`/`start` regenerating it at once
+  // (both reading the same certs/, so producing identical bytes here) could
+  // otherwise interleave a partial write, or an attacker could pre-place a
+  // symlink at this well-known path before it exists. Write to a fresh,
+  // process-unique temp file (created with the real mode from the start,
+  // not chmod'd after) and rename() over the target -- POSIX rename is
+  // atomic and replaces whatever was at the destination, symlink or not,
+  // rather than following/trusting it.
   const bundle = path.join(
     os.tmpdir(),
     `ugcportal-local-ca-${createHash("sha256").update(dir).digest("hex").slice(0, 12)}.pem`,
   );
-  // Rewritten every run rather than cached: the certs directory can change
-  // between runs, and a stale bundle would be indistinguishable from a fresh
-  // one.
-  fs.writeFileSync(
-    bundle,
-    pems.map((file) => fs.readFileSync(file, "utf8").trimEnd() + "\n").join(""),
-    { mode: 0o600 },
-  );
+  const bundleTmp = path.join(os.tmpdir(), `.${path.basename(bundle)}.${process.pid}.tmp`);
+  fs.writeFileSync(bundleTmp, content, { mode: 0o600 });
+  fs.renameSync(bundleTmp, bundle);
   return { path: bundle, source: "bundle", warning: null };
 }
 
@@ -146,7 +184,21 @@ function main() {
     if (signal) process.kill(process.pid, signal);
     else process.exit(code ?? 0);
   });
+
+  // Forward the signals a supervisor or `kill <pid>` would send to THIS
+  // process on to the real child -- without this, stopping the wrapper
+  // (its PID is what `npm run dev` prints and what a supervisor tracks)
+  // orphans `next` running underneath it, which keeps holding the port.
+  for (const sig of ["SIGINT", "SIGTERM"]) {
+    process.on(sig, () => child.kill(sig));
+  }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) main();
+// import.meta.url is a file:// URL; process.argv[1] is a plain OS path, and
+// on Windows those two forms never compare equal as raw strings (different
+// separators, and a file URL's own escaping) -- pathToFileURL normalizes
+// argv[1] into the same form import.meta.url already is, so this check
+// actually detects "run directly" cross-platform instead of silently never
+// firing on Windows.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main();
 /* c8 ignore stop */
