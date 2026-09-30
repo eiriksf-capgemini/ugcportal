@@ -11,7 +11,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { resolveLocalCa } from "./with-local-ca.mjs";
 
@@ -95,6 +95,59 @@ describe("certs directory", () => {
     expect(bundle).toContain("AAAA-first");
     expect(bundle).toContain("BBBB-second");
     expect(bundle.match(/BEGIN CERTIFICATE/g)).toHaveLength(2);
+  });
+
+  it("warns, rather than silently building a partial bundle, when a PEM vanishes mid-run", () => {
+    write("certs/a-root.pem", CERT_A);
+    const bPath = write("certs/b-intermediate.pem", CERT_B);
+    const realReadFileSync = fs.readFileSync;
+    const spy = vi.spyOn(fs, "readFileSync").mockImplementation((file, ...rest) => {
+      if (file === bPath) throw Object.assign(new Error("ENOENT (simulated)"), { code: "ENOENT" });
+      return realReadFileSync(file, ...rest);
+    });
+    try {
+      const result = resolve();
+      expect(result.source).toBe("bundle");
+      expect(result.warning).toContain("disappeared");
+      expect(result.warning).toContain(bPath);
+      const bundle = fs.readFileSync(result.path, "utf8");
+      expect(bundle).toContain("AAAA-first");
+      expect(bundle).not.toContain("BBBB-second");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("removes a leftover bundle once certs/ is emptied, rather than leaving stale CA material behind", () => {
+    write("certs/a-root.pem", CERT_A);
+    write("certs/b-intermediate.pem", CERT_B);
+    const bundlePath = resolve().path;
+    expect(fs.existsSync(bundlePath)).toBe(true);
+
+    fs.rmSync(path.join(root, "certs"), { recursive: true, force: true });
+    expect(resolve()).toEqual({ path: null, source: "none", warning: null });
+    expect(fs.existsSync(bundlePath)).toBe(false);
+  });
+
+  it("does not silently follow a pre-existing file at the bundle's predictable temp-write path", () => {
+    write("certs/a-root.pem", CERT_A);
+    write("certs/b-intermediate.pem", CERT_B);
+
+    const dir = path.resolve(root, "certs");
+    const bundlePath = path.join(
+      os.tmpdir(),
+      `ugcportal-local-ca-${createHash("sha256").update(dir).digest("hex").slice(0, 12)}.pem`,
+    );
+    const tmpPath = path.join(os.tmpdir(), `.${path.basename(bundlePath)}.${process.pid}.tmp`);
+    fs.writeFileSync(tmpPath, "pre-placed content, e.g. a symlink target in the real attack");
+    try {
+      // `wx` fails on an existing path rather than silently overwriting or
+      // following it -- the correct fail-CLOSED response to a plausible
+      // symlink-planting attempt at a predictable, PID-based name.
+      expect(() => resolve()).toThrow();
+    } finally {
+      fs.rmSync(tmpPath, { force: true });
+    }
   });
 
   it("rewrites the bundle when the certs change between runs", () => {

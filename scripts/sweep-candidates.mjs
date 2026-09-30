@@ -55,9 +55,10 @@
  */
 
 import { execFileSync } from "node:child_process";
-import path from "node:path";
 
 import ts from "typescript";
+
+import { isMainModule } from "./lib/is-main.mjs";
 
 const TEST_FILE_RE = /\.(test|spec)\.[cm]?[jt]sx?$/;
 const SOURCE_FILE_RE = /\.[cm]?[jt]sx?$/;
@@ -352,6 +353,6 @@ function main() {
   console.log("(advisory only -- does not affect exit status; paste relevant lines into the PR's sweep report)");
 }
 
-if (import.meta.url === `file://${path.resolve(process.argv[1] ?? "")}`) {
+if (isMainModule(import.meta.url)) {
   main();
 }
