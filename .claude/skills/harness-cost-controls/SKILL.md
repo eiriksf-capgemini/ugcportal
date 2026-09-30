@@ -82,8 +82,9 @@ diverging as more time passes.
    instead of silently inheriting the parent's Opus — while still letting an
    explicit `model: "opus"` or `model: "fable"` argument, or a named agent's
    own frontmatter, override it deliberately for judgment-heavy work.
-   **Status: two different versions of this fix exist, and only one of them
-   is repo-local.** The repo-local, versioned form — an edit to *this
+   **Status: this fix has a repo-local, versioned form and a personal,
+   unversioned form — only the personal one is actually in effect today.**
+   The repo-local, versioned form — an edit to *this
    repo's* `.claude/settings.json` — is still **not done**: that file is
    edit/write-denied for agents (see `CLAUDE.md` §
    "Changing `.claude/settings.json`"), the exact snippet is in the PR that
@@ -112,14 +113,12 @@ diverging as more time passes.
 
 **What this does and does not close.** Mechanism 1 is a practice, not a
 guarantee — it depends on whoever spawns the subagent reading this file or
-the `bd remember` entry. Mechanism 2 is the actual backstop, and its
-repo-local, versioned half — the only half that would protect a different
-machine, contributor, or CI run — still hasn't landed; an orchestrator on any
-machine other than Eirik's own, that forgets the argument, is exactly as
-exposed as before either fix existed. The global override (`ugcportal-2tc`)
-closes the gap for Eirik's own sessions only, and only for as long as that
-one machine's config persists. Neither mechanism is verifiable from inside
-this repo's CI (see § 4 below on what K6 can and cannot check).
+the `bd remember` entry. Mechanism 2 is the actual backstop; see the status
+note just above for exactly which half of it exists today and for whom —
+in short, an orchestrator on any machine other than Eirik's own that forgets
+the argument is exactly as exposed as before either fix existed. Neither
+mechanism is verifiable from inside this repo's CI (see § 4 below on what K6
+can and cannot check).
 
 ## 2. Cap orchestration-session context
 
@@ -269,13 +268,10 @@ measurement time.
 
 **This baseline is a "before" figure, not a "before and after" — and still
 is.** Nothing in this PR changed runtime behavior — § 1 mechanism 2 (the
-actual backstop) required a `.claude/settings.json` edit this PR could not
-make, and that repo-local, versioned edit still hasn't landed (see § 1). A
-narrower, single-machine version of the same fix landed separately on
-2026-09-29 (`ugcportal-2tc`, a global env block on Eirik's own machine only)
-— after this baseline was captured — but the re-run that would show whether
-it actually moved the Opus share (`ugcportal-0xw`) has **not been run yet**
-as of this writing. K1's acceptance criterion ("re-running... over a later
+actual backstop) is still only partially in effect (see § 1's status note
+for exactly which half, and for whom). The re-run that would show whether
+that partial fix actually moved the Opus share (`ugcportal-0xw`) has **not
+been run yet** as of this writing. K1's acceptance criterion ("re-running... over a later
 window and showing the Opus share of subagent requests has fallen") still
 needs that second run, over a window that postdates `2tc`'s adoption. Re-run
 the command above then and compare against the baseline in this section —
