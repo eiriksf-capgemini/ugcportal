@@ -3,9 +3,9 @@
   "version": "0.4.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "node scripts/with-local-ca.mjs next dev",
     "build": "next build",
-    "start": "next start",
+    "start": "node scripts/with-local-ca.mjs next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
