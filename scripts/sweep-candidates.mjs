@@ -17,17 +17,21 @@
  *      implementation would still pass this, and could the needle ever
  *      actually be absent?").
  *
- *   2. Sibling object/type literals in the SAME file that share 3+ field
- *      names, where this diff changed one sibling's copy of a shared field
- *      but left the textually identical field in the other sibling(s)
- *      untouched. This is a narrower, honestly-scoped stand-in for "a fix
- *      applied to one of several parallel structures but not the other" --
- *      it flags an ASYMMETRIC EDIT WITHIN THE LITERALS THEMSELVES. It does
- *      NOT trace whether code elsewhere that *reads* a sibling's field was
- *      also fixed; that would need real type/data-flow analysis, which
- *      ugcportal-plp6 explicitly scopes out ("if (b) turns out to need a
- *      real type checker to avoid false negatives, that's a scope decision
- *      for whoever builds this, not assumed here").
+ *   2. Sibling object/type literals in the SAME non-test file that share 3+
+ *      field names, where this diff changed one sibling's copy of a shared
+ *      field but left the textually identical field in the other
+ *      sibling(s) untouched. This is a narrower, honestly-scoped stand-in
+ *      for "a fix applied to one of several parallel structures but not the
+ *      other" -- it flags an ASYMMETRIC EDIT WITHIN THE LITERALS
+ *      THEMSELVES. It does NOT trace whether code elsewhere that *reads* a
+ *      sibling's field was also fixed; that would need real type/data-flow
+ *      analysis, which ugcportal-plp6 explicitly scopes out ("if (b) turns
+ *      out to need a real type checker to avoid false negatives, that's a
+ *      scope decision for whoever builds this, not assumed here"). Test
+ *      files are deliberately excluded from this check (round 4 finding):
+ *      table-driven tests routinely repeat a same-shaped fixture object
+ *      across many cases, which is indistinguishable from the real defect
+ *      shape by field-name matching alone and drowns it in noise.
  *
  * Usage:
  *   node scripts/sweep-candidates.mjs [--base <git-ref>]
@@ -157,7 +161,10 @@ export function findObjectLikeBlocks(content, filePath = "input.tsx") {
       const fieldLines = new Map();
       for (const member of node.members ?? node.properties) {
         const name = propertyName(member);
-        if (name !== null && !fieldLines.has(name)) {
+        // A later duplicate key is the one that actually takes effect in a
+        // JS/TS object literal, so it -- not the first occurrence -- is
+        // what a diff touching it should be compared against.
+        if (name !== null) {
           fieldLines.set(name, lineOf(sourceFile, member.getStart(sourceFile)));
         }
       }
@@ -183,7 +190,7 @@ export function findObjectLikeBlocks(content, filePath = "input.tsx") {
  * @returns {{file: string, field: string, touchedLine: number, siblingLine: number}[]}
  */
 export function findSiblingGuardOmissions(content, changedLines, filePath) {
-  const blocks = findObjectLikeBlocks(content);
+  const blocks = findObjectLikeBlocks(content, filePath);
   const candidates = [];
   const seen = new Set();
 
@@ -308,7 +315,15 @@ function main() {
       toContainCandidates.push(...findToContainCandidates(content, filePath));
     }
 
-    if (SOURCE_FILE_RE.test(filePath)) {
+    // Deliberately excludes test files: a table-driven test's fixtures
+    // routinely repeat a `{field, field, field}`-shaped object across many
+    // `it()` blocks (this very file's own test suite does), which is
+    // structurally identical to the parallel-structure defect this check
+    // looks for but isn't one. Reproduced: scanning this PR's own test file
+    // reported dozens of candidates, all fixture repetition -- noisy enough
+    // that a human is likely to start ignoring the block's output
+    // wholesale, including the rare push where it flags a real defect.
+    if (SOURCE_FILE_RE.test(filePath) && !TEST_FILE_RE.test(filePath)) {
       let content;
       try {
         content = readFile(filePath);

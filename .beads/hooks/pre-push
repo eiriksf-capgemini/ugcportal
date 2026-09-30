@@ -81,9 +81,14 @@ else
   _ugcportal_env_local="$_ugcportal_repo_root/.env.local"
   _ugcportal_env_plain="$_ugcportal_repo_root/.env"
   _ugcportal_has_env_var() {
-    # $1 = var name
-    { [ -f "$_ugcportal_env_local" ] && grep -q "^$1=" "$_ugcportal_env_local"; } \
-      || { [ -f "$_ugcportal_env_plain" ] && grep -q "^$1=" "$_ugcportal_env_plain"; }
+    # $1 = var name. Requires a NON-EMPTY value after `=` -- env.example
+    # ships several of these five names as empty placeholder lines
+    # (`AUTH_GOOGLE_ID=`), and a dev who copies it to .env.local without
+    # filling every field in would otherwise have this check see that
+    # empty line as "a real value already exists" and skip the fallback,
+    # leaving the var empty for `npm run build` (round 4 finding).
+    { [ -f "$_ugcportal_env_local" ] && grep -qE "^$1=.+" "$_ugcportal_env_local"; } \
+      || { [ -f "$_ugcportal_env_plain" ] && grep -qE "^$1=.+" "$_ugcportal_env_plain"; }
   }
   if [ -z "$AUTH_SECRET" ] && ! _ugcportal_has_env_var AUTH_SECRET; then
     export AUTH_SECRET="$AUTH_SECRET_PLACEHOLDER"
@@ -111,14 +116,17 @@ else
   # route types instead of the fresh ones CI checks post-build.
   _ugcportal_run npm run typecheck || exit 1
 
-  # Conditionally run the harness-cost-controls self-test -- intended to
-  # mirror CI's own path-conditional job (ugcportal-d4z, gh-56), but that PR
-  # is not yet merged as of this writing, so until it lands THIS is the only
-  # place this self-test runs at all: do not rely on `--no-verify` to skip
-  # past a real regression in harness-cost-controls/scripts/. Only runs when
-  # this branch has actually changed that directory relative to its
-  # upstream (falling back to origin/main for a branch with no upstream
-  # configured yet, e.g. its first push).
+  # Conditionally run the harness-cost-controls self-test -- duplicates
+  # CI's own path-conditional job (ugcportal-d4z, gh-56, merged) here for
+  # faster local feedback. This is NOT the only place it runs (CI still
+  # runs it server-side on the pushed branch regardless of this hook), but
+  # it IS conditional on this clone/worktree having core.hooksPath actually
+  # pointed at .beads/hooks (via `bd hooks install`) -- a fresh clone or CI
+  # runner without that configured runs no hook at all here, which is fine
+  # precisely because CI's own copy of this same check still covers it.
+  # Only runs when this branch has actually changed that directory
+  # relative to its upstream (falling back to origin/main for a branch
+  # with no upstream configured yet, e.g. its first push).
   _ugcportal_upstream=$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null)
   if [ -z "$_ugcportal_upstream" ] || ! git rev-parse --verify "$_ugcportal_upstream" >/dev/null 2>&1; then
     _ugcportal_upstream="origin/main"

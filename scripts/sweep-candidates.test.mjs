@@ -142,6 +142,13 @@ describe("findObjectLikeBlocks", () => {
     expect(findObjectLikeBlocks(content)).toEqual([]);
   });
 
+  it("records a duplicate key's LAST occurrence, since that's the one that takes effect in JS", () => {
+    const content = "const x = {\n  id: true,\n  name: true,\n  role: 1,\n  role: 2,\n};\n";
+    const blocks = findObjectLikeBlocks(content);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].fieldLines.get("role")).toBe(5);
+  });
+
   it("closes a string field value ending in an escaped backslash, without corrupting the rest of the file", () => {
     // Round-2 finding: the naive escape check left `inDouble` stuck true
     // after a value like "C:\\", so every later brace in the file was
@@ -196,5 +203,29 @@ describe("findSiblingGuardOmissions", () => {
   it("flags nothing when the changed line is outside any object literal", () => {
     const changedLines = new Set([6]); // the blank line between the two blocks
     expect(findSiblingGuardOmissions(fixture, changedLines, "select.ts")).toEqual([]);
+  });
+
+  it("forwards filePath so a plain .ts file parses correctly instead of defaulting to TSX", () => {
+    // An angle-bracket type assertion (`<Foo>bar`) is valid TypeScript but
+    // ONLY outside a .tsx file, where it's ambiguous with a JSX tag and
+    // rejected. Parsing this content with the wrong ScriptKind either
+    // throws or misparses everything after it -- confirming the real
+    // filename (and therefore ScriptKind.TS, not the TSX default) reached
+    // findObjectLikeBlocks.
+    const content = [
+      "const cast = <string>(x as unknown);",
+      "const a = {",
+      "  id: true,",
+      "  name: true,",
+      "  role: true,",
+      "};",
+      "const b = {",
+      "  id: true,",
+      "  name: true,",
+      "  role: true,",
+      "};",
+    ].join("\n");
+    const candidates = findSiblingGuardOmissions(content, new Set([3]), "cast-example.ts");
+    expect(candidates).toEqual([{ file: "cast-example.ts", field: "id", touchedLine: 3, siblingLine: 8 }]);
   });
 });
