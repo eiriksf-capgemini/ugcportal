@@ -40,6 +40,21 @@
  *
  * Self-test: npm test -- runs scripts/sweep-candidates.test.mjs (vitest).
  *
+ * KNOWN LIMITATION (ugcportal-lykb): the "HEAD" half of every comparison
+ * this script makes -- getChangedFiles/getChangedLineNumbersByFile/readFile
+ * below -- is the currently CHECKED-OUT HEAD, not necessarily the content
+ * of whatever is actually being pushed. When invoked from
+ * .beads/hooks/pre-push (see that file's own KNOWN LIMITATION note), an
+ * unusual push -- a different local branch than the one checked out, an
+ * explicit SHA, `git push origin X:main` -- means this script silently
+ * sweeps HEAD's diff instead of the pushed ref's. This is a deliberate
+ * scope decision, not an oversight: this tool is advisory-only (see K4
+ * above), has no CI equivalent (nothing under .github/workflows/ invokes
+ * it -- it only ever runs locally, manually or from this repo's pre-push
+ * hook), and never blocks a push or a merge on its own -- so the blast
+ * radius of inspecting the wrong ref here is a missed local hint, not a
+ * bypassed gate.
+ *
  * Both checks below parse with the TypeScript compiler API (`typescript`,
  * already a project dependency for `tsc --noEmit`) rather than hand-rolled
  * string/regex scanning. An earlier version hand-rolled a
@@ -235,6 +250,9 @@ function resolveDefaultBase() {
   }
 }
 
+// NOTE (ugcportal-lykb): `...HEAD` is checked-out HEAD, not necessarily
+// what's actually being pushed -- see the KNOWN LIMITATION note in this
+// file's header docstring.
 function getChangedFiles(base) {
   const out = execFileSync("git", ["diff", "--name-only", `${base}...HEAD`], { encoding: "utf8" });
   return out.split("\n").filter(Boolean);
@@ -245,6 +263,10 @@ function getChangedFiles(base) {
  * version spawned a `git diff -U0 base...HEAD -- <file>` per changed file,
  * which review found could mean ~100 subprocess spawns on a 50-file PR for
  * data a single whole-diff parse already has).
+ *
+ * NOTE (ugcportal-lykb): `...HEAD` is checked-out HEAD, not necessarily
+ * what's actually being pushed -- see the KNOWN LIMITATION note in this
+ * file's header docstring.
  *
  * @returns {Map<string, Set<number>>} filePath -> changed absolute line numbers
  */
@@ -277,6 +299,9 @@ function getChangedLineNumbersByFile(base) {
   return result;
 }
 
+// NOTE (ugcportal-lykb): reads the file's content at checked-out HEAD, not
+// necessarily what's actually being pushed -- see the KNOWN LIMITATION
+// note in this file's header docstring.
 function readFile(filePath) {
   return execFileSync("git", ["show", `HEAD:${filePath}`], { encoding: "utf8" });
 }
