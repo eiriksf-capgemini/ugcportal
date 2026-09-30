@@ -556,7 +556,7 @@ EOF
 Deferred from review round <N> of <PR> under the round-4 severity gate (ugcportal-2yj).
 
 Severity: low
-Found by: code-review / recurring-family sweep family <1|2|3>
+Found by: code-review / recurring-family sweep family <1|2|3|4>
 In scope: <the fix>
 Out of scope: <neighbouring work>
 EOF
