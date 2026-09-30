@@ -146,8 +146,12 @@ export function registerTagCaption(
       name: "gallery-tags",
       className: LIGHTBOX_TAG_CAPTION_CLASS,
       appendTo: "root",
-      // After the default controls, so it cannot be inserted between the
-      // close button and the counter.
+      // Positioned at order: 9, which in photoswipe@5.4.4 (defaults:
+      // counter 5, preloader 7, arrowPrev 10, zoom 10, arrowNext 11, close 20)
+      // lands between preloader and arrowPrev in sort order. This position in
+      // the sort list is moot visually because appendTo: "root" targets a
+      // different container than the default controls, which all use
+      // appendTo: "wrapper".
       order: 9,
       isButton: false,
       tagName: "p",
