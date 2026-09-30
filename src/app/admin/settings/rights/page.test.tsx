@@ -353,7 +353,7 @@ describe("an uploader outside the listed slice can still be decided about", () =
     const markup = await renderPage({ edit: "excluded-by-query" });
 
     // Should show the query-exclusion reason, not the cap reason.
-    expect(markup).toContain("no uploads and no prior review yet");
+    expect(markup).toContain("no uploads and no prior review");
     expect(markup).not.toContain("fall outside the first");
     // The uploader should still be pinned and visible.
     expect(listedEmails(markup)[0]).toBe("excluded@example.com");
@@ -366,7 +366,7 @@ describe("an uploader outside the listed slice can still be decided about", () =
     const markup = await renderPage({ edit: outsideId });
 
     expect(markup).toContain("fall outside the first");
-    expect(markup).not.toContain("no uploads and no prior review yet");
+    expect(markup).not.toContain("no uploads and no prior review");
     // Pinned, not sorted into place: the admin came here to act on them.
     expect(listedEmails(markup)[0]).toBe(
       `u${String(MAX_UPLOADERS).padStart(4, "0")}@example.com`,
