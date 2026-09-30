@@ -43,6 +43,22 @@ describe("findToContainCandidates", () => {
     const candidates = findToContainCandidates(content, "example.test.ts");
     expect(candidates).toEqual([{ file: "example.test.ts", line: 1, negated: false, needle: "String(count)" }]);
   });
+
+  it("closes a string ending in an escaped backslash, not one escaped char short", () => {
+    // A naive "is the immediately preceding char a backslash" check reads
+    // the closing quote of `"value\\"` as escaped (it's preceded by `\`),
+    // when that `\` is itself escaped by the one before it -- the string
+    // really does end there.
+    const content = 'expect(x).toContain("value\\\\");\nexpect(y).toBe(true);\n';
+    const candidates = findToContainCandidates(content, "example.test.ts");
+    expect(candidates).toEqual([{ file: "example.test.ts", line: 1, negated: false, needle: '"value\\\\"' }]);
+  });
+
+  it("does not miscount a paren inside a regex character class", () => {
+    const content = "expect(x).toContain(/[(]/);\nexpect(y).toBe(true);\n";
+    const candidates = findToContainCandidates(content, "example.test.ts");
+    expect(candidates).toEqual([{ file: "example.test.ts", line: 1, negated: false, needle: "/[(]/" }]);
+  });
 });
 
 describe("findObjectLikeBlocks", () => {
@@ -87,6 +103,17 @@ describe("findObjectLikeBlocks", () => {
   it("does not mistake a class body for an object literal", () => {
     const content = "class Foo extends Bar {\n  id: string;\n  name: string;\n  role: string;\n}\n";
     expect(findObjectLikeBlocks(content)).toEqual([]);
+  });
+
+  it("closes a string field value ending in an escaped backslash, without corrupting the rest of the file", () => {
+    // Round-2 finding: the naive escape check left `inDouble` stuck true
+    // after a value like "C:\\", so every later brace in the file was
+    // silently read as still being inside that string.
+    const content = 'const a = {\n  path: "C:\\\\",\n};\n\nconst b = {\n  id: true,\n};\n';
+    const blocks = findObjectLikeBlocks(content);
+    expect(blocks).toHaveLength(2);
+    expect([...blocks[0].fieldLines.keys()]).toEqual(["path"]);
+    expect([...blocks[1].fieldLines.keys()]).toEqual(["id"]);
   });
 });
 

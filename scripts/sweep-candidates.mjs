@@ -45,6 +45,24 @@ const SOURCE_FILE_RE = /\.[cm]?[jt]sx?$/;
 
 const CONTROL_FLOW_KEYWORDS = new Set(["if", "for", "while", "function", "else", "try", "switch", "catch", "do", "finally"]);
 
+// True if the character at `pos` is escaped by the backslash(es) immediately
+// preceding it -- counts them and checks parity, since a naive "is the prior
+// character a backslash" check gets a value ending in an escaped backslash
+// wrong (e.g. `"value\\"`: the quote is preceded by a backslash, but that
+// backslash is itself escaped by the one before it, so the quote is NOT
+// escaped and the string really does end there). Shared by both scanners
+// below, which had this exact bug independently before round 2 of review on
+// ugcportal-5dr6/plp6 found it in both.
+function isEscapedAt(content, pos) {
+  let count = 0;
+  let i = pos - 1;
+  while (i >= 0 && content[i] === "\\") {
+    count++;
+    i--;
+  }
+  return count % 2 === 1;
+}
+
 // --- Check 1: toContain / not.toContain enumeration ---------------------
 
 /**
@@ -56,49 +74,111 @@ export function findToContainCandidates(content, filePath) {
   const candidates = [];
   // Scanned over the whole content, not split by line, so a call spanning
   // multiple lines is still found -- a real shape in this codebase (e.g.
-  // src/lib/sign-in-policy.test.ts). The argument's closing paren is found
-  // by depth-counting rather than a non-greedy match to the first `)`, so a
-  // needle containing its own call (e.g. `toContain(String(count))`) isn't
-  // truncated.
+  // src/lib/sign-in-policy.test.ts). scanBalancedArgs finds the argument's
+  // closing paren by depth-counting (string/template/regex-aware) rather
+  // than a non-greedy match to the first `)`, so a needle containing its
+  // own call (e.g. `toContain(String(count))`) isn't truncated.
   const callRe = /(\.not)?\.toContain\(/g;
   let m;
   while ((m = callRe.exec(content)) !== null) {
     const argStart = m.index + m[0].length;
-    let depth = 1;
-    let j = argStart;
-    let inS = false;
-    let inD = false;
-    let inT = false;
-    while (j < content.length && depth > 0) {
-      const ch = content[j];
-      const pv = content[j - 1];
-      if (inS) {
-        if (ch === "'" && pv !== "\\") inS = false;
-      } else if (inD) {
-        if (ch === '"' && pv !== "\\") inD = false;
-      } else if (inT) {
-        if (ch === "`" && pv !== "\\") inT = false;
-      } else if (ch === "'") {
-        inS = true;
-      } else if (ch === '"') {
-        inD = true;
-      } else if (ch === "`") {
-        inT = true;
-      } else if (ch === "(") {
-        depth++;
-      } else if (ch === ")") {
-        depth--;
-      }
-      if (depth > 0) j++;
-    }
+    const argEnd = scanBalancedArgs(content, argStart);
     candidates.push({
       file: filePath,
       line: content.slice(0, m.index).split("\n").length,
       negated: Boolean(m[1]),
-      needle: content.slice(argStart, j).trim(),
+      needle: content.slice(argStart, argEnd).trim(),
     });
   }
   return candidates;
+}
+
+/**
+ * Scans forward from `start` (the position right after a call's own open
+ * paren, so depth begins at 1) for the matching close paren, tracking
+ * string/template/regex-literal state so a paren, quote, or brace inside
+ * one of those doesn't desync the count. Shares the string/regex handling
+ * `findObjectLikeBlocks` uses, so a fix to one doesn't leave the other
+ * vulnerable to the same input shape (round 2 of review on
+ * ugcportal-5dr6/plp6 found the escape-parity bug duplicated exactly that
+ * way).
+ *
+ * @param {string} content
+ * @param {number} start
+ * @returns {number} index of the matching close paren, or content.length if
+ *   the call is unterminated
+ */
+function scanBalancedArgs(content, start) {
+  let depth = 1;
+  let inSingle = false;
+  let inDouble = false;
+  let inTemplate = false;
+  let inRegex = false;
+  let inRegexClass = false;
+  let lastSignificant = "("; // just past the call's own open paren
+
+  let j = start;
+  for (; j < content.length; j++) {
+    const c = content[j];
+    if (inSingle) {
+      if (c === "'" && !isEscapedAt(content, j)) inSingle = false;
+      continue;
+    }
+    if (inDouble) {
+      if (c === '"' && !isEscapedAt(content, j)) inDouble = false;
+      continue;
+    }
+    if (inTemplate) {
+      if (c === "`" && !isEscapedAt(content, j)) inTemplate = false;
+      continue;
+    }
+    if (inRegex) {
+      if (c === "\\") {
+        j++;
+        continue;
+      }
+      if (c === "[") inRegexClass = true;
+      else if (c === "]") inRegexClass = false;
+      else if (c === "/" && !inRegexClass) {
+        inRegex = false;
+        while (j + 1 < content.length && /[a-z]/i.test(content[j + 1])) j++;
+        lastSignificant = "/";
+      }
+      continue;
+    }
+    if (c === "'") {
+      inSingle = true;
+      lastSignificant = c;
+      continue;
+    }
+    if (c === '"') {
+      inDouble = true;
+      lastSignificant = c;
+      continue;
+    }
+    if (c === "`") {
+      inTemplate = true;
+      lastSignificant = c;
+      continue;
+    }
+    if (c === "/" && REGEX_PRECEDERS.has(lastSignificant)) {
+      inRegex = true;
+      continue;
+    }
+    if (c === "(") {
+      depth++;
+      lastSignificant = c;
+      continue;
+    }
+    if (c === ")") {
+      depth--;
+      if (depth === 0) break;
+      lastSignificant = c;
+      continue;
+    }
+    if (!/\s/.test(c)) lastSignificant = c;
+  }
+  return j;
 }
 
 // --- Check 2: sibling object/type-literal guard omissions ---------------
@@ -190,15 +270,15 @@ export function findObjectLikeBlocks(content) {
       continue;
     }
     if (inSingle) {
-      if (c === "'" && prev !== "\\") inSingle = false;
+      if (c === "'" && !isEscapedAt(content, i)) inSingle = false;
       continue;
     }
     if (inDouble) {
-      if (c === '"' && prev !== "\\") inDouble = false;
+      if (c === '"' && !isEscapedAt(content, i)) inDouble = false;
       continue;
     }
     if (inTemplate) {
-      if (c === "`" && prev !== "\\") inTemplate = false;
+      if (c === "`" && !isEscapedAt(content, i)) inTemplate = false;
       continue;
     }
     if (inRegex) {
