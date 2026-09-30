@@ -149,9 +149,10 @@ export function registerTagCaption(
       // Positioned at order: 9, which in photoswipe@5.4.4 (defaults:
       // counter 5, preloader 7, arrowPrev 10, zoom 10, arrowNext 11, close 20)
       // lands between preloader and arrowPrev in sort order. This position in
-      // the sort list is moot visually because appendTo: "root" targets a
-      // different container than the default controls, which all use
-      // appendTo: "wrapper".
+      // the sort list is moot visually because appendTo: "root" places this
+      // element in the root DOM container, separate from where the default
+      // UI controls render (appendTo: "bar" by default for counter/preloader/
+      // close, or explicitly "wrapper" for arrows).
       order: 9,
       isButton: false,
       tagName: "p",
