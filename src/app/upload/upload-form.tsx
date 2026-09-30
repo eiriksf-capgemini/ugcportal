@@ -129,6 +129,19 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
   const settledRef = useRef(new Set<string>());
 
   /**
+   * A clock, read fresh at every dispatch (ugcportal-ggw) and otherwise
+   * ticking only while some row is inside a Retry-After window — see the
+   * effect below, and `dispatchQueue`, which is where it is actually kept
+   * current.
+   *
+   * Initialised from a function so the first value is read at mount rather
+   * than at module scope, and never rendered when the queue is empty — which
+   * it always is on the server — so there is nothing here to mismatch during
+   * hydration.
+   */
+  const [now, setNow] = useState(() => Date.now());
+
+  /**
    * The single door every dispatch goes through, so the two things that have
    * to track the action stream actually see all of it.
    *
@@ -137,6 +150,27 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
    * succeeded row and every non-retryable failure kept its File — and its
    * backing blob, up to 200 MB for a video — alive for the tab's lifetime with
    * no reader left.
+   *
+   * IT ALSO REFRESHES `now` (ugcportal-ggw), and doing it here rather than in
+   * an effect is the fix. `now` used to be refreshed only by the interval
+   * further down, which itself runs only while `throttled` is true — and
+   * `throttled` is computed FROM that same `now`. A 503 with a Retry-After
+   * landing long after mount (the user picked tags, read the page, walked
+   * away) was rendered on the very next commit with `now` still sitting at
+   * whatever it was when the interval last ran, or at mount if it never has
+   * — turning a real 12-second window into "Try again in 312s" for the up to
+   * 500ms until the interval's own first tick caught up.
+   *
+   * An effect cannot close that window: an effect runs AFTER the browser has
+   * already committed the stale render once. `dispatchQueue` is called
+   * synchronously from the same event (a promise resolving, a click) that is
+   * about to make `items` carry the new failure, so reading the clock HERE —
+   * before `dispatch(action)` schedules the re-render that will need it — is
+   * what makes the very first render of that failure already correct, rather
+   * than a second render moments later. Calling `Date.now()` directly in the
+   * component body instead (a natural-looking alternative) is what this repo's
+   * react-hooks/purity rule exists to catch: a component's render must be a
+   * pure function of its props and state, and this is a callback, not render.
    */
   const dispatchQueue = useCallback((action: QueueAction) => {
     const { settled, unsettled } = settledChange(action);
@@ -152,6 +186,7 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
       tagsRef.current.delete(released);
     }
 
+    setNow(Date.now());
     dispatch(action);
   }, []);
 
@@ -310,20 +345,6 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
 
   const summary = queueSummary(items);
 
-  /**
-   * A clock, ticking only while some row is inside a Retry-After window.
-   *
-   * The countdown on a throttled "Try again" has to stay true as it runs, and
-   * nothing else on this page re-renders while the user waits. The interval
-   * exists only for as long as there is something to count down, so an idle
-   * page does no work.
-   *
-   * Initialised from a function so the first value is read at mount rather
-   * than at module scope, and never rendered when the queue is empty — which
-   * it always is on the server — so there is nothing here to mismatch during
-   * hydration.
-   */
-  const [now, setNow] = useState(() => Date.now());
   const throttled = items.some(
     (item) =>
       item.failure !== null && secondsUntilRetry(item.failure, now) > 0,
