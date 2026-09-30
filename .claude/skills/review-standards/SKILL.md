@@ -1,6 +1,6 @@
 ---
 name: review-standards
-description: ugcportal's review standards — the required sweep for this repo's three recurring defect families, the severity-gated stopping rule for review iteration (rounds 1-3 fix everything; round 4+ only a medium-or-above blocks and lows are filed as beads; hard cap at 6 rounds, then escalation to a human), and the scope freeze after first push. Read before pushing a branch for review, on every review round of a PR in this repo, and whenever deciding whether another round is worth running.
+description: ugcportal's review standards — the required sweep for this repo's four recurring defect families, the severity-gated stopping rule for review iteration (rounds 1-3 fix everything; round 4+ only a medium-or-above blocks and lows are filed as beads; hard cap at 6 rounds, then escalation to a human), and the scope freeze after first push. Read before pushing a branch for review, on every review round of a PR in this repo, and whenever deciding whether another round is worth running.
 ---
 
 # Review standards (ugcportal)
@@ -43,16 +43,16 @@ Found during review of <PR>. ...
 EOF
 ```
 
-## 2. The required sweep — three recurring defect families
+## 2. The required sweep — four recurring defect families
 
-Two families accounted for a large share of all review rounds on this repo; a third has now hit twice. Sweeping for the **class** costs one round and has repeatedly replaced several — agents asked to do this found further instances themselves, unprompted.
+Two families accounted for a large share of all review rounds on this repo; a third hit twice. A fourth was added 2026-09-30 (`ugcportal-ws3`), from the same kind of evidence as the first three: measured directly against delivery logs rather than recalled, and named only after showing up repeatedly rather than once. Sweeping for the **class** costs one round and has repeatedly replaced several — agents asked to do this found further instances themselves, unprompted.
 
 This sweep is **required**, not advisory, in two places:
 
 - by the implementer, before the first push; and
 - by the reviewer, on every review round (`pr-review-merge` step 4.1).
 
-Each family must be **reported as checked, by name**, with what was found (including "nothing"). A silent skip is the failure mode this exists to make visible — if a report does not name all three, the sweep did not happen.
+Each family must be **reported as checked, by name**, with what was found (including "nothing"). A silent skip is the failure mode this exists to make visible — if a report does not name all four, the sweep did not happen.
 
 ### Family 1 — a comment claims a guarantee the code does not make
 
@@ -105,6 +105,22 @@ If a materially worse implementation passes, the assertion is decoration. If the
 Then make it mechanical, because attention is demonstrably not the missing ingredient here — one defective harness was written in the same commit as the fix it was guarding, by an agent that had just spent two rounds writing about this exact family:
 
 > **Mutate the fixture, not just the production code.** After writing an assertion, change the *fixture* so the failure it describes should occur, and confirm it does. Mutating the production code only proves the assertion is connected to the behaviour; mutating the fixture proves it is connected to a case that can actually fail.
+
+### Family 4 — sibling-omission: a fix applied to only one of several parallel structures
+
+Named 2026-09-30 in `ugcportal-ws3`, which measured it directly against the round-by-round delivery logs of this repo's two worst-offending beads (`ugcportal-r1d`: 10 impl / 9 review rounds; `ugcportal-0ss`: 7/7) and found it accounted for roughly 8 of `r1d`'s 10 rounds. `r1d`'s own close reason names the same shape independently, in its own words, before `ws3` ever generalised it.
+
+The shape: the codebase has two (or more) parallel structures that are supposed to move together — two audience-specific projections, two directions of a check, two response paths, two fields that must stay linked — and a round's fix lands on one of them, leaving its sibling with the exact bug the fix just removed from its pair. The next round finds the sibling, looking like a new defect, when it is the same one found again one structure over.
+
+Real instances from this repo:
+
+- `previewKey` was withheld as a field from an anonymous projection, but the same account id remained recoverable from the previewKey *string* — withholding a value is not the same as withholding what derives from it (`r1d`'s own close reason calls this its central lesson).
+- a 409 "already has a preview" guard checked only `previewKey`, while the two listings it was protecting filtered on `previewKey` **and** `previewId` — a row could satisfy one sibling check and fail the other, becoming publishable-but-invisible.
+- a listing-scope type made `previewKey`/`previewId` required so a defensive filter couldn't forget them, but left `publishedAt` optional — the field that mattered most was the one sibling nobody structurally required.
+- one rights-clearance lookup, keyed on the wrong column, let a single clearance silently settle three separate rights layers (music / third-party / sponsorship) that each needed independent treatment.
+- `Cache-Control` was set on a handler's 200 response but not its 400 path from the same handler — a happy path and its error path are siblings too.
+
+**The check:** for every field, guard, projection, or response path touched by this diff, ask "does this same shape exist anywhere else — a second audience, a second direction, a second response path, a paired field?" If so, confirm the fix (or the bug) was checked against both, not just the one the diff happens to touch. Treat finding the sibling as the default next step after finding the first instance, not as an edge case to remember.
 
 ## 3. The stopping rule — severity gate, then a hard cap
 

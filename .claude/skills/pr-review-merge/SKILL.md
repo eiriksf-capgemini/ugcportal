@@ -1,6 +1,6 @@
 ---
 name: pr-review-merge
-description: Review a GitHub PR in this repo for correctness/security issues, sweep for this repo's three recurring defect families, check its CI status, then auto-approve and merge it — but only if CI is green, the diff touches no sensitive paths, and no finding blocks under the round-based severity gate (rounds 1-3 any finding blocks; round 4+ only a medium-or-above; hard cap at 6 rounds, then escalation). Otherwise, post a review comment explaining what's blocking and leave it for a human. Use when asked to "review PR #N", "review and merge this PR", or as a follow-up step right after opening a PR in this repo.
+description: Review a GitHub PR in this repo for correctness/security issues, sweep for this repo's four recurring defect families, check its CI status, then auto-approve and merge it — but only if CI is green, the diff touches no sensitive paths, and no finding blocks under the round-based severity gate (rounds 1-3 any finding blocks; round 4+ only a medium-or-above; hard cap at 6 rounds, then escalation). Otherwise, post a review comment explaining what's blocking and leave it for a human. Use when asked to "review PR #N", "review and merge this PR", or as a follow-up step right after opening a PR in this repo.
 ---
 
 # PR Review & Merge (ugcportal)
@@ -120,21 +120,22 @@ If for some reason that skill isn't available in this session, review the diff y
 
 ### 4.1 Required recurring-family sweep
 
-`code-review` is a general reviewer. This repo has three defect families that produced most of its historical review churn, and sweeping for the **class** costs one round while repeatedly replacing several. So after step 4, and on **every** round, run the sweep from the repo's `review-standards` skill:
+`code-review` is a general reviewer. This repo has four defect families that produced most of its historical review churn, and sweeping for the **class** costs one round while repeatedly replacing several. So after step 4, and on **every** round, run the sweep from the repo's `review-standards` skill:
 
 ```
 Skill(skill: "review-standards")
 ```
 
-Read section 2 of that skill and apply all three families to this diff:
+Read section 2 of that skill and apply all four families to this diff:
 
 1. **A comment claims a guarantee the code does not make** — a guard that cannot fire, a type constraint that does not constrain, a measured figure covering one code path of four, a doc line contradicting the table below it.
 2. **A check compares the wrong two things** — a request-derived value against configuration, two columns written by the same author, or the NaN variant where a comparison returns `false` for unparseable input and so fails open.
 3. **An assertion that cannot fail** — the test is: *for each assertion, what weaker implementation would still pass it, and could the needle ever actually be absent?*
+4. **Sibling-omission** — a fix applied to only one of several parallel structures (two audience-specific projections, two directions of a check, two response paths, two fields that must move together), leaving the untouched sibling with the exact bug just removed from its pair. The check: for every field, guard, or response path touched, ask whether the same shape exists elsewhere in the diff or the codebase, and confirm both were checked.
 
 This sweep is **required, not advisory**, and it is not a substitute for step 4 — it is an addition. Anything it finds is a finding like any other and feeds step 5 at its own severity.
 
-**Report having checked each family, by name, in your step 6 report and in any PR comment you post** — including when a family turned up nothing ("Family 3 (assertion that cannot fail): checked, nothing found"). A silent skip is what this requirement exists to make visible: a report that does not name all three did not do the sweep.
+**Report having checked each family, by name, in your step 6 report and in any PR comment you post** — including when a family turned up nothing ("Family 3 (assertion that cannot fail): checked, nothing found"). A silent skip is what this requirement exists to make visible: a report that does not name all four did not do the sweep.
 
 ## 4a. Record QA token cost
 
@@ -390,7 +391,7 @@ First, the gates that apply at every round without exception. Approve and merge 
 - Base branch is `main` and it's mergeable (step 1)
 - No sensitive paths touched (step 2)
 - CI fully green (step 3)
-- The step 4.1 sweep was actually run, with all three families reported
+- The step 4.1 sweep was actually run, with all four families reported
 
 Then apply the severity gate to the findings from steps 4 and 4.1, using the severities **you** assigned in step 4 and the round from step 4b. Definitions are in `review-standards` section 3; in short, **medium-or-above** is wrong behaviour a user or the data can reach (fail-open, authz gap, data loss, leaked credential, broken migration, a wrong figure a later bead builds on), and **low** is the correctness of the code's *description* rather than of the code (inaccurate comment, duplicate log lines, naming nit, an untidy test that still fails when the behaviour breaks). Note the one rule that is easy to get backwards: a **defective test inherits the severity of what it guards**, so a family-3 assertion-that-cannot-fail over a fresh fail-open fix is medium-or-above, not low.
 
@@ -598,7 +599,7 @@ State plainly:
 - **That you released the step 1a lock**, or — if you stood down — that another run held it and you consumed no round, posted nothing and stamped nothing.
 - If this run stopped before step 4 (CI, mergeability, base branch), say so and that it was stamped with a **non-counting** stop marker, so it is clear no round was consumed.
 - If this was round 7+, that it was a post-escalation verification round (step 5b), and the three things that let you enter that row: the chain was `exact`, the URL of the **latest** stop comment at or above 6, and the changed head SHA or non-bot human comment since it.
-- **All three recurring families from step 4.1, named, each with what it found (including "nothing").**
+- **All four recurring families from step 4.1, named, each with what it found (including "nothing").**
 - Findings with **the severity you assigned each one** (step 4 — `code-review` does not supply it), and which were fixed versus deferred.
 - Bead ids filed in step 5a, if any.
 - The `tokens_qa` figure recorded in step 4a (or note that it was skipped, and why).
