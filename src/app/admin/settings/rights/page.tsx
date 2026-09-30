@@ -136,6 +136,20 @@ export default async function ResaleRightsSettingsPage({
     editingUserId && !editedIsVisible && !requestedUploader,
   );
 
+  /**
+   * Distinguish why a requested uploader is not in the visible list:
+   * - excluded by query (no uploads AND no review) → "excluded by query"
+   * - beyond the cap → "beyond cap"
+   * - null if not applicable
+   */
+  const requestedUploaderNotInListReason =
+    requestedUploader === null
+      ? null
+      : requestedUploader._count.media === 0 &&
+          requestedUploader.resaleRightsReview === null
+        ? "excluded-by-query"
+        : "beyond-cap";
+
   const errorMessage = outcomeMessage(error);
 
   return (
@@ -182,10 +196,25 @@ export default async function ResaleRightsSettingsPage({
       ) : null}
       {requestedUploader ? (
         <p className="mt-6 rounded-lg border border-border bg-muted p-3 text-sm">
-          Showing{" "}
-          {requestedUploader.email ?? requestedUploader.name ?? requestedUploader.id}{" "}
-          at the top because you opened their decision form. They fall outside
-          the first {MAX_UPLOADERS} uploaders listed below.
+          {requestedUploaderNotInListReason === "excluded-by-query" ? (
+            <>
+              Showing{" "}
+              {requestedUploader.email ??
+                requestedUploader.name ??
+                requestedUploader.id}{" "}
+              because you opened their decision form. This uploader has no uploads
+              and no prior review yet, so they do not appear in the list above.
+            </>
+          ) : (
+            <>
+              Showing{" "}
+              {requestedUploader.email ??
+                requestedUploader.name ??
+                requestedUploader.id}{" "}
+              at the top because you opened their decision form. They fall outside
+              the first {MAX_UPLOADERS} uploaders listed below.
+            </>
+          )}
         </p>
       ) : null}
 
