@@ -76,6 +76,48 @@ jobs:
             exit 1
           fi
 
+  usage-indicators-selftest:
+    name: harness-cost-controls self-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check whether harness-cost-controls scripts changed
+        id: changed
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            CHANGED=$(git diff --name-only "origin/${BASE_REF}...HEAD")
+          elif [ -n "$PUSH_BEFORE" ] && [ "$PUSH_BEFORE" != "0000000000000000000000000000000000000000" ] && git cat-file -e "$PUSH_BEFORE" 2>/dev/null; then
+            # Diff the whole pushed range, not just the last commit -- a
+            # multi-commit direct push to main would otherwise only check
+            # its final commit and could silently skip a scripts/ change
+            # made earlier in the same push.
+            CHANGED=$(git diff --name-only "$PUSH_BEFORE" HEAD)
+          else
+            # No usable "before" SHA (first push to the branch, a force-push,
+            # or history rewrite) -- fail safe and assume relevant, rather
+            # than silently skipping the self-test on an unknown range.
+            CHANGED=".claude/skills/harness-cost-controls/scripts/"
+          fi
+          echo "Changed files:"
+          echo "$CHANGED"
+          if echo "$CHANGED" | grep -q '^\.claude/skills/harness-cost-controls/scripts/'; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run usage_indicators.py self-test
+        if: steps.changed.outputs.run == 'true'
+        working-directory: .claude/skills/harness-cost-controls/scripts
+        run: python3 -m unittest test_usage_indicators -v
+
   quality:
     name: Lint, test, typecheck, build
     runs-on: ubuntu-latest
