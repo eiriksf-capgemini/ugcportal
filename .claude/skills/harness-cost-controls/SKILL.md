@@ -82,11 +82,26 @@ diverging as more time passes.
    instead of silently inheriting the parent's Opus — while still letting an
    explicit `model: "opus"` or `model: "fable"` argument, or a named agent's
    own frontmatter, override it deliberately for judgment-heavy work.
-   **This requires an edit to `.claude/settings.json`, which is
-   edit/write-denied for agents in this repo** (see `CLAUDE.md` §
-   "Changing `.claude/settings.json`"). The exact snippet is in the PR that
-   introduced this file, for a human to apply by hand; it is deliberately not
-   committed here.
+   **Status: two different versions of this fix exist, and only one of them
+   is repo-local.** The repo-local, versioned form — an edit to *this
+   repo's* `.claude/settings.json` — is still **not done**: that file is
+   edit/write-denied for agents (see `CLAUDE.md` §
+   "Changing `.claude/settings.json`"), the exact snippet is in the PR that
+   introduced this file for a human to apply by hand, and re-reading
+   `.claude/settings.json` directly (confirmed 2026-09-30) shows it still has
+   no `env` block at all — nothing has changed there since this file was
+   written. Separately, `ugcportal-2tc` closed 2026-09-29 via a **different,
+   narrower fix**: a global `env` block in Eirik's own personal
+   `~/.claude/settings.json`, outside any repo and with no diff/PR/commit
+   behind it, confirmed live in-session via `env | grep CLAUDE` showing
+   `CLAUDE_CODE_SUBAGENT_MODEL=sonnet`. That is the same mechanism, applied
+   one level up, and it genuinely is closing the leak for Eirik's own
+   sessions right now. But it is single-machine and unversioned: it has no
+   git history, ships with no PR, and does not travel with the repo. A
+   different machine, a different contributor's checkout, or a CI run
+   against this repo gets **none** of it and is exactly as exposed to the
+   Opus-inheritance bug as if neither fix existed. Read "`2tc` closed" as
+   "one person's environment stopped leaking," not as "this repo is fixed."
 
    Do **not** set `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`. That overrides every
    subagent regardless of explicit arguments or agent-definition frontmatter,
@@ -97,11 +112,14 @@ diverging as more time passes.
 
 **What this does and does not close.** Mechanism 1 is a practice, not a
 guarantee — it depends on whoever spawns the subagent reading this file or
-the `bd remember` entry. Mechanism 2 is the actual backstop, and it is the
-half of this fix that a human has to apply; until it lands, an orchestrator
-that forgets the argument is exactly as exposed as before. Neither mechanism
-is verifiable from inside this repo's CI (see § 4 below on what K6 can and
-cannot check).
+the `bd remember` entry. Mechanism 2 is the actual backstop, and its
+repo-local, versioned half — the only half that would protect a different
+machine, contributor, or CI run — still hasn't landed; an orchestrator on any
+machine other than Eirik's own, that forgets the argument, is exactly as
+exposed as before either fix existed. The global override (`ugcportal-2tc`)
+closes the gap for Eirik's own sessions only, and only for as long as that
+one machine's config persists. Neither mechanism is verifiable from inside
+this repo's CI (see § 4 below on what K6 can and cannot check).
 
 ## 2. Cap orchestration-session context
 
@@ -249,14 +267,21 @@ being priced (round 3) — see § 5. Every reading still agrees on the
 qualitative finding: most subagent spend was still running on Opus at
 measurement time.
 
-**This baseline is a "before" figure, not a "before and after."** Nothing in
-this PR changes runtime behavior — § 1 mechanism 2 (the actual backstop)
-requires a `.claude/settings.json` edit this PR cannot make. K1's acceptance
-criterion ("re-running... over a later window and showing the Opus share of
-subagent requests has fallen") needs a second run, after the settings.json
-change lands and/or the explicit-model practice is actually adopted in spawns
-against this repo, over a window that postdates that adoption. Re-run the
-command above then and compare against the baseline in this section.
+**This baseline is a "before" figure, not a "before and after" — and still
+is.** Nothing in this PR changed runtime behavior — § 1 mechanism 2 (the
+actual backstop) required a `.claude/settings.json` edit this PR could not
+make, and that repo-local, versioned edit still hasn't landed (see § 1). A
+narrower, single-machine version of the same fix landed separately on
+2026-09-29 (`ugcportal-2tc`, a global env block on Eirik's own machine only)
+— after this baseline was captured — but the re-run that would show whether
+it actually moved the Opus share (`ugcportal-0xw`) has **not been run yet**
+as of this writing. K1's acceptance criterion ("re-running... over a later
+window and showing the Opus share of subagent requests has fallen") still
+needs that second run, over a window that postdates `2tc`'s adoption. Re-run
+the command above then and compare against the baseline in this section —
+don't treat the ~$795 recoverable-savings figure (§ 1, computed from this
+section's own numbers) as a confirmed, already-recovered saving until that
+comparison exists; it is a pre-fix baseline, not a current result.
 
 ## 5. When this measurement itself is wrong
 
