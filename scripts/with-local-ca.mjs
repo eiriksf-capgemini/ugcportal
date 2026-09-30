@@ -148,6 +148,12 @@ export function resolveLocalCa({ certsDir, env, cwd }) {
     // "trusting ..." success with NODE_EXTRA_CA_CERTS pointing at nothing.
     try {
       fs.accessSync(pems[0], fs.constants.R_OK);
+      // A stale concatenated bundle from a PREVIOUS multi-PEM run (now
+      // containing content from a cert that's been removed/rotated since)
+      // would otherwise linger indefinitely once certs/ drops to exactly
+      // one file -- the same leftover-bundle case the pems.length===0
+      // branch above already cleans up.
+      cleanUpLeftoverBundle();
       return { path: pems[0], source: "single", warning: null };
     } catch {
       cleanUpLeftoverBundle();

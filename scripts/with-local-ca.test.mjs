@@ -164,6 +164,22 @@ describe("certs directory", () => {
     expect(fs.existsSync(bundlePath)).toBe(false);
   });
 
+  it("removes a leftover multi-PEM bundle once certs/ drops to exactly one PEM", () => {
+    const bPath = write("certs/b-intermediate.pem", CERT_B);
+    write("certs/a-root.pem", CERT_A);
+    const bundlePath = resolve().path;
+    expect(fs.existsSync(bundlePath)).toBe(true);
+
+    // A cert rotation/removal down to a single remaining PEM -- the old
+    // bundle (which still contains the removed cert's content) must not
+    // be left behind at its predictable path once it's no longer what
+    // gets used.
+    fs.rmSync(bPath);
+    const result = resolve();
+    expect(result.source).toBe("single");
+    expect(fs.existsSync(bundlePath)).toBe(false);
+  });
+
   it("does not silently follow a pre-existing file at the bundle's predictable temp-write path", () => {
     write("certs/a-root.pem", CERT_A);
     write("certs/b-intermediate.pem", CERT_B);
