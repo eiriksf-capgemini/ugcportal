@@ -31,3 +31,77 @@ if command -v bd >/dev/null 2>&1; then
   if [ $_bd_exit -ne 0 ]; then exit $_bd_exit; fi
 fi
 # --- END BEADS INTEGRATION v1.2.2 ---
+
+# --- Mechanical pre-push checks (ugcportal-5dr6) ---
+# Local convenience only: CI (.github/workflows/ci.yml) and the
+# pr-review-merge severity-gated review remain the authoritative,
+# unbypassable gates regardless of what happens here. This adds roughly
+# 16s to `git push` (lint + typecheck + test + build; see ugcportal-2pnq
+# for the measured local/CI breakdown) so a mechanical failure is caught
+# locally instead of after CI's ~2min round trip. Skip with
+# `git push --no-verify` if needed -- that is a speed convenience, not a
+# security control (nothing here is enforced server-side), consistent
+# with this repo's existing don't-skip-hooks-without-asking policy for
+# agents.
+_ugcportal_repo_root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+cd "$_ugcportal_repo_root" || exit 0
+
+if ! command -v npm >/dev/null 2>&1; then
+  echo "ugcportal: npm not found, skipping local mechanical checks" >&2
+else
+  echo "ugcportal: running local mechanical checks (lint, typecheck, test, build)..."
+  npm run lint || exit 1
+  npm run typecheck || exit 1
+  npm test || exit 1
+
+  # Fall back to CI's placeholder secrets only where .env.local doesn't
+  # already provide a real value -- never override a real local value,
+  # since Next.js would otherwise silently prefer this placeholder over
+  # what .env.local defines.
+  _ugcportal_env_local="$_ugcportal_repo_root/.env.local"
+  if [ -z "$AUTH_SECRET" ] && { [ ! -f "$_ugcportal_env_local" ] || ! grep -q '^AUTH_SECRET=' "$_ugcportal_env_local"; }; then
+    export AUTH_SECRET=ci-placeholder-secret-not-for-real-use
+  fi
+  if [ -z "$AUTH_GOOGLE_ID" ] && { [ ! -f "$_ugcportal_env_local" ] || ! grep -q '^AUTH_GOOGLE_ID=' "$_ugcportal_env_local"; }; then
+    export AUTH_GOOGLE_ID=ci-placeholder
+  fi
+  if [ -z "$AUTH_GOOGLE_SECRET" ] && { [ ! -f "$_ugcportal_env_local" ] || ! grep -q '^AUTH_GOOGLE_SECRET=' "$_ugcportal_env_local"; }; then
+    export AUTH_GOOGLE_SECRET=ci-placeholder
+  fi
+  if [ -z "$AUTH_FACEBOOK_ID" ] && { [ ! -f "$_ugcportal_env_local" ] || ! grep -q '^AUTH_FACEBOOK_ID=' "$_ugcportal_env_local"; }; then
+    export AUTH_FACEBOOK_ID=ci-placeholder
+  fi
+  if [ -z "$AUTH_FACEBOOK_SECRET" ] && { [ ! -f "$_ugcportal_env_local" ] || ! grep -q '^AUTH_FACEBOOK_SECRET=' "$_ugcportal_env_local"; }; then
+    export AUTH_FACEBOOK_SECRET=ci-placeholder
+  fi
+  npm run build || exit 1
+
+  # Conditionally run the harness-cost-controls self-test, mirroring CI's
+  # own path-conditional job (ugcportal-d4z) -- only when this branch has
+  # actually changed that directory relative to its upstream (falling back
+  # to origin/main for a branch with no upstream configured yet, e.g. its
+  # first push).
+  _ugcportal_upstream=$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null)
+  if [ -z "$_ugcportal_upstream" ] || ! git rev-parse --verify "$_ugcportal_upstream" >/dev/null 2>&1; then
+    _ugcportal_upstream="origin/main"
+  fi
+  if git rev-parse --verify "$_ugcportal_upstream" >/dev/null 2>&1; then
+    _ugcportal_scripts_changed=$(git diff --name-only "${_ugcportal_upstream}...HEAD" 2>/dev/null | grep -c '^\.claude/skills/harness-cost-controls/scripts/')
+  else
+    # Can't determine a comparison range at all -- fail safe, assume
+    # relevant rather than silently skip.
+    _ugcportal_scripts_changed=1
+  fi
+  if [ "${_ugcportal_scripts_changed:-0}" -gt 0 ]; then
+    echo "ugcportal: harness-cost-controls/scripts changed, running its self-test..."
+    ( cd .claude/skills/harness-cost-controls/scripts && python3 -m unittest test_usage_indicators -v ) || exit 1
+  fi
+
+  # Advisory only, per its own header (ugcportal-plp6) -- never affects
+  # this hook's exit status.
+  if command -v node >/dev/null 2>&1 && [ -f scripts/sweep-candidates.mjs ]; then
+    node scripts/sweep-candidates.mjs --base "$_ugcportal_upstream" || true
+  fi
+
+  echo "ugcportal: local mechanical checks passed."
+fi
