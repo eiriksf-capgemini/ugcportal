@@ -3,7 +3,7 @@
  * Enumerates review-sweep candidates from a diff (ugcportal-plp6).
  *
  * Purely advisory: lists candidates for a human (implementer or reviewer) to
- * judge against review-standards/SKILL.md section 2's three-family sweep.
+ * judge against review-standards/SKILL.md section 2's four-family sweep.
  * Never judges correctness itself, and never fails a build or blocks a push
  * (K4) -- this is not a substitute for that semantic sweep or for the
  * severity-gated round rule (ugcportal-2yj), both of which stay exactly as
