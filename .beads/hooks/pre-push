@@ -31,3 +31,133 @@ if command -v bd >/dev/null 2>&1; then
   if [ $_bd_exit -ne 0 ]; then exit $_bd_exit; fi
 fi
 # --- END BEADS INTEGRATION v1.2.2 ---
+
+# --- Mechanical pre-push checks (ugcportal-5dr6) ---
+# Local convenience only: CI (.github/workflows/ci.yml) and the
+# pr-review-merge severity-gated review remain the authoritative,
+# unbypassable gates regardless of what happens here. This adds roughly
+# 16s to `git push` (lint + typecheck + test + build; see ugcportal-2pnq
+# for the measured local/CI breakdown) so a mechanical failure is caught
+# locally instead of after CI's ~2min round trip. Skip with
+# `git push --no-verify` if needed -- that is a speed convenience, not a
+# security control (nothing here is enforced server-side), consistent
+# with this repo's existing don't-skip-hooks-without-asking policy for
+# agents.
+_ugcportal_repo_root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+cd "$_ugcportal_repo_root" || exit 0
+
+# Bound every command below the same way the beads block above bounds its
+# own -- a hang here (network call, misconfigured watch mode, an
+# interactive prompt) would otherwise block `git push` indefinitely, unlike
+# every command in the managed section above it.
+_ugcportal_timeout=${UGCPORTAL_HOOK_TIMEOUT:-300}
+_ugcportal_run() {
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$_ugcportal_timeout" "$@"
+  elif command -v gtimeout >/dev/null 2>&1; then
+    gtimeout "$_ugcportal_timeout" "$@"
+  elif command -v perl >/dev/null 2>&1; then
+    perl -e 'alarm shift; exec @ARGV' "$_ugcportal_timeout" "$@"
+  else
+    "$@"
+  fi
+}
+
+if ! command -v npm >/dev/null 2>&1; then
+  echo "ugcportal: npm not found, skipping local mechanical checks" >&2
+else
+  echo "ugcportal: running local mechanical checks (lint, test, build, typecheck)..."
+  _ugcportal_run npm run lint || exit 1
+  _ugcportal_run npm test || exit 1
+
+  # Fall back to a placeholder secret only where neither .env.local nor
+  # plain .env already provides a real value -- never override a real local
+  # value, since Next.js would otherwise silently prefer this placeholder
+  # over what those files define. Placeholder values themselves come from
+  # scripts/ci-placeholder-env.sh, the single source of truth also meant
+  # for .github/workflows/ci.yml's Build step (not yet wired there --
+  # ci.yml is a sensitive path this PR doesn't touch; see ugcportal-qmxl).
+  . "$_ugcportal_repo_root/scripts/ci-placeholder-env.sh"
+  _ugcportal_env_local="$_ugcportal_repo_root/.env.local"
+  _ugcportal_env_plain="$_ugcportal_repo_root/.env"
+  _ugcportal_has_env_var() {
+    # $1 = var name. Requires a NON-EMPTY value after `=` -- env.example
+    # ships several of these five names as empty placeholder lines
+    # (`AUTH_GOOGLE_ID=`), and a dev who copies it to .env.local without
+    # filling every field in would otherwise have this check see that
+    # empty line as "a real value already exists" and skip the fallback,
+    # leaving the var empty for `npm run build` (round 4 finding).
+    { [ -f "$_ugcportal_env_local" ] && grep -qE "^$1=.+" "$_ugcportal_env_local"; } \
+      || { [ -f "$_ugcportal_env_plain" ] && grep -qE "^$1=.+" "$_ugcportal_env_plain"; }
+  }
+  if [ -z "$AUTH_SECRET" ] && ! _ugcportal_has_env_var AUTH_SECRET; then
+    export AUTH_SECRET="$AUTH_SECRET_PLACEHOLDER"
+  fi
+  if [ -z "$AUTH_GOOGLE_ID" ] && ! _ugcportal_has_env_var AUTH_GOOGLE_ID; then
+    export AUTH_GOOGLE_ID="$AUTH_GOOGLE_ID_PLACEHOLDER"
+  fi
+  if [ -z "$AUTH_GOOGLE_SECRET" ] && ! _ugcportal_has_env_var AUTH_GOOGLE_SECRET; then
+    export AUTH_GOOGLE_SECRET="$AUTH_GOOGLE_SECRET_PLACEHOLDER"
+  fi
+  if [ -z "$AUTH_FACEBOOK_ID" ] && ! _ugcportal_has_env_var AUTH_FACEBOOK_ID; then
+    export AUTH_FACEBOOK_ID="$AUTH_FACEBOOK_ID_PLACEHOLDER"
+  fi
+  if [ -z "$AUTH_FACEBOOK_SECRET" ] && ! _ugcportal_has_env_var AUTH_FACEBOOK_SECRET; then
+    export AUTH_FACEBOOK_SECRET="$AUTH_FACEBOOK_SECRET_PLACEHOLDER"
+  fi
+  _ugcportal_run npm run build || exit 1
+
+  # Typecheck runs AFTER build, matching CI's order (.github/workflows/ci.yml)
+  # exactly, and for the same reason ugcportal-63m fixed in CI itself:
+  # tsconfig.json's include list depends on .next/types/**/*.ts and
+  # .next/dev/types/**/*.ts, which only `next build` generates. Running
+  # typecheck first (an earlier version of this hook did) means a fresh
+  # clone or a stale .next/ gets checked against missing or stale generated
+  # route types instead of the fresh ones CI checks post-build.
+  _ugcportal_run npm run typecheck || exit 1
+
+  # Conditionally run the harness-cost-controls self-test -- duplicates
+  # CI's own path-conditional job (ugcportal-d4z, gh-56, merged) here for
+  # faster local feedback. This is NOT the only place it runs (CI still
+  # runs it server-side on the pushed branch regardless of this hook), but
+  # it IS conditional on this clone/worktree having core.hooksPath actually
+  # pointed at .beads/hooks (via `bd hooks install`) -- a fresh clone or CI
+  # runner without that configured runs no hook at all here, which is fine
+  # precisely because CI's own copy of this same check still covers it.
+  # Only runs when this branch has actually changed that directory
+  # relative to its upstream (falling back to origin/main for a branch
+  # with no upstream configured yet, e.g. its first push).
+  _ugcportal_upstream=$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null)
+  if [ -z "$_ugcportal_upstream" ] || ! git rev-parse --verify "$_ugcportal_upstream" >/dev/null 2>&1; then
+    _ugcportal_upstream="origin/main"
+  fi
+  if git rev-parse --verify "$_ugcportal_upstream" >/dev/null 2>&1 \
+    && _ugcportal_diff_out=$(git diff --name-only "${_ugcportal_upstream}...HEAD" 2>&1); then
+    _ugcportal_scripts_changed=$(printf '%s\n' "$_ugcportal_diff_out" | grep -c '^\.claude/skills/harness-cost-controls/scripts/')
+  else
+    # Either no comparison ref, or the diff itself failed (e.g. no
+    # computable merge-base in a shallow clone) -- fail safe, assume
+    # relevant rather than silently skip.
+    _ugcportal_scripts_changed=1
+  fi
+  if [ "${_ugcportal_scripts_changed:-0}" -gt 0 ]; then
+    if command -v python3 >/dev/null 2>&1; then
+      echo "ugcportal: harness-cost-controls/scripts changed, running its self-test..."
+      _ugcportal_run sh -c 'cd .claude/skills/harness-cost-controls/scripts && python3 -m unittest test_usage_indicators -v' || exit 1
+    else
+      echo "ugcportal: python3 not found, skipping harness-cost-controls self-test" >&2
+    fi
+  fi
+
+  # Advisory only, per its own header (ugcportal-plp6) -- never affects
+  # this hook's exit status. No --base given: sweep-candidates.mjs's own
+  # default (origin/main, falling back to HEAD~1) covers the whole PR's
+  # diff against main, not just this push's incremental range against
+  # $_ugcportal_upstream -- the latter would silently narrow the sweep to
+  # only the newest commits on push 2+ of a multi-push branch.
+  if command -v node >/dev/null 2>&1 && [ -f scripts/sweep-candidates.mjs ]; then
+    _ugcportal_run node scripts/sweep-candidates.mjs || true
+  fi
+
+  echo "ugcportal: local mechanical checks passed."
+fi
