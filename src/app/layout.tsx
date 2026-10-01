@@ -16,14 +16,23 @@ const geistMono = Geist_Mono({
 
 /**
  * Display face for h1-h3 (ugcportal-rw9j, product decision: approved).
- * Weight 500 only — the one weight globals.css's `--font-heading` rule and
- * every current heading's own `font-medium`/`font-semibold` utility actually
- * need; `display: "swap"` avoids an invisible-heading flash while it loads.
+ *
+ * `weight: "variable"`, not a single static weight (review round 1): the
+ * existing h1/h2 elements this now applies to mix `font-medium` (500) and
+ * `font-semibold` (600) — src/app/admin/settings/rights/page.tsx,
+ * users/page.tsx and instagram/page.tsx all use 600 — and Fraunces is a
+ * genuine variable font (confirmed in next/font's own Google font-data:
+ * weights 100-900, including "variable"), so loading only the 500 static
+ * face would leave every 600 heading with no matching face to render at all.
+ * The variable file covers every weight any heading asks for, present or
+ * future, without re-deciding this per heading.
+ *
+ * `display: "swap"` avoids an invisible-heading flash while it loads.
  */
 const fraunces = Fraunces({
   variable: "--font-fraunces",
   subsets: ["latin"],
-  weight: ["500"],
+  weight: "variable",
   display: "swap",
 });
 

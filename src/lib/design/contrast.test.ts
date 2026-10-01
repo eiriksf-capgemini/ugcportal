@@ -352,12 +352,19 @@ describe("the gate cannot be routed around", () => {
    * coverage follows the components the way the token coverage tests already
    * follow the stylesheet.
    */
+  // Hoisted out of the it.each below (review round 1): which alpha-modified
+  // utilities the components ship is a fact about the source tree, not about
+  // which theme mode is active, so scanning it once and sharing the result
+  // across both mode runs is correct, not just faster - a second scan would
+  // have had to find the exact same answer or something else is broken.
+  const usedAlphaUtilities = findAlphaColorUtilities();
+
   it.each(THEME_MODES)(
     "measures every alpha-modified colour utility the components ship (%s)",
     (mode) => {
       const modeTokens = tokensByMode[mode];
       const { foregroundVerified, measuredBackground } = COVERAGE_BY_MODE[mode];
-      const used = findAlphaColorUtilities();
+      const used = usedAlphaUtilities;
       expect(used.length).toBeGreaterThan(0);
 
       for (const usage of used) {
@@ -617,7 +624,7 @@ describe("the gate cannot be routed around", () => {
   });
 
   it("still ships the focus ring at the alpha the constant names", () => {
-    const rings = findAlphaColorUtilities().filter(
+    const rings = usedAlphaUtilities.filter(
       (usage) => usage.property === "--color-ring",
     );
     expect(rings.length).toBeGreaterThan(0);

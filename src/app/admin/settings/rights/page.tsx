@@ -263,13 +263,26 @@ export default async function ResaleRightsSettingsPage({
                       ? " — not sellable"
                       : " — clear to sell, once each upload is triaged"}
                   </p>
+                  {/*
+                    text-ink-muted, not text-muted-foreground (ugcportal-rw9j
+                    review round 1): both of these sit inside the bg-muted/
+                    bg-destructive-surface well above, which is still the old
+                    near-black surface scale this phase leaves untouched.
+                    --muted-foreground now means "secondary text on the page
+                    canvas" (see globals.css and contrast.ts's
+                    muted-foreground-on-background comment) and measures only
+                    3.18:1 against --muted in light mode - --color-ink-muted
+                    is the token still tuned for this well, exactly like
+                    --color-ink for the destructive-well body copy above it in
+                    contrast.ts.
+                  */}
                   {blocker ? (
-                    <p className="mt-1 text-muted-foreground">
+                    <p className="mt-1 text-ink-muted">
                       {BLOCKER_MESSAGES[blocker]}
                     </p>
                   ) : null}
                   {review ? (
-                    <dl className="mt-2 space-y-1 text-xs text-muted-foreground">
+                    <dl className="mt-2 space-y-1 text-xs text-ink-muted">
                       <div>
                         <dt className="inline font-medium">Reviewer: </dt>
                         <dd className="inline">

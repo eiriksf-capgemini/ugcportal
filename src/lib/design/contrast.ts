@@ -236,13 +236,21 @@ export const PAIRINGS: Pairing[] = [
    * ugcportal-rw9j: --color-ink-muted, not --muted-foreground, for these two.
    * --muted/--card stay on the untouched near-black surface scale this
    * phase, and --muted-foreground now means "secondary text as this app
-   * actually renders it" (see muted-foreground-on-background below) - a
-   * page-canvas-specific token, the same split applied to --foreground vs
-   * --color-ink for the destructive well above. Nothing in the shipped app
-   * renders text-muted-foreground directly on bg-muted/bg-card today (every
-   * real `bg-muted`/`bg-card` usage leaves text colour at its default); these
-   * two stay as documented, aspirational coverage for whenever something
-   * does, using the token that actually still matches those surfaces.
+   * actually renders it on the page canvas" (see muted-foreground-on-
+   * background below) - a page-canvas-specific token, the same split applied
+   * to --foreground vs --color-ink for the destructive well above.
+   *
+   * Review round 1 found this matters for real, not just in principle: this
+   * comment originally claimed nothing in the shipped app renders
+   * text-muted-foreground directly on bg-muted - false. src/app/admin/
+   * settings/rights/page.tsx rendered exactly that (an uploader's blocker
+   * message and review metadata, inside the same div as bg-muted/
+   * bg-destructive-surface), which measured 3.18:1 against the new
+   * --muted-foreground in light mode. Fixed there by switching those two
+   * elements to text-ink-muted - the token this pairing (and
+   * muted-foreground-on-destructive-surface below) actually measures - so
+   * the claim below is enforced by that page's own markup now, not merely
+   * documented here.
    */
   {
     id: "muted-foreground-on-muted",
@@ -284,12 +292,25 @@ export const PAIRINGS: Pairing[] = [
     requirement: "body",
     usage: "Text of a hovered or selected menu item / list row.",
   },
+  /*
+   * ugcportal-rw9j review round 1: the shadcn `secondary` button variant no
+   * longer renders --secondary/--secondary-foreground at all - it reuses the
+   * petrol outline treatment (src/components/ui/button.tsx), covered by
+   * link-on-background above - so as of this bead nothing in src renders
+   * this pairing. Kept, not deleted: --secondary-foreground is still a
+   * declared `-foreground` token (the "documents every *-foreground token"
+   * test below requires it to be covered by some pairing), and --secondary
+   * itself is untouched, documented, near-black-scale coverage for the same
+   * reason --color-petrol-600..950 are kept despite not driving a current
+   * utility - available if something reaches for it, not proof that
+   * something does today.
+   */
   {
     id: "secondary-foreground-on-secondary",
     foreground: "--secondary-foreground",
     background: ["--secondary"],
     requirement: "body",
-    usage: "Label of the secondary button variant.",
+    usage: "Label of the secondary button variant, if something renders it (unused as of ugcportal-rw9j).",
   },
   {
     id: "sidebar-foreground-on-sidebar",

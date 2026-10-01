@@ -356,14 +356,19 @@
    * --ink-muted-petrol ("dempet tekst" in docs/design/tokens.css), not
    * --color-ink-muted (ugcportal-rw9j, found by a live axe run on the home
    * page, not reasoned out in advance): --muted-foreground renders directly
-   * on --background in every real component that uses it today - the
+   * on --background in the overwhelming majority of its real uses - the
    * footer, gallery empty-state/loading copy, the signed-in user's email,
-   * supporting paragraphs on auth/error and the admin pages - none of them
-   * inside a --muted/--card fill. --color-ink-muted is tuned for the
-   * near-black canvas and measured 1.9:1 here against the new --paper
-   * background; --ink-muted-petrol clears 5.0:1. See the
-   * muted-foreground-on-background comment in contrast.ts for the full
-   * reasoning, including why --muted/--card themselves are still untouched.
+   * supporting paragraphs on auth/error and the admin pages. --color-ink-muted
+   * is tuned for the near-black canvas and measured 1.9:1 here against the
+   * new --paper background; --ink-muted-petrol clears 5.0:1.
+   *
+   * Review round 1 found one real exception to "none of them inside a
+   * --muted/--card fill": admin/settings/rights/page.tsx did, at 3.18:1,
+   * which is fixed there (text-ink-muted) rather than here - --muted/--card
+   * stay on the untouched near-black scale this phase, so the ONE place that
+   * rendered --muted-foreground inside one needed to stop doing that, not
+   * the other way round. See the muted-foreground-on-background comment in
+   * contrast.ts for the full reasoning.
    */
   --muted-foreground: var(--ink-muted-petrol);
 

@@ -65,11 +65,25 @@ function walk(dir: string, out: string[]): void {
   }
 }
 
-/** Strips `//`, `/* *\/` and the CSS/JS-comment-adjacent `{/* *\/}` wrapper braces are irrelevant to a text scan, so only the comment bodies need removing. */
+/**
+ * Strips `//`, `/* *\/` and the CSS/JS-comment-adjacent `{/* *\/}` wrapper
+ * braces are irrelevant to a text scan, so only the comment bodies need
+ * removing.
+ *
+ * The line-comment half uses a negative lookbehind for `:` (not usage.ts's
+ * `(^|[^:\w])` boundary) specifically so it does NOT require whitespace
+ * before `//` to strip it - review round 1: `(^|[^:\w])` also excludes any
+ * `//` immediately after a word character (digit/letter) with no separating
+ * space, so e.g. `5//#abc123` left the hex literal in a genuine comment
+ * un-stripped and reported as a false-positive "raw hex" finding. The
+ * lookbehind only has to avoid treating a URL's `://` as a comment opener;
+ * it does not need usage.ts's broader class-name-boundary logic, which this
+ * file has no class names to bound.
+ */
 function stripComments(source: string): string {
   return source
     .replace(/\/\*[\s\S]*?\*\//g, " ")
-    .replace(/(^|[^:\w])\/\/[^\n]*/g, "$1 ");
+    .replace(/(?<!:)\/\/[^\n]*/g, " ");
 }
 
 describe("no raw hex colour literals outside the tokens file", () => {
