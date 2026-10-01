@@ -1,4 +1,4 @@
-import { hasUnsafeText } from "@/lib/media-rules";
+import { hasUnsafeText, validateAltText, validateCaption } from "@/lib/media-rules";
 import { mediaPreviewPath } from "@/lib/routes";
 
 /**
@@ -93,35 +93,31 @@ export type PublicMediaRowish = {
 };
 
 /**
- * A user-supplied string, cleaned the same way a tag name is (see
- * `toGalleryTags` below): trimmed, and dropped entirely — not stripped — if
- * it carries anything from `hasUnsafeText`'s denylist, the bidi overrides in
- * particular. Returns `""` for "nothing safe to show", never a partially
- * repaired string nobody wrote.
+ * A user-supplied string, cleaned by calling the EXACT SAME validator the
+ * write path uses (`validateAltText`/`validateCaption`, src/lib/media-rules.ts)
+ * rather than a second, hand-written copy of its rules. Returns `""` for
+ * "nothing safe to show" — whether that's because nothing was supplied or
+ * because what was supplied failed validation — never a partially repaired
+ * string nobody wrote.
  *
- * Used for both `altText` and `caption`, and for the SAME reason
- * `validateBoundedText` in src/lib/media-rules.ts takes an `allowNewlines`
- * flag: caption is a multi-row `<textarea>` and is allowed to contain `\n`
- * (review round 1, finding 6) — but this read-side sanitizer was not told
- * that, so a caption written with a real line break came back through
- * `hasUnsafeText` (which still treats `\n` as an unsafe control character)
- * and was wiped to `""` on every render. That is a round-2 finding: the
- * write path allowed newlines, the read path quietly undid it, and nothing
- * caught the mismatch because no test exercised a caption containing an
- * actual `\n` through this function. `allowNewlines` here exists for the
- * exact same single caller `validateCaption` has it for, and for no other:
- * alt text stays on the strict check, unchanged.
+ * THIS USED TO BE A SEPARATE IMPLEMENTATION, and that cost a real bug
+ * (review round 2): it re-ran `hasUnsafeText` by hand without the caption
+ * newline exemption `validateCaption` has, so a caption written with a real
+ * `\n` validated fine at write time and then silently lost its line breaks
+ * on every render — the write path and the read path's independent copies
+ * had drifted apart. Round 3 found the fix for that still had two remaining
+ * gaps from the same root cause: the hand-written copy never enforced
+ * `MAX_ALT_TEXT_LENGTH`/`MAX_CAPTION_LENGTH` at all (so an oversized value
+ * from any future writer that bypasses POST /api/media's own validation
+ * would have rendered in full), and the two copies could drift again the
+ * next time either validator's rules changed. Calling the real function
+ * removes the second copy instead of fixing it a third time: there is
+ * nothing left here that can disagree with what was actually validated at
+ * write time.
  */
-function sanitizedMediaText(
-  value: unknown,
-  allowNewlines = false,
-): string {
-  if (typeof value !== "string") return "";
-  const trimmed = value.trim();
-  if (trimmed === "") return "";
-  const checked = allowNewlines ? trimmed.replace(/\r\n|\r|\n/g, "") : trimmed;
-  if (hasUnsafeText(checked)) return "";
-  return trimmed;
+function sanitizedMediaText(value: unknown, allowNewlines = false): string {
+  const result = allowNewlines ? validateCaption(value) : validateAltText(value);
+  return result.ok ? result.value : "";
 }
 
 /**

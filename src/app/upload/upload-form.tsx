@@ -11,12 +11,7 @@ import {
 
 import { ACCEPTED_MIME_TYPES } from "@/lib/media-rules";
 
-import {
-  MAX_ALT_TEXT_LENGTH,
-  MAX_CAPTION_LENGTH,
-  altTextFieldError,
-  captionFieldError,
-} from "./alt-text";
+import { altTextFieldError, captionFieldError } from "./alt-text";
 import {
   acceptedTypesSummary,
   cancelledFailure,
@@ -105,6 +100,17 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
    * choosing files" before the visitor has done anything at all.
    */
   const [altTextTouched, setAltTextTouched] = useState(false);
+  /**
+   * The filenames `addFiles` was actually checking against when it refused
+   * (review round 3 finding 4's own follow-on): the live error display below
+   * calls the identical `altTextFieldError` the gate did, with the SAME
+   * arguments, so "why this was blocked" and "what the message says" cannot
+   * disagree. Cleared alongside `altTextTouched`; `[]` the rest of the time,
+   * since there is no file list to check against before one is chosen.
+   */
+  const [attemptedFilenames, setAttemptedFilenames] = useState<
+    readonly string[]
+  >([]);
 
   /**
    * The authoritative work queue, OUTSIDE React state on purpose.
@@ -260,9 +266,16 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
        * `failed`: those rows exist to report something the SERVER would
        * refuse about the FILE itself (precheckFile) — a type, a size — not a
        * field on the form that has nothing to do with any particular file.
+       *
+       * The actual filenames are passed here (review round 3 finding 4) so
+       * the K2 filename-equality rule is caught before anything uploads,
+       * not only after — see alt-text.ts's own docstring on why this is the
+       * one point in this component that can supply them at all.
        */
-      if (altTextFieldError(altText) !== null) {
+      const filenames = files.map((file) => file.name);
+      if (altTextFieldError(altText, filenames) !== null) {
         setAltTextTouched(true);
+        setAttemptedFilenames(filenames);
         return;
       }
       /*
@@ -464,6 +477,7 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
         altText={altText}
         caption={caption}
         showAltTextError={altTextTouched}
+        attemptedFilenames={attemptedFilenames}
         onAltTextChange={(value) => {
           setAltText(value);
           // Typing clears the "you have to fill this in" message; it comes
@@ -575,20 +589,32 @@ function AltTextFields({
   altText,
   caption,
   showAltTextError,
+  attemptedFilenames,
   onAltTextChange,
   onCaptionChange,
 }: {
   altText: string;
   caption: string;
   showAltTextError: boolean;
+  /**
+   * The filenames `addFiles` was checking against when it last refused —
+   * see the state declaring this in the parent for why it has to be passed
+   * down rather than recomputed here from nothing: without it, a refusal
+   * caused by the K2 filename-equality rule would show no message at all,
+   * because this component has no file list of its own to check against.
+   */
+  attemptedFilenames: readonly string[];
   onAltTextChange: (value: string) => void;
   onCaptionChange: (value: string) => void;
 }) {
   const altTextId = useId();
   const altTextErrorId = useId();
   const captionId = useId();
+  const captionErrorId = useId();
 
-  const altTextError = showAltTextError ? altTextFieldError(altText) : null;
+  const altTextError = showAltTextError
+    ? altTextFieldError(altText, attemptedFilenames)
+    : null;
   const captionError = captionFieldError(caption);
 
   return (
@@ -608,7 +634,17 @@ function AltTextFields({
         id={altTextId}
         type="text"
         required
-        maxLength={MAX_ALT_TEXT_LENGTH}
+        // No `maxLength` attribute (review round 3 finding 2): the browser's
+        // own `maxlength` counts UTF-16 CODE UNITS, while
+        // MAX_ALT_TEXT_LENGTH and `altTextFieldError` count CODE POINTS (the
+        // same unit `Array.from(x).length` uses throughout this codebase, so
+        // a surrogate pair is never split) — an astral character such as an
+        // emoji is two code units but one code point, so the native
+        // attribute would silently stop accepting input at roughly HALF the
+        // length the server actually allows. The live error message below,
+        // driven by the same code-point-counting validator the server uses,
+        // is the real limit; a native `maxlength` here would just be a
+        // second, wrong one.
         value={altText}
         onChange={(event) => onAltTextChange(event.target.value)}
         aria-invalid={altTextError !== null}
@@ -635,13 +671,20 @@ function AltTextFields({
       <textarea
         id={captionId}
         rows={2}
-        maxLength={MAX_CAPTION_LENGTH}
+        // No `maxLength` here either — same code-unit-vs-code-point reason
+        // the alt text input's own comment gives.
         value={caption}
         onChange={(event) => onCaptionChange(event.target.value)}
         aria-invalid={captionError !== null}
+        aria-describedby={captionError !== null ? captionErrorId : undefined}
         className="mt-2 block w-full rounded-md border border-line-strong bg-surface-1 px-3 py-2 text-sm text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
       />
-      <p role="alert" className="mt-1 text-xs text-destructive">
+      {/* `id` + `aria-describedby` above, matching the alt text field's own
+          pattern (review round 3 finding 3) — without it, `aria-invalid`
+          alone tells a screen-reader user THAT the caption is invalid but
+          never associates WHY, which is a real gap in a bead whose entire
+          purpose is accessibility text. */}
+      <p id={captionErrorId} role="alert" className="mt-1 text-xs text-destructive">
         {captionError ?? ""}
       </p>
     </div>

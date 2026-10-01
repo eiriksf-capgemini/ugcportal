@@ -1,6 +1,7 @@
 import {
   MAX_ALT_TEXT_LENGTH,
   MAX_CAPTION_LENGTH,
+  altTextEqualsFilename,
   validateAltText,
   validateCaption,
 } from "@/lib/media-rules";
@@ -47,13 +48,32 @@ import {
  * character class) because that function deliberately treats blank as "not
  * supplied yet" — correct for the server, which must accept it — rather than
  * as an error; this page's stronger requirement has to say so itself.
+ *
+ * `filenames` lets this precheck catch K2's filename-equality rule too
+ * (review round 3 finding 4) — `POST /api/media` has refused this since
+ * round 2, but nothing stopped the browser from uploading the whole file
+ * first and only THEN being told no. Optional and defaulted to `[]`, so a
+ * caller with nothing to check against yet (there is a moment, between
+ * typing alt text and picking a file, where this page genuinely does not
+ * know the filename) still gets every other check. Uses
+ * `altTextEqualsFilename`, the identical function the server calls, for the
+ * raw filename; the server's OWN check additionally covers the sanitized
+ * form, which needs a node-only module this page cannot import — see that
+ * function's docstring.
  */
-export function altTextFieldError(value: string): string | null {
+export function altTextFieldError(
+  value: string,
+  filenames: readonly string[] = [],
+): string | null {
   if (value.trim() === "") {
     return "Add alt text before choosing files.";
   }
   const validation = validateAltText(value);
-  return validation.ok ? null : validation.message;
+  if (!validation.ok) return validation.message;
+  if (altTextEqualsFilename(value, filenames)) {
+    return "Alt text must describe the photo, not repeat its filename.";
+  }
+  return null;
 }
 
 /** The caption has no requiredness rule — only `validateCaption`'s own. */

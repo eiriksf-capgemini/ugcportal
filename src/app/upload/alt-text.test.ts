@@ -42,6 +42,38 @@ describe("altTextFieldError", () => {
     // length to complain about yet.
     expect(altTextFieldError("")).toBe("Add alt text before choosing files.");
   });
+
+  // Review round 3 finding 4: the client precheck didn't know about K2's
+  // filename-equality rule at all, so the server was the only thing that
+  // ever refused it — after the whole file had already uploaded.
+  describe("the filename-equality rule (K2)", () => {
+    it("blocks when alt text matches one of the given filenames exactly", () => {
+      expect(altTextFieldError("photo.png", ["photo.png"])).not.toBeNull();
+    });
+
+    it("blocks against any one of several filenames, not only the first", () => {
+      expect(
+        altTextFieldError("clip.mp4", ["photo.png", "clip.mp4"]),
+      ).not.toBeNull();
+    });
+
+    it("passes when there are no filenames to check against yet", () => {
+      expect(altTextFieldError("photo.png", [])).toBeNull();
+      expect(altTextFieldError("photo.png")).toBeNull();
+    });
+
+    it("does not block a substring match — this is literal equality, not a fuzzy rule", () => {
+      expect(
+        altTextFieldError("A photo named photo.png, taken at dawn", [
+          "photo.png",
+        ]),
+      ).toBeNull();
+    });
+
+    it("trims both sides before comparing", () => {
+      expect(altTextFieldError("  photo.png  ", ["photo.png"])).not.toBeNull();
+    });
+  });
 });
 
 describe("captionFieldError", () => {

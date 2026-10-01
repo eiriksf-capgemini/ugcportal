@@ -8,6 +8,7 @@ import {
   toGalleryItems,
   type GalleryItem,
 } from "@/lib/gallery-items";
+import { MAX_ALT_TEXT_LENGTH, MAX_CAPTION_LENGTH } from "@/lib/media-rules";
 import { MEDIA_PREVIEW_PATH } from "@/lib/routes";
 
 /**
@@ -206,6 +207,21 @@ describe("alt text and caption on a mapped item", () => {
       altText: "A fox\ncrossing a field",
     });
     expect(mapped?.altText).toBe("");
+  });
+
+  it("drops an oversized alt text or caption on read too (review round 3 finding 5)", () => {
+    // sanitizedMediaText used to enforce the character denylist but not the
+    // length cap — a gap only reachable if some future writer bypassed POST
+    // /api/media's own validateAltText/validateCaption. Now that this
+    // function calls those validators directly instead of a hand-written
+    // copy of their rules, the length cap applies here for free.
+    const mapped = toGalleryItem({
+      ...ROW,
+      altText: "a".repeat(MAX_ALT_TEXT_LENGTH + 1),
+      caption: "c".repeat(MAX_CAPTION_LENGTH + 1),
+    });
+    expect(mapped?.altText).toBe("");
+    expect(mapped?.caption).toBe("");
   });
 });
 

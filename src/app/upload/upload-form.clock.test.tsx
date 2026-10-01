@@ -158,8 +158,14 @@ function mount(): void {
  * drives a real upload through the DOM needs this once, up front.
  */
 function setAltText(value: string): void {
+  // `input[required]` alone, not `[maxlength]` too (review round 3 finding
+  // 2 removed that attribute — it counted UTF-16 code units while the real
+  // validator counts code points, so the native limit silently disagreed
+  // with the server's). The only other required input on this page is the
+  // file picker, which this selector does not match because it carries its
+  // own `type="file"`.
   const input = container.querySelector<HTMLInputElement>(
-    "input[required][maxlength]",
+    'input[required][type="text"]',
   );
   if (input === null) throw new Error("no alt text field in the markup");
   const setter = Object.getOwnPropertyDescriptor(

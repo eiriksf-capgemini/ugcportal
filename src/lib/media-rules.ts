@@ -322,3 +322,32 @@ export function validateAltText(value: unknown): TextFieldValidation {
 export function validateCaption(value: unknown): TextFieldValidation {
   return validateBoundedText(value, "caption", MAX_CAPTION_LENGTH, true);
 }
+
+/**
+ * True when `altText` is, verbatim, one of the names in `filenames` — K2's
+ * own "never happen" case (ugcportal-gwr's Norwegian description:
+ * "alt-tekst lik filnavnet"). Trims both sides and refuses to match an empty
+ * string (an empty alt text is a different, separate problem — see the
+ * publish gate), but otherwise does a literal, case-sensitive comparison: a
+ * coincidental partial match ("a photo named photo.png") is not what K2 is
+ * about, and fuzzing the comparison would make it guess rather than check.
+ *
+ * DEPENDENCY-FREE, so the upload FORM (a client component) can run the
+ * identical check the server does — the same reason this whole module
+ * exists (see its header). It is not the server's WHOLE check, though:
+ * `POST /api/media` (src/app/api/media/route.ts) additionally compares
+ * against `sanitizeOriginalName(file.name)`, which repairs a name that
+ * started out different but collapses to the same stored string, and that
+ * function lives in src/lib/media.ts, which imports `node:crypto` and
+ * cannot be bundled for the browser. So the client-side precheck below
+ * catches the common case — typing the exact name you can see — and the
+ * server remains the backstop for the sanitized-but-not-raw edge case.
+ */
+export function altTextEqualsFilename(
+  altText: string,
+  filenames: readonly string[],
+): boolean {
+  const trimmed = altText.trim();
+  if (trimmed === "") return false;
+  return filenames.some((name) => trimmed === name.trim());
+}

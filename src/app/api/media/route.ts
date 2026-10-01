@@ -10,6 +10,7 @@ import {
   mediaPreviewColumns,
   sanitizeOriginalName,
   sniffKind,
+  altTextEqualsFilename,
   validateAltText,
   validateCaption,
   validateUpload,
@@ -329,23 +330,29 @@ async function handleUpload(
     return NextResponse.json({ error: altText.message }, { status: 400 });
   }
   /*
+   * Computed once and reused below at the actual write (review round 3
+   * finding 9) — `file.name` does not change between the two reads, so a
+   * second call here would be doing the same work twice for no reason, and
+   * is exactly the kind of duplicate-call shape that drifts if either site
+   * is edited independently later without the other.
+   */
+  const sanitizedFileName = sanitizeOriginalName(file.name);
+
+  /*
    * Alt text equal to the filename is one of K2's own "never happen" cases
    * (ugcportal-gwr's Norwegian description: "alt-tekst lik filnavnet"), and
    * review round 2 found that nothing stopped an uploader from simply
    * TYPING the filename into the field themselves — `validateAltText` only
-   * checks length and character class, not content. Compared against both
-   * the raw, as-picked `file.name` and the sanitized form that actually
-   * becomes `originalName` (sanitizeOriginalName can repair a name that
-   * started out different but would collapse to the same string), so
-   * neither spelling of "the filename" slips past. Not case-folded: this
-   * is a literal-equality check against two specific strings, not a fuzzy
-   * heuristic, and a coincidental partial match is not what K2 is about.
+   * checks length and character class, not content. `altTextEqualsFilename`
+   * (src/lib/media-rules.ts) is the SAME function the upload form's client-
+   * side precheck calls (review round 3 finding 4) for the raw name; this
+   * route additionally checks the sanitized form that actually becomes
+   * `originalName` (sanitizeOriginalName can repair a name that started out
+   * different but would collapse to the same string), which the client
+   * cannot do without pulling in a node-only module — see that function's
+   * own docstring for why.
    */
-  if (
-    altText.value !== "" &&
-    (altText.value === file.name ||
-      altText.value === sanitizeOriginalName(file.name))
-  ) {
+  if (altTextEqualsFilename(altText.value, [file.name, sanitizedFileName])) {
     return NextResponse.json(
       {
         error:
@@ -527,7 +534,7 @@ async function handleUpload(
           // src/lib/media.ts for why the upload path is lenient where the
           // rename path refuses. `file.name` is fully client-controlled and
           // the GET listing echoes it back, so it cannot go in raw.
-          originalName: sanitizeOriginalName(file.name),
+          originalName: sanitizedFileName,
           // Null, not "", when nothing was supplied — the same "absent means
           // not yet decided" encoding as the triage booleans on
           // MediaListing, and what lets the publish gate (ugcportal-gwr K1)

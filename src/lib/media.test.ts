@@ -8,6 +8,7 @@ import {
   MAX_ALT_TEXT_LENGTH,
   MAX_CAPTION_LENGTH,
   MAX_ORIGINAL_NAME_LENGTH,
+  altTextEqualsFilename,
   mediaPreviewColumns,
   sanitizeOriginalName,
   sniffKind,
@@ -379,6 +380,53 @@ describe("validateCaption", () => {
 describe("validateAltText still refuses a line break (unlike validateCaption)", () => {
   it("rejects a newline in alt text — it is a single-line field", () => {
     expect(validateAltText("A fox\nin a field").ok).toBe(false);
+  });
+});
+
+/**
+ * K2's filename-equality rule (review round 3 finding 4), as the one
+ * function both `POST /api/media` and the upload form's client-side
+ * precheck call — see that function's own docstring for why they cannot
+ * share the WHOLE check (the server additionally compares against
+ * `sanitizeOriginalName`, which needs a node-only module).
+ */
+describe("altTextEqualsFilename", () => {
+  it("matches the exact filename", () => {
+    expect(altTextEqualsFilename("photo.png", ["photo.png"])).toBe(true);
+  });
+
+  it("matches against any one of several filenames", () => {
+    expect(
+      altTextEqualsFilename("clip.mp4", ["photo.png", "clip.mp4"]),
+    ).toBe(true);
+  });
+
+  it("does not match when nothing in the list equals it", () => {
+    expect(altTextEqualsFilename("A fox in a field", ["photo.png"])).toBe(
+      false,
+    );
+  });
+
+  it("does not match an empty alt text against anything", () => {
+    expect(altTextEqualsFilename("", ["photo.png"])).toBe(false);
+    expect(altTextEqualsFilename("   ", ["photo.png"])).toBe(false);
+  });
+
+  it("is not a substring match", () => {
+    expect(
+      altTextEqualsFilename("A photo named photo.png, taken at dawn", [
+        "photo.png",
+      ]),
+    ).toBe(false);
+  });
+
+  it("trims both sides before comparing", () => {
+    expect(altTextEqualsFilename("  photo.png  ", ["photo.png"])).toBe(true);
+    expect(altTextEqualsFilename("photo.png", ["  photo.png  "])).toBe(true);
+  });
+
+  it("matches nothing when the filename list is empty", () => {
+    expect(altTextEqualsFilename("photo.png", [])).toBe(false);
   });
 });
 

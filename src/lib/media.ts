@@ -29,6 +29,7 @@ export {
   MAX_CAPTION_LENGTH,
   MAX_SIZE_BYTES,
   UNSAFE_TEXT_CHARS,
+  altTextEqualsFilename,
   hasUnsafeText,
   kindForDeclaredType,
   validateAltText,
