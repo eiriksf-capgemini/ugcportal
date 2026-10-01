@@ -347,42 +347,84 @@
 }
 
 /*
- * The subject tags on the open slide (ugcportal-jsc).
- *
- * PhotoSwipe builds its own DOM outside React, so this element cannot carry
- * Tailwind utilities from a component — see registerTagCaption in
- * src/components/gallery/lightbox.ts, which is where the class name comes
- * from and where the "textContent, never innerHTML" rule lives.
+ * The two caption bars PhotoSwipe's viewer draws on top of a slide: the
+ * subject tags (ugcportal-jsc, bottom) and the photograph's own caption
+ * (ugcportal-gwr, top). Both are built by hand outside React — see
+ * registerTagCaption/registerMediaCaption in src/components/gallery/lightbox.ts,
+ * which is where the two class names come from and where the "textContent,
+ * never innerHTML" rule lives — so neither can carry Tailwind utilities from
+ * a component, and the mechanics every full-width overlay bar on this
+ * surface needs are shared here (review round 3 finding 7) rather than
+ * copied twice: full-bleed positioning, the stacking context, and
+ * `pointer-events: none` so a caption can never swallow a click meant for
+ * the backdrop — closing by clicking outside the photograph is what
+ * `bgClickAction: "close"` promises, and a caption strip that ate that click
+ * would break it along whichever edge it sits on.
  *
  * --color-ink-muted over the scrim is an already-measured pairing
  * (`ink-muted-on-scrim` in src/lib/design/contrast.ts), so this reuses a
  * combination the contrast gate checks rather than introducing one it does
  * not know about.
- *
- * Centred at the bottom, above the slide but clear of the arrows, and
- * `pointer-events: none` so it can never swallow a click meant for the
- * backdrop — closing by clicking outside the photograph is what
- * `bgClickAction: "close"` promises, and a caption strip that eats that click
- * would break it along the bottom edge of every tagged slide.
  */
-.pswp__gallery-tags {
+.pswp__gallery-tags,
+.pswp__media-caption {
   position: absolute;
-  bottom: 0;
   left: 0;
   right: 0;
   z-index: 10;
   margin: 0;
-  padding: 1rem 1.25rem calc(1rem + env(safe-area-inset-bottom));
   color: var(--color-ink-muted);
+  text-align: center;
+  pointer-events: none;
+}
+
+.pswp__gallery-tags[hidden],
+.pswp__media-caption[hidden] {
+  display: none;
+}
+
+/*
+ * The subject tags: anchored to the BOTTOM, above the slide but clear of the
+ * arrows. Small-caps labels, not a sentence, hence the uppercase tracking.
+ */
+.pswp__gallery-tags {
+  bottom: 0;
+  padding: 1rem 1.25rem calc(1rem + env(safe-area-inset-bottom));
   font-size: 0.75rem;
   line-height: 1rem;
   font-weight: 500;
   letter-spacing: 0.06em;
-  text-align: center;
   text-transform: uppercase;
-  pointer-events: none;
 }
 
-.pswp__gallery-tags[hidden] {
-  display: none;
+/*
+ * The photograph's caption (ugcportal-gwr): anchored to the TOP, deliberately
+ * opposite the tags above so the two bars never overlap each other on the
+ * same photograph.
+ *
+ * `top: 60px`, NOT `top: 0` (review round 1, finding 7). PhotoSwipe's own
+ * `.pswp__top-bar` (photoswipe/dist/photoswipe.css) is a `position: absolute;
+ * top: 0; height: 60px` band carrying the counter, zoom and close buttons, at
+ * the SAME `z-index: 10` this group uses. A `top: 0` caption of any real
+ * length paints text directly behind those controls — `pointer-events: none`
+ * keeps them clickable, but not legible. Sitting below the full height of
+ * that band is what actually avoids the overlap, rather than guessing at
+ * which half of it the buttons occupy (`justify-content: flex-end` clusters
+ * them to the right, but a centred caption spans the full width regardless).
+ * If PhotoSwipe ever changes that constant this drifts; there is no public
+ * API to read it from, so the number is pinned here instead.
+ *
+ * Regular case and weight, unlike the tag caption's small-caps labels: this is
+ * a sentence the uploader wrote, not a set of short labels, and should read as
+ * a sentence. `white-space: pre-line` for the same reason
+ * `GALLERY_CAPTION_CLASS` has it: `validateCaption` allows a line break
+ * (review round 1, finding 6), and the default `normal` would silently
+ * collapse it back into a space.
+ */
+.pswp__media-caption {
+  top: 60px;
+  padding: 0.75rem 1.25rem 1rem;
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  white-space: pre-line;
 }

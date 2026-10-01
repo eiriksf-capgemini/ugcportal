@@ -22,12 +22,13 @@ import { toGalleryItems } from "@/lib/gallery-items";
  * already nine hundred lines about the viewer's lifetime; this is about one
  * element inside it.
  *
- * THE THIRD jsdom FILE IN THE SUITE — the others being lightbox.test.ts and
- * gallery.unmount.test.tsx, and the count is worth keeping accurate because
- * of how jsdom fails here. On the wrong version (30 needs Node >= 22; CI runs
- * Node 20) every file carrying the pragma above stops being COLLECTED, with
- * no failure reported — the run simply comes back smaller and green. jsdom is
- * pinned at ^26 for that reason; do not raise it.
+ * ONE OF FOUR jsdom FILES IN THE SUITE — the others being lightbox.test.ts,
+ * gallery.unmount.test.tsx and lightbox.media-caption.test.ts, and the count
+ * is worth keeping accurate because of how jsdom fails here. On the wrong
+ * version (30 needs Node >= 22; CI runs Node 20) every file carrying the
+ * pragma above stops being COLLECTED, with no failure reported — the run
+ * simply comes back smaller and green. jsdom is pinned at ^26 for that
+ * reason; do not raise it.
  *
  * What this does NOT claim: that the caption is legible, positioned where it
  * should be, or out of the way of the arrows. jsdom has no layout engine and

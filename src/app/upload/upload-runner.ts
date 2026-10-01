@@ -83,6 +83,9 @@ export async function uploadItem(
    * and an untagged upload is still literally the same request.
    */
   tags: readonly string[] = [],
+  /** Alt text and caption chosen for this file (ugcportal-gwr). */
+  altText = "",
+  caption = "",
 ): Promise<void> {
   dispatch({ type: "started", id });
 
@@ -91,6 +94,8 @@ export async function uploadItem(
     response = await transport({
       file,
       tags,
+      altText,
+      caption,
       signal,
       onProgress: ({ loadedBytes }) =>
         dispatch({ type: "progress", id, loadedBytes }),
@@ -133,6 +138,14 @@ export type QueueEntry = {
    * user could see when they dropped the files is the one those files get.
    */
   tags: readonly string[];
+  /**
+   * Alt text and caption chosen at the moment the file was ADDED
+   * (ugcportal-gwr), captured per entry for the same reason `tags` is: a
+   * retry has to resend what the original attempt sent, not whatever is
+   * typed into the form now.
+   */
+  altText: string;
+  caption: string;
 };
 
 /**
@@ -158,6 +171,13 @@ export function enqueueFiles(
    * into work already queued — see `QueueEntry.tags`.
    */
   tags: readonly string[] = [],
+  /**
+   * The alt text and caption for this batch (ugcportal-gwr), copied into each
+   * entry for the same reason `tags` is. See the module docstring in
+   * upload-form.tsx for why these are batch-level rather than per-file today.
+   */
+  altText = "",
+  caption = "",
 ): { items: QueueItem[]; entries: QueueEntry[] } {
   const pairs = files.map((file) => ({
     item: makeQueueItem(nextId(), file),
@@ -172,6 +192,8 @@ export function enqueueFiles(
         id: pair.item.id,
         file: pair.file,
         tags: [...tags],
+        altText,
+        caption,
       })),
   };
 }
@@ -207,6 +229,8 @@ export async function drainQueue(
       transport,
       entry.signal,
       entry.tags,
+      entry.altText,
+      entry.caption,
     );
   }
 }

@@ -361,3 +361,97 @@ describe("the states around the grid", () => {
     expect(levels[0]).toBe(1);
   });
 });
+
+/**
+ * Alt text and captions on gallery tiles (ugcportal-gwr K1/K2).
+ *
+ * Driven through the real `Gallery` component's SSR markup, not a unit test
+ * of `galleryItemAlt` in isolation — K2's "never empty, never the filename"
+ * guarantee is a claim about what actually reaches the DOM, and the render
+ * layer is a second, independent place that could get it wrong even with
+ * `toGalleryItem` and the publish gate both holding.
+ */
+describe("ugcportal-gwr — alt text and captions", () => {
+  it("renders the uploader's real alt text on the tile's <img>, and leaks no filename", () => {
+    const items = toGalleryItems([
+      {
+        id: "a",
+        previewId: "pv-a",
+        publishedAt: "2026-03-01T00:00:00.000Z",
+        altText: "A fox crossing a snowy field at dawn",
+        // Not a real field on the public feed — included here only to prove
+        // that even if it somehow arrived, nothing downstream would use it.
+        originalName: "IMG_4821.HEIC",
+      },
+    ]);
+
+    const [img] = images(render({ initialItems: items }));
+
+    expect(img).toContain('alt="A fox crossing a snowy field at dawn"');
+    expect(img).not.toContain('alt=""');
+    expect(render({ initialItems: items })).not.toContain("IMG_4821");
+  });
+
+  it("falls back to a non-empty placeholder when alt text is missing (K2 safety net)", () => {
+    // Published media is never supposed to reach this without real alt text
+    // — the publish gate refuses it — but the render layer keeps its own net
+    // independently of that gate holding.
+    const items = toGalleryItems([
+      { id: "a", previewId: "pv-a", publishedAt: "2026-03-01T00:00:00.000Z" },
+    ]);
+
+    const [img] = images(render({ initialItems: items }));
+
+    expect(img).not.toContain('alt=""');
+    expect(img).toContain('alt="Photograph 1');
+  });
+
+  it("renders the caption as visible text under the tile", () => {
+    const items = toGalleryItems([
+      {
+        id: "a",
+        previewId: "pv-a",
+        publishedAt: "2026-03-01T00:00:00.000Z",
+        altText: "A fox crossing a snowy field",
+        caption: "Shot on a walk before sunrise.",
+      },
+    ]);
+
+    const markup = render({ initialItems: items });
+
+    expect(markup).toContain("Shot on a walk before sunrise.");
+    expect(markup).toContain('data-gallery-caption="a"');
+  });
+
+  it("renders no caption element at all for an uncaptioned item", () => {
+    const items = toGalleryItems([
+      {
+        id: "a",
+        previewId: "pv-a",
+        publishedAt: "2026-03-01T00:00:00.000Z",
+        altText: "A fox crossing a snowy field",
+      },
+    ]);
+
+    expect(render({ initialItems: items })).not.toContain(
+      "data-gallery-caption",
+    );
+  });
+
+  it("renders a <script> caption as inert escaped text, never as markup (K2 XSS)", () => {
+    const items = toGalleryItems([
+      {
+        id: "a",
+        previewId: "pv-a",
+        publishedAt: "2026-03-01T00:00:00.000Z",
+        altText: "A fox crossing a snowy field",
+        caption: "<script>window.__xss_fired = true</script>",
+      },
+    ]);
+
+    const markup = render({ initialItems: items });
+
+    expect(markup).not.toContain("<script>window.__xss_fired");
+    expect(markup).toContain("&lt;script&gt;window.__xss_fired");
+  });
+});

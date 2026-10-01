@@ -110,6 +110,12 @@ export const MEDIA_OWNER_SELECT = {
   // anonymous select for why that is worse than useless.
   mimeType: true,
   sizeBytes: true,
+  // Accessibility/discoverability text (ugcportal-gwr). In the owner select
+  // so POST /api/media's 201 and the publish echo can report what was
+  // stored; see the anonymous select below for why these are ALSO there,
+  // unlike `originalName` two lines up.
+  altText: true,
+  caption: true,
   // Subject tags (ugcportal-jsc). In BOTH selects, which is the unusual case
   // in this file and is the point: a tag is a label chosen to be published,
   // so there is no audience it is for and another it is not. The nested
@@ -189,6 +195,15 @@ export const MEDIA_ANONYMOUS_SELECT = {
   createdAt: true,
   // Always non-null here (the feed filters on it) and reads as "public since".
   publishedAt: true,
+  // Alt text and caption (ugcportal-gwr) — unlike `originalName`, which is
+  // withheld below because it is a filename nobody chose for publication,
+  // these two are exactly what an uploader DID choose to say about a published
+  // photograph: `altText` is required before publishedAt can ever be set (see
+  // the publish route), and `caption` is the plain-text description the
+  // gallery tile and the lightbox render. Neither carries a storage path, an
+  // account id, or anything else this feed goes to length to withhold.
+  altText: true,
+  caption: true,
   // Subject tags (ugcportal-jsc), and the one field this select has ever
   // gained that was added FOR this audience rather than inherited by one.
   //
@@ -314,6 +329,8 @@ export function toOwnerMedia(media: OwnedMediaRow): OwnerMedia {
     mimeType: media.mimeType,
     sizeBytes: media.sizeBytes,
     originalName: media.originalName,
+    altText: media.altText,
+    caption: media.caption,
     createdAt: media.createdAt,
     publishedAt: media.publishedAt,
     // Copied rather than aliased, so a caller spreading a change over the

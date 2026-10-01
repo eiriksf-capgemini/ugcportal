@@ -61,6 +61,61 @@ export async function POST(_request: Request, { params }: RouteContext) {
     );
   }
 
+  // Alt text is REQUIRED TO PUBLISH (ugcportal-gwr K1) — not at upload, and
+  // not at the schema layer (Media.altText is nullable; see that column's
+  // comment in prisma/schema.prisma). This is the one place that rule is
+  // enforced, same spirit as the preview check below: well-formed, authorized
+  // request, refused because of the row's own current state, so 400 — a
+  // field-level validation failure, not an authorization or state-conflict
+  // one — with a message naming the field, per K1 ("rejected... at the
+  // field"). `.trim()` because an owner could in principle have stored
+  // whitespace-only text before this check existed; `validateAltText` already
+  // refuses that going forward, but this route must not trust that every row
+  // in the table was written after this check existed.
+  //
+  // READ-THEN-CHECK, not folded into the `updateMany` where-clause the way
+  // `publishedAt: null` below is (review round 1, finding 8). That one is
+  // folded in because something CAN race it — a concurrent publish or
+  // unpublish — and the predicate is how two racing writes agree on a
+  // winner. Nothing today can race THIS check: `altText` is set once, at
+  // upload, and never cleared afterwards (no route writes it null — the
+  // rename endpoint only touches `originalName`), so there is no concurrent
+  // writer for a `where: { altText: { not: null } }` clause to defend
+  // against yet. The day a second writer can null it out (an edit surface,
+  // say), this needs the same treatment `previewId`'s repair logic above
+  // got — but adding it now, against nothing, would be exactly the kind of
+  // check this file's own comments elsewhere warn against: one that reads as
+  // a defence and is not exercised by anything.
+  //
+  // GATED ON `publishedAt === null` — i.e. only on an actual TRANSITION,
+  // never on an already-published row (review round 4 finding 4). Without
+  // this, an idempotent re-POST on a row that is ALREADY published but
+  // happens to have a null `altText` — which this bead's backfill migration
+  // closes for every row that existed when it ran, but cannot close for a
+  // row inserted by stale pre-this-bead code during the brief window of a
+  // migrate-then-swap rolling deploy, the same deploy shape this route's
+  // own `previewId` self-repair a few lines below exists to tolerate — would
+  // 400 instead of returning the 200 this route's own docstring promises
+  // ("Idempotent... an already-published row keeps its original [timestamp]
+  // rather than having its history rewritten"). K1 is a rule about the
+  // TRANSITION (no row may go from unpublished to published without alt
+  // text); it was never meant to retroactively block a row that is already
+  // sitting on the other side of that transition. Nothing is weakened by
+  // this: a genuinely unpublished row with no alt text is still refused
+  // below, exactly as before.
+  if (
+    access.media.publishedAt === null &&
+    (access.media.altText === null || access.media.altText.trim() === "")
+  ) {
+    return NextResponse.json(
+      {
+        error: "Add alt text before publishing this item.",
+        field: "altText",
+      },
+      { status: 400 },
+    );
+  }
+
   // Two different problems hide behind "this row has no usable preview", and
   // they need different answers.
   //

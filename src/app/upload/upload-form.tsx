@@ -11,6 +11,7 @@ import {
 
 import { ACCEPTED_MIME_TYPES } from "@/lib/media-rules";
 
+import { altTextFieldError, captionFieldError } from "./alt-text";
 import {
   acceptedTypesSummary,
   cancelledFailure,
@@ -86,6 +87,31 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
   const [selectedSlugs, setSelectedSlugs] = useState<readonly string[]>([]);
 
   /**
+   * Alt text and caption for the next batch of files (ugcportal-gwr), the
+   * same "applies to files you add next" timing the tag picker uses, and for
+   * the same reason — see alt-text.ts's module docstring for why these are
+   * batch-level rather than per-file today.
+   */
+  const [altText, setAltText] = useState("");
+  const [caption, setCaption] = useState("");
+  /**
+   * ONE piece of state, not two (review round 4 finding 7 — `altTextTouched`
+   * and a separate `attemptedFilenames` used to be written together on every
+   * path, which is the same "two state variables representing one fact"
+   * shape this file's own comment, a few lines below, already warns against
+   * when justifying merging `filesRef`/`tagsRef` into one `Map`). `null`
+   * means "nothing attempted yet, or the field changed since" — the state
+   * `showAltTextError` used to carry as `false`. A non-null array means
+   * `addFiles` refused with exactly those filenames, which the live error
+   * display below reads with the SAME `altTextFieldError` call the gate
+   * made, so "why this was blocked" and "what the message says" cannot
+   * disagree.
+   */
+  const [attemptedFilenames, setAttemptedFilenames] = useState<
+    readonly string[] | null
+  >(null);
+
+  /**
    * The authoritative work queue, OUTSIDE React state on purpose.
    *
    * Picking the next file out of the rendered `items` races the re-render the
@@ -94,18 +120,35 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
    * at the instant it is asked, which is what the loop needs.
    */
   const queueRef = useRef<QueueEntry[]>([]);
-  /** The File objects, which are not serialisable into reducer state. */
-  const filesRef = useRef(new Map<string, File>());
   /**
-   * The tags each queued row was added with (ugcportal-jsc).
+   * Everything a RETRY needs to re-send exactly what the original attempt
+   * sent, keyed by queue id: the `File` itself (not serialisable into reducer
+   * state), the tags it was added with (ugcportal-jsc), and its alt text and
+   * caption (ugcportal-gwr). Reading the form's CURRENT state on retry would
+   * silently re-tag, or re-describe, a file the user chose subjects and
+   * wording for minutes ago with whatever happens to be ticked or typed now —
+   * an edit to a request they are asking to repeat, not a retry of it.
    *
-   * Kept beside `filesRef` and for the same reason: RETRY has to re-send what
-   * the original attempt sent. Reading the picker's current state on retry
-   * would re-tag a file the user chose subjects for ten minutes ago with
-   * whatever happens to be ticked now — a silent edit to a request they are
-   * asking to repeat.
+   * ONE MAP, NOT THREE. An earlier version of this kept `filesRef`, `tagsRef`
+   * and `altCaptionRef` as three separate `Map`s, each written at the same
+   * four call sites (add, release-on-settle, retry-read, dismiss) — a shape a
+   * review round flagged as the same sibling-omission risk already fixed once
+   * for `filesRef` alone: a future per-file field (ugcportal-hf5u) would have
+   * paid the same four-site tax a fourth time, and a missed delete at either
+   * teardown site leaks that one map's entry while the other two are cleaned
+   * up correctly. One map means one set/get/delete per site instead of three.
+   *
+   * The value type is `Omit<QueueEntry, "id" | "signal">` — reusing
+   * upload-runner.ts's own type rather than a second, hand-written literal
+   * (review round 2 finding) — so the exact sibling-omission risk finding 9
+   * closed one level down cannot reopen one level up: a field added to
+   * `QueueEntry` later is a compile error here until this map's callers
+   * are updated too, rather than a silently-dropped field with nothing to
+   * flag the gap.
    */
-  const tagsRef = useRef(new Map<string, readonly string[]>());
+  const queuedFilesRef = useRef(
+    new Map<string, Omit<QueueEntry, "id" | "signal">>(),
+  );
   const drainingRef = useRef(false);
   const inFlightRef = useRef<{ id: string; controller: AbortController } | null>(
     null,
@@ -179,11 +222,10 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
 
     const released = releasedFileId(action);
     if (released !== null) {
-      filesRef.current.delete(released);
-      // Released together: a row whose File is gone can never be retried, so
-      // keeping its tag list is a leak of exactly the same shape, just a
-      // smaller one.
-      tagsRef.current.delete(released);
+      // One delete, not three: a row whose File is gone can never be
+      // retried, so keeping any of its other fields is a leak of exactly the
+      // same shape, just smaller.
+      queuedFilesRef.current.delete(released);
     }
 
     setNow(Date.now());
@@ -214,6 +256,63 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
       if (files.length === 0) return;
 
       /*
+       * ALT TEXT IS REQUIRED TO ADD FILES ON THIS PAGE (ugcportal-gwr), and
+       * checked HERE — before anything is queued or sent — rather than left
+       * to the server. See alt-text.ts's docstring on `altTextFieldError`
+       * for why this page's gate is stricter than POST /api/media's own.
+       *
+       * Refusing the whole drop/pick rather than queueing the files as
+       * `failed`: those rows exist to report something the SERVER would
+       * refuse about the FILE itself (precheckFile) — a type, a size — not a
+       * field on the form that has nothing to do with any particular file.
+       *
+       * The actual filenames are passed here (review round 3 finding 4) so
+       * the K2 filename-equality rule is caught before anything uploads,
+       * not only after — see alt-text.ts's own docstring on why this is the
+       * one point in this component that can supply them at all.
+       */
+      const filenames = files.map((file) => file.name);
+      if (altTextFieldError(altText, filenames) !== null) {
+        setAttemptedFilenames(filenames);
+        return;
+      }
+      /*
+       * The caption gets the same gate (review round 1, finding 5) —
+       * `AltTextFields` already shows this message live, unconditionally,
+       * the moment the caption is invalid (unlike alt text's "touched"
+       * gating, there is nothing to wait for: a caption is never required,
+       * so there is no "merely empty" state this would prematurely flag).
+       * Without this check the files still queued and uploaded in full —
+       * the whole point of a CLIENT-side precheck is to refuse before
+       * paying for the request, and an invalid caption reaching the server
+       * is exactly the 413/400-after-the-upload shape this page's other
+       * prechecks exist to avoid.
+       */
+      if (captionFieldError(caption) !== null) {
+        return;
+      }
+
+      /*
+       * CLEAR a stale refusal (round 5 finding): `attemptedFilenames` is only
+       * ever WRITTEN by the gate above, on refusal — nothing on this success
+       * path used to touch it. So a visitor who hit the K2 filename-equality
+       * refusal once, then fixed it not by editing the alt text but by
+       * swapping in a different file whose name no longer collides, reached
+       * here with the OLD failing filenames still sitting in state. The live
+       * error display a few lines down in `AltTextFields` recomputes from
+       * whatever `attemptedFilenames` holds, so it kept re-running
+       * `altTextFieldError` against that stale filename and kept showing
+       * "must describe the photo, not repeat its filename" under a field
+       * whose files had just been queued successfully — a real refusal
+       * banner left on screen describing an attempt that already succeeded.
+       * Resetting here, the one place a success is known, is what `null`'s
+       * own docstring above already promises: "nothing attempted yet, OR THE
+       * FIELD CHANGED SINCE" — a successful add is exactly that, for the
+       * files if not for the field itself.
+       */
+      if (attemptedFilenames !== null) setAttemptedFilenames(null);
+
+      /*
        * The tag NAMES for this batch, resolved from the ticked slugs at the
        * moment the files are added. A slug that is no longer in
        * `availableTags` resolves to nothing and is dropped rather than sent
@@ -230,18 +329,32 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
         files,
         nextQueueId,
         tagNames,
+        altText.trim(),
+        caption.trim(),
       );
       dispatchQueue({ type: "queued", items: queued });
 
       for (const entry of entries) {
-        filesRef.current.set(entry.id, entry.file);
-        tagsRef.current.set(entry.id, entry.tags);
+        queuedFilesRef.current.set(entry.id, {
+          file: entry.file,
+          tags: entry.tags,
+          altText: entry.altText,
+          caption: entry.caption,
+        });
         queueRef.current.push(entry);
       }
 
       drain();
     },
-    [availableTags, drain, dispatchQueue, selectedSlugs],
+    [
+      altText,
+      attemptedFilenames,
+      availableTags,
+      caption,
+      drain,
+      dispatchQueue,
+      selectedSlugs,
+    ],
   );
 
   const removeFromQueue = useCallback((id: string) => {
@@ -285,8 +398,8 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
 
   const retry = useCallback(
     (id: string) => {
-      const file = filesRef.current.get(id);
-      if (file === undefined) return;
+      const queued = queuedFilesRef.current.get(id);
+      if (queued === undefined) return;
       /*
         Must be settled to be retried, read from the set rather than from
         `items` for the same reason cancel() does — and `retried` removes the
@@ -315,8 +428,15 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
       if (!mayRetry(item.failure, Date.now())) return;
 
       dispatchQueue({ type: "retried", id });
-      // The tags the FIRST attempt carried, not whatever is ticked now.
-      queueRef.current.push({ id, file, tags: tagsRef.current.get(id) ?? [] });
+      // The tags, alt text and caption the FIRST attempt carried, not
+      // whatever is ticked or typed now.
+      queueRef.current.push({
+        id,
+        file: queued.file,
+        tags: queued.tags,
+        altText: queued.altText,
+        caption: queued.caption,
+      });
       drain();
     },
     [dispatchQueue, drain, items],
@@ -328,8 +448,7 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
         inFlightRef.current.controller.abort();
       }
       removeFromQueue(id);
-      filesRef.current.delete(id);
-      tagsRef.current.delete(id);
+      queuedFilesRef.current.delete(id);
       dispatchQueue({ type: "dismissed", id });
     },
     [dispatchQueue, removeFromQueue],
@@ -415,7 +534,26 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
         Its own copy already says "Applies to files you add from now on",
         which is only an honest sentence if the reader has met it before they
         add anything. Rendered second, the sentence was true and useless.
+
+        AltTextFields is rendered first of the two, for the same reason: it
+        is the one that can actually refuse to let files be added at all
+        (ugcportal-gwr), so it has to be the thing a visitor meets before the
+        drop zone, not something discovered only after a drop was refused.
       */}
+      <AltTextFields
+        altText={altText}
+        caption={caption}
+        attemptedFilenames={attemptedFilenames}
+        onAltTextChange={(value) => {
+          setAltText(value);
+          // Typing clears the "you have to fill this in" message; it comes
+          // back only if the visitor tries to add files again while it is
+          // still blank or invalid.
+          if (attemptedFilenames !== null) setAttemptedFilenames(null);
+        }}
+        onCaptionChange={setCaption}
+      />
+
       <TagPicker
         availableTags={availableTags}
         selectedSlugs={selectedSlugs}
@@ -497,6 +635,123 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
         onCancel={cancel}
         onDismiss={dismiss}
       />
+    </div>
+  );
+}
+
+/**
+ * Alt text (required) and caption (optional) for the next files added
+ * (ugcportal-gwr). See alt-text.ts's module docstring for why these are
+ * batch-level — the same timing the tag picker already uses — rather than
+ * per file.
+ *
+ * `attemptedFilenames` is a PROP, not state read inside this component,
+ * because the question "has the visitor tried and failed" belongs to the
+ * thing that actually tried — `addFiles` in the parent — not to a field
+ * watching its own value change. A component that showed the error the
+ * moment the field was merely empty would announce "required" before anyone
+ * had done anything. `null` means "nothing attempted yet, or the value
+ * changed since"; a (possibly empty) array means `addFiles` refused with
+ * exactly those filenames, which this component reads with the SAME
+ * `altTextFieldError` call the gate made, so "why this was blocked" and
+ * "what the message says" cannot disagree (review round 3 finding 4's own
+ * follow-on — see the state declaring this in the parent for why it has to
+ * be passed down rather than recomputed here from nothing).
+ */
+function AltTextFields({
+  altText,
+  caption,
+  attemptedFilenames,
+  onAltTextChange,
+  onCaptionChange,
+}: {
+  altText: string;
+  caption: string;
+  attemptedFilenames: readonly string[] | null;
+  onAltTextChange: (value: string) => void;
+  onCaptionChange: (value: string) => void;
+}) {
+  const altTextId = useId();
+  const altTextErrorId = useId();
+  const captionId = useId();
+  const captionErrorId = useId();
+
+  const altTextError =
+    attemptedFilenames !== null
+      ? altTextFieldError(altText, attemptedFilenames)
+      : null;
+  const captionError = captionFieldError(caption);
+
+  return (
+    <div className="mt-6" data-upload-alt-text-fields="">
+      <label htmlFor={altTextId} className="block text-sm font-medium text-ink">
+        Alt text
+        {/* Visual asterisk plus a spoken word, so the requirement survives
+            whether the label is seen or heard. */}
+        <span aria-hidden="true"> *</span>
+        <span className="sr-only"> (required)</span>
+      </label>
+      <p className="mt-1 max-w-prose text-xs text-ink-muted">
+        Describe what the photo shows, for people using a screen reader and
+        for search. Applies to files you add next.
+      </p>
+      <input
+        id={altTextId}
+        type="text"
+        required
+        // No `maxLength` attribute (review round 3 finding 2): the browser's
+        // own `maxlength` counts UTF-16 CODE UNITS, while
+        // MAX_ALT_TEXT_LENGTH and `altTextFieldError` count CODE POINTS (the
+        // same unit `Array.from(x).length` uses throughout this codebase, so
+        // a surrogate pair is never split) — an astral character such as an
+        // emoji is two code units but one code point, so the native
+        // attribute would silently stop accepting input at roughly HALF the
+        // length the server actually allows. The live error message below,
+        // driven by the same code-point-counting validator the server uses,
+        // is the real limit; a native `maxlength` here would just be a
+        // second, wrong one.
+        value={altText}
+        onChange={(event) => onAltTextChange(event.target.value)}
+        aria-invalid={altTextError !== null}
+        aria-describedby={altTextError !== null ? altTextErrorId : undefined}
+        className="mt-2 block w-full rounded-md border border-line-strong bg-surface-1 px-3 py-2 text-sm text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+      />
+      {/* Rendered unconditionally, empty when there is nothing wrong — the
+          same rule GalleryPaging and the tag picker's cap message follow, so
+          the error is announced rather than silently inserted. */}
+      <p
+        id={altTextErrorId}
+        role="alert"
+        className="mt-1 text-xs text-destructive"
+      >
+        {altTextError ?? ""}
+      </p>
+
+      <label
+        htmlFor={captionId}
+        className="mt-4 block text-sm font-medium text-ink"
+      >
+        Caption <span className="text-ink-muted">(optional)</span>
+      </label>
+      <textarea
+        id={captionId}
+        rows={2}
+        // No `maxLength` here either — same code-unit-vs-code-point reason
+        // the alt text input's own comment gives.
+        value={caption}
+        onChange={(event) => onCaptionChange(event.target.value)}
+        aria-invalid={captionError !== null}
+        aria-describedby={captionError !== null ? captionErrorId : undefined}
+        className="mt-2 block w-full rounded-md border border-line-strong bg-surface-1 px-3 py-2 text-sm text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+      />
+      {/* `id` + `aria-describedby` above, matching the alt text field's own
+          pattern (review round 3 finding 3) — without it, `aria-invalid`
+          alone tells a screen-reader user THAT the caption is invalid but
+          never associates WHY, which is a real gap in a bead whose entire
+          purpose is accessibility text. */}
+      <p id={captionErrorId} role="alert" className="mt-1 text-xs text-destructive">
+        {captionError ?? ""}
+      </p>
     </div>
   );
 }

@@ -57,6 +57,8 @@ const ownedMedia: OwnedMediaRow = {
   mimeType: "image/png",
   sizeBytes: 1024,
   originalName: "photo.png",
+  altText: "A fox crossing a snowy field at dawn",
+  caption: null,
   createdAt: new Date("2026-01-01T00:00:00.000Z"),
   // Private until its owner publishes it (ugcportal-r1d). Renaming and
   // deleting are indifferent to publish state; publishing lives in
@@ -340,6 +342,11 @@ describe("PATCH /api/media/[id] as the owner", () => {
     // The public projection is still complete, not just stripped.
     expect(Object.keys(body).sort()).toEqual(
       [
+        // Added by ugcportal-gwr. A rename does not touch either, but the
+        // owner projection carries them for the same reason it carries
+        // publishedAt and tags, below.
+        "altText",
+        "caption",
         "createdAt",
         "id",
         "kind",
