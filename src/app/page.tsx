@@ -54,16 +54,12 @@ export default async function Home() {
    * from it answering with nothing; the two must stay that way all the way to
    * the rendered page, so this branches before `Gallery` ever sees it rather
    * than inside it.
+   *
+   * The failure itself is logged inside `listPublicMedia`, not here — see
+   * that function's own comment for why one shared log line beats one per
+   * caller, and why it is throttled.
    */
   if (!result.ok) {
-    // The only detail `listMedia` hands back for this branch, but it is
-    // enough to tell a malformed-cursor regression apart from anything else
-    // that could reach here — and, per K2, it is the operator's only signal
-    // that the public feed is failing at all.
-    console.error("[gallery] public media listing failed", {
-      status: result.status,
-      error: result.error,
-    });
     return <GalleryUnavailable />;
   }
 

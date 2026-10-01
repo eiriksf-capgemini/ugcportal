@@ -14,6 +14,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
  * is forced here by mocking `@/lib/public-media` directly, which is the
  * branch this file exists to pin rather than a weaker substitute for it.
  *
+ * K2 (the failure is logged server-side) is NOT covered here, on purpose.
+ * The logging lives inside the real `listPublicMedia` (src/lib/public-media.ts),
+ * and this file mocks that whole module away — a test here asserting
+ * `console.error` was called would only be proving the MOCK calls it, which
+ * is circular. `src/lib/public-media.logging.test.ts` exercises the real
+ * function directly, including its throttle.
+ *
  * `mockListing.current` is read by the mock's implementation on every call,
  * not just once at module load, so a test can swap what `listPublicMedia`
  * answers next without `vi.resetModules()`/`vi.doMock()` — `Home()` reads it
@@ -24,12 +31,18 @@ import { afterEach, describe, expect, it, vi } from "vitest";
  * in the file; a test appended after it would have silently inherited the
  * override instead of this file's own top-level mock.
  */
+// The one spelling of "a malformed cursor" this file needs, shared by the
+// mock's default answer and the reset in `afterEach` below. A second literal
+// of the same shape (an earlier version of this file had one) is a fixture
+// that can drift from the mock it is meant to restore.
+const FAILED_LISTING = vi.hoisted(() => ({
+  ok: false as const,
+  status: 400 as const,
+  error: "Invalid cursor",
+}));
+
 const mockListing = vi.hoisted(() => ({
-  current: {
-    ok: false as const,
-    status: 400 as const,
-    error: "Invalid cursor",
-  } as
+  current: FAILED_LISTING as
     | { ok: false; status: 400; error: string }
     | {
         ok: true;
@@ -48,12 +61,6 @@ vi.mock("@/lib/public-media", () => ({
 
 const { default: Home } = await import("@/app/page");
 
-const FAILED_LISTING = {
-  ok: false as const,
-  status: 400 as const,
-  error: "Invalid cursor",
-};
-
 async function renderHome(): Promise<string> {
   return renderToStaticMarkup(await Home());
 }
@@ -67,8 +74,6 @@ afterEach(() => {
 
 describe("K1/K4 — a failed listing never renders as an empty gallery", () => {
   it("does not render the empty-gallery reassurance", async () => {
-    vi.spyOn(console, "error").mockImplementation(() => {});
-
     const markup = await renderHome();
 
     // The exact claim this bead exists to stop: a failed fetch must never be
@@ -78,25 +83,10 @@ describe("K1/K4 — a failed listing never renders as an empty gallery", () => {
   });
 
   it("renders a state that is distinguishable, in the markup, from the empty state", async () => {
-    vi.spyOn(console, "error").mockImplementation(() => {});
-
     const markup = await renderHome();
 
     expect(markup).toContain('data-gallery-state="error"');
     expect(markup).not.toContain('data-gallery-state="empty"');
-  });
-});
-
-describe("K2 — the failure is logged server-side", () => {
-  it("logs the status and error listMedia reported", async () => {
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-
-    await renderHome();
-
-    expect(errorSpy).toHaveBeenCalledWith(
-      "[gallery] public media listing failed",
-      expect.objectContaining({ status: 400, error: "Invalid cursor" }),
-    );
   });
 });
 

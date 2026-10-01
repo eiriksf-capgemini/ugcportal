@@ -95,18 +95,12 @@ export async function GET(request: Request) {
   const result = await listPublicMedia(request.url);
 
   if (!result.ok) {
-    // The sibling of the log in src/app/page.tsx (ugcportal-0dh). That
-    // caller's `ok: false` branch is not expected to run in practice — it
-    // only reaches here for a malformed `?cursor=`, and the server-rendered
-    // first page never sends one. THIS caller is the one a client actually
-    // controls: a stale tab, a hand-written request, or a bot can send any
-    // `?cursor=` it likes, so this is the branch most likely to really fire.
-    // Logging only the unreachable sibling and not this one would leave the
-    // operator blind on exactly the path a malformed request can reach.
-    console.error("[gallery] public media listing failed", {
-      status: result.status,
-      error: result.error,
-    });
+    // `listPublicMedia` already logged this, throttled (ugcportal-0dh) — see
+    // its own comment. THIS caller is the one a client actually controls: a
+    // stale tab, a hand-written request, or a bot can send any `?cursor=` it
+    // likes, unlike the server-rendered home page's call, which never sends
+    // one. That is exactly why the throttle lives centrally rather than only
+    // on the branch that looked reachable.
     return NextResponse.json(
       { error: result.error },
       { status: result.status, headers: NO_STORE },
