@@ -293,6 +293,26 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
       }
 
       /*
+       * CLEAR a stale refusal (round 5 finding): `attemptedFilenames` is only
+       * ever WRITTEN by the gate above, on refusal — nothing on this success
+       * path used to touch it. So a visitor who hit the K2 filename-equality
+       * refusal once, then fixed it not by editing the alt text but by
+       * swapping in a different file whose name no longer collides, reached
+       * here with the OLD failing filenames still sitting in state. The live
+       * error display a few lines down in `AltTextFields` recomputes from
+       * whatever `attemptedFilenames` holds, so it kept re-running
+       * `altTextFieldError` against that stale filename and kept showing
+       * "must describe the photo, not repeat its filename" under a field
+       * whose files had just been queued successfully — a real refusal
+       * banner left on screen describing an attempt that already succeeded.
+       * Resetting here, the one place a success is known, is what `null`'s
+       * own docstring above already promises: "nothing attempted yet, OR THE
+       * FIELD CHANGED SINCE" — a successful add is exactly that, for the
+       * files if not for the field itself.
+       */
+      if (attemptedFilenames !== null) setAttemptedFilenames(null);
+
+      /*
        * The tag NAMES for this batch, resolved from the ticked slugs at the
        * moment the files are added. A slug that is no longer in
        * `availableTags` resolves to nothing and is dropped rather than sent
@@ -326,7 +346,15 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
 
       drain();
     },
-    [altText, availableTags, caption, drain, dispatchQueue, selectedSlugs],
+    [
+      altText,
+      attemptedFilenames,
+      availableTags,
+      caption,
+      drain,
+      dispatchQueue,
+      selectedSlugs,
+    ],
   );
 
   const removeFromQueue = useCallback((id: string) => {
