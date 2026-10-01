@@ -1,0 +1,100 @@
+/* ugcportal – designtokens (referanse for DESIGN-beaden)
+   Fargene er vedtatt. Skriftvalget er et forslag og skal godkjennes av Eirik. */
+
+:root {
+  --petrol-900: #0B2E33;   /* dyp petrol: tekst, footer, mørk base */
+  --petrol-700: #14555F;   /* primær: hero, primærknapp, lenker */
+  --petrol-500: #2E7D85;   /* hover på primær */
+  --petrol-200: #9FC5C8;   /* dempet tekst på mørk flate */
+  --petrol-100: #CFE8E7;   /* tint: kort, tagger, ingress på petrol */
+  --accent-600: #B85A2B;   /* terrakotta hover */
+  --accent-500: #D9713C;   /* terrakotta: én CTA per skjerm */
+  --accent-100: #FBE4D3;   /* terrakotta-tint: «Til salgs»-merke */
+  --accent-900: #7A3A17;   /* tekst på terrakotta-tint */
+  --paper:      #FAF7F2;   /* varm hvit: sidebakgrunn i lys modus */
+  --paper-line: #D8D3C8;   /* hårlinje på lys flate */
+  --ink-muted:  #6B6B63;   /* sekundærtekst */
+
+  --bg: var(--paper);
+  --fg: var(--petrol-900);
+  --fg-muted: var(--ink-muted);
+  --line: var(--paper-line);
+  --card: #FFFFFF;
+
+  --font-display: "Fraunces", Georgia, serif;
+  --font-ui: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+
+  --radius-control: 8px;
+  --radius-card: 10px;
+  --measure: 60ch;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: var(--petrol-900);
+    --fg: var(--paper);
+    --fg-muted: var(--petrol-200);
+    --line: #1F4A50;
+    --card: #10393F;
+  }
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 16px/1.6 var(--font-ui);
+}
+h1, h2, h3 { font-family: var(--font-display); font-weight: 500; line-height: 1.15; margin: 0; }
+h1 { font-size: clamp(2rem, 4vw, 3rem); letter-spacing: -0.01em; }
+h2 { font-size: 1.5rem; }
+h3 { font-size: 1.125rem; }
+p  { margin: 0; max-width: var(--measure); }
+a  { color: var(--petrol-700); }
+img { display: block; max-width: 100%; height: auto; }
+
+.wrap { width: min(1120px, 100% - 3rem); margin-inline: auto; }
+
+.skip-link {
+  position: absolute; left: 1rem; top: -3rem;
+  background: var(--petrol-700); color: #fff; padding: .5rem .75rem;
+  border-radius: var(--radius-control); z-index: 10;
+}
+.skip-link:focus { top: 1rem; }
+
+.btn {
+  display: inline-flex; align-items: center; gap: .5rem;
+  padding: .7rem 1.1rem; border-radius: var(--radius-control);
+  font: 500 .95rem/1 var(--font-ui); text-decoration: none; cursor: pointer;
+  border: 1px solid transparent;
+}
+.btn-primary { background: var(--petrol-700); color: #fff; }
+.btn-primary:hover { background: var(--petrol-500); }
+.btn-accent  { background: var(--accent-500); color: #fff; }
+.btn-accent:hover { background: var(--accent-600); }
+.btn-outline { background: transparent; color: var(--petrol-700); border-color: var(--petrol-700); }
+.btn-outline:hover { background: var(--petrol-100); }
+.btn-ghost-light { background: transparent; color: var(--petrol-100); }
+.btn-ghost-light:hover { color: #fff; }
+
+:focus-visible { outline: 3px solid var(--accent-500); outline-offset: 2px; }
+
+.badge {
+  display: inline-block; font: 500 .75rem/1 var(--font-ui);
+  padding: .3rem .55rem; border-radius: 6px;
+  background: var(--accent-100); color: var(--accent-900);
+}
+.tag {
+  display: inline-block; font: .75rem/1 var(--font-ui);
+  padding: .3rem .55rem; border-radius: 6px;
+  background: var(--petrol-100); color: var(--petrol-900);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .reveal { animation: reveal .6s ease-out both; }
+  .reveal:nth-child(2) { animation-delay: .08s; }
+  .reveal:nth-child(3) { animation-delay: .16s; }
+  @keyframes reveal { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+}

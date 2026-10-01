@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="nb">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UGC Portal – lightbox (referanseskisse)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="tokens.css">
+<style>
+  .overlay { min-height: 100vh; background: rgba(11,46,51,.82); display: grid; place-items: center; padding: 1.5rem; }
+  .lightbox { background: var(--paper); color: var(--petrol-900); border-radius: var(--radius-card); width: min(960px, 100%); display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); overflow: hidden; position: relative; }
+  .close { position: absolute; right: .6rem; top: .5rem; background: none; border: 0; font-size: 1.4rem; line-height: 1; color: var(--ink-muted); cursor: pointer; padding: .3rem .5rem; border-radius: 6px; }
+
+  .stage { background: var(--petrol-100); position: relative; display: grid; place-items: center; min-height: 420px; overflow: hidden; }
+  .stage img { width: 72%; height: auto; border-radius: 6px; }
+  .nav { position: absolute; top: 50%; translate: 0 -50%; background: none; border: 0; color: var(--petrol-700); font-size: 1.8rem; cursor: pointer; padding: .5rem; }
+  .nav.prev { left: .6rem; } .nav.next { right: .6rem; }
+  .watermark { position: absolute; inset: 0; pointer-events: none; display: grid; place-items: center; rotate: -28deg; font: 500 1.1rem/1 var(--font-ui); letter-spacing: .15em; color: rgba(250,247,242,.55); white-space: nowrap; }
+  .stage .note { position: absolute; left: .75rem; bottom: .75rem; background: rgba(11,46,51,.75); color: var(--petrol-100); font-size: .75rem; padding: .25rem .5rem; border-radius: 6px; }
+
+  .panel { padding: 1.5rem 1.25rem; display: flex; flex-direction: column; gap: .9rem; }
+  .panel .meta { color: var(--ink-muted); font-size: .8rem; margin-top: .25rem; }
+  .panel .caption { font-size: .95rem; }
+  .tags { display: flex; gap: .4rem; flex-wrap: wrap; }
+  .buy { border-top: 1px solid var(--paper-line); padding-top: .9rem; margin-top: auto; }
+  .price-row { display: flex; justify-content: space-between; align-items: baseline; }
+  .price-row span:first-child { color: var(--ink-muted); font-size: .85rem; }
+  .price { font-size: 1.25rem; font-weight: 500; }
+  .buy .btn { width: 100%; justify-content: center; margin-top: .7rem; }
+  .license { font-size: .75rem; color: var(--ink-muted); margin-top: .5rem; }
+  .social { display: flex; gap: 1rem; align-items: center; color: var(--petrol-700); font-size: .9rem; }
+  .social .hint { margin-left: auto; color: var(--ink-muted); font-size: .75rem; }
+
+  @media (max-width: 720px) {
+    .lightbox { grid-template-columns: 1fr; }
+    .stage { min-height: 260px; }
+  }
+</style>
+</head>
+<body>
+<div class="overlay">
+  <div class="lightbox" role="dialog" aria-modal="true" aria-labelledby="lb-title" aria-describedby="lb-caption">
+    <button class="close" type="button" aria-label="Lukk">×</button>
+
+    <div class="stage">
+      <button class="nav prev" type="button" aria-label="Forrige verk">‹</button>
+      <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='4' height='3'%3E%3Crect width='4' height='3' fill='%2314555F'/%3E%3C/svg%3E"
+           alt="Tåke som letter over et stille fjordvann i gryningen, en brygge i forgrunnen">
+      <div class="watermark" aria-hidden="true">UGC Portal · forhåndsvisning · UGC Portal · forhåndsvisning</div>
+      <span class="note">Vannmerket forhåndsvisning</span>
+      <button class="nav next" type="button" aria-label="Neste verk">›</button>
+    </div>
+
+    <div class="panel">
+      <div>
+        <h2 id="lb-title">Morgenlys over fjorden</h2>
+        <div class="meta">@konto_en · mars 2026</div>
+      </div>
+      <p class="caption" id="lb-caption">Tatt klokken 05.40 fra brygga, like før tåken lettet. Film, ingen etterbehandling.</p>
+      <div class="tags"><span class="tag">landskap</span><span class="tag">film</span></div>
+
+      <div class="buy">
+        <div class="price-row"><span>Original, full oppløsning</span><span class="price">1 200 kr</span></div>
+        <a class="btn btn-accent" href="/kjop/morgenlys-over-fjorden">Kjøp original</a>
+        <p class="license">Personlig lisens. Nedlasting via tidsbegrenset lenke etter betaling. (Plassholder – teksten skal via Legal.)</p>
+      </div>
+
+      <div class="social">
+        <button class="btn btn-outline" type="button" aria-pressed="false">♡ 42</button>
+        <button class="btn btn-outline" type="button">Del</button>
+        <span class="hint">Esc lukker · piltaster blar</span>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>
