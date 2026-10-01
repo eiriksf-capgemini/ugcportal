@@ -149,14 +149,7 @@ export const PAIRINGS: Pairing[] = [
    * background above - --ring applies globally (`* { outline-ring/80 }` in
    * globals.css), so it is not a component this phase chose to move, it is a
    * token this phase could not avoid touching once the page canvas changed
-   * (see globals.css's long comment on --ring for why). Narrowing this
-   * PAIRING to --background documents what is actually proven - the focus
-   * ring on the page canvas, in both modes - rather than silently keeping a
-   * claim ("every surface") that is no longer true: measured at 1.27-2.39:1
-   * against the untouched near-black --card/--popover/--sidebar surfaces in
-   * light mode, down from passing before this bead. That gap is real, it is
-   * flagged in the PR and the bead, and it is fase 2's job (giving those
-   * surfaces their own ring override) rather than this one's.
+   * (see globals.css's long comment on --ring for why).
    */
   {
     id: "focus-ring-on-background",
@@ -165,6 +158,23 @@ export const PAIRINGS: Pairing[] = [
     requirement: "ui",
     usage: "The focus indicator, at the alpha it is rendered with, on the page canvas.",
   },
+  /*
+   * ugcportal-rw9j review round 3: globals.css scopes a --ring override back
+   * to --color-petrol-400 on every element that also carries one of the old
+   * near-black surface background classes (bg-surface-*, bg-muted, bg-card,
+   * ...) - resolveToken/loadThemeTokens has no notion of a class-scoped CSS
+   * override, so this checks the literal token that override points at
+   * directly (the same reason primary-hover-fill and friends check a literal
+   * step of the petrol scale rather than a semantic alias elsewhere in this
+   * file), restoring the "every surface" coverage focus-ring-on-background
+   * above gave up when --ring started tracking --primary.
+   */
+  ...onEverySurface(
+    "focus-ring-on-old-surface",
+    `--color-petrol-400/${RING_ALPHA_MODIFIER}`,
+    "ui",
+    "The focus indicator on a control that still lives on the near-black surface scale (the resale-rights decision form's inputs, the upload page's file dropzone, ...), via the --ring override scoped to these surface classes in globals.css.",
+  ),
   ...onEverySurface(
     "divider",
     "--color-line",

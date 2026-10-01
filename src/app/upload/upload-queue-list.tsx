@@ -215,8 +215,20 @@ function Failure({
               surface in contrast.ts). cn/tailwind-merge (see button.tsx)
               resolves the conflicting border/text/hover utilities in this
               className string's favour over PETROL_OUTLINE_STYLE's.
+
+              Every PETROL_OUTLINE_STYLE utility needs an explicit
+              counterpart here, not just its resting state (review round 3):
+              hover:border-input/aria-expanded:border-input/aria-expanded:no-
+              underline exist solely to cancel PETROL_OUTLINE_STYLE's
+              hover:border-primary-hover/aria-expanded:border-primary-hover/
+              aria-expanded:underline, which tailwind-merge otherwise leaves
+              standing - confirmed by running the real cn() against both
+              class strings, not just by reading them. A hover that moved
+              the border to petrol-100 while resting on border-input would
+              have been exactly the kind of "fixed in the comment, not in
+              the rendered className" gap this round exists to catch.
             */
-            className="border-input bg-transparent text-ink hover:bg-accent hover:text-accent-foreground hover:no-underline aria-expanded:bg-accent"
+            className="border-input bg-transparent text-ink hover:border-input hover:bg-accent hover:text-accent-foreground hover:no-underline aria-expanded:border-input aria-expanded:bg-accent aria-expanded:no-underline"
             disabled={!mayRetry(failure, now)}
             onClick={() => onRetry(item.id)}
           >

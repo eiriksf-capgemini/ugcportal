@@ -216,6 +216,27 @@ describe("loadThemeTokens dual-mode resolution", () => {
     ).toThrow(/declared twice/);
   });
 
+  /**
+   * ugcportal-rw9j review round 3: a class-scoped override (`.pswp { ... }`,
+   * or globals.css's `.bg-surface-0, ... { --ring: ...; }`) re-declares a
+   * property :root already declares, and that is legitimate - it is a third
+   * kind of deliberate override, not the "second theme" the duplicate guard
+   * exists to catch. Proves the exclusion rather than just the real
+   * stylesheet parsing without throwing: a synthetic class selector
+   * re-declaring --a must not trip the guard, in EITHER mode, and must not
+   * leak into either resolved map (nothing should resolve a class-scoped
+   * value through loadThemeTokens at all - a pairing that needs one reads
+   * the literal token the override points at directly, same as
+   * contrast.ts's focus-ring-on-old-surface).
+   */
+  it("excludes a class-scoped override from the theme entirely, in both modes", () => {
+    const css = ":root { --a: 1; } .some-class { --a: 2; }";
+    expect(() => writeAndLoad(css, "light")).not.toThrow();
+    expect(() => writeAndLoad(css, "dark")).not.toThrow();
+    expect(resolveToken("--a", writeAndLoad(css, "light"))).toBe("1");
+    expect(resolveToken("--a", writeAndLoad(css, "dark"))).toBe("1");
+  });
+
   it("does NOT reject the one deliberate pattern: once in light, once in dark", () => {
     expect(() => writeAndLoad(CSS, "dark")).not.toThrow();
     expect(() => writeAndLoad(CSS, "light")).not.toThrow();

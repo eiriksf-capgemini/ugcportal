@@ -315,19 +315,18 @@
  * values in this list; that is fase 2's job, not this one's.
  *
  * One cross-cutting consequence of that split, found while building this:
- * --ring is applied globally (`* { outline-ring/80 }`), so it cannot be
- * scoped to only the surfaces this phase touches. Pointing it at the new
- * --primary (needed so the focus ring is visible at all on the new light
- * canvas - the old --color-petrol-400 measures 1.3-2.4:1 against
- * --paper) means a focus ring drawn on the untouched near-black --card/
- * --popover surfaces (src/app/admin/settings/{rights,instagram}/page.tsx,
- * which render --primary text-links the same way) falls to roughly 1.3-2.4:1
- * there in light mode — below the 3:1 it had before this bead. That is a
- * real, measured regression on pages this PR does not otherwise touch, not
- * a cosmetic mismatch, and it is not fixed here: fixing it means giving
- * those surfaces their own ring override, which is a card/surface change and
- * therefore fase 2's job. Flagged in the PR and the bead rather than
- * silently accepted.
+ * --ring is applied globally (`* { outline-ring/80 }`), so pointing it at
+ * the new --primary (needed so the focus ring is visible at all on the new
+ * light canvas - the old --color-petrol-400 measures 1.3-2.4:1 against
+ * --paper) would otherwise also apply to every focusable control still
+ * living on the untouched near-black surface scale. Fixed, not merely
+ * flagged (review round 3, after the no-fix version of this comment
+ * incorrectly cited "admin/settings/{rights,instagram}'s cards" - this
+ * codebase has no Card/Popover component and no bg-card/bg-popover usage
+ * anywhere; the real instances were the resale-rights decision form's inputs
+ * and the upload page's file dropzone, both on bg-surface-*): see the
+ * --ring-on-old-surfaces override below, scoped to exactly the background
+ * classes that still need the old value.
  */
 :root {
   color-scheme: light dark;
@@ -440,6 +439,41 @@
     --primary-hover: var(--petrol-100);
     --primary-foreground: var(--petrol-900);
   }
+}
+
+/*
+ * ugcportal-rw9j review round 3: --ring tracks --primary (see the comment
+ * above), which is correct against --background but measures only
+ * ~1.3-2.4:1 against the untouched near-black surface scale in light mode -
+ * a real, reachable failure on every focusable control still living on one
+ * of those surfaces. Found three times across three review rounds in three
+ * different places (admin/settings/{rights,instagram}'s links, the resale-
+ * rights decision form's inputs, the upload page's file dropzone), which is
+ * what made this the fix rather than a fourth individual override: every
+ * element carrying one of these background utility classes gets its own
+ * --ring back, via ordinary CSS custom-property cascade - `--ring` (and
+ * anything that reads it, like `outline-ring/80` or a component's own
+ * `focus-visible:border-ring`) resolves against whichever value is in scope
+ * on that element, so a control on one of these surfaces is correct
+ * automatically, including ones added after this comment, with no
+ * per-component override to remember. --color-petrol-400 is the value
+ * --ring held before this bead - already verified against every one of
+ * these surfaces (the focus-ring-on-old-surface pairing in contrast.ts), so
+ * this is a revert, scoped to exactly the surfaces that still need it.
+ */
+.bg-surface-0,
+.bg-surface-1,
+.bg-surface-2,
+.bg-surface-3,
+.bg-surface-4,
+.bg-muted,
+.bg-card,
+.bg-popover,
+.bg-accent,
+.bg-secondary,
+.bg-destructive-surface,
+.bg-sidebar {
+  --ring: var(--color-petrol-400);
 }
 
 @layer base {

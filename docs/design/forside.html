@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="nb">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UGC Portal – forside (referanseskisse)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="tokens.css">
+<style>
+  .site-header { border-bottom: 1px solid var(--line); background: var(--bg); position: sticky; top: 0; z-index: 5; }
+  .site-header .wrap { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding-block: .9rem; }
+  .brand { display: flex; align-items: center; gap: .75rem; text-decoration: none; color: inherit; }
+  .brand-mark { width: 28px; height: 28px; border-radius: 6px; background: var(--petrol-700); }
+  .brand strong { display: block; font-weight: 500; }
+  .brand small { color: var(--fg-muted); font-size: .8rem; }
+  .site-nav { display: flex; align-items: center; gap: 1.4rem; font-size: .95rem; }
+  .site-nav a { color: inherit; text-decoration: none; }
+  .site-nav a[aria-current] { text-decoration: underline; text-underline-offset: .35em; }
+
+  .hero { background: var(--petrol-700); color: #fff; }
+  .hero .wrap { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 2.5rem; align-items: center; padding-block: 4rem; }
+  .hero p { color: var(--petrol-100); }
+  .hero .lede { font-size: 1.1rem; margin: 1rem 0 1.6rem; }
+  .hero .actions { display: flex; flex-wrap: wrap; gap: .75rem 1rem; align-items: center; }
+  .hero-art { position: relative; height: 240px; }
+  .hero-art span { position: absolute; width: 56%; height: 55%; border-radius: var(--radius-card); }
+  .hero-art span:nth-child(1) { left: 0; top: 15%; background: var(--petrol-900); }
+  .hero-art span:nth-child(2) { left: 26%; top: 0; background: var(--petrol-100); }
+  .hero-art span:nth-child(3) { left: 44%; top: 40%; background: var(--accent-500); }
+
+  .featured .wrap { padding-block: 3rem 3.5rem; }
+  .section-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 1.25rem; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1.25rem; }
+  figure { margin: 0; }
+  .tile { position: relative; border-radius: var(--radius-card); overflow: hidden; aspect-ratio: 4 / 3; background: var(--petrol-100); }
+  .tile img { width: 100%; height: 100%; object-fit: cover; }
+  .tile .badge { position: absolute; left: .7rem; top: .7rem; }
+  .tile .play { position: absolute; right: .7rem; bottom: .7rem; width: 36px; height: 36px; border-radius: 50%; background: rgba(11,46,51,.75); color: var(--petrol-100); display: grid; place-items: center; }
+  figcaption { margin-top: .6rem; }
+  figcaption .title { font-weight: 500; }
+  figcaption .meta { display: flex; justify-content: space-between; color: var(--fg-muted); font-size: .85rem; }
+
+  .site-footer { background: var(--petrol-900); color: var(--petrol-100); }
+  .site-footer .wrap { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1fr); gap: 2rem; padding-block: 2.5rem; font-size: .9rem; }
+  .site-footer h2 { font-family: var(--font-ui); font-size: 1rem; color: #fff; margin-bottom: .5rem; }
+  .site-footer p { color: var(--petrol-200); }
+  .site-footer ul { list-style: none; margin: 0; padding: 0; line-height: 2; }
+  .site-footer a { color: inherit; text-decoration: none; }
+  .site-footer a:hover { text-decoration: underline; }
+  .copyright { color: var(--petrol-200); margin-top: .5rem; }
+
+  @media (max-width: 720px) {
+    .site-nav { gap: 1rem; font-size: .9rem; }
+    .brand small { display: none; }
+    .hero .wrap { grid-template-columns: 1fr; padding-block: 2.5rem; }
+    .hero-art { height: 180px; }
+    .site-footer .wrap { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<a class="skip-link" href="#main">Hopp til innholdet</a>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="/">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span><strong>UGC Portal</strong><small>Kuraterte fotografier, til salgs som originaler</small></span>
+    </a>
+    <nav class="site-nav" aria-label="Hovedmeny">
+      <a href="/galleri" aria-current="page">Galleri</a>
+      <a href="/til-salgs">Til salgs</a>
+      <a href="/om">Om</a>
+      <a class="btn btn-outline" href="/logg-inn">Logg inn</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+  <section class="hero" aria-labelledby="hero-title">
+    <div class="wrap">
+      <div>
+        <p>Fotografi og video fra egne kontoer</p>
+        <h1 id="hero-title">Øyeblikk du kan ta med deg hjem</h1>
+        <p class="lede">Et kuratert galleri med verk som kan kjøpes som originaler. Forhåndsvis med vannmerke, kjøp i full oppløsning.</p>
+        <div class="actions">
+          <a class="btn btn-accent" href="/galleri">Utforsk galleriet</a>
+          <a class="btn btn-ghost-light" href="/logg-inn">Logg inn for å laste opp</a>
+        </div>
+      </div>
+      <div class="hero-art" aria-hidden="true">
+        <span class="reveal"></span><span class="reveal"></span><span class="reveal"></span>
+      </div>
+    </div>
+  </section>
+
+  <section class="featured" aria-labelledby="featured-title">
+    <div class="wrap">
+      <div class="section-head">
+        <h2 id="featured-title">Fremhevet denne måneden</h2>
+        <a href="/galleri">Se alle</a>
+      </div>
+      <div class="grid">
+        <figure>
+          <div class="tile">
+            <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='4' height='3'%3E%3Crect width='4' height='3' fill='%23CFE8E7'/%3E%3C/svg%3E"
+                 alt="Tåke som letter over et stille fjordvann i gryningen, en brygge i forgrunnen">
+            <span class="badge">Til salgs</span>
+          </div>
+          <figcaption>
+            <div class="title">Morgenlys over fjorden</div>
+            <div class="meta"><span>@konto_en</span><span>42 reaksjoner</span></div>
+          </figcaption>
+        </figure>
+        <figure>
+          <div class="tile">
+            <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='4' height='3'%3E%3Crect width='4' height='3' fill='%230B2E33'/%3E%3C/svg%3E"
+                 alt="Våt brostein som speiler gatelys, en paraply i bevegelse">
+          </div>
+          <figcaption>
+            <div class="title">Regn på Karl Johan</div>
+            <div class="meta"><span>@konto_to</span><span>18 reaksjoner</span></div>
+          </figcaption>
+        </figure>
+        <figure>
+          <div class="tile">
+            <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='4' height='3'%3E%3Crect width='4' height='3' fill='%2314555F'/%3E%3C/svg%3E"
+                 alt="Stillbilde fra video: tidevannet trekker seg tilbake over mørk sand">
+            <span class="play" aria-hidden="true">▶</span>
+          </div>
+          <figcaption>
+            <div class="title">Tidevann, 40 sekunder</div>
+            <div class="meta"><span>@konto_en</span><span>7 reaksjoner</span></div>
+          </figcaption>
+        </figure>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <div>
+      <h2>UGC Portal</h2>
+      <p>Egne fotografier og videoer, kuratert fra flere Instagram-kontoer og solgt som originaler.</p>
+    </div>
+    <nav aria-label="Sider">
+      <h2>Sider</h2>
+      <ul>
+        <li><a href="/om">Om</a></li>
+        <li><a href="/lisens">Lisens og rettigheter</a></li>
+        <li><a href="/personvern">Personvern</a></li>
+        <li><a href="/llms.txt">llms.txt</a></li>
+      </ul>
+    </nav>
+    <div>
+      <h2>Kontakt</h2>
+      <ul>
+        <li><a href="mailto:hei@eksempel.no">hei@eksempel.no</a></li>
+        <li><a href="https://instagram.com/konto_en">@konto_en</a>, <a href="https://instagram.com/konto_to">@konto_to</a></li>
+      </ul>
+      <p class="copyright">© 2026</p>
+    </div>
+  </div>
+</footer>
+</body>
+</html>
