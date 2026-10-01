@@ -438,13 +438,50 @@ function GalleryItemTags({ item }: { item: GalleryItem }) {
 
 function GalleryEmpty() {
   return (
-    <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col justify-center px-4 py-24 sm:px-6">
+    <div
+      className="mx-auto flex w-full max-w-6xl flex-1 flex-col justify-center px-4 py-24 sm:px-6"
+      data-gallery-state="empty"
+    >
       <h1 className="max-w-2xl text-2xl leading-tight font-medium tracking-tight text-balance text-foreground sm:text-3xl">
         Nothing is published yet.
       </h1>
       <p className="mt-4 max-w-prose text-sm text-muted-foreground">
         Photographs appear here as soon as they are published. Nothing is
         hidden from you — the gallery is genuinely empty.
+      </p>
+    </div>
+  );
+}
+
+/**
+ * What the home page renders when `listPublicMedia` answers `ok: false`
+ * (ugcportal-0dh).
+ *
+ * NOT `GalleryEmpty`. That component's whole second sentence — "Nothing is
+ * hidden from you — the gallery is genuinely empty" — is a claim about the
+ * listing having been read successfully and come back with nothing in it.
+ * This branch is the other case: the listing was NOT read successfully, so
+ * the honest claim is the opposite of that one, and the two must not share
+ * copy or a visitor reading a failed fetch is told a specific, false thing
+ * about the state of the gallery.
+ *
+ * `data-gallery-state="error"` (against `GalleryEmpty`'s `"empty"`) is what
+ * makes the two distinguishable in the rendered markup itself, per K3 — not
+ * only by which sentence happens to be present, which a future copy edit
+ * could make the two read alike.
+ */
+export function GalleryUnavailable() {
+  return (
+    <div
+      className="mx-auto flex w-full max-w-6xl flex-1 flex-col justify-center px-4 py-24 sm:px-6"
+      data-gallery-state="error"
+    >
+      <h1 className="max-w-2xl text-2xl leading-tight font-medium tracking-tight text-balance text-foreground sm:text-3xl">
+        The gallery could not be loaded.
+      </h1>
+      <p className="mt-4 max-w-prose text-sm text-muted-foreground" role="alert">
+        Something went wrong while fetching photographs. This is not the same
+        as an empty gallery — please try refreshing in a moment.
       </p>
     </div>
   );
