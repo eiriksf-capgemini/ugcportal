@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Fraunces, Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { AppShell } from "@/components/app-shell";
 import { SITE_DESCRIPTION, SITE_NAME } from "@/lib/site";
@@ -12,6 +12,19 @@ const geistSans = Geist({
 const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
   subsets: ["latin"],
+});
+
+/**
+ * Display face for h1-h3 (ugcportal-rw9j, product decision: approved).
+ * Weight 500 only — the one weight globals.css's `--font-heading` rule and
+ * every current heading's own `font-medium`/`font-semibold` utility actually
+ * need; `display: "swap"` avoids an invisible-heading flash while it loads.
+ */
+const fraunces = Fraunces({
+  variable: "--font-fraunces",
+  subsets: ["latin"],
+  weight: ["500"],
+  display: "swap",
 });
 
 export const metadata: Metadata = {
@@ -27,14 +40,14 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     <html
       lang="en"
       /*
-       * `dark` is set once, here, and never toggled: this app has one theme
-       * (ugcportal-axu). Every token value lives in :root in globals.css; the
-       * class exists so third-party components' `dark:` utilities resolve
-       * against that single set instead of falling back to light defaults.
-       * `color-scheme: dark` in globals.css tells the browser to match its own
-       * chrome — scrollbars, form controls, the canvas before paint.
+       * No `dark` class (ugcportal-rw9j): colour mode follows the OS/browser's
+       * own `prefers-color-scheme`, via the `@media (prefers-color-scheme:
+       * dark)` override in globals.css, not a class toggle - there is no
+       * in-app switch yet. `color-scheme: light dark` in globals.css tells the
+       * browser to match the active mode for its own chrome - scrollbars, form
+       * controls, the canvas before paint.
        */
-      className={`dark ${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`${geistSans.variable} ${geistMono.variable} ${fraunces.variable} h-full antialiased`}
     >
       <body className="min-h-full">
         <AppShell>{children}</AppShell>

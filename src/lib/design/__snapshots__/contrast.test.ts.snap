@@ -1,0 +1,26 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`K1: the exact palette docs/design/tokens.css adopted > matches the known-good snapshot of the resolved palette in both modes 1`] = `
+{
+  "dark": {
+    "--background": "#0b2e33",
+    "--foreground": "#faf7f2",
+    "--primary": "#9fc5c8",
+    "--primary-foreground": "#0b2e33",
+    "--primary-hover": "#cfe8e7",
+    "--ring": "#9fc5c8",
+    "--selection": "#cfe8e7",
+    "--selection-foreground": "#0b2e33",
+  },
+  "light": {
+    "--background": "#faf7f2",
+    "--foreground": "#0b2e33",
+    "--primary": "#14555f",
+    "--primary-foreground": "#ffffff",
+    "--primary-hover": "#2e7d85",
+    "--ring": "#14555f",
+    "--selection": "#cfe8e7",
+    "--selection-foreground": "#0b2e33",
+  },
+}
+`;

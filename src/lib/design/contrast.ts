@@ -117,24 +117,54 @@ export const PAIRINGS: Pairing[] = [
     "body",
     "Secondary text: metadata, helper text, image captions, table sub-labels.",
   ),
-  ...onEverySurface(
-    "link",
-    "--primary",
-    "body",
-    "Petrol as link text and as the `link` button variant; also the fill of the single primary action, whose boundary this same ratio covers.",
-  ),
+  /*
+   * ugcportal-rw9j: this used to be onEverySurface, back when --background
+   * was one of SURFACES and --primary (petrol) had one value good on all of
+   * them. Now --primary has a light and a dark derivation chosen for the
+   * page canvas specifically (see globals.css), and measures only 1.3-2.4:1
+   * against the untouched near-black --card/--popover surfaces in light mode
+   * - scoping this to --background is what's actually true post-rw9j, not a
+   * narrowing for its own sake. See globals.css's --ring comment for the one
+   * place that gap is real today (text-primary links on
+   * admin/settings/{rights,instagram}, which sit on --card) and why fixing it
+   * is fase 2's job.
+   */
+  {
+    id: "link-on-background",
+    foreground: "--primary",
+    background: ["--background"],
+    requirement: "body",
+    usage:
+      "Petrol as link text, the `link` button variant, and the petrol outline/secondary button's border and label; also the fill of the single primary action, whose boundary this same ratio covers.",
+  },
   ...onEverySurface(
     "control-edge",
     "--input",
     "ui",
     "The boundary that identifies an interactive control: input borders, outline-button borders.",
   ),
-  ...onEverySurface(
-    "focus-ring",
-    `--ring/${RING_ALPHA_MODIFIER}`,
-    "ui",
-    "The focus indicator, at the alpha it is rendered with.",
-  ),
+  /*
+   * ugcportal-rw9j: scoped to --background rather than onEverySurface, for a
+   * reason distinct from link-on-background and primary-hover-fill-on-
+   * background above - --ring applies globally (`* { outline-ring/80 }` in
+   * globals.css), so it is not a component this phase chose to move, it is a
+   * token this phase could not avoid touching once the page canvas changed
+   * (see globals.css's long comment on --ring for why). Narrowing this
+   * PAIRING to --background documents what is actually proven - the focus
+   * ring on the page canvas, in both modes - rather than silently keeping a
+   * claim ("every surface") that is no longer true: measured at 1.27-2.39:1
+   * against the untouched near-black --card/--popover/--sidebar surfaces in
+   * light mode, down from passing before this bead. That gap is real, it is
+   * flagged in the PR and the bead, and it is fase 2's job (giving those
+   * surfaces their own ring override) rather than this one's.
+   */
+  {
+    id: "focus-ring-on-background",
+    foreground: `--ring/${RING_ALPHA_MODIFIER}`,
+    background: ["--background"],
+    requirement: "ui",
+    usage: "The focus indicator, at the alpha it is rendered with, on the page canvas.",
+  },
   ...onEverySurface(
     "divider",
     "--color-line",
@@ -157,12 +187,19 @@ export const PAIRINGS: Pairing[] = [
     requirement: "body",
     usage: "Label of the filled primary action button, hovered.",
   },
-  ...onEverySurface(
-    "primary-hover-fill",
-    "--primary-hover",
-    "ui",
-    "The hovered primary button's fill, as the boundary that identifies it against the page.",
-  ),
+  /*
+   * ugcportal-rw9j: scoped to --background rather than onEverySurface, same
+   * reasoning as link-on-background above - the primary button lives on the
+   * page canvas in this phase, not inside the untouched card/popover
+   * surfaces.
+   */
+  {
+    id: "primary-hover-fill-on-background",
+    foreground: "--primary-hover",
+    background: ["--background"],
+    requirement: "ui",
+    usage: "The hovered primary button's fill, as the boundary that identifies it against the page.",
+  },
   {
     id: "selection-text-on-selection",
     foreground: "--selection-foreground",
@@ -195,19 +232,50 @@ export const PAIRINGS: Pairing[] = [
     requirement: "body",
     usage: "Text inside a popover, menu or dialog.",
   },
+  /*
+   * ugcportal-rw9j: --color-ink-muted, not --muted-foreground, for these two.
+   * --muted/--card stay on the untouched near-black surface scale this
+   * phase, and --muted-foreground now means "secondary text as this app
+   * actually renders it" (see muted-foreground-on-background below) - a
+   * page-canvas-specific token, the same split applied to --foreground vs
+   * --color-ink for the destructive well above. Nothing in the shipped app
+   * renders text-muted-foreground directly on bg-muted/bg-card today (every
+   * real `bg-muted`/`bg-card` usage leaves text colour at its default); these
+   * two stay as documented, aspirational coverage for whenever something
+   * does, using the token that actually still matches those surfaces.
+   */
   {
     id: "muted-foreground-on-muted",
-    foreground: "--muted-foreground",
+    foreground: "--color-ink-muted",
     background: ["--muted"],
     requirement: "body",
     usage: "Secondary text on a muted fill.",
   },
   {
     id: "muted-foreground-on-card",
-    foreground: "--muted-foreground",
+    foreground: "--color-ink-muted",
     background: ["--card"],
     requirement: "body",
     usage: "Caption under an image, metadata line in a list row.",
+  },
+  /*
+   * ugcportal-rw9j K1: this is the pairing that actually matches reality.
+   * --muted-foreground renders directly on --background in real, shipped
+   * components today - the footer (src/components/app-shell.tsx), the empty-
+   * gallery and loading-status copy (src/components/gallery/*), the signed-in
+   * user's email (auth-status.tsx), and supporting paragraphs across
+   * auth/error and the admin settings pages. A live axe run against the home
+   * page caught exactly this: --color-ink-muted (unchanged, designed for the
+   * old near-black canvas) measured 1.9:1 against the new --paper background
+   * before this pairing existed to catch it in the gate too.
+   */
+  {
+    id: "muted-foreground-on-background",
+    foreground: "--muted-foreground",
+    background: ["--background"],
+    requirement: "body",
+    usage:
+      "Secondary/caption text directly on the page canvas: footer, empty-state copy, loading status, supporting paragraphs.",
   },
   {
     id: "accent-foreground-on-accent",
@@ -292,15 +360,25 @@ export const PAIRINGS: Pairing[] = [
           usage: `Error text inside its own well${state ? ", hovered" : ""}.`,
         },
         {
+          /*
+           * --color-ink, not --foreground (ugcportal-rw9j): the error well
+           * stays on the untouched near-black surface scale (see globals.css's
+           * phase-1-mandate comment), and --foreground now means "whatever
+           * pairs with --background", which this well deliberately is not.
+           * --color-ink is the neutral scale's own body-text token - what
+           * "foreground" meant here before this bead decoupled the two.
+           */
           id: `ink-on-destructive-surface${state}`,
-          foreground: "--foreground",
+          foreground: "--color-ink",
           background: [well],
           requirement: "body",
           usage: `Body copy inside an error well${state ? ", hovered" : ""}.`,
         },
         {
+          // --color-ink-muted, not --muted-foreground: same reasoning as
+          // ink-on-destructive-surface above.
           id: `muted-foreground-on-destructive-surface${state}`,
-          foreground: "--muted-foreground",
+          foreground: "--color-ink-muted",
           background: [well],
           requirement: "body",
           usage: `Supporting detail inside an error well${state ? ", hovered" : ""}.`,

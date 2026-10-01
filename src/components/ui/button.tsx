@@ -3,13 +3,15 @@ import { cva, type VariantProps } from "class-variance-authority"
 import { cn } from "cn"
 
 /**
- * Restyled onto the ugcportal-axu tokens.
+ * Restyled onto the ugcportal-axu tokens, then onto the petrol palette
+ * (ugcportal-rw9j).
  *
- * Two changes worth knowing about:
+ * Four changes worth knowing about:
  *
- * 1. The `dark:` duplicates are gone. There is one theme, so a `dark:` variant
- *    of a token-driven class was always the same colour twice; keeping them
- *    invited the two copies to drift.
+ * 1. The `dark:` duplicates are gone. There is one theme per mode (see
+ *    globals.css), so a `dark:` variant of a token-driven class would just be
+ *    a second, hand-maintained copy of what the dark media-query override in
+ *    globals.css already gives every token for free.
  * 2. Every alpha-modified colour utility here ships at an alpha the contrast
  *    gate has measured (RING_ALPHA_MODIFIER and
  *    DESTRUCTIVE_EDGE_ALPHA_MODIFIER in src/lib/design/contrast.ts), and a
@@ -17,26 +19,36 @@ import { cn } from "cn"
  *    seen. shadcn's stock ring and destructive-border alphas both measure
  *    below 3:1 on the lighter surfaces of this palette, so they are not an
  *    option here.
- * 3. The primary hover is an opaque step down the petrol ramp rather than an
+ * 3. The primary hover is an opaque step along the petrol ramp rather than an
  *    alpha fade, so the button's label sits on a background that does not
  *    depend on what happens to be behind the button.
+ * 4. `outline` and `secondary` (ugcportal-rw9j) are the one petrol treatment
+ *    docs/design/tokens.css's `.btn-outline` describes, not two different
+ *    styles: a petrol border and label, transparent fill, hover moves to
+ *    --primary-hover. They read `--primary`/`--primary-hover` directly rather
+ *    than through `--border`/`--input`/`--accent` or `--secondary` (all
+ *    untouched this phase, still the near-black surface scale - see
+ *    globals.css's phase-1-mandate comment) precisely so this one petrol
+ *    treatment works on the new canvas without waiting for fase 2. The hover
+ *    state only moves the border/label colour, not the fill: `--primary-hover`
+ *    (petrol-500 in light mode) measures 4.48:1 as TEXT on --paper, just under
+ *    the 4.5:1 body text needs, so it is fine as a 3:1 non-text boundary but
+ *    not as a second text colour on top of the resting one.
  */
+const PETROL_OUTLINE_STYLE =
+  "border-primary bg-transparent text-primary hover:border-primary-hover hover:underline aria-expanded:border-primary-hover aria-expanded:underline"
+
 const buttonVariants = cva(
   "group/button inline-flex shrink-0 items-center justify-center rounded-lg border border-transparent bg-clip-padding text-sm font-medium whitespace-nowrap transition-all outline-none select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/80 active:not-aria-[haspopup]:translate-y-px disabled:pointer-events-none disabled:opacity-50 aria-invalid:border-destructive/75 aria-invalid:ring-3 aria-invalid:ring-destructive/80 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
   {
     variants: {
       variant: {
-        // The only petrol fill in the system, for the one primary action on a
-        // surface. Everything else is neutral, so this reads as emphasis
-        // rather than as decoration.
+        // The only solid petrol fill in the system, for the one primary
+        // action on a surface. Everything else is neutral or outlined, so
+        // this reads as emphasis rather than as decoration.
         default: "bg-primary text-primary-foreground hover:bg-primary-hover",
-        // border-input is --color-line-strong, which clears 3:1 on every
-        // surface: on a near-black ground the border is the only thing saying
-        // a control is here, so it cannot be a decorative hairline.
-        outline:
-          "border-input bg-transparent text-foreground hover:bg-accent hover:text-accent-foreground aria-expanded:bg-accent",
-        secondary:
-          "bg-secondary text-secondary-foreground hover:bg-surface-3 aria-expanded:bg-surface-3",
+        outline: PETROL_OUTLINE_STYLE,
+        secondary: PETROL_OUTLINE_STYLE,
         ghost:
           "text-foreground hover:bg-accent hover:text-accent-foreground aria-expanded:bg-accent",
         destructive:

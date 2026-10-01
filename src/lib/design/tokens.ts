@@ -190,10 +190,57 @@ export const GLOBALS_CSS_PATH = path.resolve(
   "globals.css",
 );
 
-/** Reads and flattens the shipped stylesheet. */
+export type ThemeMode = "light" | "dark";
+
+/**
+ * Matches the selector `parseDeclarations` records for anything nested inside
+ * `@media (prefers-color-scheme: dark) { ... }` — the one, deliberate way
+ * this stylesheet varies by mode (ugcportal-rw9j). Whitespace is normalised
+ * by nothing here, so the media query in globals.css must be written exactly
+ * `@media (prefers-color-scheme: dark)` for this to recognise it; a test in
+ * contrast.test.ts pins that the block exists and is found by this pattern,
+ * so a reformatted query is a loud failure rather than a silently-ignored
+ * light theme in disguise.
+ */
+const DARK_MEDIA_SELECTOR = /(?:^|>\s*)@media \(prefers-color-scheme:\s*dark\)/;
+
+/**
+ * Reads and flattens the shipped stylesheet for one theme mode.
+ *
+ * "Light" (the default) is every declaration NOT nested inside the dark media
+ * query — exactly what this function returned before dual-mode theming
+ * existed, so every caller that does not pass `mode` keeps working unchanged.
+ * "Dark" is that same light map with whatever the dark media query
+ * re-declares layered on top, the same way a browser's own cascade resolves
+ * it: the light value is the fallback, the dark one wins once the media
+ * feature matches.
+ *
+ * `flattenDeclarations` still refuses a property declared twice *within the
+ * same mode* (ugcportal-axu's "one theme" guarantee, preserved per mode
+ * rather than globally) — it just no longer considers a property declared
+ * once in :root and once more inside the dark media query to be that same
+ * violation, because this bead is the one deliberate, single place that
+ * pattern is allowed.
+ */
 export function loadThemeTokens(
   cssPath: string = GLOBALS_CSS_PATH,
+  mode: ThemeMode = "light",
 ): Map<string, Declaration> {
   const css = readFileSync(cssPath, "utf8");
-  return flattenDeclarations(parseDeclarations(css));
+  const declarations = parseDeclarations(css);
+  const lightDeclarations = declarations.filter(
+    (declaration) => !DARK_MEDIA_SELECTOR.test(declaration.selector),
+  );
+  const lightTokens = flattenDeclarations(lightDeclarations);
+  if (mode === "light") return lightTokens;
+
+  const darkDeclarations = declarations.filter((declaration) =>
+    DARK_MEDIA_SELECTOR.test(declaration.selector),
+  );
+  const darkOverrides = flattenDeclarations(darkDeclarations);
+  const merged = new Map(lightTokens);
+  for (const [property, declaration] of darkOverrides) {
+    merged.set(property, declaration);
+  }
+  return merged;
 }

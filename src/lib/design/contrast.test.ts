@@ -18,6 +18,8 @@ import {
   loadThemeTokens,
   parseDeclarations,
   resolveToken,
+  type Declaration,
+  type ThemeMode,
 } from "./tokens";
 import {
   designSystem,
@@ -26,13 +28,29 @@ import {
   type AlphaUtilityUsage,
 } from "./usage";
 
+/**
+ * ugcportal-rw9j: this app now resolves to one of two token sets depending on
+ * `prefers-color-scheme` (see globals.css's "ONE THEME PER MODE" comment).
+ * K1/K2 apply in both, so everything below that evaluates PAIRINGS or scans
+ * component usage against a resolved value does it once per mode rather than
+ * once, against `tokens` alone, the way this file worked before dual-mode
+ * theming existed.
+ */
+const THEME_MODES: readonly ThemeMode[] = ["light", "dark"];
 const tokens = loadThemeTokens();
+const tokensByMode: Record<ThemeMode, Map<string, Declaration>> = {
+  light: tokens,
+  dark: loadThemeTokens(GLOBALS_CSS_PATH, "dark"),
+};
 const css = readFileSync(GLOBALS_CSS_PATH, "utf8");
 
 /** `--ring/70` (or a bare `--ring`) to `<resolved literal>@<alpha percent>`. */
-function tokenAlphaKey(reference: string): string {
+function tokenAlphaKey(
+  reference: string,
+  mode: Map<string, Declaration> = tokens,
+): string {
   const { property, alphaPercent } = parseTokenReference(reference);
-  return `${resolveToken(property, tokens)}@${alphaPercent}`;
+  return `${resolveToken(property, mode)}@${alphaPercent}`;
 }
 
 /**
@@ -75,7 +93,10 @@ function tokenAlphaKey(reference: string): string {
  * deliberately collide, the same way K2's fix was proved against a
  * synthetic collision rather than only trusted against real data.
  */
-function buildForegroundVerifiedThreshold(pairings: readonly Pairing[]): Map<string, number> {
+function buildForegroundVerifiedThreshold(
+  pairings: readonly Pairing[],
+  mode: Map<string, Declaration> = tokens,
+): Map<string, number> {
   const perReference = new Map<string, number>();
   for (const pairing of pairings) {
     const value = pairing.requirement === "decorative" ? 0 : THRESHOLDS[pairing.requirement];
@@ -87,7 +108,7 @@ function buildForegroundVerifiedThreshold(pairings: readonly Pairing[]): Map<str
 
   const perKey = new Map<string, number>();
   for (const pairing of pairings) {
-    const key = tokenAlphaKey(pairing.foreground);
+    const key = tokenAlphaKey(pairing.foreground, mode);
     const value = perReference.get(pairing.foreground)!;
     perKey.set(key, Math.max(perKey.get(key) ?? -Infinity, value));
   }
@@ -97,15 +118,33 @@ function buildForegroundVerifiedThreshold(pairings: readonly Pairing[]): Map<str
 const FOREGROUND_VERIFIED_THRESHOLD = buildForegroundVerifiedThreshold(PAIRINGS);
 
 /**
- * Background coverage has no threshold dimension: a surface itself is not
- * independently held to a ratio, only whatever sits on it is, and no shipped
- * PAIRINGS background is alpha-modified. If that stops being true, the
- * background side of this needs the same threshold treatment as the
- * foreground side above.
+ * ugcportal-rw9j: the same two coverage maps as above, computed once per
+ * theme mode, because --primary (and therefore --ring, which tracks it)
+ * resolves to a different literal in each one. A component's alpha-modified
+ * usage (`ring-ring/80`) has to be proven safe under BOTH resolutions, not
+ * just the light one these two module-level constants were built from before
+ * dual-mode theming existed - see "measures every alpha-modified colour
+ * utility" below, which is the one test that actually walks this per mode.
  */
-const MEASURED_BACKGROUND = new Set(
-  PAIRINGS.flatMap((pairing) => pairing.background.map(tokenAlphaKey)),
-);
+const COVERAGE_BY_MODE: Record<
+  ThemeMode,
+  { foregroundVerified: Map<string, number>; measuredBackground: Set<string> }
+> = Object.fromEntries(
+  THEME_MODES.map((mode) => {
+    const modeTokens = tokensByMode[mode];
+    return [
+      mode,
+      {
+        foregroundVerified: buildForegroundVerifiedThreshold(PAIRINGS, modeTokens),
+        measuredBackground: new Set(
+          PAIRINGS.flatMap((pairing) =>
+            pairing.background.map((reference) => tokenAlphaKey(reference, modeTokens)),
+          ),
+        ),
+      },
+    ];
+  }),
+) as Record<ThemeMode, { foregroundVerified: Map<string, number>; measuredBackground: Set<string> }>;
 
 /**
  * What a *usage* (as opposed to a PAIRING) needs to clear, inferred from its
@@ -169,20 +208,22 @@ function expectedThresholdFor(usage: Pick<AlphaUtilityUsage, "prefix">): number 
 }
 
 /**
- * K1 (ugcportal-axu). Every documented pairing, evaluated against the values
- * actually in src/app/globals.css. Editing a token below its threshold turns
- * this red, which turns CI red, which blocks the merge.
+ * K1 (ugcportal-axu), run under both modes (ugcportal-rw9j). Every documented
+ * pairing, evaluated against the values actually in src/app/globals.css, for
+ * light AND for dark. Editing a token below its threshold in either mode
+ * turns this red, which turns CI red, which blocks the merge.
  */
-describe("WCAG contrast over the documented palette", () => {
+describe.each(THEME_MODES)("WCAG contrast over the documented palette (%s)", (mode) => {
+  const modeTokens = tokensByMode[mode];
   it.each(
     PAIRINGS.filter((pairing) => pairing.requirement !== "decorative").map(
       (pairing) => [pairing.id, pairing] as const,
     ),
   )("%s", (_id, pairing) => {
-    const result = evaluatePairing(pairing, tokens);
+    const result = evaluatePairing(pairing, modeTokens);
     expect(
       result.ratio,
-      `${pairing.id}: ${pairing.foreground} (${result.foregroundHex}) on ` +
+      `[${mode}] ${pairing.id}: ${pairing.foreground} (${result.foregroundHex}) on ` +
         `${pairing.background.join(" + ")} (${result.backgroundHex}) is ` +
         `${result.ratio.toFixed(2)}:1, below the ${result.required}:1 required for ` +
         `"${pairing.requirement}". Usage: ${pairing.usage}`,
@@ -311,54 +352,59 @@ describe("the gate cannot be routed around", () => {
    * coverage follows the components the way the token coverage tests already
    * follow the stylesheet.
    */
-  it("measures every alpha-modified colour utility the components ship", () => {
-    const used = findAlphaColorUtilities();
-    expect(used.length).toBeGreaterThan(0);
+  it.each(THEME_MODES)(
+    "measures every alpha-modified colour utility the components ship (%s)",
+    (mode) => {
+      const modeTokens = tokensByMode[mode];
+      const { foregroundVerified, measuredBackground } = COVERAGE_BY_MODE[mode];
+      const used = findAlphaColorUtilities();
+      expect(used.length).toBeGreaterThan(0);
 
-    for (const usage of used) {
-      // A Tailwind built-in colour (bg-black/50) resolves to no token at all.
-      // Caught here with its own advice, because letting resolveToken throw
-      // "unknown token --color-black" blames the wrong thing.
-      expect(
-        tokens.has(usage.property),
-        `${usage.file} uses "${usage.utility}", which is not a design token - ` +
-          `${usage.property} is not declared in globals.css. Use a token from the ` +
-          `surface/ink/petrol scales so the gate can measure it.`,
-      ).toBe(true);
-
-      const usageKey = `${resolveToken(usage.property, tokens)}@${usage.alphaPercent}`;
-
-      if (usage.role === "background") {
+      for (const usage of used) {
+        // A Tailwind built-in colour (bg-black/50) resolves to no token at all.
+        // Caught here with its own advice, because letting resolveToken throw
+        // "unknown token --color-black" blames the wrong thing.
         expect(
-          MEASURED_BACKGROUND.has(usageKey),
-          `${usage.file} uses "${usage.utility}", but no pairing in PAIRINGS ` +
-            `measures ${usage.property} at ${usage.alphaPercent}% alpha as a ` +
-            `background. Add that pairing - a colour measured as a foreground ` +
-            `does not cover it, because the two sit against different things.`,
+          modeTokens.has(usage.property),
+          `[${mode}] ${usage.file} uses "${usage.utility}", which is not a design token - ` +
+            `${usage.property} is not declared in globals.css. Use a token from the ` +
+            `surface/ink/petrol scales so the gate can measure it.`,
         ).toBe(true);
-        continue;
-      }
 
-      // Foreground: presence is not enough for text (K2). The pairing that
-      // measures this (literal, alpha) has to have checked it at or above
-      // the threshold *this usage's namespace* needs (0 - mere presence -
-      // for everything except text/placeholder; see expectedThresholdFor).
-      const verified = FOREGROUND_VERIFIED_THRESHOLD.get(usageKey) ?? -Infinity;
-      const required = expectedThresholdFor(usage);
-      expect(
-        verified >= required,
-        `${usage.file} uses "${usage.utility}", but no pairing in PAIRINGS measures ` +
-          `${usage.property} at ${usage.alphaPercent}% alpha as a foreground` +
-          (required > 0 ? ` at or above the ${required}:1 this usage's namespace needs. ` : ". ") +
-          (verified === -Infinity
-            ? "It is not measured as a foreground at that alpha at all."
-            : `The weakest pairing that measures it there is only checked at ` +
-              `${verified}:1 - a different token that happens to share this ` +
-              `literal is not proof this one clears the bar.`) +
-          " Add a pairing for it.",
-      ).toBe(true);
-    }
-  });
+        const usageKey = `${resolveToken(usage.property, modeTokens)}@${usage.alphaPercent}`;
+
+        if (usage.role === "background") {
+          expect(
+            measuredBackground.has(usageKey),
+            `[${mode}] ${usage.file} uses "${usage.utility}", but no pairing in PAIRINGS ` +
+              `measures ${usage.property} at ${usage.alphaPercent}% alpha as a ` +
+              `background. Add that pairing - a colour measured as a foreground ` +
+              `does not cover it, because the two sit against different things.`,
+          ).toBe(true);
+          continue;
+        }
+
+        // Foreground: presence is not enough for text (K2). The pairing that
+        // measures this (literal, alpha) has to have checked it at or above
+        // the threshold *this usage's namespace* needs (0 - mere presence -
+        // for everything except text/placeholder; see expectedThresholdFor).
+        const verified = foregroundVerified.get(usageKey) ?? -Infinity;
+        const required = expectedThresholdFor(usage);
+        expect(
+          verified >= required,
+          `[${mode}] ${usage.file} uses "${usage.utility}", but no pairing in PAIRINGS measures ` +
+            `${usage.property} at ${usage.alphaPercent}% alpha as a foreground` +
+            (required > 0 ? ` at or above the ${required}:1 this usage's namespace needs. ` : ". ") +
+            (verified === -Infinity
+              ? "It is not measured as a foreground at that alpha at all."
+              : `The weakest pairing that measures it there is only checked at ` +
+                `${verified}:1 - a different token that happens to share this ` +
+                `literal is not proof this one clears the bar.`) +
+            " Add a pairing for it.",
+        ).toBe(true);
+      }
+    },
+  );
 
   /**
    * K2 (ugcportal-j4j finding 2), reproduced directly: --ring and --primary
@@ -675,7 +721,13 @@ describe("parseTokenReference", () => {
 
 /**
  * K4 (ugcportal-axu): petrol survives the demotion and still drives at least
- * the focus and link treatments.
+ * the focus and link treatments. Updated by ugcportal-rw9j: --ring, --primary
+ * and --selection now drive off the NEW `--petrol-*`/`--paper` palette
+ * (docs/design/tokens.css's naming) rather than the old OKLCH
+ * `--color-petrol-*` scale, which is why the three assertions below changed
+ * shape rather than just value - see the petrol-palette comment near the top
+ * of globals.css for why these are a separate set of tokens, not a renamed
+ * version of the old one.
  */
 describe("petrol is demoted, not removed", () => {
   it("still ships the full --color-petrol-50..950 scale", () => {
@@ -685,36 +737,92 @@ describe("petrol is demoted, not removed", () => {
   });
 
   it("drives the focus ring", () => {
-    expect(tokens.get("--ring")?.value).toMatch(/^var\(--color-petrol-\d+\)$/);
+    // --ring tracks --primary by indirection (see globals.css), so this is
+    // the same assertion as "drives link and primary-action colour" below,
+    // confirmed via resolution rather than restating the literal.
+    expect(resolveToken("--ring", tokens)).toBe(resolveToken("--primary", tokens));
   });
 
   it("drives link and primary-action colour", () => {
-    expect(tokens.get("--primary")?.value).toMatch(
-      /^var\(--color-petrol-\d+\)$/,
-    );
+    expect(tokens.get("--primary")?.value).toMatch(/^var\(--petrol-\d+\)$/);
   });
 
   it("drives the selection highlight", () => {
-    expect(tokens.get("--selection")?.value).toMatch(
-      /^var\(--color-petrol-(?:\d+|deep)\)$/,
-    );
+    expect(tokens.get("--selection")?.value).toMatch(/^var\(--petrol-\d+\)$/);
   });
 
-  it("no longer paints the page, cards, overlays or the neutral hover fill", () => {
+  it("no longer paints cards, overlays, the secondary button or the neutral hover fill", () => {
     // The demotion, stated as a check: the big areas are all neutral surface.
-    for (const token of [
-      "--background",
-      "--card",
-      "--popover",
-      "--muted",
-      "--accent",
-      "--secondary",
-      "--sidebar",
-    ]) {
+    // --background is deliberately NOT in this list any more (ugcportal-rw9j):
+    // painting the page canvas with the petrol/paper palette is this bead's
+    // entire point, not a regression of the demotion K4 originally checked.
+    for (const token of ["--card", "--popover", "--muted", "--accent", "--secondary", "--sidebar"]) {
       expect(tokens.get(token)?.value, token).toMatch(
         /^var\(--color-(surface-\d+|scrim)\)$/,
       );
     }
+  });
+
+  it("paints the page canvas with the petrol/paper palette, in both modes", () => {
+    expect(tokens.get("--background")?.value).toBe("var(--paper)");
+    expect(tokens.get("--foreground")?.value).toBe("var(--petrol-900)");
+    const darkTokens = tokensByMode.dark;
+    expect(darkTokens.get("--background")?.value).toBe("var(--petrol-900)");
+    expect(darkTokens.get("--foreground")?.value).toBe("var(--paper)");
+  });
+});
+
+/**
+ * ugcportal-rw9j K1: a direct, literal check of the bytes K1 names, plus a
+ * broader snapshot of the whole resolved palette (light and dark) so any
+ * future edit to a token value is a visible, deliberate diff in review rather
+ * than a silent drift the ratio-only checks above might not catch (two colours
+ * can swap and still clear the same ratio).
+ */
+describe("K1: the exact palette docs/design/tokens.css adopted", () => {
+  it("renders the light-mode canvas and primary button at the exact adopted bytes", () => {
+    expect(resolveToken("--background", tokens)).toBe("#FAF7F2".toLowerCase());
+    expect(resolveToken("--primary", tokens)).toBe("#14555F".toLowerCase());
+    expect(resolveToken("--primary-foreground", tokens)).toBe("#ffffff");
+  });
+
+  it("declares a dark-mode override for exactly the tokens this phase touches", () => {
+    const darkOnly = parseDeclarations(css).filter((declaration) =>
+      /(?:^|>\s*)@media \(prefers-color-scheme:\s*dark\)/.test(declaration.selector),
+    );
+    const declaredProperties = new Set(darkOnly.map((declaration) => declaration.property));
+    expect(declaredProperties).toEqual(
+      new Set([
+        "--background",
+        "--foreground",
+        "--muted-foreground",
+        "--primary",
+        "--primary-hover",
+        "--primary-foreground",
+      ]),
+    );
+  });
+
+  it("matches the known-good snapshot of the resolved palette in both modes", () => {
+    const snapshotTokens = [
+      "--background",
+      "--foreground",
+      "--primary",
+      "--primary-hover",
+      "--primary-foreground",
+      "--ring",
+      "--selection",
+      "--selection-foreground",
+    ];
+    const resolved = Object.fromEntries(
+      THEME_MODES.map((mode) => [
+        mode,
+        Object.fromEntries(
+          snapshotTokens.map((name) => [name, resolveToken(name, tokensByMode[mode])]),
+        ),
+      ]),
+    );
+    expect(resolved).toMatchSnapshot();
   });
 });
 
