@@ -110,6 +110,35 @@ describe("throttles repeated failures (ugcportal-0dh round 2: unauthenticated, u
   });
 });
 
+describe("logs the very first failure even when the clock reads near the epoch", () => {
+  /**
+   * Mirrors watermark.concurrency.test.ts's coverage of logShedUpload's own
+   * `shedLogLastAt !== 0` guard. Without the matching guard here, the FIRST
+   * call after a fresh module instance computes `now - 0`, and a `now` this
+   * small reads as "still inside the window" — exactly backwards from what
+   * "first failure after a quiet period always logs" promises. Production
+   * never sees this (wall-clock time is nowhere near the epoch), but a test
+   * using fake timers seeded at time zero, or a real clock mid-boot before
+   * NTP sync, would.
+   */
+  it("still logs when Date.now() is smaller than the throttle interval", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { listPublicMedia, LISTING_FAILURE_LOG_INTERVAL_MS } =
+      await freshListPublicMedia();
+
+    const nowSpy = vi
+      .spyOn(Date, "now")
+      .mockReturnValue(Math.floor(LISTING_FAILURE_LOG_INTERVAL_MS / 2));
+    try {
+      await listPublicMedia(BAD_CURSOR_URL);
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("logs (and rethrows) when the query itself throws, not just ok: false", () => {
   /**
    * No cursor on this URL, unlike `BAD_CURSOR_URL` above — so `listMedia`

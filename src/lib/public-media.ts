@@ -91,7 +91,19 @@ function logFailedPublicListing(
   detail: PublicMediaFailure | { threw: true; error: string },
 ): void {
   const now = Date.now();
-  if (now - listingFailureLogLastAt < LISTING_FAILURE_LOG_INTERVAL_MS) {
+  // `listingFailureLogLastAt !== 0`, matching `logShedUpload`'s own
+  // `shedLogLastAt !== 0` guard (watermark.ts) — without it, the FIRST
+  // failure after process start computes `now - 0`, which is only large
+  // enough to clear the window because wall-clock time is nowhere near the
+  // epoch. That holds by the accident of what year it is, not by anything
+  // this function asserts; a clock near zero (fake timers seeded at the
+  // epoch, or a real clock before NTP sync at container boot) would read as
+  // "still inside the window" and silently suppress the one failure this
+  // throttle most needs to let through.
+  if (
+    listingFailureLogLastAt !== 0 &&
+    now - listingFailureLogLastAt < LISTING_FAILURE_LOG_INTERVAL_MS
+  ) {
     listingFailureLogSuppressed += 1;
     return;
   }
