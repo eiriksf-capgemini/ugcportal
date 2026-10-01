@@ -279,9 +279,30 @@ function main() {
     console.log(`[local-ca] trusting ${path.relative(process.cwd(), caPath) || caPath}`);
   }
 
+  // Three cases for the child's env:
+  //  - caPath set: forward the resolved path (certs/ scan, or a valid
+  //    explicit override).
+  //  - caPath null but source is "env": an explicit NODE_EXTRA_CA_CERTS was
+  //    set but didn't resolve to a readable file (see the warning above).
+  //    Passing process.env through here unchanged would still hand the
+  //    child the same broken value the wrapper itself just rejected --
+  //    defeating the warning's own claim that the default trust store will
+  //    be used, and producing Node's own differently-formatted "Ignoring
+  //    extra certs... load failed" warning on top of this one. Delete it so
+  //    the child falls back cleanly.
+  //  - caPath null, source "none": nothing was ever set or found -- pass
+  //    process.env through as-is, with no copy needed.
+  let childEnv = process.env;
+  if (caPath) {
+    childEnv = { ...process.env, NODE_EXTRA_CA_CERTS: caPath };
+  } else if (source === "env") {
+    childEnv = { ...process.env };
+    delete childEnv.NODE_EXTRA_CA_CERTS;
+  }
+
   const child = spawn(command, args, {
     stdio: "inherit",
-    env: caPath ? { ...process.env, NODE_EXTRA_CA_CERTS: caPath } : process.env,
+    env: childEnv,
     // `next` and friends live in node_modules/.bin, which npm puts on PATH.
     // Windows needs a shell to resolve the .cmd shim; POSIX must not use one,
     // so that argv is passed through without another round of word splitting.

@@ -7,13 +7,17 @@
  * a mock would let the resolver pass while the real thing failed.
  */
 import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { resolveLocalCa } from "./with-local-ca.mjs";
+
+const WRAPPER = fileURLToPath(new URL("./with-local-ca.mjs", import.meta.url));
 
 /** @type {string} */
 let root;
@@ -283,5 +287,48 @@ describe("explicit NODE_EXTRA_CA_CERTS", () => {
   it("falls back to the certs directory when the value is blank", () => {
     const file = write("certs/corp.pem", CERT_A);
     expect(resolve({ NODE_EXTRA_CA_CERTS: "   " }).path).toBe(file);
+  });
+});
+
+describe("main() child process env (ugcportal-5g9t)", () => {
+  // These spawn the real wrapper script, rather than calling resolveLocalCa()
+  // directly with a parameter -- the bug this guards against was in main()'s
+  // own env-forwarding logic, specifically with NODE_EXTRA_CA_CERTS already
+  // present in the *ambient* shell environment before the wrapper runs (as
+  // opposed to only ever passed as a function argument in a test). A unit
+  // test that only exercises resolveLocalCa() would pass before this fix
+  // existed, same as it did for ugcportal-drt1/PR gh-61.
+  it("does not forward an explicit NODE_EXTRA_CA_CERTS that didn't resolve to a readable file", () => {
+    const output = execFileSync(
+      process.execPath,
+      [WRAPPER, process.execPath, "-e", "process.stdout.write(String(process.env.NODE_EXTRA_CA_CERTS))"],
+      {
+        cwd: root,
+        env: { ...process.env, NODE_EXTRA_CA_CERTS: "./certs/does-not-exist.pem" },
+        encoding: "utf8",
+      },
+    );
+    // String(undefined) -- the child's own NODE_EXTRA_CA_CERTS key must be
+    // entirely absent, not merely falsy/empty, so this must read "undefined"
+    // literally rather than e.g. "" (which `env.X = ""` would also produce).
+    expect(output.trim()).toBe("undefined");
+  });
+
+  it("still forwards a resolved explicit NODE_EXTRA_CA_CERTS unchanged", () => {
+    const chosen = write("elsewhere/chosen.pem", CERT_A);
+    const output = execFileSync(
+      process.execPath,
+      [WRAPPER, process.execPath, "-e", "process.stdout.write(process.env.NODE_EXTRA_CA_CERTS ?? '')"],
+      {
+        cwd: root,
+        env: { ...process.env, NODE_EXTRA_CA_CERTS: "./elsewhere/chosen.pem" },
+        encoding: "utf8",
+      },
+    );
+    // Compare via realpath: spawning a child with `cwd` set to a path under
+    // macOS's /tmp (a symlink to /private/tmp) reports its own cwd pre-
+    // resolved through that symlink, which a plain string comparison against
+    // `root` would then spuriously fail on.
+    expect(fs.realpathSync(output.trim())).toBe(fs.realpathSync(chosen));
   });
 });
