@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 
-import { auth } from "@/lib/auth";
+import { getSession } from "@/lib/auth";
 import { UPLOAD_PATH, signInPath } from "@/lib/routes";
 import { listPickerTags } from "@/lib/tags";
 
@@ -22,7 +22,7 @@ export const metadata = {
  * server so it is on screen before any JavaScript arrives.
  */
 export default async function UploadPage() {
-  const session = await auth();
+  const session = await getSession();
 
   /*
     Gated on `user.id`, not on `session` or `user`, because `user.id` is

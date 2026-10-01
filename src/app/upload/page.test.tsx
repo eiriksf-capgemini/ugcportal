@@ -9,7 +9,7 @@ import { ACCEPTED_MIME_TYPES } from "@/lib/media";
  */
 
 const authMock = vi.fn();
-vi.mock("@/lib/auth", () => ({ auth: authMock }));
+vi.mock("@/lib/auth", () => ({ getSession: authMock }));
 
 const redirectMock = vi.fn((url: string): never => {
   /*
