@@ -31,6 +31,11 @@ function item(overrides: Partial<GalleryItem> = {}): GalleryItem {
     id: "media-1",
     previewSrc: `${MEDIA_PREVIEW_PATH}/pv-1`,
     publishedAt: "2026-03-04T10:00:00.000Z",
+    // Empty by default, so every existing fixture here exercises the SAME
+    // path it always did — the placeholder fallback in `galleryItemAlt`.
+    // Tests that care about real alt text / caption pass their own.
+    altText: "",
+    caption: "",
     tags: [],
     ...overrides,
   };
@@ -42,6 +47,8 @@ describe("toGalleryItem", () => {
       id: "media-1",
       previewSrc: `${MEDIA_PREVIEW_PATH}/pv-1`,
       publishedAt: "2026-03-04T10:00:00.000Z",
+      altText: "",
+      caption: "",
       tags: [],
     });
   });
@@ -62,6 +69,8 @@ describe("toGalleryItem", () => {
 
     expect(mapped).not.toBeNull();
     expect(Object.keys(mapped as GalleryItem).sort()).toEqual([
+      "altText",
+      "caption",
       "id",
       "previewSrc",
       "publishedAt",
@@ -109,6 +118,81 @@ describe("toGalleryItem", () => {
     // the gallery.
     expect(mapped?.id).toBe("media-1");
     expect(mapped?.publishedAt).toBeNull();
+  });
+});
+
+/**
+ * Alt text and caption at the read boundary (ugcportal-gwr). The write path
+ * (POST /api/media) already refuses anything unsafe or over-length, but this
+ * is the second end of the same rule — see `sanitizedMediaText`'s own
+ * docstring for why that is worth having rather than redundant.
+ */
+describe("alt text and caption on a mapped item", () => {
+  const RTL_OVERRIDE = String.fromCodePoint(0x202e);
+
+  it("carries the uploader's alt text and caption through unchanged", () => {
+    const mapped = toGalleryItem({
+      ...ROW,
+      altText: "A fox crossing a snowy field at dawn",
+      caption: "Shot on a walk before sunrise.",
+    });
+    expect(mapped?.altText).toBe("A fox crossing a snowy field at dawn");
+    expect(mapped?.caption).toBe("Shot on a walk before sunrise.");
+  });
+
+  it("is an empty string, never undefined or null, when neither was supplied", () => {
+    for (const absent of [undefined, null, "", "   ", 7, {}]) {
+      const mapped = toGalleryItem({ ...ROW, altText: absent, caption: absent });
+      expect(mapped?.altText).toBe("");
+      expect(mapped?.caption).toBe("");
+    }
+  });
+
+  it("drops alt text or a caption carrying a bidi override, rather than stripping it", () => {
+    const mapped = toGalleryItem({
+      ...ROW,
+      altText: `A fox${RTL_OVERRIDE} in a field`,
+      caption: `Caught${RTL_OVERRIDE} at dawn`,
+    });
+    expect(mapped?.altText).toBe("");
+    expect(mapped?.caption).toBe("");
+  });
+
+  it("keeps text containing HTML, because React escapes it on render", () => {
+    // Stripping it here would be the same "text nobody wrote" mistake the
+    // tag-name sanitizer avoids. Escaping is this function's co-defender's
+    // job (the component), asserted against real markup in the gallery and
+    // page test suites.
+    const mapped = toGalleryItem({
+      ...ROW,
+      altText: "A fox <script>alert(1)</script> in a field",
+      caption: "<b>Bold</b> claim about a fox",
+    });
+    expect(mapped?.altText).toBe("A fox <script>alert(1)</script> in a field");
+    expect(mapped?.caption).toBe("<b>Bold</b> claim about a fox");
+  });
+});
+
+describe("galleryItemAlt and galleryItemLabel prefer real alt text", () => {
+  it("uses the uploader's alt text verbatim, uncapitalized and unchanged", () => {
+    const withAlt = item({ altText: "a fox crossing a snowy field" });
+    expect(galleryItemAlt(withAlt, 0)).toBe("a fox crossing a snowy field");
+  });
+
+  it("prefixes the real alt text with Open for the tile's accessible name", () => {
+    const withAlt = item({ altText: "A fox crossing a snowy field" });
+    expect(galleryItemLabel(withAlt, 0)).toBe(
+      "Open A fox crossing a snowy field",
+    );
+  });
+
+  it("falls back to the position/date placeholder when alt text is empty (K2)", () => {
+    // Published media is never supposed to reach this without real alt text
+    // (the publish gate refuses it) — this is the render layer's own net,
+    // kept independently of that gate holding.
+    const blank = item({ altText: "" });
+    expect(galleryItemAlt(blank, 0)).toBe("Photograph 1, published 4 March 2026");
+    expect(galleryItemAlt(blank, 0)).not.toBe("");
   });
 });
 

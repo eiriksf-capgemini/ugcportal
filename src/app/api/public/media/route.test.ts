@@ -30,6 +30,8 @@ type Row = {
   mimeType: string;
   sizeBytes: number;
   originalName: string;
+  altText: string | null;
+  caption: string | null;
   createdAt: Date;
   publishedAt: Date | null;
 };
@@ -158,6 +160,11 @@ function row(overrides: Partial<Row> = {}): Row {
     mimeType: "image/png",
     sizeBytes: 1234,
     originalName: `${id}.png`,
+    // ugcportal-gwr: present by default so this fixture can produce a row
+    // the anonymous feed is actually allowed to publish (K1 requires it),
+    // and distinct from `originalName` so a test can tell the two apart.
+    altText: `A photograph, ${id}`,
+    caption: null,
     createdAt: new Date(
       `2026-09-${String((sequence % 28) + 1).padStart(2, "0")}T10:00:00Z`,
     ),
@@ -166,8 +173,20 @@ function row(overrides: Partial<Row> = {}): Row {
   };
 }
 
-/** Exactly the fields an anonymous caller may see. */
+/**
+ * Exactly the fields an anonymous caller may see.
+ *
+ * NOT exhaustive against `MEDIA_ANONYMOUS_SELECT` — `tags` is a relation, and
+ * this file's `Row`/`project` fixture pre-dates it (ugcportal-jsc) without
+ * being extended to model one; that gap is pre-existing and out of this
+ * bead's scope. `altText` and `caption` (ugcportal-gwr) are plain columns,
+ * same shape as everything else this list already names, so they are added
+ * here rather than left to silently vanish the way an `undefined` fixture
+ * value does through `NextResponse.json`'s serialisation.
+ */
 const ANONYMOUS_FIELDS = [
+  "altText",
+  "caption",
   "createdAt",
   "id",
   "kind",

@@ -12,6 +12,12 @@ import {
 import { ACCEPTED_MIME_TYPES } from "@/lib/media-rules";
 
 import {
+  MAX_ALT_TEXT_LENGTH,
+  MAX_CAPTION_LENGTH,
+  altTextFieldError,
+  captionFieldError,
+} from "./alt-text";
+import {
   acceptedTypesSummary,
   cancelledFailure,
   mayRetry,
@@ -86,6 +92,21 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
   const [selectedSlugs, setSelectedSlugs] = useState<readonly string[]>([]);
 
   /**
+   * Alt text and caption for the next batch of files (ugcportal-gwr), the
+   * same "applies to files you add next" timing the tag picker uses, and for
+   * the same reason — see alt-text.ts's module docstring for why these are
+   * batch-level rather than per-file today.
+   */
+  const [altText, setAltText] = useState("");
+  const [caption, setCaption] = useState("");
+  /**
+   * Set only once `addFiles` has actually been asked to queue something and
+   * refused — not on every keystroke, which would show "Add alt text before
+   * choosing files" before the visitor has done anything at all.
+   */
+  const [altTextTouched, setAltTextTouched] = useState(false);
+
+  /**
    * The authoritative work queue, OUTSIDE React state on purpose.
    *
    * Picking the next file out of the rendered `items` races the re-render the
@@ -106,6 +127,13 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
    * asking to repeat.
    */
   const tagsRef = useRef(new Map<string, readonly string[]>());
+  /**
+   * The alt text and caption each queued row was added with (ugcportal-gwr).
+   * Kept beside `tagsRef`, for the same retry reason.
+   */
+  const altCaptionRef = useRef(
+    new Map<string, { altText: string; caption: string }>(),
+  );
   const drainingRef = useRef(false);
   const inFlightRef = useRef<{ id: string; controller: AbortController } | null>(
     null,
@@ -184,6 +212,7 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
       // keeping its tag list is a leak of exactly the same shape, just a
       // smaller one.
       tagsRef.current.delete(released);
+      altCaptionRef.current.delete(released);
     }
 
     setNow(Date.now());
@@ -214,6 +243,22 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
       if (files.length === 0) return;
 
       /*
+       * ALT TEXT IS REQUIRED TO ADD FILES ON THIS PAGE (ugcportal-gwr), and
+       * checked HERE — before anything is queued or sent — rather than left
+       * to the server. See alt-text.ts's docstring on `altTextFieldError`
+       * for why this page's gate is stricter than POST /api/media's own.
+       *
+       * Refusing the whole drop/pick rather than queueing the files as
+       * `failed`: those rows exist to report something the SERVER would
+       * refuse about the FILE itself (precheckFile) — a type, a size — not a
+       * field on the form that has nothing to do with any particular file.
+       */
+      if (altTextFieldError(altText) !== null) {
+        setAltTextTouched(true);
+        return;
+      }
+
+      /*
        * The tag NAMES for this batch, resolved from the ticked slugs at the
        * moment the files are added. A slug that is no longer in
        * `availableTags` resolves to nothing and is dropped rather than sent
@@ -230,18 +275,24 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
         files,
         nextQueueId,
         tagNames,
+        altText.trim(),
+        caption.trim(),
       );
       dispatchQueue({ type: "queued", items: queued });
 
       for (const entry of entries) {
         filesRef.current.set(entry.id, entry.file);
         tagsRef.current.set(entry.id, entry.tags);
+        altCaptionRef.current.set(entry.id, {
+          altText: entry.altText,
+          caption: entry.caption,
+        });
         queueRef.current.push(entry);
       }
 
       drain();
     },
-    [availableTags, drain, dispatchQueue, selectedSlugs],
+    [altText, availableTags, caption, drain, dispatchQueue, selectedSlugs],
   );
 
   const removeFromQueue = useCallback((id: string) => {
@@ -315,8 +366,16 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
       if (!mayRetry(item.failure, Date.now())) return;
 
       dispatchQueue({ type: "retried", id });
-      // The tags the FIRST attempt carried, not whatever is ticked now.
-      queueRef.current.push({ id, file, tags: tagsRef.current.get(id) ?? [] });
+      // The tags, alt text and caption the FIRST attempt carried, not
+      // whatever is ticked or typed now.
+      const saved = altCaptionRef.current.get(id);
+      queueRef.current.push({
+        id,
+        file,
+        tags: tagsRef.current.get(id) ?? [],
+        altText: saved?.altText ?? "",
+        caption: saved?.caption ?? "",
+      });
       drain();
     },
     [dispatchQueue, drain, items],
@@ -330,6 +389,7 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
       removeFromQueue(id);
       filesRef.current.delete(id);
       tagsRef.current.delete(id);
+      altCaptionRef.current.delete(id);
       dispatchQueue({ type: "dismissed", id });
     },
     [dispatchQueue, removeFromQueue],
@@ -374,7 +434,26 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
         Its own copy already says "Applies to files you add from now on",
         which is only an honest sentence if the reader has met it before they
         add anything. Rendered second, the sentence was true and useless.
+
+        AltTextFields is rendered first of the two, for the same reason: it
+        is the one that can actually refuse to let files be added at all
+        (ugcportal-gwr), so it has to be the thing a visitor meets before the
+        drop zone, not something discovered only after a drop was refused.
       */}
+      <AltTextFields
+        altText={altText}
+        caption={caption}
+        showAltTextError={altTextTouched}
+        onAltTextChange={(value) => {
+          setAltText(value);
+          // Typing clears the "you have to fill this in" message; it comes
+          // back only if the visitor tries to add files again while it is
+          // still blank or invalid.
+          if (altTextTouched) setAltTextTouched(false);
+        }}
+        onCaptionChange={setCaption}
+      />
+
       <TagPicker
         availableTags={availableTags}
         selectedSlugs={selectedSlugs}
@@ -456,6 +535,95 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
         onCancel={cancel}
         onDismiss={dismiss}
       />
+    </div>
+  );
+}
+
+/**
+ * Alt text (required) and caption (optional) for the next files added
+ * (ugcportal-gwr). See alt-text.ts's module docstring for why these are
+ * batch-level — the same timing the tag picker already uses — rather than
+ * per file.
+ *
+ * `showAltTextError` is a PROP, not state read inside this component, because
+ * the question "has the visitor tried and failed" belongs to the thing that
+ * actually tried — `addFiles` in the parent — not to a field watching its own
+ * value change. A component that showed the error the moment the field was
+ * merely empty would announce "required" before anyone had done anything.
+ */
+function AltTextFields({
+  altText,
+  caption,
+  showAltTextError,
+  onAltTextChange,
+  onCaptionChange,
+}: {
+  altText: string;
+  caption: string;
+  showAltTextError: boolean;
+  onAltTextChange: (value: string) => void;
+  onCaptionChange: (value: string) => void;
+}) {
+  const altTextId = useId();
+  const altTextErrorId = useId();
+  const captionId = useId();
+
+  const altTextError = showAltTextError ? altTextFieldError(altText) : null;
+  const captionError = captionFieldError(caption);
+
+  return (
+    <div className="mt-6" data-upload-alt-text-fields="">
+      <label htmlFor={altTextId} className="block text-sm font-medium text-ink">
+        Alt text
+        {/* Visual asterisk plus a spoken word, so the requirement survives
+            whether the label is seen or heard. */}
+        <span aria-hidden="true"> *</span>
+        <span className="sr-only"> (required)</span>
+      </label>
+      <p className="mt-1 max-w-prose text-xs text-ink-muted">
+        Describe what the photo shows, for people using a screen reader and
+        for search. Applies to files you add next.
+      </p>
+      <input
+        id={altTextId}
+        type="text"
+        required
+        maxLength={MAX_ALT_TEXT_LENGTH}
+        value={altText}
+        onChange={(event) => onAltTextChange(event.target.value)}
+        aria-invalid={altTextError !== null}
+        aria-describedby={altTextError !== null ? altTextErrorId : undefined}
+        className="mt-2 block w-full rounded-md border border-line-strong bg-surface-1 px-3 py-2 text-sm text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+      />
+      {/* Rendered unconditionally, empty when there is nothing wrong — the
+          same rule GalleryPaging and the tag picker's cap message follow, so
+          the error is announced rather than silently inserted. */}
+      <p
+        id={altTextErrorId}
+        role="alert"
+        className="mt-1 text-xs text-destructive"
+      >
+        {altTextError ?? ""}
+      </p>
+
+      <label
+        htmlFor={captionId}
+        className="mt-4 block text-sm font-medium text-ink"
+      >
+        Caption <span className="text-ink-muted">(optional)</span>
+      </label>
+      <textarea
+        id={captionId}
+        rows={2}
+        maxLength={MAX_CAPTION_LENGTH}
+        value={caption}
+        onChange={(event) => onCaptionChange(event.target.value)}
+        aria-invalid={captionError !== null}
+        className="mt-2 block w-full rounded-md border border-line-strong bg-surface-1 px-3 py-2 text-sm text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+      />
+      <p role="alert" className="mt-1 text-xs text-destructive">
+        {captionError ?? ""}
+      </p>
     </div>
   );
 }

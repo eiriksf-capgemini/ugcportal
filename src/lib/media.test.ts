@@ -5,10 +5,14 @@ import { createClient } from "@libsql/client";
 import { describe, expect, it } from "vitest";
 
 import {
+  MAX_ALT_TEXT_LENGTH,
+  MAX_CAPTION_LENGTH,
   MAX_ORIGINAL_NAME_LENGTH,
   mediaPreviewColumns,
   sanitizeOriginalName,
   sniffKind,
+  validateAltText,
+  validateCaption,
   validateOriginalName,
   validateUpload,
 } from "@/lib/media";
@@ -246,6 +250,97 @@ describe("sanitizeOriginalName", () => {
       });
     },
   );
+});
+
+/**
+ * Alt text and caption (ugcportal-gwr). Both run through
+ * `validateBoundedText` in src/lib/media-rules.ts; these tests exercise it
+ * through the two names every caller actually imports, the same way the
+ * tag-name tests in src/lib/tags.test.ts exercise their own shared
+ * denylist through `parseTagNames` rather than the private helper directly.
+ */
+describe("validateAltText", () => {
+  it("accepts ordinary text", () => {
+    expect(validateAltText("A fox crossing a snowy field at dawn")).toEqual({
+      ok: true,
+      value: "A fox crossing a snowy field at dawn",
+    });
+  });
+
+  it("treats absent or blank as 'none supplied', not an error", () => {
+    // Requiredness is a separate, server-only rule — the publish gate, not
+    // this function. See alt-text.ts in src/app/upload for the stricter,
+    // client-side rule this page applies on top of it.
+    for (const value of [null, undefined, "", "   "]) {
+      expect(validateAltText(value)).toEqual({ ok: true, value: "" });
+    }
+  });
+
+  it("trims surrounding whitespace", () => {
+    expect(validateAltText("  a fox in a field  ")).toEqual({
+      ok: true,
+      value: "a fox in a field",
+    });
+  });
+
+  // THE BOUNDARY (ugcportal-gwr's own self-check): 124 accepted, 125
+  // accepted, 126 rejected. Strict rejection, not truncation — see
+  // MAX_ALT_TEXT_LENGTH's docstring for why.
+  it("accepts alt text one character below the limit (124)", () => {
+    const value = "a".repeat(MAX_ALT_TEXT_LENGTH - 1);
+    expect(validateAltText(value)).toEqual({ ok: true, value });
+  });
+
+  it("accepts alt text at exactly the limit (125)", () => {
+    const value = "a".repeat(MAX_ALT_TEXT_LENGTH);
+    expect(validateAltText(value)).toEqual({ ok: true, value });
+  });
+
+  it("rejects alt text one character over the limit (126), rather than truncating it", () => {
+    const value = "a".repeat(MAX_ALT_TEXT_LENGTH + 1);
+    const result = validateAltText(value);
+    expect(result.ok).toBe(false);
+    expect(result).not.toHaveProperty("value");
+  });
+
+  it("counts in code points, so an astral character is one unit", () => {
+    // U+1F98A (fox emoji) is a surrogate pair in UTF-16 — two code UNITS,
+    // one code POINT. Counting units would reject this one character short
+    // of where it should.
+    const value = "\u{1F98A}".repeat(MAX_ALT_TEXT_LENGTH);
+    expect(validateAltText(value).ok).toBe(true);
+  });
+
+  it("rejects a bidi override, the same denylist originalName and tags use", () => {
+    const result = validateAltText(`A fox‮ in a field`);
+    expect(result.ok).toBe(false);
+  });
+
+  it("rejects a non-string value rather than coercing it", () => {
+    expect(validateAltText(42).ok).toBe(false);
+    expect(validateAltText({}).ok).toBe(false);
+  });
+});
+
+describe("validateCaption", () => {
+  it("accepts ordinary text, and absence, the same way validateAltText does", () => {
+    expect(validateCaption("Shot on a walk before sunrise.")).toEqual({
+      ok: true,
+      value: "Shot on a walk before sunrise.",
+    });
+    expect(validateCaption(undefined)).toEqual({ ok: true, value: "" });
+  });
+
+  it("has its own, longer limit", () => {
+    expect(MAX_CAPTION_LENGTH).toBeGreaterThan(MAX_ALT_TEXT_LENGTH);
+    const atLimit = "c".repeat(MAX_CAPTION_LENGTH);
+    expect(validateCaption(atLimit)).toEqual({ ok: true, value: atLimit });
+    expect(validateCaption("c".repeat(MAX_CAPTION_LENGTH + 1)).ok).toBe(false);
+  });
+
+  it("rejects a bidi override", () => {
+    expect(validateCaption(`Caught‮ at dawn`).ok).toBe(false);
+  });
 });
 
 describe("mediaPreviewColumns", () => {

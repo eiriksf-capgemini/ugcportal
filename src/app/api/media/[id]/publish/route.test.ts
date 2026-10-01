@@ -80,6 +80,11 @@ const unpublishedMedia: OwnedMediaRow = {
   mimeType: "image/png",
   sizeBytes: 1024,
   originalName: "photo.png",
+  // Present by default so every existing publish test keeps exercising the
+  // thing IT is about, rather than tripping the new K1 gate. The tests that
+  // ARE about K1 override this to null explicitly.
+  altText: "A fox crossing a snowy field at dawn",
+  caption: null,
   createdAt: new Date("2026-01-01T00:00:00.000Z"),
   // The default for every row: private until its owner says otherwise.
   publishedAt: null,
@@ -114,6 +119,8 @@ const previewLessMedia: OwnedMediaRow = {
  * src/app/api/public/media/route.test.ts.
  */
 const OWNER_FIELDS = [
+  "altText",
+  "caption",
   "createdAt",
   "id",
   "kind",
@@ -142,6 +149,8 @@ function toOwnerShape(media: OwnedMediaRow) {
     mimeType: media.mimeType,
     sizeBytes: media.sizeBytes,
     originalName: media.originalName,
+    altText: media.altText,
+    caption: media.caption,
     createdAt: media.createdAt,
     publishedAt: media.publishedAt,
     tags: media.tags,
@@ -416,6 +425,79 @@ describe("POST /api/media/[id]/publish", () => {
         (call) => call[0].select?.key === undefined,
       ),
     ).toBe(true);
+  });
+});
+
+describe("publishing without alt text (ugcportal-gwr K1)", () => {
+  it("refuses with 400 naming the field, and writes nothing", async () => {
+    signedInAs(OWNER_ID);
+    mediaFindUniqueMock.mockResolvedValue({
+      ...unpublishedMedia,
+      altText: null,
+    });
+
+    const response = await POST(publishRequest("POST"), context());
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body.field).toBe("altText");
+    expect(body.error).toMatch(/alt text/i);
+    expect(mediaUpdateManyMock).not.toHaveBeenCalled();
+    expectNoOtherWrites();
+  });
+
+  it("refuses whitespace-only alt text the same way", async () => {
+    // Defence in depth: `validateAltText` refuses this going forward, but the
+    // publish route must not trust that every row was written after that
+    // check existed.
+    signedInAs(OWNER_ID);
+    mediaFindUniqueMock.mockResolvedValue({
+      ...unpublishedMedia,
+      altText: "   ",
+    });
+
+    const response = await POST(publishRequest("POST"), context());
+
+    expect(response.status).toBe(400);
+    expect(mediaUpdateManyMock).not.toHaveBeenCalled();
+  });
+
+  it("still publishes normally when alt text is present", async () => {
+    signedInAs(OWNER_ID);
+    mediaFindUniqueMock.mockResolvedValue(unpublishedMedia);
+
+    const response = await POST(publishRequest("POST"), context());
+
+    expect(response.status).toBe(200);
+    expect(mediaUpdateManyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("checks ownership before alt text, not after", async () => {
+    // The 400 must not become a way to probe someone else's library.
+    signedInAs(OTHER_ID);
+    mediaFindUniqueMock.mockResolvedValue({
+      ...unpublishedMedia,
+      altText: null,
+    });
+
+    const response = await POST(publishRequest("POST"), context());
+
+    expect(response.status).toBe(403);
+  });
+
+  it("does not block unpublishing a row with no alt text", async () => {
+    // DELETE /publish cannot fail — an owner must always be able to retract
+    // an item, whatever state its other fields are in.
+    signedInAs(OWNER_ID);
+    mediaFindUniqueMock.mockResolvedValue({
+      ...publishedMedia,
+      altText: null,
+    });
+
+    const response = await DELETE(publishRequest("DELETE"), context());
+
+    expect(response.status).toBe(200);
+    expect((await response.json()).publishedAt).toBeNull();
   });
 });
 

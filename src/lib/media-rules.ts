@@ -213,3 +213,89 @@ export const MAX_TAGS_PER_ITEM = 6;
  * the longest of the four subjects in use ("Wine & drink") is twelve.
  */
 export const MAX_TAG_NAME_LENGTH = 32;
+
+// --- alt text and caption (ugcportal-gwr) -----------------------------------
+//
+// Accessibility/discoverability text on a Media row. Both numbers live here,
+// not the rule that makes the first one REQUIRED — that is "required to
+// publish", a product decision enforced once, at POST
+// /api/media/[id]/publish, which is server-only (it reads the owner's row)
+// and must not be reimplemented client-side. What the upload form DOES need
+// is the shared length/character rule, so a caption that is already too long
+// or carries a bidi override is refused the same way client-side as it would
+// be server-side — the same relationship `MAX_TAGS_PER_ITEM` already has to
+// `parseTagNames`.
+
+/**
+ * Longest alt text, in CODE POINTS — the same counting MAX_ORIGINAL_NAME_LENGTH
+ * and MAX_TAG_NAME_LENGTH use, so truncating or measuring can never split a
+ * surrogate pair.
+ *
+ * 125 rather than a rounder number: it is Eirik's own call for this bead, sized
+ * to keep alt text a description rather than a caption-length essay — a screen
+ * reader reads the whole string aloud on every encounter, so there is a real
+ * cost to length that a visual caption does not have.
+ *
+ * STRICT REJECTION ABOVE THE LIMIT, not truncation. Alt text is text someone
+ * typed into a form field on purpose, immediately before submitting it — the
+ * same position `validateOriginalName`'s rename path is in, and that path
+ * REJECTS rather than repairs for exactly the same reason: unlike an
+ * incidental filename a phone's camera chose, there is no "theirs, but
+ * slightly mangled" version of a sentence someone wrote and meant. Silently
+ * cutting it at code point 125 would store a sentence nobody wrote and the
+ * one person who could tell has already moved on past the form.
+ */
+export const MAX_ALT_TEXT_LENGTH = 125;
+
+/** Longest caption, in code points. Generous relative to alt text on purpose:
+ * a caption is read on demand, not announced unconditionally, so the cost of
+ * length is the ordinary one a visual caption always had.
+ */
+export const MAX_CAPTION_LENGTH = 500;
+
+export type TextFieldValidation =
+  | { ok: true; value: string }
+  | { ok: false; message: string };
+
+/**
+ * Shared shape for both fields below: absent or blank is accepted as "none"
+ * (`value: ""`) — REQUIREDNESS is a separate, server-only rule (the publish
+ * gate), not something this function decides — and anything present is held
+ * to the same denylist every other user-typed string in this product goes
+ * through (`hasUnsafeText`, above), plus its own length cap.
+ */
+function validateBoundedText(
+  value: unknown,
+  field: string,
+  maxLength: number,
+): TextFieldValidation {
+  if (value === null || value === undefined) return { ok: true, value: "" };
+  if (typeof value !== "string") {
+    return { ok: false, message: `Field '${field}' must be a string` };
+  }
+  const trimmed = value.trim();
+  if (trimmed === "") return { ok: true, value: "" };
+  if (Array.from(trimmed).length > maxLength) {
+    return {
+      ok: false,
+      message: `Field '${field}' must be at most ${maxLength} characters`,
+    };
+  }
+  if (hasUnsafeText(trimmed)) {
+    return {
+      ok: false,
+      message: `Field '${field}' must not contain control or text-direction characters`,
+    };
+  }
+  return { ok: true, value: trimmed };
+}
+
+/** Validates (never requires) alt text. See MAX_ALT_TEXT_LENGTH. */
+export function validateAltText(value: unknown): TextFieldValidation {
+  return validateBoundedText(value, "altText", MAX_ALT_TEXT_LENGTH);
+}
+
+/** Validates the optional caption. See MAX_CAPTION_LENGTH. */
+export function validateCaption(value: unknown): TextFieldValidation {
+  return validateBoundedText(value, "caption", MAX_CAPTION_LENGTH);
+}

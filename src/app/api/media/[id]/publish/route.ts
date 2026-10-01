@@ -61,6 +61,27 @@ export async function POST(_request: Request, { params }: RouteContext) {
     );
   }
 
+  // Alt text is REQUIRED TO PUBLISH (ugcportal-gwr K1) — not at upload, and
+  // not at the schema layer (Media.altText is nullable; see that column's
+  // comment in prisma/schema.prisma). This is the one place that rule is
+  // enforced, same spirit as the preview check below: well-formed, authorized
+  // request, refused because of the row's own current state, so 400 — a
+  // field-level validation failure, not an authorization or state-conflict
+  // one — with a message naming the field, per K1 ("rejected... at the
+  // field"). `.trim()` because an owner could in principle have stored
+  // whitespace-only text before this check existed; `validateAltText` already
+  // refuses that going forward, but this route must not trust that every row
+  // in the table was written after this check existed.
+  if (access.media.altText === null || access.media.altText.trim() === "") {
+    return NextResponse.json(
+      {
+        error: "Add alt text before publishing this item.",
+        field: "altText",
+      },
+      { status: 400 },
+    );
+  }
+
   // Two different problems hide behind "this row has no usable preview", and
   // they need different answers.
   //

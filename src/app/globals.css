@@ -386,3 +386,33 @@
 .pswp__gallery-tags[hidden] {
   display: none;
 }
+
+/*
+ * The photograph's caption on the open slide (ugcportal-gwr).
+ *
+ * Anchored at the TOP of the slide, deliberately opposite
+ * `.pswp__gallery-tags`'s bottom position, so the two bars this viewer draws
+ * never overlap on the same photograph.
+ *
+ * Regular case and weight, unlike the tag caption's small-caps labels: this is
+ * a sentence the uploader wrote, not a set of short labels, and should read as
+ * a sentence.
+ */
+.pswp__media-caption {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 10;
+  margin: 0;
+  padding: calc(1rem + env(safe-area-inset-top)) 1.25rem 1rem;
+  color: var(--color-ink-muted);
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  text-align: center;
+  pointer-events: none;
+}
+
+.pswp__media-caption[hidden] {
+  display: none;
+}

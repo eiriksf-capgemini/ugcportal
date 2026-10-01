@@ -10,6 +10,8 @@ import {
   mediaPreviewColumns,
   sanitizeOriginalName,
   sniffKind,
+  validateAltText,
+  validateCaption,
   validateUpload,
 } from "@/lib/media";
 import { MEDIA_OWNER_SELECT } from "@/lib/media-access";
@@ -20,7 +22,11 @@ import {
   peekDeclaredPartType,
   readCappedFormDataFrom,
 } from "@/lib/request-body";
-import { MEDIA_TAGS_FIELD } from "@/lib/routes";
+import {
+  MEDIA_ALT_TEXT_FIELD,
+  MEDIA_CAPTION_FIELD,
+  MEDIA_TAGS_FIELD,
+} from "@/lib/routes";
 import { getBucketName, getS3Client } from "@/lib/s3";
 import { parseTagNames, resolveTagRows } from "@/lib/tags";
 import type { UploadReservation } from "@/lib/upload-memory";
@@ -301,6 +307,32 @@ async function handleUpload(
     return NextResponse.json({ error: tags.message }, { status: 400 });
   }
 
+  /*
+   * Alt text and caption (ugcportal-gwr). NOT required here — see
+   * MAX_ALT_TEXT_LENGTH's docstring and the publish route, which is the one
+   * place `altText` is actually enforced. What IS refused here is a value
+   * that is present and malformed: too long, or carrying a bidi override —
+   * the same "fails the whole upload rather than being silently dropped"
+   * treatment `tags` gets above, and for the same reason: both are strings a
+   * person typed on purpose, immediately before submitting this request, so
+   * silently storing something other than what they typed is worse than
+   * saying no.
+   *
+   * `get()`, not `getAll()`: unlike tags these are sent at most once per
+   * upload (MEDIA_ALT_TEXT_FIELD's docstring in src/lib/routes.ts). A part
+   * sent as a file would arrive as a File rather than a string; `validateAltText`
+   * and `validateCaption` already refuse a non-string outright, so that
+   * shape is rejected rather than coerced into "[object File]".
+   */
+  const altText = validateAltText(body.value.get(MEDIA_ALT_TEXT_FIELD));
+  if (!altText.ok) {
+    return NextResponse.json({ error: altText.message }, { status: 400 });
+  }
+  const caption = validateCaption(body.value.get(MEDIA_CAPTION_FIELD));
+  if (!caption.ok) {
+    return NextResponse.json({ error: caption.message }, { status: 400 });
+  }
+
   const buffer = Buffer.from(await file.arrayBuffer());
   if (sniffKind(buffer) !== validation.kind) {
     return NextResponse.json(
@@ -469,6 +501,12 @@ async function handleUpload(
           // rename path refuses. `file.name` is fully client-controlled and
           // the GET listing echoes it back, so it cannot go in raw.
           originalName: sanitizeOriginalName(file.name),
+          // Null, not "", when nothing was supplied — the same "absent means
+          // not yet decided" encoding as the triage booleans on
+          // MediaListing, and what lets the publish gate (ugcportal-gwr K1)
+          // use a plain null/blank check rather than two.
+          altText: altText.value === "" ? null : altText.value,
+          caption: caption.value === "" ? null : caption.value,
           // `connect`, not `connectOrCreate`: resolveTagRows already made
           // sure every row exists, so one place decides how a Tag comes into
           // existence and both writers (here and PUT .../tags) go through it.

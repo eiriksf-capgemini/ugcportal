@@ -320,11 +320,15 @@ describe("a connection that goes quiet is given up on (round 2, finding 1)", () 
         id: "q1",
         file: new File(["a"], "first.png", { type: "image/png" }),
         tags: [],
+        altText: "",
+        caption: "",
       },
       {
         id: "q2",
         file: new File(["b"], "second.png", { type: "image/png" }),
         tags: [],
+        altText: "",
+        caption: "",
       },
     ];
     state = entries.map((entry) => ({

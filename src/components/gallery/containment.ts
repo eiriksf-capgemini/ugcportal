@@ -93,6 +93,14 @@ export const GALLERY_TILE_IMAGE_CLASS =
   "h-full w-full object-cover transition-transform duration-300 ease-out group-hover:scale-[1.04] motion-reduce:transform-none motion-reduce:transition-none";
 
 /**
+ * The caption under one tile (ugcportal-gwr). Quiet body text — unlike the
+ * tag chips below it, a caption is a sentence the uploader wrote, not a
+ * label, so it is neither small-caps nor muted to the same degree: it needs
+ * to read as a sentence someone would actually read.
+ */
+export const GALLERY_CAPTION_CLASS = "mt-1.5 text-sm text-ink";
+
+/**
  * SUBJECT TAGS (ugcportal-jsc), and the three decisions behind where they sit.
  *
  * WHY UNDER THE TILE AND NOT OVER IT. An overlay reads better on a

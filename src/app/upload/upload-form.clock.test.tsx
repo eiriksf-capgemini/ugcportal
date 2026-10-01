@@ -150,6 +150,28 @@ function mount(): void {
   });
 }
 
+/**
+ * Fills in the required alt text field (ugcportal-gwr) the way a real visitor
+ * would, before any file is added. Not this file's own concern — it is
+ * testing the retry clock, not the alt-text gate — but `addFiles` now refuses
+ * to queue anything at all while the field is blank, so every test that
+ * drives a real upload through the DOM needs this once, up front.
+ */
+function setAltText(value: string): void {
+  const input = container.querySelector<HTMLInputElement>(
+    "input[required][maxlength]",
+  );
+  if (input === null) throw new Error("no alt text field in the markup");
+  const setter = Object.getOwnPropertyDescriptor(
+    HTMLInputElement.prototype,
+    "value",
+  )?.set;
+  setter?.call(input, value);
+  act(() => {
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+
 /** Drives the hidden file input the way a real picker/drop would. */
 function addFile(file: File): void {
   const input = container.querySelector<HTMLInputElement>('input[type="file"]');
@@ -194,6 +216,7 @@ function markup(): string {
 describe("the retry countdown reads the clock at the moment a 503 lands (ugcportal-ggw)", () => {
   it("renders from the current time, not mount time, on the very first render", async () => {
     mount();
+    setAltText("A fox crossing a snowy field at dawn");
     addFile(imageFile());
 
     await waitUntil(() => FakeXhr.instances.length > 0, "the request to start");
@@ -239,6 +262,7 @@ describe("the retry interval exists only inside a retry window (K3)", () => {
 
   it("starts an interval once a row is throttled, and clears it once the window passes", async () => {
     mount();
+    setAltText("A fox crossing a snowy field at dawn");
     addFile(imageFile());
 
     await waitUntil(() => FakeXhr.instances.length > 0, "the request to start");

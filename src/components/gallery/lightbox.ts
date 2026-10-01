@@ -188,6 +188,133 @@ export function registerTagCaption(
 }
 
 /**
+ * The class the visible media caption carries (ugcportal-gwr), and the hook
+ * its CSS is written against. Exported for the same reason
+ * LIGHTBOX_TAG_CAPTION_CLASS is: a test asserts the string the viewer
+ * actually renders.
+ */
+export const LIGHTBOX_MEDIA_CAPTION_CLASS = "pswp__media-caption";
+
+/**
+ * Stable element ids the dialog's `aria-labelledby`/`aria-describedby` point
+ * at (ugcportal-gwr) — the pattern docs/design/lightbox.html's reference
+ * sketch uses, with the title/caption pair it names adapted to the fields
+ * this product actually has today. There is no separate title field
+ * (out of scope for this bead), so the label is the photograph's own alt
+ * text rather than a second string.
+ *
+ * MODULE-SCOPED CONSTANTS, not generated per open. PhotoSwipe tears down and
+ * rebuilds its DOM on every `openGalleryViewer` call (a fresh `Lightbox`
+ * instance per activation — see that function's own docstring), so there is
+ * never more than one `.pswp` root in the document at a time for these ids to
+ * collide inside.
+ */
+const MEDIA_TITLE_ID = "pswp__media-title";
+const MEDIA_CAPTION_ID = "pswp__media-caption";
+
+/**
+ * The alt text for each slide, positionally — same arrangement as
+ * `galleryTagCaptions` and `sizes`, so the three cannot come apart.
+ *
+ * `GalleryItem.altText` is already the finished string by this point —
+ * sanitized and, for the rare published row without one, already carrying
+ * `galleryItemAlt`'s own fallback — so this is a plain projection, not a
+ * second place that decides what the text is.
+ */
+function galleryItemAltTexts(items: GalleryItem[]): string[] {
+  return items.map((item, position) => galleryItemAlt(item, position));
+}
+
+/**
+ * Puts the photograph's description and caption on the open slide, and wires
+ * the dialog's `aria-labelledby`/`aria-describedby` to them (ugcportal-gwr).
+ *
+ * TWO ELEMENTS, NOT ONE, because the two questions an assistive-technology
+ * user asks of a dialog are different: "what is this" (the label) and "what
+ * does it say about itself" (the description). The first is `galleryItemAlt`
+ * — already required to be non-empty for anything published, so the dialog
+ * always has a name — rendered into a visually hidden (`sr-only`) heading,
+ * because the photograph itself already conveys that description visually;
+ * repeating it as on-screen text would be clutter the viewer does not need.
+ * The second is the uploader's optional `caption`, visible, the same
+ * "textContent only" rule `registerTagCaption` uses, for the same reason: a
+ * caption containing `<script>` must render as inert text, never execute
+ * (K2's XSS criterion).
+ *
+ * BOTH IDS ARE SET ONCE, not refreshed per slide. Only the elements'
+ * `textContent` changes on `change`, matching `registerTagCaption` — the
+ * dialog keeps pointing at the same two elements for its whole lifetime, and
+ * screen readers re-read an `aria-labelledby`/`aria-describedby` target's
+ * current text on each announcement, so there is nothing to re-wire.
+ *
+ * Positioned opposite the tag caption (`LIGHTBOX_TAG_CAPTION_CLASS` sits at
+ * the slide's bottom) so the two visible bars never overlap: this one is
+ * anchored to the top.
+ */
+export function registerMediaCaption(
+  lightbox: PhotoSwipeLightbox,
+  items: GalleryItem[],
+): void {
+  const altTexts = galleryItemAltTexts(items);
+  const captions = items.map((item) => item.caption);
+
+  lightbox.on("uiRegister", () => {
+    lightbox.pswp?.ui?.registerElement({
+      name: "gallery-media-title",
+      className: "sr-only",
+      appendTo: "root",
+      order: 6,
+      isButton: false,
+      tagName: "h2",
+      onInit: (element, pswp) => {
+        element.id = MEDIA_TITLE_ID;
+        const show = () => {
+          element.textContent = altTexts[pswp.currIndex] ?? "";
+        };
+        pswp.on("change", show);
+      },
+    });
+
+    lightbox.pswp?.ui?.registerElement({
+      name: "gallery-media-caption",
+      className: LIGHTBOX_MEDIA_CAPTION_CLASS,
+      appendTo: "root",
+      // Between preloader (7) and the tag caption (9) — see that element's
+      // own note on why the sort position is moot visually (`appendTo:
+      // "root"` targets a different container than the default controls).
+      order: 8,
+      isButton: false,
+      tagName: "p",
+      onInit: (element, pswp) => {
+        element.id = MEDIA_CAPTION_ID;
+        const show = () => {
+          const caption = captions[pswp.currIndex] ?? "";
+          element.textContent = caption;
+          // `hidden`, not an empty string alone — the same reason the tag
+          // caption does this: the element still carries padding, which would
+          // otherwise darken a strip across an uncaptioned photograph.
+          element.hidden = caption === "";
+        };
+        pswp.on("change", show);
+      },
+    });
+  });
+
+  // Set once the dialog root exists. `afterInit` is the same event
+  // `openGalleryViewer` itself awaits, and it fires after `uiRegister`, so
+  // both ids above are already on the page by the time this runs.
+  lightbox.on("afterInit", () => {
+    const element = lightbox.pswp?.element;
+    if (!element) return;
+    element.setAttribute("aria-labelledby", MEDIA_TITLE_ID);
+    element.setAttribute("aria-describedby", MEDIA_CAPTION_ID);
+    // PhotoSwipe sets role="dialog" itself but not this — and the mockup
+    // this follows (docs/design/lightbox.html) has it on the same element.
+    element.setAttribute("aria-modal", "true");
+  });
+}
+
+/**
  * Opens the viewer at `index` and hands back the instance.
  *
  * A fresh instance per activation. Reusing one would mean keeping its
@@ -395,6 +522,9 @@ export async function openGalleryViewer(
   // Also before `loadAndOpen`: `uiRegister` is dispatched while PhotoSwipe
   // assembles its controls, which happens inside the open.
   registerTagCaption(lightbox, galleryTagCaptions(items));
+  // The photograph's description and caption, plus the dialog's
+  // aria-labelledby/aria-describedby wiring (ugcportal-gwr).
+  registerMediaCaption(lightbox, items);
 
   // Registered before `loadAndOpen`, because `afterInit` is dispatched from a
   // microtask continuation that a later `.on()` would already have missed.

@@ -1,4 +1,9 @@
-import { MEDIA_TAGS_FIELD, MEDIA_UPLOAD_PATH } from "@/lib/routes";
+import {
+  MEDIA_ALT_TEXT_FIELD,
+  MEDIA_CAPTION_FIELD,
+  MEDIA_TAGS_FIELD,
+  MEDIA_UPLOAD_PATH,
+} from "@/lib/routes";
 
 import type { UploadResponseSummary } from "./outcomes";
 
@@ -148,6 +153,14 @@ export type UploadRequest = {
    * no-tags path changed shape.
    */
   tags?: readonly string[];
+  /**
+   * Alt text and caption for this file (ugcportal-gwr). Both optional at this
+   * layer — the server does not require `altText` at upload, only at publish
+   * (POST /api/media/[id]/publish) — and an absent or empty value sends no
+   * part at all, the same "no-op path is unchanged" treatment `tags` gets.
+   */
+  altText?: string;
+  caption?: string;
   onProgress?: (progress: UploadProgress) => void;
   signal?: AbortSignal;
 };
@@ -187,7 +200,7 @@ function parseJson(text: string): unknown {
 }
 
 export function uploadFile(
-  { file, tags, onProgress, signal }: UploadRequest,
+  { file, tags, altText, caption, onProgress, signal }: UploadRequest,
   createRequest: XhrFactory = () => new XMLHttpRequest(),
 ): Promise<UploadResponseSummary> {
   return new Promise((resolve, reject) => {
@@ -218,6 +231,15 @@ export function uploadFile(
     form.append(UPLOAD_FIELD_NAME, file, file.name);
     for (const tag of tags ?? []) {
       form.append(MEDIA_TAGS_FIELD, tag);
+    }
+    // Same reasoning as tags: appended after the file part, and omitted
+    // entirely rather than sent empty, so an untouched caption field makes
+    // literally the same request an upload always made.
+    if (altText !== undefined && altText !== "") {
+      form.append(MEDIA_ALT_TEXT_FIELD, altText);
+    }
+    if (caption !== undefined && caption !== "") {
+      form.append(MEDIA_CAPTION_FIELD, caption);
     }
 
     const xhr = createRequest();

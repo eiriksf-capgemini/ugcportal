@@ -25,13 +25,17 @@ import {
 export {
   ACCEPTED_MIME_TYPES,
   LONE_SURROGATE,
+  MAX_ALT_TEXT_LENGTH,
+  MAX_CAPTION_LENGTH,
   MAX_SIZE_BYTES,
   UNSAFE_TEXT_CHARS,
   hasUnsafeText,
   kindForDeclaredType,
+  validateAltText,
+  validateCaption,
   validateUpload,
 } from "@/lib/media-rules";
-export type { UploadValidationResult } from "@/lib/media-rules";
+export type { TextFieldValidation, UploadValidationResult } from "@/lib/media-rules";
 
 // Upper bound for the whole multipart request, used to reject oversized
 // uploads from the Content-Length header before buffering the body.

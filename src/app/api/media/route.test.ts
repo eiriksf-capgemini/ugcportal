@@ -3,6 +3,8 @@ import sharp from "sharp";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  MAX_ALT_TEXT_LENGTH,
+  MAX_CAPTION_LENGTH,
   MAX_IMAGE_UPLOAD_BYTES,
   MAX_ORIGINAL_NAME_LENGTH,
   MAX_UPLOAD_BYTES,
@@ -151,6 +153,12 @@ function selectedRow(overrides: Record<string, unknown> = {}) {
     mimeType: "image/png",
     sizeBytes: 1234,
     originalName: "photo.png",
+    // Alt text and caption (ugcportal-gwr). Null by default — the ordinary
+    // state for a fresh upload that supplied neither — and part of the owner
+    // projection for the same reason `tags` is: the select really does
+    // return them.
+    altText: null,
+    caption: null,
     createdAt: new Date("2026-09-24T10:00:00Z"),
     // Owner's own view: unpublished by default, and still listed. See the
     // regression test at the bottom of the GET block (ugcportal-r1d).
@@ -169,7 +177,13 @@ function selectedRow(overrides: Record<string, unknown> = {}) {
  * at the first PART_HEADER_PEEK_BYTES, and a field ahead of it pushes the
  * declaration out of that window (ugcportal-05b).
  */
-function buildRequest(file: File | null, tags: readonly string[] = []) {
+function buildRequest(
+  file: File | null,
+  tags: readonly string[] = [],
+  /** Alt text and caption (ugcportal-gwr), appended after the file and the
+   * tags for the same ordering reason both already follow it. */
+  fields: { altText?: string; caption?: string } = {},
+) {
   const formData = new FormData();
   if (file) {
     formData.set("file", file);
@@ -177,6 +191,8 @@ function buildRequest(file: File | null, tags: readonly string[] = []) {
   for (const tag of tags) {
     formData.append("tags", tag);
   }
+  if (fields.altText !== undefined) formData.set("altText", fields.altText);
+  if (fields.caption !== undefined) formData.set("caption", fields.caption);
   return new Request("http://localhost/api/media", {
     method: "POST",
     body: formData,
@@ -1419,7 +1435,12 @@ describe("POST /api/media — upload memory (ugcportal-05b)", () => {
 
     const response = await POST(
       formRequest({
-        fields: [["caption", "c".repeat(100 * 1024)]],
+        // An unrecognised field name, deliberately — not "caption": since
+        // ugcportal-gwr, the route reads and length-checks that one
+        // (MAX_CAPTION_LENGTH), and a 100 KB value would now be refused by
+        // that check with a 400 before ever reaching the stream-budget
+        // behaviour this test exists to prove.
+        fields: [["unrelated-note", "c".repeat(100 * 1024)]],
         payloadBytes: MAX_IMAGE_UPLOAD_BYTES,
       }),
     );
@@ -2138,5 +2159,121 @@ describe("POST /api/media — subject tags", () => {
 
     expect(response.status).toBe(400);
     expect(mediaCreateMock).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Alt text and caption at upload time (ugcportal-gwr).
+ *
+ * NOT required here — see the publish route's own tests for the K1 gate that
+ * actually enforces "required to publish". What this route refuses is a
+ * value that is present and malformed (too long, or carrying a bidi
+ * override), the same "fails the whole upload rather than being silently
+ * dropped" treatment the subject-tags block above already covers, and for
+ * the same reason.
+ */
+describe("POST /api/media — alt text and caption", () => {
+  const RTL_OVERRIDE = String.fromCodePoint(0x202e);
+
+  function imageFile() {
+    return new File([REAL_PNG], "photo.png", { type: "image/png" });
+  }
+
+  beforeEach(() => {
+    authMock.mockResolvedValue({ user: { id: "user-1" } });
+    s3SendMock.mockResolvedValue({});
+    mediaCreateMock.mockImplementation(async () => selectedRow());
+  });
+
+  it("stores the alt text and caption it was sent", async () => {
+    const response = await POST(
+      buildRequest(imageFile(), [], {
+        altText: "A fox crossing a snowy field at dawn",
+        caption: "Shot on a walk before sunrise.",
+      }),
+    );
+
+    expect(response.status).toBe(201);
+    expect(mediaCreateMock.mock.calls[0][0].data.altText).toBe(
+      "A fox crossing a snowy field at dawn",
+    );
+    expect(mediaCreateMock.mock.calls[0][0].data.caption).toBe(
+      "Shot on a walk before sunrise.",
+    );
+  });
+
+  it("uploads with neither field exactly as it always did, storing null rather than empty strings", async () => {
+    const response = await POST(buildRequest(imageFile()));
+
+    expect(response.status).toBe(201);
+    expect(mediaCreateMock.mock.calls[0][0].data.altText).toBeNull();
+    expect(mediaCreateMock.mock.calls[0][0].data.caption).toBeNull();
+  });
+
+  it("accepts alt text at exactly the length limit (125) and rejects one character more (K2 boundary)", async () => {
+    const atLimit = "a".repeat(MAX_ALT_TEXT_LENGTH);
+    const overLimit = "a".repeat(MAX_ALT_TEXT_LENGTH + 1);
+
+    const ok = await POST(buildRequest(imageFile(), [], { altText: atLimit }));
+    expect(ok.status).toBe(201);
+    expect(mediaCreateMock.mock.calls[0][0].data.altText).toBe(atLimit);
+
+    mediaCreateMock.mockClear();
+    const refused = await POST(
+      buildRequest(imageFile(), [], { altText: overLimit }),
+    );
+    expect(refused.status).toBe(400);
+    expect(mediaCreateMock).not.toHaveBeenCalled();
+  });
+
+  it("accepts alt text one character below the limit too (124)", async () => {
+    const belowLimit = "a".repeat(MAX_ALT_TEXT_LENGTH - 1);
+    const response = await POST(
+      buildRequest(imageFile(), [], { altText: belowLimit }),
+    );
+    expect(response.status).toBe(201);
+    expect(mediaCreateMock.mock.calls[0][0].data.altText).toBe(belowLimit);
+  });
+
+  it("refuses a caption over its own, longer, limit", async () => {
+    const response = await POST(
+      buildRequest(imageFile(), [], {
+        caption: "c".repeat(MAX_CAPTION_LENGTH + 1),
+      }),
+    );
+    expect(response.status).toBe(400);
+    expect(mediaCreateMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses alt text carrying a bidi override, before any watermarking or storage", async () => {
+    const response = await POST(
+      buildRequest(imageFile(), [], {
+        altText: `A fox${RTL_OVERRIDE} in a field`,
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    expect(s3SendMock).not.toHaveBeenCalled();
+    expect(mediaCreateMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses a caption carrying a bidi override the same way", async () => {
+    const response = await POST(
+      buildRequest(imageFile(), [], {
+        caption: `Caught${RTL_OVERRIDE} at dawn`,
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    expect(mediaCreateMock).not.toHaveBeenCalled();
+  });
+
+  it("treats whitespace-only alt text as not supplied, rather than storing blank text", async () => {
+    const response = await POST(
+      buildRequest(imageFile(), [], { altText: "   " }),
+    );
+
+    expect(response.status).toBe(201);
+    expect(mediaCreateMock.mock.calls[0][0].data.altText).toBeNull();
   });
 });
