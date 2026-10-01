@@ -52,10 +52,19 @@ const mockListing = vi.hoisted(() => ({
           nextCursor: string | null;
         };
       },
+  // A SEPARATE flag rather than folding "throws" into `current`'s union:
+  // throwing is not a value `listPublicMedia` can return, so it has no
+  // business being a case of the type that describes what it DOES return.
+  throws: false,
 }));
 
 vi.mock("@/lib/public-media", () => ({
-  listPublicMedia: vi.fn(async () => mockListing.current),
+  listPublicMedia: vi.fn(async () => {
+    if (mockListing.throws) {
+      throw new Error("listPublicMedia threw (simulated)");
+    }
+    return mockListing.current;
+  }),
   publicMediaListingUrl: () => "http://listing.internal/api/public/media",
 }));
 
@@ -67,9 +76,11 @@ async function renderHome(): Promise<string> {
 
 afterEach(() => {
   vi.restoreAllMocks();
-  // So a test that swaps `current` (K3 below) cannot leak into whichever
-  // test runs after it — every test starts from the same default answer.
+  // So a test that swaps `current` (K3 below) or sets `throws` (the thrown-
+  // failure test below) cannot leak into whichever test runs after it —
+  // every test starts from the same default answer.
   mockListing.current = FAILED_LISTING;
+  mockListing.throws = false;
 });
 
 describe("K1/K4 — a failed listing never renders as an empty gallery", () => {
@@ -87,6 +98,27 @@ describe("K1/K4 — a failed listing never renders as an empty gallery", () => {
 
     expect(markup).toContain('data-gallery-state="error"');
     expect(markup).not.toContain('data-gallery-state="empty"');
+  });
+});
+
+describe("K1/K4 — a THROWN failure is treated the same as ok: false", () => {
+  /**
+   * `listPublicMedia` can fail by throwing outright (a dropped database
+   * connection, say) rather than ever returning an `ok: false` result — see
+   * that function's own comment in src/lib/public-media.ts. From this page's
+   * point of view that must be the SAME failure as `ok: false`: still no
+   * "genuinely empty" claim, still the distinguishable error state, still no
+   * uncaught rejection reaching Next's generic error boundary.
+   */
+  it("renders GalleryUnavailable rather than crashing or claiming emptiness", async () => {
+    mockListing.throws = true;
+
+    const markup = await renderHome();
+
+    expect(markup).toContain('data-gallery-state="error"');
+    expect(markup).not.toContain('data-gallery-state="empty"');
+    expect(markup).not.toContain("the gallery is genuinely empty");
+    expect(markup).not.toContain("Nothing is published yet.");
   });
 });
 

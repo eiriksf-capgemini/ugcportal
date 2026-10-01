@@ -189,6 +189,15 @@ beforeEach(() => {
   sequence = 0;
   authMock.mockResolvedValue(null);
   seed([]);
+  // listPublicMedia now logs a malformed cursor's `ok: false` through to
+  // console.error, throttled (ugcportal-0dh) — real behaviour this suite
+  // should not have to opt out of case by case. Several tests below
+  // (caching, the malformed-cursor loop) deliberately exercise that exact
+  // path; without this, their otherwise-green runs print real
+  // "[gallery] public media listing failed" lines to test stderr, which is
+  // noise this file never asked for and that can mask a genuinely
+  // unexpected error in CI output.
+  vi.spyOn(console, "error").mockImplementation(() => {});
 });
 
 describe("GET /api/public/media — visibility (K1)", () => {

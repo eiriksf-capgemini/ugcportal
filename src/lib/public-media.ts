@@ -68,8 +68,28 @@ export const LISTING_FAILURE_LOG_INTERVAL_MS = 10_000;
 let listingFailureLogLastAt = 0;
 let listingFailureLogSuppressed = 0;
 
-/** Logs a failed public listing, throttled per the comment above. */
-function logFailedPublicListing(result: { status: number; error: string }): void {
+/**
+ * The real `ok: false` shape `listMedia` can return, reused rather than
+ * re-typed. An earlier version of {@link logFailedPublicListing} declared its
+ * own `{ status: number; error: string }` parameter type instead of this, so
+ * a future change to the real branch's shape could drift from what this
+ * function logs with no compiler error to catch it.
+ */
+type PublicMediaFailure = Extract<PublicMediaResult, { ok: false }>;
+
+/**
+ * Logs a failed public listing, throttled per the comment above.
+ *
+ * Two shapes, not one. `PublicMediaFailure` is `listMedia` REPORTING a
+ * failure (today, only a malformed `?cursor=`) — it returned normally, with
+ * `ok: false`. `{ threw: true; error }` is the other way this can fail: the
+ * query itself throwing (a dropped database connection, say) rather than
+ * answering at all. There is no existing type for that case, because it
+ * never produces a `PublicMediaResult` — the function never returns.
+ */
+function logFailedPublicListing(
+  detail: PublicMediaFailure | { threw: true; error: string },
+): void {
   const now = Date.now();
   if (now - listingFailureLogLastAt < LISTING_FAILURE_LOG_INTERVAL_MS) {
     listingFailureLogSuppressed += 1;
@@ -79,8 +99,7 @@ function logFailedPublicListing(result: { status: number; error: string }): void
   listingFailureLogLastAt = now;
   listingFailureLogSuppressed = 0;
   console.error("[gallery] public media listing failed", {
-    status: result.status,
-    error: result.error,
+    ...detail,
     // Present only when this line's own window actually swallowed others —
     // an absent field reads as "nothing was suppressed" without a `0` that
     // looks the same as a count nobody bothered to track.
@@ -103,15 +122,32 @@ function logFailedPublicListing(result: { status: number; error: string }): void
  * warns about, except with a log line instead of a check: a future third
  * caller, or a changed log shape, needs to remember to update every copy
  * rather than the one place that produces the event.
+ *
+ * Logs AND rethrows when `listMedia` itself throws, rather than only
+ * covering the `ok: false` contract. The bead this exists for (ugcportal-0dh)
+ * is about a failing public feed being indistinguishable from an empty one,
+ * "from both sides" — a dropped database connection is just as much a
+ * failing feed as a malformed cursor, and it is the more serious of the two.
+ * Rethrowing rather than swallowing is deliberate: this function reports what
+ * happened, it does not decide how a caller recovers. `src/app/page.tsx`
+ * catches it and renders `GalleryUnavailable`, the same as `ok: false`; the
+ * route handler does not catch it, and Next's own route-handler error
+ * handling still answers a 500 — unchanged from before this function logged
+ * anything, except that now the attempt is on record.
  */
 export async function listPublicMedia(
   requestUrl: string,
 ): Promise<PublicMediaResult> {
-  const result = await listMedia(
-    requestUrl,
-    PUBLIC_MEDIA_SCOPE,
-    MEDIA_ANONYMOUS_SELECT,
-  );
+  let result: PublicMediaResult;
+  try {
+    result = await listMedia(requestUrl, PUBLIC_MEDIA_SCOPE, MEDIA_ANONYMOUS_SELECT);
+  } catch (error) {
+    logFailedPublicListing({
+      threw: true,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
+  }
   if (!result.ok) {
     logFailedPublicListing(result);
   }

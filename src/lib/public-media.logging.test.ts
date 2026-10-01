@@ -101,6 +101,51 @@ describe("throttles repeated failures (ugcportal-0dh round 2: unauthenticated, u
     await listPublicMedia(BAD_CURSOR_URL);
 
     const logged = errorSpy.mock.calls[0][1] as Record<string, unknown>;
-    expect(Object.keys(logged).sort()).toEqual(["error", "status"]);
+    // `ok: false` rides along because the real `listMedia` result is logged
+    // directly rather than re-typed into a narrower shape (see
+    // PublicMediaFailure's own comment) — it doubles as a discriminator
+    // against the `threw: true` shape below, so the two failure modes read
+    // apart in a log search rather than looking identical.
+    expect(Object.keys(logged).sort()).toEqual(["error", "ok", "status"]);
+  });
+});
+
+describe("logs (and rethrows) when the query itself throws, not just ok: false", () => {
+  /**
+   * No cursor on this URL, unlike `BAD_CURSOR_URL` above — so `listMedia`
+   * passes `decodeMediaCursor`'s guard and reaches a real
+   * `prisma.media.findMany` call, against a database this test deliberately
+   * never seeds or migrates (no `createTemporaryDatabase()`/
+   * `applyMigrations()`, unlike src/app/page.test.tsx). That query throwing
+   * on its own IS the fixture: it is `listMedia` failing by throwing rather
+   * than by answering `ok: false`, which is the one path
+   * src/app/page.tsx's own try/catch exists to cover.
+   */
+  const NO_CURSOR_URL = "http://listing.internal/api/public/media";
+
+  it("logs the thrown error and rethrows it to the caller", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { listPublicMedia } = await freshListPublicMedia();
+
+    await expect(listPublicMedia(NO_CURSOR_URL)).rejects.toThrow();
+
+    expect(errorSpy).toHaveBeenCalledWith(
+      "[gallery] public media listing failed",
+      expect.objectContaining({ threw: true, error: expect.any(String) }),
+    );
+  });
+
+  it("shares the SAME throttle as the ok: false case", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { listPublicMedia } = await freshListPublicMedia();
+
+    // One of each, back to back: an operator mid-incident does not care
+    // which shape of failure is making the noise, and should not get twice
+    // the budget by alternating between them.
+    await expect(listPublicMedia(NO_CURSOR_URL)).rejects.toThrow();
+    const result = await listPublicMedia(BAD_CURSOR_URL);
+
+    expect(result.ok).toBe(false);
+    expect(errorSpy).toHaveBeenCalledTimes(1);
   });
 });
