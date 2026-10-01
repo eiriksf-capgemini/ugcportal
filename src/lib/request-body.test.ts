@@ -326,30 +326,51 @@ describe("readCappedFormDataFrom — stalls and metered reads", () => {
   it("does not fire on a body that is merely slow", async () => {
     // An idle timeout, not a deadline: every chunk resets it, so a large
     // upload on a bad connection is unaffected however long it takes in
-    // total. Six chunks at 15 ms is 90 ms of wall clock against a 40 ms
-    // idle budget.
-    const boundaryTail = `\r\n--${BOUNDARY}--\r\n`;
-    const pieces = [partHeader(), "AA", "BB", "CC", "DD", boundaryTail];
-    let index = 0;
-    const slow = new ReadableStream<Uint8Array>({
-      async pull(controller) {
-        if (index >= pieces.length) {
-          controller.close();
-          return;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 15));
-        controller.enqueue(new TextEncoder().encode(pieces[index++]));
-      },
-    });
+    // total. Fake timers make the 15 ms-per-chunk / 40 ms-idle-budget
+    // relationship an exact, controlled fact instead of a wall-clock margin
+    // that a busy test machine (72 files competing for the event loop) can
+    // eat — nothing here waits on the real clock, so nothing here can be
+    // slowed down by load. Widening the margin would not fix that; it would
+    // just raise the bar the machine has to clear.
+    vi.useFakeTimers();
+    try {
+      const boundaryTail = `\r\n--${BOUNDARY}--\r\n`;
+      const pieces = [partHeader(), "AA", "BB", "CC", "DD", boundaryTail];
+      let index = 0;
+      const slow = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (index >= pieces.length) {
+            controller.close();
+            return;
+          }
+          return new Promise<void>((resolve) => {
+            setTimeout(() => {
+              controller.enqueue(new TextEncoder().encode(pieces[index++]));
+              resolve();
+            }, 15);
+          });
+        },
+      });
 
-    const result = await readCappedFormDataFrom(
-      request,
-      slow,
-      10 * 1024 * 1024,
-      { stallTimeoutMs: 40 },
-    );
+      const resultPromise = readCappedFormDataFrom(
+        request,
+        slow,
+        10 * 1024 * 1024,
+        { stallTimeoutMs: 40 },
+      );
 
-    expect(result.ok).toBe(true);
+      // Advance past every chunk's 15 ms delay — each one well inside the
+      // 40 ms idle budget — in virtual lockstep rather than hoping the real
+      // clock keeps pace.
+      for (let chunk = 0; chunk < pieces.length; chunk += 1) {
+        await vi.advanceTimersByTimeAsync(15);
+      }
+
+      const result = await resultPromise;
+      expect(result.ok).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("tears the source down on a stall rather than leaving it locked", async () => {
