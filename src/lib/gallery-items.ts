@@ -339,6 +339,24 @@ export function galleryItemLabel(item: GalleryItem, position: number): string {
  * net is kept anyway. Capitalized there and not on the real value, because the
  * placeholder is a phrase this function builds in lower case ("photograph 12,
  * published...") and real alt text is not this function's to re-case.
+ *
+ * `position` DISAMBIGUATES ONLY ON THE FALLBACK BRANCH, and that asymmetry is
+ * deliberate rather than a gap this function should close (review round 1,
+ * finding 2). The placeholder needed it because the SAME synthetic string
+ * (a position and a date) was otherwise handed to every item in a batch, with
+ * nothing else to tell them apart. Real alt text does not have that problem
+ * in the same way — it is the uploader's own words — but it is not immune
+ * to it either: this product's upload form applies one alt text to an entire
+ * batch of files (ugcportal-gwr's known limitation, tracked as
+ * ugcportal-hf5u), so several items CAN legitimately carry the identical
+ * string today, and nothing here makes them unique. That is intentional: a
+ * screen-reader user hearing the same real description on three photographs
+ * from the same batch is hearing an honest (if unhelpful) fact about how
+ * they were described, not a bug this function invented — inventing a
+ * position suffix ("…, photo 2 of 3") on text someone wrote would put words
+ * in their caption that are not theirs. The actual fix for the underlying
+ * limitation is per-file alt text (hf5u), not a disambiguator bolted onto
+ * the read side.
  */
 export function galleryItemAlt(item: GalleryItem, position: number): string {
   if (item.altText !== "") return item.altText;

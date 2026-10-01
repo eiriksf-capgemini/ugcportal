@@ -97,8 +97,15 @@ export const GALLERY_TILE_IMAGE_CLASS =
  * tag chips below it, a caption is a sentence the uploader wrote, not a
  * label, so it is neither small-caps nor muted to the same degree: it needs
  * to read as a sentence someone would actually read.
+ *
+ * `whitespace-pre-line`, because a caption may legitimately contain a line
+ * break (`validateCaption` allows one — review round 1, finding 6, the
+ * caption field is a multi-row `<textarea>`). The default `normal` collapses
+ * `\n` to a single space, which would silently undo a line break the
+ * uploader typed on purpose; `pre-line` keeps it while still collapsing
+ * runs of ordinary spaces, same as any other paragraph of text.
  */
-export const GALLERY_CAPTION_CLASS = "mt-1.5 text-sm text-ink";
+export const GALLERY_CAPTION_CLASS = "mt-1.5 text-sm whitespace-pre-line text-ink";
 
 /**
  * SUBJECT TAGS (ugcportal-jsc), and the three decisions behind where they sit.

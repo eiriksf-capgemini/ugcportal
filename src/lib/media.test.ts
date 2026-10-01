@@ -341,6 +341,45 @@ describe("validateCaption", () => {
   it("rejects a bidi override", () => {
     expect(validateCaption(`Caught‮ at dawn`).ok).toBe(false);
   });
+
+  // Review round 1, finding 6: the caption field is a multi-row <textarea>
+  // and the shared denylist's control-character range includes \n and \r,
+  // so an ordinary two-line caption was refused outright before this.
+  it("accepts a line break, unlike every other field that shares this denylist", () => {
+    expect(validateCaption("Line one\nLine two")).toEqual({
+      ok: true,
+      value: "Line one\nLine two",
+    });
+    // CRLF too — a paste from a Windows editor should not be refused either.
+    expect(validateCaption("Line one\r\nLine two").ok).toBe(true);
+  });
+
+  it("still rejects every other control character and every bidi override once newlines are set aside", () => {
+    expect(validateCaption("Line one\nLine two").ok).toBe(false);
+    expect(validateCaption(`Line one\nLine two‮ bidi`).ok).toBe(false);
+  });
+
+  it("counts a line break toward the length limit — it is not stripped from the stored value", () => {
+    // The newline sits in the MIDDLE, deliberately: `.trim()` removes one at
+    // either edge (the same as any other whitespace), which would make this
+    // test pass for the wrong reason — proving trimming, not preservation.
+    const withNewline = `${"c".repeat(MAX_CAPTION_LENGTH - 1)}\nc`;
+    expect(Array.from(withNewline).length).toBe(MAX_CAPTION_LENGTH + 1);
+    expect(validateCaption(withNewline).ok).toBe(false);
+
+    const withinLimit = `${"c".repeat(MAX_CAPTION_LENGTH - 2)}\nc`;
+    expect(Array.from(withinLimit).length).toBe(MAX_CAPTION_LENGTH);
+    expect(validateCaption(withinLimit)).toEqual({
+      ok: true,
+      value: withinLimit,
+    });
+  });
+});
+
+describe("validateAltText still refuses a line break (unlike validateCaption)", () => {
+  it("rejects a newline in alt text — it is a single-line field", () => {
+    expect(validateAltText("A fox\nin a field").ok).toBe(false);
+  });
 });
 
 describe("mediaPreviewColumns", () => {

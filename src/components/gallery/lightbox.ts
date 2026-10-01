@@ -304,13 +304,38 @@ export function registerMediaCaption(
   // `openGalleryViewer` itself awaits, and it fires after `uiRegister`, so
   // both ids above are already on the page by the time this runs.
   lightbox.on("afterInit", () => {
-    const element = lightbox.pswp?.element;
-    if (!element) return;
+    const pswp = lightbox.pswp;
+    const element = pswp?.element;
+    if (!pswp || !element) return;
     element.setAttribute("aria-labelledby", MEDIA_TITLE_ID);
     element.setAttribute("aria-describedby", MEDIA_CAPTION_ID);
     // PhotoSwipe sets role="dialog" itself but not this — and the mockup
     // this follows (docs/design/lightbox.html) has it on the same element.
     element.setAttribute("aria-modal", "true");
+
+    /*
+     * Hide the slide's own content image from assistive tech (review round
+     * 1, finding 4). Unlike the GRID tile — whose `<img>` already carries
+     * `aria-hidden` because the surrounding button supplies the accessible
+     * name (see gallery.tsx) — the lightbox's full-size slide image is NOT
+     * hidden by PhotoSwipe itself: `imageElement.alt` is set from this
+     * module's own `alt` option (galleryLightboxOptions), so without this it
+     * is a second, real accessible name inside a dialog that already has one
+     * via `aria-labelledby` above — the exact "announces the same thing
+     * twice" problem the tile's own `aria-hidden` note describes, one level
+     * further in.
+     *
+     * Re-applied on every `change`, because PhotoSwipe swaps which element
+     * is `currSlide.content.element` as the visitor moves between slides —
+     * there is no single element whose `aria-hidden` could be set once.
+     * `content.element` is a documented public property (PhotoSwipe's
+     * `Content` class), not a private internal reached around the API.
+     */
+    const hideSlideImageFromAT = () => {
+      pswp.currSlide?.content.element?.setAttribute("aria-hidden", "true");
+    };
+    hideSlideImageFromAT();
+    pswp.on("change", hideSlideImageFromAT);
   });
 }
 

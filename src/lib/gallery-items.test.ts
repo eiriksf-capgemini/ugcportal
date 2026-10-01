@@ -194,6 +194,21 @@ describe("galleryItemAlt and galleryItemLabel prefer real alt text", () => {
     expect(galleryItemAlt(blank, 0)).toBe("Photograph 1, published 4 March 2026");
     expect(galleryItemAlt(blank, 0)).not.toBe("");
   });
+
+  it("does NOT disambiguate real alt text by position — two items with the same uploader-supplied text read identically (review round 1, finding 2)", () => {
+    // This is the documented, intentional asymmetry with the fallback
+    // branch above: the upload form can apply one alt text to a whole batch
+    // (ugcportal-hf5u), so two different photographs legitimately carrying
+    // the exact same real alt text is expected, not a bug this function
+    // should paper over by inventing a position suffix on text someone
+    // wrote. See galleryItemAlt's own docstring.
+    const shared = "A fox crossing a snowy field at dawn";
+    expect(galleryItemAlt(item({ altText: shared }), 0)).toBe(shared);
+    expect(galleryItemAlt(item({ altText: shared }), 1)).toBe(shared);
+    expect(galleryItemAlt(item({ altText: shared }), 0)).toBe(
+      galleryItemAlt(item({ altText: shared }), 1),
+    );
+  });
 });
 
 describe("toGalleryItems", () => {

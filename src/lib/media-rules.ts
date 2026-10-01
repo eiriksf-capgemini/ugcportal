@@ -263,11 +263,28 @@ export type TextFieldValidation =
  * gate), not something this function decides — and anything present is held
  * to the same denylist every other user-typed string in this product goes
  * through (`hasUnsafeText`, above), plus its own length cap.
+ *
+ * `allowNewlines` exists for exactly one caller: the caption field is
+ * rendered as a multi-row `<textarea>` (ugcportal-gwr, review round 1,
+ * finding 6), which invites the Enter key the way a single-line `<input>`
+ * never does. `UNSAFE_TEXT_CHARS`' control-character range includes `\n`
+ * and `\r`, so without this an ordinary two-line caption was refused
+ * outright, with a message that does not even mention line breaks. Alt text
+ * stays on the strict denylist unchanged — it is a single-line field, so a
+ * literal newline in it is already a sign something is wrong, the same
+ * reasoning `validateOriginalName` applies to a filename.
+ *
+ * The exemption is applied to a COPY used only for the denylist check, never
+ * to the value this function returns or to the length count: a caption's
+ * length is still measured with its newlines included, and what reaches the
+ * database is the string the user actually typed, not one with its line
+ * breaks silently removed.
  */
 function validateBoundedText(
   value: unknown,
   field: string,
   maxLength: number,
+  allowNewlines = false,
 ): TextFieldValidation {
   if (value === null || value === undefined) return { ok: true, value: "" };
   if (typeof value !== "string") {
@@ -281,7 +298,8 @@ function validateBoundedText(
       message: `Field '${field}' must be at most ${maxLength} characters`,
     };
   }
-  if (hasUnsafeText(trimmed)) {
+  const checked = allowNewlines ? trimmed.replace(/\r\n|\r|\n/g, "") : trimmed;
+  if (hasUnsafeText(checked)) {
     return {
       ok: false,
       message: `Field '${field}' must not contain control or text-direction characters`,
@@ -295,7 +313,12 @@ export function validateAltText(value: unknown): TextFieldValidation {
   return validateBoundedText(value, "altText", MAX_ALT_TEXT_LENGTH);
 }
 
-/** Validates the optional caption. See MAX_CAPTION_LENGTH. */
+/**
+ * Validates the optional caption. See MAX_CAPTION_LENGTH.
+ *
+ * `allowNewlines: true` — see `validateBoundedText`'s own note on why this is
+ * the one field that gets it.
+ */
 export function validateCaption(value: unknown): TextFieldValidation {
-  return validateBoundedText(value, "caption", MAX_CAPTION_LENGTH);
+  return validateBoundedText(value, "caption", MAX_CAPTION_LENGTH, true);
 }

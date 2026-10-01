@@ -115,24 +115,29 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
    * at the instant it is asked, which is what the loop needs.
    */
   const queueRef = useRef<QueueEntry[]>([]);
-  /** The File objects, which are not serialisable into reducer state. */
-  const filesRef = useRef(new Map<string, File>());
   /**
-   * The tags each queued row was added with (ugcportal-jsc).
+   * Everything a RETRY needs to re-send exactly what the original attempt
+   * sent, keyed by queue id: the `File` itself (not serialisable into reducer
+   * state), the tags it was added with (ugcportal-jsc), and its alt text and
+   * caption (ugcportal-gwr). Reading the form's CURRENT state on retry would
+   * silently re-tag, or re-describe, a file the user chose subjects and
+   * wording for minutes ago with whatever happens to be ticked or typed now —
+   * an edit to a request they are asking to repeat, not a retry of it.
    *
-   * Kept beside `filesRef` and for the same reason: RETRY has to re-send what
-   * the original attempt sent. Reading the picker's current state on retry
-   * would re-tag a file the user chose subjects for ten minutes ago with
-   * whatever happens to be ticked now — a silent edit to a request they are
-   * asking to repeat.
+   * ONE MAP, NOT THREE. An earlier version of this kept `filesRef`, `tagsRef`
+   * and `altCaptionRef` as three separate `Map`s, each written at the same
+   * four call sites (add, release-on-settle, retry-read, dismiss) — a shape a
+   * review round flagged as the same sibling-omission risk already fixed once
+   * for `filesRef` alone: a future per-file field (ugcportal-hf5u) would have
+   * paid the same four-site tax a fourth time, and a missed delete at either
+   * teardown site leaks that one map's entry while the other two are cleaned
+   * up correctly. One map means one set/get/delete per site instead of three.
    */
-  const tagsRef = useRef(new Map<string, readonly string[]>());
-  /**
-   * The alt text and caption each queued row was added with (ugcportal-gwr).
-   * Kept beside `tagsRef`, for the same retry reason.
-   */
-  const altCaptionRef = useRef(
-    new Map<string, { altText: string; caption: string }>(),
+  const queuedFilesRef = useRef(
+    new Map<
+      string,
+      { file: File; tags: readonly string[]; altText: string; caption: string }
+    >(),
   );
   const drainingRef = useRef(false);
   const inFlightRef = useRef<{ id: string; controller: AbortController } | null>(
@@ -207,12 +212,10 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
 
     const released = releasedFileId(action);
     if (released !== null) {
-      filesRef.current.delete(released);
-      // Released together: a row whose File is gone can never be retried, so
-      // keeping its tag list is a leak of exactly the same shape, just a
-      // smaller one.
-      tagsRef.current.delete(released);
-      altCaptionRef.current.delete(released);
+      // One delete, not three: a row whose File is gone can never be
+      // retried, so keeping any of its other fields is a leak of exactly the
+      // same shape, just smaller.
+      queuedFilesRef.current.delete(released);
     }
 
     setNow(Date.now());
@@ -257,6 +260,21 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
         setAltTextTouched(true);
         return;
       }
+      /*
+       * The caption gets the same gate (review round 1, finding 5) —
+       * `AltTextFields` already shows this message live, unconditionally,
+       * the moment the caption is invalid (unlike alt text's "touched"
+       * gating, there is nothing to wait for: a caption is never required,
+       * so there is no "merely empty" state this would prematurely flag).
+       * Without this check the files still queued and uploaded in full —
+       * the whole point of a CLIENT-side precheck is to refuse before
+       * paying for the request, and an invalid caption reaching the server
+       * is exactly the 413/400-after-the-upload shape this page's other
+       * prechecks exist to avoid.
+       */
+      if (captionFieldError(caption) !== null) {
+        return;
+      }
 
       /*
        * The tag NAMES for this batch, resolved from the ticked slugs at the
@@ -281,9 +299,9 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
       dispatchQueue({ type: "queued", items: queued });
 
       for (const entry of entries) {
-        filesRef.current.set(entry.id, entry.file);
-        tagsRef.current.set(entry.id, entry.tags);
-        altCaptionRef.current.set(entry.id, {
+        queuedFilesRef.current.set(entry.id, {
+          file: entry.file,
+          tags: entry.tags,
           altText: entry.altText,
           caption: entry.caption,
         });
@@ -336,8 +354,8 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
 
   const retry = useCallback(
     (id: string) => {
-      const file = filesRef.current.get(id);
-      if (file === undefined) return;
+      const queued = queuedFilesRef.current.get(id);
+      if (queued === undefined) return;
       /*
         Must be settled to be retried, read from the set rather than from
         `items` for the same reason cancel() does — and `retried` removes the
@@ -368,13 +386,12 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
       dispatchQueue({ type: "retried", id });
       // The tags, alt text and caption the FIRST attempt carried, not
       // whatever is ticked or typed now.
-      const saved = altCaptionRef.current.get(id);
       queueRef.current.push({
         id,
-        file,
-        tags: tagsRef.current.get(id) ?? [],
-        altText: saved?.altText ?? "",
-        caption: saved?.caption ?? "",
+        file: queued.file,
+        tags: queued.tags,
+        altText: queued.altText,
+        caption: queued.caption,
       });
       drain();
     },
@@ -387,9 +404,7 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
         inFlightRef.current.controller.abort();
       }
       removeFromQueue(id);
-      filesRef.current.delete(id);
-      tagsRef.current.delete(id);
-      altCaptionRef.current.delete(id);
+      queuedFilesRef.current.delete(id);
       dispatchQueue({ type: "dismissed", id });
     },
     [dispatchQueue, removeFromQueue],

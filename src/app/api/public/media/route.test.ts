@@ -360,13 +360,53 @@ describe("GET /api/public/media — no original key, no preview-less row (K3)", 
     // happened to correlate with the uploader would differ here.
     expect(a.kind).toEqual(c.kind);
     expect(b.kind).toEqual(c.kind);
-    // Every remaining field is either shared by all three or unique to one.
-    // Nothing sits in between, which is what "cannot be grouped" means.
+    // Every remaining field is either shared by all three or unique to one —
+    // EXCEPT `altText` and `caption` (ugcportal-gwr), which are deliberately
+    // not covered by this invariant and are excluded here rather than left to
+    // pass by accident of this fixture's own `row()` building a distinct
+    // string per id. See the dedicated test below for why: both are content
+    // the uploader chose to PUBLISH, the same status `tags` already has (and
+    // `tags` isn't modelled in this file's `Row`/`project` fixture at all, a
+    // pre-existing gap, not one this bead introduces or closes).
     for (const field of Object.keys(a)) {
+      if (field === "altText" || field === "caption") continue;
       const values = [a[field], b[field], c[field]];
       const distinct = new Set(values.map((v) => JSON.stringify(v))).size;
       expect([1, 3]).toContain(distinct);
     }
+  });
+
+  it("lets a batch upload's shared alt text and caption correlate rows — not a leak this feed tries to prevent (ugcportal-gwr, review round 1 finding 3)", async () => {
+    // The upload form can apply ONE alt text and caption to an entire batch
+    // of files (ugcportal-hf5u's known limitation), so two rows from the
+    // same uploader's batch legitimately carry byte-identical altText and
+    // caption while a third, unrelated row differs — exactly the "two
+    // same, one different" shape the invariant above forbids for every
+    // OTHER field. That shape is excluded there on purpose and asserted
+    // here instead, so the exemption is a stated decision rather than a
+    // silent gap in the sibling test: altText and caption are the
+    // uploader's own words, chosen to be shown next to the photograph they
+    // describe (the same status `tags` already has — see
+    // MEDIA_ANONYMOUS_SELECT's own comment on tags for the identical
+    // argument), not an infrastructure identifier this feed goes to length
+    // to decorrelate the way it does `previewKey`, `userId` or
+    // `originalName`.
+    const sameBatch = "Shot on a walk before sunrise.";
+    seed([
+      row({ id: "a", userId: "user-1", altText: "A fox", caption: sameBatch }),
+      row({ id: "b", userId: "user-1", altText: "A fox", caption: sameBatch }),
+      row({ id: "c", userId: "user-2", altText: "A heron", caption: "Different." }),
+    ]);
+
+    const body = await (await GET(request())).json();
+    const [a, b, c] = body.items.slice().sort(
+      (x: { id: string }, y: { id: string }) => (x.id < y.id ? -1 : 1),
+    );
+
+    expect(a.altText).toBe(b.altText);
+    expect(a.caption).toBe(b.caption);
+    expect(a.altText).not.toBe(c.altText);
+    expect(a.caption).not.toBe(c.caption);
   });
 
   it("withholds the uploader-supplied filename from anonymous callers", async () => {

@@ -72,6 +72,20 @@ export async function POST(_request: Request, { params }: RouteContext) {
   // whitespace-only text before this check existed; `validateAltText` already
   // refuses that going forward, but this route must not trust that every row
   // in the table was written after this check existed.
+  //
+  // READ-THEN-CHECK, not folded into the `updateMany` where-clause the way
+  // `publishedAt: null` below is (review round 1, finding 8). That one is
+  // folded in because something CAN race it — a concurrent publish or
+  // unpublish — and the predicate is how two racing writes agree on a
+  // winner. Nothing today can race THIS check: `altText` is set once, at
+  // upload, and never cleared afterwards (no route writes it null — the
+  // rename endpoint only touches `originalName`), so there is no concurrent
+  // writer for a `where: { altText: { not: null } }` clause to defend
+  // against yet. The day a second writer can null it out (an edit surface,
+  // say), this needs the same treatment `previewId`'s repair logic above
+  // got — but adding it now, against nothing, would be exactly the kind of
+  // check this file's own comments elsewhere warn against: one that reads as
+  // a defence and is not exercised by anything.
   if (access.media.altText === null || access.media.altText.trim() === "") {
     return NextResponse.json(
       {

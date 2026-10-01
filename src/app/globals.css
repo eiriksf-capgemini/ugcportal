@@ -390,26 +390,42 @@
 /*
  * The photograph's caption on the open slide (ugcportal-gwr).
  *
- * Anchored at the TOP of the slide, deliberately opposite
- * `.pswp__gallery-tags`'s bottom position, so the two bars this viewer draws
- * never overlap on the same photograph.
+ * `top: 60px`, NOT `top: 0` (review round 1, finding 7). PhotoSwipe's own
+ * `.pswp__top-bar` (photoswipe/dist/photoswipe.css) is a `position: absolute;
+ * top: 0; height: 60px` band carrying the counter, zoom and close buttons, at
+ * the SAME `z-index: 10` this element uses. A `top: 0` caption of any real
+ * length paints text directly behind those controls — `pointer-events: none`
+ * keeps them clickable, but not legible. Sitting below the full height of
+ * that band is what actually avoids the overlap, rather than guessing at
+ * which half of it the buttons occupy (`justify-content: flex-end` clusters
+ * them to the right, but a centred caption spans the full width regardless).
+ * If PhotoSwipe ever changes that constant this drifts; there is no public
+ * API to read it from, so the number is pinned here instead.
+ *
+ * Still deliberately opposite `.pswp__gallery-tags`'s bottom position, so the
+ * two bars this viewer draws never overlap each other on the same
+ * photograph.
  *
  * Regular case and weight, unlike the tag caption's small-caps labels: this is
  * a sentence the uploader wrote, not a set of short labels, and should read as
- * a sentence.
+ * a sentence. `white-space: pre-line` for the same reason
+ * `GALLERY_CAPTION_CLASS` has it: `validateCaption` allows a line break
+ * (review round 1, finding 6), and the default `normal` would silently
+ * collapse it back into a space.
  */
 .pswp__media-caption {
   position: absolute;
-  top: 0;
+  top: 60px;
   left: 0;
   right: 0;
   z-index: 10;
   margin: 0;
-  padding: calc(1rem + env(safe-area-inset-top)) 1.25rem 1rem;
+  padding: 0.75rem 1.25rem 1rem;
   color: var(--color-ink-muted);
   font-size: 0.875rem;
   line-height: 1.25rem;
   text-align: center;
+  white-space: pre-line;
   pointer-events: none;
 }
 
