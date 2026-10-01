@@ -358,6 +358,41 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
     return () => clearInterval(ticker);
   }, [throttled]);
 
+  /*
+    Swallows dragover/drop anywhere on the DOCUMENT, for the lifetime of this
+    page (ugcportal-juo).
+
+    The drop zone's own onDragOver/onDrop below already preventDefault, but
+    only for drops that land ON the zone. The zone is a few hundred pixels
+    tall on a page that is full height, so a drop a few pixels outside it is
+    ordinary, not a rare edge case -- and without this, THAT drop hits the
+    browser's default handling: navigate to the dropped file, which replaces
+    the entire page and destroys the queue, including anything mid-upload.
+
+    This only has to make a miss inert, not treat it as a hit (that is a
+    separate, larger decision about the page's target area -- explicitly out
+    of scope here). So these two listeners do nothing but preventDefault;
+    they never call addFiles, and the zone's own handlers above still run
+    first and keep working exactly as before -- a React synthetic listener
+    on the zone element fires before a native listener added here on
+    `document` sees the same bubbling event.
+
+    Attached with a plain useEffect with no dependencies, so it is installed
+    once on mount and removed once on unmount (K2) -- it must not outlive
+    this page and swallow a drop on whatever route is rendered next.
+  */
+  useEffect(() => {
+    const swallow = (event: DragEvent) => {
+      event.preventDefault();
+    };
+    document.addEventListener("dragover", swallow);
+    document.addEventListener("drop", swallow);
+    return () => {
+      document.removeEventListener("dragover", swallow);
+      document.removeEventListener("drop", swallow);
+    };
+  }, []);
+
   return (
     <div>
       {/*
