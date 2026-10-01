@@ -436,12 +436,19 @@ function GalleryItemTags({ item }: { item: GalleryItem }) {
   );
 }
 
+/**
+ * The centred, single-column layout shared by both whole-page states below —
+ * "nothing published" and "could not load". Named once rather than repeated
+ * on each, so a layout tweak to one (say, `py-24`) cannot silently drift from
+ * the other: the two are meant to look like siblings, only their copy and
+ * `data-gallery-state` differ.
+ */
+const GALLERY_STATE_CONTAINER_CLASS =
+  "mx-auto flex w-full max-w-6xl flex-1 flex-col justify-center px-4 py-24 sm:px-6";
+
 function GalleryEmpty() {
   return (
-    <div
-      className="mx-auto flex w-full max-w-6xl flex-1 flex-col justify-center px-4 py-24 sm:px-6"
-      data-gallery-state="empty"
-    >
+    <div className={GALLERY_STATE_CONTAINER_CLASS} data-gallery-state="empty">
       <h1 className="max-w-2xl text-2xl leading-tight font-medium tracking-tight text-balance text-foreground sm:text-3xl">
         Nothing is published yet.
       </h1>
@@ -472,10 +479,7 @@ function GalleryEmpty() {
  */
 export function GalleryUnavailable() {
   return (
-    <div
-      className="mx-auto flex w-full max-w-6xl flex-1 flex-col justify-center px-4 py-24 sm:px-6"
-      data-gallery-state="error"
-    >
+    <div className={GALLERY_STATE_CONTAINER_CLASS} data-gallery-state="error">
       <h1 className="max-w-2xl text-2xl leading-tight font-medium tracking-tight text-balance text-foreground sm:text-3xl">
         The gallery could not be loaded.
       </h1>
