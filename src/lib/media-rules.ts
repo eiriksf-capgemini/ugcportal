@@ -305,7 +305,21 @@ function validateBoundedText(
   }
   const trimmed = value.trim();
   if (trimmed === "") return { ok: true, value: "" };
-  if (Array.from(trimmed).length > maxLength) {
+  /*
+   * `trimmed.length` (UTF-16 code UNITS) first, as a cheap short-circuit
+   * (review round 4 finding 9): every code POINT is one or two code units,
+   * so the code-point count can never exceed it — meaning whenever the
+   * code-unit count is already within bound, the code-point count provably
+   * is too, with no need to build the full `Array.from` array to find out.
+   * `sanitizedMediaText` (src/lib/gallery-items.ts) calls this once per
+   * field per row on every gallery read, and the ordinary case (a caption
+   * well under 500 code points) never allocates at all now. The precise,
+   * surrogate-pair-aware count is still computed, exactly as before, on the
+   * one path where it can actually change the answer: a code-unit count
+   * over the limit that a run of astral characters (two units, one point
+   * each) might still bring back under it.
+   */
+  if (trimmed.length > maxLength && Array.from(trimmed).length > maxLength) {
     return {
       ok: false,
       message: `Field '${field}' must be at most ${maxLength} characters`,

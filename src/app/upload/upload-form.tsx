@@ -95,22 +95,21 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
   const [altText, setAltText] = useState("");
   const [caption, setCaption] = useState("");
   /**
-   * Set only once `addFiles` has actually been asked to queue something and
-   * refused — not on every keystroke, which would show "Add alt text before
-   * choosing files" before the visitor has done anything at all.
-   */
-  const [altTextTouched, setAltTextTouched] = useState(false);
-  /**
-   * The filenames `addFiles` was actually checking against when it refused
-   * (review round 3 finding 4's own follow-on): the live error display below
-   * calls the identical `altTextFieldError` the gate did, with the SAME
-   * arguments, so "why this was blocked" and "what the message says" cannot
-   * disagree. Cleared alongside `altTextTouched`; `[]` the rest of the time,
-   * since there is no file list to check against before one is chosen.
+   * ONE piece of state, not two (review round 4 finding 7 — `altTextTouched`
+   * and a separate `attemptedFilenames` used to be written together on every
+   * path, which is the same "two state variables representing one fact"
+   * shape this file's own comment, a few lines below, already warns against
+   * when justifying merging `filesRef`/`tagsRef` into one `Map`). `null`
+   * means "nothing attempted yet, or the field changed since" — the state
+   * `showAltTextError` used to carry as `false`. A non-null array means
+   * `addFiles` refused with exactly those filenames, which the live error
+   * display below reads with the SAME `altTextFieldError` call the gate
+   * made, so "why this was blocked" and "what the message says" cannot
+   * disagree.
    */
   const [attemptedFilenames, setAttemptedFilenames] = useState<
-    readonly string[]
-  >([]);
+    readonly string[] | null
+  >(null);
 
   /**
    * The authoritative work queue, OUTSIDE React state on purpose.
@@ -274,7 +273,6 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
        */
       const filenames = files.map((file) => file.name);
       if (altTextFieldError(altText, filenames) !== null) {
-        setAltTextTouched(true);
         setAttemptedFilenames(filenames);
         return;
       }
@@ -476,14 +474,13 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
       <AltTextFields
         altText={altText}
         caption={caption}
-        showAltTextError={altTextTouched}
         attemptedFilenames={attemptedFilenames}
         onAltTextChange={(value) => {
           setAltText(value);
           // Typing clears the "you have to fill this in" message; it comes
           // back only if the visitor tries to add files again while it is
           // still blank or invalid.
-          if (altTextTouched) setAltTextTouched(false);
+          if (attemptedFilenames !== null) setAttemptedFilenames(null);
         }}
         onCaptionChange={setCaption}
       />
@@ -579,31 +576,29 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
  * batch-level — the same timing the tag picker already uses — rather than
  * per file.
  *
- * `showAltTextError` is a PROP, not state read inside this component, because
- * the question "has the visitor tried and failed" belongs to the thing that
- * actually tried — `addFiles` in the parent — not to a field watching its own
- * value change. A component that showed the error the moment the field was
- * merely empty would announce "required" before anyone had done anything.
+ * `attemptedFilenames` is a PROP, not state read inside this component,
+ * because the question "has the visitor tried and failed" belongs to the
+ * thing that actually tried — `addFiles` in the parent — not to a field
+ * watching its own value change. A component that showed the error the
+ * moment the field was merely empty would announce "required" before anyone
+ * had done anything. `null` means "nothing attempted yet, or the value
+ * changed since"; a (possibly empty) array means `addFiles` refused with
+ * exactly those filenames, which this component reads with the SAME
+ * `altTextFieldError` call the gate made, so "why this was blocked" and
+ * "what the message says" cannot disagree (review round 3 finding 4's own
+ * follow-on — see the state declaring this in the parent for why it has to
+ * be passed down rather than recomputed here from nothing).
  */
 function AltTextFields({
   altText,
   caption,
-  showAltTextError,
   attemptedFilenames,
   onAltTextChange,
   onCaptionChange,
 }: {
   altText: string;
   caption: string;
-  showAltTextError: boolean;
-  /**
-   * The filenames `addFiles` was checking against when it last refused —
-   * see the state declaring this in the parent for why it has to be passed
-   * down rather than recomputed here from nothing: without it, a refusal
-   * caused by the K2 filename-equality rule would show no message at all,
-   * because this component has no file list of its own to check against.
-   */
-  attemptedFilenames: readonly string[];
+  attemptedFilenames: readonly string[] | null;
   onAltTextChange: (value: string) => void;
   onCaptionChange: (value: string) => void;
 }) {
@@ -612,9 +607,10 @@ function AltTextFields({
   const captionId = useId();
   const captionErrorId = useId();
 
-  const altTextError = showAltTextError
-    ? altTextFieldError(altText, attemptedFilenames)
-    : null;
+  const altTextError =
+    attemptedFilenames !== null
+      ? altTextFieldError(altText, attemptedFilenames)
+      : null;
   const captionError = captionFieldError(caption);
 
   return (

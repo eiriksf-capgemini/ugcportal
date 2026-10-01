@@ -137,53 +137,84 @@ export function galleryTagCaptions(items: GalleryItem[]): string[] {
  * is being assembled — so this has to be attached BEFORE `loadAndOpen`, for
  * the same reason `afterInit` does.
  */
+/**
+ * One slide-indexed text element, built by hand outside React — the shared
+ * mechanics behind `registerTagCaption` and `registerMediaCaption`'s two
+ * elements (review round 4 finding 5: these three were three near-identical
+ * copies of `uiRegister` → `registerElement` → `onInit` → `show()` →
+ * `pswp.on("change", show)`, which is exactly the shape where a future
+ * PhotoSwipe-upgrade-driven fix lands on one copy and leaves the others
+ * silently stale).
+ *
+ * `change` ALONE IS ENOUGH to show the opening slide's own text too, and that
+ * is a MEASURED claim rather than an assumption carried over from the single
+ * caller this used to have. The obvious extra `show()` call here — on the
+ * theory that `change` only fires for slides after the first, so the
+ * photograph the visitor clicked would open with no text at all — is dead
+ * code in photoswipe@5.4.4: `init()` reaches `goTo()` for the opening slide
+ * after the UI has been registered, so this listener runs for it too.
+ * Verified by deleting the extra call and watching the suite: nothing
+ * failed, which is what identified it as dead, for all three elements this
+ * now drives. If a future PhotoSwipe stops dispatching `change` on open,
+ * "names the tags of the slide the visitor actually opened" in
+ * lightbox.caption.test.ts fails, because it opens at index 2.
+ */
+function registerSlideTextElement(
+  lightbox: PhotoSwipeLightbox,
+  /** The text for each slide, positionally — `texts[n]` belongs to the
+   * slide at index `n`, the same arrangement every caller already builds
+   * its array in. */
+  texts: string[],
+  options: {
+    name: string;
+    className: string;
+    /** Sort order within PhotoSwipe's own UI registry — moot visually for
+     * every caller today, since `appendTo: "root"` targets a container none
+     * of the default controls (which use `appendTo: "wrapper"`) share. */
+    order: number;
+    tagName: keyof HTMLElementTagNameMap;
+    /** Set once, on init, for a caller that needs a stable id to be the
+     * target of an `aria-labelledby`/`aria-describedby` elsewhere. */
+    id?: string;
+    /** Whether an empty string hides the element rather than merely
+     * emptying it. Every current caller's element carries its own padding,
+     * so a merely-empty one still darkens a strip across the photograph. */
+    hideWhenEmpty: boolean;
+  },
+): void {
+  lightbox.on("uiRegister", () => {
+    lightbox.pswp?.ui?.registerElement({
+      name: options.name,
+      className: options.className,
+      appendTo: "root",
+      order: options.order,
+      isButton: false,
+      tagName: options.tagName,
+      onInit: (element, pswp) => {
+        if (options.id !== undefined) element.id = options.id;
+        const show = () => {
+          const text = texts[pswp.currIndex] ?? "";
+          element.textContent = text;
+          if (options.hideWhenEmpty) element.hidden = text === "";
+        };
+        pswp.on("change", show);
+      },
+    });
+  });
+}
+
 export function registerTagCaption(
   lightbox: PhotoSwipeLightbox,
   captions: string[],
 ): void {
-  lightbox.on("uiRegister", () => {
-    lightbox.pswp?.ui?.registerElement({
-      name: "gallery-tags",
-      className: LIGHTBOX_TAG_CAPTION_CLASS,
-      appendTo: "root",
-      // Positioned at order: 9, which in photoswipe@5.4.4 (defaults:
-      // counter 5, preloader 7, arrowPrev 10, zoom 10, arrowNext 11, close 20)
-      // lands between preloader and arrowPrev in sort order. This position in
-      // the sort list is moot visually because appendTo: "root" targets a
-      // different container than the default controls, which all use
-      // appendTo: "wrapper".
-      order: 9,
-      isButton: false,
-      tagName: "p",
-      onInit: (element, pswp) => {
-        const show = () => {
-          const caption = captions[pswp.currIndex] ?? "";
-          element.textContent = caption;
-          // `hidden`, not an empty string alone: the element has padding, so
-          // an empty one still darkens a strip across the bottom of an
-          // untagged photograph.
-          element.hidden = caption === "";
-        };
-        /*
-         * `change` ALONE IS ENOUGH, and that is a measured claim rather than
-         * an assumption. The obvious extra `show()` call here — on the theory
-         * that `change` only fires for slides after the first, so the
-         * photograph the visitor clicked would open uncaptioned — is dead
-         * code in photoswipe@5.4.4: `init()` reaches `goTo()` for the opening
-         * slide after the UI has been registered, so this listener runs for
-         * it too.
-         *
-         * Verified by deleting the extra call and watching the suite: nothing
-         * failed, which is what identified it as dead. It was removed rather
-         * than kept "just in case" — an unreachable line next to a comment
-         * explaining the case it handles is a claim about behaviour that is
-         * not true. If a future PhotoSwipe stops dispatching `change` on
-         * open, "names the tags of the slide the visitor actually opened" in
-         * lightbox.caption.test.ts fails, because it opens at index 2.
-         */
-        pswp.on("change", show);
-      },
-    });
+  registerSlideTextElement(lightbox, captions, {
+    name: "gallery-tags",
+    className: LIGHTBOX_TAG_CAPTION_CLASS,
+    // See registerSlideTextElement's own note on why 9 (between preloader's
+    // 7 and arrowPrev's 10 in photoswipe@5.4.4's defaults) is moot visually.
+    order: 9,
+    tagName: "p",
+    hideWhenEmpty: true,
   });
 }
 
@@ -258,46 +289,29 @@ export function registerMediaCaption(
   const altTexts = galleryItemAltTexts(items);
   const captions = items.map((item) => item.caption);
 
-  lightbox.on("uiRegister", () => {
-    lightbox.pswp?.ui?.registerElement({
-      name: "gallery-media-title",
-      className: "sr-only",
-      appendTo: "root",
-      order: 6,
-      isButton: false,
-      tagName: "h2",
-      onInit: (element, pswp) => {
-        element.id = MEDIA_TITLE_ID;
-        const show = () => {
-          element.textContent = altTexts[pswp.currIndex] ?? "";
-        };
-        pswp.on("change", show);
-      },
-    });
+  // The title never needs `hideWhenEmpty`: `galleryItemAlt` always returns a
+  // non-empty string (a fallback description when `item.altText` itself is
+  // blank), unlike the caption, which is genuinely optional.
+  registerSlideTextElement(lightbox, altTexts, {
+    name: "gallery-media-title",
+    className: "sr-only",
+    order: 6,
+    tagName: "h2",
+    id: MEDIA_TITLE_ID,
+    hideWhenEmpty: false,
+  });
 
-    lightbox.pswp?.ui?.registerElement({
-      name: "gallery-media-caption",
-      className: LIGHTBOX_MEDIA_CAPTION_CLASS,
-      appendTo: "root",
-      // Between preloader (7) and the tag caption (9) — see that element's
-      // own note on why the sort position is moot visually (`appendTo:
-      // "root"` targets a different container than the default controls).
-      order: 8,
-      isButton: false,
-      tagName: "p",
-      onInit: (element, pswp) => {
-        element.id = MEDIA_CAPTION_ID;
-        const show = () => {
-          const caption = captions[pswp.currIndex] ?? "";
-          element.textContent = caption;
-          // `hidden`, not an empty string alone — the same reason the tag
-          // caption does this: the element still carries padding, which would
-          // otherwise darken a strip across an uncaptioned photograph.
-          element.hidden = caption === "";
-        };
-        pswp.on("change", show);
-      },
-    });
+  registerSlideTextElement(lightbox, captions, {
+    name: "gallery-media-caption",
+    className: LIGHTBOX_MEDIA_CAPTION_CLASS,
+    // Between preloader (7) and the tag caption (9) — see
+    // registerSlideTextElement's own note on why the sort position is moot
+    // visually (`appendTo: "root"` targets a different container than the
+    // default controls).
+    order: 8,
+    tagName: "p",
+    id: MEDIA_CAPTION_ID,
+    hideWhenEmpty: true,
   });
 
   // Set once the dialog root exists. `afterInit` is the same event
