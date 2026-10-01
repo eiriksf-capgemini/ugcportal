@@ -46,10 +46,17 @@ export type GalleryItem = {
   /** ISO-8601, or null when the feed sent something that was not a date. */
   publishedAt: string | null;
   /**
-   * The uploader's own description of the photograph (ugcportal-gwr), used
-   * verbatim as `<img alt>`. NEVER the empty string and NEVER a placeholder
-   * built from the item's position — see `toGalleryItem` for the one case
-   * that falls back, and why it falls back to a sentence rather than "".
+   * The uploader's own description of the photograph (ugcportal-gwr), or
+   * `""` when none was supplied or what was supplied failed sanitisation —
+   * the same "absence is the empty string" contract `caption` below has.
+   *
+   * NOT what reaches `<img alt>` directly: this field is the sanitized
+   * INPUT to that decision, and `galleryItemAlt(item, position)` is the
+   * function that turns it into the string actually rendered, falling back
+   * to a non-empty placeholder built from the item's position when this is
+   * `""`. Reading `item.altText` directly anywhere a render needs real alt
+   * text is the bug `galleryItemAlt` exists to be the one place that can't
+   * have.
    */
   altText: string;
   /**
