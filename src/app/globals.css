@@ -110,11 +110,13 @@
  * keeps the reference's literal `--petrol-700` fill with white text, which is
  * K1's exact requirement.
  *
- * Terracotta and `--ink-muted-petrol` are declared but not consumed by
- * anything in this PR (phase 1 is tokens, the global canvas, and the primary/
- * secondary button only) — see the mandate note two blocks down. They exist
- * here so "all six colours have tokens" is true starting now, not only once
- * something renders them.
+ * Terracotta is declared but not consumed by anything in this PR (phase 1 is
+ * tokens, the global canvas, and the primary/secondary button only) — see
+ * the mandate note two blocks down. It exists here so "all six colours have
+ * tokens" is true starting now, not only once something renders it.
+ * `--ink-muted-petrol` IS consumed (review round 4: this comment used to
+ * claim otherwise) — it drives `--muted-foreground` below, which several
+ * real components render directly on the page canvas.
  */
 :root {
   --petrol-900: #0b2e33;

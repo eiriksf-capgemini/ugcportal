@@ -1,5 +1,12 @@
 /* ugcportal – designtokens (referanse for DESIGN-beaden)
-   Fargene er vedtatt. Skriftvalget er et forslag og skal godkjennes av Eirik. */
+   Fargene er vedtatt. Skriftvalget er et forslag og skal godkjennes av Eirik.
+
+   Ikke en kildefil noe bygges fra: dette er skissen fargene og navnene i
+   src/app/globals.css ble vedtatt fra, kopiert inn én gang (ugcportal-rw9j).
+   Den shippede paletten, kontraktskontrollen og token-navnene lever i
+   globals.css og håndheves av src/lib/design (K1/K2); dette dokumentet
+   endres ikke når de gjør det, og er ikke ment å synkroniseres mekanisk med
+   dem — se review-round 4-notatet på PR-en for ugcportal-rw9j. */
 
 :root {
   --petrol-900: #0B2E33;   /* dyp petrol: tekst, footer, mørk base */

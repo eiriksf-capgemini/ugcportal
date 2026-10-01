@@ -34,9 +34,26 @@ import { cn } from "cn"
  *    (petrol-500 in light mode) measures 4.48:1 as TEXT on --paper, just under
  *    the 4.5:1 body text needs, so it is fine as a 3:1 non-text boundary but
  *    not as a second text colour on top of the resting one.
+ * 5. `outline-neutral` (ugcportal-rw9j review round 4) exists for exactly one
+ *    caller: src/app/upload/upload-queue-list.tsx's "Try again" button,
+ *    which sits inside the untouched bg-destructive-surface well rather than
+ *    on --background, where PETROL_OUTLINE_STYLE measures only 1.87:1.
+ *    First fixed (rounds 2-3) as an inline className override that
+ *    restated and inverted every PETROL_OUTLINE_STYLE utility at the call
+ *    site - fragile by construction, confirmed the hard way when round 3
+ *    found the first version of that override missed three of its six
+ *    utilities. A real variant means "the pre-rw9j neutral outline" is a
+ *    single word at the call site instead of a string a reviewer has to
+ *    diff against PETROL_OUTLINE_STYLE by hand; border-input is
+ *    --color-line-strong, already measured at 3:1+ against every near-black
+ *    surface including this one (control-edge-on-destructive-surface in
+ *    contrast.ts).
  */
 const PETROL_OUTLINE_STYLE =
   "border-primary bg-transparent text-primary hover:border-primary-hover hover:underline aria-expanded:border-primary-hover aria-expanded:underline"
+
+const NEUTRAL_OUTLINE_STYLE =
+  "border-input bg-transparent text-ink hover:border-input hover:bg-accent hover:text-accent-foreground hover:no-underline aria-expanded:border-input aria-expanded:bg-accent aria-expanded:no-underline"
 
 const buttonVariants = cva(
   "group/button inline-flex shrink-0 items-center justify-center rounded-lg border border-transparent bg-clip-padding text-sm font-medium whitespace-nowrap transition-all outline-none select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/80 active:not-aria-[haspopup]:translate-y-px disabled:pointer-events-none disabled:opacity-50 aria-invalid:border-destructive/75 aria-invalid:ring-3 aria-invalid:ring-destructive/80 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
@@ -49,6 +66,7 @@ const buttonVariants = cva(
         default: "bg-primary text-primary-foreground hover:bg-primary-hover",
         outline: PETROL_OUTLINE_STYLE,
         secondary: PETROL_OUTLINE_STYLE,
+        "outline-neutral": NEUTRAL_OUTLINE_STYLE,
         /*
          * text-ink, not text-foreground (ugcportal-rw9j review round 2):
          * every current ghost-button usage (src/app/upload/upload-queue-

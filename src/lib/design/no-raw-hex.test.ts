@@ -24,12 +24,18 @@
  * .ts files outside src/lib/design are NOT excluded as a category: a future
  * hex literal smuggled into, say, an email template or OG-image generator
  * would still be a K2 violation and this still has to see it.
+ *
+ * The file walker and comment stripper are shared with dual-meaning-
+ * usage.test.ts via scan-source.ts (ugcportal-rw9j review round 4) rather
+ * than duplicated here a second time.
  */
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
+
+import { isTestFile, stripComments, walkSourceFiles } from "./scan-source";
 
 const SRC_ROOT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -43,59 +49,23 @@ const SCANNED_EXTENSIONS = /\.(tsx|ts|css)$/;
 const HEX_COLOR = /#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})\b/g;
 
 const EXCLUDED_FILES = new Set([path.join(SRC_ROOT, "app", "globals.css")]);
-const EXCLUDED_DIRS = [path.join(SRC_ROOT, "lib", "design")];
+const DESIGN_LIB_DIR = path.join(SRC_ROOT, "lib", "design") + path.sep;
 
 function isExcluded(file: string): boolean {
   if (EXCLUDED_FILES.has(file)) return true;
-  if (EXCLUDED_DIRS.some((dir) => file.startsWith(dir + path.sep))) return true;
-  if (/\.(test|spec)\.(tsx?|css)$/.test(file)) return true;
+  if (file.startsWith(DESIGN_LIB_DIR)) return true;
+  if (isTestFile(file)) return true;
   return false;
-}
-
-function walk(dir: string, out: string[]): void {
-  for (const entry of readdirSync(dir)) {
-    if (entry === "node_modules" || entry.startsWith(".")) continue;
-    const full = path.join(dir, entry);
-    if (statSync(full).isDirectory()) {
-      walk(full, out);
-      continue;
-    }
-    if (full.includes(`${path.sep}generated${path.sep}`)) continue;
-    if (SCANNED_EXTENSIONS.test(entry) && !isExcluded(full)) out.push(full);
-  }
-}
-
-/**
- * Strips `//`, `/* *\/` and the CSS/JS-comment-adjacent `{/* *\/}` wrapper
- * braces are irrelevant to a text scan, so only the comment bodies need
- * removing.
- *
- * The line-comment half uses a negative lookbehind for `:` (not usage.ts's
- * `(^|[^:\w])` boundary) specifically so it does NOT require whitespace
- * before `//` to strip it - review round 1: `(^|[^:\w])` also excludes any
- * `//` immediately after a word character (digit/letter) with no separating
- * space, so e.g. `5//#abc123` left the hex literal in a genuine comment
- * un-stripped and reported as a false-positive "raw hex" finding. The
- * lookbehind only has to avoid treating a URL's `://` as a comment opener;
- * it does not need usage.ts's broader class-name-boundary logic, which this
- * file has no class names to bound.
- */
-function stripComments(source: string): string {
-  return source
-    .replace(/\/\*[\s\S]*?\*\//g, " ")
-    .replace(/(?<!:)\/\/[^\n]*/g, " ");
 }
 
 describe("no raw hex colour literals outside the tokens file", () => {
   it("finds files to scan", () => {
-    const files: string[] = [];
-    walk(SRC_ROOT, files);
+    const files = walkSourceFiles(SRC_ROOT, isExcluded, SCANNED_EXTENSIONS);
     expect(files.length).toBeGreaterThan(10);
   });
 
   it("ships no hex colour literal in a .tsx/.ts/.css file other than the tokens file", () => {
-    const files: string[] = [];
-    walk(SRC_ROOT, files);
+    const files = walkSourceFiles(SRC_ROOT, isExcluded, SCANNED_EXTENSIONS);
 
     const offenders: string[] = [];
     for (const file of files) {

@@ -76,10 +76,19 @@ export default async function UploadPage() {
       main landmark, and a second one would break the skip link.
     */
     <div className="mx-auto w-full max-w-3xl px-4 py-12 sm:px-6">
-      <h1 className="text-2xl font-medium tracking-tight text-ink sm:text-3xl">
+      {/*
+        text-foreground/text-muted-foreground, not text-ink/text-ink-muted
+        (ugcportal-rw9j review round 4): this heading and intro sit directly
+        on --background (this div has no bg-surface-* class), not inside any
+        near-black well. --color-ink/--color-ink-muted are tuned for that
+        near-black scale and measured ~1.1-1.9:1 against the new --paper
+        canvas in light mode; the semantic foreground/muted-foreground tokens
+        are the ones actually mode-aware for the page canvas.
+      */}
+      <h1 className="text-2xl font-medium tracking-tight text-foreground sm:text-3xl">
         Upload
       </h1>
-      <p className="mt-3 max-w-prose text-sm text-ink-muted">
+      <p className="mt-3 max-w-prose text-sm text-muted-foreground">
         Add images and video to your library. Each image is watermarked as it
         arrives, and only that watermarked copy is ever displayed.
       </p>

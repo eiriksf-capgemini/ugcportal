@@ -16,10 +16,26 @@
  * JSX-ancestor-aware static analysis this codebase does not have and this
  * bead is not the place to build. What it does instead: every CURRENT
  * (file, count) pairing for these four "dual-meaning" tokens has been
- * manually audited (round 2 of this bead) and is pinned below. A usage this
- * scanner has not seen before - a new file, or a changed count in an
- * existing one - fails loudly rather than shipping silently, the same
+ * manually audited (rounds 2 and 4 of this bead) and is pinned below. A
+ * usage this scanner has not seen before - a new file, or a changed count in
+ * an existing one - fails loudly rather than shipping silently, the same
  * "never just skip" contract usage.ts holds itself to for alpha utilities.
+ *
+ * Known scope limit (review round 4, NOT closed by this file): this is a
+ * literal-text scan. It sees a utility string written directly in a
+ * `className`, but it cannot see one reaching a file through component
+ * composition - `<Button variant="outline">` or
+ * `buttonVariants({ variant: "outline" })` carry no "border-primary"/
+ * "text-primary" substring of their own; those live only inside button.tsx's
+ * PETROL_OUTLINE_STYLE definition, which IS scanned (and pinned below).
+ * Every such call site in this codebase was traced by hand across rounds 2-4
+ * (see the PR's review comments) and confirmed either safe (renders on
+ * --background) or fixed (upload-queue-list.tsx's "Try again" now uses
+ * button.tsx's dedicated `outline-neutral` variant instead); this file does
+ * not re-verify that automatically, and a future PR adding a new
+ * `variant="outline"`/`"secondary"` call site inside an untouched near-black
+ * surface would not be caught here. That gap is real and is not claimed
+ * otherwise.
  *
  * To add or move a usage: audit where it actually renders (what background,
  * if any, sits behind it - --background is safe, any --card/--popover/
@@ -28,21 +44,30 @@
  * text-ink/text-ink-muted - see contrast.ts's muted-foreground-on-background
  * and ink-on-destructive-surface comments for worked examples), then update
  * AUDITED_USAGE to match. A mismatch names the exact file and token so the
- * audit is a one-line diff, not a re-hunt.
+ * audit is a one-line diff, not a re-hunt. Yes, this means an unrelated
+ * change that happens to add or remove one of these four tokens anywhere in
+ * an audited file will fail this test and ask for that one-line diff - that
+ * is the intended friction, not a defect in it: the alternative is exactly
+ * the kind of silent drift that let three real regressions through in
+ * rounds 1-2.
+ *
+ * The file walker and comment stripper are shared with no-raw-hex.test.ts
+ * via scan-source.ts (ugcportal-rw9j review round 4) rather than duplicated
+ * here a second time.
  */
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
+
+import { isTestFile, stripComments, walkSourceFiles } from "./scan-source";
 
 const SRC_ROOT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "..",
   "..",
 );
-
-const SCANNED_EXTENSIONS = /\.(tsx|ts)$/;
 
 /**
  * The four tokens whose MEANING this bead split in two (see globals.css):
@@ -66,39 +91,18 @@ const TOKEN_PATTERN = new RegExp(
   "g",
 );
 
+const DESIGN_LIB_DIR = path.join(SRC_ROOT, "lib", "design") + path.sep;
+
 /** Design-system internals (color.ts, contrast.ts, tokens.ts, usage.ts) reason about these strings as data, not as rendered UI - see no-raw-hex.test.ts's identical exclusion for the same reasoning. */
-const EXCLUDED_DIRS = [path.join(SRC_ROOT, "lib", "design")];
-
 function isExcluded(file: string): boolean {
-  if (EXCLUDED_DIRS.some((dir) => file.startsWith(dir + path.sep))) return true;
-  if (/\.(test|spec)\.(tsx?|css)$/.test(file)) return true;
+  if (file.startsWith(DESIGN_LIB_DIR)) return true;
+  if (isTestFile(file)) return true;
   return false;
-}
-
-function walk(dir: string, out: string[]): void {
-  for (const entry of readdirSync(dir)) {
-    if (entry === "node_modules" || entry.startsWith(".")) continue;
-    const full = path.join(dir, entry);
-    if (statSync(full).isDirectory()) {
-      walk(full, out);
-      continue;
-    }
-    if (full.includes(`${path.sep}generated${path.sep}`)) continue;
-    if (SCANNED_EXTENSIONS.test(entry) && !isExcluded(full)) out.push(full);
-  }
-}
-
-/** Same comment-stripping as no-raw-hex.test.ts: `//` uses a `(?<!:)` lookbehind so a `//` immediately after a word character (no separating space) still strips, without treating a URL's `://` as a comment opener. */
-function stripComments(source: string): string {
-  return source
-    .replace(/\/\*[\s\S]*?\*\//g, " ")
-    .replace(/(?<!:)\/\/[^\n]*/g, " ");
 }
 
 /** Every (file, token) count found in the current source tree. */
 function scanDualMeaningUsage(): Map<string, Partial<Record<DualMeaningToken, number>>> {
-  const files: string[] = [];
-  walk(SRC_ROOT, files);
+  const files = walkSourceFiles(SRC_ROOT, isExcluded);
 
   const found = new Map<string, Partial<Record<DualMeaningToken, number>>>();
   for (const file of files) {
@@ -118,15 +122,21 @@ function scanDualMeaningUsage(): Map<string, Partial<Record<DualMeaningToken, nu
 }
 
 /**
- * Audited round 2 of ugcportal-rw9j. Every entry below renders on
+ * Audited rounds 2 and 4 of ugcportal-rw9j. Every entry below renders on
  * --background (the page canvas, where the new meaning is correct) with one
  * documented exception: src/components/ui/button.tsx's `border-primary`/
  * `text-primary` are PETROL_OUTLINE_STYLE, shared by the `outline` and
  * `secondary` button variants - correct wherever a caller renders them on
- * --background (every current caller except one, overridden at its call
- * site - see the comment in upload-queue-list.tsx), and its own
+ * --background (every current caller except one, which now uses the
+ * dedicated `outline-neutral` variant instead - see button.tsx), and its own
  * `text-primary` in the (currently unused) `link` variant is the same token
  * for the same reason, dead code only for now.
+ *
+ * Round 4 added src/app/upload/page.tsx, upload-form.tsx and
+ * src/components/gallery/containment.ts: all three used text-ink/
+ * text-ink-muted directly on --background (safe before this bead, wrong
+ * once --background stopped being the near-black surface scale) and were
+ * switched to the semantic tokens this file tracks.
  */
 const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> = {
   "src/app/auth/error/page.tsx": { "text-foreground": 1, "text-muted-foreground": 1 },
@@ -134,6 +144,8 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
   "src/app/admin/settings/rights/decision-form.tsx": { "text-muted-foreground": 3 },
   "src/app/admin/settings/users/page.tsx": { "text-muted-foreground": 4, "text-primary": 1 },
   "src/app/admin/settings/instagram/page.tsx": { "text-muted-foreground": 3, "text-primary": 1 },
+  "src/app/upload/page.tsx": { "text-foreground": 1, "text-muted-foreground": 1 },
+  "src/app/upload/upload-form.tsx": { "text-foreground": 2, "text-muted-foreground": 5 },
   "src/components/upload-link.tsx": { "text-foreground": 1, "text-primary": 1 },
   "src/components/ui/button.tsx": { "border-primary": 1, "text-primary": 2 },
   "src/components/app-shell.tsx": {
@@ -146,13 +158,13 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
     "text-foreground": 1,
     "text-muted-foreground": 1,
   },
+  "src/components/gallery/containment.ts": { "text-muted-foreground": 1 },
   "src/components/auth-status.tsx": { "text-muted-foreground": 1 },
 };
 
 describe("dual-meaning token usage is audited, not just found", () => {
   it("finds files to scan", () => {
-    const files: string[] = [];
-    walk(SRC_ROOT, files);
+    const files = walkSourceFiles(SRC_ROOT, isExcluded);
     expect(files.length).toBeGreaterThan(10);
   });
 

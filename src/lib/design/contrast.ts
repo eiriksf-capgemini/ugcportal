@@ -68,6 +68,27 @@ export const SURFACES = [
   "--color-scrim",
 ] as const;
 
+/**
+ * ugcportal-rw9j review round 4: the distinct, resolved-token list behind
+ * globals.css's --ring-on-old-surfaces rule (`.bg-surface-0, ... .bg-sidebar
+ * { --ring: var(--color-petrol-400); }`) - --color-surface-0..4 cover
+ * .bg-surface-0..4 directly; --color-surface-1 also covers .bg-muted/
+ * .bg-card/.bg-sidebar and --color-surface-2 also covers .bg-popover/
+ * .bg-accent/.bg-secondary (all already in this list via their shared
+ * resolved token, so no separate entries are needed for them);
+ * --color-danger-surface is .bg-destructive-surface's resolved value, the
+ * one member SURFACES above does not include. See the focus-ring-on-old-
+ * surface comment below for why this is its own list rather than SURFACES.
+ */
+const RING_OVERRIDE_SURFACES = [
+  "--color-surface-0",
+  "--color-surface-1",
+  "--color-surface-2",
+  "--color-surface-3",
+  "--color-surface-4",
+  "--color-danger-surface",
+] as const;
+
 function onEverySurface(
   idPrefix: string,
   foreground: string,
@@ -122,12 +143,19 @@ export const PAIRINGS: Pairing[] = [
    * was one of SURFACES and --primary (petrol) had one value good on all of
    * them. Now --primary has a light and a dark derivation chosen for the
    * page canvas specifically (see globals.css), and measures only 1.3-2.4:1
-   * against the untouched near-black --card/--popover surfaces in light mode
-   * - scoping this to --background is what's actually true post-rw9j, not a
-   * narrowing for its own sake. See globals.css's --ring comment for the one
-   * place that gap is real today (text-primary links on
-   * admin/settings/{rights,instagram}, which sit on --card) and why fixing it
-   * is fase 2's job.
+   * against the untouched near-black surface scale in light mode - scoping
+   * this to --background is what's actually true post-rw9j, not a narrowing
+   * for its own sake.
+   *
+   * review round 4: every real text-primary usage (admin/settings/rights,
+   * users, instagram pages) was traced and confirmed to sit on the plain
+   * page canvas, not inside any well - this codebase has no Card/Popover
+   * component and no bg-card/bg-popover usage anywhere (see globals.css's
+   * round-3 --ring comment). The focus ring is the one control that
+   * genuinely reaches the untouched near-black surfaces (the resale-rights
+   * decision form's inputs, the upload page's dropzone), fixed by the
+   * --ring-on-old-surfaces override and focus-ring-on-old-surface above -
+   * not by anything here.
    */
   {
     id: "link-on-background",
@@ -168,13 +196,29 @@ export const PAIRINGS: Pairing[] = [
    * step of the petrol scale rather than a semantic alias elsewhere in this
    * file), restoring the "every surface" coverage focus-ring-on-background
    * above gave up when --ring started tracking --primary.
+   *
+   * review round 4 (MAJOR): this used to be `...onEverySurface(...)`, i.e.
+   * SURFACES (--color-surface-0..4 plus --color-scrim). That list was built
+   * for a different question ("every surface a foreground can land on") and
+   * both omitted a real member of the --ring override - .bg-destructive-
+   * surface resolves to --color-danger-surface, not any --color-surface-N,
+   * so the override's actual effect there (measured 4.66:1 - safe, but
+   * unverified by this gate) was never checked - and included one that does
+   * not apply: no component anywhere uses a literal bg-scrim class, so
+   * --color-scrim's membership in SURFACES never corresponded to anything
+   * the --ring override actually touches. RING_OVERRIDE_SURFACES below is
+   * restated directly from globals.css's own selector list instead of reused
+   * from an unrelated enumeration, so the two cannot independently drift
+   * again the way they already had.
    */
-  ...onEverySurface(
-    "focus-ring-on-old-surface",
-    `--color-petrol-400/${RING_ALPHA_MODIFIER}`,
-    "ui",
-    "The focus indicator on a control that still lives on the near-black surface scale (the resale-rights decision form's inputs, the upload page's file dropzone, ...), via the --ring override scoped to these surface classes in globals.css.",
-  ),
+  ...RING_OVERRIDE_SURFACES.map((surface) => ({
+    id: `focus-ring-on-old-surface-${surface.replace("--color-", "")}`,
+    foreground: `--color-petrol-400/${RING_ALPHA_MODIFIER}`,
+    background: [surface],
+    requirement: "ui" as const,
+    usage:
+      "The focus indicator on a control that still lives on the near-black surface scale (the resale-rights decision form's inputs, the upload page's file dropzone, a destructive well's own controls, ...), via the --ring override scoped to these surface classes in globals.css.",
+  })),
   ...onEverySurface(
     "divider",
     "--color-line",

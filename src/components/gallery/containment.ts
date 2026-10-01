@@ -131,9 +131,18 @@ export const GALLERY_TAG_LIST_CLASS =
  * is a decision rather than an omission — see the bead's note on filtering,
  * and ugcportal-8rm for the follow-up. Styling it as interactive when it is
  * not would be the worse half of both options.
+ *
+ * text-muted-foreground, not text-ink-muted (ugcportal-rw9j review round 4):
+ * this renders directly beside the image tile on the page canvas
+ * (--background), not inside any near-black well - --color-ink-muted
+ * measured ~1.9:1 against the new --paper background in light mode, the
+ * same regression class as the /upload fixes in this same round, just on
+ * the home page itself. Caught by review, not by this PR's own axe run,
+ * because the local dev database it ran against had no tagged published
+ * items to render.
  */
 export const GALLERY_TAG_CLASS =
-  "text-[0.6875rem] leading-4 font-medium tracking-wide text-ink-muted uppercase";
+  "text-[0.6875rem] leading-4 font-medium tracking-wide text-muted-foreground uppercase";
 
 /**
  * The centred, single-column layout shared by the gallery's two whole-page

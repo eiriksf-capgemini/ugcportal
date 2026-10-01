@@ -200,35 +200,23 @@ function Failure({
           */
           <Button
             type="button"
-            variant="outline"
-            size="sm"
             /*
-              ugcportal-rw9j review round 2: this button sits inside the
-              bg-destructive-surface well above, not on --background, so the
-              petrol outline treatment (border-primary/text-primary) is wrong
-              here - border-primary measured only 1.87:1 against this well in
-              light mode, below the 3:1 a control's boundary needs.
-              Overridden back to the pre-rw9j outline treatment (border-input/
-              text-ink, hover bg-accent/text-accent-foreground) for this one
-              instance: border-input is --color-line-strong, already measured
-              at 3:1+ against this exact well (control-edge-on-destructive-
-              surface in contrast.ts). cn/tailwind-merge (see button.tsx)
-              resolves the conflicting border/text/hover utilities in this
-              className string's favour over PETROL_OUTLINE_STYLE's.
-
-              Every PETROL_OUTLINE_STYLE utility needs an explicit
-              counterpart here, not just its resting state (review round 3):
-              hover:border-input/aria-expanded:border-input/aria-expanded:no-
-              underline exist solely to cancel PETROL_OUTLINE_STYLE's
-              hover:border-primary-hover/aria-expanded:border-primary-hover/
-              aria-expanded:underline, which tailwind-merge otherwise leaves
-              standing - confirmed by running the real cn() against both
-              class strings, not just by reading them. A hover that moved
-              the border to petrol-100 while resting on border-input would
-              have been exactly the kind of "fixed in the comment, not in
-              the rendered className" gap this round exists to catch.
+              ugcportal-rw9j review round 4: `outline-neutral`, not `outline`
+              - this button sits inside the bg-destructive-surface well
+              above, not on --background, so the petrol outline treatment
+              (border-primary/text-primary) is wrong here: border-primary
+              measured only 1.87:1 against this well in light mode, below
+              the 3:1 a control's boundary needs. Rounds 2-3 fixed this with
+              an inline className override restating and inverting every
+              PETROL_OUTLINE_STYLE utility at the call site, which round 3
+              then had to re-fix when three of its six utilities turned out
+              unreverted (border/aria-expanded states tailwind-merge left
+              standing) - exactly the fragility a real variant (see
+              button.tsx) removes. See button.tsx's own comment for the
+              contrast numbers behind outline-neutral itself.
             */
-            className="border-input bg-transparent text-ink hover:border-input hover:bg-accent hover:text-accent-foreground hover:no-underline aria-expanded:border-input aria-expanded:bg-accent aria-expanded:no-underline"
+            variant="outline-neutral"
+            size="sm"
             disabled={!mayRetry(failure, now)}
             onClick={() => onRetry(item.id)}
           >
