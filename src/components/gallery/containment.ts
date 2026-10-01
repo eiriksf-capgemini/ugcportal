@@ -134,3 +134,19 @@ export const GALLERY_TAG_LIST_CLASS =
  */
 export const GALLERY_TAG_CLASS =
   "text-[0.6875rem] leading-4 font-medium tracking-wide text-ink-muted uppercase";
+
+/**
+ * The centred, single-column layout shared by the gallery's two whole-page
+ * states (ugcportal-71y's "nothing published", ugcportal-0dh's "could not
+ * load") — `GalleryEmpty` in gallery.tsx and `GalleryUnavailable` in
+ * gallery-unavailable.tsx. Named once, here rather than in either of those
+ * modules, specifically so BOTH can import a shared value without either
+ * importing the other: `GalleryEmpty` lives in a `"use client"` file and
+ * `GalleryUnavailable` deliberately does not (see that module's own
+ * docstring for why), and this file is a plain module neither of those
+ * boundaries has any reason to object to. A layout tweak to one of the two
+ * states (say, `py-24`) cannot silently drift from the other, because there
+ * is only one string to change.
+ */
+export const GALLERY_STATE_CONTAINER_CLASS =
+  "mx-auto flex w-full max-w-6xl flex-1 flex-col justify-center px-4 py-24 sm:px-6";

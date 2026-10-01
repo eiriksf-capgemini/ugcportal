@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   GALLERY_GRID_CLASS,
+  GALLERY_STATE_CONTAINER_CLASS,
   GALLERY_TAG_CLASS,
   GALLERY_TAG_LIST_CLASS,
   GALLERY_TILE_CLASS,
@@ -437,15 +438,15 @@ function GalleryItemTags({ item }: { item: GalleryItem }) {
 }
 
 /**
- * The centred, single-column layout shared by both whole-page states below —
- * "nothing published" and "could not load". Named once rather than repeated
- * on each, so a layout tweak to one (say, `py-24`) cannot silently drift from
- * the other: the two are meant to look like siblings, only their copy and
- * `data-gallery-state` differ.
+ * The whole-page "nothing published" state. Its sibling, `GalleryUnavailable`
+ * — what renders instead when the listing itself failed rather than coming
+ * back empty (ugcportal-0dh) — lives in its own module, gallery-unavailable.tsx,
+ * rather than here: this file is `"use client"`, which is unavoidable for
+ * THIS component (it is reachable from `Gallery`'s own client-side render,
+ * below) but is not true of `GalleryUnavailable`, which is never rendered by
+ * `Gallery` at all. See that module's docstring for why it stays out of this
+ * one's client bundle.
  */
-const GALLERY_STATE_CONTAINER_CLASS =
-  "mx-auto flex w-full max-w-6xl flex-1 flex-col justify-center px-4 py-24 sm:px-6";
-
 function GalleryEmpty() {
   return (
     <div className={GALLERY_STATE_CONTAINER_CLASS} data-gallery-state="empty">
@@ -455,37 +456,6 @@ function GalleryEmpty() {
       <p className="mt-4 max-w-prose text-sm text-muted-foreground">
         Photographs appear here as soon as they are published. Nothing is
         hidden from you — the gallery is genuinely empty.
-      </p>
-    </div>
-  );
-}
-
-/**
- * What the home page renders when `listPublicMedia` answers `ok: false`
- * (ugcportal-0dh).
- *
- * NOT `GalleryEmpty`. That component's whole second sentence — "Nothing is
- * hidden from you — the gallery is genuinely empty" — is a claim about the
- * listing having been read successfully and come back with nothing in it.
- * This branch is the other case: the listing was NOT read successfully, so
- * the honest claim is the opposite of that one, and the two must not share
- * copy or a visitor reading a failed fetch is told a specific, false thing
- * about the state of the gallery.
- *
- * `data-gallery-state="error"` (against `GalleryEmpty`'s `"empty"`) is what
- * makes the two distinguishable in the rendered markup itself, per K3 — not
- * only by which sentence happens to be present, which a future copy edit
- * could make the two read alike.
- */
-export function GalleryUnavailable() {
-  return (
-    <div className={GALLERY_STATE_CONTAINER_CLASS} data-gallery-state="error">
-      <h1 className="max-w-2xl text-2xl leading-tight font-medium tracking-tight text-balance text-foreground sm:text-3xl">
-        The gallery could not be loaded.
-      </h1>
-      <p className="mt-4 max-w-prose text-sm text-muted-foreground" role="alert">
-        Something went wrong while fetching photographs. This is not the same
-        as an empty gallery — please try refreshing in a moment.
       </p>
     </div>
   );

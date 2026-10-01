@@ -258,6 +258,13 @@ describe("K1 — the gallery renders published previews to an anonymous visitor"
 
     expect(renderedIds(markup)).toEqual([]);
     expect(markup).toContain("Nothing is published yet.");
+    // Against the real listing rather than a mock: ugcportal-0dh's
+    // `GalleryUnavailable` (the OTHER reason the grid can be empty — the
+    // listing failed rather than came back with nothing) carries
+    // `data-gallery-state="error"` instead, so this is the genuinely-empty
+    // case's half of that distinction, pinned here where the row really is
+    // absent rather than where a fetch failed.
+    expect(markup).toContain('data-gallery-state="empty"');
   });
 });
 

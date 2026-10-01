@@ -1,4 +1,5 @@
-import { Gallery, GalleryUnavailable } from "@/components/gallery/gallery";
+import { Gallery } from "@/components/gallery/gallery";
+import { GalleryUnavailable } from "@/components/gallery/gallery-unavailable";
 import { toGalleryItems } from "@/lib/gallery-items";
 import { listPublicMedia, publicMediaListingUrl } from "@/lib/public-media";
 
