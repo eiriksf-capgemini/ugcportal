@@ -97,13 +97,32 @@ describe("a drop outside the drop zone does not navigate away (K1)", () => {
     const zone = input.closest("div");
     if (zone === null) throw new Error("no drop zone ancestor in the markup");
 
-    const event = dispatchDragEvent(zone, "drop");
+    // `defaultPrevented` can't be the assertion here: the document listener
+    // this bead adds now prevents the default action of EVERY drop,
+    // including one that lands on the zone, so checking it would pass even
+    // if the zone's own onDrop were deleted entirely -- it would prove
+    // nothing bead-specific. Instead, drive the zone's own
+    // dragenter-sets-"dragging over" / drop-clears-it state, which only the
+    // zone's own handlers touch (the document listener has no component
+    // state to reach): if the drop's effect on that state disappears, the
+    // zone's onDrop stopped running, however "prevented" the event still is.
+    // `classList.contains`, not a `className` substring check: the zone's
+    // static classes already include `has-[:focus-visible]:border-ring`, so
+    // a substring match on "border-ring" would be true even at rest and
+    // never actually observe the dragging-over state changing.
+    act(() => {
+      zone.dispatchEvent(
+        new Event("dragenter", { bubbles: true, cancelable: true }),
+      );
+    });
+    expect(zone.classList.contains("border-ring")).toBe(true);
 
-    // The zone's own onDrop calls preventDefault() regardless of whether any
-    // files were on the (empty, in this synthetic event) dataTransfer, so
-    // this just confirms the document listener didn't need to be the one to
-    // do it -- the zone's handler still ran first, unchanged.
-    expect(event.defaultPrevented).toBe(true);
+    act(() => {
+      dispatchDragEvent(zone, "drop");
+    });
+
+    expect(zone.classList.contains("border-ring")).toBe(false);
+    expect(zone.classList.contains("border-line-strong")).toBe(true);
   });
 });
 

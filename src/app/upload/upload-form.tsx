@@ -372,10 +372,16 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
     This only has to make a miss inert, not treat it as a hit (that is a
     separate, larger decision about the page's target area -- explicitly out
     of scope here). So these two listeners do nothing but preventDefault;
-    they never call addFiles, and the zone's own handlers above still run
-    first and keep working exactly as before -- a React synthetic listener
-    on the zone element fires before a native listener added here on
-    `document` sees the same bubbling event.
+    they never call addFiles, and the zone's own handlers above are
+    unaffected by them regardless of listener order -- neither this listener
+    nor the browser's default action stops other listeners from running, so
+    the zone's onDragOver/onDrop still fire and still do their own work
+    (including calling addFiles) exactly as before a drop that lands on the
+    zone. (Next.js's App Router hydrates onto `document` itself -- see
+    `appElement` in next's client/app-index.js -- so React's own delegated
+    listener for these events lives on the same node as this one, not on an
+    ancestor; ordering between the two is registration order, not DOM
+    nesting, and this effect relies on neither.)
 
     Attached with a plain useEffect with no dependencies, so it is installed
     once on mount and removed once on unmount (K2) -- it must not outlive
