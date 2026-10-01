@@ -41,15 +41,129 @@ export type PublicMediaRow = MediaListingItem<MediaAnonymousListingSelect>;
 export type PublicMediaResult = MediaListingResult<MediaAnonymousListingSelect>;
 
 /**
+ * Shortest interval between "listing failed" log lines; the rest in between
+ * are counted and folded into the next one.
+ *
+ * `listPublicMedia` has two callers (below) and both are reachable by an
+ * anonymous request: the server-rendered home page always asks for the first
+ * page with no cursor, so in practice it is GET /api/public/media
+ * (src/app/api/public/media/route.ts) that a client actually controls — and
+ * that route has no rate limit of its own yet (ugcportal-9w5 is the open bead
+ * for one). Logging one line per request would let a single looping bot turn
+ * this bead's own fix into a free way to flood the error log. Throttled the
+ * same way watermark.ts's `logShedUpload` is: the first failure after a quiet
+ * period always logs, so the transition into failing is never delayed.
+ *
+ * Unlike `logShedUpload`, there is no proactive flush timer here for a quiet
+ * burst's tail. A shed is a capacity signal operators page on, and losing its
+ * tail to a throttle that only flushes on the next event is a real cost
+ * `watermark.ts` goes to some length to avoid; a malformed cursor is a
+ * nuisance-input signal, not a capacity one, and is not worth that same
+ * machinery. The accepted cost is the same shape, smaller: a handful of
+ * requests at the very end of a burst can go uncounted if nothing in this
+ * window logs again.
+ */
+export const LISTING_FAILURE_LOG_INTERVAL_MS = 10_000;
+
+let listingFailureLogLastAt = 0;
+let listingFailureLogSuppressed = 0;
+
+/**
+ * The real `ok: false` shape `listMedia` can return, reused rather than
+ * re-typed. An earlier version of {@link logFailedPublicListing} declared its
+ * own `{ status: number; error: string }` parameter type instead of this, so
+ * a future change to the real branch's shape could drift from what this
+ * function logs with no compiler error to catch it.
+ */
+type PublicMediaFailure = Extract<PublicMediaResult, { ok: false }>;
+
+/**
+ * Logs a failed public listing, throttled per the comment above.
+ *
+ * Two shapes, not one. `PublicMediaFailure` is `listMedia` REPORTING a
+ * failure (today, only a malformed `?cursor=`) — it returned normally, with
+ * `ok: false`. `{ threw: true; error }` is the other way this can fail: the
+ * query itself throwing (a dropped database connection, say) rather than
+ * answering at all. There is no existing type for that case, because it
+ * never produces a `PublicMediaResult` — the function never returns.
+ */
+function logFailedPublicListing(
+  detail: PublicMediaFailure | { threw: true; error: string },
+): void {
+  const now = Date.now();
+  // `listingFailureLogLastAt !== 0`, matching `logShedUpload`'s own
+  // `shedLogLastAt !== 0` guard (watermark.ts) — without it, the FIRST
+  // failure after process start computes `now - 0`, which is only large
+  // enough to clear the window because wall-clock time is nowhere near the
+  // epoch. That holds by the accident of what year it is, not by anything
+  // this function asserts; a clock near zero (fake timers seeded at the
+  // epoch, or a real clock before NTP sync at container boot) would read as
+  // "still inside the window" and silently suppress the one failure this
+  // throttle most needs to let through.
+  if (
+    listingFailureLogLastAt !== 0 &&
+    now - listingFailureLogLastAt < LISTING_FAILURE_LOG_INTERVAL_MS
+  ) {
+    listingFailureLogSuppressed += 1;
+    return;
+  }
+  const suppressed = listingFailureLogSuppressed;
+  listingFailureLogLastAt = now;
+  listingFailureLogSuppressed = 0;
+  console.error("[gallery] public media listing failed", {
+    ...detail,
+    // Present only when this line's own window actually swallowed others —
+    // an absent field reads as "nothing was suppressed" without a `0` that
+    // looks the same as a count nobody bothered to track.
+    ...(suppressed > 0 ? { suppressed } : {}),
+  });
+}
+
+/**
  * One page of the public feed.
  *
  * Takes a full request URL because that is what `listMedia` parses `?limit`
  * and `?cursor` out of — the route hands it `request.url` directly. A caller
  * with no request of its own (the server-rendered gallery) builds one with
  * `publicMediaListingUrl` below.
+ *
+ * Logs its own failure (ugcportal-0dh), here rather than in each caller.
+ * `src/app/page.tsx` and `src/app/api/public/media/route.ts` both call this
+ * function and both need the SAME signal on the SAME condition — spelling the
+ * log line twice is exactly the shape ugcportal-ws3's sibling-omission family
+ * warns about, except with a log line instead of a check: a future third
+ * caller, or a changed log shape, needs to remember to update every copy
+ * rather than the one place that produces the event.
+ *
+ * Logs AND rethrows when `listMedia` itself throws, rather than only
+ * covering the `ok: false` contract. The bead this exists for (ugcportal-0dh)
+ * is about a failing public feed being indistinguishable from an empty one,
+ * "from both sides" — a dropped database connection is just as much a
+ * failing feed as a malformed cursor, and it is the more serious of the two.
+ * Rethrowing rather than swallowing is deliberate: this function reports what
+ * happened, it does not decide how a caller recovers. `src/app/page.tsx`
+ * catches it and renders `GalleryUnavailable`, the same as `ok: false`; the
+ * route handler does not catch it, and Next's own route-handler error
+ * handling still answers a 500 — unchanged from before this function logged
+ * anything, except that now the attempt is on record.
  */
-export function listPublicMedia(requestUrl: string): Promise<PublicMediaResult> {
-  return listMedia(requestUrl, PUBLIC_MEDIA_SCOPE, MEDIA_ANONYMOUS_SELECT);
+export async function listPublicMedia(
+  requestUrl: string,
+): Promise<PublicMediaResult> {
+  let result: PublicMediaResult;
+  try {
+    result = await listMedia(requestUrl, PUBLIC_MEDIA_SCOPE, MEDIA_ANONYMOUS_SELECT);
+  } catch (error) {
+    logFailedPublicListing({
+      threw: true,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
+  }
+  if (!result.ok) {
+    logFailedPublicListing(result);
+  }
+  return result;
 }
 
 /**

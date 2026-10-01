@@ -1,6 +1,11 @@
 import { Gallery } from "@/components/gallery/gallery";
+import { GalleryUnavailable } from "@/components/gallery/gallery-unavailable";
 import { toGalleryItems } from "@/lib/gallery-items";
-import { listPublicMedia, publicMediaListingUrl } from "@/lib/public-media";
+import {
+  listPublicMedia,
+  publicMediaListingUrl,
+  type PublicMediaResult,
+} from "@/lib/public-media";
 
 /**
  * The public gallery (ugcportal-71y), and the whole of the home page.
@@ -36,24 +41,50 @@ import { listPublicMedia, publicMediaListingUrl } from "@/lib/public-media";
 export const dynamic = "force-dynamic";
 
 export default async function Home() {
-  const result = await listPublicMedia(publicMediaListingUrl());
-
   /*
    * `listMedia` only reports `ok: false` for a malformed `?cursor=`, and the
-   * URL above carries no cursor — so this branch is not expected to run. It is
-   * written out rather than asserted away because "not expected" is not
+   * URL above carries no cursor — so that branch is not expected to run. It
+   * is written out rather than asserted away because "not expected" is not
    * "cannot": the alternative is a non-null assertion that turns a future
    * change to that contract into a crash on the home page.
+   *
+   * `listPublicMedia` can also THROW outright — a dropped database
+   * connection, say — rather than ever returning an `ok: false` result.
+   * Catching that here, rather than letting it reach Next's own error
+   * boundary (there is none configured for this route yet, so it would be
+   * the framework's generic one), is what makes this the SAME failure as
+   * `ok: false` from this page's point of view: both render
+   * `GalleryUnavailable` rather than two different kinds of broken page for
+   * what an operator experiences as one incident. `listPublicMedia` has
+   * already logged either case — see that function's own comment for why
+   * one shared, throttled log line beats one per caller and per failure
+   * mode.
+   *
+   * A failed listing used to be substituted with an empty page here
+   * (ugcportal-0dh), which routed straight into `GalleryEmpty` — telling the
+   * visitor the gallery was "genuinely empty" on the one path where that is
+   * not known to be true, and leaving no trace of the failure anywhere a
+   * human could find it. `listPublicMedia` not answering is distinguishable
+   * from it answering with nothing; the two must stay that way all the way
+   * to the rendered page, so both branches below return before `Gallery`
+   * ever sees anything rather than inside it.
    */
-  const page = result.ok
-    ? result.page
-    : { items: [], hasMore: false, nextCursor: null };
+  let result: PublicMediaResult;
+  try {
+    result = await listPublicMedia(publicMediaListingUrl());
+  } catch {
+    return <GalleryUnavailable />;
+  }
+
+  if (!result.ok) {
+    return <GalleryUnavailable />;
+  }
 
   return (
     <Gallery
-      initialItems={toGalleryItems(page.items)}
-      initialCursor={page.nextCursor}
-      initialHasMore={page.hasMore}
+      initialItems={toGalleryItems(result.page.items)}
+      initialCursor={result.page.nextCursor}
+      initialHasMore={result.page.hasMore}
     />
   );
 }

@@ -95,6 +95,12 @@ export async function GET(request: Request) {
   const result = await listPublicMedia(request.url);
 
   if (!result.ok) {
+    // `listPublicMedia` already logged this, throttled (ugcportal-0dh) — see
+    // its own comment. THIS caller is the one a client actually controls: a
+    // stale tab, a hand-written request, or a bot can send any `?cursor=` it
+    // likes, unlike the server-rendered home page's call, which never sends
+    // one. That is exactly why the throttle lives centrally rather than only
+    // on the branch that looked reachable.
     return NextResponse.json(
       { error: result.error },
       { status: result.status, headers: NO_STORE },

@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   GALLERY_GRID_CLASS,
+  GALLERY_STATE_CONTAINER_CLASS,
   GALLERY_TAG_CLASS,
   GALLERY_TAG_LIST_CLASS,
   GALLERY_TILE_CLASS,
@@ -436,9 +437,19 @@ function GalleryItemTags({ item }: { item: GalleryItem }) {
   );
 }
 
+/**
+ * The whole-page "nothing published" state. Its sibling, `GalleryUnavailable`
+ * — what renders instead when the listing itself failed rather than coming
+ * back empty (ugcportal-0dh) — lives in its own module, gallery-unavailable.tsx,
+ * rather than here: this file is `"use client"`, which is unavoidable for
+ * THIS component (it is reachable from `Gallery`'s own client-side render,
+ * below) but is not true of `GalleryUnavailable`, which is never rendered by
+ * `Gallery` at all. See that module's docstring for why it stays out of this
+ * one's client bundle.
+ */
 function GalleryEmpty() {
   return (
-    <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col justify-center px-4 py-24 sm:px-6">
+    <div className={GALLERY_STATE_CONTAINER_CLASS} data-gallery-state="empty">
       <h1 className="max-w-2xl text-2xl leading-tight font-medium tracking-tight text-balance text-foreground sm:text-3xl">
         Nothing is published yet.
       </h1>
