@@ -19,6 +19,12 @@ import { toDateInputValue } from "./dates";
  * dangerous one — losing it turns a time-limited clearance into a perpetual
  * one, the only way this feature can fail open. See decision-form.test.tsx,
  * which asserts every field round-trips.
+ *
+ * Every field's text colour is `text-ink`, not `text-foreground`
+ * (ugcportal-rw9j review round 2): these fields sit on `bg-surface-3`, the
+ * untouched near-black surface scale, and `--foreground` now means "whatever
+ * pairs with --background" - it measured ~1.08:1 here in light mode.
+ * `--color-ink` is the token this surface is actually measured against.
  */
 
 export type DecisionFormReview = {
@@ -106,7 +112,7 @@ export function ResaleRightsDecisionForm({
         <select
           name="status"
           defaultValue={review?.status ?? "UNREVIEWED"}
-          className="mt-1 block w-full rounded-md border border-input bg-surface-3 p-2 text-sm text-foreground"
+          className="mt-1 block w-full rounded-md border border-input bg-surface-3 p-2 text-sm text-ink"
         >
           {RESALE_RIGHTS_STATUSES.map((status) => (
             <option key={status} value={status}>
@@ -120,7 +126,7 @@ export function ResaleRightsDecisionForm({
         <select
           name="route"
           defaultValue={review?.route ?? ""}
-          className="mt-1 block w-full rounded-md border border-input bg-surface-3 p-2 text-sm text-foreground"
+          className="mt-1 block w-full rounded-md border border-input bg-surface-3 p-2 text-sm text-ink"
         >
           <option value="">not recorded</option>
           {RESALE_RIGHTS_ROUTES.map((route) => (
@@ -143,7 +149,7 @@ export function ResaleRightsDecisionForm({
           type="date"
           name="validUntil"
           defaultValue={toDateInputValue(review?.validUntil ?? null)}
-          className="mt-1 block w-full rounded-md border border-input bg-surface-3 p-2 text-sm text-foreground"
+          className="mt-1 block w-full rounded-md border border-input bg-surface-3 p-2 text-sm text-ink"
         />
       </label>
       <label className="block text-xs font-medium">
@@ -152,7 +158,7 @@ export function ResaleRightsDecisionForm({
           name="conditions"
           rows={2}
           defaultValue={review?.conditions ?? ""}
-          className="mt-1 block w-full rounded-md border border-input bg-surface-3 p-2 text-sm text-foreground"
+          className="mt-1 block w-full rounded-md border border-input bg-surface-3 p-2 text-sm text-ink"
         />
       </label>
       <label className="block text-xs font-medium">
@@ -166,7 +172,7 @@ export function ResaleRightsDecisionForm({
           name="reason"
           rows={2}
           required
-          className="mt-1 block w-full rounded-md border border-input bg-surface-3 p-2 text-sm text-foreground"
+          className="mt-1 block w-full rounded-md border border-input bg-surface-3 p-2 text-sm text-ink"
         />
       </label>
       <label className="block text-xs font-medium">

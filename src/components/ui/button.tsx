@@ -49,8 +49,19 @@ const buttonVariants = cva(
         default: "bg-primary text-primary-foreground hover:bg-primary-hover",
         outline: PETROL_OUTLINE_STYLE,
         secondary: PETROL_OUTLINE_STYLE,
+        /*
+         * text-ink, not text-foreground (ugcportal-rw9j review round 2):
+         * every current ghost-button usage (src/app/upload/upload-queue-
+         * list.tsx - Cancel, Clear, Remove) renders inside a near-black well
+         * (bg-surface-1, bg-destructive-surface), never on --background -
+         * text-foreground now means "whatever pairs with --background" and
+         * measured ~1.06-1.3:1 there. text-ink is the token those wells are
+         * actually measured against (ink-on-surface-N, ink-on-destructive-
+         * surface in contrast.ts). The hover state already swaps to
+         * text-accent-foreground (also --color-ink), unaffected either way.
+         */
         ghost:
-          "text-foreground hover:bg-accent hover:text-accent-foreground aria-expanded:bg-accent",
+          "text-ink hover:bg-accent hover:text-accent-foreground aria-expanded:bg-accent",
         destructive:
           "border-destructive/75 bg-destructive-surface text-destructive hover:bg-destructive-surface-hover focus-visible:border-destructive focus-visible:ring-destructive/80",
         link: "text-primary underline-offset-4 hover:underline",

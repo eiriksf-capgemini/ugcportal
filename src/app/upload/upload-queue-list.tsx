@@ -202,6 +202,21 @@ function Failure({
             type="button"
             variant="outline"
             size="sm"
+            /*
+              ugcportal-rw9j review round 2: this button sits inside the
+              bg-destructive-surface well above, not on --background, so the
+              petrol outline treatment (border-primary/text-primary) is wrong
+              here - border-primary measured only 1.87:1 against this well in
+              light mode, below the 3:1 a control's boundary needs.
+              Overridden back to the pre-rw9j outline treatment (border-input/
+              text-ink, hover bg-accent/text-accent-foreground) for this one
+              instance: border-input is --color-line-strong, already measured
+              at 3:1+ against this exact well (control-edge-on-destructive-
+              surface in contrast.ts). cn/tailwind-merge (see button.tsx)
+              resolves the conflicting border/text/hover utilities in this
+              className string's favour over PETROL_OUTLINE_STYLE's.
+            */
+            className="border-input bg-transparent text-ink hover:bg-accent hover:text-accent-foreground hover:no-underline aria-expanded:bg-accent"
             disabled={!mayRetry(failure, now)}
             onClick={() => onRetry(item.id)}
           >
