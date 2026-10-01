@@ -86,7 +86,27 @@ export async function POST(_request: Request, { params }: RouteContext) {
   // got — but adding it now, against nothing, would be exactly the kind of
   // check this file's own comments elsewhere warn against: one that reads as
   // a defence and is not exercised by anything.
-  if (access.media.altText === null || access.media.altText.trim() === "") {
+  //
+  // GATED ON `publishedAt === null` — i.e. only on an actual TRANSITION,
+  // never on an already-published row (review round 4 finding 4). Without
+  // this, an idempotent re-POST on a row that is ALREADY published but
+  // happens to have a null `altText` — which this bead's backfill migration
+  // closes for every row that existed when it ran, but cannot close for a
+  // row inserted by stale pre-this-bead code during the brief window of a
+  // migrate-then-swap rolling deploy, the same deploy shape this route's
+  // own `previewId` self-repair a few lines below exists to tolerate — would
+  // 400 instead of returning the 200 this route's own docstring promises
+  // ("Idempotent... an already-published row keeps its original [timestamp]
+  // rather than having its history rewritten"). K1 is a rule about the
+  // TRANSITION (no row may go from unpublished to published without alt
+  // text); it was never meant to retroactively block a row that is already
+  // sitting on the other side of that transition. Nothing is weakened by
+  // this: a genuinely unpublished row with no alt text is still refused
+  // below, exactly as before.
+  if (
+    access.media.publishedAt === null &&
+    (access.media.altText === null || access.media.altText.trim() === "")
+  ) {
     return NextResponse.json(
       {
         error: "Add alt text before publishing this item.",

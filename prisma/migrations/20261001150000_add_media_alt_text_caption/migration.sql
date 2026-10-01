@@ -29,4 +29,24 @@ ALTER TABLE "Media" ADD COLUMN "caption" TEXT;
 -- honest placeholder beats either blocking forever or inventing a
 -- description nobody wrote. It unblocks EXISTING content; every upload
 -- through the new form still collects real alt text from here on.
-UPDATE "Media" SET "altText" = 'No description provided.' WHERE "altText" IS NULL;
+--
+-- PER-ROW UNIQUE, not one identical literal string for every row (review
+-- round 4, finding 3 — a real regression this migration shipped with
+-- initially). Before this bead, every PUBLISHED row's accessible name
+-- already came from a placeholder — src/lib/gallery-items.ts's
+-- `fallbackDescription`, "photograph N, published <date>" — and that
+-- placeholder was deliberately built to be unique PER TILE, because an
+-- earlier version of this exact file gave a whole same-day batch the
+-- identical name and that was the bug fixed first. A backfill that stamps
+-- one shared literal across every existing row throws that fix away:
+-- `galleryItemAlt` uses real (non-empty) altText VERBATIM, with no
+-- per-position disambiguation at all (see that function's own docstring on
+-- why — real text is not this function's to re-word), so every
+-- pre-existing photograph would otherwise collapse onto one indistinguishable
+-- accessible name again. Folding the row's own `id` (a cuid — already
+-- globally unique, already assigned, free to reference in the same UPDATE)
+-- into the placeholder keeps it honest AND distinct, with no new per-row
+-- logic beyond what SQLite's `||` string concatenation already does.
+UPDATE "Media"
+SET "altText" = 'Untitled photograph (' || "id" || ')'
+WHERE "altText" IS NULL;

@@ -5,6 +5,7 @@ import { createClient } from "@libsql/client";
 import { describe, expect, it } from "vitest";
 
 import {
+  LONE_SURROGATE,
   MAX_ALT_TEXT_LENGTH,
   MAX_CAPTION_LENGTH,
   MAX_ORIGINAL_NAME_LENGTH,
@@ -374,6 +375,27 @@ describe("validateCaption", () => {
       ok: true,
       value: withinLimit,
     });
+  });
+
+  // Review round 4: stripping the newline for the control/bidi check used to
+  // ALSO feed the lone-surrogate check, and deleting the character between
+  // two lone surrogates can reassemble them into one well-formed code point
+  // in the copy being tested — while the real, returned value (newline
+  // intact) still has two genuinely separate lone surrogates in it.
+  // @libsql/client silently substitutes U+FFFD for a lone surrogate on
+  // write, so letting this through would mean the persisted caption
+  // silently disagreed with the one this function just validated.
+  it("still refuses a lone surrogate that a newline happens to sit between", () => {
+    const lowSurrogate = String.fromCharCode(0xdc00);
+    const highSurrogate = String.fromCharCode(0xd800);
+    const straddlingNewline = `${highSurrogate}\n${lowSurrogate}`;
+    // Sanity check on the premise: stripped of its newline, this pair IS a
+    // single well-formed astral character — which is exactly why checking
+    // the stripped copy for lone surrogates would have been wrong.
+    expect(LONE_SURROGATE.test(straddlingNewline.replace("\n", ""))).toBe(
+      false,
+    );
+    expect(validateCaption(straddlingNewline).ok).toBe(false);
   });
 });
 

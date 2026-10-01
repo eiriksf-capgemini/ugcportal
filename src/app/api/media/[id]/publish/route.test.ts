@@ -499,6 +499,38 @@ describe("publishing without alt text (ugcportal-gwr K1)", () => {
     expect(response.status).toBe(200);
     expect((await response.json()).publishedAt).toBeNull();
   });
+
+  // Review round 4, finding 4: a row that is ALREADY published but has no
+  // alt text (a deploy-window straggler the backfill migration could not
+  // reach, since it did not exist when the migration ran) must still get
+  // the idempotent 200 this route's own docstring promises, not a fresh
+  // 400 — K1 governs the TRANSITION, not an already-published row's state.
+  it("idempotently re-confirms an already-published row even if it has no alt text", async () => {
+    signedInAs(OWNER_ID);
+    const straggler = { ...publishedMedia, altText: null };
+    mediaFindUniqueMock.mockResolvedValue(straggler);
+    mediaFindFirstMock.mockResolvedValue(toOwnerShape(straggler));
+
+    const response = await POST(publishRequest("POST"), context());
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.publishedAt).toBe(PUBLISHED_AT.toISOString());
+    expect(mediaUpdateManyMock).not.toHaveBeenCalled();
+  });
+
+  it("still refuses a genuinely UNPUBLISHED row with no alt text (K1 itself, unchanged)", async () => {
+    signedInAs(OWNER_ID);
+    mediaFindUniqueMock.mockResolvedValue({
+      ...unpublishedMedia,
+      altText: null,
+    });
+
+    const response = await POST(publishRequest("POST"), context());
+
+    expect(response.status).toBe(400);
+    expect(mediaUpdateManyMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("publishing a row with no watermarked preview", () => {

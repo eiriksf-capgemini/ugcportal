@@ -274,11 +274,24 @@ export type TextFieldValidation =
  * literal newline in it is already a sign something is wrong, the same
  * reasoning `validateOriginalName` applies to a filename.
  *
- * The exemption is applied to a COPY used only for the denylist check, never
- * to the value this function returns or to the length count: a caption's
- * length is still measured with its newlines included, and what reaches the
- * database is the string the user actually typed, not one with its line
- * breaks silently removed.
+ * The exemption is applied to a COPY used only for the CONTROL/BIDI half of
+ * the denylist check, never to the value this function returns, to the
+ * length count, or — this is the part review round 4 found missing — to the
+ * LONE-SURROGATE check. That last one has to run against the real,
+ * unmodified string: stripping a newline is a character DELETION, and
+ * deleting the one character separating a lone high surrogate from a lone
+ * low surrogate can reassemble them into a single valid code point in the
+ * copy being tested, while the ACTUAL value returned (newline intact,
+ * halves still genuinely separate) is still exactly as malformed as before.
+ * `"\uD800\n\uDC00"` is the concrete case: newline-stripped, that reads as
+ * one well-formed astral character and passes; unmodified, it is two lone
+ * surrogates around an ordinary line break, which is what is actually
+ * stored. `@libsql/client` silently substitutes U+FFFD for a lone surrogate
+ * on write (see LONE_SURROGATE's own docstring above), so letting this pass
+ * means the persisted caption would have silently diverged from the one
+ * this function just validated and handed back — precisely the
+ * echoed-response-disagrees-with-later-read failure this repo already fixed
+ * once for `originalName` (ugcportal-bdh) and must not reintroduce here.
  */
 function validateBoundedText(
   value: unknown,
@@ -298,8 +311,15 @@ function validateBoundedText(
       message: `Field '${field}' must be at most ${maxLength} characters`,
     };
   }
-  const checked = allowNewlines ? trimmed.replace(/\r\n|\r|\n/g, "") : trimmed;
-  if (hasUnsafeText(checked)) {
+  // Newlines are exempted from the control/bidi check alone — see above for
+  // why LONE_SURROGATE must not be re-run against this stripped copy.
+  const checkedForControlChars = allowNewlines
+    ? trimmed.replace(/\r\n|\r|\n/g, "")
+    : trimmed;
+  if (
+    UNSAFE_TEXT_CHARS.test(checkedForControlChars) ||
+    LONE_SURROGATE.test(trimmed)
+  ) {
     return {
       ok: false,
       message: `Field '${field}' must not contain control or text-direction characters`,

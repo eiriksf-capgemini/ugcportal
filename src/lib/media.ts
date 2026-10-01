@@ -174,7 +174,14 @@ const LONE_SURROGATE_GLOBAL = new RegExp(LONE_SURROGATE, "g");
 // Used when sanitizing leaves nothing behind — a name made entirely of
 // stripped characters or whitespace. Better than an empty string, which
 // renders as a blank row in any listing.
-const FALLBACK_ORIGINAL_NAME = "untitled";
+//
+// EXPORTED (review round 4, finding 1): the K2 filename-equality check in
+// POST /api/media compares alt text against `sanitizeOriginalName(file.name)`
+// and has to treat a match against THIS specific value differently — it is
+// not really "the filename", it is "we could not read one", and an uploader
+// who honestly types the word "untitled" as alt text for an abstract photo
+// is not repeating a filename they never saw.
+export const FALLBACK_ORIGINAL_NAME = "untitled";
 
 export type OriginalNameValidation =
   | { ok: true; value: string }

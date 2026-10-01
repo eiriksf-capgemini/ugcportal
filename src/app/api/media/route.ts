@@ -5,6 +5,7 @@ import { NextResponse } from "next/server";
 
 import { auth } from "@/lib/auth";
 import {
+  FALLBACK_ORIGINAL_NAME,
   MAX_UPLOAD_BYTES,
   PREVIEW_KEY_PREFIX,
   mediaPreviewColumns,
@@ -351,8 +352,25 @@ async function handleUpload(
    * different but would collapse to the same string), which the client
    * cannot do without pulling in a node-only module — see that function's
    * own docstring for why.
+   *
+   * `sanitizedFileName` is EXCLUDED from this check when it equals
+   * `FALLBACK_ORIGINAL_NAME` ("untitled") (review round 4, finding 1): that
+   * value means `sanitizeOriginalName` could not read a real name at all —
+   * the file arrived with an empty name, or one made only of
+   * stripped/invisible characters — so it is not actually the filename the
+   * uploader saw, it is this codebase's placeholder for "no filename was
+   * readable". An uploader who honestly types "untitled" as alt text for
+   * an abstract photo is not repeating anything, and refusing them for it
+   * would be a false positive K2 was never aimed at. The RAW `file.name`
+   * is still always checked: a file whose real name happens to be
+   * literally "untitled" (no extension) remains caught by that half of
+   * the comparison.
    */
-  if (altTextEqualsFilename(altText.value, [file.name, sanitizedFileName])) {
+  const filenamesToCheck = [file.name];
+  if (sanitizedFileName !== FALLBACK_ORIGINAL_NAME) {
+    filenamesToCheck.push(sanitizedFileName);
+  }
+  if (altTextEqualsFilename(altText.value, filenamesToCheck)) {
     return NextResponse.json(
       {
         error:

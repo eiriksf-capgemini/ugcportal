@@ -2319,4 +2319,23 @@ describe("POST /api/media — alt text and caption", () => {
 
     expect(response.status).toBe(201);
   });
+
+  it("accepts alt text 'untitled' even when the file's name sanitizes to the same fallback (review round 4, finding 1)", async () => {
+    // A name made only of an invisible character (zero-width space, kept
+    // non-empty on purpose — a literally empty filename hits an unrelated
+    // "Missing 'file' field" failure mode in how this test harness's
+    // multipart writer handles a blank filename parameter) sanitizes to
+    // sanitizeOriginalName's own FALLBACK_ORIGINAL_NAME, "untitled" — which
+    // is NOT really the filename the uploader saw, it is "no name was
+    // readable". Someone honestly typing "untitled" as alt text for an
+    // abstract photo must not be refused as though they had repeated a
+    // filename.
+    const nameless = new File([REAL_PNG], "​", { type: "image/png" });
+
+    const response = await POST(
+      buildRequest(nameless, [], { altText: "untitled" }),
+    );
+
+    expect(response.status).toBe(201);
+  });
 });
