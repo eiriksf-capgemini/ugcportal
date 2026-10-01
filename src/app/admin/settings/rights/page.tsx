@@ -203,7 +203,8 @@ export default async function ResaleRightsSettingsPage({
                 requestedUploader.name ??
                 requestedUploader.id}{" "}
               because you opened their decision form. This uploader has no uploads
-              and no prior review yet, so they do not appear in the list above.
+              and no prior review, so they would not normally appear in the listing
+              below.
             </>
           ) : (
             <>
