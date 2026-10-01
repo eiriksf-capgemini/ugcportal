@@ -99,15 +99,28 @@ export type PublicMediaRowish = {
  * particular. Returns `""` for "nothing safe to show", never a partially
  * repaired string nobody wrote.
  *
- * Used for both `altText` and `caption`. The difference between the two is
- * NOT in this function: a blank caption is a legitimate, ordinary final
- * state (most of the library has none), while a blank `altText` is only ever
- * a safety net — see `galleryItemAlt`, the one place that distinguishes them.
+ * Used for both `altText` and `caption`, and for the SAME reason
+ * `validateBoundedText` in src/lib/media-rules.ts takes an `allowNewlines`
+ * flag: caption is a multi-row `<textarea>` and is allowed to contain `\n`
+ * (review round 1, finding 6) — but this read-side sanitizer was not told
+ * that, so a caption written with a real line break came back through
+ * `hasUnsafeText` (which still treats `\n` as an unsafe control character)
+ * and was wiped to `""` on every render. That is a round-2 finding: the
+ * write path allowed newlines, the read path quietly undid it, and nothing
+ * caught the mismatch because no test exercised a caption containing an
+ * actual `\n` through this function. `allowNewlines` here exists for the
+ * exact same single caller `validateCaption` has it for, and for no other:
+ * alt text stays on the strict check, unchanged.
  */
-function sanitizedMediaText(value: unknown): string {
+function sanitizedMediaText(
+  value: unknown,
+  allowNewlines = false,
+): string {
   if (typeof value !== "string") return "";
   const trimmed = value.trim();
-  if (trimmed === "" || hasUnsafeText(trimmed)) return "";
+  if (trimmed === "") return "";
+  const checked = allowNewlines ? trimmed.replace(/\r\n|\r|\n/g, "") : trimmed;
+  if (hasUnsafeText(checked)) return "";
   return trimmed;
 }
 
@@ -196,7 +209,7 @@ export function toGalleryItem(row: PublicMediaRowish): GalleryItem | null {
     previewSrc: mediaPreviewPath(previewId),
     publishedAt: asIsoString(row.publishedAt),
     altText: sanitizedMediaText(row.altText),
-    caption: sanitizedMediaText(row.caption),
+    caption: sanitizedMediaText(row.caption, true),
     // Absent tags are an empty list, never a missing field: a row from before
     // tagging existed and a row somebody untagged are the same thing to draw,
     // and a `tags` that can be `undefined` is a `.map` waiting to throw in a

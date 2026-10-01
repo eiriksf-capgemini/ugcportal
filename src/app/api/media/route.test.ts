@@ -2276,4 +2276,47 @@ describe("POST /api/media — alt text and caption", () => {
     expect(response.status).toBe(201);
     expect(mediaCreateMock.mock.calls[0][0].data.altText).toBeNull();
   });
+
+  // K2 (ugcportal-gwr's Norwegian description): alt text equal to the
+  // filename must never happen. Review round 2 finding: nothing stopped an
+  // uploader from simply typing it.
+  it("refuses alt text that is exactly the file's own name", async () => {
+    const response = await POST(
+      buildRequest(imageFile(), [], { altText: "photo.png" }),
+    );
+
+    expect(response.status).toBe(400);
+    expect(mediaCreateMock).not.toHaveBeenCalled();
+    const body = await response.json();
+    expect(body.field).toBe("altText");
+  });
+
+  it("refuses alt text equal to the SANITIZED filename too, not only the raw one", async () => {
+    // sanitizeOriginalName trims surrounding whitespace, so a file picked
+    // with extra space in its name still collapses to "photo.png" — the
+    // exact string stored as originalName — and alt text matching THAT
+    // must be refused just as much as matching the raw name would be.
+    const spaced = new File([REAL_PNG], "  photo.png  ", {
+      type: "image/png",
+    });
+
+    const response = await POST(
+      buildRequest(spaced, [], { altText: "photo.png" }),
+    );
+
+    expect(response.status).toBe(400);
+    expect(mediaCreateMock).not.toHaveBeenCalled();
+  });
+
+  it("accepts alt text that merely contains the filename as a substring", async () => {
+    // A literal-equality check, not a fuzzy one — K2 is about alt text that
+    // simply IS the filename, not text that happens to mention it.
+    const response = await POST(
+      buildRequest(imageFile(), [], {
+        altText: "A photo named photo.png, taken at dawn",
+      }),
+    );
+
+    expect(response.status).toBe(201);
+  });
 });

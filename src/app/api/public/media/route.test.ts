@@ -360,16 +360,23 @@ describe("GET /api/public/media — no original key, no preview-less row (K3)", 
     // happened to correlate with the uploader would differ here.
     expect(a.kind).toEqual(c.kind);
     expect(b.kind).toEqual(c.kind);
-    // Every remaining field is either shared by all three or unique to one —
-    // EXCEPT `altText` and `caption` (ugcportal-gwr), which are deliberately
-    // not covered by this invariant and are excluded here rather than left to
-    // pass by accident of this fixture's own `row()` building a distinct
-    // string per id. See the dedicated test below for why: both are content
-    // the uploader chose to PUBLISH, the same status `tags` already has (and
-    // `tags` isn't modelled in this file's `Row`/`project` fixture at all, a
-    // pre-existing gap, not one this bead introduces or closes).
+    // Every remaining field is either shared by all three or unique to one.
+    // Nothing sits in between, which is what "cannot be grouped" means.
+    //
+    // `altText` and `caption` (ugcportal-gwr) are INCLUDED here, deliberately
+    // — review round 2 pointed out that excluding them entirely (an earlier
+    // version of this test did) throws away this invariant's general
+    // protection against an UNRELATED leak (a bug elsewhere making two
+    // different uploaders' rows share a value by accident), leaving only
+    // the narrower, same-batch-specific test below to catch it. With this
+    // fixture's default `row()` values — a unique altText per id, and
+    // `caption: null` shared by everyone — both still satisfy {1, 3}
+    // exactly like every other field. The INTENTIONAL exception (two rows
+    // from the SAME batch sharing identical text) is deliberately not built
+    // here; it is its own, explicit scenario in the test below, which
+    // constructs it on purpose rather than leaving this one to either miss
+    // it or be weakened to stop looking.
     for (const field of Object.keys(a)) {
-      if (field === "altText" || field === "caption") continue;
       const values = [a[field], b[field], c[field]];
       const distinct = new Set(values.map((v) => JSON.stringify(v))).size;
       expect([1, 3]).toContain(distinct);

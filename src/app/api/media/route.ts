@@ -328,6 +328,33 @@ async function handleUpload(
   if (!altText.ok) {
     return NextResponse.json({ error: altText.message }, { status: 400 });
   }
+  /*
+   * Alt text equal to the filename is one of K2's own "never happen" cases
+   * (ugcportal-gwr's Norwegian description: "alt-tekst lik filnavnet"), and
+   * review round 2 found that nothing stopped an uploader from simply
+   * TYPING the filename into the field themselves — `validateAltText` only
+   * checks length and character class, not content. Compared against both
+   * the raw, as-picked `file.name` and the sanitized form that actually
+   * becomes `originalName` (sanitizeOriginalName can repair a name that
+   * started out different but would collapse to the same string), so
+   * neither spelling of "the filename" slips past. Not case-folded: this
+   * is a literal-equality check against two specific strings, not a fuzzy
+   * heuristic, and a coincidental partial match is not what K2 is about.
+   */
+  if (
+    altText.value !== "" &&
+    (altText.value === file.name ||
+      altText.value === sanitizeOriginalName(file.name))
+  ) {
+    return NextResponse.json(
+      {
+        error:
+          "Alt text must describe the photo, not repeat its filename.",
+        field: "altText",
+      },
+      { status: 400 },
+    );
+  }
   const caption = validateCaption(body.value.get(MEDIA_CAPTION_FIELD));
   if (!caption.ok) {
     return NextResponse.json({ error: caption.message }, { status: 400 });

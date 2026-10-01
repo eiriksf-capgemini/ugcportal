@@ -132,12 +132,17 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
    * paid the same four-site tax a fourth time, and a missed delete at either
    * teardown site leaks that one map's entry while the other two are cleaned
    * up correctly. One map means one set/get/delete per site instead of three.
+   *
+   * The value type is `Omit<QueueEntry, "id" | "signal">` — reusing
+   * upload-runner.ts's own type rather than a second, hand-written literal
+   * (review round 2 finding) — so the exact sibling-omission risk finding 9
+   * closed one level down cannot reopen one level up: a field added to
+   * `QueueEntry` later is a compile error here until this map's callers
+   * are updated too, rather than a silently-dropped field with nothing to
+   * flag the gap.
    */
   const queuedFilesRef = useRef(
-    new Map<
-      string,
-      { file: File; tags: readonly string[]; altText: string; caption: string }
-    >(),
+    new Map<string, Omit<QueueEntry, "id" | "signal">>(),
   );
   const drainingRef = useRef(false);
   const inFlightRef = useRef<{ id: string; controller: AbortController } | null>(

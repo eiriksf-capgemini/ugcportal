@@ -171,6 +171,42 @@ describe("alt text and caption on a mapped item", () => {
     expect(mapped?.altText).toBe("A fox <script>alert(1)</script> in a field");
     expect(mapped?.caption).toBe("<b>Bold</b> claim about a fox");
   });
+
+  it("keeps a line break in a caption, rather than wiping it to empty (review round 2 regression)", () => {
+    // `validateCaption` (src/lib/media-rules.ts) allows a caption to contain
+    // `\n` — the field is a multi-row <textarea> — but this function's own
+    // denylist check used to run against the UNMODIFIED string, so a caption
+    // written with a real line break came back through `hasUnsafeText`
+    // (which still treats `\n` as an unsafe control character on its own)
+    // and silently disappeared on every render. The write path allowed it;
+    // the read path quietly undid it.
+    const mapped = toGalleryItem({
+      ...ROW,
+      altText: "A fox crossing a snowy field",
+      caption: "Line one\nLine two",
+    });
+    expect(mapped?.caption).toBe("Line one\nLine two");
+  });
+
+  it("still refuses a bidi override hiding inside a multi-line caption", () => {
+    // The newline exemption must not become a general loophole: everything
+    // else in the denylist — the bidi group especially — still applies once
+    // the newlines themselves are set aside.
+    const mapped = toGalleryItem({
+      ...ROW,
+      altText: "A fox crossing a snowy field",
+      caption: `Line one\nLine two${String.fromCodePoint(0x202e)}reversed`,
+    });
+    expect(mapped?.caption).toBe("");
+  });
+
+  it("does NOT extend the newline exemption to alt text, which stays single-line", () => {
+    const mapped = toGalleryItem({
+      ...ROW,
+      altText: "A fox\ncrossing a field",
+    });
+    expect(mapped?.altText).toBe("");
+  });
 });
 
 describe("galleryItemAlt and galleryItemLabel prefer real alt text", () => {
