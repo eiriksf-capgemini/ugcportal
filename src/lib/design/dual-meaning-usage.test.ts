@@ -100,9 +100,19 @@ function isExcluded(file: string): boolean {
   return false;
 }
 
+/**
+ * Memoised (round 5): "finds files to scan" and the real assertion below it
+ * both need the file list, and the source tree does not change mid-run, so
+ * walking it twice bought nothing but a second filesystem traversal.
+ */
+let cachedFiles: string[] | undefined;
+function scannedFiles(): string[] {
+  return (cachedFiles ??= walkSourceFiles(SRC_ROOT, isExcluded));
+}
+
 /** Every (file, token) count found in the current source tree. */
 function scanDualMeaningUsage(): Map<string, Partial<Record<DualMeaningToken, number>>> {
-  const files = walkSourceFiles(SRC_ROOT, isExcluded);
+  const files = scannedFiles();
 
   const found = new Map<string, Partial<Record<DualMeaningToken, number>>>();
   for (const file of files) {
@@ -164,8 +174,7 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
 
 describe("dual-meaning token usage is audited, not just found", () => {
   it("finds files to scan", () => {
-    const files = walkSourceFiles(SRC_ROOT, isExcluded);
-    expect(files.length).toBeGreaterThan(10);
+    expect(scannedFiles().length).toBeGreaterThan(10);
   });
 
   it("matches the audited (file, token, count) baseline exactly", () => {

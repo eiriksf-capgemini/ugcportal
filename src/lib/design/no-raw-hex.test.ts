@@ -48,6 +48,39 @@ const SCANNED_EXTENSIONS = /\.(tsx|ts|css)$/;
 /** Matches a CSS hex colour literal: #rgb, #rgba, #rrggbb or #rrggbbaa. */
 const HEX_COLOR = /#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})\b/g;
 
+/**
+ * round 5: the bare HEX_COLOR regex false-positives on ordinary English
+ * words that happen to be hex-safe after a `#` - verified: `#deface`,
+ * `#decade`, `#cafe`, `#beef` all match. A digit-required filter was
+ * considered and rejected: it would also silently stop catching a REAL
+ * violation using a common all-letter shorthand (`#fff`, `#ccc`, `#eee`),
+ * which this codebase has no fewer legitimate reasons to guard against than
+ * any other hex literal - trading a narrow, undemonstrated false-positive
+ * risk for a broader, real false-negative one is the wrong direction for a
+ * gate whose job is exactly this.
+ *
+ * The concrete, demonstrated channel instead: a same-page anchor,
+ * `href="#main-content"` (src/components/app-shell.tsx) today, where a
+ * future slug-shaped id (`href="#cafe-section"`) would trip the regex and
+ * is not a colour. Stripped the same way `stripComments` already neutralises
+ * comments, rather than filtering matches after the fact, so the file's line
+ * numbers/structure are otherwise untouched and a hex literal elsewhere on
+ * the same line is still caught.
+ *
+ * Residual, stated rather than solved: a hex-shaped English word OUTSIDE an
+ * href (a hashtag-style tag placeholder, say) is still a latent false
+ * positive this does not close. No such channel exists in this codebase
+ * today (confirmed: no hashtag-prefixed string literal anywhere in scanned
+ * source) - full immunity needs real string-literal-aware parsing, which is
+ * a disproportionate rewrite of a grep-style gate for a channel that does
+ * not exist yet; fix it when it does.
+ */
+const HREF_FRAGMENT = /\bhref\s*=\s*(["'])#[^"'\n]*\1/g;
+
+function stripHrefFragments(source: string): string {
+  return source.replace(HREF_FRAGMENT, (match) => " ".repeat(match.length));
+}
+
 const EXCLUDED_FILES = new Set([path.join(SRC_ROOT, "app", "globals.css")]);
 const DESIGN_LIB_DIR = path.join(SRC_ROOT, "lib", "design") + path.sep;
 
@@ -58,18 +91,47 @@ function isExcluded(file: string): boolean {
   return false;
 }
 
+describe("stripHrefFragments", () => {
+  it("blanks an href anchor so it cannot read as a hex colour", () => {
+    const stripped = stripHrefFragments('<a href="#cafe-section">Jump</a>');
+    expect(stripped).not.toContain("#cafe-section");
+    expect(stripped.match(HEX_COLOR)).toBeNull();
+  });
+
+  it("leaves a real hex literal on an unrelated line untouched", () => {
+    const stripped = stripHrefFragments(
+      '<a href="#cafe-section">Jump</a>\nconst x = "#14555f";',
+    );
+    expect(stripped.match(HEX_COLOR)).toEqual(["#14555f"]);
+  });
+
+  it("does not touch a non-fragment href", () => {
+    const stripped = stripHrefFragments('<a href="/gallery">Gallery</a>');
+    expect(stripped).toContain('href="/gallery"');
+  });
+});
+
+/**
+ * Memoised (round 5): "finds files to scan" and the real assertion below it
+ * both need the file list, and the source tree does not change mid-run, so
+ * walking it twice bought nothing but a second filesystem traversal.
+ */
+let cachedFiles: string[] | undefined;
+function scannedFiles(): string[] {
+  return (cachedFiles ??= walkSourceFiles(SRC_ROOT, isExcluded, SCANNED_EXTENSIONS));
+}
+
 describe("no raw hex colour literals outside the tokens file", () => {
   it("finds files to scan", () => {
-    const files = walkSourceFiles(SRC_ROOT, isExcluded, SCANNED_EXTENSIONS);
-    expect(files.length).toBeGreaterThan(10);
+    expect(scannedFiles().length).toBeGreaterThan(10);
   });
 
   it("ships no hex colour literal in a .tsx/.ts/.css file other than the tokens file", () => {
-    const files = walkSourceFiles(SRC_ROOT, isExcluded, SCANNED_EXTENSIONS);
+    const files = scannedFiles();
 
     const offenders: string[] = [];
     for (const file of files) {
-      const source = stripComments(readFileSync(file, "utf8"));
+      const source = stripHrefFragments(stripComments(readFileSync(file, "utf8")));
       const matches = source.match(HEX_COLOR);
       if (matches) {
         const relative = path.relative(path.dirname(SRC_ROOT), file);

@@ -255,6 +255,7 @@ describe("the gate cannot be routed around", () => {
     ).map((pairing) => pairing.id);
     expect(decorative.sort()).toEqual(
       [
+        "divider-on-background",
         "divider-on-scrim",
         "divider-on-surface-0",
         "divider-on-surface-1",

@@ -49,12 +49,48 @@ for (const mode of MODES) {
       const bodyBackground = await page.evaluate(
         () => getComputedStyle(document.body).backgroundColor,
       );
+
+      /*
+       * round 5: this test's own title has claimed to check the primary
+       * button's fill since round 1, but the body below it never queried a
+       * button element at all - a family-3 defect (an assertion that reads
+       * as coverage but cannot fail on the thing it names).
+       *
+       * The header's "Skip to content" link (src/components/app-shell.tsx)
+       * is used as the live DOM target instead of the gallery's own
+       * default-variant Button: `bg-primary text-primary-foreground` is the
+       * exact utility pair button.tsx's `default` variant ships
+       * (src/components/ui/button.tsx), so the two resolve to the same
+       * computed colours, and the skip link is the only place in this app's
+       * chrome where that pair is guaranteed to render regardless of
+       * database content. The gallery's own default-variant Button ("Load
+       * more") only renders when a second page exists (hasMore), which this
+       * suite has no fixture/seeding to guarantee - there is no e2e
+       * database-seeding infrastructure in this repo yet (tracked
+       * separately, ugcportal-4zgy). `sr-only` positions the link off-screen
+       * but does not touch background-color/color, so the computed values
+       * below are real regardless of focus state.
+       */
+      const skipLink = page.locator('a[href="#main-content"]');
+      const primaryFill = await skipLink.evaluate(
+        (el) => getComputedStyle(el).backgroundColor,
+      );
+      const primaryLabel = await skipLink.evaluate(
+        (el) => getComputedStyle(el).color,
+      );
+
       if (mode === "light") {
         // #FAF7F2
         expect(bodyBackground).toBe("rgb(250, 247, 242)");
+        // --primary: --petrol-700 (#14555F), --primary-foreground: #ffffff
+        expect(primaryFill).toBe("rgb(20, 85, 95)");
+        expect(primaryLabel).toBe("rgb(255, 255, 255)");
       } else {
         // #0B2E33
         expect(bodyBackground).toBe("rgb(11, 46, 51)");
+        // --primary: --petrol-200 (#9FC5C8), --primary-foreground: --petrol-900 (#0B2E33)
+        expect(primaryFill).toBe("rgb(159, 197, 200)");
+        expect(primaryLabel).toBe("rgb(11, 46, 51)");
       }
     });
   });

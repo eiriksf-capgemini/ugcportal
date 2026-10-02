@@ -12,7 +12,7 @@
  * genuinely new, this-bead copies sharing one implementation is the bounded
  * fix; touching usage.ts is not this bead's job.
  */
-import { readdirSync, statSync } from "node:fs";
+import { readdirSync } from "node:fs";
 import path from "node:path";
 
 /** Every .tsx/.ts file under `root`, honouring `isExcluded`. */
@@ -32,15 +32,23 @@ function walk(
   isExcluded: (file: string) => boolean,
   extensions: RegExp,
 ): void {
-  for (const entry of readdirSync(dir)) {
-    if (entry === "node_modules" || entry.startsWith(".")) continue;
-    const full = path.join(dir, entry);
-    if (statSync(full).isDirectory()) {
+  /*
+   * round 5: one readdirSync(dir, { withFileTypes: true }) instead of a
+   * readdirSync(dir) plus a separate statSync(full) per entry - half the
+   * syscalls per directory, same result, since nothing under src/ is a
+   * symlinked directory (Dirent.isDirectory() does not follow symlinks the
+   * way statSync does; confirmed none exist in this tree, and a real one
+   * would need this reconsidered).
+   */
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name === "node_modules" || entry.name.startsWith(".")) continue;
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
       walk(full, out, isExcluded, extensions);
       continue;
     }
     if (full.includes(`${path.sep}generated${path.sep}`)) continue;
-    if (extensions.test(entry) && !isExcluded(full)) out.push(full);
+    if (extensions.test(entry.name) && !isExcluded(full)) out.push(full);
   }
 }
 

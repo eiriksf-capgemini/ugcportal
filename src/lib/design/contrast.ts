@@ -226,6 +226,37 @@ export const PAIRINGS: Pairing[] = [
     "Row dividers, card edges and section rules.",
     "Purely ornamental separation. WCAG 1.4.11 covers the parts of a control that identify it, not decoration; a 3:1 hairline on every row would draw a bright grid across a page whose job is to disappear behind photographs. Controls use --color-line-strong (--input), which is checked at 3:1 above.",
   ),
+  /*
+   * ugcportal-rw9j review round 5: --border (--color-line) is one of the
+   * tokens globals.css's phase-1-mandate comment explicitly, deliberately
+   * leaves on the untouched near-black surface scale - "kort, kantlinjer,
+   * skjemafelt" (cards, BORDERS, form fields) is phase 2's own named scope,
+   * not this bead's. That is why this entry exists only to MEASURE the
+   * consequence on --background, not to gate it: the header/footer hairline
+   * (`* { @apply border-border }` against the new --background) measures
+   * 11.6:1 in light mode and 1.16:1 in dark - the same colour was never
+   * retuned for either new canvas, light mode's high ratio is incidental
+   * (--paper happens to be far lighter than --color-line), and dark mode's
+   * low one is the same incidental mismatch in the other direction, not a
+   * new defect introduced by moving --background specifically. Fixing it
+   * means choosing a border treatment for the new canvas, i.e. doing part of
+   * fase 2's job inside phase 1 - out of scope for the same reason --border
+   * itself is. docs/design/tokens.css's own reference already names the
+   * fix for whoever picks up fase 2: a dedicated dark-mode `--line` distinct
+   * from `--paper-line` (`#1F4A50`, measured here at only ~1.48:1 against
+   * --petrol-900 - still subtle by the reference's own design, not a bug to
+   * chase further). Decorative: no threshold, so this cannot block K2; it
+   * exists so the gap is visible to whoever reads this file next, not
+   * silent the way it was before this round.
+   */
+  {
+    id: "divider-on-background",
+    foreground: "--color-line",
+    background: ["--background"],
+    requirement: "decorative",
+    usage: "The header/footer hairline rule against the page canvas.",
+    why: "Phase-1-exempt, same as --border/--input generally (see globals.css's phase-1-mandate comment) - fase 2 (\"kantlinjer\") owns retuning this, not this bead. Measured and left visible rather than silently uncovered: 11.6:1 light, 1.16:1 dark.",
+  },
 
   {
     id: "primary-label-on-primary",
@@ -471,6 +502,23 @@ export const PAIRINGS: Pairing[] = [
           background: [well],
           requirement: "ui",
           usage: `Border of the destructive button against its own fill${state ? ", hovered" : ""}.`,
+        },
+        /*
+         * ugcportal-rw9j review round 5: destructive-focus-ring above
+         * (onEverySurface) only ever checked --destructive/${RING_ALPHA_
+         * MODIFIER} against SURFACES, never against the well its own focus
+         * ring actually has to render on - the same shape as
+         * focus-ring-on-old-surface's round-4 gap, just for the destructive
+         * ring instead of the neutral one. Passes today (measured ~5.33:1,
+         * same value on both well states since --destructive itself doesn't
+         * change), but was entirely unmonitored before this entry.
+         */
+        {
+          id: `destructive-focus-ring-on-destructive-surface${state}`,
+          foreground: `--destructive/${RING_ALPHA_MODIFIER}`,
+          background: [well],
+          requirement: "ui",
+          usage: `Focus indicator on a destructive control inside its own well${state ? ", hovered" : ""}.`,
         },
       ];
     },
