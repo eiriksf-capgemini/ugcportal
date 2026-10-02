@@ -136,6 +136,30 @@ model Media {
   mimeType     String
   sizeBytes    Int
   originalName String
+  // Accessibility and discoverability text (ugcportal-gwr) — the fields that
+  // replace `originalName` as the thing a screen reader or a search index
+  // reads about this image. Both nullable with no default, the same "null
+  // means not yet decided" idiom MediaListing's triage booleans use below:
+  // the upload form asks for `altText` but does not have to receive it, and
+  // nothing at this layer forces a value in.
+  //
+  // `altText` is enforced at exactly one place — POST /api/media/[id]/publish
+  // refuses to set `publishedAt` while this is null or blank (K1) — not here
+  // and not at upload. A schema-level NOT NULL would also bind every other
+  // writer this table will ever get (ugcportal-ct0's Instagram sync, for one)
+  // to supplying a value before a row can exist at all, which is a stronger
+  // and separate claim from "may not be PUBLISHED without one". The render
+  // layer (toGalleryItem in src/lib/gallery-items.ts) still never emits an
+  // empty alt or `originalName` as a fallback even if this invariant is ever
+  // violated upstream — see that module for why defence in depth is kept
+  // there too rather than trusted entirely to the publish gate.
+  //
+  // `caption` is optional everywhere, upload through publish. Both are plain
+  // text, escaped like any other React text node — no inline markup or link
+  // support in this iteration (product decision, ugcportal-gwr; revisit if a
+  // future bead wants rich captions).
+  altText      String?
+  caption      String?
   createdAt    DateTime  @default(now())
   publishedAt  DateTime?
 

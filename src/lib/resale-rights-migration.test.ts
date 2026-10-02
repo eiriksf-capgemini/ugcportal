@@ -312,8 +312,19 @@ describe("ugcportal-vsm K2: the audit trail survives intact", () => {
     // Derived rather than hard-coded: adding a fixture above must not turn
     // this into a number nobody rechecks.
     expect(await prisma.resaleRightsEvent.count()).toBe(before);
+    // `select: { id: true }` rather than an unscoped findUnique: this test's
+    // database deliberately stops applying migrations before
+    // REANCHOR_MIGRATION, so it never gains any column a later migration adds
+    // to Media (ugcportal-gwr's altText/caption included) — but the Prisma
+    // Client generated from the CURRENT schema still defaults to selecting
+    // every scalar column it knows about. An unscoped select would make this
+    // assertion, which only cares whether the row exists, start failing every
+    // time a future bead adds an unrelated Media column.
     expect(
-      await prisma.media.findUnique({ where: { id: "media-1" } }),
+      await prisma.media.findUnique({
+        where: { id: "media-1" },
+        select: { id: true },
+      }),
     ).toBeNull();
   });
 });

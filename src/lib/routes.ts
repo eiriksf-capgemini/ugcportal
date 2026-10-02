@@ -33,6 +33,15 @@ export const MEDIA_UPLOAD_PATH = "/api/media";
  */
 export const MEDIA_TAGS_FIELD = "tags";
 
+/**
+ * The multipart fields POST /api/media reads alt text and the caption out of
+ * (ugcportal-gwr). Unlike MEDIA_TAGS_FIELD each is sent at most once per
+ * upload — one description per file, not a repeated field — so the route
+ * reads them with `get()` rather than `getAll()`.
+ */
+export const MEDIA_ALT_TEXT_FIELD = "altText";
+export const MEDIA_CAPTION_FIELD = "caption";
+
 // The public gallery feed (ugcportal-r1d) and the preview bytes it points at
 // (ugcportal-a2l). Named here rather than spelled inline because ugcportal-71y
 // reaches for both from three places — the server-rendered first page, the

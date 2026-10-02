@@ -1,4 +1,4 @@
-import { hasUnsafeText } from "@/lib/media-rules";
+import { hasUnsafeText, validateAltText, validateCaption } from "@/lib/media-rules";
 import { mediaPreviewPath } from "@/lib/routes";
 
 /**
@@ -22,11 +22,14 @@ import { mediaPreviewPath } from "@/lib/routes";
  * the grid and the lightbox actually draw, so a column added to the feed later
  * reaches the DOM only if someone adds it here on purpose.
  *
- * Alt text is not a field. There is no alt-text column yet — ugcportal-gwr
- * owns adding one — and `originalName` is not a substitute even where it is
- * available: it is a filename off someone's disk, withheld from this audience
- * for that reason. See `galleryItemLabel` for what is used instead and why it
- * is a placeholder.
+ * `altText` and `caption` (ugcportal-gwr) ARE here, and are the one pair of
+ * fields on this type that come straight off the row rather than being
+ * derived or withheld. `originalName` is still not a substitute for either,
+ * for the reason given below `toGalleryTags`: it is a filename off someone's
+ * disk. Published media is never without alt text — POST
+ * /api/media/[id]/publish refuses to set `publishedAt` otherwise (K1) — but
+ * `toGalleryItem` still does not trust that invariant blindly; see its own
+ * comment for the defence-in-depth fallback.
  */
 /** One subject label on an item (ugcportal-jsc). */
 export type GalleryTag = {
@@ -42,6 +45,28 @@ export type GalleryItem = {
   previewSrc: string;
   /** ISO-8601, or null when the feed sent something that was not a date. */
   publishedAt: string | null;
+  /**
+   * The uploader's own description of the photograph (ugcportal-gwr), or
+   * `""` when none was supplied or what was supplied failed sanitisation —
+   * the same "absence is the empty string" contract `caption` below has.
+   *
+   * NOT what reaches `<img alt>` directly: this field is the sanitized
+   * INPUT to that decision, and `galleryItemAlt(item, position)` is the
+   * function that turns it into the string actually rendered, falling back
+   * to a non-empty placeholder built from the item's position when this is
+   * `""`. Reading `item.altText` directly anywhere a render needs real alt
+   * text is the bug `galleryItemAlt` exists to be the one place that can't
+   * have.
+   */
+  altText: string;
+  /**
+   * The uploader's optional caption (ugcportal-gwr), rendered as visible text
+   * in the gallery tile and the lightbox. Empty string means none was
+   * supplied — the ordinary case for anything uploaded before this bead — and
+   * both render sites hide the element entirely for it, the same rule the
+   * subject-tag caption already follows in the lightbox.
+   */
+  caption: string;
   /**
    * The item's subject tags, in the order the feed sent them (by slug — see
    * MEDIA_TAGS_SELECT). EMPTY IS ORDINARY, not an error state: most of the
@@ -62,8 +87,38 @@ export type PublicMediaRowish = {
   id?: unknown;
   previewId?: unknown;
   publishedAt?: unknown;
+  altText?: unknown;
+  caption?: unknown;
   tags?: unknown;
 };
+
+/**
+ * A user-supplied string, cleaned by calling the EXACT SAME validator the
+ * write path uses (`validateAltText`/`validateCaption`, src/lib/media-rules.ts)
+ * rather than a second, hand-written copy of its rules. Returns `""` for
+ * "nothing safe to show" — whether that's because nothing was supplied or
+ * because what was supplied failed validation — never a partially repaired
+ * string nobody wrote.
+ *
+ * THIS USED TO BE A SEPARATE IMPLEMENTATION, and that cost a real bug
+ * (review round 2): it re-ran `hasUnsafeText` by hand without the caption
+ * newline exemption `validateCaption` has, so a caption written with a real
+ * `\n` validated fine at write time and then silently lost its line breaks
+ * on every render — the write path and the read path's independent copies
+ * had drifted apart. Round 3 found the fix for that still had two remaining
+ * gaps from the same root cause: the hand-written copy never enforced
+ * `MAX_ALT_TEXT_LENGTH`/`MAX_CAPTION_LENGTH` at all (so an oversized value
+ * from any future writer that bypasses POST /api/media's own validation
+ * would have rendered in full), and the two copies could drift again the
+ * next time either validator's rules changed. Calling the real function
+ * removes the second copy instead of fixing it a third time: there is
+ * nothing left here that can disagree with what was actually validated at
+ * write time.
+ */
+function sanitizedMediaText(value: unknown, allowNewlines = false): string {
+  const result = allowNewlines ? validateCaption(value) : validateAltText(value);
+  return result.ok ? result.value : "";
+}
 
 /**
  * The tags on one row, filtered down to the ones that can safely be drawn.
@@ -149,6 +204,8 @@ export function toGalleryItem(row: PublicMediaRowish): GalleryItem | null {
     id,
     previewSrc: mediaPreviewPath(previewId),
     publishedAt: asIsoString(row.publishedAt),
+    altText: sanitizedMediaText(row.altText),
+    caption: sanitizedMediaText(row.caption, true),
     // Absent tags are an empty list, never a missing field: a row from before
     // tagging existed and a row somebody untagged are the same thing to draw,
     // and a `tags` that can be `undefined` is a `.map` waiting to throw in a
@@ -238,46 +295,80 @@ const PUBLISHED_ON = new Intl.DateTimeFormat("en-GB", {
 });
 
 /**
- * What a tile and its lightbox slide are called.
+ * THE SAFETY NET, not the primary source any more. Before ugcportal-gwr this
+ * WAS the tile's alt text — a placeholder built from a position and a
+ * publication date, because there was no field for a real description. That
+ * field exists now (`GalleryItem.altText`), and `galleryItemAlt` below reaches
+ * for this only when it is empty: published media is never supposed to lack
+ * alt text at all — POST /api/media/[id]/publish refuses to set
+ * `publishedAt` otherwise (K1) — but "never supposed to" is exactly the
+ * assumption that made earlier invariants in this codebase vacuous when they
+ * turned out to be wrong, so K2's "never empty alt text" is kept true here
+ * too, independently of the publish gate holding.
  *
- * A PLACEHOLDER, and worth naming as one: neither a position nor a publication
- * date describes a photograph, and a screen-reader user learns nothing about
- * the image from either. Real alt text needs a field the uploader fills in,
- * which is ugcportal-gwr.
- *
- * What it does buy is that every tile has an accessible name and that no two
- * names collide. THE POSITION IS WHAT MAKES THAT TRUE, and it is here because
- * the date alone did not: the first version of this named the publication date
- * and nothing else, and the feed publishes in batches, so a day's uploads all
- * got the identical name — "Open photograph published 4 March 2026", forty
- * times, in a grid whose whole purpose is choosing between them. The test that
- * was supposed to cover it only ever compared items published on *different*
- * days, so the fixture could not construct the collision it existed to rule
- * out.
- *
- * The date stays because it is the only meaningful thing the anonymous feed
- * knows about a row; the position is what disambiguates. `position` is the
- * item's index in the rendered list, which is also its slide index in the
- * viewer — the same number in both places, so a listener who hears
- * "photograph 12" in the grid hears the same in the lightbox.
+ * THE POSITION IS WHAT MAKES TWO FALLBACKS NOT COLLIDE. The first version of
+ * this named only the publication date, and the feed publishes in batches, so
+ * a day's uploads all got the identical name — "Open photograph published
+ * 4 March 2026", forty times. `position` is the item's index in the rendered
+ * list, which is also its slide index in the viewer — the same number in both
+ * places, so a listener who hears "photograph 12" in the grid hears the same
+ * in the lightbox.
  */
-function describeGalleryItem(item: GalleryItem, position: number): string {
+function fallbackDescription(item: GalleryItem, position: number): string {
   const subject = `photograph ${position + 1}`;
   if (item.publishedAt === null) return subject;
   return `${subject}, published ${PUBLISHED_ON.format(new Date(item.publishedAt))}`;
 }
 
-/** The accessible name of a tile, which is a control that opens the viewer. */
+/**
+ * The accessible name of a tile, which is a control that opens the viewer.
+ *
+ * NOT built from `galleryItemAlt` below, even though both ultimately choose
+ * between the same two sources — real alt text, or the fallback — because
+ * `galleryItemAlt` capitalizes the fallback (it stands alone, as `<img alt>`)
+ * and this one does not (it reads as the tail of "Open …"). Delegating would
+ * either capitalize mid-sentence ("Open Photograph 1…") or require this
+ * function to re-lowercase a string the other one just capitalized.
+ */
 export function galleryItemLabel(item: GalleryItem, position: number): string {
-  return `Open ${describeGalleryItem(item, position)}`;
+  const text = item.altText !== "" ? item.altText : fallbackDescription(item, position);
+  return `Open ${text}`;
 }
 
 /**
- * The lightbox slide's alt text. The same description without "Open", because
- * a slide is an image rather than a control and alt text that reads as an
- * instruction is worse than alt text that reads as a label.
+ * The lightbox slide's alt text, and the gallery tile's `<img alt>` (ugcportal-gwr).
+ *
+ * THE UPLOADER'S OWN WORDS, first. `item.altText` is sanitized but otherwise
+ * verbatim — not capitalized, not reworded — because it is a sentence someone
+ * wrote on purpose and rewriting a person's own description is not this
+ * function's place.
+ *
+ * The placeholder is reached only when that is empty, which K1 means should
+ * never happen for a published item; see `fallbackDescription` for why the
+ * net is kept anyway. Capitalized there and not on the real value, because the
+ * placeholder is a phrase this function builds in lower case ("photograph 12,
+ * published...") and real alt text is not this function's to re-case.
+ *
+ * `position` DISAMBIGUATES ONLY ON THE FALLBACK BRANCH, and that asymmetry is
+ * deliberate rather than a gap this function should close (review round 1,
+ * finding 2). The placeholder needed it because the SAME synthetic string
+ * (a position and a date) was otherwise handed to every item in a batch, with
+ * nothing else to tell them apart. Real alt text does not have that problem
+ * in the same way — it is the uploader's own words — but it is not immune
+ * to it either: this product's upload form applies one alt text to an entire
+ * batch of files (ugcportal-gwr's known limitation, tracked as
+ * ugcportal-hf5u), so several items CAN legitimately carry the identical
+ * string today, and nothing here makes them unique. That is intentional: a
+ * screen-reader user hearing the same real description on three photographs
+ * from the same batch is hearing an honest (if unhelpful) fact about how
+ * they were described, not a bug this function invented — inventing a
+ * position suffix ("…, photo 2 of 3") on text someone wrote would put words
+ * in their caption that are not theirs. The actual fix for the underlying
+ * limitation is per-file alt text (hf5u), not a disambiguator bolted onto
+ * the read side.
  */
 export function galleryItemAlt(item: GalleryItem, position: number): string {
-  const description = describeGalleryItem(item, position);
+  if (item.altText !== "") return item.altText;
+  const description = fallbackDescription(item, position);
   return description.charAt(0).toUpperCase() + description.slice(1);
 }

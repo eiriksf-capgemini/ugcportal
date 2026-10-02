@@ -30,6 +30,8 @@ type Row = {
   mimeType: string;
   sizeBytes: number;
   originalName: string;
+  altText: string | null;
+  caption: string | null;
   createdAt: Date;
   publishedAt: Date | null;
 };
@@ -158,6 +160,11 @@ function row(overrides: Partial<Row> = {}): Row {
     mimeType: "image/png",
     sizeBytes: 1234,
     originalName: `${id}.png`,
+    // ugcportal-gwr: present by default so this fixture can produce a row
+    // the anonymous feed is actually allowed to publish (K1 requires it),
+    // and distinct from `originalName` so a test can tell the two apart.
+    altText: `A photograph, ${id}`,
+    caption: null,
     createdAt: new Date(
       `2026-09-${String((sequence % 28) + 1).padStart(2, "0")}T10:00:00Z`,
     ),
@@ -166,8 +173,20 @@ function row(overrides: Partial<Row> = {}): Row {
   };
 }
 
-/** Exactly the fields an anonymous caller may see. */
+/**
+ * Exactly the fields an anonymous caller may see.
+ *
+ * NOT exhaustive against `MEDIA_ANONYMOUS_SELECT` — `tags` is a relation, and
+ * this file's `Row`/`project` fixture pre-dates it (ugcportal-jsc) without
+ * being extended to model one; that gap is pre-existing and out of this
+ * bead's scope. `altText` and `caption` (ugcportal-gwr) are plain columns,
+ * same shape as everything else this list already names, so they are added
+ * here rather than left to silently vanish the way an `undefined` fixture
+ * value does through `NextResponse.json`'s serialisation.
+ */
 const ANONYMOUS_FIELDS = [
+  "altText",
+  "caption",
   "createdAt",
   "id",
   "kind",
@@ -343,11 +362,58 @@ describe("GET /api/public/media — no original key, no preview-less row (K3)", 
     expect(b.kind).toEqual(c.kind);
     // Every remaining field is either shared by all three or unique to one.
     // Nothing sits in between, which is what "cannot be grouped" means.
+    //
+    // `altText` and `caption` (ugcportal-gwr) are INCLUDED here, deliberately
+    // — review round 2 pointed out that excluding them entirely (an earlier
+    // version of this test did) throws away this invariant's general
+    // protection against an UNRELATED leak (a bug elsewhere making two
+    // different uploaders' rows share a value by accident), leaving only
+    // the narrower, same-batch-specific test below to catch it. With this
+    // fixture's default `row()` values — a unique altText per id, and
+    // `caption: null` shared by everyone — both still satisfy {1, 3}
+    // exactly like every other field. The INTENTIONAL exception (two rows
+    // from the SAME batch sharing identical text) is deliberately not built
+    // here; it is its own, explicit scenario in the test below, which
+    // constructs it on purpose rather than leaving this one to either miss
+    // it or be weakened to stop looking.
     for (const field of Object.keys(a)) {
       const values = [a[field], b[field], c[field]];
       const distinct = new Set(values.map((v) => JSON.stringify(v))).size;
       expect([1, 3]).toContain(distinct);
     }
+  });
+
+  it("lets a batch upload's shared alt text and caption correlate rows — not a leak this feed tries to prevent (ugcportal-gwr, review round 1 finding 3)", async () => {
+    // The upload form can apply ONE alt text and caption to an entire batch
+    // of files (ugcportal-hf5u's known limitation), so two rows from the
+    // same uploader's batch legitimately carry byte-identical altText and
+    // caption while a third, unrelated row differs — exactly the "two
+    // same, one different" shape the invariant above forbids for every
+    // OTHER field. That shape is excluded there on purpose and asserted
+    // here instead, so the exemption is a stated decision rather than a
+    // silent gap in the sibling test: altText and caption are the
+    // uploader's own words, chosen to be shown next to the photograph they
+    // describe (the same status `tags` already has — see
+    // MEDIA_ANONYMOUS_SELECT's own comment on tags for the identical
+    // argument), not an infrastructure identifier this feed goes to length
+    // to decorrelate the way it does `previewKey`, `userId` or
+    // `originalName`.
+    const sameBatch = "Shot on a walk before sunrise.";
+    seed([
+      row({ id: "a", userId: "user-1", altText: "A fox", caption: sameBatch }),
+      row({ id: "b", userId: "user-1", altText: "A fox", caption: sameBatch }),
+      row({ id: "c", userId: "user-2", altText: "A heron", caption: "Different." }),
+    ]);
+
+    const body = await (await GET(request())).json();
+    const [a, b, c] = body.items.slice().sort(
+      (x: { id: string }, y: { id: string }) => (x.id < y.id ? -1 : 1),
+    );
+
+    expect(a.altText).toBe(b.altText);
+    expect(a.caption).toBe(b.caption);
+    expect(a.altText).not.toBe(c.altText);
+    expect(a.caption).not.toBe(c.caption);
   });
 
   it("withholds the uploader-supplied filename from anonymous callers", async () => {

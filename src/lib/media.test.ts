@@ -5,10 +5,16 @@ import { createClient } from "@libsql/client";
 import { describe, expect, it } from "vitest";
 
 import {
+  LONE_SURROGATE,
+  MAX_ALT_TEXT_LENGTH,
+  MAX_CAPTION_LENGTH,
   MAX_ORIGINAL_NAME_LENGTH,
+  altTextEqualsFilename,
   mediaPreviewColumns,
   sanitizeOriginalName,
   sniffKind,
+  validateAltText,
+  validateCaption,
   validateOriginalName,
   validateUpload,
 } from "@/lib/media";
@@ -246,6 +252,204 @@ describe("sanitizeOriginalName", () => {
       });
     },
   );
+});
+
+/**
+ * Alt text and caption (ugcportal-gwr). Both run through
+ * `validateBoundedText` in src/lib/media-rules.ts; these tests exercise it
+ * through the two names every caller actually imports, the same way the
+ * tag-name tests in src/lib/tags.test.ts exercise their own shared
+ * denylist through `parseTagNames` rather than the private helper directly.
+ */
+describe("validateAltText", () => {
+  it("accepts ordinary text", () => {
+    expect(validateAltText("A fox crossing a snowy field at dawn")).toEqual({
+      ok: true,
+      value: "A fox crossing a snowy field at dawn",
+    });
+  });
+
+  it("treats absent or blank as 'none supplied', not an error", () => {
+    // Requiredness is a separate, server-only rule — the publish gate, not
+    // this function. See alt-text.ts in src/app/upload for the stricter,
+    // client-side rule this page applies on top of it.
+    for (const value of [null, undefined, "", "   "]) {
+      expect(validateAltText(value)).toEqual({ ok: true, value: "" });
+    }
+  });
+
+  it("trims surrounding whitespace", () => {
+    expect(validateAltText("  a fox in a field  ")).toEqual({
+      ok: true,
+      value: "a fox in a field",
+    });
+  });
+
+  // THE BOUNDARY (ugcportal-gwr's own self-check): 124 accepted, 125
+  // accepted, 126 rejected. Strict rejection, not truncation — see
+  // MAX_ALT_TEXT_LENGTH's docstring for why.
+  it("accepts alt text one character below the limit (124)", () => {
+    const value = "a".repeat(MAX_ALT_TEXT_LENGTH - 1);
+    expect(validateAltText(value)).toEqual({ ok: true, value });
+  });
+
+  it("accepts alt text at exactly the limit (125)", () => {
+    const value = "a".repeat(MAX_ALT_TEXT_LENGTH);
+    expect(validateAltText(value)).toEqual({ ok: true, value });
+  });
+
+  it("rejects alt text one character over the limit (126), rather than truncating it", () => {
+    const value = "a".repeat(MAX_ALT_TEXT_LENGTH + 1);
+    const result = validateAltText(value);
+    expect(result.ok).toBe(false);
+    expect(result).not.toHaveProperty("value");
+  });
+
+  it("counts in code points, so an astral character is one unit", () => {
+    // U+1F98A (fox emoji) is a surrogate pair in UTF-16 — two code UNITS,
+    // one code POINT. Counting units would reject this one character short
+    // of where it should.
+    const value = "\u{1F98A}".repeat(MAX_ALT_TEXT_LENGTH);
+    expect(validateAltText(value).ok).toBe(true);
+  });
+
+  it("rejects a bidi override, the same denylist originalName and tags use", () => {
+    const result = validateAltText(`A fox‮ in a field`);
+    expect(result.ok).toBe(false);
+  });
+
+  it("rejects a non-string value rather than coercing it", () => {
+    expect(validateAltText(42).ok).toBe(false);
+    expect(validateAltText({}).ok).toBe(false);
+  });
+});
+
+describe("validateCaption", () => {
+  it("accepts ordinary text, and absence, the same way validateAltText does", () => {
+    expect(validateCaption("Shot on a walk before sunrise.")).toEqual({
+      ok: true,
+      value: "Shot on a walk before sunrise.",
+    });
+    expect(validateCaption(undefined)).toEqual({ ok: true, value: "" });
+  });
+
+  it("has its own, longer limit", () => {
+    expect(MAX_CAPTION_LENGTH).toBeGreaterThan(MAX_ALT_TEXT_LENGTH);
+    const atLimit = "c".repeat(MAX_CAPTION_LENGTH);
+    expect(validateCaption(atLimit)).toEqual({ ok: true, value: atLimit });
+    expect(validateCaption("c".repeat(MAX_CAPTION_LENGTH + 1)).ok).toBe(false);
+  });
+
+  it("rejects a bidi override", () => {
+    expect(validateCaption(`Caught‮ at dawn`).ok).toBe(false);
+  });
+
+  // Review round 1, finding 6: the caption field is a multi-row <textarea>
+  // and the shared denylist's control-character range includes \n and \r,
+  // so an ordinary two-line caption was refused outright before this.
+  it("accepts a line break, unlike every other field that shares this denylist", () => {
+    expect(validateCaption("Line one\nLine two")).toEqual({
+      ok: true,
+      value: "Line one\nLine two",
+    });
+    // CRLF too — a paste from a Windows editor should not be refused either.
+    expect(validateCaption("Line one\r\nLine two").ok).toBe(true);
+  });
+
+  it("still rejects every other control character and every bidi override once newlines are set aside", () => {
+    expect(validateCaption("Line one\nLine two").ok).toBe(false);
+    expect(validateCaption(`Line one\nLine two‮ bidi`).ok).toBe(false);
+  });
+
+  it("counts a line break toward the length limit — it is not stripped from the stored value", () => {
+    // The newline sits in the MIDDLE, deliberately: `.trim()` removes one at
+    // either edge (the same as any other whitespace), which would make this
+    // test pass for the wrong reason — proving trimming, not preservation.
+    const withNewline = `${"c".repeat(MAX_CAPTION_LENGTH - 1)}\nc`;
+    expect(Array.from(withNewline).length).toBe(MAX_CAPTION_LENGTH + 1);
+    expect(validateCaption(withNewline).ok).toBe(false);
+
+    const withinLimit = `${"c".repeat(MAX_CAPTION_LENGTH - 2)}\nc`;
+    expect(Array.from(withinLimit).length).toBe(MAX_CAPTION_LENGTH);
+    expect(validateCaption(withinLimit)).toEqual({
+      ok: true,
+      value: withinLimit,
+    });
+  });
+
+  // Review round 4: stripping the newline for the control/bidi check used to
+  // ALSO feed the lone-surrogate check, and deleting the character between
+  // two lone surrogates can reassemble them into one well-formed code point
+  // in the copy being tested — while the real, returned value (newline
+  // intact) still has two genuinely separate lone surrogates in it.
+  // @libsql/client silently substitutes U+FFFD for a lone surrogate on
+  // write, so letting this through would mean the persisted caption
+  // silently disagreed with the one this function just validated.
+  it("still refuses a lone surrogate that a newline happens to sit between", () => {
+    const lowSurrogate = String.fromCharCode(0xdc00);
+    const highSurrogate = String.fromCharCode(0xd800);
+    const straddlingNewline = `${highSurrogate}\n${lowSurrogate}`;
+    // Sanity check on the premise: stripped of its newline, this pair IS a
+    // single well-formed astral character — which is exactly why checking
+    // the stripped copy for lone surrogates would have been wrong.
+    expect(LONE_SURROGATE.test(straddlingNewline.replace("\n", ""))).toBe(
+      false,
+    );
+    expect(validateCaption(straddlingNewline).ok).toBe(false);
+  });
+});
+
+describe("validateAltText still refuses a line break (unlike validateCaption)", () => {
+  it("rejects a newline in alt text — it is a single-line field", () => {
+    expect(validateAltText("A fox\nin a field").ok).toBe(false);
+  });
+});
+
+/**
+ * K2's filename-equality rule (review round 3 finding 4), as the one
+ * function both `POST /api/media` and the upload form's client-side
+ * precheck call — see that function's own docstring for why they cannot
+ * share the WHOLE check (the server additionally compares against
+ * `sanitizeOriginalName`, which needs a node-only module).
+ */
+describe("altTextEqualsFilename", () => {
+  it("matches the exact filename", () => {
+    expect(altTextEqualsFilename("photo.png", ["photo.png"])).toBe(true);
+  });
+
+  it("matches against any one of several filenames", () => {
+    expect(
+      altTextEqualsFilename("clip.mp4", ["photo.png", "clip.mp4"]),
+    ).toBe(true);
+  });
+
+  it("does not match when nothing in the list equals it", () => {
+    expect(altTextEqualsFilename("A fox in a field", ["photo.png"])).toBe(
+      false,
+    );
+  });
+
+  it("does not match an empty alt text against anything", () => {
+    expect(altTextEqualsFilename("", ["photo.png"])).toBe(false);
+    expect(altTextEqualsFilename("   ", ["photo.png"])).toBe(false);
+  });
+
+  it("is not a substring match", () => {
+    expect(
+      altTextEqualsFilename("A photo named photo.png, taken at dawn", [
+        "photo.png",
+      ]),
+    ).toBe(false);
+  });
+
+  it("trims both sides before comparing", () => {
+    expect(altTextEqualsFilename("  photo.png  ", ["photo.png"])).toBe(true);
+    expect(altTextEqualsFilename("photo.png", ["  photo.png  "])).toBe(true);
+  });
+
+  it("matches nothing when the filename list is empty", () => {
+    expect(altTextEqualsFilename("photo.png", [])).toBe(false);
+  });
 });
 
 describe("mediaPreviewColumns", () => {

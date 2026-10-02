@@ -213,3 +213,175 @@ export const MAX_TAGS_PER_ITEM = 6;
  * the longest of the four subjects in use ("Wine & drink") is twelve.
  */
 export const MAX_TAG_NAME_LENGTH = 32;
+
+// --- alt text and caption (ugcportal-gwr) -----------------------------------
+//
+// Accessibility/discoverability text on a Media row. Both numbers live here,
+// not the rule that makes the first one REQUIRED — that is "required to
+// publish", a product decision enforced once, at POST
+// /api/media/[id]/publish, which is server-only (it reads the owner's row)
+// and must not be reimplemented client-side. What the upload form DOES need
+// is the shared length/character rule, so a caption that is already too long
+// or carries a bidi override is refused the same way client-side as it would
+// be server-side — the same relationship `MAX_TAGS_PER_ITEM` already has to
+// `parseTagNames`.
+
+/**
+ * Longest alt text, in CODE POINTS — the same counting MAX_ORIGINAL_NAME_LENGTH
+ * and MAX_TAG_NAME_LENGTH use, so truncating or measuring can never split a
+ * surrogate pair.
+ *
+ * 125 rather than a rounder number: it is Eirik's own call for this bead, sized
+ * to keep alt text a description rather than a caption-length essay — a screen
+ * reader reads the whole string aloud on every encounter, so there is a real
+ * cost to length that a visual caption does not have.
+ *
+ * STRICT REJECTION ABOVE THE LIMIT, not truncation. Alt text is text someone
+ * typed into a form field on purpose, immediately before submitting it — the
+ * same position `validateOriginalName`'s rename path is in, and that path
+ * REJECTS rather than repairs for exactly the same reason: unlike an
+ * incidental filename a phone's camera chose, there is no "theirs, but
+ * slightly mangled" version of a sentence someone wrote and meant. Silently
+ * cutting it at code point 125 would store a sentence nobody wrote and the
+ * one person who could tell has already moved on past the form.
+ */
+export const MAX_ALT_TEXT_LENGTH = 125;
+
+/** Longest caption, in code points. Generous relative to alt text on purpose:
+ * a caption is read on demand, not announced unconditionally, so the cost of
+ * length is the ordinary one a visual caption always had.
+ */
+export const MAX_CAPTION_LENGTH = 500;
+
+export type TextFieldValidation =
+  | { ok: true; value: string }
+  | { ok: false; message: string };
+
+/**
+ * Shared shape for both fields below: absent or blank is accepted as "none"
+ * (`value: ""`) — REQUIREDNESS is a separate, server-only rule (the publish
+ * gate), not something this function decides — and anything present is held
+ * to the same denylist every other user-typed string in this product goes
+ * through (`hasUnsafeText`, above), plus its own length cap.
+ *
+ * `allowNewlines` exists for exactly one caller: the caption field is
+ * rendered as a multi-row `<textarea>` (ugcportal-gwr, review round 1,
+ * finding 6), which invites the Enter key the way a single-line `<input>`
+ * never does. `UNSAFE_TEXT_CHARS`' control-character range includes `\n`
+ * and `\r`, so without this an ordinary two-line caption was refused
+ * outright, with a message that does not even mention line breaks. Alt text
+ * stays on the strict denylist unchanged — it is a single-line field, so a
+ * literal newline in it is already a sign something is wrong, the same
+ * reasoning `validateOriginalName` applies to a filename.
+ *
+ * The exemption is applied to a COPY used only for the CONTROL/BIDI half of
+ * the denylist check, never to the value this function returns, to the
+ * length count, or — this is the part review round 4 found missing — to the
+ * LONE-SURROGATE check. That last one has to run against the real,
+ * unmodified string: stripping a newline is a character DELETION, and
+ * deleting the one character separating a lone high surrogate from a lone
+ * low surrogate can reassemble them into a single valid code point in the
+ * copy being tested, while the ACTUAL value returned (newline intact,
+ * halves still genuinely separate) is still exactly as malformed as before.
+ * `"\uD800\n\uDC00"` is the concrete case: newline-stripped, that reads as
+ * one well-formed astral character and passes; unmodified, it is two lone
+ * surrogates around an ordinary line break, which is what is actually
+ * stored. `@libsql/client` silently substitutes U+FFFD for a lone surrogate
+ * on write (see LONE_SURROGATE's own docstring above), so letting this pass
+ * means the persisted caption would have silently diverged from the one
+ * this function just validated and handed back — precisely the
+ * echoed-response-disagrees-with-later-read failure this repo already fixed
+ * once for `originalName` (ugcportal-bdh) and must not reintroduce here.
+ */
+function validateBoundedText(
+  value: unknown,
+  field: string,
+  maxLength: number,
+  allowNewlines = false,
+): TextFieldValidation {
+  if (value === null || value === undefined) return { ok: true, value: "" };
+  if (typeof value !== "string") {
+    return { ok: false, message: `Field '${field}' must be a string` };
+  }
+  const trimmed = value.trim();
+  if (trimmed === "") return { ok: true, value: "" };
+  /*
+   * `trimmed.length` (UTF-16 code UNITS) first, as a cheap short-circuit
+   * (review round 4 finding 9): every code POINT is one or two code units,
+   * so the code-point count can never exceed it — meaning whenever the
+   * code-unit count is already within bound, the code-point count provably
+   * is too, with no need to build the full `Array.from` array to find out.
+   * `sanitizedMediaText` (src/lib/gallery-items.ts) calls this once per
+   * field per row on every gallery read, and the ordinary case (a caption
+   * well under 500 code points) never allocates at all now. The precise,
+   * surrogate-pair-aware count is still computed, exactly as before, on the
+   * one path where it can actually change the answer: a code-unit count
+   * over the limit that a run of astral characters (two units, one point
+   * each) might still bring back under it.
+   */
+  if (trimmed.length > maxLength && Array.from(trimmed).length > maxLength) {
+    return {
+      ok: false,
+      message: `Field '${field}' must be at most ${maxLength} characters`,
+    };
+  }
+  // Newlines are exempted from the control/bidi check alone — see above for
+  // why LONE_SURROGATE must not be re-run against this stripped copy.
+  const checkedForControlChars = allowNewlines
+    ? trimmed.replace(/\r\n|\r|\n/g, "")
+    : trimmed;
+  if (
+    UNSAFE_TEXT_CHARS.test(checkedForControlChars) ||
+    LONE_SURROGATE.test(trimmed)
+  ) {
+    return {
+      ok: false,
+      message: `Field '${field}' must not contain control or text-direction characters`,
+    };
+  }
+  return { ok: true, value: trimmed };
+}
+
+/** Validates (never requires) alt text. See MAX_ALT_TEXT_LENGTH. */
+export function validateAltText(value: unknown): TextFieldValidation {
+  return validateBoundedText(value, "altText", MAX_ALT_TEXT_LENGTH);
+}
+
+/**
+ * Validates the optional caption. See MAX_CAPTION_LENGTH.
+ *
+ * `allowNewlines: true` — see `validateBoundedText`'s own note on why this is
+ * the one field that gets it.
+ */
+export function validateCaption(value: unknown): TextFieldValidation {
+  return validateBoundedText(value, "caption", MAX_CAPTION_LENGTH, true);
+}
+
+/**
+ * True when `altText` is, verbatim, one of the names in `filenames` — K2's
+ * own "never happen" case (ugcportal-gwr's Norwegian description:
+ * "alt-tekst lik filnavnet"). Trims both sides and refuses to match an empty
+ * string (an empty alt text is a different, separate problem — see the
+ * publish gate), but otherwise does a literal, case-sensitive comparison: a
+ * coincidental partial match ("a photo named photo.png") is not what K2 is
+ * about, and fuzzing the comparison would make it guess rather than check.
+ *
+ * DEPENDENCY-FREE, so the upload FORM (a client component) can run the
+ * identical check the server does — the same reason this whole module
+ * exists (see its header). It is not the server's WHOLE check, though:
+ * `POST /api/media` (src/app/api/media/route.ts) additionally compares
+ * against `sanitizeOriginalName(file.name)`, which repairs a name that
+ * started out different but collapses to the same stored string, and that
+ * function lives in src/lib/media.ts, which imports `node:crypto` and
+ * cannot be bundled for the browser. So the client-side precheck below
+ * catches the common case — typing the exact name you can see — and the
+ * server remains the backstop for the sanitized-but-not-raw edge case.
+ */
+export function altTextEqualsFilename(
+  altText: string,
+  filenames: readonly string[],
+): boolean {
+  const trimmed = altText.trim();
+  if (trimmed === "") return false;
+  return filenames.some((name) => trimmed === name.trim());
+}

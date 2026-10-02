@@ -4,6 +4,7 @@ import type PhotoSwipeLightbox from "photoswipe/lightbox";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
+  GALLERY_CAPTION_CLASS,
   GALLERY_GRID_CLASS,
   GALLERY_STATE_CONTAINER_CLASS,
   GALLERY_TAG_CLASS,
@@ -21,6 +22,7 @@ import {
 import { Button } from "@/components/ui/button";
 import {
   appendGalleryItems,
+  galleryItemAlt,
   galleryItemLabel,
   toGalleryItems,
   type GalleryItem,
@@ -364,7 +366,17 @@ export function Gallery({
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src={item.previewSrc}
-                alt=""
+                /*
+                  The REAL alt text (ugcportal-gwr K1/K2), not "" — this is the
+                  attribute discoverability tooling (search, llms.txt) and a
+                  text-only or image-failed render actually read, independently
+                  of what any screen reader announces. `aria-hidden` below is
+                  what stops that second channel, not an empty alt: the button
+                  already carries the accessible name, so without aria-hidden
+                  the two would announce the same photograph twice, not once
+                  correctly and once as nothing.
+                */
+                alt={galleryItemAlt(item, index)}
                 className={GALLERY_TILE_IMAGE_CLASS}
                 /*
                   The default page is 50 items, and on a phone roughly 46 of
@@ -384,6 +396,7 @@ export function Gallery({
                 onLoad={(event) => remember(item.previewSrc, event.currentTarget)}
               />
             </button>
+            <GalleryItemCaption item={item} />
             <GalleryItemTags item={item} />
           </li>
         ))}
@@ -399,6 +412,34 @@ export function Gallery({
         }}
       />
     </div>
+  );
+}
+
+/**
+ * The caption under one tile (ugcportal-gwr). Mirrors `figure > img[alt] +
+ * figcaption` from docs/design/forside.html's reference sketch — not a
+ * literal `<figcaption>`, since the tile is not inside a `<figure>` and
+ * introducing one here is a larger structural change than this bead's render
+ * half needs, but the same idea: a short, optional, visible line of text
+ * under the photograph, separate from the button that opens it.
+ *
+ * RENDERS NOTHING when there is no caption, for the same reason
+ * `GalleryItemTags` renders nothing when there are no tags: an untagged,
+ * uncaptioned item is the ordinary case for most of this library, and an
+ * empty element would still carry this one's margin.
+ *
+ * Plain text, nothing else. React escapes it the same way it escapes a tag
+ * name, so a caption containing `<script>` renders as those literal
+ * characters rather than executing (K2's XSS criterion) — the same guarantee
+ * `GalleryItemTags` already has, for the same reason: nothing on this path
+ * uses `dangerouslySetInnerHTML`.
+ */
+function GalleryItemCaption({ item }: { item: GalleryItem }) {
+  if (item.caption === "") return null;
+  return (
+    <p className={GALLERY_CAPTION_CLASS} data-gallery-caption={item.id}>
+      {item.caption}
+    </p>
   );
 }
 

@@ -5,11 +5,15 @@ import { NextResponse } from "next/server";
 
 import { auth } from "@/lib/auth";
 import {
+  FALLBACK_ORIGINAL_NAME,
   MAX_UPLOAD_BYTES,
   PREVIEW_KEY_PREFIX,
   mediaPreviewColumns,
   sanitizeOriginalName,
   sniffKind,
+  altTextEqualsFilename,
+  validateAltText,
+  validateCaption,
   validateUpload,
 } from "@/lib/media";
 import { MEDIA_OWNER_SELECT } from "@/lib/media-access";
@@ -20,7 +24,11 @@ import {
   peekDeclaredPartType,
   readCappedFormDataFrom,
 } from "@/lib/request-body";
-import { MEDIA_TAGS_FIELD } from "@/lib/routes";
+import {
+  MEDIA_ALT_TEXT_FIELD,
+  MEDIA_CAPTION_FIELD,
+  MEDIA_TAGS_FIELD,
+} from "@/lib/routes";
 import { getBucketName, getS3Client } from "@/lib/s3";
 import { parseTagNames, resolveTagRows } from "@/lib/tags";
 import type { UploadReservation } from "@/lib/upload-memory";
@@ -301,6 +309,82 @@ async function handleUpload(
     return NextResponse.json({ error: tags.message }, { status: 400 });
   }
 
+  /*
+   * Alt text and caption (ugcportal-gwr). NOT required here — see
+   * MAX_ALT_TEXT_LENGTH's docstring and the publish route, which is the one
+   * place `altText` is actually enforced. What IS refused here is a value
+   * that is present and malformed: too long, or carrying a bidi override —
+   * the same "fails the whole upload rather than being silently dropped"
+   * treatment `tags` gets above, and for the same reason: both are strings a
+   * person typed on purpose, immediately before submitting this request, so
+   * silently storing something other than what they typed is worse than
+   * saying no.
+   *
+   * `get()`, not `getAll()`: unlike tags these are sent at most once per
+   * upload (MEDIA_ALT_TEXT_FIELD's docstring in src/lib/routes.ts). A part
+   * sent as a file would arrive as a File rather than a string; `validateAltText`
+   * and `validateCaption` already refuse a non-string outright, so that
+   * shape is rejected rather than coerced into "[object File]".
+   */
+  const altText = validateAltText(body.value.get(MEDIA_ALT_TEXT_FIELD));
+  if (!altText.ok) {
+    return NextResponse.json({ error: altText.message }, { status: 400 });
+  }
+  /*
+   * Computed once and reused below at the actual write (review round 3
+   * finding 9) — `file.name` does not change between the two reads, so a
+   * second call here would be doing the same work twice for no reason, and
+   * is exactly the kind of duplicate-call shape that drifts if either site
+   * is edited independently later without the other.
+   */
+  const sanitizedFileName = sanitizeOriginalName(file.name);
+
+  /*
+   * Alt text equal to the filename is one of K2's own "never happen" cases
+   * (ugcportal-gwr's Norwegian description: "alt-tekst lik filnavnet"), and
+   * review round 2 found that nothing stopped an uploader from simply
+   * TYPING the filename into the field themselves — `validateAltText` only
+   * checks length and character class, not content. `altTextEqualsFilename`
+   * (src/lib/media-rules.ts) is the SAME function the upload form's client-
+   * side precheck calls (review round 3 finding 4) for the raw name; this
+   * route additionally checks the sanitized form that actually becomes
+   * `originalName` (sanitizeOriginalName can repair a name that started out
+   * different but would collapse to the same string), which the client
+   * cannot do without pulling in a node-only module — see that function's
+   * own docstring for why.
+   *
+   * `sanitizedFileName` is EXCLUDED from this check when it equals
+   * `FALLBACK_ORIGINAL_NAME` ("untitled") (review round 4, finding 1): that
+   * value means `sanitizeOriginalName` could not read a real name at all —
+   * the file arrived with an empty name, or one made only of
+   * stripped/invisible characters — so it is not actually the filename the
+   * uploader saw, it is this codebase's placeholder for "no filename was
+   * readable". An uploader who honestly types "untitled" as alt text for
+   * an abstract photo is not repeating anything, and refusing them for it
+   * would be a false positive K2 was never aimed at. The RAW `file.name`
+   * is still always checked: a file whose real name happens to be
+   * literally "untitled" (no extension) remains caught by that half of
+   * the comparison.
+   */
+  const filenamesToCheck = [file.name];
+  if (sanitizedFileName !== FALLBACK_ORIGINAL_NAME) {
+    filenamesToCheck.push(sanitizedFileName);
+  }
+  if (altTextEqualsFilename(altText.value, filenamesToCheck)) {
+    return NextResponse.json(
+      {
+        error:
+          "Alt text must describe the photo, not repeat its filename.",
+        field: "altText",
+      },
+      { status: 400 },
+    );
+  }
+  const caption = validateCaption(body.value.get(MEDIA_CAPTION_FIELD));
+  if (!caption.ok) {
+    return NextResponse.json({ error: caption.message }, { status: 400 });
+  }
+
   const buffer = Buffer.from(await file.arrayBuffer());
   if (sniffKind(buffer) !== validation.kind) {
     return NextResponse.json(
@@ -468,7 +552,13 @@ async function handleUpload(
           // src/lib/media.ts for why the upload path is lenient where the
           // rename path refuses. `file.name` is fully client-controlled and
           // the GET listing echoes it back, so it cannot go in raw.
-          originalName: sanitizeOriginalName(file.name),
+          originalName: sanitizedFileName,
+          // Null, not "", when nothing was supplied — the same "absent means
+          // not yet decided" encoding as the triage booleans on
+          // MediaListing, and what lets the publish gate (ugcportal-gwr K1)
+          // use a plain null/blank check rather than two.
+          altText: altText.value === "" ? null : altText.value,
+          caption: caption.value === "" ? null : caption.value,
           // `connect`, not `connectOrCreate`: resolveTagRows already made
           // sure every row exists, so one place decides how a Tag comes into
           // existence and both writers (here and PUT .../tags) go through it.
