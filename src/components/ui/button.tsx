@@ -71,13 +71,18 @@ const buttonVariants = cva(
          * near-black surface scale (bg-surface-0..4 / bg-destructive-surface)
          * measures --primary at only 1.59-2.03:1 there in light mode, same
          * root cause as outline-neutral's own PETROL_OUTLINE_STYLE gap.
-         * --color-petrol-400 (the pre-rw9j --ring/--sidebar-primary value,
-         * already verified at 4.8-7.75:1 against every old surface by
-         * focus-ring-on-old-surface) paired with --petrol-900 as the label
-         * (the same fill-light/label-dark pairing dark mode's own --primary
-         * already uses) measures 6.02:1. `hover:brightness-95` rather than a
-         * second new token: this is a contrast fix for an untouched-surface
-         * caller, not a second filled-button treatment to design and verify.
+         * --color-petrol-400 (the pre-rw9j --ring/--sidebar-primary value)
+         * paired with --petrol-900 as the label (the same fill-light/label-
+         * dark pairing dark mode's own --primary already uses) measures
+         * 4.8-7.75:1 against every old surface and 6.02:1 for the label on
+         * its own fill - a NEW measurement this round (contrast.ts's
+         * petrol-400-fill-on-old-surface-* and petrol-900-on-petrol-400),
+         * not one focus-ring-on-old-surface already covered: that pairing
+         * only ever checked this same token at RING_ALPHA_MODIFIER alpha,
+         * a different, weaker ratio than the full-opacity fill this variant
+         * paints. `hover:brightness-95` rather than a second new token: this
+         * is a contrast fix for an untouched-surface caller, not a second
+         * filled-button treatment to design and verify.
          */
         "default-neutral": "bg-petrol-400 text-petrol-900 hover:brightness-95",
         outline: PETROL_OUTLINE_STYLE,
