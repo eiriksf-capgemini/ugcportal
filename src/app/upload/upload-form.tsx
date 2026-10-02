@@ -610,7 +610,19 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
         />
         <label
           htmlFor={inputId}
-          className="cursor-pointer rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary-hover"
+          /*
+            bg-petrol-400/text-petrol-900, not bg-primary/text-primary-
+            foreground (ugcportal-rw9j review round 5, code-review): this
+            label sits inside the dropzone panel above (bg-surface-1
+            resting, bg-surface-2 dragging), the untouched near-black
+            surface scale - --primary measured 2.03:1 / 1.81:1 there in
+            light mode. --color-petrol-400/--petrol-900 is the same
+            old-surface-safe fill/label pair button.tsx's default-neutral
+            variant uses (6.02:1); this is a plain label, not a Button, so
+            the tokens are applied directly rather than importing the
+            component for one call site.
+          */
+          className="cursor-pointer rounded-lg bg-petrol-400 px-3 py-2 text-sm font-medium text-petrol-900 transition-colors hover:brightness-95"
         >
           Choose files
         </label>
@@ -624,7 +636,13 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
         The overall state, announced. Counted from the rows rather than kept
         beside them, so it cannot disagree with what is on screen.
       */}
-      <p role="status" aria-live="polite" className="mt-4 text-sm text-ink-muted">
+      {/*
+        text-muted-foreground, not text-ink-muted (ugcportal-rw9j review
+        round 4): this sits after the dropzone div closes, directly on
+        --background, unlike the "or drag them here"/accepted-types copy
+        above it which is genuinely inside the dropzone's bg-surface-1/2.
+      */}
+      <p role="status" aria-live="polite" className="mt-4 text-sm text-muted-foreground">
         {summary.message}
       </p>
 
@@ -822,7 +840,7 @@ function TagPicker({
      * were deleted, looks like.
      */
     return (
-      <p className="mt-4 max-w-prose text-sm text-ink-muted">
+      <p className="mt-4 max-w-prose text-sm text-muted-foreground">
         No subjects have been set up yet, so these uploads will have no tags.
       </p>
     );
@@ -832,11 +850,14 @@ function TagPicker({
   const capMessage = tagCapMessage(selectedSlugs.length);
 
   return (
+    // text-foreground/text-muted-foreground throughout this fieldset, not
+    // text-ink/text-ink-muted (ugcportal-rw9j review round 4): it renders
+    // directly on --background, not inside any near-black well.
     <fieldset className="mt-6" data-upload-tag-picker="">
-      <legend className="text-sm font-medium text-ink">
+      <legend className="text-sm font-medium text-foreground">
         Tag what you add next
       </legend>
-      <p className="mt-1 max-w-prose text-xs text-ink-muted">
+      <p className="mt-1 max-w-prose text-xs text-muted-foreground">
         Applies to files you add from now on. Tags are shown under the
         photograph in the gallery.
       </p>
@@ -847,8 +868,8 @@ function TagPicker({
             className={[
               "flex items-center gap-2 text-sm",
               row.disabled
-                ? "cursor-not-allowed text-ink-muted"
-                : "cursor-pointer text-ink",
+                ? "cursor-not-allowed text-muted-foreground"
+                : "cursor-pointer text-foreground",
             ].join(" ")}
           >
             <input
@@ -877,7 +898,7 @@ function TagPicker({
         region inserted at the same moment as its text is frequently not
         announced at all — the same rule GalleryPaging follows.
       */}
-      <p aria-live="polite" className="mt-2 text-xs text-ink-muted">
+      <p aria-live="polite" className="mt-2 text-xs text-muted-foreground">
         {capMessage}
       </p>
     </fieldset>

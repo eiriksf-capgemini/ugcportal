@@ -30,6 +30,10 @@ export default defineConfig({
     //
     // CI is unaffected either way: it checks out a clean tree with no
     // worktrees in it.
-    exclude: [...defaultExclude, ".claude/**"],
+    // e2e/** holds Playwright specs (ugcportal-rw9j's axe-core checks),
+    // which use @playwright/test's own `test()`/`expect()` and a real
+    // browser + dev server (see playwright.config.ts) - vitest's default
+    // test-file glob would otherwise try to collect and run them itself.
+    exclude: [...defaultExclude, ".claude/**", "e2e/**"],
   },
 });

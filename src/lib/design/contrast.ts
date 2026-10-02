@@ -68,6 +68,32 @@ export const SURFACES = [
   "--color-scrim",
 ] as const;
 
+/**
+ * ugcportal-rw9j review round 4: the distinct, resolved-token list behind
+ * globals.css's --ring-on-old-surfaces rule (`.bg-surface-0, ... .bg-sidebar
+ * { --ring: var(--color-petrol-400); }`) - --color-surface-0..4 cover
+ * .bg-surface-0..4 directly; --color-surface-1 also covers .bg-muted/
+ * .bg-card/.bg-sidebar and --color-surface-2 also covers .bg-popover/
+ * .bg-accent/.bg-secondary (all already in this list via their shared
+ * resolved token, so no separate entries are needed for them);
+ * --color-danger-surface is .bg-destructive-surface's resolved value, the
+ * one member SURFACES above does not include. See the focus-ring-on-old-
+ * surface comment below for why this is its own list rather than SURFACES.
+ *
+ * Exported (round 5, code-review): nothing enforced this list staying in
+ * sync with globals.css's own selector list until contrast.test.ts's
+ * "RING_OVERRIDE_SURFACES matches globals.css's own selector list" gained a
+ * test that resolves both independently and compares them.
+ */
+export const RING_OVERRIDE_SURFACES = [
+  "--color-surface-0",
+  "--color-surface-1",
+  "--color-surface-2",
+  "--color-surface-3",
+  "--color-surface-4",
+  "--color-danger-surface",
+] as const;
+
 function onEverySurface(
   idPrefix: string,
   foreground: string,
@@ -117,24 +143,118 @@ export const PAIRINGS: Pairing[] = [
     "body",
     "Secondary text: metadata, helper text, image captions, table sub-labels.",
   ),
-  ...onEverySurface(
-    "link",
-    "--primary",
-    "body",
-    "Petrol as link text and as the `link` button variant; also the fill of the single primary action, whose boundary this same ratio covers.",
-  ),
+  /*
+   * ugcportal-rw9j: this used to be onEverySurface, back when --background
+   * was one of SURFACES and --primary (petrol) had one value good on all of
+   * them. Now --primary has a light and a dark derivation chosen for the
+   * page canvas specifically (see globals.css), and measures only 1.3-2.4:1
+   * against the untouched near-black surface scale in light mode - scoping
+   * this to --background is what's actually true post-rw9j, not a narrowing
+   * for its own sake.
+   *
+   * review round 4: every real text-primary usage (admin/settings/rights,
+   * users, instagram pages) was traced and confirmed to sit on the plain
+   * page canvas, not inside any well - this codebase has no Card/Popover
+   * component and no bg-card/bg-popover usage anywhere (see globals.css's
+   * round-3 --ring comment). The focus ring is the one control that
+   * genuinely reaches the untouched near-black surfaces (the resale-rights
+   * decision form's inputs, the upload page's dropzone), fixed by the
+   * --ring-on-old-surfaces override and focus-ring-on-old-surface above -
+   * not by anything here.
+   */
+  {
+    id: "link-on-background",
+    foreground: "--primary",
+    background: ["--background"],
+    requirement: "body",
+    usage:
+      "Petrol as link text, the `link` button variant, and the petrol outline/secondary button's border and label; also the fill of the single primary action, whose boundary this same ratio covers.",
+  },
   ...onEverySurface(
     "control-edge",
     "--input",
     "ui",
     "The boundary that identifies an interactive control: input borders, outline-button borders.",
   ),
-  ...onEverySurface(
-    "focus-ring",
-    `--ring/${RING_ALPHA_MODIFIER}`,
-    "ui",
-    "The focus indicator, at the alpha it is rendered with.",
-  ),
+  /*
+   * ugcportal-rw9j: scoped to --background rather than onEverySurface, for a
+   * reason distinct from link-on-background and primary-hover-fill-on-
+   * background above - --ring applies globally (`* { outline-ring/80 }` in
+   * globals.css), so it is not a component this phase chose to move, it is a
+   * token this phase could not avoid touching once the page canvas changed
+   * (see globals.css's long comment on --ring for why).
+   */
+  {
+    id: "focus-ring-on-background",
+    foreground: `--ring/${RING_ALPHA_MODIFIER}`,
+    background: ["--background"],
+    requirement: "ui",
+    usage: "The focus indicator, at the alpha it is rendered with, on the page canvas.",
+  },
+  /*
+   * ugcportal-rw9j review round 3: globals.css scopes a --ring override back
+   * to --color-petrol-400 on every element that also carries one of the old
+   * near-black surface background classes (bg-surface-*, bg-muted, bg-card,
+   * ...) - resolveToken/loadThemeTokens has no notion of a class-scoped CSS
+   * override, so this checks the literal token that override points at
+   * directly (the same reason primary-hover-fill and friends check a literal
+   * step of the petrol scale rather than a semantic alias elsewhere in this
+   * file), restoring the "every surface" coverage focus-ring-on-background
+   * above gave up when --ring started tracking --primary.
+   *
+   * review round 4 (MAJOR): this used to be `...onEverySurface(...)`, i.e.
+   * SURFACES (--color-surface-0..4 plus --color-scrim). That list was built
+   * for a different question ("every surface a foreground can land on") and
+   * both omitted a real member of the --ring override - .bg-destructive-
+   * surface resolves to --color-danger-surface, not any --color-surface-N,
+   * so the override's actual effect there (measured 4.66:1 - safe, but
+   * unverified by this gate) was never checked - and included one that does
+   * not apply: no component anywhere uses a literal bg-scrim class, so
+   * --color-scrim's membership in SURFACES never corresponded to anything
+   * the --ring override actually touches. RING_OVERRIDE_SURFACES below is
+   * restated directly from globals.css's own selector list instead of reused
+   * from an unrelated enumeration, so the two cannot independently drift
+   * again the way they already had.
+   */
+  ...RING_OVERRIDE_SURFACES.map((surface) => ({
+    id: `focus-ring-on-old-surface-${surface.replace("--color-", "")}`,
+    foreground: `--color-petrol-400/${RING_ALPHA_MODIFIER}`,
+    background: [surface],
+    requirement: "ui" as const,
+    usage:
+      "The focus indicator on a control that still lives on the near-black surface scale (the resale-rights decision form's inputs, the upload page's file dropzone, a destructive well's own controls, ...), via the --ring override scoped to these surface classes in globals.css.",
+  })),
+  /*
+   * ugcportal-rw9j review round 5 (code-review): --color-petrol-400 at FULL
+   * opacity (not the RING_ALPHA_MODIFIER-alpha ring above) against the same
+   * old-surface list - button.tsx's default-neutral variant and the upload
+   * queue's per-row progress-bar fill both paint it solid on one of these
+   * surfaces, and neither was checked by any existing pairing before this
+   * round (focus-ring-on-old-surface only ever checked the alpha-modified
+   * ring use). Same surfaces, different use of the same token, so its own
+   * entry rather than folded into the one above.
+   */
+  ...RING_OVERRIDE_SURFACES.map((surface) => ({
+    id: `petrol-400-fill-on-old-surface-${surface.replace("--color-", "")}`,
+    foreground: "--color-petrol-400",
+    background: [surface],
+    requirement: "ui" as const,
+    usage:
+      "default-neutral's fill and the upload queue's progress-bar fill, both solid --color-petrol-400 on a control that still lives on the near-black surface scale.",
+  })),
+  /*
+   * ugcportal-rw9j review round 5 (code-review): the label on top of that
+   * same fill - default-neutral's text-petrol-900 (button.tsx) and the
+   * upload dropzone's "Choose files" label use this exact pairing, chosen
+   * to mirror dark mode's own --primary (a light fill with a dark label).
+   */
+  {
+    id: "petrol-900-on-petrol-400",
+    foreground: "--petrol-900",
+    background: ["--color-petrol-400"],
+    requirement: "body",
+    usage: "Label on default-neutral's fill and the upload dropzone's \"Choose files\" button.",
+  },
   ...onEverySurface(
     "divider",
     "--color-line",
@@ -142,6 +262,37 @@ export const PAIRINGS: Pairing[] = [
     "Row dividers, card edges and section rules.",
     "Purely ornamental separation. WCAG 1.4.11 covers the parts of a control that identify it, not decoration; a 3:1 hairline on every row would draw a bright grid across a page whose job is to disappear behind photographs. Controls use --color-line-strong (--input), which is checked at 3:1 above.",
   ),
+  /*
+   * ugcportal-rw9j review round 5: --border (--color-line) is one of the
+   * tokens globals.css's phase-1-mandate comment explicitly, deliberately
+   * leaves on the untouched near-black surface scale - "kort, kantlinjer,
+   * skjemafelt" (cards, BORDERS, form fields) is phase 2's own named scope,
+   * not this bead's. That is why this entry exists only to MEASURE the
+   * consequence on --background, not to gate it: the header/footer hairline
+   * (`* { @apply border-border }` against the new --background) measures
+   * 11.6:1 in light mode and 1.16:1 in dark - the same colour was never
+   * retuned for either new canvas, light mode's high ratio is incidental
+   * (--paper happens to be far lighter than --color-line), and dark mode's
+   * low one is the same incidental mismatch in the other direction, not a
+   * new defect introduced by moving --background specifically. Fixing it
+   * means choosing a border treatment for the new canvas, i.e. doing part of
+   * fase 2's job inside phase 1 - out of scope for the same reason --border
+   * itself is. docs/design/tokens.css's own reference already names the
+   * fix for whoever picks up fase 2: a dedicated dark-mode `--line` distinct
+   * from `--paper-line` (`#1F4A50`, measured here at only ~1.48:1 against
+   * --petrol-900 - still subtle by the reference's own design, not a bug to
+   * chase further). Decorative: no threshold, so this cannot block K2; it
+   * exists so the gap is visible to whoever reads this file next, not
+   * silent the way it was before this round.
+   */
+  {
+    id: "divider-on-background",
+    foreground: "--color-line",
+    background: ["--background"],
+    requirement: "decorative",
+    usage: "The header/footer hairline rule against the page canvas.",
+    why: "Phase-1-exempt, same as --border/--input generally (see globals.css's phase-1-mandate comment) - fase 2 (\"kantlinjer\") owns retuning this, not this bead. Measured and left visible rather than silently uncovered: 11.6:1 light, 1.16:1 dark.",
+  },
 
   {
     id: "primary-label-on-primary",
@@ -157,12 +308,19 @@ export const PAIRINGS: Pairing[] = [
     requirement: "body",
     usage: "Label of the filled primary action button, hovered.",
   },
-  ...onEverySurface(
-    "primary-hover-fill",
-    "--primary-hover",
-    "ui",
-    "The hovered primary button's fill, as the boundary that identifies it against the page.",
-  ),
+  /*
+   * ugcportal-rw9j: scoped to --background rather than onEverySurface, same
+   * reasoning as link-on-background above - the primary button lives on the
+   * page canvas in this phase, not inside the untouched card/popover
+   * surfaces.
+   */
+  {
+    id: "primary-hover-fill-on-background",
+    foreground: "--primary-hover",
+    background: ["--background"],
+    requirement: "ui",
+    usage: "The hovered primary button's fill, as the boundary that identifies it against the page.",
+  },
   {
     id: "selection-text-on-selection",
     foreground: "--selection-foreground",
@@ -195,19 +353,58 @@ export const PAIRINGS: Pairing[] = [
     requirement: "body",
     usage: "Text inside a popover, menu or dialog.",
   },
+  /*
+   * ugcportal-rw9j: --color-ink-muted, not --muted-foreground, for these two.
+   * --muted/--card stay on the untouched near-black surface scale this
+   * phase, and --muted-foreground now means "secondary text as this app
+   * actually renders it on the page canvas" (see muted-foreground-on-
+   * background below) - a page-canvas-specific token, the same split applied
+   * to --foreground vs --color-ink for the destructive well above.
+   *
+   * Review round 1 found this matters for real, not just in principle: this
+   * comment originally claimed nothing in the shipped app renders
+   * text-muted-foreground directly on bg-muted - false. src/app/admin/
+   * settings/rights/page.tsx rendered exactly that (an uploader's blocker
+   * message and review metadata, inside the same div as bg-muted/
+   * bg-destructive-surface), which measured 3.18:1 against the new
+   * --muted-foreground in light mode. Fixed there by switching those two
+   * elements to text-ink-muted - the token this pairing (and
+   * muted-foreground-on-destructive-surface below) actually measures - so
+   * the claim below is enforced by that page's own markup now, not merely
+   * documented here.
+   */
   {
     id: "muted-foreground-on-muted",
-    foreground: "--muted-foreground",
+    foreground: "--color-ink-muted",
     background: ["--muted"],
     requirement: "body",
     usage: "Secondary text on a muted fill.",
   },
   {
     id: "muted-foreground-on-card",
-    foreground: "--muted-foreground",
+    foreground: "--color-ink-muted",
     background: ["--card"],
     requirement: "body",
     usage: "Caption under an image, metadata line in a list row.",
+  },
+  /*
+   * ugcportal-rw9j K1: this is the pairing that actually matches reality.
+   * --muted-foreground renders directly on --background in real, shipped
+   * components today - the footer (src/components/app-shell.tsx), the empty-
+   * gallery and loading-status copy (src/components/gallery/*), the signed-in
+   * user's email (auth-status.tsx), and supporting paragraphs across
+   * auth/error and the admin settings pages. A live axe run against the home
+   * page caught exactly this: --color-ink-muted (unchanged, designed for the
+   * old near-black canvas) measured 1.9:1 against the new --paper background
+   * before this pairing existed to catch it in the gate too.
+   */
+  {
+    id: "muted-foreground-on-background",
+    foreground: "--muted-foreground",
+    background: ["--background"],
+    requirement: "body",
+    usage:
+      "Secondary/caption text directly on the page canvas: footer, empty-state copy, loading status, supporting paragraphs.",
   },
   {
     id: "accent-foreground-on-accent",
@@ -216,12 +413,25 @@ export const PAIRINGS: Pairing[] = [
     requirement: "body",
     usage: "Text of a hovered or selected menu item / list row.",
   },
+  /*
+   * ugcportal-rw9j review round 1: the shadcn `secondary` button variant no
+   * longer renders --secondary/--secondary-foreground at all - it reuses the
+   * petrol outline treatment (src/components/ui/button.tsx), covered by
+   * link-on-background above - so as of this bead nothing in src renders
+   * this pairing. Kept, not deleted: --secondary-foreground is still a
+   * declared `-foreground` token (the "documents every *-foreground token"
+   * test below requires it to be covered by some pairing), and --secondary
+   * itself is untouched, documented, near-black-scale coverage for the same
+   * reason --color-petrol-600..950 are kept despite not driving a current
+   * utility - available if something reaches for it, not proof that
+   * something does today.
+   */
   {
     id: "secondary-foreground-on-secondary",
     foreground: "--secondary-foreground",
     background: ["--secondary"],
     requirement: "body",
-    usage: "Label of the secondary button variant.",
+    usage: "Label of the secondary button variant, if something renders it (unused as of ugcportal-rw9j).",
   },
   {
     id: "sidebar-foreground-on-sidebar",
@@ -292,15 +502,25 @@ export const PAIRINGS: Pairing[] = [
           usage: `Error text inside its own well${state ? ", hovered" : ""}.`,
         },
         {
+          /*
+           * --color-ink, not --foreground (ugcportal-rw9j): the error well
+           * stays on the untouched near-black surface scale (see globals.css's
+           * phase-1-mandate comment), and --foreground now means "whatever
+           * pairs with --background", which this well deliberately is not.
+           * --color-ink is the neutral scale's own body-text token - what
+           * "foreground" meant here before this bead decoupled the two.
+           */
           id: `ink-on-destructive-surface${state}`,
-          foreground: "--foreground",
+          foreground: "--color-ink",
           background: [well],
           requirement: "body",
           usage: `Body copy inside an error well${state ? ", hovered" : ""}.`,
         },
         {
+          // --color-ink-muted, not --muted-foreground: same reasoning as
+          // ink-on-destructive-surface above.
           id: `muted-foreground-on-destructive-surface${state}`,
-          foreground: "--muted-foreground",
+          foreground: "--color-ink-muted",
           background: [well],
           requirement: "body",
           usage: `Supporting detail inside an error well${state ? ", hovered" : ""}.`,
@@ -318,6 +538,23 @@ export const PAIRINGS: Pairing[] = [
           background: [well],
           requirement: "ui",
           usage: `Border of the destructive button against its own fill${state ? ", hovered" : ""}.`,
+        },
+        /*
+         * ugcportal-rw9j review round 5: destructive-focus-ring above
+         * (onEverySurface) only ever checked --destructive/${RING_ALPHA_
+         * MODIFIER} against SURFACES, never against the well its own focus
+         * ring actually has to render on - the same shape as
+         * focus-ring-on-old-surface's round-4 gap, just for the destructive
+         * ring instead of the neutral one. Passes today (measured ~5.33:1,
+         * same value on both well states since --destructive itself doesn't
+         * change), but was entirely unmonitored before this entry.
+         */
+        {
+          id: `destructive-focus-ring-on-destructive-surface${state}`,
+          foreground: `--destructive/${RING_ALPHA_MODIFIER}`,
+          background: [well],
+          requirement: "ui",
+          usage: `Focus indicator on a destructive control inside its own well${state ? ", hovered" : ""}.`,
         },
       ];
     },

@@ -104,8 +104,19 @@ export const GALLERY_TILE_IMAGE_CLASS =
  * `\n` to a single space, which would silently undo a line break the
  * uploader typed on purpose; `pre-line` keeps it while still collapsing
  * runs of ordinary spaces, same as any other paragraph of text.
+ *
+ * text-muted-foreground, not text-ink (ugcportal-rw9j review round 5,
+ * code-review): this renders directly beside the image tile on the page
+ * canvas (--background), the identical sibling regression GALLERY_TAG_CLASS
+ * three lines below was already fixed for in round 4 - --color-ink measured
+ * 1.10:1 against the new --paper background in light mode. Missed here
+ * because this PR and ugcportal-gwr (the caption feature) landed on
+ * diverging branches and merged after both shipped; contrast.ts's own
+ * muted-foreground-on-background pairing already names "caption" as a
+ * usage this token covers (5.03:1).
  */
-export const GALLERY_CAPTION_CLASS = "mt-1.5 text-sm whitespace-pre-line text-ink";
+export const GALLERY_CAPTION_CLASS =
+  "mt-1.5 text-sm whitespace-pre-line text-muted-foreground";
 
 /**
  * SUBJECT TAGS (ugcportal-jsc), and the three decisions behind where they sit.
@@ -146,9 +157,18 @@ export const GALLERY_TAG_LIST_CLASS =
  * is a decision rather than an omission — see the bead's note on filtering,
  * and ugcportal-8rm for the follow-up. Styling it as interactive when it is
  * not would be the worse half of both options.
+ *
+ * text-muted-foreground, not text-ink-muted (ugcportal-rw9j review round 4):
+ * this renders directly beside the image tile on the page canvas
+ * (--background), not inside any near-black well - --color-ink-muted
+ * measured ~1.9:1 against the new --paper background in light mode, the
+ * same regression class as the /upload fixes in this same round, just on
+ * the home page itself. Caught by review, not by this PR's own axe run,
+ * because the local dev database it ran against had no tagged published
+ * items to render.
  */
 export const GALLERY_TAG_CLASS =
-  "text-[0.6875rem] leading-4 font-medium tracking-wide text-ink-muted uppercase";
+  "text-[0.6875rem] leading-4 font-medium tracking-wide text-muted-foreground uppercase";
 
 /**
  * The centred, single-column layout shared by the gallery's two whole-page

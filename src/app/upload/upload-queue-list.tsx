@@ -120,7 +120,15 @@ function ProgressBar({ item }: { item: QueueItem }) {
       className="mt-2 h-1 w-full overflow-hidden rounded-full bg-surface-3"
     >
       <div
-        className="h-full rounded-full bg-primary transition-[width] duration-200"
+        /*
+          bg-petrol-400, not bg-primary (ugcportal-rw9j review round 5,
+          code-review): the track above is bg-surface-3, the untouched
+          near-black surface scale - --primary measured only 1.59:1 there in
+          light mode. --color-petrol-400 (the same old-surface-safe accent
+          default-neutral uses, see button.tsx) clears 5.57:1 against this
+          specific track.
+        */
+        className="h-full rounded-full bg-petrol-400 transition-[width] duration-200"
         /*
           Inline, because the value is per-row and continuous; there is no
           utility class for "37%". Width only — the colour is a token.
@@ -182,7 +190,15 @@ function Failure({
             href={signInPath(UPLOAD_PATH)}
             target="_blank"
             rel="noopener noreferrer"
-            className={buttonVariants({ variant: "default", size: "sm" })}
+            /*
+              ugcportal-rw9j review round 5 (code-review): default-neutral,
+              not default - this link sits inside the bg-destructive-surface
+              well above, the same reason "Try again" below uses
+              outline-neutral instead of outline. --primary measured 1.87:1
+              against this well; see button.tsx's own comment on
+              default-neutral for the contrast numbers.
+            */
+            className={buttonVariants({ variant: "default-neutral", size: "sm" })}
           >
             Sign in
             {/* The accessible name has to carry it too, not just the prose. */}
@@ -200,7 +216,22 @@ function Failure({
           */
           <Button
             type="button"
-            variant="outline"
+            /*
+              ugcportal-rw9j review round 4: `outline-neutral`, not `outline`
+              - this button sits inside the bg-destructive-surface well
+              above, not on --background, so the petrol outline treatment
+              (border-primary/text-primary) is wrong here: border-primary
+              measured only 1.87:1 against this well in light mode, below
+              the 3:1 a control's boundary needs. Rounds 2-3 fixed this with
+              an inline className override restating and inverting every
+              PETROL_OUTLINE_STYLE utility at the call site, which round 3
+              then had to re-fix when three of its six utilities turned out
+              unreverted (border/aria-expanded states tailwind-merge left
+              standing) - exactly the fragility a real variant (see
+              button.tsx) removes. See button.tsx's own comment for the
+              contrast numbers behind outline-neutral itself.
+            */
+            variant="outline-neutral"
             size="sm"
             disabled={!mayRetry(failure, now)}
             onClick={() => onRetry(item.id)}

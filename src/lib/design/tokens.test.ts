@@ -1,6 +1,11 @@
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import {
+  GLOBALS_CSS_PATH,
   flattenDeclarations,
   loadThemeTokens,
   parseDeclarations,
@@ -157,5 +162,102 @@ describe("the shipped stylesheet", () => {
   it("parses, and declares every token exactly once", () => {
     expect(() => loadThemeTokens()).not.toThrow();
     expect(loadThemeTokens().size).toBeGreaterThan(40);
+  });
+});
+
+/** Writes `css` to a temp file and loads it under `mode`, so these tests exercise the real file-reading path, not just parseDeclarations/flattenDeclarations directly. */
+function writeAndLoad(css: string, mode: "light" | "dark") {
+  const dir = mkdtempSync(join(tmpdir(), "ugcportal-tokens-test-"));
+  const file = join(dir, "globals.css");
+  writeFileSync(file, css, "utf8");
+  return loadThemeTokens(file, mode);
+}
+
+/**
+ * ugcportal-rw9j: loadThemeTokens(path, "dark") is the one place "one theme
+ * per mode" is actually enforced - these are unit tests of that enforcement
+ * against small, synthetic stylesheets, independent of whatever
+ * globals.css's real dark override happens to contain today.
+ */
+describe("loadThemeTokens dual-mode resolution", () => {
+  const CSS = `
+    :root { --background: oklch(0.9 0 0); --foreground: oklch(0.1 0 0); }
+    @media (prefers-color-scheme: dark) {
+      :root { --background: oklch(0.1 0 0); }
+    }
+  `;
+
+  it("light mode ignores anything inside the dark media query", () => {
+    const tokens = writeAndLoad(CSS, "light");
+    expect(resolveToken("--background", tokens)).toBe("oklch(0.9 0 0)");
+    expect(resolveToken("--foreground", tokens)).toBe("oklch(0.1 0 0)");
+  });
+
+  it("dark mode layers its override on top of the light value, like a browser's cascade", () => {
+    const tokens = writeAndLoad(CSS, "dark");
+    // Overridden in the dark block:
+    expect(resolveToken("--background", tokens)).toBe("oklch(0.1 0 0)");
+    // NOT overridden - falls through to the light declaration:
+    expect(resolveToken("--foreground", tokens)).toBe("oklch(0.1 0 0)");
+  });
+
+  it("still rejects a property declared twice within the light mode", () => {
+    expect(() => writeAndLoad(":root { --a: 1; --a: 2; }", "light")).toThrow(
+      /declared twice/,
+    );
+  });
+
+  it("still rejects a property declared twice within the dark override", () => {
+    expect(() =>
+      writeAndLoad(
+        "@media (prefers-color-scheme: dark) { :root { --a: 1; } :root { --a: 2; } }",
+        "dark",
+      ),
+    ).toThrow(/declared twice/);
+  });
+
+  /**
+   * ugcportal-rw9j review round 3: a class-scoped override (`.pswp { ... }`,
+   * or globals.css's `.bg-surface-0, ... { --ring: ...; }`) re-declares a
+   * property :root already declares, and that is legitimate - it is a third
+   * kind of deliberate override, not the "second theme" the duplicate guard
+   * exists to catch. Proves the exclusion rather than just the real
+   * stylesheet parsing without throwing: a synthetic class selector
+   * re-declaring --a must not trip the guard, in EITHER mode, and must not
+   * leak into either resolved map (nothing should resolve a class-scoped
+   * value through loadThemeTokens at all - a pairing that needs one reads
+   * the literal token the override points at directly, same as
+   * contrast.ts's focus-ring-on-old-surface).
+   */
+  it("excludes a class-scoped override from the theme entirely, in both modes", () => {
+    const css = ":root { --a: 1; } .some-class { --a: 2; }";
+    expect(() => writeAndLoad(css, "light")).not.toThrow();
+    expect(() => writeAndLoad(css, "dark")).not.toThrow();
+    expect(resolveToken("--a", writeAndLoad(css, "light"))).toBe("1");
+    expect(resolveToken("--a", writeAndLoad(css, "dark"))).toBe("1");
+  });
+
+  /**
+   * round 5 (code-review): the same class-scoped override, wrapped in an
+   * at-rule the way globals.css's own adjacent `@layer base { ... }` block
+   * sits right next to it - an edit nobody would expect to change meaning.
+   * Reproduced against the pre-fix CLASS_SCOPED_SELECTOR (`/^\./`, matching
+   * only the very start of the joined selector): the joined selector became
+   * "@layer base > .some-class, ...", which that pattern never matched, so
+   * flattenDeclarations saw --a declared twice and threw.
+   */
+  it("still excludes a class-scoped override wrapped in an at-rule (e.g. @layer)", () => {
+    const css = ":root { --a: 1; } @layer base { .some-class { --a: 2; } }";
+    expect(() => writeAndLoad(css, "light")).not.toThrow();
+    expect(resolveToken("--a", writeAndLoad(css, "light"))).toBe("1");
+  });
+
+  it("does NOT reject the one deliberate pattern: once in light, once in dark", () => {
+    expect(() => writeAndLoad(CSS, "dark")).not.toThrow();
+    expect(() => writeAndLoad(CSS, "light")).not.toThrow();
+  });
+
+  it("parses the real shipped stylesheet's dark override without throwing", () => {
+    expect(() => loadThemeTokens(GLOBALS_CSS_PATH, "dark")).not.toThrow();
   });
 });

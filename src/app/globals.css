@@ -14,23 +14,43 @@
 @import "photoswipe/style.css";
 
 /*
- * ONE THEME (ugcportal-axu).
+ * ONE THEME PER MODE (ugcportal-axu, revised by ugcportal-rw9j).
  *
- * Every semantic token below is declared exactly once, in :root. There is no
- * second (light) token set and no theme switcher — a second theme doubles the
- * design and test surface before ugcportal-2al has established any browser
- * testing at all.
+ * ugcportal-axu's original rule was "exactly one :root, no light/dark split" —
+ * deliberately, because a second theme doubles the design and test surface
+ * before ugcportal-2al had established any browser testing at all. That
+ * browser testing exists now (Playwright + axe, see e2e/), and the product
+ * decision for this bead is an explicit light/dark split that follows the
+ * OS/browser's own `prefers-color-scheme` — there is no in-app toggle, so the
+ * two themes are not independently reachable UI states a user can flip
+ * between, just the one rendering a given visit's `prefers-color-scheme`
+ * produces.
  *
- * The `dark` class is still defined, and is set on <html> in layout.tsx, for
- * one reason only: third-party components (shadcn/base-ui output, future
- * `npx shadcn add`) ship `dark:` utilities, and those must resolve against the
- * same single token set rather than silently falling back to light defaults.
- * It is an activation hook, not a second palette.
+ * So the rule is now "one theme PER MODE": every semantic token has exactly
+ * one light value (:root) and, where it differs, exactly one dark value
+ * (inside `@media (prefers-color-scheme: dark) { :root { ... } }`, layered on
+ * top of the light value the same way a browser's own cascade resolves it).
+ * src/lib/design/tokens.ts's loadThemeTokens(path, "dark") merges the two
+ * exactly that way, and still refuses a property declared twice *within the
+ * same mode* — the one-drifting-copy failure the original rule closed is
+ * still closed; only the one deliberate per-property, per-mode override this
+ * bead asks for is now allowed.
  *
- * src/lib/design/contrast.test.ts parses THIS FILE and fails the suite if any
- * documented non-decorative pairing drops below its WCAG threshold, or if any
- * custom property is declared in more than one block. Edit the numbers freely;
- * the gate will tell you when you have gone too far.
+ * The `dark` class this comment used to describe is gone (ugcportal-rw9j):
+ * <html> no longer carries it. It existed only so third-party `dark:`
+ * utilities would resolve against this app's own tokens instead of falling
+ * back to Tailwind's defaults, which only mattered while the app was
+ * permanently dark. Forcing the class unconditionally now would be actively
+ * wrong — a real light mode exists, and `@custom-variant dark (&:is(.dark *))`
+ * below is untouched, so a future `dark:` utility still compiles; it is just
+ * not activated by anything today, which is correct until something
+ * decides it should be.
+ *
+ * src/lib/design/contrast.test.ts parses THIS FILE, resolves it under both
+ * modes, and fails the suite if any documented non-decorative pairing drops
+ * below its WCAG threshold in either one, or if any custom property is
+ * declared more than once within the same mode. Edit the numbers freely; the
+ * gate will tell you when you have gone too far.
  */
 @custom-variant dark (&:is(.dark *));
 
@@ -61,6 +81,56 @@
   --color-petrol-800: oklch(0.34 0.065 205);
   --color-petrol-900: oklch(0.27 0.05 205);
   --color-petrol-950: oklch(0.18 0.035 205);
+}
+
+/*
+ * The petrol palette (ugcportal-rw9j) — phase 1 of docs/design/tokens.css's
+ * six adopted colours. Named the way that reference file names them
+ * (`--petrol-700`, `--paper`, ...), not the way the scale above is named
+ * (`--color-petrol-700`): these are a different, independently-adopted set
+ * of exact sRGB hex values, not a new rung on ugcportal-axu/eh5's OKLCH
+ * near-black scale, and giving them a visibly different name keeps the two
+ * from being mistaken for each other.
+ *
+ * Plain hex, not OKLCH: K1 checks the rendered page against these exact
+ * bytes (`#FAF7F2`, `#14555F`, ...), so there is no perceptual-scale reason
+ * to round-trip them through a colour space that would reintroduce the exact
+ * gamut/rounding drift documented above for --color-petrol-900..600.
+ *
+ * `--petrol-500` and `--petrol-200`/`--petrol-100` are docs/design/tokens.css's
+ * own documented hover/tint steps, not independently invented here — see
+ * that file's comments ("hover på primær", "tint: kort, tagger, ingress").
+ * `--petrol-500` and `--petrol-100` are reused below as the DARK-mode primary
+ * resting/hover fills, a departure from the reference file (which keeps
+ * `--petrol-700` as the primary fill in both modes): measured against this
+ * app's existing near-black surface scale AND the new dark-mode background
+ * (`--petrol-900`), `--petrol-700` only clears 1.3-2.4:1 against either — far
+ * below the 3:1 a filled control's boundary needs — while `--petrol-200`
+ * resting / `--petrol-100` hover clear 6.2-11.3:1 against both. Light mode
+ * keeps the reference's literal `--petrol-700` fill with white text, which is
+ * K1's exact requirement.
+ *
+ * Terracotta is declared but not consumed by anything in this PR (phase 1 is
+ * tokens, the global canvas, and the primary/secondary button only) — see
+ * the mandate note two blocks down. It exists here so "all six colours have
+ * tokens" is true starting now, not only once something renders it.
+ * `--ink-muted-petrol` IS consumed (review round 4: this comment used to
+ * claim otherwise) — it drives `--muted-foreground` below, which several
+ * real components render directly on the page canvas.
+ */
+:root {
+  --petrol-900: #0b2e33;
+  --petrol-700: #14555f;
+  --petrol-500: #2e7d85;
+  --petrol-200: #9fc5c8;
+  --petrol-100: #cfe8e7;
+  --terracotta-600: #b85a2b;
+  --terracotta-500: #d9713c;
+  --terracotta-100: #fbe4d3;
+  --terracotta-900: #7a3a17;
+  --paper: #faf7f2;
+  --paper-line: #d8d3c8;
+  --ink-muted-petrol: #6b6b63;
 }
 
 @theme {
@@ -175,7 +245,14 @@
    */
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
-  --font-heading: var(--font-geist-sans);
+  /*
+   * Fraunces for h1-h3 (ugcportal-rw9j, product decision: approved), loaded
+   * via next/font/google like every other face in this app (layout.tsx), not
+   * the static mockup's Google Fonts <link>. Georgia/serif is the fallback
+   * named in docs/design/tokens.css, used verbatim here in case the font
+   * variable fails to load.
+   */
+  --font-heading: var(--font-fraunces), Georgia, serif;
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -220,42 +297,81 @@
 /*
  * Semantic layer. Every shadcn/base-ui token maps onto the surface scale
  * above; petrol appears only where an accent belongs.
+ *
+ * Phase 1 mandate (ugcportal-rw9j): this block touches exactly the page
+ * canvas (--background, --foreground, --muted-foreground - added after a
+ * live axe run on the home page found it was really a page-canvas token in
+ * disguise, see its own comment below), the primary action (--primary and
+ * friends), and the things petrol already drove (--ring, --selection). The
+ * secondary/outline button is restyled in src/components/ui/button.tsx using
+ * --primary/--primary-hover directly rather than through --secondary (see
+ * that file).
+ *
+ * --card, --popover, --muted, --accent, --secondary, --destructive-*,
+ * --sidebar-*, --chart-*, --border and --input are DELIBERATELY left
+ * reading from the near-black surface scale above. That is correct for the
+ * one place this app still wants an immersive near-black context (the
+ * lightbox scrim), and is a known, deliberate inconsistency everywhere else
+ * until fase 2 (cards, borders, form fields) is approved — Eirik approves a
+ * screenshot of phase 1 first. Do not "fix" the resulting clash by editing
+ * values in this list; that is fase 2's job, not this one's.
+ *
+ * One cross-cutting consequence of that split, found while building this:
+ * --ring is applied globally (`* { outline-ring/80 }`), so pointing it at
+ * the new --primary (needed so the focus ring is visible at all on the new
+ * light canvas - the old --color-petrol-400 measures 1.3-2.4:1 against
+ * --paper) would otherwise also apply to every focusable control still
+ * living on the untouched near-black surface scale. Fixed, not merely
+ * flagged (review round 3, after the no-fix version of this comment
+ * incorrectly cited "admin/settings/{rights,instagram}'s cards" - this
+ * codebase has no Card/Popover component and no bg-card/bg-popover usage
+ * anywhere; the real instances were the resale-rights decision form's inputs
+ * and the upload page's file dropzone, both on bg-surface-*): see the
+ * --ring-on-old-surfaces override below, scoped to exactly the background
+ * classes that still need the old value.
  */
 :root {
-  color-scheme: dark;
+  color-scheme: light dark;
 
-  --background: var(--color-surface-0);
-  --foreground: var(--color-ink);
+  --background: var(--paper);
+  --foreground: var(--petrol-900);
   --card: var(--color-surface-1);
   --card-foreground: var(--color-ink);
   --popover: var(--color-surface-2);
   --popover-foreground: var(--color-ink);
 
   /*
-   * The one place petrol still fills an area: a single primary action. Its
-   * label is the page colour, not petrol-950 — petrol-950 is out of gamut
-   * (see --color-petrol-deep).
-   *
-   * The hover state is an opaque step along the petrol ramp rather than the
-   * usual alpha fade. A translucent fill would put the button's label on a
-   * background that changes with whatever is behind the button, which has no
-   * one contrast ratio to check; this way both the fill and its label are
-   * verifiable on every surface.
-   *
-   * It brightens rather than darkens. That is the right affordance on a dark
-   * theme (hover raises a surface, as it does throughout the neutral scale),
-   * and darkening to petrol-500 left the hovered fill at only 1.007x the 3:1
-   * it needs against surface-4 - inside the measured authored-vs-rendered
-   * drift, so the gate could not honestly call it a pass.
+   * The primary action, petrol-filled with white text (K1). The hover fill
+   * is an opaque step along the petrol ramp, same reasoning as
+   * ugcportal-axu's original choice below: a translucent fill would put the
+   * label on a background that changes with whatever is behind the button.
    */
-  --primary: var(--color-petrol-400);
-  --primary-hover: var(--color-petrol-300);
-  --primary-foreground: var(--color-surface-0);
+  --primary: var(--petrol-700);
+  --primary-hover: var(--petrol-500);
+  --primary-foreground: #ffffff;
 
   --secondary: var(--color-surface-2);
   --secondary-foreground: var(--color-ink);
   --muted: var(--color-surface-1);
-  --muted-foreground: var(--color-ink-muted);
+  /*
+   * --ink-muted-petrol ("dempet tekst" in docs/design/tokens.css), not
+   * --color-ink-muted (ugcportal-rw9j, found by a live axe run on the home
+   * page, not reasoned out in advance): --muted-foreground renders directly
+   * on --background in the overwhelming majority of its real uses - the
+   * footer, gallery empty-state/loading copy, the signed-in user's email,
+   * supporting paragraphs on auth/error and the admin pages. --color-ink-muted
+   * is tuned for the near-black canvas and measured 1.9:1 here against the
+   * new --paper background; --ink-muted-petrol clears 5.0:1.
+   *
+   * Review round 1 found one real exception to "none of them inside a
+   * --muted/--card fill": admin/settings/rights/page.tsx did, at 3.18:1,
+   * which is fixed there (text-ink-muted) rather than here - --muted/--card
+   * stay on the untouched near-black scale this phase, so the ONE place that
+   * rendered --muted-foreground inside one needed to stop doing that, not
+   * the other way round. See the muted-foreground-on-background comment in
+   * contrast.ts for the full reasoning.
+   */
+  --muted-foreground: var(--ink-muted-petrol);
 
   /* Neutral, not petrol: this is the hover/selected fill for menus and rows. */
   --accent: var(--color-surface-2);
@@ -266,10 +382,17 @@
   --destructive-surface-hover: var(--color-danger-surface-hover);
   --border: var(--color-line);
   --input: var(--color-line-strong);
-  --ring: var(--color-petrol-400);
+  /*
+   * Tracks --primary rather than repeating its value: the dark-mode block
+   * below only re-declares --primary, and this indirection means --ring
+   * (and anything else that points at --primary) follows it automatically,
+   * exactly the way a browser's own cascade resolves var() - no separate
+   * dark override needed here.
+   */
+  --ring: var(--primary);
 
-  --selection: var(--color-petrol-deep);
-  --selection-foreground: var(--color-ink);
+  --selection: var(--petrol-100);
+  --selection-foreground: var(--petrol-900);
 
   /*
    * Nothing charts yet. These are kept in the petrol family plus one neutral
@@ -295,6 +418,66 @@
   --sidebar-ring: var(--color-petrol-400);
 }
 
+/*
+ * The dark-mode override (ugcportal-rw9j): "mørk modus med dyp petrol base".
+ * Only what actually needs a different value in the dark is re-declared here
+ * — --ring, --selection and everything else that points at one of these via
+ * var() follows automatically (see the comment on --ring above).
+ *
+ * --primary steps to a lighter petrol (petrol-200 resting, petrol-100 hover)
+ * with a dark label, rather than keeping --petrol-700 with a white label as
+ * light mode does: see the comment on the --petrol-* scale near the top of
+ * this file for the measured reason (--petrol-700 falls to 1.3-3:1 against
+ * both this dark background and the near-black surface scale; --petrol-200/
+ * 100 clear 6.2-11.3:1 against both).
+ */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: var(--petrol-900);
+    --foreground: var(--paper);
+    --muted-foreground: var(--petrol-200);
+
+    --primary: var(--petrol-200);
+    --primary-hover: var(--petrol-100);
+    --primary-foreground: var(--petrol-900);
+  }
+}
+
+/*
+ * ugcportal-rw9j review round 3: --ring tracks --primary (see the comment
+ * above), which is correct against --background but measures only
+ * ~1.3-2.4:1 against the untouched near-black surface scale in light mode -
+ * a real, reachable failure on every focusable control still living on one
+ * of those surfaces. Found three times across three review rounds in three
+ * different places (admin/settings/{rights,instagram}'s links, the resale-
+ * rights decision form's inputs, the upload page's file dropzone), which is
+ * what made this the fix rather than a fourth individual override: every
+ * element carrying one of these background utility classes gets its own
+ * --ring back, via ordinary CSS custom-property cascade - `--ring` (and
+ * anything that reads it, like `outline-ring/80` or a component's own
+ * `focus-visible:border-ring`) resolves against whichever value is in scope
+ * on that element, so a control on one of these surfaces is correct
+ * automatically, including ones added after this comment, with no
+ * per-component override to remember. --color-petrol-400 is the value
+ * --ring held before this bead - already verified against every one of
+ * these surfaces (the focus-ring-on-old-surface pairing in contrast.ts), so
+ * this is a revert, scoped to exactly the surfaces that still need it.
+ */
+.bg-surface-0,
+.bg-surface-1,
+.bg-surface-2,
+.bg-surface-3,
+.bg-surface-4,
+.bg-muted,
+.bg-card,
+.bg-popover,
+.bg-accent,
+.bg-secondary,
+.bg-destructive-surface,
+.bg-sidebar {
+  --ring: var(--color-petrol-400);
+}
+
 @layer base {
   * {
     /*
@@ -311,6 +494,18 @@
   }
   html {
     @apply font-sans;
+  }
+  /*
+   * Fraunces for display headings (ugcportal-rw9j, product decision:
+   * approved). Weight and size stay with whatever each heading already sets
+   * (`font-medium`/`font-semibold`, `text-2xl`, ...) — @layer base utilities
+   * lose to component-authored utility classes in Tailwind's own layer
+   * order, so this only ever changes the typeface.
+   */
+  h1,
+  h2,
+  h3 {
+    @apply font-heading;
   }
   ::selection {
     background-color: var(--selection);
