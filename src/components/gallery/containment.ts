@@ -104,8 +104,19 @@ export const GALLERY_TILE_IMAGE_CLASS =
  * `\n` to a single space, which would silently undo a line break the
  * uploader typed on purpose; `pre-line` keeps it while still collapsing
  * runs of ordinary spaces, same as any other paragraph of text.
+ *
+ * text-muted-foreground, not text-ink (ugcportal-rw9j review round 5,
+ * code-review): this renders directly beside the image tile on the page
+ * canvas (--background), the identical sibling regression GALLERY_TAG_CLASS
+ * three lines below was already fixed for in round 4 - --color-ink measured
+ * 1.10:1 against the new --paper background in light mode. Missed here
+ * because this PR and ugcportal-gwr (the caption feature) landed on
+ * diverging branches and merged after both shipped; contrast.ts's own
+ * muted-foreground-on-background pairing already names "caption" as a
+ * usage this token covers (5.03:1).
  */
-export const GALLERY_CAPTION_CLASS = "mt-1.5 text-sm whitespace-pre-line text-ink";
+export const GALLERY_CAPTION_CLASS =
+  "mt-1.5 text-sm whitespace-pre-line text-muted-foreground";
 
 /**
  * SUBJECT TAGS (ugcportal-jsc), and the three decisions behind where they sit.

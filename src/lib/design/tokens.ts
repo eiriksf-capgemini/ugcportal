@@ -202,7 +202,16 @@ export type ThemeMode = "light" | "dark";
  * so a reformatted query is a loud failure rather than a silently-ignored
  * light theme in disguise.
  */
-const DARK_MEDIA_SELECTOR = /(?:^|>\s*)@media \(prefers-color-scheme:\s*dark\)/;
+/**
+ * Exported (round 5, code-review): contrast.test.ts's own "declares a
+ * dark-mode override for exactly the tokens this phase touches" test used
+ * to carry an independent, hand-copied literal of this same pattern. If this
+ * one were ever widened (e.g. to tolerate no space after the colon), that
+ * copy would silently stop recognising the real dark override and either
+ * validate against an empty set or fail a change loadThemeTokens itself
+ * handles correctly - importing the one pattern removes the divergence.
+ */
+export const DARK_MEDIA_SELECTOR = /(?:^|>\s*)@media \(prefers-color-scheme:\s*dark\)/;
 
 /**
  * Matches a bare class-selector block — `.pswp { ... }`, or ugcportal-rw9j's
@@ -219,8 +228,19 @@ const DARK_MEDIA_SELECTOR = /(?:^|>\s*)@media \(prefers-color-scheme:\s*dark\)/;
  * override's effect (contrast.ts's focus-ring-on-old-surface) checks the
  * literal token the override points at directly instead - the same way it
  * already does for primary-hover-fill and friends.
+ *
+ * round 5 (code-review): matches a `.` at the very start of the joined
+ * selector string, OR right after a `>` nesting boundary - not just at the
+ * start - for the same reason DARK_MEDIA_SELECTOR above already does this.
+ * A class selector wrapped in an at-rule (`@layer base { .bg-surface-0 {
+ * --ring: ...; } }`, an otherwise ordinary refactor nobody would expect to
+ * change meaning) joins to "@layer base > .bg-surface-0, ...", which the
+ * old `/^\./` never matched; `flattenDeclarations` then saw --ring declared
+ * twice (once in :root, once "undetected-class-scoped") and threw. Fails
+ * loudly today (not silently wrong) precisely because this guard didn't
+ * fire - reproduced directly against loadThemeTokens before this fix.
  */
-const CLASS_SCOPED_SELECTOR = /^\./;
+const CLASS_SCOPED_SELECTOR = /(?:^|>\s*)\./;
 
 /**
  * Reads and flattens the shipped stylesheet for one theme mode.

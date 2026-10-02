@@ -120,7 +120,15 @@ function ProgressBar({ item }: { item: QueueItem }) {
       className="mt-2 h-1 w-full overflow-hidden rounded-full bg-surface-3"
     >
       <div
-        className="h-full rounded-full bg-primary transition-[width] duration-200"
+        /*
+          bg-petrol-400, not bg-primary (ugcportal-rw9j review round 5,
+          code-review): the track above is bg-surface-3, the untouched
+          near-black surface scale - --primary measured only 1.59:1 there in
+          light mode. --color-petrol-400 (the same old-surface-safe accent
+          default-neutral uses, see button.tsx) clears 5.57:1 against this
+          specific track.
+        */
+        className="h-full rounded-full bg-petrol-400 transition-[width] duration-200"
         /*
           Inline, because the value is per-row and continuous; there is no
           utility class for "37%". Width only — the colour is a token.
@@ -182,7 +190,15 @@ function Failure({
             href={signInPath(UPLOAD_PATH)}
             target="_blank"
             rel="noopener noreferrer"
-            className={buttonVariants({ variant: "default", size: "sm" })}
+            /*
+              ugcportal-rw9j review round 5 (code-review): default-neutral,
+              not default - this link sits inside the bg-destructive-surface
+              well above, the same reason "Try again" below uses
+              outline-neutral instead of outline. --primary measured 1.87:1
+              against this well; see button.tsx's own comment on
+              default-neutral for the contrast numbers.
+            */
+            className={buttonVariants({ variant: "default-neutral", size: "sm" })}
           >
             Sign in
             {/* The accessible name has to carry it too, not just the prose. */}

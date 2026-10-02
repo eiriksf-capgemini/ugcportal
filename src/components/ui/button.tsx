@@ -64,6 +64,22 @@ const buttonVariants = cva(
         // action on a surface. Everything else is neutral or outlined, so
         // this reads as emphasis rather than as decoration.
         default: "bg-primary text-primary-foreground hover:bg-primary-hover",
+        /*
+         * ugcportal-rw9j review round 5 (code-review): the filled-button
+         * counterpart to outline-neutral, for the identical reason - a
+         * `default`-variant caller inside a well still on the untouched
+         * near-black surface scale (bg-surface-0..4 / bg-destructive-surface)
+         * measures --primary at only 1.59-2.03:1 there in light mode, same
+         * root cause as outline-neutral's own PETROL_OUTLINE_STYLE gap.
+         * --color-petrol-400 (the pre-rw9j --ring/--sidebar-primary value,
+         * already verified at 4.8-7.75:1 against every old surface by
+         * focus-ring-on-old-surface) paired with --petrol-900 as the label
+         * (the same fill-light/label-dark pairing dark mode's own --primary
+         * already uses) measures 6.02:1. `hover:brightness-95` rather than a
+         * second new token: this is a contrast fix for an untouched-surface
+         * caller, not a second filled-button treatment to design and verify.
+         */
+        "default-neutral": "bg-petrol-400 text-petrol-900 hover:brightness-95",
         outline: PETROL_OUTLINE_STYLE,
         secondary: PETROL_OUTLINE_STYLE,
         "outline-neutral": NEUTRAL_OUTLINE_STYLE,

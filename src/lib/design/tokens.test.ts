@@ -237,6 +237,21 @@ describe("loadThemeTokens dual-mode resolution", () => {
     expect(resolveToken("--a", writeAndLoad(css, "dark"))).toBe("1");
   });
 
+  /**
+   * round 5 (code-review): the same class-scoped override, wrapped in an
+   * at-rule the way globals.css's own adjacent `@layer base { ... }` block
+   * sits right next to it - an edit nobody would expect to change meaning.
+   * Reproduced against the pre-fix CLASS_SCOPED_SELECTOR (`/^\./`, matching
+   * only the very start of the joined selector): the joined selector became
+   * "@layer base > .some-class, ...", which that pattern never matched, so
+   * flattenDeclarations saw --a declared twice and threw.
+   */
+  it("still excludes a class-scoped override wrapped in an at-rule (e.g. @layer)", () => {
+    const css = ":root { --a: 1; } @layer base { .some-class { --a: 2; } }";
+    expect(() => writeAndLoad(css, "light")).not.toThrow();
+    expect(resolveToken("--a", writeAndLoad(css, "light"))).toBe("1");
+  });
+
   it("does NOT reject the one deliberate pattern: once in light, once in dark", () => {
     expect(() => writeAndLoad(CSS, "dark")).not.toThrow();
     expect(() => writeAndLoad(CSS, "light")).not.toThrow();

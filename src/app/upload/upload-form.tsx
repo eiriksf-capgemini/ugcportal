@@ -610,7 +610,19 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
         />
         <label
           htmlFor={inputId}
-          className="cursor-pointer rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary-hover"
+          /*
+            bg-petrol-400/text-petrol-900, not bg-primary/text-primary-
+            foreground (ugcportal-rw9j review round 5, code-review): this
+            label sits inside the dropzone panel above (bg-surface-1
+            resting, bg-surface-2 dragging), the untouched near-black
+            surface scale - --primary measured 2.03:1 / 1.81:1 there in
+            light mode. --color-petrol-400/--petrol-900 is the same
+            old-surface-safe fill/label pair button.tsx's default-neutral
+            variant uses (6.02:1); this is a plain label, not a Button, so
+            the tokens are applied directly rather than importing the
+            component for one call site.
+          */
+          className="cursor-pointer rounded-lg bg-petrol-400 px-3 py-2 text-sm font-medium text-petrol-900 transition-colors hover:brightness-95"
         >
           Choose files
         </label>

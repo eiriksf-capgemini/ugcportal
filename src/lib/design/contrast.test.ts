@@ -7,6 +7,7 @@ import { parseColor } from "./color";
 import {
   PAIRINGS,
   RING_ALPHA_MODIFIER,
+  RING_OVERRIDE_SURFACES,
   SURFACES,
   THRESHOLDS,
   evaluatePairing,
@@ -14,6 +15,7 @@ import {
   type Pairing,
 } from "./contrast";
 import {
+  DARK_MEDIA_SELECTOR,
   GLOBALS_CSS_PATH,
   loadThemeTokens,
   parseDeclarations,
@@ -796,7 +798,7 @@ describe("K1: the exact palette docs/design/tokens.css adopted", () => {
 
   it("declares a dark-mode override for exactly the tokens this phase touches", () => {
     const darkOnly = parseDeclarations(css).filter((declaration) =>
-      /(?:^|>\s*)@media \(prefers-color-scheme:\s*dark\)/.test(declaration.selector),
+      DARK_MEDIA_SELECTOR.test(declaration.selector),
     );
     const declaredProperties = new Set(darkOnly.map((declaration) => declaration.property));
     expect(declaredProperties).toEqual(
@@ -831,6 +833,51 @@ describe("K1: the exact palette docs/design/tokens.css adopted", () => {
       ]),
     );
     expect(resolved).toMatchSnapshot();
+  });
+});
+
+/**
+ * ugcportal-rw9j review round 5 (code-review): RING_OVERRIDE_SURFACES
+ * (contrast.ts) hand-duplicates globals.css's own `.bg-surface-0, ...
+ * .bg-sidebar { --ring: var(--color-petrol-400); }` selector list, with
+ * nothing tying the two together before this test - exactly the kind of
+ * two-list drift this repo's own review history keeps finding (round 4's
+ * MAJOR finding against the predecessor of this same override). Resolves
+ * both independently: the CSS selector's classes through their real
+ * semantic aliases (`.bg-muted` -> `--muted` -> `--color-surface-1`, etc,
+ * the same mapping documented on RING_OVERRIDE_SURFACES's own comment), and
+ * RING_OVERRIDE_SURFACES's own tokens through resolveToken - then compares
+ * the two resolved sets rather than the raw names, since one is literal
+ * CSS classes and the other is TypeScript's --color-surface-N tokens.
+ */
+describe("RING_OVERRIDE_SURFACES matches globals.css's own selector list", () => {
+  /** `.bg-foo` -> the `--color-foo` custom property Tailwind's `bg-foo` utility resolves to, by this app's own `@theme inline` naming convention. */
+  function classToColorToken(className: string): string {
+    return `--color-${className.replace(/^\.bg-/, "")}`;
+  }
+
+  it("resolves to the identical set of literal colours in both modes", () => {
+    const ringOverride = parseDeclarations(css).find(
+      (declaration) =>
+        declaration.property === "--ring" && declaration.selector.startsWith(".bg-surface-0"),
+    );
+    if (!ringOverride) {
+      throw new Error(
+        "could not find globals.css's .bg-surface-0, ... { --ring: ... } override - has its selector changed?",
+      );
+    }
+    const classes = ringOverride.selector.split(",").map((part) => part.trim());
+
+    for (const mode of THEME_MODES) {
+      const modeTokens = tokensByMode[mode];
+      const fromCss = new Set(
+        classes.map((className) => resolveToken(classToColorToken(className), modeTokens)),
+      );
+      const fromTsList = new Set(
+        RING_OVERRIDE_SURFACES.map((token) => resolveToken(token, modeTokens)),
+      );
+      expect(fromCss, mode).toEqual(fromTsList);
+    }
   });
 });
 

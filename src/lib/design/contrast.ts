@@ -79,8 +79,13 @@ export const SURFACES = [
  * --color-danger-surface is .bg-destructive-surface's resolved value, the
  * one member SURFACES above does not include. See the focus-ring-on-old-
  * surface comment below for why this is its own list rather than SURFACES.
+ *
+ * Exported (round 5, code-review): nothing enforced this list staying in
+ * sync with globals.css's own selector list until contrast.test.ts's
+ * "RING_OVERRIDE_SURFACES matches globals.css's own selector list" gained a
+ * test that resolves both independently and compares them.
  */
-const RING_OVERRIDE_SURFACES = [
+export const RING_OVERRIDE_SURFACES = [
   "--color-surface-0",
   "--color-surface-1",
   "--color-surface-2",
@@ -219,6 +224,37 @@ export const PAIRINGS: Pairing[] = [
     usage:
       "The focus indicator on a control that still lives on the near-black surface scale (the resale-rights decision form's inputs, the upload page's file dropzone, a destructive well's own controls, ...), via the --ring override scoped to these surface classes in globals.css.",
   })),
+  /*
+   * ugcportal-rw9j review round 5 (code-review): --color-petrol-400 at FULL
+   * opacity (not the RING_ALPHA_MODIFIER-alpha ring above) against the same
+   * old-surface list - button.tsx's default-neutral variant and the upload
+   * queue's per-row progress-bar fill both paint it solid on one of these
+   * surfaces, and neither was checked by any existing pairing before this
+   * round (focus-ring-on-old-surface only ever checked the alpha-modified
+   * ring use). Same surfaces, different use of the same token, so its own
+   * entry rather than folded into the one above.
+   */
+  ...RING_OVERRIDE_SURFACES.map((surface) => ({
+    id: `petrol-400-fill-on-old-surface-${surface.replace("--color-", "")}`,
+    foreground: "--color-petrol-400",
+    background: [surface],
+    requirement: "ui" as const,
+    usage:
+      "default-neutral's fill and the upload queue's progress-bar fill, both solid --color-petrol-400 on a control that still lives on the near-black surface scale.",
+  })),
+  /*
+   * ugcportal-rw9j review round 5 (code-review): the label on top of that
+   * same fill - default-neutral's text-petrol-900 (button.tsx) and the
+   * upload dropzone's "Choose files" label use this exact pairing, chosen
+   * to mirror dark mode's own --primary (a light fill with a dark label).
+   */
+  {
+    id: "petrol-900-on-petrol-400",
+    foreground: "--petrol-900",
+    background: ["--color-petrol-400"],
+    requirement: "body",
+    usage: "Label on default-neutral's fill and the upload dropzone's \"Choose files\" button.",
+  },
   ...onEverySurface(
     "divider",
     "--color-line",

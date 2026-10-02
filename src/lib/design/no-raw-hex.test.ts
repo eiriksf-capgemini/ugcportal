@@ -45,8 +45,21 @@ const SRC_ROOT = path.resolve(
 
 const SCANNED_EXTENSIONS = /\.(tsx|ts|css)$/;
 
-/** Matches a CSS hex colour literal: #rgb, #rgba, #rrggbb or #rrggbbaa. */
-const HEX_COLOR = /#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})\b/g;
+/**
+ * Matches a CSS hex colour literal: #rgb, #rgba, #rrggbb or #rrggbbaa.
+ *
+ * `(?![0-9a-fA-F])`, not a trailing `\b` (round 5, code-review): `\b` fails
+ * to match when the hex run is immediately followed by a non-hex WORD
+ * character with no separator - verified, `"#14555fsolid".match(HEX_COLOR)`
+ * and `"#14555fx".match(HEX_COLOR)` both returned `null` against the old
+ * pattern, so a raw hex literal abutting another identifier with no
+ * whitespace would ship undetected. The negative lookahead asks the
+ * narrower, correct question - "is the next character also a valid hex
+ * digit" - which still rejects a run that is really a prefix of a longer
+ * one (`#1234567`, 7 digits, matches neither length) while no longer
+ * rejecting a run followed by an unrelated word character.
+ */
+const HEX_COLOR = /#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})(?![0-9a-fA-F])/g;
 
 /**
  * round 5: the bare HEX_COLOR regex false-positives on ordinary English
@@ -90,6 +103,17 @@ function isExcluded(file: string): boolean {
   if (isTestFile(file)) return true;
   return false;
 }
+
+describe("HEX_COLOR", () => {
+  it("matches a hex literal immediately followed by a non-hex word character", () => {
+    expect("#14555fsolid".match(HEX_COLOR)).toEqual(["#14555f"]);
+    expect("#14555fx".match(HEX_COLOR)).toEqual(["#14555f"]);
+  });
+
+  it("still rejects a run that is really a prefix of a longer one", () => {
+    expect("#1234567".match(HEX_COLOR)).toBeNull();
+  });
+});
 
 describe("stripHrefFragments", () => {
   it("blanks an href anchor so it cannot read as a hex colour", () => {

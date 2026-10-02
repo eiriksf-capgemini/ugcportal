@@ -132,7 +132,7 @@ function scanDualMeaningUsage(): Map<string, Partial<Record<DualMeaningToken, nu
 }
 
 /**
- * Audited rounds 2 and 4 of ugcportal-rw9j. Every entry below renders on
+ * Audited rounds 2, 4 and 5 of ugcportal-rw9j. Every entry below renders on
  * --background (the page canvas, where the new meaning is correct) with one
  * documented exception: src/components/ui/button.tsx's `border-primary`/
  * `text-primary` are PETROL_OUTLINE_STYLE, shared by the `outline` and
@@ -147,6 +147,13 @@ function scanDualMeaningUsage(): Map<string, Partial<Record<DualMeaningToken, nu
  * text-ink-muted directly on --background (safe before this bead, wrong
  * once --background stopped being the near-black surface scale) and were
  * switched to the semantic tokens this file tracks.
+ *
+ * Round 5 (code-review) found a second instance in containment.ts itself:
+ * GALLERY_CAPTION_CLASS, three lines above GALLERY_TAG_CLASS in the real
+ * file, used text-ink and was missed in round 4 - the caption feature
+ * (ugcportal-gwr) landed on a diverging branch and merged into this one only
+ * after round 4, so round 4's own audit never saw it. Switched to
+ * text-muted-foreground, the same token its sibling already uses.
  */
 const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> = {
   "src/app/auth/error/page.tsx": { "text-foreground": 1, "text-muted-foreground": 1 },
@@ -168,7 +175,7 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
     "text-foreground": 1,
     "text-muted-foreground": 1,
   },
-  "src/components/gallery/containment.ts": { "text-muted-foreground": 1 },
+  "src/components/gallery/containment.ts": { "text-muted-foreground": 2 },
   "src/components/auth-status.tsx": { "text-muted-foreground": 1 },
 };
 
