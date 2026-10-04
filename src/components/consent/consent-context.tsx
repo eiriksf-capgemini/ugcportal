@@ -28,6 +28,16 @@ type ConsentContextValue = {
   onlyNecessary: () => void;
   /** Reopens the choice — what the "Cookies" control (K4) calls. */
   reopen: () => void;
+  /**
+   * Increments on every `reopen()` call only — never on the initial
+   * mount-time open a first-time visitor with no stored choice gets.
+   * CookieBanner (review round 1, finding 9) watches this to know when to
+   * move focus and announce: a visitor's first-ever page load should not
+   * have focus yanked away from wherever it would otherwise land, but a
+   * visitor who explicitly clicks "Cookies" to reopen the choice should
+   * have focus follow it, the same way any other reopened control would.
+   */
+  reopenCount: number;
 };
 
 const ConsentContext = createContext<ConsentContextValue | null>(null);
@@ -55,6 +65,7 @@ export function ConsentProvider({
 }) {
   const [consent, setConsent] = useState<ConsentChoice | null>(initialConsent);
   const [bannerOpen, setBannerOpen] = useState(initialConsent === null);
+  const [reopenCount, setReopenCount] = useState(0);
 
   const acceptOptional = useCallback(() => {
     writeStoredConsent("granted");
@@ -70,11 +81,12 @@ export function ConsentProvider({
 
   const reopen = useCallback(() => {
     setBannerOpen(true);
+    setReopenCount((count) => count + 1);
   }, []);
 
   const value = useMemo<ConsentContextValue>(
-    () => ({ consent, bannerOpen, acceptOptional, onlyNecessary, reopen }),
-    [consent, bannerOpen, acceptOptional, onlyNecessary, reopen],
+    () => ({ consent, bannerOpen, acceptOptional, onlyNecessary, reopen, reopenCount }),
+    [consent, bannerOpen, acceptOptional, onlyNecessary, reopen, reopenCount],
   );
 
   return (

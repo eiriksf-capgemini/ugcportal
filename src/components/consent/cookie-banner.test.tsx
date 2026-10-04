@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
-import { act } from "react";
+import { act, useEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { ConsentProvider } from "./consent-context";
+import { ConsentProvider, useConsent } from "./consent-context";
 import {
   COOKIE_BANNER_ACCEPT_LABEL,
   COOKIE_BANNER_COPY,
@@ -47,6 +47,27 @@ function mountOpenBanner(): void {
   act(() => {
     root.render(
       <ConsentProvider initialConsent={null}>
+        <CookieBanner />
+      </ConsentProvider>,
+    );
+  });
+}
+
+let actionsRef: ReturnType<typeof useConsent> | undefined;
+
+function Actions() {
+  const value = useConsent();
+  useEffect(() => {
+    actionsRef = value;
+  });
+  return null;
+}
+
+function mountWithActions(initialConsent: "granted" | "denied" | null): void {
+  act(() => {
+    root.render(
+      <ConsentProvider initialConsent={initialConsent}>
+        <Actions />
         <CookieBanner />
       </ConsentProvider>,
     );
@@ -121,5 +142,109 @@ describe("CookieBanner visibility", () => {
     mountOpenBanner();
     const region = container.querySelector('[role="region"][aria-label="Cookies"]');
     expect(region).not.toBeNull();
+  });
+});
+
+/**
+ * Review round 1, CONFIRMED medium, finding 8: a fixed bottom banner with no
+ * compensating padding can cover the footer, the gallery's "Load more" and
+ * `/upload`'s form bottom for the whole first-visit session.
+ */
+describe("CookieBanner reserves space for itself while open (finding 8)", () => {
+  afterEach(() => {
+    // Belt-and-braces: afterEach above already unmounts, which should run
+    // this component's own cleanup, but a defect in that cleanup should not
+    // leak into the NEXT test's assertions either.
+    document.body.style.paddingBottom = "";
+  });
+
+  it("sets a non-empty padding-bottom on <body> while the banner is open", () => {
+    expect(document.body.style.paddingBottom).toBe("");
+    mountOpenBanner();
+    expect(document.body.style.paddingBottom).not.toBe("");
+  });
+
+  it("clears the padding-bottom again once the banner closes", () => {
+    mountWithActions(null);
+    expect(document.body.style.paddingBottom).not.toBe("");
+
+    act(() => {
+      actionsRef?.acceptOptional();
+    });
+
+    expect(document.body.style.paddingBottom).toBe("");
+  });
+
+  it("MUTATION CHECK: unmounting the banner outright also clears the padding (cleanup actually runs)", () => {
+    mountOpenBanner();
+    expect(document.body.style.paddingBottom).not.toBe("");
+
+    act(() => {
+      root.unmount();
+    });
+
+    expect(document.body.style.paddingBottom).toBe("");
+  });
+});
+
+/**
+ * Review round 1, PLAUSIBLE low, finding 9: reopening via the footer
+ * "Cookies" control neither moved focus nor announced the change, so a
+ * screen-reader user had no signal the banner reopened.
+ */
+describe("CookieBanner focus/announce on reopen (finding 9)", () => {
+  it("carries aria-live=\"polite\" on the region", () => {
+    mountOpenBanner();
+    const region = container.querySelector('[role="region"][aria-label="Cookies"]');
+    expect(region?.getAttribute("aria-live")).toBe("polite");
+  });
+
+  it("does NOT move focus on the initial mount-time open (no stored choice yet)", () => {
+    const focusBefore = document.activeElement;
+    mountOpenBanner();
+    // Specifically: focus must not have moved to the banner's own heading.
+    expect(document.activeElement?.textContent).not.toBe("Cookies");
+    expect(document.activeElement).toBe(focusBefore);
+  });
+
+  it("moves focus to the banner's heading when reopened via reopen()", () => {
+    mountWithActions("granted");
+    expect(container.querySelector('[aria-label="Cookies"]')).toBeNull();
+
+    act(() => {
+      actionsRef?.reopen();
+    });
+
+    const heading = container.querySelector("h2");
+    expect(heading).not.toBeNull();
+    expect(heading?.textContent).toBe("Cookies");
+    expect(document.activeElement).toBe(heading);
+  });
+
+  it("MUTATION CHECK: a second reopen() (e.g. after choosing again) moves focus again, not just the first time", () => {
+    mountWithActions("granted");
+
+    act(() => {
+      actionsRef?.reopen();
+    });
+    act(() => {
+      actionsRef?.onlyNecessary();
+    });
+    expect(container.querySelector('[aria-label="Cookies"]')).toBeNull();
+
+    // Deliberately move focus elsewhere to prove the SECOND reopen() is
+    // what brings it back, not a focus that merely never left.
+    const elsewhere = document.createElement("button");
+    document.body.append(elsewhere);
+    elsewhere.focus();
+    expect(document.activeElement).toBe(elsewhere);
+
+    act(() => {
+      actionsRef?.reopen();
+    });
+
+    const heading = container.querySelector("h2");
+    expect(document.activeElement).toBe(heading);
+    elsewhere.remove();
   });
 });

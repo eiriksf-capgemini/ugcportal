@@ -140,6 +140,39 @@ describe("ConsentProvider actions", () => {
     expect(latest?.consent).toBe("granted");
   });
 
+  it("reopenCount starts at 0 and does not increment on the initial mount-time open (review round 1, finding 9)", () => {
+    let actions: ReturnType<typeof useConsent> | undefined;
+    mount(null, (value) => {
+      actions = value;
+    });
+
+    // bannerOpen is already true here (no stored choice), but reopen() was
+    // never called — CookieBanner must not treat this as a reason to move
+    // focus/announce.
+    expect(actions?.bannerOpen).toBe(true);
+    expect(actions?.reopenCount).toBe(0);
+  });
+
+  it("reopenCount increments once per reopen() call", () => {
+    let actions: ReturnType<typeof useConsent> | undefined;
+    mount("granted", (value) => {
+      actions = value;
+    });
+
+    act(() => {
+      actions?.reopen();
+    });
+    expect(actions?.reopenCount).toBe(1);
+
+    act(() => {
+      actions?.onlyNecessary();
+    });
+    act(() => {
+      actions?.reopen();
+    });
+    expect(actions?.reopenCount).toBe(2);
+  });
+
   it("switching the choice after reopening overwrites the earlier one (K4 withdrawal)", () => {
     let actions: ReturnType<typeof useConsent> | undefined;
     mount("granted", (value) => {

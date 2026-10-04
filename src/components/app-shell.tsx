@@ -74,10 +74,13 @@ export function AppShell({ children }: { children: ReactNode }) {
       </a>
 
       {/*
-        z-20 is the only stacking tier in the app today: this is the one
-        sticky element and there are no overlays yet. Whoever adds the first
-        dialog or popover should replace this with a documented tier scale
-        rather than picking a bigger number.
+        z-20: this header's own sticky tier. No longer the only one in the
+        app (review round 1, ugcportal-3wgp, finding 5) — the cookie-consent
+        banner (src/components/consent/cookie-banner.tsx) is the first
+        overlay, at z-40, deliberately above this header. There is still no
+        documented tier SCALE (no --z-* tokens in globals.css); whoever adds
+        a third stacking context should introduce one rather than everyone
+        picking their own bigger number.
       */}
       <header className="sticky top-0 z-20 border-b border-border bg-background">
         <div className="mx-auto flex h-14 w-full max-w-6xl items-center gap-4 px-4 sm:px-6">

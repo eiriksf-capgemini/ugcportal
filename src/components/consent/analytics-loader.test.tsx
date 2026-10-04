@@ -26,9 +26,21 @@ vi.mock("next/script", () => ({
   default: (props: Record<string, unknown>) => scriptMock(props),
 }));
 
-const { AnalyticsLoader, ANALYTICS_COOKIE_NAMES, clearAnalyticsCookies } =
-  await import("./analytics-loader");
+const {
+  AnalyticsLoader,
+  ANALYTICS_COOKIE_NAMES,
+  clearAnalyticsCookies,
+  disableUmamiTracking,
+  enableUmamiTracking,
+} = await import("./analytics-loader");
 const { ConsentProvider, useConsent } = await import("./consent-context");
+
+// The exact key Umami's real tracker checks on every track call (confirmed
+// against upstream umami-software/umami src/tracker/index.ts,
+// `trackingDisabled()`); spelled out directly here rather than imported, so
+// this test fails if analytics-loader.tsx ever renames its own constant
+// without this test noticing the drift.
+const UMAMI_DISABLE_STORAGE_KEY = "umami.disabled";
 
 const ANALYTICS_SRC_VAR = "NEXT_PUBLIC_UMAMI_SRC";
 const ANALYTICS_WEBSITE_ID_VAR = "NEXT_PUBLIC_UMAMI_WEBSITE_ID";
@@ -52,9 +64,7 @@ beforeEach(() => {
   ).IS_REACT_ACT_ENVIRONMENT = true;
   scriptMock.mockClear();
   clearAnalyticsEnv();
-  for (const name of ANALYTICS_COOKIE_NAMES) {
-    document.cookie = `${name}=; Max-Age=0; Path=/`;
-  }
+  window.localStorage.removeItem(UMAMI_DISABLE_STORAGE_KEY);
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -177,34 +187,86 @@ describe("K4: withdrawal via the 'Cookies' control", () => {
     expect(scriptMock).not.toHaveBeenCalled();
   });
 
-  it("removes the analytics cookies the client can see", () => {
+  /**
+   * Review round 1, MEDIUM finding 1: removing <Script> from React's tree
+   * stops a FUTURE mount, not an already-running tracker — next/script has
+   * no unmount cleanup. The real fix is Umami's own documented runtime
+   * opt-out, which its tracker checks on every track call, not just at
+   * load (confirmed against upstream src/tracker/index.ts). This stub
+   * reproduces that exact shape (a gate reading the same localStorage key
+   * before every tracked call) without vendoring the real bundle, so a
+   * regression that stops setting the real flag — or renames it — fails
+   * this test the same way it would fail against the real script.
+   */
+  it("a stub tracker that already loaded stops making track calls after withdrawal, and the disable signal is set", () => {
     setAnalyticsEnv();
-    // Simulate the script having set its cache cookie while consent was
-    // granted.
-    for (const name of ANALYTICS_COOKIE_NAMES) {
-      document.cookie = `${name}=some-value; Path=/`;
+    let trackCallCount = 0;
+    function stubTrack(): void {
+      // The exact gate Umami's real tracker runs before every track call.
+      if (window.localStorage.getItem(UMAMI_DISABLE_STORAGE_KEY)) return;
+      trackCallCount += 1;
     }
-    expect(document.cookie).toContain(ANALYTICS_COOKIE_NAMES[0]);
 
     mount("granted");
+    expect(window.localStorage.getItem(UMAMI_DISABLE_STORAGE_KEY)).toBeNull();
+    stubTrack();
+    expect(trackCallCount).toBe(1);
 
     act(() => {
       actionsRef?.reopen();
       actionsRef?.onlyNecessary();
     });
 
-    for (const name of ANALYTICS_COOKIE_NAMES) {
-      expect(document.cookie).not.toContain(`${name}=some-value`);
-    }
+    expect(window.localStorage.getItem(UMAMI_DISABLE_STORAGE_KEY)).toBe("1");
+    stubTrack();
+    stubTrack();
+    expect(trackCallCount).toBe(1); // no further track calls after withdrawal
   });
 
-  it("MUTATION CHECK: clearAnalyticsCookies actually removes a cookie it names, not a no-op", () => {
-    document.cookie = `${ANALYTICS_COOKIE_NAMES[0]}=present; Path=/`;
-    expect(document.cookie).toContain(`${ANALYTICS_COOKIE_NAMES[0]}=present`);
+  it("re-enables tracking if consent is granted again after a prior withdrawal", () => {
+    setAnalyticsEnv();
+    mount("granted");
+    act(() => {
+      actionsRef?.reopen();
+      actionsRef?.onlyNecessary();
+    });
+    expect(window.localStorage.getItem(UMAMI_DISABLE_STORAGE_KEY)).toBe("1");
 
-    clearAnalyticsCookies();
+    act(() => {
+      actionsRef?.reopen();
+      actionsRef?.acceptOptional();
+    });
 
-    expect(document.cookie).not.toContain(`${ANALYTICS_COOKIE_NAMES[0]}=present`);
+    expect(window.localStorage.getItem(UMAMI_DISABLE_STORAGE_KEY)).toBeNull();
+  });
+
+  it("MUTATION CHECK: disableUmamiTracking actually sets the flag, not a no-op", () => {
+    expect(window.localStorage.getItem(UMAMI_DISABLE_STORAGE_KEY)).toBeNull();
+    disableUmamiTracking();
+    expect(window.localStorage.getItem(UMAMI_DISABLE_STORAGE_KEY)).toBe("1");
+  });
+
+  it("MUTATION CHECK: enableUmamiTracking actually clears the flag, not a no-op", () => {
+    window.localStorage.setItem(UMAMI_DISABLE_STORAGE_KEY, "1");
+    enableUmamiTracking();
+    expect(window.localStorage.getItem(UMAMI_DISABLE_STORAGE_KEY)).toBeNull();
+  });
+
+  it("ANALYTICS_COOKIE_NAMES is empty today — Umami is confirmed cookieless (review round 1, finding 4)", () => {
+    expect(ANALYTICS_COOKIE_NAMES).toEqual([]);
+  });
+
+  it("MUTATION CHECK: clearAnalyticsCookies actually removes a cookie it is given, not a no-op", () => {
+    // No real Umami cookie exists to simulate (see the empty-array test
+    // above); this proves the generic clearing mechanism itself works,
+    // independent of which vendor is configured, by passing an explicit
+    // name the way a future vendor's entry would.
+    document.cookie = "a_future_vendor_cookie=present; Path=/";
+    expect(document.cookie).toContain("a_future_vendor_cookie=present");
+
+    clearAnalyticsCookies(["a_future_vendor_cookie"]);
+
+    expect(document.cookie).not.toContain("a_future_vendor_cookie=present");
   });
 });
 

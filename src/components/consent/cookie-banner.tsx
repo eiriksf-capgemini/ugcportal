@@ -1,5 +1,7 @@
 "use client";
 
+import { useEffect, useLayoutEffect, useRef } from "react";
+
 import { Button } from "@/components/ui/button";
 
 import { useConsent } from "./consent-context";
@@ -17,6 +19,14 @@ export const COOKIE_BANNER_COPY =
 export const COOKIE_BANNER_ACCEPT_LABEL = "Accept optional cookies";
 export const COOKIE_BANNER_DECLINE_LABEL = "Only necessary";
 
+// React warns about useLayoutEffect "doing nothing" when it runs during
+// server rendering. It never actually DOES anything during SSR either way
+// (Next does not execute effects server-side at all) — this just silences
+// the warning the common way, by using the synchronous (layout) version
+// only once `window` exists.
+const useIsomorphicLayoutEffect =
+  typeof window !== "undefined" ? useLayoutEffect : useEffect;
+
 /**
  * Bottom-anchored, small, one paragraph, two equally styled buttons
  * (ugcportal-3wgp K5). Both buttons share the exact same `variant`/`size` —
@@ -33,16 +43,71 @@ export const COOKIE_BANNER_DECLINE_LABEL = "Only necessary";
  * still use the site before choosing — the only thing gated is optional
  * storage/tracking itself, enforced by AnalyticsLoader, not by this banner
  * blocking anything.
+ *
+ * Review round 1 findings addressed here:
+ *
+ * - Finding 8 (the fixed banner can cover interactive content): nothing in
+ *   this PR previously added matching bottom padding anywhere, so the
+ *   footer's "Cookies" control, the gallery's "Load more" button and
+ *   `/upload`'s form bottom could sit behind this banner, unreachable by
+ *   scroll, for the whole first-visit session. Fixed by measuring the
+ *   banner's own rendered height and reserving exactly that much
+ *   `padding-bottom` on `<body>` while it is open — a `ResizeObserver`
+ *   rather than a fixed guess, since the banner wraps to a second line
+ *   (and a taller box) on narrow viewports.
+ * - Finding 9 (reopening via "Cookies" neither moves focus nor announces):
+ *   fixed by moving focus to a heading inside the banner whenever
+ *   `reopenCount` increments (never on the very first, no-stored-choice
+ *   open — see consent-context.tsx's own comment on why), and adding
+ *   `aria-live="polite"` so the region's reappearance is itself
+ *   announced to assistive tech even before focus lands.
  */
 export function CookieBanner() {
-  const { bannerOpen, acceptOptional, onlyNecessary } = useConsent();
+  const { bannerOpen, acceptOptional, onlyNecessary, reopenCount } = useConsent();
+  const bannerRef = useRef<HTMLDivElement>(null);
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const lastHandledReopenCount = useRef(reopenCount);
+
+  // Finding 8: reserve space for the banner so it never covers interactive
+  // content beneath it, for as long as it's open.
+  useIsomorphicLayoutEffect(() => {
+    if (!bannerOpen) return undefined;
+    const el = bannerRef.current;
+    if (!el) return undefined;
+
+    const applyPadding = () => {
+      document.body.style.paddingBottom = `${el.offsetHeight}px`;
+    };
+    applyPadding();
+
+    const supportsResizeObserver = typeof ResizeObserver !== "undefined";
+    const observer = supportsResizeObserver ? new ResizeObserver(applyPadding) : null;
+    observer?.observe(el);
+
+    return () => {
+      observer?.disconnect();
+      document.body.style.paddingBottom = "";
+    };
+  }, [bannerOpen]);
+
+  // Finding 9: move focus into the banner when it was explicitly reopened
+  // (reopenCount changed since last render) — but not on the initial
+  // mount-time open a first-time visitor with no stored choice gets, which
+  // is why this compares against a ref rather than firing on every open.
+  useIsomorphicLayoutEffect(() => {
+    if (reopenCount === lastHandledReopenCount.current) return;
+    lastHandledReopenCount.current = reopenCount;
+    if (bannerOpen) headingRef.current?.focus();
+  }, [reopenCount, bannerOpen]);
 
   if (!bannerOpen) return null;
 
   return (
     <div
+      ref={bannerRef}
       role="region"
       aria-label="Cookies"
+      aria-live="polite"
       /*
        * bg-background, not bg-popover: button.tsx's `outline` variant (used
        * by both buttons below) renders its resting label in `text-primary`,
@@ -56,6 +121,9 @@ export function CookieBanner() {
        */
       className="fixed inset-x-0 bottom-0 z-40 border-t border-border bg-background px-4 py-4 shadow-lg sm:px-6"
     >
+      <h2 ref={headingRef} tabIndex={-1} className="sr-only">
+        Cookies
+      </h2>
       <div className="mx-auto flex w-full max-w-6xl flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <p className="max-w-prose text-sm text-foreground">
           {COOKIE_BANNER_COPY}

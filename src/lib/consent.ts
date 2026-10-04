@@ -24,7 +24,12 @@
  * consent/analytics-loader.tsx is the one place that belongs, and a
  * repo-grep test (analytics-host.grep.test.ts) fails the build if that
  * knowledge leaks out here instead.
+ *
+ * The actual cookie mechanics (read/write, encoding, SameSite/Secure) live
+ * in src/lib/cookies.ts (review round 1, finding 6) — this module owns only
+ * the consent-specific name, lifetime and value validation.
  */
+import { getCookie, setCookie } from "./cookies";
 
 export type ConsentChoice = "granted" | "denied";
 
@@ -49,10 +54,6 @@ export function parseConsentChoice(
   return raw === "granted" || raw === "denied" ? raw : null;
 }
 
-function isBrowser(): boolean {
-  return typeof document !== "undefined";
-}
-
 /**
  * Reads the visitor's stored choice from the first-party cookie. Browser-
  * only: returns `null` (same as "no choice yet") when called during SSR,
@@ -61,13 +62,7 @@ function isBrowser(): boolean {
  * component by mistake and silently always report "no choice".
  */
 export function readStoredConsent(): ConsentChoice | null {
-  if (!isBrowser()) return null;
-  const prefix = `${CONSENT_COOKIE_NAME}=`;
-  const row = document.cookie
-    .split("; ")
-    .find((entry) => entry.startsWith(prefix));
-  if (row === undefined) return null;
-  return parseConsentChoice(decodeURIComponent(row.slice(prefix.length)));
+  return parseConsentChoice(getCookie(CONSENT_COOKIE_NAME));
 }
 
 /**
@@ -77,9 +72,7 @@ export function readStoredConsent(): ConsentChoice | null {
  * not reappear on the visitor's next visit (K3).
  */
 export function writeStoredConsent(value: ConsentChoice): void {
-  if (!isBrowser()) return;
-  const secure = window.location.protocol === "https:" ? "; Secure" : "";
-  document.cookie =
-    `${CONSENT_COOKIE_NAME}=${value}; Max-Age=${CONSENT_COOKIE_MAX_AGE_SECONDS}; ` +
-    `Path=/; SameSite=Lax${secure}`;
+  setCookie(CONSENT_COOKIE_NAME, value, {
+    maxAgeSeconds: CONSENT_COOKIE_MAX_AGE_SECONDS,
+  });
 }
