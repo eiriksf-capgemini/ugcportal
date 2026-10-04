@@ -3,6 +3,7 @@ import { PortfolioTile } from "@/components/portfolio/portfolio-tile";
 import { ContactSection } from "@/components/site/contact-section";
 import { IntroSection } from "@/components/site/intro-section";
 import { PageShell } from "@/components/site/page-shell";
+import { SECTION_HEADING_CLASS } from "@/components/site/section-heading";
 import { WhatWeOfferSection } from "@/components/site/what-we-offer-section";
 import { listPortfolioPieces } from "@/lib/portfolio";
 
@@ -32,16 +33,10 @@ export const metadata = {
  * unpublished or deleted sample until something rebuilt it, and would also
  * mean running a Prisma query at `next build` time against a database the
  * build environment has no reason to have — the same failure
- * src/app/page.tsx's own comment names.
- *
- * Unlike src/app/about/page.tsx (round-1 review: its own `force-dynamic`
- * export was dropped as redundant, even though the app as a whole still
- * renders every route dynamically — see that file's own comment), this
- * page's `dynamic` export is NOT redundant: `ContactSection`'s old
- * contact-email guard reason is gone (that check moved to a boot-time
- * warning, src/instrumentation.ts's `checkContactEmailConfiguration`, and
- * no longer throws at render time), but the live-data reason above is real
- * and specific to this page regardless of anything the root layout does.
+ * src/app/page.tsx's own comment names. (`ContactSection`'s own old
+ * contact-email guard reason no longer applies to either page in this
+ * bead — see src/app/about/page.tsx's own comment for that history and for
+ * why IT carries this same export too, for a different, site-wide reason.)
  */
 export const dynamic = "force-dynamic";
 
@@ -53,9 +48,7 @@ export default async function PortfolioPage() {
       <IntroSection />
 
       <section className="mt-10" data-page-section="samples">
-        <h2 className="text-lg font-semibold tracking-tight text-foreground">
-          Samples
-        </h2>
+        <h2 className={SECTION_HEADING_CLASS}>Samples</h2>
         {pieces.length === 0 ? (
           // No sample has been curated yet (or none is a photo — v0.5.0's
           // scope) rather than an error: the gallery's own GalleryEmpty is

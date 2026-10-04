@@ -1,4 +1,5 @@
 import { ContactMailtoForm } from "@/components/site/contact-mailto-form";
+import { SECTION_HEADING_CLASS } from "@/components/site/section-heading";
 import { contactMailtoHref, resolveContactEmail } from "@/lib/contact";
 import { PRIVACY_PATH } from "@/lib/routes";
 import { CONTACT_INTRO, CONTACT_NOTICE } from "@/lib/site";
@@ -35,11 +36,10 @@ import { CONTACT_INTRO, CONTACT_NOTICE } from "@/lib/site";
  * both callers (src/app/about/page.tsx, src/app/portfolio/page.tsx) read
  * the same live configuration without either having to remember to pass it
  * through. `resolveContactEmail` no longer throws (round-1 review moved
- * that guard to a boot-time check, src/instrumentation.ts), so this no
- * longer forces its callers to be `force-dynamic` purely on its account —
- * see src/app/about/page.tsx's own comment for why that page's own
- * `force-dynamic` export was still dropped, and why the build nonetheless
- * still marks it dynamic for an unrelated, site-wide reason.
+ * that guard to a boot-time check, src/instrumentation.ts), so this
+ * component itself no longer needs either caller to be `force-dynamic` on
+ * its account — both still carry that export today, each for its own
+ * unrelated reason (see each page file's own comment).
  */
 
 /**
@@ -56,9 +56,7 @@ export function ContactSection({ defaultSubject }: { defaultSubject: string }) {
 
   return (
     <section className="mt-10" data-page-section="contact">
-      <h2 className="text-lg font-semibold tracking-tight text-foreground">
-        Get in touch
-      </h2>
+      <h2 className={SECTION_HEADING_CLASS}>Get in touch</h2>
       <p className="mt-2 max-w-prose text-sm text-muted-foreground">
         {CONTACT_INTRO}
       </p>

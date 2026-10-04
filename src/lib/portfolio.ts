@@ -56,14 +56,20 @@ export const SPEC_SAMPLE_LABEL = "Spec sample, not a client commission";
 
 /**
  * A ceiling on how many samples the portfolio page will render, whatever the
- * curated set turns out to contain — the same defensive reasoning
- * `MAX_PICKER_TAGS` (src/lib/tags.ts) gives for the upload page's tag
- * picker: nothing here deletes a Media row or un-tags one, so the curated
- * set can only grow, and a page that renders every row it is ever given has
- * no ceiling on its own render cost. Twenty-four is the same figure
- * `MAX_PICKER_TAGS` uses, for the same reason — comfortably more than "the
- * six sample pieces" §5.2 names as this product's starting content, and far
- * short of a size a grid can choke on.
+ * curated set turns out to contain: nothing here deletes a Media row or
+ * un-tags one, so the curated set can only grow, and a page that renders
+ * every row it is ever given has no ceiling on its own render cost.
+ *
+ * Twenty-four, chosen on its OWN terms (round-3 review: an earlier draft of
+ * this comment claimed it was "the same figure `MAX_PICKER_TAGS` uses, for
+ * the same reason" — true only by coincidence, since the two cap unrelated
+ * things: `MAX_PICKER_TAGS` bounds how many DISTINCT TAGS the upload page's
+ * picker offers, this bounds how many MEDIA ITEMS this page renders, and
+ * deriving one from the other would wire a future change to one concern
+ * into the other's render cost for no real reason). Comfortably more than
+ * "the six sample pieces" §5.2 names as this product's starting content,
+ * and far short of a size a grid can choke on — the justification stands
+ * on its own regardless of what `MAX_PICKER_TAGS` is set to.
  */
 export const MAX_PORTFOLIO_PIECES = 24;
 

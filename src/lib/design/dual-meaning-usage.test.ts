@@ -190,16 +190,22 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
    * Round 2 moved the shared `<h1>` both pages used to carry out to
    * `src/components/site/page-shell.tsx` (`PageShell`) — so
    * `src/app/about/page.tsx` carries none of these tokens directly any more
-   * (no entry below: an audited file with zero matches simply isn't one),
-   * and `/portfolio`'s own `text-foreground` count dropped from two to one
-   * (its "Samples" `<h2>` is the only one left in the page file itself; its
-   * empty-state `<p>` accounts for the one `text-muted-foreground`).
+   * (no entry below: an audited file with zero matches simply isn't one).
+   *
+   * Round 3 did the same for the shared `<h2>` section heading
+   * (`src/components/site/section-heading.ts`, `SECTION_HEADING_CLASS`):
+   * `/portfolio`'s own `text-foreground` count is now zero too (its
+   * "Samples" `<h2>` moved to the constant; its empty-state `<p>` still
+   * accounts for the one `text-muted-foreground`), and
+   * `contact-section.tsx`'s "Get in touch" `<h2>` moved the same way, so
+   * that file's own `text-foreground` count also dropped to zero.
+   * `what-we-offer-section.tsx` keeps one `text-foreground` of its own —
+   * its per-item `<dt>`, not the section `<h2>`, which also moved to the
+   * shared constant.
    */
-  "src/app/portfolio/page.tsx": {
-    "text-foreground": 1,
-    "text-muted-foreground": 1,
-  },
+  "src/app/portfolio/page.tsx": { "text-muted-foreground": 1 },
   "src/components/site/page-shell.tsx": { "text-foreground": 1 },
+  "src/components/site/section-heading.ts": { "text-foreground": 1 },
   // Round-1 review simplified this component (K2's spec marker renders
   // unconditionally, the K3 advertising-label branch is gone until
   // ugcportal-qnq9.1 lands) — one text-foreground usage now, not two.
@@ -209,13 +215,12 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
   // once in the source text, not twice (the literal is written once; both
   // `<a>` elements reference the same constant).
   "src/components/site/contact-section.tsx": {
-    "text-foreground": 1,
     "text-muted-foreground": 3,
     "text-primary": 1,
   },
   "src/components/site/intro-section.tsx": { "text-muted-foreground": 1 },
   "src/components/site/what-we-offer-section.tsx": {
-    "text-foreground": 2,
+    "text-foreground": 1,
     "text-muted-foreground": 1,
   },
 };

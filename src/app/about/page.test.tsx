@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import AboutPage from "@/app/about/page";
+import AboutPage, { dynamic } from "@/app/about/page";
 import { CONTACT_EMAIL_PLACEHOLDER } from "@/lib/contact";
 
 /**
@@ -44,5 +44,12 @@ describe("/about", () => {
   it("percent-encodes the @ in the mailto href (round-2 review)", () => {
     const markup = renderToStaticMarkup(<AboutPage />);
     expect(markup).toContain("mailto:REPLACE-BEFORE-LAUNCH%40example.invalid");
+  });
+
+  // Round-3 review: declared explicitly, rather than relying on AppShell's
+  // own session read to keep this page dynamic — see this route's own
+  // comment on the export for why.
+  it("declares its own force-dynamic, rather than relying on AppShell", () => {
+    expect(dynamic).toBe("force-dynamic");
   });
 });

@@ -3,10 +3,8 @@
 import { useState } from "react";
 
 import { buttonVariants } from "@/components/ui/button";
+import { TEXT_INPUT_CLASS } from "@/components/ui/text-input";
 import { contactMailtoHref } from "@/lib/contact";
-
-const FIELD_CLASS =
-  "mt-2 block w-full rounded-md border border-line-strong bg-surface-1 px-3 py-2 text-sm text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring";
 
 /**
  * The interactive half of the contact form (ugcportal-qnq9.7 round-1 review,
@@ -43,10 +41,12 @@ export function ContactMailtoForm({
 }) {
   const [subject, setSubject] = useState(defaultSubject);
   const [message, setMessage] = useState("");
-  const href = contactMailtoHref(email, {
-    subject,
-    body: message === "" ? undefined : message,
-  });
+  // No `message === "" ? undefined : message` ternary here (round-3 review:
+  // it was redundant) — contactMailtoHref's own `Boolean(entry[1])` filter
+  // (src/lib/contact.ts) already omits a falsy value, and an empty string
+  // is falsy, so passing `message` straight through already omits `body=`
+  // until something is typed.
+  const href = contactMailtoHref(email, { subject, body: message });
 
   return (
     <form
@@ -62,7 +62,7 @@ export function ContactMailtoForm({
         type="text"
         value={subject}
         onChange={(event) => setSubject(event.target.value)}
-        className={FIELD_CLASS}
+        className={TEXT_INPUT_CLASS}
       />
 
       <label
@@ -76,7 +76,7 @@ export function ContactMailtoForm({
         rows={5}
         value={message}
         onChange={(event) => setMessage(event.target.value)}
-        className={FIELD_CLASS}
+        className={TEXT_INPUT_CLASS}
       />
 
       <a

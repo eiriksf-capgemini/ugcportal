@@ -30,30 +30,21 @@ export const metadata = {
 };
 
 /**
- * NO `export const dynamic` ANY MORE (round-1 review). This page used to
- * carry `force-dynamic` because `ContactSection` called
- * `resolveContactEmail()` (src/lib/contact.ts), which used to throw at
- * render time if production had nothing configured — and prerendering
- * would have run that check during `next build` instead of at a real
- * request. That guard now lives in src/instrumentation.ts as a boot-time
- * warning (`checkContactEmailConfiguration`), so nothing on this page's own
- * render path can throw any more, and there is no live data on this page to
- * go stale — nothing left here that NEEDS `force-dynamic`.
- *
- * WHAT THIS DOES NOT CLAIM: that `next build`'s own output marks `/about`
- * static (`○`). It does not — confirmed by running `npm run build`, which
- * still reports `ƒ (Dynamic)` for every route in this app, this one
- * included. That is inherited from the ROOT layout
- * (src/components/app-shell.tsx renders `<AuthStatus />`, an async Server
- * Component that reads the session via cookies on every request), which
- * forces every page under it to render dynamically regardless of any
- * individual page's own `dynamic` export — a site-wide fact, not one this
- * bead introduced or can fix from inside a single page file, and
- * app-shell.tsx is explicitly out of scope for this bead to touch. Removing
- * the now-redundant export here is still correct: it stops this file
- * claiming a reason for dynamism that no longer exists, even though a
- * different, pre-existing reason still applies at the site level.
+ * `force-dynamic` AGAIN (round-3 review), but for a DIFFERENT reason than
+ * before. Round 1 had this for `ContactSection`'s old `resolveContactEmail`
+ * throw, which moved to a boot-time warning (src/instrumentation.ts) and no
+ * longer needs it; round 2 dropped the export on that basis, noting the
+ * build still marks every route `ƒ (Dynamic)` anyway because the root
+ * layout's `<AuthStatus />` (src/components/app-shell.tsx) reads the
+ * session on every request. Round 3's point: relying on THAT is relying on
+ * an implementation detail of a file this bead does not own and must not
+ * touch — if AppShell ever stopped reading the session on every request
+ * (caching it, say), `/about` would start silently serving a stale
+ * prerendered snapshot, with nothing here to say that was never supposed to
+ * happen. Declaring it explicitly makes this page's own correctness
+ * independent of what AppShell does.
  */
+export const dynamic = "force-dynamic";
 
 export default function AboutPage() {
   return (
