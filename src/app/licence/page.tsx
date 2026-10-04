@@ -11,6 +11,13 @@ import { loadLicence } from "./content";
  * see that page's header.
  */
 
+/** Per request, never prerendered — same reason as /privacy. */
+export const dynamic = "force-dynamic";
+
+/**
+ * Reflects the same per-request readiness the body reads; only the body
+ * throws — see the note on /privacy's generateMetadata.
+ */
 export function generateMetadata(): Metadata {
   return legalMetadata("Licence", loadLicence().readiness.draft);
 }

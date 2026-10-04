@@ -17,6 +17,7 @@ import {
 } from "@/lib/legal/legal-page.test-support";
 import { LEGAL_PAGES } from "@/lib/legal/pages";
 import {
+  type LegalPage,
   assertPublishable,
   authoredDigest,
   checkLegalPagesPublishable,
@@ -138,18 +139,48 @@ describe("legalPage", () => {
     expect(cleanPage.authoredSha256).toMatch(/^[0-9a-f]{64}$/);
   });
 
+  it("derives what a page requires from the fields its prose interpolates (round 5)", () => {
+    expect(cleanPage.requires).toEqual(["contactEmail"]);
+    const two = legalPage("/two", (c) => [`${c.controllerName} / ${c.storageProvider}`]);
+    expect(two.requires).toEqual(["controllerName", "storageProvider"]);
+    expect(legalPage("/none", () => ["static"]).requires).toEqual([]);
+  });
+
+  it("the sentinel values cannot be mistaken for one another", () => {
+    // `requires` is detected by substring, so no sentinel may contain another.
+    const values = Object.values(SENTINEL_CONTACT);
+    for (const a of values) {
+      for (const b of values) {
+        if (a !== b) expect(a.includes(b)).toBe(false);
+      }
+    }
+  });
+
   it("gives different prose a different digest", () => {
     expect(examplePage("Write to {email}!").authoredSha256).not.toBe(cleanPage.authoredSha256);
   });
 });
 
 describe("legalReadiness", () => {
-  it("is blocked and draft while a variable is unset", () => {
+  it("is blocked and draft while a variable the page renders is unset", () => {
     const readiness = legalReadiness([cleanPage], unset, SIGNED);
-    expect(readiness.missing).toEqual(Object.values(LEGAL_CONTACT_VARS));
+    // cleanPage renders only the contact address, so only that is missing.
+    expect(readiness.missing).toEqual(["LEGAL_CONTACT_EMAIL"]);
     expect(readiness.strayPlaceholders).toEqual([]);
     expect(readiness.blocked).toBe(true);
     expect(readiness.draft).toBe(true);
+  });
+
+  it("ignores an unset variable the page never renders (round 5)", () => {
+    const onlyEmail = { ...unset, LEGAL_CONTACT_EMAIL: "kari@example.com" };
+    const readiness = legalReadiness([cleanPage], onlyEmail, SIGNED);
+    expect(readiness).toMatchObject({ missing: [], blocked: false, draft: false });
+    // The union over several pages: a page that renders the storage
+    // provider brings its variable back in.
+    const storage = legalPage("/storage", (c) => [`Stored by ${c.storageProvider}.`]);
+    expect(legalReadiness([cleanPage, storage], onlyEmail, SIGNED).missing).toEqual([
+      "LEGAL_STORAGE_PROVIDER",
+    ]);
   });
 
   it("is blocked and draft while stray placeholder text remains", () => {
@@ -232,7 +263,10 @@ describe("legalReadiness", () => {
 
 describe("checkLegalPagesPublishable", () => {
   it("names the unset variables, the pages, and env.example", () => {
-    const warning = checkLegalPagesPublishable([cleanPage, examplePage(undefined, "/other")], {
+    // /other is the page that renders the controller; /example renders only
+    // the contact. The union of the two is what boot judges.
+    const other = legalPage("/other", (contact) => [`Run by ${contact.controllerName}.`]);
+    const warning = checkLegalPagesPublishable([cleanPage, other], {
       ...filled,
       LEGAL_CONTROLLER_NAME: "",
     });
@@ -304,6 +338,41 @@ describe("the real legal pages", () => {
     for (const env of [filled, unset, bracketed]) {
       expect(legalReadiness(LEGAL_PAGES, env).strayPlaceholders).toEqual([]);
     }
+  });
+
+  it("each require exactly the variables their prose renders", () => {
+    // /privacy names the controller, the contact, the host and the store;
+    // /licence names the controller and the contact and nothing else.
+    const byPath = Object.fromEntries(LEGAL_PAGES.map((page) => [page.path, page.requires]));
+    expect(byPath[PRIVACY_PATH]).toEqual([
+      "controllerName",
+      "contactEmail",
+      "hostingProvider",
+      "storageProvider",
+    ]);
+    expect(byPath[LICENCE_PATH]).toEqual(["controllerName", "contactEmail"]);
+  });
+
+  it("/licence publishes with only its own two variables set; /privacy still needs all four", () => {
+    // Verified by mutation: requiring every field on every page fails the
+    // first expectation.
+    const licenceOnly = {
+      ...unset,
+      LEGAL_CONTROLLER_NAME: FILLED_LEGAL_ENV.LEGAL_CONTROLLER_NAME,
+      LEGAL_CONTACT_EMAIL: FILLED_LEGAL_ENV.LEGAL_CONTACT_EMAIL,
+    };
+    const licence = LEGAL_PAGES.find((page) => page.path === LICENCE_PATH) as LegalPage;
+    const privacy = LEGAL_PAGES.find((page) => page.path === PRIVACY_PATH) as LegalPage;
+    expect(legalReadiness([licence], licenceOnly).blocked).toBe(false);
+    expect(() => assertPublishable(legalReadiness([licence], licenceOnly), licenceOnly)).not.toThrow();
+    expect(legalReadiness([privacy], licenceOnly)).toMatchObject({
+      blocked: true,
+      missing: ["LEGAL_HOSTING_PROVIDER", "LEGAL_STORAGE_PROVIDER"],
+    });
+    // Boot walks both, so the boot warning still names what /privacy lacks.
+    expect(checkLegalPagesPublishable(LEGAL_PAGES, licenceOnly)).toContain(
+      "LEGAL_HOSTING_PROVIDER, LEGAL_STORAGE_PROVIDER are not set",
+    );
   });
 
   it("are blocked exactly while unconfigured", () => {

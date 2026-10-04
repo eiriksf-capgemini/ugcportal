@@ -78,6 +78,15 @@ export function LegalPageFrame({
   );
 }
 
+/** A heading over a run of sections — "What is collected, and why" — one step above LegalSection's. */
+export function LegalGroupHeading({ children }: { children: ReactNode }) {
+  return (
+    <h2 className="mt-12 text-xl font-medium tracking-tight text-foreground">
+      {children}
+    </h2>
+  );
+}
+
 /** One titled section with an anchor and a stable test id. */
 export function LegalSection({
   id,

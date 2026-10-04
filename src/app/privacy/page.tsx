@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 
 import {
   LegalFacts,
+  LegalGroupHeading,
   LegalPageFrame,
   LegalParagraphs,
   LegalProse,
@@ -26,6 +27,22 @@ import { loadPrivacy, retentionText } from "./content";
  * read that one result, so they cannot disagree.
  */
 
+/**
+ * Rendered per request, never prerendered: the text names the controller
+ * and recipients from LEGAL_* at request time, and the production guard
+ * below has to run on every request, not once at build against whatever
+ * the build environment happened to hold.
+ */
+export const dynamic = "force-dynamic";
+
+/**
+ * Reads the same readiness object the body reads (`loadPrivacy` is
+ * `cache()`d per request) but only REFLECTS it — draft marker, noindex.
+ * The throw lives in the body alone: metadata is resolved separately from
+ * the page tree, so a throw here would surface as a metadata error for a
+ * page that may still have rendered, while a throw in the body is the one
+ * place every render passes through and gives one error page.
+ */
 export function generateMetadata(): Metadata {
   return legalMetadata("Privacy", loadPrivacy().readiness.draft);
 }
@@ -38,9 +55,7 @@ export default function PrivacyPage() {
     <LegalPageFrame title="Privacy" intro={content.intro} draft={readiness.draft}>
       <LegalProse section={content.controller} testIdPrefix="privacy-section" />
 
-      <h2 className="mt-12 text-xl font-medium tracking-tight text-foreground">
-        What is collected, and why
-      </h2>
+      <LegalGroupHeading>What is collected, and why</LegalGroupHeading>
       {content.categories.map((category) => (
         <LegalSection
           key={category.id}

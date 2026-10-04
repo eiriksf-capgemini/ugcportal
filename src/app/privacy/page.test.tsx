@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { renderToStaticMarkup } from "react-dom/server";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import {
   FILLED_LEGAL_ENV,
@@ -40,11 +40,9 @@ describeLegalPageContract({
   filledNeedle: `The data controller is ${FILLED_LEGAL_ENV.LEGAL_CONTROLLER_NAME}`,
 });
 
+// Environment stubs are undone by the file-scoped afterEach that
+// describeLegalPageContract registers above.
 describe("/privacy", () => {
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
-
   it("has a section per data category and per prose section, by test id", () => {
     stubLegalEnv("development", FILLED_LEGAL_ENV);
     const markup = render();
@@ -74,6 +72,13 @@ describe("/privacy", () => {
         category.retention.kind === "undetermined",
       );
     }
+  });
+
+  it("still needs all four in production: the storage provider alone unset blocks it (round 5)", () => {
+    // The counterpart to /licence's two-variable case: the privacy page
+    // names the store (uploads, transfers), so it is held to it.
+    stubLegalEnv("production", { ...FILLED_LEGAL_ENV, LEGAL_STORAGE_PROVIDER: "" });
+    expect(() => render()).toThrow(/LEGAL_STORAGE_PROVIDER/);
   });
 
   it("renders the not-done list as list items", () => {

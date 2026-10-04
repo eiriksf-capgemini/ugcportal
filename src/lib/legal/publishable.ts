@@ -1,9 +1,11 @@
 import { createHash } from "node:crypto";
 
 import {
+  LEGAL_CONTACT_VARS,
   LEGAL_SIGN_OFF,
   SENTINEL_CONTACT,
   type LegalContact,
+  type LegalContactField,
   type LegalContactVar,
   type LegalSignOff,
   readLegalContact,
@@ -16,10 +18,14 @@ import {
  * Three things keep a page in draft, and the first two also keep production
  * from serving it at all:
  *
- *  1. an unset LEGAL_* variable (src/lib/legal/contact.ts) — the primary,
- *     binary signal. A privacy statement whose controller reads
- *     "[LEGAL_CONTROLLER_NAME]" does not satisfy GDPR Art. 13(1)(a) and is
- *     worse than no page, because it looks like compliance;
+ *  1. an unset LEGAL_* variable (src/lib/legal/contact.ts) that THIS page
+ *     renders — the primary, binary signal. A privacy statement whose
+ *     controller reads "[LEGAL_CONTROLLER_NAME]" does not satisfy GDPR
+ *     Art. 13(1)(a) and is worse than no page, because it looks like
+ *     compliance. Per page (round 5): the licence names the controller and
+ *     the contact address and nothing else, so it is not held hostage by a
+ *     storage provider it never mentions; which fields a page uses is read
+ *     off its authored prose, not declared by hand;
  *  2. a stray placeholder in the AUTHORED prose — "[fill in later]", "TBD" —
  *     the second line, for text that slipped past review. Authored, not
  *     rendered: a page's prose is built once, from SENTINEL_CONTACT, so an
@@ -79,6 +85,12 @@ export type LegalPage = {
   authored: readonly string[];
   /** sha256 hex over `authored`, computed once; what a sign-off certifies. */
   authoredSha256: string;
+  /**
+   * The contact fields this page's prose actually interpolates — the ones
+   * whose sentinel value appears in `authored`. Only their variables are
+   * required for this page (round 5).
+   */
+  requires: readonly LegalContactField[];
 };
 
 /** The digest a sign-off records for a page's authored prose. */
@@ -89,20 +101,24 @@ export function authoredDigest(authored: readonly string[]): string {
 /**
  * The one way to build a LegalPage: evaluate the content module's text
  * function against the sentinel, once, at module load. Both pages go
- * through here, so both scan the same kind of thing.
+ * through here, so both scan the same kind of thing and both derive what
+ * they require the same way.
  */
 export function legalPage(
   path: string,
   textsFor: (contact: LegalContact) => readonly string[],
 ): LegalPage {
   const authored = textsFor(SENTINEL_CONTACT);
-  return { path, authored, authoredSha256: authoredDigest(authored) };
+  const requires = (Object.keys(SENTINEL_CONTACT) as LegalContactField[]).filter((field) =>
+    authored.some((text) => text.includes(SENTINEL_CONTACT[field])),
+  );
+  return { path, authored, authoredSha256: authoredDigest(authored), requires };
 }
 
 export type LegalReadiness = {
   /** The routes this readiness describes, in the order given. */
   paths: string[];
-  /** LEGAL_* variables that are unset. */
+  /** LEGAL_* variables that are unset AND required by at least one of the pages given. */
   missing: LegalContactVar[];
   /** Placeholders in the authored prose. */
   strayPlaceholders: { path: string; tokens: string[] }[];
@@ -121,7 +137,12 @@ export function legalReadiness(
   env: NodeJS.ProcessEnv = process.env,
   signOff: LegalSignOff | null = LEGAL_SIGN_OFF,
 ): LegalReadiness {
-  const { missing } = readLegalContact(env);
+  // Judge each page on the variables it renders, not on the whole set: the
+  // union of the given pages' requirements, intersected with what is unset.
+  const required = new Set<LegalContactVar>(
+    pages.flatMap((page) => page.requires.map((field) => LEGAL_CONTACT_VARS[field])),
+  );
+  const missing = readLegalContact(env).missing.filter((name) => required.has(name));
   const strayPlaceholders = pages
     .map((page) => ({ path: page.path, tokens: findPlaceholders(page.authored) }))
     .filter(({ tokens }) => tokens.length > 0);

@@ -122,11 +122,14 @@ export type LegalPageUnderTest = {
  * sees actually rendered. Registers the cases; call from inside a test file.
  */
 export function describeLegalPageContract(page: LegalPageUnderTest): void {
-  describe(`${page.path}: the shared legal-page contract`, () => {
-    afterEach(() => {
-      vi.unstubAllEnvs();
-    });
+  // File-scoped, registered once here for the whole test file (round 5):
+  // the page tests' own cases stub the environment too, and this is the one
+  // place that undoes it, so neither page test registers its own.
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
 
+  describe(`${page.path}: the shared legal-page contract`, () => {
     it("renders in development with each unset variable shown by name", () => {
       stubLegalEnv("development");
       const text = textContent(page.render());
@@ -160,6 +163,28 @@ export function describeLegalPageContract(page: LegalPageUnderTest): void {
       const text = textContent(page.render());
       expect(text).toContain(page.filledNeedle);
       expect(text).not.toContain("[LEGAL_");
+    });
+
+    it("in production, needs exactly the variables its own prose renders", () => {
+      // Required per page, read off the authored prose (round 5): with only
+      // this page's variables set and every other one blank it publishes;
+      // blank any one of its own and it does not. Verified by mutation:
+      // requiring all four everywhere fails this for /licence.
+      const own = new Set(page.page.requires.map((field) => LEGAL_CONTACT_VARS[field]));
+      expect(own.size).toBeGreaterThan(0);
+      const onlyOwn = Object.fromEntries(
+        Object.values(LEGAL_CONTACT_VARS).map((name) => [
+          name,
+          own.has(name) ? FILLED_LEGAL_ENV[name] : "",
+        ]),
+      ) as Record<LegalContactVar, string>;
+      stubLegalEnv("production", onlyOwn);
+      expect(() => page.render()).not.toThrow();
+
+      for (const name of own) {
+        stubLegalEnv("production", { ...onlyOwn, [name]: "" });
+        expect(() => page.render(), name).toThrow(new RegExp(name));
+      }
     });
 
     it("in production, serves an operator value that contains brackets or TBD", () => {

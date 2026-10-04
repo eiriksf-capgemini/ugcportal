@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { renderToStaticMarkup } from "react-dom/server";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import {
   FILLED_CONTACT,
@@ -39,11 +39,9 @@ describeLegalPageContract({
   filledNeedle: `The rights-holder for licensing questions is ${FILLED_CONTACT.controllerName}`,
 });
 
+// Environment stubs are undone by the file-scoped afterEach that
+// describeLegalPageContract registers above.
 describe("/licence", () => {
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
-
   it("has every section by test id, including buying and uploading", () => {
     stubLegalEnv("development", FILLED_LEGAL_ENV);
     const markup = render();
@@ -63,6 +61,18 @@ describe("/licence", () => {
     expect(text).toContain("without written permission");
     expect(text).toContain("Nothing is offered for sale yet");
     expect(text).toContain(`E-mail ${FILLED_CONTACT.contactEmail}`);
+  });
+
+  it("publishes in production with only the controller and the contact set (round 5)", () => {
+    // Spelled out rather than derived from page.requires, so it still
+    // fails if every page were made to require all four. The licence never
+    // names the host or the store; verified by mutation.
+    stubLegalEnv("production", {
+      LEGAL_CONTROLLER_NAME: FILLED_LEGAL_ENV.LEGAL_CONTROLLER_NAME,
+      LEGAL_CONTACT_EMAIL: FILLED_LEGAL_ENV.LEGAL_CONTACT_EMAIL,
+    });
+    expect(textContent(render())).toContain(FILLED_LEGAL_ENV.LEGAL_CONTROLLER_NAME);
+    expect(generateMetadata().title).toBe("Licence");
   });
 
   it("promises no licence picker that does not exist", () => {

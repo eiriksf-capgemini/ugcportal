@@ -166,9 +166,8 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
   // the app shell's <main>, with no surface well of their own - the same
   // situation as auth/error/page.tsx and upload/page.tsx, so the page-canvas
   // pair is the correct one.
-  "src/app/privacy/page.tsx": { "text-foreground": 1 },
   "src/components/legal/legal-page.tsx": {
-    "text-foreground": 2,
+    "text-foreground": 3,
     "text-muted-foreground": 5,
   },
   "src/app/admin/settings/rights/page.tsx": { "text-muted-foreground": 5, "text-primary": 2 },
