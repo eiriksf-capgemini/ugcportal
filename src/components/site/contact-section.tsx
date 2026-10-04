@@ -69,7 +69,18 @@ export function ContactSection({ defaultSubject }: { defaultSubject: string }) {
     : CONTACT_EMAIL_FALLBACK_LABEL;
 
   return (
-    <section className="mt-10" data-page-section="contact">
+    // id="contact" is the footer's link target (ABOUT_CONTACT_PATH,
+    // src/lib/routes.ts, ugcportal-akv6) — data-page-section="contact" above
+    // was a test hook only and nothing a fragment link could navigate to.
+    // scroll-mt-14 matches the sticky header's 56px height (see
+    // src/components/app-shell.tsx's identical class on <main>, for the
+    // same reason): without it, landing here from the footer's anchor link
+    // scrolls this section's top edge under the header instead of past it.
+    <section
+      id="contact"
+      className="mt-10 scroll-mt-14"
+      data-page-section="contact"
+    >
       <h2 className={SECTION_HEADING_CLASS}>Get in touch</h2>
       <p className="mt-2 max-w-prose text-sm text-muted-foreground">
         {CONTACT_INTRO}

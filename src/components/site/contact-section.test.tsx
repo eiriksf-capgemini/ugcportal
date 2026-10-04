@@ -16,6 +16,22 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
+describe("ContactSection — the footer's anchor target (ugcportal-akv6)", () => {
+  it(`carries id="contact", the footer's ABOUT_CONTACT_PATH fragment target`, () => {
+    const markup = renderToStaticMarkup(
+      <ContactSection defaultSubject="Hello" />,
+    );
+    expect(markup).toContain('id="contact"');
+  });
+
+  it("MUTATION CHECK: a different id would not satisfy the check above", () => {
+    const markup = renderToStaticMarkup(
+      <ContactSection defaultSubject="Hello" />,
+    );
+    expect(markup).not.toContain('id="get-in-touch"');
+  });
+});
+
 describe("ContactSection — the direct-email link label", () => {
   it("shows the real address when it is shaped like one", () => {
     vi.stubEnv("CONTACT_EMAIL", "owner@example.com");

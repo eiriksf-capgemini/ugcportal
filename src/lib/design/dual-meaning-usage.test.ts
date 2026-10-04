@@ -182,10 +182,12 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
   "src/app/upload/upload-form.tsx": { "text-foreground": 2, "text-muted-foreground": 5 },
   "src/components/upload-link.tsx": { "text-foreground": 1, "text-primary": 1 },
   "src/components/ui/button.tsx": { "border-primary": 1, "text-primary": 2 },
+  // ugcportal-akv6 moved the footer (and its one text-muted-foreground
+  // usage) out to src/components/site-footer.tsx; the header markup this
+  // bead left untouched keeps its own text-foreground/text-primary pair.
   "src/components/app-shell.tsx": {
     "text-foreground": 1,
     "text-primary": 1,
-    "text-muted-foreground": 1,
   },
   "src/components/gallery/gallery.tsx": { "text-foreground": 2, "text-muted-foreground": 2 },
   "src/components/gallery/gallery-unavailable.tsx": {
@@ -250,6 +252,24 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
     "text-muted-foreground": 1,
   },
   "src/components/ui/inline-link.ts": { "text-primary": 1 },
+
+  /*
+   * ugcportal-akv6: the site footer. Renders directly on --background
+   * (the app shell's <footer>, no --card/--popover/--muted/etc. fill
+   * behind it — the same safe case as the header and
+   * cookie-settings-link.tsx above). Five text-muted-foreground: the
+   * brand description paragraph, FOOTER_LINK_CLASS's own definition (one
+   * literal occurrence of the string, reused by every rendered link, same
+   * convention as INLINE_LINK_CLASS above), the blocked-draft-link <span>,
+   * the compact variant's "SITE_NAME · © year" <span>, and the full
+   * variant's copyright line. Three text-foreground: the brand name, and
+   * FOOTER_HEADING_CLASS's own definition (reused by both the "Pages" and
+   * "Legal" headings), plus FOOTER_LINK_CLASS's "hover:text-foreground".
+   */
+  "src/components/site-footer.tsx": {
+    "text-muted-foreground": 5,
+    "text-foreground": 3,
+  },
 };
 
 describe("dual-meaning token usage is audited, not just found", () => {

@@ -33,6 +33,15 @@ export const ABOUT_PATH = "/about";
 export const PORTFOLIO_PATH = "/portfolio";
 
 /**
+ * The "Get in touch" section on /about, as a fragment anchor (ugcportal-akv6).
+ * ContactSection (src/components/site/contact-section.tsx) carries the
+ * matching `id="contact"`; named here, like every other route in this
+ * module, so the footer's "Contact" link cannot hand-type "/about#contact"
+ * a second time and drift from it if the section ever moves.
+ */
+export const ABOUT_CONTACT_PATH = `${ABOUT_PATH}#contact`;
+
+/**
  * The multipart field POST /api/media reads the subject tags out of
  * (ugcportal-jsc), named here because the browser writes it and the route
  * reads it and a field name spelled twice is one that eventually differs —
