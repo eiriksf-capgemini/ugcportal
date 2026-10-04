@@ -77,12 +77,42 @@ const SRC_ROOT = path.resolve(
  * or `border-primary` inside `border-primary-hover` (ugcportal-rw9j's own
  * PETROL_OUTLINE_STYLE uses exactly that pair, deliberately not pinned here
  * since --primary-hover is not one of the dual-meaning tokens).
+ *
+ * `text-ink` (ugcportal-14k9 PR #94 review round 1, low finding 5) is NOT a
+ * fifth dual-meaning token - its meaning never changed, and `button.tsx`
+ * documents it as safe only inside one of the old near-black wells, never
+ * against `--background`. It is pinned here anyway, for a related but
+ * distinct reason: this file's own mechanism - fail loudly on any (file,
+ * count) this scanner has not seen audited before - catches a NEW file
+ * typing the literal `text-ink` class string somewhere outside an audited
+ * well, the moment it happens, rather than at review.
+ *
+ * What it does NOT catch, confirmed empirically rather than assumed: PR
+ * #94's own round-1 medium finding was `<Button variant="ghost">` inside
+ * mobile-nav-toggle.tsx, not a literal `text-ink` string in that file - this
+ * is exactly the scope limit this file's own docstring already names
+ * ("it cannot see one reaching a file through component composition -
+ * `<Button variant="outline">`... carries no `border-primary`/`text-primary`
+ * substring of their own"). Reverting that variant back to `"ghost"` and
+ * re-running this suite leaves it green, because `ghost` is a string inside
+ * button.tsx, not inside mobile-nav-toggle.tsx. The real guard against THAT
+ * class of regression is mobile-nav-toggle.contrast.test.tsx, which resolves
+ * whichever token the component's REAL rendered className carries and
+ * measures it directly - confirmed to catch the identical mutation this
+ * paragraph describes. `text-ink`'s addition here is still worth having for
+ * what it DOES catch (the literal-string case), just not a substitute for
+ * that component-level test.
+ *
+ * The negative lookahead above still matters for this addition the same way
+ * it does for the other four: `text-ink-muted` is a different, unrelated
+ * token and must not be swallowed into `text-ink`'s count.
  */
 const DUAL_MEANING_TOKENS = [
   "text-foreground",
   "text-primary",
   "text-muted-foreground",
   "border-primary",
+  "text-ink",
 ] as const;
 type DualMeaningToken = (typeof DUAL_MEANING_TOKENS)[number];
 
@@ -158,27 +188,68 @@ function scanDualMeaningUsage(): Map<string, Partial<Record<DualMeaningToken, nu
 const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> = {
   "src/app/auth/error/page.tsx": { "text-foreground": 1, "text-muted-foreground": 1 },
   "src/app/admin/settings/rights/page.tsx": { "text-muted-foreground": 5, "text-primary": 2 },
-  "src/app/admin/settings/rights/decision-form.tsx": { "text-muted-foreground": 3 },
+  // text-ink counts added (ugcportal-14k9 PR #94 review round 1, low finding
+  // 5): every field in this form - five identically-styled inputs/textareas
+  // - renders inside the resale-rights decision screen's plain page canvas,
+  // not any well, which is exactly why its OWN entry already carried
+  // text-muted-foreground rather than text-ink-muted; text-ink here is the
+  // matching body-text token for the same safe context, pre-existing and
+  // unrelated to the review finding - the finding was about a NEW usage
+  // outside a well (mobile-nav-toggle.tsx's since-reverted `ghost`), not
+  // about any of these.
+  "src/app/admin/settings/rights/decision-form.tsx": {
+    "text-muted-foreground": 3,
+    "text-ink": 5,
+  },
   "src/app/admin/settings/users/page.tsx": { "text-muted-foreground": 4, "text-primary": 1 },
   "src/app/admin/settings/instagram/page.tsx": { "text-muted-foreground": 3, "text-primary": 1 },
   "src/app/upload/page.tsx": { "text-foreground": 1, "text-muted-foreground": 1 },
-  "src/app/upload/upload-form.tsx": { "text-foreground": 2, "text-muted-foreground": 5 },
-  "src/components/upload-link.tsx": { "text-foreground": 1, "text-primary": 1 },
-  "src/components/ui/button.tsx": { "border-primary": 1, "text-primary": 2 },
+  // text-ink: 4 added (low finding 5) - the alt-text label, the alt-text
+  // input, the caption label and the caption input, all inside the upload
+  // form's own plain-canvas fields (ugcportal-gwr), same reasoning as
+  // decision-form.tsx above.
+  "src/app/upload/upload-form.tsx": {
+    "text-foreground": 2,
+    "text-muted-foreground": 5,
+    "text-ink": 4,
+  },
+  // text-ink: 1 added (low finding 5) - the queued file's name, inside the
+  // upload page's own plain canvas (ugcportal-n3c), same reasoning as above.
+  "src/app/upload/upload-queue-list.tsx": { "text-ink": 1 },
+  // text-ink: 2 added (low finding 5) - button.tsx's OWN two usages
+  // (NEUTRAL_OUTLINE_STYLE and the `ghost` variant), each documented in
+  // that file as measured and safe only inside one of the old near-black
+  // wells, never against --background. Pinning the count here means a
+  // future edit INSIDE button.tsx that adds a third text-ink usage (a new
+  // variant, say) cannot land silently - but, per this file's header
+  // comment above, it does NOT extend to catching a caller elsewhere
+  // choosing `variant="ghost"` on an unsafe background: that is a
+  // component-composition usage with no "text-ink" substring of its own,
+  // which is this scanner's documented scope limit, confirmed (not
+  // assumed) against this PR's own round-1 finding. mobile-nav-toggle.
+  // contrast.test.tsx is the real guard for that case.
+  "src/components/ui/button.tsx": { "border-primary": 1, "text-primary": 2, "text-ink": 2 },
   /*
    * ugcportal-14k9: these two usages are what app-shell.tsx's own former
    * entry used to cover (wordmark text-foreground/hover:text-primary, the
    * tagline's text-muted-foreground) before the header's markup moved out
-   * of that file wholesale into site-header.tsx, plus the nav links'
-   * text-foreground/hover:text-primary/aria-[current=page]:text-primary
-   * which now live in their own component (primary-nav-link.tsx) because
-   * both the always-visible desktop nav and the mobile menu panel render
-   * one. Same background both audits already covered: the sticky header is
-   * bg-background, so --foreground/--primary/--muted-foreground's
+   * of that file wholesale into site-header.tsx. The nav links' shared base
+   * class (text-foreground/hover:text-primary) now lives in its own module,
+   * src/components/header-nav-link.ts, shared with upload-link.tsx (PR #94
+   * review round 1, low finding 4) - upload-link.tsx's own former entry for
+   * these two tokens is retired along with it, since the literal class
+   * string no longer appears in that file's own source text. Same
+   * background every one of these audits already covered: the sticky
+   * header is bg-background, so --foreground/--primary/--muted-foreground's
    * "whatever pairs with --background" meaning is exactly right here, same
    * as the wordmark always was.
    */
-  "src/components/primary-nav-link.tsx": { "text-foreground": 1, "text-primary": 2 },
+  "src/components/header-nav-link.ts": { "text-foreground": 1, "text-primary": 1 },
+  // Just the aria-[current=page]:text-primary highlighting this component
+  // adds on top of the shared base class above - the base class's own
+  // text-foreground/text-primary moved to header-nav-link.ts and are no
+  // longer literal text in this file.
+  "src/components/primary-nav-link.tsx": { "text-primary": 1 },
   "src/components/site-header.tsx": {
     "text-foreground": 1,
     "text-primary": 1,

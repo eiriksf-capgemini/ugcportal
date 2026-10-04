@@ -247,6 +247,31 @@ describe("K1 — the gallery renders published previews to an anonymous visitor"
     expect(await renderGallery()).not.toContain("<main");
   });
 
+  /**
+   * ugcportal-14k9 PR #94 review round 1, low finding 2. Before this test,
+   * the gallery's own h1 repeated SITE_DESCRIPTION — the same sentence
+   * src/app/layout.tsx puts in `<meta name="description">` — and once the
+   * header (src/components/site-header.tsx) started rendering SITE_TAGLINE
+   * on every page including this one, an anonymous visitor on "/" saw two
+   * different descriptive sentences stacked within a few dozen pixels of
+   * each other: the header's tagline, then this h1 restating the same idea
+   * in different words. Checked by substring on SITE_DESCRIPTION's own
+   * distinguishing fragment ("wine and drink" — the exact words ugcportal-
+   * qnq9.3 still needs to reword away from naming alcohol) rather than its
+   * full text, so this keeps meaning what it says even after that reword
+   * lands and changes SITE_DESCRIPTION's exact wording.
+   */
+  it("uses the header's own tagline as its one heading, not a second description", async () => {
+    await seedMedia({ id: "a", createdAt: new Date("2026-03-01T00:00:00Z") });
+
+    const markup = await renderGallery();
+
+    expect(markup).toContain(
+      "Original photography of food, wine accessories, technology and books.",
+    );
+    expect(markup).not.toContain("wine and drink");
+  });
+
   it("shows an empty state, not a broken grid, when nothing is published", async () => {
     await seedMedia({
       id: "private",

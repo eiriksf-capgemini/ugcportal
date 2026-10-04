@@ -1,10 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 
 import { cn } from "cn";
+
+import { HEADER_NAV_LINK_CLASS, useAriaCurrentPage } from "@/components/header-nav-link";
 
 /**
  * One link in the header's main navigation (Gallery, About — ugcportal-14k9).
@@ -26,6 +27,13 @@ import { cn } from "cn";
  * `onNavigate` is used by the mobile panel (src/components/mobile-nav-
  * toggle.tsx) to close itself the moment a link is actually activated —
  * optional and unused by the desktop nav, which has no panel to close.
+ *
+ * The `aria-current` derivation and the base link class are shared with
+ * src/components/upload-link.tsx via src/components/header-nav-link.ts
+ * (ugcportal-14k9 PR #94 review round 1, low finding 4) rather than each
+ * hand-spelling its own copy — see that file's own comment. The
+ * `aria-[current=page]:*` highlighting below is added on top, not shared:
+ * UploadLink has no equivalent need for it (see header-nav-link.ts).
  */
 export function PrimaryNavLink({
   href,
@@ -38,16 +46,16 @@ export function PrimaryNavLink({
   onNavigate?: () => void;
   className?: string;
 }) {
-  const pathname = usePathname();
-  const isCurrentPage = pathname === href;
+  const ariaCurrent = useAriaCurrentPage(href);
 
   return (
     <Link
       href={href}
-      aria-current={isCurrentPage ? "page" : undefined}
+      aria-current={ariaCurrent}
       onClick={onNavigate}
       className={cn(
-        "rounded-sm text-sm font-medium text-foreground transition-colors hover:text-primary focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring aria-[current=page]:text-primary aria-[current=page]:underline aria-[current=page]:underline-offset-4",
+        HEADER_NAV_LINK_CLASS,
+        "aria-[current=page]:text-primary aria-[current=page]:underline aria-[current=page]:underline-offset-4",
         className,
       )}
     >

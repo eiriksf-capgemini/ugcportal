@@ -6,11 +6,17 @@ import { expect, test, type Page } from "@playwright/test";
  *
  * Follows e2e/petrol-theme.spec.ts's conventions: a real browser against
  * `npm run dev` (playwright.config.ts's webServer), axe-core for automated
- * a11y violations, and explicit viewport sizes rather than device presets,
- * so the three widths tested are exactly the three K1 names.
+ * a11y violations, and explicit viewport sizes rather than device presets.
+ *
+ * K1 names exactly 375/768/1440; `mobile320` (PR #94 review round 1, low
+ * finding 3) is additional coverage, not a replacement — the narrowest
+ * width e2e/petrol-theme.spec.ts already checks elsewhere in this app, and
+ * the one most likely to reveal a layout squeeze the three named widths
+ * happen to miss.
  */
 
 const VIEWPORTS = {
+  mobile320: { width: 320, height: 720 },
   mobile375: { width: 375, height: 800 },
   tablet768: { width: 768, height: 1024 },
   desktop1440: { width: 1440, height: 900 },

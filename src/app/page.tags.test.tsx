@@ -506,9 +506,10 @@ describe("K4 — one gallery, never a section or a route per tag", () => {
      *
      * Counted rather than pattern-matched against the subject names, which
      * is what the first version of this did and what made it fail for the
-     * wrong reason: SITE_DESCRIPTION is literally "Food, wine and drink,
-     * technology and books, photographed.", so a "no heading starts with a
-     * subject name" rule flags the page's own tagline. A section per tag
+     * wrong reason: the page's own h1 (SITE_TAGLINE as of ugcportal-14k9,
+     * previously SITE_DESCRIPTION) names the same subjects a tag section
+     * would, so a "no heading starts with a subject name" rule flags the
+     * page's own tagline. A section per tag
      * shows up as extra headings whatever they are called, so counting is
      * both the stricter check and the one that means what it says.
      */

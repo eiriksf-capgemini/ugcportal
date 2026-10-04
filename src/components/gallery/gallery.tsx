@@ -34,7 +34,7 @@ import {
   type GalleryItem,
 } from "@/lib/gallery-items";
 import { publicMediaListingPath } from "@/lib/routes";
-import { SITE_DESCRIPTION } from "@/lib/site";
+import { SITE_TAGLINE } from "@/lib/site";
 
 /**
  * The public gallery (ugcportal-71y): a grid of watermarked previews, a
@@ -419,13 +419,24 @@ export function Gallery({
         began at the grid, and the empty state was the only branch that kept a
         heading at all.
 
-        It is the site description rather than the word "Gallery", because
-        this IS the site's front page and the tagline says what the
-        photographs are of. Sized modestly on purpose — the surround is
-        supposed to recede behind the pictures.
+        SITE_TAGLINE, not SITE_DESCRIPTION (ugcportal-14k9 PR #94 review round
+        1, low finding 2): this heading used to repeat SITE_DESCRIPTION, and
+        once the header (src/components/site-header.tsx) started rendering
+        SITE_TAGLINE on every page including this one, the front page carried
+        two different descriptive sentences stacked on top of each other —
+        the header's tagline, then this h1 restating the same idea in
+        different words a few dozen pixels below it. One sentence, not two:
+        SITE_TAGLINE is now the single source for "what this site is" copy
+        anywhere a visitor can see both at once. SITE_DESCRIPTION remains
+        only as the <meta name="description"> and llms.txt text (src/app/
+        layout.tsx, src/app/llms.txt/route.ts) — surfaces nobody reads side
+        by side with the header — and still says "wine and drink" pending
+        ugcportal-qnq9.3's reword; that bead owns changing it, not this one.
+        Sized modestly on purpose — the surround is supposed to recede behind
+        the pictures.
       */}
       <h1 className="max-w-2xl text-xl leading-tight font-medium tracking-tight text-balance text-foreground sm:text-2xl">
-        {SITE_DESCRIPTION}
+        {SITE_TAGLINE}
       </h1>
 
       <ul className={`mt-6 ${GALLERY_GRID_CLASS}`}>

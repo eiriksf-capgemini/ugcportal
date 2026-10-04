@@ -45,9 +45,28 @@ export function MobileNavToggle({ items }: { items: NavItem[] }) {
 
   return (
     <div className="relative md:hidden">
+      {/*
+        variant="outline", not "ghost" (PR #94 review round 1 finding):
+        ghost's text colour is text-ink (src/components/ui/button.tsx),
+        documented there as safe only inside one of the old near-black
+        wells (bg-surface-*, bg-destructive-surface, ...) - never measured
+        against --background, because nothing was expected to put it there.
+        This button sits directly on the header's bg-background, where
+        text-ink measures roughly 1.1:1 in light mode - the icon was
+        functionally invisible. "outline" uses text-primary/border-primary
+        instead, the exact pairing contrast.ts's "link-on-background" entry
+        already covers at the stricter 4.5:1 body threshold (well above the
+        3:1 a non-text UI boundary needs), because it is the same token
+        AuthStatus's own sign-in buttons already render on this same
+        background. mobile-nav-toggle.contrast.test.tsx pins this
+        component-locally too, resolving whichever foreground token it
+        actually ships against --background in both colour schemes, rather
+        than only trusting the system-wide pairing to stay in sync with
+        whatever variant this file happens to use.
+      */}
       <Button
         type="button"
-        variant="ghost"
+        variant="outline"
         size="icon"
         aria-expanded={open}
         aria-controls={MOBILE_NAV_PANEL_ID}
