@@ -18,6 +18,13 @@ export const RIGHTS_DECISION_PATH = "/api/admin/rights/decision";
 export const UPLOAD_PATH = "/upload";
 export const MEDIA_UPLOAD_PATH = "/api/media";
 
+// The header nav's "About" destination (ugcportal-14k9). The page itself is
+// ugcportal-qnq9.7's job, built concurrently with this bead — this constant
+// exists so the header can link to it now, rather than the header and the
+// eventual page each spelling "/about" separately and risking the usual
+// drift. Expect this to 404 until that bead lands.
+export const ABOUT_PATH = "/about";
+
 /**
  * The multipart field POST /api/media reads the subject tags out of
  * (ugcportal-jsc), named here because the browser writes it and the route

@@ -165,11 +165,29 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
   "src/app/upload/upload-form.tsx": { "text-foreground": 2, "text-muted-foreground": 5 },
   "src/components/upload-link.tsx": { "text-foreground": 1, "text-primary": 1 },
   "src/components/ui/button.tsx": { "border-primary": 1, "text-primary": 2 },
-  "src/components/app-shell.tsx": {
+  /*
+   * ugcportal-14k9: these two usages are what app-shell.tsx's own former
+   * entry used to cover (wordmark text-foreground/hover:text-primary, the
+   * tagline's text-muted-foreground) before the header's markup moved out
+   * of that file wholesale into site-header.tsx, plus the nav links'
+   * text-foreground/hover:text-primary/aria-[current=page]:text-primary
+   * which now live in their own component (primary-nav-link.tsx) because
+   * both the always-visible desktop nav and the mobile menu panel render
+   * one. Same background both audits already covered: the sticky header is
+   * bg-background, so --foreground/--primary/--muted-foreground's
+   * "whatever pairs with --background" meaning is exactly right here, same
+   * as the wordmark always was.
+   */
+  "src/components/primary-nav-link.tsx": { "text-foreground": 1, "text-primary": 2 },
+  "src/components/site-header.tsx": {
     "text-foreground": 1,
     "text-primary": 1,
     "text-muted-foreground": 1,
   },
+  // The footer's own text-muted-foreground, unchanged by ugcportal-14k9 and
+  // unrelated to the header move above - app-shell.tsx still renders it
+  // directly on bg-background, same as always.
+  "src/components/app-shell.tsx": { "text-muted-foreground": 1 },
   "src/components/gallery/gallery.tsx": { "text-foreground": 2, "text-muted-foreground": 2 },
   "src/components/gallery/gallery-unavailable.tsx": {
     "text-foreground": 1,
