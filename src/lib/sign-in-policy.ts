@@ -62,6 +62,25 @@ export const PERMITTED_EMAILS_VAR = "ALLOWED_SIGNIN_EMAILS";
 export const SIGN_IN_PROVIDERS = ["google", "facebook"] as const;
 export type SignInProvider = (typeof SIGN_IN_PROVIDERS)[number];
 
+/**
+ * Why this is a hand-maintained list rather than derived from
+ * `authConfig.providers`: this module is imported by src/instrumentation.ts,
+ * which also runs in the Edge instrumentation bundle, and src/lib/auth.ts
+ * imports the Prisma client, which cannot load there. The import is
+ * therefore one-way (auth.ts -> here), and the test in src/lib/auth.test.ts
+ * that pins the two lists together is the mechanism that keeps them equal,
+ * not a convenience. (PR #81 round 1, finding 3.)
+ */
+
+/**
+ * How an operator is told to write a bound entry, in every message that
+ * reports an unusable one — one string so the boot warning and the
+ * per-refusal log line cannot drift apart.
+ */
+export const PROVIDER_PREFIX_HINT = SIGN_IN_PROVIDERS.map(
+  (provider) => `${provider}:`,
+).join(" or ");
+
 function isSignInProvider(value: string): value is SignInProvider {
   return (SIGN_IN_PROVIDERS as readonly string[]).includes(value);
 }
@@ -271,7 +290,6 @@ export function permittedIdentities(
   ];
 
   const parsed: PermittedEntry[] = [];
-  const emails: string[] = [];
   const malformed: string[] = [];
   for (const entry of entries) {
     const usable = parseEntry(entry);
@@ -288,10 +306,10 @@ export function permittedIdentities(
     ) {
       parsed.push(usable);
     }
-    if (!emails.includes(usable.email)) {
-      emails.push(usable.email);
-    }
   }
+  // Derived, not tracked: the distinct addresses across the parsed entries,
+  // in first-seen order.
+  const emails = Array.from(new Set(parsed.map((entry) => entry.email)));
 
   return { entries: parsed, emails, malformed, configured: entries.length > 0 };
 }
@@ -415,9 +433,42 @@ export function decideSignIn(
   attempt: SignInAttempt,
   env: SignInEnv = process.env,
 ): SignInDecision {
+  return evaluateSignIn(attempt, env).decision;
+}
+
+/**
+ * Everything one sign-in attempt resolves to: the decision, plus the three
+ * values the log line needs — the address judged, the provider asserted and
+ * the parsed configuration. Computed once here so that `decideSignIn` and
+ * `isPermittedSignIn` do not each re-parse the configuration and re-read the
+ * provider (PR #81 round 1, findings 1 and 5). The configuration is parsed
+ * even when the decision is made before it is consulted, because the
+ * per-refusal log names unusable entries on EVERY refusal, including the
+ * no-email one.
+ */
+type SignInEvaluation = {
+  decision: SignInDecision;
+  email: string | null;
+  provider: SignInProvider | null;
+  identities: PermittedIdentities;
+};
+
+function evaluateSignIn(
+  attempt: SignInAttempt,
+  env: SignInEnv,
+): SignInEvaluation {
   const email = authorisedEmail(attempt);
+  const provider = signInProvider(attempt);
+  const identities = permittedIdentities(env);
+  const refuse = (reason: SignInRefusal): SignInEvaluation => ({
+    decision: { permitted: false, reason },
+    email,
+    provider,
+    identities,
+  });
+
   if (!email) {
-    return { permitted: false, reason: "no-email" };
+    return refuse("no-email");
   }
   // Safe to read as being about `email` above: when the provider asserts an
   // address, that is the address chosen, so the claim and the subject of the
@@ -425,29 +476,26 @@ export function decideSignIn(
   // verification either, and the persisted address stands on the same footing
   // as it did the day the provider supplied it.
   if (assertedUnverified(attempt.profile?.email_verified)) {
-    return { permitted: false, reason: "unverified-email" };
+    return refuse("unverified-email");
   }
-
-  const identities = permittedIdentities(env);
   if (!identities.configured) {
-    return { permitted: false, reason: "no-configuration" };
+    return refuse("no-configuration");
   }
   const listed = identities.entries.filter((entry) => entry.email === email);
   if (listed.length === 0) {
-    return { permitted: false, reason: "not-permitted" };
+    return refuse("not-permitted");
   }
   // An unbound entry permits the address from any configured provider; a
-  // bound one only from the provider it names. `provider` is read from the
-  // attempt only here, so a missing or unrecognised one fails closed against
-  // bound entries rather than matching the first of them.
-  const provider = signInProvider(attempt);
+  // bound one only from the provider it names. A missing or unrecognised
+  // provider is `null`, which fails closed against bound entries rather than
+  // matching the first of them.
   const permitted = listed.some(
     (entry) => entry.provider === null || entry.provider === provider,
   );
   if (!permitted) {
-    return { permitted: false, reason: "wrong-provider" };
+    return refuse("wrong-provider");
   }
-  return { permitted: true, email };
+  return { decision: { permitted: true, email }, email, provider, identities };
 }
 
 /** The provider id asserted by this attempt, or `null` when there is none. */
@@ -486,7 +534,10 @@ export function isPermittedSignIn(
   attempt: SignInAttempt,
   env: SignInEnv = process.env,
 ): boolean {
-  const decision = decideSignIn(attempt, env);
+  const { decision, email, provider, identities } = evaluateSignIn(
+    attempt,
+    env,
+  );
   if (decision.permitted) {
     return true;
   }
@@ -494,10 +545,10 @@ export function isPermittedSignIn(
   // The address the decision was actually about, not `user.email` — those
   // differ for anyone whose provider address has changed, and a log line
   // naming a domain the gate did not judge is worse than no log line.
-  const domain = emailDomain(authorisedEmail(attempt));
+  const domain = emailDomain(email);
   // The provider is not personal data and is exactly what an operator who
   // bound an address to the wrong provider needs to see.
-  const via = ` via ${signInProvider(attempt) ?? "an unrecognised provider"}`;
+  const via = ` via ${provider ?? "an unrecognised provider"}`;
   if (decision.reason === "no-configuration") {
     console.error(
       `[auth] Refused a sign-in from ${domain}${via}: neither ${PERMITTED_EMAILS_VAR} ` +
@@ -511,13 +562,13 @@ export function isPermittedSignIn(
   // operator who typed `*@example.com` and got "Access Denied" is looking at
   // the log for THIS attempt, and a list that silently permits nobody is the
   // failure mode this reporting exists for.
-  const { malformed } = permittedIdentities(env);
+  const { malformed } = identities;
   const malformedNote =
     malformed.length > 0
       ? ` Ignoring ${malformed.length} unusable entr${
           malformed.length === 1 ? "y" : "ies"
         } (${malformed.join(", ")}) — an exact address is required, ` +
-        `optionally prefixed with one of ${SIGN_IN_PROVIDERS.map((p) => `${p}:`).join(" or ")}, ` +
+        `optionally prefixed with ${PROVIDER_PREFIX_HINT}, ` +
         "and wildcards are not supported."
       : "";
   console.warn(
