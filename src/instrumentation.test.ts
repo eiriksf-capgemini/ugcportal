@@ -1,9 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   checkEvidenceEncryption,
   checkSignInConfiguration,
+  register,
 } from "@/instrumentation";
+import { FILLED_LEGAL_ENV, stubLegalEnv } from "@/lib/legal/legal-page.test-support";
 import { PERMITTED_EMAILS_VAR } from "@/lib/sign-in-policy";
 
 const PROD = { NODE_ENV: "production" } as NodeJS.ProcessEnv;
@@ -125,5 +127,43 @@ describe("the sign-in configuration startup check", () => {
       "NOBODY can sign in",
     );
     expect(checkSignInConfiguration({})).toContain("NOBODY can sign in");
+  });
+});
+
+/**
+ * ugcportal-qnq9.4: the legal-page placeholder check is wired into boot.
+ * The check itself is tested in src/lib/legal/publishable.test.ts; this
+ * proves register() actually calls it, in whichever state the repository's
+ * contact block is in.
+ */
+describe("the legal-pages startup check", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  async function legalLinesFromBoot(): Promise<string[]> {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    await register();
+    return errors.mock.calls
+      .map((call) => String(call[0]))
+      .filter((line) => line.startsWith("[legal]"));
+  }
+
+  it("names an unset LEGAL_* variable at boot, in production and out", async () => {
+    stubLegalEnv("production", { ...FILLED_LEGAL_ENV, LEGAL_CONTROLLER_NAME: "" });
+    const inProduction = await legalLinesFromBoot();
+    expect(inProduction.join("\n")).toContain("LEGAL_CONTROLLER_NAME is not set");
+    expect(inProduction.join("\n")).toContain("Production will not serve");
+
+    stubLegalEnv("development", { ...FILLED_LEGAL_ENV, LEGAL_CONTROLLER_NAME: "" });
+    const inDevelopment = await legalLinesFromBoot();
+    expect(inDevelopment.join("\n")).toContain("LEGAL_CONTROLLER_NAME is not set");
+    expect(inDevelopment.join("\n")).not.toContain("Production will not serve");
+  });
+
+  it("is quiet once every variable is set", async () => {
+    stubLegalEnv("production", FILLED_LEGAL_ENV);
+    expect(await legalLinesFromBoot()).toEqual([]);
   });
 });

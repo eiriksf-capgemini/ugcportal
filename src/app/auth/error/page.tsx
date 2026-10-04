@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { PageTitle } from "@/components/page-title";
 import { buttonVariants } from "@/components/ui/button";
 import { signInPath } from "@/lib/routes";
 
@@ -39,9 +40,7 @@ export default async function AuthErrorPage(props: PageProps<"/auth/error">) {
 
   return (
     <div className="mx-auto w-full max-w-xl px-4 py-24 sm:px-6">
-      <h1 className="text-2xl font-medium tracking-tight text-foreground sm:text-3xl">
-        {copy.heading}
-      </h1>
+      <PageTitle>{copy.heading}</PageTitle>
       {copy.body.map((paragraph) => (
         <p
           key={paragraph}
