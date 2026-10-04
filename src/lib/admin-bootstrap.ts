@@ -1,6 +1,9 @@
 import { prisma } from "@/lib/prisma";
 import { setUserRole } from "@/lib/roles";
-import { bootstrapAdminEmails } from "@/lib/sign-in-policy";
+import {
+  bootstrapAdminEmails,
+  isBootstrapAdminSignIn,
+} from "@/lib/sign-in-policy";
 
 /**
  * Re-exported, not defined here, since ugcportal-egp.
@@ -33,14 +36,23 @@ export { bootstrapAdminEmails };
  * but it is the reason the variable should be emptied once bootstrap is done
  * (documented in env.example).
  */
-export async function reconcileBootstrapAdmin(user: {
-  id?: string;
-  email?: string | null;
-}): Promise<boolean> {
+export async function reconcileBootstrapAdmin(
+  user: {
+    id?: string;
+    email?: string | null;
+  },
+  // The provider this sign-in came through (Auth.js's `account` in the
+  // signIn event). A bootstrap entry bound to a provider promotes only a
+  // sign-in through that provider (PR #81 round 5); absent or unknown fails
+  // closed against bound entries and is ignored by unbound ones.
+  account?: { provider?: unknown } | null,
+): Promise<boolean> {
   if (!user.id || !user.email) {
     return false;
   }
-  if (!bootstrapAdminEmails().includes(user.email.toLowerCase())) {
+  if (
+    !isBootstrapAdminSignIn({ email: user.email, provider: account?.provider })
+  ) {
     return false;
   }
 

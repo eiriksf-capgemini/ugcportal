@@ -246,11 +246,46 @@ function splitList(raw: string | undefined): string[] {
 export function bootstrapAdminEmails(
   raw: string | undefined = process.env.ADMIN_BOOTSTRAP_EMAILS,
 ): string[] {
-  // A bound entry (`google:addr`) in the bootstrap list binds the SIGN-IN,
-  // via the union below; the promotion itself matches the persisted address,
-  // so the prefix is dropped here. An unusable entry is returned as written —
-  // it never matches a real address, so it still grants nothing.
+  // Addresses only, for reporting. The promotion decision does NOT use this
+  // — it uses `isBootstrapAdminSignIn`, which honours a bound entry's
+  // provider (PR #81 round 5). An unusable entry is returned as written; it
+  // never matches a real address, so it still grants nothing.
   return splitList(raw).map((entry) => parseEntry(entry)?.email ?? entry);
+}
+
+/**
+ * Whether THIS sign-in — address and provider together — is named for the
+ * first-admin bootstrap (ugcportal-lu7).
+ *
+ * The binding is honoured here as well as at the gate (PR #81 round 5). It
+ * has to be: the gate judges the union of both lists, so an operator who
+ * writes `ALLOWED_SIGNIN_EMAILS=admin@x.com` and
+ * `ADMIN_BOOTSTRAP_EMAILS=google:admin@x.com` has let the address in through
+ * either provider while asking that only Google-asserted sign-ins be
+ * promoted. Matching the bare address at promotion would hand ADMIN to the
+ * Facebook sign-in — the binding defeated at the one place it mattered most.
+ *
+ * `raw` is a parameter, not read from an injected env object, because the
+ * only caller is src/lib/admin-bootstrap.ts and its tests, which set the
+ * variable on process.env.
+ */
+export function isBootstrapAdminSignIn(
+  identity: { email: unknown; provider?: unknown },
+  raw: string | undefined = process.env.ADMIN_BOOTSTRAP_EMAILS,
+): boolean {
+  const email = normalizeString(identity.email);
+  if (!email) {
+    return false;
+  }
+  const provider = providerId(identity.provider);
+  return splitList(raw).some((entry) => {
+    const parsed = parseEntry(entry);
+    return (
+      parsed !== null &&
+      parsed.email === email &&
+      (parsed.provider === null || parsed.provider === provider)
+    );
+  });
 }
 
 export type PermittedIdentities = {
@@ -538,7 +573,12 @@ function evaluateSignIn(
 
 /** The provider id asserted by this attempt, or `null` when there is none. */
 function signInProvider(attempt: SignInAttempt): SignInProvider | null {
-  const normalized = normalizeString(attempt.account?.provider);
+  return providerId(attempt.account?.provider);
+}
+
+/** A configured provider id, or `null` for anything else. Fails closed. */
+function providerId(value: unknown): SignInProvider | null {
+  const normalized = normalizeString(value);
   return normalized !== null && isSignInProvider(normalized) ? normalized : null;
 }
 

@@ -231,15 +231,18 @@ describe("the bootstrap and the allowlist compose (K3)", () => {
     // reconcileBootstrapAdmin, which owns the "listed and no role history"
     // rule and is tested in admin-bootstrap.test.ts.
     const user = { id: "user-1", email: LISTED };
+    const account = { provider: "google", providerAccountId: "sub-1" };
 
     return expect(
-      authConfig.events.signIn({ user } as Parameters<
+      authConfig.events.signIn({ user, account } as Parameters<
         typeof authConfig.events.signIn
       >[0]),
     )
       .resolves.toBeUndefined()
       .then(() => {
-        expect(reconcileBootstrapAdminMock).toHaveBeenCalledWith(user);
+        // The provider travels with the user, so a bound bootstrap entry can
+        // be honoured at promotion (PR #81 round 5).
+        expect(reconcileBootstrapAdminMock).toHaveBeenCalledWith(user, account);
       });
   });
 });

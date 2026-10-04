@@ -209,8 +209,11 @@ Small things, each of which has been a real bug somewhere:
   `SIGN_IN_PROVIDERS` (src/lib/sign-in-policy.ts), which a test in
   src/lib/auth.test.ts pins to the providers actually configured — anything
   else (`twitter:`, a typo) is malformed and reported, not treated as unbound.
-  The same syntax works in `ADMIN_BOOTSTRAP_EMAILS`; the sign-in grant it
-  implies is bound, while the promotion itself matches the bare address;
+  The same syntax works in `ADMIN_BOOTSTRAP_EMAILS`, and there it binds both
+  the sign-in grant and the promotion: `reconcileBootstrapAdmin` receives the
+  sign-in's provider and promotes only through the one the entry names, so
+  an unbound allowlist entry for the same address cannot be used to collect
+  the promotion through the other provider;
 - every address is optional on the Auth.js objects, so absent, empty and
   whitespace-only all normalise to `null` and are refused before any
   comparison happens — an absent address cannot match a blank list entry from

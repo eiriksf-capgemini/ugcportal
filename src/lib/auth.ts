@@ -119,9 +119,11 @@ export const authConfig = {
     // into one permitted set (see permittedIdentities). Being listed for
     // bootstrap is therefore itself a grant of sign-in, not a way around
     // one. It does not promote on an empty database; it promotes a listed
-    // address with no role history.
-    async signIn({ user }) {
-      await reconcileBootstrapAdmin(user);
+    // address with no role history — and, for a provider-bound entry, only
+    // when the sign-in came through that provider (PR #81 round 5), which is
+    // why `account` is handed on.
+    async signIn({ user, account }) {
+      await reconcileBootstrapAdmin(user, account);
     },
   },
   // Built from SIGN_IN_PROVIDERS in src/lib/sign-in-providers.ts, so the
