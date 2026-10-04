@@ -1,3 +1,4 @@
+import { stripCurationTags } from "@/lib/curation-tags";
 import { MEDIA_ANONYMOUS_SELECT } from "@/lib/media-access";
 import {
   listMedia,
@@ -147,6 +148,29 @@ function logFailedPublicListing(
  * handling still answers a 500 — unchanged from before this function logged
  * anything, except that now the attempt is on record.
  */
+/**
+ * Strips any curation-only tag (`stripCurationTags`,
+ * src/lib/curation-tags.ts — see that function's own comment for the
+ * non-array tolerance it needs, and round-5 review for why it is the
+ * same function `src/lib/gallery-items.ts#toGalleryTags` now calls too)
+ * from every row's `tags`, before this module's result leaves it in
+ * either direction.
+ *
+ * ROUND-4 REVIEW: this is the fix for a real leak, not belt-and-suspenders.
+ * `toGalleryTags` already stripped the same tags, but only for callers
+ * that convert a row through `toGalleryItem`/`toGalleryItems` — the
+ * server-rendered home page does, but GET /api/public/media
+ * (src/app/api/public/media/route.ts) serialises `listPublicMedia`'s own
+ * result straight to JSON with NO such conversion. A photo tagged both a
+ * real subject and "portfolio" therefore kept
+ * `{"slug":"portfolio","name":"Portfolio"}` in the raw API response even
+ * after round 2 fixed the rendered HTML — a leak to any direct API
+ * consumer (curl, a future integration, a bot), not to a page visitor.
+ * Fixing it HERE, in the one function both the route and the server-
+ * rendered page call, means every current and future caller of
+ * `listPublicMedia` gets it for free, rather than each caller having to
+ * remember to filter its own copy of the result.
+ */
 export async function listPublicMedia(
   requestUrl: string,
 ): Promise<PublicMediaResult> {
@@ -162,8 +186,18 @@ export async function listPublicMedia(
   }
   if (!result.ok) {
     logFailedPublicListing(result);
+    return result;
   }
-  return result;
+  return {
+    ok: true,
+    page: {
+      ...result.page,
+      items: result.page.items.map((row) => ({
+        ...row,
+        tags: stripCurationTags(row.tags),
+      })),
+    },
+  };
 }
 
 /**

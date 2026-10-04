@@ -64,14 +64,32 @@ export const GALLERY_GRID_CLASS =
 export const GALLERY_TILE_ASPECT_CLASS = "aspect-square";
 
 /**
- * One tile. The aspect class above fixes the shape, `overflow-hidden` is what
- * makes the crop a crop, and `bg-surface-1` is the mat visible while the image
+ * The shape and mat every tile shares, whether or not it is interactive.
+ * The aspect class above fixes the shape, `overflow-hidden` is what makes
+ * the crop a crop, and `bg-surface-1` is the mat visible while the image
  * loads — level 1, because a tile is a raised element on the page canvas.
  *
- * `block` and `w-full`: a `<button>` is inline-block by default, which would
+ * `block` and `w-full`: an inline element (a `<button>`, by default) would
  * leave the tile sized by its content rather than by the grid track.
+ *
+ * FACTORED OUT (round-5 review) so `GALLERY_TILE_CLASS` below and
+ * src/components/portfolio/portfolio-tile.tsx's own `<figure>` compose the
+ * SAME base rather than the portfolio tile hand-copying this exact string.
+ * Only this shape/mat half is shared — the portfolio tile is deliberately
+ * NOT interactive (see that component's own comment for why it carries
+ * none of `GALLERY_TILE_CLASS`'s `group`/`cursor-zoom-in`/focus-ring
+ * classes below).
  */
-export const GALLERY_TILE_CLASS = `group relative block w-full cursor-zoom-in overflow-hidden rounded-md bg-surface-1 ${GALLERY_TILE_ASPECT_CLASS} focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring`;
+export const GALLERY_TILE_BASE_CLASS = `relative block w-full overflow-hidden rounded-md bg-surface-1 ${GALLERY_TILE_ASPECT_CLASS}`;
+
+/**
+ * One INTERACTIVE tile (gallery.tsx's own `<button>`, which opens the
+ * lightbox): the shared base above, plus `group` (so `GALLERY_TILE_IMAGE_
+ * CLASS`'s `group-hover:scale-[…]` has an ancestor to key off), the
+ * zoom-in cursor, and a focus-visible ring for keyboard navigation — none
+ * of which belong on a tile nothing happens when you activate.
+ */
+export const GALLERY_TILE_CLASS = `group ${GALLERY_TILE_BASE_CLASS} cursor-zoom-in focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring`;
 
 /**
  * The image inside a tile.

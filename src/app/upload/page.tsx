@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 
+import { PAGE_CONTAINER_CLASS } from "@/components/site/page-shell";
 import { PageTitle } from "@/components/page-title";
 import { getSession } from "@/lib/auth";
 import { UPLOAD_PATH, signInPath } from "@/lib/routes";
@@ -76,7 +77,7 @@ export default async function UploadPage() {
       No <main> here — src/components/app-shell.tsx owns the page's single
       main landmark, and a second one would break the skip link.
     */
-    <div className="mx-auto w-full max-w-3xl px-4 py-12 sm:px-6">
+    <div className={PAGE_CONTAINER_CLASS}>
       {/*
         text-foreground/text-muted-foreground, not text-ink/text-ink-muted
         (ugcportal-rw9j review round 4): this heading and intro sit directly
