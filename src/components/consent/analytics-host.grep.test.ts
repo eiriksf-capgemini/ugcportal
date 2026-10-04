@@ -128,7 +128,7 @@ export function findAnalyticsMarkerOffenders(
     const relative = path.relative(root, absolutePath).split(path.sep).join("/");
     if (allowedRelativePaths.has(relative)) continue;
     const contents = readFileSync(absolutePath, "utf8");
-    if (ANALYTICS_MARKER.test(stripComments(contents))) offenders.push(relative);
+    if (ANALYTICS_MARKER.test(stripComments(contents, absolutePath))) offenders.push(relative);
   }
   return offenders;
 }
@@ -382,6 +382,72 @@ describe("findAnalyticsMarkerOffenders (the real scanner, exercised over a real 
         '  if (header) /charset="/i.test(header);\n' +
         "}\n" +
         'const trackingSrc = "https://stats.example/x?umami";\n',
+    });
+
+    const result = findAnalyticsMarkerOffenders(
+      walkSourceFiles(root, INCLUDE_EVERYTHING, K6_SCANNED_EXTENSIONS),
+      root,
+      new Set(),
+    );
+
+    expect(result).toEqual(["offender.ts"]);
+  });
+
+  /**
+   * Review round 1 on this PR, finding 2, MEDIUM (CONFIRMED by execution):
+   * a block comment with no closer runs to end of file, so stripping it
+   * erased every line after it — and a live analytics host on one of those
+   * lines was gone before this grep ever ran. The second K3 fixture, same
+   * shape as the desync one above: real file, real walker, real reader,
+   * real scanner, real marker. `stripComments` now returns such a file
+   * whole rather than stripping it, so the host is still there to find.
+   */
+  it("reports a live analytics host that follows an unterminated block comment", () => {
+    const root = fixture({
+      "offender.ts":
+        "const a = 1; /* this comment is never closed\n" +
+        'const trackingSrc = "https://stats.example/x?umami";\n',
+    });
+
+    const result = findAnalyticsMarkerOffenders(
+      walkSourceFiles(root, INCLUDE_EVERYTHING, K6_SCANNED_EXTENSIONS),
+      root,
+      new Set(),
+    );
+
+    expect(result).toEqual(["offender.ts"]);
+  });
+
+  /**
+   * Review round 1 on this PR, finding 1, MEDIUM (CONFIRMED by execution):
+   * parsing every file as TSX made a `.ts` file's generic arrow open a JSX
+   * element that never closes, so no comment after it was stripped. That
+   * direction is a FALSE POSITIVE for this gate rather than a bypass — a
+   * comment merely discussing the vendor would trip it, which is precisely
+   * the round-2 finding-9 regression this scan already pays to avoid.
+   */
+  it("does not report a .ts file whose only vendor mention is a comment after a generic arrow", () => {
+    const root = fixture({
+      "fine.ts":
+        "export const identity = <T>(x: T) => x;\n" +
+        "// umami lives in analytics-loader.tsx, not here\n" +
+        "export const y = 2;\n",
+    });
+
+    const result = findAnalyticsMarkerOffenders(
+      walkSourceFiles(root, INCLUDE_EVERYTHING, K6_SCANNED_EXTENSIONS),
+      root,
+      new Set(),
+    );
+
+    expect(result).toEqual([]);
+  });
+
+  it("MUTATION CHECK: the same file with the vendor in LIVE code after the generic arrow IS reported", () => {
+    const root = fixture({
+      "offender.ts":
+        "export const identity = <T>(x: T) => x;\n" +
+        'export const trackingSrc = "https://stats.example/x?umami";\n',
     });
 
     const result = findAnalyticsMarkerOffenders(

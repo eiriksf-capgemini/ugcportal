@@ -57,6 +57,37 @@ function walk(
 }
 
 /**
+ * Which dialect to parse a file as (ugcportal-ysub review round 1,
+ * finding 1, CONFIRMED medium).
+ *
+ * Parsing everything as TSX was wrong, and wrong in a direction that is
+ * easy to miss: `<` is the one character whose meaning TSX and TS
+ * genuinely disagree about. In a `.ts` file, `const identity = <T>(x: T)
+ * => x` is a generic arrow function and `const n = <number>value` is a
+ * type assertion; read as TSX, both open a JSX element that never closes,
+ * and from there every comment in the rest of the file sits inside what
+ * the parser believes is JSX TEXT - where comments do not exist, so none
+ * of them is stripped. Reproduced: with `// c1` and `// c2` after such a
+ * line, both survived. That re-opens ugcportal-3wgp round 2's finding 9
+ * (a comment merely DISCUSSING the vendor tripping the K6 grep) and
+ * quietly degrades the hex and dual-meaning gates the same way.
+ *
+ * TS is the fallback for an unrecognised extension rather than TSX,
+ * deliberately: TSX is the dialect that loses information, and a file
+ * that really does contain JSX always carries one of the four extensions
+ * named here. `.js`/`.mjs`/`.cjs` map to `ScriptKind.JS`, which already
+ * implies TypeScript's JSX language variant, so a `.js` file with JSX in
+ * it (which Next allows) still parses - and the TS-only `<T>()`/`<T>v`
+ * ambiguity cannot arise there, because neither is valid JavaScript.
+ */
+function scriptKindFor(fileName: string): ts.ScriptKind {
+  if (/\.tsx$/i.test(fileName)) return ts.ScriptKind.TSX;
+  if (/\.jsx$/i.test(fileName)) return ts.ScriptKind.JSX;
+  if (/\.(js|mjs|cjs)$/i.test(fileName)) return ts.ScriptKind.JS;
+  return ts.ScriptKind.TS;
+}
+
+/**
  * Strips `/* *\/` and `//` comments from TS/TSX/JS/JSX source, using
  * TypeScript's OWN parser rather than a hand-rolled lexer (ugcportal-ysub).
  *
@@ -123,13 +154,34 @@ function walk(
  * of its range, so line structure survives; a multi-line block comment
  * collapses to one space, same as before.
  *
+ * `fileName` is REQUIRED, and is the real path of the file being scanned
+ * (a plausible one, for a unit fixture). It is what picks the dialect -
+ * see `scriptKindFor` - and there is deliberately no default: the dialect
+ * that would have to be the default is the one that silently gets `.ts`
+ * files wrong, so "forgot to pass it" must be a compile error rather than
+ * a quiet mis-parse (ugcportal-ysub review round 1, finding 1).
+ *
+ * UNTERMINATED BLOCK COMMENT: returns `source` completely unstripped
+ * (round 1, finding 2, CONFIRMED). A `/*` with no `*\/` after it runs to
+ * end of file, so stripping it erases every remaining line - and a live
+ * analytics host on one of those lines then vanished before the K6 grep
+ * could see it, which is exactly the "following should never happen" this
+ * bead's K3 names. Returning the source whole is the fail-CLOSED answer:
+ * the output is then a strict superset of the correctly-stripped text, so
+ * every marker a caller is hunting for is still present. The alternative
+ * considered was throwing; returning unstripped is better here because
+ * the gate still runs and still names the offending FILE in its own
+ * failure message, where a throw aborts the whole scan with a stack trace
+ * and no path. Real source cannot reach this state and still compile, so
+ * the cost of the conservative answer is zero in practice.
+ *
  * This is for JavaScript-family source only. CSS is not JavaScript - see
  * `stripCssComments` below, and no-raw-hex.test.ts, which is the one
  * caller that scans both.
  */
-export function stripComments(source: string): string {
+export function stripComments(source: string, fileName: string): string {
   const sourceFile = ts.createSourceFile(
-    "scan-source-input.tsx",
+    fileName,
     source,
     {
       languageVersion: ts.ScriptTarget.Latest,
@@ -147,7 +199,7 @@ export function stripComments(source: string): string {
       },
     },
     /* setParentNodes */ true,
-    ts.ScriptKind.TSX,
+    scriptKindFor(fileName),
   );
 
   const ranges: ts.CommentRange[] = [];
@@ -178,6 +230,25 @@ export function stripComments(source: string): string {
   }
 
   visit(sourceFile);
+
+  /*
+   * Fail closed on an unterminated block comment (round 1, finding 2).
+   * `indexOf` rather than "does the range's text end in `*​/`": the latter
+   * calls `/*​/` terminated, since its last two characters ARE `*​/` even
+   * though the scanner never found a closer after the opener. Asking the
+   * question the scanner itself asks - is there a `*​/` anywhere after
+   * `pos + 2` - has no such edge. It cannot false-positive either: a
+   * genuinely terminated comment's own closer is at `end - 2`, which is
+   * always at or after `pos + 2`.
+   */
+  for (const range of ranges) {
+    if (
+      range.kind === ts.SyntaxKind.MultiLineCommentTrivia &&
+      source.indexOf("*/", range.pos + 2) === -1
+    ) {
+      return source;
+    }
+  }
 
   ranges.sort((a, b) => a.pos - b.pos);
 

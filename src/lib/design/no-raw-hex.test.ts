@@ -114,7 +114,7 @@ function stripHrefFragments(source: string): string {
  * walker already knows which extension it matched.
  */
 function stripSourceComments(file: string, contents: string): string {
-  return file.endsWith(".css") ? stripCssComments(contents) : stripComments(contents);
+  return file.endsWith(".css") ? stripCssComments(contents) : stripComments(contents, file);
 }
 
 const EXCLUDED_FILES = new Set([path.join(SRC_ROOT, "app", "globals.css")]);

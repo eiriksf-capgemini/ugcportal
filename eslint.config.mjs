@@ -100,6 +100,34 @@ const GATED_SCRIPT_MESSAGE =
  * hand-written `createElement`), and the one module with a legitimate
  * reason to construct a script element — the gated loader — is already
  * exempt from this whole ruleset via `ignores`.
+ *
+ * KNOWN LIMIT (review round 1, LOW — stated, not closed). Banning the
+ * import closes the ALIAS, not every route to a script element. These
+ * shapes are known to pass both this ban and the call-site selectors, and
+ * the K6 host-name grep (analytics-host.grep.test.ts) is the backstop for
+ * all of them — it does not care how a vendor's host reached the page,
+ * only that the string appears in the source:
+ *
+ *   - `jsx()`/`jsxs()`/`jsxDEV()` from `react/jsx-runtime`, which is what
+ *     the modern JSX transform actually compiles to. Not banned here
+ *     because every `.tsx` file in this repo imports it implicitly —
+ *     banning the module would ban JSX itself. The lowercase JSX
+ *     `<script>` selector covers the authored form; a HAND-WRITTEN
+ *     `jsx("script", ...)` is not covered.
+ *   - An aliased METHOD reference rather than an import: `const e =
+ *     document.createElement; e("script")`. The call site's callee is a
+ *     plain identifier bound by assignment, which no selector and no
+ *     import rule can follow.
+ *   - String-to-DOM routes that never name `createElement` at all:
+ *     `el.innerHTML = "<script…"`, `insertAdjacentHTML`,
+ *     `document.write`, `new DOMParser().parseFromString`. (Worth noting
+ *     `innerHTML` alone does not execute an injected script, but
+ *     `insertAdjacentHTML` and `document.write` reach the same end by
+ *     other means.)
+ *   - Any specifier or tag name assembled at runtime — a concatenation
+ *     (`"next/" + "script"`), a substituted template, or a variable. The
+ *     value is simply not in the source for a selector to match, which is
+ *     the same residual the KNOWN LIMIT above already names.
  */
 const GATED_CREATE_ELEMENT_MESSAGE =
   "React's createElement may not be imported outside " +
@@ -109,10 +137,18 @@ const GATED_CREATE_ELEMENT_MESSAGE =
   "invisible to the call-site lint selectors. Write JSX instead, and route " +
   "any tracking/affiliate script mount through the consent gate.";
 
+/**
+ * The gated module specifier, in one place: it is spelled in the import
+ * ban, in both dynamic-`import()` selectors and in both `require()`
+ * selectors, and a rename that reached four of those five would leave a
+ * live hole (review round 1, LOW).
+ */
+const NEXT_SCRIPT_MODULE = "next/script";
+
 export const GATED_SCRIPT_IMPORT_OPTIONS = [
   {
     paths: [
-      { name: "next/script", message: GATED_SCRIPT_MESSAGE },
+      { name: NEXT_SCRIPT_MODULE, message: GATED_SCRIPT_MESSAGE },
       {
         name: "react",
         importNames: ["createElement"],
@@ -142,9 +178,6 @@ export const GATED_SCRIPT_IMPORT_OPTIONS = [
  * script tag there.
  */
 const SCRIPT_TAG_NAME = "/^script$/i";
-
-/** `next/script`, as a plain Literal argument and as a no-substitution template literal. */
-const NEXT_SCRIPT_MODULE = "next/script";
 
 export const GATED_SCRIPT_SYNTAX_SELECTORS = [
   {
