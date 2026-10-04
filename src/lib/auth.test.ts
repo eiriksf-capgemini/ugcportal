@@ -22,8 +22,8 @@ const {
   nextAuthConfigs,
   reconcileBootstrapAdminMock,
   deleteManyMock,
-  findManyMock,
-  updateManyMock,
+  createSessionMock,
+  routeHandlerMock,
 } = vi.hoisted(() => {
     // The configs NextAuth was constructed with, recorded rather than read
     // off mock.calls: NextAuth is constructed once, when the module is first
@@ -31,16 +31,21 @@ const {
     const nextAuthConfigs: unknown[] = [];
     return {
       nextAuthConfigs,
-      // The Session reads and writes src/lib/live-session.ts makes. Their
-      // behaviour is tested there; here they exist so the callback and the
-      // event can be driven, and so this file can assert they were reached.
+      // The two Session writes this config makes: the revocation, and the
+      // insert the adapter performs when a sign-in mints a session. Their
+      // behaviour is tested in src/lib/live-session.test.ts; here they exist
+      // so the callbacks and the adapter can be driven, and so this file can
+      // assert they were reached with the right values.
       deleteManyMock: vi.fn(async () => ({ count: 1 })),
-      findManyMock: vi.fn(async () => [{ id: "session-1" }]),
-      updateManyMock: vi.fn(async () => ({ count: 1 })),
+      createSessionMock: vi.fn(async (args: unknown) => args),
+      // Stands in for @auth/core's own route handler, so that what this
+      // app EXPORTS as `handlers` can be driven and the wrapping around it
+      // asserted. Its body is set per test.
+      routeHandlerMock: vi.fn(async () => new Response("ok")),
       nextAuthMock: vi.fn((config: unknown) => {
         nextAuthConfigs.push(config);
         return {
-          handlers: {},
+          handlers: { GET: routeHandlerMock, POST: routeHandlerMock },
           auth: vi.fn(),
           signIn: vi.fn(),
           signOut: vi.fn(),
@@ -72,15 +77,12 @@ vi.mock("@/lib/admin-bootstrap", async (importOriginal) => {
 
 vi.mock("@/lib/prisma", () => ({
   prisma: {
-    session: {
-      deleteMany: deleteManyMock,
-      findMany: findManyMock,
-      updateMany: updateManyMock,
-    },
+    session: { deleteMany: deleteManyMock, create: createSessionMock },
   },
 }));
 
-const { authConfig } = await import("@/lib/auth");
+const { authConfig, handlers } = await import("@/lib/auth");
+const { withSignInIdentity } = await import("@/lib/live-session");
 
 const LISTED = "owner@example.com";
 const STRANGER = "anyone-with-a-google-account@gmail.com";
@@ -329,22 +331,118 @@ describe("the session callback re-checks the policy on every request", () => {
   });
 });
 
-describe("the signIn event records which identity got them in", () => {
-  it("writes it to the session row, so the session callback can read it back", async () => {
-    await authConfig.events.signIn({
-      user: { id: "user-1", email: LISTED },
-      account: { provider: "facebook", providerAccountId: "sub-1" },
-      profile: { email: LISTED },
-    } as Parameters<typeof authConfig.events.signIn>[0]);
+/**
+ * The identity the gate just judged reaches the session row, as wired: the
+ * real `signIn` callback, the real wrapped adapter, the real
+ * AsyncLocalStorage slot (PR #91 review, round 2, finding 1).
+ *
+ * Driven through `withSignInIdentity` because that is what the exported
+ * `handlers` are wrapped in — a request is the unit that owns a slot, and
+ * without one there is nothing for the callback to write into.
+ */
+describe("a permitted sign-in hands its identity to the session it mints", () => {
+  /** One request: the gate decides, then the adapter creates the session. */
+  function signInRequest(options: {
+    email: string;
+    provider: string;
+    profile?: Record<string, unknown>;
+  }) {
+    return withSignInIdentity({
+      POST: async () => {
+        const permitted = authConfig.callbacks.signIn({
+          user: { email: options.email },
+          account: { provider: options.provider },
+          profile: options.profile ?? { email: options.email },
+        } as Parameters<typeof authConfig.callbacks.signIn>[0]);
+        await authConfig.adapter.createSession?.({
+          sessionToken: "session-token-1",
+          userId: "user-1",
+          expires: new Date(Date.now() + 86_400_000),
+        });
+        return permitted;
+      },
+    }).POST();
+  }
 
-    expect(findManyMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: { userId: "user-1", signInProvider: null },
+  it("writes the provider and the judged address in the session's own insert", async () => {
+    await expect(
+      signInRequest({ email: LISTED, provider: "google" }),
+    ).resolves.toBe(true);
+
+    expect(createSessionMock).toHaveBeenCalledTimes(1);
+    expect(createSessionMock.mock.calls[0][0]).toMatchObject({
+      data: {
+        sessionToken: "session-token-1",
+        signInProvider: "google",
+        signInEmail: LISTED,
+      },
+    });
+  });
+
+  it("records the address the gate judged, not the one on the user object", async () => {
+    // `authorisedEmail` prefers what the provider asserted in THIS exchange.
+    const fresh = "fresh@example.com";
+    process.env[PERMITTED_EMAILS_VAR] = fresh;
+
+    await expect(
+      signInRequest({
+        email: LISTED,
+        provider: "google",
+        profile: { email: fresh },
       }),
+    ).resolves.toBe(true);
+
+    expect(createSessionMock.mock.calls[0][0]).toMatchObject({
+      data: { signInEmail: fresh },
+    });
+  });
+
+  it("records nothing for a sign-in the gate refused", async () => {
+    // Belt and braces on the ordering: a refused attempt never reaches
+    // `handleLoginOrRegister`, so no session is created at all — but if one
+    // ever were, it must not inherit a refused identity.
+    process.env[PERMITTED_EMAILS_VAR] = "someone-else@example.com";
+
+    await expect(
+      signInRequest({ email: LISTED, provider: "google" }),
+    ).resolves.toBe(false);
+
+    expect(createSessionMock.mock.calls[0][0]).toMatchObject({
+      data: { signInProvider: null, signInEmail: null },
+    });
+  });
+});
+
+describe("the exported route handlers carry the identity slot", () => {
+  it("gives the request a slot, so the gate's answer reaches the insert", async () => {
+    // Without the wrapper there is no store for the whole mechanism to use:
+    // `rememberSignInIdentity` finds nothing to write into and the session
+    // is created unattributed. Driven through the EXPORTED handlers rather
+    // than a locally wrapped function, because the export is the thing a
+    // route file imports and the thing that can be unwrapped by accident.
+    routeHandlerMock.mockImplementation(async () => {
+      authConfig.callbacks.signIn({
+        user: { email: LISTED },
+        account: { provider: "google" },
+        profile: { email: LISTED },
+      } as Parameters<typeof authConfig.callbacks.signIn>[0]);
+      await authConfig.adapter.createSession?.({
+        sessionToken: "session-token-1",
+        userId: "user-1",
+        expires: new Date(Date.now() + 86_400_000),
+      });
+      return new Response("ok");
+    });
+
+    await handlers.POST(
+      new Request("http://localhost/api/auth/callback/google", {
+        method: "POST",
+      }) as never,
     );
-    expect(updateManyMock).toHaveBeenCalledWith({
-      where: { id: "session-1" },
-      data: { signInProvider: "facebook", signInEmail: LISTED },
+
+    expect(routeHandlerMock).toHaveBeenCalledTimes(1);
+    expect(createSessionMock.mock.calls[0][0]).toMatchObject({
+      data: { signInProvider: "google", signInEmail: LISTED },
     });
   });
 });

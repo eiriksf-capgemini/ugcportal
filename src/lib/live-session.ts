@@ -1,5 +1,9 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+
+import type { Adapter } from "next-auth/adapters";
 import type { DefaultSession, Session } from "next-auth";
 
+import type { SessionUncheckedCreateInput } from "@/generated/prisma/models";
 import { prisma } from "@/lib/prisma";
 import {
   PERMITTED_EMAILS_VAR,
@@ -45,16 +49,12 @@ import {
  * where an old process is still serving under the new policy.
  *
  * THE COST, per authenticated request (K2): one `decideLiveSession` call,
- * over a permitted set parsed once per distinct configuration string. No
- * database read of any kind. Every value it judges is a column of the one
- * row `getSessionAndUser` already loaded in the single query `auth()` was
- * always making. The only write is on the refusal path, and it IS the
- * revocation; it deletes one row, the session in front of it.
- *
- * Two requests in flight together can both reach that delete — the first
- * takes the row and the second deletes nothing — and once the row is gone
- * `getSessionAndUser` returns null, so this function is not reached again
- * for that session at all.
+ * over a permitted set parsed once per distinct configuration string and
+ * indexed by address. No database read of any kind. Every value it judges is
+ * a column of the one row `getSessionAndUser` already loaded in the single
+ * query `auth()` was always making. The only write is on the refusal path,
+ * it IS the revocation, it deletes one row — the session in front of it —
+ * and the response does not wait for it.
  */
 
 /**
@@ -72,30 +72,40 @@ export type LiveSessionUser = {
 };
 
 /**
- * The refusals that mean "this identity is positively not permitted any
- * more", as opposed to "the policy cannot be evaluated right now".
+ * What each refusal does to the session row. Exhaustive over
+ * `SignInRefusal` by construction — `satisfies Record<...>` is a compile
+ * error the day a sixth refusal is added and nobody classifies it (PR #91
+ * review, round 2, finding 3; the same pattern `sign-in-providers.ts` uses
+ * to keep the configured providers and the allowlist prefixes in step).
  *
- * Only these destroy the session row. The distinction is the difference
- * between a revocation and an outage: `no-configuration` is what a
- * deployment that lost its environment variables looks like, and `no-email`
- * describes a row, not a decision about the list. Those refuse the request —
- * fail closed, every time, that part is not conditional — but they leave the
- * row alone, so restoring the variable restores the sessions instead of
- * having silently logged every user out of every device while nobody could
- * sign in to notice.
+ * `"revoke"` means the identity is positively not permitted any more.
+ * `"keep"` means the policy could not be evaluated — and those two are the
+ * difference between a revocation and an outage. `no-configuration` is what
+ * a deployment that lost its environment variables looks like, and
+ * `no-email` describes a row rather than a decision about the list. Both
+ * refuse the request — fail closed, every time, that part is not
+ * conditional — but they leave the row alone, so restoring the variable
+ * restores the sessions instead of having silently logged every user out of
+ * every device while nobody could sign in to notice.
  *
- * `unverified-email` is absent because `decideLiveSession` cannot return it
- * (see its own comment: no request carries a provider profile to assert a
- * claim with). It is listed in `SignInRefusal` because the sign-in gate can
- * return it, and this array is typed against that union so that a refusal
- * added later has to be classified here rather than defaulting silently —
- * it defaults to the safe side, refusing without deleting, but the doc test
- * in src/lib/access-control-doc.test.ts makes the choice visible.
+ * `unverified-email` can never arrive here: `decideLiveSession` cannot
+ * return it, because no request carries a provider profile to assert the
+ * claim with (see that function). It is classified anyway, because the
+ * exhaustiveness check is the point — and `"keep"` is the answer that
+ * matches the others of its kind if it ever becomes reachable.
+ *
+ * Exported for src/lib/access-control-doc.test.ts, which asserts the
+ * runbook in docs/access-control.md names exactly the revoking ones. It
+ * imports this (round 2, finding 9); it used to scrape the source with a
+ * regex, which a reformat could silently defeat.
  */
-const REVOKING_REFUSALS: readonly SignInRefusal[] = [
-  "not-permitted",
-  "wrong-provider",
-];
+export const REVOKING_REFUSALS = {
+  "no-configuration": "keep",
+  "no-email": "keep",
+  "unverified-email": "keep",
+  "not-permitted": "revoke",
+  "wrong-provider": "revoke",
+} satisfies Record<SignInRefusal, "revoke" | "keep">;
 
 /**
  * Shortest interval between live-session refusal log lines, per channel.
@@ -109,6 +119,17 @@ const REVOKING_REFUSALS: readonly SignInRefusal[] = [
  * where the log needs to stay readable. The first line after a quiet period
  * always logs, so the transition into refusing is never delayed, and the
  * lines in between are counted and folded into the next one.
+ *
+ * THIS IS THE THIRD COPY of that algorithm — `watermark.ts` and
+ * `public-media.ts` have the other two — and it is deliberately still a
+ * copy. `ugcportal-z3lo` owns extracting the shared helper and already
+ * records why the first two were not merged (watermark's has a proactive
+ * flush timer the others deliberately lack); PR #85 adds
+ * `src/lib/throttled-log.ts` and is not merged yet. Taking the extraction
+ * here would either pre-empt that design or build a fourth variant for it
+ * to reconcile. The generalisation this copy does have — a `LogThrottle`
+ * record plus a `dueToLog` function, two independent channels — is the
+ * shape that bead should adopt (PR #91 review, round 2, finding 11).
  */
 export const LIVE_SESSION_LOG_INTERVAL_MS = 10_000;
 
@@ -176,6 +197,22 @@ function recordedIdentity(session: Session): {
 }
 
 /**
+ * A recorded address, or `null` when there is nothing usable recorded.
+ *
+ * Blank counts as absent (PR #91 review, round 2, finding 5). Nothing this
+ * app writes can produce `""` — `authorisedEmail` collapses blanks to
+ * `null` before the identity is ever persisted — but a direct SQL fix-up or
+ * a future backfill could, and the difference matters: a `""` treated as
+ * present skips the fallback to `User.email` and lands on `no-email`, which
+ * is a refusal that deliberately does NOT delete the row. The session would
+ * then be refused forever, with a valid address sitting on the user row and
+ * no destructive log line to explain it.
+ */
+function recordedAddress(value: unknown): string | null {
+  return typeof value === "string" && value.trim() !== "" ? value : null;
+}
+
+/**
  * Re-check the sign-in policy for an existing session, and refuse it when
  * the identity that minted it is no longer permitted.
  *
@@ -194,7 +231,7 @@ export async function enforceLiveSessionPolicy(
     // `authorisedEmail` prefers the asserted address at sign-in too, so the
     // session is judged on the string the gate permitted rather than on a
     // `User.email` that @auth/core never refreshes.
-    email: typeof recorded.email === "string" ? recorded.email : user.email,
+    email: recordedAddress(recorded.email) ?? user.email,
     provider: recorded.provider,
   });
   if (decision.permitted) {
@@ -211,11 +248,49 @@ export async function enforceLiveSessionPolicy(
     );
   }
 
-  if (REVOKING_REFUSALS.includes(decision.reason)) {
-    await revokeSession(recorded.id, user.id);
+  if (REVOKING_REFUSALS[decision.reason] === "revoke") {
+    // NOT awaited (PR #91 review, round 2, finding 6). The refusal below is
+    // a pure transform of data already in hand and does not depend on the
+    // delete — `revokeSession` says so itself — so making every request
+    // from a just-revoked identity wait out a `DELETE` round trip would be
+    // paying latency for nothing, at exactly the moment refusals are most
+    // numerous. `revokeSession` never rejects, so the floating promise
+    // cannot become an unhandled rejection.
+    //
+    // If the process is torn down before it lands (this instance runs a
+    // long-lived Node server, so that means a restart mid-request), the row
+    // survives and the next request refuses it again and retries the
+    // delete. That is the same recovery as a failed delete, which is why
+    // the refusal is never allowed to depend on either.
+    track(revokeSession(recorded.id, user.id));
   }
 
   return refusedSession(session);
+}
+
+/**
+ * Revocations that have been started and not yet finished.
+ *
+ * Exists because `enforceLiveSessionPolicy` deliberately does not await
+ * them: the set gives tests something to wait on, and a future graceful
+ * shutdown something to drain. Entries remove themselves.
+ */
+const inFlightRevocations = new Set<Promise<void>>();
+
+function track(revocation: Promise<void>): void {
+  inFlightRevocations.add(revocation);
+  void revocation.finally(() => inFlightRevocations.delete(revocation));
+}
+
+/**
+ * Settle every revocation started so far.
+ *
+ * For tests, which assert on rows the request itself does not wait for. Not
+ * a way to make the refusal synchronous — nothing in the request path calls
+ * it.
+ */
+export function settleRevocations(): Promise<unknown> {
+  return Promise.all([...inFlightRevocations]);
 }
 
 /**
@@ -232,6 +307,9 @@ export async function enforceLiveSessionPolicy(
  * stops spreading the row — would turn this into `DELETE FROM Session` for
  * every user on the instance. It fails closed instead: no id, no delete, and
  * the request is still refused by the caller either way.
+ *
+ * Never rejects. The caller does not await it, and an unhandled rejection
+ * would take the process down over a failed delete.
  */
 async function revokeSession(id: unknown, userId: string): Promise<void> {
   if (typeof id !== "string" || id === "") {
@@ -280,7 +358,9 @@ async function revokeSession(id: unknown, userId: string): Promise<void> {
  * The refusal would be invisible: no error, no 401, and a test that drove
  * the callback directly would still pass. A present-but-undefined key wins
  * the spread, and then does not survive `JSON.stringify` of the response
- * body — so `auth()` resolves a session object with no user on it.
+ * body — so `auth()` resolves a session object with no user on it. That
+ * possibility is why `Session["user"]` is declared optional in
+ * src/lib/auth.ts (round 2, finding 2).
  *
  * `expires` only, rather than `{ ...session, user: undefined }`: the runtime
  * `session` here is the whole `Session` row the Prisma adapter read,
@@ -293,84 +373,118 @@ function refusedSession(session: Session): DefaultSession {
 }
 
 /**
- * Record, on the session this sign-in just minted, which identity minted it
- * — so the per-request check above can judge a provider-bound allowlist
- * entry without a second query.
+ * The identity a sign-in asserted, carried from the `signIn` callback to
+ * the `createSession` that same request is about to make.
  *
- * Runs from the Auth.js `signIn` EVENT, which fires after the `signIn`
- * callback has already permitted the attempt and after the `Session` row
- * exists, but still inside the request that sets the session cookie
- * (`await events.signIn?.()` in @auth/core/lib/actions/callback/index.js,
- * before the redirect is returned). So the columns are written before the
- * browser can make the request that reads them — a freshly signed-in user is
- * never judged against an identity that has not been recorded yet.
+ * WHY A STORE AND NOT A LOOKUP. The columns have to be written on the
+ * session row this sign-in creates, and the Auth.js `signIn` EVENT — the
+ * obvious place for a write — is never told which row that is. The first
+ * version of this therefore guessed: "the user's newest session with no
+ * identity recorded yet". Two sign-ins by the same person inside the same
+ * window (two tabs, or the two providers `ugcportal-t33p` is about to make
+ * ordinary) both see two unstamped rows, can both pick the same one, and
+ * the last write wins — one session labelled with the other's provider, the
+ * other left unlabelled. With a bound entry that is a permitted session
+ * refused as `wrong-provider` and deleted on its next request (PR #91
+ * review, round 2, finding 1).
  *
- * WHICH ROW, and the race. The event is not told the session token, so the
- * row is found rather than named: the user's newest session that has no
- * identity recorded yet. In the ordinary case exactly one row matches — the
- * one just created — because every other session of theirs was stamped at
- * its own sign-in. The exception is a session that predates these columns
- * (the migration backfills only the unambiguous ones), and the window is
- * this single `await`: if such a row exists AND its `expires` is later than
- * the new session's, this stamps the old row instead and the new session
- * keeps a null identity. The consequence is bounded and fail-closed — the
- * new session is refused by a bound entry on its next request, and the
- * person signs in again — and it cannot outlive the legacy rows.
+ * There is no lookup that fixes this, because the ambiguity is real: the
+ * rows are indistinguishable. So the identity travels with the request
+ * instead of being inferred from the database, and lands in the SAME INSERT
+ * that creates the row — after which there is no window, no second write,
+ * and no heuristic.
+ */
+type SignInIdentity = Required<
+  Pick<SessionUncheckedCreateInput, "signInProvider" | "signInEmail">
+>;
+
+const signInIdentity = new AsyncLocalStorage<SignInIdentity>();
+
+/**
+ * Give every Auth.js request its own identity slot.
  *
- * The address recorded is `authorisedEmail`'s, i.e. the one the gate just
- * judged, not `user.email`: those differ for anyone whose provider address
- * has changed, and recording the address that was actually permitted is the
+ * Wraps the route handlers rather than calling `enterWith` from the
+ * callback: `AsyncLocalStorage.run` propagates strictly downwards into
+ * everything the request does, which is exactly the relationship between
+ * the handler and the callbacks it drives. `enterWith` would depend on a
+ * store set inside an awaited callee being visible to its caller's
+ * continuation, which is not a property Node guarantees.
+ *
+ * The slot is mutable and starts empty: it is filled by
+ * `rememberSignInIdentity` only for requests that are actually a sign-in,
+ * and read by the adapter below only when it creates a session. Any other
+ * request carries an empty slot and writes nothing.
+ */
+export function withSignInIdentity<
+  Handlers extends Record<string, (...args: never[]) => unknown>,
+>(handlers: Handlers): Handlers {
+  const wrapped: Record<string, unknown> = {};
+  for (const [method, handler] of Object.entries(handlers)) {
+    wrapped[method] = (...args: never[]) =>
+      signInIdentity.run({ signInProvider: null, signInEmail: null }, () =>
+        handler(...args),
+      );
+  }
+  return wrapped as Handlers;
+}
+
+/**
+ * Record what this sign-in asserted, for the session it is about to create.
+ *
+ * Called from `callbacks.signIn` once the gate has permitted the attempt,
+ * which is the last point before `handleLoginOrRegister` that still has the
+ * provider and the profile in hand. Writes nothing to the database; the
+ * insert that follows picks it up.
+ *
+ * The address is `authorisedEmail`'s, i.e. the one the gate just judged,
+ * not `user.email`: those differ for anyone whose provider address has
+ * changed, and recording the address that was actually permitted is the
  * whole point of recording one.
  *
- * Never throws. A failure here is logged and swallowed, because this event
- * is awaited by @auth/core and a throw would turn a sign-in that was already
- * permitted into an Access Denied page. The consequence of the failure is
- * fail-closed in the same bounded way: the session keeps a null identity,
- * which a bound entry refuses on the next request.
+ * A no-op outside a wrapped request (no store), which is what keeps this
+ * safe to call from anywhere: the columns stay null, and a null identity
+ * fails closed against a bound entry.
  */
-export async function recordSignInIdentity(
-  attempt: SignInAttempt & { user: { id?: string } },
-): Promise<void> {
-  const provider = attempt.account?.provider;
-  const email = authorisedEmail(attempt);
-  const userId = attempt.user.id;
-  if (!userId || typeof provider !== "string" || provider === "") {
+export function rememberSignInIdentity(attempt: SignInAttempt): void {
+  const slot = signInIdentity.getStore();
+  if (!slot) {
     return;
   }
-  try {
-    const [newest] = await prisma.session.findMany({
-      where: { userId, signInProvider: null },
-      orderBy: { expires: "desc" },
-      take: 1,
-      select: { id: true },
-    });
-    if (!newest) {
-      // Not an error worth shouting about on its own — but it means the
-      // session this sign-in minted will be judged as having no recorded
-      // identity, so a bound entry will refuse it once and the next sign-in
-      // will try again.
-      console.warn(
-        `[auth] No unrecorded session row to attribute for user ${userId}; ` +
-          "a provider-bound allowlist entry will refuse this session on its " +
-          "next request.",
-      );
-      return;
-    }
-    // Stores whatever provider id Auth.js reported, without checking it
-    // against SIGN_IN_PROVIDERS. An id outside that list cannot widen
-    // anything — `providerId` maps it to `null` when the column is read,
-    // exactly as a missing value — and storing what actually happened keeps
-    // the column honest if the configured providers ever change.
-    await prisma.session.updateMany({
-      where: { id: newest.id },
-      data: { signInProvider: provider, signInEmail: email },
-    });
-  } catch (error) {
-    console.error(
-      `[auth] Could not record the sign-in identity for user ${userId}. ` +
-        "A provider-bound allowlist entry will refuse this session on its " +
-        "next request until it is recorded.",
-      error,
-    );
+  const provider = attempt.account?.provider;
+  // Stores whatever provider id Auth.js reported, without checking it
+  // against SIGN_IN_PROVIDERS. An id outside that list cannot widen
+  // anything — `providerId` maps it to `null` when the column is read,
+  // exactly as a missing value — and storing what actually happened keeps
+  // the column honest if the configured providers ever change.
+  slot.signInProvider =
+    typeof provider === "string" && provider !== "" ? provider : null;
+  slot.signInEmail = authorisedEmail(attempt);
+}
+
+/**
+ * The Prisma adapter, with the sign-in identity written into the same
+ * `INSERT` that creates the session.
+ *
+ * One statement, so there is no window in which a row exists without its
+ * identity and nothing to pick the right row out of several. The extra keys
+ * reach the database because @auth/prisma-adapter's `createSession` is
+ * `p.session.create(stripUndefined(data))` (node_modules/@auth/prisma-adapter/
+ * index.js) — it passes the object it is given straight through — and the
+ * cast is only about `createSession`'s declared parameter, which names the
+ * three columns @auth/core knows about. The column NAMES are still checked,
+ * because `SignInIdentity` is DERIVED from Prisma's own generated create
+ * input — rename a column in the schema and this stops compiling.
+ */
+export function withSessionIdentity(adapter: Adapter): Adapter {
+  const createSession = adapter.createSession?.bind(adapter);
+  if (!createSession) {
+    return adapter;
   }
+  return {
+    ...adapter,
+    createSession: (data) => {
+      const identity = signInIdentity.getStore();
+      return createSession({ ...data, ...identity } as typeof data);
+    },
+  };
 }

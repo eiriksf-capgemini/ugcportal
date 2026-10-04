@@ -3,6 +3,8 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import { REVOKING_REFUSALS } from "@/lib/live-session";
+
 /**
  * docs/access-control.md tells an operator what `DELETE FROM User` destroys,
  * so they can decide whether to remove an account that got in while the
@@ -152,25 +154,27 @@ describe("the runbook does not recommend a command that prints nothing", () => {
  * CODE rather than against the memory of whoever last edited the doc, in the
  * same spirit as the cascade check above: the dangerous drift is not a
  * missing section, it is a section that still describes the previous rule.
- * Add a refusal to `REVOKING_REFUSALS` and this fails until the runbook says
- * so — and the operator's mental model of "what does removing an entry
- * actually destroy" is the thing that would otherwise go quietly stale.
+ * Reclassify a refusal in `REVOKING_REFUSALS` and this fails until the
+ * runbook says so — and the operator's mental model of "what does removing
+ * an entry actually destroy" is the thing that would otherwise go quietly
+ * stale.
+ *
+ * The real value is IMPORTED, not scraped out of the source text (PR #91
+ * review, round 2, finding 9). The first version parsed the array literal
+ * with a regex, which any cosmetic reformat — one line instead of three, a
+ * trailing comment, different quotes — could silently turn into an empty
+ * list, leaving a test that compares nothing to nothing.
  */
-
-const liveSession = read("src/lib/live-session.ts");
 
 const REVOCATION_HEADING = "### Revoking access takes effect on the next request";
 const DEPLOY_HEADING = "### Deploy order: migrate first, then deploy";
 
 /** The refusals src/lib/live-session.ts deletes session rows for. */
-function revokingRefusals(source: string): string[] {
-  const block = source.match(
-    /REVOKING_REFUSALS[^=]*=\s*\[([\s\S]*?)\];/,
-  );
-  if (!block) {
-    return [];
-  }
-  return [...block[1].matchAll(/"([a-z-]+)"/g)].map(([, name]) => name).sort();
+function revokingRefusals(): string[] {
+  return Object.entries(REVOKING_REFUSALS)
+    .filter(([, handling]) => handling === "revoke")
+    .map(([refusal]) => refusal)
+    .sort();
 }
 
 /** The ones the doc tells the operator are destructive. */
@@ -197,12 +201,15 @@ describe("the revocation runbook matches the code", () => {
     expect(doc).toContain(REVOCATION_HEADING);
     expect(doc).toContain(DEPLOY_HEADING);
     expect(revocationSection.length).toBeGreaterThan(0);
-    expect(revokingRefusals(liveSession).length).toBeGreaterThan(0);
+    expect(revokingRefusals().length).toBeGreaterThan(0);
+    // Both kinds exist, so "names exactly the revoking ones" below is a real
+    // partition rather than "names all of them".
+    expect(Object.values(REVOKING_REFUSALS)).toContain("keep");
   });
 
   it("names exactly the refusals that destroy session rows", () => {
     expect(documentedRevokingRefusals(revocationSection)).toEqual(
-      revokingRefusals(liveSession),
+      revokingRefusals(),
     );
   });
 
@@ -212,6 +219,16 @@ describe("the revocation runbook matches the code", () => {
     expect(revocationSection).toMatch(
       /\*\*The bound is the next request that resolves their session\*\*/,
     );
+  });
+
+  it("says the identity is written by the insert, not afterwards", () => {
+    // The round-2 redesign (finding 1). A doc that still described a write
+    // after the fact would send the next reader looking for an event that
+    // no longer exists — and would make the race it removed sound live.
+    expect(revocationSection).toMatch(
+      /\*\*The identity is written by the insert that creates the session\.\*\*/,
+    );
+    expect(revocationSection).toContain("AsyncLocalStorage");
   });
 
   it("says which of the three mechanisms was chosen and what the others were", () => {

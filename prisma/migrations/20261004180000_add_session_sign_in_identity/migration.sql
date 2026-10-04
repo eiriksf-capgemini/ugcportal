@@ -32,10 +32,17 @@ ALTER TABLE "Session" ADD COLUMN "signInEmail" TEXT;
 --     BOUND entry (`google:a@b.com`) refuses them, and the per-request check
 --     then deletes that session. The person signs in again, which records
 --     the identity properly, and they are back — one sign-in, once.
---   * `signInEmail` is deliberately NOT backfilled. A null address falls
---     back to `User.email` in src/lib/live-session.ts, which is the exact
---     address the check judged before this column existed; writing the same
---     value into the column would add a second place for it to be wrong.
+--   * `signInEmail` is deliberately NOT backfilled. A null (or blank)
+--     address falls back to `User.email` in src/lib/live-session.ts, which
+--     is the exact address the check judged before this column existed;
+--     writing the same value into the column would add a second place for
+--     it to be wrong.
+--
+-- From here on both columns are written by the INSERT that creates the row
+-- (the adapter wrapper in src/lib/live-session.ts), so every session a
+-- SIGN-IN mints after this migration is attributed as it is created. A row
+-- written by anything else — a fixture, a manual INSERT — still gets NULL,
+-- and is refused by a bound entry exactly as the rows above are.
 --
 -- The alternative to the backfill is evicting every signed-in person with a
 -- bound entry, including the operator, on the deploy that carries this —

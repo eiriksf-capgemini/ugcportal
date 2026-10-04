@@ -5,8 +5,9 @@ import { PERMITTED_EMAILS_VAR } from "@/lib/sign-in-policy";
 import { pinEnvironment } from "@/lib/test-support/env";
 
 /**
- * What the two database writes in src/lib/live-session.ts do when the
- * database refuses them (ugcportal-mzr).
+ * What the revocation in src/lib/live-session.ts does when the database
+ * refuses it — and what the request does while it is in flight
+ * (ugcportal-mzr).
  *
  * Separate from src/lib/live-session.test.ts, which runs against a real
  * SQLite database: a `vi.spyOn` on a Prisma delegate method does not survive
@@ -15,22 +16,16 @@ import { pinEnvironment } from "@/lib/test-support/env";
  * the client. Here the module is mocked instead, which is the right tool for
  * "the write threw" and the wrong one for "the row is gone".
  *
- * Both cases are fail-closed claims, which is why they are tested at all: a
- * failed delete must not become a permitted session, and a failed identity
- * write must not turn an already-permitted sign-in into Access Denied.
+ * Fail-closed claims, which is why they are tested at all: a failed delete
+ * must not become a permitted session, and a delete that never finishes must
+ * not hold the refusal up behind it (PR #91 review, round 2, finding 6).
  */
 
-const { deleteMany, findMany, updateMany } = vi.hoisted(() => ({
-  deleteMany: vi.fn(),
-  findMany: vi.fn(),
-  updateMany: vi.fn(),
-}));
+const { deleteMany } = vi.hoisted(() => ({ deleteMany: vi.fn() }));
 
-vi.mock("@/lib/prisma", () => ({
-  prisma: { session: { deleteMany, findMany, updateMany } },
-}));
+vi.mock("@/lib/prisma", () => ({ prisma: { session: { deleteMany } } }));
 
-const { enforceLiveSessionPolicy, recordSignInIdentity } = await import(
+const { enforceLiveSessionPolicy, settleRevocations } = await import(
   "@/lib/live-session"
 );
 
@@ -107,52 +102,25 @@ describe("a revocation whose delete fails", () => {
   });
 });
 
-describe("an identity record whose write fails", () => {
-  it("does not throw, so a permitted sign-in still completes", async () => {
-    // @auth/core awaits the signIn event inside the sign-in request, so a
-    // throw here would turn a sign-in the gate had already permitted into
-    // the Access Denied page.
-    findMany.mockResolvedValue([{ id: SESSION_ID }]);
-    updateMany.mockRejectedValue(new Error("database is locked"));
-
-    await expect(
-      recordSignInIdentity({
-        user: { id: USER_ID, email: LISTED },
-        account: { provider: "google" },
+describe("a revocation that has not finished", () => {
+  it("does not hold up the refusal", async () => {
+    // The delete is started and never settles. If the refusal awaited it,
+    // this test would not finish — vitest's timeout is the assertion, and
+    // it is the only way to state "does not wait" that a passing-by-luck
+    // implementation cannot satisfy.
+    let finish = (): void => {};
+    deleteMany.mockReturnValue(
+      new Promise((resolve) => {
+        finish = () => resolve({ count: 1 });
       }),
-    ).resolves.toBeUndefined();
-    expect(updateMany).toHaveBeenCalledTimes(1);
-  });
+    );
 
-  it("does not throw when the lookup itself fails either", async () => {
-    findMany.mockRejectedValue(new Error("database is locked"));
+    const result = await enforce();
 
-    await expect(
-      recordSignInIdentity({
-        user: { id: USER_ID, email: LISTED },
-        account: { provider: "google" },
-      }),
-    ).resolves.toBeUndefined();
-    expect(updateMany).not.toHaveBeenCalled();
-  });
-
-  it("asks for the newest session that has no identity recorded yet", async () => {
-    // The row this sign-in just created. Narrowing on `signInProvider: null`
-    // is what makes "newest" the right answer in the ordinary case: every
-    // other session of theirs was stamped at its own sign-in.
-    findMany.mockResolvedValue([{ id: SESSION_ID }]);
-    updateMany.mockResolvedValue({ count: 1 });
-
-    await recordSignInIdentity({
-      user: { id: USER_ID, email: LISTED },
-      account: { provider: "google" },
-    });
-
-    expect(findMany).toHaveBeenCalledWith({
-      where: { userId: USER_ID, signInProvider: null },
-      orderBy: { expires: "desc" },
-      take: 1,
-      select: { id: true },
-    });
+    expect(result.user).toBeUndefined();
+    expect(deleteMany).toHaveBeenCalledTimes(1);
+    // Let it go, so the pending promise does not leak into the next test.
+    finish();
+    await settleRevocations();
   });
 });

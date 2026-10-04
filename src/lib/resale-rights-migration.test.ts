@@ -307,12 +307,17 @@ describe("ugcportal-vsm K2: the audit trail survives intact", () => {
     const before = await prisma.resaleRightsEvent.count();
     expect(before).toBeGreaterThan(0);
 
-    // `select` here for the same reason as on the findUnique below, and
-    // added when the case the note predicted actually happened: a `User`
-    // column from a later migration (`signInProvider`, ugcportal-mzr) is a
-    // column this database does not have, and an unscoped delete asks for
-    // every scalar the CURRENT client knows about. The note called this out
-    // for `Media` and fixed only that one; `User` was its sibling.
+    // `select` here for the same reason as on the findUnique below: an
+    // unscoped delete asks for every scalar the CURRENT client knows about,
+    // and this database deliberately stops short of the later migrations.
+    // The note below called that out for `Media` and scoped only that one;
+    // `User` was its sibling, and ugcportal-mzr briefly made the sibling
+    // bite — its first draft put a `signInProvider` column on `User`, which
+    // broke this test. That column now lives on `Session` instead (see
+    // prisma/schema.prisma), so nothing in `User` requires this today; it
+    // stays because the next column added to `User` would need it again,
+    // and because a test that fails for an unrelated schema change is how
+    // this was found in the first place.
     await prisma.user.delete({
       where: { id: "owner-1" },
       select: { id: true },

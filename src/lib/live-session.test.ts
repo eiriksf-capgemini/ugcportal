@@ -28,9 +28,14 @@ import { pinEnvironment } from "@/lib/test-support/env";
 
 const database = createTemporaryDatabase();
 const { prisma } = await import("@/lib/prisma");
-const { enforceLiveSessionPolicy, recordSignInIdentity } = await import(
-  "@/lib/live-session"
-);
+const {
+  enforceLiveSessionPolicy,
+  rememberSignInIdentity,
+  settleRevocations,
+  withSessionIdentity,
+  withSignInIdentity,
+} = await import("@/lib/live-session");
+const { PrismaAdapter } = await import("@auth/prisma-adapter");
 
 const LISTED = "owner@example.com";
 const OTHER = "owner.second@example.com";
@@ -101,11 +106,18 @@ function callbackSession(row: SeededSession): Session {
   } as unknown as Session;
 }
 
-function enforce(row: SeededSession, userEmail: string | null = LISTED) {
-  return enforceLiveSessionPolicy(callbackSession(row), {
+async function enforce(row: SeededSession, userEmail: string | null = LISTED) {
+  const result = await enforceLiveSessionPolicy(callbackSession(row), {
     id: USER_ID,
     email: userEmail,
   });
+  // The revocation is deliberately NOT awaited by the request (PR #91
+  // review, round 2, finding 6), so these tests wait for what a request
+  // does not. That the request really does not wait is asserted in
+  // src/lib/live-session.failures.test.ts, where the delete can be held
+  // open.
+  await settleRevocations();
+  return result;
 }
 
 function liveSessionIds(): Promise<string[]> {
@@ -191,6 +203,7 @@ describe("a session whose permission has been revoked (K1)", () => {
       id: USER_ID,
       email: LISTED,
     });
+    await settleRevocations();
 
     expect(result.expires).toBe(session.expires);
     expect(result).not.toHaveProperty("sessionToken");
@@ -249,6 +262,24 @@ describe("a session whose permission has been revoked (K1)", () => {
     });
 
     expect((await enforce(first)).user?.id).toBe(USER_ID);
+  });
+
+  it("falls back to the user row for a blank recorded address too", async () => {
+    // `""` is not something this app writes — `authorisedEmail` collapses
+    // blanks to null — but a direct SQL fix-up or a future backfill could,
+    // and a blank treated as PRESENT lands on `no-email`, a refusal that by
+    // design never deletes the row. The session would be refused forever,
+    // with a perfectly good address on the user row (PR #91 review, round 2,
+    // finding 5).
+    const [first] = await signedIn({
+      sessions: [{ provider: "google", email: "   " }],
+    });
+
+    expect((await enforce(first, LISTED)).user?.id).toBe(USER_ID);
+    // And the fallback really is what answered: remove the user row's
+    // address from the list and the same fixture is refused.
+    process.env[PERMITTED_EMAILS_VAR] = OTHER;
+    expect((await enforce(first, LISTED)).user).toBeUndefined();
   });
 
   it("falls back to the user row for a session minted before the column existed", async () => {
@@ -372,105 +403,204 @@ describe("a session row that cannot be identified is refused, not mass-deleted",
       id: USER_ID,
       email: LISTED,
     });
+    await settleRevocations();
 
     expect(result.user).toBeUndefined();
     expect(await liveSessionIds()).toEqual(["session-0", "session-1"]);
   });
 });
 
-describe("recordSignInIdentity (what makes the per-session check possible)", () => {
-  it("stamps the session that has no identity yet", async () => {
-    await signedIn({
-      sessions: [{ provider: "google" }, { provider: null, email: null }],
-    });
+/**
+ * How the identity gets onto the row in the first place (PR #91 review,
+ * round 2, finding 1).
+ *
+ * The real adapter, the real store, the real wrapper, and a real database —
+ * because the claim is about what a concurrent INSERT writes, which is
+ * precisely what a mock cannot tell you.
+ */
+describe("recording the identity that minted a session", () => {
+  const adapter = withSessionIdentity(PrismaAdapter(prisma));
 
-    await recordSignInIdentity({
-      user: { id: USER_ID, email: LISTED },
-      account: { provider: "facebook" },
-      profile: { email: OTHER },
-    });
+  /**
+   * One sign-in, shaped like the request Auth.js makes: the handler is
+   * wrapped (so the request has its own slot), the gate's decision is
+   * remembered, and only then is the session row created — with a turn of
+   * the event loop in between, which is where a second sign-in gets to
+   * interleave.
+   */
+  const handlers = withSignInIdentity({
+    POST: async (signIn: {
+      provider: string;
+      email: string;
+      token: string;
+      id: string;
+    }) => {
+      rememberSignInIdentity({
+        user: { email: signIn.email },
+        account: { provider: signIn.provider },
+        profile: { email: signIn.email },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await adapter.createSession?.({
+        sessionToken: signIn.token,
+        userId: USER_ID,
+        expires: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+      });
+    },
+  });
 
-    const rows = await prisma.session.findMany({
+  function identities() {
+    return prisma.session.findMany({
       where: { userId: USER_ID },
-      orderBy: { id: "asc" },
+      orderBy: { sessionToken: "asc" },
+      select: { sessionToken: true, signInProvider: true, signInEmail: true },
+    });
+  }
+
+  it("writes the provider and the asserted address in the row's own insert", async () => {
+    await prisma.user.create({ data: { id: USER_ID, email: LISTED } });
+
+    await handlers.POST({
+      provider: "google",
+      // The address the GATE judged, which `authorisedEmail` takes from the
+      // profile — not the one stored on the user row.
+      email: OTHER,
+      token: "token-google",
+      id: "ignored",
+    });
+
+    await expect(identities()).resolves.toEqual([
+      {
+        sessionToken: "token-google",
+        signInProvider: "google",
+        signInEmail: OTHER,
+      },
+    ]);
+  });
+
+  it("gives each of two concurrent sign-ins its own identity", async () => {
+    // THE CASE THE LOOKUP GOT WRONG. Two sign-ins by one person inside the
+    // same window — two tabs, or the two providers ugcportal-t33p makes
+    // ordinary — used to be attributed by finding "the newest session with
+    // no identity yet", which both of them match. One row got the other's
+    // provider and one got none, and with a bound entry that is a permitted
+    // session refused as `wrong-provider` and deleted on its next request.
+    //
+    // Interleaved on purpose: each handler remembers, yields, then inserts,
+    // so both slots are live at once. There is no ordering here that makes
+    // a shared slot look right.
+    await prisma.user.create({ data: { id: USER_ID, email: LISTED } });
+
+    await Promise.all([
+      handlers.POST({
+        provider: "google",
+        email: LISTED,
+        token: "token-a-google",
+        id: "a",
+      }),
+      handlers.POST({
+        provider: "facebook",
+        email: OTHER,
+        token: "token-b-facebook",
+        id: "b",
+      }),
+    ]);
+
+    await expect(identities()).resolves.toEqual([
+      {
+        sessionToken: "token-a-google",
+        signInProvider: "google",
+        signInEmail: LISTED,
+      },
+      {
+        sessionToken: "token-b-facebook",
+        signInProvider: "facebook",
+        signInEmail: OTHER,
+      },
+    ]);
+  });
+
+  it("and each of those sessions is then judged on its own identity", async () => {
+    // The reason the attribution matters, asserted end to end rather than
+    // left to the reader: with both entries bound, both sessions are
+    // permitted; drop one entry and only its own session is refused.
+    process.env[PERMITTED_EMAILS_VAR] = `google:${LISTED}, facebook:${OTHER}`;
+    await prisma.user.create({ data: { id: USER_ID, email: LISTED } });
+    await Promise.all([
+      handlers.POST({
+        provider: "google",
+        email: LISTED,
+        token: "token-a-google",
+        id: "a",
+      }),
+      handlers.POST({
+        provider: "facebook",
+        email: OTHER,
+        token: "token-b-facebook",
+        id: "b",
+      }),
+    ]);
+    const rows = await prisma.session.findMany({
+      orderBy: { sessionToken: "asc" },
       select: { id: true, signInProvider: true, signInEmail: true },
     });
-    // The already-stamped session is untouched; the new one gets the
-    // identity this sign-in asserted.
-    expect(rows[0]).toMatchObject({
-      signInProvider: "google",
-      signInEmail: LISTED,
-    });
-    expect(rows[1]).toMatchObject({
-      signInProvider: "facebook",
-      signInEmail: OTHER,
-    });
+
+    for (const row of rows) {
+      expect((await enforce(row)).user?.id).toBe(USER_ID);
+    }
+
+    process.env[PERMITTED_EMAILS_VAR] = `facebook:${OTHER}`;
+    expect((await enforce(rows[0])).user).toBeUndefined();
+    expect((await enforce(rows[1])).user?.id).toBe(USER_ID);
   });
 
-  it("records the address the gate judged, not the one on the user row", async () => {
-    // `authorisedEmail` prefers the address the provider asserted in THIS
-    // exchange; that is the string the sign-in was permitted on, so it is
-    // the string the session must be re-judged on.
-    await signedIn({ sessions: [{ provider: null, email: null }] });
+  it("records nothing outside a wrapped request, and fails closed on it", async () => {
+    // No store, no slot: `rememberSignInIdentity` is a no-op and the insert
+    // writes null, which a bound entry refuses. The alternative — a module
+    // -level mutable default — is the shared-state bug this design exists to
+    // avoid, so "nothing happens" is the right answer.
+    await prisma.user.create({ data: { id: USER_ID, email: LISTED } });
 
-    await recordSignInIdentity({
-      user: { id: USER_ID, email: LISTED },
+    rememberSignInIdentity({
+      user: { email: LISTED },
       account: { provider: "google" },
-      profile: { email: OTHER },
+    });
+    await adapter.createSession?.({
+      sessionToken: "token-unwrapped",
+      userId: USER_ID,
+      expires: new Date(Date.now() + 1000),
     });
 
-    expect(
-      (await prisma.session.findUnique({ where: { id: "session-0" } }))
-        ?.signInEmail,
-    ).toBe(OTHER);
+    await expect(identities()).resolves.toEqual([
+      {
+        sessionToken: "token-unwrapped",
+        signInProvider: null,
+        signInEmail: null,
+      },
+    ]);
   });
 
-  it("leaves everything alone, quietly, when there is nothing to record", async () => {
-    await signedIn({ sessions: [{ provider: null, email: null }] });
-    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+  it("leaves the columns null when the sign-in asserts no usable provider", async () => {
+    await prisma.user.create({ data: { id: USER_ID, email: LISTED } });
 
-    await recordSignInIdentity({ user: { id: USER_ID }, account: null });
-    await recordSignInIdentity({ user: { id: USER_ID } });
-    // An empty string is the one that would actually REACH the column if
-    // the guard only checked the type.
-    await recordSignInIdentity({
-      user: { id: USER_ID },
-      account: { provider: "" },
+    const unwritable = withSignInIdentity({
+      POST: async (provider: unknown) => {
+        rememberSignInIdentity({ user: { email: LISTED }, account: { provider } });
+        await adapter.createSession?.({
+          sessionToken: `token-${String(provider)}`,
+          userId: USER_ID,
+          expires: new Date(Date.now() + 1000),
+        });
+      },
     });
-    await recordSignInIdentity({ user: {}, account: { provider: "google" } });
-    // And nothing is LOGGED either, which is what separates "declined to
-    // write" from "tried to write and the driver refused": handing Prisma a
-    // non-string for a `String?` column throws, and the throw is swallowed,
-    // so the column would look identical from the outside.
-    await recordSignInIdentity({
-      user: { id: USER_ID },
-      account: { provider: 42 },
+    for (const provider of [null, undefined, "", 42]) {
+      await unwritable.POST(provider);
+    }
+
+    const rows = await prisma.session.findMany({
+      select: { signInProvider: true },
     });
-
-    expect(
-      (await prisma.session.findUnique({ where: { id: "session-0" } }))
-        ?.signInProvider,
-    ).toBeNull();
-    expect(error).not.toHaveBeenCalled();
-  });
-
-  it("says so when there is no unrecorded session to attribute", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    await signedIn({ sessions: [{ provider: "google" }] });
-
-    await recordSignInIdentity({
-      user: { id: USER_ID },
-      account: { provider: "facebook" },
-    });
-
-    expect(warn).toHaveBeenCalledTimes(1);
-    expect(String(warn.mock.calls[0][0])).toContain(
-      "No unrecorded session row",
-    );
-    // And it changed nothing, rather than stamping some other device's row.
-    expect(
-      (await prisma.session.findUnique({ where: { id: "session-0" } }))
-        ?.signInProvider,
-    ).toBe("google");
+    expect(rows).toHaveLength(4);
+    expect(rows.every((row) => row.signInProvider === null)).toBe(true);
   });
 });

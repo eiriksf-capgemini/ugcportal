@@ -45,7 +45,9 @@ vi.mock("next-auth", () => ({ default: nextAuthMock }));
 vi.mock("@/lib/prisma", () => ({
   prisma: {
     media: { create: vi.fn(), findMany: vi.fn(), findFirst: vi.fn() },
-    session: { deleteMany, findMany: vi.fn(), updateMany: vi.fn() },
+    // `create` is here because \@/lib/auth wraps the Prisma adapter at import
+    // time; no test in this file mints a session, so it is never called.
+    session: { deleteMany, create: vi.fn() },
   },
 }));
 

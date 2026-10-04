@@ -151,15 +151,24 @@ How it works, in one line each:
   sign in to notice.
 - **The unit is one session, not one person.** Each session carries the
   identity that minted it — `Session.signInProvider` and
-  `Session.signInEmail`, written by the `signIn` event — and is judged on
-  that alone; the same person's other sessions are judged, separately and
-  identically, on their own next request. So revoking somebody does end
-  every session they hold, one request each, while a change that only
-  affects one of their identities leaves the others alone. Recording this
-  per *user* instead would mean a sign-in on one device could get a
-  still-permitted session on another device refused and deleted — which is
-  exactly what `ugcportal-t33p` (identity linking) is about to make
-  ordinary.
+  `Session.signInEmail` — and is judged on that alone; the same person's
+  other sessions are judged, separately and identically, on their own next
+  request. So revoking somebody does end every session they hold, one
+  request each, while a change that only affects one of their identities
+  leaves the others alone. Recording this per *user* instead would mean a
+  sign-in on one device could get a still-permitted session on another
+  device refused and deleted — which is exactly what `ugcportal-t33p`
+  (identity linking) is about to make ordinary.
+- **The identity is written by the insert that creates the session.** The
+  `signIn` callback puts what it just judged — provider and address — into
+  an `AsyncLocalStorage` slot belonging to that request, and the adapter
+  wrapper in [`src/lib/live-session.ts`](../src/lib/live-session.ts) reads
+  it in `createSession`. Deliberately not a write afterwards: the Auth.js
+  `signIn` event is never told which session row it is about, and two
+  sign-ins by one person in the same moment (two tabs, or two providers)
+  leave two indistinguishable unattributed rows. Anything that picks "the
+  newest unattributed one" can label the wrong one, which is a permitted
+  session refused as `wrong-provider` and deleted on its next request.
 - Provider binding is honoured here too: rebinding an entry from
   `google:a@b.com` to `facebook:a@b.com` revokes the sessions minted through
   Google and leaves the Facebook ones. The columns are a denormalisation —

@@ -307,6 +307,23 @@ export type PermittedIdentities = {
    * visitor, two very different server-log lines.
    */
   configured: boolean;
+  /**
+   * The entries for one address, in first-seen order. Empty for an address
+   * nobody listed.
+   *
+   * A lookup, not a scan (PR #91 review, round 2, finding 8). The decision
+   * below runs on every authenticated request since ugcportal-mzr, and it
+   * only ever wants the entries for ONE address; filtering the whole list
+   * each time made the per-request cost scale with how many people the
+   * operator has listed, when the parse had already visited every entry and
+   * could index them for free.
+   *
+   * A function over a closed-over `Map` rather than an exposed `Map` field,
+   * because this object is memoised and shared: `Object.freeze` does not
+   * stop `map.set`, so a reachable Map would be a hole in exactly the
+   * protection the freeze exists for.
+   */
+  entriesFor(email: string): readonly PermittedEntry[];
 };
 
 /**
@@ -385,6 +402,17 @@ export function permittedIdentities(
     }
   }
   const parsed = Array.from(byKey.values());
+  // The same entries, indexed by the thing every decision looks them up by.
+  // Built here because this loop has already touched all of them.
+  const byEmail = new Map<string, PermittedEntry[]>();
+  for (const entry of parsed) {
+    const forEmail = byEmail.get(entry.email);
+    if (forEmail) {
+      forEmail.push(entry);
+    } else {
+      byEmail.set(entry.email, [entry]);
+    }
+  }
   // Derived, not tracked: the distinct addresses across the parsed entries,
   // in first-seen order.
   const emails = Array.from(new Set(parsed.map((entry) => entry.email)));
@@ -400,10 +428,14 @@ export function permittedIdentities(
     emails: Object.freeze(emails) as string[],
     malformed: Object.freeze(Array.from(malformed)) as string[],
     configured: entries.length > 0,
+    entriesFor: (email: string) => byEmail.get(email) ?? NO_ENTRIES,
   });
   cachedIdentities = { raw, rawBootstrap, value };
   return value;
 }
+
+/** The answer for an address nobody listed. One array, never written to. */
+const NO_ENTRIES: readonly PermittedEntry[] = Object.freeze([]);
 
 /**
  * The one parse kept across calls, keyed by the exact strings it was made
@@ -605,6 +637,12 @@ export type LiveSessionIdentity = {
  *    one permitted. The refusal stays in `SignInRefusal` because the gate
  *    can still return it; src/lib/live-session.ts says the same thing where
  *    it classifies which refusals destroy a row.
+ *
+ * The `email` on a permitted answer is inert here: `SignInDecision` is the
+ * shared shape, and this function's only caller reads `permitted` and
+ * `reason` and nothing else. It is carried rather than stripped because a
+ * narrower return type at this one boundary would be a second decision type
+ * to keep in step with the first, for no caller's benefit.
  */
 export function decideLiveSession(
   identity: LiveSessionIdentity,
@@ -664,7 +702,7 @@ function evaluateSignIn(
   if (!identities.configured) {
     return refuse("no-configuration");
   }
-  const listed = identities.entries.filter((entry) => entry.email === email);
+  const listed = identities.entriesFor(email);
   if (listed.length === 0) {
     return refuse("not-permitted");
   }

@@ -465,7 +465,18 @@ describe("decideSignIn binds an entry to its provider", () => {
       emails: [GOOGLE_ONLY, FACEBOOK_ONLY],
       malformed: [],
       configured: true,
+      // The by-address index built during the parse (PR #91 review, round
+      // 2, finding 8). Asserted as part of the shape rather than ignored,
+      // so dropping it is a failure here rather than a silent return to
+      // scanning the array.
+      entriesFor: expect.any(Function),
     });
+    expect(permittedIdentities(bound).entriesFor(GOOGLE_ONLY)).toEqual([
+      { email: GOOGLE_ONLY, provider: "google" },
+    ]);
+    expect(permittedIdentities(bound).entriesFor("nobody@example.com")).toEqual(
+      [],
+    );
   });
 
   it("permits each address through the provider it is bound to", () => {
