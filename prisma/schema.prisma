@@ -4,8 +4,15 @@
 // Get a free hosted Postgres database in seconds: `npx create-db`
 
 generator client {
-  provider = "prisma-client"
-  output   = "../src/generated/prisma"
+  provider        = "prisma-client"
+  output          = "../src/generated/prisma"
+  // Enables the partial-index `where:` argument on `@@index`, used below on
+  // Media's public-feed index (ugcportal-ei7). Verified against Prisma 7.10
+  // to be real and not preview-flagged drift: with this on, `prisma migrate
+  // diff` emits exactly the intended `CREATE INDEX ... WHERE ...` DDL and
+  // nothing else changes for any other model. See the index comment in the
+  // Media model for the measurement this enabled.
+  previewFeatures = ["partialIndexes"]
 }
 
 datasource db {
@@ -211,17 +218,49 @@ model Media {
   // because GET /api/public/media is unauthenticated, so the work is reachable
   // without an account, and because the plan above looks clean and hides it.
   //
-  // The fix is a partial index. Contrary to what is often assumed, Prisma 7.10
+  // RESOLVED (ugcportal-ei7): the fix above was a partial index. Prisma 7.10
   // *can* express one for sqlite — `@@index([createdAt, id], where: raw(...))`
-  // behind `previewFeatures = ["partialIndexes"]` — and `migrate diff` then
-  // emits the intended `CREATE INDEX ... WHERE ...` with no drift. Verified
-  // 2026-09-24; see ugcportal-ei7 for the exact commands and output. It is not
-  // done here because turning on a preview feature changes generator config for
-  // the whole schema, which is its own decision with its own blast radius, not
-  // a rider on a publish-state PR.
+  // behind `previewFeatures = ["partialIndexes"]` (generator block, above) —
+  // and `migrate diff` emits exactly the intended `CREATE INDEX ... WHERE ...`
+  // with no drift: same index name, so the migration is a plain DROP+CREATE
+  // of this one index rather than two indexes doing the same job.
   //
-  // Tracked as ugcportal-ei7 (perf/media, discovered from ugcportal-r1d).
-  @@index([createdAt, id])
+  // The WHERE clause mirrors the public feed's own filter exactly (PUBLIC_
+  // MEDIA_SCOPE in src/lib/public-media.ts) — publishedAt, previewKey AND
+  // previewId all IS NOT NULL. All three, not just the two measured in the
+  // original scratch test (ugcportal-ei7's notes), because a mismatch between
+  // the index's predicate and the feed's would not break correctness — SQLite
+  // still re-checks every predicate in the `where` against the row before
+  // emitting it, partial index or not — but it would silently defeat the
+  // point of this change: a row that qualifies for the feed but not for the
+  // index's narrower WHERE falls back to a full-table scan to find it, right
+  // back to the cost this index exists to remove. K3 in the bead is this
+  // exact failure mode, guarded by a migration test that asserts the index's
+  // WHERE clause by reading sqlite_master directly, not by trusting this
+  // comment.
+  //
+  // Re-measured 2026-10-04 on SQLite 3, 200,000 Media rows / 1% published,
+  // first page of 50 (scratch seed, same method as the original ugcportal-ei7
+  // note — not re-run in CI, since a seed that size has no place in the test
+  // suite; src/lib/media-public-feed-index-migration.test.ts instead asserts
+  // the index's WHERE clause and the feed's correctness on every run, which
+  // is what would actually regress silently if this drifted):
+  //   BEFORE (plain @@index([createdAt, id])):
+  //     EXPLAIN QUERY PLAN: "SCAN Media USING INDEX Media_createdAt_id_idx"
+  //     avg over 20 runs: ~0.6-0.7ms.
+  //   AFTER (this partial index, same name since it replaces the old one):
+  //     EXPLAIN QUERY PLAN text is IDENTICAL — SQLite's plan summary names the
+  //     index, not its row count, so the improvement does not show up as
+  //     different plan text. It shows up as a different `sqlite_master`
+  //     definition (the index now carries the `WHERE ...` clause — assert
+  //     this directly, not the plan string, which is exactly what the
+  //     migration test does) and as wall time: avg over 20 runs ~0.11-0.12ms,
+  //     roughly 5-6x faster at this row count. The old index's cost scales
+  //     with total Media rows walked before 50 published ones turn up — at a
+  //     steady 1% publish rate that is roughly 100x more index entries than
+  //     the new index needs to hold, so the gap widens, not narrows, as the
+  //     table grows past this scratch size.
+  @@index([createdAt, id], where: raw("publishedAt IS NOT NULL AND previewKey IS NOT NULL AND previewId IS NOT NULL"))
 }
 
 // One subject tag (ugcportal-jsc). A TABLE rather than an enum, deliberately:
