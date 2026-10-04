@@ -307,36 +307,36 @@ Accessories are not alcohol, so you can promote and earn from them. Two parts of
 ---
 
 ## Sources
-183	
-184	**Norwegian authorities**
-185	
-186	- [Helsedirektoratet – § 9-2 Reklame for alkoholholdig drikk (commentary)](https://www.helsedirektoratet.no/rundskriv/alkoholloven/kapittel-9-reklameforbud/-9-2.reklame-for-alkoholholdig-drikk)
-187	- [Helsedirektoratet – Forbud mot alkoholreklame](https://www.helsedirektoratet.no/lov-og-forskrift/alkoholloven/forbud-mot-alkoholreklame)
-188	- [EUCAM – Norway: It will now hurt to advertise alcohol on social media (2024)](https://eucam.info/2024/09/27/norway-it-will-now-hurt-to-advertise-alcohol-on-social-media/)
-189	- [NHOMD – Prohibition of alcohol advertising in Norway (PDF)](https://www.nhomd.no/contentassets/2903e65252854beda11b61c0e8d41a2d/prohibition-of-alcohol-advertising-in-norway--0918.pdf)
-190	- [Forbrukertilsynet – Veileder for merking av reklame i sosiale medier](https://www.forbrukertilsynet.no/lov-og-rett/veiledninger-og-retningslinjer/someveiledning)
-191	- [Forbrukertilsynet – Ofte stilte spørsmål om reklame i sosiale medier](https://www.forbrukertilsynet.no/vi-jobber-med/reklame-i-sosiale-medier/ofte-stilte-sporsmal-om-reklame-i-sosiale-medier)
-192	- [Skatteetaten – Blogging and social media](https://www.skatteetaten.no/en/person/taxes/get-the-taxes-right/employment-benefits-and-pensions/hobby-odd-jobs-and-extra-income/blogging/)
-193	- [Skatteetaten – Inntekt fra aktivitet på internett](https://www.skatteetaten.no/bedrift-og-organisasjon/skatt/skattemelding-naringsdrivende/fradrag/digitale-plattformer-delingsokonomi/inntekt-fra-aktivitet-pa-internett/)
-194	- [Datatilsynet – Nye cookie-regler fra 1. januar](https://www.datatilsynet.no/aktuelt/aktuelle-nyheter-2024/nye-cookie-regler-fra-1.-januar/)
-195	- [Nkom – Informasjonskapsler/cookies](https://nkom.no/internett/informasjonskapsler-cookies)
-196	- [Regjeringen – Lov om digitale tjenester sendes på høring (DSA)](https://www.regjeringen.no/no/aktuelt/tryggere-internett-lov-om-digitale-tjenester-sendes-na-pa-horing/id3114039/)
-197	- [Nkom – Hva er DSA?](https://nkom.no/internett/digital-service-act-dsa/hva-er-dsa)
-198	
-199	**UGC market and platforms**
-200	
-201	- [Influee – How to Become a UGC Creator in 2026](https://influee.co/blog/how-to-become-ugc-creator)
-202	- [Vizaca – How to Become a UGC Creator in 2026 (No Following Required)](https://www.vizaca.com/make-money-side-hustles/how-to-become-a-ugc-creator-in-2026-no-following-required/)
-203	- [Xolo – Become a UGC Creator: The 2026 Complete Guide](https://blog.xolo.io/become-a-ugc-creator-the-complete-guide)
-204	- [InfluenceFlow – UGC Creator Rate Card 2026](https://influenceflow.io/resources/ugc-creator-rate-card-the-complete-2026-guide-to-pricing-your-content/)
-205	- [DesignRevision – UGC Creator Pricing in 2026](https://designrevision.com/blog/ugc-creator-pricing)
-206	- [Fourthwall – Best UGC Platforms for Creators in 2026](https://fourthwall.com/blog/best-ugc-platforms-for-creators)
-207	- [30DayPivot – Best UGC Platforms for Beginners](https://30daypivot.com/ugc_creator_spoke_platforms)
-208	
-209	**Affiliate and copyright (Norway)**
-210	
-211	- [AffiliateProgrammer.no – Beste norske affiliate-nettverkene](https://www.affiliateprogrammer.no/guider/beste-norske-affiliate-nettverkene)
-212	- [AffiliateProgrammer.no – Adtraction Norge](https://www.affiliateprogrammer.no/nettverk/adtraction)
-213	- [Capitalize – Affiliate marketing Norge 2026](https://capitalize.no/blogg/affiliate-nettverk/)
-214	- [NDLA – Åndsverklov og opphavsrett](https://ndla.no/en/r/media-and-information-knowledge-1/andsverklov-og-opphavsrett/a9433dc3fd)
-215	- [Advokatguiden – Regler om bildetyveri på nett](https://blogg.advokatguiden.no/dette-er-reglene-om-bildetyveri-pa-nett/)
+
+**Norwegian authorities**
+
+- [Helsedirektoratet – § 9-2 Reklame for alkoholholdig drikk (commentary)](https://www.helsedirektoratet.no/rundskriv/alkoholloven/kapittel-9-reklameforbud/-9-2.reklame-for-alkoholholdig-drikk)
+- [Helsedirektoratet – Forbud mot alkoholreklame](https://www.helsedirektoratet.no/lov-og-forskrift/alkoholloven/forbud-mot-alkoholreklame)
+- [EUCAM – Norway: It will now hurt to advertise alcohol on social media (2024)](https://eucam.info/2024/09/27/norway-it-will-now-hurt-to-advertise-alcohol-on-social-media/)
+- [NHOMD – Prohibition of alcohol advertising in Norway (PDF)](https://www.nhomd.no/contentassets/2903e65252854beda11b61c0e8d41a2d/prohibition-of-alcohol-advertising-in-norway--0918.pdf)
+- [Forbrukertilsynet – Veileder for merking av reklame i sosiale medier](https://www.forbrukertilsynet.no/lov-og-rett/veiledninger-og-retningslinjer/someveiledning)
+- [Forbrukertilsynet – Ofte stilte spørsmål om reklame i sosiale medier](https://www.forbrukertilsynet.no/vi-jobber-med/reklame-i-sosiale-medier/ofte-stilte-sporsmal-om-reklame-i-sosiale-medier)
+- [Skatteetaten – Blogging and social media](https://www.skatteetaten.no/en/person/taxes/get-the-taxes-right/employment-benefits-and-pensions/hobby-odd-jobs-and-extra-income/blogging/)
+- [Skatteetaten – Inntekt fra aktivitet på internett](https://www.skatteetaten.no/bedrift-og-organisasjon/skatt/skattemelding-naringsdrivende/fradrag/digitale-plattformer-delingsokonomi/inntekt-fra-aktivitet-pa-internett/)
+- [Datatilsynet – Nye cookie-regler fra 1. januar](https://www.datatilsynet.no/aktuelt/aktuelle-nyheter-2024/nye-cookie-regler-fra-1.-januar/)
+- [Nkom – Informasjonskapsler/cookies](https://nkom.no/internett/informasjonskapsler-cookies)
+- [Regjeringen – Lov om digitale tjenester sendes på høring (DSA)](https://www.regjeringen.no/no/aktuelt/tryggere-internett-lov-om-digitale-tjenester-sendes-na-pa-horing/id3114039/)
+- [Nkom – Hva er DSA?](https://nkom.no/internett/digital-service-act-dsa/hva-er-dsa)
+
+**UGC market and platforms**
+
+- [Influee – How to Become a UGC Creator in 2026](https://influee.co/blog/how-to-become-ugc-creator)
+- [Vizaca – How to Become a UGC Creator in 2026 (No Following Required)](https://www.vizaca.com/make-money-side-hustles/how-to-become-a-ugc-creator-in-2026-no-following-required/)
+- [Xolo – Become a UGC Creator: The 2026 Complete Guide](https://blog.xolo.io/become-a-ugc-creator-the-complete-guide)
+- [InfluenceFlow – UGC Creator Rate Card 2026](https://influenceflow.io/resources/ugc-creator-rate-card-the-complete-2026-guide-to-pricing-your-content/)
+- [DesignRevision – UGC Creator Pricing in 2026](https://designrevision.com/blog/ugc-creator-pricing)
+- [Fourthwall – Best UGC Platforms for Creators in 2026](https://fourthwall.com/blog/best-ugc-platforms-for-creators)
+- [30DayPivot – Best UGC Platforms for Beginners](https://30daypivot.com/ugc_creator_spoke_platforms)
+
+**Affiliate and copyright (Norway)**
+
+- [AffiliateProgrammer.no – Beste norske affiliate-nettverkene](https://www.affiliateprogrammer.no/guider/beste-norske-affiliate-nettverkene)
+- [AffiliateProgrammer.no – Adtraction Norge](https://www.affiliateprogrammer.no/nettverk/adtraction)
+- [Capitalize – Affiliate marketing Norge 2026](https://capitalize.no/blogg/affiliate-nettverk/)
+- [NDLA – Åndsverklov og opphavsrett](https://ndla.no/en/r/media-and-information-knowledge-1/andsverklov-og-opphavsrett/a9433dc3fd)
+- [Advokatguiden – Regler om bildetyveri på nett](https://blogg.advokatguiden.no/dette-er-reglene-om-bildetyveri-pa-nett/)
