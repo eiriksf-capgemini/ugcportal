@@ -843,6 +843,62 @@ describe("POST /api/media", () => {
     );
     errorSpy.mockRestore();
   });
+
+  /**
+   * Round-4 review finding (MEDIUM): an earlier version routed this line
+   * through a throttle whose deferred flush replayed whichever `log()`
+   * call's closure happened to schedule it — so when BOTH the original's
+   * and the preview's cleanup deletes failed (storedKeys always has at most
+   * these two), the second one's key name and cause were silently never
+   * logged anywhere. The fix (this PR) is to not throttle this line at all:
+   * orphaned keys are distinct and rare, and each one is the only record of
+   * an object that needs manual cleanup.
+   */
+  it("logs each distinct orphaned key separately when cleanup fails for more than one (round-4 finding)", async () => {
+    authMock.mockResolvedValue({ user: { id: "user-1" } });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    let deleteCount = 0;
+    s3SendMock.mockImplementation(async (command) => {
+      if (command instanceof DeleteObjectCommand) {
+        deleteCount += 1;
+        // Distinct errors, not the same one twice, so the two log calls
+        // below are also distinguishable by `cause`, not only by `key`.
+        throw new Error(`delete denied #${deleteCount}`);
+      }
+      return {};
+    });
+    mediaCreateMock.mockRejectedValue(new Error("db down"));
+    const file = new File([REAL_PNG], "photo.png", { type: "image/png" });
+
+    await expect(POST(buildRequest(file))).rejects.toThrow("db down");
+
+    const puts = s3SendMock.mock.calls
+      .map((call) => call[0])
+      .filter((c): c is PutObjectCommand => c instanceof PutObjectCommand);
+    expect(puts).toHaveLength(2); // the original and the preview both stored
+    const storedObjectKeys = puts.map((p) => p.input.Key);
+    expect(storedObjectKeys[0]).not.toBe(storedObjectKeys[1]);
+
+    const cleanupFailureCalls = errorSpy.mock.calls.filter(
+      (call) => call[0] === "[media] failed to clean up orphaned object",
+    );
+    // Both keys, not just one — the whole point of this test.
+    expect(cleanupFailureCalls).toHaveLength(2);
+    const loggedKeys = cleanupFailureCalls
+      .map((call) => (call[1] as { key?: unknown }).key)
+      .sort();
+    expect(loggedKeys).toEqual([...storedObjectKeys].sort());
+
+    errorSpy.mockRestore();
+
+    // Mutation check (round-4, per the coordinator's instruction): with the
+    // per-key console.error above replaced by a stand-in that only ever logs
+    // the FIRST catch to run and silently drops any later one — the exact
+    // shape of the original shared-closure-flush bug, reduced to its
+    // observable effect — `cleanupFailureCalls` drops to length 1 and this
+    // test fails. Confirmed by hand, then restored to the unconditional
+    // per-key logging above.
+  });
 });
 
 /**
@@ -1226,13 +1282,17 @@ describe("POST /api/media — object storage unreachable (ugcportal-1b2c)", () =
 
       // The window elapses with nothing further happening: the scheduled
       // flush reports the one occurrence the throttle swallowed, with no
-      // third request needed to trigger it.
+      // third request needed to trigger it. A deliberately DIFFERENT,
+      // payload-free message (round-4 review finding): the flush never
+      // carries a particular request's operation/code/attempts/message/
+      // cause, only a count — see createThrottledLog's own doc comment for
+      // why reusing the first request's closure here was the bug.
       await vi.advanceTimersByTimeAsync(10_000);
       expect(errorSpy).toHaveBeenCalledTimes(2);
       expect(errorSpy).toHaveBeenNthCalledWith(
         2,
-        "[media] object storage unreachable",
-        expect.objectContaining({ suppressed: 1 }),
+        "[media] object storage unreachable (additional occurrences suppressed)",
+        { suppressed: 1 },
       );
     } finally {
       vi.useRealTimers();

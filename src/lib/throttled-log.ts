@@ -23,6 +23,29 @@
  * whichever bead happens to add the third caller. That migration, if ever
  * done, is its own piece of work with `watermark.concurrency.test.ts` as its
  * regression baseline — not a drive-by part of this one.
+ *
+ * THE FLUSH PATH IS PAYLOAD-FREE, AND THAT IS NOT A STYLE CHOICE (round-4
+ * review finding, MEDIUM). An earlier version of this module let `log()`'s
+ * caller-supplied `emit` closure double as the flush callback too: whichever
+ * call happened to be the one that scheduled the pending timer had ITS
+ * closure invoked later, by the timer, with the final suppressed count.
+ * That is silently wrong the moment two different calls in the same window
+ * close over different per-occurrence data (a key name, a cause) rather than
+ * reading from shared outer state the way `watermark.ts`'s `gate?.stats()` or
+ * `public-media.ts`'s per-process counters do — `src/app/api/media/route.ts`'s
+ * cleanup-failure line did exactly that, closing over `storedKey` and
+ * `cleanupError` per call, and lost the second of two distinct orphaned
+ * keys' name and cause when both landed in the same throttle window: the
+ * flush faithfully reported the FIRST suppressed call's closure, and the
+ * second one's payload was never logged anywhere, recoverable or not.
+ *
+ * The fix is structural, not a caller discipline: `onFlush` is bound once,
+ * at `createThrottledLog` call time, and only ever receives a count — there
+ * is no per-call closure for a flush to accidentally pick up, so this
+ * mistake is not representable here again. A caller that genuinely needs
+ * every suppressed occurrence's own payload preserved needs a different
+ * design (a bounded buffer of pending payloads, flushed as a batch) — this
+ * module deliberately does not attempt that; it only ever reports a count.
  */
 
 export type ThrottledLogOptions = {
@@ -30,13 +53,13 @@ export type ThrottledLogOptions = {
   intervalMs: number;
   /**
    * Also guarantee the tail of a quiet burst is reported even if nothing
-   * else happens to trigger it — a scheduled timer flushes any suppressed
-   * count once the window elapses. See `watermark.ts`'s own `flushShedLog`
-   * doc comment for why this matters for a signal worth paging on: without
-   * it, a burst that sheds once more right at the edge of the window and
-   * then goes quiet has its count sit uncounted forever, because the only
-   * thing that would have flushed it is a *next* occurrence that never
-   * comes.
+   * else happens to trigger it — a scheduled timer calls `onFlush` with any
+   * suppressed count once the window elapses. See `watermark.ts`'s own
+   * `flushShedLog` doc comment for why this matters for a signal worth
+   * paging on: without it, a burst that sheds once more right at the edge
+   * of the window and then goes quiet has its count sit uncounted forever,
+   * because the only thing that would have flushed it is a *next*
+   * occurrence that never comes.
    *
    * Leave this off (the default, matching `public-media.ts`'s copy) for a
    * failure that is a nuisance-input signal rather than a capacity one, where
@@ -44,6 +67,18 @@ export type ThrottledLogOptions = {
    * accepted, smaller version of the same cost.
    */
   flush?: boolean;
+  /**
+   * Called with a suppressed count once a scheduled flush actually fires.
+   * Required when `flush` is true (a flush-enabled instance with no
+   * `onFlush` simply has nothing to report the tail with); unused
+   * otherwise.
+   *
+   * Deliberately `(suppressed: number) => void` and nothing richer — see
+   * this module's own top-of-file doc comment for why a flush must never
+   * carry per-occurrence data. Bound once, here, rather than accepted again
+   * per `log()` call.
+   */
+  onFlush?: (suppressed: number) => void;
 };
 
 export type ThrottledLog = {
@@ -53,9 +88,10 @@ export type ThrottledLog = {
    * If this call is outside the throttle window (the first call ever, or
    * the first since the window last elapsed), `emit` runs now, with the
    * count of occurrences the window swallowed since the last real line (0
-   * the common case). Otherwise this occurrence is only counted — `emit`
-   * does not run now, though a flush-enabled instance may still run it
-   * later from a scheduled timer.
+   * the common case). Otherwise this occurrence is only counted — neither
+   * `emit` nor `onFlush` runs now; `onFlush` may still run later, from a
+   * scheduled timer, on a flush-enabled instance, but never with this
+   * particular call's closure — see `onFlush` above.
    */
   log(emit: (suppressedSinceLastLine: number) => void): void;
   /**
@@ -72,7 +108,7 @@ export type ThrottledLog = {
    * health check, say) becomes the clock the throttle resets on, rather
    * than a caller asking it a question.
    */
-  flushNow(emit: (suppressed: number) => void): void;
+  flushNow(): void;
   /** Test-only: back to a fresh, never-logged state. */
   reset(): void;
 };
@@ -80,6 +116,7 @@ export type ThrottledLog = {
 export function createThrottledLog({
   intervalMs,
   flush: flushEnabled = false,
+  onFlush,
 }: ThrottledLogOptions): ThrottledLog {
   let lastAt = 0;
   let suppressed = 0;
@@ -92,32 +129,32 @@ export function createThrottledLog({
     }
   }
 
-  function scheduleFlush(emit: (suppressed: number) => void): void {
+  function scheduleFlush(): void {
     if (flushTimer) return;
     const delay = Math.max(0, intervalMs - (Date.now() - lastAt));
     flushTimer = setTimeout(() => {
       flushTimer = undefined;
-      flushNow(emit);
+      flushNow();
     }, delay);
     // Never hold the event loop open just to report a count.
     flushTimer.unref?.();
   }
 
-  function flushNow(emit: (suppressed: number) => void): void {
+  function flushNow(): void {
     if (!flushEnabled) return;
     if (suppressed === 0) {
       clearFlushTimer();
       return;
     }
     if (Date.now() - lastAt < intervalMs) {
-      scheduleFlush(emit);
+      scheduleFlush();
       return;
     }
     clearFlushTimer();
     const count = suppressed;
     suppressed = 0;
     lastAt = Date.now();
-    emit(count);
+    onFlush?.(count);
   }
 
   return {
@@ -131,7 +168,7 @@ export function createThrottledLog({
       // not by anything this function asserts.
       if (lastAt !== 0 && now - lastAt < intervalMs) {
         suppressed += 1;
-        if (flushEnabled) scheduleFlush(emit);
+        if (flushEnabled) scheduleFlush();
         return;
       }
       const count = suppressed;

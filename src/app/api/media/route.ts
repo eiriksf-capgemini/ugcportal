@@ -59,44 +59,54 @@ function sanitizeFilename(name: string): string {
 }
 
 /**
- * Shortest interval between "object storage unreachable" log lines, and
- * separately between "failed to clean up orphaned object" ones — each gets
- * its own independent throttle instance below, since a storage outage during
- * a burst of uploads would otherwise produce one line of each PER REQUEST
- * (round-3 review finding 5, the same volume problem `watermark.ts`'s
- * `SHED_LOG_INTERVAL_MS` exists to solve for the busy-503 path, ugcportal-e86
- * — this is the storage-unreachable 503's sibling case, and had no such
- * throttle until now).
+ * Shortest interval between "object storage unreachable" log lines — a
+ * storage outage during a burst of uploads would otherwise produce one line
+ * PER REQUEST (round-3 review finding 5, the same volume problem
+ * `watermark.ts`'s `SHED_LOG_INTERVAL_MS` exists to solve for the busy-503
+ * path, ugcportal-e86 — this is the storage-unreachable 503's sibling case).
  *
- * `flush: true` on both: an outage is exactly the kind of capacity/service
- * signal `createThrottledLog`'s doc comment says that option is for — losing
- * the tail of an outage burst (how many uploads actually failed, not just
- * that one did) is a real cost here, the same way it would be for a shed.
+ * `flush: true`: an outage is exactly the kind of capacity/service signal
+ * `createThrottledLog`'s doc comment says that option is for — losing the
+ * tail of an outage burst (how many uploads actually failed, not just that
+ * one did) is a real cost here, the same way it would be for a shed. The
+ * flush itself only ever reports a COUNT (`onFlush` below), never any
+ * per-request detail — see `createThrottledLog`'s own doc comment for why
+ * that is load-bearing, not a simplification: round-4 review found that an
+ * earlier version let the flush report whichever request's closure happened
+ * to schedule it, silently dropping every other suppressed request's detail.
+ *
+ * NOT applied to the per-key "failed to clean up orphaned object" line in
+ * `cleanupStoredKeys` below (round-4 finding, option (a) of the two offered):
+ * orphaned keys are distinct and rare — nowhere near the volume a per-upload
+ * busy-503 or a storage-unreachable classification can produce — and each
+ * one is itself the only record of which object needs manual cleanup, so
+ * throttling it trades a log-volume problem this line does not have for a
+ * real chance of losing the one piece of information that line exists to
+ * preserve.
  */
 const OBJECT_STORAGE_UNREACHABLE_LOG_INTERVAL_MS = 10_000;
 
 const objectStorageUnreachableLog = createThrottledLog({
   intervalMs: OBJECT_STORAGE_UNREACHABLE_LOG_INTERVAL_MS,
   flush: true,
-});
-
-const cleanupFailureLog = createThrottledLog({
-  intervalMs: OBJECT_STORAGE_UNREACHABLE_LOG_INTERVAL_MS,
-  flush: true,
+  onFlush: (suppressed) => {
+    console.error("[media] object storage unreachable (additional occurrences suppressed)", {
+      suppressed,
+    });
+  },
 });
 
 /**
- * Test-only: both throttles above are module-level state, so a test file
- * that triggers either log line more than once (likely, across many `it`
- * blocks in the same process) needs to reset them between tests — otherwise
- * every assertion past the first would be looking for a line the throttle
- * correctly, and silently, swallowed. Mirrors the same reset-export pattern
- * `resetWatermarkConcurrencyGate`/`resetUploadMemoryBudget` already use in
- * this codebase.
+ * Test-only: the throttle above is module-level state, so a test file that
+ * triggers the storage-unreachable log line more than once (likely, across
+ * many `it` blocks in the same process) needs to reset it between tests —
+ * otherwise every assertion past the first would be looking for a line the
+ * throttle correctly, and silently, swallowed. Mirrors the same reset-export
+ * pattern `resetWatermarkConcurrencyGate`/`resetUploadMemoryBudget` already
+ * use in this codebase.
  */
 export function resetObjectStorageUnreachableLogThrottles(): void {
   objectStorageUnreachableLog.reset();
-  cleanupFailureLog.reset();
 }
 
 /**
@@ -115,6 +125,12 @@ export function resetObjectStorageUnreachableLogThrottles(): void {
  * `ObjectStorageUnreachableError` rather than a bare SDK error — not because
  * this function branches on it (it still logs and swallows either way), but
  * so the shape is consistent for whatever a caller's log line inspects.
+ *
+ * NOT throttled, deliberately (round-4 review finding) — see the doc comment
+ * on `OBJECT_STORAGE_UNREACHABLE_LOG_INTERVAL_MS` above. Every key that
+ * failed to clean up is logged, every time: there are at most two per
+ * request (the original and the preview), and each one names an object nothing
+ * else will ever point back to.
  */
 async function cleanupStoredKeys(storedKeys: readonly string[]): Promise<void> {
   await Promise.all(
@@ -127,12 +143,9 @@ async function cleanupStoredKeys(storedKeys: readonly string[]): Promise<void> {
           }),
         ),
       ).catch((cleanupError) => {
-        cleanupFailureLog.log((suppressed) => {
-          console.error("[media] failed to clean up orphaned object", {
-            key: storedKey,
-            cause: cleanupError,
-            ...(suppressed > 0 ? { suppressed } : {}),
-          });
+        console.error("[media] failed to clean up orphaned object", {
+          key: storedKey,
+          cause: cleanupError,
         });
       }),
     ),

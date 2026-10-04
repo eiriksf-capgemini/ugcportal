@@ -65,8 +65,13 @@ describe("createThrottledLog", () => {
   });
 
   describe("flush: true", () => {
-    it("schedules a flush that reports a suppressed tail even if nothing else happens", () => {
-      const throttle = createThrottledLog({ intervalMs: 10_000, flush: true });
+    it("schedules a flush that reports a suppressed count even if nothing else happens", () => {
+      const onFlush = vi.fn();
+      const throttle = createThrottledLog({
+        intervalMs: 10_000,
+        flush: true,
+        onFlush,
+      });
       const emit = vi.fn();
 
       throttle.log(emit); // logs immediately
@@ -74,41 +79,94 @@ describe("createThrottledLog", () => {
       throttle.log(emit); // suppressed
 
       expect(emit).toHaveBeenCalledTimes(1);
+      expect(onFlush).not.toHaveBeenCalled();
 
       vi.advanceTimersByTime(10_000);
 
-      expect(emit).toHaveBeenCalledTimes(2);
-      expect(emit).toHaveBeenNthCalledWith(2, 2);
+      expect(onFlush).toHaveBeenCalledTimes(1);
+      expect(onFlush).toHaveBeenCalledWith(2);
     });
 
     it("never fires a flush when nothing was suppressed", () => {
-      const throttle = createThrottledLog({ intervalMs: 10_000, flush: true });
+      const onFlush = vi.fn();
+      const throttle = createThrottledLog({
+        intervalMs: 10_000,
+        flush: true,
+        onFlush,
+      });
       const emit = vi.fn();
 
       throttle.log(emit); // logs immediately, nothing queued behind it
 
       vi.advanceTimersByTime(60_000);
 
-      expect(emit).toHaveBeenCalledTimes(1);
+      expect(onFlush).not.toHaveBeenCalled();
     });
 
     it("flushNow respects the window even when called directly, rather than resetting the clock", () => {
       // Matches watermark.ts's flushShedLog guard: a caller polling this
       // faster than intervalMs must not be able to force an early line.
-      const throttle = createThrottledLog({ intervalMs: 10_000, flush: true });
+      const onFlush = vi.fn();
+      const throttle = createThrottledLog({
+        intervalMs: 10_000,
+        flush: true,
+        onFlush,
+      });
       const emit = vi.fn();
 
       throttle.log(emit); // logs immediately
       throttle.log(emit); // suppressed
 
       vi.advanceTimersByTime(5_000); // still inside the window
-      throttle.flushNow(emit);
-      expect(emit).toHaveBeenCalledTimes(1); // not yet — too soon
+      throttle.flushNow();
+      expect(onFlush).not.toHaveBeenCalled(); // not yet — too soon
 
       vi.advanceTimersByTime(5_000); // window now elapsed
-      throttle.flushNow(emit);
-      expect(emit).toHaveBeenCalledTimes(2);
-      expect(emit).toHaveBeenNthCalledWith(2, 1);
+      throttle.flushNow();
+      expect(onFlush).toHaveBeenCalledTimes(1);
+      expect(onFlush).toHaveBeenCalledWith(1);
+    });
+
+    /**
+     * Round-4 review finding (MEDIUM): a flush used to be wired to whichever
+     * `emit` closure the `log()` call that scheduled the pending timer had
+     * passed in — so if different calls in the same window closed over
+     * different per-occurrence data (a key name, a cause — exactly what
+     * src/app/api/media/route.ts's cleanup-failure log used to do), only
+     * the FIRST suppressed call's data survived into the flush; everything
+     * about the second (and any later) suppressed call was never logged
+     * anywhere, recoverable or not.
+     *
+     * This test proves the fix structurally rather than by re-running the
+     * same scenario and hoping: `onFlush` is bound once, at creation, and
+     * genuinely has no way to receive per-`log()`-call data — there is no
+     * closure parameter on it at all, only a count. Passing THREE calls
+     * with visibly different closures (each would push a different string
+     * onto `seen` if it were ever invoked) and asserting none of them ever
+     * ran is the closest a test can get to proving a whole class of bug is
+     * unrepresentable, rather than merely absent from the cases tried.
+     */
+    it("never invokes a log() call's own emit closure from a flush, however many different ones were suppressed", () => {
+      const onFlush = vi.fn();
+      const throttle = createThrottledLog({
+        intervalMs: 10_000,
+        flush: true,
+        onFlush,
+      });
+      const seen: string[] = [];
+
+      throttle.log(() => seen.push("first")); // logs immediately
+      throttle.log(() => seen.push("second")); // suppressed
+      throttle.log(() => seen.push("third")); // suppressed
+
+      vi.advanceTimersByTime(10_000);
+
+      // Only the FIRST call's own emit ever actually ran (the one that
+      // logged immediately) — "second" and "third" must never appear,
+      // because nothing in this design ever calls a `log()` call's emit
+      // from the flush path.
+      expect(seen).toEqual(["first"]);
+      expect(onFlush).toHaveBeenCalledWith(2);
     });
   });
 
@@ -129,15 +187,16 @@ describe("createThrottledLog", () => {
     });
 
     it("flushNow is a no-op", () => {
-      const throttle = createThrottledLog({ intervalMs: 10_000 });
+      const onFlush = vi.fn();
+      const throttle = createThrottledLog({ intervalMs: 10_000, onFlush });
       const emit = vi.fn();
 
       throttle.log(emit);
       throttle.log(emit);
       vi.advanceTimersByTime(10_000);
-      throttle.flushNow(emit);
+      throttle.flushNow();
 
-      expect(emit).toHaveBeenCalledTimes(1);
+      expect(onFlush).not.toHaveBeenCalled();
     });
   });
 
