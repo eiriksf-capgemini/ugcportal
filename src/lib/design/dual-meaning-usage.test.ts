@@ -177,6 +177,38 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
   },
   "src/components/gallery/containment.ts": { "text-muted-foreground": 2 },
   "src/components/auth-status.tsx": { "text-muted-foreground": 1 },
+
+  /*
+   * ugcportal-qnq9.7: the public About and Portfolio pages, and the shared
+   * sections they're built from. Every entry below renders directly on the
+   * page canvas (--background) — none of these sit inside a --card/
+   * --popover/--muted/--accent/--secondary/--destructive-surface/--sidebar
+   * fill or any src/components/gallery/containment.ts well, which is the one
+   * condition that would need text-ink/text-ink-muted instead (see this
+   * file's header comment). `src/app/about/page.tsx` and
+   * `src/app/portfolio/page.tsx` each carry one `text-foreground` on their
+   * own `<h1>`; /portfolio additionally renders IntroSection once more than
+   * /about's own `text-muted-foreground` paragraph count because its
+   * "Samples" `<h2>` and, when nothing is curated yet, its empty-state
+   * `<p>` both use these tokens directly in the page file itself rather
+   * than through a shared section component.
+   */
+  "src/app/about/page.tsx": { "text-foreground": 1 },
+  "src/app/portfolio/page.tsx": {
+    "text-foreground": 2,
+    "text-muted-foreground": 1,
+  },
+  "src/components/portfolio/portfolio-tile.tsx": { "text-foreground": 2 },
+  "src/components/site/contact-section.tsx": {
+    "text-foreground": 1,
+    "text-muted-foreground": 3,
+    "text-primary": 2,
+  },
+  "src/components/site/intro-section.tsx": { "text-muted-foreground": 1 },
+  "src/components/site/what-we-offer-section.tsx": {
+    "text-foreground": 2,
+    "text-muted-foreground": 1,
+  },
 };
 
 describe("dual-meaning token usage is audited, not just found", () => {

@@ -19,6 +19,20 @@ export const UPLOAD_PATH = "/upload";
 export const MEDIA_UPLOAD_PATH = "/api/media";
 
 /**
+ * The public about and portfolio pages (ugcportal-qnq9.7). English route
+ * names, matching the Decisions table's language rule — unlike
+ * ugcportal-qnq9.4's /personvern and /lisens, which keep their Norwegian
+ * names despite English content (see that bead's own title).
+ *
+ * `ABOUT_PATH` is also the header's link target (ugcportal-14k9, concurrent
+ * with this bead) — named here so that bead imports the same constant
+ * rather than a hand-typed "/about" that could drift from this route if it
+ * were ever renamed.
+ */
+export const ABOUT_PATH = "/about";
+export const PORTFOLIO_PATH = "/portfolio";
+
+/**
  * The multipart field POST /api/media reads the subject tags out of
  * (ugcportal-jsc), named here because the browser writes it and the route
  * reads it and a field name spelled twice is one that eventually differs —
