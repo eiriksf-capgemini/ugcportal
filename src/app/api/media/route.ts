@@ -29,8 +29,14 @@ import {
   MEDIA_CAPTION_FIELD,
   MEDIA_TAGS_FIELD,
 } from "@/lib/routes";
-import { getBucketName, getS3Client } from "@/lib/s3";
+import {
+  ObjectStorageUnreachableError,
+  getBucketName,
+  getS3Client,
+  sendWithTransportClassification,
+} from "@/lib/s3";
 import { parseTagNames, resolveTagRows } from "@/lib/tags";
+import { createThrottledLog } from "@/lib/throttled-log";
 import type { UploadReservation } from "@/lib/upload-memory";
 import {
   UploadMemoryExhaustedError,
@@ -50,6 +56,100 @@ import {
 
 function sanitizeFilename(name: string): string {
   return name.replace(/[^a-zA-Z0-9._-]/g, "_").slice(-100);
+}
+
+/**
+ * Shortest interval between "object storage unreachable" log lines — a
+ * storage outage during a burst of uploads would otherwise produce one line
+ * PER REQUEST (round-3 review finding 5, the same volume problem
+ * `watermark.ts`'s `SHED_LOG_INTERVAL_MS` exists to solve for the busy-503
+ * path, ugcportal-e86 — this is the storage-unreachable 503's sibling case).
+ *
+ * `flush: true`: an outage is exactly the kind of capacity/service signal
+ * `createThrottledLog`'s doc comment says that option is for — losing the
+ * tail of an outage burst (how many uploads actually failed, not just that
+ * one did) is a real cost here, the same way it would be for a shed. The
+ * flush itself only ever reports a COUNT (`onFlush` below), never any
+ * per-request detail — see `createThrottledLog`'s own doc comment for why
+ * that is load-bearing, not a simplification: round-4 review found that an
+ * earlier version let the flush report whichever request's closure happened
+ * to schedule it, silently dropping every other suppressed request's detail.
+ *
+ * NOT applied to the per-key "failed to clean up orphaned object" line in
+ * `cleanupStoredKeys` below (round-4 finding, option (a) of the two offered):
+ * orphaned keys are distinct and rare — nowhere near the volume a per-upload
+ * busy-503 or a storage-unreachable classification can produce — and each
+ * one is itself the only record of which object needs manual cleanup, so
+ * throttling it trades a log-volume problem this line does not have for a
+ * real chance of losing the one piece of information that line exists to
+ * preserve.
+ */
+const OBJECT_STORAGE_UNREACHABLE_LOG_INTERVAL_MS = 10_000;
+
+const objectStorageUnreachableLog = createThrottledLog({
+  intervalMs: OBJECT_STORAGE_UNREACHABLE_LOG_INTERVAL_MS,
+  flush: true,
+  onFlush: (suppressed) => {
+    console.error("[media] object storage unreachable (additional occurrences suppressed)", {
+      suppressed,
+    });
+  },
+});
+
+/**
+ * Test-only: the throttle above is module-level state, so a test file that
+ * triggers the storage-unreachable log line more than once (likely, across
+ * many `it` blocks in the same process) needs to reset it between tests —
+ * otherwise every assertion past the first would be looking for a line the
+ * throttle correctly, and silently, swallowed. Mirrors the same reset-export
+ * pattern `resetWatermarkConcurrencyGate`/`resetUploadMemoryBudget` already
+ * use in this codebase.
+ */
+export function resetObjectStorageUnreachableLogThrottles(): void {
+  objectStorageUnreachableLog.reset();
+}
+
+/**
+ * Best-effort compensation so a failed preview upload, a DB hiccup, or a
+ * storage outage doesn't leave untracked objects sitting in the bucket
+ * forever. Failures here are swallowed — the caller's own error (or 503) is
+ * the one worth propagating — but they are logged, not discarded: a
+ * compensation that is quietly failing every time leaks storage indefinitely
+ * with nothing to notice it by. Expected to fail on every key in the
+ * storage-unreachable path: if PutObject could not reach the bucket, this
+ * DeleteObject cannot either, and that failure is itself worth the same log
+ * line rather than a silently swallowed promise.
+ *
+ * Wrapped through `sendWithTransportClassification` (operation `"cleanup"`)
+ * like the two PutObjects below, so a transport failure here is also a typed
+ * `ObjectStorageUnreachableError` rather than a bare SDK error — not because
+ * this function branches on it (it still logs and swallows either way), but
+ * so the shape is consistent for whatever a caller's log line inspects.
+ *
+ * NOT throttled, deliberately (round-4 review finding) — see the doc comment
+ * on `OBJECT_STORAGE_UNREACHABLE_LOG_INTERVAL_MS` above. Every key that
+ * failed to clean up is logged, every time: there are at most two per
+ * request (the original and the preview), and each one names an object nothing
+ * else will ever point back to.
+ */
+async function cleanupStoredKeys(storedKeys: readonly string[]): Promise<void> {
+  await Promise.all(
+    storedKeys.map((storedKey) =>
+      sendWithTransportClassification("cleanup", () =>
+        getS3Client().send(
+          new DeleteObjectCommand({
+            Bucket: getBucketName(),
+            Key: storedKey,
+          }),
+        ),
+      ).catch((cleanupError) => {
+        console.error("[media] failed to clean up orphaned object", {
+          key: storedKey,
+          cause: cleanupError,
+        });
+      }),
+    ),
+  );
 }
 
 // The response projections moved to src/lib/media-access.ts when PATCH
@@ -493,24 +593,28 @@ async function handleUpload(
   const storedKeys: string[] = [];
 
   try {
-    await getS3Client().send(
-      new PutObjectCommand({
-        Bucket: getBucketName(),
-        Key: key,
-        Body: buffer,
-        ContentType: file.type,
-      }),
+    await sendWithTransportClassification("original", () =>
+      getS3Client().send(
+        new PutObjectCommand({
+          Bucket: getBucketName(),
+          Key: key,
+          Body: buffer,
+          ContentType: file.type,
+        }),
+      ),
     );
     storedKeys.push(key);
 
     if (preview && previewKey) {
-      await getS3Client().send(
-        new PutObjectCommand({
-          Bucket: getBucketName(),
-          Key: previewKey,
-          Body: preview.data,
-          ContentType: PREVIEW_CONTENT_TYPE,
-        }),
+      await sendWithTransportClassification("preview", () =>
+        getS3Client().send(
+          new PutObjectCommand({
+            Bucket: getBucketName(),
+            Key: previewKey,
+            Body: preview.data,
+            ContentType: PREVIEW_CONTENT_TYPE,
+          }),
+        ),
       );
       storedKeys.push(previewKey);
     }
@@ -570,28 +674,67 @@ async function handleUpload(
 
     return NextResponse.json(media, { status: 201 });
   } catch (error) {
+    if (error instanceof ObjectStorageUnreachableError) {
+      // A storage outage (ugcportal-1b2c) — MinIO/S3 unreachable, not
+      // anything about this upload — so it is answered deliberately rather
+      // than as the bare, stack-trace-bearing 500 an unhandled SDK rejection
+      // produced before this. `error` can only ever be this type because
+      // `sendWithTransportClassification` (src/lib/s3.ts) classifies at the
+      // source, around the S3 send itself — a DB/libSQL error from the
+      // `prisma.$transaction` call a few lines up can never land here no
+      // matter what `code` it happens to carry (round-1 finding 1).
+      //
+      // The client gets a stable, machine-readable `reason` plus a message
+      // that names neither the endpoint nor the bucket; the operator gets
+      // which operation failed, the transport code, the SDK's own retry
+      // count, the underlying message, and — via `cause` — the stack
+      // (round-2 finding 2: the fields above are the quick-scan summary, but
+      // without the error object itself, console.error has nothing to print
+      // a stack trace from, and "object storage unreachable" with no stack
+      // is a harder outage to debug than it needs to be).
+      //
+      // Throttled (round-3 finding 5): an outage can affect every upload in
+      // flight, and without this a request-per-second burst would log a
+      // line per request for the one thing already true of all of them. See
+      // src/lib/throttled-log.ts.
+      const unreachableError = error;
+      objectStorageUnreachableLog.log((suppressed) => {
+        console.error("[media] object storage unreachable", {
+          operation: unreachableError.operation,
+          code: unreachableError.code,
+          attempts: unreachableError.attempts,
+          message: unreachableError.message,
+          cause: unreachableError,
+          ...(suppressed > 0 ? { suppressed } : {}),
+        });
+      });
+      // Whatever already landed in the bucket (the original, and/or the
+      // preview) before the failing call must not be left orphaned. If
+      // storage is genuinely unreachable this DeleteObject will fail too —
+      // cleanupStoredKeys logs that rather than masking it or throwing.
+      await cleanupStoredKeys(storedKeys);
+      return NextResponse.json(
+        {
+          error:
+            "Object storage is temporarily unavailable. Please try again shortly.",
+          // Machine-readable, and stable: src/app/upload/outcomes.ts reads
+          // this to tell this 503 apart from the "too many uploads" shed
+          // 503 (ugcportal-u7g/e86), which carries no such field. Both
+          // reach the client as the same HTTP status, but they mean
+          // different things and must not collapse into the same sentence
+          // (round-1 finding 2).
+          reason: "object_storage_unavailable",
+        },
+        { status: 503 },
+      );
+    }
+
     // Best-effort compensation so a failed preview upload or DB hiccup doesn't
     // leave untracked objects sitting in the bucket forever. Failures here are
     // swallowed because the original error is the one worth propagating — but
     // they are logged, not discarded: a compensation that is quietly failing
     // every time leaks storage indefinitely with nothing to notice it by.
-    await Promise.all(
-      storedKeys.map((storedKey) =>
-        getS3Client()
-          .send(
-            new DeleteObjectCommand({
-              Bucket: getBucketName(),
-              Key: storedKey,
-            }),
-          )
-          .catch((cleanupError) => {
-            console.error("[media] failed to clean up orphaned object", {
-              key: storedKey,
-              cause: cleanupError,
-            });
-          }),
-      ),
-    );
+    await cleanupStoredKeys(storedKeys);
     throw error;
   }
 }
