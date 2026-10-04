@@ -1,7 +1,13 @@
 "use client";
 
 import type PhotoSwipeLightbox from "photoswipe/lightbox";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  type RefObject,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 
 import {
   GALLERY_CAPTION_CLASS,
@@ -168,6 +174,38 @@ export function Gallery({
    */
   const tornDown = useRef(false);
 
+  /**
+   * Where keyboard focus goes once "Load more" vanishes (ugcportal-jx4 K2).
+   *
+   * `{hasMore ? <Button/> : null}` unmounts the very element that was just
+   * activated, and React does not move focus anywhere when that happens —
+   * it falls to `<body>`, and the next Tab restarts the page at the skip
+   * link. The paging status line (`GalleryPaging`'s polite live region,
+   * already announcing "Showing all N photographs.") is a sensible,
+   * always-present landing spot — UNLIKE the button, it is never
+   * conditionally rendered, so `pagingStatusRef.current` is already the
+   * final element by the time `loadMore` can act on it below, with no need
+   * to wait for a later render the way the button's own ref would.
+   *
+   * `tabIndex={-1}` on that paragraph (below, in `GalleryPaging`) is what
+   * makes it a valid `.focus()` target without adding it to the Tab order.
+   */
+  const pagingStatusRef = useRef<HTMLParagraphElement>(null);
+
+  /**
+   * The "Load more" / "Try again" button itself, so `loadMore` can tell
+   * whether the visitor was still on it before moving focus elsewhere
+   * (ugcportal-jx4 round-2 review finding).
+   *
+   * Without this, the focus handoff below fired unconditionally whenever a
+   * page turned out to be the last one — including when the visitor had
+   * already tabbed away to something else entirely while the request was
+   * in flight, in which case yanking focus to the status line is exactly
+   * the kind of surprise a focus-management fix is supposed to prevent,
+   * not cause.
+   */
+  const loadMoreButtonRef = useRef<HTMLButtonElement>(null);
+
   useEffect(() => {
     /*
      * Reset on mount as well as set on unmount. React's StrictMode mounts,
@@ -296,10 +334,57 @@ export function Gallery({
       }
       const payload: unknown = await response.json();
       const page = readListingPage(payload);
+      const nextHasMore = page.hasMore && page.nextCursor !== null;
       setItems((current) => appendGalleryItems(current, page.items));
       setCursor(page.nextCursor);
-      setHasMore(page.hasMore && page.nextCursor !== null);
+      setHasMore(nextHasMore);
       setLoadState("idle");
+      if (!nextHasMore) {
+        /*
+         * The button this click is on is about to unmount (`{hasMore ? ...
+         * : null}` below) — but only chase it with focus if the visitor is
+         * actually still ON IT right now (ugcportal-jx4 round-2/4 review
+         * findings). Checked synchronously here, before this function
+         * returns and React gets a chance to commit the re-render that
+         * removes the button: nothing else runs between the state updates
+         * above and this line, so `document.activeElement` still reflects
+         * whatever the visitor's last actual action left it as — including
+         * a Tab elsewhere while this request was in flight, which must be
+         * left alone rather than overridden.
+         *
+         * No `=== document.body` branch (round-4 review finding; an earlier
+         * version had one, reasoning it meant "the button already
+         * unmounted"). That reasoning doesn't hold AT THIS POINT: nothing
+         * has unmounted yet, this check runs strictly before the state
+         * updates above are committed — so `activeElement === body` here
+         * means only "nothing was ever focused in the first place", which
+         * is the ordinary case for a plain mouse click (Safari does not
+         * focus a button on click, and neither does jsdom's synthetic
+         * click here). Treating that as "move focus" would hand a mouse
+         * visitor who never asked for keyboard focus an unrequested focus
+         * ring on the status line.
+         *
+         * WHAT MATTERS IS THAT NOTHING AWAITS BETWEEN THE STATE UPDATES
+         * ABOVE AND THIS CHECK — the same shape as `tornDown` and
+         * `activations` further up this file, and the same reason it
+         * matters: a guard is only as good as the span it actually covers.
+         * `setHasMore`/`setLoadState` above are synchronous calls that
+         * QUEUE a re-render; they do not commit one. If a future edit put
+         * an `await` anywhere between them and `document.activeElement`
+         * here — logging, another fetch, anything — React could commit
+         * that re-render in the gap, the button could actually unmount, and
+         * `loadMoreButtonRef.current` would already read `null` by the time
+         * this line ran: the guard would silently stop recognising the
+         * visitor who was genuinely still on the button, for a reason
+         * entirely unrelated to where their focus was. A guard that reads
+         * correct in isolation but sits on the wrong side of an `await` is
+         * exactly the failure shape those two comments warn about, not a
+         * new one.
+         */
+        if (document.activeElement === loadMoreButtonRef.current) {
+          pagingStatusRef.current?.focus();
+        }
+      }
     } catch {
       // Deliberately keeps `cursor` and `hasMore` as they were, so the retry
       // asks for the same page rather than silently skipping it.
@@ -407,6 +492,8 @@ export function Gallery({
         loadState={loadState}
         viewerFailed={viewerFailed}
         count={items.length}
+        statusRef={pagingStatusRef}
+        buttonRef={loadMoreButtonRef}
         onLoadMore={() => {
           void loadMore();
         }}
@@ -550,12 +637,16 @@ function GalleryPaging({
   loadState,
   viewerFailed,
   count,
+  statusRef,
+  buttonRef,
   onLoadMore,
 }: {
   hasMore: boolean;
   loadState: LoadState;
   viewerFailed: boolean;
   count: number;
+  statusRef: RefObject<HTMLParagraphElement | null>;
+  buttonRef: RefObject<HTMLButtonElement | null>;
   onLoadMore: () => void;
 }) {
   return (
@@ -570,15 +661,65 @@ function GalleryPaging({
           ? "Could not open the viewer. The photograph itself is fine — reload the page and try again."
           : ""}
       </p>
-      <p aria-live="polite" className="text-sm text-muted-foreground">
+      {/*
+        `tabIndex={-1}` and `ref={statusRef}` (ugcportal-jx4 K2): not in the
+        Tab order, but a valid `.focus()` target, so `Gallery` can hand focus
+        here once the "Load more" button it was on has unmounted. Still an
+        ordinary polite live region otherwise — the ref does not change what
+        it announces, only that it can also be focused deliberately.
+
+        `outline-hidden` + an explicit `focus:ring` (round-1 review finding,
+        ugcportal-jx4), not `outline-none` alone. `outline-none` drops the
+        outline unconditionally, including the forced-colors fallback outline
+        a real browser substitutes when every other outline is suppressed —
+        `outline-hidden` is this repo's existing idiom for keeping that
+        fallback (see src/components/app-shell.tsx's `<main>`, the skip
+        link's own programmatic-focus target). And the ring is `focus:`, not
+        `focus-visible:` like Button's own ring (src/components/ui/button.tsx)
+        — deliberately, because the input that led here is a MOUSE click on
+        "Load more", and a browser's `:focus-visible` heuristic keys off the
+        last input modality rather than off whether the focus move was
+        programmatic, so it is not reliable for a `.focus()` call that
+        follows a click. `focus:` paints the ring unconditionally whenever
+        this element is the one focused, which is exactly the case here.
+      */}
+      <p
+        aria-live="polite"
+        className="rounded-sm text-sm text-muted-foreground outline-hidden focus:ring-3 focus:ring-ring/80"
+        ref={statusRef}
+        tabIndex={-1}
+      >
         {pagingMessage(loadState, hasMore, count)}
       </p>
       {hasMore ? (
         <Button
+          ref={buttonRef}
           type="button"
           size="lg"
           variant={loadState === "error" ? "outline" : "default"}
+          /*
+            `disabled` + `focusableWhenDisabled` (ugcportal-jx4 K1/K3), not
+            `disabled` alone. A plain `disabled` button is pulled out of the
+            accessibility tree AND the Tab order the instant React applies
+            it — mid-click, since this is the click handler's own state
+            update — so focus resets to <body> and the next Tab restarts at
+            the skip link. `focusableWhenDisabled` (base-ui's own escape
+            hatch for exactly this) keeps the element tabbable and renders
+            `aria-disabled="true"` instead of the native attribute, while
+            still blocking the click/keydown activation handlers that
+            `disabled` always blocked — see useButton.ts's `getButtonProps`.
+            `loadMore`'s own `loadState === "loading"` guard (K3) is kept
+            regardless, so a request that slips through some other path
+            (e.g. a form submit) still cannot double up.
+
+            No `className` override for the dimmed/non-interactive look:
+            `buttonVariants` itself pairs `aria-disabled:pointer-events-none
+            aria-disabled:opacity-50` with its existing `disabled:` pair
+            (ugcportal-jx4 round-2 review finding), so every
+            `focusableWhenDisabled` button gets this for free.
+          */
           disabled={loadState === "loading"}
+          focusableWhenDisabled
           aria-busy={loadState === "loading"}
           onClick={onLoadMore}
         >

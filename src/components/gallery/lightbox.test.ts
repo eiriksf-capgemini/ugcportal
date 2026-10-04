@@ -19,6 +19,7 @@ import {
   openGalleryViewer,
   type PixelSize,
 } from "@/components/gallery/lightbox";
+import { waitUntil } from "@/components/gallery/gallery.test-support";
 import { toGalleryItems } from "@/lib/gallery-items";
 import { mediaPreviewPath } from "@/lib/routes";
 
@@ -112,31 +113,6 @@ function openInstance(): unknown {
   return (window as unknown as { pswp?: unknown }).pswp;
 }
 
-/**
- * Waits for a condition, then fails loudly if it never arrives.
- *
- * Polling rather than a fixed sleep, for a reason specific to jsdom:
- * PhotoSwipe's open and close are CSS transitions, and jsdom never fires
- * `transitionend`, so both complete on the library's own fallback timer
- * (duration + 500ms, i.e. about 833ms at the default 333ms). A fixed wait
- * short enough to keep the suite quick would be flaky; one long enough to be
- * safe would cost seconds per test.
- *
- * The timeout throwing with a label is the point. Under the recursion bug this
- * file was written for, a close never completes — and "timed out waiting for
- * the viewer to close" names the defect, where a bare sleep would have
- * reported some unrelated assertion further down.
- */
-async function waitUntil(condition: () => boolean, what: string): Promise<void> {
-  const deadline = Date.now() + 3000;
-  while (!condition()) {
-    if (Date.now() > deadline) {
-      throw new Error(`timed out waiting for the viewer to ${what}`);
-    }
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-}
-
 async function open(index: number): Promise<PhotoSwipeLightbox> {
   // No `waitUntil` here any more, deliberately: openGalleryViewer's promise
   // now resolves when the viewer is genuinely open, so polling afterwards
@@ -151,7 +127,7 @@ async function open(index: number): Promise<PhotoSwipeLightbox> {
 
 async function close(lightbox: PhotoSwipeLightbox): Promise<void> {
   lightbox.pswp?.close();
-  await waitUntil(() => openInstance() === undefined, "close");
+  await waitUntil(() => openInstance() === undefined, "the viewer to close");
 }
 
 afterEach(async () => {

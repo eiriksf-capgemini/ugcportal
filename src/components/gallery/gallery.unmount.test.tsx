@@ -1,9 +1,14 @@
 // @vitest-environment jsdom
 import { act } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { createRoot } from "react-dom/client";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 
-import { Gallery } from "@/components/gallery/gallery";
+import {
+  setupGalleryTestRoot,
+  renderGallery,
+  unmountGallery,
+  waitUntil,
+} from "@/components/gallery/gallery.test-support";
 import { toGalleryItems } from "@/lib/gallery-items";
 
 /**
@@ -122,24 +127,21 @@ beforeAll(() => {
   })) as unknown as typeof window.matchMedia;
 });
 
-let container: HTMLElement;
-let root: Root;
+const ctx = setupGalleryTestRoot();
 
-beforeEach(() => {
-  (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT =
-    true;
-  container = document.createElement("div");
-  document.body.append(container);
-  root = createRoot(container);
-});
-
-afterEach(async () => {
-  // Unmounting an already-unmounted root is a no-op, so this is safe after the
-  // tests that unmount deliberately.
-  await act(async () => {
-    root.unmount();
-  });
-  container.remove();
+afterEach(() => {
+  /*
+   * Runs BEFORE the shared `afterEach` inside `setupGalleryTestRoot`, not
+   * after: Vitest runs same-scope `afterEach` hooks in reverse registration
+   * order (no `sequence.hooks` override in vitest.config.ts to change that),
+   * and this one is registered second. So at the point this callback runs,
+   * the root has NOT been unmounted yet and the container is still in the
+   * document — this cleanup just never reads either of those, for the
+   * PhotoSwipe-specific state below. `stale?.destroy?.()` in particular is
+   * safe to call whether or not the root has unmounted by the time it runs,
+   * since PhotoSwipe's own `destroy()` is idempotent (a no-op once `pswp` is
+   * already undefined) regardless of ordering either way.
+   */
   measurements.length = 0;
   requested.length = 0;
   (globalThis as unknown as { Image: unknown }).Image = realImage;
@@ -155,16 +157,16 @@ afterEach(async () => {
 });
 
 async function mount(): Promise<void> {
-  await act(async () => {
-    root.render(
-      <Gallery initialItems={ITEMS} initialCursor={null} initialHasMore={false} />,
-    );
+  await renderGallery(ctx.root(), {
+    initialItems: ITEMS,
+    initialCursor: null,
+    initialHasMore: false,
   });
 }
 
 /** Clicks the tile at `index`, the way a visitor does. */
 async function clickTile(index: number): Promise<void> {
-  const tiles = container.querySelectorAll<HTMLButtonElement>(
+  const tiles = ctx.container().querySelectorAll<HTMLButtonElement>(
     "button[data-gallery-tile]",
   );
   expect(tiles).toHaveLength(ITEMS.length);
@@ -174,29 +176,7 @@ async function clickTile(index: number): Promise<void> {
 }
 
 async function unmount(): Promise<void> {
-  await act(async () => {
-    root.unmount();
-  });
-}
-
-/**
- * Waits for a condition and then fails with a label naming what never came.
- *
- * Polling rather than a fixed sleep, and the same helper lightbox.test.ts has
- * for the same reason: PhotoSwipe's teardown finishes on its own timer in
- * jsdom, which never fires `transitionend`. The labelled timeout is the point —
- * under the bug this file was written for the overlay never goes away, and
- * "timed out waiting for the overlay to go away when the gallery unmounts"
- * says so directly.
- */
-async function waitUntil(condition: () => boolean, what: string): Promise<void> {
-  const deadline = Date.now() + 3000;
-  while (!condition()) {
-    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    });
-  }
+  await unmountGallery(ctx.root());
 }
 
 describe("a viewer that is open when the gallery unmounts", () => {
@@ -237,14 +217,10 @@ describe("a viewer that is open when the gallery unmounts", () => {
     document.body.append(secondContainer);
     const secondRoot = createRoot(secondContainer);
     try {
-      await act(async () => {
-        secondRoot.render(
-          <Gallery
-            initialItems={ITEMS}
-            initialCursor={null}
-            initialHasMore={false}
-          />,
-        );
+      await renderGallery(secondRoot, {
+        initialItems: ITEMS,
+        initialCursor: null,
+        initialHasMore: false,
       });
       const tile = secondContainer.querySelector<HTMLButtonElement>(
         "button[data-gallery-tile]",
@@ -260,9 +236,7 @@ describe("a viewer that is open when the gallery unmounts", () => {
       );
       expect(overlay()).not.toBeNull();
     } finally {
-      await act(async () => {
-        secondRoot.unmount();
-      });
+      await unmountGallery(secondRoot);
       secondContainer.remove();
     }
   });
