@@ -1,11 +1,35 @@
 "use client";
 
 import Link from "next/link";
-import type { ReactNode } from "react";
+import type { MouseEvent, ReactNode } from "react";
 
 import { cn } from "cn";
 
 import { HEADER_NAV_LINK_CLASS, useAriaCurrentPage } from "@/components/header-nav-link";
+
+/**
+ * True for a click that will navigate in THIS tab, right now, with nothing
+ * else about to intercept it (PR #94 review round 6, finding 4). A nav item
+ * inside the mobile panel closes the panel via `onNavigate` on click - but a
+ * Cmd/Ctrl-click, a middle-click, or a Shift/Alt-click each open the
+ * destination in a new tab or window instead, leaving the visitor still on
+ * THIS page; closing the panel for one of those is closing it out from
+ * under someone who never left. `event.button !== 0` excludes a
+ * middle-click (which also opens a new tab in most browsers) and a
+ * right-click (which opens a context menu, not a navigation).
+ * `event.defaultPrevented` excludes a click some OTHER handler already
+ * decided should not navigate at all.
+ */
+function isPlainLeftClick(event: MouseEvent<HTMLAnchorElement>): boolean {
+  return (
+    !event.defaultPrevented &&
+    event.button === 0 &&
+    !event.metaKey &&
+    !event.ctrlKey &&
+    !event.shiftKey &&
+    !event.altKey
+  );
+}
 
 /**
  * One link in the header's main navigation (Gallery, About — ugcportal-14k9).
@@ -27,6 +51,12 @@ import { HEADER_NAV_LINK_CLASS, useAriaCurrentPage } from "@/components/header-n
  * `onNavigate` is used by the mobile panel (src/components/mobile-nav-
  * toggle.tsx) to close itself the moment a link is actually activated —
  * optional and unused by the desktop nav, which has no panel to close.
+ * Only called for a plain left click (`isPlainLeftClick` above, PR #94
+ * review round 6 finding 4) - a Cmd/Ctrl/Shift/Alt-click or a middle-click
+ * opens the destination in a new tab and leaves this one open, and closing
+ * the panel out from under a visitor who never navigated away is exactly
+ * the kind of "it closed and I don't know why" bug a modifier-click is
+ * supposed to be invisible to the page handling it.
  *
  * The `aria-current` derivation and the base link class are shared with
  * src/components/upload-link.tsx via src/components/header-nav-link.ts
@@ -52,7 +82,11 @@ export function PrimaryNavLink({
     <Link
       href={href}
       aria-current={ariaCurrent}
-      onClick={onNavigate}
+      onClick={(event) => {
+        if (onNavigate && isPlainLeftClick(event)) {
+          onNavigate();
+        }
+      }}
       className={cn(
         HEADER_NAV_LINK_CLASS,
         "aria-[current=page]:text-primary aria-[current=page]:underline aria-[current=page]:underline-offset-4",

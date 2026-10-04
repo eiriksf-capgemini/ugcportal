@@ -126,17 +126,32 @@ describe("SiteHeader (ugcportal-14k9)", () => {
     );
   });
 
-  it("places the main nav and the mobile toggle between the wordmark and the auth widget", () => {
+  /**
+   * PR #94 review round 6, finding 5: this absorbs app-shell.nav.test.tsx's
+   * own former "places the nav slot between the wordmark and the auth
+   * widget" test, which checked the SAME ordering relationship but via two
+   * layers of indirection (AppShell renders `<SiteHeader />`, which is what
+   * actually produces this order) and a narrower middle element (only
+   * `UploadNavLink`'s own "Primary" landmark, not the main nav this bead
+   * added). That file no longer asserts anything about header-internal
+   * ordering at all; this is the one place it is checked now, for every
+   * landmark in the row, not just two of them.
+   */
+  it("places the main nav, the mobile toggle, and the upload link between the wordmark and the auth widget", () => {
     const markup = renderHeader();
     const wordmark = markup.indexOf(`>${EXPECTED_SITE_NAME}<`);
     const nav = markup.indexOf('aria-label="Main navigation"');
+    const uploadNav = markup.indexOf('data-testid="upload-nav-stub"');
     const auth = markup.indexOf('data-testid="auth-stub"');
 
-    expect(wordmark).toBeGreaterThan(-1);
-    expect(nav).toBeGreaterThan(-1);
-    expect(auth).toBeGreaterThan(-1);
+    expect(wordmark, "wordmark not found").toBeGreaterThan(-1);
+    expect(nav, "main nav not found").toBeGreaterThan(-1);
+    expect(uploadNav, "upload nav stub not found").toBeGreaterThan(-1);
+    expect(auth, "auth stub not found").toBeGreaterThan(-1);
+
     expect(nav).toBeGreaterThan(wordmark);
-    expect(auth).toBeGreaterThan(nav);
+    expect(uploadNav).toBeGreaterThan(nav);
+    expect(auth).toBeGreaterThan(uploadNav);
   });
 
   it("renders exactly one header landmark", () => {

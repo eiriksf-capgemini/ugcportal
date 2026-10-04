@@ -67,6 +67,16 @@ function panel(): HTMLElement | null {
  * "change" listener to. Captures that listener so the test can fire it by
  * hand, rather than trying to make jsdom's own (nonexistent) viewport
  * actually resize.
+ *
+ * `removeEventListener` only clears `matchMediaChangeListener` when the
+ * function it is PASSED is the same one that was recorded (PR #94 review
+ * round 6 finding 1): a stub that nulled the slot for ANY `"change"` removal
+ * call, regardless of which handler, would make the two "removed on
+ * close"/"removed on unmount" tests below pass even if the real component's
+ * cleanup called `removeEventListener("change", someOtherFunction)` - the
+ * exact shape of a genuinely leaked listener. Checked against a real DOM
+ * API's own contract (`removeEventListener` is a no-op unless the handler
+ * reference matches), not invented for this stub.
  */
 let matchMediaChangeListener: ((event: MediaQueryListEvent) => void) | null = null;
 
@@ -79,8 +89,10 @@ function stubMatchMedia(): void {
     addEventListener: (type: string, listener: (event: MediaQueryListEvent) => void) => {
       if (type === "change") matchMediaChangeListener = listener;
     },
-    removeEventListener: (type: string) => {
-      if (type === "change") matchMediaChangeListener = null;
+    removeEventListener: (type: string, listener: (event: MediaQueryListEvent) => void) => {
+      if (type === "change" && matchMediaChangeListener === listener) {
+        matchMediaChangeListener = null;
+      }
     },
     addListener() {},
     removeListener() {},
@@ -212,6 +224,40 @@ describe("MobileNavToggle (ugcportal-14k9)", () => {
   });
 
   /**
+   * ugcportal-14k9 PR #94 review round 6, finding 4: a Cmd/Ctrl-click (or a
+   * middle-click, or Shift/Alt-click) on a nav item opens the destination in
+   * a NEW tab, leaving the visitor still on this page with the panel they
+   * were using now closed out from under them for no reason they caused. A
+   * plain left click, with none of those modifiers, must still close it -
+   * checked against the SAME link in the SAME open panel, so this cannot
+   * pass by accident on a panel that would have stayed open (or closed)
+   * regardless of which click reached it.
+   */
+  it("a Cmd-click leaves the panel open; a plain click on the same link still closes it", () => {
+    act(() => {
+      root.render(<MobileNavToggle items={ITEMS} />);
+    });
+
+    act(() => {
+      toggleButton().click();
+    });
+    const link = panel()?.querySelector("a");
+    expect(link, "no link found in the open panel").not.toBeNull();
+
+    act(() => {
+      link?.dispatchEvent(
+        new MouseEvent("click", { bubbles: true, cancelable: true, metaKey: true }),
+      );
+    });
+    expect(panel(), "a Cmd-click closed the panel").not.toBeNull();
+
+    act(() => {
+      link?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+    expect(panel(), "a plain click did not close the panel").toBeNull();
+  });
+
+  /**
    * ugcportal-14k9 PR #94 review round 3 medium finding: the hand-rolled
    * `{open && <nav>...}` toggle this shipped with closed only on a second
    * click of the toggle button or on selecting a nav item - nothing
@@ -311,11 +357,17 @@ describe("MobileNavToggle (ugcportal-14k9)", () => {
    * ugcportal-14k9 PR #94 review round 5 finding 8: the effect's own cleanup
    * (`mediaQuery.removeEventListener("change", handleChange)`) is what
    * stops a STALE closure over an earlier `open`/`items` from firing after
-   * the panel has closed, or after this component is gone entirely - either
-   * leak would mean a later unrelated viewport resize calling `setOpen`
-   * (and, on an unmounted component, React's own "state update on an
-   * unmounted component" warning) for a popover that no longer has anything
-   * to dismiss.
+   * the panel has closed, or after this component is gone entirely. Not
+   * React's "Warning: Can't perform a state update on an unmounted
+   * component" (round 6 finding 2: that warning was removed in React 18 and
+   * this repo is on React 19 - it does not fire here or anywhere else in
+   * this codebase). The real symptom of the leak: a later, wholly unrelated
+   * viewport resize past `md` would still invoke the stale closure's
+   * `setOpen(false)` - a silent no-op while mounted (there is nothing left
+   * to dismiss), and on an unmounted component, state held by a fiber React
+   * has already discarded, neither of which a user or a test would ever
+   * observe directly. That invisibility is exactly why this is worth
+   * testing explicitly rather than trusting "nothing crashed".
    */
   it("removes the matchMedia 'change' listener when the panel closes", () => {
     act(() => {
