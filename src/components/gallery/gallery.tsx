@@ -1,7 +1,13 @@
 "use client";
 
 import type PhotoSwipeLightbox from "photoswipe/lightbox";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  type RefObject,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 
 import {
   GALLERY_CAPTION_CLASS,
@@ -168,6 +174,42 @@ export function Gallery({
    */
   const tornDown = useRef(false);
 
+  /**
+   * Where keyboard focus goes once "Load more" vanishes (ugcportal-jx4 K2).
+   *
+   * `{hasMore ? <Button/> : null}` unmounts the very element that was just
+   * activated, and React does not move focus anywhere when that happens —
+   * it falls to `<body>`, and the next Tab restarts the page at the skip
+   * link. The paging status line (`GalleryPaging`'s polite live region,
+   * already announcing "Showing all N photographs.") is a sensible,
+   * always-present landing spot, so this ref lets `loadMore` hand it focus
+   * once the button it replaces is gone.
+   *
+   * `tabIndex={-1}` on that paragraph (below, in `GalleryPaging`) is what
+   * makes it a valid `.focus()` target without adding it to the Tab order.
+   */
+  const pagingStatusRef = useRef<HTMLParagraphElement>(null);
+
+  /**
+   * Set by `loadMore` when the page it just fetched is the last one, read by
+   * the effect below once the DOM has actually caught up.
+   *
+   * Not focused directly inside `loadMore`: at the point the fetch resolves,
+   * `hasMore` is still `true` from the PREVIOUS render, so the button has not
+   * unmounted yet and `pagingStatusRef` may not even be the final element a
+   * screen reader should land on. Flagging the intent and acting on it from a
+   * `hasMore`-keyed effect means the focus call always runs after the render
+   * that actually removes the button.
+   */
+  const focusPagingStatusNext = useRef(false);
+
+  useEffect(() => {
+    if (!hasMore && focusPagingStatusNext.current) {
+      focusPagingStatusNext.current = false;
+      pagingStatusRef.current?.focus();
+    }
+  }, [hasMore]);
+
   useEffect(() => {
     /*
      * Reset on mount as well as set on unmount. React's StrictMode mounts,
@@ -296,10 +338,16 @@ export function Gallery({
       }
       const payload: unknown = await response.json();
       const page = readListingPage(payload);
+      const nextHasMore = page.hasMore && page.nextCursor !== null;
       setItems((current) => appendGalleryItems(current, page.items));
       setCursor(page.nextCursor);
-      setHasMore(page.hasMore && page.nextCursor !== null);
+      setHasMore(nextHasMore);
       setLoadState("idle");
+      // The button this click is on is about to unmount (`{hasMore ? ... :
+      // null}` below) — flag it so the effect above can move focus once that
+      // render has actually happened, rather than leaving it to fall to
+      // `<body>` (K2).
+      if (!nextHasMore) focusPagingStatusNext.current = true;
     } catch {
       // Deliberately keeps `cursor` and `hasMore` as they were, so the retry
       // asks for the same page rather than silently skipping it.
@@ -407,6 +455,7 @@ export function Gallery({
         loadState={loadState}
         viewerFailed={viewerFailed}
         count={items.length}
+        statusRef={pagingStatusRef}
         onLoadMore={() => {
           void loadMore();
         }}
@@ -550,12 +599,14 @@ function GalleryPaging({
   loadState,
   viewerFailed,
   count,
+  statusRef,
   onLoadMore,
 }: {
   hasMore: boolean;
   loadState: LoadState;
   viewerFailed: boolean;
   count: number;
+  statusRef: RefObject<HTMLParagraphElement | null>;
   onLoadMore: () => void;
 }) {
   return (
@@ -570,7 +621,19 @@ function GalleryPaging({
           ? "Could not open the viewer. The photograph itself is fine — reload the page and try again."
           : ""}
       </p>
-      <p aria-live="polite" className="text-sm text-muted-foreground">
+      {/*
+        `tabIndex={-1}` and `ref={statusRef}` (ugcportal-jx4 K2): not in the
+        Tab order, but a valid `.focus()` target, so `Gallery` can hand focus
+        here once the "Load more" button it was on has unmounted. Still an
+        ordinary polite live region otherwise — the ref does not change what
+        it announces, only that it can also be focused deliberately.
+      */}
+      <p
+        aria-live="polite"
+        className="text-sm text-muted-foreground outline-none"
+        ref={statusRef}
+        tabIndex={-1}
+      >
         {pagingMessage(loadState, hasMore, count)}
       </p>
       {hasMore ? (
@@ -578,8 +641,25 @@ function GalleryPaging({
           type="button"
           size="lg"
           variant={loadState === "error" ? "outline" : "default"}
+          /*
+            `disabled` + `focusableWhenDisabled` (ugcportal-jx4 K1/K3), not
+            `disabled` alone. A plain `disabled` button is pulled out of the
+            accessibility tree AND the Tab order the instant React applies
+            it — mid-click, since this is the click handler's own state
+            update — so focus resets to <body> and the next Tab restarts at
+            the skip link. `focusableWhenDisabled` (base-ui's own escape
+            hatch for exactly this) keeps the element tabbable and renders
+            `aria-disabled="true"` instead of the native attribute, while
+            still blocking the click/keydown activation handlers that
+            `disabled` always blocked — see useButton.ts's `getButtonProps`.
+            `loadMore`'s own `loadState === "loading"` guard (K3) is kept
+            regardless, so a request that slips through some other path
+            (e.g. a form submit) still cannot double up.
+          */
           disabled={loadState === "loading"}
+          focusableWhenDisabled
           aria-busy={loadState === "loading"}
+          className="aria-disabled:pointer-events-none aria-disabled:opacity-50"
           onClick={onLoadMore}
         >
           {loadState === "error" ? "Try again" : "Load more"}
