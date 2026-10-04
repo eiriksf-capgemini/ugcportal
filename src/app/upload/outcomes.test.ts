@@ -48,6 +48,27 @@ describe("every refusal POST /api/media can send is told apart", () => {
     expect(failureFor(502).code).toBe("server_error");
   });
 
+  it("tells the object-storage-unreachable 503 apart from the busy 503 (ugcportal-1b2c round-1 finding 2)", () => {
+    // The shed-under-load 503 (ugcportal-u7g/e86): no `reason` field, just a
+    // human sentence in `error`.
+    const busy = failureFor(503, {
+      error: "Too many uploads are being processed right now",
+    });
+    // The object-storage-unreachable 503: same status, but carries the
+    // stable machine-readable `reason` the route now sends.
+    const storageUnavailable = failureFor(503, {
+      error: "Object storage is temporarily unavailable. Please try again shortly.",
+      reason: "object_storage_unavailable",
+    });
+
+    expect(busy.code).toBe("busy");
+    expect(storageUnavailable.code).toBe("storage_unavailable");
+    // The whole point: two different sentences, not the same "too many
+    // uploads" message for both.
+    expect(storageUnavailable.message).not.toBe(busy.message);
+    expect(storageUnavailable.retryable).toBe(true);
+  });
+
   it("gives each one a different sentence", () => {
     // The assertion K2 is actually about. Distinct codes with one shared
     // message would satisfy the test above and fail the user.

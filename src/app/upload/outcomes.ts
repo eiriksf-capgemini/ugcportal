@@ -40,7 +40,16 @@ export type UploadFailureCode =
   | "too_large" // 413
   | "unsupported_type" // 415
   | "unprocessable" // 422
-  | "busy" // 503
+  | "busy" // 503, the upload-memory/watermark shed (ugcportal-u7g/e86)
+  /**
+   * 503, object storage unreachable (ugcportal-1b2c) — distinct from `busy`
+   * above even though both are a 503. `busy` means "this server is healthy
+   * but handling too many uploads right now"; this means "the server tried
+   * to reach S3-compatible storage and could not" — a different cause with
+   * a different message, told apart by the response body's `reason` field
+   * (see `failureForResponse`'s 503 case) rather than by status code alone.
+   */
+  | "storage_unavailable"
   | "server_error" // other 5xx
   | "unexpected_status" // anything else, including a 2xx that isn't 201
   // Never reached the server, or the answer never came back.
@@ -349,6 +358,19 @@ function detailFrom(body: unknown): string | null {
   return trimmed;
 }
 
+/**
+ * The machine-readable `reason` POST /api/media's object-storage-unreachable
+ * 503 (ugcportal-1b2c) carries, that its "too many uploads" 503 does not.
+ * Read as its own field rather than overloading `error` — `error` is a
+ * human sentence read into `detail` above, and giving it double duty as a
+ * machine code too would make the two 503s indistinguishable the moment
+ * either route changed its wording.
+ */
+function storageUnavailableReason(body: unknown): boolean {
+  if (typeof body !== "object" || body === null) return false;
+  return (body as { reason?: unknown }).reason === "object_storage_unavailable";
+}
+
 export type UploadResponseSummary = {
   status: number;
   /** The parsed JSON body, or null when there wasn't one. */
@@ -452,6 +474,24 @@ export function failureForResponse(
         retryable: false,
       };
     case 503: {
+      // Two different 503s share this one HTTP status, and they must not
+      // share a sentence (round-1 review finding 2): the shed under load
+      // (ugcportal-u7g/e86) means "this server is healthy, try again soon";
+      // object storage being unreachable (ugcportal-1b2c) means something
+      // downstream is actually broken. Told apart by the body's `reason`
+      // field, checked first, before any of the shed-specific Retry-After
+      // handling below (which does not apply to this failure — the route
+      // sends no Retry-After for it, since it has no basis for one).
+      if (storageUnavailableReason(response.body)) {
+        return {
+          ...base,
+          code: "storage_unavailable",
+          message:
+            "The server could not reach object storage. Nothing is wrong with this file — try again in a little while.",
+          retryable: true,
+        };
+      }
+
       /*
         A header that resolves to ZERO is not a plan, and `??` does not treat
         it as one: 0 is not nullish, so it short-circuited the body fallback
