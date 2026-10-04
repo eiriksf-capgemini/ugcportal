@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   PERMITTED_EMAILS_VAR,
+  type PermittedEntry,
   SIGN_IN_PROVIDERS,
   type SignInEnv,
   bootstrapAdminEmails,
@@ -699,8 +700,8 @@ describe("decideLiveSession re-asks the rule for an existing session", () => {
   });
 
   it("fails closed when no provider was recorded, but only for a bound entry", () => {
-    // A row written before User.signInProvider existed, or one the backfill
-    // left ambiguous. Unrecognised is not "any".
+    // A session minted before Session.signInProvider existed, or one the
+    // backfill could not attribute. Unrecognised is not "any".
     for (const provider of [null, undefined, "", "not-a-provider", 42]) {
       expect(
         decideLiveSession(
@@ -733,5 +734,71 @@ describe("decideLiveSession re-asks the rule for an existing session", () => {
     // either refuse everybody or invent a claim. It judges the address the
     // sign-in it already permitted was judged on.
     expect(decideLiveSession({ email: LISTED }, env()).permitted).toBe(true);
+  });
+});
+
+/**
+ * ugcportal-mzr / PR #91 review, round 1, finding 7: the parse is memoised,
+ * because `decideLiveSession` now runs on every authenticated request.
+ *
+ * The property that matters is NOT "it is fast" — it is that the memo cannot
+ * go stale, because a stale permitted set is a revocation that silently does
+ * not happen. The key is the pair of raw strings, so there is no window in
+ * which a changed variable and an old answer coexist.
+ */
+describe("permittedIdentities is memoised on the configuration, not the clock", () => {
+  it("reuses the same parse for the same strings", () => {
+    const first = permittedIdentities(env());
+    // A DIFFERENT env object carrying the same two strings: the parse reads
+    // nothing else, so the answer must be the same one.
+    const second = permittedIdentities(env());
+
+    expect(second).toBe(first);
+  });
+
+  it("re-parses the moment either variable changes", () => {
+    const before = permittedIdentities(env());
+    expect(before.emails).toEqual([LISTED]);
+
+    const after = permittedIdentities(
+      env({ [PERMITTED_EMAILS_VAR]: "someone-else@example.com" }),
+    );
+
+    expect(after).not.toBe(before);
+    expect(after.emails).toEqual(["someone-else@example.com"]);
+    // And the other variable is part of the key too, not just the first.
+    const withBootstrap = permittedIdentities(
+      env({ ADMIN_BOOTSTRAP_EMAILS: "admin@example.com" }),
+    );
+    expect(withBootstrap.emails).toEqual([LISTED, "admin@example.com"]);
+  });
+
+  it("hands out a frozen set, so one caller cannot edit the policy for the next", () => {
+    // The cost of sharing one object across every request: a caller that
+    // mutated it would be editing the permitted set process-wide. Frozen, so
+    // that is a throw rather than a silent authorisation change.
+    const identities = permittedIdentities(env());
+
+    expect(Object.isFrozen(identities)).toBe(true);
+    expect(Object.isFrozen(identities.entries)).toBe(true);
+    expect(() => {
+      (identities.entries as PermittedEntry[]).push({
+        email: "sneaked-in@example.com",
+        provider: null,
+      });
+    }).toThrow();
+    expect(permittedIdentities(env()).emails).toEqual([LISTED]);
+  });
+
+  it("still answers the empty and absent cases through the memo", () => {
+    // Two configurations that are easy to collapse onto one cache entry and
+    // must not be: unset means "nobody has configured this", empty means
+    // "configured, and it names nobody" — the memo keys on the raw value, so
+    // `undefined` and `""` are different keys.
+    expect(permittedIdentities({}).configured).toBe(false);
+    expect(
+      permittedIdentities({ [PERMITTED_EMAILS_VAR]: "" }).configured,
+    ).toBe(false);
+    expect(permittedIdentities(env()).configured).toBe(true);
   });
 });

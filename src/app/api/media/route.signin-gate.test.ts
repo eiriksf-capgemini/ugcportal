@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { MEDIA_UPLOAD_PATH } from "@/lib/routes";
 import { PERMITTED_EMAILS_VAR } from "@/lib/sign-in-policy";
+import { pinEnvironment } from "@/lib/test-support/env";
 
 /**
  * ugcportal-egp K2: an identity this instance does not permit ends up with no
@@ -59,8 +60,10 @@ const { POST } = await import("@/app/api/media/route");
 const LISTED = "owner@example.com";
 const STRANGER = "anyone-with-a-google-account@gmail.com";
 
-const originalAllowlist = process.env[PERMITTED_EMAILS_VAR];
-const originalBootstrap = process.env.ADMIN_BOOTSTRAP_EMAILS;
+pinEnvironment({
+  [PERMITTED_EMAILS_VAR]: LISTED,
+  ADMIN_BOOTSTRAP_EMAILS: undefined,
+});
 
 /**
  * Sign in as `email` against the real gate, then record the session that
@@ -110,22 +113,10 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.spyOn(console, "warn").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
-  process.env[PERMITTED_EMAILS_VAR] = LISTED;
-  delete process.env.ADMIN_BOOTSTRAP_EMAILS;
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
-  for (const [name, value] of [
-    [PERMITTED_EMAILS_VAR, originalAllowlist],
-    ["ADMIN_BOOTSTRAP_EMAILS", originalBootstrap],
-  ] as const) {
-    if (value === undefined) {
-      delete process.env[name];
-    } else {
-      process.env[name] = value;
-    }
-  }
 });
 
 describe("an unpermitted identity cannot upload (K2)", () => {

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { MEDIA_UPLOAD_PATH } from "@/lib/routes";
 import { PERMITTED_EMAILS_VAR } from "@/lib/sign-in-policy";
+import { pinEnvironment } from "@/lib/test-support/env";
 
 /**
  * ugcportal-mzr K1: an identity holding a valid, unexpired database session
@@ -44,8 +45,7 @@ vi.mock("next-auth", () => ({ default: nextAuthMock }));
 vi.mock("@/lib/prisma", () => ({
   prisma: {
     media: { create: vi.fn(), findMany: vi.fn(), findFirst: vi.fn() },
-    session: { deleteMany },
-    user: { updateMany: vi.fn() },
+    session: { deleteMany, findMany: vi.fn(), updateMany: vi.fn() },
   },
 }));
 
@@ -59,21 +59,34 @@ const { POST } = await import("@/app/api/media/route");
 
 const LISTED = "owner@example.com";
 
-const originalAllowlist = process.env[PERMITTED_EMAILS_VAR];
-const originalBootstrap = process.env.ADMIN_BOOTSTRAP_EMAILS;
+pinEnvironment({
+  [PERMITTED_EMAILS_VAR]: LISTED,
+  ADMIN_BOOTSTRAP_EMAILS: undefined,
+});
 
-/**
- * The adapter `User` row, as `getSessionAndUser` returns it: the whole row,
- * `role` and `signInProvider` included.
- */
-function userRow(signInProvider: string | null = "google") {
+/** The adapter `User` row, as `getSessionAndUser` returns it. */
+function userRow() {
   return {
     id: "user-1",
     email: LISTED,
     name: "Owner",
     image: null,
     role: "USER" as const,
+  };
+}
+
+/**
+ * The `Session` row, with the identity that minted it — the thing the
+ * per-request check judges (PR #91 review, round 1, finding 1).
+ */
+function sessionRow(signInProvider: string | null = "google") {
+  return {
+    id: "session-1",
+    sessionToken: "session-token-1",
+    userId: "user-1",
+    expires: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
     signInProvider,
+    signInEmail: LISTED,
   };
 }
 
@@ -99,14 +112,10 @@ function userRow(signInProvider: string | null = "google") {
  * `undefined`. Skipping either step here would make this file agree with a
  * broken implementation.
  */
-async function asAuthResolvesIt(user: ReturnType<typeof userRow>) {
+async function asAuthResolvesIt(session = sessionRow()) {
+  const user = userRow();
   const payload = await authConfig.callbacks.session({
-    session: {
-      sessionToken: "session-token-1",
-      userId: user.id,
-      expires: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
-      user,
-    },
+    session: { ...session, user },
     user,
   } as unknown as Parameters<typeof authConfig.callbacks.session>[0]);
 
@@ -134,65 +143,58 @@ beforeEach(() => {
   deleteMany.mockResolvedValue({ count: 1 });
   vi.spyOn(console, "warn").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
-  process.env[PERMITTED_EMAILS_VAR] = LISTED;
-  delete process.env.ADMIN_BOOTSTRAP_EMAILS;
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
-  for (const [name, value] of [
-    [PERMITTED_EMAILS_VAR, originalAllowlist],
-    ["ADMIN_BOOTSTRAP_EMAILS", originalBootstrap],
-  ] as const) {
-    if (value === undefined) {
-      delete process.env[name];
-    } else {
-      process.env[name] = value;
-    }
-  }
 });
 
 describe("a revoked identity cannot upload with the session it already holds (K1)", () => {
   it("gets 401 from POST /api/media once its address is removed", async () => {
     // The control, first: the same unexpired session row, under the
     // configuration it was minted under, reaches the route.
-    expect((await asAuthResolvesIt(userRow())).user?.id).toBe("user-1");
+    expect((await asAuthResolvesIt()).user?.id).toBe("user-1");
     expect((await postWithNoBody()).status).toBe(400);
 
     // The operator removes the address. Nothing else changes: same session
     // row, same cookie, same unexpired `expires`.
     process.env[PERMITTED_EMAILS_VAR] = "someone-else@example.com";
 
-    expect((await asAuthResolvesIt(userRow())).user).toBeUndefined();
+    expect((await asAuthResolvesIt()).user).toBeUndefined();
     const response = await postWithNoBody();
 
     expect(response.status).toBe(401);
     await expect(response.json()).resolves.toEqual({ error: "Unauthorized" });
   });
 
-  it("and the session rows go with it, so the cookie is dead everywhere", async () => {
+  it("and the session row goes with it, so that cookie is dead", async () => {
     process.env[PERMITTED_EMAILS_VAR] = "someone-else@example.com";
 
-    await asAuthResolvesIt(userRow());
+    await asAuthResolvesIt();
 
-    expect(deleteMany).toHaveBeenCalledWith({ where: { userId: "user-1" } });
+    // By the id of the session that was refused, not by its owner: the
+    // person's other devices are judged on their own recorded identities,
+    // on their own next request.
+    expect(deleteMany).toHaveBeenCalledWith({ where: { id: "session-1" } });
   });
 
   it("gets 401 when the entry is rebound to the other provider", async () => {
     process.env[PERMITTED_EMAILS_VAR] = `google:${LISTED}`;
-    expect((await asAuthResolvesIt(userRow("google"))).user?.id).toBe("user-1");
+    expect((await asAuthResolvesIt(sessionRow("google"))).user?.id).toBe(
+      "user-1",
+    );
     expect((await postWithNoBody()).status).toBe(400);
 
     process.env[PERMITTED_EMAILS_VAR] = `facebook:${LISTED}`;
 
-    await asAuthResolvesIt(userRow("google"));
+    await asAuthResolvesIt(sessionRow("google"));
     expect((await postWithNoBody()).status).toBe(401);
   });
 
   it("gets 401 when nobody at all is configured any more", async () => {
     delete process.env[PERMITTED_EMAILS_VAR];
 
-    await asAuthResolvesIt(userRow());
+    await asAuthResolvesIt();
     expect((await postWithNoBody()).status).toBe(401);
   });
 
@@ -200,7 +202,7 @@ describe("a revoked identity cannot upload with the session it already holds (K1
     // The needle-can-be-absent control for all of the above, and the K2
     // half: the ordinary request still succeeds, and nothing was deleted.
     for (let attempt = 0; attempt < 3; attempt += 1) {
-      expect((await asAuthResolvesIt(userRow())).user?.id).toBe("user-1");
+      expect((await asAuthResolvesIt()).user?.id).toBe("user-1");
       expect((await postWithNoBody()).status).toBe(400);
     }
     expect(deleteMany).not.toHaveBeenCalled();

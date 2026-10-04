@@ -89,7 +89,7 @@ that needs more than an email also means widening `SignInAttempt`, and one
 that needs a database means making those async and both callbacks in
 `src/lib/auth.ts` await them — and, because `decideLiveSession` runs on every
 request, it means paying for that database read on every request too, which
-is the cost `User.signInProvider` exists to avoid for the current rule.
+is the cost the identity columns on `Session` avoid for the current rule.
 Everything else, including the closed-by-default property and every
 downstream gate, stays as it is.
 
@@ -140,35 +140,53 @@ How it works, in one line each:
   redirect from `/upload`, `notFound()` from the admin screens. Every gate
   that already understood "not signed in" needs no change.
 - A refusal that is a *decision about the list* (`not-permitted`,
-  `wrong-provider`) also **deletes every `Session` row for that user**, on
-  every device, so the cookie is dead rather than merely useless.
+  `wrong-provider`) also **deletes that session's row**, so the cookie is
+  dead rather than merely useless.
 - A refusal that means *the policy cannot be evaluated* (no configuration at
-  all, a user row with no address) refuses the request just as hard but
-  **leaves the rows alone**. That distinction is deliberate: losing the
-  environment variables is an outage, not a revocation, and restoring them
-  should restore the sessions rather than having silently logged everyone
-  out of every device while nobody could sign in to notice.
-- Provider binding is honoured here too. `User.signInProvider` records which
-  provider the live session was minted through, so rebinding an entry from
-  `google:a@b.com` to `facebook:a@b.com` revokes the Google session. It is a
-  denormalised copy of `Account.provider`, written by the `signIn` event,
-  and it exists so this check reads **only columns the session query already
-  loaded**: the per-request cost of all of the above is parsing two
-  environment variables, and **no database read beyond the one `auth()` was
-  always making**. The only write is the revocation itself.
-- An unrecorded provider (`NULL` — a row from before the column existed, or
-  one the migration's backfill left ambiguous because the user had two
-  linked providers) is treated as *unrecognised*, which fails closed against
-  a bound entry and changes nothing for an unbound one. The cost of that is
-  one extra sign-in for such a user; the alternative, guessing, could keep a
-  session alive through the provider the operator did not name.
+  all, a session and user row with no address between them) refuses the
+  request just as hard but **leaves the row alone**. That distinction is
+  deliberate: losing the environment variables is an outage, not a
+  revocation, and restoring them should restore the sessions rather than
+  having silently logged everyone out of every device while nobody could
+  sign in to notice.
+- **The unit is one session, not one person.** Each session carries the
+  identity that minted it — `Session.signInProvider` and
+  `Session.signInEmail`, written by the `signIn` event — and is judged on
+  that alone; the same person's other sessions are judged, separately and
+  identically, on their own next request. So revoking somebody does end
+  every session they hold, one request each, while a change that only
+  affects one of their identities leaves the others alone. Recording this
+  per *user* instead would mean a sign-in on one device could get a
+  still-permitted session on another device refused and deleted — which is
+  exactly what `ugcportal-t33p` (identity linking) is about to make
+  ordinary.
+- Provider binding is honoured here too: rebinding an entry from
+  `google:a@b.com` to `facebook:a@b.com` revokes the sessions minted through
+  Google and leaves the Facebook ones. The columns are a denormalisation —
+  the provider is also on `Account`, the address on `User` — and they earn
+  it by being free to read: the session query already loads this row, so the
+  per-request cost of all of the above is parsing two environment variables
+  (memoised on their exact values), and **no database read beyond the one
+  `auth()` was always making**. The only write is the revocation itself.
+  `Account` could not answer the question anyway: it says which providers
+  are linked, never which one a given session came through.
+- An unrecorded identity (`NULL` — a session from before the columns
+  existed, or one the migration's backfill could not attribute because the
+  user had two linked providers) is treated as *unrecognised*: the provider
+  fails closed against a bound entry and changes nothing for an unbound one,
+  and the address falls back to `User.email`, which is what this check
+  judged before the columns existed. The cost is one extra sign-in on such a
+  device; the alternative, guessing, could keep a session alive through the
+  provider the operator did not name.
 
 **What an operator still has to do by hand:**
 
 1. **Restart or redeploy** after editing the variable. The policy is read
-   from the process environment on every call — there is no cache and no TTL
-   — but a process that is still running still has the old environment. The
-   "next request" bound is relative to the configuration the server sees.
+   from the process environment on every call — the parse is memoised on the
+   exact strings, so a changed value is a changed answer with no TTL to wait
+   out — but a process that is still running still has the old environment.
+   The "next request" bound is relative to the configuration the server
+   sees.
 2. **Decide whether the account should exist at all**, which this does not
    touch. A revoked identity keeps its `User`, `Account` and `Media` rows; it
    simply cannot reach anything. See step 3 of the runbook below before
@@ -179,6 +197,17 @@ How it works, in one line each:
 4. **Audit, if you need to know who got in.** Revocation is silent by
    design on the visitor's side; the server logs each refused live session
    with the user's id and the reason.
+
+### Deploy order: migrate first, then deploy
+
+**Run `prisma migrate deploy` before rolling out the code that reads the new
+columns.** The generated Prisma client selects every scalar column the schema
+knows about, so a new client against a database that has not had
+`20261004180000_add_session_sign_in_identity` applied fails
+`getSessionAndUser` — which is every `auth()` call, for everybody, including
+the operator, on every page. The migration itself is additive (two nullable
+columns and a backfill) and is harmless to the running old code, which simply
+never selects them.
 
 ### What the first deploy of the sign-in gate still needs
 
@@ -324,12 +353,16 @@ You are judged on your **new** address, so **add it to
 `ALLOWED_SIGNIN_EMAILS`** and you are back in. You do not have to keep the old
 one listed.
 
-One wrinkle since `ugcportal-mzr`: a session that already exists is judged on
-the **stored** address (a request carries no provider profile to read a fresh
-one from), which for you is the old one. So removing the old entry revokes
-the session you are holding right now. Sign in again — that attempt is judged
-on the fresh address, which is listed — and you get a new one. Annoying for
-one round trip, and in the safe direction.
+One wrinkle since `ugcportal-mzr`: a session is re-judged on the address
+recorded when it was **minted**, which is the address the provider asserted
+at that sign-in (a request carries no provider profile to read a fresher one
+from). So a session you opened before you changed your address is still
+judged on the old one, and removing the old entry revokes it. Sign in again —
+that attempt is judged on the fresh address, which is listed — and the
+session that replaces it is recorded under the new address. Annoying for one
+round trip, and in the safe direction. (A session minted before these columns
+existed has no recorded address and falls back to `User.email`, which Auth.js
+never refreshes, so it behaves exactly as the old one did.)
 
 This is worth stating because the obvious alternative is a trap, and this
 module shipped it briefly: refusing whenever the stored and asserted addresses

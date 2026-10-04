@@ -335,8 +335,25 @@ export type PermittedIdentities = {
 export function permittedIdentities(
   env: SignInEnv = process.env,
 ): PermittedIdentities {
+  const raw = env[PERMITTED_EMAILS_VAR];
+  const rawBootstrap = env.ADMIN_BOOTSTRAP_EMAILS;
+  // Memoised on the two raw strings, because this now runs on EVERY
+  // authenticated request (`decideLiveSession`, ugcportal-mzr) and not only
+  // at sign-in, while the configuration changes about once a year.
+  //
+  // Keyed on the strings themselves rather than on the `env` object: the
+  // parse is a pure function of exactly these two values — nothing else is
+  // read — so two different env objects carrying the same two strings must
+  // produce the same answer, and a single mutated `process.env` carrying
+  // different ones must not reuse it. An env-object identity key would get
+  // the second case wrong, which is the case that matters: a stale permitted
+  // set is a revocation that does not happen.
+  const cached = cachedIdentities;
+  if (cached && cached.raw === raw && cached.rawBootstrap === rawBootstrap) {
+    return cached.value;
+  }
   const entries = [
-    ...splitList(env[PERMITTED_EMAILS_VAR]),
+    ...splitList(raw),
     // `splitList` directly, NOT `bootstrapAdminEmails(env.ADMIN_BOOTSTRAP_EMAILS)`
     // — that function has a default parameter reading `process.env`, so passing
     // the key of an env object that does not have it passes `undefined`, which
@@ -345,7 +362,7 @@ export function permittedIdentities(
     // mentioned: a gate granting from a source its caller believed it had
     // overridden (PR #45 review, round 1). Both lists are parsed by the same
     // `splitList`, so they still cannot drift.
-    ...splitList(env.ADMIN_BOOTSTRAP_EMAILS),
+    ...splitList(rawBootstrap),
   ];
 
   // First occurrence wins, keyed by the (provider, address) tuple — the same
@@ -372,13 +389,33 @@ export function permittedIdentities(
   // in first-seen order.
   const emails = Array.from(new Set(parsed.map((entry) => entry.email)));
 
-  return {
-    entries: parsed,
-    emails,
-    malformed: Array.from(malformed),
+  // Frozen before it is shared. The memo above hands the same object to
+  // every caller, so a caller that mutated `entries` would be editing the
+  // permitted set for every later request in the process; freezing turns
+  // that from a silent, process-wide authorisation change into a throw (or,
+  // in sloppy mode, a no-op). Nothing mutates it today — `evaluateSignIn`
+  // filters, which copies — and this is what keeps that true.
+  const value: PermittedIdentities = Object.freeze({
+    entries: Object.freeze(parsed) as PermittedEntry[],
+    emails: Object.freeze(emails) as string[],
+    malformed: Object.freeze(Array.from(malformed)) as string[],
     configured: entries.length > 0,
-  };
+  });
+  cachedIdentities = { raw, rawBootstrap, value };
+  return value;
 }
+
+/**
+ * The one parse kept across calls, keyed by the exact strings it was made
+ * from. Module-level and never invalidated by anything but a changed string:
+ * there is no TTL to tune and no way for it to go stale, because the key IS
+ * the input.
+ */
+let cachedIdentities: {
+  raw: string | undefined;
+  rawBootstrap: string | undefined;
+  value: PermittedIdentities;
+} | null = null;
 
 /**
  * Why a sign-in was refused. Server-side only: every one of these reaches the
@@ -510,20 +547,21 @@ export function decideSignIn(
 }
 
 /**
- * The identity behind a session that ALREADY EXISTS: the address stored on
- * the `User` row and the provider the sign-in that minted it came through
- * (`User.signInProvider`). Both are columns of the one row the session
- * adapter already loads, which is what keeps the re-check below free of
- * extra queries.
+ * The identity that minted a session that ALREADY EXISTS: the address the
+ * provider asserted for it and the provider it came through
+ * (`Session.signInEmail` / `Session.signInProvider`). Both are columns of
+ * the session row the adapter already loads, which is what keeps the
+ * re-check below free of extra queries — and what makes it a question about
+ * THIS session rather than about everything its owner has ever done.
  */
 export type LiveSessionIdentity = {
   email?: string | null;
   /**
-   * `User.signInProvider`. `unknown`, and not `SignInProvider`, because it
-   * is whatever string the column holds: null for a session minted before
-   * the column existed, or for a user whose linked providers were
-   * ambiguous at backfill time. `providerId` maps anything unrecognised to
-   * `null`, which fails closed against a bound entry.
+   * `Session.signInProvider`. `unknown`, and not `SignInProvider`, because
+   * it is whatever the column holds: null for a session minted before the
+   * column existed, or one the migration's backfill could not attribute.
+   * `providerId` maps anything unrecognised to `null`, which fails closed
+   * against a bound entry.
    */
   provider?: unknown;
 };
@@ -550,14 +588,23 @@ export type LiveSessionIdentity = {
  * Two differences from a sign-in attempt, both forced by what a request has
  * to work with, and both narrowing rather than widening:
  *
- *  - there is no fresh `profile`, so the address judged is the STORED one
- *    (`authorisedEmail`'s documented fallback). For anyone who has changed
- *    their provider address, that is the stale one — so listing only the new
- *    address revokes the live session and the next sign-in, judged on the
- *    fresh address, mints a new one. Self-healing, in the safe direction;
- *  - `email_verified` is not re-asserted on a request, so it is not re-read.
- *    It was checked at sign-in against the address the provider vouched for,
- *    and this function can only refuse identities that one permitted.
+ *  - there is no fresh `profile`. The address judged is the one recorded on
+ *    the session when it was minted — which IS the address the gate judged
+ *    at sign-in, because `recordSignInIdentity` records `authorisedEmail`'s
+ *    answer. For a session minted before that column existed, the caller
+ *    falls back to the stored `User.email`, which is what this check judged
+ *    before the column existed; for anyone who has since changed their
+ *    provider address that is the stale one, so listing only the new address
+ *    revokes the old session and the next sign-in, judged on the fresh
+ *    address, mints a new one. Self-healing, in the safe direction;
+ *  - `email_verified` is not re-asserted on a request, so it is not re-read,
+ *    and THIS FUNCTION CANNOT RETURN `unverified-email`: that branch needs a
+ *    `profile` claim, and no caller here has one (PR #91 review, round 1,
+ *    finding 4). The claim was checked at sign-in against the address the
+ *    provider vouched for, and this function can only refuse identities that
+ *    one permitted. The refusal stays in `SignInRefusal` because the gate
+ *    can still return it; src/lib/live-session.ts says the same thing where
+ *    it classifies which refusals destroy a row.
  */
 export function decideLiveSession(
   identity: LiveSessionIdentity,

@@ -9,7 +9,7 @@ import type { Role } from "@/generated/prisma/enums";
 import { reconcileBootstrapAdmin } from "@/lib/admin-bootstrap";
 import {
   enforceLiveSessionPolicy,
-  recordSignInProvider,
+  recordSignInIdentity,
 } from "@/lib/live-session";
 import { prisma } from "@/lib/prisma";
 import { AUTH_ERROR_PATH } from "@/lib/routes";
@@ -33,23 +33,6 @@ declare module "next-auth" {
 // granting access (see requireAdmin in src/lib/admin.ts).
 function toRole(user: object): Role {
   return (user as { role?: unknown }).role === "ADMIN" ? "ADMIN" : "USER";
-}
-
-/**
- * `User.signInProvider` (ugcportal-mzr), read off the adapter row the same
- * defensive way and for the same reason as `toRole` above: the Prisma
- * adapter hands back the whole row, `AdapterUser` declares neither column,
- * and widening a type from a transitive `@auth/core` package to say
- * otherwise is more brittle than reading the field.
- *
- * Deliberately returns `unknown` rather than narrowing here. The one thing
- * allowed to decide what a provider value means is `providerId` in
- * src/lib/sign-in-policy.ts, which maps anything unrecognised — including
- * the `null` of a row written before this column existed — to "no
- * provider", and fails closed against a bound allowlist entry.
- */
-function toSignInProvider(user: object): unknown {
-  return (user as { signInProvider?: unknown }).signInProvider;
 }
 
 // AUTH_URL / NEXTAUTH_URL should point at http://localhost:3000 for local
@@ -138,10 +121,12 @@ export const authConfig = {
       // revoking someone's admin role takes effect immediately instead of
       // waiting for their session to expire.
       session.user.role = toRole(user);
+      // `session` carries the row's own columns at runtime, the recorded
+      // sign-in identity among them; `user` is only needed for the id in
+      // the log line and the pre-column address fallback.
       return enforceLiveSessionPolicy(session, {
         id: user.id,
         email: user.email,
-        signInProvider: toSignInProvider(user),
       });
     },
   },
@@ -160,13 +145,14 @@ export const authConfig = {
     // address with no role history — and, for a provider-bound entry, only
     // when the sign-in came through that provider (PR #81 round 5), which is
     // why `account` is handed on.
-    async signIn({ user, account }) {
-      // Which provider got them in, recorded on the User row so the session
+    async signIn({ user, account, profile }) {
+      // Which identity got them in — provider and asserted address —
+      // recorded on the session this sign-in just minted, so the session
       // callback above can judge a provider-bound entry on every request
       // without a second query (ugcportal-mzr). Here rather than in the
       // callback for the same reason the promotion is here: it is a write,
       // and sign-in is the one moment where doing it once is enough.
-      await recordSignInProvider(user, account);
+      await recordSignInIdentity({ user, account, profile });
       await reconcileBootstrapAdmin(user, account);
     },
   },

@@ -160,7 +160,7 @@ describe("the runbook does not recommend a command that prints nothing", () => {
 const liveSession = read("src/lib/live-session.ts");
 
 const REVOCATION_HEADING = "### Revoking access takes effect on the next request";
-const DEPLOY_HEADING = "### What the first deploy of the sign-in gate still needs";
+const DEPLOY_HEADING = "### Deploy order: migrate first, then deploy";
 
 /** The refusals src/lib/live-session.ts deletes session rows for. */
 function revokingRefusals(source: string): string[] {
@@ -176,7 +176,7 @@ function revokingRefusals(source: string): string[] {
 /** The ones the doc tells the operator are destructive. */
 function documentedRevokingRefusals(section: string): string[] {
   const sentence = section.match(
-    /decision about the list\*\s*\(([^)]*)\)\s*also\s*\*\*deletes every/,
+    /decision about the list\*\s*\(([^)]*)\)\s*also\s*\*\*deletes that/,
   );
   if (!sentence) {
     return [];

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AUTH_ERROR_PATH } from "@/lib/routes";
 import { PERMITTED_EMAILS_VAR, SIGN_IN_PROVIDERS } from "@/lib/sign-in-policy";
+import { pinEnvironment } from "@/lib/test-support/env";
 
 /**
  * ugcportal-egp K1, as WIRED rather than as written.
@@ -21,6 +22,7 @@ const {
   nextAuthConfigs,
   reconcileBootstrapAdminMock,
   deleteManyMock,
+  findManyMock,
   updateManyMock,
 } = vi.hoisted(() => {
     // The configs NextAuth was constructed with, recorded rather than read
@@ -29,10 +31,11 @@ const {
     const nextAuthConfigs: unknown[] = [];
     return {
       nextAuthConfigs,
-      // The two writes src/lib/live-session.ts makes. Their behaviour is
-      // tested there; here they exist so the callback and the event can be
-      // driven, and so this file can assert they were reached.
+      // The Session reads and writes src/lib/live-session.ts makes. Their
+      // behaviour is tested there; here they exist so the callback and the
+      // event can be driven, and so this file can assert they were reached.
       deleteManyMock: vi.fn(async () => ({ count: 1 })),
+      findManyMock: vi.fn(async () => [{ id: "session-1" }]),
       updateManyMock: vi.fn(async () => ({ count: 1 })),
       nextAuthMock: vi.fn((config: unknown) => {
         nextAuthConfigs.push(config);
@@ -69,8 +72,11 @@ vi.mock("@/lib/admin-bootstrap", async (importOriginal) => {
 
 vi.mock("@/lib/prisma", () => ({
   prisma: {
-    session: { deleteMany: deleteManyMock },
-    user: { updateMany: updateManyMock },
+    session: {
+      deleteMany: deleteManyMock,
+      findMany: findManyMock,
+      updateMany: updateManyMock,
+    },
   },
 }));
 
@@ -79,34 +85,24 @@ const { authConfig } = await import("@/lib/auth");
 const LISTED = "owner@example.com";
 const STRANGER = "anyone-with-a-google-account@gmail.com";
 
-const originalAllowlist = process.env[PERMITTED_EMAILS_VAR];
-const originalBootstrap = process.env.ADMIN_BOOTSTRAP_EMAILS;
-
-function restore(name: string, value: string | undefined): void {
-  if (value === undefined) {
-    delete process.env[name];
-  } else {
-    process.env[name] = value;
-  }
-}
-
 /**
  * The callback reads process.env (that is the configuration seam), so these
  * tests set it and put it back. Every case states its own configuration; none
  * inherits the host's.
  */
+pinEnvironment({
+  [PERMITTED_EMAILS_VAR]: LISTED,
+  ADMIN_BOOTSTRAP_EMAILS: undefined,
+});
+
 beforeEach(() => {
   vi.clearAllMocks();
   vi.spyOn(console, "warn").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
-  process.env[PERMITTED_EMAILS_VAR] = LISTED;
-  delete process.env.ADMIN_BOOTSTRAP_EMAILS;
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
-  restore(PERMITTED_EMAILS_VAR, originalAllowlist);
-  restore("ADMIN_BOOTSTRAP_EMAILS", originalBootstrap);
 });
 
 function signIn(
@@ -271,31 +267,38 @@ describe("the bootstrap and the allowlist compose (K3)", () => {
  * callback fails something below.
  */
 describe("the session callback re-checks the policy on every request", () => {
-  /** The adapter row, as the database strategy hands it to the callback. */
+  /** The adapter rows, as the database strategy hands them to the callback. */
   function userRow(overrides: Record<string, unknown> = {}) {
+    return { id: "user-1", email: LISTED, role: "USER", ...overrides };
+  }
+
+  function sessionRow(overrides: Record<string, unknown> = {}) {
     return {
-      id: "user-1",
-      email: LISTED,
-      role: "USER",
+      id: "session-1",
+      sessionToken: "session-token-1",
+      userId: "user-1",
+      expires: new Date(Date.now() + 86_400_000),
       signInProvider: "google",
+      signInEmail: LISTED,
       ...overrides,
     };
   }
 
-  function resolveSession(user: Record<string, unknown>) {
+  function resolveSession(
+    session: Record<string, unknown> = sessionRow(),
+    user: Record<string, unknown> = userRow(),
+  ) {
     return authConfig.callbacks.session({
-      session: {
-        sessionToken: "session-token-1",
-        userId: user.id,
-        expires: new Date(Date.now() + 86_400_000),
-        user,
-      },
+      session: { ...session, user },
       user,
     } as unknown as Parameters<typeof authConfig.callbacks.session>[0]);
   }
 
   it("surfaces the id and role of a still-permitted identity", async () => {
-    const session = await resolveSession(userRow({ role: "ADMIN" }));
+    const session = await resolveSession(
+      sessionRow(),
+      userRow({ role: "ADMIN" }),
+    );
 
     expect(session.user?.id).toBe("user-1");
     expect((session.user as { role?: string }).role).toBe("ADMIN");
@@ -304,37 +307,44 @@ describe("the session callback re-checks the policy on every request", () => {
   it("refuses the identity once its address stops being permitted", async () => {
     process.env[PERMITTED_EMAILS_VAR] = "someone-else@example.com";
 
-    const session = await resolveSession(userRow());
+    const session = await resolveSession();
 
     expect(session.user).toBeUndefined();
-    expect(deleteManyMock).toHaveBeenCalledWith({ where: { userId: "user-1" } });
+    // The session in front of it, by id — not every session its owner holds.
+    expect(deleteManyMock).toHaveBeenCalledWith({
+      where: { id: "session-1" },
+    });
   });
 
-  it("judges the provider recorded on the row", async () => {
-    // The pair that pins `toSignInProvider` to the callback: the two cases
-    // differ only in the column's value, so a callback that stopped reading
-    // it would answer the same way twice.
+  it("judges the identity recorded on the SESSION row", async () => {
+    // The pair that pins the session row to the callback: the two cases
+    // differ only in a column of the session, so a callback that read the
+    // user instead — the round-1 defect — would answer the same way twice.
     process.env[PERMITTED_EMAILS_VAR] = `google:${LISTED}`;
 
+    expect((await resolveSession(sessionRow())).user?.id).toBe("user-1");
     expect(
-      (await resolveSession(userRow({ signInProvider: "google" }))).user?.id,
-    ).toBe("user-1");
-    expect(
-      (await resolveSession(userRow({ signInProvider: "facebook" }))).user,
+      (await resolveSession(sessionRow({ signInProvider: "facebook" }))).user,
     ).toBeUndefined();
   });
 });
 
-describe("the signIn event records which provider got them in", () => {
-  it("writes it to the User row, so the session callback can read it back", async () => {
+describe("the signIn event records which identity got them in", () => {
+  it("writes it to the session row, so the session callback can read it back", async () => {
     await authConfig.events.signIn({
       user: { id: "user-1", email: LISTED },
       account: { provider: "facebook", providerAccountId: "sub-1" },
+      profile: { email: LISTED },
     } as Parameters<typeof authConfig.events.signIn>[0]);
 
+    expect(findManyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { userId: "user-1", signInProvider: null },
+      }),
+    );
     expect(updateManyMock).toHaveBeenCalledWith({
-      where: { id: "user-1" },
-      data: { signInProvider: "facebook" },
+      where: { id: "session-1" },
+      data: { signInProvider: "facebook", signInEmail: LISTED },
     });
   });
 });

@@ -43,28 +43,6 @@ model User {
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
-  // Which provider the most recent sign-in came through (ugcportal-mzr):
-  // an id from SIGN_IN_PROVIDERS (`google`, `facebook`), written by the
-  // Auth.js `signIn` event in src/lib/auth.ts.
-  //
-  // A DENORMALISATION of Account.provider, and it exists for one reason: the
-  // `session` callback re-checks the sign-in policy on every request, and
-  // that policy is provider-bound (`google:addr`, ugcportal-1551). The
-  // adapter already loads this whole row alongside the session in one query,
-  // so reading the provider from here costs nothing, while reading it from
-  // Account would add a second query to every authenticated request — which
-  // ugcportal-mzr K2 rules out.
-  //
-  // Nullable, and null is not "no provider": it is "not recorded", which
-  // `providerId` in src/lib/sign-in-policy.ts already treats as an
-  // unrecognised provider. That fails closed against a bound entry (the
-  // session is revoked and the person signs in again, which records it) and
-  // changes nothing for an unbound one. Not a foreign key, not unique, and
-  // deliberately NOT the set of linked accounts: it answers "how did the
-  // identity holding this session get in", which for a user with two linked
-  // accounts is one of them, not both.
-  signInProvider String?
-
   accounts           Account[]
   sessions           Session[]
   media              Media[]
@@ -106,6 +84,37 @@ model Session {
   sessionToken String   @unique
   userId       String
   expires      DateTime
+
+  // WHICH IDENTITY MINTED THIS SESSION (ugcportal-mzr): the provider the
+  // sign-in came through (an id from SIGN_IN_PROVIDERS — `google`,
+  // `facebook`) and the address that provider asserted for it. Written by
+  // the Auth.js `signIn` event in src/lib/auth.ts, onto the row that
+  // sign-in had just created.
+  //
+  // Here, on the SESSION, and not on `User`. A user can hold several
+  // sessions at once, minted through different providers and — once
+  // ugcportal-t33p lands — under different addresses, and the per-request
+  // re-check in src/lib/live-session.ts asks about the one session in front
+  // of it. A per-user column answers a question nobody asked ("which
+  // provider did this person last use, anywhere?"), and judging a session
+  // by it means one device's sign-in can get another device's
+  // still-permitted session refused (PR #91 review, round 1, finding 1).
+  //
+  // A DENORMALISATION — the provider also appears on `Account`, and the
+  // address on `User` — and it earns that by being free to read: the
+  // adapter's `getSessionAndUser` loads this row in the single query
+  // `auth()` already makes, so the per-request check costs no extra query
+  // (ugcportal-mzr K2). `Account` could not answer it anyway: it says which
+  // providers are linked, never which one a given session came through.
+  //
+  // Nullable, and null is not "no identity": it is "not recorded" — a
+  // session minted before these columns existed, or one the migration's
+  // backfill could not attribute. `providerId` in src/lib/sign-in-policy.ts
+  // maps an unrecognised provider to `null`, which fails closed against a
+  // provider-bound entry; a null address falls back to `User.email`, which
+  // is what the check judged before these columns existed.
+  signInProvider String?
+  signInEmail    String?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
