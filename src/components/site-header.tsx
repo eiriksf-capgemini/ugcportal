@@ -32,15 +32,33 @@ import { SITE_NAME, SITE_TAGLINE } from "@/lib/site";
  * composing them here instead of in AppShell directly preserves that —
  * nothing in this file calls or awaits either.
  *
- * Two fixed, measured numbers tie this component to app-shell.tsx's <main>:
- * the row heights below (h-14 for the wordmark/nav row, a fixed-height
- * single-line tagline row) sum to the `scroll-mt-*` app-shell.tsx sets on
- * <main>, so the skip link lands a keyboard user just below this header
- * rather than partly under it (K3: a sticky header must never hide the
- * focused element). Changing either row's height here means updating that
- * scroll-mt too — e2e/header.spec.ts asserts the two stay in step by
- * measuring the real rendered boxes rather than trusting either number.
+ * `HEADER_HEIGHT_PX` ties this component's real rendered height to app-
+ * shell.tsx's `<main>` (PR #94 review round 2, finding 3) — the skip link
+ * moves focus there, and a sticky header must never cover the element focus
+ * just landed on (K3). Before this, the two files each carried their OWN
+ * number (this file's row heights; app-shell.tsx's `scroll-mt-24`, padded
+ * well above the real height "to be safe") - two independently-reasoned
+ * numbers that happened to agree, which is exactly the shape a later change
+ * to either one could silently break. Now there is one: AppShell reads
+ * `HEADER_HEIGHT_PX` from here and publishes it as a `--header-height` CSS
+ * custom property, which <main>'s `scroll-mt-[var(--header-height)]`
+ * (a literal, Tailwind-detectable arbitrary value - not a template-literal
+ * interpolation of the number, which Tailwind's static source scan cannot
+ * see) then reads. See app-shell.tsx's own comment for why the property has
+ * to be declared on the shared ancestor rather than on this component's own
+ * `<header>` element: CSS custom properties cascade to descendants, and
+ * `<header>` and `<main>` are siblings, not ancestor and descendant.
+ *
+ * The number itself: 56px (`h-14`, the wordmark/nav row) + 28px (`h-7`, the
+ * tagline row below - see that row's own comment for why it is a fixed
+ * height rather than tracking the text's natural line-height) + 1px (this
+ * element's own `border-b`) = 85px. e2e/header.spec.ts still measures the
+ * real rendered boxes rather than trusting this arithmetic either - the
+ * point of the shared variable is that there is now only one number to get
+ * right, not that getting it right stops being worth checking for real.
  */
+export const HEADER_HEIGHT_PX = 85;
+
 const NAV_ITEMS: NavItem[] = [
   { href: "/", label: "Gallery" },
   { href: ABOUT_PATH, label: "About" },
@@ -99,16 +117,27 @@ export function SiteHeader() {
           The tagline, on its own fixed-height row rather than squeezed into
           the wordmark row (K1: it must stay visible, not truncated away,
           at 375px alongside two sign-in buttons and up to two nav links).
-          `truncate` keeps this row's height to exactly one line in every
-          case so the `scroll-mt-*` on <main> this component's own docstring
-          names stays a single correct number across all three tested
-          viewports, rather than one that is only right where the sentence
-          happens to fit on one line. Even truncated, the full sentence stays
+
+          `h-7` (28px), not the text's own natural line-height plus padding
+          (PR #94 review round 2, finding 3): `text-xs`'s line-height is
+          16px and `sm:text-sm`'s is 20px, so the row used to be a different
+          height below `sm` than at it - meaning HEADER_HEIGHT_PX below would
+          have needed to be two numbers, one per breakpoint, which is exactly
+          the kind of thing this component and <main>'s scroll-margin could
+          drift apart on without either file's author noticing. `h-7 flex
+          items-center` fixes the row at one height regardless of which text
+          size is active, so this component's total rendered height - and
+          therefore HEADER_HEIGHT_PX - is a single constant, true at every
+          viewport this bead tests.
+
+          `truncate` keeps this row to exactly one line even if the sentence
+          grows at some future rewrite - needed for the fixed height above to
+          keep meaning what it says. Even truncated, the full sentence stays
           in the DOM and the accessible name - only the visual rendering
           clips, which is what K2's "snapshot of the header strings" below
           reviews rather than a screenshot.
         */}
-        <p className="truncate pb-2 text-xs text-muted-foreground sm:text-sm">
+        <p className="flex h-7 items-center truncate text-xs text-muted-foreground sm:text-sm">
           {SITE_TAGLINE}
         </p>
       </div>

@@ -23,6 +23,23 @@ vi.mock("@/lib/auth", () => ({
 }));
 
 /**
+ * Stubbed only for the one test below that renders the full page through
+ * AppShell (ugcportal-14k9 PR #94 review round 2, finding 1) rather than
+ * Home()/Gallery alone. Both are real async Server Components that import
+ * `getSession` from "@/lib/auth" - a module this file's own mock above
+ * replaces wholesale, so an un-stubbed UploadNavLink/AuthStatus would call
+ * `undefined()` the moment AppShell's tree actually resolves them. Harmless
+ * for every OTHER test in this file, which renders Home()/Gallery directly
+ * and never touches either.
+ */
+vi.mock("@/components/upload-nav-link", () => ({
+  UploadNavLink: () => null,
+}));
+vi.mock("@/components/auth-status", () => ({
+  AuthStatus: () => null,
+}));
+
+/**
  * The public gallery, against a real database and the real listing code
  * (ugcportal-71y).
  *
@@ -42,6 +59,7 @@ vi.mock("@/lib/auth", () => ({
 const database = createTemporaryDatabase();
 const { prisma } = await import("@/lib/prisma");
 const { default: Home } = await import("@/app/page");
+const { AppShell } = await import("@/components/app-shell");
 const { GET } = await import("@/app/api/public/media/route");
 const { mediaPreviewPath, publicMediaListingPath } = await import(
   "@/lib/routes"
@@ -248,28 +266,30 @@ describe("K1 — the gallery renders published previews to an anonymous visitor"
   });
 
   /**
-   * ugcportal-14k9 PR #94 review round 1, low finding 2. Before this test,
-   * the gallery's own h1 repeated SITE_DESCRIPTION — the same sentence
-   * src/app/layout.tsx puts in `<meta name="description">` — and once the
-   * header (src/components/site-header.tsx) started rendering SITE_TAGLINE
-   * on every page including this one, an anonymous visitor on "/" saw two
-   * different descriptive sentences stacked within a few dozen pixels of
-   * each other: the header's tagline, then this h1 restating the same idea
-   * in different words. Checked by substring on SITE_DESCRIPTION's own
-   * distinguishing fragment ("wine and drink" — the exact words ugcportal-
-   * qnq9.3 still needs to reword away from naming alcohol) rather than its
-   * full text, so this keeps meaning what it says even after that reword
-   * lands and changes SITE_DESCRIPTION's exact wording.
+   * ugcportal-14k9 PR #94 review, two rounds of the same mistake. Round 1
+   * found the gallery's own h1 repeating SITE_DESCRIPTION — the same
+   * sentence src/app/layout.tsx puts in `<meta name="description">` — once
+   * the header (src/components/site-header.tsx) started rendering
+   * SITE_TAGLINE on every page too, duplicating it in different words.
+   * Round 1's own fix (switching this heading TO SITE_TAGLINE) just swapped
+   * which sentence got duplicated — round 2 found it now repeats the
+   * header's tagline WORD FOR WORD. The actual fix is for this heading to
+   * stop restating site-wide copy at all: "Gallery" names the page, the
+   * same word the header's own nav link already uses for it, so it cannot
+   * drift into a second description no matter what either SITE_TAGLINE or
+   * SITE_DESCRIPTION says later. The cross-component duplication claim
+   * itself — that the tagline sentence appears exactly once on the whole
+   * rendered page — is asserted below, through AppShell, not here: a
+   * Gallery-only render cannot see the header's copy at all, which is
+   * exactly how round 1's fix shipped a new instance of the round-1 bug
+   * with every Gallery-only test still green.
    */
-  it("uses the header's own tagline as its one heading, not a second description", async () => {
+  it("gives the gallery its own heading, not site-wide copy", async () => {
     await seedMedia({ id: "a", createdAt: new Date("2026-03-01T00:00:00Z") });
 
     const markup = await renderGallery();
 
-    expect(markup).toContain(
-      "Original photography of food, wine accessories, technology and books.",
-    );
-    expect(markup).not.toContain("wine and drink");
+    expect(markup).toMatch(/<h1[^>]*>Gallery<\/h1>/);
   });
 
   it("shows an empty state, not a broken grid, when nothing is published", async () => {
@@ -290,6 +310,30 @@ describe("K1 — the gallery renders published previews to an anonymous visitor"
     // case's half of that distinction, pinned here where the row really is
     // absent rather than where a fetch failed.
     expect(markup).toContain('data-gallery-state="empty"');
+  });
+});
+
+/**
+ * ugcportal-14k9 PR #94 review round 2, finding 1. Rendered through
+ * `AppShell`, not `Home()`/`Gallery` alone - the bug both review rounds
+ * found is a relationship BETWEEN two components (the header's tagline and
+ * the gallery's own heading), which no render of either component in
+ * isolation can observe. Every other test in this file renders `Home()`
+ * directly for exactly that narrower, component-scoped reason; this is the
+ * one claim that needs the composed page instead.
+ */
+describe("the header's tagline is not duplicated elsewhere on the composed page", () => {
+  const TAGLINE =
+    "Original photography of food, wine accessories, technology and books.";
+
+  it("appears exactly once across the whole rendered home page", async () => {
+    await seedMedia({ id: "a", createdAt: new Date("2026-03-01T00:00:00Z") });
+
+    const page = await Home();
+    const markup = renderToStaticMarkup(AppShell({ children: page }));
+
+    const occurrences = markup.split(TAGLINE).length - 1;
+    expect(occurrences, markup).toBe(1);
   });
 });
 

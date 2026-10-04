@@ -1,6 +1,6 @@
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 
-import { SiteHeader } from "@/components/site-header";
+import { HEADER_HEIGHT_PX, SiteHeader } from "@/components/site-header";
 import { SITE_NAME } from "@/lib/site";
 
 /**
@@ -18,8 +18,8 @@ import { SITE_NAME } from "@/lib/site";
  * Frame budget:
  *   header   variable, sticky, opaque (ugcportal-14k9: a wordmark/nav row
  *            plus a fixed-height tagline row; see src/components/site-
- *            header.tsx and the scroll-mt-24 note on <main> below for the
- *            number this grew to)
+ *            header.tsx's HEADER_HEIGHT_PX and the `--header-height` note
+ *            on the root div below for the number this grew to)
  *   content  flex-1, page decides its own max width and padding
  *   footer   auto, hairline above
  *
@@ -47,8 +47,22 @@ export function AppShell({ children }: { children: ReactNode }) {
       height on the ancestor chain to resolve against, and `body` only has a
       min-height, so `min-h-full` collapsed here and left the footer floating
       in the middle of a short page.
+
+      `--header-height` (PR #94 review round 2, finding 3) is declared HERE,
+      on the root div, rather than on <SiteHeader />'s own <header> element -
+      not a style choice, a CSS constraint: a custom property cascades to an
+      element's DESCENDANTS, and <header>/<main> are siblings under this div,
+      not ancestor and descendant. Declaring it on their nearest common
+      ancestor is the only place in this tree where both can read it. The
+      NUMBER itself is not re-derived here, though: it is imported straight
+      from site-header.tsx's own HEADER_HEIGHT_PX (see that file's comment
+      for the arithmetic), so this file does not carry a second, independent
+      guess of the header's height the way `scroll-mt-24` used to.
     */
-    <div className="flex min-h-dvh flex-col bg-background">
+    <div
+      className="flex min-h-dvh flex-col bg-background"
+      style={{ "--header-height": `${HEADER_HEIGHT_PX}px` } as CSSProperties}
+    >
       {/*
         `fixed`, not `absolute`. This wrapper is not a containing block, so an
         absolutely positioned skip link resolves against the initial
@@ -109,19 +123,22 @@ export function AppShell({ children }: { children: ReactNode }) {
         failure ugcportal-14k9 names: a sticky header that hides the focused
         element with no working skip link.
 
-        scroll-mt-24 (96px), not scroll-mt-14 (56px) any more (ugcportal-
-        14k9): the header grew a second, tagline row (src/components/site-
-        header.tsx) once the wordmark/nav row could no longer carry it. That
-        row's real height is 81px below the `sm` breakpoint (h-14's 56px +
-        a one-line text-xs tagline at pb-2 + the header's own 1px border)
-        and 85px at `sm` and above (the tagline switches to text-sm, one
-        line taller); 96px is a deliberately round, single number comfortably
-        above both rather than a `scroll-mt-[81px] sm:scroll-mt-[85px]` pair
-        tracking two measured pixel counts a future font or spacing tweak
-        could quietly invalidate. e2e/header.spec.ts verifies the real
-        relationship directly - that the focused element's top is at or below
-        the sticky header's bottom, post-skip, at each tested viewport -
-        rather than trusting this arithmetic.
+        scroll-mt-[var(--header-height)], not a literal scroll-mt-24 any
+        more (PR #94 review round 2, finding 3): the root div above declares
+        `--header-height` from site-header.tsx's own HEADER_HEIGHT_PX, so
+        this reads the SAME number the header's rows are sized from rather
+        than a second, independently-reasoned Tailwind scale value that
+        happened to agree with it. `[var(--header-height)]`, not a
+        `${HEADER_HEIGHT_PX}px` template literal baked into the class name:
+        Tailwind's source scan looks for a literal arbitrary-value string in
+        the compiled output, and a template-literal interpolation does not
+        produce one at the point Tailwind reads this file's text - `var(...)`
+        is itself the literal, resolved later by the browser's own cascade,
+        which is exactly what makes this safe to write once here rather than
+        import-and-interpolate. e2e/header.spec.ts still verifies the real
+        relationship directly - that the focused element's top is at or
+        below the sticky header's bottom, post-skip, at each tested viewport
+        - rather than trusting this arithmetic, single-sourced or not.
 
         outline-hidden only for this programmatic focus: a full-width ring
         round the entire content region is noise, and every control inside it
@@ -130,7 +147,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       <main
         id="main-content"
         tabIndex={-1}
-        className="flex flex-1 scroll-mt-24 flex-col outline-hidden"
+        className="flex flex-1 scroll-mt-[var(--header-height)] flex-col outline-hidden"
       >
         {children}
       </main>
