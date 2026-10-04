@@ -3,6 +3,8 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import { REFUSAL_EFFECT } from "@/lib/sign-in-policy";
+
 /**
  * docs/access-control.md tells an operator what `DELETE FROM User` destroys,
  * so they can decide whether to remove an account that got in while the
@@ -141,5 +143,110 @@ describe("the runbook does not recommend a command that prints nothing", () => {
     expect(commands).toHaveLength(1);
     expect(commands[0]).not.toMatch(/prisma\s+db\s+execute/);
     expect(commands[0]).toMatch(/^\s*sqlite3\b/m);
+  });
+});
+
+/**
+ * ugcportal-mzr K3: the doc says which of the three mechanisms was chosen,
+ * what the revocation bound is, and what the operator must still do by hand.
+ *
+ * The list of refusals that destroy session rows is checked against the
+ * CODE rather than against the memory of whoever last edited the doc, in the
+ * same spirit as the cascade check above: the dangerous drift is not a
+ * missing section, it is a section that still describes the previous rule.
+ * Reclassify a refusal in `REFUSAL_EFFECT` and this fails until the
+ * runbook says so — and the operator's mental model of "what does removing
+ * an entry actually destroy" is the thing that would otherwise go quietly
+ * stale.
+ *
+ * The real value is IMPORTED, not scraped out of the source text (PR #91
+ * review, round 2, finding 9). The first version parsed the array literal
+ * with a regex, which any cosmetic reformat — one line instead of three, a
+ * trailing comment, different quotes — could silently turn into an empty
+ * list, leaving a test that compares nothing to nothing.
+ */
+
+const REVOCATION_HEADING = "### Revoking access takes effect on the next request";
+const DEPLOY_HEADING = "### Deploy order: migrate first, then deploy";
+
+/** The refusals src/lib/live-session.ts deletes session rows for. */
+function revokingRefusals(): string[] {
+  return Object.entries(REFUSAL_EFFECT)
+    .filter(([, handling]) => handling === "revoke")
+    .map(([refusal]) => refusal)
+    .sort();
+}
+
+/** The ones the doc tells the operator are destructive. */
+function documentedRevokingRefusals(section: string): string[] {
+  const sentence = section.match(
+    /decision about this identity\*\*\s*\(([^)]*)\)\s*also\s*\*\*deletes that/,
+  );
+  if (!sentence) {
+    return [];
+  }
+  return [...sentence[1].matchAll(/`([a-z-]+)`/g)]
+    .map(([, name]) => name)
+    .sort();
+}
+
+const revocationSection = doc.slice(
+  doc.indexOf(REVOCATION_HEADING),
+  doc.indexOf(DEPLOY_HEADING),
+);
+
+describe("the revocation runbook matches the code", () => {
+  it("has a section at all", () => {
+    // Guards the checks below against passing on two empty strings.
+    expect(doc).toContain(REVOCATION_HEADING);
+    expect(doc).toContain(DEPLOY_HEADING);
+    expect(revocationSection.length).toBeGreaterThan(0);
+    expect(revokingRefusals().length).toBeGreaterThan(0);
+    // Both kinds exist, so "names exactly the revoking ones" below is a real
+    // partition rather than "names all of them".
+    expect(Object.values(REFUSAL_EFFECT)).toContain("keep");
+  });
+
+  it("names exactly the refusals that destroy session rows", () => {
+    expect(documentedRevokingRefusals(revocationSection)).toEqual(
+      revokingRefusals(),
+    );
+  });
+
+  it("states the bound, rather than only that there is one", () => {
+    // "within a bound that is written down" — the thing an operator needs is
+    // the number or the event, not the adjective.
+    expect(revocationSection).toMatch(
+      /\*\*The bound is the next request that resolves their session\*\*/,
+    );
+  });
+
+  it("says the identity is written by the insert, not afterwards", () => {
+    // The round-2 redesign (finding 1). A doc that still described a write
+    // after the fact would send the next reader looking for an event that
+    // no longer exists — and would make the race it removed sound live.
+    expect(revocationSection).toMatch(
+      /\*\*The identity is written by the insert that creates the session\.\*\*/,
+    );
+    expect(revocationSection).toContain("AsyncLocalStorage");
+  });
+
+  it("says which of the three mechanisms was chosen and what the others were", () => {
+    expect(revocationSection).toContain("session.maxAge");
+    expect(revocationSection).toContain("revoke all sessions");
+  });
+
+  it("tells the operator what is still theirs to do", () => {
+    expect(revocationSection).toContain(
+      "What an operator still has to do by hand:",
+    );
+    // The one that is not optional: the policy is read from the process
+    // environment, so an unrestarted server keeps the old list.
+    expect(revocationSection).toMatch(/\*\*Restart or redeploy\*\*/);
+    // And the one that cannot be done afterwards: the row is deleted with
+    // the refusal, so the log line is the only record that session existed
+    // (PR #91 review, round 3, finding 6).
+    expect(revocationSection).toMatch(/\*\*Keep the logs if you want a record/);
+    expect(revocationSection).toMatch(/the \*\*only\*\* trace/);
   });
 });

@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AUTH_ERROR_PATH } from "@/lib/routes";
 import { PERMITTED_EMAILS_VAR, SIGN_IN_PROVIDERS } from "@/lib/sign-in-policy";
+import { pinEnvironment } from "@/lib/test-support/env";
+import { callbackSession } from "@/lib/test-support/session";
 
 /**
  * ugcportal-egp K1, as WIRED rather than as written.
@@ -16,18 +18,35 @@ import { PERMITTED_EMAILS_VAR, SIGN_IN_PROVIDERS } from "@/lib/sign-in-policy";
 // vi.hoisted, because vi.mock's factory is hoisted above every `const` in
 // this module, so anything the factory closes over has to be created up
 // there with it.
-const { nextAuthMock, nextAuthConfigs, reconcileBootstrapAdminMock } =
-  vi.hoisted(() => {
+const {
+  nextAuthMock,
+  nextAuthConfigs,
+  reconcileBootstrapAdminMock,
+  deleteManyMock,
+  createSessionMock,
+  routeHandlerMock,
+} = vi.hoisted(() => {
     // The configs NextAuth was constructed with, recorded rather than read
     // off mock.calls: NextAuth is constructed once, when the module is first
     // evaluated, and the beforeEach below clears mock state.
     const nextAuthConfigs: unknown[] = [];
     return {
       nextAuthConfigs,
+      // The two Session writes this config makes: the revocation, and the
+      // insert the adapter performs when a sign-in mints a session. Their
+      // behaviour is tested in src/lib/live-session.test.ts; here they exist
+      // so the callbacks and the adapter can be driven, and so this file can
+      // assert they were reached with the right values.
+      deleteManyMock: vi.fn(async () => ({ count: 1 })),
+      createSessionMock: vi.fn(async (args: unknown) => args),
+      // Stands in for @auth/core's own route handler, so that what this
+      // app EXPORTS as `handlers` can be driven and the wrapping around it
+      // asserted. Its body is set per test.
+      routeHandlerMock: vi.fn(async () => new Response("ok")),
       nextAuthMock: vi.fn((config: unknown) => {
         nextAuthConfigs.push(config);
         return {
-          handlers: {},
+          handlers: { GET: routeHandlerMock, POST: routeHandlerMock },
           auth: vi.fn(),
           signIn: vi.fn(),
           signOut: vi.fn(),
@@ -57,41 +76,36 @@ vi.mock("@/lib/admin-bootstrap", async (importOriginal) => {
   };
 });
 
-vi.mock("@/lib/prisma", () => ({ prisma: {} }));
+vi.mock("@/lib/prisma", () => ({
+  prisma: {
+    session: { deleteMany: deleteManyMock, create: createSessionMock },
+  },
+}));
 
-const { authConfig } = await import("@/lib/auth");
+const { authConfig, handlers } = await import("@/lib/auth");
+const { withSignInIdentity } = await import("@/lib/live-session");
 
 const LISTED = "owner@example.com";
 const STRANGER = "anyone-with-a-google-account@gmail.com";
-
-const originalAllowlist = process.env[PERMITTED_EMAILS_VAR];
-const originalBootstrap = process.env.ADMIN_BOOTSTRAP_EMAILS;
-
-function restore(name: string, value: string | undefined): void {
-  if (value === undefined) {
-    delete process.env[name];
-  } else {
-    process.env[name] = value;
-  }
-}
 
 /**
  * The callback reads process.env (that is the configuration seam), so these
  * tests set it and put it back. Every case states its own configuration; none
  * inherits the host's.
  */
+pinEnvironment({
+  [PERMITTED_EMAILS_VAR]: LISTED,
+  ADMIN_BOOTSTRAP_EMAILS: undefined,
+});
+
 beforeEach(() => {
   vi.clearAllMocks();
   vi.spyOn(console, "warn").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
-  process.env[PERMITTED_EMAILS_VAR] = LISTED;
-  delete process.env.ADMIN_BOOTSTRAP_EMAILS;
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
-  restore(PERMITTED_EMAILS_VAR, originalAllowlist);
-  restore("ADMIN_BOOTSTRAP_EMAILS", originalBootstrap);
 });
 
 function signIn(
@@ -244,6 +258,188 @@ describe("the bootstrap and the allowlist compose (K3)", () => {
         // be honoured at promotion (PR #81 round 5).
         expect(reconcileBootstrapAdminMock).toHaveBeenCalledWith(user, account);
       });
+  });
+});
+
+/**
+ * ugcportal-mzr, as WIRED. The enforcement itself — what it returns, what it
+ * deletes, what it refuses to delete — is src/lib/live-session.ts's own
+ * suite's business; what can only be checked here is that the `session`
+ * callback this app hands NextAuth reaches it at all, and hands it the two
+ * columns the decision is made on. Deleting either of the three lines in the
+ * callback fails something below.
+ */
+describe("the session callback re-checks the policy on every request", () => {
+  /** The adapter rows, as the database strategy hands them to the callback. */
+  function userRow(overrides: Record<string, unknown> = {}) {
+    return { id: "user-1", email: LISTED, role: "USER", ...overrides };
+  }
+
+  function sessionRow(overrides: { signInProvider?: string | null } = {}) {
+    return callbackSession({ signInEmail: LISTED, ...overrides }) as unknown as Record<
+      string,
+      unknown
+    >;
+  }
+
+  function resolveSession(
+    session: Record<string, unknown> = sessionRow(),
+    user: Record<string, unknown> = userRow(),
+  ) {
+    return authConfig.callbacks.session({
+      session: { ...session, user },
+      user,
+    } as unknown as Parameters<typeof authConfig.callbacks.session>[0]);
+  }
+
+  it("surfaces the id and role of a still-permitted identity", async () => {
+    const session = await resolveSession(
+      sessionRow(),
+      userRow({ role: "ADMIN" }),
+    );
+
+    expect(session.user?.id).toBe("user-1");
+    expect((session.user as { role?: string }).role).toBe("ADMIN");
+  });
+
+  it("refuses the identity once its address stops being permitted", async () => {
+    process.env[PERMITTED_EMAILS_VAR] = "someone-else@example.com";
+
+    const session = await resolveSession();
+
+    expect(session.user).toBeUndefined();
+    // The session in front of it, by id — not every session its owner holds.
+    expect(deleteManyMock).toHaveBeenCalledWith({
+      where: { id: "session-1" },
+    });
+  });
+
+  it("judges the identity recorded on the SESSION row", async () => {
+    // The pair that pins the session row to the callback: the two cases
+    // differ only in a column of the session, so a callback that read the
+    // user instead — the round-1 defect — would answer the same way twice.
+    process.env[PERMITTED_EMAILS_VAR] = `google:${LISTED}`;
+
+    expect((await resolveSession(sessionRow())).user?.id).toBe("user-1");
+    expect(
+      (await resolveSession(sessionRow({ signInProvider: "facebook" }))).user,
+    ).toBeUndefined();
+  });
+});
+
+/**
+ * The identity the gate just judged reaches the session row, as wired: the
+ * real `signIn` callback, the real wrapped adapter, the real
+ * AsyncLocalStorage slot (PR #91 review, round 2, finding 1).
+ *
+ * Driven through `withSignInIdentity` because that is what the exported
+ * `handlers` are wrapped in — a request is the unit that owns a slot, and
+ * without one there is nothing for the callback to write into.
+ */
+describe("a permitted sign-in hands its identity to the session it mints", () => {
+  /** One request: the gate decides, then the adapter creates the session. */
+  function signInRequest(options: {
+    email: string;
+    provider: string;
+    profile?: Record<string, unknown>;
+  }) {
+    return withSignInIdentity({
+      POST: async () => {
+        const permitted = authConfig.callbacks.signIn({
+          user: { email: options.email },
+          account: { provider: options.provider },
+          profile: options.profile ?? { email: options.email },
+        } as Parameters<typeof authConfig.callbacks.signIn>[0]);
+        await authConfig.adapter.createSession?.({
+          sessionToken: "session-token-1",
+          userId: "user-1",
+          expires: new Date(Date.now() + 86_400_000),
+        });
+        return permitted;
+      },
+    }).POST();
+  }
+
+  it("writes the provider and the judged address in the session's own insert", async () => {
+    await expect(
+      signInRequest({ email: LISTED, provider: "google" }),
+    ).resolves.toBe(true);
+
+    expect(createSessionMock).toHaveBeenCalledTimes(1);
+    expect(createSessionMock.mock.calls[0][0]).toMatchObject({
+      data: {
+        sessionToken: "session-token-1",
+        signInProvider: "google",
+        signInEmail: LISTED,
+      },
+    });
+  });
+
+  it("records the address the gate judged, not the one on the user object", async () => {
+    // `authorisedEmail` prefers what the provider asserted in THIS exchange.
+    const fresh = "fresh@example.com";
+    process.env[PERMITTED_EMAILS_VAR] = fresh;
+
+    await expect(
+      signInRequest({
+        email: LISTED,
+        provider: "google",
+        profile: { email: fresh },
+      }),
+    ).resolves.toBe(true);
+
+    expect(createSessionMock.mock.calls[0][0]).toMatchObject({
+      data: { signInEmail: fresh },
+    });
+  });
+
+  it("records nothing for a sign-in the gate refused", async () => {
+    // Belt and braces on the ordering: a refused attempt never reaches
+    // `handleLoginOrRegister`, so no session is created at all — but if one
+    // ever were, it must not inherit a refused identity.
+    process.env[PERMITTED_EMAILS_VAR] = "someone-else@example.com";
+
+    await expect(
+      signInRequest({ email: LISTED, provider: "google" }),
+    ).resolves.toBe(false);
+
+    expect(createSessionMock.mock.calls[0][0]).toMatchObject({
+      data: { signInProvider: null, signInEmail: null },
+    });
+  });
+});
+
+describe("the exported route handlers carry the identity slot", () => {
+  it("gives the request a slot, so the gate's answer reaches the insert", async () => {
+    // Without the wrapper there is no store for the whole mechanism to use:
+    // `rememberSignInIdentity` finds nothing to write into and the session
+    // is created unattributed. Driven through the EXPORTED handlers rather
+    // than a locally wrapped function, because the export is the thing a
+    // route file imports and the thing that can be unwrapped by accident.
+    routeHandlerMock.mockImplementation(async () => {
+      authConfig.callbacks.signIn({
+        user: { email: LISTED },
+        account: { provider: "google" },
+        profile: { email: LISTED },
+      } as Parameters<typeof authConfig.callbacks.signIn>[0]);
+      await authConfig.adapter.createSession?.({
+        sessionToken: "session-token-1",
+        userId: "user-1",
+        expires: new Date(Date.now() + 86_400_000),
+      });
+      return new Response("ok");
+    });
+
+    await handlers.POST(
+      new Request("http://localhost/api/auth/callback/google", {
+        method: "POST",
+      }) as never,
+    );
+
+    expect(routeHandlerMock).toHaveBeenCalledTimes(1);
+    expect(createSessionMock.mock.calls[0][0]).toMatchObject({
+      data: { signInProvider: "google", signInEmail: LISTED },
+    });
   });
 });
 

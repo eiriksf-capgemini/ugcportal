@@ -85,6 +85,44 @@ model Session {
   userId       String
   expires      DateTime
 
+  // WHICH IDENTITY MINTED THIS SESSION (ugcportal-mzr): the provider the
+  // sign-in came through (an id from SIGN_IN_PROVIDERS — `google`,
+  // `facebook`; canonicalised by `providerId` on the way in, so the value
+  // here is always one the reader will recognise or NULL, never something
+  // in between) and the address that provider asserted for it. Written in
+  // the row's own INSERT, by the adapter wrapper in
+  // src/lib/live-session.ts: the `signIn` callback puts the identity in an
+  // AsyncLocalStorage slot for the request, and `createSession` reads it.
+  // Not a second write afterwards — two sign-ins by one person at the same
+  // moment leave two indistinguishable rows, and nothing that looks for
+  // "the newest unattributed one" can tell them apart (PR #91 review,
+  // round 2, finding 1).
+  //
+  // Here, on the SESSION, and not on `User`. A user can hold several
+  // sessions at once, minted through different providers and — once
+  // ugcportal-t33p lands — under different addresses, and the per-request
+  // re-check in src/lib/live-session.ts asks about the one session in front
+  // of it. A per-user column answers a question nobody asked ("which
+  // provider did this person last use, anywhere?"), and judging a session
+  // by it means one device's sign-in can get another device's
+  // still-permitted session refused (PR #91 review, round 1, finding 1).
+  //
+  // A DENORMALISATION — the provider also appears on `Account`, and the
+  // address on `User` — and it earns that by being free to read: the
+  // adapter's `getSessionAndUser` loads this row in the single query
+  // `auth()` already makes, so the per-request check costs no extra query
+  // (ugcportal-mzr K2). `Account` could not answer it anyway: it says which
+  // providers are linked, never which one a given session came through.
+  //
+  // Nullable, and null is not "no identity": it is "not recorded" — a
+  // session minted before these columns existed, or one the migration's
+  // backfill could not attribute. `providerId` in src/lib/sign-in-policy.ts
+  // maps an unrecognised provider to `null`, which fails closed against a
+  // provider-bound entry; a null address falls back to `User.email`, which
+  // is what the check judged before these columns existed.
+  signInProvider String?
+  signInEmail    String?
+
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 

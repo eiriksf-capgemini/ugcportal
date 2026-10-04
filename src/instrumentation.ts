@@ -6,6 +6,8 @@
  * an audit — or, for the sign-in gate below, as an unexplained refusal.
  */
 import { CONTACT_EMAIL_PLACEHOLDER, isBareEmailAddress } from "@/lib/contact";
+import { LEGAL_PAGES } from "@/lib/legal/pages";
+import { checkLegalPagesPublishable } from "@/lib/legal/publishable";
 import {
   PERMITTED_EMAILS_VAR,
   PROVIDER_PREFIX_HINT,
@@ -159,6 +161,11 @@ export async function register(): Promise<void> {
     checkEvidenceEncryption(),
     checkSignInConfiguration(),
     checkContactEmailConfiguration(),
+    // ugcportal-qnq9.4: while a LEGAL_* variable is unset (env.example) the
+    // legal pages refuse to render in production (src/lib/legal/
+    // publishable.ts); say which at boot rather than leaving it to the
+    // first visitor to find.
+    checkLegalPagesPublishable(LEGAL_PAGES),
   ]) {
     if (warning) {
       console.error(warning);

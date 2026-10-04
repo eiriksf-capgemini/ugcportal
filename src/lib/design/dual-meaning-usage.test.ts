@@ -156,23 +156,29 @@ function scanDualMeaningUsage(): Map<string, Partial<Record<DualMeaningToken, nu
  * text-muted-foreground, the same token its sibling already uses.
  */
 const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> = {
-  "src/app/auth/error/page.tsx": { "text-foreground": 1, "text-muted-foreground": 1 },
-  // Round-5 review: the identical inline-link class string these three
-  // pages (and contact-section.tsx, below) each wrote out by hand is now
-  // one shared constant, src/components/ui/inline-link.ts's
-  // INLINE_LINK_CLASS — so "text-primary" appears in THIS file's own
-  // source text only where it is still written directly. rights/page.tsx
-  // keeps one: a second, differently-styled link elsewhere on that page
-  // that was never part of the duplicated string this round's finding was
-  // about (see INLINE_LINK_CLASS for why that one was left alone). users/
-  // page.tsx and instagram/page.tsx each had exactly one occurrence, which
-  // was the duplicated string, so both drop to zero "text-primary" of
-  // their own.
+  // The page h1 moved out of auth/error, upload and the legal frame into
+  // src/components/page-title.tsx (ugcportal-qnq9.4, PR #90 round 2); it
+  // still renders straight on --background inside the app shell's <main>,
+  // so the page-canvas token stays the correct one.
+  "src/components/page-title.tsx": { "text-foreground": 1 },
+  "src/app/auth/error/page.tsx": { "text-muted-foreground": 1 },
+  // ugcportal-qnq9.4: the legal pages render straight on --background inside
+  // the app shell's <main>, with no surface well of their own - the same
+  // situation as auth/error/page.tsx and upload/page.tsx, so the page-canvas
+  // pair is the correct one.
+  "src/components/legal/legal-page.tsx": {
+    "text-foreground": 3,
+    "text-muted-foreground": 5,
+  },
+  // ugcportal-qnq9.7 round 5: the inline-link class string these admin pages
+  // wrote out by hand is now INLINE_LINK_CLASS (src/components/ui/inline-link.ts),
+  // so their own "text-primary" counts drop; rights/page.tsx keeps one
+  // differently-styled link of its own.
   "src/app/admin/settings/rights/page.tsx": { "text-muted-foreground": 5, "text-primary": 1 },
   "src/app/admin/settings/rights/decision-form.tsx": { "text-muted-foreground": 3 },
   "src/app/admin/settings/users/page.tsx": { "text-muted-foreground": 4 },
   "src/app/admin/settings/instagram/page.tsx": { "text-muted-foreground": 3 },
-  "src/app/upload/page.tsx": { "text-foreground": 1, "text-muted-foreground": 1 },
+  "src/app/upload/page.tsx": { "text-muted-foreground": 1 },
   "src/app/upload/upload-form.tsx": { "text-foreground": 2, "text-muted-foreground": 5 },
   "src/components/upload-link.tsx": { "text-foreground": 1, "text-primary": 1 },
   "src/components/ui/button.tsx": { "border-primary": 1, "text-primary": 2 },

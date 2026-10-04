@@ -84,16 +84,16 @@ export const MEDIA_PREVIEW_PATH = "/api/media/preview";
 export const AUTH_ERROR_PATH = "/auth/error";
 
 /**
- * The privacy statement (ugcportal-qnq9.4). English, not /personvern: the
- * site's language is English (docs/ugc-research.md, decisions table).
+ * The privacy statement and the licence text (ugcportal-qnq9.4).
  *
- * Defined here rather than in ugcportal-qnq9.7's own site-copy module, with
- * the SAME name and value ugcportal-qnq9.4 (PR #90, concurrent) adds at this
- * exact spot — so the About/Portfolio contact notice and that bead's own
- * /privacy page cannot name two different paths, and whichever of the two
- * PRs merges first, the other's addition is a trivial, identical line.
+ * English paths, not /personvern and /lisens: the site's language is English
+ * (docs/ugc-research.md, decisions table), and a route a reader cannot
+ * pronounce is one they will not find. Norwegian law still governs the
+ * CONTENT — see the pages themselves. Named here so the footer
+ * (ugcportal-akv6) and the pages cannot drift apart.
  */
 export const PRIVACY_PATH = "/privacy";
+export const LICENCE_PATH = "/licence";
 
 /**
  * Where to send a visitor who has to sign in first.

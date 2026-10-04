@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 
 import { PAGE_CONTAINER_CLASS } from "@/components/site/page-shell";
+import { PageTitle } from "@/components/page-title";
 import { getSession } from "@/lib/auth";
 import { UPLOAD_PATH, signInPath } from "@/lib/routes";
 import { listPickerTags } from "@/lib/tags";
@@ -86,9 +87,7 @@ export default async function UploadPage() {
         canvas in light mode; the semantic foreground/muted-foreground tokens
         are the ones actually mode-aware for the page canvas.
       */}
-      <h1 className="text-2xl font-medium tracking-tight text-foreground sm:text-3xl">
-        Upload
-      </h1>
+      <PageTitle>Upload</PageTitle>
       <p className="mt-3 max-w-prose text-sm text-muted-foreground">
         Add images and video to your library. Each image is watermarked as it
         arrives, and only that watermarked copy is ever displayed.
