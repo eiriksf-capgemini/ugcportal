@@ -180,7 +180,7 @@ function revokingRefusals(): string[] {
 /** The ones the doc tells the operator are destructive. */
 function documentedRevokingRefusals(section: string): string[] {
   const sentence = section.match(
-    /decision about the list\*\s*\(([^)]*)\)\s*also\s*\*\*deletes that/,
+    /decision about this identity\*\*\s*\(([^)]*)\)\s*also\s*\*\*deletes that/,
   );
   if (!sentence) {
     return [];

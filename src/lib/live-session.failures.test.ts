@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { PERMITTED_EMAILS_VAR } from "@/lib/sign-in-policy";
 import { pinEnvironment } from "@/lib/test-support/env";
+import { callbackSession } from "@/lib/test-support/session";
 
 /**
  * What the revocation in src/lib/live-session.ts does when the database
@@ -40,15 +41,7 @@ pinEnvironment({
 });
 
 function sessionRow(): Session {
-  return {
-    id: SESSION_ID,
-    sessionToken: "token-1",
-    userId: USER_ID,
-    expires: "2026-12-01T00:00:00.000Z",
-    signInProvider: "google",
-    signInEmail: LISTED,
-    user: { id: USER_ID, email: LISTED, role: "USER" },
-  } as unknown as Session;
+  return callbackSession({ id: SESSION_ID, userId: USER_ID, signInEmail: LISTED });
 }
 
 function enforce() {

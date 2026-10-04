@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { PERMITTED_EMAILS_VAR } from "@/lib/sign-in-policy";
 import { pinEnvironment } from "@/lib/test-support/env";
+import { callbackSession } from "@/lib/test-support/session";
 
 /**
  * The live-session refusal log is throttled (PR #91 review, round 1,
@@ -43,13 +44,7 @@ pinEnvironment({
 });
 
 function sessionRow(): Session {
-  return {
-    id: "session-1",
-    expires: "2026-12-01T00:00:00.000Z",
-    signInProvider: "google",
-    signInEmail: LISTED,
-    user: { id: USER_ID, email: LISTED, role: "USER" },
-  } as unknown as Session;
+  return callbackSession({ userId: USER_ID, signInEmail: LISTED });
 }
 
 async function freshModule() {

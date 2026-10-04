@@ -200,8 +200,14 @@ function normalizeEmail(value: unknown): string | null {
  * non-string and blank to `null`. Shared by the address and the provider id
  * (PR #81 round 4) so a future change — Unicode case folding, say — happens
  * once.
+ *
+ * Exported since ugcportal-mzr, because src/lib/live-session.ts reads the
+ * same kind of value — columns written from these ones — off a session row,
+ * and had grown its own near-copy of this (PR #91 review, round 4, finding
+ * 3). "Blank counts as absent" has to mean the same thing on both sides of
+ * that write or the fallbacks stop lining up.
  */
-function normalizeString(value: unknown): string | null {
+export function normalizeString(value: unknown): string | null {
   if (typeof value !== "string") {
     return null;
   }
@@ -480,22 +486,36 @@ export type SignInRefusal =
  * makes the second half compulsory: a sixth variant that nobody classifies
  * is a compile error rather than a silent default.
  *
- * `"revoke"` means the identity is positively not permitted any more, so
- * the session row is deleted (src/lib/live-session.ts). `"keep"` means the
- * request is refused — fail closed, every time, that part is not
- * conditional — but the row survives. The difference is a revocation versus
- * an outage: `no-configuration` is what a deployment that lost its
- * environment variables looks like, and `no-email` describes a row rather
- * than a decision about the list. Deleting on those would log every user
- * out of every device at the moment nobody can sign in to notice.
+ * `"revoke"` means the answer is about THIS session and will not change on
+ * its own, so the row is deleted (src/lib/live-session.ts). `"keep"` means
+ * the policy could not be evaluated at all. Both refuse the request — fail
+ * closed, every time, that part is not conditional — and the difference is
+ * only what happens to the row.
+ *
+ * `no-configuration` is the whole of `"keep"`, and it is there because it
+ * is an OUTAGE, not a decision: a deployment that lost its environment
+ * variables refuses everybody, and deleting on it would log every user out
+ * of every device at the moment nobody can sign in to notice. Restoring the
+ * variable has to restore the sessions.
+ *
+ * `no-email` revokes, which is worth stating since it reads like the same
+ * kind of thing (PR #91 review, round 4 addendum, finding 8). It is not: it
+ * means this session has no address recorded AND the user row has none
+ * either, so there is nothing to judge and nothing outside the row that can
+ * change that. Classifying it `"keep"` left such a session refused on every
+ * request forever and never deleted — a row that can only be removed by
+ * expiring, for an identity that cannot sign in again either (the gate
+ * refuses `no-email` too). Deleting it is the same decision the gate
+ * already made, applied to the session that decision outlived.
  *
  * `unverified-email` cannot reach a live session at all — `decideLiveSession`
- * never returns it, having no profile to read the claim from — and is
- * classified with the others of its kind for the day that changes.
+ * never returns it, having no profile to read the claim from. It is
+ * classified `"keep"` because that is what an unreachable branch should be:
+ * the conservative answer, chosen by nobody's hand being forced.
  */
 export const REFUSAL_EFFECT = {
   "no-configuration": "keep",
-  "no-email": "keep",
+  "no-email": "revoke",
   "unverified-email": "keep",
   "not-permitted": "revoke",
   "wrong-provider": "revoke",

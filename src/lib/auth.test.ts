@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AUTH_ERROR_PATH } from "@/lib/routes";
 import { PERMITTED_EMAILS_VAR, SIGN_IN_PROVIDERS } from "@/lib/sign-in-policy";
 import { pinEnvironment } from "@/lib/test-support/env";
+import { callbackSession } from "@/lib/test-support/session";
 
 /**
  * ugcportal-egp K1, as WIRED rather than as written.
@@ -274,16 +275,11 @@ describe("the session callback re-checks the policy on every request", () => {
     return { id: "user-1", email: LISTED, role: "USER", ...overrides };
   }
 
-  function sessionRow(overrides: Record<string, unknown> = {}) {
-    return {
-      id: "session-1",
-      sessionToken: "session-token-1",
-      userId: "user-1",
-      expires: new Date(Date.now() + 86_400_000),
-      signInProvider: "google",
-      signInEmail: LISTED,
-      ...overrides,
-    };
+  function sessionRow(overrides: { signInProvider?: string | null } = {}) {
+    return callbackSession({ signInEmail: LISTED, ...overrides }) as unknown as Record<
+      string,
+      unknown
+    >;
   }
 
   function resolveSession(

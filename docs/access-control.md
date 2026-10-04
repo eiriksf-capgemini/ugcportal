@@ -139,16 +139,19 @@ How it works, in one line each:
   resolves a session that no gate accepts: 401 from the media routes, a
   redirect from `/upload`, `notFound()` from the admin screens. Every gate
   that already understood "not signed in" needs no change.
-- A refusal that is a *decision about the list* (`not-permitted`,
-  `wrong-provider`) also **deletes that session's row**, so the cookie is
-  dead rather than merely useless.
-- A refusal that means *the policy cannot be evaluated* (no configuration at
-  all, a session and user row with no address between them) refuses the
-  request just as hard but **leaves the row alone**. That distinction is
-  deliberate: losing the environment variables is an outage, not a
-  revocation, and restoring them should restore the sessions rather than
-  having silently logged everyone out of every device while nobody could
-  sign in to notice.
+- A refusal that is a **decision about this identity** (`not-permitted`,
+  `wrong-provider`, `no-email`) also **deletes that session's row**, so the
+  cookie is dead rather than merely useless. `no-email` belongs with the
+  other two even though it sounds like a mishap: it means the session has no
+  recorded address and the user row has none either, so there is nothing to
+  judge, nothing outside the row that can supply one, and the same identity
+  cannot sign in again either.
+- A refusal that means *the policy cannot be evaluated* — no configuration
+  at all — refuses the request just as hard but **leaves the row alone**.
+  That distinction is deliberate: losing the environment variables is an
+  outage, not a revocation, and restoring them should restore the sessions
+  rather than having silently logged everyone out of every device while
+  nobody could sign in to notice.
 - **The unit is one session, not one person.** Each session carries the
   identity that minted it — `Session.signInProvider` and
   `Session.signInEmail` — and is judged on that alone; the same person's

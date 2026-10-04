@@ -11,6 +11,7 @@ import {
   type SignInAttempt,
   authorisedEmail,
   decideLiveSession,
+  normalizeString,
 } from "@/lib/sign-in-policy";
 
 /**
@@ -181,36 +182,34 @@ function suppressedNote(suppressed: Map<string, number>): string {
  * row's own columns.
  */
 function recordedIdentity(session: Session): {
-  id: unknown;
+  id: string | null;
   provider: unknown;
-  email: unknown;
+  email: string | null;
 } {
   const row = session as unknown as {
     id?: unknown;
     signInProvider?: unknown;
     signInEmail?: unknown;
   };
+  // NORMALISED HERE, ONCE (PR #91 review, round 4, finding 3), with the
+  // policy's own `normalizeString` rather than a local near-copy of it:
+  // absent, non-string and blank all become `null`, so every reader below
+  // has one thing to check instead of its own idea of "usable".
+  //
+  // Blank mattering is not hypothetical bookkeeping. Nothing this app
+  // writes can produce `""` — `authorisedEmail` collapses blanks to `null`
+  // before the identity is persisted — but a direct SQL fix-up or a future
+  // backfill could, and a `""` address treated as present would skip the
+  // fallback to `User.email` and judge the session on nothing.
+  //
+  // `provider` stays raw: `providerId` inside the policy is the one place
+  // allowed to decide what a provider value means, and it normalises with
+  // the same function on the way.
   return {
-    id: row.id,
+    id: normalizeString(row.id),
     provider: row.signInProvider,
-    email: row.signInEmail,
+    email: normalizeString(row.signInEmail),
   };
-}
-
-/**
- * A recorded address, or `null` when there is nothing usable recorded.
- *
- * Blank counts as absent (PR #91 review, round 2, finding 5). Nothing this
- * app writes can produce `""` — `authorisedEmail` collapses blanks to
- * `null` before the identity is ever persisted — but a direct SQL fix-up or
- * a future backfill could, and the difference matters: a `""` treated as
- * present skips the fallback to `User.email` and lands on `no-email`, which
- * is a refusal that deliberately does NOT delete the row. The session would
- * then be refused forever, with a valid address sitting on the user row and
- * no destructive log line to explain it.
- */
-function recordedAddress(value: unknown): string | null {
-  return typeof value === "string" && value.trim() !== "" ? value : null;
 }
 
 /**
@@ -232,7 +231,7 @@ export async function enforceLiveSessionPolicy(
     // `authorisedEmail` prefers the asserted address at sign-in too, so the
     // session is judged on the string the gate permitted rather than on a
     // `User.email` that @auth/core never refreshes.
-    email: recordedAddress(recorded.email) ?? user.email,
+    email: recorded.email ?? user.email,
     provider: recorded.provider,
   });
   if (decision.permitted) {
@@ -270,11 +269,21 @@ export async function enforceLiveSessionPolicy(
 }
 
 /**
- * Revocations that have been started and not yet finished.
+ * A TEST SEAM, AND NOTHING ELSE (PR #91 review, round 4, findings 5 and 6).
  *
- * Exists because `enforceLiveSessionPolicy` deliberately does not await
- * them: the set gives tests something to wait on, and a future graceful
- * shutdown something to drain. Entries remove themselves.
+ * `enforceLiveSessionPolicy` deliberately does not await the delete, so a
+ * test that asserts the row is gone needs something to wait on; this is
+ * that and only that. No production path calls `settleRevocations`, and the
+ * set is not a shutdown drain — this app has no shutdown hook, and claiming
+ * one would be describing something that does not exist. If a drain is ever
+ * wanted, it is a new decision about what to do with an in-flight delete,
+ * not an existing feature of this variable.
+ *
+ * The alternative was `vi.waitFor` on a spy in every test that revokes.
+ * Kept this way because the real-database tests assert on rows rather than
+ * on calls, and polling a database for an answer that is already
+ * deterministic trades a precise failure (a diff) for a vague one (a
+ * timeout). Entries remove themselves.
  */
 const inFlightRevocations = new Set<Promise<void>>();
 
@@ -283,13 +292,7 @@ function track(revocation: Promise<void>): void {
   void revocation.finally(() => inFlightRevocations.delete(revocation));
 }
 
-/**
- * Settle every revocation started so far.
- *
- * For tests, which assert on rows the request itself does not wait for. Not
- * a way to make the refusal synchronous — nothing in the request path calls
- * it.
- */
+/** Settle every revocation started so far. See above: tests only. */
 export function settleRevocations(): Promise<unknown> {
   return Promise.all([...inFlightRevocations]);
 }
@@ -307,13 +310,15 @@ export function settleRevocations(): Promise<unknown> {
  * without the row's `id` — a different adapter, a future @auth/core that
  * stops spreading the row — would turn this into `DELETE FROM Session` for
  * every user on the instance. It fails closed instead: no id, no delete, and
- * the request is still refused by the caller either way.
+ * the request is still refused by the caller either way. The id arrives
+ * already normalised (`recordedIdentity`), so `null` is the only shape of
+ * "no usable id" this has to know about.
  *
  * Never rejects. The caller does not await it, and an unhandled rejection
  * would take the process down over a failed delete.
  */
-async function revokeSession(id: unknown, userId: string): Promise<void> {
-  if (typeof id !== "string" || id === "") {
+async function revokeSession(id: string | null, userId: string): Promise<void> {
+  if (id === null) {
     console.error(
       `[auth] Refused a live session for user ${userId} but could not ` +
         "identify its row, so nothing was deleted. The session is still " +
@@ -364,6 +369,13 @@ async function revokeSession(id: unknown, userId: string): Promise<void> {
  * body — so `auth()` resolves a session object with no user on it. That
  * possibility is why `Session["user"]` is declared optional in
  * src/lib/auth.ts (round 2, finding 2).
+ *
+ * That merge is a specific line in a beta dependency, and it is PINNED:
+ * src/lib/next-auth-session-merge.test.ts asserts the installed next-auth
+ * still merges this way, asserts package.json names an exact version rather
+ * than a range, and records why the behaviour cannot simply be executed
+ * under vitest (round 4, finding 1). If this shape ever has to change, that
+ * file says what else moves with it.
  *
  * `expires` only, rather than `{ ...session, user: undefined }`: the runtime
  * `session` here is the whole `Session` row the Prisma adapter read,
@@ -481,12 +493,45 @@ export function rememberSignInIdentity(attempt: SignInAttempt): void {
 export function withSessionIdentity(adapter: Adapter): Adapter {
   const createSession = adapter.createSession?.bind(adapter);
   if (!createSession) {
-    return adapter;
+    // At construction, so an adapter that cannot create sessions is a boot
+    // failure and not a silent pass-through (PR #91 review, round 4
+    // addendum, finding 7). Returning the adapter unchanged would have left
+    // every new session unattributed — and therefore self-revoking under a
+    // bound entry on its next request — with nothing anywhere saying why.
+    // The database session strategy cannot work without this method in any
+    // case, so there is no configuration this refuses that would otherwise
+    // have run.
+    throw new Error(
+      "[auth] The configured adapter has no createSession, so the sign-in " +
+        "identity cannot be recorded on the session it creates. See " +
+        "src/lib/live-session.ts (ugcportal-mzr).",
+    );
   }
   return {
     ...adapter,
     createSession: (data) => {
       const identity = signInIdentity.getStore();
+      if (!identity) {
+        // A session being created outside a wrapped request: either a new
+        // entry point that does not go through this app's `handlers`, or
+        // the wrapper lost somewhere. The row is written either way, with
+        // null columns — which fails closed, so this is a diagnostic
+        // problem rather than a security one — but silence is how the next
+        // such path goes unnoticed (round 4, finding 2).
+        //
+        // Loud in development and tests, where it is a bug somebody is
+        // about to introduce; a log in production, where refusing to create
+        // the session would turn a diagnostic into an outage.
+        const message =
+          "[auth] A session was created with no sign-in identity in scope. " +
+          "Every sign-in must go through the handlers exported by " +
+          "src/lib/auth.ts, which carry it; this session will be refused " +
+          "by any provider-bound allowlist entry on its next request.";
+        if (process.env.NODE_ENV !== "production") {
+          throw new Error(message);
+        }
+        console.error(message);
+      }
       return createSession({ ...data, ...identity } as typeof data);
     },
   };

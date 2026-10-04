@@ -1,9 +1,10 @@
 import type { Session } from "next-auth";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { PERMITTED_EMAILS_VAR } from "@/lib/sign-in-policy";
+import { PERMITTED_EMAILS_VAR, REFUSAL_EFFECT } from "@/lib/sign-in-policy";
 import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db";
 import { pinEnvironment } from "@/lib/test-support/env";
+import { callbackSession } from "@/lib/test-support/session";
 
 /**
  * ugcportal-mzr K1/K2: revoking permission takes effect on the next request
@@ -93,21 +94,24 @@ async function signedIn(options: {
   return rows;
 }
 
-/** The object @auth/core builds: the whole row, with the user attached. */
-function callbackSession(row: SeededSession): Session {
-  return {
+/** The seeded row, as @auth/core hands it to the callback. */
+function sessionFor(
+  row: SeededSession,
+  overrides: { id?: string | null } = {},
+): Session {
+  return callbackSession({
     id: row.id,
     sessionToken: `token-for-${row.id}`,
     userId: USER_ID,
-    expires: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
     signInProvider: row.signInProvider,
     signInEmail: row.signInEmail,
-    user: { id: USER_ID, email: LISTED, role: "USER" },
-  } as unknown as Session;
+    user: { id: USER_ID, email: LISTED },
+    ...overrides,
+  });
 }
 
 async function enforce(row: SeededSession, userEmail: string | null = LISTED) {
-  const result = await enforceLiveSessionPolicy(callbackSession(row), {
+  const result = await enforceLiveSessionPolicy(sessionFor(row), {
     id: USER_ID,
     email: userEmail,
   });
@@ -140,7 +144,7 @@ afterEach(async () => {
 describe("a session whose identity is still permitted (K2)", () => {
   it("is handed back untouched, with its rows intact", async () => {
     const [first] = await signedIn({});
-    const session = callbackSession(first);
+    const session = sessionFor(first);
 
     const result = await enforceLiveSessionPolicy(session, {
       id: USER_ID,
@@ -197,7 +201,7 @@ describe("a session whose permission has been revoked (K1)", () => {
   it("carries nothing else off the Session row either", async () => {
     process.env[PERMITTED_EMAILS_VAR] = "someone-else@example.com";
     const [first] = await signedIn({});
-    const session = callbackSession(first);
+    const session = sessionFor(first);
 
     const result = await enforceLiveSessionPolicy(session, {
       id: USER_ID,
@@ -316,13 +320,25 @@ describe("a session whose permission has been revoked (K1)", () => {
     expect(await liveSessionIds()).toEqual([]);
   });
 
-  it("refuses a session with no address anywhere", async () => {
+  it("refuses AND revokes a session with no address anywhere", async () => {
+    // `no-email` deletes the row (PR #91 review, round 4 addendum, finding
+    // 8). It reads like an "outage" refusal and is not one: there is no
+    // address on the session and none on the user row, nothing outside the
+    // row can supply one, and the gate refuses the same identity a fresh
+    // sign-in. Keeping the row meant refusing it on every request until it
+    // expired, for an identity that could never come back.
     const [first] = await signedIn({
       email: null,
-      sessions: [{ provider: "google", email: null }],
+      sessions: [
+        { provider: "google", email: null },
+        { provider: "google", email: null },
+      ],
     });
 
     expect((await enforce(first, null)).user).toBeUndefined();
+    // And only the one in front of it: the rule is unchanged, only the
+    // classification of this reason is.
+    expect(await liveSessionIds()).toEqual(["session-1"]);
   });
 });
 
@@ -399,36 +415,82 @@ describe("a policy that cannot be evaluated refuses without destroying rows", ()
     expect(await liveSessionIds()).toEqual(["session-0", "session-1"]);
   });
 
-  it("keeps the rows for a session with no address anywhere", async () => {
-    const [first] = await signedIn({
-      email: null,
-      sessions: [{ provider: "google", email: null }, { provider: "google" }],
-    });
-
-    await enforce(first, null);
-
-    expect(await liveSessionIds()).toEqual(["session-0", "session-1"]);
+  it("is only the no-configuration case, and the other refusals say so", () => {
+    // The partition, asserted against the classification itself rather than
+    // described: exactly one refusal keeps the row, and the reason it does
+    // is that it is the only one that is not about the session in front of
+    // it. A future refusal added as "keep" without that property fails here.
+    expect(
+      Object.entries(REFUSAL_EFFECT)
+        .filter(([, effect]) => effect === "keep")
+        .map(([reason]) => reason)
+        .sort(),
+    ).toEqual(["no-configuration", "unverified-email"]);
   });
 });
 
 describe("a session row that cannot be identified is refused, not mass-deleted", () => {
-  it("deletes nothing when the row carries no id", async () => {
-    // Prisma reads `where: { id: undefined }` as no filter at all, so this
-    // is the difference between "delete this session" and "delete every
-    // session on the instance".
+  /** Refuse a session whose row id is whatever the caller says it is. */
+  async function enforceWithId(id: string | null) {
     process.env[PERMITTED_EMAILS_VAR] = "someone-else@example.com";
     const [first] = await signedIn({});
-    const session = callbackSession(first);
-    delete (session as unknown as { id?: unknown }).id;
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    const result = await enforceLiveSessionPolicy(session, {
+    const result = await enforceLiveSessionPolicy(sessionFor(first, { id }), {
       id: USER_ID,
       email: LISTED,
     });
     await settleRevocations();
+    return { result, error };
+  }
+
+  it("deletes nothing when the row carries no id", async () => {
+    // Prisma reads `where: { id: undefined }` as no filter at all, so this
+    // is the difference between "delete this session" and "delete every
+    // session on the instance".
+    const { result, error } = await enforceWithId(null);
 
     expect(result.user).toBeUndefined();
     expect(await liveSessionIds()).toEqual(["session-0", "session-1"]);
+    expect(String(error.mock.calls[0][0])).toContain(
+      "could not identify its row",
+    );
+  });
+
+  it("asks for that fixture as an ABSENT id, not a null one", async () => {
+    // Which shape the fixture has is the whole point of the case above.
+    // Prisma reads `where: { id: undefined }` as NO FILTER — every row —
+    // and `where: { id: null }` as `IS NULL`, which matches nothing. Only
+    // the first is the dangerous one, and only the first is what a session
+    // object that lost its row id would actually look like, so that is what
+    // the builder has to produce.
+    const [first] = await signedIn({});
+
+    expect("id" in sessionFor(first, { id: null })).toBe(false);
+    expect("id" in sessionFor(first)).toBe(true);
+  });
+
+  it("treats a blank id the same way, rather than deleting by it", async () => {
+    // The case that separates "normalise, then check" from "check for
+    // null": a blank id is not a row id, and issuing `where: { id: "  " }`
+    // would delete nothing while reporting nothing either — a revocation
+    // that silently did not happen (PR #91 review, round 4, finding 3).
+    const { result, error } = await enforceWithId("   ");
+
+    expect(result.user).toBeUndefined();
+    expect(await liveSessionIds()).toEqual(["session-0", "session-1"]);
+    expect(String(error.mock.calls[0][0])).toContain(
+      "could not identify its row",
+    );
+  });
+
+  it("while a real id does delete that row, so the guard is not the whole story", async () => {
+    // The control: the same path, with an id that identifies something.
+    const { result, error } = await enforceWithId("session-0");
+
+    expect(result.user).toBeUndefined();
+    expect(await liveSessionIds()).toEqual(["session-1"]);
+    expect(error).not.toHaveBeenCalled();
   });
 });
 
@@ -576,23 +638,50 @@ describe("recording the identity that minted a session", () => {
     expect((await enforce(rows[1])).user?.id).toBe(USER_ID);
   });
 
-  it("records nothing outside a wrapped request, and fails closed on it", async () => {
-    // No store, no slot: `rememberSignInIdentity` is a no-op and the insert
-    // writes null, which a bound entry refuses. The alternative — a module
-    // -level mutable default — is the shared-state bug this design exists to
-    // avoid, so "nothing happens" is the right answer.
+  it("refuses to create a session outside a wrapped request, in dev and test", async () => {
+    // No store, no slot: `rememberSignInIdentity` has nowhere to write and
+    // the row would be created unattributed — fail-closed, but silent, and
+    // silence is how the next entry point that skips the handlers goes
+    // unnoticed (PR #91 review, round 4, finding 2). Loud where a developer
+    // will see it.
     await prisma.user.create({ data: { id: USER_ID, email: LISTED } });
 
     rememberSignInIdentity({
       user: { email: LISTED },
       account: { provider: "google" },
     });
+
+    // Synchronously, before any row is written: the guard runs in the
+    // wrapper, not inside the adapter's promise.
+    expect(() =>
+      adapter.createSession?.({
+        sessionToken: "token-unwrapped",
+        userId: USER_ID,
+        expires: new Date(Date.now() + 1000),
+      }),
+    ).toThrow(/no sign-in identity in scope/);
+    // And nothing was written, so the loud path is not also a half-done one.
+    await expect(identities()).resolves.toEqual([]);
+  });
+
+  it("creates it anyway in production, loudly, rather than failing a sign-in", async () => {
+    // The other half: on a live instance an unattributed session is a
+    // diagnostic problem (a bound entry refuses it once) while refusing to
+    // create one at all is an outage. So production logs and continues.
+    vi.stubEnv("NODE_ENV", "production");
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    await prisma.user.create({ data: { id: USER_ID, email: LISTED } });
+
     await adapter.createSession?.({
       sessionToken: "token-unwrapped",
       userId: USER_ID,
       expires: new Date(Date.now() + 1000),
     });
 
+    expect(error).toHaveBeenCalledTimes(1);
+    expect(String(error.mock.calls[0][0])).toContain(
+      "no sign-in identity in scope",
+    );
     await expect(identities()).resolves.toEqual([
       {
         sessionToken: "token-unwrapped",
@@ -600,6 +689,16 @@ describe("recording the identity that minted a session", () => {
         signInEmail: null,
       },
     ]);
+    vi.unstubAllEnvs();
+  });
+
+  it("refuses to wrap an adapter that cannot create sessions at all", () => {
+    // Construction-time, so an adapter upgrade that drops or renames the
+    // method is a boot failure rather than every new session silently
+    // losing its identity (round 4 addendum, finding 7).
+    expect(() => withSessionIdentity({} as Parameters<typeof withSessionIdentity>[0])).toThrow(
+      /no createSession/,
+    );
   });
 
   it("leaves the columns null when the sign-in asserts no usable provider", async () => {
