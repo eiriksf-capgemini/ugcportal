@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
 
+import { footerLinkHrefs, uniqueFetchTargets } from "../footer-test-support";
+
 /**
  * K3 (ugcportal-akv6): "Following should never happen: a footer link
  * pointing at a page carrying a draft marker when NODE_ENV is production."
@@ -33,14 +35,8 @@ test("production footer never links a page carrying the draft marker", async ({
   request,
 }) => {
   await page.goto("/");
-  const footer = page.locator("footer[data-site-footer]");
-  await footer.scrollIntoViewIfNeeded();
-  await expect(footer).toBeVisible();
-
-  const hrefs = await footer.locator("a[href]").evaluateAll((anchors) =>
-    anchors.map((a) => a.getAttribute("href") ?? ""),
-  );
-  const targets = [...new Set(hrefs.filter(Boolean).map((href) => href.split("#")[0]))];
+  const hrefs = await footerLinkHrefs(page);
+  const targets = uniqueFetchTargets(hrefs);
   expect(targets.length).toBeGreaterThan(0);
 
   for (const target of targets) {
@@ -69,17 +65,13 @@ test("today's real configuration: /privacy and /licence ARE drafts, and the foot
   }
 
   await page.goto("/");
-  const footer = page.locator("footer[data-site-footer]");
-  await footer.scrollIntoViewIfNeeded();
-  const hrefs = await footer.locator("a[href]").evaluateAll((anchors) =>
-    anchors.map((a) => a.getAttribute("href") ?? ""),
-  );
+  const hrefs = await footerLinkHrefs(page);
   expect(hrefs).not.toContain("/privacy");
   expect(hrefs).not.toContain("/licence");
 
   // Still named for the visitor, as inert text, not vanished outright — see
   // src/components/site-footer.tsx's FooterNavLink.
-  const footerText = await footer.innerText();
+  const footerText = await page.locator("footer[data-site-footer]").innerText();
   expect(footerText).toContain("Privacy");
   expect(footerText).toContain("Licence and rights");
 });

@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
 
+import { footerLinkHrefs, uniqueFetchTargets } from "./footer-test-support";
+
 /**
  * K1 (ugcportal-akv6): on any page, scrolled to the bottom, the footer is
  * visible with all its links, and every link target answers 200.
@@ -18,17 +20,6 @@ import { expect, test } from "@playwright/test";
  */
 
 const PAGES = ["/", "/about", "/privacy"] as const;
-
-/** Every href the footer's own <a> elements carry, fragment included. */
-async function footerLinkHrefs(page: import("@playwright/test").Page): Promise<string[]> {
-  const footer = page.locator("footer[data-site-footer]");
-  await footer.scrollIntoViewIfNeeded();
-  await expect(footer).toBeVisible();
-  const hrefs = await footer.locator("a[href]").evaluateAll((anchors) =>
-    anchors.map((a) => a.getAttribute("href") ?? ""),
-  );
-  return hrefs.filter((href) => href !== "");
-}
 
 for (const path of PAGES) {
   test(`${path}: footer is visible with its links`, async ({ page }) => {
@@ -52,11 +43,7 @@ for (const path of PAGES) {
   test(`${path}: every footer link target answers 200`, async ({ page, request }) => {
     await page.goto(path);
     const hrefs = await footerLinkHrefs(page);
-
-    // A fragment is never sent to the server — strip it before fetching, so
-    // "/about#contact" is checked as "/about" rather than as a literal
-    // (non-existent) path with a "#" in it.
-    const uniqueTargets = [...new Set(hrefs.map((href) => href.split("#")[0]))];
+    const uniqueTargets = uniqueFetchTargets(hrefs);
     expect(uniqueTargets.length).toBeGreaterThan(0);
 
     for (const target of uniqueTargets) {

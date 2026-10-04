@@ -11,12 +11,13 @@ import {
   ABOUT_CONTACT_PATH,
   ABOUT_PATH,
   LICENCE_PATH,
+  LLMS_TXT_PATH,
   PORTFOLIO_PATH,
   PRIVACY_PATH,
 } from "@/lib/routes";
 import { SITE_NAME } from "@/lib/site";
 
-import { SiteFooter, blockedInProduction } from "./site-footer";
+import { SiteFooter } from "./site-footer";
 
 /**
  * ugcportal-akv6.
@@ -25,18 +26,18 @@ import { SiteFooter, blockedInProduction } from "./site-footer";
  * K2: a reviewable snapshot of every visible string (see
  * "K2: every visible string, for review" below) — Eirik should read this
  * list in the PR diff, not just trust that the component compiles.
- * K3: the production draft-link guard, unit-level — the real e2e coverage
- * (an actual production server, the meta tag read from the rendered page)
- * lives in e2e/production/site-footer-draft.spec.ts; this is the fast,
- * no-server check that the footer's OWN wiring does the right thing with
- * whatever readiness the legal pages report.
+ * K3: the production draft-link guard, at the integration level — this
+ * file proves SiteFooter actually wires `linkBlockedInProduction` (the
+ * pure rule itself, round-1 review moved it to
+ * src/lib/legal/publishable.ts and unit-tests it there) to the real
+ * `LEGAL_PAGES` readiness. The real e2e coverage (an actual production
+ * server, the meta tag read from the rendered page) lives in
+ * e2e/production/site-footer-draft.spec.ts.
  */
 
 afterEach(() => {
   vi.unstubAllEnvs();
 });
-
-const LLMS_TXT_PATH = "/llms.txt";
 
 const EXPECTED_LINKS = [
   ["About", ABOUT_PATH],
@@ -50,26 +51,6 @@ const EXPECTED_LINKS = [
 function render(compact: boolean): string {
   return renderToStaticMarkup(<SiteFooter compact={compact} />);
 }
-
-describe("blockedInProduction (K3's pure guard)", () => {
-  it("blocks a draft page once NODE_ENV is production", () => {
-    expect(
-      blockedInProduction(true, { NODE_ENV: "production" } as NodeJS.ProcessEnv),
-    ).toBe(true);
-  });
-
-  it("MUTATION CHECK: does not block the same draft page outside production", () => {
-    expect(
-      blockedInProduction(true, { NODE_ENV: "development" } as NodeJS.ProcessEnv),
-    ).toBe(false);
-  });
-
-  it("does not block a page that is not a draft, even in production", () => {
-    expect(
-      blockedInProduction(false, { NODE_ENV: "production" } as NodeJS.ProcessEnv),
-    ).toBe(false);
-  });
-});
 
 describe.each([
   ["full", false],
@@ -178,9 +159,13 @@ describe.each([
       expect(markup).toContain(`data-footer-draft-link="${PRIVACY_PATH}"`);
       expect(markup).toContain(`data-footer-draft-link="${LICENCE_PATH}"`);
       // Still named, so a visitor learns the page exists rather than seeing
-      // it vanish.
-      expect(textContent(markup)).toContain("Privacy");
-      expect(textContent(markup)).toContain("Licence and rights");
+      // it vanish — and annotated as plain, assistive-tech-readable text
+      // (not merely a muted colour, which an inconsistent screen reader or
+      // a colour-blind visitor would miss entirely), so it's clear it
+      // isn't simply a broken link.
+      const text = textContent(markup);
+      expect(text).toContain("Privacy (coming soon)");
+      expect(text).toContain("Licence and rights (coming soon)");
     });
 
     it("MUTATION CHECK: links Privacy and Licence normally outside production, even though they're still drafts", () => {
@@ -193,6 +178,7 @@ describe.each([
       expect(markup).toContain(`href="${PRIVACY_PATH}"`);
       expect(markup).toContain(`href="${LICENCE_PATH}"`);
       expect(markup).not.toContain("data-footer-draft-link");
+      expect(markup).not.toContain("coming soon");
     });
   },
 );

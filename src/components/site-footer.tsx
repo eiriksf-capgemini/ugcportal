@@ -1,12 +1,18 @@
 import Link from "next/link";
 
-import { loadLicence } from "@/app/licence/content";
-import { loadPrivacy } from "@/app/privacy/content";
 import { CookieSettingsLink } from "@/components/consent/cookie-settings-link";
+import { FOOTER_LINK_CLASS } from "@/components/ui/footer-link";
+import { LEGAL_PAGES } from "@/lib/legal/pages";
+import {
+  type LegalPage,
+  legalReadiness,
+  linkBlockedInProduction,
+} from "@/lib/legal/publishable";
 import {
   ABOUT_CONTACT_PATH,
   ABOUT_PATH,
   LICENCE_PATH,
+  LLMS_TXT_PATH,
   PORTFOLIO_PATH,
   PRIVACY_PATH,
 } from "@/lib/routes";
@@ -50,39 +56,44 @@ import { SITE_DESCRIPTION, SITE_NAME } from "@/lib/site";
  * point made to the reviewer.
  */
 
-const LLMS_TXT_PATH = "/llms.txt";
-
-/**
- * Renders on --background, the page canvas, same as the rest of this
- * footer and as CookieSettingsLink's identical class list (src/components/
- * consent/cookie-settings-link.tsx) — reused verbatim here for one visually
- * consistent footer link style, see src/lib/design/dual-meaning-usage.test.ts.
- */
-const FOOTER_LINK_CLASS =
-  "rounded-sm text-muted-foreground underline-offset-2 hover:text-foreground hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring";
-
 const FOOTER_HEADING_CLASS = "text-sm font-medium text-foreground";
 
 /**
- * K3's real guard: whether a link to a page with the given draft status may
- * render at all. Reads the SAME readiness the legal pages themselves guard
- * rendering with (`legalReadiness`/`assertPublishable`,
- * src/lib/legal/publishable.ts) via each page's own `loadPrivacy`/
- * `loadLicence` loader below — this function only applies the "never link
- * a draft page in production" rule on top of that shared readiness, it does
- * not compute readiness itself, so the footer and the pages cannot disagree
- * about which pages are safe to serve.
- *
- * `env` is a parameter, same convention as `legalReadiness` and
- * `assertPublishable` themselves, so a test can exercise the production
- * branch without mutating the real `process.env`.
+ * The registered LegalPage for a route this footer links to (round-1
+ * review: previously went through each page's own `loadPrivacy`/
+ * `loadLicence` loader, which also builds the full rendered prose from the
+ * live LEGAL_* contact on every single render of every page, just to read
+ * one boolean — see src/lib/legal/pages.ts's own comment for why LEGAL_PAGES
+ * is the right thing to read instead). Throws rather than silently treating
+ * an unregistered path as safe: a footer link to a legal page that isn't in
+ * LEGAL_PAGES is a bug in this file, not a page that happens to be fine to
+ * link.
  */
-export function blockedInProduction(
-  draft: boolean,
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
-  return draft && env.NODE_ENV === "production";
+function legalPageFor(path: string): LegalPage {
+  const page = LEGAL_PAGES.find((candidate) => candidate.path === path);
+  if (!page) {
+    throw new Error(
+      `${path} is not registered in LEGAL_PAGES (src/lib/legal/pages.ts) — the footer cannot judge whether it is safe to link.`,
+    );
+  }
+  return page;
 }
+
+/**
+ * K3's real guard: whether a link to the given legal page may render at
+ * all. Reads the SAME readiness the page itself guards rendering with
+ * (`legalReadiness`/`assertPublishable`, src/lib/legal/publishable.ts) via
+ * `LEGAL_PAGES` above, and applies `linkBlockedInProduction` — the same
+ * helper `ugcportal-nf9l` reuses for the About page's own outbound link —
+ * on top of it, so the footer and the pages cannot disagree about which
+ * pages are safe to serve or to link to.
+ */
+function legalLinkBlocked(path: string): boolean {
+  return linkBlockedInProduction(legalReadiness([legalPageFor(path)]));
+}
+
+/** The visible, assistive-tech-readable suffix on a blocked legal link — see FooterNavLink. */
+const COMING_SOON_SUFFIX = " (coming soon)";
 
 function FooterNavLink({
   label,
@@ -95,15 +106,19 @@ function FooterNavLink({
 }) {
   if (blocked) {
     // K3: never an <a href> to a page carrying the draft marker once
-    // NODE_ENV is production — annotated as inert text instead of omitted
-    // outright, so a visitor still learns the page exists rather than
-    // wondering why "Privacy" or "Licence and rights" is simply missing.
+    // NODE_ENV is production — rendered as inert, non-navigating text
+    // instead of omitted outright, with a plain-text "(coming soon)"
+    // suffix so a visitor (sighted or using assistive tech — this is
+    // ordinary text content, not an aria-hidden decoration) learns the
+    // page exists and is on its way, rather than wondering why "Privacy"
+    // or "Licence and rights" is simply missing.
     return (
       <span
         className="text-muted-foreground italic"
         data-footer-draft-link={href}
       >
         {label}
+        {COMING_SOON_SUFFIX}
       </span>
     );
   }
@@ -122,8 +137,8 @@ export function SiteFooter({ compact = false }: { compact?: boolean }) {
   // never computes it at all.
   const year = new Date().getFullYear();
 
-  const privacyBlocked = blockedInProduction(loadPrivacy().readiness.draft);
-  const licenceBlocked = blockedInProduction(loadLicence().readiness.draft);
+  const privacyBlocked = legalLinkBlocked(PRIVACY_PATH);
+  const licenceBlocked = legalLinkBlocked(LICENCE_PATH);
 
   const pageLinks: { label: string; href: string; blocked: boolean }[] = [
     { label: "About", href: ABOUT_PATH, blocked: false },

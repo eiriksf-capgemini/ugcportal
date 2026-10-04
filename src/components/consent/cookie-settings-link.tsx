@@ -1,5 +1,7 @@
 "use client";
 
+import { FOOTER_LINK_CLASS } from "@/components/ui/footer-link";
+
 import { useOptionalConsent } from "./consent-context";
 
 /**
@@ -49,7 +51,7 @@ export function CookieSettingsLink() {
       // (ugcportal-akv6) may move or re-mount, and an id is a single
       // global namespace a future second mount point could collide with.
       data-cookie-settings-trigger=""
-      className="rounded-sm text-muted-foreground underline-offset-2 hover:text-foreground hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+      className={FOOTER_LINK_CLASS}
     >
       Cookies
     </button>

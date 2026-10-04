@@ -24,6 +24,7 @@ import {
   findPlaceholders,
   legalPage,
   legalReadiness,
+  linkBlockedInProduction,
 } from "@/lib/legal/publishable";
 import { LICENCE_PATH, PRIVACY_PATH } from "@/lib/routes";
 
@@ -327,6 +328,26 @@ describe("assertPublishable", () => {
     expect(() => assertPublishable(legalReadiness([cleanPage], dev), dev)).not.toThrow();
     const test = { NODE_ENV: "test", ...FILLED_LEGAL_ENV } as NodeJS.ProcessEnv;
     expect(() => assertPublishable(legalReadiness([strayPage], test), test)).not.toThrow();
+  });
+});
+
+describe("linkBlockedInProduction (ugcportal-akv6 K3; reused by ugcportal-nf9l for About)", () => {
+  it("blocks a draft page once NODE_ENV is production", () => {
+    const readiness = legalReadiness([cleanPage], filled, null);
+    expect(readiness.draft).toBe(true);
+    expect(linkBlockedInProduction(readiness, filled)).toBe(true);
+  });
+
+  it("MUTATION CHECK: does not block the same draft page outside production", () => {
+    const readiness = legalReadiness([cleanPage], filled, null);
+    expect(readiness.draft).toBe(true);
+    expect(linkBlockedInProduction(readiness, DEV)).toBe(false);
+  });
+
+  it("does not block a page that is not a draft, even in production", () => {
+    const readiness = legalReadiness([cleanPage], filled, SIGNED);
+    expect(readiness.draft).toBe(false);
+    expect(linkBlockedInProduction(readiness, filled)).toBe(false);
   });
 });
 

@@ -42,6 +42,15 @@ export const PORTFOLIO_PATH = "/portfolio";
 export const ABOUT_CONTACT_PATH = `${ABOUT_PATH}#contact`;
 
 /**
+ * /llms.txt (ugcportal-o7l), per https://llmstxt.org. The route lives at
+ * src/app/llms.txt/route.ts — a literal directory name, not a dynamic
+ * segment, so this is the one and only path it answers at. Named here,
+ * like every other route in this module, so the footer (ugcportal-akv6)
+ * cannot hand-type "/llms.txt" a second time and drift from it.
+ */
+export const LLMS_TXT_PATH = "/llms.txt";
+
+/**
  * The multipart field POST /api/media reads the subject tags out of
  * (ugcportal-jsc), named here because the browser writes it and the route
  * reads it and a field name spelled twice is one that eventually differs —

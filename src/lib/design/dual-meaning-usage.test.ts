@@ -196,12 +196,11 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
   },
   "src/components/gallery/containment.ts": { "text-muted-foreground": 2 },
   "src/components/auth-status.tsx": { "text-muted-foreground": 1 },
-  // Renders directly in app-shell.tsx's footer, which sits on --background
-  // (no --card/--popover/--muted/etc. fill behind it) — the safe case.
-  "src/components/consent/cookie-settings-link.tsx": {
-    "text-muted-foreground": 1,
-    "text-foreground": 1,
-  },
+  // cookie-settings-link.tsx carried its own literal class string here
+  // until PR #96 round-1 review (ugcportal-akv6): it now imports
+  // FOOTER_LINK_CLASS from src/components/ui/footer-link.ts instead
+  // (shared with site-footer.tsx), so its own source text carries neither
+  // token any more — no entry, per this file's own "zero matches" rule.
   // Deliberately bg-background, not bg-popover (see this file's own
   // comment, added after an axe run caught text-primary on bg-popover at
   // 1.81:1 in dark mode) — the safe case.
@@ -254,21 +253,32 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
   "src/components/ui/inline-link.ts": { "text-primary": 1 },
 
   /*
+   * ugcportal-akv6, PR #96 round 1: FOOTER_LINK_CLASS moved out to its own
+   * module (shared between site-footer.tsx and cookie-settings-link.tsx,
+   * same reasoning as inline-link.ts above). Renders on --background via
+   * both its callers — it carries no background of its own.
+   */
+  "src/components/ui/footer-link.ts": {
+    "text-muted-foreground": 1,
+    "text-foreground": 1,
+  },
+
+  /*
    * ugcportal-akv6: the site footer. Renders directly on --background
    * (the app shell's <footer>, no --card/--popover/--muted/etc. fill
    * behind it — the same safe case as the header and
-   * cookie-settings-link.tsx above). Five text-muted-foreground: the
-   * brand description paragraph, FOOTER_LINK_CLASS's own definition (one
-   * literal occurrence of the string, reused by every rendered link, same
-   * convention as INLINE_LINK_CLASS above), the blocked-draft-link <span>,
-   * the compact variant's "SITE_NAME · © year" <span>, and the full
-   * variant's copyright line. Three text-foreground: the brand name, and
+   * cookie-settings-link.tsx above). Four text-muted-foreground: the
+   * brand description paragraph, the blocked-draft-link <span>, the
+   * compact variant's "SITE_NAME · © year" <span>, and the full variant's
+   * copyright line (FOOTER_LINK_CLASS's own one moved to footer-link.ts
+   * above, round 1). Two text-foreground: the brand name, and
    * FOOTER_HEADING_CLASS's own definition (reused by both the "Pages" and
-   * "Legal" headings), plus FOOTER_LINK_CLASS's "hover:text-foreground".
+   * "Legal" headings — FOOTER_LINK_CLASS's "hover:text-foreground" moved
+   * out the same way).
    */
   "src/components/site-footer.tsx": {
-    "text-muted-foreground": 5,
-    "text-foreground": 3,
+    "text-muted-foreground": 4,
+    "text-foreground": 2,
   },
 };
 

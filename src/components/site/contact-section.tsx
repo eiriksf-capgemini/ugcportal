@@ -72,13 +72,18 @@ export function ContactSection({ defaultSubject }: { defaultSubject: string }) {
     // id="contact" is the footer's link target (ABOUT_CONTACT_PATH,
     // src/lib/routes.ts, ugcportal-akv6) — data-page-section="contact" above
     // was a test hook only and nothing a fragment link could navigate to.
-    // scroll-mt-14 matches the sticky header's 56px height (see
-    // src/components/app-shell.tsx's identical class on <main>, for the
-    // same reason): without it, landing here from the footer's anchor link
-    // scrolls this section's top edge under the header instead of past it.
+    //
+    // scroll-mt-[var(--header-height,...)], not scroll-mt-14 (round-1
+    // review): PR #94 introduces --header-height on the shell, and once
+    // that header becomes a different real height than today's 56px this
+    // section would silently go back to scrolling under it. The literal
+    // 3.5rem (56px) fallback is only for the window before #94 merges, when
+    // the variable is unset and would otherwise resolve to 0 — it must
+    // match #94's --header-height exactly once that lands, or this reverts
+    // to the bug it fixes.
     <section
       id="contact"
-      className="mt-10 scroll-mt-14"
+      className="mt-10 scroll-mt-[var(--header-height,3.5rem)]"
       data-page-section="contact"
     >
       <h2 className={SECTION_HEADING_CLASS}>Get in touch</h2>
