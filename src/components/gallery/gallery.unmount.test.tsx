@@ -135,8 +135,8 @@ afterEach(() => {
    * after: Vitest runs same-scope `afterEach` hooks in reverse registration
    * order (no `sequence.hooks` override in vitest.config.ts to change that),
    * and this one is registered second. So at the point this callback runs,
-   * `ctx.root` has NOT been unmounted yet and `ctx.container` is still in
-   * the document — this cleanup just never reads either of those, for the
+   * the root has NOT been unmounted yet and the container is still in the
+   * document — this cleanup just never reads either of those, for the
    * PhotoSwipe-specific state below. `stale?.destroy?.()` in particular is
    * safe to call whether or not the root has unmounted by the time it runs,
    * since PhotoSwipe's own `destroy()` is idempotent (a no-op once `pswp` is
@@ -157,7 +157,7 @@ afterEach(() => {
 });
 
 async function mount(): Promise<void> {
-  await renderGallery(ctx.root, {
+  await renderGallery(ctx.root(), {
     initialItems: ITEMS,
     initialCursor: null,
     initialHasMore: false,
@@ -166,7 +166,7 @@ async function mount(): Promise<void> {
 
 /** Clicks the tile at `index`, the way a visitor does. */
 async function clickTile(index: number): Promise<void> {
-  const tiles = ctx.container.querySelectorAll<HTMLButtonElement>(
+  const tiles = ctx.container().querySelectorAll<HTMLButtonElement>(
     "button[data-gallery-tile]",
   );
   expect(tiles).toHaveLength(ITEMS.length);
@@ -176,7 +176,7 @@ async function clickTile(index: number): Promise<void> {
 }
 
 async function unmount(): Promise<void> {
-  await unmountGallery(ctx.root);
+  await unmountGallery(ctx.root());
 }
 
 describe("a viewer that is open when the gallery unmounts", () => {

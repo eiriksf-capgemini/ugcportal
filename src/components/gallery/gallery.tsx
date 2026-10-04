@@ -363,6 +363,23 @@ export function Gallery({
          * click here). Treating that as "move focus" would hand a mouse
          * visitor who never asked for keyboard focus an unrequested focus
          * ring on the status line.
+         *
+         * WHAT MATTERS IS THAT NOTHING AWAITS BETWEEN THE STATE UPDATES
+         * ABOVE AND THIS CHECK — the same shape as `tornDown` and
+         * `activations` further up this file, and the same reason it
+         * matters: a guard is only as good as the span it actually covers.
+         * `setHasMore`/`setLoadState` above are synchronous calls that
+         * QUEUE a re-render; they do not commit one. If a future edit put
+         * an `await` anywhere between them and `document.activeElement`
+         * here — logging, another fetch, anything — React could commit
+         * that re-render in the gap, the button could actually unmount, and
+         * `loadMoreButtonRef.current` would already read `null` by the time
+         * this line ran: the guard would silently stop recognising the
+         * visitor who was genuinely still on the button, for a reason
+         * entirely unrelated to where their focus was. A guard that reads
+         * correct in isolation but sits on the wrong side of an `await` is
+         * exactly the failure shape those two comments warn about, not a
+         * new one.
          */
         if (document.activeElement === loadMoreButtonRef.current) {
           pagingStatusRef.current?.focus();

@@ -8,6 +8,7 @@ import {
   openGalleryViewer,
   type PixelSize,
 } from "@/components/gallery/lightbox";
+import { waitUntil } from "@/components/gallery/gallery.test-support";
 import { toGalleryItems } from "@/lib/gallery-items";
 
 /**
@@ -106,16 +107,6 @@ function caption(): HTMLElement | null {
   return document.querySelector(`.${LIGHTBOX_TAG_CAPTION_CLASS}`);
 }
 
-async function waitUntil(condition: () => boolean, what: string): Promise<void> {
-  const deadline = Date.now() + 3000;
-  while (!condition()) {
-    if (Date.now() > deadline) {
-      throw new Error(`timed out waiting for the caption to ${what}`);
-    }
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-}
-
 async function open(
   index: number,
   items = TAGGED,
@@ -131,7 +122,10 @@ async function open(
 
 async function close(lightbox: PhotoSwipeLightbox): Promise<void> {
   lightbox.pswp?.close();
-  await waitUntil(() => openInstance() === undefined, "close with the viewer");
+  await waitUntil(
+    () => openInstance() === undefined,
+    "the caption to close with the viewer",
+  );
 }
 
 afterEach(async () => {
@@ -179,7 +173,7 @@ describe("the tag caption in the viewer", () => {
       lightbox.pswp?.goTo(2);
       await waitUntil(
         () => caption()?.textContent === "Wine & drink",
-        "show the next slide's tags",
+        "the caption to show the next slide's tags",
       );
     } finally {
       await close(lightbox);
@@ -192,7 +186,7 @@ describe("the tag caption in the viewer", () => {
       lightbox.pswp?.goTo(1);
       await waitUntil(
         () => caption()?.hidden === true,
-        "hide on an untagged slide",
+        "the caption to hide on an untagged slide",
       );
       expect(caption()?.textContent).toBe("");
     } finally {
@@ -208,7 +202,7 @@ describe("the tag caption in the viewer", () => {
     try {
       expect(caption()?.hidden).toBe(true);
       lightbox.pswp?.goTo(0);
-      await waitUntil(() => caption()?.hidden === false, "reappear");
+      await waitUntil(() => caption()?.hidden === false, "the caption to reappear");
       expect(caption()?.textContent).toBe(BOTH_TAGS);
     } finally {
       await close(lightbox);

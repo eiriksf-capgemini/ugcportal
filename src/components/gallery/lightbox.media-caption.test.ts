@@ -7,6 +7,7 @@ import {
   openGalleryViewer,
   type PixelSize,
 } from "@/components/gallery/lightbox";
+import { waitUntil } from "@/components/gallery/gallery.test-support";
 import { toGalleryItems } from "@/lib/gallery-items";
 
 /**
@@ -68,16 +69,6 @@ function labelElement(): HTMLElement | null {
 function describedByElement(): HTMLElement | null {
   const id = dialogElement()?.getAttribute("aria-describedby");
   return id ? document.getElementById(id) : null;
-}
-
-async function waitUntil(condition: () => boolean, what: string): Promise<void> {
-  const deadline = Date.now() + 3000;
-  while (!condition()) {
-    if (Date.now() > deadline) {
-      throw new Error(`timed out waiting for ${what}`);
-    }
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
 }
 
 async function open(
