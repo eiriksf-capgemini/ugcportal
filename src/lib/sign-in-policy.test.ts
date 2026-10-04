@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   PERMITTED_EMAILS_VAR,
+  SIGN_IN_PROVIDERS,
   type SignInEnv,
   bootstrapAdminEmails,
   decideSignIn,
@@ -431,6 +432,147 @@ describe("a changed provider address is recoverable from configuration", () => {
     // outcomes have to actually occur for the property to mean something.
     expect(seen.refused).toBeGreaterThan(0);
     expect(seen.permitted).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * ugcportal-1551: an entry may be bound to the one provider it may arrive
+ * through. The fixture is one Google-only address and one Facebook-only
+ * address, and each test below swaps the PROVIDER on the attempt — not the
+ * production code — so that a gate ignoring `account.provider` fails the
+ * refusal cases rather than passing them by accident.
+ */
+describe("decideSignIn binds an entry to its provider", () => {
+  const GOOGLE_ONLY = "person@gmail.com";
+  const FACEBOOK_ONLY = "person@example.org";
+  const bound = env({
+    [PERMITTED_EMAILS_VAR]: `google:${GOOGLE_ONLY}, Facebook:${FACEBOOK_ONLY}`,
+  });
+  const via = (provider: string | null, email: string) => ({
+    user: { email },
+    account: provider === null ? null : { provider },
+    profile: { email, email_verified: true },
+  });
+
+  it("parses the prefix off the entry and keeps the address", () => {
+    expect(permittedIdentities(bound)).toEqual({
+      entries: [
+        { email: GOOGLE_ONLY, provider: "google" },
+        { email: FACEBOOK_ONLY, provider: "facebook" },
+      ],
+      emails: [GOOGLE_ONLY, FACEBOOK_ONLY],
+      malformed: [],
+      configured: true,
+    });
+  });
+
+  it("permits each address through the provider it is bound to", () => {
+    expect(decideSignIn(via("google", GOOGLE_ONLY), bound)).toEqual({
+      permitted: true,
+      email: GOOGLE_ONLY,
+    });
+    expect(decideSignIn(via("facebook", FACEBOOK_ONLY), bound)).toEqual({
+      permitted: true,
+      email: FACEBOOK_ONLY,
+    });
+  });
+
+  it("refuses the same address through the other provider", () => {
+    // The fixture mutation: identical identity, only the provider swapped.
+    expect(decideSignIn(via("facebook", GOOGLE_ONLY), bound)).toEqual({
+      permitted: false,
+      reason: "wrong-provider",
+    });
+    expect(decideSignIn(via("google", FACEBOOK_ONLY), bound)).toEqual({
+      permitted: false,
+      reason: "wrong-provider",
+    });
+  });
+
+  it("refuses a bound address when no provider is asserted at all", () => {
+    expect(decideSignIn(via(null, GOOGLE_ONLY), bound).permitted).toBe(false);
+    expect(
+      decideSignIn({ user: { email: GOOGLE_ONLY } }, bound).permitted,
+    ).toBe(false);
+    expect(
+      decideSignIn(via("not-a-provider", GOOGLE_ONLY), bound).permitted,
+    ).toBe(false);
+  });
+
+  it("still permits an unbound entry from any provider", () => {
+    const mixed = env({
+      [PERMITTED_EMAILS_VAR]: `${LISTED},google:${GOOGLE_ONLY}`,
+    });
+    for (const provider of [...SIGN_IN_PROVIDERS, null]) {
+      expect(decideSignIn(via(provider, LISTED), mixed).permitted).toBe(true);
+    }
+    expect(decideSignIn(via("facebook", GOOGLE_ONLY), mixed).permitted).toBe(
+      false,
+    );
+  });
+
+  it("lets an unbound entry for the same address override a bound one", () => {
+    const both = env({
+      [PERMITTED_EMAILS_VAR]: `google:${GOOGLE_ONLY},${GOOGLE_ONLY}`,
+    });
+    expect(decideSignIn(via("facebook", GOOGLE_ONLY), both).permitted).toBe(
+      true,
+    );
+  });
+
+  it("treats an unknown or empty prefix as unusable, not as unbound", () => {
+    const { entries, malformed, configured } = permittedIdentities({
+      [PERMITTED_EMAILS_VAR]: `twitter:${GOOGLE_ONLY}, gogle:${FACEBOOK_ONLY}, google:, :${LISTED}`,
+    });
+    expect(entries).toEqual([]);
+    expect(malformed).toEqual([
+      `twitter:${GOOGLE_ONLY}`,
+      `gogle:${FACEBOOK_ONLY}`,
+      "google:",
+      `:${LISTED}`,
+    ]);
+    expect(configured).toBe(true);
+    // And an unusable bound entry permits nobody on any provider.
+    for (const provider of [...SIGN_IN_PROVIDERS, null]) {
+      expect(
+        decideSignIn(via(provider, GOOGLE_ONLY), {
+          [PERMITTED_EMAILS_VAR]: `twitter:${GOOGLE_ONLY}`,
+        }).permitted,
+      ).toBe(false);
+    }
+  });
+
+  it("de-duplicates by address AND provider", () => {
+    const { entries } = permittedIdentities({
+      [PERMITTED_EMAILS_VAR]: `google:${GOOGLE_ONLY},GOOGLE:${GOOGLE_ONLY},facebook:${GOOGLE_ONLY}`,
+    });
+    expect(entries).toEqual([
+      { email: GOOGLE_ONLY, provider: "google" },
+      { email: GOOGLE_ONLY, provider: "facebook" },
+    ]);
+  });
+
+  it("is honoured in ADMIN_BOOTSTRAP_EMAILS too, and the bootstrap sees the bare address", () => {
+    const viaBootstrap = { ADMIN_BOOTSTRAP_EMAILS: `facebook:${FACEBOOK_ONLY}` };
+    expect(decideSignIn(via("facebook", FACEBOOK_ONLY), viaBootstrap).permitted).toBe(true);
+    expect(decideSignIn(via("google", FACEBOOK_ONLY), viaBootstrap)).toEqual({
+      permitted: false,
+      reason: "wrong-provider",
+    });
+    expect(bootstrapAdminEmails(`facebook:${FACEBOOK_ONLY}, ${LISTED}, *@x.com`)).toEqual([
+      FACEBOOK_ONLY,
+      LISTED,
+      "*@x.com",
+    ]);
+  });
+
+  it("logs the provider the refused attempt came through", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(isPermittedSignIn(via("facebook", GOOGLE_ONLY), bound)).toBe(false);
+    const message = String(warn.mock.calls[0][0]);
+    expect(message).toContain("via facebook");
+    expect(message).toContain("wrong-provider");
+    expect(message).not.toContain("person@");
   });
 });
 

@@ -74,7 +74,8 @@ export const authConfig = {
     /**
      * The authorisation gate (ugcportal-egp). Closed by default, opened by
      * configuration: `isPermittedSignIn` refuses unless the address appears
-     * in ALLOWED_SIGNIN_EMAILS or ADMIN_BOOTSTRAP_EMAILS.
+     * in ALLOWED_SIGNIN_EMAILS or ADMIN_BOOTSTRAP_EMAILS — and, for an entry
+     * bound to a provider (ugcportal-1551), arrives through that provider.
      *
      * Returning `false` matters more than it looks. Auth.js turns it into an
      * `AccessDenied` before `handleLoginOrRegister` runs, so a refused
@@ -90,8 +91,10 @@ export const authConfig = {
      * with a truthy non-boolean. A string, in particular, is read as a
      * redirect URL rather than as permission.
      */
-    signIn({ user, profile }) {
-      return isPermittedSignIn({ user, profile });
+    signIn({ user, account, profile }) {
+      // `account` carries the provider id, which a bound allowlist entry
+      // (`google:addr`, ugcportal-1551) is judged against.
+      return isPermittedSignIn({ user, account, profile });
     },
     // Database session strategy hands us the adapter user record here;
     // surface its id so route handlers can associate uploads (ugcportal-8wa)

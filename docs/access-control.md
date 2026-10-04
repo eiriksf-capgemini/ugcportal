@@ -87,7 +87,7 @@ Deliberately **not** implemented, because each would silently be the decision:
 
 | Variable | Effect |
 | --- | --- |
-| `ALLOWED_SIGNIN_EMAILS` | Comma-separated exact addresses permitted to sign in. **This is the one that decides who can upload.** |
+| `ALLOWED_SIGNIN_EMAILS` | Comma-separated exact addresses permitted to sign in, each optionally bound to one provider with a `google:` or `facebook:` prefix. **This is the one that decides who can upload.** |
 | `ADMIN_BOOTSTRAP_EMAILS` | First-admin bootstrap (`ugcportal-lu7`). Also grants sign-in — see below. |
 
 Neither set: nobody can sign in, and the server says so loudly at startup
@@ -199,6 +199,18 @@ Small things, each of which has been a real bug somewhere:
   silently disappear either. Silently permitting nobody and silently
   permitting everybody are both bad, and the reporting is what keeps the first
   one from being the second one's twin;
+- an entry may be **bound to one provider** (ugcportal-1551): `google:a@b.com`
+  permits that address only when `account.provider` on the sign-in is
+  `google`; the same address through Facebook is refused with the
+  server-side reason `wrong-provider`, and the visitor sees the same Access
+  denied page as every other refusal. A bare entry is unbound and keeps the
+  original any-provider meaning; an unbound entry for an address overrides a
+  bound one for the same address. The prefix must be one of the ids in
+  `SIGN_IN_PROVIDERS` (src/lib/sign-in-policy.ts), which a test in
+  src/lib/auth.test.ts pins to the providers actually configured — anything
+  else (`twitter:`, a typo) is malformed and reported, not treated as unbound.
+  The same syntax works in `ADMIN_BOOTSTRAP_EMAILS`; the sign-in grant it
+  implies is bound, while the promotion itself matches the bare address;
 - every address is optional on the Auth.js objects, so absent, empty and
   whitespace-only all normalise to `null` and are refused before any
   comparison happens — an absent address cannot match a blank list entry from

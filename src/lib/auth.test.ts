@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AUTH_ERROR_PATH } from "@/lib/routes";
-import { PERMITTED_EMAILS_VAR } from "@/lib/sign-in-policy";
+import { PERMITTED_EMAILS_VAR, SIGN_IN_PROVIDERS } from "@/lib/sign-in-policy";
 
 /**
  * ugcportal-egp K1, as WIRED rather than as written.
@@ -97,15 +97,40 @@ afterEach(() => {
 function signIn(
   user: { email?: string | null },
   profile?: Record<string, unknown>,
+  account?: { provider: string },
 ) {
   // Shaped like what @auth/core passes: `user` is the adapter row when the
   // account is already linked and the provider-derived user when it is not,
-  // and `profile` is the provider's parsed profile for this sign-in.
+  // `profile` is the provider's parsed profile for this sign-in, and
+  // `account` names the provider it came through.
   return authConfig.callbacks.signIn({
     user,
+    account,
     profile,
   } as Parameters<typeof authConfig.callbacks.signIn>[0]);
 }
+
+describe("the signIn callback hands the provider to the gate (ugcportal-1551)", () => {
+  // Deleting `account` from the callback's destructuring would make every
+  // bound entry refuse everyone — so the PERMITTED case is the one that
+  // proves the wiring, and the refused case proves the binding is read.
+  it("permits a bound address through its own provider and refuses it through the other", () => {
+    process.env[PERMITTED_EMAILS_VAR] = `google:${LISTED}`;
+    expect(signIn({ email: LISTED }, { email: LISTED }, { provider: "google" })).toBe(true);
+    expect(signIn({ email: LISTED }, { email: LISTED }, { provider: "facebook" })).toBe(false);
+  });
+
+  it("configures exactly the providers an entry may be bound to", () => {
+    // SIGN_IN_PROVIDERS is what `google:`/`facebook:` prefixes are checked
+    // against. If a provider is added here without being listed there, its
+    // prefix is silently malformed and permits nobody; the reverse would let
+    // an operator bind an address to a provider that cannot sign anyone in.
+    const configured = authConfig.providers
+      .map((provider) => provider.id)
+      .sort();
+    expect(configured).toEqual([...SIGN_IN_PROVIDERS].sort());
+  });
+});
 
 describe("the signIn callback is the authorisation gate", () => {
   it("is wired into the config NextAuth was constructed with", () => {

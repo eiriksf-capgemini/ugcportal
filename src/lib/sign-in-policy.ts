@@ -26,8 +26,10 @@
  * Google or Facebook account on the internet could sign in, upload, and
  * publish to the public gallery.
  *
- * The rule below — a configured list of permitted email addresses — is
- * PROVISIONAL, and is not a claim that an allowlist is the right mechanism.
+ * The rule below — a configured list of permitted email addresses, each
+ * optionally bound to the one provider it may arrive through
+ * (ugcportal-1551) — is PROVISIONAL, and is not a claim that an allowlist
+ * is the right mechanism.
  * What is not provisional is the default: with no configuration present,
  * every sign-in is refused. That is the property the defect lacked, and it
  * holds under every mechanism that might replace this one.
@@ -49,6 +51,58 @@
  * The permitted-address list. Comma-separated, compared case-insensitively.
  */
 export const PERMITTED_EMAILS_VAR = "ALLOWED_SIGNIN_EMAILS";
+
+/**
+ * The provider ids an entry may be bound to (ugcportal-1551). These are
+ * Auth.js provider ids — `account.provider` in the `signIn` callback — and
+ * MUST match the providers configured in src/lib/auth.ts; a test there
+ * asserts the two lists agree, so adding a provider without listing it here
+ * fails a test rather than silently making `newprovider:addr` malformed.
+ */
+export const SIGN_IN_PROVIDERS = ["google", "facebook"] as const;
+export type SignInProvider = (typeof SIGN_IN_PROVIDERS)[number];
+
+function isSignInProvider(value: string): value is SignInProvider {
+  return (SIGN_IN_PROVIDERS as readonly string[]).includes(value);
+}
+
+/**
+ * One usable allowlist entry. `provider: null` is the original, unbound
+ * meaning — the address is permitted whichever configured provider vouches
+ * for it. A bound entry (`google:addr`) permits the address only when THAT
+ * provider is the one asserting it.
+ */
+export type PermittedEntry = {
+  email: string;
+  provider: SignInProvider | null;
+};
+
+/**
+ * Parse one trimmed, lowercased entry. `null` means unusable.
+ *
+ * The separator is the first `:`. A colon can in principle appear in an
+ * email's quoted local part, but neither configured provider issues such
+ * addresses, and reading `google:x@y.com` as a mailbox called `google:x`
+ * is the silent failure this parser exists to prevent — before this, that
+ * entry WAS email-shaped and simply never matched anybody.
+ *
+ * An unknown prefix (`twitter:x@y.com`, or a typo like `gogle:`) is
+ * malformed, not "unbound": treating it as a plain address would be
+ * another entry that silently permits nobody, and treating it as unbound
+ * would permit the address on providers the operator did not name.
+ */
+function parseEntry(entry: string): PermittedEntry | null {
+  const colon = entry.indexOf(":");
+  if (colon === -1) {
+    return isEmailShaped(entry) ? { email: entry, provider: null } : null;
+  }
+  const prefix = entry.slice(0, colon).trim();
+  const email = entry.slice(colon + 1).trim();
+  if (!isSignInProvider(prefix) || !isEmailShaped(email)) {
+    return null;
+  }
+  return { email, provider: prefix };
+}
 
 /**
  * Narrower than `NodeJS.ProcessEnv` on purpose: only ALLOWED_SIGNIN_EMAILS
@@ -149,11 +203,21 @@ function splitList(raw: string | undefined): string[] {
 export function bootstrapAdminEmails(
   raw: string | undefined = process.env.ADMIN_BOOTSTRAP_EMAILS,
 ): string[] {
-  return splitList(raw);
+  // A bound entry (`google:addr`) in the bootstrap list binds the SIGN-IN,
+  // via the union below; the promotion itself matches the persisted address,
+  // so the prefix is dropped here. An unusable entry is returned as written —
+  // it never matches a real address, so it still grants nothing.
+  return splitList(raw).map((entry) => parseEntry(entry)?.email ?? entry);
 }
 
 export type PermittedIdentities = {
-  /** Email-shaped, normalised, de-duplicated. Empty means nobody. */
+  /** Usable entries, normalised, de-duplicated. Empty means nobody. */
+  entries: PermittedEntry[];
+  /**
+   * The distinct addresses across `entries`, for reporting. Not the thing
+   * to decide on — a listed address may be bound to a provider — so
+   * `decideSignIn` reads `entries`.
+   */
   emails: string[];
   /** Entries that were present but not usable, for the operator's benefit. */
   malformed: string[];
@@ -206,16 +270,30 @@ export function permittedIdentities(
     ...splitList(env.ADMIN_BOOTSTRAP_EMAILS),
   ];
 
+  const parsed: PermittedEntry[] = [];
   const emails: string[] = [];
   const malformed: string[] = [];
   for (const entry of entries) {
-    const target = isEmailShaped(entry) ? emails : malformed;
-    if (!target.includes(entry)) {
-      target.push(entry);
+    const usable = parseEntry(entry);
+    if (!usable) {
+      if (!malformed.includes(entry)) {
+        malformed.push(entry);
+      }
+      continue;
+    }
+    if (
+      !parsed.some(
+        (seen) => seen.email === usable.email && seen.provider === usable.provider,
+      )
+    ) {
+      parsed.push(usable);
+    }
+    if (!emails.includes(usable.email)) {
+      emails.push(usable.email);
     }
   }
 
-  return { emails, malformed, configured: entries.length > 0 };
+  return { entries: parsed, emails, malformed, configured: entries.length > 0 };
 }
 
 /**
@@ -229,7 +307,9 @@ export type SignInRefusal =
   | "no-configuration"
   | "no-email"
   | "unverified-email"
-  | "not-permitted";
+  | "not-permitted"
+  /** Listed, but only for a provider other than the one asserting it. */
+  | "wrong-provider";
 
 export type SignInDecision =
   | { permitted: true; email: string }
@@ -244,6 +324,14 @@ export type SignInDecision =
  */
 export type SignInAttempt = {
   user: { email?: string | null };
+  /**
+   * Which provider this sign-in came through — `account.provider` is the
+   * provider id (`"google"`, `"facebook"`). Only consulted for a bound
+   * entry; an attempt with no account (Auth.js passes `null` for the
+   * credentials and email flows, neither configured here) can satisfy only
+   * an unbound one.
+   */
+  account?: { provider?: unknown } | null;
   profile?: {
     email?: unknown;
     email_verified?: unknown;
@@ -344,10 +432,32 @@ export function decideSignIn(
   if (!identities.configured) {
     return { permitted: false, reason: "no-configuration" };
   }
-  if (!identities.emails.includes(email)) {
+  const listed = identities.entries.filter((entry) => entry.email === email);
+  if (listed.length === 0) {
     return { permitted: false, reason: "not-permitted" };
   }
+  // An unbound entry permits the address from any configured provider; a
+  // bound one only from the provider it names. `provider` is read from the
+  // attempt only here, so a missing or unrecognised one fails closed against
+  // bound entries rather than matching the first of them.
+  const provider = signInProvider(attempt);
+  const permitted = listed.some(
+    (entry) => entry.provider === null || entry.provider === provider,
+  );
+  if (!permitted) {
+    return { permitted: false, reason: "wrong-provider" };
+  }
   return { permitted: true, email };
+}
+
+/** The provider id asserted by this attempt, or `null` when there is none. */
+function signInProvider(attempt: SignInAttempt): SignInProvider | null {
+  const raw = attempt.account?.provider;
+  if (typeof raw !== "string") {
+    return null;
+  }
+  const normalized = raw.trim().toLowerCase();
+  return isSignInProvider(normalized) ? normalized : null;
 }
 
 /**
@@ -385,9 +495,12 @@ export function isPermittedSignIn(
   // differ for anyone whose provider address has changed, and a log line
   // naming a domain the gate did not judge is worse than no log line.
   const domain = emailDomain(authorisedEmail(attempt));
+  // The provider is not personal data and is exactly what an operator who
+  // bound an address to the wrong provider needs to see.
+  const via = ` via ${signInProvider(attempt) ?? "an unrecognised provider"}`;
   if (decision.reason === "no-configuration") {
     console.error(
-      `[auth] Refused a sign-in from ${domain}: neither ${PERMITTED_EMAILS_VAR} ` +
+      `[auth] Refused a sign-in from ${domain}${via}: neither ${PERMITTED_EMAILS_VAR} ` +
         "nor ADMIN_BOOTSTRAP_EMAILS is set, so nobody may sign in to this " +
         "instance. See docs/access-control.md and env.example.",
     );
@@ -403,11 +516,12 @@ export function isPermittedSignIn(
     malformed.length > 0
       ? ` Ignoring ${malformed.length} unusable entr${
           malformed.length === 1 ? "y" : "ies"
-        } (${malformed.join(", ")}) — an exact address is required and ` +
-        "wildcards are not supported."
+        } (${malformed.join(", ")}) — an exact address is required, ` +
+        `optionally prefixed with one of ${SIGN_IN_PROVIDERS.map((p) => `${p}:`).join(" or ")}, ` +
+        "and wildcards are not supported."
       : "";
   console.warn(
-    `[auth] Refused a sign-in from ${domain}: ${decision.reason}. ` +
+    `[auth] Refused a sign-in from ${domain}${via}: ${decision.reason}. ` +
       `Permitted addresses come from ${PERMITTED_EMAILS_VAR} ` +
       `(plus ADMIN_BOOTSTRAP_EMAILS); see docs/access-control.md.${malformedNote}`,
   );
