@@ -92,10 +92,11 @@ for (const [name, viewport] of Object.entries(VIEWPORTS)) {
         // this width - is activated with the keyboard.
         await expect(page.getByRole("button", { name: "Open menu" })).toBeFocused();
         await page.keyboard.press("Enter");
-        // Activating a button with Enter leaves focus ON the button; the
-        // panel it just revealed is the very next thing in DOM order.
-        await expect(page.getByRole("button", { name: "Close menu" })).toBeFocused();
-        await page.keyboard.press("Tab");
+        // `@base-ui/react/popover`'s own default `initialFocus` (PR #94
+        // review round 3): opening via a KEYBOARD interaction moves focus
+        // straight to the first tabbable element inside the panel, not
+        // left on the toggle button the way the hand-rolled version this
+        // replaced did - one fewer Tab press to reach "Gallery" below.
       }
 
       const nav = page.getByRole("navigation", { name: "Main navigation" });

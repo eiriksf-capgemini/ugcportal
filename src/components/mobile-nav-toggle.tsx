@@ -1,5 +1,6 @@
 "use client";
 
+import { Popover } from "@base-ui/react/popover";
 import { Menu, X } from "lucide-react";
 import { useState } from "react";
 
@@ -7,8 +8,6 @@ import { Button } from "@/components/ui/button";
 import { PrimaryNavLink } from "@/components/primary-nav-link";
 
 export type NavItem = { href: string; label: string };
-
-const MOBILE_NAV_PANEL_ID = "mobile-nav-panel";
 
 /**
  * The collapsed, small-viewport form of the header's main navigation
@@ -24,79 +23,88 @@ const MOBILE_NAV_PANEL_ID = "mobile-nav-panel";
  * through a closed menu would land on destinations with nothing on screen
  * to show for it.
  *
- * The panel only exists in the tree at all while `open` is true (`{open &&
- * ...}`, not a `hidden` class) for the same reason: nothing inside it is
- * focusable, and therefore nothing inside it is reachable by Tab, until the
- * toggle button has actually been activated — which is also what keeps a
- * narrow-viewport Playwright run's "Tab reaches every nav item" check
- * honest rather than passing by reaching links no visitor could see.
+ * Built on `@base-ui/react/popover` (PR #94 review round 3 medium finding),
+ * not the hand-rolled `{open && <nav>...}` toggle this shipped with: that
+ * version opened and closed on click, but nothing dismissed it on Escape or
+ * on a pointer-down outside it, and nothing returned focus to the toggle
+ * button when it closed — a keyboard or screen-reader visitor who opened it
+ * had no way to leave it except Tab-ing all the way through its contents.
+ * Popover is the right primitive for exactly this shape (a disclosure
+ * anchored to a trigger button) and ships all three for free: Escape and
+ * outside-press both dismiss it by default, and `finalFocus` (its own
+ * default) returns focus to the trigger that opened it. `Collapsible`
+ * (this package's other obvious candidate) was considered and rejected —
+ * confirmed by reading its source, not assumed: it has no dismissal model
+ * at all (no Escape handling, no outside-press detection anywhere in
+ * `@base-ui/react/collapsible`), because a plain expand/collapse disclosure
+ * is a different interaction pattern than an overlay popup.
  *
- * Why this needed its own component rather than inlining a `useState` into
- * site-header.tsx: that file is a plain Server Component (no "use client"),
- * for the reason its own header-row comment states — AppShell's nav slot and
- * auth widget must stay concurrent, un-awaited siblings, and a client
- * boundary cannot contain a Server Component's own async data fetching
- * inside it. Isolating the one genuinely interactive piece here keeps
- * site-header.tsx free to stay a Server Component and still compose
- * UploadNavLink/AuthStatus as ordinary children.
+ * Still fully controlled (`open`/`onOpenChange`, not `defaultOpen`): a nav
+ * item's own click needs to close the panel too (see `onNavigate` below),
+ * and owning the state here rather than letting Popover manage it
+ * internally means that close path and Popover's own dismissal paths
+ * (Escape, outside-press) all funnel through the same `setOpen`, rather
+ * than this component needing to reconcile two independent sources of
+ * truth about whether the panel is open.
+ *
+ * `Popover.Close` (a built-in button that closes the popover on click) was
+ * deliberately NOT used to wrap the nav links: it renders via `useButton`,
+ * which is written for a focusable, button-ROLE target, not for composing
+ * onto a semantic `<a>` — this package's own `render` prop lets any element
+ * be substituted, but verified here that the substitution is only safe when
+ * the thing underneath already behaves like a button. Passing `onNavigate`
+ * through to `PrimaryNavLink` and closing from there keeps the nav items
+ * exactly the plain links they already were everywhere else in this header.
+ *
+ * `Popover.Popup` defaults to `role="dialog"` with `aria-labelledby`/
+ * `aria-describedby` wired to a `Popover.Title`/`Popover.Description` this
+ * component doesn't render — wrong semantics for a navigation menu, not a
+ * dialog. `render={<nav />}` swaps the rendered tag, and the explicit
+ * `role="navigation"`/`aria-label` below override Popup's own defaults:
+ * confirmed from `@base-ui/react`'s own `mergeProps` docstring that props
+ * merge "Object.assign style, rightmost wins", and this component's own
+ * props are the rightmost entry in Popup's internal merge order.
  */
 export function MobileNavToggle({ items }: { items: NavItem[] }) {
   const [open, setOpen] = useState(false);
 
   return (
-    <div className="relative md:hidden">
-      {/*
-        variant="outline", not "ghost" (PR #94 review round 1 finding):
-        ghost's text colour is text-ink (src/components/ui/button.tsx),
-        documented there as safe only inside one of the old near-black
-        wells (bg-surface-*, bg-destructive-surface, ...) - never measured
-        against --background, because nothing was expected to put it there.
-        This button sits directly on the header's bg-background, where
-        text-ink measures roughly 1.1:1 in light mode - the icon was
-        functionally invisible. "outline" uses text-primary/border-primary
-        instead, the exact pairing contrast.ts's "link-on-background" entry
-        already covers at the stricter 4.5:1 body threshold (well above the
-        3:1 a non-text UI boundary needs), because it is the same token
-        AuthStatus's own sign-in buttons already render on this same
-        background. mobile-nav-toggle.contrast.test.tsx pins this
-        component-locally too, resolving whichever foreground token it
-        actually ships against --background in both colour schemes, rather
-        than only trusting the system-wide pairing to stay in sync with
-        whatever variant this file happens to use.
-      */}
-      <Button
-        type="button"
-        variant="outline"
-        size="icon"
-        aria-expanded={open}
-        aria-controls={MOBILE_NAV_PANEL_ID}
-        onClick={() => setOpen((wasOpen) => !wasOpen)}
-      >
-        {open ? <X aria-hidden="true" /> : <Menu aria-hidden="true" />}
-        <span className="sr-only">{open ? "Close menu" : "Open menu"}</span>
-      </Button>
+    <Popover.Root open={open} onOpenChange={setOpen}>
+      <div className="relative md:hidden">
+        <Popover.Trigger
+          render={(triggerProps, state) => (
+            <Button {...triggerProps} type="button" variant="outline" size="icon">
+              {state.open ? <X aria-hidden="true" /> : <Menu aria-hidden="true" />}
+              <span className="sr-only">{state.open ? "Close menu" : "Open menu"}</span>
+            </Button>
+          )}
+        />
 
-      {open && (
-        <nav
-          id={MOBILE_NAV_PANEL_ID}
-          aria-label="Main navigation"
-          className="absolute top-full right-0 left-0 z-10 mt-2 min-w-40 rounded-lg border border-border bg-background p-2 shadow-md"
-        >
-          <ul className="flex flex-col">
-            {items.map((item) => (
-              <li key={item.href}>
-                <PrimaryNavLink
-                  href={item.href}
-                  onNavigate={() => setOpen(false)}
-                  className="block rounded-md px-3 py-2 hover:bg-accent hover:text-accent-foreground"
-                >
-                  {item.label}
-                </PrimaryNavLink>
-              </li>
-            ))}
-          </ul>
-        </nav>
-      )}
-    </div>
+        <Popover.Portal>
+          <Popover.Positioner align="end" sideOffset={8} className="z-10">
+            <Popover.Popup
+              role="navigation"
+              aria-label="Main navigation"
+              render={<nav />}
+              className="min-w-40 rounded-lg border border-border bg-background p-2 shadow-md"
+            >
+              <ul className="flex flex-col">
+                {items.map((item) => (
+                  <li key={item.href}>
+                    <PrimaryNavLink
+                      href={item.href}
+                      onNavigate={() => setOpen(false)}
+                      className="block rounded-md px-3 py-2 hover:bg-accent hover:text-accent-foreground"
+                    >
+                      {item.label}
+                    </PrimaryNavLink>
+                  </li>
+                ))}
+              </ul>
+            </Popover.Popup>
+          </Popover.Positioner>
+        </Popover.Portal>
+      </div>
+    </Popover.Root>
   );
 }

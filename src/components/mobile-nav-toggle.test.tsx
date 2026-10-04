@@ -48,8 +48,27 @@ function toggleButton(): HTMLButtonElement {
   return button;
 }
 
+/**
+ * `document`, not `container`: `@base-ui/react/popover`'s `Popover.Portal`
+ * renders the panel into `document.body` by default (PR #94 review round
+ * 3), not as a DOM descendant of the toggle button's own wrapper the way
+ * the hand-rolled `{open && <nav>...}` version used to.
+ */
 function panel(): HTMLElement | null {
-  return container.querySelector('nav[aria-label="Main navigation"]');
+  return document.querySelector('nav[aria-label="Main navigation"]');
+}
+
+/**
+ * `@base-ui/react/popover`'s floating-ui-based positioning and its dismiss
+ * listeners both settle across a microtask/effect cycle beyond the one
+ * `act()` flushes synchronously for the triggering click itself - confirmed
+ * empirically: without this, the two tests below that dispatch a dismissal
+ * event immediately after opening the panel found nothing listening yet.
+ */
+async function flush(): Promise<void> {
+  await act(async () => {
+    await Promise.resolve();
+  });
 }
 
 describe("MobileNavToggle (ugcportal-14k9)", () => {
@@ -116,6 +135,72 @@ describe("MobileNavToggle (ugcportal-14k9)", () => {
 
     expect(toggleButton().getAttribute("aria-expanded")).toBe("false");
     expect(panel()).toBeNull();
+  });
+
+  /**
+   * ugcportal-14k9 PR #94 review round 3 medium finding: the hand-rolled
+   * `{open && <nav>...}` toggle this shipped with closed only on a second
+   * click of the toggle button or on selecting a nav item - nothing
+   * dismissed it on Escape, and nothing returned focus anywhere in
+   * particular when it closed. `@base-ui/react/popover`'s own dismissal
+   * model (Escape + outside-press, both wired by default, documented in
+   * `PopoverRootChangeEventReason`) is what this test, and the one below
+   * it, actually exercise - not a hand-rolled listener this component would
+   * otherwise need to own and keep correct itself.
+   */
+  it("Escape closes the panel and returns focus to the toggle button", async () => {
+    act(() => {
+      root.render(<MobileNavToggle items={ITEMS} />);
+    });
+
+    act(() => {
+      toggleButton().click();
+    });
+    await flush();
+    expect(panel(), "panel did not open").not.toBeNull();
+
+    act(() => {
+      document.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+      );
+    });
+    await flush();
+
+    expect(panel()).toBeNull();
+    expect(toggleButton().getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(toggleButton());
+  });
+
+  /**
+   * `.click()`, not a bare `pointerdown` (confirmed empirically, not
+   * assumed): a click-opened Popover.Trigger puts the dismiss hook into
+   * `outsidePressEvent: 'intentional'` mode, which requires a full outside
+   * press-and-release (or a detail-0 "virtual" click, the same shape
+   * `Element.prototype.click()` itself produces) before it dismisses - a
+   * lone synthetic `pointerdown` is deliberately not enough on its own, so
+   * that an outside drag that merely starts with a pointerdown cannot
+   * dismiss the popup the instant it begins.
+   */
+  it("a click outside the panel closes it", async () => {
+    act(() => {
+      root.render(<MobileNavToggle items={ITEMS} />);
+    });
+
+    act(() => {
+      toggleButton().click();
+    });
+    await flush();
+    expect(panel(), "panel did not open").not.toBeNull();
+
+    act(() => {
+      // Outside both the toggle button and the panel - document.body itself,
+      // which neither element is.
+      document.body.click();
+    });
+    await flush();
+
+    expect(panel()).toBeNull();
+    expect(toggleButton().getAttribute("aria-expanded")).toBe("false");
   });
 
   /**
