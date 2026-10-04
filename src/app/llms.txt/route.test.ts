@@ -1,122 +1,98 @@
-import { describe, it, expect } from "vitest";
-import { GET } from "./route";
+import { describe, expect, it } from "vitest";
+
+import { SITE_DESCRIPTION, SITE_NAME } from "@/lib/site";
+
+import { GET, buildLlmsTxt } from "./route";
+
+/**
+ * ugcportal-o7l. The structural tests run against the REAL builder with
+ * inputs chosen to make the failure they describe possible — a two-line
+ * description, a name with a line break — rather than against a local copy
+ * of the algorithm, which is the assertion-that-cannot-fail shape PR #83's
+ * rounds 1 and 3 both caught.
+ */
+
+function lines(text: string): string[] {
+  return text.split("\n");
+}
+
+/** The non-empty lines between the H1 and the first H2: the summary block. */
+function summaryLines(text: string): string[] {
+  const all = lines(text);
+  const h1 = all.findIndex((line) => line.startsWith("# "));
+  const h2 = all.findIndex((line) => line.startsWith("## "));
+  return all.slice(h1 + 1, h2).filter((line) => line.trim().length > 0);
+}
 
 describe("GET /llms.txt", () => {
-  it("returns a valid llms.txt response with correct content type", async () => {
+  it("answers 200 as UTF-8 plain text", () => {
     const response = GET();
-
     expect(response.status).toBe(200);
-    expect(response.headers.get("Content-Type")).toBe("text/plain; charset=utf-8");
+    expect(response.headers.get("Content-Type")).toBe(
+      "text/plain; charset=utf-8",
+    );
   });
 
-  it("starts with a single H1 line with the site name", async () => {
-    const response = GET();
-    const content = await response.clone().text();
-    const lines = content.split("\n");
-
-    // First non-empty line should be H1
-    const firstLine = lines.find((line) => line.trim());
-    expect(firstLine).toBe("# UGC Portal");
-
-    // Count H1 lines - should be exactly one
-    const h1Count = lines.filter((line) => line.trim().startsWith("# ")).length;
-    expect(h1Count).toBe(1);
+  it("starts with exactly one H1 carrying the site name", async () => {
+    const text = await GET().text();
+    const all = lines(text);
+    expect(all.find((line) => line.trim().length > 0)).toBe(`# ${SITE_NAME}`);
+    expect(all.filter((line) => line.startsWith("# ")).length).toBe(1);
   });
 
-  it("contains a blockquote with every line prefixed with '> '", async () => {
-    const response = GET();
-    const content = await response.clone().text();
-    const lines = content.split("\n");
-
-    // Find the blockquote section (starts after H1, before H2)
-    const h1Index = lines.findIndex((line) => line.startsWith("# "));
-    const h2Index = lines.findIndex((line) => line.startsWith("## "));
-    const blockquoteLines = lines.slice(h1Index + 2, h2Index).filter((line) => line.trim());
-
-    // Every blockquote line must start with "> " to maintain spec structure
-    expect(blockquoteLines.length).toBeGreaterThan(0);
-    for (const line of blockquoteLines) {
-      expect(line, "Blockquote line must be prefixed with '> '").toMatch(/^> /);
+  it("quotes the whole description as one blockquote", async () => {
+    const text = await GET().text();
+    const summary = summaryLines(text);
+    expect(summary.length).toBeGreaterThan(0);
+    for (const line of summary) {
+      expect(line).toMatch(/^> /);
     }
-
-    // The blockquote must contain the description
-    const blockquoteText = blockquoteLines.join("\n");
-    expect(blockquoteText).toContain("Food, wine and drink, technology and books, photographed.");
+    expect(summary.join("\n")).toContain(SITE_DESCRIPTION);
   });
 
-  it("lists only paths from the allowlist of public routes", async () => {
-    const response = GET();
-    const content = await response.clone().text();
-
-    // Extract all paths from markdown links [text](path)
-    const linkRegex = /\]\(([^)]+)\)/g;
-    const paths: string[] = [];
-    let match;
-
-    while ((match = linkRegex.exec(content)) !== null) {
-      paths.push(match[1]);
-    }
-
-    // Define the allowlist of public paths
-    const allowlist = new Set([
-      "/", // home page with public gallery
-    ]);
-
-    // Every extracted path must be in the allowlist
-    for (const path of paths) {
-      expect(path, `Path ${path} should be in the allowlist`).toSatisfy(
-        (p: string) => allowlist.has(p) || p.startsWith("http"),
-      );
+  it("links only to public pages", async () => {
+    const text = await GET().text();
+    // "/" is the only public page today; src/lib/routes.ts exports no
+    // constant for the app root, so it is written out here. Add a path only
+    // when a public page exists for it.
+    const publicPaths = new Set(["/"]);
+    const linked = Array.from(text.matchAll(/\]\(([^)]+)\)/g), (m) => m[1]);
+    expect(linked.length).toBeGreaterThan(0);
+    for (const path of linked) {
+      expect(publicPaths.has(path), `${path} is not a public page`).toBe(true);
     }
   });
 
-  it("enforces guardrail: no line contains '/admin', '/api/', or '/upload'", async () => {
-    const response = GET();
-    const content = await response.clone().text();
-    const lines = content.split("\n");
-
-    // These patterns are checked as literal substrings, not imported constants,
-    // because they represent categories of routes: all /admin/* paths, all /api/* paths,
-    // and the /upload path. A new private route cannot slip through with stale literals.
-    for (const line of lines) {
-      expect(line, "Line should not contain '/admin'").not.toContain("/admin");
-      expect(line, "Line should not contain '/api/'").not.toContain("/api/");
-      expect(line, "Line should not contain '/upload'").not.toContain("/upload");
+  it("never mentions an admin, API or upload path (K2 guardrail)", async () => {
+    // Literal substrings on purpose: they name whole families of private
+    // routes, so a new /admin/* or /api/* page cannot slip past a stale
+    // allowlist. Mutation-checked by adding "/admin/settings" to the prose and
+    // watching this fail.
+    const text = await GET().text();
+    for (const needle of ["/admin", "/api/", "/upload"]) {
+      expect(text, `must not mention ${needle}`).not.toContain(needle);
     }
   });
+});
 
-  it("multiline description test: blockquote properly escapes with > prefix (mutation check)", () => {
-    // This test verifies that if SITE_DESCRIPTION were to contain newlines,
-    // the blockquote building logic in the route would correctly prefix every
-    // line with "> " to maintain llms.txt spec structure.
-    //
-    // Simulate what would happen with a two-line description:
-    // Without the fix (direct interpolation): only first line gets ">", breaking spec
-    // With the fix (split + map): every line gets "> ", preserving spec
-    const mockDescription = "Line one of description.\nLine two of description.";
+describe("buildLlmsTxt keeps the spec's structure for awkward inputs", () => {
+  it("quotes every line of a multi-line description", () => {
+    const text = buildLlmsTxt({
+      name: "Site",
+      description: "Line one.\nLine two.",
+    });
+    const summary = summaryLines(text);
+    expect(summary).toEqual(["> Line one.", "> Line two."]);
+  });
 
-    // Simulate the BROKEN approach (direct interpolation):
-    // const brokenBlockquote = `> ${mockDescription}`;
-    // This would produce:
-    //   > Line one of description.
-    //   Line two of description.
-    // The second line is missing "> ", breaking the blockquote format.
-
-    // Simulate the FIXED approach (split and prefix each line):
-    const fixedBlockquote = mockDescription
-      .split("\n")
-      .map((line) => `> ${line}`)
-      .join("\n");
-
-    // Every line of the blockquote must start with "> "
-    const lines = fixedBlockquote.split("\n");
-    expect(lines.length).toBe(2);
-    for (const line of lines) {
-      expect(line, "Every blockquote line must be prefixed with '> '").toMatch(/^> /);
-    }
-    expect(lines[1]).toContain("Line two of description.");
-
-    // If we had NOT implemented the split/map fix, the test above would fail
-    // because line[1] would be "Line two of description." (without the "> " prefix)
+  it("collapses a name with line breaks into a single H1", () => {
+    const text = buildLlmsTxt({
+      name: "Two\nline   name",
+      description: "d",
+    });
+    const all = lines(text);
+    expect(all[0]).toBe("# Two line name");
+    expect(all.filter((line) => line.startsWith("# ")).length).toBe(1);
+    expect(all[1]).toBe("");
   });
 });
