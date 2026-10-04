@@ -13,12 +13,9 @@
  * and can be malformed, where `Number()` yields NaN and `NaN > limit` is
  * false. The wrapped stream is what holds the line.
  *
- * `src/app/api/media/route.ts` used to carry its own copy of
- * readCappedFormData and now imports this one (ugcportal-05b had to change
- * that reader, and maintaining the change in two places was not an option).
- * `src/app/api/media/[id]/route.ts` still has a private `readJsonBody`;
- * switching it over and deleting that copy is the rest of ugcportal-e15.
- * Until then a fix to readJsonBody here needs applying there too.
+ * Both `src/app/api/media/route.ts` and `src/app/api/media/[id]/route.ts` now
+ * import these helpers; maintaining duplicate implementations was not an option
+ * when either one needed to change (ugcportal-05b, ugcportal-e15).
  */
 
 /** Thrown from inside the body stream, so it surfaces out of the parser. */
