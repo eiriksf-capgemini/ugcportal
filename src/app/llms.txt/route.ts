@@ -50,7 +50,9 @@ export function buildLlmsTxt(site: {
     // publish, captions shown: src/app/api/media/[id]/publish/route.ts and
     // src/components/gallery/. Allowlisted sign-in: src/lib/sign-in-policy.ts.
     // Owner-only publishing: requireOwnedMedia in the publish route.
-    "A public gallery of watermarked preview images, each with alt text and a caption. " +
+    // Alt text is required to publish; a caption is optional and shown when
+    // the contributor wrote one (gallery.tsx renders nothing otherwise).
+    "A public gallery of watermarked preview images, each with alt text and, where the contributor wrote one, a caption. " +
       "Contributors are a small, allowlisted set of signed-in uploaders, and each publishes their own work.",
     "",
     "- [Home](/): browse the public gallery",
