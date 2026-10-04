@@ -10,6 +10,7 @@ import {
   LEGAL_SIGN_OFF,
   type LegalContact,
   type LegalContactVar,
+  readLegalContact,
   unsetMarker,
 } from "@/lib/legal/contact";
 
@@ -19,6 +20,9 @@ import {
  * include glob wants `.test.` or `.spec.`) and not scanned as shipped UI by
  * src/lib/design/scan-source.ts (`isTestFile` wants the same) — it only
  * ever runs when a test imports it.
+ *
+ * `textContent` and `describeLegalPageContract` need a DOM: put
+ * `// @vitest-environment jsdom` at the top of any test file that uses them.
  */
 
 export const REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
@@ -31,13 +35,25 @@ export const FILLED_LEGAL_ENV: Record<LegalContactVar, string> = {
   LEGAL_STORAGE_PROVIDER: "Example Objects GmbH, Germany",
 };
 
-/** The same deployment as a contact object, for content-module unit tests. */
-export const FILLED_CONTACT: LegalContact = {
-  controllerName: FILLED_LEGAL_ENV.LEGAL_CONTROLLER_NAME,
-  contactEmail: FILLED_LEGAL_ENV.LEGAL_CONTACT_EMAIL,
-  hostingProvider: FILLED_LEGAL_ENV.LEGAL_HOSTING_PROVIDER,
-  storageProvider: FILLED_LEGAL_ENV.LEGAL_STORAGE_PROVIDER,
+/**
+ * A deployment whose operator values happen to contain the characters the
+ * placeholder scan looks for. Every variable IS set; nothing here is a
+ * placeholder, and the pages must publish (PR #90 round 3).
+ */
+export const BRACKETED_LEGAL_ENV: Record<LegalContactVar, string> = {
+  ...FILLED_LEGAL_ENV,
+  LEGAL_CONTROLLER_NAME: "Kari Nordmann [Oslo]",
+  LEGAL_HOSTING_PROVIDER: "Acme Hosting [Oslo], Norway (region TBD)",
 };
+
+/**
+ * The same deployment as a contact object, through the real reader rather
+ * than a second copy of the env-to-field mapping (PR #90 round 3).
+ */
+export const FILLED_CONTACT: LegalContact = readLegalContact({
+  NODE_ENV: "test",
+  ...FILLED_LEGAL_ENV,
+} as NodeJS.ProcessEnv).contact;
 
 /** All four variables blank, which readLegalContact treats as unset. */
 export const UNSET_LEGAL_ENV: Record<LegalContactVar, string> = {
@@ -63,32 +79,19 @@ export function stubLegalEnv(
 }
 
 /**
- * The visible text of static markup: tags removed, every entity React can
- * emit decoded (it escapes & < > " ' as named or numeric references). One
- * pass, so a literal "&lt;" in the source — emitted as "&amp;lt;" — decodes
- * to "&lt;" and not further. Complete rather than a hand-picked list (PR #90
- * round 2).
+ * The visible text of static markup, as the browser would read it: parsed
+ * by jsdom and read back through the real `textContent`, rather than a
+ * hand-rolled tag stripper and entity table (PR #90 round 3).
  */
 export function textContent(markup: string): string {
-  const named: Record<string, string> = {
-    amp: "&",
-    lt: "<",
-    gt: ">",
-    quot: '"',
-    apos: "'",
-    nbsp: " ",
-  };
-  return markup
-    .replace(/<[^>]*>/g, "")
-    .replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (whole, body: string) => {
-      if (body.startsWith("#x") || body.startsWith("#X")) {
-        return String.fromCodePoint(parseInt(body.slice(2), 16));
-      }
-      if (body.startsWith("#")) {
-        return String.fromCodePoint(parseInt(body.slice(1), 10));
-      }
-      return named[body.toLowerCase()] ?? whole;
-    });
+  if (typeof document === "undefined") {
+    throw new Error(
+      "textContent needs a DOM: add `// @vitest-environment jsdom` at the top of this test file.",
+    );
+  }
+  const host = document.createElement("div");
+  host.innerHTML = markup;
+  return host.textContent ?? "";
 }
 
 export type LegalPageUnderTest = {
@@ -149,6 +152,16 @@ export function describeLegalPageContract(page: LegalPageUnderTest): void {
       const text = textContent(page.render());
       expect(text).toContain(page.filledNeedle);
       expect(text).not.toContain("[LEGAL_");
+    });
+
+    it("in production, serves an operator value that contains brackets or TBD", () => {
+      // The scan reads the authored prose, not the interpolated page, so a
+      // set variable can never be mistaken for a placeholder (round 3).
+      // Verified by mutation: scanning `page.texts` instead makes this throw.
+      stubLegalEnv("production", BRACKETED_LEGAL_ENV);
+      const text = textContent(page.render());
+      expect(text).toContain(BRACKETED_LEGAL_ENV.LEGAL_CONTROLLER_NAME);
+      expect(page.generateMetadata().title).toBe(page.title);
     });
 
     it("stays a draft after configuration exactly until the sign-off lands", () => {

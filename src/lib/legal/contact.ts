@@ -73,6 +73,22 @@ export function readLegalContact(
 }
 
 /**
+ * A contact whose values can never read as a placeholder — plain lower-case
+ * hyphenated words, no brackets, not TODO or TBD — used to build the AUTHORED
+ * text of a page for the stray-placeholder scan (PR #90 round 3). The scan
+ * must see the prose the repository wrote, not what an operator typed into
+ * an environment variable: "Acme Hosting [Oslo], Norway" is a set variable,
+ * not a reminder to fill one in, and must not block the page. A test holds
+ * these values to PLACEHOLDER_PATTERN.
+ */
+export const SENTINEL_CONTACT: LegalContact = {
+  controllerName: "controller-name-sentinel",
+  contactEmail: "contact-email-sentinel",
+  hostingProvider: "hosting-provider-sentinel",
+  storageProvider: "storage-provider-sentinel",
+};
+
+/**
  * The human sign-off ugcportal-alg requires before the draft marker comes
  * off (bead K4: "review by whoever plays the DPO/legal role for this project
  * before the draft marker is removed"). A source constant, not an

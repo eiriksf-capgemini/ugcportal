@@ -1,9 +1,10 @@
 import {
   LEGAL_SIGN_OFF,
+  SENTINEL_CONTACT,
+  type LegalContact,
   type LegalContactVar,
   type LegalSignOff,
   readLegalContact,
-  unsetMarker,
 } from "@/lib/legal/contact";
 
 /**
@@ -17,8 +18,12 @@ import {
  *     binary signal. A privacy statement whose controller reads
  *     "[LEGAL_CONTROLLER_NAME]" does not satisfy GDPR Art. 13(1)(a) and is
  *     worse than no page, because it looks like compliance;
- *  2. a stray placeholder in the prose — "[fill in later]", "TBD" — the
- *     second line, for text that slipped past review;
+ *  2. a stray placeholder in the AUTHORED prose — "[fill in later]", "TBD" —
+ *     the second line, for text that slipped past review. Authored, not
+ *     rendered: the scan runs over the page built from SENTINEL_CONTACT, so
+ *     an operator value that happens to contain brackets or the word TBD is
+ *     a set variable, not a placeholder, and never blocks the page (PR #90
+ *     round 3);
  *  3. no human sign-off yet (LEGAL_SIGN_OFF, ugcportal-alg) — draft only;
  *     this is not a configuration problem an operator can fix at deploy
  *     time, so it keeps the notice and the marker rather than the page.
@@ -59,14 +64,31 @@ export function findPlaceholders(texts: Iterable<string>): string[] {
 export type LegalPage = {
   /** The route, for messages. */
   path: string;
-  /** Every string the page can render, flattened. */
+  /** Every string the page renders in the current environment, operator values included. */
   texts: readonly string[];
+  /**
+   * The same strings built from SENTINEL_CONTACT — the prose this repository
+   * wrote, with no operator value in it. The placeholder scan reads THIS.
+   */
+  authored: readonly string[];
 };
+
+/**
+ * The one way to build a LegalPage, so both pages scan the same thing: the
+ * texts for the configured contact, and the texts for the sentinel.
+ */
+export function legalPage(
+  path: string,
+  textsFor: (contact: LegalContact) => readonly string[],
+  contact: LegalContact,
+): LegalPage {
+  return { path, texts: textsFor(contact), authored: textsFor(SENTINEL_CONTACT) };
+}
 
 export type LegalReadiness = {
   /** LEGAL_* variables that are unset. */
   missing: LegalContactVar[];
-  /** Placeholders in the prose other than the markers for unset variables. */
+  /** Placeholders in the authored prose. */
   strayPlaceholders: { path: string; tokens: string[] }[];
   signedOff: boolean;
   /** True while any of the three conditions above holds. */
@@ -81,13 +103,8 @@ export function legalReadiness(
   signOff: LegalSignOff | null = LEGAL_SIGN_OFF,
 ): LegalReadiness {
   const { missing } = readLegalContact(env);
-  // The unset markers are reported once, as `missing`, not again as prose.
-  const unsetMarkers = new Set(missing.map(unsetMarker));
   const strayPlaceholders = pages
-    .map((page) => ({
-      path: page.path,
-      tokens: findPlaceholders(page.texts).filter((token) => !unsetMarkers.has(token)),
-    }))
+    .map((page) => ({ path: page.path, tokens: findPlaceholders(page.authored) }))
     .filter(({ tokens }) => tokens.length > 0);
   const blocked = missing.length > 0 || strayPlaceholders.length > 0;
   const signedOff = signOff !== null;

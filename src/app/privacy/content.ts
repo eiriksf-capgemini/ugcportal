@@ -1,5 +1,7 @@
+import { cache } from "react";
+
 import { type LegalContact, readLegalContact } from "@/lib/legal/contact";
-import type { LegalPage } from "@/lib/legal/publishable";
+import { type LegalPage, legalPage } from "@/lib/legal/publishable";
 import {
   type LegalListSection,
   type LegalProseSection,
@@ -450,11 +452,24 @@ export function privacyTexts(content: PrivacyContent): string[] {
   ];
 }
 
-/** The content and the page record the guard reads, from one environment. */
-export function loadPrivacy(env: NodeJS.ProcessEnv = process.env): {
-  content: PrivacyContent;
-  page: LegalPage;
-} {
-  const content = privacyContent(readLegalContact(env).contact);
-  return { content, page: { path: PRIVACY_PATH, texts: privacyTexts(content) } };
-}
+const textsFor = (contact: LegalContact): string[] => privacyTexts(privacyContent(contact));
+
+/**
+ * The content and the page record the guard reads, from one environment.
+ *
+ * Wrapped in React's `cache` (the same idiom as `getSession` in
+ * src/lib/auth.ts) so `generateMetadata` and the page component, which both
+ * call this with no arguments during one request, share one build rather
+ * than two. Outside a server-component render — tests, the boot check —
+ * `cache` is a pass-through, which is why the tests can change the stubbed
+ * environment between calls.
+ */
+export const loadPrivacy = cache(
+  (env: NodeJS.ProcessEnv = process.env): { content: PrivacyContent; page: LegalPage } => {
+    const { contact } = readLegalContact(env);
+    return {
+      content: privacyContent(contact),
+      page: legalPage(PRIVACY_PATH, textsFor, contact),
+    };
+  },
+);

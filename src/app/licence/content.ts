@@ -1,5 +1,7 @@
+import { cache } from "react";
+
 import { type LegalContact, readLegalContact } from "@/lib/legal/contact";
-import type { LegalPage } from "@/lib/legal/publishable";
+import { type LegalPage, legalPage } from "@/lib/legal/publishable";
 import { type LegalProseSection, sectionTexts } from "@/lib/legal/section";
 import { LICENCE_PATH } from "@/lib/routes";
 
@@ -117,11 +119,18 @@ export function licenceTexts(content: LicenceContent): string[] {
   return [...content.intro, ...content.sections.flatMap(sectionTexts)];
 }
 
-/** The content and the page record the guard reads, from one environment. */
-export function loadLicence(env: NodeJS.ProcessEnv = process.env): {
-  content: LicenceContent;
-  page: LegalPage;
-} {
-  const content = licenceContent(readLegalContact(env).contact);
-  return { content, page: { path: LICENCE_PATH, texts: licenceTexts(content) } };
-}
+const textsFor = (contact: LegalContact): string[] => licenceTexts(licenceContent(contact));
+
+/**
+ * The content and the page record the guard reads, from one environment.
+ * Cached per request for the same reason as `loadPrivacy` — see there.
+ */
+export const loadLicence = cache(
+  (env: NodeJS.ProcessEnv = process.env): { content: LicenceContent; page: LegalPage } => {
+    const { contact } = readLegalContact(env);
+    return {
+      content: licenceContent(contact),
+      page: legalPage(LICENCE_PATH, textsFor, contact),
+    };
+  },
+);
