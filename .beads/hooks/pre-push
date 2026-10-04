@@ -94,10 +94,10 @@ else
   # Fall back to a placeholder secret only where neither .env.local nor
   # plain .env already provides a real value -- never override a real local
   # value, since Next.js would otherwise silently prefer this placeholder
-  # over what those files define. Placeholder values themselves come from
-  # scripts/ci-placeholder-env.sh, the single source of truth also meant
-  # for .github/workflows/ci.yml's Build step (not yet wired there --
-  # ci.yml is a sensitive path this PR doesn't touch; see ugcportal-qmxl).
+  # over what those files define. Placeholder values come from
+  # scripts/ci-placeholder-env.sh, the single source of truth shared with
+  # .github/workflows/ci.yml's Build step (which sources this file via the
+  # Load placeholder auth env vars step -- wired in ugcportal-qmxl).
   . "$_ugcportal_repo_root/scripts/ci-placeholder-env.sh"
   _ugcportal_env_local="$_ugcportal_repo_root/.env.local"
   _ugcportal_env_plain="$_ugcportal_repo_root/.env"
