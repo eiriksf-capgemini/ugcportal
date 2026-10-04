@@ -3,8 +3,6 @@ import NextAuth, {
   type DefaultSession,
   type NextAuthConfig,
 } from "next-auth";
-import Facebook from "next-auth/providers/facebook";
-import Google from "next-auth/providers/google";
 import { cache } from "react";
 
 import type { Role } from "@/generated/prisma/enums";
@@ -12,6 +10,7 @@ import { reconcileBootstrapAdmin } from "@/lib/admin-bootstrap";
 import { prisma } from "@/lib/prisma";
 import { AUTH_ERROR_PATH } from "@/lib/routes";
 import { isPermittedSignIn } from "@/lib/sign-in-policy";
+import { signInProviders } from "@/lib/sign-in-providers";
 
 declare module "next-auth" {
   interface Session {
@@ -74,7 +73,8 @@ export const authConfig = {
     /**
      * The authorisation gate (ugcportal-egp). Closed by default, opened by
      * configuration: `isPermittedSignIn` refuses unless the address appears
-     * in ALLOWED_SIGNIN_EMAILS or ADMIN_BOOTSTRAP_EMAILS.
+     * in ALLOWED_SIGNIN_EMAILS or ADMIN_BOOTSTRAP_EMAILS — and, for an entry
+     * bound to a provider (ugcportal-1551), arrives through that provider.
      *
      * Returning `false` matters more than it looks. Auth.js turns it into an
      * `AccessDenied` before `handleLoginOrRegister` runs, so a refused
@@ -90,8 +90,10 @@ export const authConfig = {
      * with a truthy non-boolean. A string, in particular, is read as a
      * redirect URL rather than as permission.
      */
-    signIn({ user, profile }) {
-      return isPermittedSignIn({ user, profile });
+    signIn({ user, account, profile }) {
+      // `account` carries the provider id, which a bound allowlist entry
+      // (`google:addr`, ugcportal-1551) is judged against.
+      return isPermittedSignIn({ user, account, profile });
     },
     // Database session strategy hands us the adapter user record here;
     // surface its id so route handlers can associate uploads (ugcportal-8wa)
@@ -117,21 +119,17 @@ export const authConfig = {
     // into one permitted set (see permittedIdentities). Being listed for
     // bootstrap is therefore itself a grant of sign-in, not a way around
     // one. It does not promote on an empty database; it promotes a listed
-    // address with no role history.
-    async signIn({ user }) {
-      await reconcileBootstrapAdmin(user);
+    // address with no role history — and, for a provider-bound entry, only
+    // when the sign-in came through that provider (PR #81 round 5), which is
+    // why `account` is handed on.
+    async signIn({ user, account }) {
+      await reconcileBootstrapAdmin(user, account);
     },
   },
-  providers: [
-    Google({
-      clientId: process.env.AUTH_GOOGLE_ID,
-      clientSecret: process.env.AUTH_GOOGLE_SECRET,
-    }),
-    Facebook({
-      clientId: process.env.AUTH_FACEBOOK_ID,
-      clientSecret: process.env.AUTH_FACEBOOK_SECRET,
-    }),
-  ],
+  // Built from SIGN_IN_PROVIDERS in src/lib/sign-in-providers.ts, so the
+  // providers configured here and the prefixes the allowlist accepts are one
+  // list (ugcportal-1551).
+  providers: signInProviders,
 } satisfies NextAuthConfig;
 
 export const { handlers, auth, signIn, signOut } = NextAuth(authConfig);

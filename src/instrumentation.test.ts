@@ -84,6 +84,16 @@ describe("the sign-in configuration startup check", () => {
     ).toBeNull();
   });
 
+  it("explains the provider prefix when an entry cannot be used (ugcportal-1551)", () => {
+    const message = checkSignInConfiguration({
+      ALLOWED_SIGNIN_EMAILS: "twitter:someone@example.com",
+    });
+    expect(message).toContain("twitter:someone@example.com");
+    expect(message).toContain("google:");
+    expect(message).toContain("facebook:");
+    expect(message).toContain("NOBODY can sign in");
+  });
+
   it("names an entry it cannot use rather than silently permitting nobody", () => {
     // The more dangerous of the two quiet states: `*@example.com` reads like
     // it works, and would otherwise look configured while permitting nobody.

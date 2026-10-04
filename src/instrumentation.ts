@@ -7,6 +7,7 @@
  */
 import {
   PERMITTED_EMAILS_VAR,
+  PROVIDER_PREFIX_HINT,
   type SignInEnv,
   permittedIdentities,
 } from "@/lib/sign-in-policy";
@@ -82,8 +83,9 @@ export function checkSignInConfiguration(
       `[auth] ${malformed.length} entr${malformed.length === 1 ? "y" : "ies"} ` +
       `in ${PERMITTED_EMAILS_VAR}/ADMIN_BOOTSTRAP_EMAILS ` +
       `cannot be used and ${malformed.length === 1 ? "was" : "were"} ignored: ` +
-      `${malformed.join(", ")}. Each entry must be one exact email address; ` +
-      "wildcards and domain patterns are not supported. " +
+      `${malformed.join(", ")}. Each entry must be one exact email address, ` +
+      `optionally prefixed with ${PROVIDER_PREFIX_HINT} ` +
+      "to bind it to that provider; wildcards and domain patterns are not supported. " +
       `${emails.length === 0 ? "NOBODY can sign in to this instance." : `${emails.length} address(es) remain permitted.`} ` +
       "See docs/access-control.md."
     );

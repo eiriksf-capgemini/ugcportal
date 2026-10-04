@@ -107,6 +107,39 @@ describe("reconcileBootstrapAdmin", () => {
     expect(setUserRoleMock).not.toHaveBeenCalled();
   });
 
+  it("honours a provider-bound entry: promotes through that provider only (PR #81 round 5)", async () => {
+    process.env.ADMIN_BOOTSTRAP_EMAILS = "google:first@example.com";
+
+    await expect(
+      reconcileBootstrapAdmin(
+        { id: "user-1", email: "first@example.com" },
+        { provider: "facebook" },
+      ),
+    ).resolves.toBe(false);
+    await expect(
+      reconcileBootstrapAdmin({ id: "user-1", email: "first@example.com" }),
+    ).resolves.toBe(false);
+    expect(setUserRoleMock).not.toHaveBeenCalled();
+
+    await expect(
+      reconcileBootstrapAdmin(
+        { id: "user-1", email: "first@example.com" },
+        { provider: "google" },
+      ),
+    ).resolves.toBe(true);
+    expect(setUserRoleMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("promotes an unbound entry through any provider, or none", async () => {
+    for (const account of [{ provider: "google" }, { provider: "facebook" }, null]) {
+      setUserRoleMock.mockClear();
+      await expect(
+        reconcileBootstrapAdmin({ id: "user-1", email: "first@example.com" }, account),
+      ).resolves.toBe(true);
+      expect(setUserRoleMock).toHaveBeenCalledTimes(1);
+    }
+  });
+
   it("reports false when the user was already an admin", async () => {
     setUserRoleMock.mockResolvedValue("unchanged");
 
