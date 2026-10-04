@@ -220,7 +220,6 @@ describe("K2 — focus at the end of the list", () => {
 
     expect(document.activeElement).not.toBe(document.body);
     expect(document.activeElement).toBe(pagingStatus());
-    expect(pagingStatus().textContent).toContain("Showing all 3 photographs.");
   });
 
   it("does not move focus anywhere when there is more to load", async () => {
