@@ -182,8 +182,10 @@ export function Gallery({
    * it falls to `<body>`, and the next Tab restarts the page at the skip
    * link. The paging status line (`GalleryPaging`'s polite live region,
    * already announcing "Showing all N photographs.") is a sensible,
-   * always-present landing spot, so this ref lets `loadMore` hand it focus
-   * once the button it replaces is gone.
+   * always-present landing spot — UNLIKE the button, it is never
+   * conditionally rendered, so `pagingStatusRef.current` is already the
+   * final element by the time `loadMore` can act on it below, with no need
+   * to wait for a later render the way the button's own ref would.
    *
    * `tabIndex={-1}` on that paragraph (below, in `GalleryPaging`) is what
    * makes it a valid `.focus()` target without adding it to the Tab order.
@@ -191,24 +193,18 @@ export function Gallery({
   const pagingStatusRef = useRef<HTMLParagraphElement>(null);
 
   /**
-   * Set by `loadMore` when the page it just fetched is the last one, read by
-   * the effect below once the DOM has actually caught up.
+   * The "Load more" / "Try again" button itself, so `loadMore` can tell
+   * whether the visitor was still on it before moving focus elsewhere
+   * (ugcportal-jx4 round-2 review finding).
    *
-   * Not focused directly inside `loadMore`: at the point the fetch resolves,
-   * `hasMore` is still `true` from the PREVIOUS render, so the button has not
-   * unmounted yet and `pagingStatusRef` may not even be the final element a
-   * screen reader should land on. Flagging the intent and acting on it from a
-   * `hasMore`-keyed effect means the focus call always runs after the render
-   * that actually removes the button.
+   * Without this, the focus handoff below fired unconditionally whenever a
+   * page turned out to be the last one — including when the visitor had
+   * already tabbed away to something else entirely while the request was
+   * in flight, in which case yanking focus to the status line is exactly
+   * the kind of surprise a focus-management fix is supposed to prevent,
+   * not cause.
    */
-  const focusPagingStatusNext = useRef(false);
-
-  useEffect(() => {
-    if (!hasMore && focusPagingStatusNext.current) {
-      focusPagingStatusNext.current = false;
-      pagingStatusRef.current?.focus();
-    }
-  }, [hasMore]);
+  const loadMoreButtonRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     /*
@@ -343,11 +339,27 @@ export function Gallery({
       setCursor(page.nextCursor);
       setHasMore(nextHasMore);
       setLoadState("idle");
-      // The button this click is on is about to unmount (`{hasMore ? ... :
-      // null}` below) — flag it so the effect above can move focus once that
-      // render has actually happened, rather than leaving it to fall to
-      // `<body>` (K2).
-      if (!nextHasMore) focusPagingStatusNext.current = true;
+      if (!nextHasMore) {
+        /*
+         * The button this click is on is about to unmount (`{hasMore ? ...
+         * : null}` below) — but only chase it with focus if the visitor was
+         * actually still on it, or focus had already landed on <body>/null
+         * because some earlier step already took it away (ugcportal-jx4
+         * round-2 review finding). Checked synchronously here, before this
+         * function returns and React gets a chance to re-render: nothing
+         * else runs between the state updates above and this line, so
+         * `document.activeElement` still reflects whatever the visitor's
+         * last actual action left it as, including a Tab elsewhere while
+         * this request was in flight — which must be left alone rather than
+         * overridden.
+         */
+        const active = document.activeElement;
+        const stillOnControl =
+          active === loadMoreButtonRef.current ||
+          active === document.body ||
+          active === null;
+        if (stillOnControl) pagingStatusRef.current?.focus();
+      }
     } catch {
       // Deliberately keeps `cursor` and `hasMore` as they were, so the retry
       // asks for the same page rather than silently skipping it.
@@ -456,6 +468,7 @@ export function Gallery({
         viewerFailed={viewerFailed}
         count={items.length}
         statusRef={pagingStatusRef}
+        buttonRef={loadMoreButtonRef}
         onLoadMore={() => {
           void loadMore();
         }}
@@ -600,6 +613,7 @@ function GalleryPaging({
   viewerFailed,
   count,
   statusRef,
+  buttonRef,
   onLoadMore,
 }: {
   hasMore: boolean;
@@ -607,6 +621,7 @@ function GalleryPaging({
   viewerFailed: boolean;
   count: number;
   statusRef: RefObject<HTMLParagraphElement | null>;
+  buttonRef: RefObject<HTMLButtonElement | null>;
   onLoadMore: () => void;
 }) {
   return (
@@ -653,6 +668,7 @@ function GalleryPaging({
       </p>
       {hasMore ? (
         <Button
+          ref={buttonRef}
           type="button"
           size="lg"
           variant={loadState === "error" ? "outline" : "default"}
@@ -670,11 +686,16 @@ function GalleryPaging({
             `loadMore`'s own `loadState === "loading"` guard (K3) is kept
             regardless, so a request that slips through some other path
             (e.g. a form submit) still cannot double up.
+
+            No `className` override for the dimmed/non-interactive look:
+            `buttonVariants` itself pairs `aria-disabled:pointer-events-none
+            aria-disabled:opacity-50` with its existing `disabled:` pair
+            (ugcportal-jx4 round-2 review finding), so every
+            `focusableWhenDisabled` button gets this for free.
           */
           disabled={loadState === "loading"}
           focusableWhenDisabled
           aria-busy={loadState === "loading"}
-          className="aria-disabled:pointer-events-none aria-disabled:opacity-50"
           onClick={onLoadMore}
         >
           {loadState === "error" ? "Try again" : "Load more"}

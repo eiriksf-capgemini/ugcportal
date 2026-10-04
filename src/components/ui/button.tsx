@@ -56,7 +56,20 @@ const NEUTRAL_OUTLINE_STYLE =
   "border-input bg-transparent text-ink hover:border-input hover:bg-accent hover:text-accent-foreground hover:no-underline aria-expanded:border-input aria-expanded:bg-accent aria-expanded:no-underline"
 
 const buttonVariants = cva(
-  "group/button inline-flex shrink-0 items-center justify-center rounded-lg border border-transparent bg-clip-padding text-sm font-medium whitespace-nowrap transition-all outline-none select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/80 active:not-aria-[haspopup]:translate-y-px disabled:pointer-events-none disabled:opacity-50 aria-invalid:border-destructive/75 aria-invalid:ring-3 aria-invalid:ring-destructive/80 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+  /*
+   * `aria-disabled:pointer-events-none aria-disabled:opacity-50` sits right
+   * beside the `disabled:` pair (ugcportal-jx4 round-2 review finding), not
+   * hand-rolled at a call site: a `focusableWhenDisabled` button (base-ui's
+   * own escape hatch for staying focusable while busy — see
+   * src/components/gallery/gallery.tsx's "Load more") renders
+   * `aria-disabled="true"` instead of the native `disabled` attribute, so the
+   * `disabled:` variant never matches it. Any such button gets the same
+   * dimmed/non-interactive look for free, rather than every caller re-deriving
+   * it. `aria-disabled:opacity-50` reuses the same alpha the `disabled:`
+   * variant already applies, so it carries no new value for the contrast
+   * gate's own alpha-coverage check (src/lib/design/usage.ts) to learn.
+   */
+  "group/button inline-flex shrink-0 items-center justify-center rounded-lg border border-transparent bg-clip-padding text-sm font-medium whitespace-nowrap transition-all outline-none select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/80 active:not-aria-[haspopup]:translate-y-px disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 aria-invalid:border-destructive/75 aria-invalid:ring-3 aria-invalid:ring-destructive/80 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
   {
     variants: {
       variant: {

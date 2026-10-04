@@ -1,9 +1,12 @@
 // @vitest-environment jsdom
 import { act } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { Gallery } from "@/components/gallery/gallery";
+import {
+  setupGalleryTestRoot,
+  renderGallery,
+  waitUntil,
+} from "@/components/gallery/gallery.test-support";
 import { toGalleryItems } from "@/lib/gallery-items";
 
 /**
@@ -48,6 +51,13 @@ import { toGalleryItems } from "@/lib/gallery-items";
  *    needed from this test file (confirmed directly, the same way). So the
  *    second describe block's `document.activeElement` assertions are
  *    genuinely load-bearing, unlike the first block's.
+ *
+ * A third concern, added at round-2 review: the K2 handoff must not run
+ * unconditionally. If the visitor tabs away to something else entirely
+ * while the final page's request is still in flight, the handoff firing
+ * anyway would yank focus back to the gallery — exactly the kind of
+ * surprise a focus-management fix exists to prevent. The last `describe`
+ * block below covers that.
  */
 
 const ITEMS = toGalleryItems([
@@ -55,41 +65,28 @@ const ITEMS = toGalleryItems([
   { id: "two", previewId: "pv-two", publishedAt: "2026-03-02T00:00:00.000Z" },
 ]);
 
-let container: HTMLElement;
-let root: Root;
+const ctx = setupGalleryTestRoot();
 
-beforeEach(() => {
-  (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT =
-    true;
-  container = document.createElement("div");
-  document.body.append(container);
-  root = createRoot(container);
-});
-
-afterEach(async () => {
-  await act(async () => {
-    root.unmount();
-  });
-  container.remove();
+afterEach(() => {
   vi.unstubAllGlobals();
 });
 
 async function mount(): Promise<void> {
-  await act(async () => {
-    root.render(
-      <Gallery initialItems={ITEMS} initialCursor="cursor-1" initialHasMore={true} />,
-    );
+  await renderGallery(ctx.root, {
+    initialItems: ITEMS,
+    initialCursor: "cursor-1",
+    initialHasMore: true,
   });
 }
 
 /**
  * The paging control, distinguished from a gallery TILE — both are
- * `<button>` elements, and `container.querySelector("button")` alone would
- * silently match whichever comes first in document order.
+ * `<button>` elements, and `ctx.container.querySelector("button")` alone
+ * would silently match whichever comes first in document order.
  */
 function loadMoreButtonOrNull(): HTMLButtonElement | null {
   return (
-    [...container.querySelectorAll("button")].find(
+    [...ctx.container.querySelectorAll("button")].find(
       (candidate) => !candidate.hasAttribute("data-gallery-tile"),
     ) ?? null
   );
@@ -103,25 +100,9 @@ function loadMoreButton(): HTMLButtonElement {
 
 /** The polite paging status line — the K2 focus target. */
 function pagingStatus(): HTMLParagraphElement {
-  const status = container.querySelector('p[aria-live="polite"]');
+  const status = ctx.container.querySelector('p[aria-live="polite"]');
   expect(status).not.toBeNull();
   return status as HTMLParagraphElement;
-}
-
-/**
- * Waits for a condition, the same labelled-timeout helper
- * gallery.unmount.test.tsx uses for the same reason: the behaviour under test
- * resolves through a chain of promises and React effects this test does not
- * control directly, so polling inside `act` is what lets them all flush.
- */
-async function waitUntil(condition: () => boolean, what: string): Promise<void> {
-  const deadline = Date.now() + 2000;
-  while (!condition()) {
-    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    });
-  }
 }
 
 function click(button: HTMLButtonElement): Promise<void> {
@@ -267,5 +248,70 @@ describe("K2 — focus at the end of the list", () => {
 
     expect(loadMoreButtonOrNull()).not.toBeNull();
     expect(document.activeElement).toBe(button);
+  });
+});
+
+describe("K2 guard — a visitor who tabbed elsewhere while the request was pending", () => {
+  it("leaves focus alone instead of chasing it to the paging status", async () => {
+    // Round-2 review finding: the K2 handoff fired whenever `hasMore`
+    // flipped to `false`, with no check of where focus actually was by
+    // then. A visitor who tabs away to something else entirely — this
+    // "elsewhere" element stands in for any of it — while the request is
+    // still in flight must not have their focus overridden once it
+    // resolves.
+    let resolveFetch: ((value: unknown) => void) | undefined;
+    const fetchMock = vi.fn().mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveFetch = resolve;
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await mount();
+    const button = loadMoreButton();
+    button.focus();
+
+    await click(button);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    const elsewhere = document.createElement("input");
+    document.body.append(elsewhere);
+    try {
+      elsewhere.focus();
+      expect(document.activeElement).toBe(elsewhere);
+
+      const finalPage = {
+        items: [
+          {
+            id: "three",
+            previewId: "pv-three",
+            publishedAt: "2026-03-03T00:00:00.000Z",
+          },
+        ],
+        hasMore: false,
+        nextCursor: null,
+      };
+      await act(async () => {
+        resolveFetch?.({
+          ok: true,
+          status: 200,
+          json: async () => finalPage,
+        });
+      });
+
+      await waitUntil(
+        () => loadMoreButtonOrNull() === null,
+        "the Load more button to be removed after the last page",
+      );
+
+      // Left exactly where the visitor put it — not pulled to the paging
+      // status, and not dropped to <body> either.
+      expect(document.activeElement).toBe(elsewhere);
+      expect(document.activeElement).not.toBe(pagingStatus());
+      expect(document.activeElement).not.toBe(document.body);
+    } finally {
+      elsewhere.remove();
+    }
   });
 });
