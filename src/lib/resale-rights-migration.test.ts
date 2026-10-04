@@ -307,7 +307,16 @@ describe("ugcportal-vsm K2: the audit trail survives intact", () => {
     const before = await prisma.resaleRightsEvent.count();
     expect(before).toBeGreaterThan(0);
 
-    await prisma.user.delete({ where: { id: "owner-1" } });
+    // `select` here for the same reason as on the findUnique below, and
+    // added when the case the note predicted actually happened: a `User`
+    // column from a later migration (`signInProvider`, ugcportal-mzr) is a
+    // column this database does not have, and an unscoped delete asks for
+    // every scalar the CURRENT client knows about. The note called this out
+    // for `Media` and fixed only that one; `User` was its sibling.
+    await prisma.user.delete({
+      where: { id: "owner-1" },
+      select: { id: true },
+    });
 
     // Derived rather than hard-coded: adding a fixture above must not turn
     // this into a number nobody rechecks.

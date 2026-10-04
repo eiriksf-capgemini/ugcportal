@@ -510,6 +510,69 @@ export function decideSignIn(
 }
 
 /**
+ * The identity behind a session that ALREADY EXISTS: the address stored on
+ * the `User` row and the provider the sign-in that minted it came through
+ * (`User.signInProvider`). Both are columns of the one row the session
+ * adapter already loads, which is what keeps the re-check below free of
+ * extra queries.
+ */
+export type LiveSessionIdentity = {
+  email?: string | null;
+  /**
+   * `User.signInProvider`. `unknown`, and not `SignInProvider`, because it
+   * is whatever string the column holds: null for a session minted before
+   * the column existed, or for a user whose linked providers were
+   * ambiguous at backfill time. `providerId` maps anything unrecognised to
+   * `null`, which fails closed against a bound entry.
+   */
+  provider?: unknown;
+};
+
+/**
+ * Is the identity holding an already-issued session STILL permitted
+ * (ugcportal-mzr)?
+ *
+ * The same decision as `decideSignIn`, over the same `evaluateSignIn`, asked
+ * at a different moment — which is the entire point. Before this, the policy
+ * was consulted once, at the door: `@auth/core` calls `callbacks.signIn` only
+ * on a sign-in, so removing someone from `ALLOWED_SIGNIN_EMAILS` stopped them
+ * signing in AGAIN and did nothing to the 30-day database session they were
+ * already holding. Asking the same question of a live session is what makes
+ * revocation a thing an operator can actually do.
+ *
+ * Deliberately NOT a second rule. Everything `decideSignIn` decides —
+ * closed by default, the union with ADMIN_BOOTSTRAP_EMAILS, provider
+ * binding, malformed entries permitting nobody — applies here unchanged,
+ * because both are projections of `evaluateSignIn`. A rule that applied at
+ * sign-in but not per request (or the reverse) would be the same defect
+ * ugcportal-egp was, one layer along.
+ *
+ * Two differences from a sign-in attempt, both forced by what a request has
+ * to work with, and both narrowing rather than widening:
+ *
+ *  - there is no fresh `profile`, so the address judged is the STORED one
+ *    (`authorisedEmail`'s documented fallback). For anyone who has changed
+ *    their provider address, that is the stale one — so listing only the new
+ *    address revokes the live session and the next sign-in, judged on the
+ *    fresh address, mints a new one. Self-healing, in the safe direction;
+ *  - `email_verified` is not re-asserted on a request, so it is not re-read.
+ *    It was checked at sign-in against the address the provider vouched for,
+ *    and this function can only refuse identities that one permitted.
+ */
+export function decideLiveSession(
+  identity: LiveSessionIdentity,
+  env: SignInEnv = process.env,
+): SignInDecision {
+  return evaluateSignIn(
+    {
+      user: { email: identity.email },
+      account: { provider: identity.provider },
+    },
+    env,
+  ).decision;
+}
+
+/**
  * Everything one sign-in attempt resolves to: the decision, plus the three
  * values the log line needs — the address judged, the provider asserted and
  * the parsed configuration. Computed once here so that `decideSignIn` and

@@ -35,13 +35,16 @@ upload surface will not rediscover it.
    defect was that the open case was the default.
 2. **The permitted set comes from configuration, never from code.** No
    hardcoded address, no domain literal, no "if the database is empty" branch.
-3. **There is exactly one place that decides.**
-   `decideSignIn` in [`src/lib/sign-in-policy.ts`](../src/lib/sign-in-policy.ts),
-   reached through the `isPermittedSignIn` wrapper from the `signIn` callback
-   in [`src/lib/auth.ts`](../src/lib/auth.ts). No other module may form its own
-   opinion about who is allowed in. Gates *downstream* of sign-in (admin role,
-   row ownership, rights clearance) are separate questions and stay where they
-   are.
+3. **There is exactly one place that decides.** `evaluateSignIn` in
+   [`src/lib/sign-in-policy.ts`](../src/lib/sign-in-policy.ts), reached two
+   ways: through `isPermittedSignIn` from the `signIn` callback in
+   [`src/lib/auth.ts`](../src/lib/auth.ts), and through `decideLiveSession`
+   from the `session` callback in the same file (`ugcportal-mzr`, point 5
+   below). Two moments, one rule — a rule that applied at the door but not on
+   each request, or the reverse, would be this document's original defect one
+   layer along. No other module may form its own opinion about who is allowed
+   in. Gates *downstream* of sign-in (admin role, row ownership, rights
+   clearance) are separate questions and stay where they are.
 4. **Refusal happens at sign-in, not at each surface.** A refused identity
    never gets a `User`, `Account` or `Session` row — `@auth/core` throws
    `AccessDenied` before `handleLoginOrRegister` runs — so `auth()` returns
@@ -51,10 +54,20 @@ upload surface will not rediscover it.
    gates on `session.user.id` is therefore already covered, and that is the
    point of putting the decision here.
 
-   The cost of deciding it once, at the door, is that it is also decided
-   *only* at the door: a session minted before the rule changed keeps working
-   until it expires. See "Deploying this does not evict anyone already signed
-   in" below, and `ugcportal-mzr`.
+   **Gate on `session.user.id` — or `hasSignedInUser` — and never on the
+   session being non-null.** The two stopped being the same question with
+   point 5 below: a session that is refused per-request still resolves to an
+   object (`{ expires }`) with no user on it, so `if (!session)` would let a
+   revoked identity through. Every surface in this app gates on the id
+   today; a new one must too.
+
+5. **And re-decided on every request** (`ugcportal-mzr`). Deciding only at
+   the door meant a session minted before the rule changed kept working until
+   it expired — up to 30 days. The `session` callback now asks the same
+   question again on every request that resolves a session, and a session
+   whose identity is no longer permitted is refused and deleted. See
+   "Revoking access takes effect on the next request" below for the bound and
+   for what an operator still has to do by hand.
 
 ## What is provisional
 
@@ -70,11 +83,15 @@ pre-empting the choice.
 **The seam to replace:** three functions in
 `src/lib/sign-in-policy.ts` — `permittedIdentities` (what the permitted set
 is), `authorisedEmail` (which of the identity's addresses is judged) and
-`decideSignIn` (the decision itself). A new rule that needs more than an
-email also means widening `SignInAttempt`, and one that needs a database
-means making `decideSignIn` async and the callback in `src/lib/auth.ts`
-await it. Everything else, including the closed-by-default property and
-every downstream gate, stays as it is.
+`evaluateSignIn` (the decision itself, which `decideSignIn`,
+`isPermittedSignIn` and `decideLiveSession` are three views of). A new rule
+that needs more than an email also means widening `SignInAttempt`, and one
+that needs a database means making those async and both callbacks in
+`src/lib/auth.ts` await them — and, because `decideLiveSession` runs on every
+request, it means paying for that database read on every request too, which
+is the cost `User.signInProvider` exists to avoid for the current rule.
+Everything else, including the closed-by-default property and every
+downstream gate, stays as it is.
 
 Deliberately **not** implemented, because each would silently be the decision:
 
@@ -94,21 +111,88 @@ Neither set: nobody can sign in, and the server says so loudly at startup
 (`checkSignInConfiguration` in `src/instrumentation.ts`). See `env.example`
 for the full notes.
 
-### Deploying this does not evict anyone already signed in
+### Revoking access takes effect on the next request
 
-**Setting `ALLOWED_SIGNIN_EMAILS` is not the whole deployment step.** The gate
-runs at sign-in, and nothing here revokes a session that already exists.
+**To revoke someone: remove their entry from `ALLOWED_SIGNIN_EMAILS` (and
+from `ADMIN_BOOTSTRAP_EMAILS`, which grants sign-in too), then restart or
+redeploy the server.** That is the whole operation. You do not also have to
+delete their sessions by hand, and you do not have to wait for anything to
+expire.
 
-`session: { strategy: "database" }` with no `maxAge` override means
-`@auth/core`'s default: **30 days** of idle life per session
-(`node_modules/@auth/core/lib/init.js:38`), stored in the `Session` table. An
-account that signed in while `defaultCallbacks.signIn` was permitting
-everybody keeps a valid cookie, `auth()` still resolves it out of that table,
-and `POST /api/media` still sees a `session.user.id` and still lets them
-upload and publish — for up to 30 days after this fix ships.
+**The bound is the next request that resolves their session** — the next
+page load, the next API call, whichever comes first. `ugcportal-mzr` chose
+this (option (a) of the three it put up) over a shorter `session.maxAge`,
+which only shrinks a window it can never close, and over an admin
+"revoke all sessions" button, which answers a different question: what
+changed is the *configuration*, and the operator who edits an environment
+variable on a server has nothing to click.
 
-So, on the deploy that first carries this — **look first, then revoke**, since
-deleting the sessions also deletes the evidence of who held one:
+How it works, in one line each:
+
+- `callbacks.session` in [`src/lib/auth.ts`](../src/lib/auth.ts) runs on
+  every request under the database session strategy. It calls
+  `enforceLiveSessionPolicy` in
+  [`src/lib/live-session.ts`](../src/lib/live-session.ts), which asks
+  `decideLiveSession` — the same rule the sign-in gate asks — about the
+  identity holding the session.
+- A refused session is handed back **with no user on it**, so `auth()`
+  resolves a session that no gate accepts: 401 from the media routes, a
+  redirect from `/upload`, `notFound()` from the admin screens. Every gate
+  that already understood "not signed in" needs no change.
+- A refusal that is a *decision about the list* (`not-permitted`,
+  `wrong-provider`) also **deletes every `Session` row for that user**, on
+  every device, so the cookie is dead rather than merely useless.
+- A refusal that means *the policy cannot be evaluated* (no configuration at
+  all, a user row with no address) refuses the request just as hard but
+  **leaves the rows alone**. That distinction is deliberate: losing the
+  environment variables is an outage, not a revocation, and restoring them
+  should restore the sessions rather than having silently logged everyone
+  out of every device while nobody could sign in to notice.
+- Provider binding is honoured here too. `User.signInProvider` records which
+  provider the live session was minted through, so rebinding an entry from
+  `google:a@b.com` to `facebook:a@b.com` revokes the Google session. It is a
+  denormalised copy of `Account.provider`, written by the `signIn` event,
+  and it exists so this check reads **only columns the session query already
+  loaded**: the per-request cost of all of the above is parsing two
+  environment variables, and **no database read beyond the one `auth()` was
+  always making**. The only write is the revocation itself.
+- An unrecorded provider (`NULL` — a row from before the column existed, or
+  one the migration's backfill left ambiguous because the user had two
+  linked providers) is treated as *unrecognised*, which fails closed against
+  a bound entry and changes nothing for an unbound one. The cost of that is
+  one extra sign-in for such a user; the alternative, guessing, could keep a
+  session alive through the provider the operator did not name.
+
+**What an operator still has to do by hand:**
+
+1. **Restart or redeploy** after editing the variable. The policy is read
+   from the process environment on every call — there is no cache and no TTL
+   — but a process that is still running still has the old environment. The
+   "next request" bound is relative to the configuration the server sees.
+2. **Decide whether the account should exist at all**, which this does not
+   touch. A revoked identity keeps its `User`, `Account` and `Media` rows; it
+   simply cannot reach anything. See step 3 of the runbook below before
+   reaching for `DELETE FROM User`.
+3. **Deal with what they already published.** Revocation stops future
+   access; it does not unpublish media that is already in the public gallery
+   or remove anything from the bucket.
+4. **Audit, if you need to know who got in.** Revocation is silent by
+   design on the visitor's side; the server logs each refused live session
+   with the user's id and the reason.
+
+### What the first deploy of the sign-in gate still needs
+
+The one-time cleanup for the deploy that first carried `ugcportal-egp`'s gate
+is still worth running, for a reason the automatic revocation above does not
+cover: **it tells you who got in while the door was open.** Automatic
+revocation makes those accounts harmless, not invisible, and it deletes the
+sessions that are the evidence of who held one.
+
+(It is also the fallback whenever you want sessions gone *without* changing
+the allowlist — forcing everyone to sign in again after a scare, say.)
+
+So — **look first, then revoke**, since deleting the sessions also deletes
+the evidence:
 
 1. **Audit who got in while the door was open.** Read-only. The datasource is
    `sqlite` (`prisma/schema.prisma`), so `DATABASE_URL` is a `file:` URL, not
@@ -139,8 +223,12 @@ deleting the sessions also deletes the evidence of who held one:
    `prisma7.config.ts`, which reads `DATABASE_URL`.)
 
 2. **Revoke every session.** This is the part that is always correct, and it
-   is enough to make the gate effective: everyone signs in again and the new
-   callback decides. A write, so `prisma db execute` is fine:
+   is enough to make the gate effective: everyone signs in again and the
+   `signIn` callback decides. Since `ugcportal-mzr` the per-request check
+   already refuses and deletes the sessions of anyone the list does not
+   name, so this is belt-and-braces for the ones it names — and the only way
+   to clear sessions you are *not* revoking. A write, so `prisma db execute`
+   is fine:
 
    ```bash
    npx prisma db execute --stdin <<'SQL'
@@ -184,9 +272,12 @@ Today this is very likely a no-op — nothing has been deployed (`ugcportal-321`
 "the gate is live" and "nobody unwanted holds a session" are two different
 facts.
 
-Doing any of this **in code** — purging sessions on boot, re-checking the
-policy per request, or shortening `maxAge` — is deliberately *not* in the PR
-that added the gate. See `ugcportal-mzr`, filed for it.
+Of the three ways of doing this **in code** — purging sessions on boot,
+re-checking the policy per request, or shortening `maxAge` — `ugcportal-mzr`
+shipped the second; see "Revoking access takes effect on the next request"
+above. `session.maxAge` is still `@auth/core`'s default **30 days**
+(`node_modules/@auth/core/lib/init.js:38`), and that is now only how long a
+*still-permitted* session lasts without being used.
 
 ## How the email is compared
 
@@ -232,6 +323,13 @@ Small things, each of which has been a real bug somewhere:
 You are judged on your **new** address, so **add it to
 `ALLOWED_SIGNIN_EMAILS`** and you are back in. You do not have to keep the old
 one listed.
+
+One wrinkle since `ugcportal-mzr`: a session that already exists is judged on
+the **stored** address (a request carries no provider profile to read a fresh
+one from), which for you is the old one. So removing the old entry revokes
+the session you are holding right now. Sign in again — that attempt is judged
+on the fresh address, which is listed — and you get a new one. Annoying for
+one round trip, and in the safe direction.
 
 This is worth stating because the obvious alternative is a trap, and this
 module shipped it briefly: refusing whenever the stored and asserted addresses
@@ -307,6 +405,14 @@ monitoring consequence is not, and is the reason this is written down.
 What *can* still be keyed on: the config branch only rewrites HTML `GET`s to
 the auth pages, so a non-GET or a non-page action such as
 `GET /api/auth/session` still answers JSON 500 (`index.js:86-88`).
+
+A **revoked live session** sees none of this, because there is no sign-in
+attempt to refuse: the person simply stops being signed in. The header
+offers "Sign in" again, `/upload` redirects, the API answers 401 — and if
+they do sign in again, the sign-in gate refuses them and *then* they land on
+this page. The reason is logged server-side, with the user's id (not their
+address — the id is already in the logs as the owner of every row they
+touch).
 
 The wording is **identical for every refusal**, and is worded to be true of
 all of them. The gate distinguishes "not on the list" from "the provider would

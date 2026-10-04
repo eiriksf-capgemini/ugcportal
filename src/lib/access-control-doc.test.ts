@@ -143,3 +143,88 @@ describe("the runbook does not recommend a command that prints nothing", () => {
     expect(commands[0]).toMatch(/^\s*sqlite3\b/m);
   });
 });
+
+/**
+ * ugcportal-mzr K3: the doc says which of the three mechanisms was chosen,
+ * what the revocation bound is, and what the operator must still do by hand.
+ *
+ * The list of refusals that destroy session rows is checked against the
+ * CODE rather than against the memory of whoever last edited the doc, in the
+ * same spirit as the cascade check above: the dangerous drift is not a
+ * missing section, it is a section that still describes the previous rule.
+ * Add a refusal to `REVOKING_REFUSALS` and this fails until the runbook says
+ * so — and the operator's mental model of "what does removing an entry
+ * actually destroy" is the thing that would otherwise go quietly stale.
+ */
+
+const liveSession = read("src/lib/live-session.ts");
+
+const REVOCATION_HEADING = "### Revoking access takes effect on the next request";
+const DEPLOY_HEADING = "### What the first deploy of the sign-in gate still needs";
+
+/** The refusals src/lib/live-session.ts deletes session rows for. */
+function revokingRefusals(source: string): string[] {
+  const block = source.match(
+    /REVOKING_REFUSALS[^=]*=\s*\[([\s\S]*?)\];/,
+  );
+  if (!block) {
+    return [];
+  }
+  return [...block[1].matchAll(/"([a-z-]+)"/g)].map(([, name]) => name).sort();
+}
+
+/** The ones the doc tells the operator are destructive. */
+function documentedRevokingRefusals(section: string): string[] {
+  const sentence = section.match(
+    /decision about the list\*\s*\(([^)]*)\)\s*also\s*\*\*deletes every/,
+  );
+  if (!sentence) {
+    return [];
+  }
+  return [...sentence[1].matchAll(/`([a-z-]+)`/g)]
+    .map(([, name]) => name)
+    .sort();
+}
+
+const revocationSection = doc.slice(
+  doc.indexOf(REVOCATION_HEADING),
+  doc.indexOf(DEPLOY_HEADING),
+);
+
+describe("the revocation runbook matches the code", () => {
+  it("has a section at all", () => {
+    // Guards the checks below against passing on two empty strings.
+    expect(doc).toContain(REVOCATION_HEADING);
+    expect(doc).toContain(DEPLOY_HEADING);
+    expect(revocationSection.length).toBeGreaterThan(0);
+    expect(revokingRefusals(liveSession).length).toBeGreaterThan(0);
+  });
+
+  it("names exactly the refusals that destroy session rows", () => {
+    expect(documentedRevokingRefusals(revocationSection)).toEqual(
+      revokingRefusals(liveSession),
+    );
+  });
+
+  it("states the bound, rather than only that there is one", () => {
+    // "within a bound that is written down" — the thing an operator needs is
+    // the number or the event, not the adjective.
+    expect(revocationSection).toMatch(
+      /\*\*The bound is the next request that resolves their session\*\*/,
+    );
+  });
+
+  it("says which of the three mechanisms was chosen and what the others were", () => {
+    expect(revocationSection).toContain("session.maxAge");
+    expect(revocationSection).toContain("revoke all sessions");
+  });
+
+  it("tells the operator what is still theirs to do", () => {
+    expect(revocationSection).toContain(
+      "What an operator still has to do by hand:",
+    );
+    // The one that is not optional: the policy is read from the process
+    // environment, so an unrestarted server keeps the old list.
+    expect(revocationSection).toMatch(/\*\*Restart or redeploy\*\*/);
+  });
+});

@@ -5,6 +5,7 @@ import {
   SIGN_IN_PROVIDERS,
   type SignInEnv,
   bootstrapAdminEmails,
+  decideLiveSession,
   decideSignIn,
   isPermittedSignIn,
   permittedIdentities,
@@ -657,5 +658,80 @@ describe("isPermittedSignIn", () => {
 
     expect(warn).not.toHaveBeenCalled();
     expect(error).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * ugcportal-mzr: the same rule, asked of a session that already exists.
+ *
+ * These cases are about what `decideLiveSession` does DIFFERENTLY from
+ * `decideSignIn` — judging the stored address and the recorded provider,
+ * with no fresh profile to read. Everything the two share (closed by
+ * default, the union with ADMIN_BOOTSTRAP_EMAILS, malformed entries) is
+ * already covered above and is the same code: both are projections of
+ * `evaluateSignIn`.
+ */
+describe("decideLiveSession re-asks the rule for an existing session", () => {
+  it("permits a listed address and refuses one that has been removed", () => {
+    expect(decideLiveSession({ email: LISTED }, env())).toEqual({
+      permitted: true,
+      email: LISTED,
+    });
+    expect(
+      decideLiveSession({ email: LISTED }, { [PERMITTED_EMAILS_VAR]: "" }),
+    ).toEqual({ permitted: false, reason: "no-configuration" });
+    expect(
+      decideLiveSession(
+        { email: LISTED },
+        { [PERMITTED_EMAILS_VAR]: "someone-else@example.com" },
+      ),
+    ).toEqual({ permitted: false, reason: "not-permitted" });
+  });
+
+  it("judges the recorded provider against a bound entry", () => {
+    const bound = { [PERMITTED_EMAILS_VAR]: `google:${LISTED}` };
+
+    expect(decideLiveSession({ email: LISTED, provider: "google" }, bound))
+      .toEqual({ permitted: true, email: LISTED });
+    expect(
+      decideLiveSession({ email: LISTED, provider: "facebook" }, bound),
+    ).toEqual({ permitted: false, reason: "wrong-provider" });
+  });
+
+  it("fails closed when no provider was recorded, but only for a bound entry", () => {
+    // A row written before User.signInProvider existed, or one the backfill
+    // left ambiguous. Unrecognised is not "any".
+    for (const provider of [null, undefined, "", "not-a-provider", 42]) {
+      expect(
+        decideLiveSession(
+          { email: LISTED, provider },
+          { [PERMITTED_EMAILS_VAR]: `google:${LISTED}` },
+        ).permitted,
+      ).toBe(false);
+      // The other half of the pair: the same unrecorded provider against an
+      // UNBOUND entry is still permitted, so the refusals above are about
+      // the binding and not about the value being missing.
+      expect(decideLiveSession({ email: LISTED, provider }, env()).permitted).toBe(
+        true,
+      );
+    }
+  });
+
+  it("refuses a session whose row has no address", () => {
+    for (const email of [null, undefined, "", "   "]) {
+      expect(decideLiveSession({ email }, env())).toEqual({
+        permitted: false,
+        reason: "no-email",
+      });
+    }
+  });
+
+  it("does not re-ask for an email_verified claim a request cannot carry", () => {
+    // The sign-in gate refuses `email_verified: false`, and it is the only
+    // thing that can: a request carries no provider profile. If this
+    // function went looking for one it would find nothing and would have to
+    // either refuse everybody or invent a claim. It judges the address the
+    // sign-in it already permitted was judged on.
+    expect(decideLiveSession({ email: LISTED }, env()).permitted).toBe(true);
   });
 });

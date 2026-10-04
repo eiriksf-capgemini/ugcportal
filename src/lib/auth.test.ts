@@ -16,14 +16,24 @@ import { PERMITTED_EMAILS_VAR, SIGN_IN_PROVIDERS } from "@/lib/sign-in-policy";
 // vi.hoisted, because vi.mock's factory is hoisted above every `const` in
 // this module, so anything the factory closes over has to be created up
 // there with it.
-const { nextAuthMock, nextAuthConfigs, reconcileBootstrapAdminMock } =
-  vi.hoisted(() => {
+const {
+  nextAuthMock,
+  nextAuthConfigs,
+  reconcileBootstrapAdminMock,
+  deleteManyMock,
+  updateManyMock,
+} = vi.hoisted(() => {
     // The configs NextAuth was constructed with, recorded rather than read
     // off mock.calls: NextAuth is constructed once, when the module is first
     // evaluated, and the beforeEach below clears mock state.
     const nextAuthConfigs: unknown[] = [];
     return {
       nextAuthConfigs,
+      // The two writes src/lib/live-session.ts makes. Their behaviour is
+      // tested there; here they exist so the callback and the event can be
+      // driven, and so this file can assert they were reached.
+      deleteManyMock: vi.fn(async () => ({ count: 1 })),
+      updateManyMock: vi.fn(async () => ({ count: 1 })),
       nextAuthMock: vi.fn((config: unknown) => {
         nextAuthConfigs.push(config);
         return {
@@ -57,7 +67,12 @@ vi.mock("@/lib/admin-bootstrap", async (importOriginal) => {
   };
 });
 
-vi.mock("@/lib/prisma", () => ({ prisma: {} }));
+vi.mock("@/lib/prisma", () => ({
+  prisma: {
+    session: { deleteMany: deleteManyMock },
+    user: { updateMany: updateManyMock },
+  },
+}));
 
 const { authConfig } = await import("@/lib/auth");
 
@@ -244,6 +259,83 @@ describe("the bootstrap and the allowlist compose (K3)", () => {
         // be honoured at promotion (PR #81 round 5).
         expect(reconcileBootstrapAdminMock).toHaveBeenCalledWith(user, account);
       });
+  });
+});
+
+/**
+ * ugcportal-mzr, as WIRED. The enforcement itself — what it returns, what it
+ * deletes, what it refuses to delete — is src/lib/live-session.ts's own
+ * suite's business; what can only be checked here is that the `session`
+ * callback this app hands NextAuth reaches it at all, and hands it the two
+ * columns the decision is made on. Deleting either of the three lines in the
+ * callback fails something below.
+ */
+describe("the session callback re-checks the policy on every request", () => {
+  /** The adapter row, as the database strategy hands it to the callback. */
+  function userRow(overrides: Record<string, unknown> = {}) {
+    return {
+      id: "user-1",
+      email: LISTED,
+      role: "USER",
+      signInProvider: "google",
+      ...overrides,
+    };
+  }
+
+  function resolveSession(user: Record<string, unknown>) {
+    return authConfig.callbacks.session({
+      session: {
+        sessionToken: "session-token-1",
+        userId: user.id,
+        expires: new Date(Date.now() + 86_400_000),
+        user,
+      },
+      user,
+    } as unknown as Parameters<typeof authConfig.callbacks.session>[0]);
+  }
+
+  it("surfaces the id and role of a still-permitted identity", async () => {
+    const session = await resolveSession(userRow({ role: "ADMIN" }));
+
+    expect(session.user?.id).toBe("user-1");
+    expect((session.user as { role?: string }).role).toBe("ADMIN");
+  });
+
+  it("refuses the identity once its address stops being permitted", async () => {
+    process.env[PERMITTED_EMAILS_VAR] = "someone-else@example.com";
+
+    const session = await resolveSession(userRow());
+
+    expect(session.user).toBeUndefined();
+    expect(deleteManyMock).toHaveBeenCalledWith({ where: { userId: "user-1" } });
+  });
+
+  it("judges the provider recorded on the row", async () => {
+    // The pair that pins `toSignInProvider` to the callback: the two cases
+    // differ only in the column's value, so a callback that stopped reading
+    // it would answer the same way twice.
+    process.env[PERMITTED_EMAILS_VAR] = `google:${LISTED}`;
+
+    expect(
+      (await resolveSession(userRow({ signInProvider: "google" }))).user?.id,
+    ).toBe("user-1");
+    expect(
+      (await resolveSession(userRow({ signInProvider: "facebook" }))).user,
+    ).toBeUndefined();
+  });
+});
+
+describe("the signIn event records which provider got them in", () => {
+  it("writes it to the User row, so the session callback can read it back", async () => {
+    await authConfig.events.signIn({
+      user: { id: "user-1", email: LISTED },
+      account: { provider: "facebook", providerAccountId: "sub-1" },
+    } as Parameters<typeof authConfig.events.signIn>[0]);
+
+    expect(updateManyMock).toHaveBeenCalledWith({
+      where: { id: "user-1" },
+      data: { signInProvider: "facebook" },
+    });
   });
 });
 

@@ -7,6 +7,10 @@ import { cache } from "react";
 
 import type { Role } from "@/generated/prisma/enums";
 import { reconcileBootstrapAdmin } from "@/lib/admin-bootstrap";
+import {
+  enforceLiveSessionPolicy,
+  recordSignInProvider,
+} from "@/lib/live-session";
 import { prisma } from "@/lib/prisma";
 import { AUTH_ERROR_PATH } from "@/lib/routes";
 import { isPermittedSignIn } from "@/lib/sign-in-policy";
@@ -29,6 +33,23 @@ declare module "next-auth" {
 // granting access (see requireAdmin in src/lib/admin.ts).
 function toRole(user: object): Role {
   return (user as { role?: unknown }).role === "ADMIN" ? "ADMIN" : "USER";
+}
+
+/**
+ * `User.signInProvider` (ugcportal-mzr), read off the adapter row the same
+ * defensive way and for the same reason as `toRole` above: the Prisma
+ * adapter hands back the whole row, `AdapterUser` declares neither column,
+ * and widening a type from a transitive `@auth/core` package to say
+ * otherwise is more brittle than reading the field.
+ *
+ * Deliberately returns `unknown` rather than narrowing here. The one thing
+ * allowed to decide what a provider value means is `providerId` in
+ * src/lib/sign-in-policy.ts, which maps anything unrecognised — including
+ * the `null` of a row written before this column existed — to "no
+ * provider", and fails closed against a bound allowlist entry.
+ */
+function toSignInProvider(user: object): unknown {
+  return (user as { signInProvider?: unknown }).signInProvider;
 }
 
 // AUTH_URL / NEXTAUTH_URL should point at http://localhost:3000 for local
@@ -98,13 +119,30 @@ export const authConfig = {
     // Database session strategy hands us the adapter user record here;
     // surface its id so route handlers can associate uploads (ugcportal-8wa)
     // and other user-owned records without a second lookup.
-    session({ session, user }) {
+    //
+    // THE SECOND GATE (ugcportal-mzr). The `signIn` callback above runs once,
+    // at the door; this one runs on every request, and asking the policy
+    // again here is what makes removing an address from ALLOWED_SIGNIN_EMAILS
+    // revoke the session that address is already holding, instead of only its
+    // next sign-in up to 30 days later. The enforcement — including why a
+    // refusal cannot simply `delete session.user`, and what it costs — lives
+    // in src/lib/live-session.ts; this callback stays the wiring.
+    //
+    // The two assignments below are left in front of it deliberately: they
+    // are what a PERMITTED session needs, and a refused one discards the
+    // whole `user` object anyway, so neither value can reach a caller whose
+    // session was refused.
+    async session({ session, user }) {
       session.user.id = user.id;
       // Read on every request under the database session strategy, so
       // revoking someone's admin role takes effect immediately instead of
       // waiting for their session to expire.
       session.user.role = toRole(user);
-      return session;
+      return enforceLiveSessionPolicy(session, {
+        id: user.id,
+        email: user.email,
+        signInProvider: toSignInProvider(user),
+      });
     },
   },
   events: {
@@ -123,6 +161,12 @@ export const authConfig = {
     // when the sign-in came through that provider (PR #81 round 5), which is
     // why `account` is handed on.
     async signIn({ user, account }) {
+      // Which provider got them in, recorded on the User row so the session
+      // callback above can judge a provider-bound entry on every request
+      // without a second query (ugcportal-mzr). Here rather than in the
+      // callback for the same reason the promotion is here: it is a write,
+      // and sign-in is the one moment where doing it once is enough.
+      await recordSignInProvider(user, account);
       await reconcileBootstrapAdmin(user, account);
     },
   },
