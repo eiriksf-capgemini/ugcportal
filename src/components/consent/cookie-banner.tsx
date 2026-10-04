@@ -44,23 +44,47 @@ const useIsomorphicLayoutEffect =
  * storage/tracking itself, enforced by AnalyticsLoader, not by this banner
  * blocking anything.
  *
- * Review round 1 findings addressed here:
+ * Review findings addressed here:
  *
- * - Finding 8 (the fixed banner can cover interactive content): nothing in
- *   this PR previously added matching bottom padding anywhere, so the
+ * - Round 1 finding 8 (the fixed banner can cover interactive content):
+ *   nothing in that round added matching bottom padding anywhere, so the
  *   footer's "Cookies" control, the gallery's "Load more" button and
  *   `/upload`'s form bottom could sit behind this banner, unreachable by
  *   scroll, for the whole first-visit session. Fixed by measuring the
- *   banner's own rendered height and reserving exactly that much
- *   `padding-bottom` on `<body>` while it is open — a `ResizeObserver`
- *   rather than a fixed guess, since the banner wraps to a second line
- *   (and a taller box) on narrow viewports.
+ *   banner's own rendered height and reserving exactly that much space
+ *   while it's open — a `ResizeObserver` rather than a fixed guess, since
+ *   the banner wraps to a second line (and a taller box) on narrow
+ *   viewports.
+ * - Round 2 finding 4: that fix wrote `document.body.style.paddingBottom`
+ *   directly — a bare, unnamespaced global property any future
+ *   fixed-position overlay (a toast, a mobile nav drawer, a second banner)
+ *   reserving space the same way would silently clobber. Fixed by owning
+ *   ONE namespaced CSS custom property instead (`--cookie-banner-reserved-
+ *   height`, set via `style.setProperty`), consumed by a
+ *   `padding-bottom: var(--cookie-banner-reserved-height, 0px)` rule on
+ *   `body` in globals.css — composable with anything else that reserves
+ *   its own differently-named variable, rather than two consumers racing
+ *   to overwrite the same bare property.
  * - Finding 9 (reopening via "Cookies" neither moves focus nor announces):
  *   fixed by moving focus to a heading inside the banner whenever
  *   `reopenCount` increments (never on the very first, no-stored-choice
- *   open — see consent-context.tsx's own comment on why), and adding
- *   `aria-live="polite"` so the region's reappearance is itself
- *   announced to assistive tech even before focus lands.
+ *   open — see consent-context.tsx's own comment on why). This is the
+ *   PRIMARY, reliable announcement mechanism — a focus move is always
+ *   perceivable to assistive tech, in every browser/screen-reader
+ *   combination, because it is the same signal any other reopened control
+ *   relies on.
+ * - Round 2 finding 8: `aria-live="polite"` was also added in round 1, on
+ *   the theory that it would announce the region's reappearance even
+ *   before focus lands. That's optimistic: this whole subtree unmounts
+ *   (`if (!bannerOpen) return null;` below) and remounts from scratch on
+ *   reopen, rather than staying present and toggling content — several
+ *   screen-reader/browser combinations only reliably announce `aria-live`
+ *   updates to content changing INSIDE an already-present live region, not
+ *   a brand-new subtree appearing with the attribute already on it. Kept
+ *   anyway as a harmless, best-effort secondary signal for the
+ *   combinations that DO announce it — but the focus move above is what
+ *   this component actually relies on; not a reason to go remove a
+ *   worthwhile attribute that costs nothing when it doesn't help.
  */
 export function CookieBanner() {
   const { bannerOpen, acceptOptional, onlyNecessary, reopenCount } = useConsent();
@@ -68,25 +92,29 @@ export function CookieBanner() {
   const headingRef = useRef<HTMLHeadingElement>(null);
   const lastHandledReopenCount = useRef(reopenCount);
 
-  // Finding 8: reserve space for the banner so it never covers interactive
-  // content beneath it, for as long as it's open.
+  // Reserve space for the banner so it never covers interactive content
+  // beneath it, for as long as it's open (round 1 finding 8, round 2
+  // finding 4 — see this component's own doc comment above for both).
   useIsomorphicLayoutEffect(() => {
     if (!bannerOpen) return undefined;
     const el = bannerRef.current;
     if (!el) return undefined;
 
-    const applyPadding = () => {
-      document.body.style.paddingBottom = `${el.offsetHeight}px`;
+    const applyReservedHeight = () => {
+      document.body.style.setProperty(
+        "--cookie-banner-reserved-height",
+        `${el.offsetHeight}px`,
+      );
     };
-    applyPadding();
+    applyReservedHeight();
 
     const supportsResizeObserver = typeof ResizeObserver !== "undefined";
-    const observer = supportsResizeObserver ? new ResizeObserver(applyPadding) : null;
+    const observer = supportsResizeObserver ? new ResizeObserver(applyReservedHeight) : null;
     observer?.observe(el);
 
     return () => {
       observer?.disconnect();
-      document.body.style.paddingBottom = "";
+      document.body.style.removeProperty("--cookie-banner-reserved-height");
     };
   }, [bannerOpen]);
 

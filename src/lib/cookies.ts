@@ -16,7 +16,18 @@ function isBrowser(): boolean {
   return typeof document !== "undefined";
 }
 
-/** Reads a single cookie by exact name, or `null` if absent or server-side. */
+/**
+ * Reads a single cookie by exact name, or `null` if absent, server-side, or
+ * unreadable.
+ *
+ * Fails safe rather than throwing (review round 2, finding 2): a cookie
+ * this module didn't write itself — tampered with by hand, or truncated by
+ * a browser/proxy cookie-jar size limit — can contain a `%` that is not a
+ * valid percent-escape, and `decodeURIComponent` throws `URIError` on that.
+ * The one caller that matters most, `readStoredConsent`, needs exactly this
+ * behaviour: a malformed cookie must read as "no choice yet" (`null`), the
+ * same safe default an absent cookie gets, not crash the render.
+ */
 export function getCookie(name: string): string | null {
   if (!isBrowser()) return null;
   const prefix = `${name}=`;
@@ -24,45 +35,85 @@ export function getCookie(name: string): string | null {
     .split("; ")
     .find((entry) => entry.startsWith(prefix));
   if (row === undefined) return null;
-  return decodeURIComponent(row.slice(prefix.length));
+  try {
+    return decodeURIComponent(row.slice(prefix.length));
+  } catch {
+    return null;
+  }
 }
 
-export type SetCookieOptions = {
+/**
+ * `sameSite: "None"` without `secure: true` is forbidden at the TYPE level
+ * (review round 2, finding 6), not just by a runtime default: per the
+ * Set-Cookie spec, and every modern browser's enforcement of it, a cookie
+ * with `SameSite=None` that does not also carry `Secure` is rejected
+ * outright — silently written to the `document.cookie` string in the JS
+ * sense, never actually persisted by the browser. The discriminated union
+ * below makes `{ sameSite: "None" }` with no `secure` (or `secure: false`)
+ * a compile error instead of a runtime footgun a caller could hit blind.
+ */
+type SameSiteOptions =
+  | { sameSite?: "Lax" | "Strict"; secure?: boolean }
+  | { sameSite: "None"; secure: true };
+
+export type SetCookieOptions = SameSiteOptions & {
   /** Omit for a session cookie. */
   maxAgeSeconds?: number;
-  sameSite?: "Lax" | "Strict" | "None";
-  /**
-   * Defaults to `true` on an HTTPS origin and `false` otherwise (plain HTTP
-   * dev servers can't set a `Secure` cookie at all — the browser silently
-   * drops it). Override only if a caller has a reason to force one way.
-   */
-  secure?: boolean;
 };
 
-/** Writes a cookie with `Path=/`. No-op server-side. */
+/**
+ * Builds the `document.cookie` assignment string shared by `setCookie` and
+ * `deleteCookie` (review round 2, finding 5) — a delete is just a write of
+ * an empty value with `Max-Age=0`, and sharing one builder means the two
+ * can never again drift on `SameSite`/`Secure`, which is exactly how
+ * `deleteCookie` ended up silently missing both in round 1.
+ */
+function buildCookieAssignment(
+  name: string,
+  value: string,
+  maxAgeSeconds: number | undefined,
+  attrs: SameSiteOptions,
+): string {
+  const { sameSite = "Lax" } = attrs;
+  const secure = attrs.secure ?? window.location.protocol === "https:";
+  const parts = [`${name}=${encodeURIComponent(value)}`, "Path=/", `SameSite=${sameSite}`];
+  if (maxAgeSeconds !== undefined) parts.push(`Max-Age=${maxAgeSeconds}`);
+  if (secure) parts.push("Secure");
+  return parts.join("; ");
+}
+
+/**
+ * Writes a cookie with `Path=/`. No-op server-side. Encodes `value` with
+ * `encodeURIComponent` (review round 2, finding 2 — `getCookie` always
+ * decoded on read, but nothing encoded on write; asymmetric, and a value
+ * containing `;`, `,`, or a literal `%` would either corrupt the
+ * `document.cookie` string or throw on the next read).
+ */
 export function setCookie(
   name: string,
   value: string,
   options: SetCookieOptions = {},
 ): void {
   if (!isBrowser()) return;
-  const { maxAgeSeconds, sameSite = "Lax" } = options;
-  const secure = options.secure ?? window.location.protocol === "https:";
-  const parts = [`${name}=${value}`, "Path=/", `SameSite=${sameSite}`];
-  if (maxAgeSeconds !== undefined) parts.push(`Max-Age=${maxAgeSeconds}`);
-  if (secure) parts.push("Secure");
-  document.cookie = parts.join("; ");
+  document.cookie = buildCookieAssignment(name, value, options.maxAgeSeconds, options);
 }
 
 /**
  * Expires a cookie immediately. No-op (including server-side) if the cookie
  * was never set — deleting something absent is not an error.
  *
- * Deliberately does not set `SameSite`/`Secure`: a browser honours a
- * `Max-Age=0` expiry for a name+Path match regardless of what those
- * attributes were on the cookie being deleted, so there is nothing to match.
+ * Writes the SAME `SameSite`/`Secure` attributes `setCookie` would have used
+ * for these options (review round 2, finding 5): a cookie written with
+ * `Secure` can only be overwritten — including by an expiring delete — from
+ * a secure context, per "Leave Secure Cookies Alone" (RFC 6265bis,
+ * implemented in Chromium/Firefox). A delete that omits `Secure` is
+ * silently ignored by the browser against such a cookie, which the
+ * previous version of this function's own comment claimed could not
+ * happen ("regardless of what those attributes were on the cookie being
+ * deleted") — it was wrong. Pass the same `options` used to set a cookie
+ * when deleting it, so this actually clears it.
  */
-export function deleteCookie(name: string): void {
+export function deleteCookie(name: string, options: SameSiteOptions = {}): void {
   if (!isBrowser()) return;
-  document.cookie = `${name}=; Max-Age=0; Path=/`;
+  document.cookie = buildCookieAssignment(name, "", 0, options);
 }

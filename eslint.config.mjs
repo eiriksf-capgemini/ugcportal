@@ -8,7 +8,7 @@ const HEX_COLOR_REGEX =
 const hexColorMessage =
   "Hardcoded hex colors are not allowed in components. Use a theme color token (e.g. bg-primary, text-petrol-600) defined in src/app/globals.css instead.";
 
-const HEX_COLOR_SELECTORS = [
+export const HEX_COLOR_SELECTORS = [
   {
     selector: `Literal[value=/${HEX_COLOR_REGEX}/]`,
     message: hexColorMessage,
@@ -19,30 +19,78 @@ const HEX_COLOR_SELECTORS = [
   },
 ];
 
-// Cookie-consent gate (ugcportal-3wgp review round 1, finding 2): the K6
-// repo-grep test (analytics-host.grep.test.ts) only catches a bypass that
-// names the vendor's host string — a `<Script src="https://plausible.io/...">`
-// or a raw `<script src>` dropped into any page, naming no vendor at all,
-// would pass it silently. This catches the MECHANISM instead, the same
-// `no-restricted-syntax` pattern the hex-colour guardrail above already
-// uses: ban importing `next/script` and any JSX `<script src>` everywhere
-// under src/ except the one gated loader.
+/**
+ * Cookie-consent gate (ugcportal-3wgp). The K6 repo-grep test
+ * (analytics-host.grep.test.ts) only catches a bypass that names the
+ * vendor's host string in plain text — it cannot see a bypass that never
+ * spells the vendor out at all. These two rulesets catch the MECHANISM
+ * instead, everywhere under src/ except the one gated loader
+ * (src/components/consent/analytics-loader.tsx):
+ *
+ * - GATED_SCRIPT_IMPORT_OPTIONS (`no-restricted-imports`, a built-in rule
+ *   chosen specifically because it already understands every form of
+ *   "this file depends on next/script" — a direct `import`, a dynamic
+ *   `import()`, AND a `.ts` barrel re-export (`export { default as X } from
+ *   "next/script"` / `export * from "next/script"`) — without hand-written
+ *   selectors for each. Round 1 only banned `ImportDeclaration`, which a
+ *   re-export dodges entirely (it's an `ExportNamedDeclaration`/
+ *   `ExportAllDeclaration` node, not an `ImportDeclaration`), and an
+ *   imported alias was never actually a gap — `source.value` is checked on
+ *   the declaration itself, so any local name bound to it was always
+ *   caught; the real gap `no-restricted-imports` closes is the barrel.
+ *   Scoped to .ts too (not just .tsx/.jsx — round 1's gap), since a plain
+ *   `.ts` file is exactly where such a barrel would live.
+ *
+ * - GATED_SCRIPT_SYNTAX_SELECTORS (`no-restricted-syntax`, same mechanism
+ *   as the hex-colour guardrail below) bans the JSX `<script>` element
+ *   OUTRIGHT — not just one carrying a `src` attribute (round 1's
+ *   narrower selector), because a `<script dangerouslySetInnerHTML={{
+ *   __html: snippet }}>` inline-bootstrap tag (the standard way GA4/GTM/
+ *   Meta Pixel snippets are usually dropped into a page) carries no `src`
+ *   at all and dodged it. Also bans `document.createElement("script")`
+ *   (and `anything.createElement("script")` generally — there is no
+ *   legitimate non-`document` receiver for this in a browser DOM context),
+ *   the programmatic-DOM-construction bypass that uses no JSX and no
+ *   import at all.
+ */
 const GATED_SCRIPT_MESSAGE =
-  "next/script (or a raw <script src>) may only be used inside " +
-  "src/components/consent/analytics-loader.tsx — ugcportal-3wgp's consent " +
-  "gate. Route any tracking/affiliate script mount through that module " +
-  "instead, so it is gated on visitor consent rather than bypassing it.";
+  "next/script (or a raw <script> element, however constructed) may only " +
+  "be used inside src/components/consent/analytics-loader.tsx — " +
+  "ugcportal-3wgp's consent gate. Route any tracking/affiliate script " +
+  "mount through that module instead, so it is gated on visitor consent " +
+  "rather than bypassing it.";
 
-const GATED_SCRIPT_SELECTORS = [
+export const GATED_SCRIPT_IMPORT_OPTIONS = [
   {
-    selector: 'ImportDeclaration[source.value="next/script"]',
+    paths: [{ name: "next/script", message: GATED_SCRIPT_MESSAGE }],
+  },
+];
+
+export const GATED_SCRIPT_SYNTAX_SELECTORS = [
+  {
+    // Any <script> JSX element at all — not qualified by `src` or any
+    // other attribute, so a dangerouslySetInnerHTML-only inline-snippet
+    // bootstrap (no `src`) is caught the same as a src-bearing one.
+    selector: 'JSXOpeningElement[name.name="script"]',
     message: GATED_SCRIPT_MESSAGE,
   },
   {
-    selector: 'JSXOpeningElement[name.name="script"] > JSXAttribute[name.name="src"]',
+    selector: 'CallExpression[callee.property.name="createElement"][arguments.0.value="script"]',
+    message: GATED_SCRIPT_MESSAGE,
+  },
+  {
+    // A dynamic `import("next/script")`. `no-restricted-imports` below
+    // handles every static import/export-from form but — confirmed
+    // directly against this repo's installed ESLint 9.39.5 via its own
+    // RuleTester (eslint-gated-script.test.ts) — does NOT flag a dynamic
+    // `ImportExpression` the way it flags a static `ImportDeclaration`, so
+    // this shape needs its own selector here instead.
+    selector: 'ImportExpression[source.value="next/script"]',
     message: GATED_SCRIPT_MESSAGE,
   },
 ];
+
+const GATED_LOADER_PATH = "src/components/consent/analytics-loader.tsx";
 
 const eslintConfig = defineConfig([
   ...nextVitals,
@@ -58,35 +106,55 @@ const eslintConfig = defineConfig([
     // which makes local `npm run lint` scan stale checkouts under here).
     ".claude/worktrees/**",
   ]),
+  /*
+   * Three non-overlapping `no-restricted-syntax` config objects below,
+   * deliberately partitioned by file set rather than combined with
+   * `ignores` on a single pair — ESLint's flat config does not MERGE two
+   * `no-restricted-syntax` arrays that both match the same file; the
+   * later-listed config object silently replaces the earlier one's
+   * selectors for that rule key instead of adding to them. Giving each
+   * object a file set that never overlaps another `no-restricted-syntax`
+   * object's set avoids that collision entirely, rather than relying on
+   * array-combining discipline every time one of these rulesets changes.
+   */
   {
-    // Design-system guardrail (ugcportal-eh5): components must consume the
-    // petrol blue theme tokens defined in src/app/globals.css rather than
-    // bypassing them with hardcoded hex colors. Scoped to component files;
-    // the theme definition itself lives in CSS and is unaffected.
-    //
-    // Also carries the gated-script ban (above): every *.tsx/*.jsx file
-    // EXCEPT analytics-loader.tsx itself, which is the one file allowed to
-    // import next/script. Both rulesets live in the same config object
-    // (rather than two separate ones) because ESLint's flat config does
-    // not merge two `no-restricted-syntax` arrays for the same matched
-    // file — the later config object would silently replace the earlier
-    // one's selectors instead of adding to them.
+    // The gate itself: hex-colour-checked like every other component, but
+    // exempt from the script-shape ban (it IS the gate).
+    files: [GATED_LOADER_PATH],
+    rules: {
+      "no-restricted-syntax": ["error", ...HEX_COLOR_SELECTORS],
+    },
+  },
+  {
+    // Design-system guardrail (ugcportal-eh5) PLUS the script-shape ban,
+    // for every other *.tsx/*.jsx file.
     files: ["**/*.tsx", "**/*.jsx"],
-    ignores: ["src/components/consent/analytics-loader.tsx"],
+    ignores: [GATED_LOADER_PATH],
     rules: {
       "no-restricted-syntax": [
         "error",
         ...HEX_COLOR_SELECTORS,
-        ...GATED_SCRIPT_SELECTORS,
+        ...GATED_SCRIPT_SYNTAX_SELECTORS,
       ],
     },
   },
   {
-    // The one exception: still checked for hex colours, exempt from the
-    // gated-script ban (it IS the gate).
-    files: ["src/components/consent/analytics-loader.tsx"],
+    // Plain .ts files never carry JSX, so no hex-colour/JSX-selector
+    // concern here — but the script-shape ban (document.createElement)
+    // still applies, and no-restricted-imports (next config object) needs
+    // this file set covered too for the barrel-re-export shape.
+    files: ["**/*.ts"],
     rules: {
-      "no-restricted-syntax": ["error", ...HEX_COLOR_SELECTORS],
+      "no-restricted-syntax": ["error", ...GATED_SCRIPT_SYNTAX_SELECTORS],
+    },
+  },
+  {
+    // A different rule key (no-restricted-imports), so this can freely
+    // span .ts/.tsx/.jsx together without colliding with any object above.
+    files: ["**/*.ts", "**/*.tsx", "**/*.jsx"],
+    ignores: [GATED_LOADER_PATH],
+    rules: {
+      "no-restricted-imports": ["error", ...GATED_SCRIPT_IMPORT_OPTIONS],
     },
   },
 ]);

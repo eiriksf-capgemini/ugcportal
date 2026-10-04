@@ -146,44 +146,148 @@ describe("CookieBanner visibility", () => {
 });
 
 /**
- * Review round 1, CONFIRMED medium, finding 8: a fixed bottom banner with no
- * compensating padding can cover the footer, the gallery's "Load more" and
- * `/upload`'s form bottom for the whole first-visit session.
+ * Round 1 finding 8: a fixed bottom banner with no compensating padding can
+ * cover the footer, the gallery's "Load more" and `/upload`'s form bottom
+ * for the whole first-visit session.
+ *
+ * Round 2 finding 4: the reservation now lives in a namespaced CSS custom
+ * property (`--cookie-banner-reserved-height`, consumed by a `body` rule in
+ * globals.css), not a direct write to `body.style.paddingBottom` — so these
+ * tests read `getPropertyValue("--cookie-banner-reserved-height")`, not
+ * `style.paddingBottom`.
+ *
+ * Round 2 finding 3 (CONFIRMED medium): jsdom 26.1.0 implements neither
+ * `ResizeObserver` nor real layout (`offsetHeight` is always `0`), so the
+ * PREVIOUS version of this block's `not.toBe("")` assertions passed on
+ * `"0px"` just as readily as on a correct, non-zero measurement — a
+ * regression reverting the real measurement to a fixed guess, or a typo
+ * that always wrote `"0px"`, would not have turned any of them red. Fixed
+ * by stubbing both: `offsetHeight` returns a controlled, non-zero value,
+ * and a fake `ResizeObserver` captures its callback so a test can invoke it
+ * with a NEW height and assert the reservation actually updates — a real
+ * check against the mechanism, not jsdom's defaults happening to look like
+ * one.
  */
-describe("CookieBanner reserves space for itself while open (finding 8)", () => {
+describe("CookieBanner reserves space for itself while open (round 1 finding 8, round 2 findings 3 and 4)", () => {
+  const RESERVED_HEIGHT_PROPERTY = "--cookie-banner-reserved-height";
+  const STUBBED_HEIGHT_PX = 128;
+
+  let offsetHeightDescriptor: PropertyDescriptor | undefined;
+  let resizeObserverCallbacks: ResizeObserverCallback[];
+  let originalResizeObserver: typeof ResizeObserver | undefined;
+
+  class FakeResizeObserver {
+    #callback: ResizeObserverCallback;
+    constructor(callback: ResizeObserverCallback) {
+      this.#callback = callback;
+      resizeObserverCallbacks.push(callback);
+    }
+    observe(): void {}
+    unobserve(): void {}
+    disconnect(): void {}
+    // Exposed so tests can drive a resize notification manually.
+    trigger(): void {
+      this.#callback([] as unknown as ResizeObserverEntry[], this as unknown as ResizeObserver);
+    }
+  }
+
+  beforeEach(() => {
+    offsetHeightDescriptor = Object.getOwnPropertyDescriptor(
+      HTMLElement.prototype,
+      "offsetHeight",
+    );
+    Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
+      configurable: true,
+      get(): number {
+        return STUBBED_HEIGHT_PX;
+      },
+    });
+
+    resizeObserverCallbacks = [];
+    originalResizeObserver = (globalThis as { ResizeObserver?: typeof ResizeObserver })
+      .ResizeObserver;
+    (globalThis as { ResizeObserver?: unknown }).ResizeObserver = FakeResizeObserver;
+  });
+
   afterEach(() => {
+    if (offsetHeightDescriptor) {
+      Object.defineProperty(HTMLElement.prototype, "offsetHeight", offsetHeightDescriptor);
+    }
+    (globalThis as { ResizeObserver?: typeof ResizeObserver }).ResizeObserver =
+      originalResizeObserver;
     // Belt-and-braces: afterEach above already unmounts, which should run
     // this component's own cleanup, but a defect in that cleanup should not
     // leak into the NEXT test's assertions either.
-    document.body.style.paddingBottom = "";
+    document.body.style.removeProperty(RESERVED_HEIGHT_PROPERTY);
   });
 
-  it("sets a non-empty padding-bottom on <body> while the banner is open", () => {
-    expect(document.body.style.paddingBottom).toBe("");
+  function reservedHeight(): string {
+    return document.body.style.getPropertyValue(RESERVED_HEIGHT_PROPERTY);
+  }
+
+  it("sets the reserved-height variable to the banner's real measured height while open", () => {
+    expect(reservedHeight()).toBe("");
     mountOpenBanner();
-    expect(document.body.style.paddingBottom).not.toBe("");
+    expect(reservedHeight()).toBe(`${STUBBED_HEIGHT_PX}px`);
   });
 
-  it("clears the padding-bottom again once the banner closes", () => {
+  it("registers a ResizeObserver on the banner and updates the variable when it fires with a new size", () => {
+    mountOpenBanner();
+    expect(reservedHeight()).toBe(`${STUBBED_HEIGHT_PX}px`);
+    expect(resizeObserverCallbacks).toHaveLength(1);
+
+    // Simulate the banner wrapping to a second line on a narrower viewport.
+    Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
+      configurable: true,
+      get(): number {
+        return STUBBED_HEIGHT_PX * 2;
+      },
+    });
+    act(() => {
+      resizeObserverCallbacks[0]?.([] as unknown as ResizeObserverEntry[], {} as ResizeObserver);
+    });
+
+    expect(reservedHeight()).toBe(`${STUBBED_HEIGHT_PX * 2}px`);
+  });
+
+  it("clears the reserved-height variable again once the banner closes", () => {
     mountWithActions(null);
-    expect(document.body.style.paddingBottom).not.toBe("");
+    expect(reservedHeight()).toBe(`${STUBBED_HEIGHT_PX}px`);
 
     act(() => {
       actionsRef?.acceptOptional();
     });
 
-    expect(document.body.style.paddingBottom).toBe("");
+    expect(reservedHeight()).toBe("");
   });
 
-  it("MUTATION CHECK: unmounting the banner outright also clears the padding (cleanup actually runs)", () => {
+  it("MUTATION CHECK: unmounting the banner outright also clears the variable (cleanup actually runs)", () => {
     mountOpenBanner();
-    expect(document.body.style.paddingBottom).not.toBe("");
+    expect(reservedHeight()).toBe(`${STUBBED_HEIGHT_PX}px`);
 
     act(() => {
       root.unmount();
     });
 
-    expect(document.body.style.paddingBottom).toBe("");
+    expect(reservedHeight()).toBe("");
+  });
+
+  it("MUTATION CHECK fixture: the written value tracks the real offsetHeight rather than a hardcoded constant", () => {
+    // Fixture mutation: a DIFFERENT offsetHeight stub, applied after the
+    // one in beforeEach. A production regression that hardcoded the
+    // reserved height (instead of reading el.offsetHeight) would write the
+    // SAME value regardless of this change, making this assertion fail —
+    // proving the test above is actually reading the measurement, not a
+    // constant that happens to match the stub.
+    Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
+      configurable: true,
+      get(): number {
+        return 0;
+      },
+    });
+    mountOpenBanner();
+    expect(reservedHeight()).toBe("0px");
+    expect(reservedHeight()).not.toBe(`${STUBBED_HEIGHT_PX}px`);
   });
 });
 

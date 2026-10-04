@@ -127,18 +127,34 @@ test.describe("the 'Cookies' control (K4)", () => {
  * banner's first review round shipped on `bg-popover`, which measured
  * 1.81:1 in dark mode specifically while looking fine by inspection in
  * light — exactly the sibling this loop exists to not omit.
+ *
+ * Also both the default viewport AND 320px (review round 2, finding 10):
+ * CookieBanner's own code comment explicitly anticipates it wrapping to a
+ * second, taller line at narrow widths (that's why the padding reservation
+ * in cookie-banner.tsx uses a ResizeObserver rather than a fixed guess),
+ * but nothing checked that combination before this — every other
+ * desktop-width-only axe run in this file would miss a contrast/overlap
+ * regression that only shows up once the banner is two lines tall, over
+ * real bottom-of-page content ("/", the route the gallery's own "Load
+ * more" lives on — exactly what round 1 finding 8 named).
  */
 const COLOR_SCHEMES = ["light", "dark"] as const;
+const AXE_VIEWPORTS = {
+  desktop: { width: 1280, height: 800 },
+  mobile320: { width: 320, height: 720 },
+} as const;
 
 for (const scheme of COLOR_SCHEMES) {
-  test.describe(`accessibility with the banner open (K5, ${scheme})`, () => {
-    test.use({ colorScheme: scheme });
+  for (const [viewportName, viewport] of Object.entries(AXE_VIEWPORTS)) {
+    test.describe(`accessibility with the banner open (K5, ${scheme}, ${viewportName})`, () => {
+      test.use({ colorScheme: scheme, viewport });
 
-    test("has no automatically detectable axe violations", async ({ page }) => {
-      await page.goto("/");
-      await expect(page.getByRole("region", { name: "Cookies" })).toBeVisible();
-      const results = await new AxeBuilder({ page }).analyze();
-      expect(results.violations, JSON.stringify(results.violations, null, 2)).toEqual([]);
+      test("has no automatically detectable axe violations", async ({ page }) => {
+        await page.goto("/");
+        await expect(page.getByRole("region", { name: "Cookies" })).toBeVisible();
+        const results = await new AxeBuilder({ page }).analyze();
+        expect(results.violations, JSON.stringify(results.violations, null, 2)).toEqual([]);
+      });
     });
-  });
+  }
 }

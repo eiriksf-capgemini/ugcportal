@@ -104,28 +104,43 @@ export function clearAnalyticsCookies(
  */
 const UMAMI_DISABLE_STORAGE_KEY = "umami.disabled";
 
-function isLocalStorageAvailable(): boolean {
-  return typeof window !== "undefined" && typeof window.localStorage !== "undefined";
+/**
+ * Runs `action` against `window.localStorage`, failing silently (never
+ * throwing) however it fails.
+ *
+ * Review round 2, finding 7: the previous version checked
+ * `typeof window.localStorage !== "undefined"` OUTSIDE its try/catch, and
+ * only wrapped the subsequent `setItem`/`removeItem` call. But merely
+ * ACCESSING `window.localStorage` — not just calling a method on it — can
+ * itself throw a `SecurityError` synchronously in some real, current
+ * contexts (a sandboxed cross-origin iframe without
+ * `allow-same-origin`, some hardened/enterprise storage-partitioning
+ * configurations). Since this runs inside `AnalyticsLoader`'s `useEffect`,
+ * an uncaught throw there would propagate out of the effect instead of
+ * failing safe the way every surrounding comment assumes. Folding the
+ * access itself inside the try closes that gap.
+ */
+function withUmamiDisableFlag(action: (storage: Storage) => void): void {
+  if (typeof window === "undefined") return;
+  try {
+    const storage = window.localStorage;
+    if (typeof storage === "undefined") return;
+    action(storage);
+  } catch {
+    // Covers both: accessing window.localStorage itself throwing, and
+    // setItem/removeItem throwing (private browsing in some engines,
+    // quota, storage disabled entirely). Either way, nothing more to do
+    // client-side — the script element is still removed from the tree
+    // regardless.
+  }
 }
 
 export function disableUmamiTracking(): void {
-  if (!isLocalStorageAvailable()) return;
-  try {
-    window.localStorage.setItem(UMAMI_DISABLE_STORAGE_KEY, "1");
-  } catch {
-    // localStorage can throw (private browsing in some engines, quota,
-    // storage disabled entirely) — nothing more to do client-side; the
-    // script element is still removed from the tree either way.
-  }
+  withUmamiDisableFlag((storage) => storage.setItem(UMAMI_DISABLE_STORAGE_KEY, "1"));
 }
 
 export function enableUmamiTracking(): void {
-  if (!isLocalStorageAvailable()) return;
-  try {
-    window.localStorage.removeItem(UMAMI_DISABLE_STORAGE_KEY);
-  } catch {
-    // see disableUmamiTracking
-  }
+  withUmamiDisableFlag((storage) => storage.removeItem(UMAMI_DISABLE_STORAGE_KEY));
 }
 
 export function AnalyticsLoader() {

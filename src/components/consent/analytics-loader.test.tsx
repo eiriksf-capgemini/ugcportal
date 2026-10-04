@@ -252,6 +252,59 @@ describe("K4: withdrawal via the 'Cookies' control", () => {
     expect(window.localStorage.getItem(UMAMI_DISABLE_STORAGE_KEY)).toBeNull();
   });
 
+  /**
+   * Review round 2, finding 7: merely ACCESSING window.localStorage (not
+   * just calling setItem/removeItem on it) can throw synchronously in a
+   * sandboxed cross-origin iframe without allow-same-origin, or some
+   * hardened/enterprise storage-partitioning configurations. Simulated
+   * here by redefining the property's getter to throw for the duration of
+   * the test — this is the fixture that would have failed before the
+   * access itself moved inside the try/catch.
+   */
+  describe("accessing window.localStorage itself throws (not just a method on it)", () => {
+    let originalDescriptor: PropertyDescriptor | undefined;
+
+    beforeEach(() => {
+      originalDescriptor = Object.getOwnPropertyDescriptor(window, "localStorage");
+      Object.defineProperty(window, "localStorage", {
+        configurable: true,
+        get(): Storage {
+          throw new DOMException("Access is denied for this document.", "SecurityError");
+        },
+      });
+    });
+
+    afterEach(() => {
+      if (originalDescriptor) {
+        Object.defineProperty(window, "localStorage", originalDescriptor);
+      }
+    });
+
+    it("disableUmamiTracking does not throw", () => {
+      expect(() => disableUmamiTracking()).not.toThrow();
+    });
+
+    it("enableUmamiTracking does not throw", () => {
+      expect(() => enableUmamiTracking()).not.toThrow();
+    });
+
+    it("AnalyticsLoader's own withdrawal effect does not throw and still removes the script", () => {
+      setAnalyticsEnv();
+      expect(() => mount("granted")).not.toThrow();
+      expect(scriptMock).toHaveBeenCalledTimes(1);
+
+      scriptMock.mockClear();
+      expect(() => {
+        act(() => {
+          actionsRef?.reopen();
+          actionsRef?.onlyNecessary();
+        });
+      }).not.toThrow();
+
+      expect(scriptMock).not.toHaveBeenCalled();
+    });
+  });
+
   it("ANALYTICS_COOKIE_NAMES is empty today — Umami is confirmed cookieless (review round 1, finding 4)", () => {
     expect(ANALYTICS_COOKIE_NAMES).toEqual([]);
   });

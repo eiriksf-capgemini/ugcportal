@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { walkSourceFiles } from "@/lib/design/scan-source";
+import { stripComments, walkSourceFiles } from "@/lib/design/scan-source";
 
 /**
  * K6 (ugcportal-3wgp): "the gate being bypassed by a script placed outside
@@ -32,7 +32,18 @@ import { walkSourceFiles } from "@/lib/design/scan-source";
  * describe what it is checking for without mentioning it either. Every
  * other file under src/ is in scope, including other test files (no
  * isTestFile exclusion, unlike dual-meaning-usage.test.ts — see
- * INCLUDE_EVERYTHING below).
+ * INCLUDE_EVERYTHING below) and plain .ts files (walkSourceFiles's default
+ * extensions regex, `/\.(tsx|ts)$/`, already includes them — confirmed by
+ * this file's own temp-fixture tests below, which use `.ts` fixtures
+ * throughout).
+ *
+ * Comments are stripped before matching (review round 2, finding 9) using
+ * the same `stripComments` its sibling repo-wide scanners
+ * (dual-meaning-usage.test.ts, no-raw-hex.test.ts, both via scan-source.ts)
+ * already use — before this fix, an innocent comment merely discussing the
+ * vendor name (a code-review note, a docblock explaining why some other
+ * file is the gate) tripped this test with no live code anywhere
+ * referencing it, a false positive its siblings don't have.
  */
 
 const SRC_ROOT = path.resolve(
@@ -88,7 +99,7 @@ export function findAnalyticsMarkerOffenders(
     const relative = path.relative(root, absolutePath).split(path.sep).join("/");
     if (allowedRelativePaths.has(relative)) continue;
     const contents = readFileSync(absolutePath, "utf8");
-    if (ANALYTICS_MARKER.test(contents)) offenders.push(relative);
+    if (ANALYTICS_MARKER.test(stripComments(contents))) offenders.push(relative);
   }
   return offenders;
 }
@@ -176,6 +187,42 @@ describe("findAnalyticsMarkerOffenders (the real scanner, exercised over a real 
       walkSourceFiles(root, INCLUDE_EVERYTHING),
       root,
       new Set(["allowed.ts"]),
+    );
+
+    expect(result).toEqual(["offender.ts"]);
+  });
+
+  /**
+   * Review round 2, finding 9: a comment merely discussing the vendor name
+   * must not trip this test — only LIVE code referencing it should.
+   */
+  it("does not report a file where the marker appears only inside a comment", () => {
+    const root = fixture({
+      "block-comment.ts": "/* do not wire up umami tracking here directly */\nexport const x = 1;",
+      "line-comment.ts": "// umami lives in analytics-loader.tsx, not here\nexport const y = 2;",
+    });
+
+    const result = findAnalyticsMarkerOffenders(
+      walkSourceFiles(root, INCLUDE_EVERYTHING),
+      root,
+      new Set(),
+    );
+
+    expect(result).toEqual([]);
+  });
+
+  it("MUTATION CHECK: still reports a file where the marker appears in live code alongside an unrelated comment", () => {
+    // Confirms the fix above is "strip comments", not "stop matching
+    // altogether" — a regression that did the latter would also pass the
+    // comment-only test above.
+    const root = fixture({
+      "offender.ts": '// unrelated comment\nconst trackingSrc = "https://stats.example/umami.js";',
+    });
+
+    const result = findAnalyticsMarkerOffenders(
+      walkSourceFiles(root, INCLUDE_EVERYTHING),
+      root,
+      new Set(),
     );
 
     expect(result).toEqual(["offender.ts"]);
