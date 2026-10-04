@@ -18,7 +18,7 @@ export function GET(): Response {
 
 ## Public Gallery
 
-A public gallery featuring watermarked previews of user-generated photography across diverse subject areas: food, wine and drink, technology, and books. All images are published by permitted uploaders and vetted for quality before appearing in the public feed.
+A public gallery of watermarked photographs with alt text and captions. Contributors are members of a configured allowlist of permitted uploaders. Each contributor publishes their own work. Photography covers food, wine and drink, technology, and books.
 
 - [Home](/): Browse the public gallery
 
