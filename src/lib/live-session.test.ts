@@ -504,6 +504,9 @@ describe("a session row that cannot be identified is refused, not mass-deleted",
  */
 describe("recording the identity that minted a session", () => {
   const adapter = withSessionIdentity(PrismaAdapter(prisma));
+  /** What a provider id can arrive as, and what it has to be stored as. */
+  const REPORTED_PROVIDER = "  GOOGLE  ";
+  const CANONICAL_PROVIDER = REPORTED_PROVIDER.trim().toLowerCase();
 
   /**
    * One sign-in, shaped like the request Auth.js makes: the handler is
@@ -560,6 +563,57 @@ describe("recording the identity that minted a session", () => {
         signInEmail: OTHER,
       },
     ]);
+  });
+
+  it("stores the provider in the form the reader will recognise", async () => {
+    // Canonicalised on the way in by the same `providerId` that reads it
+    // back (PR #91 review, round 5). Auth.js reports the provider id a
+    // configuration supplied, and a stray space or a capital would be
+    // stored verbatim and then read as an unrecognised provider: a row that
+    // looks attributed and behaves unattributed.
+    //
+    // The expectation is DERIVED from the fixture, and the fixture is
+    // asserted not to be the answer already — otherwise swapping it for a
+    // tidy `"google"` would leave a test that passes without canonicalising
+    // anything.
+    expect(REPORTED_PROVIDER).not.toBe(CANONICAL_PROVIDER);
+    await prisma.user.create({ data: { id: USER_ID, email: LISTED } });
+
+    await handlers.POST({
+      provider: REPORTED_PROVIDER,
+      email: LISTED,
+      token: "token-shouty",
+      id: "a",
+    });
+
+    await expect(identities()).resolves.toEqual([
+      {
+        sessionToken: "token-shouty",
+        signInProvider: CANONICAL_PROVIDER,
+        signInEmail: LISTED,
+      },
+    ]);
+  });
+
+  it("so that session is permitted by a bound entry, which the raw value was not", async () => {
+    // The consequence, not just the stored string: with ` GOOGLE ` written
+    // verbatim this session is refused as `wrong-provider` on its next
+    // request and deleted, despite having genuinely come through Google.
+    expect(REPORTED_PROVIDER).not.toBe(CANONICAL_PROVIDER);
+    process.env[PERMITTED_EMAILS_VAR] = `${CANONICAL_PROVIDER}:${LISTED}`;
+    await prisma.user.create({ data: { id: USER_ID, email: LISTED } });
+    await handlers.POST({
+      provider: REPORTED_PROVIDER,
+      email: LISTED,
+      token: "token-shouty",
+      id: "a",
+    });
+    const [row] = await prisma.session.findMany({
+      select: { id: true, signInProvider: true, signInEmail: true },
+    });
+
+    expect((await enforce(row)).user?.id).toBe(USER_ID);
+    expect(await liveSessionIds()).toEqual([row.id]);
   });
 
   it("gives each of two concurrent sign-ins its own identity", async () => {
@@ -714,14 +768,19 @@ describe("recording the identity that minted a session", () => {
         });
       },
     });
-    for (const provider of [null, undefined, "", 42]) {
+    // `twitter` is the case the canonicalisation added: a provider id that
+    // is a perfectly good string and is not one of this instance's. Stored
+    // verbatim it would be read back as unrecognised anyway — so the column
+    // would hold a value that means nothing to anyone, which is worse than
+    // null for exactly the reason null is honest.
+    for (const provider of [null, undefined, "", "   ", 42, "twitter"]) {
       await unwritable.POST(provider);
     }
 
     const rows = await prisma.session.findMany({
       select: { signInProvider: true },
     });
-    expect(rows).toHaveLength(4);
+    expect(rows).toHaveLength(6);
     expect(rows.every((row) => row.signInProvider === null)).toBe(true);
   });
 });

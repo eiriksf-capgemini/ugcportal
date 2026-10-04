@@ -61,6 +61,11 @@ ALTER TABLE "Session" ADD COLUMN "signInEmail" TEXT;
 -- bound entry, including the operator, on the deploy that carries this —
 -- recoverable, but indistinguishable from the outside from the new check
 -- misfiring on its first day.
+-- The two correlated subqueries below are deliberately left as they are:
+-- `Account.userId` carries no index, so each one is a scan, but this runs
+-- ONCE over a table with a handful of rows on an instance with a handful of
+-- users. Adding an index for a one-time migration would be a permanent
+-- schema change bought for a single statement.
 UPDATE "Session"
 SET "signInProvider" = (
   SELECT MIN(a."provider") FROM "Account" a WHERE a."userId" = "Session"."userId"

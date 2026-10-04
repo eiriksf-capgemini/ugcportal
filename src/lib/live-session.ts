@@ -12,6 +12,7 @@ import {
   authorisedEmail,
   decideLiveSession,
   normalizeString,
+  providerId,
 } from "@/lib/sign-in-policy";
 
 /**
@@ -465,14 +466,19 @@ export function rememberSignInIdentity(attempt: SignInAttempt): void {
   if (!slot) {
     return;
   }
-  const provider = attempt.account?.provider;
-  // Stores whatever provider id Auth.js reported, without checking it
-  // against SIGN_IN_PROVIDERS. An id outside that list cannot widen
-  // anything — `providerId` maps it to `null` when the column is read,
-  // exactly as a missing value — and storing what actually happened keeps
-  // the column honest if the configured providers ever change.
-  slot.signInProvider =
-    typeof provider === "string" && provider !== "" ? provider : null;
+  // CANONICALISED BY THE READER'S OWN FUNCTION (PR #91 review, round 5,
+  // finding 1). `providerId` is what `decideLiveSession` uses when this
+  // column is read back, so using it here makes the two agree by
+  // construction rather than by two string checks staying in step: a
+  // provider reported as ` GOOGLE ` is stored as `google` instead of
+  // verbatim, and anything outside SIGN_IN_PROVIDERS is stored as `null`
+  // rather than as a value that makes the row look attributed while
+  // behaving unattributed.
+  //
+  // The address needs no step of its own: `authorisedEmail` returns
+  // `normalizeEmail`'s answer, which IS `normalizeString` — the same
+  // function `recordedIdentity` normalises with on the way back out.
+  slot.signInProvider = providerId(attempt.account?.provider);
   slot.signInEmail = authorisedEmail(attempt);
 }
 

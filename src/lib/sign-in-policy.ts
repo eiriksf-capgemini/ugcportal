@@ -781,8 +781,19 @@ function signInProvider(attempt: SignInAttempt): SignInProvider | null {
   return providerId(attempt.account?.provider);
 }
 
-/** A configured provider id, or `null` for anything else. Fails closed. */
-function providerId(value: unknown): SignInProvider | null {
+/**
+ * A configured provider id, or `null` for anything else. Fails closed.
+ *
+ * Exported since ugcportal-mzr: this is the one definition of "which
+ * provider is this", and src/lib/live-session.ts now uses it on BOTH sides
+ * of the `Session.signInProvider` column — to canonicalise what a sign-in
+ * writes there, and (through `decideLiveSession`) to read it back on every
+ * later request (PR #91 review, round 5). A write path with its own idea of
+ * a valid provider is the "compares the wrong two things" family waiting to
+ * happen: ` GOOGLE ` stored verbatim is a value the reader maps to `null`,
+ * so the row looks attributed and behaves unattributed.
+ */
+export function providerId(value: unknown): SignInProvider | null {
   const normalized = normalizeString(value);
   return normalized !== null && isSignInProvider(normalized) ? normalized : null;
 }

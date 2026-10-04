@@ -87,7 +87,9 @@ model Session {
 
   // WHICH IDENTITY MINTED THIS SESSION (ugcportal-mzr): the provider the
   // sign-in came through (an id from SIGN_IN_PROVIDERS — `google`,
-  // `facebook`) and the address that provider asserted for it. Written in
+  // `facebook`; canonicalised by `providerId` on the way in, so the value
+  // here is always one the reader will recognise or NULL, never something
+  // in between) and the address that provider asserted for it. Written in
   // the row's own INSERT, by the adapter wrapper in
   // src/lib/live-session.ts: the `signIn` callback puts the identity in an
   // AsyncLocalStorage slot for the request, and `createSession` reads it.
