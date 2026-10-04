@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 import { validateOriginalName } from "@/lib/media";
 import { requireOwnedMedia, toOwnerMedia } from "@/lib/media-access";
 import { prisma } from "@/lib/prisma";
+import { readJsonBody } from "@/lib/request-body";
 import { getBucketName, getS3Client } from "@/lib/s3";
 
 // App Router hands dynamic segments in as a Promise (Next 16).
@@ -17,74 +18,6 @@ type RouteContext = { params: Promise<{ id: string }> };
 const MAX_PATCH_BODY_BYTES = 4096;
 
 type NameResult = { ok: true; value: string } | { ok: false; message: string };
-
-type BodyResult =
-  | { ok: true; value: unknown }
-  | { ok: false; status: 400 | 413; error: string };
-
-/**
- * Reads and JSON-parses the request body, never holding more than `limit`
- * bytes of it.
- *
- * The Content-Length check is only a cheap early-out, and deliberately not
- * the enforcement: the header is absent on a chunked request and can be
- * malformed, in which case `Number()` yields NaN and `NaN > limit` is
- * false. Trusting it alone would wave through exactly the unbounded
- * buffering the cap exists to prevent. The read loop is what actually
- * enforces the bound — it stops at the first chunk that takes the running
- * total past `limit` and cancels the stream, so a sender that lies about
- * (or omits) its length gets a 413 rather than memory.
- */
-async function readJsonBody(
-  request: Request,
-  limit: number,
-): Promise<BodyResult> {
-  const declared = Number(request.headers.get("content-length"));
-  if (Number.isFinite(declared) && declared > limit) {
-    return { ok: false, status: 413, error: "Request body too large" };
-  }
-
-  if (!request.body) {
-    return { ok: false, status: 400, error: "Invalid JSON body" };
-  }
-
-  const reader = request.body.getReader();
-  const decoder = new TextDecoder();
-  let received = 0;
-  let text = "";
-
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-
-      received += value.byteLength;
-      if (received > limit) {
-        // Swallowed deliberately: cancel() can reject when the connection
-        // is already gone, and the shared catch below answers 400. The cap
-        // has been decided by this point, so letting a failed teardown
-        // rewrite a correct 413 into "malformed JSON" would report the
-        // wrong thing about a request we already understand.
-        await reader.cancel().catch(() => {});
-        return { ok: false, status: 413, error: "Request body too large" };
-      }
-
-      text += decoder.decode(value, { stream: true });
-    }
-    text += decoder.decode();
-  } catch {
-    // A truncated or reset connection is the client's problem, not a 500.
-    return { ok: false, status: 400, error: "Invalid JSON body" };
-  }
-
-  try {
-    return { ok: true, value: JSON.parse(text) };
-  } catch {
-    return { ok: false, status: 400, error: "Invalid JSON body" };
-  }
-}
 
 /**
  * Pulls the one editable field off the request body. `originalName` is the
