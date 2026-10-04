@@ -5,6 +5,8 @@
  * a quiet difference in how data is stored — the kind nobody discovers until
  * an audit — or, for the sign-in gate below, as an unexplained refusal.
  */
+import { legalPages } from "@/lib/legal/pages";
+import { checkLegalPagesPublishable } from "@/lib/legal/publishable";
 import {
   PERMITTED_EMAILS_VAR,
   PROVIDER_PREFIX_HINT,
@@ -106,7 +108,14 @@ export function checkSignInConfiguration(
 }
 
 export async function register(): Promise<void> {
-  for (const warning of [checkEvidenceEncryption(), checkSignInConfiguration()]) {
+  for (const warning of [
+    checkEvidenceEncryption(),
+    checkSignInConfiguration(),
+    // ugcportal-qnq9.4: a legal page still carrying "[CONTROLLER NAME]"
+    // refuses to render in production (src/lib/legal/publishable.ts); say
+    // so at boot rather than leaving it to the first visitor to find.
+    checkLegalPagesPublishable(legalPages()),
+  ]) {
     if (warning) {
       console.error(warning);
     }

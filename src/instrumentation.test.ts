@@ -1,9 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   checkEvidenceEncryption,
   checkSignInConfiguration,
+  register,
 } from "@/instrumentation";
+import { legalPages } from "@/lib/legal/pages";
+import { unresolvedPlaceholders } from "@/lib/legal/publishable";
 import { PERMITTED_EMAILS_VAR } from "@/lib/sign-in-policy";
 
 const PROD = { NODE_ENV: "production" } as NodeJS.ProcessEnv;
@@ -125,5 +128,44 @@ describe("the sign-in configuration startup check", () => {
       "NOBODY can sign in",
     );
     expect(checkSignInConfiguration({})).toContain("NOBODY can sign in");
+  });
+});
+
+/**
+ * ugcportal-qnq9.4: the legal-page placeholder check is wired into boot.
+ * The check itself is tested in src/lib/legal/publishable.test.ts; this
+ * proves register() actually calls it, in whichever state the repository's
+ * contact block is in.
+ */
+describe("the legal-pages startup check", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it("is announced at boot in production if and only if a placeholder remains", async () => {
+    const remaining = legalPages().some(
+      (page) => unresolvedPlaceholders(page).length > 0,
+    );
+    vi.stubEnv("NODE_ENV", "production");
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await register();
+
+    const legalLines = errors.mock.calls
+      .map((call) => String(call[0]))
+      .filter((line) => line.startsWith("[legal]"));
+    expect(legalLines.length > 0).toBe(remaining);
+  });
+
+  it("says nothing outside production", async () => {
+    vi.stubEnv("NODE_ENV", "development");
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await register();
+
+    expect(
+      errors.mock.calls.map((call) => String(call[0])).filter((l) => l.startsWith("[legal]")),
+    ).toEqual([]);
   });
 });

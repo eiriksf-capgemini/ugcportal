@@ -157,6 +157,15 @@ function scanDualMeaningUsage(): Map<string, Partial<Record<DualMeaningToken, nu
  */
 const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> = {
   "src/app/auth/error/page.tsx": { "text-foreground": 1, "text-muted-foreground": 1 },
+  // ugcportal-qnq9.4: the legal pages render straight on --background inside
+  // the app shell's <main>, with no surface well of their own - the same
+  // situation as auth/error/page.tsx and upload/page.tsx above, so the
+  // page-canvas pair is the correct one.
+  "src/app/privacy/page.tsx": { "text-foreground": 1, "text-muted-foreground": 1 },
+  "src/components/legal/legal-page.tsx": {
+    "text-foreground": 3,
+    "text-muted-foreground": 5,
+  },
   "src/app/admin/settings/rights/page.tsx": { "text-muted-foreground": 5, "text-primary": 2 },
   "src/app/admin/settings/rights/decision-form.tsx": { "text-muted-foreground": 3 },
   "src/app/admin/settings/users/page.tsx": { "text-muted-foreground": 4, "text-primary": 1 },
