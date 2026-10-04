@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import { CONSENT_COOKIE_NAME, readStoredConsent } from "@/lib/consent";
 
-import { ConsentProvider, useConsent } from "./consent-context";
+import { ConsentProvider, useConsent, useOptionalConsent } from "./consent-context";
 import { setupConsentTestRoot } from "./consent-test-support";
 
 /**
@@ -154,5 +154,45 @@ describe("useConsent outside a provider", () => {
         ctx.root().render(<Probe />);
       });
     }).toThrow(/useConsent must be used within a ConsentProvider/);
+  });
+});
+
+/**
+ * Review round 5, LOW finding 7: CookieSettingsLink needs a non-throwing
+ * way to read consent context so it can degrade gracefully (render
+ * nothing) instead of crashing outside a ConsentProvider. useConsent()'s
+ * own throwing behaviour above stays exactly as it was — this is a
+ * SEPARATE accessor for that one tolerant consumer, not a replacement.
+ */
+describe("useOptionalConsent", () => {
+  let optionalRef: ReturnType<typeof useOptionalConsent> | undefined;
+
+  function OptionalProbe() {
+    const value = useOptionalConsent();
+    useEffect(() => {
+      optionalRef = value;
+    });
+    return null;
+  }
+
+  it("returns null outside a provider, rather than throwing", () => {
+    expect(() => {
+      act(() => {
+        ctx.root().render(<OptionalProbe />);
+      });
+    }).not.toThrow();
+    expect(optionalRef).toBeNull();
+  });
+
+  it("returns the real context value inside a provider", () => {
+    act(() => {
+      ctx.root().render(
+        <ConsentProvider initialConsent="granted">
+          <OptionalProbe />
+        </ConsentProvider>,
+      );
+    });
+    expect(optionalRef).not.toBeNull();
+    expect(optionalRef?.consent).toBe("granted");
   });
 });

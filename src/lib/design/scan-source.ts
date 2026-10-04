@@ -90,13 +90,15 @@ function walk(
  * "regex vs divide" ambiguity every real JS tokenizer resolves using the
  * PRECEDING token, not the character itself. `isDivisionContext` below
  * approximates that: a `/` is division if the last significant source
- * character is alphanumeric/`_`/`$`/`)`/`]`/a closing quote (the end of a
- * value, e.g. `a / b`, `(x) / 2`, `"s" / 1`) UNLESS that trailing word is
+ * character is alphanumeric/`_`/`$`/`)`/`]`/`}`/a closing quote (the end
+ * of a value, e.g. `a / b`, `(x) / 2`, `"s" / 1`, `{a:1} / 2` - the `}`
+ * case added in review round 5, finding 1) UNLESS that trailing word is
  * itself a keyword that can only precede an expression (`return`,
- * `typeof`, `instanceof`, `in`, `of`, `new`, `void`, `delete`, `yield`,
- * `case`, `do`, `else`, `throw`, `default` - real cases of exactly this
- * shape exist in this repo today, e.g. `return /value="([^"]*)"/.exec(...)`
- * in decision-form.test.tsx, and this file's own `isTestFile` below).
+ * `await` - round 5, finding 2 - `typeof`, `instanceof`, `in`, `of`,
+ * `new`, `void`, `delete`, `yield`, `case`, `do`, `else`, `throw`,
+ * `default` - real cases of exactly this shape exist in this repo today,
+ * e.g. `return /value="([^"]*)"/.exec(...)` in decision-form.test.tsx,
+ * and this file's own `isTestFile` below).
  * Checked empirically against every real division (`MAX_UPLOAD_BYTES / 10`,
  * `height / 2`, ...) and every real regex literal across the whole src/
  * tree via no-raw-hex.test.ts/dual-meaning-usage.test.ts/K6's own suites,
@@ -120,6 +122,7 @@ function walk(
  */
 const REGEX_PERMITTING_KEYWORDS = new Set([
   "return",
+  "await",
   "typeof",
   "instanceof",
   "in",
@@ -194,7 +197,18 @@ export function stripComments(source: string): string {
       const word = out.slice(wordStart + 1, k + 1);
       return !REGEX_PERMITTING_KEYWORDS.has(word);
     }
-    return /[)\]'"`]/.test(c);
+    // Round 5, finding 1: `}` was missing — a `/` right after a closing
+    // brace that ends an object literal (`{a:1} / 2`) is division, not a
+    // regex start. (A `}` that closes a BLOCK or function body instead,
+    // immediately followed by a genuine new regex-literal STATEMENT, is a
+    // real ambiguity no character-based heuristic can perfectly resolve
+    // without full nesting context — out of scope here, same as the
+    // file's own stated "not full lexical correctness" boundary. Checked
+    // empirically: every real `}` immediately followed by `/` in this
+    // repo's src/ tree today is either inside an already-protected
+    // template literal or a JSX self-closing `/>` that the "no closing /
+    // before a newline" fallback already handles safely either way.)
+    return /[)\]}'"`]/.test(c);
   }
 
   while (i < n) {

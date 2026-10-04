@@ -1,6 +1,8 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 
+import { ANALYTICS_MARKER as ANALYTICS_HOST_MARKER } from "../src/lib/analytics-marker";
+
 /**
  * K1/K5/K6 browser verification for the cookie-consent gate (ugcportal-3wgp).
  *
@@ -21,9 +23,11 @@ import { expect, test, type Page } from "@playwright/test";
  * script-src check and the repo-grep test (src/components/consent/
  * analytics-host.grep.test.ts) are what actually pin "umami" as the forbidden
  * string in the meantime.
+ * Round 5, finding 6: ANALYTICS_HOST_MARKER (aliased on import from the
+ * shared ANALYTICS_MARKER) now lives in one module, src/lib/
+ * analytics-marker.ts, imported here and by analytics-host.grep.test.ts —
+ * before this, each defined its own identical `/umami/i` independently.
  */
-
-const ANALYTICS_HOST_MARKER = /umami/i;
 
 async function collectRequestUrls(page: Page): Promise<string[]> {
   const urls: string[] = [];

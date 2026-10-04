@@ -4,6 +4,7 @@ import Script from "next/script";
 import { useEffect } from "react";
 
 import { deleteCookie } from "@/lib/cookies";
+import { trySilently } from "@/lib/try-silently";
 
 import { useConsent } from "./consent-context";
 
@@ -135,20 +136,18 @@ const UMAMI_DISABLE_STORAGE_KEY = "umami.disabled";
  * an uncaught throw there would propagate out of the effect instead of
  * failing safe the way every surrounding comment assumes. Folding the
  * access itself inside the try closes that gap.
+ *
+ * Round 5, LOW finding 5: that try/catch is now `trySilently` (src/lib/
+ * try-silently.ts) — the exact same shape `src/lib/cookies.ts` hand-rolled
+ * around `document.cookie`, now written once.
  */
 function withUmamiDisableFlag(action: (storage: Storage) => void): void {
   if (typeof window === "undefined") return;
-  try {
+  trySilently(() => {
     const storage = window.localStorage;
     if (typeof storage === "undefined") return;
     action(storage);
-  } catch {
-    // Covers both: accessing window.localStorage itself throwing, and
-    // setItem/removeItem throwing (private browsing in some engines,
-    // quota, storage disabled entirely). Either way, nothing more to do
-    // client-side — the script element is still removed from the tree
-    // regardless.
-  }
+  });
 }
 
 export function disableUmamiTracking(): void {

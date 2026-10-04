@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { ANALYTICS_MARKER } from "@/lib/analytics-marker";
 import { stripComments, walkSourceFiles } from "@/lib/design/scan-source";
 
 import { GATED_LOADER_PATH } from "../../../eslint.config.mjs";
@@ -65,12 +66,15 @@ const ALLOWED_RELATIVE_PATHS = new Set([
   GATED_LOADER_PATH.replace(/^src\//, ""),
   "components/consent/analytics-loader.test.tsx",
   "components/consent/analytics-host.grep.test.ts",
+  // Round 5, finding 6: ANALYTICS_MARKER now lives in one shared module
+  // (src/lib/analytics-marker.ts), imported here AND by
+  // e2e/cookie-consent.spec.ts — it necessarily spells the vendor name
+  // itself, same reason the loader and this file are both already allowed.
+  // Its own direct unit test (analytics-marker.test.ts) needs the same
+  // allowance, for the same reason this file's own tests do.
+  "lib/analytics-marker.ts",
+  "lib/analytics-marker.test.ts",
 ]);
-
-// Matches "umami" case-insensitively, which also catches the two env var
-// names (NEXT_PUBLIC_UMAMI_SRC, NEXT_PUBLIC_UMAMI_WEBSITE_ID) and any actual
-// host/URL containing the word, without needing three separate patterns.
-const ANALYTICS_MARKER = /umami/i;
 
 // walkSourceFiles's own default (/\.(tsx|ts)$/) misses .jsx/.js/.mjs
 // entirely (review round 4, finding 2 — CONFIRMED: a .js or .mjs file

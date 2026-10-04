@@ -28,6 +28,42 @@ const useIsomorphicLayoutEffect =
   typeof window !== "undefined" ? useLayoutEffect : useEffect;
 
 /**
+ * Round 5, LOW finding 3: where to send focus when the captured invoker is
+ * still attached to the document but `.focus()` on it did not actually move
+ * `document.activeElement` (e.g. it became `disabled`/`inert`/lost its own
+ * focusability between capture and restore). Exported for its own direct
+ * unit test, independent of the full banner mount/unmount cycle.
+ *
+ * First choice: the live "Cookies" trigger, looked up fresh by the stable
+ * `data-cookie-settings-trigger` attribute (cookie-settings-link.tsx) —
+ * NOT the stale captured ref, in case an equivalent, currently-focusable
+ * control is right there even though the one originally captured is not.
+ *
+ * Second choice: the page's own `<h1>`. Every page in this repo renders
+ * exactly one (app-shell.tsx's own documented convention, enforced by
+ * gallery.test.tsx's "has exactly one <h1>"), so it is always present and
+ * is already the visitor's own landmark for "where this page's content
+ * starts" — a far more sensible landing spot than an unannounced, unfocused
+ * <body>. Headings are not natively focusable; `tabIndex="-1"` is added if
+ * missing (the same technique this component's own sr-only `<h2>` already
+ * relies on above) and left in place afterwards — that only removes the
+ * element from the SEQUENTIAL tab order's reach (Tab/Shift+Tab), not from
+ * programmatic focus, same as that sr-only heading.
+ */
+export function focusFallbackTarget(): void {
+  const trigger = document.querySelector<HTMLElement>("[data-cookie-settings-trigger]");
+  if (trigger && document.contains(trigger)) {
+    trigger.focus();
+    if (document.activeElement === trigger) return;
+  }
+
+  const heading = document.querySelector<HTMLElement>("h1");
+  if (!heading) return;
+  if (!heading.hasAttribute("tabindex")) heading.setAttribute("tabindex", "-1");
+  heading.focus();
+}
+
+/**
  * Bottom-anchored, small, one paragraph, two equally styled buttons
  * (ugcportal-3wgp K5). Both buttons share the exact same `variant`/`size` —
  * literally the same props, not just a visually similar pair — so there is
@@ -211,7 +247,17 @@ export function CookieBanner() {
     if (!bannerOpen && wasOpen) {
       const invoker = invokingElementRef.current;
       invokingElementRef.current = null;
-      if (invoker && document.contains(invoker)) invoker.focus();
+      if (invoker && document.contains(invoker)) {
+        invoker.focus();
+        // Round 5, LOW finding 3: being attached (`document.contains`) is
+        // necessary but not sufficient for `.focus()` to actually take —
+        // the invoker could have gone `disabled`, `inert`, lost its
+        // `tabIndex`, or otherwise become unfocusable between capture and
+        // restore, in which case `.focus()` silently no-ops and focus is
+        // left exactly where this whole effect exists to prevent: an
+        // unannounced <body>. Detect that and fall back instead.
+        if (document.activeElement !== invoker) focusFallbackTarget();
+      }
     }
   }, [bannerOpen]);
 

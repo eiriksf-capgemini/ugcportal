@@ -94,6 +94,108 @@ describe("stripComments", () => {
     expect(stripComments(code)).toBe(code);
   });
 
+  /**
+   * Review round 5, LOW finding 1: the division-permitting character class
+   * omitted `}` — a `/` right after an object literal's closing brace
+   * (`{a:1} / 2`) was read as a regex START instead of division, so a REAL
+   * block comment right after it survived stripping untouched (the
+   * scanner thought it was still "inside a regex", scanning for a closing
+   * `/` that isn't there until it bails at the newline — but by then the
+   * comment's own `/*`/`*​/` never got the chance to be recognised as such).
+   */
+  it("treats a / right after an object literal's closing brace as division, not a regex start", () => {
+    const code = "const x = {a:1} / 2; /* a real comment */ const y = 2;";
+    expect(stripComments(code)).toBe("const x = {a:1} / 2;   const y = 2;");
+  });
+
+  /**
+   * Review round 5, LOW finding 2: REGEX_PERMITTING_KEYWORDS omitted
+   * "await" - "await" ends in a letter, same ambiguity as "return" above.
+   * A fixture that merely checks `stripComments(code) === code` with no
+   * quote/comment inside the regex body would pass either way here (the
+   * misread-as-division path still copies characters through unchanged
+   * when nothing inside the "regex" needs protecting) - that would be
+   * exactly the "assertion that cannot fail" trap review-standards'
+   * Family 3 sweep watches for. This fixture instead embeds a quote
+   * character inside the regex pattern (same shape as the round-4 named
+   * bug) FOLLOWED by a real trailing block comment: misreading the
+   * leading `/` as division sends the quote through skipString as if it
+   * opened a string, desyncing the scanner so the real comment after it
+   * is no longer recognised as a comment and survives unstripped -
+   * verified by hand-tracing both the "await"-aware and "await"-unaware
+   * paths before committing to this fixture.
+   */
+  it("treats a regex literal after 'await' as a regex, not division (and still strips a real comment after it)", () => {
+    const code = 'await /name="([^"]*)"/i.test(s); /* real comment */ const z = 1;';
+    expect(stripComments(code)).toBe('await /name="([^"]*)"/i.test(s);   const z = 1;');
+  });
+
+  it("MUTATION CHECK: without '}' in the division class, the block comment after {a:1} / 2 survives unstripped", () => {
+    // Fixture mutation, not a production-code change: reproduces the
+    // round-5 (pre-fix) stripComments inline (division class missing `}`)
+    // and confirms it corrupts the exact fixture above by failing to
+    // strip the trailing real comment — proving this test is anchored to
+    // a real, previously-shipped defect rather than an invented one. This
+    // was also confirmed directly against the real scan-source.ts via a
+    // temporary revert-and-restore mutation check.
+    function round5PreFixStripComments(source: string): string {
+      let out = "";
+      let i = 0;
+      const n = source.length;
+      function isDivisionContext(): boolean {
+        let k = out.length - 1;
+        while (k >= 0 && /\s/.test(out[k])) k -= 1;
+        if (k < 0) return false;
+        const c = out[k];
+        if (/[A-Za-z0-9_$]/.test(c)) return true;
+        return /[)\]'"`]/.test(c); // `}` missing - the round-5 bug.
+      }
+      function tryRegexLiteralEnd(): number | null {
+        let j = i + 1;
+        let inClass = false;
+        while (j < n && source[j] !== "\n") {
+          const c = source[j];
+          if (c === "\\") { j += 2; continue; }
+          if (c === "[") { inClass = true; j += 1; continue; }
+          if (c === "]") { inClass = false; j += 1; continue; }
+          if (c === "/" && !inClass) {
+            j += 1;
+            while (j < n && /[a-zA-Z]/.test(source[j])) j += 1;
+            return j;
+          }
+          j += 1;
+        }
+        return null;
+      }
+      while (i < n) {
+        const ch = source[i];
+        if (ch === "/" && source[i + 1] === "*") {
+          const close = source.indexOf("*/", i + 2);
+          out += " ";
+          i = close === -1 ? n : close + 2;
+          continue;
+        }
+        if (ch === "/" && !isDivisionContext()) {
+          const end = tryRegexLiteralEnd();
+          if (end !== null) {
+            out += source.slice(i, end);
+            i = end;
+            continue;
+          }
+        }
+        out += ch;
+        i += 1;
+      }
+      return out;
+    }
+
+    const code = "const x = {a:1} / 2; /* a real comment */ const y = 2;";
+    expect(round5PreFixStripComments(code)).toBe(code); // comment NOT stripped - the bug.
+    expect(round5PreFixStripComments(code)).not.toBe(
+      "const x = {a:1} / 2;   const y = 2;",
+    );
+  });
+
   it("strips a real comment that follows a regex literal on the same line", () => {
     const code = 'const x = /abc/.test(y); // a real comment\nconst z = 1;';
     expect(stripComments(code)).toBe(

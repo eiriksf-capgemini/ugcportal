@@ -60,3 +60,41 @@ describe("clicking it", () => {
     expect(bannerOpenRef).toBe(true);
   });
 });
+
+/**
+ * Review round 5, LOW finding 7: without a ConsentProvider above it,
+ * CookieSettingsLink previously called the throwing `useConsent()` and
+ * crashed whatever rendered it (app-shell.tsx's own doc comment used to
+ * document this as a HARD dependency for exactly that reason). It now uses
+ * `useOptionalConsent()` and renders nothing instead.
+ */
+describe("without a ConsentProvider (round 5, finding 7)", () => {
+  it("does not throw when mounted with no ConsentProvider above it", () => {
+    expect(() => {
+      act(() => {
+        ctx.root().render(<CookieSettingsLink />);
+      });
+    }).not.toThrow();
+  });
+
+  it("renders nothing (no button at all) with no ConsentProvider above it", () => {
+    act(() => {
+      ctx.root().render(<CookieSettingsLink />);
+    });
+    expect(ctx.container().querySelector("button")).toBeNull();
+    expect(ctx.container().textContent).toBe("");
+  });
+
+  it("MUTATION CHECK: still renders the real button once a ConsentProvider IS present (proves the test above isn't vacuously true)", () => {
+    act(() => {
+      ctx.root().render(
+        <ConsentProvider initialConsent="granted">
+          <CookieSettingsLink />
+        </ConsentProvider>,
+      );
+    });
+    const button = ctx.container().querySelector("button");
+    expect(button).not.toBeNull();
+    expect(button?.textContent).toBe("Cookies");
+  });
+});

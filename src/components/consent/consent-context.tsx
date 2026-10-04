@@ -89,3 +89,27 @@ export function useConsent(): ConsentContextValue {
   }
   return value;
 }
+
+/**
+ * The one non-throwing way to read consent context (review round 5, LOW
+ * finding 7) — `null` outside a `ConsentProvider`, same as
+ * `useContext(ConsentContext)` itself already returns, rather than
+ * `useConsent()`'s own deliberate throw.
+ *
+ * `useConsent()` above throws BY DESIGN (see its own code and
+ * consent-context.test.tsx's "throws rather than silently reporting no
+ * choice") — that stays unchanged: every consumer that actually NEEDS a
+ * consent choice to do its job (the banner, AnalyticsLoader) should keep
+ * failing loudly if mounted without a provider, since silently reporting
+ * "no choice" there would be indistinguishable from a real first-time
+ * visitor and mask a real wiring bug.
+ *
+ * `CookieSettingsLink` is different: it is a single optional footer link
+ * whose only job, absent a provider, is to not exist — not to report
+ * anything about consent at all. This hook exists for exactly that one
+ * tolerant consumer, not as a general-purpose replacement for
+ * `useConsent()` elsewhere.
+ */
+export function useOptionalConsent(): ConsentContextValue | null {
+  return useContext(ConsentContext);
+}

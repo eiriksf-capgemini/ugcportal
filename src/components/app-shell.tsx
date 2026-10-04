@@ -33,17 +33,23 @@ import { SITE_NAME } from "@/lib/site";
  * so it is exactly the thing the contrast gate in src/lib/design cannot check
  * and a reader cannot rely on.
  *
- * HARD DEPENDENCY (ugcportal-3wgp review round 4, finding 9): the footer
- * renders `CookieSettingsLink`, which calls `useConsent()` and THROWS if no
- * `ConsentProvider` is above it in the tree. This is not optional or
- * gracefully degrading — a caller that renders `<AppShell>` without a
- * `ConsentProvider` ancestor (a Storybook story, an isolated test, a future
- * reuse outside the real app) gets a hard crash, not a missing footer link.
+ * DOCUMENTED DEPENDENCY (ugcportal-3wgp review round 4, finding 9; updated
+ * round 5, finding 7): the footer renders `CookieSettingsLink`, which only
+ * actually does anything with a `ConsentProvider` above it in the tree.
  * `src/app/layout.tsx` provides one for every real page; anything else
- * rendering `AppShell` directly must do the same. (`app-shell.nav.test.tsx`
- * works around this by mocking `CookieSettingsLink` out entirely, rather
- * than wrapping in a provider, since that file is about the shell's own
- * static structure, not the consent gate.)
+ * rendering `AppShell` directly should do the same to get a working
+ * "Cookies" control. This is no longer a HARD dependency, though, the way
+ * round 4 documented it: `CookieSettingsLink` now degrades gracefully
+ * (renders nothing — see its own doc comment) rather than throwing when no
+ * provider is present, so a caller without one (a Storybook story, an
+ * isolated test, a future reuse outside the real app) gets a shell with a
+ * quietly absent footer link, not a hard crash. The dependency itself is
+ * unchanged — only the failure mode when it is missing — so this stays
+ * documented here rather than being removed now that it no longer crashes.
+ * (`app-shell.nav.test.tsx` still mocks `CookieSettingsLink` out entirely
+ * rather than wrapping in a provider, same as its other two stubs, since
+ * that file is about the shell's own static structure, not the consent
+ * gate — not because leaving it unmocked would crash anymore.)
  */
 export function AppShell({ children }: { children: ReactNode }) {
   return (

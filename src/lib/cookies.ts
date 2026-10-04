@@ -12,6 +12,8 @@
  * repo-grep test's allowlist rather than needing to be added to it.
  */
 
+import { trySilently } from "./try-silently";
+
 function isBrowser(): boolean {
   return typeof document !== "undefined";
 }
@@ -38,19 +40,23 @@ function isBrowser(): boolean {
  * for the banner's own buttons means the handler exits having done nothing
  * — stuck, unresponsive to further clicks, with no visible error. The whole
  * read is now inside the try, not just the decode.
+ *
+ * Round 5, LOW finding 5: that try/catch is now `trySilently` (src/lib/
+ * try-silently.ts) — the exact same shape `withUmamiDisableFlag` below
+ * hand-rolled around `window.localStorage`, now written once.
  */
 export function getCookie(name: string): string | null {
   if (!isBrowser()) return null;
-  try {
-    const prefix = `${name}=`;
-    const row = document.cookie
-      .split("; ")
-      .find((entry) => entry.startsWith(prefix));
-    if (row === undefined) return null;
-    return decodeURIComponent(row.slice(prefix.length));
-  } catch {
-    return null;
-  }
+  return (
+    trySilently(() => {
+      const prefix = `${name}=`;
+      const row = document.cookie
+        .split("; ")
+        .find((entry) => entry.startsWith(prefix));
+      if (row === undefined) return null;
+      return decodeURIComponent(row.slice(prefix.length));
+    }) ?? null
+  );
 }
 
 /**
@@ -83,11 +89,36 @@ export type SetCookieOptions = SameSiteOptions & {
 };
 
 /**
+ * RFC 6265's cookie-name grammar is "token" per RFC 2616 §2.2 — any
+ * printable US-ASCII character except the separators
+ * (`()<>@,;:\"/[]?={} ` and horizontal tab) and other control characters.
+ * Enforced here (review round 5, LOW finding 4) because `value` is encoded
+ * on write but `name` was not validated at all: `name` is spliced directly
+ * into `${name}=${encodeURIComponent(value)}` below with no escaping of its
+ * own, so a name containing `=` would (depending on which `=` a later
+ * parser treats as the separator) desync the pair, and a name containing
+ * `;` would terminate the name/value pair early and let the REST of
+ * `name` be read back as additional cookie attributes — e.g a name of
+ * `"x; Secure; SameSite=None"` would smuggle those into the write as if
+ * this module had asked for them. No call site today passes anything but a
+ * hardcoded literal, so this is defense-in-depth against a future one that
+ * doesn't, not a fix to an exploitable path that exists yet.
+ */
+const VALID_COOKIE_NAME = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+
+/**
  * Builds the `document.cookie` assignment string shared by `setCookie` and
  * `deleteCookie` (review round 2, finding 5) — a delete is just a write of
  * an empty value with `Max-Age=0`, and sharing one builder means the two
  * can never again drift on `SameSite`/`Secure`, which is exactly how
  * `deleteCookie` ended up silently missing both in round 1.
+ *
+ * Throws on an invalid `name` (see VALID_COOKIE_NAME above) rather than
+ * writing something subtly wrong — both callers already wrap this in a
+ * try/catch that fails safe (see getCookie's own comment), the same
+ * fail-safe precedent a thrown `SecurityError` from `document.cookie`
+ * itself already relies on, so this does not need its own separate
+ * handling.
  */
 function buildCookieAssignment(
   name: string,
@@ -95,6 +126,9 @@ function buildCookieAssignment(
   maxAgeSeconds: number | undefined,
   attrs: SameSiteOptions,
 ): string {
+  if (!VALID_COOKIE_NAME.test(name)) {
+    throw new Error(`cookies.ts: refusing to write invalid cookie name ${JSON.stringify(name)}`);
+  }
   const { sameSite = "Lax" } = attrs;
   const secure = attrs.secure ?? window.location.protocol === "https:";
   const parts = [`${name}=${encodeURIComponent(value)}`, "Path=/", `SameSite=${sameSite}`];
@@ -121,12 +155,9 @@ export function setCookie(
   options: SetCookieOptions = {},
 ): void {
   if (!isBrowser()) return;
-  try {
+  trySilently(() => {
     document.cookie = buildCookieAssignment(name, value, options.maxAgeSeconds, options);
-  } catch {
-    // See getCookie's own comment — fails safe rather than throwing out of
-    // a caller (most often a click handler) that has no way to recover.
-  }
+  });
 }
 
 /**
@@ -146,9 +177,7 @@ export function setCookie(
  */
 export function deleteCookie(name: string, options: SameSiteOptions = {}): void {
   if (!isBrowser()) return;
-  try {
+  trySilently(() => {
     document.cookie = buildCookieAssignment(name, "", 0, options);
-  } catch {
-    // See getCookie's own comment.
-  }
+  });
 }

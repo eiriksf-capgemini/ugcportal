@@ -9,6 +9,7 @@ import {
   COOKIE_BANNER_COPY,
   COOKIE_BANNER_DECLINE_LABEL,
   CookieBanner,
+  focusFallbackTarget,
 } from "./cookie-banner";
 
 /**
@@ -492,5 +493,154 @@ describe("CookieBanner focus/announce on reopen (finding 9)", () => {
         actionsRef?.onlyNecessary();
       });
     }).not.toThrow();
+  });
+
+  /**
+   * Review round 5, LOW finding 3: the guard above only checked the invoker
+   * was still ATTACHED (`document.contains`), not that `.focus()` on it
+   * actually moved `document.activeElement` — an attached-but-unfocusable
+   * invoker (e.g. gone `disabled`/`inert` since capture) silently no-ops,
+   * leaving focus on whatever the browser defaults to (typically <body>).
+   */
+  it("falls back to a live '[data-cookie-settings-trigger]' element when the captured invoker's focus() silently does not take", () => {
+    const cookiesButton = document.createElement("button");
+    document.body.append(cookiesButton);
+    cookiesButton.focus();
+    expect(document.activeElement).toBe(cookiesButton);
+    // Simulate "attached but no longer focusable" (disabled/inert/etc)
+    // affecting future calls only — the capture above already happened.
+    cookiesButton.focus = () => {};
+
+    const liveTrigger = document.createElement("button");
+    liveTrigger.setAttribute("data-cookie-settings-trigger", "");
+    document.body.append(liveTrigger);
+
+    mountWithActions("granted");
+    act(() => {
+      actionsRef?.reopen();
+    });
+
+    act(() => {
+      actionsRef?.onlyNecessary();
+    });
+
+    expect(document.activeElement).toBe(liveTrigger);
+    cookiesButton.remove();
+    liveTrigger.remove();
+  });
+
+  it("falls back to the page's <h1> when the invoker's focus() does not take and no live trigger element exists either", () => {
+    const cookiesButton = document.createElement("button");
+    document.body.append(cookiesButton);
+    cookiesButton.focus();
+    cookiesButton.focus = () => {};
+
+    const heading = document.createElement("h1");
+    heading.textContent = "Gallery";
+    document.body.append(heading);
+
+    mountWithActions("granted");
+    act(() => {
+      actionsRef?.reopen();
+    });
+
+    act(() => {
+      actionsRef?.onlyNecessary();
+    });
+
+    expect(document.activeElement).toBe(heading);
+    expect(heading.getAttribute("tabindex")).toBe("-1");
+    cookiesButton.remove();
+    heading.remove();
+  });
+
+  it("MUTATION CHECK: does NOT fall back at all when the invoker's focus() takes normally", () => {
+    // Fixture guard: proves the two tests above are exercising the
+    // FALLBACK path specifically (triggered by focus() not taking),
+    // not something that would fire unconditionally on every close.
+    const cookiesButton = document.createElement("button");
+    cookiesButton.textContent = "Cookies";
+    document.body.append(cookiesButton);
+
+    const liveTrigger = document.createElement("button");
+    liveTrigger.setAttribute("data-cookie-settings-trigger", "");
+    document.body.append(liveTrigger);
+
+    mountWithActions("granted");
+    cookiesButton.focus();
+
+    act(() => {
+      actionsRef?.reopen();
+    });
+    act(() => {
+      actionsRef?.onlyNecessary();
+    });
+
+    expect(document.activeElement).toBe(cookiesButton);
+    expect(document.activeElement).not.toBe(liveTrigger);
+    cookiesButton.remove();
+    liveTrigger.remove();
+  });
+});
+
+/**
+ * Review round 5, LOW finding 3: focusFallbackTarget is exported standalone
+ * (not just exercised indirectly through the full mount/reopen/close cycle
+ * above) so its own selection logic — live trigger first, page <h1>
+ * second, do nothing rather than throw if neither exists — has a direct,
+ * fast unit test independent of CookieBanner's own mount lifecycle.
+ */
+describe("focusFallbackTarget (round 5, finding 3)", () => {
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  it("focuses a live [data-cookie-settings-trigger] element when one is present", () => {
+    const trigger = document.createElement("button");
+    trigger.setAttribute("data-cookie-settings-trigger", "");
+    document.body.append(trigger);
+
+    focusFallbackTarget();
+
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it("falls back to the page's <h1>, making it focusable, when no trigger element exists", () => {
+    const heading = document.createElement("h1");
+    heading.textContent = "Gallery";
+    document.body.append(heading);
+
+    focusFallbackTarget();
+
+    expect(document.activeElement).toBe(heading);
+    expect(heading.getAttribute("tabindex")).toBe("-1");
+  });
+
+  it("does not overwrite an <h1>'s own pre-existing tabindex", () => {
+    const heading = document.createElement("h1");
+    heading.setAttribute("tabindex", "0");
+    document.body.append(heading);
+
+    focusFallbackTarget();
+
+    expect(document.activeElement).toBe(heading);
+    expect(heading.getAttribute("tabindex")).toBe("0");
+  });
+
+  it("MUTATION CHECK: does not touch the <h1> at all when a live trigger element already took focus", () => {
+    const trigger = document.createElement("button");
+    trigger.setAttribute("data-cookie-settings-trigger", "");
+    document.body.append(trigger);
+    const heading = document.createElement("h1");
+    document.body.append(heading);
+
+    focusFallbackTarget();
+
+    expect(document.activeElement).toBe(trigger);
+    expect(heading.hasAttribute("tabindex")).toBe(false);
+  });
+
+  it("does nothing (and does not throw) when neither a trigger element nor an <h1> exist", () => {
+    expect(() => focusFallbackTarget()).not.toThrow();
   });
 });

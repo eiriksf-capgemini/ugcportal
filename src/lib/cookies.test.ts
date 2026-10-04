@@ -203,6 +203,74 @@ describe("SetCookieOptions forbids sameSite: None without secure: true (round 2,
   });
 });
 
+/**
+ * Review round 5, LOW finding 4: `value` is encoded on write
+ * (`encodeURIComponent`) but `name` was not validated at all — spliced
+ * directly into the assignment string, so a name containing `=` or `;`
+ * could desync the pair or smuggle extra attributes into the write.
+ */
+describe("cookie name validation (round 5, finding 4)", () => {
+  it("round-trips an ordinary name unaffected by the new validation", () => {
+    setCookie("some_cookie", "granted");
+    expect(getCookie("some_cookie")).toBe("granted");
+  });
+
+  it("setCookie does not throw and does not write anything for a name containing '='", () => {
+    const capture = captureCookieWrites();
+    try {
+      expect(() => setCookie("bad=name", "x")).not.toThrow();
+    } finally {
+      capture.restore();
+    }
+    expect(capture.writes).toHaveLength(0);
+    expect(getCookie("bad")).toBeNull();
+  });
+
+  it("refuses a name containing ';' — the attribute-smuggling shape — without writing it", () => {
+    const capture = captureCookieWrites();
+    try {
+      expect(() => setCookie("x; Secure; SameSite=None", "y")).not.toThrow();
+    } finally {
+      capture.restore();
+    }
+    expect(capture.writes).toHaveLength(0);
+  });
+
+  it("refuses a name containing whitespace", () => {
+    const capture = captureCookieWrites();
+    try {
+      expect(() => setCookie("bad name", "x")).not.toThrow();
+    } finally {
+      capture.restore();
+    }
+    expect(capture.writes).toHaveLength(0);
+  });
+
+  it("deleteCookie also refuses an invalid name rather than writing it", () => {
+    const capture = captureCookieWrites();
+    try {
+      expect(() => deleteCookie("bad=name")).not.toThrow();
+    } finally {
+      capture.restore();
+    }
+    expect(capture.writes).toHaveLength(0);
+  });
+
+  it("MUTATION CHECK fixture: the pre-fix builder DOES splice an invalid name straight into the write", () => {
+    // Fixture mutation, not a production-code change: reproduces the
+    // round-5 (pre-fix) buildCookieAssignment inline — no name validation
+    // at all — and confirms it happily smuggles extra attributes in,
+    // proving this test is anchored to a real, previously-shipped gap.
+    function preFixBuildCookieAssignment(name: string, value: string): string {
+      return [`${name}=${encodeURIComponent(value)}`, "Path=/", "SameSite=Lax"].join("; ");
+    }
+    const built = preFixBuildCookieAssignment("x; Secure; SameSite=None", "y");
+    // "Secure" ends up as its own split segment, smuggled in via the name —
+    // exactly the attribute-injection shape this validation exists to stop.
+    expect(built.split("; ")).toContain("Secure");
+  });
+});
+
 describe("deleteCookie", () => {
   it("removes a cookie that was set", () => {
     setCookie("some_cookie", "granted");
