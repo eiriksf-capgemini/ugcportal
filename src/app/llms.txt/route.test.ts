@@ -51,9 +51,7 @@ describe("GET /llms.txt", () => {
 
     // Define the allowlist of public paths
     const allowlist = new Set([
-      "/", // home page
-      "/api/public/media", // public gallery feed
-      "/docs", // documentation (if it exists)
+      "/", // home page with public gallery
     ]);
 
     // Every extracted path must be in the allowlist
@@ -64,49 +62,15 @@ describe("GET /llms.txt", () => {
     }
   });
 
-  it("enforces guardrail: no line contains '/admin' or '/api/' or '/upload'", async () => {
+  it("enforces guardrail: no line contains '/admin', '/api/', or '/upload'", async () => {
     const response = GET();
     const content = await response.clone().text();
     const lines = content.split("\n");
 
     for (const line of lines) {
       expect(line, "Line should not contain '/admin'").not.toContain("/admin");
+      expect(line, "Line should not contain '/api/'").not.toContain("/api/");
       expect(line, "Line should not contain '/upload'").not.toContain("/upload");
-      // Note: /api/public/media is allowed, but /api/ generally is not
-      // We check for /api/ to catch admin APIs
-      const containsRestrictedApi = /\/api\/(?!public)/.test(line);
-      expect(containsRestrictedApi, "Line should not contain restricted '/api/' routes").toBe(
-        false,
-      );
     }
-  });
-
-  it("guardrail test fails when admin content is added (mutation check)", async () => {
-    // This test mutates the expected content by simulating what would break the guardrail
-    const mutatedContent = `# UGC Portal
-
-> Food, wine and drink, technology and books, photographed.
-
-## Admin Settings
-
-- [Settings](/admin/settings)
-
-## Public Gallery
-
-- [Home](/): Browse the public gallery
-`;
-
-    const lines = mutatedContent.split("\n");
-    let guardrailViolation = false;
-
-    for (const line of lines) {
-      if (line.includes("/admin")) {
-        guardrailViolation = true;
-        break;
-      }
-    }
-
-    // This should be true, proving the guardrail would catch this
-    expect(guardrailViolation).toBe(true);
   });
 });
