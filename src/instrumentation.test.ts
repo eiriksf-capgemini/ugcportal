@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  checkContactEmailConfiguration,
   checkEvidenceEncryption,
   checkSignInConfiguration,
 } from "@/instrumentation";
+import { CONTACT_EMAIL_PLACEHOLDER } from "@/lib/contact";
 import { PERMITTED_EMAILS_VAR } from "@/lib/sign-in-policy";
 
 const PROD = { NODE_ENV: "production" } as NodeJS.ProcessEnv;
@@ -125,5 +127,51 @@ describe("the sign-in configuration startup check", () => {
       "NOBODY can sign in",
     );
     expect(checkSignInConfiguration({})).toContain("NOBODY can sign in");
+  });
+});
+
+/**
+ * ugcportal-qnq9.7 round-1 review: moved out of src/lib/contact.ts's own
+ * `resolveContactEmail`, which used to throw at render time. Same shape as
+ * the two checks above — a warning at boot, not a refusal to boot.
+ */
+describe("the contact-email startup check", () => {
+  it("warns when production has nothing configured", () => {
+    const warning = checkContactEmailConfiguration({
+      NODE_ENV: "production",
+    } as NodeJS.ProcessEnv);
+
+    expect(warning).toContain("CONTACT_EMAIL is not set");
+    expect(warning).toContain(CONTACT_EMAIL_PLACEHOLDER);
+    expect(warning).toContain("env.example");
+  });
+
+  it("warns when production's CONTACT_EMAIL is whitespace-only", () => {
+    expect(
+      checkContactEmailConfiguration({
+        NODE_ENV: "production",
+        CONTACT_EMAIL: "   ",
+      } as NodeJS.ProcessEnv),
+    ).toContain("CONTACT_EMAIL is not set");
+  });
+
+  it("is quiet once a real address is configured", () => {
+    expect(
+      checkContactEmailConfiguration({
+        NODE_ENV: "production",
+        CONTACT_EMAIL: "owner@example.com",
+      } as NodeJS.ProcessEnv),
+    ).toBeNull();
+  });
+
+  it("says nothing outside production", () => {
+    // Local dev and CI never set CONTACT_EMAIL; warning there would train
+    // people to ignore it, same reasoning as the evidence-encryption check.
+    expect(
+      checkContactEmailConfiguration({ NODE_ENV: "development" } as NodeJS.ProcessEnv),
+    ).toBeNull();
+    expect(
+      checkContactEmailConfiguration({ NODE_ENV: "test" } as NodeJS.ProcessEnv),
+    ).toBeNull();
   });
 });

@@ -24,13 +24,20 @@ describe("/about", () => {
     const markup = renderToStaticMarkup(<AboutPage />);
     expect(markup).toContain('data-contact-notice=""');
     expect(markup).toMatch(/collect|store|receive/i);
-    expect(markup).toContain('href="/personvern"');
+    expect(markup).toContain('href="/privacy"');
   });
 
-  it("renders a contact form targeting the configured (placeholder, in test) address", () => {
+  it("renders a contact form targeting the configured (placeholder, in test) address, with its own default subject", () => {
     const markup = renderToStaticMarkup(<AboutPage />);
     expect(markup).toContain('data-contact-form=""');
-    expect(markup).toContain(`action="mailto:${CONTACT_EMAIL_PLACEHOLDER}"`);
     expect(markup).toContain(CONTACT_EMAIL_PLACEHOLDER);
+    // Round-1 review: the subject must name THIS page, not "portfolio page".
+    expect(markup).toContain("Hello from your about page");
+    expect(markup).not.toContain("Hello from your portfolio page");
+  });
+
+  it("encodes the default subject's spaces as %20, never as + (round-1 review)", () => {
+    const markup = renderToStaticMarkup(<AboutPage />);
+    expect(markup).toContain("Hello%20from%20your%20about%20page");
   });
 });

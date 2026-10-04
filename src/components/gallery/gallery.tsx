@@ -520,8 +520,18 @@ export function Gallery({
  * characters rather than executing (K2's XSS criterion) — the same guarantee
  * `GalleryItemTags` already has, for the same reason: nothing on this path
  * uses `dangerouslySetInnerHTML`.
+ *
+ * EXPORTED (ugcportal-qnq9.7 round-1 review) so the portfolio page's
+ * `PortfolioTile` (src/components/portfolio/portfolio-tile.tsx) can reuse
+ * this exact function rather than a second copy of it — a sibling surface
+ * drawing the same `GalleryItem.caption` field is exactly the case the "one
+ * tag denylist, checked at every end" reasoning below generalises to:
+ * fewer copies that can drift, not more. Safe to import from a Server
+ * Component despite this module's own `"use client"`: nothing here reads
+ * state, a ref, or a browser API, so it costs a little client-bundle weight
+ * and nothing else.
  */
-function GalleryItemCaption({ item }: { item: GalleryItem }) {
+export function GalleryItemCaption({ item }: { item: GalleryItem }) {
   if (item.caption === "") return null;
   return (
     <p className={GALLERY_CAPTION_CLASS} data-gallery-caption={item.id}>
@@ -551,8 +561,17 @@ function GalleryItemCaption({ item }: { item: GalleryItem }) {
  * refused at the write path (src/lib/tags.ts) and dropped again at the read
  * path (`toGalleryTags`), so there is nothing left here that needs handling.
  * Nothing on this path uses `dangerouslySetInnerHTML`, and nothing should.
+ *
+ * EXPORTED (ugcportal-qnq9.7 round-1 review) for `PortfolioTile`
+ * (src/components/portfolio/portfolio-tile.tsx) to reuse — see
+ * `GalleryItemCaption`'s own comment above for why a sibling surface reusing
+ * this function is preferred over a second copy. It renders `item.tags`
+ * exactly as given, with NO filtering of its own: the portfolio page's own
+ * curation tag is stripped before a piece ever reaches this component (see
+ * `listPortfolioPieces` in src/lib/portfolio.ts), kept as the single place
+ * that happens rather than duplicated here as a second, redundant filter.
  */
-function GalleryItemTags({ item }: { item: GalleryItem }) {
+export function GalleryItemTags({ item }: { item: GalleryItem }) {
   if (item.tags.length === 0) return null;
   return (
     <ul className={GALLERY_TAG_LIST_CLASS}>

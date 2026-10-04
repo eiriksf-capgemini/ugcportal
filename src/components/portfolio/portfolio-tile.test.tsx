@@ -2,17 +2,21 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
 import { PortfolioTile } from "@/components/portfolio/portfolio-tile";
-import { SPEC_SAMPLE_LABEL, type PortfolioPiece } from "@/lib/portfolio";
+import type { GalleryItem } from "@/lib/gallery-items";
+import { SPEC_SAMPLE_LABEL } from "@/lib/portfolio";
 
 /**
- * K2/K3 (ugcportal-qnq9.7): the spec/concept marker and the advertising
- * label are mutually exclusive, and the right one renders for each case.
+ * K2 (ugcportal-qnq9.7): the spec/concept marker renders on a portfolio
+ * piece. K3 (an advertising-disclosure label instead) is deferred to
+ * ugcportal-qnq9.1 (round-1 review) — see SPEC_SAMPLE_LABEL's own comment in
+ * src/lib/portfolio.ts for why there is nothing to test here yet.
  *
  * `@/lib/auth` is mocked for the same reason src/lib/portfolio.test.ts mocks
- * it: `@/lib/portfolio`'s `PortfolioPiece` type (imported here for the test
- * fixture) comes from a module that imports `@/lib/media-access`, which
- * imports `@/lib/auth` at module scope — real next-auth config this node
- * test run has no business loading.
+ * it: `@/components/gallery/gallery` (imported via PortfolioTile, for
+ * GalleryItemCaption/GalleryItemTags) does not itself import `@/lib/auth`,
+ * but the fixture type below comes from `@/lib/gallery-items`, which keeps
+ * this test file's import graph close enough to the real page's that the
+ * same guard is worth keeping as a belt-and-braces check.
  */
 vi.mock("@/lib/auth", () => ({
   auth: () => {
@@ -20,7 +24,7 @@ vi.mock("@/lib/auth", () => ({
   },
 }));
 
-function piece(overrides: Partial<PortfolioPiece> = {}): PortfolioPiece {
+function piece(overrides: Partial<GalleryItem> = {}): GalleryItem {
   return {
     id: "piece-1",
     previewSrc: "/api/media/preview/pv-1",
@@ -28,69 +32,19 @@ function piece(overrides: Partial<PortfolioPiece> = {}): PortfolioPiece {
     altText: "A flat-lay of a book, a coffee cup and a reading lamp",
     caption: "Flat-lay photo set, 6 images",
     tags: [{ slug: "books", name: "Books" }],
-    isSpec: true,
-    advertisingLabel: null,
     ...overrides,
   };
 }
 
 describe("PortfolioTile", () => {
-  it("K2: shows the spec marker for a self-made sample with no brand involved", () => {
+  it("K2: shows the spec marker", () => {
     const markup = renderToStaticMarkup(
       <ul>
-        <PortfolioTile piece={piece({ isSpec: true, advertisingLabel: null })} position={0} />
+        <PortfolioTile piece={piece()} position={0} />
       </ul>,
     );
     expect(markup).toContain('data-portfolio-marker="spec"');
     expect(markup).toContain(SPEC_SAMPLE_LABEL);
-    expect(markup).not.toContain('data-portfolio-marker="advertisement"');
-  });
-
-  it("K3: shows the advertising label instead of the spec marker for a commissioned job", () => {
-    const markup = renderToStaticMarkup(
-      <ul>
-        <PortfolioTile
-          piece={piece({
-            isSpec: false,
-            advertisingLabel: "Advertisement / Reklame",
-          })}
-          position={0}
-        />
-      </ul>,
-    );
-    expect(markup).toContain('data-portfolio-marker="advertisement"');
-    expect(markup).toContain("Advertisement / Reklame");
-    expect(markup).not.toContain('data-portfolio-marker="spec"');
-    expect(markup).not.toContain(SPEC_SAMPLE_LABEL);
-  });
-
-  it("K3: the advertising label wins even if isSpec is also true (fail-safe direction)", () => {
-    const markup = renderToStaticMarkup(
-      <ul>
-        <PortfolioTile
-          piece={piece({
-            isSpec: true,
-            advertisingLabel: "Advertisement / Annonse",
-          })}
-          position={0}
-        />
-      </ul>,
-    );
-    expect(markup).toContain('data-portfolio-marker="advertisement"');
-    expect(markup).not.toContain('data-portfolio-marker="spec"');
-  });
-
-  it("renders neither marker for a piece that is somehow neither (not a state real data can reach)", () => {
-    const markup = renderToStaticMarkup(
-      <ul>
-        <PortfolioTile
-          piece={piece({ isSpec: false, advertisingLabel: null })}
-          position={0}
-        />
-      </ul>,
-    );
-    expect(markup).not.toContain('data-portfolio-marker="advertisement"');
-    expect(markup).not.toContain('data-portfolio-marker="spec"');
   });
 
   it("renders the one-line caption", () => {
@@ -99,7 +53,7 @@ describe("PortfolioTile", () => {
         <PortfolioTile piece={piece({ caption: "Wine glasses, 8 images" })} position={0} />
       </ul>,
     );
-    expect(markup).toContain('data-portfolio-caption="piece-1"');
+    expect(markup).toContain('data-gallery-caption="piece-1"');
     expect(markup).toContain("Wine glasses, 8 images");
   });
 
@@ -109,7 +63,7 @@ describe("PortfolioTile", () => {
         <PortfolioTile piece={piece({ caption: "" })} position={0} />
       </ul>,
     );
-    expect(markup).not.toContain("data-portfolio-caption");
+    expect(markup).not.toContain("data-gallery-caption");
   });
 
   it("renders the visible subject tags", () => {
@@ -125,15 +79,12 @@ describe("PortfolioTile", () => {
     expect(markup).toContain("Wine &amp; drink");
   });
 
-  it("never renders the portfolio curation tag as a visible subject (defence in depth, besides the lib-level strip)", () => {
+  it("does not add the gallery's hover-scale utility to its own image (no viewer opens on activation)", () => {
     const markup = renderToStaticMarkup(
       <ul>
-        <PortfolioTile
-          piece={piece({ tags: [{ slug: "portfolio", name: "Portfolio" }] })}
-          position={0}
-        />
+        <PortfolioTile piece={piece()} position={0} />
       </ul>,
     );
-    expect(markup).not.toContain('data-gallery-tag="portfolio"');
+    expect(markup).not.toContain("group-hover:scale");
   });
 });

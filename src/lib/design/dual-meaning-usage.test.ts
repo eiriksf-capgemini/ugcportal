@@ -198,7 +198,10 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
     "text-foreground": 2,
     "text-muted-foreground": 1,
   },
-  "src/components/portfolio/portfolio-tile.tsx": { "text-foreground": 2 },
+  // Round-1 review simplified this component (K2's spec marker renders
+  // unconditionally, the K3 advertising-label branch is gone until
+  // ugcportal-qnq9.1 lands) — one text-foreground usage now, not two.
+  "src/components/portfolio/portfolio-tile.tsx": { "text-foreground": 1 },
   "src/components/site/contact-section.tsx": {
     "text-foreground": 1,
     "text-muted-foreground": 3,

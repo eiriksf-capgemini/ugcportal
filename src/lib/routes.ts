@@ -84,6 +84,18 @@ export const MEDIA_PREVIEW_PATH = "/api/media/preview";
 export const AUTH_ERROR_PATH = "/auth/error";
 
 /**
+ * The privacy statement (ugcportal-qnq9.4). English, not /personvern: the
+ * site's language is English (docs/ugc-research.md, decisions table).
+ *
+ * Defined here rather than in ugcportal-qnq9.7's own site-copy module, with
+ * the SAME name and value ugcportal-qnq9.4 (PR #90, concurrent) adds at this
+ * exact spot — so the About/Portfolio contact notice and that bead's own
+ * /privacy page cannot name two different paths, and whichever of the two
+ * PRs merges first, the other's addition is a trivial, identical line.
+ */
+export const PRIVACY_PATH = "/privacy";
+
+/**
  * Where to send a visitor who has to sign in first.
  *
  * Auth.js mounts its own provider-picker at `/api/auth/signin`

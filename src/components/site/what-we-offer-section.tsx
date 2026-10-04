@@ -1,4 +1,4 @@
-import { WHAT_WE_OFFER } from "@/lib/site-copy";
+import { WHAT_WE_OFFER } from "@/lib/site";
 
 /**
  * §5.3: "What you offer: short videos, photo sets, reviews." Shared by

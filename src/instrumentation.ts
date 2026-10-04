@@ -5,6 +5,7 @@
  * a quiet difference in how data is stored — the kind nobody discovers until
  * an audit — or, for the sign-in gate below, as an unexplained refusal.
  */
+import { CONTACT_EMAIL_PLACEHOLDER } from "@/lib/contact";
 import {
   PERMITTED_EMAILS_VAR,
   PROVIDER_PREFIX_HINT,
@@ -105,8 +106,37 @@ export function checkSignInConfiguration(
   return null;
 }
 
+/**
+ * The contact address the About and Portfolio pages' mailto form sends to
+ * (ugcportal-qnq9.7). `resolveContactEmail` (src/lib/contact.ts) falls back
+ * to a clearly-fake placeholder whenever `CONTACT_EMAIL` is unset — fine in
+ * every environment except production, where a visitor would otherwise mail
+ * an address nobody reads. Same shape as the two checks above: a warning
+ * rather than a refusal to boot, because the rest of the site is useful
+ * without a working contact form.
+ */
+export function checkContactEmailConfiguration(
+  env: NodeJS.ProcessEnv = process.env,
+): string | null {
+  if (env.NODE_ENV !== "production") {
+    return null;
+  }
+  if (env.CONTACT_EMAIL?.trim()) {
+    return null;
+  }
+  return (
+    "[contact] CONTACT_EMAIL is not set. The About and Portfolio pages' " +
+    `contact form will show the placeholder address (${CONTACT_EMAIL_PLACEHOLDER}) ` +
+    "to every visitor until it is. See env.example."
+  );
+}
+
 export async function register(): Promise<void> {
-  for (const warning of [checkEvidenceEncryption(), checkSignInConfiguration()]) {
+  for (const warning of [
+    checkEvidenceEncryption(),
+    checkSignInConfiguration(),
+    checkContactEmailConfiguration(),
+  ]) {
     if (warning) {
       console.error(warning);
     }

@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { seedMedia } from "@/lib/test-support/media-fixtures";
 import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db";
 
 /**
@@ -25,41 +26,6 @@ const { PORTFOLIO_TAG_SLUG, SPEC_SAMPLE_LABEL } = await import(
 const { CONTACT_EMAIL_PLACEHOLDER } = await import("@/lib/contact");
 
 const UPLOADER = "uploader-portfolio-page";
-
-type SeedOptions = {
-  id: string;
-  createdAt: Date;
-  kind?: "IMAGE" | "VIDEO";
-  tags?: string[];
-  caption?: string;
-};
-
-async function seedMedia({
-  id,
-  createdAt,
-  kind = "IMAGE",
-  tags = [],
-  caption,
-}: SeedOptions) {
-  await prisma.media.create({
-    data: {
-      id,
-      userId: UPLOADER,
-      kind,
-      key: `media/${UPLOADER}/${id}-original.jpg`,
-      previewKey: `previews/${UPLOADER}/${id}.webp`,
-      previewId: `pv-${id}`,
-      mimeType: kind === "VIDEO" ? "video/mp4" : "image/jpeg",
-      sizeBytes: 4096,
-      originalName: `${id}.jpg`,
-      altText: `Alt text for ${id}`,
-      caption,
-      createdAt,
-      publishedAt: new Date("2026-03-04T10:00:00.000Z"),
-      tags: { connect: tags.map((slug) => ({ slug })) },
-    },
-  });
-}
 
 async function renderPortfolio(): Promise<string> {
   return renderToStaticMarkup(await PortfolioPage());
@@ -93,8 +59,9 @@ describe("K1: /portfolio shows all five §5.3 elements", () => {
   });
 
   it("renders a published, portfolio-tagged photo as a sample", async () => {
-    await seedMedia({
+    await seedMedia(prisma, {
       id: "piece-1",
+      userId: UPLOADER,
       createdAt: new Date("2026-02-01T00:00:00.000Z"),
       tags: [PORTFOLIO_TAG_SLUG],
       caption: "Flat-lay photo set, 6 images",
@@ -106,16 +73,18 @@ describe("K1: /portfolio shows all five §5.3 elements", () => {
     expect(markup).not.toContain("data-portfolio-samples-empty");
   });
 
-  it("the contact form targets the configured (placeholder, in test) address", async () => {
+  it("the contact form targets the configured (placeholder, in test) address, with the portfolio's own default subject", async () => {
     const markup = await renderPortfolio();
-    expect(markup).toContain(`action="mailto:${CONTACT_EMAIL_PLACEHOLDER}"`);
+    expect(markup).toContain(CONTACT_EMAIL_PLACEHOLDER);
+    expect(markup).toContain("Hello from your portfolio page");
   });
 });
 
 describe("K2: the spec marker", () => {
   it("appears on a rendered sample (every piece this release is self-made spec work)", async () => {
-    await seedMedia({
+    await seedMedia(prisma, {
       id: "piece-spec",
+      userId: UPLOADER,
       createdAt: new Date("2026-02-02T00:00:00.000Z"),
       tags: [PORTFOLIO_TAG_SLUG],
     });
@@ -128,8 +97,9 @@ describe("K2: the spec marker", () => {
 
 describe("release scope: photo pieces only (Eirik's 2026-10-04 note)", () => {
   it("does not render an untagged published photo as a sample", async () => {
-    await seedMedia({
+    await seedMedia(prisma, {
       id: "piece-untagged",
+      userId: UPLOADER,
       createdAt: new Date("2026-02-03T00:00:00.000Z"),
       tags: [],
     });
@@ -139,8 +109,9 @@ describe("release scope: photo pieces only (Eirik's 2026-10-04 note)", () => {
   });
 
   it("does not render a portfolio-tagged VIDEO as a sample", async () => {
-    await seedMedia({
+    await seedMedia(prisma, {
       id: "piece-video",
+      userId: UPLOADER,
       createdAt: new Date("2026-02-04T00:00:00.000Z"),
       kind: "VIDEO",
       tags: [PORTFOLIO_TAG_SLUG],

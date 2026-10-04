@@ -1,6 +1,7 @@
-import { Button } from "@/components/ui/button";
+import { ContactMailtoForm } from "@/components/site/contact-mailto-form";
 import { contactMailtoHref, resolveContactEmail } from "@/lib/contact";
-import { CONTACT_INTRO, CONTACT_NOTICE, PRIVACY_PATH } from "@/lib/site-copy";
+import { PRIVACY_PATH } from "@/lib/routes";
+import { CONTACT_INTRO, CONTACT_NOTICE } from "@/lib/site";
 
 /**
  * The contact affordance for /about and /portfolio (ugcportal-qnq9.7, K5).
@@ -13,41 +14,34 @@ import { CONTACT_INTRO, CONTACT_NOTICE, PRIVACY_PATH } from "@/lib/site-copy";
  * add to ugcportal-qnq9.4's privacy page (which lists "contact-form
  * submissions" as a category THIS bead would introduce), rate limiting and
  * spam handling — a materially bigger surface than "two static routes, a
- * curated list and a form" this bead's own model_why estimates. A GET-method
- * form targeting `mailto:` keeps the literal shape the bead asks for (a real
- * `<form>`, a real submission) while keeping NO data at all server-side,
- * which trivially satisfies "keeps no more than is needed" — the strongest
- * form of that requirement is needing nothing.
+ * curated list and a form" this bead's own model_why estimates. The actual
+ * field-encoding and submission mechanics live in `ContactMailtoForm`
+ * (src/components/site/contact-mailto-form.tsx, a Client Component) — see
+ * that module's own comment for the round-1 review fix (the `+`-vs-`%20`
+ * encoding bug) and why it has to run client-side.
  *
- * KNOWN LIMITATION, worth naming rather than discovering later: a
- * GET-method form whose `action` is a `mailto:` URI is a long-standing
- * browser trick, not a web standard with guaranteed behaviour — some
- * browsers prompt for a handler, some silently do nothing if no mail client
- * is configured (common on a phone with only a webmail tab), and only the
- * `subject`/`body` field NAMES are honoured by RFC 6068; anything else
- * appended to the query string is ignored by the mail client. The plain
- * `mailto:` link beneath the form is there for exactly that failure mode —
- * copy the address and write an email the ordinary way.
+ * `defaultSubject` IS A PROP, not a shared constant (round-1 review): each
+ * page names itself in its own default subject line rather than every
+ * contact form on the site saying "portfolio page", even on /about.
  *
  * K5: the notice above the form states what happens and why BEFORE
  * submission (nothing is collected server-side at all; the visitor's own
  * mail client is the entire path), and links to the privacy statement
- * (ugcportal-qnq9.4's /personvern, not yet merged — see site-copy.ts for
- * that gap).
+ * (`PRIVACY_PATH`, src/lib/routes.ts — ugcportal-qnq9.4's /privacy, not yet
+ * merged — see that bead's PR for the gap).
  *
  * Calls `resolveContactEmail()` ITSELF, inside this component's render,
- * rather than receiving the email as a prop computed by its caller at module
- * scope — see src/lib/contact.ts for why that matters: the guard that stops
- * an unconfigured placeholder reaching production only works if it runs at
- * request time, and both callers of this component (src/app/about/page.tsx,
- * src/app/portfolio/page.tsx) mark their route `force-dynamic` for the same
- * reason.
+ * rather than receiving the email as a prop computed by its caller — so
+ * both callers (src/app/about/page.tsx, src/app/portfolio/page.tsx) read
+ * the same live configuration without either having to remember to pass it
+ * through. `resolveContactEmail` no longer throws (round-1 review moved
+ * that guard to a boot-time check, src/instrumentation.ts), so this no
+ * longer forces its callers to be `force-dynamic` on its account — /about
+ * is static again for exactly that reason.
  */
-const DEFAULT_SUBJECT = "Hello from your portfolio page";
-
-export function ContactSection() {
+export function ContactSection({ defaultSubject }: { defaultSubject: string }) {
   const email = resolveContactEmail();
-  const directHref = contactMailtoHref(email, DEFAULT_SUBJECT);
+  const directHref = contactMailtoHref(email, { subject: defaultSubject });
 
   return (
     <section className="mt-10" data-page-section="contact">
@@ -69,44 +63,7 @@ export function ContactSection() {
         .
       </p>
 
-      <form
-        action={`mailto:${email}`}
-        method="get"
-        className="mt-4 max-w-prose"
-        data-contact-form=""
-      >
-        <label
-          htmlFor="contact-subject"
-          className="block text-sm font-medium text-ink"
-        >
-          Subject
-        </label>
-        <input
-          id="contact-subject"
-          name="subject"
-          type="text"
-          defaultValue={DEFAULT_SUBJECT}
-          className="mt-2 block w-full rounded-md border border-line-strong bg-surface-1 px-3 py-2 text-sm text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-        />
-
-        <label
-          htmlFor="contact-message"
-          className="mt-4 block text-sm font-medium text-ink"
-        >
-          Message
-        </label>
-        <textarea
-          id="contact-message"
-          name="body"
-          rows={5}
-          required
-          className="mt-2 block w-full rounded-md border border-line-strong bg-surface-1 px-3 py-2 text-sm text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-        />
-
-        <Button type="submit" className="mt-4">
-          Open your email client
-        </Button>
-      </form>
+      <ContactMailtoForm email={email} defaultSubject={defaultSubject} />
 
       <p className="mt-4 text-sm text-muted-foreground">
         Prefer to email us directly?{" "}

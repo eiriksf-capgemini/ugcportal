@@ -19,7 +19,9 @@ import { WhatWeOfferSection } from "@/components/site/what-we-offer-section";
  *
  * Shares IntroSection/WhatWeOfferSection/ContactSection with /portfolio
  * rather than duplicating their copy, so the two pages cannot drift apart
- * about who runs the site or how to reach it.
+ * about who runs the site or how to reach it. `defaultSubject` is passed
+ * explicitly (round-1 review) so this page's contact form does not say
+ * "portfolio page" by way of a shared default.
  */
 
 export const metadata = {
@@ -27,22 +29,30 @@ export const metadata = {
 };
 
 /**
- * Never prerendered. Two reasons, both load-bearing:
+ * NO `export const dynamic` ANY MORE (round-1 review). This page used to
+ * carry `force-dynamic` because `ContactSection` called
+ * `resolveContactEmail()` (src/lib/contact.ts), which used to throw at
+ * render time if production had nothing configured — and prerendering
+ * would have run that check during `next build` instead of at a real
+ * request. That guard now lives in src/instrumentation.ts as a boot-time
+ * warning (`checkContactEmailConfiguration`), so nothing on this page's own
+ * render path can throw any more, and there is no live data on this page to
+ * go stale — nothing left here that NEEDS `force-dynamic`.
  *
- *   - ContactSection calls `resolveContactEmail()` (src/lib/contact.ts),
- *     which deliberately throws if this is a real production request with
- *     no CONTACT_EMAIL configured. That guard only works if it runs at
- *     REQUEST time; prerendering this page would run it during `next build`
- *     instead, in production mode, in every environment that builds this
- *     repo — including this repo's own CI and pre-push hook, neither of
- *     which sets CONTACT_EMAIL. See src/lib/contact.ts's own comment for the
- *     full reasoning, and src/app/page.tsx for the sibling case this mirrors
- *     (a build-time Prisma query there, a build-time env check here).
- *   - Buildability, for the same reason: a prerendered page is built with
- *     whatever module-scope code runs during that build, and this page's
- *     tree includes a function that is SUPPOSED to be able to throw.
+ * WHAT THIS DOES NOT CLAIM: that `next build`'s own output marks `/about`
+ * static (`○`). It does not — confirmed by running `npm run build`, which
+ * still reports `ƒ (Dynamic)` for every route in this app, this one
+ * included. That is inherited from the ROOT layout
+ * (src/components/app-shell.tsx renders `<AuthStatus />`, an async Server
+ * Component that reads the session via cookies on every request), which
+ * forces every page under it to render dynamically regardless of any
+ * individual page's own `dynamic` export — a site-wide fact, not one this
+ * bead introduced or can fix from inside a single page file, and
+ * app-shell.tsx is explicitly out of scope for this bead to touch. Removing
+ * the now-redundant export here is still correct: it stops this file
+ * claiming a reason for dynamism that no longer exists, even though a
+ * different, pre-existing reason still applies at the site level.
  */
-export const dynamic = "force-dynamic";
 
 export default function AboutPage() {
   return (
@@ -52,7 +62,7 @@ export default function AboutPage() {
       </h1>
       <IntroSection />
       <WhatWeOfferSection />
-      <ContactSection />
+      <ContactSection defaultSubject="Hello from your about page" />
     </div>
   );
 }

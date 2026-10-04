@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { seedMedia } from "@/lib/test-support/media-fixtures";
 import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db";
 
 /**
@@ -29,50 +30,12 @@ const database = createTemporaryDatabase();
 const { prisma } = await import("@/lib/prisma");
 const { listPickerTags } = await import("@/lib/tags");
 const {
+  MAX_PORTFOLIO_PIECES,
   PORTFOLIO_TAG_SLUG,
   listPortfolioPieces,
 } = await import("@/lib/portfolio");
 
 const UPLOADER = "uploader-qnq9-7";
-
-type SeedOptions = {
-  id: string;
-  createdAt: Date;
-  kind?: "IMAGE" | "VIDEO";
-  tags?: string[];
-  published?: boolean;
-  withPreview?: boolean;
-  caption?: string;
-};
-
-async function seedMedia({
-  id,
-  createdAt,
-  kind = "IMAGE",
-  tags = [],
-  published = true,
-  withPreview = true,
-  caption,
-}: SeedOptions) {
-  await prisma.media.create({
-    data: {
-      id,
-      userId: UPLOADER,
-      kind,
-      key: `media/${UPLOADER}/${id}-original.jpg`,
-      previewKey: withPreview ? `previews/${UPLOADER}/${id}.webp` : null,
-      previewId: withPreview ? `pv-${id}` : null,
-      mimeType: kind === "VIDEO" ? "video/mp4" : "image/jpeg",
-      sizeBytes: 4096,
-      originalName: `${id}.jpg`,
-      altText: `Alt text for ${id}`,
-      caption,
-      createdAt,
-      publishedAt: published ? new Date("2026-03-04T10:00:00.000Z") : null,
-      tags: { connect: tags.map((slug) => ({ slug })) },
-    },
-  });
-}
 
 beforeAll(async () => {
   await applyMigrations(prisma);
@@ -84,13 +47,6 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  // Media rows only — the migration's own "portfolio" Tag row, and any tag
-  // created by an earlier test, are left alone, matching
-  // src/app/page.tags.test.tsx's own beforeEach. Deleting Media first is load
-  // bearing: the implicit _MediaToTag join table has no ON DELETE on the
-  // Media side that would otherwise matter here, but a stale Media row with a
-  // FK to a User this suite is about to delete is exactly the ordering bug
-  // this sequence avoids.
   await prisma.media.deleteMany({});
   await prisma.user.deleteMany({});
   await prisma.user.create({
@@ -116,8 +72,9 @@ describe("the seeded portfolio tag (20261004150000_seed_portfolio_tag)", () => {
 
 describe("listPortfolioPieces", () => {
   it("returns a published, portfolio-tagged IMAGE", async () => {
-    await seedMedia({
+    await seedMedia(prisma, {
       id: "piece-ok",
+      userId: UPLOADER,
       createdAt: new Date("2026-02-01T00:00:00.000Z"),
       tags: [PORTFOLIO_TAG_SLUG],
       caption: "Flat-lay, 5 images",
@@ -130,8 +87,9 @@ describe("listPortfolioPieces", () => {
   });
 
   it("excludes media with no portfolio tag", async () => {
-    await seedMedia({
+    await seedMedia(prisma, {
       id: "piece-untagged",
+      userId: UPLOADER,
       createdAt: new Date("2026-02-02T00:00:00.000Z"),
       tags: [],
     });
@@ -141,8 +99,9 @@ describe("listPortfolioPieces", () => {
   });
 
   it("excludes an unpublished portfolio-tagged item", async () => {
-    await seedMedia({
+    await seedMedia(prisma, {
       id: "piece-unpublished",
+      userId: UPLOADER,
       createdAt: new Date("2026-02-03T00:00:00.000Z"),
       tags: [PORTFOLIO_TAG_SLUG],
       published: false,
@@ -158,8 +117,9 @@ describe("listPortfolioPieces", () => {
   // than reach it and render wrong — the exact defect ugcportal-dzz already
   // named for the gallery itself.
   it("excludes a portfolio-tagged VIDEO (release scope: photo pieces only)", async () => {
-    await seedMedia({
+    await seedMedia(prisma, {
       id: "piece-video",
+      userId: UPLOADER,
       createdAt: new Date("2026-02-04T00:00:00.000Z"),
       kind: "VIDEO",
       tags: [PORTFOLIO_TAG_SLUG],
@@ -170,8 +130,9 @@ describe("listPortfolioPieces", () => {
   });
 
   it("excludes a portfolio-tagged item with no preview (not yet watermarked)", async () => {
-    await seedMedia({
+    await seedMedia(prisma, {
       id: "piece-no-preview",
+      userId: UPLOADER,
       createdAt: new Date("2026-02-05T00:00:00.000Z"),
       tags: [PORTFOLIO_TAG_SLUG],
       withPreview: false,
@@ -182,13 +143,15 @@ describe("listPortfolioPieces", () => {
   });
 
   it("orders pieces oldest first", async () => {
-    await seedMedia({
+    await seedMedia(prisma, {
       id: "piece-order-b",
+      userId: UPLOADER,
       createdAt: new Date("2026-04-02T00:00:00.000Z"),
       tags: [PORTFOLIO_TAG_SLUG],
     });
-    await seedMedia({
+    await seedMedia(prisma, {
       id: "piece-order-a",
+      userId: UPLOADER,
       createdAt: new Date("2026-04-01T00:00:00.000Z"),
       tags: [PORTFOLIO_TAG_SLUG],
     });
@@ -206,8 +169,9 @@ describe("listPortfolioPieces", () => {
       create: { slug: "food", name: "Food" },
       update: {},
     });
-    await seedMedia({
+    await seedMedia(prisma, {
       id: "piece-tags",
+      userId: UPLOADER,
       createdAt: new Date("2026-04-03T00:00:00.000Z"),
       tags: [PORTFOLIO_TAG_SLUG, "food"],
     });
@@ -217,16 +181,20 @@ describe("listPortfolioPieces", () => {
     expect(piece?.tags.map((t) => t.slug)).toEqual(["food"]);
   });
 
-  it("marks every piece as a spec sample with no advertising label (ugcportal-qnq9.1 not built yet)", async () => {
-    await seedMedia({
-      id: "piece-marker",
-      createdAt: new Date("2026-04-04T00:00:00.000Z"),
-      tags: [PORTFOLIO_TAG_SLUG],
-    });
+  // Round-1 review: a bounded `take` on the query, so the curated set (which
+  // nothing ever un-tags or deletes from) cannot grow the page's render cost
+  // without limit.
+  it("never returns more than MAX_PORTFOLIO_PIECES pieces", async () => {
+    for (let index = 0; index < MAX_PORTFOLIO_PIECES + 3; index += 1) {
+      await seedMedia(prisma, {
+        id: `piece-bound-${index}`,
+        userId: UPLOADER,
+        createdAt: new Date(2026, 3, 1 + index),
+        tags: [PORTFOLIO_TAG_SLUG],
+      });
+    }
 
     const pieces = await listPortfolioPieces();
-    const piece = pieces.find((p) => p.id === "piece-marker");
-    expect(piece?.isSpec).toBe(true);
-    expect(piece?.advertisingLabel).toBeNull();
+    expect(pieces.length).toBe(MAX_PORTFOLIO_PIECES);
   });
 });

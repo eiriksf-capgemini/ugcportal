@@ -1,4 +1,4 @@
-import { INTRO_PARAGRAPHS } from "@/lib/site-copy";
+import { INTRO_PARAGRAPHS } from "@/lib/site";
 
 /**
  * §5.3's intro: "2-3 sentences on who you are, what you make and your

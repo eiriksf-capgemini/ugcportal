@@ -26,18 +26,21 @@ export const metadata = {
 };
 
 /**
- * Never prerendered — two independent reasons, the same shape
- * src/app/page.tsx and src/app/about/page.tsx give for their own `dynamic`
- * export:
+ * Never prerendered — `listPortfolioPieces` reads live, published Media
+ * rows. A statically generated portfolio page would keep showing an
+ * unpublished or deleted sample until something rebuilt it, and would also
+ * mean running a Prisma query at `next build` time against a database the
+ * build environment has no reason to have — the same failure
+ * src/app/page.tsx's own comment names.
  *
- *   - Correctness: `listPortfolioPieces` reads live, published Media rows.
- *     A statically generated portfolio page would keep showing an
- *     unpublished or deleted sample until something rebuilt it.
- *   - Buildability: ContactSection's `resolveContactEmail()` guard only
- *     works at request time (see src/lib/contact.ts), and prerendering
- *     would also mean running a Prisma query at `next build` time against a
- *     database the build environment has no reason to have — the exact
- *     failure src/app/page.tsx's own comment names.
+ * Unlike src/app/about/page.tsx (round-1 review: its own `force-dynamic`
+ * export was dropped as redundant, even though the app as a whole still
+ * renders every route dynamically — see that file's own comment), this
+ * page's `dynamic` export is NOT redundant: `ContactSection`'s old
+ * contact-email guard reason is gone (that check moved to a boot-time
+ * warning, src/instrumentation.ts's `checkContactEmailConfiguration`, and
+ * no longer throws at render time), but the live-data reason above is real
+ * and specific to this page regardless of anything the root layout does.
  */
 export const dynamic = "force-dynamic";
 
@@ -76,7 +79,7 @@ export default async function PortfolioPage() {
       </section>
 
       <WhatWeOfferSection />
-      <ContactSection />
+      <ContactSection defaultSubject="Hello from your portfolio page" />
     </div>
   );
 }
