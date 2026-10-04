@@ -15,12 +15,15 @@
  * through this wrapper too.
  *
  * The fix is Node's NODE_EXTRA_CA_CERTS. The trap is WHERE it has to be set.
- * Node reads that variable once, at process start, when it builds its TLS
- * trust store. Putting it in `.env.local` does not work and fails silently:
- * Next loads that file with dotenv from inside the already-running process,
- * long after the trust store exists. The variable then shows up in
- * `process.env` — so it looks set — while TLS never sees it. This wrapper
- * exists to set it in the real environment of the child process instead.
+ * Node reads it once at process start, building the TLS trust store. With
+ * `next start` and `next build`, the running process loads .env.local
+ * afterwards, so the value appears in `process.env` but TLS never sees it.
+ * With `next dev`, Next's CLI loads .env.local first, forks a render worker
+ * with inherited process.env, so the worker sees it. Node warns "Ignoring
+ * extra certs..., load failed" if the file is missing. This wrapper works
+ * for all three by setting it in the real environment of the child process
+ * before Node starts; it does not rely on worker forking. Most common
+ * failure: the PEM file in certs/ was never exported.
  *
  * It is deliberately a no-op for anyone not behind such a proxy: no certs
  * directory means spawn the command unchanged, with no warning. A developer
