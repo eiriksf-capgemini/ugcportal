@@ -491,6 +491,16 @@
   }
   body {
     @apply bg-background text-foreground;
+    /*
+     * Reserved space for the cookie-consent banner while it's open
+     * (ugcportal-3wgp review round 2, finding 4) — CookieBanner owns this
+     * ONE namespaced variable via `style.setProperty`, rather than writing
+     * the generic `padding-bottom`/`style.paddingBottom` property directly,
+     * which any future fixed-position overlay (a toast, a mobile nav
+     * drawer, a second banner) reserving space the same way would silently
+     * clobber. Defaults to 0px: unset, this changes nothing.
+     */
+    padding-bottom: var(--cookie-banner-reserved-height, 0px);
   }
   html {
     @apply font-sans;

@@ -2,6 +2,7 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 
 import { AuthStatus } from "@/components/auth-status";
+import { CookieSettingsLink } from "@/components/consent/cookie-settings-link";
 import { UploadNavLink } from "@/components/upload-nav-link";
 import { SITE_NAME } from "@/lib/site";
 
@@ -31,6 +32,24 @@ import { SITE_NAME } from "@/lib/site";
  * scrolling feed. Text on a blurred photograph has no defined contrast ratio,
  * so it is exactly the thing the contrast gate in src/lib/design cannot check
  * and a reader cannot rely on.
+ *
+ * DOCUMENTED DEPENDENCY (ugcportal-3wgp review round 4, finding 9; updated
+ * round 5, finding 7): the footer renders `CookieSettingsLink`, which only
+ * actually does anything with a `ConsentProvider` above it in the tree.
+ * `src/app/layout.tsx` provides one for every real page; anything else
+ * rendering `AppShell` directly should do the same to get a working
+ * "Cookies" control. This is no longer a HARD dependency, though, the way
+ * round 4 documented it: `CookieSettingsLink` now degrades gracefully
+ * (renders nothing — see its own doc comment) rather than throwing when no
+ * provider is present, so a caller without one (a Storybook story, an
+ * isolated test, a future reuse outside the real app) gets a shell with a
+ * quietly absent footer link, not a hard crash. The dependency itself is
+ * unchanged — only the failure mode when it is missing — so this stays
+ * documented here rather than being removed now that it no longer crashes.
+ * (`app-shell.nav.test.tsx` still mocks `CookieSettingsLink` out entirely
+ * rather than wrapping in a provider, same as its other two stubs, since
+ * that file is about the shell's own static structure, not the consent
+ * gate — not because leaving it unmocked would crash anymore.)
  */
 export function AppShell({ children }: { children: ReactNode }) {
   return (
@@ -73,10 +92,13 @@ export function AppShell({ children }: { children: ReactNode }) {
       </a>
 
       {/*
-        z-20 is the only stacking tier in the app today: this is the one
-        sticky element and there are no overlays yet. Whoever adds the first
-        dialog or popover should replace this with a documented tier scale
-        rather than picking a bigger number.
+        z-20: this header's own sticky tier. No longer the only one in the
+        app (review round 1, ugcportal-3wgp, finding 5) — the cookie-consent
+        banner (src/components/consent/cookie-banner.tsx) is the first
+        overlay, at z-40, deliberately above this header. There is still no
+        documented tier SCALE (no --z-* tokens in globals.css); whoever adds
+        a third stacking context should introduce one rather than everyone
+        picking their own bigger number.
       */}
       <header className="sticky top-0 z-20 border-b border-border bg-background">
         <div className="mx-auto flex h-14 w-full max-w-6xl items-center gap-4 px-4 sm:px-6">
@@ -180,8 +202,10 @@ export function AppShell({ children }: { children: ReactNode }) {
       </main>
 
       <footer className="border-t border-border">
-        <div className="mx-auto w-full max-w-6xl px-4 py-6 text-xs text-muted-foreground sm:px-6">
-          {SITE_NAME}
+        <div className="mx-auto flex w-full max-w-6xl items-center justify-between gap-4 px-4 py-6 text-xs text-muted-foreground sm:px-6">
+          <span>{SITE_NAME}</span>
+          {/* ugcportal-3wgp K4 — reopens the cookie choice. ugcportal-akv6 owns final footer placement. */}
+          <CookieSettingsLink />
         </div>
       </footer>
     </div>

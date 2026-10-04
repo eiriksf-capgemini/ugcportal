@@ -353,23 +353,30 @@ export function privacyContent(contact: LegalContact): PrivacyContent {
       reviewAgainst: ["src/lib/s3.ts", "src/lib/sign-in-providers.ts"],
     },
 
-    // The consent position, in terms of what ugcportal-3wgp specifies and
-    // in the future tense: no banner or analytics exists in this tree yet.
+    // The consent position as the code makes it true: the banner, the
+    // consent cookie and the gated loader are ugcportal-3wgp (PR #92); the
+    // analytics tool itself is only present in a deployment that sets the
+    // loader's two NEXT_PUBLIC_UMAMI_* variables (env.example).
     cookies: {
       id: "cookies",
       title: "Cookies and consent",
       paragraphs: [
-        "If you only browse, this site sets no cookies of its own and loads no analytics, advertising or social-media scripts.",
+        "If you only browse and have not answered the cookie banner, this site sets no cookies of its own and loads no analytics, advertising or social-media scripts.",
         "Cookies appear when someone signs in: the sign-in library sets a few security cookies (a CSRF token, the OAuth state, and the address to return to) while the sign-in is in progress, and a session cookie afterwards (see “staying signed in” above). An administrator connecting an Instagram account gets a ten-minute cookie that ties the Instagram reply to the request that started it. These are strictly necessary, and no consent is asked for them.",
-        "If the site adds visitor analytics (the planned tool is Umami), it will load only after you accept it on a consent banner. Nothing optional is set or loaded before you choose; declining takes the same single click as accepting; and your choice is remembered in a first-party cookie or browser storage of its own, which exists only to remember your answer. You can change or withdraw the choice later from the footer, and withdrawing stops the script from loading again.",
+        "Visitor analytics, where a deployment has it switched on, uses Umami and loads only after you accept it on the consent banner. Nothing optional is set or loaded before you choose, and declining takes the same single click as accepting. Your answer is remembered in one first-party cookie of this site's own (ugc_cookie_consent, kept for a year), which holds nothing but the answer. You can change or withdraw the choice at any time from the “Cookies” link, and withdrawing stops the script from loading again.",
         "That is what ekomloven § 3-15 requires: GDPR-standard, active consent for anything that is not strictly necessary.",
       ],
-      // No cookie is set outside Auth.js and the Instagram state cookie
-      // (grep for cookies()/Set-Cookie in src/, asserted in
-      // content.test.ts); no third-party script is loaded (layout.tsx).
+      // No cookie is written outside Auth.js, the Instagram state cookie
+      // and the consent cookie (grep for cookies()/Set-Cookie/document.cookie
+      // in src/, asserted in content.test.ts); the layout mounts no script
+      // of its own, only the consent-gated AnalyticsLoader (layout.tsx,
+      // analytics-loader.tsx).
       reviewAgainst: [
         "src/lib/auth.ts",
         "src/lib/instagram-oauth-state.ts",
+        "src/lib/consent.ts",
+        "src/components/consent/cookie-banner.tsx",
+        "src/components/consent/analytics-loader.tsx",
         "src/app/layout.tsx",
       ],
     },
@@ -382,14 +389,18 @@ export function privacyContent(contact: LegalContact): PrivacyContent {
         "No visitor uploads, comments or accounts.",
         "No newsletter and no contact form; contact is by e-mail.",
         "No sales and no payment processing yet.",
-        "No analytics, advertising or affiliate tracking.",
+        "No advertising or affiliate tracking, and no visitor analytics unless you have accepted it on the cookie banner in a deployment that has it switched on.",
         "No profiling and no automated decisions about anyone.",
         "No transfer of visitor data anywhere, because none is collected.",
       ],
       paragraphs: [
         "If any of these changes, this statement is updated first, and anything that needs your consent will ask for it before it starts.",
       ],
-      reviewAgainst: ["src/app/layout.tsx", "src/lib/media-access.ts"],
+      reviewAgainst: [
+        "src/app/layout.tsx",
+        "src/components/consent/analytics-loader.tsx",
+        "src/lib/media-access.ts",
+      ],
     },
 
     // Art. 13(2)(b)-(d): rights, withdrawal, complaint.

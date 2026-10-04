@@ -214,26 +214,50 @@ describe("the negative claims hold against the source tree", () => {
     expect(offenders).toEqual([]);
   });
 
-  it("only the Instagram connect flow sets a cookie by hand", () => {
-    // "If you only browse, this site sets no cookies of its own": Auth.js
-    // sets its own cookies inside the library, and the one first-party
-    // cookie this code writes is the admin-only OAuth state cookie.
-    const pattern = /cookies\(\)|\.cookies\.set\(|set-cookie/i;
+  it("only the Instagram connect flow and the consent choice write a cookie by hand", () => {
+    // "sets no cookies of its own" until the banner is answered: Auth.js
+    // sets its cookies inside the library; this code writes exactly two of
+    // its own — the admin-only OAuth state cookie, and the consent cookie
+    // described in the statement (ugcportal-3wgp). `document.cookie =` is in
+    // the pattern because that is how the consent cookie is written
+    // (src/lib/cookies.ts); without it the pattern saw only server-side
+    // writes and the claim was checked against half the code.
+    const pattern = /cookies\(\)|\.cookies\.set\(|set-cookie|document\.cookie\s*=/i;
     const offenders = sources.filter(({ code }) => pattern.test(code)).map((s) => s.file);
-    const instagramConnectFlow = new Set([
+    const described = new Set([
       "src/app/api/admin/instagram/callback/route.ts",
       "src/app/api/admin/instagram/connect/route.ts",
       "src/lib/instagram-oauth-state.ts",
+      // The consent cookie: written and deleted through src/lib/cookies.ts,
+      // read on the server by consent.server.ts (`cookies()`, read only),
+      // and the gated loader clears a withdrawn script's cookies
+      // (`clearAnalyticsCookies`). All three are what the statement's
+      // "Cookies and consent" section says happens.
+      "src/lib/cookies.ts",
+      "src/lib/consent.server.ts",
+      "src/components/consent/analytics-loader.tsx",
     ]);
-    expect(offenders.filter((file) => !instagramConnectFlow.has(file))).toEqual([]);
-    // The control: the pattern does find the route that sets the cookie
-    // (instagram-oauth-state.ts only defines its options).
+    expect(offenders.filter((file) => !described.has(file))).toEqual([]);
+    // The controls: the pattern does find the route that sets the Instagram
+    // cookie (instagram-oauth-state.ts only defines its options) and the
+    // one module that writes the consent cookie.
     expect(offenders).toContain("src/app/api/admin/instagram/connect/route.ts");
+    expect(offenders).toContain("src/lib/cookies.ts");
   });
 
-  it("no third-party script is loaded from the layout", () => {
-    // "loads no analytics, advertising or social-media scripts"
-    const layout = readFileSync(path.join(SRC_ROOT, "app", "layout.tsx"), "utf8");
-    expect(stripComments(layout)).not.toMatch(/next\/script|<script|umami|gtag|analytics/i);
+  it("the layout mounts no script of its own, only the consent-gated loader", () => {
+    // "loads no analytics, advertising or social-media scripts" before the
+    // banner is answered. The layout may not reach for next/script, a raw
+    // <script> or a vendor directly; the one analytics-related thing it may
+    // render is AnalyticsLoader, which is the single place a tracking script
+    // may mount and is itself gated on consent (ugcportal-3wgp K2/K6, guarded
+    // by eslint.config.mjs and analytics-host.grep.test.ts).
+    const layout = stripComments(
+      readFileSync(path.join(SRC_ROOT, "app", "layout.tsx"), "utf8"),
+    );
+    expect(layout).not.toMatch(/next\/script|<script|umami|gtag/i);
+    expect(layout).toMatch(/@\/components\/consent\/analytics-loader/);
+    // Any other "analytics" in the layout is a second mount point.
+    expect(layout.replace(/analytics-loader|AnalyticsLoader/g, "")).not.toMatch(/analytics/i);
   });
 });
