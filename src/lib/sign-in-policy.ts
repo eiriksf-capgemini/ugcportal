@@ -345,9 +345,10 @@ export type SignInAttempt = {
   /**
    * Which provider this sign-in came through — `account.provider` is the
    * provider id (`"google"`, `"facebook"`). Only consulted for a bound
-   * entry; an attempt with no account (Auth.js passes `null` for the
-   * credentials and email flows, neither configured here) can satisfy only
-   * an unbound one.
+   * entry. Auth.js builds an `account` for every flow it has (OAuth, email
+   * and credentials alike — lib/actions/callback/index.js), but its type
+   * admits `null`, and a provider id outside SIGN_IN_PROVIDERS is treated
+   * the same as none: either can satisfy only an unbound entry.
    */
   account?: { provider?: unknown } | null;
   profile?: {
