@@ -100,10 +100,65 @@ describe("throttles repeated live-session refusals", () => {
 
     expect(warn).toHaveBeenCalledTimes(2);
     // The two lines account for every refusal between them: one named by the
-    // first, the other two by this one's count.
+    // first, the other two by this one's count — and by REASON, so a bulk
+    // revocation does not report one line and an anonymous total (PR #91
+    // review, round 3, finding 5).
     expect(String(warn.mock.calls[1][0])).toContain(
-      "(2 similar line(s) suppressed)",
+      "(2 similar line(s) suppressed: not-permitted x2)",
     );
+  });
+
+  it("breaks the suppressed count down by reason", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { enforceLiveSessionPolicy, LIVE_SESSION_LOG_INTERVAL_MS } =
+      await freshModule();
+    const user = { id: USER_ID, email: LISTED };
+
+    await enforceLiveSessionPolicy(sessionRow(), user); // logs: not-permitted
+    await enforceLiveSessionPolicy(sessionRow(), user); // suppressed
+    // A different reason inside the same window. Both are refusals; only
+    // one of them is a decision about the list, which is exactly the
+    // distinction an operator reading this line is trying to make.
+    delete process.env[PERMITTED_EMAILS_VAR];
+    await enforceLiveSessionPolicy(sessionRow(), user); // suppressed
+    process.env[PERMITTED_EMAILS_VAR] = "someone-else@example.com";
+
+    const now = vi
+      .spyOn(Date, "now")
+      .mockReturnValue(Date.now() + LIVE_SESSION_LOG_INTERVAL_MS + 1);
+    await enforceLiveSessionPolicy(sessionRow(), user);
+    now.mockRestore();
+
+    const flushed = String(warn.mock.calls[1][0]);
+    expect(flushed).toContain("2 similar line(s) suppressed");
+    expect(flushed).toContain("not-permitted x1");
+    expect(flushed).toContain("no-configuration x1");
+  });
+
+  it("clears the counts it has reported, so the next line is not cumulative", async () => {
+    // A map that is read but never cleared reports the same suppressions
+    // again on every later flush, which turns the count from a measurement
+    // into a running total nobody can interpret.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { enforceLiveSessionPolicy, LIVE_SESSION_LOG_INTERVAL_MS } =
+      await freshModule();
+    const user = { id: USER_ID, email: LISTED };
+    let clock = Date.now();
+    const now = vi.spyOn(Date, "now").mockImplementation(() => clock);
+
+    await enforceLiveSessionPolicy(sessionRow(), user); // logs
+    await enforceLiveSessionPolicy(sessionRow(), user); // suppressed, 1
+    clock += LIVE_SESSION_LOG_INTERVAL_MS + 1;
+    await enforceLiveSessionPolicy(sessionRow(), user); // flushes that 1
+    await enforceLiveSessionPolicy(sessionRow(), user); // suppressed, 1 again
+    clock += LIVE_SESSION_LOG_INTERVAL_MS + 1;
+    await enforceLiveSessionPolicy(sessionRow(), user); // flushes that 1
+    now.mockRestore();
+
+    expect(warn).toHaveBeenCalledTimes(3);
+    expect(String(warn.mock.calls[1][0])).toContain("not-permitted x1");
+    // x1, not x2: the first flush took the first one with it.
+    expect(String(warn.mock.calls[2][0])).toContain("not-permitted x1");
   });
 
   it("says nothing about suppression when nothing was swallowed", async () => {

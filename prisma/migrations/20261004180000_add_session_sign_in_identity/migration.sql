@@ -44,6 +44,19 @@ ALTER TABLE "Session" ADD COLUMN "signInEmail" TEXT;
 -- written by anything else — a fixture, a manual INSERT — still gets NULL,
 -- and is refused by a bound entry exactly as the rows above are.
 --
+-- ONE MORE THING ABOUT MIGRATION DAY, and it is the case most likely to
+-- surprise: the backfill above fills in the PROVIDER and deliberately not
+-- the address, so every pre-existing session is judged on `User.email` —
+-- the address stored when the account was linked, which @auth/core never
+-- refreshes. If you ALSO change which address is listed on this same deploy
+-- (rebinding `old@x.com` to `new@x.com` because someone changed their
+-- provider address, say), those backfilled sessions are judged on the stale
+-- stored address, found not permitted, and revoked — including the
+-- operator's own. Nothing is lost: everyone affected signs in again, the
+-- new session records the fresh address, and from then on the two agree.
+-- But if you would rather not explain an unexpected logout to anybody, ship
+-- this migration on one deploy and change the allowlist on the next.
+--
 -- The alternative to the backfill is evicting every signed-in person with a
 -- bound entry, including the operator, on the deploy that carries this —
 -- recoverable, but indistinguishable from the outside from the new check

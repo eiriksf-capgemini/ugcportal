@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
+
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
@@ -25,6 +28,7 @@ import {
  */
 
 const MIGRATION_NAME = "20261004180000_add_session_sign_in_identity";
+const MIGRATIONS_DIR = path.resolve(__dirname, "../../prisma/migrations");
 
 const database = createTemporaryDatabase();
 const { prisma } = await import("@/lib/prisma");
@@ -115,6 +119,31 @@ describe("the session identity backfill", () => {
       { signInProvider: null, signInEmail: null },
       { signInProvider: null, signInEmail: null },
     ]);
+  });
+
+  it("warns, in the migration itself, what that fallback costs on migration day", () => {
+    // The backfilled sessions are judged on the STALE `User.email`, so an
+    // operator who also rebinds an address on this deploy revokes them —
+    // including their own. That is the one surprise this migration can
+    // cause, the comment is the only place it is said before it happens,
+    // and the behaviour behind it is pinned in
+    // src/lib/live-session.test.ts ("the migration-day case").
+    // Read as PROSE, not as raw text: every line carries a `--` and the
+    // sentences wrap, so asserting on the file verbatim would fail the next
+    // time anyone rewraps a paragraph. Stripping the comment markers and
+    // collapsing whitespace leaves the claim, which is the thing that must
+    // not disappear.
+    const prose = readFileSync(
+      path.join(MIGRATIONS_DIR, MIGRATION_NAME, "migration.sql"),
+      "utf8",
+    )
+      .replace(/^--\s?/gm, " ")
+      .replace(/\s+/g, " ");
+    expect(prose).toContain("ONE MORE THING ABOUT MIGRATION DAY");
+    expect(prose).toContain("judged on the stale stored address");
+    expect(prose).toContain(
+      "ship this migration on one deploy and change the allowlist on the next",
+    );
   });
 
   it("writes no address at all, leaving that to the fallback", async () => {

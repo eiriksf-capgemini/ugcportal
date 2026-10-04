@@ -7,8 +7,8 @@ import type { SessionUncheckedCreateInput } from "@/generated/prisma/models";
 import { prisma } from "@/lib/prisma";
 import {
   PERMITTED_EMAILS_VAR,
+  REFUSAL_EFFECT,
   type SignInAttempt,
-  type SignInRefusal,
   authorisedEmail,
   decideLiveSession,
 } from "@/lib/sign-in-policy";
@@ -72,40 +72,16 @@ export type LiveSessionUser = {
 };
 
 /**
- * What each refusal does to the session row. Exhaustive over
- * `SignInRefusal` by construction — `satisfies Record<...>` is a compile
- * error the day a sixth refusal is added and nobody classifies it (PR #91
- * review, round 2, finding 3; the same pattern `sign-in-providers.ts` uses
- * to keep the configured providers and the allowlist prefixes in step).
+ * Whether a refusal deletes the session row is `REFUSAL_EFFECT`, defined
+ * beside `SignInRefusal` itself in src/lib/sign-in-policy.ts (PR #91
+ * review, round 3, finding 3) — adding a refusal and saying what it does to
+ * a live session are one edit, in one file, and the `satisfies` there makes
+ * the second half compulsory. This module acts on the answer; it does not
+ * own it.
  *
- * `"revoke"` means the identity is positively not permitted any more.
- * `"keep"` means the policy could not be evaluated — and those two are the
- * difference between a revocation and an outage. `no-configuration` is what
- * a deployment that lost its environment variables looks like, and
- * `no-email` describes a row rather than a decision about the list. Both
- * refuse the request — fail closed, every time, that part is not
- * conditional — but they leave the row alone, so restoring the variable
- * restores the sessions instead of having silently logged every user out of
- * every device while nobody could sign in to notice.
- *
- * `unverified-email` can never arrive here: `decideLiveSession` cannot
- * return it, because no request carries a provider profile to assert the
- * claim with (see that function). It is classified anyway, because the
- * exhaustiveness check is the point — and `"keep"` is the answer that
- * matches the others of its kind if it ever becomes reachable.
- *
- * Exported for src/lib/access-control-doc.test.ts, which asserts the
- * runbook in docs/access-control.md names exactly the revoking ones. It
- * imports this (round 2, finding 9); it used to scrape the source with a
- * regex, which a reformat could silently defeat.
+ * src/lib/access-control-doc.test.ts imports the same map and asserts the
+ * runbook in docs/access-control.md names exactly the revoking ones.
  */
-export const REVOKING_REFUSALS = {
-  "no-configuration": "keep",
-  "no-email": "keep",
-  "unverified-email": "keep",
-  "not-permitted": "revoke",
-  "wrong-provider": "revoke",
-} satisfies Record<SignInRefusal, "revoke" | "keep">;
 
 /**
  * Shortest interval between live-session refusal log lines, per channel.
@@ -133,14 +109,23 @@ export const REVOKING_REFUSALS = {
  */
 export const LIVE_SESSION_LOG_INTERVAL_MS = 10_000;
 
-type LogThrottle = { lastAt: number; suppressed: number };
+type LogThrottle = { lastAt: number; suppressed: Map<string, number> };
 
 /** Separate counters per channel, so a flood of one cannot hide the other. */
-const refusalLog: LogThrottle = { lastAt: 0, suppressed: 0 };
-const revocationFailureLog: LogThrottle = { lastAt: 0, suppressed: 0 };
+const refusalLog: LogThrottle = { lastAt: 0, suppressed: new Map() };
+const revocationFailureLog: LogThrottle = { lastAt: 0, suppressed: new Map() };
 
 /**
- * How many lines this one swallowed, or `null` to stay quiet.
+ * What this line swallowed, by kind, or `null` to stay quiet.
+ *
+ * Counted PER KIND rather than as one number (PR #91 review, round 3,
+ * finding 5): a bulk revocation otherwise reports one line and folds every
+ * other reason into an anonymous total, which is the opposite of what the
+ * operator who just edited the allowlist needs to see. The kind is the
+ * refusal reason, so the key space is the `SignInRefusal` vocabulary and
+ * cannot grow with traffic. Deliberately NOT keyed by user: that is
+ * unbounded, and a visitor who can be refused is a visitor who can make the
+ * map grow.
  *
  * `lastAt !== 0` matches the guard `logFailedPublicListing` and
  * `logShedUpload` both carry, and is there for the same reason: without it
@@ -149,24 +134,40 @@ const revocationFailureLog: LogThrottle = { lastAt: 0, suppressed: 0 };
  * (fake timers, a container before NTP) would read as "still inside the
  * window" and swallow the one line this throttle most needs to let through.
  */
-function dueToLog(throttle: LogThrottle): number | null {
+function dueToLog(
+  throttle: LogThrottle,
+  kind: string,
+): Map<string, number> | null {
   const now = Date.now();
   if (
     throttle.lastAt !== 0 &&
     now - throttle.lastAt < LIVE_SESSION_LOG_INTERVAL_MS
   ) {
-    throttle.suppressed += 1;
+    throttle.suppressed.set(kind, (throttle.suppressed.get(kind) ?? 0) + 1);
     return null;
   }
-  const suppressed = throttle.suppressed;
+  const suppressed = new Map(throttle.suppressed);
   throttle.lastAt = now;
-  throttle.suppressed = 0;
+  throttle.suppressed.clear();
   return suppressed;
 }
 
-/** Present only when this line's own window actually swallowed others. */
-function suppressedNote(suppressed: number): string {
-  return suppressed > 0 ? ` (${suppressed} similar line(s) suppressed)` : "";
+/**
+ * Present only when this line's own window actually swallowed others, and
+ * then naming what they were: `(3 similar line(s) suppressed:
+ * not-permitted x2, wrong-provider x1)`.
+ */
+function suppressedNote(suppressed: Map<string, number>): string {
+  if (suppressed.size === 0) {
+    return "";
+  }
+  let total = 0;
+  const byKind: string[] = [];
+  for (const [kind, count] of suppressed) {
+    total += count;
+    byKind.push(`${kind} x${count}`);
+  }
+  return ` (${total} similar line(s) suppressed: ${byKind.join(", ")})`;
 }
 
 /**
@@ -238,7 +239,7 @@ export async function enforceLiveSessionPolicy(
     return session;
   }
 
-  const suppressed = dueToLog(refusalLog);
+  const suppressed = dueToLog(refusalLog, decision.reason);
   if (suppressed !== null) {
     console.warn(
       `[auth] Refused a live session for user ${user.id}: ${decision.reason}. ` +
@@ -248,7 +249,7 @@ export async function enforceLiveSessionPolicy(
     );
   }
 
-  if (REVOKING_REFUSALS[decision.reason] === "revoke") {
+  if (REFUSAL_EFFECT[decision.reason] === "revoke") {
     // NOT awaited (PR #91 review, round 2, finding 6). The refusal below is
     // a pure transform of data already in hand and does not depend on the
     // delete — `revokeSession` says so itself — so making every request
@@ -332,7 +333,9 @@ async function revokeSession(id: unknown, userId: string): Promise<void> {
     // the delete must not be able to turn a refusal into a permission — it
     // only means the stale row survives to be refused again on the next
     // request, which is also why this log is throttled.
-    const suppressed = dueToLog(revocationFailureLog);
+    // One kind on this channel — the counts still read the same way, and a
+    // second failure mode later gets its own name for free.
+    const suppressed = dueToLog(revocationFailureLog, "delete-failed");
     if (suppressed !== null) {
       console.error(
         `[auth] Could not revoke session ${id} for user ${userId}; the ` +

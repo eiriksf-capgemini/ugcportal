@@ -203,9 +203,16 @@ How it works, in one line each:
 3. **Deal with what they already published.** Revocation stops future
    access; it does not unpublish media that is already in the public gallery
    or remove anything from the bucket.
-4. **Audit, if you need to know who got in.** Revocation is silent by
-   design on the visitor's side; the server logs each refused live session
-   with the user's id and the reason.
+4. **Keep the logs if you want a record of it.** Revocation is silent by
+   design on the visitor's side, and the `[auth] Refused a live session for
+   user <id>` warning (plus the `Revoked session <id>` line beside it) is now
+   the **only** trace that a particular session ever existed — the row it
+   describes is deleted in the same breath, and `ugcportal-mzr` replaced the
+   old "look first, then revoke" ordering with something that needs no
+   operator at all. If who held a session matters to you — an incident, a
+   question about what an account reached — ship the server's stdout
+   somewhere durable before you need it, because afterwards there is nothing
+   left to query. The lines name a user id, never an address.
 
 ### Deploy order: migrate first, then deploy
 

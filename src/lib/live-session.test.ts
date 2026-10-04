@@ -294,6 +294,28 @@ describe("a session whose permission has been revoked (K1)", () => {
     expect((await enforce(first, LISTED)).user).toBeUndefined();
   });
 
+  it("revokes a backfilled session when the listed address is rebound (migration day)", async () => {
+    // What the migration's own deploy note warns about. A session the
+    // backfill attributed has a provider but NO recorded address, so it is
+    // judged on `User.email` — the address stored when the account was
+    // linked, which @auth/core never refreshes. An operator who changes
+    // which address is listed on the same deploy therefore revokes those
+    // sessions, including their own.
+    const STORED = LISTED;
+    const FRESH = OTHER;
+    const [first] = await signedIn({
+      email: STORED,
+      sessions: [{ provider: "google", email: null }],
+    });
+    // Still fine while the stored address is the listed one.
+    expect((await enforce(first, STORED)).user?.id).toBe(USER_ID);
+
+    process.env[PERMITTED_EMAILS_VAR] = `google:${FRESH}`;
+
+    expect((await enforce(first, STORED)).user).toBeUndefined();
+    expect(await liveSessionIds()).toEqual([]);
+  });
+
   it("refuses a session with no address anywhere", async () => {
     const [first] = await signedIn({
       email: null,

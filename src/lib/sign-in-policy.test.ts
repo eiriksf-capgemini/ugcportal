@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   PERMITTED_EMAILS_VAR,
-  type PermittedEntry,
   SIGN_IN_PROVIDERS,
   type SignInEnv,
   bootstrapAdminEmails,
@@ -458,10 +457,6 @@ describe("decideSignIn binds an entry to its provider", () => {
 
   it("parses the prefix off the entry and keeps the address", () => {
     expect(permittedIdentities(bound)).toEqual({
-      entries: [
-        { email: GOOGLE_ONLY, provider: "google" },
-        { email: FACEBOOK_ONLY, provider: "facebook" },
-      ],
       emails: [GOOGLE_ONLY, FACEBOOK_ONLY],
       malformed: [],
       configured: true,
@@ -534,10 +529,14 @@ describe("decideSignIn binds an entry to its provider", () => {
   });
 
   it("treats an unknown or empty prefix as unusable, not as unbound", () => {
-    const { entries, malformed, configured } = permittedIdentities({
+    const identities = permittedIdentities({
       [PERMITTED_EMAILS_VAR]: `twitter:${GOOGLE_ONLY}, gogle:${FACEBOOK_ONLY}, google:, :${LISTED}`,
     });
-    expect(entries).toEqual([]);
+    const { malformed, configured } = identities;
+    // Nobody is permitted: no address is listed, and the one entry each of
+    // these addresses appears in was unusable.
+    expect(identities.emails).toEqual([]);
+    expect(identities.entriesFor(GOOGLE_ONLY)).toEqual([]);
     expect(malformed).toEqual([
       `twitter:${GOOGLE_ONLY}`,
       `gogle:${FACEBOOK_ONLY}`,
@@ -559,10 +558,12 @@ describe("decideSignIn binds an entry to its provider", () => {
     // PR #81 round 3: `google:facebook:a@b.com` used to parse as a bound entry
     // whose address was `facebook:a@b.com` — counted as permitted, reported
     // nowhere, matched by nobody.
-    const { entries, malformed } = permittedIdentities({
+    const identities = permittedIdentities({
       [PERMITTED_EMAILS_VAR]: `google:facebook:${GOOGLE_ONLY}, google:${GOOGLE_ONLY}:`,
     });
-    expect(entries).toEqual([]);
+    const { malformed } = identities;
+    expect(identities.emails).toEqual([]);
+    expect(identities.entriesFor(GOOGLE_ONLY)).toEqual([]);
     expect(malformed).toEqual([
       `google:facebook:${GOOGLE_ONLY}`,
       `google:${GOOGLE_ONLY}:`,
@@ -575,10 +576,13 @@ describe("decideSignIn binds an entry to its provider", () => {
   });
 
   it("de-duplicates by address AND provider", () => {
-    const { entries } = permittedIdentities({
+    const identities = permittedIdentities({
       [PERMITTED_EMAILS_VAR]: `google:${GOOGLE_ONLY},GOOGLE:${GOOGLE_ONLY},facebook:${GOOGLE_ONLY}`,
     });
-    expect(entries).toEqual([
+    // One address, two entries under it: the duplicate Google entry is
+    // dropped and the Facebook one is not.
+    expect(identities.emails).toEqual([GOOGLE_ONLY]);
+    expect(identities.entriesFor(GOOGLE_ONLY)).toEqual([
       { email: GOOGLE_ONLY, provider: "google" },
       { email: GOOGLE_ONLY, provider: "facebook" },
     ]);
@@ -791,14 +795,18 @@ describe("permittedIdentities is memoised on the configuration, not the clock", 
     const identities = permittedIdentities(env());
 
     expect(Object.isFrozen(identities)).toBe(true);
-    expect(Object.isFrozen(identities.entries)).toBe(true);
+    expect(Object.isFrozen(identities.emails)).toBe(true);
     expect(() => {
-      (identities.entries as PermittedEntry[]).push({
-        email: "sneaked-in@example.com",
-        provider: null,
-      });
+      (identities.emails as string[]).push("sneaked-in@example.com");
     }).toThrow();
     expect(permittedIdentities(env()).emails).toEqual([LISTED]);
+    // The entries themselves are reachable only through `entriesFor`, which
+    // closes over its Map rather than exposing it — so there is nothing to
+    // freeze and nothing to push onto. The array it hands back for an
+    // unlisted address is shared and frozen for the same reason.
+    expect(Object.isFrozen(identities.entriesFor("nobody@example.com"))).toBe(
+      true,
+    );
   });
 
   it("still answers the empty and absent cases through the memo", () => {

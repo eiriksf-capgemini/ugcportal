@@ -289,12 +289,16 @@ export function isBootstrapAdminSignIn(
 }
 
 export type PermittedIdentities = {
-  /** Usable entries, normalised, de-duplicated. Empty means nobody. */
-  entries: PermittedEntry[];
   /**
-   * The distinct addresses across `entries`, for reporting. Not the thing
-   * to decide on — a listed address may be bound to a provider — so
-   * `decideSignIn` reads `entries`.
+   * The distinct permitted addresses, in first-seen order, FOR REPORTING —
+   * the boot warning and the per-refusal log line. Not the thing to decide
+   * on, because a listed address may be bound to a provider: the decision
+   * goes through `entriesFor`.
+   *
+   * There is no flat `entries` array beside this any more (PR #91 review,
+   * round 3, finding 2). It was the only other way to reach the parsed
+   * entries, nothing read it once `entriesFor` existed, and a second public
+   * view of the same data is a second thing to keep frozen and in step.
    */
   emails: string[];
   /** Entries that were present but not usable, for the operator's benefit. */
@@ -382,13 +386,22 @@ export function permittedIdentities(
     ...splitList(rawBootstrap),
   ];
 
-  // First occurrence wins, keyed by the (provider, address) tuple — the same
-  // Set/Map idiom as appendGalleryItems (gallery-items.ts) and parseTagNames
-  // (tags.ts), so "unique by what" is stated by the key rather than by a
-  // comparison. The key is the JSON of the pair, not a hand-joined string,
-  // so it needs no separator argument: `null` and every address serialise
-  // distinctly whatever characters they contain (PR #81 round 4).
-  const byKey = new Map<string, PermittedEntry>();
+  // ONE pass that builds everything (PR #91 review, round 3, finding 1).
+  //
+  // `seen` is the de-duplication: first occurrence wins, keyed by the
+  // (provider, address) tuple — the same Set/Map idiom as appendGalleryItems
+  // (gallery-items.ts) and parseTagNames (tags.ts), so "unique by what" is
+  // stated by the key rather than by a comparison. The key is the JSON of
+  // the pair, not a hand-joined string, so it needs no separator argument:
+  // `null` and every address serialise distinctly whatever characters they
+  // contain (PR #81 round 4).
+  //
+  // `byEmail` is the index every decision looks entries up by, and it is
+  // also where the distinct addresses come from: a Map iterates in insertion
+  // order, so its keys ARE the first-seen address order a second pass used
+  // to recompute.
+  const seen = new Set<string>();
+  const byEmail = new Map<string, PermittedEntry[]>();
   const malformed = new Set<string>();
   for (const entry of entries) {
     const usable = parseEntry(entry);
@@ -397,34 +410,27 @@ export function permittedIdentities(
       continue;
     }
     const key = JSON.stringify([usable.provider, usable.email]);
-    if (!byKey.has(key)) {
-      byKey.set(key, usable);
+    if (seen.has(key)) {
+      continue;
     }
-  }
-  const parsed = Array.from(byKey.values());
-  // The same entries, indexed by the thing every decision looks them up by.
-  // Built here because this loop has already touched all of them.
-  const byEmail = new Map<string, PermittedEntry[]>();
-  for (const entry of parsed) {
-    const forEmail = byEmail.get(entry.email);
+    seen.add(key);
+    const forEmail = byEmail.get(usable.email);
     if (forEmail) {
-      forEmail.push(entry);
+      forEmail.push(usable);
     } else {
-      byEmail.set(entry.email, [entry]);
+      byEmail.set(usable.email, [usable]);
     }
   }
-  // Derived, not tracked: the distinct addresses across the parsed entries,
-  // in first-seen order.
-  const emails = Array.from(new Set(parsed.map((entry) => entry.email)));
+  const emails = Array.from(byEmail.keys());
 
   // Frozen before it is shared. The memo above hands the same object to
-  // every caller, so a caller that mutated `entries` would be editing the
+  // every caller, so a caller that mutated `emails` would be editing the
   // permitted set for every later request in the process; freezing turns
   // that from a silent, process-wide authorisation change into a throw (or,
-  // in sloppy mode, a no-op). Nothing mutates it today — `evaluateSignIn`
-  // filters, which copies — and this is what keeps that true.
+  // in sloppy mode, a no-op). The entries themselves are reachable only
+  // through `entriesFor`, which closes over `byEmail` rather than exposing
+  // it — `Object.freeze` does not stop `Map.set`.
   const value: PermittedIdentities = Object.freeze({
-    entries: Object.freeze(parsed) as PermittedEntry[],
     emails: Object.freeze(emails) as string[],
     malformed: Object.freeze(Array.from(malformed)) as string[],
     configured: entries.length > 0,
@@ -463,6 +469,37 @@ export type SignInRefusal =
   | "not-permitted"
   /** Listed, but only for a provider other than the one asserting it. */
   | "wrong-provider";
+
+/**
+ * What each refusal means for a session that ALREADY EXISTS: is it a
+ * decision about the list, or a failure to evaluate the list at all?
+ *
+ * Lives here, beside the refusals themselves, rather than next to the code
+ * that acts on it (PR #91 review, round 3, finding 3). Adding a refusal and
+ * classifying it are then one edit in one file, and the `satisfies` below
+ * makes the second half compulsory: a sixth variant that nobody classifies
+ * is a compile error rather than a silent default.
+ *
+ * `"revoke"` means the identity is positively not permitted any more, so
+ * the session row is deleted (src/lib/live-session.ts). `"keep"` means the
+ * request is refused — fail closed, every time, that part is not
+ * conditional — but the row survives. The difference is a revocation versus
+ * an outage: `no-configuration` is what a deployment that lost its
+ * environment variables looks like, and `no-email` describes a row rather
+ * than a decision about the list. Deleting on those would log every user
+ * out of every device at the moment nobody can sign in to notice.
+ *
+ * `unverified-email` cannot reach a live session at all — `decideLiveSession`
+ * never returns it, having no profile to read the claim from — and is
+ * classified with the others of its kind for the day that changes.
+ */
+export const REFUSAL_EFFECT = {
+  "no-configuration": "keep",
+  "no-email": "keep",
+  "unverified-email": "keep",
+  "not-permitted": "revoke",
+  "wrong-provider": "revoke",
+} satisfies Record<SignInRefusal, "revoke" | "keep">;
 
 export type SignInDecision =
   | { permitted: true; email: string }

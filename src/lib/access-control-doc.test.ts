@@ -3,7 +3,7 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { REVOKING_REFUSALS } from "@/lib/live-session";
+import { REFUSAL_EFFECT } from "@/lib/sign-in-policy";
 
 /**
  * docs/access-control.md tells an operator what `DELETE FROM User` destroys,
@@ -154,7 +154,7 @@ describe("the runbook does not recommend a command that prints nothing", () => {
  * CODE rather than against the memory of whoever last edited the doc, in the
  * same spirit as the cascade check above: the dangerous drift is not a
  * missing section, it is a section that still describes the previous rule.
- * Reclassify a refusal in `REVOKING_REFUSALS` and this fails until the
+ * Reclassify a refusal in `REFUSAL_EFFECT` and this fails until the
  * runbook says so — and the operator's mental model of "what does removing
  * an entry actually destroy" is the thing that would otherwise go quietly
  * stale.
@@ -171,7 +171,7 @@ const DEPLOY_HEADING = "### Deploy order: migrate first, then deploy";
 
 /** The refusals src/lib/live-session.ts deletes session rows for. */
 function revokingRefusals(): string[] {
-  return Object.entries(REVOKING_REFUSALS)
+  return Object.entries(REFUSAL_EFFECT)
     .filter(([, handling]) => handling === "revoke")
     .map(([refusal]) => refusal)
     .sort();
@@ -204,7 +204,7 @@ describe("the revocation runbook matches the code", () => {
     expect(revokingRefusals().length).toBeGreaterThan(0);
     // Both kinds exist, so "names exactly the revoking ones" below is a real
     // partition rather than "names all of them".
-    expect(Object.values(REVOKING_REFUSALS)).toContain("keep");
+    expect(Object.values(REFUSAL_EFFECT)).toContain("keep");
   });
 
   it("names exactly the refusals that destroy session rows", () => {
@@ -243,5 +243,10 @@ describe("the revocation runbook matches the code", () => {
     // The one that is not optional: the policy is read from the process
     // environment, so an unrestarted server keeps the old list.
     expect(revocationSection).toMatch(/\*\*Restart or redeploy\*\*/);
+    // And the one that cannot be done afterwards: the row is deleted with
+    // the refusal, so the log line is the only record that session existed
+    // (PR #91 review, round 3, finding 6).
+    expect(revocationSection).toMatch(/\*\*Keep the logs if you want a record/);
+    expect(revocationSection).toMatch(/the \*\*only\*\* trace/);
   });
 });
