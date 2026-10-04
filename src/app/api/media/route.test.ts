@@ -836,6 +836,222 @@ describe("POST /api/media", () => {
 });
 
 /**
+ * ugcportal-1b2c: a transport-level S3 failure (the storage endpoint itself
+ * unreachable — connection refused/reset, DNS failure, timed out) used to
+ * surface as a bare, unhandled 500 with a raw SDK stack trace. These assert
+ * the deliberate 503 instead: a stable, non-disclosing body; one structured
+ * log line naming the transport code and the SDK's own retry count; and that
+ * whatever already landed in the bucket before the failing call is cleaned
+ * up rather than left orphaned.
+ */
+describe("POST /api/media — object storage unreachable (ugcportal-1b2c)", () => {
+  /**
+   * Stands in for what the AWS SDK actually throws on a transport failure —
+   * see @smithy/node-http-handler's NODEJS_TIMEOUT_ERROR_CODES: the original
+   * Node error (ECONNRESET, ECONNREFUSED, ...) gets its `name` overwritten to
+   * `"TimeoutError"`, but keeps its own `code`, and @smithy/core's retry
+   * middleware stamps `$metadata` (attempts, totalRetryDelay) onto it once
+   * retries are exhausted — with no `httpStatusCode`, because no response
+   * was ever received.
+   */
+  function transportError({
+    name = "TimeoutError",
+    code,
+    attempts = 3,
+  }: { name?: string; code?: string; attempts?: number } = {}): Error & {
+    code?: string;
+    $metadata: { attempts: number; totalRetryDelay: number };
+  } {
+    const error = new Error(`read ${code ?? "ECONNRESET"}`) as Error & {
+      code?: string;
+      $metadata: { attempts: number; totalRetryDelay: number };
+    };
+    error.name = name;
+    if (code !== undefined) error.code = code;
+    error.$metadata = { attempts, totalRetryDelay: 101 };
+    return error;
+  }
+
+  /**
+   * An error shape the classifier must also catch even though it matches
+   * neither a known transport `code` nor the SDK's `TimeoutError` rename:
+   * `$metadata` present, with no `httpStatusCode` because no HTTP response
+   * ever came back. Exercises the fallback branch of
+   * `isObjectStorageUnreachableError` on its own, independent of the
+   * code/name checks above it.
+   */
+  function metadataOnlyTransportError(): Error & {
+    $metadata: { attempts: number };
+  } {
+    const error = new Error("socket hang up") as Error & {
+      $metadata: { attempts: number };
+    };
+    error.$metadata = { attempts: 2 };
+    return error;
+  }
+
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    authMock.mockResolvedValue({ user: { id: "user-1" } });
+    errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    errorSpy.mockRestore();
+  });
+
+  it("answers 503, not a bare 500, when the original PutObject hits a transport error", async () => {
+    s3SendMock.mockRejectedValueOnce(
+      transportError({ code: "ECONNRESET", attempts: 3 }),
+    );
+    const file = new File([REAL_PNG], "photo.png", { type: "image/png" });
+
+    const response = await POST(buildRequest(file));
+
+    expect(response.status).toBe(503);
+    const responseBody: unknown = await response.json();
+    expect(responseBody).toEqual({
+      error: expect.stringContaining("temporarily unavailable"),
+    });
+    // Non-disclosing: neither the bucket name nor anything endpoint-shaped
+    // makes it into the client-facing body.
+    expect(JSON.stringify(responseBody)).not.toContain("test-bucket");
+
+    // Structured server-side log, naming the transport code and the SDK's
+    // own attempt count — not just "something went wrong".
+    expect(errorSpy).toHaveBeenCalledWith(
+      "[media] object storage unreachable",
+      expect.objectContaining({ code: "ECONNRESET", attempts: 3 }),
+    );
+
+    // Nothing had landed in the bucket yet, so there is nothing to clean up,
+    // and the DB transaction must never have been reached.
+    const commands = s3SendMock.mock.calls.map((call) => call[0]);
+    expect(commands.filter((c) => c instanceof DeleteObjectCommand)).toHaveLength(0);
+    expect(mediaCreateMock).not.toHaveBeenCalled();
+
+    // Mutation check (see PR body): with `s3SendMock.mockRejectedValueOnce`
+    // above replaced by a resolved value, this test fails (201, not 503) —
+    // confirmed by hand, then restored to the throwing form above.
+  });
+
+  it("answers 503 and cleans up the original when the preview PutObject hits a transport error", async () => {
+    s3SendMock
+      .mockResolvedValueOnce({}) // original PutObject
+      .mockRejectedValueOnce(transportError({ name: "TimeoutError", code: "ETIMEDOUT" })) // preview PutObject
+      .mockResolvedValueOnce({}); // compensating DeleteObject
+    const file = new File([REAL_PNG], "photo.png", { type: "image/png" });
+
+    const response = await POST(buildRequest(file));
+
+    expect(response.status).toBe(503);
+    expect(errorSpy).toHaveBeenCalledWith(
+      "[media] object storage unreachable",
+      expect.objectContaining({ code: "ETIMEDOUT", attempts: 3 }),
+    );
+
+    const commands = s3SendMock.mock.calls.map((call) => call[0]);
+    const puts = commands.filter((c) => c instanceof PutObjectCommand);
+    const deletes = commands.filter((c) => c instanceof DeleteObjectCommand);
+    expect(puts).toHaveLength(2);
+    // Only the original made it into the bucket — that is what must be
+    // cleaned up, not the preview that never landed.
+    expect(deletes).toHaveLength(1);
+    expect((deletes[0] as DeleteObjectCommand).input.Key).toBe(
+      (puts[0] as PutObjectCommand).input.Key,
+    );
+    expect(mediaCreateMock).not.toHaveBeenCalled();
+
+    // Mutation check: made the compensating delete also reject below (next
+    // test) and confirmed the 503 still answers rather than throwing.
+  });
+
+  it("still answers 503, without masking the original error, when the compensating cleanup delete itself fails", async () => {
+    let putCount = 0;
+    s3SendMock.mockImplementation(async (command) => {
+      if (command instanceof DeleteObjectCommand) {
+        throw transportError({ code: "ECONNREFUSED" });
+      }
+      if (command instanceof PutObjectCommand) {
+        putCount += 1;
+        // The first PutObjectCommand (the original) succeeds; the second
+        // (the preview) is the one that fails.
+        if (putCount === 2) {
+          throw transportError({ code: "ECONNREFUSED" });
+        }
+        return {};
+      }
+      return {};
+    });
+    const file = new File([REAL_PNG], "photo.png", { type: "image/png" });
+
+    const response = await POST(buildRequest(file));
+
+    // The storage-unreachable 503 still answers — a cleanup failure must not
+    // turn into an unhandled rejection or mask the original classification.
+    expect(response.status).toBe(503);
+    const responseBody: unknown = await response.json();
+    expect(responseBody).toEqual({
+      error: expect.stringContaining("temporarily unavailable"),
+    });
+
+    // Both failures are logged: the storage-unreachable line for the
+    // original cause, and the cleanup-failure line for the delete that
+    // could not reach the bucket either.
+    expect(errorSpy).toHaveBeenCalledWith(
+      "[media] object storage unreachable",
+      expect.objectContaining({ code: "ECONNREFUSED" }),
+    );
+    expect(errorSpy).toHaveBeenCalledWith(
+      "[media] failed to clean up orphaned object",
+      expect.objectContaining({ cause: expect.any(Error) }),
+    );
+
+    // Mutation check: with the delete mock above changed to resolve `{}`
+    // instead of throwing, the second expectation (the cleanup-failure log)
+    // stops firing — confirmed by hand, then restored to the throwing form
+    // above.
+  });
+
+  it("classifies a transport error that carries $metadata but no known code or TimeoutError name", async () => {
+    s3SendMock.mockRejectedValueOnce(metadataOnlyTransportError());
+    const file = new File([REAL_PNG], "photo.png", { type: "image/png" });
+
+    const response = await POST(buildRequest(file));
+
+    expect(response.status).toBe(503);
+    expect(errorSpy).toHaveBeenCalledWith(
+      "[media] object storage unreachable",
+      expect.objectContaining({ attempts: 2 }),
+    );
+
+    // Mutation check: giving this same error a real `$metadata.httpStatusCode`
+    // (as a genuine service error like AccessDenied would carry) must take it
+    // OUT of this branch — asserted directly below.
+  });
+
+  it("does not classify a genuine S3 service error (one with an httpStatusCode) as storage-unreachable", async () => {
+    const serviceError = new Error("Access Denied") as Error & {
+      name: string;
+      $metadata: { httpStatusCode: number; attempts: number };
+    };
+    serviceError.name = "AccessDenied";
+    serviceError.$metadata = { httpStatusCode: 403, attempts: 1 };
+    s3SendMock.mockRejectedValueOnce(serviceError);
+    const file = new File([REAL_PNG], "photo.png", { type: "image/png" });
+
+    // Not the storage-unreachable path: today that means the error simply
+    // propagates, as it did before this bead (unchanged handling, per scope).
+    await expect(POST(buildRequest(file))).rejects.toThrow("Access Denied");
+    expect(errorSpy).not.toHaveBeenCalledWith(
+      "[media] object storage unreachable",
+      expect.anything(),
+    );
+  });
+});
+
+/**
  * Stands in for a real preview while a request is parked mid-handler.
  *
  * The parked calls here are about *when* generateWatermarkedPreview settles,

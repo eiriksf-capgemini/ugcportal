@@ -52,6 +52,84 @@ function sanitizeFilename(name: string): string {
   return name.replace(/[^a-zA-Z0-9._-]/g, "_").slice(-100);
 }
 
+/**
+ * Node's own names for "the connection never worked", as distinct from a
+ * well-formed HTTP response the S3-compatible endpoint chose to send back
+ * (AccessDenied, NoSuchBucket, ...). `TimeoutError` is not a Node error code;
+ * it is the AWS SDK's own classification, applied by
+ * `@smithy/node-http-handler` to exactly this set of codes (plus a genuine
+ * socket/connect timeout) — see NODEJS_TIMEOUT_ERROR_CODES in that package.
+ * Matching both the renamed `name` and the original `code` means a transport
+ * failure is caught whichever shape it arrives in.
+ */
+const TRANSPORT_ERROR_CODES = new Set([
+  "ECONNRESET",
+  "ECONNREFUSED",
+  "ENOTFOUND",
+  "ETIMEDOUT",
+]);
+
+type TransportLikeError = Error & {
+  code?: string;
+  $metadata?: { httpStatusCode?: number; attempts?: number };
+};
+
+/**
+ * True when `error` is a failure to reach the storage backend at all, rather
+ * than a response it sent back. The distinguishing signal: `@smithy/core`'s
+ * retry middleware stamps `$metadata` onto every error it gives up retrying
+ * (see `@smithy/core/dist-cjs/submodules/retry/index.js`, the
+ * `lastError.$metadata = {}` fallback), but only a real HTTP response ever
+ * gets `httpStatusCode` set on it — a service error like AccessDenied or
+ * NoSuchBucket carries one (403, 404, ...); a connection that was refused,
+ * reset, or never resolved never had a response to take it from. The
+ * explicit code/name checks are a belt-and-braces match for the exact shapes
+ * named in ugcportal-1b2c, in case an error reaches here before the retry
+ * middleware has had a chance to attach `$metadata` at all.
+ */
+function isObjectStorageUnreachableError(
+  error: unknown,
+): error is TransportLikeError {
+  if (!(error instanceof Error)) return false;
+  const err = error as TransportLikeError;
+  if (err.name === "TimeoutError") return true;
+  if (err.code !== undefined && TRANSPORT_ERROR_CODES.has(err.code)) {
+    return true;
+  }
+  return err.$metadata !== undefined && err.$metadata.httpStatusCode === undefined;
+}
+
+/**
+ * Best-effort compensation so a failed preview upload, a DB hiccup, or a
+ * storage outage doesn't leave untracked objects sitting in the bucket
+ * forever. Failures here are swallowed — the caller's own error (or 503) is
+ * the one worth propagating — but they are logged, not discarded: a
+ * compensation that is quietly failing every time leaks storage indefinitely
+ * with nothing to notice it by. Expected to fail on every key in the
+ * storage-unreachable path: if PutObject could not reach the bucket, this
+ * DeleteObject cannot either, and that failure is itself worth the same log
+ * line rather than a silently swallowed promise.
+ */
+async function cleanupStoredKeys(storedKeys: readonly string[]): Promise<void> {
+  await Promise.all(
+    storedKeys.map((storedKey) =>
+      getS3Client()
+        .send(
+          new DeleteObjectCommand({
+            Bucket: getBucketName(),
+            Key: storedKey,
+          }),
+        )
+        .catch((cleanupError) => {
+          console.error("[media] failed to clean up orphaned object", {
+            key: storedKey,
+            cause: cleanupError,
+          });
+        }),
+    ),
+  );
+}
+
 // The response projections moved to src/lib/media-access.ts when PATCH
 // (ugcportal-bdh) became a third caller that has to honour them — the comment
 // explaining what they guarantee, and why there are two, lives with them there.
@@ -570,28 +648,38 @@ async function handleUpload(
 
     return NextResponse.json(media, { status: 201 });
   } catch (error) {
+    if (isObjectStorageUnreachableError(error)) {
+      // A storage outage (ugcportal-1b2c) — MinIO/S3 unreachable, not
+      // anything about this upload — so it is answered deliberately rather
+      // than as the bare, stack-trace-bearing 500 an unhandled SDK rejection
+      // produced before this. The client gets a stable message that names
+      // neither the endpoint nor the bucket; the operator gets the transport
+      // code and the SDK's own retry count, which is what actually
+      // distinguishes "MinIO is down" from a one-off blip.
+      console.error("[media] object storage unreachable", {
+        code: error.code ?? error.name,
+        attempts: error.$metadata?.attempts,
+      });
+      // Whatever already landed in the bucket (the original, and/or the
+      // preview) before the failing call must not be left orphaned. If
+      // storage is genuinely unreachable this DeleteObject will fail too —
+      // cleanupStoredKeys logs that rather than masking it or throwing.
+      await cleanupStoredKeys(storedKeys);
+      return NextResponse.json(
+        {
+          error:
+            "Object storage is temporarily unavailable. Please try again shortly.",
+        },
+        { status: 503 },
+      );
+    }
+
     // Best-effort compensation so a failed preview upload or DB hiccup doesn't
     // leave untracked objects sitting in the bucket forever. Failures here are
     // swallowed because the original error is the one worth propagating — but
     // they are logged, not discarded: a compensation that is quietly failing
     // every time leaks storage indefinitely with nothing to notice it by.
-    await Promise.all(
-      storedKeys.map((storedKey) =>
-        getS3Client()
-          .send(
-            new DeleteObjectCommand({
-              Bucket: getBucketName(),
-              Key: storedKey,
-            }),
-          )
-          .catch((cleanupError) => {
-            console.error("[media] failed to clean up orphaned object", {
-              key: storedKey,
-              cause: cleanupError,
-            });
-          }),
-      ),
-    );
+    await cleanupStoredKeys(storedKeys);
     throw error;
   }
 }
