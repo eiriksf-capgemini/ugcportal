@@ -112,13 +112,14 @@ export type TransportFailureInfo = {
  *    exact shapes `@smithy/node-http-handler` and `@smithy/core`'s own retry
  *    middleware produce for this family of failure.
  *  - the fallback — `$metadata` present at all (its `httpStatusCode` is
- *    already known to be absent, from the guard above) — covers whatever
- *    reaches here without having been renamed/coded that way yet.
- *    `@smithy/core`'s retry middleware stamps `$metadata` onto every error it
- *    gives up retrying; a response that was actually received always gets
- *    `httpStatusCode` set on it too (a service error like AccessDenied or
- *    NoSuchBucket always carries one), so by the time this branch runs, "no
- *    `httpStatusCode`" already means "no response".
+ *    already known to be absent, from the guard above) AND `attempts > 1` —
+ *    covers whatever reaches here without having been renamed/coded that
+ *    way yet. `@smithy/core`'s retry middleware stamps `$metadata` onto
+ *    every error it gives up retrying; a response that was actually
+ *    received always gets `httpStatusCode` set on it too (a service error
+ *    like AccessDenied or NoSuchBucket always carries one), so by the time
+ *    this branch runs, "no `httpStatusCode`" already means "no response".
+ *    The `attempts > 1` half is round-5's own fix — see below.
  *
  * What this function can distinguish: "the SDK gave up without ever hearing
  * an HTTP response back" from "the backend answered, even with an error (or
@@ -126,13 +127,34 @@ export type TransportFailureInfo = {
  * came back. It also matches, for instance, a credential-signing failure, a
  * local TLS validation error, or a request aborted by a client-side timeout
  * wrapper — anything the SDK gave up on before or without a response, not
- * only an unreachable backend. That over-breadth is bounded by *where* this
- * is called from, not by the check itself: `sendWithTransportClassification`
- * below only ever runs it against the error an S3 SDK call itself threw, so
- * a DB/libSQL error that happens to carry a transport-shaped `code` (e.g.
- * its own `ECONNRESET`) is never passed through this function in the first
- * place, and therefore can never be mislabelled as "object storage
- * unreachable" (round-1 finding 1).
+ * only an unreachable backend. That over-breadth is bounded two ways:
+ *
+ *  - by *where* this is called from: `sendWithTransportClassification`
+ *    below only ever runs it against the error an S3 SDK call itself threw,
+ *    so a DB/libSQL error that happens to carry a transport-shaped `code`
+ *    (e.g. its own `ECONNRESET`) is never passed through this function in
+ *    the first place, and therefore can never be mislabelled as "object
+ *    storage unreachable" (round-1 finding 1);
+ *  - by `attempts > 1` in the fallback branch (round-5 review finding): a
+ *    signing failure (bad credentials) or a local TLS validation error is
+ *    NOT a transport failure the SDK retries — `@smithy/core`'s retry
+ *    middleware gives up after the first attempt for those, same as it
+ *    would for a genuine one-shot configuration error, so `$metadata`
+ *    reaches here with `attempts: 1`. Without this check such an error —
+ *    permanent, not transient — was answered as a retryable 503, telling a
+ *    caller to try again when trying again can never help. A real
+ *    transport failure, by contrast, is exactly the case `@smithy/core`'s
+ *    retry middleware DOES retry, so it always reaches here with
+ *    `attempts > 1` (the SDK's default `maxAttempts` is 3). The accepted
+ *    trade-off: a client explicitly configured with `maxAttempts: 1` loses
+ *    this fallback branch entirely — its transport failures also stop at
+ *    `attempts: 1`, indistinguishable from the permanent-failure case this
+ *    check exists to exclude — and falls through to the generic,
+ *    non-storage-unreachable error path instead. That is judged the lesser
+ *    cost: it is a deliberate, unusual configuration choice, not the
+ *    default, and this module cannot tell "one attempt because the client
+ *    asked for one" apart from "one attempt because retrying would not have
+ *    helped" from the error alone.
  */
 export function classifyTransportFailure(
   error: unknown,
@@ -152,7 +174,22 @@ export function classifyTransportFailure(
   if (err.code !== undefined && TRANSPORT_ERROR_CODES.has(err.code)) {
     return { code: err.code, attempts: err.$metadata?.attempts };
   }
-  if (err.$metadata !== undefined) {
+  if (
+    err.$metadata !== undefined &&
+    // Round-5 review finding: without this, a permanent, non-retryable
+    // local failure (bad credentials failing to sign the request, a TLS
+    // validation error) was indistinguishable from a genuine transport
+    // failure the SDK gave up on — both reach here with `$metadata` and no
+    // `httpStatusCode`. The SDK's own retry middleware is the discriminator:
+    // it retries transport failures (this module's whole reason to exist)
+    // but stops at the FIRST attempt for a local, non-retryable one, so
+    // `attempts > 1` is true only for the case this branch should actually
+    // match. See this function's own top doc comment for the accepted
+    // trade-off (a client configured with `maxAttempts: 1` loses this
+    // branch entirely).
+    err.$metadata.attempts !== undefined &&
+    err.$metadata.attempts > 1
+  ) {
     // `?? err.name` used to fall back here, and for a plain `new Error(...)`
     // that is the literal string `"Error"` — a code that reads as
     // meaningful but names nothing (round-3 finding 3). `"unknown"` says
@@ -245,6 +282,13 @@ export async function sendWithTransportClassification<T>(
     return await send();
   } catch (error) {
     const info = classifyTransportFailure(error);
+    // `error instanceof Error` is runtime-redundant here: `classifyTransportFailure`
+    // already returns non-null (`info`) only when its own `error instanceof Error`
+    // check passed, so `info` truthy implies this is already true. It is kept
+    // purely to narrow `error`'s TYPE from `unknown` to `Error` for the
+    // `ObjectStorageUnreachableError` constructor below, which requires one —
+    // TypeScript cannot infer that narrowing across the separate `classifyTransportFailure`
+    // call (round-5 review finding).
     if (info && error instanceof Error) {
       throw new ObjectStorageUnreachableError(operation, error, info);
     }

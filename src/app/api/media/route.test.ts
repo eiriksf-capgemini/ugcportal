@@ -961,9 +961,11 @@ describe("POST /api/media — object storage unreachable (ugcportal-1b2c)", () =
   beforeEach(() => {
     authMock.mockResolvedValue({ user: { id: "user-1" } });
     errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    // Both storage-unreachable log lines are throttled module-level state
-    // (round-3 finding 5) — reset between tests so one test's line does not
-    // silently suppress the next test's identical assertion.
+    // The storage-unreachable log line is throttled module-level state
+    // (round-3 finding 5; round-4 removed throttling from the separate
+    // per-key cleanup-failure line, so only this one remains) — reset
+    // between tests so one test's line does not silently suppress the next
+    // test's identical assertion.
     resetObjectStorageUnreachableLogThrottles();
   });
 
@@ -1128,6 +1130,40 @@ describe("POST /api/media — object storage unreachable (ugcportal-1b2c)", () =
     // Mutation check: giving this same error a real `$metadata.httpStatusCode`
     // (as a genuine service error like AccessDenied would carry) must take it
     // OUT of this branch — asserted directly below.
+  });
+
+  it("does not classify a $metadata-only error that stopped after a single attempt as storage-unreachable (round-5 finding 1)", async () => {
+    // Shaped like a signing failure (bad credentials) or a local TLS
+    // validation error: no `httpStatusCode` (no response was ever
+    // received), but also no `code` the SDK recognises, AND — the
+    // discriminator this test exists for — `attempts: 1`. A genuine
+    // transport failure is exactly what the SDK's own retry middleware
+    // retries, so it never stops at the first attempt (its default
+    // maxAttempts is 3); a permanent, local failure does, because retrying
+    // it could never have helped. Answering the latter with a retryable 503
+    // would tell a caller to try again when trying again can never work.
+    const singleAttemptError = new Error("could not sign request") as Error & {
+      $metadata: { attempts: number };
+    };
+    singleAttemptError.$metadata = { attempts: 1 };
+    s3SendMock.mockRejectedValueOnce(singleAttemptError);
+    const file = new File([REAL_PNG], "photo.png", { type: "image/png" });
+
+    // Not the storage-unreachable path: propagates unchanged, same as the
+    // genuine-service-error case above.
+    await expect(POST(buildRequest(file))).rejects.toThrow(
+      "could not sign request",
+    );
+    expect(errorSpy).not.toHaveBeenCalledWith(
+      "[media] object storage unreachable",
+      expect.anything(),
+    );
+
+    // Mutation check: with the `attempts > 1` guard removed from
+    // classifyTransportFailure (src/lib/s3.ts), this error IS classified —
+    // confirmed by hand, then restored. The existing
+    // metadataOnlyTransportError() test above (attempts: 2) keeps passing
+    // throughout, since it is unaffected by this guard.
   });
 
   it("does not classify a genuine S3 service error (one with an httpStatusCode) as storage-unreachable", async () => {
