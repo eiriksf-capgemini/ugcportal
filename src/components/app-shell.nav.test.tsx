@@ -34,6 +34,13 @@ vi.mock("@/components/upload-nav-link", () => ({
 vi.mock("@/components/auth-status", () => ({
   AuthStatus: () => <div data-testid="auth-stub">auth widget</div>,
 }));
+// ugcportal-3wgp: the footer's CookieSettingsLink reads consent via
+// useConsent(), which throws outside a ConsentProvider — out of scope for
+// this file's shell-structure-only tests, same reasoning as the two stubs
+// above.
+vi.mock("@/components/consent/cookie-settings-link", () => ({
+  CookieSettingsLink: () => <button data-testid="cookie-settings-stub">Cookies</button>,
+}));
 
 const { AppShell } = await import("./app-shell");
 

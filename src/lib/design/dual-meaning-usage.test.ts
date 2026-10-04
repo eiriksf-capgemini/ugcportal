@@ -177,6 +177,16 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
   },
   "src/components/gallery/containment.ts": { "text-muted-foreground": 2 },
   "src/components/auth-status.tsx": { "text-muted-foreground": 1 },
+  // Renders directly in app-shell.tsx's footer, which sits on --background
+  // (no --card/--popover/--muted/etc. fill behind it) — the safe case.
+  "src/components/consent/cookie-settings-link.tsx": {
+    "text-muted-foreground": 1,
+    "text-foreground": 1,
+  },
+  // Deliberately bg-background, not bg-popover (see this file's own
+  // comment, added after an axe run caught text-primary on bg-popover at
+  // 1.81:1 in dark mode) — the safe case.
+  "src/components/consent/cookie-banner.tsx": { "text-foreground": 1 },
 };
 
 describe("dual-meaning token usage is audited, not just found", () => {

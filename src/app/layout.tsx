@@ -2,6 +2,10 @@ import type { Metadata } from "next";
 import { Fraunces, Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { AppShell } from "@/components/app-shell";
+import { AnalyticsLoader } from "@/components/consent/analytics-loader";
+import { ConsentProvider } from "@/components/consent/consent-context";
+import { CookieBanner } from "@/components/consent/cookie-banner";
+import { readConsentCookieOnServer } from "@/lib/consent.server";
 import { SITE_DESCRIPTION, SITE_NAME } from "@/lib/site";
 
 const geistSans = Geist({
@@ -44,7 +48,13 @@ export const metadata: Metadata = {
   description: SITE_DESCRIPTION,
 };
 
-export default function RootLayout({ children }: LayoutProps<"/">) {
+export default async function RootLayout({ children }: LayoutProps<"/">) {
+  // Read once, server-side, so the first paint already matches whatever
+  // choice the browser's cookie already carries (ugcportal-3wgp) — the
+  // alternative, a client-only read, would mean every fresh page load shows
+  // the banner for one frame regardless of an earlier choice.
+  const initialConsent = await readConsentCookieOnServer();
+
   return (
     <html
       lang="en"
@@ -59,7 +69,17 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       className={`${geistSans.variable} ${geistMono.variable} ${fraunces.variable} h-full antialiased`}
     >
       <body className="min-h-full">
-        <AppShell>{children}</AppShell>
+        <ConsentProvider initialConsent={initialConsent}>
+          <AppShell>{children}</AppShell>
+          {/*
+            Mounted once, here, for every page a visitor can land on
+            (ugcportal-3wgp) — including /auth/error and the admin routes
+            (K1/K6). AnalyticsLoader is the ONLY place a tracking script may
+            mount; CookieBanner is the only banner.
+          */}
+          <CookieBanner />
+          <AnalyticsLoader />
+        </ConsentProvider>
       </body>
     </html>
   );

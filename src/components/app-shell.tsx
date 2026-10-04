@@ -2,6 +2,7 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 
 import { AuthStatus } from "@/components/auth-status";
+import { CookieSettingsLink } from "@/components/consent/cookie-settings-link";
 import { UploadNavLink } from "@/components/upload-nav-link";
 import { SITE_NAME } from "@/lib/site";
 
@@ -180,8 +181,10 @@ export function AppShell({ children }: { children: ReactNode }) {
       </main>
 
       <footer className="border-t border-border">
-        <div className="mx-auto w-full max-w-6xl px-4 py-6 text-xs text-muted-foreground sm:px-6">
-          {SITE_NAME}
+        <div className="mx-auto flex w-full max-w-6xl items-center justify-between gap-4 px-4 py-6 text-xs text-muted-foreground sm:px-6">
+          <span>{SITE_NAME}</span>
+          {/* ugcportal-3wgp K4 — reopens the cookie choice. ugcportal-akv6 owns final footer placement. */}
+          <CookieSettingsLink />
         </div>
       </footer>
     </div>
