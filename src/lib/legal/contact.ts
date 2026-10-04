@@ -21,14 +21,17 @@
  */
 
 /**
- * `[CONTROLLER NAME]`, `[CONTACT EMAIL]`, ... Upper-case letters, digits,
- * spaces, hyphens and commas, at least two characters, in square brackets.
- * Deliberately not matching `[1]`-style citation markers or lower-case
- * bracketed prose, so a real sentence cannot trip it by accident — and
- * deliberately not configurable, so there is exactly one notion of
+ * Anything in square brackets — `[CONTROLLER NAME]`, `[fill in later]`,
+ * `[Todo: confirm]` — plus the bare words TODO and TBD in any case, as whole
+ * words. Deliberately broad (PR #90 review round 1): the first version
+ * matched only upper-case tokens, which left a lower-case reminder free to
+ * ship to production unredacted. The legal pages contain no legitimate
+ * bracketed prose, so there is nothing for a broad match to trip over, and
+ * if that ever changes the right move is to reword the prose, not to narrow
+ * the guard. Not configurable, so there is exactly one notion of
  * "placeholder" for the pages, the guard and the tests.
  */
-export const PLACEHOLDER_PATTERN = /\[[A-Z][A-Z0-9 ,-]+\]/g;
+export const PLACEHOLDER_PATTERN = /\[[^\]\n]+\]|\b(?:TODO|TBD)\b/gi;
 
 /** Every placeholder token found in the given texts, in order, deduplicated. */
 export function findPlaceholders(texts: Iterable<string>): string[] {

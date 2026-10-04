@@ -64,8 +64,8 @@ export function LegalPageFrame({
           {DRAFT_NOTICE}
         </p>
       ) : null}
-      {intro.map((paragraph) => (
-        <p key={paragraph} className="mt-4 max-w-prose text-sm text-muted-foreground">
+      {intro.map((paragraph, index) => (
+        <p key={index} className="mt-4 max-w-prose text-sm text-muted-foreground">
           {paragraph}
         </p>
       ))}
@@ -99,11 +99,17 @@ export function LegalSection({
   );
 }
 
+/**
+ * Keyed by position, not by text (PR #90 review round 1): two identical
+ * paragraphs would collide on a text key. The content is static data from
+ * ./content.ts and is never reordered at runtime, so an index is a stable
+ * identity here.
+ */
 export function LegalParagraphs({ paragraphs }: { paragraphs: readonly string[] }) {
   return (
     <>
-      {paragraphs.map((paragraph) => (
-        <p key={paragraph} className="mt-3 max-w-prose text-sm text-muted-foreground">
+      {paragraphs.map((paragraph, index) => (
+        <p key={index} className="mt-3 max-w-prose text-sm text-muted-foreground">
           {paragraph}
         </p>
       ))}
@@ -119,11 +125,12 @@ export function LegalFacts({
 }) {
   return (
     <dl className="mt-4 grid max-w-prose grid-cols-1 gap-x-6 gap-y-2 text-sm sm:grid-cols-[max-content_1fr]">
-      {facts.map((fact) => (
+      {facts.map((fact, index) => (
         // A fragment keyed per row, so dt and dd stay siblings inside the dl
         // (a wrapper div between them is invalid in a grid dl for assistive
-        // tech in some browsers).
-        <LegalFact key={fact.label} {...fact} />
+        // tech in some browsers). Keyed by position for the same reason as
+        // LegalParagraphs above.
+        <LegalFact key={index} {...fact} />
       ))}
     </dl>
   );

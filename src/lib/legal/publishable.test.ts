@@ -33,19 +33,37 @@ const filledIn = {
 };
 
 describe("findPlaceholders", () => {
-  it("finds the bracketed upper-case tokens and nothing else", () => {
+  it("finds every bracketed token, whatever its case", () => {
+    // PR #90 review round 1: the first pattern was upper-case only, so a
+    // reminder like "[fill in later]" shipped. Verified by mutation: with
+    // the old pattern restored, this test fails on the second and third
+    // tokens.
     expect(
       findPlaceholders([
-        "[CONTROLLER NAME] and [HOSTING PROVIDER, COUNTRY] and [S3-COMPATIBLE STORE]",
-        // Not placeholders: a citation marker, lower-case prose, a lone
-        // bracket pair.
-        "see [1] and [as described above] and []",
+        "[CONTROLLER NAME] and [HOSTING PROVIDER, COUNTRY]",
+        "then [fill in later] and [Todo: confirm with counsel]",
       ]),
     ).toEqual([
       "[CONTROLLER NAME]",
       "[HOSTING PROVIDER, COUNTRY]",
-      "[S3-COMPATIBLE STORE]",
+      "[fill in later]",
+      "[Todo: confirm with counsel]",
     ]);
+  });
+
+  it("finds the bare words TODO and TBD as whole words only", () => {
+    expect(findPlaceholders(["Retention: TBD.", "todo: ask Eirik"])).toEqual([
+      "TBD",
+      "todo",
+    ]);
+    // Word-bounded: a word that merely contains them is prose.
+    expect(findPlaceholders(["her todos; a stbd sentence; the methodology"])).toEqual(
+      [],
+    );
+  });
+
+  it("ignores an empty bracket pair", () => {
+    expect(findPlaceholders(["an empty [] pair"])).toEqual([]);
   });
 
   it("reports each token once however often it appears", () => {

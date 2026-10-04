@@ -94,8 +94,9 @@ export default function PrivacyPage() {
         title={PRIVACY_NOT_DONE.title}
       >
         <ul className="mt-3 max-w-prose list-disc space-y-1 pl-5 text-sm text-muted-foreground">
-          {PRIVACY_NOT_DONE.items.map((item) => (
-            <li key={item}>{item}</li>
+          {PRIVACY_NOT_DONE.items.map((item, index) => (
+            // Position-keyed, like LegalParagraphs: static list, no reorder.
+            <li key={index}>{item}</li>
           ))}
         </ul>
         <LegalParagraphs paragraphs={[PRIVACY_NOT_DONE.closing]} />
