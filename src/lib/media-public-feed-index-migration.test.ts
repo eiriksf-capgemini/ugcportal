@@ -81,18 +81,18 @@ const { listPublicMedia, publicMediaListingUrl, PUBLIC_MEDIA_SCOPE } =
  * renames a filter on the feed and the index is not updated to match, this
  * derivation (and the assertion below that uses it) moves with the real
  * scope instead of silently continuing to check a stale, hand-written list.
- * Every key in the scope with a `{ not: null }` value is a column the feed
- * requires non-null; `userId` is the one key the anonymous scope's type
- * declares `never`, which `Object.entries` never sees because it was never
- * assigned.
+ *
+ * Plain `Object.keys`, not a filter re-deriving "which keys mean not-null" —
+ * `MediaAnonymousScope` (src/lib/media-listing.ts) is the type that already
+ * decides that, and it is the deciding type on purpose: every key it declares
+ * — `publishedAt`, `previewKey`, `previewId` — is typed `{ not: null }`, and
+ * the one key that isn't a not-null filter, `userId`, is typed `?: never`, so
+ * `PUBLIC_MEDIA_SCOPE` (typed as `MediaAnonymousScope`) cannot assign it at
+ * all; `Object.keys` never sees it because nothing can give it a value. A
+ * filter re-checking each value's shape here would be re-deciding, in a second
+ * place, something the type already decided in one.
  */
-const PUBLIC_FEED_NOT_NULL_COLUMNS = Object.entries(PUBLIC_MEDIA_SCOPE)
-  .filter(
-    ([, value]) =>
-      typeof value === "object" && value !== null && "not" in value && value.not === null,
-  )
-  .map(([column]) => column)
-  .sort();
+const PUBLIC_FEED_NOT_NULL_COLUMNS = Object.keys(PUBLIC_MEDIA_SCOPE).sort();
 
 /** One Media row, with every column this test varies spelled out. */
 function mediaRow(options: {

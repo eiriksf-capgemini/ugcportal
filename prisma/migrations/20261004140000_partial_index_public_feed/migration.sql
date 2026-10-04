@@ -11,6 +11,14 @@
 -- schema's `@@index([createdAt, id], where: raw(...))` — see the comment on
 -- that index in prisma/schema.prisma for the full rationale and the
 -- before/after EXPLAIN QUERY PLAN measurement.
+--
+-- DEPLOY COST: both statements below take SQLite's write lock on Media for
+-- their duration, and DROP INDEX followed by CREATE INDEX is a full table
+-- scan to rebuild the index, not an O(1) metadata change — on a Media table
+-- much larger than this repo's today, that is a write-lock window sized to
+-- the whole table, during which every write to Media (an upload, a publish,
+-- a preview write) blocks. Run this migration in a quiet window once Media
+-- is large enough for that scan to be noticeable.
 
 -- DropIndex
 DROP INDEX "Media_createdAt_id_idx";
