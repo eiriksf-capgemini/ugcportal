@@ -10,7 +10,13 @@ import {
 } from "@/lib/legal/legal-page.test-support";
 import { PRIVACY_PATH } from "@/lib/routes";
 
-import { UNDETERMINED_RETENTION_TEXT, loadPrivacy, privacyProseSections } from "./content";
+import {
+  PRIVACY_PAGE,
+  UNDETERMINED_RETENTION_TEXT,
+  loadPrivacy,
+  privacyProseSections,
+  privacyTexts,
+} from "./content";
 import PrivacyPage, { generateMetadata } from "./page";
 
 /**
@@ -27,9 +33,10 @@ function render(): string {
 describeLegalPageContract({
   path: PRIVACY_PATH,
   title: "Privacy",
+  page: PRIVACY_PAGE,
   render,
   generateMetadata,
-  texts: () => loadPrivacy().page.texts,
+  renderedTexts: () => privacyTexts(loadPrivacy().content),
   filledNeedle: `The data controller is ${FILLED_LEGAL_ENV.LEGAL_CONTROLLER_NAME}`,
 });
 

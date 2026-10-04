@@ -1,7 +1,12 @@
 import { cache } from "react";
 
 import { type LegalContact, readLegalContact } from "@/lib/legal/contact";
-import { type LegalPage, legalPage } from "@/lib/legal/publishable";
+import {
+  type LegalPage,
+  type LegalReadiness,
+  legalPage,
+  legalReadiness,
+} from "@/lib/legal/publishable";
 import {
   type LegalListSection,
   type LegalProseSection,
@@ -427,16 +432,20 @@ export const MODEL_COVERAGE: Readonly<
   MediaRightsClearance: { category: "rights" },
 };
 
-/** The prose sections, in page order, for the tests that treat them alike. */
+/**
+ * The prose sections, in page order. The ONE enumeration (round 4): the
+ * tests and `privacyTexts` both read this, so a sixth section added here is
+ * scanned, and one added anywhere else fails the test that every section
+ * the page renders is in the texts.
+ */
 export function privacyProseSections(content: PrivacyContent): LegalProseSection[] {
   return [content.controller, content.transfers, content.cookies, content.notDone, content.rights];
 }
 
-/** Every string the privacy page can render, for the placeholder scan and the markup test. */
+/** Every string the privacy page renders for a given contact. */
 export function privacyTexts(content: PrivacyContent): string[] {
   return [
     ...content.intro,
-    ...sectionTexts(content.controller),
     ...content.categories.flatMap((category) => [
       category.title,
       ...category.what,
@@ -446,16 +455,23 @@ export function privacyTexts(content: PrivacyContent): string[] {
       retentionText(category.retention),
       category.access,
     ]),
-    ...[content.transfers, content.cookies, content.notDone, content.rights].flatMap(
-      sectionTexts,
-    ),
+    ...privacyProseSections(content).flatMap(sectionTexts),
   ];
 }
 
-const textsFor = (contact: LegalContact): string[] => privacyTexts(privacyContent(contact));
+/**
+ * The page as the guard sees it — route and authored prose — built once at
+ * module load from the sentinel contact (round 4: the authored text is
+ * invariant, so it is not rebuilt per request).
+ */
+export const PRIVACY_PAGE: LegalPage = legalPage(PRIVACY_PATH, (contact) =>
+  privacyTexts(privacyContent(contact)),
+);
 
 /**
- * The content and the page record the guard reads, from one environment.
+ * What a request needs: the content for the configured contact, the page,
+ * and its readiness — computed once here, so `generateMetadata`, the
+ * component and its guard all read the same result.
  *
  * Wrapped in React's `cache` (the same idiom as `getSession` in
  * src/lib/auth.ts) so `generateMetadata` and the page component, which both
@@ -465,11 +481,11 @@ const textsFor = (contact: LegalContact): string[] => privacyTexts(privacyConten
  * environment between calls.
  */
 export const loadPrivacy = cache(
-  (env: NodeJS.ProcessEnv = process.env): { content: PrivacyContent; page: LegalPage } => {
-    const { contact } = readLegalContact(env);
-    return {
-      content: privacyContent(contact),
-      page: legalPage(PRIVACY_PATH, textsFor, contact),
-    };
-  },
+  (
+    env: NodeJS.ProcessEnv = process.env,
+  ): { content: PrivacyContent; page: LegalPage; readiness: LegalReadiness } => ({
+    content: privacyContent(readLegalContact(env).contact),
+    page: PRIVACY_PAGE,
+    readiness: legalReadiness([PRIVACY_PAGE], env),
+  }),
 );

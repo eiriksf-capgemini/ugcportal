@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import {
   LEGAL_SIGN_OFF,
   SENTINEL_CONTACT,
@@ -20,21 +22,23 @@ import {
  *     worse than no page, because it looks like compliance;
  *  2. a stray placeholder in the AUTHORED prose — "[fill in later]", "TBD" —
  *     the second line, for text that slipped past review. Authored, not
- *     rendered: the scan runs over the page built from SENTINEL_CONTACT, so
- *     an operator value that happens to contain brackets or the word TBD is
- *     a set variable, not a placeholder, and never blocks the page (PR #90
+ *     rendered: a page's prose is built once, from SENTINEL_CONTACT, so an
+ *     operator value that happens to contain brackets or the word TBD is a
+ *     set variable, not a placeholder, and never blocks the page (PR #90
  *     round 3);
- *  3. no human sign-off yet (LEGAL_SIGN_OFF, ugcportal-alg) — draft only;
- *     this is not a configuration problem an operator can fix at deploy
- *     time, so it keeps the notice and the marker rather than the page.
+ *  3. no human sign-off for THIS prose (LEGAL_SIGN_OFF, ugcportal-alg) —
+ *     draft only. The sign-off names a digest per page; a page whose
+ *     authored prose has changed since is not signed off (round 4). Not a
+ *     configuration problem an operator can fix at deploy time, so it keeps
+ *     the notice and the marker rather than the page.
  *
  * Fail-closed at two edges: at render (`assertPublishable`, called by each
  * page, so the guarantee holds however the app was started) and at boot
  * (`checkLegalPagesPublishable` from src/instrumentation.ts, so the operator
  * reads it in the first log lines rather than when the first visitor opens
- * the footer link). Both read the same `legalReadiness`, so they cannot
- * disagree. `env` is a parameter throughout so tests exercise the
- * production branch without mutating process.env.
+ * the footer link). Both format the same `LegalReadiness` through one
+ * function, so they cannot disagree. `env` is a parameter throughout so
+ * tests exercise the production branch without mutating process.env.
  */
 
 /**
@@ -61,35 +65,50 @@ export function findPlaceholders(texts: Iterable<string>): string[] {
   return Array.from(found);
 }
 
+/**
+ * A legal page as the guard sees it: its route and its AUTHORED prose. There
+ * is deliberately no rendered-text field here (round 4): the only consumer
+ * of the text-as-rendered is the test support, which derives it from the
+ * content module itself, so nothing in production can scan the wrong tree
+ * again.
+ */
 export type LegalPage = {
-  /** The route, for messages. */
+  /** The route, for messages and for the sign-off's digest map. */
   path: string;
-  /** Every string the page renders in the current environment, operator values included. */
-  texts: readonly string[];
-  /**
-   * The same strings built from SENTINEL_CONTACT — the prose this repository
-   * wrote, with no operator value in it. The placeholder scan reads THIS.
-   */
+  /** The prose this repository wrote, built once from SENTINEL_CONTACT. */
   authored: readonly string[];
+  /** sha256 hex over `authored`, computed once; what a sign-off certifies. */
+  authoredSha256: string;
 };
 
+/** The digest a sign-off records for a page's authored prose. */
+export function authoredDigest(authored: readonly string[]): string {
+  return createHash("sha256").update(JSON.stringify(authored)).digest("hex");
+}
+
 /**
- * The one way to build a LegalPage, so both pages scan the same thing: the
- * texts for the configured contact, and the texts for the sentinel.
+ * The one way to build a LegalPage: evaluate the content module's text
+ * function against the sentinel, once, at module load. Both pages go
+ * through here, so both scan the same kind of thing.
  */
 export function legalPage(
   path: string,
   textsFor: (contact: LegalContact) => readonly string[],
-  contact: LegalContact,
 ): LegalPage {
-  return { path, texts: textsFor(contact), authored: textsFor(SENTINEL_CONTACT) };
+  const authored = textsFor(SENTINEL_CONTACT);
+  return { path, authored, authoredSha256: authoredDigest(authored) };
 }
 
 export type LegalReadiness = {
+  /** The routes this readiness describes, in the order given. */
+  paths: string[];
   /** LEGAL_* variables that are unset. */
   missing: LegalContactVar[];
   /** Placeholders in the authored prose. */
   strayPlaceholders: { path: string; tokens: string[] }[];
+  /** Route -> current digest of its authored prose, for recording a sign-off. */
+  digests: Record<string, string>;
+  /** True when a sign-off exists and its digest matches every page given. */
   signedOff: boolean;
   /** True while any of the three conditions above holds. */
   draft: boolean;
@@ -106,28 +125,37 @@ export function legalReadiness(
   const strayPlaceholders = pages
     .map((page) => ({ path: page.path, tokens: findPlaceholders(page.authored) }))
     .filter(({ tokens }) => tokens.length > 0);
+  const digests = Object.fromEntries(pages.map((page) => [page.path, page.authoredSha256]));
   const blocked = missing.length > 0 || strayPlaceholders.length > 0;
-  const signedOff = signOff !== null;
-  return { missing, strayPlaceholders, signedOff, draft: blocked || !signedOff, blocked };
+  // A sign-off certifies specific words: a page whose prose has changed
+  // since is unsigned, however the constant reads.
+  const signedOff =
+    signOff !== null &&
+    pages.every((page) => signOff.authoredSha256[page.path] === page.authoredSha256);
+  return {
+    paths: pages.map((page) => page.path),
+    missing,
+    strayPlaceholders,
+    digests,
+    signedOff,
+    draft: blocked || !signedOff,
+    blocked,
+  };
 }
 
 /**
- * The boot-time check. A warning in EVERY environment while a page is
- * blocked — a fresh checkout from env.example is exactly where this is hit
- * first, the same reasoning as the sign-in check in src/instrumentation.ts
- * — with the consequence spelled out per environment. Null once nothing is
- * blocking. Sign-off alone produces no warning: it is not an operator's
- * problem to fix.
+ * The message for a blocked readiness, or null when nothing blocks. One
+ * formatter for the boot check and the render guard. Sign-off alone
+ * produces nothing: it is not an operator's problem to fix.
  */
-export function checkLegalPagesPublishable(
-  pages: readonly LegalPage[],
+export function blockerWarning(
+  readiness: LegalReadiness,
   env: NodeJS.ProcessEnv = process.env,
 ): string | null {
-  const readiness = legalReadiness(pages, env);
   if (!readiness.blocked) {
     return null;
   }
-  const paths = pages.map((page) => page.path).join(", ");
+  const paths = readiness.paths.join(", ");
   const lines: string[] = [];
   if (readiness.missing.length > 0) {
     lines.push(
@@ -151,19 +179,33 @@ export function checkLegalPagesPublishable(
 }
 
 /**
- * Called by each legal page at render. Throws in production while the page
- * is blocked, so Next serves its error page instead of a statement with no
- * controller; a no-op otherwise. Delegates to the boot check so there is
- * one definition of "blocked" and one message.
+ * The boot-time check. A warning in EVERY environment while a page is
+ * blocked — a fresh checkout from env.example is exactly where this is hit
+ * first, the same reasoning as the sign-in check in src/instrumentation.ts
+ * — with the consequence spelled out per environment.
+ */
+export function checkLegalPagesPublishable(
+  pages: readonly LegalPage[],
+  env: NodeJS.ProcessEnv = process.env,
+): string | null {
+  return blockerWarning(legalReadiness(pages, env), env);
+}
+
+/**
+ * Called by each legal page at render, with the readiness its loader already
+ * computed (round 4: once per request, not three times). Throws in
+ * production while blocked, so Next serves its error page instead of a
+ * statement with no controller; a no-op otherwise. Same formatter as the
+ * boot check, so there is one definition of "blocked" and one message.
  */
 export function assertPublishable(
-  page: LegalPage,
+  readiness: LegalReadiness,
   env: NodeJS.ProcessEnv = process.env,
 ): void {
   if (env.NODE_ENV !== "production") {
     return;
   }
-  const warning = checkLegalPagesPublishable([page], env);
+  const warning = blockerWarning(readiness, env);
   if (warning !== null) {
     throw new Error(warning);
   }

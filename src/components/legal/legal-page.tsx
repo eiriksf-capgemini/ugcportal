@@ -21,7 +21,7 @@ import type { LegalListSection, LegalProseSection } from "@/lib/legal/section";
  */
 
 /**
- * The meta tag ugcportal-akv6's footer guard reads. Present only while the
+ * The meta tag ugcportal-akv6's footer guard will read. Present only while the
  * text is a draft, so its absence IS the signal; a `content="false"` variant
  * would make the guard compare strings instead of checking presence.
  */

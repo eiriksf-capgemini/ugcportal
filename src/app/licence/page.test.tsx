@@ -12,7 +12,7 @@ import {
 } from "@/lib/legal/legal-page.test-support";
 import { LICENCE_PATH } from "@/lib/routes";
 
-import { licenceContent, licenceTexts, loadLicence } from "./content";
+import { LICENCE_PAGE, licenceContent, licenceTexts, loadLicence } from "./content";
 import LicencePage, { generateMetadata } from "./page";
 
 /**
@@ -32,9 +32,10 @@ const content = licenceContent(FILLED_CONTACT);
 describeLegalPageContract({
   path: LICENCE_PATH,
   title: "Licence",
+  page: LICENCE_PAGE,
   render,
   generateMetadata,
-  texts: () => loadLicence().page.texts,
+  renderedTexts: () => licenceTexts(loadLicence().content),
   filledNeedle: `The rights-holder for licensing questions is ${FILLED_CONTACT.controllerName}`,
 });
 

@@ -7,12 +7,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { DRAFT_META_NAME, DRAFT_NOTICE } from "@/components/legal/legal-page";
 import {
   LEGAL_CONTACT_VARS,
-  LEGAL_SIGN_OFF,
   type LegalContact,
   type LegalContactVar,
   readLegalContact,
   unsetMarker,
 } from "@/lib/legal/contact";
+import { type LegalPage, legalReadiness } from "@/lib/legal/publishable";
 
 /**
  * Shared test support for the legal pages (ugcportal-qnq9.4; one helper
@@ -97,12 +97,20 @@ export function textContent(markup: string): string {
 export type LegalPageUnderTest = {
   path: string;
   title: string;
+  /** The page as the guard sees it: route and authored prose. */
+  page: LegalPage;
   /** Renders the page under the current process.env. */
   render: () => string;
   /** The page's generateMetadata, under the current process.env. */
   generateMetadata: () => Metadata;
-  /** Every string the page can render, under the current process.env. */
-  texts: () => readonly string[];
+  /**
+   * Every string the page renders under the current process.env — the
+   * content module's text function applied to the configured contact. Only
+   * the tests want this (round 4): the guard scans `page.authored`, the
+   * sentinel-built counterpart, and this is how the tests check that the
+   * two trees are the same prose with only the contact substituted.
+   */
+  renderedTexts: () => readonly string[];
   /** A string the page is known to render under FILLED_LEGAL_ENV. */
   filledNeedle: string;
 };
@@ -164,29 +172,48 @@ export function describeLegalPageContract(page: LegalPageUnderTest): void {
       expect(page.generateMetadata().title).toBe(page.title);
     });
 
-    it("stays a draft after configuration exactly until the sign-off lands", () => {
-      // Configuration is two of the three draft conditions; the third is
-      // LEGAL_SIGN_OFF in src/lib/legal/contact.ts. legalReadiness's own
-      // test drives that parameter both ways; this pins the page to it.
+    it("stays a draft after configuration exactly until a sign-off for this prose lands", () => {
+      // Configuration is two of the three draft conditions; the third is a
+      // LEGAL_SIGN_OFF whose digest matches this page's authored prose.
+      // legalReadiness's own tests drive that both ways; this pins the page
+      // to it.
       stubLegalEnv("production", FILLED_LEGAL_ENV);
-      const signedOff = LEGAL_SIGN_OFF !== null;
+      const { signedOff } = legalReadiness([page.page]);
       expect(page.render().includes(DRAFT_NOTICE)).toBe(!signedOff);
       expect(page.generateMetadata().other?.[DRAFT_META_NAME] === "true").toBe(!signedOff);
     });
 
-    it("renders every string the placeholder scan is shown, as visible text", () => {
-      // texts() is what the guard checks. If the page rendered a string the
-      // list did not include, a placeholder could hide there — so every
-      // text must appear in the page's text content.
+    it("renders the configured counterpart of every authored string, as visible text", () => {
+      // The guard scans `page.authored` (sentinel-built); the page renders
+      // the same prose with the real contact substituted. Two checks pin
+      // that the two trees ARE the same prose: same length (so a string
+      // present in one cannot be missing from the other — the purity
+      // assumption the design rests on), and every rendered string visible
+      // in the page's text content (so nothing the scan would see is hidden
+      // from a reader, or vice versa).
       stubLegalEnv("development", FILLED_LEGAL_ENV);
       const text = textContent(page.render());
-      const texts = page.texts();
-      expect(texts.length).toBeGreaterThan(5);
-      for (const needle of texts) {
+      const rendered = page.renderedTexts();
+      expect(rendered.length).toBeGreaterThan(5);
+      expect(rendered.length).toBe(page.page.authored.length);
+      for (const needle of rendered) {
         expect(text, needle.slice(0, 60)).toContain(needle);
       }
       expect(text).not.toContain("undefined");
       expect(text).not.toContain("[object");
+    });
+
+    it("authored and rendered differ only where the contact is substituted", () => {
+      // The sentinel is a constant; so every position where the two trees
+      // differ must contain a sentinel value on the authored side.
+      stubLegalEnv("development", FILLED_LEGAL_ENV);
+      const rendered = page.renderedTexts();
+      page.page.authored.forEach((authored, index) => {
+        if (authored !== rendered[index]) {
+          expect(authored, `index ${index}`).toMatch(/-sentinel\b/);
+        }
+      });
+      expect(page.page.authored.some((authored) => /-sentinel\b/.test(authored))).toBe(true);
     });
   });
 }

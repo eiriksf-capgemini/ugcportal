@@ -8,7 +8,7 @@ import {
   LegalSection,
   legalMetadata,
 } from "@/components/legal/legal-page";
-import { assertPublishable, legalReadiness } from "@/lib/legal/publishable";
+import { assertPublishable } from "@/lib/legal/publishable";
 
 import { loadPrivacy, retentionText } from "./content";
 
@@ -21,22 +21,21 @@ import { loadPrivacy, retentionText } from "./content";
  * in any way the text does not describe. The one deliberate failure: in
  * production, while a variable is unset or a placeholder remains,
  * `assertPublishable` throws rather than serve a statement with no
- * identifiable controller (GDPR Art. 13(1)(a)). Draft status comes from the
- * same reading plus the sign-off constant, so the notice, the meta marker
- * and the guard cannot disagree.
+ * identifiable controller (GDPR Art. 13(1)(a)). The loader computes the
+ * readiness once per request; the metadata, the guard and the notice all
+ * read that one result, so they cannot disagree.
  */
 
 export function generateMetadata(): Metadata {
-  return legalMetadata("Privacy", legalReadiness([loadPrivacy().page]).draft);
+  return legalMetadata("Privacy", loadPrivacy().readiness.draft);
 }
 
 export default function PrivacyPage() {
-  const { content, page } = loadPrivacy();
-  assertPublishable(page);
-  const { draft } = legalReadiness([page]);
+  const { content, readiness } = loadPrivacy();
+  assertPublishable(readiness);
 
   return (
-    <LegalPageFrame title="Privacy" intro={content.intro} draft={draft}>
+    <LegalPageFrame title="Privacy" intro={content.intro} draft={readiness.draft}>
       <LegalProse section={content.controller} testIdPrefix="privacy-section" />
 
       <h2 className="mt-12 text-xl font-medium tracking-tight text-foreground">

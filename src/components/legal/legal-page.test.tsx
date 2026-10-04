@@ -20,7 +20,7 @@ describe("legalMetadata", () => {
   });
 
   it("carries neither once the page is no longer a draft", () => {
-    // Absence IS the signal ugcportal-akv6's guard reads, so this must be
+    // Absence IS the signal ugcportal-akv6's guard will read, so this must be
     // an absent key, not a "false".
     const metadata = legalMetadata("Privacy", false);
     expect(metadata).toEqual({ title: "Privacy" });

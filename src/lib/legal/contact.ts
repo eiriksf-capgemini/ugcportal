@@ -92,17 +92,31 @@ export const SENTINEL_CONTACT: LegalContact = {
  * The human sign-off ugcportal-alg requires before the draft marker comes
  * off (bead K4: "review by whoever plays the DPO/legal role for this project
  * before the draft marker is removed"). A source constant, not an
- * environment variable, because it is a fact about THIS text at THIS
- * revision: set it in the same PR that makes the reviewed change, so the
- * sign-off and the words it covers move together. `null` until then.
+ * environment variable, because it is a fact about THIS text: `null` until
+ * the review happens.
+ *
+ * It is bound to the words it certifies (PR #90 round 4): `authoredSha256`
+ * holds, per route, the digest of that page's authored prose
+ * (`LegalPage.authoredSha256`, computed in publishable.ts). `legalReadiness`
+ * treats a page whose digest no longer matches as NOT signed off, so editing
+ * a paragraph clears the sign-off by itself and nobody has to remember to.
+ * To record a sign-off: take the digests from `legalReadiness(...).digests`
+ * (or from the failing test's message), and set them here in the same PR
+ * as the reviewed text.
  *
  * Sign-off is one of the three things that keep a page in draft (see
- * `legalReadiness` in publishable.ts); unlike the other two it is not a
- * configuration problem, so it does not stop production from serving the
- * page — it keeps the draft notice, the `ugcportal:draft` meta tag that
- * ugcportal-akv6's footer guard reads, and `noindex` in place.
+ * `legalReadiness`); unlike the other two it is not a configuration problem,
+ * so it does not stop production from serving the page — it keeps the draft
+ * notice, the `ugcportal:draft` meta tag that ugcportal-akv6's footer guard
+ * will read, and `noindex` in place.
  */
-export type LegalSignOff = { by: string; date: string; bead: string };
+export type LegalSignOff = {
+  by: string;
+  date: string;
+  bead: string;
+  /** Route path -> sha256 hex of that page's authored prose at sign-off. */
+  authoredSha256: Readonly<Record<string, string>>;
+};
 export const LEGAL_SIGN_OFF: LegalSignOff | null = null;
 
 /** The ISO date the text was last checked against the code. */

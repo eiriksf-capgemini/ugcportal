@@ -10,11 +10,14 @@ import {
   itReviewPointersExist,
 } from "@/lib/legal/legal-page.test-support";
 
+import { type LegalProseSection, sectionTexts } from "@/lib/legal/section";
+
 import {
   MODEL_COVERAGE,
   UNDETERMINED_RETENTION_TEXT,
   privacyContent,
   privacyProseSections,
+  privacyTexts,
   retentionText,
   type Retention,
 } from "./content";
@@ -101,6 +104,23 @@ describe("K1: every category states the Art. 13 items", () => {
     expect(categoryIds.size).toBe(content.categories.length);
     for (const section of privacyProseSections(content)) {
       expect(categoryIds).not.toContain(section.id);
+    }
+  });
+
+  it("scans every prose section the content declares (one enumeration, round 4)", () => {
+    // privacyTexts derives its section list from privacyProseSections, and
+    // privacyProseSections must name every LegalProseSection on the content
+    // object — so a sixth section cannot be added without being scanned.
+    const declared = Object.values(content).filter(
+      (value): value is LegalProseSection =>
+        typeof value === "object" && value !== null && "paragraphs" in value,
+    );
+    expect(privacyProseSections(content)).toEqual(declared);
+    const texts = privacyTexts(content);
+    for (const section of declared) {
+      for (const text of sectionTexts(section)) {
+        expect(texts).toContain(text);
+      }
     }
   });
 

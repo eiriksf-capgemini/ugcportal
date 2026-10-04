@@ -5,7 +5,7 @@
  * a quiet difference in how data is stored — the kind nobody discovers until
  * an audit — or, for the sign-in gate below, as an unexplained refusal.
  */
-import { legalPages } from "@/lib/legal/pages";
+import { LEGAL_PAGES } from "@/lib/legal/pages";
 import { checkLegalPagesPublishable } from "@/lib/legal/publishable";
 import {
   PERMITTED_EMAILS_VAR,
@@ -115,7 +115,7 @@ export async function register(): Promise<void> {
     // legal pages refuse to render in production (src/lib/legal/
     // publishable.ts); say which at boot rather than leaving it to the
     // first visitor to find.
-    checkLegalPagesPublishable(legalPages()),
+    checkLegalPagesPublishable(LEGAL_PAGES),
   ]) {
     if (warning) {
       console.error(warning);

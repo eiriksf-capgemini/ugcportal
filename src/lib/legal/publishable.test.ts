@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import {
   LEGAL_CONTACT_VARS,
   SENTINEL_CONTACT,
+  type LegalSignOff,
   readLegalContact,
 } from "@/lib/legal/contact";
 import {
@@ -14,9 +15,10 @@ import {
   REPO_ROOT,
   UNSET_LEGAL_ENV,
 } from "@/lib/legal/legal-page.test-support";
-import { legalPages } from "@/lib/legal/pages";
+import { LEGAL_PAGES } from "@/lib/legal/pages";
 import {
   assertPublishable,
+  authoredDigest,
   checkLegalPagesPublishable,
   findPlaceholders,
   legalPage,
@@ -36,19 +38,28 @@ const PROD = { NODE_ENV: "production" } as NodeJS.ProcessEnv;
 const DEV = { NODE_ENV: "development" } as NodeJS.ProcessEnv;
 const filled = { ...PROD, ...FILLED_LEGAL_ENV };
 const unset = { ...PROD, ...UNSET_LEGAL_ENV };
+const bracketed = { ...PROD, ...BRACKETED_LEGAL_ENV };
 
-const SIGNED = { by: "test", date: "2026-10-04", bead: "ugcportal-alg" };
-
-/** Built the way the real pages are: authored prose with the contact interpolated. */
-function examplePage(env: NodeJS.ProcessEnv, prose = "Write to {email}.") {
-  return legalPage(
-    "/example",
-    (contact) => [prose.replace("{email}", contact.contactEmail)],
-    readLegalContact(env).contact,
-  );
+/** Built the way the real pages are: authored prose, with the contact interpolated. */
+function examplePage(prose = "Write to {email}.", route = "/example") {
+  return legalPage(route, (contact) => [prose.replace("{email}", contact.contactEmail)]);
 }
-const cleanPage = examplePage(filled);
-const strayPage = examplePage(filled, "Retention: [fill in later]. Write to {email}.");
+const cleanPage = examplePage();
+const strayPage = examplePage("Retention: [fill in later]. Write to {email}.");
+
+/** A sign-off that certifies exactly the given pages' current prose. */
+function signOffFor(...pages: { path: string; authoredSha256: string }[]): LegalSignOff {
+  return {
+    by: "test",
+    date: "2026-10-04",
+    bead: "ugcportal-alg",
+    authoredSha256: Object.fromEntries(pages.map((page) => [page.path, page.authoredSha256])),
+  };
+}
+// For cleanPage's prose. strayPage shares its route, so a map keyed by
+// route cannot certify both — and the stray tests only ever assert
+// "blocked", which holds whatever the sign-off says.
+const SIGNED = signOffFor(cleanPage);
 
 describe("readLegalContact", () => {
   it("reads all four variables", () => {
@@ -75,9 +86,9 @@ describe("readLegalContact", () => {
   });
 
   it("trims a value rather than reporting it", () => {
-    expect(readLegalContact({ ...filled, LEGAL_CONTACT_EMAIL: " a@b.no " }).contact.contactEmail).toBe(
-      "a@b.no",
-    );
+    expect(
+      readLegalContact({ ...filled, LEGAL_CONTACT_EMAIL: " a@b.no " }).contact.contactEmail,
+    ).toBe("a@b.no");
   });
 
   it("names every variable in LEGAL_CONTACT_VARS when nothing is set", () => {
@@ -114,12 +125,29 @@ describe("findPlaceholders", () => {
     expect(findPlaceholders(["an empty [] pair"])).toEqual([]);
     expect(findPlaceholders(["[X1] [X1]", "[X1]"])).toEqual(["[X1]"]);
   });
+
+  it("the sentinel contact can never read as a placeholder", () => {
+    expect(findPlaceholders(Object.values(SENTINEL_CONTACT))).toEqual([]);
+  });
+});
+
+describe("legalPage", () => {
+  it("builds the authored prose from the sentinel, with its digest", () => {
+    expect(cleanPage.authored).toEqual(["Write to contact-email-sentinel."]);
+    expect(cleanPage.authoredSha256).toBe(authoredDigest(cleanPage.authored));
+    expect(cleanPage.authoredSha256).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("gives different prose a different digest", () => {
+    expect(examplePage("Write to {email}!").authoredSha256).not.toBe(cleanPage.authoredSha256);
+  });
 });
 
 describe("legalReadiness", () => {
   it("is blocked and draft while a variable is unset", () => {
     const readiness = legalReadiness([cleanPage], unset, SIGNED);
     expect(readiness.missing).toEqual(Object.values(LEGAL_CONTACT_VARS));
+    expect(readiness.strayPlaceholders).toEqual([]);
     expect(readiness.blocked).toBe(true);
     expect(readiness.draft).toBe(true);
   });
@@ -133,48 +161,31 @@ describe("legalReadiness", () => {
     expect(readiness.draft).toBe(true);
   });
 
-  it("does not report an unset variable's marker a second time as stray prose", () => {
-    const env = { ...filled, LEGAL_CONTACT_EMAIL: "" };
-    const page = examplePage(env);
-    expect(page.texts[0]).toContain("[LEGAL_CONTACT_EMAIL]");
-    const readiness = legalReadiness([page], env, SIGNED);
-    expect(readiness.missing).toEqual(["LEGAL_CONTACT_EMAIL"]);
-    expect(readiness.strayPlaceholders).toEqual([]);
-  });
-
   it("scans the authored prose, not the operator's values (round 3)", () => {
     // An operator value with brackets or TBD is a SET variable. The page's
     // rendered text contains the brackets; the scan must not see them.
-    const env = { ...PROD, ...BRACKETED_LEGAL_ENV };
-    const page = legalPage(
-      "/example",
-      (contact) => [`Hosted by ${contact.hostingProvider}; run by ${contact.controllerName}.`],
-      readLegalContact(env).contact,
-    );
-    expect(page.texts[0]).toContain("[Oslo]");
-    expect(page.texts[0]).toContain("TBD");
-    const readiness = legalReadiness([page], env, SIGNED);
+    const textsFor = (contact: { hostingProvider: string; controllerName: string }) => [
+      `Hosted by ${contact.hostingProvider}; run by ${contact.controllerName}.`,
+    ];
+    const page = legalPage("/example", textsFor);
+    const rendered = textsFor(readLegalContact(bracketed).contact);
+    expect(rendered[0]).toContain("[Oslo]");
+    expect(rendered[0]).toContain("TBD");
+    const readiness = legalReadiness([page], bracketed, signOffFor(page));
     expect(readiness.strayPlaceholders).toEqual([]);
     expect(readiness).toMatchObject({ missing: [], blocked: false, draft: false });
-    expect(() => assertPublishable(page, env)).not.toThrow();
+    expect(() => assertPublishable(readiness, bracketed)).not.toThrow();
   });
 
   it("still catches a placeholder the repository wrote next to a bracketed value", () => {
     // The control for the case above: the authored text is what is scanned,
     // and an authored placeholder is still found with the same env.
-    const env = { ...PROD, ...BRACKETED_LEGAL_ENV };
-    const page = legalPage(
-      "/example",
-      (contact) => [`Hosted by ${contact.hostingProvider} [since TBD].`],
-      readLegalContact(env).contact,
-    );
-    expect(legalReadiness([page], env, SIGNED).strayPlaceholders).toEqual([
+    const page = legalPage("/example", (contact) => [
+      `Hosted by ${contact.hostingProvider} [since TBD].`,
+    ]);
+    expect(legalReadiness([page], bracketed, signOffFor(page)).strayPlaceholders).toEqual([
       { path: "/example", tokens: ["[since TBD]"] },
     ]);
-  });
-
-  it("the sentinel contact can never read as a placeholder", () => {
-    expect(findPlaceholders(Object.values(SENTINEL_CONTACT))).toEqual([]);
   });
 
   it("is a draft but not blocked when configured and not signed off", () => {
@@ -184,18 +195,47 @@ describe("legalReadiness", () => {
     expect(readiness.draft).toBe(true);
   });
 
-  it("is neither once configured and signed off", () => {
+  it("is neither once configured and signed off for this prose", () => {
     const readiness = legalReadiness([cleanPage], filled, SIGNED);
     expect(readiness).toMatchObject({ blocked: false, draft: false, signedOff: true });
+  });
+
+  it("treats a sign-off for different prose as no sign-off (round 4)", () => {
+    // Edit one paragraph after the sign-off: the digest no longer matches,
+    // so the page is unsigned and back in draft — not blocked, since the
+    // configuration is fine. Verified by mutation: comparing `signOff !==
+    // null` alone makes this pass as signed off.
+    const edited = examplePage("Write to {email}, any time.");
+    expect(edited.path).toBe(cleanPage.path);
+    const readiness = legalReadiness([edited], filled, SIGNED);
+    expect(readiness.signedOff).toBe(false);
+    expect(readiness.draft).toBe(true);
+    expect(readiness.blocked).toBe(false);
+    // The control: re-sign the edited prose and it is signed off again.
+    expect(legalReadiness([edited], filled, signOffFor(edited)).signedOff).toBe(true);
+  });
+
+  it("requires a matching digest for every page given, and exposes the current ones", () => {
+    const other = examplePage("Other page: {email}.", "/other");
+    const partial = signOffFor(cleanPage);
+    expect(legalReadiness([cleanPage], filled, partial).signedOff).toBe(true);
+    expect(legalReadiness([cleanPage, other], filled, partial).signedOff).toBe(false);
+    expect(legalReadiness([cleanPage, other], filled, signOffFor(cleanPage, other)).signedOff).toBe(
+      true,
+    );
+    expect(legalReadiness([cleanPage, other], filled).digests).toEqual({
+      "/example": cleanPage.authoredSha256,
+      "/other": other.authoredSha256,
+    });
   });
 });
 
 describe("checkLegalPagesPublishable", () => {
   it("names the unset variables, the pages, and env.example", () => {
-    const warning = checkLegalPagesPublishable(
-      [cleanPage, { ...cleanPage, path: "/other" }],
-      { ...filled, LEGAL_CONTROLLER_NAME: "" },
-    );
+    const warning = checkLegalPagesPublishable([cleanPage, examplePage(undefined, "/other")], {
+      ...filled,
+      LEGAL_CONTROLLER_NAME: "",
+    });
     expect(warning).toContain("LEGAL_CONTROLLER_NAME is not set");
     expect(warning).toContain("/example, /other");
     expect(warning).toContain("env.example");
@@ -204,7 +244,7 @@ describe("checkLegalPagesPublishable", () => {
 
   it("names stray placeholder text per page", () => {
     const warning = checkLegalPagesPublishable(
-      [cleanPage, { ...strayPage, path: "/stray" }],
+      [cleanPage, examplePage("[fill in later] {email}", "/stray")],
       filled,
     );
     expect(warning).toContain("/stray still contains placeholder text ([fill in later])");
@@ -233,22 +273,26 @@ describe("assertPublishable", () => {
     const env = { ...filled, LEGAL_CONTACT_EMAIL: "" };
     const expected = checkLegalPagesPublishable([cleanPage], env);
     expect(expected).not.toBeNull();
-    expect(() => assertPublishable(cleanPage, env)).toThrow(expected as string);
+    expect(() => assertPublishable(legalReadiness([cleanPage], env), env)).toThrow(
+      expected as string,
+    );
   });
 
   it("throws in production on stray placeholder text alone", () => {
-    expect(() => assertPublishable(strayPage, filled)).toThrow(/\[fill in later\]/);
+    expect(() => assertPublishable(legalReadiness([strayPage], filled), filled)).toThrow(
+      /\[fill in later\]/,
+    );
   });
 
-  it("is quiet in production once configured", () => {
-    expect(() => assertPublishable(cleanPage, filled)).not.toThrow();
+  it("is quiet in production once configured, signed off or not", () => {
+    expect(() => assertPublishable(legalReadiness([cleanPage], filled, null), filled)).not.toThrow();
   });
 
   it("lets an unconfigured draft render outside production", () => {
-    expect(() => assertPublishable(cleanPage, { ...DEV, ...UNSET_LEGAL_ENV })).not.toThrow();
-    expect(() =>
-      assertPublishable(strayPage, { NODE_ENV: "test", ...FILLED_LEGAL_ENV } as NodeJS.ProcessEnv),
-    ).not.toThrow();
+    const dev = { ...DEV, ...UNSET_LEGAL_ENV };
+    expect(() => assertPublishable(legalReadiness([cleanPage], dev), dev)).not.toThrow();
+    const test = { NODE_ENV: "test", ...FILLED_LEGAL_ENV } as NodeJS.ProcessEnv;
+    expect(() => assertPublishable(legalReadiness([strayPage], test), test)).not.toThrow();
   });
 });
 
@@ -257,20 +301,16 @@ describe("the real legal pages", () => {
     // A "[TODO]" in the prose would otherwise be caught only in production,
     // by a visitor. The authored prose is the same under every env, so this
     // holds unset, filled and bracketed alike.
-    const bracketed = { ...PROD, ...BRACKETED_LEGAL_ENV };
     for (const env of [filled, unset, bracketed]) {
-      expect(legalReadiness(legalPages(env), env).strayPlaceholders).toEqual([]);
+      expect(legalReadiness(LEGAL_PAGES, env).strayPlaceholders).toEqual([]);
     }
   });
 
   it("are blocked exactly while unconfigured", () => {
-    const bracketed = { ...PROD, ...BRACKETED_LEGAL_ENV };
-    expect(legalReadiness(legalPages(unset), unset).blocked).toBe(true);
-    expect(legalReadiness(legalPages(filled), filled).blocked).toBe(false);
-    expect(legalReadiness(legalPages(bracketed), bracketed).blocked).toBe(false);
-    for (const page of legalPages(bracketed)) {
-      expect(() => assertPublishable(page, bracketed)).not.toThrow();
-    }
+    expect(legalReadiness(LEGAL_PAGES, unset).blocked).toBe(true);
+    expect(legalReadiness(LEGAL_PAGES, filled).blocked).toBe(false);
+    expect(legalReadiness(LEGAL_PAGES, bracketed).blocked).toBe(false);
+    expect(() => assertPublishable(legalReadiness(LEGAL_PAGES, bracketed), bracketed)).not.toThrow();
   });
 
   it("each exist as a page file at the path src/lib/routes.ts names", () => {
@@ -280,10 +320,8 @@ describe("the real legal pages", () => {
     for (const route of [PRIVACY_PATH, LICENCE_PATH]) {
       expect(existsSync(path.join(appDir, route.slice(1), "page.tsx")), route).toBe(true);
     }
-    expect(
-      legalPages(filled)
-        .map((page) => page.path)
-        .sort(),
-    ).toEqual([LICENCE_PATH, PRIVACY_PATH].sort());
+    expect(LEGAL_PAGES.map((page) => page.path).sort()).toEqual(
+      [LICENCE_PATH, PRIVACY_PATH].sort(),
+    );
   });
 });

@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 
 import { LegalPageFrame, LegalProse, legalMetadata } from "@/components/legal/legal-page";
-import { assertPublishable, legalReadiness } from "@/lib/legal/publishable";
+import { assertPublishable } from "@/lib/legal/publishable";
 
 import { loadLicence } from "./content";
 
@@ -12,16 +12,15 @@ import { loadLicence } from "./content";
  */
 
 export function generateMetadata(): Metadata {
-  return legalMetadata("Licence", legalReadiness([loadLicence().page]).draft);
+  return legalMetadata("Licence", loadLicence().readiness.draft);
 }
 
 export default function LicencePage() {
-  const { content, page } = loadLicence();
-  assertPublishable(page);
-  const { draft } = legalReadiness([page]);
+  const { content, readiness } = loadLicence();
+  assertPublishable(readiness);
 
   return (
-    <LegalPageFrame title="Licence" intro={content.intro} draft={draft}>
+    <LegalPageFrame title="Licence" intro={content.intro} draft={readiness.draft}>
       {content.sections.map((section) => (
         <LegalProse key={section.id} section={section} testIdPrefix="licence-section" />
       ))}
