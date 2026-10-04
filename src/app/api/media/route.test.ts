@@ -99,7 +99,9 @@ vi.mock("@/lib/watermark", async (importOriginal) => {
   };
 });
 
-const { GET, POST } = await import("@/app/api/media/route");
+const { GET, POST, resetObjectStorageUnreachableLogThrottles } = await import(
+  "@/app/api/media/route"
+);
 const { encodeMediaCursor } = await import("@/lib/media-listing");
 // Dynamic, after the vi.mock calls: @/lib/tags imports the Prisma client at
 // module scope, so a static import here would evaluate that mock factory
@@ -903,6 +905,10 @@ describe("POST /api/media — object storage unreachable (ugcportal-1b2c)", () =
   beforeEach(() => {
     authMock.mockResolvedValue({ user: { id: "user-1" } });
     errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    // Both storage-unreachable log lines are throttled module-level state
+    // (round-3 finding 5) — reset between tests so one test's line does not
+    // silently suppress the next test's identical assertion.
+    resetObjectStorageUnreachableLogThrottles();
   });
 
   afterEach(() => {
@@ -1053,6 +1059,11 @@ describe("POST /api/media — object storage unreachable (ugcportal-1b2c)", () =
       "[media] object storage unreachable",
       expect.objectContaining({
         operation: "original",
+        // Round-3 finding 3: a plain `new Error(...)` has no real `code`,
+        // and falling back to `err.name` used to log the literal string
+        // "Error" here — meaningless, but reads as though it were a real
+        // code. "unknown" says plainly that none was available.
+        code: "unknown",
         attempts: 2,
         message: "socket hang up",
       }),
@@ -1130,8 +1141,13 @@ describe("POST /api/media — object storage unreachable (ugcportal-1b2c)", () =
   // SDK's own classification while actually omitting EPIPE, EHOSTUNREACH,
   // ENETUNREACH and EAI_AGAIN. These are @smithy/core's
   // NODEJS_TIMEOUT_ERROR_CODES/NODEJS_NETWORK_ERROR_CODES entries that
-  // TRANSPORT_ERROR_CODES (src/lib/s3.ts) previously left out.
-  it.each(["EPIPE", "EHOSTUNREACH", "ENETUNREACH", "EAI_AGAIN"])(
+  // TRANSPORT_ERROR_CODES (src/lib/s3.ts) previously left out. ENOTFOUND
+  // added per round-3 finding 4 — it was already in TRANSPORT_ERROR_CODES
+  // but, unlike the others here, had no coverage through this
+  // `codeOnlyTransportError` fixture (only through `transportError`
+  // elsewhere, which also sets `$metadata` and so cannot isolate the `code`
+  // check the way this block does — see that fixture's own doc comment).
+  it.each(["EPIPE", "EHOSTUNREACH", "ENETUNREACH", "EAI_AGAIN", "ENOTFOUND"])(
     "classifies %s as storage-unreachable, aligned with @smithy/core's own lists",
     async (code) => {
       s3SendMock.mockRejectedValueOnce(codeOnlyTransportError(code));
@@ -1181,6 +1197,52 @@ describe("POST /api/media — object storage unreachable (ugcportal-1b2c)", () =
     // confirmed by hand: status 503, `reason: "object_storage_unavailable"`,
     // and the "[media] object storage unreachable" log fires. Restored to
     // the DB-rejection form above afterwards.
+  });
+
+  it("throttles the storage-unreachable log line across a burst of requests, rather than logging once per request (round-3 finding 5)", async () => {
+    vi.useFakeTimers();
+    try {
+      // Every send() rejects for the duration of this test, standing in for
+      // a sustained outage across several uploads — not `mockRejectedValueOnce`,
+      // which would only cover the first request.
+      s3SendMock.mockRejectedValue(transportError({ code: "ECONNRESET" }));
+      // A video, not an image: it skips generateWatermarkedPreview (no
+      // preview is made for VIDEO, ugcportal-pmb) entirely, so two requests
+      // in a row cost no real image-processing work and nothing here
+      // competes with the fake timers below for an async callback.
+      const buildVideoRequest = () =>
+        buildRequest(new File([MP4_HEADER], "clip.mp4", { type: "video/mp4" }));
+
+      const first = await POST(buildVideoRequest());
+      expect(first.status).toBe(503);
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+
+      // A second request, still inside the throttle window: it still gets
+      // its own correct 503 (throttling the LOG must never throttle the
+      // RESPONSE), but the log line itself does not fire again yet.
+      const second = await POST(buildVideoRequest());
+      expect(second.status).toBe(503);
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+
+      // The window elapses with nothing further happening: the scheduled
+      // flush reports the one occurrence the throttle swallowed, with no
+      // third request needed to trigger it.
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(errorSpy).toHaveBeenCalledTimes(2);
+      expect(errorSpy).toHaveBeenNthCalledWith(
+        2,
+        "[media] object storage unreachable",
+        expect.objectContaining({ suppressed: 1 }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+
+    // Mutation check: removing `objectStorageUnreachableLog.log(...)` in
+    // route.ts (calling `console.error` directly instead, as rounds 1-2
+    // left it) makes `errorSpy` get called a second time immediately after
+    // the second request, before the timers are ever advanced — confirmed
+    // by hand, then restored.
   });
 });
 

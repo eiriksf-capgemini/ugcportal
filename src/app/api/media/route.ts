@@ -36,6 +36,7 @@ import {
   sendWithTransportClassification,
 } from "@/lib/s3";
 import { parseTagNames, resolveTagRows } from "@/lib/tags";
+import { createThrottledLog } from "@/lib/throttled-log";
 import type { UploadReservation } from "@/lib/upload-memory";
 import {
   UploadMemoryExhaustedError,
@@ -55,6 +56,47 @@ import {
 
 function sanitizeFilename(name: string): string {
   return name.replace(/[^a-zA-Z0-9._-]/g, "_").slice(-100);
+}
+
+/**
+ * Shortest interval between "object storage unreachable" log lines, and
+ * separately between "failed to clean up orphaned object" ones — each gets
+ * its own independent throttle instance below, since a storage outage during
+ * a burst of uploads would otherwise produce one line of each PER REQUEST
+ * (round-3 review finding 5, the same volume problem `watermark.ts`'s
+ * `SHED_LOG_INTERVAL_MS` exists to solve for the busy-503 path, ugcportal-e86
+ * — this is the storage-unreachable 503's sibling case, and had no such
+ * throttle until now).
+ *
+ * `flush: true` on both: an outage is exactly the kind of capacity/service
+ * signal `createThrottledLog`'s doc comment says that option is for — losing
+ * the tail of an outage burst (how many uploads actually failed, not just
+ * that one did) is a real cost here, the same way it would be for a shed.
+ */
+const OBJECT_STORAGE_UNREACHABLE_LOG_INTERVAL_MS = 10_000;
+
+const objectStorageUnreachableLog = createThrottledLog({
+  intervalMs: OBJECT_STORAGE_UNREACHABLE_LOG_INTERVAL_MS,
+  flush: true,
+});
+
+const cleanupFailureLog = createThrottledLog({
+  intervalMs: OBJECT_STORAGE_UNREACHABLE_LOG_INTERVAL_MS,
+  flush: true,
+});
+
+/**
+ * Test-only: both throttles above are module-level state, so a test file
+ * that triggers either log line more than once (likely, across many `it`
+ * blocks in the same process) needs to reset them between tests — otherwise
+ * every assertion past the first would be looking for a line the throttle
+ * correctly, and silently, swallowed. Mirrors the same reset-export pattern
+ * `resetWatermarkConcurrencyGate`/`resetUploadMemoryBudget` already use in
+ * this codebase.
+ */
+export function resetObjectStorageUnreachableLogThrottles(): void {
+  objectStorageUnreachableLog.reset();
+  cleanupFailureLog.reset();
 }
 
 /**
@@ -85,9 +127,12 @@ async function cleanupStoredKeys(storedKeys: readonly string[]): Promise<void> {
           }),
         ),
       ).catch((cleanupError) => {
-        console.error("[media] failed to clean up orphaned object", {
-          key: storedKey,
-          cause: cleanupError,
+        cleanupFailureLog.log((suppressed) => {
+          console.error("[media] failed to clean up orphaned object", {
+            key: storedKey,
+            cause: cleanupError,
+            ...(suppressed > 0 ? { suppressed } : {}),
+          });
         });
       }),
     ),
@@ -634,12 +679,21 @@ async function handleUpload(
       // without the error object itself, console.error has nothing to print
       // a stack trace from, and "object storage unreachable" with no stack
       // is a harder outage to debug than it needs to be).
-      console.error("[media] object storage unreachable", {
-        operation: error.operation,
-        code: error.code,
-        attempts: error.attempts,
-        message: error.message,
-        cause: error,
+      //
+      // Throttled (round-3 finding 5): an outage can affect every upload in
+      // flight, and without this a request-per-second burst would log a
+      // line per request for the one thing already true of all of them. See
+      // src/lib/throttled-log.ts.
+      const unreachableError = error;
+      objectStorageUnreachableLog.log((suppressed) => {
+        console.error("[media] object storage unreachable", {
+          operation: unreachableError.operation,
+          code: unreachableError.code,
+          attempts: unreachableError.attempts,
+          message: unreachableError.message,
+          cause: unreachableError,
+          ...(suppressed > 0 ? { suppressed } : {}),
+        });
       });
       // Whatever already landed in the bucket (the original, and/or the
       // preview) before the failing call must not be left orphaned. If

@@ -46,8 +46,20 @@ export function getBucketName(): string {
  * sync with what it claims to mirror until it is updated to match (round-1
  * review finding 6: an earlier version of this list claimed the same thing
  * while actually omitting EPIPE, EHOSTUNREACH, ENETUNREACH and EAI_AGAIN).
+ *
+ * `isTransientError` itself is deliberately NOT called here instead of
+ * hand-mirroring its lists (round-3 finding 2): it also treats a RECEIVED
+ * 5xx response, a clock-skew-corrected error, and a handful of named SDK
+ * error codes as transient, none of which belong in "object storage is
+ * unreachable" — so it is not a drop-in replacement for this set. What it
+ * IS good for is pinning this hand-kept mirror against the installed
+ * package: src/lib/s3.test.ts imports `isTransientError` from
+ * `@smithy/core/retry` and asserts it accepts every code in this exact set,
+ * so a future `@smithy/core` upgrade that changes either list fails that
+ * test instead of silently drifting a second time. Exported so that test can
+ * iterate the real list rather than a hand-copied second one.
  */
-const TRANSPORT_ERROR_CODES = new Set([
+export const TRANSPORT_ERROR_CODES = new Set([
   // @smithy/core's NODEJS_TIMEOUT_ERROR_CODES
   "ECONNRESET",
   "ECONNREFUSED",
@@ -141,10 +153,29 @@ export function classifyTransportFailure(
     return { code: err.code, attempts: err.$metadata?.attempts };
   }
   if (err.$metadata !== undefined) {
-    return { code: err.code ?? err.name, attempts: err.$metadata.attempts };
+    // `?? err.name` used to fall back here, and for a plain `new Error(...)`
+    // that is the literal string `"Error"` — a code that reads as
+    // meaningful but names nothing (round-3 finding 3). `"unknown"` says
+    // plainly that no real code was available; `message` and `cause` (see
+    // the structured log in src/app/api/media/route.ts, which includes this
+    // whole error as `cause`) are where the actual detail lives for this
+    // branch regardless.
+    return { code: err.code ?? "unknown", attempts: err.$metadata.attempts };
   }
   return null;
 }
+
+/**
+ * Which S3 call failed. A closed union rather than a plain `string`
+ * (round-2 finding 3) — the three call sites that exist today
+ * (src/app/api/media/route.ts's original PutObject, preview PutObject, and
+ * the compensating cleanup DeleteObject) are enumerable, so the type should
+ * say so rather than accept anything a future call site happens to type.
+ * Widen it when a sibling route (ugcportal-98rb) adds a genuinely new
+ * operation — e.g. the preview GET route's `GetObjectCommand` — rather than
+ * loosening it back to `string`.
+ */
+export type ObjectStorageOperation = "original" | "preview" | "cleanup";
 
 /**
  * Thrown by `sendWithTransportClassification` in place of whatever the SDK
@@ -160,19 +191,13 @@ export function classifyTransportFailure(
  * rethrowing a type nothing else in this codebase constructs removes that
  * risk structurally, rather than relying on every caller's catch block being
  * careful about what else it wraps.
+ *
+ * The original SDK error is never discarded: it is preserved as this error's
+ * own `.cause`, one property access away from any caller (or any log line
+ * that dumps this object whole, which `console.error` then unfolds into the
+ * printed stack via Node's own `cause`-chain support) — see
+ * `sendWithTransportClassification`'s own doc comment for where that is set.
  */
-/**
- * Which S3 call failed. A closed union rather than a plain `string`
- * (round-2 finding 3) — the three call sites that exist today
- * (src/app/api/media/route.ts's original PutObject, preview PutObject, and
- * the compensating cleanup DeleteObject) are enumerable, so the type should
- * say so rather than accept anything a future call site happens to type.
- * Widen it when a sibling route (ugcportal-98rb) adds a genuinely new
- * operation — e.g. the preview GET route's `GetObjectCommand` — rather than
- * loosening it back to `string`.
- */
-export type ObjectStorageOperation = "original" | "preview" | "cleanup";
-
 export class ObjectStorageUnreachableError extends Error {
   readonly code: string;
   readonly attempts: number | undefined;
@@ -208,7 +233,9 @@ export class ObjectStorageUnreachableError extends Error {
  * A non-transport error (a genuine service error, or anything unrelated)
  * passes through completely unchanged — only the shape
  * `classifyTransportFailure` actually recognises is ever rethrown as the new
- * type.
+ * type. The raw SDK error this function caught is never lost in that
+ * rethrow — it is set as `error.cause` on the `ObjectStorageUnreachableError`
+ * below.
  */
 export async function sendWithTransportClassification<T>(
   operation: ObjectStorageOperation,
