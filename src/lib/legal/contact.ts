@@ -117,7 +117,21 @@ export type LegalSignOff = {
   /** Route path -> sha256 hex of that page's authored prose at sign-off. */
   authoredSha256: Readonly<Record<string, string>>;
 };
-export const LEGAL_SIGN_OFF: LegalSignOff | null = null;
+export const LEGAL_SIGN_OFF: LegalSignOff | null = {
+  // Eirik reviewed the privacy statement and the licence text as published
+  // on main at 69f2209 (after PR #92 brought the cookie-consent section into
+  // the present tense) and approved them on 2026-10-05. The digests are the
+  // ones legalReadiness(LEGAL_PAGES).digests reported for that text; any
+  // later edit to either page's authored prose changes its digest and puts
+  // that page back in draft until it is approved again.
+  by: "Eirik Sander-Fjeld",
+  date: "2026-10-05",
+  bead: "ugcportal-alg",
+  authoredSha256: {
+    "/privacy": "e83caf1a47335e8c3303721ee6186f495c680270313364305f524dad83a89c48",
+    "/licence": "ae6a4a484a0bc2c571121a5f2e02c2bc9db46dd5d14eb6915abafe1b5fd8f901",
+  },
+};
 
 /** The ISO date the text was last checked against the code. */
-export const LEGAL_LAST_REVIEWED = "2026-10-04";
+export const LEGAL_LAST_REVIEWED = "2026-10-05";
