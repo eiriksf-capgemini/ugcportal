@@ -1,11 +1,15 @@
 import { Gallery } from "@/components/gallery/gallery";
 import { GalleryUnavailable } from "@/components/gallery/gallery-unavailable";
+import { EmptyState } from "@/components/home/empty-state";
+import { Hero } from "@/components/home/hero";
+import { getSession } from "@/lib/auth";
 import { toGalleryItems } from "@/lib/gallery-items";
 import {
   listPublicMedia,
   publicMediaListingUrl,
   type PublicMediaResult,
 } from "@/lib/public-media";
+import { hasSignedInUser } from "@/lib/session";
 
 /**
  * The public gallery (ugcportal-71y), and the whole of the home page.
@@ -42,6 +46,34 @@ export const dynamic = "force-dynamic";
 
 export default async function Home() {
   /*
+   * Kicked off here and awaited only once the listing below has settled —
+   * NOT serialised in between the two, so the session round trip overlaps
+   * the listing one, the same "independent reads should not block on each
+   * other" reasoning src/components/upload-nav-link.tsx and
+   * src/components/auth-status.tsx already apply (see getSession's own
+   * comment in src/lib/auth.ts).
+   *
+   * This is a DIFFERENT session read from the one src/app/page.test.tsx's
+   * own `vi.mock("@/lib/auth", ...)` guards against: that mock stubs plain
+   * `auth()` to throw specifically to assert the LISTING never varies by who
+   * is asking (see that file's comment) — `listPublicMedia` and `<Gallery>`
+   * below never touch this value. It exists only so the front page's hero
+   * (ugcportal-6dvg K1) can point its one call to action at sign-in or at
+   * /upload, which is why that same test file's mock also now stubs
+   * `getSession` (not `auth`) to answer as an anonymous visitor.
+   *
+   * Resolved here, in Home() itself, rather than inside `<Hero>` as an async
+   * Server Component of its own: `renderToStaticMarkup` cannot resolve a
+   * nested async Server Component reached while walking an already-rendering
+   * tree — confirmed empirically on this exact renderer (see
+   * src/components/upload-nav-link.tsx's own comment, point 2) — and this
+   * page's own test files all drive it through exactly
+   * `renderToStaticMarkup(await Home())`. `<Hero>` is therefore a plain,
+   * synchronous component taking the resolved boolean as a prop.
+   */
+  const sessionPromise = getSession();
+
+  /*
    * `listMedia` only reports `ok: false` for a malformed `?cursor=`, and the
    * URL above carries no cursor — so that branch is not expected to run. It
    * is written out rather than asserted away because "not expected" is not
@@ -73,18 +105,51 @@ export default async function Home() {
   try {
     result = await listPublicMedia(publicMediaListingUrl());
   } catch {
-    return <GalleryUnavailable />;
+    return (
+      <>
+        <Hero signedIn={hasSignedInUser(await sessionPromise)} />
+        <GalleryUnavailable />
+      </>
+    );
   }
+
+  const signedIn = hasSignedInUser(await sessionPromise);
 
   if (!result.ok) {
-    return <GalleryUnavailable />;
+    return (
+      <>
+        <Hero signedIn={signedIn} />
+        <GalleryUnavailable />
+      </>
+    );
   }
 
+  /*
+   * The front page's own "living empty state" (ugcportal-6dvg K1/K2),
+   * src/components/home/empty-state.tsx, rendered INSTEAD of `<Gallery>`
+   * under exactly the condition `<Gallery>`'s own internal `GalleryEmpty`
+   * (src/components/gallery/gallery.tsx) uses — `items.length === 0 &&
+   * !hasMore`, not `items.length === 0` alone; see that file's own comment
+   * for why the two are not the same claim. Computed here from the SAME
+   * `result.page` values `<Gallery>` is about to receive as props (not
+   * re-derived inside either component), so the two decisions cannot
+   * disagree with each other.
+   */
+  const isGenuinelyEmpty =
+    result.page.items.length === 0 && !result.page.hasMore;
+
   return (
-    <Gallery
-      initialItems={toGalleryItems(result.page.items)}
-      initialCursor={result.page.nextCursor}
-      initialHasMore={result.page.hasMore}
-    />
+    <>
+      <Hero signedIn={signedIn} />
+      {isGenuinelyEmpty ? (
+        <EmptyState />
+      ) : (
+        <Gallery
+          initialItems={toGalleryItems(result.page.items)}
+          initialCursor={result.page.nextCursor}
+          initialHasMore={result.page.hasMore}
+        />
+      )}
+    </>
   );
 }

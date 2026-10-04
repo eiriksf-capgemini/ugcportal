@@ -31,6 +31,20 @@ import { afterEach, describe, expect, it, vi } from "vitest";
  * in the file; a test appended after it would have silently inherited the
  * override instead of this file's own top-level mock.
  */
+
+/**
+ * `@/lib/auth`, mocked where previously nothing here was (ugcportal-6dvg):
+ * `Home()` now also reads `getSession()` for the front page's hero, on every
+ * branch including this file's failed-listing one — a visitor is still owed
+ * an answer to "what is this site" when the gallery fails to load. Left
+ * unmocked, that would pull next-auth's real module graph, including
+ * `next/server`, into this node test run. `null`, the true anonymous case
+ * every test below already simulates by never seeding a session.
+ */
+vi.mock("@/lib/auth", () => ({
+  getSession: () => Promise.resolve(null),
+}));
+
 // The one spelling of "a malformed cursor" this file needs, shared by the
 // mock's default answer and the reset in `afterEach` below. A second literal
 // of the same shape (an earlier version of this file had one) is a fixture

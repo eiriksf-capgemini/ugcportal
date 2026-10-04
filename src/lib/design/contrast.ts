@@ -572,6 +572,57 @@ export const PAIRINGS: Pairing[] = [
         usage: "Chart series mark on the canvas or inside a card.",
       })),
   ),
+
+  /*
+   * ugcportal-6dvg: the front page hero's own fixed petrol-gradient well
+   * (`.home-hero-surface`, src/app/globals.css; src/components/home/hero.tsx)
+   * — a surface this phase did not have before, so a new pairing rather than
+   * a reuse of onEverySurface's near-black scale.
+   *
+   * Checked against `--petrol-700` only, the LIGHTER of the gradient's two
+   * stops and so the worse case for a light foreground; the gradient only
+   * gets darker toward `--petrol-900`, which can only improve this ratio,
+   * never worsen it.
+   *
+   * `--color-ink`, not `--color-ink-muted`, for BOTH the title and the lead
+   * paragraph: `--color-ink-muted` measures only 4.15:1 here (below body
+   * text's 4.5:1) — it is tuned for the darker near-black surface scale
+   * (surface-0..4, L 0.185-0.345), which this gradient's lighter stop
+   * (petrol-700, L ~0.42) is not. See src/components/home/hero.tsx's own
+   * comment on its lead paragraph.
+   */
+  {
+    id: "ink-on-hero-petrol",
+    foreground: "--color-ink",
+    background: ["--petrol-700"],
+    requirement: "body",
+    usage: "The hero's title and lead paragraph, on the front page's petrol gradient surface.",
+  },
+  /*
+   * The hero's own call-to-action: a light petrol-tint fill with a dark
+   * label, mirroring the fill-light/label-dark pairing already established
+   * for default-neutral / the upload dropzone (see petrol-900-on-petrol-400
+   * above) — but spelled with tokens that actually compile to a Tailwind
+   * utility. `--color-petrol-900` (that pairing's label token) has no
+   * `bg-`/`text-petrol-900` utility: it is declared in the OKLCH near-black
+   * `:root` block, not `@theme` (see that block's own "stopping Tailwind
+   * emitting bg-petrol-900 and friends" comment), so `text-petrol-900`
+   * compiles to no rule at all — confirmed empirically by compiling
+   * globals.css and checking the generated utilities, not assumed. Filed as
+   * a pre-existing issue (not this bead's file) rather than silently
+   * reused: see the PR description. `--color-surface-0` IS in `@theme` (so
+   * `text-surface-0` is real), is a genuine near-black, and is not one of
+   * this file's existing surface entries' FOREGROUND uses — only its
+   * background ones — so this is a new foreground use of an existing token,
+   * not a new token.
+   */
+  {
+    id: "surface-0-on-petrol-100",
+    foreground: "--color-surface-0",
+    background: ["--petrol-100"],
+    requirement: "body",
+    usage: "The hero's call-to-action label, on its light petrol-tint fill.",
+  },
 ];
 
 export type TokenReference = {

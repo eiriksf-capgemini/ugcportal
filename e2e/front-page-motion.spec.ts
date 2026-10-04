@@ -1,0 +1,76 @@
+import { expect, test } from "@playwright/test";
+
+/**
+ * ugcportal-6dvg K3: with `prefers-reduced-motion: reduce` emulated, no
+ * fade-in or hover-lift animation runs on the hero's decorative surfaces —
+ * and, where a gallery tile actually exists to check, its own pre-existing
+ * hover-scale transition (src/components/gallery/containment.ts,
+ * untouched by this bead) still resolves to the same "nothing computed
+ * transitions" state.
+ *
+ * Not wired into CI, same as e2e/petrol-theme.spec.ts — see
+ * playwright.config.ts's own comment.
+ */
+test.use({ reducedMotion: "reduce" });
+
+test("K3: the hero's decorative surfaces have no computed animation under reduced motion", async ({
+  page,
+}) => {
+  await page.goto("/");
+
+  const shapes = page.locator("[data-home-hero] >> div[aria-hidden='true'] > span");
+  const count = await shapes.count();
+  expect(count).toBeGreaterThan(0);
+
+  for (let index = 0; index < count; index += 1) {
+    const computed = await shapes.nth(index).evaluate((el) => {
+      const style = getComputedStyle(el);
+      return {
+        animationName: style.animationName,
+        animationDuration: style.animationDuration,
+      };
+    });
+    expect(computed.animationName).toBe("none");
+  }
+});
+
+test("K3: a gallery tile's own hover transition still resolves to no transition under reduced motion, where a tile exists", async ({
+  page,
+}) => {
+  await page.goto("/");
+
+  const tileImages = page.locator("[data-gallery-tile] img");
+  const count = await tileImages.count();
+  if (count === 0) {
+    // No published media in this dev database (see front-page.spec.ts's own
+    // comment on the lack of e2e seeding infrastructure) — nothing to check
+    // here; front-page.spec.ts's own K1 test already covers the empty case
+    // this environment actually produces.
+    test.skip(true, "no gallery tile in this dev database to check");
+  }
+
+  const computed = await tileImages.first().evaluate((el) => {
+    const style = getComputedStyle(el);
+    return { transitionProperty: style.transitionProperty };
+  });
+  expect(computed.transitionProperty).toBe("none");
+});
+
+test("K3: the empty state's portfolio link has no computed transition under reduced motion", async ({
+  page,
+}) => {
+  await page.goto("/");
+
+  const link = page
+    .locator("[data-home-empty-state]")
+    .getByRole("link", { name: /portfolio/i });
+  if ((await link.count()) === 0) {
+    test.skip(true, "gallery is not empty in this dev database");
+  }
+
+  const computed = await link.evaluate((el) => {
+    const style = getComputedStyle(el);
+    return { transitionProperty: style.transitionProperty, transform: style.transform };
+  });
+  expect(computed.transitionProperty).toBe("none");
+});
