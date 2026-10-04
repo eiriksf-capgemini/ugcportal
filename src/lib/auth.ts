@@ -7,6 +7,12 @@ import { cache } from "react";
 
 import type { Role } from "@/generated/prisma/enums";
 import { reconcileBootstrapAdmin } from "@/lib/admin-bootstrap";
+import {
+  enforceLiveSessionPolicy,
+  rememberSignInIdentity,
+  withSessionIdentity,
+  withSignInIdentity,
+} from "@/lib/live-session";
 import { prisma } from "@/lib/prisma";
 import { AUTH_ERROR_PATH } from "@/lib/routes";
 import { isPermittedSignIn } from "@/lib/sign-in-policy";
@@ -14,7 +20,18 @@ import { signInProviders } from "@/lib/sign-in-providers";
 
 declare module "next-auth" {
   interface Session {
-    user: {
+    /**
+     * OPTIONAL, and that is load-bearing (PR #91 review, round 2, finding
+     * 2). Since ugcportal-mzr the `session` callback below can answer with
+     * a session that has no user on it — that is how a revoked identity is
+     * refused — so `auth()` really does resolve `{ expires }` with no
+     * `user` for a revoked visitor. Declaring it required would let a
+     * future `session.user.id` compile and then throw at runtime on
+     * exactly that path, which is the one nobody exercises by hand. Every
+     * caller today already asks `session?.user?.id` or `hasSignedInUser`
+     * (src/lib/session.ts); this makes the compiler keep it that way.
+     */
+    user?: {
       id: string;
       role: Role;
     } & DefaultSession["user"];
@@ -43,7 +60,12 @@ function toRole(user: object): Role {
  * shape of the ugcportal-egp defect — fails a test.
  */
 export const authConfig = {
-  adapter: PrismaAdapter(prisma),
+  // The Prisma adapter, plus the one thing @auth/core's adapter interface
+  // has no room for: which identity minted the session it is creating
+  // (ugcportal-mzr). `withSessionIdentity` writes it in the same INSERT,
+  // which is what removes the race a later lookup had (PR #91 review,
+  // round 2, finding 1).
+  adapter: withSessionIdentity(PrismaAdapter(prisma)),
   session: { strategy: "database" },
   // A first-party Access Denied screen (src/app/auth/error/page.tsx). Without
   // this, a refused sign-in lands on @auth/core's built-in page, which says
@@ -93,18 +115,57 @@ export const authConfig = {
     signIn({ user, account, profile }) {
       // `account` carries the provider id, which a bound allowlist entry
       // (`google:addr`, ugcportal-1551) is judged against.
-      return isPermittedSignIn({ user, account, profile });
+      const attempt = { user, account, profile };
+      if (!isPermittedSignIn(attempt)) {
+        return false;
+      }
+      // Permitted — so remember what this sign-in asserted, for the session
+      // row @auth/core is about to create for it (ugcportal-mzr). Nothing is
+      // written here: the identity rides the request in an AsyncLocalStorage
+      // slot and lands in that row's own INSERT, which is the only way to
+      // attribute it without guessing which row belongs to which of two
+      // concurrent sign-ins (PR #91 review, round 2, finding 1).
+      //
+      // After the gate, never before it: a refused attempt creates no
+      // session, and the slot must not describe one that does not exist.
+      rememberSignInIdentity(attempt);
+      return true;
     },
     // Database session strategy hands us the adapter user record here;
     // surface its id so route handlers can associate uploads (ugcportal-8wa)
     // and other user-owned records without a second lookup.
-    session({ session, user }) {
-      session.user.id = user.id;
-      // Read on every request under the database session strategy, so
-      // revoking someone's admin role takes effect immediately instead of
-      // waiting for their session to expire.
-      session.user.role = toRole(user);
-      return session;
+    //
+    // THE SECOND GATE (ugcportal-mzr). The `signIn` callback above runs once,
+    // at the door; this one runs on every request, and asking the policy
+    // again here is what makes removing an address from ALLOWED_SIGNIN_EMAILS
+    // revoke the session that address is already holding, instead of only its
+    // next sign-in up to 30 days later. The enforcement — including why a
+    // refusal cannot simply `delete session.user`, and what it costs — lives
+    // in src/lib/live-session.ts; this callback stays the wiring.
+    //
+    // The two assignments below are left in front of it deliberately: they
+    // are what a PERMITTED session needs, and a refused one discards the
+    // whole `user` object anyway, so neither value can reach a caller whose
+    // session was refused.
+    async session({ session, user }) {
+      // Rebuilt rather than mutated in place, because `Session["user"]` is
+      // now optional (see the augmentation above) — and the spread keeps
+      // every field @auth/core had already put there.
+      session.user = {
+        ...session.user,
+        id: user.id,
+        // Read on every request under the database session strategy, so
+        // revoking someone's admin role takes effect immediately instead of
+        // waiting for their session to expire.
+        role: toRole(user),
+      };
+      // `session` carries the row's own columns at runtime, the recorded
+      // sign-in identity among them; `user` is only needed for the id in
+      // the log line and the pre-column address fallback.
+      return enforceLiveSessionPolicy(session, {
+        id: user.id,
+        email: user.email,
+      });
     },
   },
   events: {
@@ -132,7 +193,24 @@ export const authConfig = {
   providers: signInProviders,
 } satisfies NextAuthConfig;
 
-export const { handlers, auth, signIn, signOut } = NextAuth(authConfig);
+const nextAuth = NextAuth(authConfig);
+
+export const { auth, signIn, signOut } = nextAuth;
+
+/**
+ * The Auth.js route handlers, each wrapped so the request it serves has its
+ * own slot for the identity a sign-in asserts (ugcportal-mzr).
+ *
+ * The wrapper has to be here rather than in
+ * src/app/api/auth/[...nextauth]/route.ts because this is where the adapter
+ * that reads the slot is configured: the two halves are one mechanism, and
+ * splitting them across files is how one of them gets moved later without
+ * the other. Every sign-in reaches the database through these handlers —
+ * the OAuth callback and the `signIn()` helper alike both POST through
+ * them — so a session created outside one of them is a session no sign-in
+ * asked for.
+ */
+export const handlers = withSignInIdentity(nextAuth.handlers);
 
 /**
  * `auth()`, memoized for the lifetime of one React render (ugcportal-t0y

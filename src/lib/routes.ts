@@ -70,6 +70,18 @@ export const MEDIA_PREVIEW_PATH = "/api/media/preview";
 export const AUTH_ERROR_PATH = "/auth/error";
 
 /**
+ * The privacy statement and the licence text (ugcportal-qnq9.4).
+ *
+ * English paths, not /personvern and /lisens: the site's language is English
+ * (docs/ugc-research.md, decisions table), and a route a reader cannot
+ * pronounce is one they will not find. Norwegian law still governs the
+ * CONTENT — see the pages themselves. Named here so the footer
+ * (ugcportal-akv6) and the pages cannot drift apart.
+ */
+export const PRIVACY_PATH = "/privacy";
+export const LICENCE_PATH = "/licence";
+
+/**
  * Where to send a visitor who has to sign in first.
  *
  * Auth.js mounts its own provider-picker at `/api/auth/signin`

@@ -1,0 +1,123 @@
+/**
+ * Who is behind the site, for the privacy statement and the licence page
+ * (ugcportal-qnq9.4) — read from the environment, like every other piece of
+ * required configuration in this repo (requireEnv in src/lib/s3.ts, the
+ * boot warnings in src/instrumentation.ts).
+ *
+ * Environment rather than source (PR #90 review round 2): the controller is
+ * a private person (docs/ugc-research.md, decisions table, "Owner"), and her
+ * name does not belong in a public source tree; the hosting and storage
+ * providers are deployment facts src/lib/s3.ts is deliberately agnostic
+ * about. "Unset" is also binary, where a bracketed placeholder in prose was
+ * a heuristic.
+ *
+ * Why each exists — GDPR Art. 13(1):
+ *  - LEGAL_CONTROLLER_NAME   (a) the identity of the controller;
+ *  - LEGAL_CONTACT_EMAIL     (a) the controller's contact details, and
+ *                            Art. 12: where data-subject requests go;
+ *  - LEGAL_HOSTING_PROVIDER  (e) the recipient that operates the server
+ *                            (sees IP addresses, holds the database), and
+ *                            (f) whether that is outside the EEA;
+ *  - LEGAL_STORAGE_PROVIDER  (e)/(f) the same for the object store that
+ *                            holds uploads and rights evidence.
+ *
+ * While a variable is unset the pages render its name in square brackets
+ * (`unsetMarker`), production refuses to serve them, and boot says so — see
+ * src/lib/legal/publishable.ts. Documented in env.example.
+ */
+
+export const LEGAL_CONTACT_VARS = {
+  controllerName: "LEGAL_CONTROLLER_NAME",
+  contactEmail: "LEGAL_CONTACT_EMAIL",
+  hostingProvider: "LEGAL_HOSTING_PROVIDER",
+  storageProvider: "LEGAL_STORAGE_PROVIDER",
+} as const;
+
+export type LegalContactField = keyof typeof LEGAL_CONTACT_VARS;
+export type LegalContactVar = (typeof LEGAL_CONTACT_VARS)[LegalContactField];
+export type LegalContact = Record<LegalContactField, string>;
+
+export type LegalContactReading = {
+  /** Every field filled — from the environment, or with `unsetMarker`. */
+  contact: LegalContact;
+  /** The variables that were unset or blank, in LEGAL_CONTACT_VARS order. */
+  missing: LegalContactVar[];
+};
+
+/**
+ * What an unset variable renders as: `[LEGAL_CONTROLLER_NAME]`. Bracketed
+ * so it is unmistakable on a dev screen, and so the prose scan in
+ * publishable.ts (the second line of defence) would also catch it.
+ */
+export function unsetMarker(name: LegalContactVar): string {
+  return `[${name}]`;
+}
+
+/** Reads the four variables; never throws, so a dev page can show what is missing. */
+export function readLegalContact(
+  env: NodeJS.ProcessEnv = process.env,
+): LegalContactReading {
+  const missing: LegalContactVar[] = [];
+  const contact = {} as LegalContact;
+  for (const field of Object.keys(LEGAL_CONTACT_VARS) as LegalContactField[]) {
+    const name = LEGAL_CONTACT_VARS[field];
+    const value = env[name]?.trim();
+    if (value) {
+      contact[field] = value;
+    } else {
+      contact[field] = unsetMarker(name);
+      missing.push(name);
+    }
+  }
+  return { contact, missing };
+}
+
+/**
+ * A contact whose values can never read as a placeholder — plain lower-case
+ * hyphenated words, no brackets, not TODO or TBD — used to build the AUTHORED
+ * text of a page for the stray-placeholder scan (PR #90 round 3). The scan
+ * must see the prose the repository wrote, not what an operator typed into
+ * an environment variable: "Acme Hosting [Oslo], Norway" is a set variable,
+ * not a reminder to fill one in, and must not block the page. A test holds
+ * these values to PLACEHOLDER_PATTERN.
+ */
+export const SENTINEL_CONTACT: LegalContact = {
+  controllerName: "controller-name-sentinel",
+  contactEmail: "contact-email-sentinel",
+  hostingProvider: "hosting-provider-sentinel",
+  storageProvider: "storage-provider-sentinel",
+};
+
+/**
+ * The human sign-off ugcportal-alg requires before the draft marker comes
+ * off (bead K4: "review by whoever plays the DPO/legal role for this project
+ * before the draft marker is removed"). A source constant, not an
+ * environment variable, because it is a fact about THIS text: `null` until
+ * the review happens.
+ *
+ * It is bound to the words it certifies (PR #90 round 4): `authoredSha256`
+ * holds, per route, the digest of that page's authored prose
+ * (`LegalPage.authoredSha256`, computed in publishable.ts). `legalReadiness`
+ * treats a page whose digest no longer matches as NOT signed off, so editing
+ * a paragraph clears the sign-off by itself and nobody has to remember to.
+ * To record a sign-off: take the digests from `legalReadiness(...).digests`
+ * (or from the failing test's message), and set them here in the same PR
+ * as the reviewed text.
+ *
+ * Sign-off is one of the three things that keep a page in draft (see
+ * `legalReadiness`); unlike the other two it is not a configuration problem,
+ * so it does not stop production from serving the page — it keeps the draft
+ * notice, the `ugcportal:draft` meta tag that ugcportal-akv6's footer guard
+ * will read, and `noindex` in place.
+ */
+export type LegalSignOff = {
+  by: string;
+  date: string;
+  bead: string;
+  /** Route path -> sha256 hex of that page's authored prose at sign-off. */
+  authoredSha256: Readonly<Record<string, string>>;
+};
+export const LEGAL_SIGN_OFF: LegalSignOff | null = null;
+
+/** The ISO date the text was last checked against the code. */
+export const LEGAL_LAST_REVIEWED = "2026-10-04";

@@ -74,6 +74,14 @@ const ALLOWED_RELATIVE_PATHS = new Set([
   // allowance, for the same reason this file's own tests do.
   "lib/analytics-marker.ts",
   "lib/analytics-marker.test.ts",
+  // The privacy statement (ugcportal-qnq9.4) has to tell the visitor WHICH
+  // tool loads after they accept — GDPR Art. 13 is not satisfied by "an
+  // analytics script". Naming it in prose is not wiring it up: content.ts
+  // is a data module with no script, and eslint.config.mjs's next/script
+  // ban still applies to it. Its test names the vendor in the pattern that
+  // keeps the vendor OUT of layout.tsx.
+  "app/privacy/content.ts",
+  "app/privacy/content.test.ts",
 ]);
 
 // walkSourceFiles's own default (/\.(tsx|ts)$/) misses .jsx/.js/.mjs
