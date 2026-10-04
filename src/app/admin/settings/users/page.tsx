@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 
+import { PAGE_CONTAINER_CLASS } from "@/components/site/page-shell";
 import { Button } from "@/components/ui/button";
 import { requireAdmin } from "@/lib/admin";
 import { prisma } from "@/lib/prisma";
@@ -54,7 +55,7 @@ export default async function AdminUsersPage({
   const errorMessage = roleOutcomeMessage(error);
 
   return (
-    <div className="mx-auto w-full max-w-3xl flex-1 px-4 py-12 sm:px-6">
+    <div className={PAGE_CONTAINER_CLASS}>
       <h1 className="text-2xl font-semibold tracking-tight">Users and roles</h1>
       <p className="mt-2 text-sm text-muted-foreground">
         Admins can reach every admin-only screen, including{" "}

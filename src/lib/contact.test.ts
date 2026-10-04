@@ -117,4 +117,31 @@ describe("isBareEmailAddress", () => {
   it("rejects a bare angle bracket with no surrounding name", () => {
     expect(isBareEmailAddress("<jane@example.com>")).toBe(false);
   });
+
+  // Round-4 review: the first version of this check accepted anything
+  // without whitespace or an angle bracket, which is not the same claim as
+  // "looks like an email address".
+  it("rejects plain text with no @ at all", () => {
+    expect(isBareEmailAddress("not-an-email")).toBe(false);
+  });
+
+  it("rejects a domain with no dot", () => {
+    expect(isBareEmailAddress("jane@example")).toBe(false);
+  });
+
+  it("rejects an empty local part", () => {
+    expect(isBareEmailAddress("@example.com")).toBe(false);
+  });
+
+  it("rejects an empty domain", () => {
+    expect(isBareEmailAddress("jane@")).toBe(false);
+  });
+
+  it("rejects a doubled @", () => {
+    expect(isBareEmailAddress("jane@@example.com")).toBe(false);
+  });
+
+  it("accepts a subdomain", () => {
+    expect(isBareEmailAddress("jane@mail.example.com")).toBe(true);
+  });
 });

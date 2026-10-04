@@ -40,16 +40,27 @@ export function resolveContactEmail(): string {
 }
 
 /**
- * Whether `value` is a bare address — no display name, no angle brackets,
- * no whitespace of any kind. Used by `checkContactEmailConfiguration`
- * (src/instrumentation.ts) to reject a `CONTACT_EMAIL` shaped like
- * `"Jane Doe <jane@example.com>"`: this module does no parsing of that
- * shape into its address part, so a value like that would be mailed to as
- * a single, malformed address (after encoding) rather than silently
- * repaired into the one the operator meant.
+ * Whether `value` is a bare `local@domain.tld` address — no display name,
+ * no angle brackets, no whitespace, and something that actually looks like
+ * an address rather than arbitrary text. Used by
+ * `checkContactEmailConfiguration` (src/instrumentation.ts) to reject a
+ * `CONTACT_EMAIL` shaped like `"Jane Doe <jane@example.com>"`: this module
+ * does no parsing of that shape into its address part, so a value like that
+ * would be mailed to as a single, malformed address (after encoding) rather
+ * than silently repaired into the one the operator meant.
+ *
+ * ROUND-4 REVIEW: the first version of this checked only "no whitespace or
+ * angle bracket", which accepted literally anything else — `"not-an-email"`,
+ * a bare word with no `@` at all, read as "bare" just as happily as a real
+ * address. Not a full RFC 5322 validator (this app has no reason to parse
+ * quoted local parts, comments, or IP-literal domains), but it does require
+ * the one shape that actually matters here: a non-empty local part, an `@`,
+ * and a domain with at least one `.`.
  */
+const BARE_EMAIL_ADDRESS_PATTERN = /^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/;
+
 export function isBareEmailAddress(value: string): boolean {
-  return !/[\s<>]/.test(value);
+  return BARE_EMAIL_ADDRESS_PATTERN.test(value);
 }
 
 /** The named `mailto:` query parameters this site ever builds. */

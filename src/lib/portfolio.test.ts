@@ -141,24 +141,28 @@ describe("listPortfolioPieces", () => {
     expect(pieces.map((p) => p.id)).not.toContain("piece-no-preview");
   });
 
-  it("orders pieces oldest first", async () => {
-    await seedMedia(prisma, {
-      id: "piece-order-b",
-      userId: UPLOADER,
-      createdAt: new Date("2026-04-02T00:00:00.000Z"),
-      tags: [PORTFOLIO_TAG_SLUG],
-    });
+  // Round-4 review: this used to be "orders pieces oldest first", which was
+  // the real bug — see listPortfolioPieces's own comment on `orderBy` for
+  // why oldest-first plus a `take` cap freezes the visible set at whatever
+  // was curated first.
+  it("orders pieces newest first", async () => {
     await seedMedia(prisma, {
       id: "piece-order-a",
       userId: UPLOADER,
       createdAt: new Date("2026-04-01T00:00:00.000Z"),
       tags: [PORTFOLIO_TAG_SLUG],
     });
+    await seedMedia(prisma, {
+      id: "piece-order-b",
+      userId: UPLOADER,
+      createdAt: new Date("2026-04-02T00:00:00.000Z"),
+      tags: [PORTFOLIO_TAG_SLUG],
+    });
 
     const pieces = await listPortfolioPieces();
     const order = pieces.map((p) => p.id);
-    expect(order.indexOf("piece-order-a")).toBeLessThan(
-      order.indexOf("piece-order-b"),
+    expect(order.indexOf("piece-order-b")).toBeLessThan(
+      order.indexOf("piece-order-a"),
     );
   });
 
@@ -199,5 +203,29 @@ describe("listPortfolioPieces", () => {
 
     const pieces = await listPortfolioPieces();
     expect(pieces.length).toBe(MAX_PORTFOLIO_PIECES);
+  });
+
+  // Round-4 review: the real bug this test is written against. With
+  // MAX_PORTFOLIO_PIECES + 1 pieces curated, the (index 0 .. cap) oldest
+  // pieces are seeded first and the newest piece (index MAX_PORTFOLIO_
+  // PIECES) is seeded LAST — an oldest-first `orderBy` with `take` would
+  // return the first `MAX_PORTFOLIO_PIECES` seeded and never the newest
+  // one, no matter how many more are curated afterwards. Mutating
+  // `orderBy` back to `createdAt asc` reproduces exactly that and fails
+  // this test (confirmed, then reverted — see the PR description).
+  it("keeps the newest piece when the curated set exceeds the cap, not the oldest", async () => {
+    for (let index = 0; index <= MAX_PORTFOLIO_PIECES; index += 1) {
+      await seedMedia(prisma, {
+        id: `piece-newest-${index}`,
+        userId: UPLOADER,
+        createdAt: new Date(2026, 3, 1 + index),
+        tags: [PORTFOLIO_TAG_SLUG],
+      });
+    }
+
+    const pieces = await listPortfolioPieces();
+    const ids = pieces.map((p) => p.id);
+    expect(ids).toContain(`piece-newest-${MAX_PORTFOLIO_PIECES}`);
+    expect(ids).not.toContain("piece-newest-0");
   });
 });

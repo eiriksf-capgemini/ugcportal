@@ -1,4 +1,4 @@
-import { PORTFOLIO_TAG_SLUG } from "@/lib/curation-tags";
+import { isCurationTagSlug } from "@/lib/curation-tags";
 import { hasUnsafeText, validateAltText, validateCaption } from "@/lib/media-rules";
 import { mediaPreviewPath } from "@/lib/routes";
 
@@ -151,21 +151,28 @@ function sanitizedMediaText(value: unknown, allowNewlines = false): string {
  * override removed is a DIFFERENT name that nobody chose, and showing it
  * asserts that the uploader labelled the photograph something they did not.
  *
- * THIRD JOB (round-2 review of ugcportal-qnq9.7): `PORTFOLIO_TAG_SLUG`
- * (src/lib/curation-tags.ts) is dropped here too, unconditionally, for
- * EVERY caller of this function — not only the portfolio page. That tag
- * exists to CURATE an item for the portfolio page, not to describe its
- * subject, and this function is the one boundary a published item's tags
- * cross on their way to ANY public surface: the main gallery feed
- * (src/app/page.tsx, GET /api/public/media) just as much as
- * src/lib/portfolio.ts's own selection. Filtering it only in the
- * portfolio-specific code (round 1's fix) left a real gap: a photo tagged
- * both "portfolio" and a real subject like "food" would still show a
- * "Portfolio" chip to every visitor of the ordinary home-page gallery,
- * leaking the internal curation mechanism exactly where K6's "never imply
- * something about this item that isn't true" reasoning applies just as
- * much as it does on the dedicated page. One filter, here, covers every
- * surface structurally rather than per-caller.
+ * THIRD JOB (round-2 review of ugcportal-qnq9.7): any curation-only tag
+ * (`isCurationTagSlug`, src/lib/curation-tags.ts — today just
+ * `PORTFOLIO_TAG_SLUG`) is dropped here too, unconditionally, for EVERY
+ * caller of this function — not only the portfolio page. That tag exists
+ * to CURATE an item for the portfolio page, not to describe its subject,
+ * and this function is the boundary a published item's tags cross on
+ * their way to any RENDERED public surface: the main gallery feed
+ * (src/app/page.tsx) just as much as src/lib/portfolio.ts's own render.
+ * Filtering it only in the portfolio-specific code (round 1's fix) left a
+ * real gap: a photo tagged both "portfolio" and a real subject like "food"
+ * would still show a "Portfolio" chip to every visitor of the ordinary
+ * home-page gallery, leaking the internal curation mechanism exactly
+ * where K6's "never imply something about this item that isn't true"
+ * reasoning applies just as much as it does on the dedicated page.
+ *
+ * NOT the whole story any more (round 4): GET /api/public/media
+ * (src/app/api/public/media/route.ts) serialises `listPublicMedia`'s
+ * result straight to JSON without ever calling this function, so a direct
+ * API consumer could still see the raw tag — fixed separately, in
+ * `listPublicMedia` itself (src/lib/public-media.ts), which is the
+ * boundary for THAT surface. Checked against the SAME `isCurationTagSlug`
+ * set, so the two cannot disagree about which slugs are curation-only.
  */
 function toGalleryTags(value: unknown): GalleryTag[] {
   if (!Array.isArray(value)) return [];
@@ -176,7 +183,7 @@ function toGalleryTags(value: unknown): GalleryTag[] {
     const { slug, name } = entry as { slug?: unknown; name?: unknown };
     if (typeof slug !== "string" || slug === "") continue;
     if (typeof name !== "string" || name.trim() === "") continue;
-    if (slug === PORTFOLIO_TAG_SLUG) continue;
+    if (isCurationTagSlug(slug)) continue;
     if (hasUnsafeText(name) || hasUnsafeText(slug)) continue;
     if (seen.has(slug)) continue;
     seen.add(slug);

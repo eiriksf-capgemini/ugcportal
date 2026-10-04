@@ -74,7 +74,7 @@ export const SPEC_SAMPLE_LABEL = "Spec sample, not a client commission";
 export const MAX_PORTFOLIO_PIECES = 24;
 
 /**
- * Reads every portfolio sample, oldest first.
+ * Reads every portfolio sample, newest first.
  *
  * THE SCOPE is `PUBLIC_MEDIA_SCOPE` (src/lib/public-media.ts) — the exact
  * same publish/preview filter the public gallery feed uses, so a visitor can
@@ -103,10 +103,20 @@ export const MAX_PORTFOLIO_PIECES = 24;
  * the two cannot disagree about what "published" or "public" means even
  * though the query itself is separate.
  *
- * ORDERING is oldest-first (`createdAt asc`), the opposite of the gallery's
- * newest-first feed, because a portfolio reads as a body of work assembled in
- * the order it was made — "first six pieces" (docs/ugc-research.md §5.2) —
- * rather than as a stream of recent activity.
+ * ORDERING is newest-first (`createdAt desc`) — the SAME direction as the
+ * gallery's own feed, and deliberately NOT the oldest-first order an
+ * earlier draft of this function used (round-4 review: a real bug, not a
+ * style choice). Oldest-first plus `take: MAX_PORTFOLIO_PIECES` is a trap
+ * once the curated set ever exceeds the cap: `ORDER BY createdAt ASC LIMIT
+ * 24` always returns the SAME oldest 24 rows, so curating a 25th sample
+ * would never make it onto the page at all — the portfolio would freeze at
+ * whatever was tagged first and silently stop reflecting new work forever.
+ * Newest-first means the cap instead drops the OLDEST samples off the
+ * visible set as new ones are curated, which is the direction that keeps
+ * the page a going concern rather than a fossil. (A curator who wants a
+ * deliberate, hand-picked order rather than either chronological direction
+ * would need an explicit ordering field — out of scope here; no such need
+ * has been named for this release.)
  *
  * NO TAG FILTERING HAPPENS HERE ANY MORE (round-2 review). `toGalleryItems`
  * (src/lib/gallery-items.ts) now strips the portfolio curation tag from
@@ -125,7 +135,7 @@ export async function listPortfolioPieces(): Promise<GalleryItem[]> {
       tags: { some: { slug: PORTFOLIO_TAG_SLUG } },
     },
     select: MEDIA_ANONYMOUS_SELECT,
-    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     take: MAX_PORTFOLIO_PIECES,
   });
 

@@ -1,3 +1,4 @@
+import { isCurationTagSlug } from "@/lib/curation-tags";
 import { MEDIA_ANONYMOUS_SELECT } from "@/lib/media-access";
 import {
   listMedia,
@@ -147,6 +148,45 @@ function logFailedPublicListing(
  * handling still answers a 500 — unchanged from before this function logged
  * anything, except that now the attempt is on record.
  */
+/**
+ * Strips any curation-only tag (src/lib/curation-tags.ts) from one row's
+ * `tags`, before it leaves this module in either direction.
+ *
+ * ROUND-4 REVIEW: this is the fix for a real leak, not belt-and-suspenders.
+ * `src/lib/gallery-items.ts#toGalleryTags` already strips the same tags, but
+ * only for callers that convert a row through `toGalleryItem`/
+ * `toGalleryItems` — the server-rendered home page does, but GET
+ * /api/public/media (src/app/api/public/media/route.ts) serialises
+ * `listPublicMedia`'s own result straight to JSON with NO such conversion.
+ * A photo tagged both a real subject and "portfolio" therefore kept
+ * `{"slug":"portfolio","name":"Portfolio"}` in the raw API response even
+ * after round 2 fixed the rendered HTML — a leak to any direct API
+ * consumer (curl, a future integration, a bot), not to a page visitor.
+ * Fixing it HERE, in the one function both the route and the server-
+ * rendered page call, means every current and future caller of
+ * `listPublicMedia` gets it for free, rather than each caller having to
+ * remember to filter its own copy of the result.
+ */
+function stripCurationTags(row: PublicMediaRow): PublicMediaRow {
+  // Tolerant of `tags` being absent rather than an array, the same way
+  // `toGalleryTags` (src/lib/gallery-items.ts) is tolerant of a malformed
+  // feed response — this module's own OWN type says `tags` is always an
+  // array (`MEDIA_ANONYMOUS_SELECT` always projects the relation, so a real
+  // Prisma row's untagged case is `tags: []`, never absent), but
+  // src/app/api/public/media/route.test.ts's own hand-rolled Prisma mock
+  // predates `tags` entirely (its own comment calls this "pre-existing and
+  // out of scope") and returns rows with no `tags` property at all. Rather
+  // than widen that fixture to model a relation this bead did not add,
+  // this function is defensive about the one shape a public JSON endpoint
+  // should never let crash it anyway: an unexpected `tags` is treated as
+  // "nothing to strip", not as a 500.
+  if (!Array.isArray(row.tags)) return row;
+  return {
+    ...row,
+    tags: row.tags.filter((tag) => !isCurationTagSlug(tag.slug)),
+  };
+}
+
 export async function listPublicMedia(
   requestUrl: string,
 ): Promise<PublicMediaResult> {
@@ -162,8 +202,12 @@ export async function listPublicMedia(
   }
   if (!result.ok) {
     logFailedPublicListing(result);
+    return result;
   }
-  return result;
+  return {
+    ok: true,
+    page: { ...result.page, items: result.page.items.map(stripCurationTags) },
+  };
 }
 
 /**

@@ -5,6 +5,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db";
+import type { SeedMediaOptions } from "@/lib/test-support/media-fixtures";
 
 /**
  * Subject tags on the public gallery (ugcportal-jsc): K1, K3, K4 and the read
@@ -36,22 +37,24 @@ const { GALLERY_GRID_CLASS } = await import(
 const { GET } = await import("@/app/api/public/media/route");
 const { publicMediaListingPath } = await import("@/lib/routes");
 const { PORTFOLIO_TAG_SLUG } = await import("@/lib/curation-tags");
+const { seedMedia: seedMediaFixture } = await import(
+  "@/lib/test-support/media-fixtures"
+);
 
 const UPLOADER = "uploader-jsc";
 
 /** The right-to-left override, by code point — see src/lib/tags.test.ts. */
 const RTL_OVERRIDE = String.fromCodePoint(0x202e);
 
-type SeedOptions = {
-  id: string;
-  createdAt: Date;
-  tags?: string[];
-  published?: boolean;
-  withPreview?: boolean;
-};
+type SeedOptions = Omit<SeedMediaOptions, "userId">;
 
 /**
- * Attaches tags by SLUG, creating the rows directly.
+ * Attaches tags by SLUG, creating the rows directly — a thin wrapper over
+ * the shared src/lib/test-support/media-fixtures.ts fixture (round-4
+ * review: this file used to carry its own near-identical copy of the same
+ * row-building logic, the exact "sibling-omission" shape that fixture's own
+ * comment names), fixing `userId` to this file's own `UPLOADER` so every
+ * existing call site below is unchanged.
  *
  * Deliberately not through PUT /api/media/[id]/tags: this file is about what
  * the gallery renders, and routing the fixture through the validator would
@@ -59,29 +62,8 @@ type SeedOptions = {
  * is exactly what the read-side check is a second line of defence against.
  * Its own test (src/app/api/media/[id]/tags/route.test.ts) covers the write.
  */
-async function seedMedia({
-  id,
-  createdAt,
-  tags = [],
-  published = true,
-  withPreview = true,
-}: SeedOptions) {
-  await prisma.media.create({
-    data: {
-      id,
-      userId: UPLOADER,
-      kind: "IMAGE",
-      key: `media/${UPLOADER}/${id}-original.jpg`,
-      previewKey: withPreview ? `previews/${UPLOADER}/${id}.webp` : null,
-      previewId: withPreview ? `pv-${id}` : null,
-      mimeType: "image/jpeg",
-      sizeBytes: 4096,
-      originalName: `${id}.jpg`,
-      createdAt,
-      publishedAt: published ? new Date("2026-03-04T10:00:00.000Z") : null,
-      tags: { connect: tags.map((slug) => ({ slug })) },
-    },
-  });
+async function seedMedia(options: SeedOptions) {
+  await seedMediaFixture(prisma, { ...options, userId: UPLOADER });
 }
 
 /**

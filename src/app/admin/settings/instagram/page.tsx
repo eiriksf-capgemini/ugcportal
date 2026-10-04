@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 
+import { PAGE_CONTAINER_CLASS } from "@/components/site/page-shell";
 import { Button } from "@/components/ui/button";
 import { requireAdmin } from "@/lib/admin";
 import { prisma } from "@/lib/prisma";
@@ -44,7 +45,7 @@ export default async function InstagramSettingsPage({
   const errorMessage = outcomeMessage(error);
 
   return (
-    <div className="mx-auto w-full max-w-3xl flex-1 px-4 py-12 sm:px-6">
+    <div className={PAGE_CONTAINER_CLASS}>
       <h1 className="text-2xl font-semibold tracking-tight">
         Instagram accounts
       </h1>

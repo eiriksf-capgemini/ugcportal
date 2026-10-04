@@ -39,5 +39,24 @@
 -- (which predate every real upload on purpose) is intentional here: this tag
 -- is curated the day this bead ships, not retroactively declared to predate
 -- the gallery's content.
+--
+-- ON CONFLICT("slug") DO UPDATE, not a bare INSERT (round-4 review: a real
+-- deployment hazard, not a hypothetical one). `Tag.slug` is UNIQUE, and
+-- minting a tag by naming it on an upload is allowed for any account
+-- permitted to sign in (src/lib/tags.ts) — an uploader could have already
+-- typed "Portfolio" (or "portfolio", which slugs to the same identity key)
+-- as a free-text subject before this migration ever ran, on an instance
+-- that has been live a while. A bare INSERT would then fail this migration
+-- outright with a UNIQUE constraint violation, on exactly the deployment
+-- where this feature is needed most. The conflict path instead CURATES
+-- whatever row already claims that slug and renames it to this migration's
+-- canonical display name — it deliberately does NOT touch that row's own
+-- "id" or "createdAt": those belong to whoever minted it first, and
+-- overwriting them would silently rewrite history for a row this
+-- migration did not create. See
+-- src/lib/seed-portfolio-tag-migration.test.ts, which seeds a free-minted
+-- "portfolio" row BEFORE applying this migration and asserts it is curated
+-- in place rather than the migration failing outright.
 INSERT INTO "Tag" ("id", "slug", "name", "curated", "createdAt") VALUES
-    ('tagseed00portfolio', 'portfolio', 'Portfolio', true, '2026-10-04T15:00:00.000+00:00');
+    ('tagseed00portfolio', 'portfolio', 'Portfolio', true, '2026-10-04T15:00:00.000+00:00')
+ON CONFLICT("slug") DO UPDATE SET "curated" = 1, "name" = excluded."name";

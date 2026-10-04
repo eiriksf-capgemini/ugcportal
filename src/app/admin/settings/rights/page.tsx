@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 
+import { PAGE_CONTAINER_CLASS } from "@/components/site/page-shell";
 import { requireAdmin } from "@/lib/admin";
 import { prisma } from "@/lib/prisma";
 import { uploaderClearanceBlocker } from "@/lib/resale-rights";
@@ -153,7 +154,7 @@ export default async function ResaleRightsSettingsPage({
   const errorMessage = outcomeMessage(error);
 
   return (
-    <div className="mx-auto w-full max-w-3xl flex-1 px-4 py-12 sm:px-6">
+    <div className={PAGE_CONTAINER_CLASS}>
       <h1 className="text-2xl font-semibold tracking-tight">Resale rights</h1>
       <p className="mt-2 text-sm text-muted-foreground">
         Uploading grants no right to resell. Every uploader starts UNREVIEWED
