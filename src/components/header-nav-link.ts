@@ -2,6 +2,10 @@
 
 import { usePathname } from "next/navigation";
 
+import { cn } from "cn";
+
+import { FOCUS_RING_CLASS } from "@/components/ui/focus-ring";
+
 /**
  * Shared behaviour for the header's nav-style links (ugcportal-14k9 PR #94
  * review round 1, low finding 4): src/components/upload-link.tsx and
@@ -22,9 +26,16 @@ import { usePathname } from "next/navigation";
  * destination) never needed a visually distinct current-page state the way
  * a multi-item nav does; that highlighting is PrimaryNavLink-specific, not
  * duplicated, so it is not pulled in here.
+ *
+ * `FOCUS_RING_CLASS` (round 5, reuse finding 7): the trailing three
+ * `focus-visible:*` utilities were ALSO duplicated, verbatim, in
+ * src/components/ui/inline-link.ts's `INLINE_LINK_CLASS` - pulled out to its
+ * own shared constant rather than fixed in only one of the two.
  */
-export const HEADER_NAV_LINK_CLASS =
-  "rounded-sm text-sm font-medium text-foreground transition-colors hover:text-primary focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring";
+export const HEADER_NAV_LINK_CLASS = cn(
+  "rounded-sm text-sm font-medium text-foreground transition-colors hover:text-primary",
+  FOCUS_RING_CLASS,
+);
 
 /**
  * `"page"` when `href` is the current route, `undefined` otherwise —

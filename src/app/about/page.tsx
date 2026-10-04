@@ -35,14 +35,17 @@ export const metadata = {
  * throw, which moved to a boot-time warning (src/instrumentation.ts) and no
  * longer needs it; round 2 dropped the export on that basis, noting the
  * build still marks every route `ƒ (Dynamic)` anyway because the root
- * layout's `<AuthStatus />` (src/components/app-shell.tsx) reads the
- * session on every request. Round 3's point: relying on THAT is relying on
- * an implementation detail of a file this bead does not own and must not
- * touch — if AppShell ever stopped reading the session on every request
+ * layout's `<AuthStatus />` reads the session on every request — that
+ * component now lives in src/components/site-header.tsx, reached via
+ * `<SiteHeader />` inside src/components/app-shell.tsx (ugcportal-14k9
+ * moved it there; this page's dependency on the behaviour is unchanged,
+ * only its address moved). Round 3's point: relying on THAT is relying on
+ * an implementation detail of files this bead does not own and must not
+ * touch — if that session read ever stopped happening on every request
  * (caching it, say), `/about` would start silently serving a stale
  * prerendered snapshot, with nothing here to say that was never supposed to
  * happen. Declaring it explicitly makes this page's own correctness
- * independent of what AppShell does.
+ * independent of what the shell and header do.
  */
 export const dynamic = "force-dynamic";
 

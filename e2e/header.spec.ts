@@ -1,6 +1,7 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
 
+import { MD_BREAKPOINT_PX } from "../src/lib/breakpoints";
 import { hasHorizontalScroll } from "./has-horizontal-scroll";
 
 /**
@@ -24,16 +25,6 @@ const VIEWPORTS = {
   desktop1440: { width: 1440, height: 900 },
 } as const;
 
-/**
- * Tailwind's default `md` breakpoint (PR #94 review round 2, low finding
- * 4) — the width `mobile-nav-toggle.tsx`'s own `md:hidden`/`hidden md:flex`
- * pair switches on. Named once here rather than left as the literal `768`
- * three separate times below: a future change to that breakpoint (in
- * either the component or this file) now only has one number to update
- * instead of three that could silently stop agreeing with each other.
- */
-const MD_BREAKPOINT = 768;
-
 for (const [name, viewport] of Object.entries(VIEWPORTS)) {
   test.describe(`header at ${name} (${viewport.width}px)`, () => {
     test.use({ viewport });
@@ -56,7 +47,7 @@ for (const [name, viewport] of Object.entries(VIEWPORTS)) {
       // tuning). "Visible" there means what's rendered without
       // interaction is the toggle itself, not nothing - the nav items
       // become visible the moment it is activated, checked below.
-      if (viewport.width < MD_BREAKPOINT) {
+      if (viewport.width < MD_BREAKPOINT_PX) {
         const toggle = page.getByRole("button", { name: "Open menu" });
         await expect(toggle).toBeVisible();
         await toggle.click();
@@ -82,7 +73,7 @@ for (const [name, viewport] of Object.entries(VIEWPORTS)) {
       await page.keyboard.press("Tab"); // wordmark
       await page.keyboard.press("Tab"); // menu toggle (mobile) or "Gallery" (desktop)
 
-      if (viewport.width < MD_BREAKPOINT) {
+      if (viewport.width < MD_BREAKPOINT_PX) {
         // Below md the nav is hidden entirely (see mobile-nav-toggle.tsx)
         // until the toggle - the next, and only other, focusable element at
         // this width - is activated with the keyboard.
@@ -190,7 +181,7 @@ test.describe("K3: sticky header never hides the skip link's target", () => {
 test.describe("K3: no sales link in the navigation", () => {
   test("the rendered nav contains no link to a sales route", async ({ page }) => {
     await page.goto("/");
-    if ((await page.viewportSize())!.width < MD_BREAKPOINT) {
+    if ((await page.viewportSize())!.width < MD_BREAKPOINT_PX) {
       await page.getByRole("button", { name: "Open menu" }).click();
     }
 

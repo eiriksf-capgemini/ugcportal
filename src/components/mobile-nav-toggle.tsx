@@ -4,21 +4,11 @@ import { Popover } from "@base-ui/react/popover";
 import { Menu, X } from "lucide-react";
 import { useEffect, useState } from "react";
 
-import { Button } from "@/components/ui/button";
 import { PrimaryNavLink } from "@/components/primary-nav-link";
+import { Button } from "@/components/ui/button";
+import { MD_BREAKPOINT_PX } from "@/lib/breakpoints";
 
 export type NavItem = { href: string; label: string };
-
-/**
- * Tailwind's default `md` breakpoint - the same width this component's own
- * `md:hidden`/`hidden md:flex` pair switches on, and e2e/header.spec.ts's
- * own `MD_BREAKPOINT` constant. Not imported from one shared module across
- * the Tailwind-class/JS boundary (Tailwind's breakpoints live in compiled
- * CSS, not a value either side could import) - kept here, next to the only
- * other place in this file width matters, rather than a third independent
- * copy of the number in some other location.
- */
-const MD_BREAKPOINT_PX = 768;
 
 /**
  * The collapsed, small-viewport form of the header's main navigation
@@ -113,7 +103,12 @@ const MD_BREAKPOINT_PX = 768;
  * mount time the same width check the dismiss-on-resize effect above
  * already does at runtime) or a server-side viewport guess, neither of
  * which this component's idle cost at desktop widths (an unopened popover
- * with no listeners attached while closed) justifies building.
+ * with no DOCUMENT-LEVEL listeners attached while closed - the trigger
+ * button itself always carries Base UI's own click/keydown handlers
+ * regardless of `open`, same as any other button; it is only the
+ * dismiss-on-resize effect's `matchMedia` listener, and Popover's own
+ * Escape/outside-press listeners, that come and go with `open`) justifies
+ * building.
  */
 export function MobileNavToggle({ items }: { items: NavItem[] }) {
   const [open, setOpen] = useState(false);
@@ -141,21 +136,30 @@ export function MobileNavToggle({ items }: { items: NavItem[] }) {
     <Popover.Root open={open} onOpenChange={setOpen}>
       <div className="relative md:hidden">
         <Popover.Trigger
-          render={(triggerProps, state) => (
-            <Button
-              {...triggerProps}
-              // Removes Popover's own default "dialog" - see this file's
-              // docstring for why no aria-haspopup value is the right one,
-              // not a relabelled one.
-              aria-haspopup={undefined}
-              type="button"
-              variant="outline"
-              size="icon"
-            >
-              {state.open ? <X aria-hidden="true" /> : <Menu aria-hidden="true" />}
-              <span className="sr-only">{state.open ? "Close menu" : "Open menu"}</span>
-            </Button>
-          )}
+          render={(triggerProps, state) => {
+            // Computed once (PR #94 review round 5, reuse finding 5), not
+            // the same `state.open` ternary spelled twice: the icon and the
+            // label must never disagree about which state they're
+            // describing, and a single shared read of `state.open` is what
+            // makes that structurally true rather than merely true today.
+            const Icon = state.open ? X : Menu;
+            const label = state.open ? "Close menu" : "Open menu";
+            return (
+              <Button
+                {...triggerProps}
+                // Removes Popover's own default "dialog" - see this file's
+                // docstring for why no aria-haspopup value is the right one,
+                // not a relabelled one.
+                aria-haspopup={undefined}
+                type="button"
+                variant="outline"
+                size="icon"
+              >
+                <Icon aria-hidden="true" />
+                <span className="sr-only">{label}</span>
+              </Button>
+            );
+          }}
         />
 
         <Popover.Portal>

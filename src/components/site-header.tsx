@@ -6,6 +6,7 @@ import { AuthStatus } from "@/components/auth-status";
 import { HEADER_NAV_LINK_CLASS } from "@/components/header-nav-link";
 import { MobileNavToggle, type NavItem } from "@/components/mobile-nav-toggle";
 import { PrimaryNavLink } from "@/components/primary-nav-link";
+import { SIX_XL_CONTAINER_CLASS } from "@/components/site/page-shell";
 import { UploadNavLink } from "@/components/upload-nav-link";
 import { ABOUT_PATH } from "@/lib/routes";
 import { SITE_NAME, SITE_TAGLINE } from "@/lib/site";
@@ -52,15 +53,27 @@ import { SITE_NAME, SITE_TAGLINE } from "@/lib/site";
  * `<header>` element: CSS custom properties cascade to descendants, and
  * `<header>` and `<main>` are siblings, not ancestor and descendant.
  *
- * The number itself: 56px (`h-14`, the wordmark/nav row) + 28px (`h-7`, the
- * tagline row below - see that row's own comment for why it is a fixed
- * height rather than tracking the text's natural line-height) + 1px (this
- * element's own `border-b`) = 85px. e2e/header.spec.ts still measures the
- * real rendered boxes rather than trusting this arithmetic either - the
- * point of the shared variable is that there is now only one number to get
- * right, not that getting it right stops being worth checking for real.
+ * The number itself (PR #94 review round 5, finding 4): three named
+ * constants, each mirroring the ONE Tailwind utility it stands for, summed -
+ * not a single pre-added `85` a reader has to trust matches the markup
+ * below. `WORDMARK_ROW_PX` is `h-14` (the wordmark/nav row); `TAGLINE_ROW_PX`
+ * is `h-7` (the tagline row below - see that row's own comment for why it is
+ * a fixed height rather than tracking the text's natural line-height);
+ * `BORDER_PX` is this element's own `border-b`. Naming each one after its
+ * class means a future change to `h-14`/`h-7`/the border width has exactly
+ * one matching arithmetic input to update, in the same place, rather than a
+ * single opaque total someone has to re-derive from the markup first.
+ * src/components/site-header.height.test.ts compiles the real classes and
+ * checks each named constant against its real compiled value, not just the
+ * total; e2e/header.spec.ts separately measures the real rendered boxes
+ * rather than trusting this arithmetic either way - the point of the shared
+ * variable is that there is only one number to get right, not that getting
+ * it right stops being worth checking for real.
  */
-export const HEADER_HEIGHT_PX = 85;
+export const WORDMARK_ROW_PX = 56; // h-14
+export const TAGLINE_ROW_PX = 28; // h-7
+export const BORDER_PX = 1; // border-b
+export const HEADER_HEIGHT_PX = WORDMARK_ROW_PX + TAGLINE_ROW_PX + BORDER_PX;
 
 const NAV_ITEMS: NavItem[] = [
   { href: "/", label: "Gallery" },
@@ -70,7 +83,17 @@ const NAV_ITEMS: NavItem[] = [
 export function SiteHeader() {
   return (
     <header className="sticky top-0 z-20 border-b border-border bg-background">
-      <div className="mx-auto w-full max-w-6xl px-4 sm:px-6">
+      {/*
+        SIX_XL_CONTAINER_CLASS (PR #94 review round 5, reuse finding 6), not
+        the same "mx-auto w-full max-w-6xl px-4 sm:px-6" re-spelled a second
+        time: src/components/site/page-shell.tsx already names this exact
+        string for its own WIDE variant. Not that variant itself, though -
+        it also carries `flex-1 py-12`, which this precisely-sized header
+        (see HEADER_HEIGHT_PX above) cannot absorb without breaking its own
+        arithmetic - see that constant's own comment for why it was split
+        out as its own export instead.
+      */}
+      <div className={SIX_XL_CONTAINER_CLASS}>
         <div className="flex h-14 items-center gap-4">
           {/*
             Same wordmark treatment app-shell.tsx shipped before this bead

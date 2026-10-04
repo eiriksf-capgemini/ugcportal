@@ -308,6 +308,50 @@ describe("MobileNavToggle (ugcportal-14k9)", () => {
   });
 
   /**
+   * ugcportal-14k9 PR #94 review round 5 finding 8: the effect's own cleanup
+   * (`mediaQuery.removeEventListener("change", handleChange)`) is what
+   * stops a STALE closure over an earlier `open`/`items` from firing after
+   * the panel has closed, or after this component is gone entirely - either
+   * leak would mean a later unrelated viewport resize calling `setOpen`
+   * (and, on an unmounted component, React's own "state update on an
+   * unmounted component" warning) for a popover that no longer has anything
+   * to dismiss.
+   */
+  it("removes the matchMedia 'change' listener when the panel closes", () => {
+    act(() => {
+      root.render(<MobileNavToggle items={ITEMS} />);
+    });
+
+    act(() => {
+      toggleButton().click();
+    });
+    expect(matchMediaChangeListener, "no listener registered while open").not.toBeNull();
+
+    act(() => {
+      toggleButton().click();
+    });
+
+    expect(matchMediaChangeListener, "listener was not removed on close").toBeNull();
+  });
+
+  it("removes the matchMedia 'change' listener on unmount", () => {
+    act(() => {
+      root.render(<MobileNavToggle items={ITEMS} />);
+    });
+
+    act(() => {
+      toggleButton().click();
+    });
+    expect(matchMediaChangeListener, "no listener registered while open").not.toBeNull();
+
+    act(() => {
+      root.unmount();
+    });
+
+    expect(matchMediaChangeListener, "listener was not removed on unmount").toBeNull();
+  });
+
+  /**
    * THE FIXTURE MUTATION (review-standards family 3): confirms the K1 test
    * above is actually checking something that can fail, by running the same
    * assertions against a markup shape where the panel is open but EMPTY -
