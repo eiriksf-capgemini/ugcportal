@@ -1,3 +1,4 @@
+import { PORTFOLIO_TAG_SLUG } from "@/lib/curation-tags";
 import { MEDIA_ANONYMOUS_SELECT } from "@/lib/media-access";
 import { toGalleryItems, type GalleryItem } from "@/lib/gallery-items";
 import { prisma } from "@/lib/prisma";
@@ -14,13 +15,17 @@ import { PUBLIC_MEDIA_SCOPE } from "@/lib/public-media";
  * handful of allowlisted uploaders with no new write path and no new admin
  * screen.
  *
+ * `PORTFOLIO_TAG_SLUG` itself lives in src/lib/curation-tags.ts, not here
+ * (round-2 review) — see that module's own comment for why: it is read by
+ * src/lib/gallery-items.ts too, which strips this slug from every tag list
+ * ANY public surface renders, not only this one's query.
+ *
  * KNOWN FOLLOW-UP (filed as its own bead, discovered-from this one): the
  * picker renders "Portfolio" as a plain subject checkbox indistinguishable
  * from "Food"/"Wine & drink" — fine for this bead's two uploaders today, but
  * a curation flag and a subject are different kinds of fact, and the picker
  * UI does not yet say so.
  */
-export const PORTFOLIO_TAG_SLUG = "portfolio";
 
 /**
  * The exact wording the bead specifies for a self-made sample with no brand
@@ -62,13 +67,6 @@ export const SPEC_SAMPLE_LABEL = "Spec sample, not a client commission";
  */
 export const MAX_PORTFOLIO_PIECES = 24;
 
-/** `item.tags`, with the curation tag itself removed. See the note below. */
-function visibleTags(
-  tags: GalleryItem["tags"],
-): GalleryItem["tags"] {
-  return tags.filter((tag) => tag.slug !== PORTFOLIO_TAG_SLUG);
-}
-
 /**
  * Reads every portfolio sample, oldest first.
  *
@@ -104,13 +102,14 @@ function visibleTags(
  * the order it was made — "first six pieces" (docs/ugc-research.md §5.2) —
  * rather than as a stream of recent activity.
  *
- * THE CURATION TAG ITSELF IS STRIPPED from each piece's visible tags, here
- * and ONLY here (round-1 review: the render layer, `PortfolioTile`, used to
- * filter it a second time — removed, since `GalleryItemTags`, which that
- * component now reuses from src/components/gallery/gallery.tsx, applies no
- * filter of its own and a visitor is shown the photograph's real subjects
- * the same way the gallery shows them, not the internal fact that it was
- * selected for this page).
+ * NO TAG FILTERING HAPPENS HERE ANY MORE (round-2 review). `toGalleryItems`
+ * (src/lib/gallery-items.ts) now strips the portfolio curation tag from
+ * EVERY row it converts, for every caller — this function's own filter
+ * would have been a second copy of that rule, exactly the "keep it in one
+ * place" lesson round 1 already drew, just one layer too shallow: round 1's
+ * "one place" was this file, which still left the main gallery feed
+ * leaking the tag on any item that happened to be both published and
+ * portfolio-tagged.
  */
 export async function listPortfolioPieces(): Promise<GalleryItem[]> {
   const rows = await prisma.media.findMany({
@@ -124,8 +123,5 @@ export async function listPortfolioPieces(): Promise<GalleryItem[]> {
     take: MAX_PORTFOLIO_PIECES,
   });
 
-  return toGalleryItems(rows).map((item) => ({
-    ...item,
-    tags: visibleTags(item.tags),
-  }));
+  return toGalleryItems(rows);
 }

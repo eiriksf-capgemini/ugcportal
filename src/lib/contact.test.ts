@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CONTACT_EMAIL_PLACEHOLDER,
   contactMailtoHref,
+  isBareEmailAddress,
   resolveContactEmail,
 } from "@/lib/contact";
 
@@ -37,9 +38,9 @@ describe("resolveContactEmail", () => {
 });
 
 describe("contactMailtoHref", () => {
-  it("builds a mailto: link with the subject encoded and the address left alone", () => {
+  it("builds a mailto: link with both the address and the subject encoded", () => {
     expect(contactMailtoHref("hello@example.com", { subject: "Hello there" })).toBe(
-      "mailto:hello@example.com?subject=Hello%20there",
+      "mailto:hello%40example.com?subject=Hello%20there",
     );
   });
 
@@ -61,7 +62,7 @@ describe("contactMailtoHref", () => {
       body: "Nice work on the wine coolers",
     });
     expect(href).toBe(
-      "mailto:hello@example.com?subject=Hello%20there&body=Nice%20work%20on%20the%20wine%20coolers",
+      "mailto:hello%40example.com?subject=Hello%20there&body=Nice%20work%20on%20the%20wine%20coolers",
     );
   });
 
@@ -76,13 +77,44 @@ describe("contactMailtoHref", () => {
 
   it("builds a bare mailto: with no query string when nothing is given", () => {
     expect(contactMailtoHref("hello@example.com", {})).toBe(
-      "mailto:hello@example.com",
+      "mailto:hello%40example.com",
     );
   });
 
-  it("does not percent-encode the @ in the address", () => {
+  // Round-2 review reversed round-1's choice here: the address is now
+  // percent-encoded too, as defence in depth alongside
+  // checkContactEmailConfiguration's boot-time rejection of a malformed
+  // CONTACT_EMAIL (src/instrumentation.ts) — see this function's own
+  // comment for why a warning-only boot check is not enough on its own.
+  it("percent-encodes the @ in the address", () => {
     const href = contactMailtoHref(CONTACT_EMAIL_PLACEHOLDER, { subject: "x" });
-    expect(href).toContain(`mailto:${CONTACT_EMAIL_PLACEHOLDER}?`);
-    expect(href).not.toContain("%40");
+    expect(href).toContain("mailto:REPLACE-BEFORE-LAUNCH%40example.invalid?");
+    expect(href).not.toContain(`mailto:${CONTACT_EMAIL_PLACEHOLDER}`);
+  });
+
+  it("keeps the resulting href well-formed even if a malformed address slips through", () => {
+    // The exact shape checkContactEmailConfiguration warns about but does
+    // not block: a boot-time warning is advisory, not enforced, so this
+    // function cannot assume it was heeded.
+    const href = contactMailtoHref("Jane Doe <jane@example.com>", {});
+    expect(href).not.toMatch(/[\s<>]/);
+  });
+});
+
+describe("isBareEmailAddress", () => {
+  it("accepts an ordinary address", () => {
+    expect(isBareEmailAddress("jane@example.com")).toBe(true);
+  });
+
+  it("rejects a 'Display Name <address>' value", () => {
+    expect(isBareEmailAddress("Jane Doe <jane@example.com>")).toBe(false);
+  });
+
+  it("rejects any value containing whitespace", () => {
+    expect(isBareEmailAddress("jane doe@example.com")).toBe(false);
+  });
+
+  it("rejects a bare angle bracket with no surrounding name", () => {
+    expect(isBareEmailAddress("<jane@example.com>")).toBe(false);
   });
 });

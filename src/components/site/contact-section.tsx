@@ -36,9 +36,20 @@ import { CONTACT_INTRO, CONTACT_NOTICE } from "@/lib/site";
  * the same live configuration without either having to remember to pass it
  * through. `resolveContactEmail` no longer throws (round-1 review moved
  * that guard to a boot-time check, src/instrumentation.ts), so this no
- * longer forces its callers to be `force-dynamic` on its account — /about
- * is static again for exactly that reason.
+ * longer forces its callers to be `force-dynamic` purely on its account —
+ * see src/app/about/page.tsx's own comment for why that page's own
+ * `force-dynamic` export was still dropped, and why the build nonetheless
+ * still marks it dynamic for an unrelated, site-wide reason.
  */
+
+/**
+ * Both inline links in this component (the privacy-statement link and the
+ * "email us directly" fallback) share this exact styling — one constant
+ * rather than the same long string written out twice (round-2 review).
+ */
+const INLINE_LINK_CLASS =
+  "rounded-sm font-medium text-primary underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring";
+
 export function ContactSection({ defaultSubject }: { defaultSubject: string }) {
   const email = resolveContactEmail();
   const directHref = contactMailtoHref(email, { subject: defaultSubject });
@@ -54,10 +65,7 @@ export function ContactSection({ defaultSubject }: { defaultSubject: string }) {
 
       <p className="mt-4 max-w-prose text-xs text-muted-foreground" data-contact-notice="">
         {CONTACT_NOTICE}{" "}
-        <a
-          className="rounded-sm font-medium text-primary underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring"
-          href={PRIVACY_PATH}
-        >
+        <a className={INLINE_LINK_CLASS} href={PRIVACY_PATH}>
           Read our privacy statement
         </a>
         .
@@ -67,11 +75,7 @@ export function ContactSection({ defaultSubject }: { defaultSubject: string }) {
 
       <p className="mt-4 text-sm text-muted-foreground">
         Prefer to email us directly?{" "}
-        <a
-          className="rounded-sm font-medium text-primary underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring"
-          href={directHref}
-          data-contact-direct-link=""
-        >
+        <a className={INLINE_LINK_CLASS} href={directHref} data-contact-direct-link="">
           {email}
         </a>
       </p>

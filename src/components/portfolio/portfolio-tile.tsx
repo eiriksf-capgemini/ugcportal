@@ -1,8 +1,8 @@
+import { GALLERY_TILE_ASPECT_CLASS } from "@/components/gallery/containment";
 import {
   GalleryItemCaption,
   GalleryItemTags,
-} from "@/components/gallery/gallery";
-import { GALLERY_TILE_ASPECT_CLASS } from "@/components/gallery/containment";
+} from "@/components/gallery/gallery-item";
 import { galleryItemAlt, type GalleryItem } from "@/lib/gallery-items";
 import { SPEC_SAMPLE_LABEL } from "@/lib/portfolio";
 
@@ -26,10 +26,11 @@ const PORTFOLIO_TILE_IMAGE_CLASS = "h-full w-full object-cover";
  * One sample on the portfolio page (ugcportal-qnq9.7, K1/K2).
  *
  * REUSES THE GALLERY'S OWN CAPTION AND TAG RENDERING — `GalleryItemCaption`
- * and `GalleryItemTags`, exported from src/components/gallery/gallery.tsx
- * specifically for this (round-1 review) — rather than a second,
- * near-identical copy of each. `galleryItemAlt` is reused the same way for
- * the `<img alt>`.
+ * and `GalleryItemTags`, from src/components/gallery/gallery-item.tsx (a
+ * plain, non-`"use client"` module factored out of gallery.tsx specifically
+ * for this, round-2 review — see that file's own comment for why) — rather
+ * than a second, near-identical copy of each. `galleryItemAlt` is reused the
+ * same way for the `<img alt>`.
  *
  * WHAT IT DELIBERATELY DOES NOT REUSE: `gallery.tsx`'s `<button>` wrapper
  * and the PhotoSwipe activation/measuring machinery around it, for the

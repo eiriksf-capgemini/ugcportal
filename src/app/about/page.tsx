@@ -1,5 +1,6 @@
 import { ContactSection } from "@/components/site/contact-section";
 import { IntroSection } from "@/components/site/intro-section";
+import { PageShell } from "@/components/site/page-shell";
 import { WhatWeOfferSection } from "@/components/site/what-we-offer-section";
 
 /**
@@ -56,13 +57,10 @@ export const metadata = {
 
 export default function AboutPage() {
   return (
-    <div className="mx-auto w-full max-w-3xl flex-1 px-4 py-12 sm:px-6">
-      <h1 className="text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
-        About us
-      </h1>
+    <PageShell title="About us">
       <IntroSection />
       <WhatWeOfferSection />
       <ContactSection defaultSubject="Hello from your about page" />
-    </div>
+    </PageShell>
   );
 }

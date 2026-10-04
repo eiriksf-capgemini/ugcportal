@@ -12,11 +12,15 @@ import { SPEC_SAMPLE_LABEL } from "@/lib/portfolio";
  * src/lib/portfolio.ts for why there is nothing to test here yet.
  *
  * `@/lib/auth` is mocked for the same reason src/lib/portfolio.test.ts mocks
- * it: `@/components/gallery/gallery` (imported via PortfolioTile, for
- * GalleryItemCaption/GalleryItemTags) does not itself import `@/lib/auth`,
- * but the fixture type below comes from `@/lib/gallery-items`, which keeps
- * this test file's import graph close enough to the real page's that the
- * same guard is worth keeping as a belt-and-braces check.
+ * it: `PortfolioTile` imports `SPEC_SAMPLE_LABEL` from `@/lib/portfolio`,
+ * whose module graph includes `@/lib/media-access` (for
+ * `MEDIA_ANONYMOUS_SELECT`), which imports `@/lib/auth` at module scope — a
+ * real import even though this file only uses the one named export.
+ * `GalleryItemCaption`/`GalleryItemTags` themselves come from
+ * src/components/gallery/gallery-item.tsx, a plain module with no such
+ * dependency (round-2 review moved them out of gallery.tsx specifically so
+ * importing them would not pull in the interactive gallery's own client
+ * bundle — see that file's comment).
  */
 vi.mock("@/lib/auth", () => ({
   auth: () => {

@@ -74,7 +74,7 @@ describe("ContactMailtoForm", () => {
 
     const href = submitLink().getAttribute("href");
     expect(href).toBe(
-      "mailto:hello@example.com?subject=Hello%20from%20your%20portfolio%20page",
+      "mailto:hello%40example.com?subject=Hello%20from%20your%20portfolio%20page",
     );
     expect(href).not.toContain("+");
   });
@@ -86,7 +86,7 @@ describe("ContactMailtoForm", () => {
 
     const href = submitLink().getAttribute("href");
     expect(href).toBe(
-      "mailto:hello@example.com?subject=A%20longer%20subject%20with%20several%20spaces",
+      "mailto:hello%40example.com?subject=A%20longer%20subject%20with%20several%20spaces",
     );
     expect(href).not.toContain("+");
   });

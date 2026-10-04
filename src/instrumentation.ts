@@ -5,7 +5,7 @@
  * a quiet difference in how data is stored — the kind nobody discovers until
  * an audit — or, for the sign-in gate below, as an unexplained refusal.
  */
-import { CONTACT_EMAIL_PLACEHOLDER } from "@/lib/contact";
+import { CONTACT_EMAIL_PLACEHOLDER, isBareEmailAddress } from "@/lib/contact";
 import {
   PERMITTED_EMAILS_VAR,
   PROVIDER_PREFIX_HINT,
@@ -114,14 +114,37 @@ export function checkSignInConfiguration(
  * an address nobody reads. Same shape as the two checks above: a warning
  * rather than a refusal to boot, because the rest of the site is useful
  * without a working contact form.
+ *
+ * TWO DIFFERENT PROBLEMS, two different conditions for warning about them
+ * (round-2 review added the second). "Unset" is fine everywhere except
+ * production — dev and CI never configure it, same reasoning as the
+ * evidence-encryption check above. A MALFORMED value — `CONTACT_EMAIL` set
+ * to something other than a bare address, e.g. "Jane Doe
+ * <jane@example.com>" — is worth flagging in every environment, the same
+ * way the sign-in check below is unconditional: it is a real configuration
+ * mistake the moment it is made, not merely "not got round to yet", and
+ * `contactMailtoHref` (src/lib/contact.ts) does no parsing of that shape —
+ * it would build a mailto href against the whole malformed string.
  */
 export function checkContactEmailConfiguration(
   env: NodeJS.ProcessEnv = process.env,
 ): string | null {
+  const configured = env.CONTACT_EMAIL?.trim();
+
+  if (configured && !isBareEmailAddress(configured)) {
+    return (
+      `[contact] CONTACT_EMAIL is set to "${configured}", which is not a ` +
+      'bare email address (it contains whitespace or an angle bracket — ' +
+      '"Jane Doe <jane@example.com>" rather than "jane@example.com"). ' +
+      "Nothing parses a display name out of it before building a mailto: " +
+      "link. Set it to the address alone. See env.example."
+    );
+  }
+
   if (env.NODE_ENV !== "production") {
     return null;
   }
-  if (env.CONTACT_EMAIL?.trim()) {
+  if (configured) {
     return null;
   }
   return (

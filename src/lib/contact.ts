@@ -39,6 +39,19 @@ export function resolveContactEmail(): string {
   return configured ? configured : CONTACT_EMAIL_PLACEHOLDER;
 }
 
+/**
+ * Whether `value` is a bare address — no display name, no angle brackets,
+ * no whitespace of any kind. Used by `checkContactEmailConfiguration`
+ * (src/instrumentation.ts) to reject a `CONTACT_EMAIL` shaped like
+ * `"Jane Doe <jane@example.com>"`: this module does no parsing of that
+ * shape into its address part, so a value like that would be mailed to as
+ * a single, malformed address (after encoding) rather than silently
+ * repaired into the one the operator meant.
+ */
+export function isBareEmailAddress(value: string): boolean {
+  return !/[\s<>]/.test(value);
+}
+
 /** The named `mailto:` query parameters this site ever builds. */
 export type MailtoParams = { subject?: string; body?: string };
 
@@ -57,13 +70,20 @@ export type MailtoParams = { subject?: string; body?: string };
  * GET-form version of this page. `encodeURIComponent` encodes a space as
  * `%20`, which RFC 6068 compliant mailto handling does decode correctly.
  *
- * The address itself is NOT percent-encoded, deliberately. `mailto:`
- * addresses are RFC 6068's "addr-spec" (the same ASCII local-part/domain
- * grammar email addresses always are), not a path or query component, and
- * several real mail clients take `%40` literally instead of decoding it
- * back to `@`. There is nothing in an address this function is ever handed
- * (CONTACT_EMAIL_PLACEHOLDER, or Eirik's real configured one) that needs
- * escaping in the first place.
+ * THE ADDRESS ITSELF IS ALSO ENCODED NOW (round-2 review reversed round-1's
+ * choice here). Round 1 left it raw, reasoning that RFC 6068's "addr-spec"
+ * never needs escaping and that some mail clients take a literal `%40`
+ * instead of decoding it. That reasoning traded away a bigger safety
+ * margin than it bought: `resolveContactEmail` returns WHATEVER
+ * `CONTACT_EMAIL` holds once `checkContactEmailConfiguration`
+ * (src/instrumentation.ts) has only WARNED about a malformed value, not
+ * blocked it — so a misconfigured "Jane Doe <jane@example.com>" (display
+ * name included, a genuinely easy mistake) would reach this function raw
+ * and produce `mailto:Jane Doe <jane@example.com>`, a `<a href>` with an
+ * unescaped space and angle brackets that is not a well-formed URI at all.
+ * `encodeURIComponent` keeps the href well-formed regardless of what
+ * `resolveContactEmail` was actually handed — defence in depth alongside
+ * the boot check, not a replacement for it.
  */
 export function contactMailtoHref(email: string, params: MailtoParams): string {
   const query = (Object.entries(params) as [keyof MailtoParams, string | undefined][])
@@ -71,5 +91,6 @@ export function contactMailtoHref(email: string, params: MailtoParams): string {
     .map(([key, value]) => `${key}=${encodeURIComponent(value)}`)
     .join("&");
 
-  return query === "" ? `mailto:${email}` : `mailto:${email}?${query}`;
+  const address = encodeURIComponent(email);
+  return query === "" ? `mailto:${address}` : `mailto:${address}?${query}`;
 }

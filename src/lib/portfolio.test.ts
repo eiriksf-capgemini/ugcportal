@@ -29,11 +29,10 @@ vi.mock("@/lib/auth", () => ({
 const database = createTemporaryDatabase();
 const { prisma } = await import("@/lib/prisma");
 const { listPickerTags } = await import("@/lib/tags");
-const {
-  MAX_PORTFOLIO_PIECES,
-  PORTFOLIO_TAG_SLUG,
-  listPortfolioPieces,
-} = await import("@/lib/portfolio");
+const { PORTFOLIO_TAG_SLUG } = await import("@/lib/curation-tags");
+const { MAX_PORTFOLIO_PIECES, listPortfolioPieces } = await import(
+  "@/lib/portfolio"
+);
 
 const UPLOADER = "uploader-qnq9-7";
 
@@ -163,6 +162,10 @@ describe("listPortfolioPieces", () => {
     );
   });
 
+  // Round-2 review: the actual filtering moved to toGalleryItems
+  // (src/lib/gallery-items.ts), which covers every public surface, not only
+  // this one's query. This integration-level check stays here too, as a
+  // second line of evidence that THIS caller's output carries the fix.
   it("strips the curation tag itself from a piece's visible tags, keeping real subjects", async () => {
     await prisma.tag.upsert({
       where: { slug: "food" },

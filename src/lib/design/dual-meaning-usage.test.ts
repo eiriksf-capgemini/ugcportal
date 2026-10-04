@@ -185,27 +185,33 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
    * --popover/--muted/--accent/--secondary/--destructive-surface/--sidebar
    * fill or any src/components/gallery/containment.ts well, which is the one
    * condition that would need text-ink/text-ink-muted instead (see this
-   * file's header comment). `src/app/about/page.tsx` and
-   * `src/app/portfolio/page.tsx` each carry one `text-foreground` on their
-   * own `<h1>`; /portfolio additionally renders IntroSection once more than
-   * /about's own `text-muted-foreground` paragraph count because its
-   * "Samples" `<h2>` and, when nothing is curated yet, its empty-state
-   * `<p>` both use these tokens directly in the page file itself rather
-   * than through a shared section component.
+   * file's header comment).
+   *
+   * Round 2 moved the shared `<h1>` both pages used to carry out to
+   * `src/components/site/page-shell.tsx` (`PageShell`) — so
+   * `src/app/about/page.tsx` carries none of these tokens directly any more
+   * (no entry below: an audited file with zero matches simply isn't one),
+   * and `/portfolio`'s own `text-foreground` count dropped from two to one
+   * (its "Samples" `<h2>` is the only one left in the page file itself; its
+   * empty-state `<p>` accounts for the one `text-muted-foreground`).
    */
-  "src/app/about/page.tsx": { "text-foreground": 1 },
   "src/app/portfolio/page.tsx": {
-    "text-foreground": 2,
+    "text-foreground": 1,
     "text-muted-foreground": 1,
   },
+  "src/components/site/page-shell.tsx": { "text-foreground": 1 },
   // Round-1 review simplified this component (K2's spec marker renders
   // unconditionally, the K3 advertising-label branch is gone until
   // ugcportal-qnq9.1 lands) — one text-foreground usage now, not two.
   "src/components/portfolio/portfolio-tile.tsx": { "text-foreground": 1 },
+  // Round 2 extracted INLINE_LINK_CLASS as one constant for the two
+  // identically-styled links in this file, so "text-primary" now appears
+  // once in the source text, not twice (the literal is written once; both
+  // `<a>` elements reference the same constant).
   "src/components/site/contact-section.tsx": {
     "text-foreground": 1,
     "text-muted-foreground": 3,
-    "text-primary": 2,
+    "text-primary": 1,
   },
   "src/components/site/intro-section.tsx": { "text-muted-foreground": 1 },
   "src/components/site/what-we-offer-section.tsx": {

@@ -40,4 +40,9 @@ describe("/about", () => {
     const markup = renderToStaticMarkup(<AboutPage />);
     expect(markup).toContain("Hello%20from%20your%20about%20page");
   });
+
+  it("percent-encodes the @ in the mailto href (round-2 review)", () => {
+    const markup = renderToStaticMarkup(<AboutPage />);
+    expect(markup).toContain("mailto:REPLACE-BEFORE-LAUNCH%40example.invalid");
+  });
 });

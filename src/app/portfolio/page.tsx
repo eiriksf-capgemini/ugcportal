@@ -2,6 +2,7 @@ import { GALLERY_GRID_CLASS } from "@/components/gallery/containment";
 import { PortfolioTile } from "@/components/portfolio/portfolio-tile";
 import { ContactSection } from "@/components/site/contact-section";
 import { IntroSection } from "@/components/site/intro-section";
+import { PageShell } from "@/components/site/page-shell";
 import { WhatWeOfferSection } from "@/components/site/what-we-offer-section";
 import { listPortfolioPieces } from "@/lib/portfolio";
 
@@ -48,10 +49,7 @@ export default async function PortfolioPage() {
   const pieces = await listPortfolioPieces();
 
   return (
-    <div className="mx-auto w-full max-w-6xl px-4 py-12 sm:px-6">
-      <h1 className="text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
-        Portfolio
-      </h1>
+    <PageShell title="Portfolio" wide>
       <IntroSection />
 
       <section className="mt-10" data-page-section="samples">
@@ -80,6 +78,6 @@ export default async function PortfolioPage() {
 
       <WhatWeOfferSection />
       <ContactSection defaultSubject="Hello from your portfolio page" />
-    </div>
+    </PageShell>
   );
 }

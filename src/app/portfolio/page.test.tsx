@@ -20,9 +20,8 @@ vi.mock("@/lib/auth", () => ({
 const database = createTemporaryDatabase();
 const { prisma } = await import("@/lib/prisma");
 const { default: PortfolioPage } = await import("@/app/portfolio/page");
-const { PORTFOLIO_TAG_SLUG, SPEC_SAMPLE_LABEL } = await import(
-  "@/lib/portfolio"
-);
+const { PORTFOLIO_TAG_SLUG } = await import("@/lib/curation-tags");
+const { SPEC_SAMPLE_LABEL } = await import("@/lib/portfolio");
 const { CONTACT_EMAIL_PLACEHOLDER } = await import("@/lib/contact");
 
 const UPLOADER = "uploader-portfolio-page";

@@ -35,6 +35,7 @@ const { GALLERY_GRID_CLASS } = await import(
 );
 const { GET } = await import("@/app/api/public/media/route");
 const { publicMediaListingPath } = await import("@/lib/routes");
+const { PORTFOLIO_TAG_SLUG } = await import("@/lib/curation-tags");
 
 const UPLOADER = "uploader-jsc";
 
@@ -218,6 +219,35 @@ describe("K1 — every item shows its own tags, and an untagged one renders clea
     // The grid, and nothing else: no stray tag lists.
     expect([...markup.matchAll(/<ul\b/g)]).toHaveLength(1);
     expect(markup).not.toContain("data-gallery-tag");
+  });
+});
+
+/**
+ * ugcportal-qnq9.7 round-2 review: the "portfolio" curation tag
+ * (src/lib/curation-tags.ts) exists to select which published photos show
+ * on /portfolio, not to describe a subject — so it must never reach the
+ * ORDINARY home-page gallery as if it were one, for a photo that happens to
+ * be both published (so the home page shows it) and portfolio-tagged (so
+ * /portfolio also shows it). Round 1 only stripped the tag on the
+ * portfolio-specific code path; this is the sibling surface that fix
+ * missed.
+ */
+describe("the portfolio curation tag never reaches the main feed (round-2 review)", () => {
+  it("is absent from a published item's chips, even though the item's real subject still shows", async () => {
+    await seedTag(PORTFOLIO_TAG_SLUG, "Portfolio");
+    await seedMedia({
+      id: "both-tagged",
+      createdAt: new Date("2026-03-04T00:00:00Z"),
+      tags: ["food", PORTFOLIO_TAG_SLUG],
+    });
+
+    const markup = await renderGallery();
+
+    expect(renderedTiles(markup)).toEqual([
+      { id: "both-tagged", tags: ["food"] },
+    ]);
+    expect(markup).not.toContain(`data-gallery-tag="${PORTFOLIO_TAG_SLUG}"`);
+    expect(markup).not.toContain(">Portfolio<");
   });
 });
 
