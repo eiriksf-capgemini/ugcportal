@@ -141,11 +141,11 @@ function scriptKindFor(fileName: string): ts.ScriptKind {
  *     Otherwise a top-level `await` in a file with no import/export is, by
  *     the real language rules, an ordinary identifier - so `await /re/` is
  *     division and the regex is not a regex. Parsing everything as a
- *     module keeps `await` meaning `await`. The one file kind these
- *     scanners see that is NOT an ES module is `.cjs`, where a top-level
- *     `await` is a syntax error anyway - so there is no real CommonJS
- *     source this choice can misread, only invalid source it reads
- *     differently.
+ *     module keeps `await` meaning `await`. The file kinds these scanners
+ *     see that are NOT ES modules are the CommonJS ones - `.cjs`, and
+ *     `.cts` if one is ever added - where a top-level `await` is a syntax
+ *     error anyway, so there is no real CommonJS source this choice can
+ *     misread, only invalid source it reads differently.
  *
  * Output shape is unchanged from every previous version, because callers
  * match patterns against it: each comment collapses to a single space, so
@@ -246,6 +246,18 @@ export function stripComments(source: string, fileName: string): string {
       range.kind === ts.SyntaxKind.MultiLineCommentTrivia &&
       source.indexOf("*/", range.pos + 2) === -1
     ) {
+      /*
+       * Say so (review round 2, LOW). Failing closed silently is its own
+       * trap: the gate that then fires reports only "vendor name found in
+       * <file>", and the obvious reading of that - when the only mention
+       * really is in a comment - is "false positive, add it to the
+       * allowlist", which permanently exempts a file for a reason nobody
+       * recorded. Naming the cause at the point it happens is what makes
+       * the right fix (close the comment) the obvious one.
+       */
+      console.warn(
+        `[scan-source] ${fileName}: unterminated block comment, scanned unstripped`,
+      );
       return source;
     }
   }
@@ -273,6 +285,13 @@ export function stripComments(source: string, fileName: string): string {
  * lookbehind; that lookbehind was what the protocol-relative-URL finding
  * (round 3) removed, trading one bug for another. Neither is needed once
  * the CSS caller simply stops being handed a JavaScript lexer.
+ *
+ * Duplicated, knowingly: src/lib/design/tokens.ts has the same regex as a
+ * private `stripComments`. NOT consolidated - the two differ in what they
+ * replace a comment WITH (that one erases it, this one leaves a space so
+ * two tokens cannot fuse), and importing this module would pull `node:fs`
+ * and the `typescript` devDependency into tokens.ts's graph for a
+ * one-line regex. Change one, look at the other.
  *
  * Deliberately a plain regex, not a tokenizer: `/* *\/` is the only comment
  * syntax CSS has, it does not nest, and the only text that can contain a

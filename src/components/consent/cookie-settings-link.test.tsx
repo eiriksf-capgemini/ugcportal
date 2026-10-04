@@ -96,12 +96,17 @@ describe("hands the clicked control to the banner as the focus-restore target (u
     });
 
     const cookiesButton = buttonLabelled("Cookies");
+    // The precondition this whole fix is about, asserted BEFORE the click
+    // and about `document.activeElement` — which is the thing the old
+    // implementation read (review round 2, LOW: the previous version of
+    // this line compared the BUTTON to `document.body`, two values that
+    // can never be equal, so it had no failing case and did not read
+    // activeElement at all). Nothing has focused this button, and jsdom's
+    // `dispatchEvent` will not either: exactly WebKit's behaviour.
+    expect(document.activeElement).not.toBe(cookiesButton);
     act(() => {
       cookiesButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
-    // The precondition this whole fix is about: the click did NOT focus
-    // the button, so `document.activeElement` was never it.
-    expect(cookiesButton).not.toBe(document.body);
 
     act(() => {
       buttonLabelled(COOKIE_BANNER_DECLINE_LABEL).dispatchEvent(

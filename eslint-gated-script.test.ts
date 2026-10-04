@@ -159,6 +159,32 @@ describe("eslint.config.mjs: gated-script syntax selectors (JSX/createElement)",
           options: GATED_SCRIPT_SYNTAX_SELECTORS,
           errors: 1,
         },
+        // Review round 2, MEDIUM (CONFIRMED with Linter.verify): a
+        // BACKTICKED COMPUTED CALLEE. Four hand-written selectors covered
+        // seven of the eight (callee spelling x tag spelling) cells and
+        // this was the eighth — `document["createElement"]("SCRIPT")` and
+        // the dot form were both caught while this passed cleanly. All
+        // four callee spellings now come from one `:matches()`.
+        {
+          code: 'document[`createElement`]("script");',
+          options: GATED_SCRIPT_SYNTAX_SELECTORS,
+          errors: 1,
+        },
+        {
+          code: "document[`createElement`](`script`);",
+          options: GATED_SCRIPT_SYNTAX_SELECTORS,
+          errors: 1,
+        },
+        {
+          code: 'document[`createElement`]("SCRIPT");',
+          options: GATED_SCRIPT_SYNTAX_SELECTORS,
+          errors: 1,
+        },
+        {
+          code: "window.document[`createElement`](`SCRIPT`);",
+          options: GATED_SCRIPT_SYNTAX_SELECTORS,
+          errors: 1,
+        },
         // ugcportal-ysub, family-4 sibling of the two template-literal
         // module specifiers below: a backticked TAG NAME has no `.value`
         // either, in any of the three callee spellings.
@@ -216,9 +242,16 @@ describe("eslint.config.mjs: gated-script syntax selectors (JSX/createElement)",
         { code: 'document.createElement("scriptish");', options: GATED_SCRIPT_SYNTAX_SELECTORS },
         { code: 'document.createElement("noscript");', options: GATED_SCRIPT_SYNTAX_SELECTORS },
         { code: "document.createElement(`scriptish`);", options: GATED_SCRIPT_SYNTAX_SELECTORS },
+        { code: "document[`createElement`](`scriptish`);", options: GATED_SCRIPT_SYNTAX_SELECTORS },
+        // A near-miss METHOD name, now that the callee is one `:matches()`
+        // — widening any of its four branches would light this up.
+        { code: 'document["createElementNS"]("script");', options: GATED_SCRIPT_SYNTAX_SELECTORS },
+        { code: "document[`createElementNS`](`script`);", options: GATED_SCRIPT_SYNTAX_SELECTORS },
         // A tag name only known at runtime — the documented residual the
         // K6 grep backstops, not something a selector can close.
         { code: "document.createElement(`${tag}script`);", options: GATED_SCRIPT_SYNTAX_SELECTORS },
+        // ...and the same residual on the callee side.
+        { code: "document[`createElement${x}`](`script`);", options: GATED_SCRIPT_SYNTAX_SELECTORS },
         {
           code: 'async function load() { await import("next/script-helpers"); }',
           options: GATED_SCRIPT_SYNTAX_SELECTORS,
@@ -439,6 +472,32 @@ describe("eslintConfig (the real merged, exported config) wires the gated-script
   it("K2: flags createElement(\"SCRIPT\") — DOM tag names are case-insensitive", () => {
     const ruleIds = ruleIdsFor('document.createElement("SCRIPT");', "src/lib/evil.ts");
     expect(ruleIds).toContain("no-restricted-syntax");
+  });
+
+  /**
+   * Review round 2, MEDIUM (CONFIRMED with Linter.verify): the eighth cell
+   * of the (callee spelling x tag spelling) matrix — a backticked computed
+   * property — passed the whole merged config while its string-literal
+   * twin `document["createElement"]("SCRIPT")` was caught.
+   */
+  it("K2: flags a BACKTICKED computed createElement callee through the merged config", () => {
+    expect(ruleIdsFor('document[`createElement`]("script");', "src/lib/evil.ts")).toContain(
+      "no-restricted-syntax",
+    );
+    expect(ruleIdsFor("document[`createElement`](`SCRIPT`);", "src/lib/evil.ts")).toContain(
+      "no-restricted-syntax",
+    );
+  });
+
+  it("MUTATION CHECK: a backticked computed callee naming a DIFFERENT method raises nothing", () => {
+    // Fixture mutation: `createElementNS` rather than `createElement`, in
+    // the same backticked computed position. If the new branch matched on
+    // "contains createElement" rather than "is createElement", this would
+    // fire and the assertion above would be reading a needle that can
+    // never be absent.
+    expect(ruleIdsFor("document[`createElementNS`](`script`);", "src/lib/fine.ts")).not.toContain(
+      "no-restricted-syntax",
+    );
   });
 
   it("K2: flags a template-literal dynamic import of next/script", () => {

@@ -179,6 +179,37 @@ export const GATED_SCRIPT_IMPORT_OPTIONS = [
  */
 const SCRIPT_TAG_NAME = "/^script$/i";
 
+/**
+ * "The callee is createElement", in all four spellings JavaScript gives you
+ * for naming the same function. Factored into one `:matches()` so the two
+ * selectors below each state the TAG-NAME question once, instead of the
+ * matrix of (callee spelling x tag spelling) that review round 2 found a
+ * hole in: four hand-written selectors covered seven of the eight cells,
+ * and the missing one — ``document[`createElement`]("script")`` — passed
+ * the lint cleanly (CONFIRMED with Linter.verify).
+ *
+ *   - `document.createElement(...)`     — Identifier property
+ *   - `document["createElement"](...)`  — computed, string Literal property
+ *   - ``document[`createElement`](...)``— computed, TemplateLiteral property
+ *   - `createElement(...)`              — bare Identifier callee, the
+ *     hand-written React.createElement JSX itself compiles `<script>` down
+ *     to. An ALIASED import of it (`createElement as h`) is caught at its
+ *     import instead — see GATED_CREATE_ELEMENT_MESSAGE above for why no
+ *     selector can catch it here.
+ *
+ * The template-literal spellings are restricted to NO substitutions, in
+ * the property and in the argument alike: a substituted template is not
+ * statically present in the source, which is the documented residual the
+ * K6 grep backstops (see KNOWN LIMIT above), not something a selector can
+ * close.
+ */
+const CREATE_ELEMENT_CALLEE =
+  ":matches(" +
+  '[callee.property.name="createElement"], ' +
+  '[callee.computed=true][callee.property.value="createElement"], ' +
+  '[callee.computed=true][callee.property.expressions.length=0][callee.property.quasis.0.value.cooked="createElement"], ' +
+  '[callee.name="createElement"])';
+
 export const GATED_SCRIPT_SYNTAX_SELECTORS = [
   {
     // Any <script> JSX element at all — not qualified by `src` or any
@@ -188,41 +219,19 @@ export const GATED_SCRIPT_SYNTAX_SELECTORS = [
     message: GATED_SCRIPT_MESSAGE,
   },
   {
-    // Dot notation: document.createElement("script").
-    selector: `CallExpression[callee.property.name="createElement"][arguments.0.value=${SCRIPT_TAG_NAME}]`,
+    // A plain string tag name, in any callee spelling:
+    // document.createElement("script"), document["createElement"]("SCRIPT"),
+    // `document[`createElement`]("script")`, createElement("script", ...).
+    selector: `CallExpression${CREATE_ELEMENT_CALLEE}[arguments.0.value=${SCRIPT_TAG_NAME}]`,
     message: GATED_SCRIPT_MESSAGE,
   },
   {
-    // Computed/bracket notation: document["createElement"]("script") —
-    // the property is a string Literal (`.value`), not an Identifier
-    // (`.name`), so this needs its own selector rather than reusing the
-    // one above (review round 3, finding 2).
-    selector: `CallExpression[callee.computed=true][callee.property.value="createElement"][arguments.0.value=${SCRIPT_TAG_NAME}]`,
-    message: GATED_SCRIPT_MESSAGE,
-  },
-  {
-    // Bare-identifier callee: `import { createElement } from "react";
-    // createElement("script", ...)` — hand-written React.createElement,
-    // the exact call JSX itself compiles `<script ...>` down to, with no
-    // `.` at all (the callee is a plain Identifier, not a MemberExpression,
-    // so neither selector above matches it) and no JSX syntax for the
-    // JSXOpeningElement selector above to see either (review round 4,
-    // finding 3). An ALIASED import of the same function
-    // (`createElement as h`) is caught at its import instead — see
-    // GATED_CREATE_ELEMENT_MESSAGE above for why it cannot be caught here.
-    selector: `CallExpression[callee.name="createElement"][arguments.0.value=${SCRIPT_TAG_NAME}]`,
-    message: GATED_SCRIPT_MESSAGE,
-  },
-  {
-    // A BACKTICKED tag name: ``document.createElement(`script`)``, and the
-    // computed and bare-identifier spellings of the same thing. Found by
-    // the family-4 sibling sweep while adding the backticked `import()`
-    // and `require()` selectors below — a template literal has no
-    // `.value`, so all three `[arguments.0.value=...]` selectors above
-    // were blind to it. One `:matches()` rather than three near-identical
-    // selectors, since the only part that differs is how the callee is
-    // spelled. Same "no substitutions" restriction, for the same reason.
-    selector: `CallExpression:matches([callee.property.name="createElement"], [callee.property.value="createElement"], [callee.name="createElement"]) > TemplateLiteral[expressions.length=0] > TemplateElement[value.cooked=${SCRIPT_TAG_NAME}]`,
+    // A BACKTICKED tag name, in any callee spelling: a TemplateLiteral has
+    // no `.value` at all, so the selector above cannot see it. `>` reaches
+    // the ARGUMENT only — a backticked callee property sits one level
+    // deeper, inside the MemberExpression, so it cannot be mistaken for
+    // the tag name here.
+    selector: `CallExpression${CREATE_ELEMENT_CALLEE} > TemplateLiteral[expressions.length=0] > TemplateElement[value.cooked=${SCRIPT_TAG_NAME}]`,
     message: GATED_SCRIPT_MESSAGE,
   },
   {

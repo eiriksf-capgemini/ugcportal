@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { stripComments, stripCssComments } from "./scan-source";
 import { legacyStripComments } from "./scan-source-legacy.test-support";
@@ -482,6 +482,39 @@ describe("stripComments (ugcportal-ysub: TypeScript's lexer, not a hand-rolled o
   it("THE ROUND-1 FINDING-2 BUG: an unterminated block comment returns the source whole", () => {
     expect(stripComments(UNTERMINATED, "fixture.ts")).toBe(UNTERMINATED);
     expect(stripComments(UNTERMINATED, "fixture.ts")).toContain("trackerco");
+  });
+
+  it("warns, naming the file, when it falls back to scanning unstripped", () => {
+    // Review round 2, LOW: failing closed SILENTLY is its own trap. The
+    // gate that then fires says only "vendor name found in <file>", and
+    // when the only mention really is in a comment the obvious reading of
+    // that is "false positive, allowlist it" — permanently exempting a
+    // file for a reason nobody wrote down.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      stripComments(UNTERMINATED, "src/lib/evil.ts");
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0][0]).toContain("src/lib/evil.ts");
+      expect(warn.mock.calls[0][0]).toContain("unterminated block comment");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("MUTATION CHECK: closing that comment strips it and warns about nothing", () => {
+    // Fixture mutation for the warning above: ` */` added, nothing else.
+    // If the warning fired on every call it would be noise rather than a
+    // signal, and the assertion above could not fail.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      stripComments(
+        'const a = 1; /* now closed */\nconst trackingSrc = "https://stats.example/x?trackerco";\n',
+        "src/lib/fine.ts",
+      );
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("MUTATION CHECK: closing that same comment strips it, and the host survives either way", () => {
