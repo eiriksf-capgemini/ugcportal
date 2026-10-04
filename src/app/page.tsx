@@ -1,15 +1,63 @@
+import type { ReactElement } from "react";
+
 import { Gallery } from "@/components/gallery/gallery";
 import { GalleryUnavailable } from "@/components/gallery/gallery-unavailable";
 import { EmptyState } from "@/components/home/empty-state";
 import { Hero } from "@/components/home/hero";
 import { getSession } from "@/lib/auth";
-import { toGalleryItems } from "@/lib/gallery-items";
+import { isGenuinelyEmptyPage, toGalleryItems } from "@/lib/gallery-items";
 import {
   listPublicMedia,
   publicMediaListingUrl,
   type PublicMediaResult,
 } from "@/lib/public-media";
 import { hasSignedInUser } from "@/lib/session";
+
+/**
+ * Resolves the session promise Home() kicked off, never letting a REJECTION
+ * reach a caller (round-1 review, CONFIRMED medium).
+ *
+ * `getSession()` can reject — a dropped database connection reading the
+ * session row, the same class of failure `listPublicMedia` already has to
+ * survive below — and before this existed, `await sessionPromise` was
+ * unguarded on EVERY branch, including inside the `catch` block that exists
+ * specifically to degrade a LISTING failure gracefully into
+ * `GalleryUnavailable`. A rejected session read there would have thrown
+ * again, inside that catch, past the one boundary this page has — crashing
+ * the whole home page over a session-read failure the gallery data wasn't
+ * even what failed. Degrading to the anonymous case (`signedIn: false`) is
+ * the same choice this page already makes for an actual anonymous visitor,
+ * so a visitor whose session merely couldn't be checked sees exactly what an
+ * anonymous one does — never a broken page — at the cost of one logged
+ * line an operator can act on.
+ */
+async function resolveSignedIn(
+  sessionPromise: ReturnType<typeof getSession>,
+): Promise<boolean> {
+  try {
+    return hasSignedInUser(await sessionPromise);
+  } catch (error) {
+    console.error("[home] getSession() failed; treating the visitor as signed out", error);
+    return false;
+  }
+}
+
+/**
+ * The hero plus `GalleryUnavailable`, the fragment both the thrown-failure
+ * branch and the `ok: false` branch below render (round-1 review, low
+ * finding: this used to be written out twice). Still two call sites, not
+ * one shared early return, because the two failures reach this point by
+ * different control flow (`catch` vs. an `if`) for reasons that comment
+ * explains — only the JSX itself was duplicated, not the branching.
+ */
+function unavailable(signedIn: boolean): ReactElement {
+  return (
+    <>
+      <Hero signedIn={signedIn} />
+      <GalleryUnavailable />
+    </>
+  );
+}
 
 /**
  * The public gallery (ugcportal-71y), and the whole of the home page.
@@ -105,38 +153,32 @@ export default async function Home() {
   try {
     result = await listPublicMedia(publicMediaListingUrl());
   } catch {
-    return (
-      <>
-        <Hero signedIn={hasSignedInUser(await sessionPromise)} />
-        <GalleryUnavailable />
-      </>
-    );
+    return unavailable(await resolveSignedIn(sessionPromise));
   }
 
-  const signedIn = hasSignedInUser(await sessionPromise);
+  const signedIn = await resolveSignedIn(sessionPromise);
 
   if (!result.ok) {
-    return (
-      <>
-        <Hero signedIn={signedIn} />
-        <GalleryUnavailable />
-      </>
-    );
+    return unavailable(signedIn);
   }
 
   /*
    * The front page's own "living empty state" (ugcportal-6dvg K1/K2),
    * src/components/home/empty-state.tsx, rendered INSTEAD of `<Gallery>`
    * under exactly the condition `<Gallery>`'s own internal `GalleryEmpty`
-   * (src/components/gallery/gallery.tsx) uses — `items.length === 0 &&
-   * !hasMore`, not `items.length === 0` alone; see that file's own comment
-   * for why the two are not the same claim. Computed here from the SAME
+   * (src/components/gallery/gallery.tsx) uses, via the shared
+   * `isGenuinelyEmptyPage` (src/lib/gallery-items.ts) rather than a second
+   * hand-copied boolean expression — see that function's own comment for
+   * the one place gallery.tsx's own copy could not also be swapped onto it
+   * without exceeding this bead's scope. Computed here from the SAME
    * `result.page` values `<Gallery>` is about to receive as props (not
    * re-derived inside either component), so the two decisions cannot
    * disagree with each other.
    */
-  const isGenuinelyEmpty =
-    result.page.items.length === 0 && !result.page.hasMore;
+  const isGenuinelyEmpty = isGenuinelyEmptyPage(
+    result.page.items,
+    result.page.hasMore,
+  );
 
   return (
     <>

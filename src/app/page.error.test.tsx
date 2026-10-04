@@ -40,9 +40,19 @@ import { afterEach, describe, expect, it, vi } from "vitest";
  * unmocked, that would pull next-auth's real module graph, including
  * `next/server`, into this node test run. `null`, the true anonymous case
  * every test below already simulates by never seeding a session.
+ *
+ * `mockSession.rejects` (round-1 review, CONFIRMED medium): a SEPARATE
+ * controllable flag, parallel to `mockListing` below, so the "a failed
+ * session read never crashes the page" describe block can make `getSession`
+ * reject without a second mock module — `Home()` reads this at render time,
+ * same as `mockListing.current`.
  */
+const mockSession = vi.hoisted(() => ({ rejects: false }));
 vi.mock("@/lib/auth", () => ({
-  getSession: () => Promise.resolve(null),
+  getSession: () =>
+    mockSession.rejects
+      ? Promise.reject(new Error("getSession() failed (simulated)"))
+      : Promise.resolve(null),
 }));
 
 // The one spelling of "a malformed cursor" this file needs, shared by the
@@ -95,6 +105,7 @@ afterEach(() => {
   // every test starts from the same default answer.
   mockListing.current = FAILED_LISTING;
   mockListing.throws = false;
+  mockSession.rejects = false;
 });
 
 describe("K1/K4 — a failed listing never renders as an empty gallery", () => {
@@ -160,5 +171,39 @@ describe("K3 — this harness can also produce the genuinely-empty branch", () =
 
     expect(markup).toContain('data-gallery-state="empty"');
     expect(markup).not.toContain('data-gallery-state="error"');
+  });
+});
+
+/**
+ * ugcportal-6dvg, round-1 review, CONFIRMED medium: a `getSession()`
+ * rejection must degrade to the anonymous case (the hero's "Sign in to
+ * upload"), never crash the page — on BOTH of this file's branches, since
+ * `resolveSignedIn` (src/app/page.tsx) is called from inside the `catch`
+ * that exists for a failed LISTING too, not only from the success path.
+ */
+describe("a failed session read never crashes the page", () => {
+  it("falls back to the anonymous hero when getSession() rejects and the listing itself also failed", async () => {
+    mockSession.rejects = true;
+    // The default `mockListing.current` (reset in `afterEach` above) is
+    // already the failed-listing case — explicit here for the reader.
+    mockListing.current = FAILED_LISTING;
+
+    const markup = await renderHome();
+
+    expect(markup).toContain("Sign in to upload");
+    expect(markup).toContain('data-gallery-state="error"');
+  });
+
+  it("falls back to the anonymous hero when getSession() rejects but the listing succeeds, and the gallery branch renders normally", async () => {
+    mockSession.rejects = true;
+    mockListing.current = {
+      ok: true,
+      page: { items: [], hasMore: false, nextCursor: null },
+    };
+
+    const markup = await renderHome();
+
+    expect(markup).toContain("Sign in to upload");
+    expect(markup).toContain('data-gallery-state="empty"');
   });
 });

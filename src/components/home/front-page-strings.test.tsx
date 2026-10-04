@@ -63,22 +63,41 @@ describe("front page strings (ugcportal-6dvg K4)", () => {
     for (const text of [HERO_SIGNED_OUT, HERO_SIGNED_IN, EMPTY_STATE]) {
       const withPermittedPhraseRemoved = text.replace(/wine accessories/gi, "");
       for (const word of FORBIDDEN_WORDS) {
+        /*
+         * NOT `\b` (round-1 review, LOW finding — confirmed, not assumed):
+         * JavaScript's `\b` is defined purely over `[A-Za-z0-9_]`, so "ø" is
+         * itself a non-word character to it. Between two non-word
+         * characters (a space and "ø") there is no `\w`-`\W` transition for
+         * `\b` to match AT ALL, which means `new RegExp("\\bøl\\b")` could
+         * never match "øl" however it was surrounded — a dead check for
+         * exactly the one entry this list added for the Norwegian word, the
+         * opposite of coverage while reading like it. `(?<!\p{L})`/`(?!\p{L})`
+         * with the `u` flag treats any Unicode LETTER as the boundary input
+         * instead, so "øl" between spaces (or at a string edge) is
+         * correctly flagged. Confirmed with a fixture mutation — see this
+         * file's own note below.
+         */
+        const pattern = new RegExp(`(?<!\\p{L})${word}(?!\\p{L})`, "giu");
         expect(
-          withPermittedPhraseRemoved.toLowerCase(),
+          withPermittedPhraseRemoved,
           `found forbidden word "${word}" in: ${text}`,
-        ).not.toMatch(new RegExp(`\\b${word}\\b`, "i"));
+        ).not.toMatch(pattern);
       }
     }
   });
 
   /*
-   * FIXTURE MUTATION CHECK (performed by hand, not left in the suite):
+   * FIXTURE MUTATION CHECKS (performed by hand, not left in the suite):
    * temporarily changed the lead paragraph to read "...and wine, like a
-   * nice glass after dinner...", confirmed BOTH the Norwegian-free test
-   * (not actually - wrong mutation for that one) and specifically the
-   * forbidden-word test above failed with "found forbidden word \"wine\"",
-   * then reverted. Separately mutated a character to "æ" and confirmed the
-   * Norwegian-character test failed, then reverted. See the PR description
-   * for the full list of these checks across this bead.
+   * nice glass after dinner...", confirmed the forbidden-word test above
+   * failed with "found forbidden word \"wine\"", then reverted. Separately
+   * mutated a character to "æ" and confirmed the Norwegian-character test
+   * failed, then reverted. Separately again (round-1 review): injected
+   * "øl" into the lead paragraph surrounded by spaces, confirmed the FIXED
+   * `\p{L}`-lookaround pattern above catches it (and, in a node -e
+   * one-liner, confirmed the PREVIOUS `\b`-based pattern could not —
+   * `/\bøl\b/i.test("and øl and wine")` is `false`, proving that version
+   * was dead code rather than merely untested), then reverted. See the PR
+   * description for the full list of these checks across this bead.
    */
 });

@@ -262,6 +262,36 @@ export function toGalleryItem(row: PublicMediaRowish): GalleryItem | null {
  * disappears is not the one anybody would predict. The first occurrence is the
  * one kept, so the page keeps the order the feed sent.
  */
+/**
+ * Whether a page of the public feed is GENUINELY empty — "nothing is
+ * published", not merely "this particular page happened to have nothing on
+ * it". `&& !hasMore`, not `items.length === 0` alone, for the identical
+ * reason src/components/gallery/gallery.tsx's own `GalleryEmpty` branch
+ * gives in its own comment: a first page that came back empty but still
+ * carries a cursor is a different claim, and conflating the two would strand
+ * a visitor on "nothing is published yet" with no way to ask for the rest.
+ *
+ * Exported here (round-1 review, low finding) so src/app/page.tsx
+ * (ugcportal-6dvg) can make the IDENTICAL decision gallery.tsx makes
+ * internally, from one function, rather than a second hand-copied boolean
+ * expression that could drift from it.
+ *
+ * NOT YET the single implementation, and that gap is real rather than
+ * silently left: gallery.tsx's own `if (items.length === 0 && !hasMore)`
+ * still spells this out inline — ugcportal-6dvg's own scope was explicitly
+ * "do not change grid logic" for every file under src/components/gallery/*,
+ * which that line is one of, so this function could not be swapped in
+ * there without exceeding that scope. Tracked as ugcportal-3wcd (filed
+ * alongside this fix) for whoever next has authority to touch that file to
+ * finish the consolidation.
+ */
+export function isGenuinelyEmptyPage(
+  items: ReadonlyArray<unknown>,
+  hasMore: boolean,
+): boolean {
+  return items.length === 0 && !hasMore;
+}
+
 export function toGalleryItems(rows: unknown): GalleryItem[] {
   if (!Array.isArray(rows)) return [];
   const items: GalleryItem[] = [];

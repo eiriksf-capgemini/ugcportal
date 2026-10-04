@@ -24,6 +24,72 @@ export type HeroProps = {
 };
 
 /**
+ * The decorative shapes' shared classes (round-1 review, low finding):
+ * hoisted so the three `<span>`s below don't each spell out the same long
+ * string with only position/size/colour/delay differing.
+ *
+ * Fully opaque, not alpha-blended — the same choice docs/design/forside.html's
+ * own `.hero-art span` reference sketch makes for its shapes (this layout now
+ * also matches that sketch's STRUCTURE, not only its opacity choice — see
+ * the comment on `HeroDecoration` below for why that is now load-bearing,
+ * not merely a style echo) — and it sidesteps src/lib/design/contrast.ts's
+ * alpha-utility coverage gate entirely: an alpha-modified background utility
+ * (an "/NN" opacity suffix) needs its own documented pairing there, and
+ * these three carry no text, so there is nothing a contrast ratio would be
+ * checking.
+ *
+ * `opacity-100` is the no-motion-preference-expressed baseline (so a browser
+ * with no media-feature support at all still shows them); `motion-safe:
+ * opacity-0` plus the keyframe animation (src/app/globals.css) take over only
+ * under `prefers-reduced-motion: no-preference`, and `motion-reduce:
+ * animate-none` is the explicit, redundant-by-design belt-and-braces half —
+ * see that file's own comment on `@keyframes home-fade-in` for why both exist
+ * rather than only the `motion-safe:` gate.
+ */
+const HERO_DECORATIVE_SHAPE_CLASS =
+  "absolute rounded-full opacity-100 motion-safe:opacity-0 motion-safe:animate-[home-fade-in_700ms_ease-out_both] motion-reduce:animate-none";
+
+/**
+ * The hero's purely decorative shapes (K3's "fade-in on tiles"), confined to
+ * their OWN box — a flex sibling of the text column in `Hero` below, never an
+ * absolutely-positioned overlay behind it.
+ *
+ * NOT a style choice (round-1 review, CONFIRMED medium): an earlier version
+ * positioned these three `absolute`, spanning the entire hero, which put the
+ * near-white `bg-petrol-100` circle directly behind the `text-ink` lead
+ * paragraph at 360/768/1024px viewport widths — contrast collapsing to
+ * roughly 1:1 wherever the two actually overlapped, undetected by
+ * src/lib/design/contrast.ts (which checks DECLARED token pairs, not what
+ * two elements happen to composite to at a given breakpoint) and only found
+ * by measuring real client rects in a browser. This box's own `overflow-
+ * hidden` clips every shape to ITS bounds, and flexbox (see `Hero`'s own
+ * `sm:flex-row`) keeps those bounds a sibling of the text column at every
+ * width rather than a sibling of the whole hero — so a shape cannot reach
+ * the text column's rectangle regardless of its own size or offset.
+ * e2e/front-page.spec.ts's "no decorative shape intersects hero text" check
+ * asserts this geometrically rather than trusting the structure to hold.
+ */
+function HeroDecoration() {
+  return (
+    <div
+      aria-hidden="true"
+      data-home-hero-decoration
+      className="relative h-28 w-28 shrink-0 self-center overflow-hidden sm:h-40 sm:w-40"
+    >
+      <span
+        className={`${HERO_DECORATIVE_SHAPE_CLASS} -top-4 -right-4 h-20 w-20 bg-petrol-400`}
+      />
+      <span
+        className={`${HERO_DECORATIVE_SHAPE_CLASS} bottom-0 left-0 h-16 w-16 bg-petrol-300 motion-safe:[animation-delay:150ms]`}
+      />
+      <span
+        className={`${HERO_DECORATIVE_SHAPE_CLASS} top-10 left-10 h-8 w-8 bg-petrol-100 motion-safe:[animation-delay:300ms]`}
+      />
+    </div>
+  );
+}
+
+/**
  * The front page's hero (ugcportal-6dvg): a title, a lead paragraph on what
  * this site is, and one primary call to action — K1's "signed out leads to
  * sign-in; signed in, to upload."
@@ -51,9 +117,8 @@ export type HeroProps = {
  *
  * NO IMAGE (K4): the surface below is `.home-hero-surface`
  * (src/app/globals.css), a `linear-gradient()` between two existing petrol
- * tokens — never a stock photograph or any third-party asset. The three
- * decorative circles are plain `<span>`s coloured from the same token scale,
- * `aria-hidden` because they carry no information.
+ * tokens — never a stock photograph or any third-party asset. `HeroDecoration`
+ * above is the only other visual element, and carries no information.
  */
 export function Hero({ signedIn }: HeroProps) {
   const cta = signedIn
@@ -62,82 +127,53 @@ export function Hero({ signedIn }: HeroProps) {
 
   return (
     <section data-home-hero className="home-hero-surface relative isolate overflow-hidden">
-      {/*
-        Purely decorative (K3's "fade-in on tiles"): three soft circles that
-        fade in once, on mount, rather than the static flat gradient alone.
-        `opacity-100` is the no-motion-preference-expressed baseline (so a
-        browser with no media-feature support at all still shows them);
-        `motion-safe:opacity-0` plus the keyframe animation below take over
-        only under `prefers-reduced-motion: no-preference`, and
-        `motion-reduce:animation-none` is the explicit, redundant-by-design
-        belt-and-braces half — see src/app/globals.css's own comment on
-        `@keyframes home-fade-in` for why both exist rather than only the
-        `motion-safe:` gate.
-      */}
-      <div aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden">
-        {/*
-          Fully opaque, not alpha-blended — the same choice
-          docs/design/forside.html's own `.hero-art span` reference sketch
-          makes, and it sidesteps src/lib/design/contrast.ts's alpha-utility
-          coverage gate entirely: an alpha-modified background utility (an
-          "/NN" opacity suffix) needs its own documented pairing there, and
-          these three carry no text, so there is nothing a contrast ratio
-          would be checking.
-        */}
-        <span
-          className="absolute -top-16 -right-12 h-40 w-40 rounded-full bg-petrol-400 opacity-100 motion-safe:opacity-0 motion-safe:animate-[home-fade-in_700ms_ease-out_both] motion-reduce:animate-none"
-        />
-        <span
-          className="absolute -bottom-20 left-8 h-48 w-48 rounded-full bg-petrol-300 opacity-100 motion-safe:opacity-0 motion-safe:animate-[home-fade-in_700ms_ease-out_both] motion-safe:[animation-delay:150ms] motion-reduce:animate-none"
-        />
-        <span
-          className="absolute top-1/3 right-1/4 h-20 w-20 rounded-full bg-petrol-100 opacity-100 motion-safe:opacity-0 motion-safe:animate-[home-fade-in_700ms_ease-out_both] motion-safe:[animation-delay:300ms] motion-reduce:animate-none"
-        />
-      </div>
-
-      <div className="relative mx-auto flex w-full max-w-6xl flex-col gap-4 px-4 py-16 sm:px-6 sm:py-20">
-        {/*
-          Deliberately NOT a heading element (confirmed the hard way, twice:
-          an `<h1>` here broke src/app/page.tags.test.tsx's "emits one
-          continuous item set however many distinct tags are present", which
-          also asserts the full Home() markup carries exactly one h1-h6
-          total; see also src/components/home/empty-state.tsx's own comment
-          for the opposite failure an `<h2>` there caused once this was
-          fixed). Whichever of <Gallery> (its own SITE_DESCRIPTION <h1>), the
-          new EmptyState (also an `<h1>`) or GalleryUnavailable (its own
-          <h1>) is rendered below this hero already supplies that one
-          heading — see each component's own comment — and the two of those
-          three this bead did not write are not this bead's to edit ("do not
-          change grid logic" covers Gallery's empty/unavailable siblings
-          too). Styled to read as the page's title regardless.
-        */}
-        <p className="max-w-2xl font-heading text-2xl leading-tight font-medium tracking-tight text-balance text-ink sm:text-4xl">
-          Real photos of the things you actually use.
-        </p>
-        {/*
-          text-ink, not text-ink-muted (src/lib/design/contrast.ts): measured
-          at 4.15:1 against this well's lighter --petrol-700 stop, below the
-          4.5:1 body-text threshold — --color-ink-muted is tuned for the
-          darker near-black surface scale (surface-0..4, L 0.185-0.345),
-          which this gradient's lighter stop (petrol-700, L ~0.42) is not.
-          The title and lead read at the same weight of emphasis here rather
-          than the usual primary/secondary split.
-        */}
-        <p className="max-w-prose text-sm text-ink sm:text-base">
-          This is a small, growing gallery of food, books, home technology and
-          wine accessories — think glasses, coolers and the apps that go with
-          them — photographed by real people, not studios. Every picture here
-          was taken by someone who actually owns the thing in frame. Browse
-          what is already up, or sign in to add your own.
-        </p>
-        <div className="mt-2">
-          <Link
-            href={cta.href}
-            className="inline-flex w-fit items-center gap-1.5 rounded-lg bg-petrol-100 px-4 py-2 text-sm font-medium text-surface-0 transition-colors hover:bg-petrol-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-          >
-            {cta.label}
-          </Link>
+      <div className="relative mx-auto flex w-full max-w-6xl flex-col gap-8 px-4 py-16 sm:flex-row sm:items-center sm:px-6 sm:py-20">
+        <div className="flex min-w-0 flex-1 flex-col gap-4">
+          {/*
+            Deliberately NOT a heading element (confirmed the hard way,
+            twice: an `<h1>` here broke src/app/page.tags.test.tsx's "emits
+            one continuous item set however many distinct tags are
+            present", which also asserts the full Home() markup carries
+            exactly one h1-h6 total; see also
+            src/components/home/empty-state.tsx's own comment for the
+            opposite failure an `<h2>` there caused once this was fixed).
+            Whichever of <Gallery> (its own heading), the new EmptyState
+            (also an `<h1>`) or GalleryUnavailable (its own <h1>) is
+            rendered below this hero already supplies that one heading —
+            see each component's own comment — and the two of those three
+            this bead did not write are not this bead's to edit ("do not
+            change grid logic" covers Gallery's empty/unavailable siblings
+            too). Styled to read as the page's title regardless.
+          */}
+          <p className="max-w-2xl font-heading text-2xl leading-tight font-medium tracking-tight text-balance text-ink sm:text-4xl">
+            Real photos of the things you actually use.
+          </p>
+          {/*
+            text-ink, not text-ink-muted (src/lib/design/contrast.ts):
+            measured at 4.15:1 against this well's lighter --petrol-700
+            stop, below the 4.5:1 body-text threshold — --color-ink-muted
+            is tuned for the darker near-black surface scale (surface-0..4,
+            L 0.185-0.345), which this gradient's lighter stop (petrol-700,
+            L ~0.42) is not. The title and lead read at the same weight of
+            emphasis here rather than the usual primary/secondary split.
+          */}
+          <p className="max-w-prose text-sm text-ink sm:text-base">
+            This is a small, growing gallery of food, books, home technology
+            and wine accessories — think glasses, coolers and the apps that
+            go with them — photographed by real people, not studios. Every
+            picture here was taken by someone who actually owns the thing in
+            frame. Browse what is already up, or sign in to add your own.
+          </p>
+          <div className="mt-2">
+            <Link
+              href={cta.href}
+              className="inline-flex w-fit items-center gap-1.5 rounded-lg bg-petrol-100 px-4 py-2 text-sm font-medium text-surface-0 transition-colors hover:bg-petrol-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+            >
+              {cta.label}
+            </Link>
+          </div>
         </div>
+        <HeroDecoration />
       </div>
     </section>
   );

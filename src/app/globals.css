@@ -145,11 +145,17 @@
  * participate in light/dark mode at all.
  *
  * `--petrol-700`, the LIGHTER of the two stops, is the worse case for the
- * light `--color-ink` / `--color-ink-muted` text this surface carries —
- * see `ink-on-hero-petrol` / `ink-muted-on-hero-petrol` in
- * src/lib/design/contrast.ts, checked against exactly this stop. The
- * gradient only gets darker toward `--petrol-900`, which can only improve
- * that contrast, never worsen it.
+ * light `--color-ink` text this surface carries (both the title and the
+ * lead paragraph — see `ink-on-hero-petrol` in src/lib/design/contrast.ts,
+ * checked against exactly this stop, and src/components/home/hero.tsx's own
+ * comment on why the lead uses `text-ink` rather than `text-ink-muted`
+ * here). The gradient only gets darker toward `--petrol-900`, which can
+ * only improve that contrast, never worsen it.
+ *
+ * That claim holds only as long as nothing else renders BEHIND the text at
+ * a lighter tint than this stop — see hero.tsx's own decorative-shapes
+ * comment for the one place this bead first got that wrong and how the
+ * layout now rules it out structurally rather than by colour choice alone.
  */
 .home-hero-surface {
   background-image: linear-gradient(135deg, var(--petrol-700), var(--petrol-900));
