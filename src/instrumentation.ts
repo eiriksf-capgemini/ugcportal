@@ -5,6 +5,8 @@
  * a quiet difference in how data is stored — the kind nobody discovers until
  * an audit — or, for the sign-in gate below, as an unexplained refusal.
  */
+import { CONFIGURED_USERS, type ConfiguredUser } from "@/config/users";
+import { configuredUserProblems } from "@/lib/configured-users";
 import { CONTACT_EMAIL_PLACEHOLDER, isBareEmailAddress } from "@/lib/contact";
 import { LEGAL_PAGES } from "@/lib/legal/pages";
 import { checkLegalPagesPublishable } from "@/lib/legal/publishable";
@@ -75,11 +77,21 @@ export function checkEvidenceEncryption(
  *
  * Unconditional, not production-only: a fresh local checkout is exactly
  * where someone hits this first, and env.example ships the variable empty.
+ *
+ * SINCE ugcportal-t33p the permitted set also contains the identities in
+ * src/config/users.ts, so the "nothing is set at all" branch below only
+ * fires on an instance whose users array is ALSO empty. That is the right
+ * reading of "nobody can sign in" rather than a hole in it — an instance
+ * with people in the array is configured, whatever its environment says —
+ * and the array's own mistakes are reported separately by
+ * `checkConfiguredUsers`, because they are a different kind of problem with
+ * a different fix.
  */
 export function checkSignInConfiguration(
   env: SignInEnv = process.env,
+  users: readonly ConfiguredUser[] = CONFIGURED_USERS,
 ): string | null {
-  const { emails, malformed, configured } = permittedIdentities(env);
+  const { emails, malformed, configured } = permittedIdentities(env, users);
 
   if (malformed.length > 0) {
     return (
@@ -106,6 +118,35 @@ export function checkSignInConfiguration(
   }
 
   return null;
+}
+
+/**
+ * What is wrong with the committed users array (ugcportal-t33p, scope
+ * item 5), said once at boot.
+ *
+ * The array is the only place that answers "which identities are the same
+ * person", and every way of getting it wrong is silent at runtime: an
+ * identity listed under two people quietly signs one of them in as the
+ * other, an unknown provider prefix permits nobody, a person with no
+ * identities is a name that links nothing, and a malformed address is an
+ * entry that looks configured and matches no sign-in there will ever be.
+ * None of them throws, and none of them shows up in a log line anybody reads
+ * until somebody cannot sign in.
+ *
+ * The rule itself lives in `configuredUserProblems`
+ * (src/lib/configured-users.ts) rather than here, for the same reason the
+ * sign-in rule lives in src/lib/sign-in-policy.ts: this file is the boot
+ * hook, not a second opinion about what a valid identity is.
+ *
+ * A list rather than a single string, because these are independent problems
+ * with independent fixes and folding four of them into one line is how three
+ * get missed. Same bargain as every check above — reported, never a refusal
+ * to boot.
+ */
+export function checkConfiguredUsers(
+  users: readonly ConfiguredUser[] = CONFIGURED_USERS,
+): string[] {
+  return configuredUserProblems(users);
 }
 
 /**
@@ -160,6 +201,9 @@ export async function register(): Promise<void> {
   for (const warning of [
     checkEvidenceEncryption(),
     checkSignInConfiguration(),
+    // Spread, not pushed as one string: `checkConfiguredUsers` answers with
+    // one line per problem, and each gets its own console line.
+    ...checkConfiguredUsers(),
     checkContactEmailConfiguration(),
     // ugcportal-qnq9.4: while a LEGAL_* variable is unset (env.example) the
     // legal pages refuse to render in production (src/lib/legal/

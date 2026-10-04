@@ -28,8 +28,9 @@
  *
  * The rule below — a configured list of permitted email addresses, each
  * optionally bound to the one provider it may arrive through
- * (ugcportal-1551) — is PROVISIONAL, and is not a claim that an allowlist
- * is the right mechanism.
+ * (ugcportal-1551), unioned since ugcportal-t33p with every identity in the
+ * committed users array (src/config/users.ts) — is PROVISIONAL, and is not
+ * a claim that an allowlist is the right mechanism.
  * What is not provisional is the default: with no configuration present,
  * every sign-in is refused. That is the property the defect lacked, and it
  * holds under every mechanism that might replace this one.
@@ -47,6 +48,7 @@
  * `checkSignInConfiguration` in src/instrumentation.ts.
  */
 
+import { CONFIGURED_USERS, type ConfiguredUser } from "@/config/users";
 import { isEmailShaped as isEmailShapedBase } from "@/lib/email-shape";
 
 /**
@@ -115,8 +117,15 @@ export type PermittedEntry = {
  * malformed, not "unbound": treating it as a plain address would be
  * another entry that silently permits nobody, and treating it as unbound
  * would permit the address on providers the operator did not name.
+ *
+ * Exported since ugcportal-t33p, because src/lib/configured-users.ts parses
+ * the SAME syntax out of the committed users array (src/config/users.ts) —
+ * and whether `google:Eirik@Example.com ` and `google:eirik@example.com`
+ * are one identity has to be decided in one place, or the gate and the
+ * linking can disagree about who just signed in. That module is the only
+ * other caller; it imports this one and never the reverse.
  */
-function parseEntry(entry: string): PermittedEntry | null {
+export function parsePermittedEntry(entry: string): PermittedEntry | null {
   const colon = entry.indexOf(":");
   if (colon === -1) {
     return isEmailShaped(entry) ? { email: entry, provider: null } : null;
@@ -155,8 +164,8 @@ export type SignInEnv = Readonly<Record<string, string | undefined>>;
  * choice. It is rejected loudly instead.
  *
  * `:` is excluded for the same reason in the other direction: it is the
- * provider-prefix separator (see parseEntry), so once the prefix has been
- * split off, an address that still contains one — `google:facebook:a@b.com`,
+ * provider-prefix separator (see parsePermittedEntry), so once the
+ * prefix has been split off, an address that still contains one — `google:facebook:a@b.com`,
  * `google:a@b.com:` — is a doubled or trailing prefix, not a mailbox. Left
  * in, it would be counted as a permitted address that no provider can ever
  * assert: the silently-permits-nobody state this module exists to report
@@ -256,7 +265,7 @@ export function bootstrapAdminEmails(
   // — it uses `isBootstrapAdminSignIn`, which honours a bound entry's
   // provider (PR #81 round 5). An unusable entry is returned as written; it
   // never matches a real address, so it still grants nothing.
-  return splitList(raw).map((entry) => parseEntry(entry)?.email ?? entry);
+  return splitList(raw).map((entry) => parsePermittedEntry(entry)?.email ?? entry);
 }
 
 /**
@@ -285,7 +294,7 @@ export function isBootstrapAdminSignIn(
   }
   const provider = providerId(identity.provider);
   return splitList(raw).some((entry) => {
-    const parsed = parseEntry(entry);
+    const parsed = parsePermittedEntry(entry);
     return (
       parsed !== null &&
       parsed.email === email &&
@@ -310,11 +319,26 @@ export type PermittedIdentities = {
   /** Entries that were present but not usable, for the operator's benefit. */
   malformed: string[];
   /**
-   * Whether either variable was set to anything non-blank at all.
+   * Whether ANY source contributed a non-blank entry at all — either
+   * variable, or the committed users array.
    *
    * Distinguishes "the operator has not configured this yet" from "the
    * operator configured it and you are not on it" — the same refusal to the
    * visitor, two very different server-log lines.
+   *
+   * SINCE ugcportal-t33p THIS IS NORMALLY TRUE, because src/config/users.ts
+   * is committed and non-empty, and that is the intended consequence rather
+   * than an accident: an instance whose users array lists people IS
+   * configured, whatever its environment says. Two things follow. The boot
+   * warning for "neither variable is set" (`checkSignInConfiguration` in
+   * src/instrumentation.ts) no longer fires while the array has anybody in
+   * it — correctly, since those people can sign in. And `no-configuration`,
+   * the one refusal classified `"keep"` in REFUSAL_EFFECT because it means
+   * an OUTAGE rather than a decision, becomes unreachable for the same
+   * reason: with the array populated there is no state in which the policy
+   * cannot be evaluated at all, so a lost `ALLOWED_SIGNIN_EMAILS` now
+   * revokes the sessions of anyone who was permitted ONLY by that variable.
+   * Emptying the array restores the old behaviour exactly.
    */
   configured: boolean;
   /**
@@ -361,6 +385,7 @@ export type PermittedIdentities = {
  */
 export function permittedIdentities(
   env: SignInEnv = process.env,
+  users: readonly ConfiguredUser[] = CONFIGURED_USERS,
 ): PermittedIdentities {
   const raw = env[PERMITTED_EMAILS_VAR];
   const rawBootstrap = env.ADMIN_BOOTSTRAP_EMAILS;
@@ -375,8 +400,27 @@ export function permittedIdentities(
   // different ones must not reuse it. An env-object identity key would get
   // the second case wrong, which is the case that matters: a stale permitted
   // set is a revocation that does not happen.
+  //
+  // `users` joins the key by IDENTITY, not by value (ugcportal-t33p). In
+  // production it is the one module-level constant in src/config/users.ts,
+  // so the memo still hits on every request; a test that injects its own
+  // array gets a miss and a fresh parse, which is the answer it asked for.
+  // Comparing the arrays element-by-element instead would cost more than the
+  // parse it saves.
+  //
+  // What this does NOT survive is somebody mutating that array IN PLACE: the
+  // reference would be unchanged and the stale parse would be reused. The
+  // `readonly` on `CONFIGURED_USERS` is a compile-time constraint, not a
+  // runtime freeze, so this is a convention rather than a guarantee. Nothing
+  // mutates it — the array is edited in the source and the process is
+  // restarted, which is the same way `ALLOWED_SIGNIN_EMAILS` changes.
   const cached = cachedIdentities;
-  if (cached && cached.raw === raw && cached.rawBootstrap === rawBootstrap) {
+  if (
+    cached &&
+    cached.raw === raw &&
+    cached.rawBootstrap === rawBootstrap &&
+    cached.users === users
+  ) {
     return cached.value;
   }
   const entries = [
@@ -390,6 +434,26 @@ export function permittedIdentities(
     // overridden (PR #45 review, round 1). Both lists are parsed by the same
     // `splitList`, so they still cannot drift.
     ...splitList(rawBootstrap),
+    // The committed users array (ugcportal-t33p, K3). Its identities are
+    // already written in this module's own `provider:address` syntax, so
+    // they go through the SAME `splitList` + `parsePermittedEntry` pipeline
+    // as the two variables above rather than a second parser: an identity
+    // the gate would call malformed must be malformed here too, or an
+    // operator could add a person who is linked but cannot sign in.
+    //
+    // Joined on commas and re-split, rather than spread directly, for the
+    // same reason — one normalisation (trim, lowercase, drop blanks) for
+    // every source. The array is operator data too, and nothing stops
+    // somebody writing two addresses in one entry.
+    //
+    // UNIONED, not substituted: `ALLOWED_SIGNIN_EMAILS` keeps working for
+    // somebody who is not (yet) a person in the array, and a person in the
+    // array needs no env var. Being listed here is itself the grant, the
+    // same relation ADMIN_BOOTSTRAP_EMAILS has. It does NOT widen anything
+    // else: every identity here is provider-BOUND by construction (there is
+    // no unbound form of `ConfiguredIdentity`), so the same address through
+    // the other provider is still refused with `wrong-provider`.
+    ...splitList(users.flatMap((user) => user.identities).join(",")),
   ];
 
   // ONE pass that builds everything (PR #91 review, round 3, finding 1).
@@ -410,7 +474,7 @@ export function permittedIdentities(
   const byEmail = new Map<string, PermittedEntry[]>();
   const malformed = new Set<string>();
   for (const entry of entries) {
-    const usable = parseEntry(entry);
+    const usable = parsePermittedEntry(entry);
     if (!usable) {
       malformed.add(entry);
       continue;
@@ -442,7 +506,7 @@ export function permittedIdentities(
     configured: entries.length > 0,
     entriesFor: (email: string) => byEmail.get(email) ?? NO_ENTRIES,
   });
-  cachedIdentities = { raw, rawBootstrap, value };
+  cachedIdentities = { raw, rawBootstrap, users, value };
   return value;
 }
 
@@ -450,14 +514,19 @@ export function permittedIdentities(
 const NO_ENTRIES: readonly PermittedEntry[] = Object.freeze([]);
 
 /**
- * The one parse kept across calls, keyed by the exact strings it was made
- * from. Module-level and never invalidated by anything but a changed string:
- * there is no TTL to tune and no way for it to go stale, because the key IS
- * the input.
+ * The one parse kept across calls, keyed by everything it was made from.
+ * Module-level, with no TTL to tune.
+ *
+ * Two of the three key parts are the raw strings themselves, so for those
+ * the key IS the input and there is no way for the entry to go stale. The
+ * third, `users`, is the ARRAY'S IDENTITY rather than its contents — see
+ * `permittedIdentities` for why, and for the one thing that would defeat it
+ * (mutating that array in place, which nothing does).
  */
 let cachedIdentities: {
   raw: string | undefined;
   rawBootstrap: string | undefined;
+  users: readonly ConfiguredUser[];
   value: PermittedIdentities;
 } | null = null;
 
@@ -631,8 +700,9 @@ export function authorisedEmail(attempt: SignInAttempt): string | null {
 export function decideSignIn(
   attempt: SignInAttempt,
   env: SignInEnv = process.env,
+  users: readonly ConfiguredUser[] = CONFIGURED_USERS,
 ): SignInDecision {
-  return evaluateSignIn(attempt, env).decision;
+  return evaluateSignIn(attempt, env, users).decision;
 }
 
 /**
@@ -704,6 +774,7 @@ export type LiveSessionIdentity = {
 export function decideLiveSession(
   identity: LiveSessionIdentity,
   env: SignInEnv = process.env,
+  users: readonly ConfiguredUser[] = CONFIGURED_USERS,
 ): SignInDecision {
   return evaluateSignIn(
     {
@@ -711,6 +782,7 @@ export function decideLiveSession(
       account: { provider: identity.provider },
     },
     env,
+    users,
   ).decision;
 }
 
@@ -734,10 +806,11 @@ type SignInEvaluation = {
 function evaluateSignIn(
   attempt: SignInAttempt,
   env: SignInEnv,
+  users: readonly ConfiguredUser[],
 ): SignInEvaluation {
   const email = authorisedEmail(attempt);
   const provider = signInProvider(attempt);
-  const identities = permittedIdentities(env);
+  const identities = permittedIdentities(env, users);
   const refuse = (reason: SignInRefusal): SignInEvaluation => ({
     decision: { permitted: false, reason },
     email,
@@ -823,10 +896,12 @@ function emailDomain(email: string | null | undefined): string {
 export function isPermittedSignIn(
   attempt: SignInAttempt,
   env: SignInEnv = process.env,
+  users: readonly ConfiguredUser[] = CONFIGURED_USERS,
 ): boolean {
   const { decision, email, provider, identities } = evaluateSignIn(
     attempt,
     env,
+    users,
   );
   if (decision.permitted) {
     return true;

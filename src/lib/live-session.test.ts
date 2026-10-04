@@ -1,6 +1,14 @@
 import type { Session } from "next-auth";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+/**
+ * The committed users array is emptied here, as in
+ * src/lib/sign-in-policy.test.ts: this file's `no-configuration` case needs
+ * a state in which the policy cannot be evaluated at all, and the real array
+ * (ugcportal-t33p) makes that state unreachable by always naming somebody.
+ */
+vi.mock("@/config/users", () => ({ CONFIGURED_USERS: [] }));
+
 import { PERMITTED_EMAILS_VAR, REFUSAL_EFFECT } from "@/lib/sign-in-policy";
 import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db";
 import { pinEnvironment } from "@/lib/test-support/env";

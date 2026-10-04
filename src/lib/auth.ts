@@ -7,6 +7,7 @@ import { cache } from "react";
 
 import type { Role } from "@/generated/prisma/enums";
 import { reconcileBootstrapAdmin } from "@/lib/admin-bootstrap";
+import { withConfiguredUserLinking } from "@/lib/configured-user-link";
 import {
   enforceLiveSessionPolicy,
   rememberSignInIdentity,
@@ -60,12 +61,25 @@ function toRole(user: object): Role {
  * shape of the ugcportal-egp defect — fails a test.
  */
 export const authConfig = {
-  // The Prisma adapter, plus the one thing @auth/core's adapter interface
-  // has no room for: which identity minted the session it is creating
-  // (ugcportal-mzr). `withSessionIdentity` writes it in the same INSERT,
-  // which is what removes the race a later lookup had (PR #91 review,
-  // round 2, finding 1).
-  adapter: withSessionIdentity(PrismaAdapter(prisma)),
+  // The Prisma adapter, plus the two things @auth/core's adapter interface
+  // has no room for, both of which need the identity the `signIn` callback
+  // below has in hand and the adapter does not:
+  //
+  //   `withSessionIdentity` (ugcportal-mzr) writes WHICH IDENTITY MINTED
+  //   this session into the same INSERT that creates it, which is what
+  //   removes the race a later lookup had (PR #91 review, round 2,
+  //   finding 1).
+  //
+  //   `withConfiguredUserLinking` (ugcportal-t33p) resolves a configured
+  //   person's `User` row by their handle instead of by e-mail, so Eirik's
+  //   Google and Facebook accounts land on one user with one upload history
+  //   instead of two. See that module for exactly where in @auth/core's
+  //   flow this happens and why it is necessarily after the gate.
+  //
+  // Order is not significant: the two wrappers override disjoint methods
+  // (`createSession` versus `createUser`/`getUserByEmail`) and neither reads
+  // the other's. Linking is outermost only because it is the newer layer.
+  adapter: withConfiguredUserLinking(withSessionIdentity(PrismaAdapter(prisma))),
   session: { strategy: "database" },
   // A first-party Access Denied screen (src/app/auth/error/page.tsx). Without
   // this, a refused sign-in lands on @auth/core's built-in page, which says
@@ -128,6 +142,14 @@ export const authConfig = {
       //
       // After the gate, never before it: a refused attempt creates no
       // session, and the slot must not describe one that does not exist.
+      //
+      // SINCE ugcportal-t33p THE SLOT HAS A SECOND READER: the adapter
+      // wrapper that attaches this sign-in's Account row to the configured
+      // person's one User row. This line is therefore the single point at
+      // which both the session attribution and the identity linking become
+      // possible, and it is downstream of the refusal above — which is what
+      // makes "linking happens only for an identity the gate permitted" a
+      // property of the control flow rather than of a second check.
       rememberSignInIdentity(attempt);
       return true;
     },

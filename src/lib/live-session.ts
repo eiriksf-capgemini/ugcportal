@@ -410,7 +410,7 @@ function refusedSession(session: Session): DefaultSession {
  * that creates the row — after which there is no window, no second write,
  * and no heuristic.
  */
-type SignInIdentity = Required<
+export type SignInIdentity = Required<
   Pick<SessionUncheckedCreateInput, "signInProvider" | "signInEmail">
 >;
 
@@ -480,6 +480,36 @@ export function rememberSignInIdentity(attempt: SignInAttempt): void {
   // function `recordedIdentity` normalises with on the way back out.
   slot.signInProvider = providerId(attempt.account?.provider);
   slot.signInEmail = authorisedEmail(attempt);
+}
+
+/**
+ * The identity THIS request's sign-in asserted, or `undefined` outside a
+ * wrapped Auth.js request.
+ *
+ * THE POST-GATE HANDOFF, read by a second consumer since ugcportal-t33p:
+ * src/lib/configured-user-link.ts needs to know which (provider, address) is
+ * signing in so it can attach the Account row to the right person's User
+ * row, and @auth/core's adapter interface has no room to tell it — the
+ * adapter is handed an address and a provider account id, never the pair the
+ * gate judged.
+ *
+ * The slot is the natural answer rather than a convenient one. It is filled
+ * by `rememberSignInIdentity` and by nothing else, and in production that
+ * function has exactly one caller: `callbacks.signIn` in src/lib/auth.ts,
+ * AFTER `isPermittedSignIn` has returned true. So a non-empty slot IS the
+ * statement "the gate permitted this identity on this request" — which is
+ * the property the linking has to depend on, and the reason it cannot be
+ * reached by a refused sign-in or by any request that is not a sign-in at
+ * all.
+ *
+ * Returned as a copy. The store is mutable (the whole point: the callback
+ * fills it after the handler created it), and handing the live object to a
+ * reader would let a consumer rewrite the identity the session INSERT is
+ * about to use.
+ */
+export function currentSignInIdentity(): SignInIdentity | undefined {
+  const slot = signInIdentity.getStore();
+  return slot ? { ...slot } : undefined;
 }
 
 /**
