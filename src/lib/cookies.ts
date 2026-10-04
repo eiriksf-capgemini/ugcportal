@@ -27,15 +27,26 @@ function isBrowser(): boolean {
  * The one caller that matters most, `readStoredConsent`, needs exactly this
  * behaviour: a malformed cookie must read as "no choice yet" (`null`), the
  * same safe default an absent cookie gets, not crash the render.
+ *
+ * Round 4, LOW (Family 4 — this module's own `withUmamiDisableFlag` sibling
+ * in analytics-loader.tsx already has this guard; `document.cookie` lacked
+ * it): merely ACCESSING `document.cookie` — not just decoding what comes
+ * back — can throw (a `SecurityError` in a sandboxed cross-origin iframe
+ * without `allow-same-origin`, the same precedent `localStorage` access
+ * already has here). Without a try/catch around the access itself, that
+ * throw would propagate out of whatever click handler called this, which
+ * for the banner's own buttons means the handler exits having done nothing
+ * — stuck, unresponsive to further clicks, with no visible error. The whole
+ * read is now inside the try, not just the decode.
  */
 export function getCookie(name: string): string | null {
   if (!isBrowser()) return null;
-  const prefix = `${name}=`;
-  const row = document.cookie
-    .split("; ")
-    .find((entry) => entry.startsWith(prefix));
-  if (row === undefined) return null;
   try {
+    const prefix = `${name}=`;
+    const row = document.cookie
+      .split("; ")
+      .find((entry) => entry.startsWith(prefix));
+    if (row === undefined) return null;
     return decodeURIComponent(row.slice(prefix.length));
   } catch {
     return null;
@@ -98,6 +109,11 @@ function buildCookieAssignment(
  * decoded on read, but nothing encoded on write; asymmetric, and a value
  * containing `;`, `,`, or a literal `%` would either corrupt the
  * `document.cookie` string or throw on the next read).
+ *
+ * Round 4, LOW: the WRITE can throw too, same precedent as `getCookie`'s
+ * own fix above — a sandboxed context that throws on read can throw on
+ * write just as readily, and an uncaught throw here (e.g. from a banner
+ * button's `onClick`) leaves that click having silently done nothing.
  */
 export function setCookie(
   name: string,
@@ -105,7 +121,12 @@ export function setCookie(
   options: SetCookieOptions = {},
 ): void {
   if (!isBrowser()) return;
-  document.cookie = buildCookieAssignment(name, value, options.maxAgeSeconds, options);
+  try {
+    document.cookie = buildCookieAssignment(name, value, options.maxAgeSeconds, options);
+  } catch {
+    // See getCookie's own comment — fails safe rather than throwing out of
+    // a caller (most often a click handler) that has no way to recover.
+  }
 }
 
 /**
@@ -125,5 +146,9 @@ export function setCookie(
  */
 export function deleteCookie(name: string, options: SameSiteOptions = {}): void {
   if (!isBrowser()) return;
-  document.cookie = buildCookieAssignment(name, "", 0, options);
+  try {
+    document.cookie = buildCookieAssignment(name, "", 0, options);
+  } catch {
+    // See getCookie's own comment.
+  }
 }

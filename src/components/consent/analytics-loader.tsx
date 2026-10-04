@@ -165,21 +165,33 @@ export function AnalyticsLoader() {
   const src = process.env.NEXT_PUBLIC_UMAMI_SRC;
   const websiteId = process.env.NEXT_PUBLIC_UMAMI_WEBSITE_ID;
 
-  // Runs whenever `granted` changes, including the very first render: a
-  // visitor who withdraws consent gets the disable signal set and cookies
-  // cleared on the render where `granted` flips to false, and a visitor who
-  // never granted it gets the same (idempotent, harmless) treatment on
-  // mount — including re-enabling on a later grant, so a visitor who denied
-  // then later accepts via "Cookies" is not left permanently opted out by a
-  // flag from their earlier choice.
+  /*
+   * Review round 4, MEDIUM finding 4 (K1 copy vs. behaviour, Family 1): the
+   * banner says "Nothing optional is set until you choose" (cookie-
+   * banner.tsx's own COOKIE_BANNER_COPY) — but this effect used to key off
+   * `!granted`, which is ALSO true for `consent === null` (no choice made
+   * yet). That wrote the `umami.disabled` localStorage flag on a visitor's
+   * very first render, before they had clicked anything — "setting"
+   * something optional before a choice, exactly what the banner promises
+   * does not happen.
+   *
+   * Fixed to branch on the real three-way `consent` value instead of the
+   * two-way `granted` boolean: the disable flag (and the cookie clear) now
+   * only ever write on an EXPLICIT `"denied"` — which covers both a
+   * genuine withdrawal (was `"granted"`, now revoked) and a visitor's
+   * FIRST choice being "Only necessary" (never `"granted"` at all, but
+   * still an explicit choice, not the absence of one) — and `"granted"`
+   * still re-enables (so a later accept after a withdrawal isn't left
+   * permanently opted out). `consent === null` now does nothing at all.
+   */
   useEffect(() => {
-    if (granted) {
+    if (consent === "granted") {
       enableUmamiTracking();
-    } else {
+    } else if (consent === "denied") {
       disableUmamiTracking();
       clearAnalyticsCookies();
     }
-  }, [granted]);
+  }, [consent]);
 
   if (!granted || !src || !websiteId) return null;
 

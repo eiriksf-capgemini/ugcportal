@@ -64,6 +64,91 @@ describe("stripComments", () => {
     );
   });
 
+  /**
+   * ugcportal-3wgp review round 4, MEDIUM (CONFIRMED, reproduced by the
+   * reviewer): a regex literal containing a quote character used as part
+   * of its own pattern (not string syntax) desynced the round-3 string
+   * tracker. Reproduces the exact shape from src/lib/request-body.ts's
+   * real `DISPOSITION_NAME` constant.
+   */
+  it("THE ROUND-4 NAMED BUG: a regex literal containing a quote char does not desync the scanner", () => {
+    const code =
+      'const DISPOSITION_NAME = /;\\s*name\\s*=\\s*"([^"]*)"/i;\n' +
+      'const trackingSrc = "https://stats.example/x?trackerco";';
+    expect(stripComments(code)).toBe(code);
+  });
+
+  it("does not treat a real division operator as a regex literal", () => {
+    const code = "const percent = (loaded / total) * 100; // a real comment\nconst y = 2;";
+    expect(stripComments(code)).toBe(
+      "const percent = (loaded / total) * 100;  \nconst y = 2;",
+    );
+  });
+
+  it("treats a regex literal after 'return' as a regex, not division", () => {
+    // Exactly this file's own isTestFile, and decision-form.test.tsx's
+    // real `return /value="([^"]*)"/.exec(...)` — "return" ends in a
+    // letter, so a naive last-character check would misclassify this as
+    // division.
+    const code = 'return /\\.(test|spec)\\.(tsx?|css)$/.test(file);';
+    expect(stripComments(code)).toBe(code);
+  });
+
+  it("strips a real comment that follows a regex literal on the same line", () => {
+    const code = 'const x = /abc/.test(y); // a real comment\nconst z = 1;';
+    expect(stripComments(code)).toBe(
+      "const x = /abc/.test(y);  \nconst z = 1;",
+    );
+  });
+
+  it("MUTATION CHECK: the round-3 (regex-unaware) scanner mishandles the round-4 named bug", () => {
+    // Fixture mutation, not a production-code change: reproduces round 3's
+    // actual shipped implementation (string-aware, regex-unaware) inline,
+    // and confirms it corrupts the exact fixture above — proving this
+    // test is anchored to a real, previously-shipped defect.
+    function round3StripComments(input: string): string {
+      let result = "";
+      let idx = 0;
+      const len = input.length;
+      function skipString(quote: string): number {
+        let j = idx + 1;
+        while (j < len && input[j] !== quote) {
+          j += input[j] === "\\" ? 2 : 1;
+        }
+        return Math.min(j + 1, len);
+      }
+      while (idx < len) {
+        const c = input[idx];
+        if (c === '"' || c === "'" || c === "`") {
+          const end = skipString(c);
+          result += input.slice(idx, end);
+          idx = end;
+          continue;
+        }
+        if (c === "/" && input[idx + 1] === "*") {
+          const close = input.indexOf("*/", idx + 2);
+          result += " ";
+          idx = close === -1 ? len : close + 2;
+          continue;
+        }
+        if (c === "/" && input[idx + 1] === "/") {
+          const newline = input.indexOf("\n", idx);
+          result += " ";
+          idx = newline === -1 ? len : newline;
+          continue;
+        }
+        result += c;
+        idx += 1;
+      }
+      return result;
+    }
+
+    const code =
+      'const DISPOSITION_NAME = /;\\s*name\\s*=\\s*"([^"]*)"/i;\n' +
+      'const trackingSrc = "https://stats.example/x?trackerco";';
+    expect(round3StripComments(code)).not.toBe(code);
+  });
+
   it("MUTATION CHECK: the naive (string-unaware) regex pair mishandles the named bug", () => {
     // Fixture mutation, not a production-code change: reproduces the exact
     // OLD implementation inline and confirms it fails the same assertion

@@ -224,3 +224,62 @@ describe("deleteCookie", () => {
     expect(getCookie("keep_me")).toBe("value");
   });
 });
+
+/**
+ * Review round 4, LOW (Family 4 — a sibling of analytics-loader.tsx's own
+ * `withUmamiDisableFlag` try/catch around `window.localStorage` access):
+ * merely ACCESSING `document.cookie` (not just processing what comes back)
+ * can throw a `SecurityError` in a sandboxed cross-origin iframe without
+ * `allow-same-origin`. Simulated by redefining `document.cookie`'s own
+ * getter/setter to throw for the duration of each test here.
+ */
+describe("accessing document.cookie itself throws (not just a malformed value)", () => {
+  let originalDescriptor: PropertyDescriptor | undefined;
+
+  function makeCookieAccessThrow(): void {
+    originalDescriptor = Object.getOwnPropertyDescriptor(Document.prototype, "cookie");
+    Object.defineProperty(document, "cookie", {
+      configurable: true,
+      get(): string {
+        throw new DOMException("Access is denied for this document.", "SecurityError");
+      },
+      set(): void {
+        throw new DOMException("Access is denied for this document.", "SecurityError");
+      },
+    });
+  }
+
+  function restoreCookieAccess(): void {
+    if (originalDescriptor) {
+      Object.defineProperty(document, "cookie", originalDescriptor);
+    }
+  }
+
+  it("getCookie does not throw", () => {
+    makeCookieAccessThrow();
+    try {
+      expect(() => getCookie("some_cookie")).not.toThrow();
+      expect(getCookie("some_cookie")).toBeNull();
+    } finally {
+      restoreCookieAccess();
+    }
+  });
+
+  it("setCookie does not throw", () => {
+    makeCookieAccessThrow();
+    try {
+      expect(() => setCookie("some_cookie", "granted")).not.toThrow();
+    } finally {
+      restoreCookieAccess();
+    }
+  });
+
+  it("deleteCookie does not throw", () => {
+    makeCookieAccessThrow();
+    try {
+      expect(() => deleteCookie("some_cookie")).not.toThrow();
+    } finally {
+      restoreCookieAccess();
+    }
+  });
+});

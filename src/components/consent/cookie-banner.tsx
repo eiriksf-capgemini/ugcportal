@@ -102,6 +102,7 @@ export function CookieBanner() {
   const bannerRef = useRef<HTMLDivElement>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const wasOpenRef = useRef(bannerOpen);
+  const invokingElementRef = useRef<HTMLElement | null>(null);
 
   // Reserve space for the banner so it never covers interactive content
   // beneath it, for as long as it's open (round 1 finding 8, round 2
@@ -117,6 +118,20 @@ export function CookieBanner() {
   // magic constants silently wrong the next time any of those shift;
   // measuring the real rendered box is correct by construction regardless
   // of why it changed.
+  //
+  // Round 4, LOW finding 8, ACCEPTED AND DOCUMENTED rather than fixed: this
+  // measurement only happens once this effect runs, client-side, after
+  // hydration. globals.css's fallback (`padding-bottom: var(--cookie-
+  // banner-reserved-height, 0px)`) means the server-rendered first paint —
+  // which DOES already show the banner, since `bannerOpen` is decided
+  // server-side from the cookie — has no reserved padding at all for one
+  // frame, until this effect corrects it. Setting an initial server-
+  // rendered value would need the same kind of guessed constant the
+  // comment above just argued against (a real measurement isn't available
+  // server-side at all — there is no layout pass to measure against), so
+  // this is accepted as a brief, bounded pre-hydration window rather than
+  // reintroducing a magic number to paper over it. The window is bounded
+  // by hydration time, not by anything this component controls.
   useIsomorphicLayoutEffect(() => {
     if (!bannerOpen) return undefined;
     const el = bannerRef.current;
@@ -141,11 +156,16 @@ export function CookieBanner() {
            * above; `contentRect` is content-box only and would
            * under-measure a banner with padding, so it is only the
            * fallback for an environment that provides neither (an older
-           * engine with a partial ResizeObserver polyfill).
+           * engine with a partial ResizeObserver polyfill). `contentRect`
+           * itself is optional-chained too (review round 4, finding 7) —
+           * without it, an entry shape with neither `borderBoxSize` nor
+           * `contentRect` at all (exactly the "provides neither" case this
+           * fallback chain exists for) threw reading `.height` off
+           * `undefined` instead of falling through to `el.offsetHeight`.
            */
           const entry = entries[0];
           const height =
-            entry?.borderBoxSize?.[0]?.blockSize ?? entry?.contentRect.height ?? el.offsetHeight;
+            entry?.borderBoxSize?.[0]?.blockSize ?? entry?.contentRect?.height ?? el.offsetHeight;
           applyReservedHeight(height);
         })
       : null;
@@ -164,10 +184,35 @@ export function CookieBanner() {
   // on the first render either way), and never when "Cookies" is clicked
   // while the banner is ALREADY showing (round 3 finding 4 — see this
   // component's own doc comment above).
+  //
+  // Round 4, LOW finding 5: closing the banner (accept/decline) left focus
+  // wherever the browser defaults it once the clicked button unmounts
+  // (typically <body>) — lost, rather than returned anywhere meaningful.
+  // Fixed the way any accessible disclosure/dialog pattern does: capture
+  // whatever had focus right before the banner opens on a REOPEN (the
+  // footer "Cookies" control, in the one real path that reaches this),
+  // and restore focus to it when the banner closes again. The very first,
+  // mount-time open has no real "invoking control" at all (nothing was
+  // clicked — the page simply loaded with the banner already showing), so
+  // there is nothing captured for that case and closing it leaves the
+  // browser's own default behaviour, same as before this fix for exactly
+  // that one case.
   useIsomorphicLayoutEffect(() => {
-    const transitionedToOpen = bannerOpen && !wasOpenRef.current;
+    const wasOpen = wasOpenRef.current;
     wasOpenRef.current = bannerOpen;
-    if (transitionedToOpen) headingRef.current?.focus();
+
+    if (bannerOpen && !wasOpen) {
+      invokingElementRef.current =
+        document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      headingRef.current?.focus();
+      return;
+    }
+
+    if (!bannerOpen && wasOpen) {
+      const invoker = invokingElementRef.current;
+      invokingElementRef.current = null;
+      if (invoker && document.contains(invoker)) invoker.focus();
+    }
   }, [bannerOpen]);
 
   if (!bannerOpen) return null;

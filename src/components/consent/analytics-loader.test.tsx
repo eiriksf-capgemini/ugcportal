@@ -96,6 +96,40 @@ describe("K1: first visit, no stored choice", () => {
     mount(null);
     expect(scriptMock).not.toHaveBeenCalled();
   });
+
+  /**
+   * Review round 4, MEDIUM finding 4 (K1 copy vs. behaviour): the banner's
+   * own copy says "Nothing optional is set until you choose" — but the
+   * disable flag used to be written on EVERY non-granted render, including
+   * `consent === null` (no choice made yet), which is itself "setting"
+   * something optional before any choice. A first visit must write nothing
+   * to localStorage at all.
+   */
+  it("writes nothing to localStorage on a first visit with no stored choice", () => {
+    setAnalyticsEnv();
+    expect(window.localStorage.getItem(UMAMI_DISABLE_STORAGE_KEY)).toBeNull();
+
+    mount(null);
+
+    expect(window.localStorage.getItem(UMAMI_DISABLE_STORAGE_KEY)).toBeNull();
+  });
+
+  it("MUTATION CHECK: writes nothing even when a tracker is fully configured and consent stays null across a re-render", () => {
+    setAnalyticsEnv();
+    mount(null);
+    act(() => {
+      // Force a re-render with consent still null (e.g. an unrelated
+      // parent state update) — the effect's dependency is `consent`,
+      // which has not changed, so it must not re-fire and write anything.
+      ctx.root().render(
+        <ConsentProvider initialConsent={null}>
+          <Actions />
+          <AnalyticsLoader />
+        </ConsentProvider>,
+      );
+    });
+    expect(window.localStorage.getItem(UMAMI_DISABLE_STORAGE_KEY)).toBeNull();
+  });
 });
 
 describe("K2: accepting optional cookies", () => {

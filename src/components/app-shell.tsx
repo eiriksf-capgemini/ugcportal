@@ -32,6 +32,18 @@ import { SITE_NAME } from "@/lib/site";
  * scrolling feed. Text on a blurred photograph has no defined contrast ratio,
  * so it is exactly the thing the contrast gate in src/lib/design cannot check
  * and a reader cannot rely on.
+ *
+ * HARD DEPENDENCY (ugcportal-3wgp review round 4, finding 9): the footer
+ * renders `CookieSettingsLink`, which calls `useConsent()` and THROWS if no
+ * `ConsentProvider` is above it in the tree. This is not optional or
+ * gracefully degrading — a caller that renders `<AppShell>` without a
+ * `ConsentProvider` ancestor (a Storybook story, an isolated test, a future
+ * reuse outside the real app) gets a hard crash, not a missing footer link.
+ * `src/app/layout.tsx` provides one for every real page; anything else
+ * rendering `AppShell` directly must do the same. (`app-shell.nav.test.tsx`
+ * works around this by mocking `CookieSettingsLink` out entirely, rather
+ * than wrapping in a provider, since that file is about the shell's own
+ * static structure, not the consent gate.)
  */
 export function AppShell({ children }: { children: ReactNode }) {
   return (

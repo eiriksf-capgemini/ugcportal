@@ -69,6 +69,17 @@ describe("eslint.config.mjs: gated-script syntax selectors (JSX/createElement)",
         { code: "const x = <Script src=\"https://example.com/a.js\" />;", options: GATED_SCRIPT_SYNTAX_SELECTORS },
         // An unrelated createElement call.
         { code: "document.createElement(\"div\");", options: GATED_SCRIPT_SYNTAX_SELECTORS },
+        // A bare-identifier createElement NOT called with "script".
+        {
+          code: 'import { createElement } from "react"; createElement("div");',
+          options: GATED_SCRIPT_SYNTAX_SELECTORS,
+        },
+        // A different function that happens to be NAMED createElement
+        // locally, called with "script" — the selector matches on the
+        // callee's name and the literal argument only, same as every real
+        // JS tokenizer would see it (no cross-file type information), so
+        // this is a known, accepted false-positive surface, not something
+        // this test claims to rule out.
       ],
       invalid: [
         // Round 1's own shape, still caught.
@@ -101,6 +112,15 @@ describe("eslint.config.mjs: gated-script syntax selectors (JSX/createElement)",
         },
         {
           code: "window.document.createElement(\"script\");",
+          options: GATED_SCRIPT_SYNTAX_SELECTORS,
+          errors: 1,
+        },
+        // Round 4, finding 3: bare-identifier callee — hand-written
+        // React.createElement, the exact call JSX compiles `<script>` down
+        // to, with no `.` and no JSX syntax for either of the shapes above
+        // to see.
+        {
+          code: 'import { createElement } from "react"; createElement("script", { src: "https://evil.example/x.js" });',
           options: GATED_SCRIPT_SYNTAX_SELECTORS,
           errors: 1,
         },
@@ -229,6 +249,42 @@ describe("eslintConfig (the real merged, exported config) wires the gated-script
       "src/lib/barrel.ts",
     );
     expect(ruleIds).toContain("no-restricted-imports");
+  });
+
+  /**
+   * Review round 4, MEDIUM (CONFIRMED): the lint config's `files` globs
+   * covered .ts/.tsx/.jsx only — a plain .js or .mjs file under src/
+   * bypassed both the import ban and the syntax ban, even though neither
+   * needs TypeScript to execute.
+   */
+  it("flags a next/script import in a plain .js file", () => {
+    const ruleIds = ruleIdsFor(
+      'import Script from "next/script";\nexport const x = Script;',
+      "src/lib/evil.js",
+    );
+    expect(ruleIds).toContain("no-restricted-imports");
+  });
+
+  it("flags a next/script import in a plain .mjs file", () => {
+    const ruleIds = ruleIdsFor(
+      'import Script from "next/script";\nexport const x = Script;',
+      "src/lib/evil.mjs",
+    );
+    expect(ruleIds).toContain("no-restricted-imports");
+  });
+
+  it("flags document.createElement(\"script\") in a plain .js file", () => {
+    const ruleIds = ruleIdsFor('document.createElement("script");', "src/lib/evil.js");
+    expect(ruleIds).toContain("no-restricted-syntax");
+  });
+
+  it("flags a bare-identifier createElement(\"script\") call (round 4, finding 3)", () => {
+    const ruleIds = ruleIdsFor(
+      'import { createElement } from "react";\n' +
+        'export function evil() { return createElement("script", { src: "https://evil.example/x.js" }); }',
+      "src/components/evil.tsx",
+    );
+    expect(ruleIds).toContain("no-restricted-syntax");
   });
 
   it("MUTATION CHECK: an unrelated file/shape raises neither gated-script rule", () => {

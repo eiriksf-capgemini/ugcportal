@@ -252,6 +252,26 @@ describe("CookieBanner reserves space for itself while open (round 1 finding 8, 
     expect(reservedHeight()).toBe("77px");
   });
 
+  /**
+   * Review round 4, LOW: `entry?.contentRect.height` was missing a `?.`
+   * between `contentRect` and `.height` — an entry shape with NEITHER
+   * `borderBoxSize` nor `contentRect` (exactly the "provides neither" case
+   * the fallback chain's own comment names) threw reading `.height` off
+   * `undefined`, instead of falling through to `el.offsetHeight`.
+   */
+  it("falls back to el.offsetHeight without throwing when the entry has neither borderBoxSize nor contentRect", () => {
+    mountOpenBanner();
+    const bareEntry = {} as unknown as ResizeObserverEntry;
+
+    expect(() => {
+      act(() => {
+        resizeObserverCallbacks[0]?.([bareEntry], {} as ResizeObserver);
+      });
+    }).not.toThrow();
+
+    expect(reservedHeight()).toBe(`${STUBBED_HEIGHT_PX}px`);
+  });
+
   it("MUTATION CHECK: falls back to el.offsetHeight when the callback fires with no entries at all", () => {
     mountOpenBanner();
     Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
@@ -401,5 +421,76 @@ describe("CookieBanner focus/announce on reopen (finding 9)", () => {
     expect(ctx.container().querySelector('[aria-label="Cookies"]')).not.toBeNull();
     expect(document.activeElement).toBe(focusTarget);
     focusTarget.remove();
+  });
+
+  /**
+   * Review round 4, LOW finding 5: closing the banner (accept/decline)
+   * used to leave focus wherever the browser defaults it once the clicked
+   * button unmounts (typically <body>) — lost, not returned anywhere
+   * meaningful. Fixed to restore focus to whatever invoked the reopen (the
+   * footer "Cookies" control, in the one real path that reaches this).
+   */
+  it("restores focus to the invoking control (the 'Cookies' button) when the reopened banner is dismissed", () => {
+    const cookiesButton = document.createElement("button");
+    cookiesButton.textContent = "Cookies";
+    document.body.append(cookiesButton);
+
+    mountWithActions("granted");
+    cookiesButton.focus();
+    expect(document.activeElement).toBe(cookiesButton);
+
+    act(() => {
+      actionsRef?.reopen();
+    });
+    expect(document.activeElement).toBe(ctx.container().querySelector("h2"));
+
+    act(() => {
+      actionsRef?.onlyNecessary();
+    });
+
+    expect(ctx.container().querySelector('[aria-label="Cookies"]')).toBeNull();
+    expect(document.activeElement).toBe(cookiesButton);
+    cookiesButton.remove();
+  });
+
+  it("restores focus to the invoking control on 'Accept optional cookies' too, not just 'Only necessary'", () => {
+    const cookiesButton = document.createElement("button");
+    document.body.append(cookiesButton);
+
+    mountWithActions("denied");
+    cookiesButton.focus();
+
+    act(() => {
+      actionsRef?.reopen();
+    });
+    act(() => {
+      actionsRef?.acceptOptional();
+    });
+
+    expect(document.activeElement).toBe(cookiesButton);
+    cookiesButton.remove();
+  });
+
+  it("MUTATION CHECK: does not try to restore focus to an invoker that no longer exists in the DOM", () => {
+    const cookiesButton = document.createElement("button");
+    document.body.append(cookiesButton);
+
+    mountWithActions("granted");
+    cookiesButton.focus();
+
+    act(() => {
+      actionsRef?.reopen();
+    });
+    // The invoking control is removed from the DOM entirely before the
+    // banner closes (e.g. the footer re-rendered without it) — restoring
+    // focus to a detached element would be a no-op in real browsers, but
+    // must not throw here either.
+    cookiesButton.remove();
+
+    expect(() => {
+      act(() => {
+        actionsRef?.onlyNecessary();
+      });
+    }).not.toThrow();
   });
 });

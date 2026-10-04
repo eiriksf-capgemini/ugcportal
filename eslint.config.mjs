@@ -38,8 +38,10 @@ export const HEX_COLOR_SELECTORS = [
  *   imported alias was never actually a gap — `source.value` is checked on
  *   the declaration itself, so any local name bound to it was always
  *   caught; the real gap `no-restricted-imports` closes is the barrel.
- *   Scoped to .ts too (not just .tsx/.jsx — round 1's gap), since a plain
- *   `.ts` file is exactly where such a barrel would live.
+ *   Scoped to .ts, .js and .mjs too (not just .tsx/.jsx — round 1's gap for
+ *   .ts; round 4's finding 2 for .js/.mjs, since a tracking snippet does not
+ *   need TypeScript to execute), as that is exactly where such a barrel
+ *   would live.
  *
  * - GATED_SCRIPT_SYNTAX_SELECTORS (`no-restricted-syntax`, same mechanism
  *   as the hex-colour guardrail below) bans the JSX `<script>` element
@@ -106,6 +108,17 @@ export const GATED_SCRIPT_SYNTAX_SELECTORS = [
     message: GATED_SCRIPT_MESSAGE,
   },
   {
+    // Bare-identifier callee: `import { createElement } from "react";
+    // createElement("script", ...)` — hand-written React.createElement,
+    // the exact call JSX itself compiles `<script ...>` down to, with no
+    // `.` at all (the callee is a plain Identifier, not a MemberExpression,
+    // so neither selector above matches it) and no JSX syntax for the
+    // JSXOpeningElement selector above to see either (review round 4,
+    // finding 3).
+    selector: 'CallExpression[callee.name="createElement"][arguments.0.value="script"]',
+    message: GATED_SCRIPT_MESSAGE,
+  },
+  {
     // A dynamic `import("next/script")`. `no-restricted-imports` below
     // handles every static import/export-from form but — confirmed
     // directly against this repo's installed ESLint 9.39.5 via its own
@@ -169,19 +182,24 @@ const eslintConfig = defineConfig([
     },
   },
   {
-    // Plain .ts files never carry JSX, so no hex-colour/JSX-selector
-    // concern here — but the script-shape ban (document.createElement)
-    // still applies, and no-restricted-imports (next config object) needs
-    // this file set covered too for the barrel-re-export shape.
-    files: ["**/*.ts"],
+    // Plain .ts/.js/.mjs files never carry JSX, so no hex-colour/JSX-
+    // selector concern here — but the script-shape ban
+    // (document.createElement) still applies, and no-restricted-imports
+    // (next config object) needs this file set covered too for the
+    // barrel-re-export shape. .js/.mjs added (review round 4, finding 2 —
+    // CONFIRMED: a tracking snippet doesn't need TypeScript to execute, so
+    // a plain .js/.mjs file was just as real a bypass surface as a .ts
+    // one, and this object's old `files: ["**/*.ts"]` silently missed it).
+    files: ["**/*.ts", "**/*.js", "**/*.mjs"],
     rules: {
       "no-restricted-syntax": ["error", ...GATED_SCRIPT_SYNTAX_SELECTORS],
     },
   },
   {
     // A different rule key (no-restricted-imports), so this can freely
-    // span .ts/.tsx/.jsx together without colliding with any object above.
-    files: ["**/*.ts", "**/*.tsx", "**/*.jsx"],
+    // span every extension together without colliding with any object
+    // above. .js/.mjs added for the same reason as the object above.
+    files: ["**/*.ts", "**/*.tsx", "**/*.jsx", "**/*.js", "**/*.mjs"],
     ignores: [GATED_LOADER_PATH],
     rules: {
       "no-restricted-imports": ["error", ...GATED_SCRIPT_IMPORT_OPTIONS],
