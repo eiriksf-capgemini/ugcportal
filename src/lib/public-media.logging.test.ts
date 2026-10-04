@@ -27,6 +27,26 @@ vi.mock("@/lib/auth", () => ({
   },
 }));
 
+/**
+ * The database is stubbed to THROW, explicitly (ugcportal-cl4e). An earlier
+ * version of the "query itself throws" tests below relied on the real client
+ * failing because the test "never seeds or migrates" a database — but it ran
+ * against whatever DATABASE_URL pointed at, so on a laptop with a migrated
+ * dev.db and an empty Media table the query quietly succeeded and both tests
+ * failed, while CI (no migrated database) stayed green. The fixture is now
+ * the stub, not the host. The malformed-cursor tests never reach it.
+ */
+const DB_FAILURE = "database unavailable (test fixture)";
+vi.mock("@/lib/prisma", () => ({
+  prisma: {
+    media: {
+      findMany: async () => {
+        throw new Error(DB_FAILURE);
+      },
+    },
+  },
+}));
+
 const BAD_CURSOR_URL =
   "http://listing.internal/api/public/media?cursor=not-a-real-cursor";
 
@@ -142,13 +162,11 @@ describe("logs the very first failure even when the clock reads near the epoch",
 describe("logs (and rethrows) when the query itself throws, not just ok: false", () => {
   /**
    * No cursor on this URL, unlike `BAD_CURSOR_URL` above — so `listMedia`
-   * passes `decodeMediaCursor`'s guard and reaches a real
-   * `prisma.media.findMany` call, against a database this test deliberately
-   * never seeds or migrates (no `createTemporaryDatabase()`/
-   * `applyMigrations()`, unlike src/app/page.test.tsx). That query throwing
-   * on its own IS the fixture: it is `listMedia` failing by throwing rather
-   * than by answering `ok: false`, which is the one path
-   * src/app/page.tsx's own try/catch exists to cover.
+   * passes `decodeMediaCursor`'s guard and reaches `prisma.media.findMany`,
+   * which the stub at the top of this file makes throw. That is the
+   * fixture: `listMedia` failing by throwing rather than by answering
+   * `ok: false`, which is the one path src/app/page.tsx's own try/catch
+   * exists to cover.
    */
   const NO_CURSOR_URL = "http://listing.internal/api/public/media";
 
@@ -156,11 +174,16 @@ describe("logs (and rethrows) when the query itself throws, not just ok: false",
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const { listPublicMedia } = await freshListPublicMedia();
 
-    await expect(listPublicMedia(NO_CURSOR_URL)).rejects.toThrow();
+    // The stub's own message, so a different throw — a module that failed
+    // to load, say — cannot satisfy this by accident.
+    await expect(listPublicMedia(NO_CURSOR_URL)).rejects.toThrow(DB_FAILURE);
 
     expect(errorSpy).toHaveBeenCalledWith(
       "[gallery] public media listing failed",
-      expect.objectContaining({ threw: true, error: expect.any(String) }),
+      expect.objectContaining({
+        threw: true,
+        error: expect.stringContaining(DB_FAILURE),
+      }),
     );
   });
 
@@ -171,7 +194,7 @@ describe("logs (and rethrows) when the query itself throws, not just ok: false",
     // One of each, back to back: an operator mid-incident does not care
     // which shape of failure is making the noise, and should not get twice
     // the budget by alternating between them.
-    await expect(listPublicMedia(NO_CURSOR_URL)).rejects.toThrow();
+    await expect(listPublicMedia(NO_CURSOR_URL)).rejects.toThrow(DB_FAILURE);
     const result = await listPublicMedia(BAD_CURSOR_URL);
 
     expect(result.ok).toBe(false);
