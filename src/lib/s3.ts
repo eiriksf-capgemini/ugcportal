@@ -76,44 +76,71 @@ export type TransportFailureInfo = {
  * connection, or the SDK's own classification of one (`name: "TimeoutError"`,
  * see `@smithy/node-http-handler`'s `NODEJS_TIMEOUT_ERROR_CODES` handling).
  *
- * Two genuinely independent signals, not one derived from the other:
+ * `$metadata.httpStatusCode` is checked FIRST, and its absence is required
+ * for every one of the three classifications below it, not only the
+ * fallback — round-2 finding 1: an earlier version checked it only in the
+ * fallback branch, while the `name`/`code` branches matched on shape alone.
+ * That let a connection reset while reading an already-received response
+ * body — which keeps its Node error `code` (e.g. `ECONNRESET`) AND has
+ * `$metadata.httpStatusCode` set, because a real response header's worth of
+ * bytes did arrive before the socket reset — slip through the `code` branch
+ * and get classified as "unreachable" even though the backend plainly was
+ * reached. Requiring `httpStatusCode === undefined` everywhere is a
+ * deliberate choice, not the only one that could have been made: this
+ * function reserves "storage unreachable" for "no response was ever
+ * received", and treats a reset mid-body as a different failure (the
+ * backend answered; the bytes just didn't all arrive) rather than folding
+ * it into this one. A caller more interested in "did this write definitely
+ * NOT happen" than in "was the backend reachable at all" would want the
+ * opposite choice; this module does not need that distinction today.
+ *
+ * With that settled up front, the three classifications below are:
  *
  *  - `name === "TimeoutError"` or `code` in `TRANSPORT_ERROR_CODES`: the
  *    exact shapes `@smithy/node-http-handler` and `@smithy/core`'s own retry
  *    middleware produce for this family of failure.
- *  - the fallback — `$metadata` present with no `httpStatusCode` — covers
- *    whatever reaches here without having been renamed/coded that way.
+ *  - the fallback — `$metadata` present at all (its `httpStatusCode` is
+ *    already known to be absent, from the guard above) — covers whatever
+ *    reaches here without having been renamed/coded that way yet.
  *    `@smithy/core`'s retry middleware stamps `$metadata` onto every error it
- *    gives up retrying, but only a real HTTP response ever gets
- *    `httpStatusCode` set on it (a service error like AccessDenied or
- *    NoSuchBucket always carries one; nothing that never reached the network
- *    ever does).
+ *    gives up retrying; a response that was actually received always gets
+ *    `httpStatusCode` set on it too (a service error like AccessDenied or
+ *    NoSuchBucket always carries one), so by the time this branch runs, "no
+ *    `httpStatusCode`" already means "no response".
  *
- * What the fallback can distinguish: "the SDK gave up without ever hearing
- * an HTTP response back" from "the backend answered, even with an error".
- * What it CANNOT distinguish: *why* no response came back. It also matches,
- * for instance, a credential-signing failure, a local TLS validation error,
- * or a request aborted by a client-side timeout wrapper — anything the SDK
- * gave up on before or without a response, not only an unreachable backend.
- * That over-breadth is bounded by *where* this is called from, not by the
- * check itself: `sendWithTransportClassification` below only ever runs it
- * against the error an S3 SDK call itself threw, so a DB/libSQL error that
- * happens to carry a transport-shaped `code` (e.g. its own `ECONNRESET`) is
- * never passed through this function in the first place, and therefore can
- * never be mislabelled as "object storage unreachable" (round-1 finding 1).
+ * What this function can distinguish: "the SDK gave up without ever hearing
+ * an HTTP response back" from "the backend answered, even with an error (or
+ * cut short after answering)". What it CANNOT distinguish: *why* no response
+ * came back. It also matches, for instance, a credential-signing failure, a
+ * local TLS validation error, or a request aborted by a client-side timeout
+ * wrapper — anything the SDK gave up on before or without a response, not
+ * only an unreachable backend. That over-breadth is bounded by *where* this
+ * is called from, not by the check itself: `sendWithTransportClassification`
+ * below only ever runs it against the error an S3 SDK call itself threw, so
+ * a DB/libSQL error that happens to carry a transport-shaped `code` (e.g.
+ * its own `ECONNRESET`) is never passed through this function in the first
+ * place, and therefore can never be mislabelled as "object storage
+ * unreachable" (round-1 finding 1).
  */
 export function classifyTransportFailure(
   error: unknown,
 ): TransportFailureInfo | null {
   if (!(error instanceof Error)) return null;
   const err = error as TransportLikeError;
+  // A response was received — even one cut short mid-body by a later reset
+  // — so the backend was reached. Not "storage unreachable", whatever `code`
+  // or `name` the error otherwise carries. See the doc comment above for why
+  // this is a deliberate choice, checked once so the three branches below
+  // cannot drift out of agreement with it or with each other.
+  if (err.$metadata?.httpStatusCode !== undefined) return null;
+
   if (err.name === "TimeoutError") {
     return { code: err.code ?? err.name, attempts: err.$metadata?.attempts };
   }
   if (err.code !== undefined && TRANSPORT_ERROR_CODES.has(err.code)) {
     return { code: err.code, attempts: err.$metadata?.attempts };
   }
-  if (err.$metadata !== undefined && err.$metadata.httpStatusCode === undefined) {
+  if (err.$metadata !== undefined) {
     return { code: err.code ?? err.name, attempts: err.$metadata.attempts };
   }
   return null;
@@ -134,13 +161,28 @@ export function classifyTransportFailure(
  * risk structurally, rather than relying on every caller's catch block being
  * careful about what else it wraps.
  */
+/**
+ * Which S3 call failed. A closed union rather than a plain `string`
+ * (round-2 finding 3) — the three call sites that exist today
+ * (src/app/api/media/route.ts's original PutObject, preview PutObject, and
+ * the compensating cleanup DeleteObject) are enumerable, so the type should
+ * say so rather than accept anything a future call site happens to type.
+ * Widen it when a sibling route (ugcportal-98rb) adds a genuinely new
+ * operation — e.g. the preview GET route's `GetObjectCommand` — rather than
+ * loosening it back to `string`.
+ */
+export type ObjectStorageOperation = "original" | "preview" | "cleanup";
+
 export class ObjectStorageUnreachableError extends Error {
   readonly code: string;
   readonly attempts: number | undefined;
-  /** Which S3 call failed — e.g. `"original"`, `"preview"`, `"cleanup"`. */
-  readonly operation: string;
+  readonly operation: ObjectStorageOperation;
 
-  constructor(operation: string, cause: Error, info: TransportFailureInfo) {
+  constructor(
+    operation: ObjectStorageOperation,
+    cause: Error,
+    info: TransportFailureInfo,
+  ) {
     super(cause.message);
     this.name = "ObjectStorageUnreachableError";
     this.operation = operation;
@@ -169,7 +211,7 @@ export class ObjectStorageUnreachableError extends Error {
  * type.
  */
 export async function sendWithTransportClassification<T>(
-  operation: string,
+  operation: ObjectStorageOperation,
   send: () => Promise<T>,
 ): Promise<T> {
   try {

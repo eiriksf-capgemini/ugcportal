@@ -629,12 +629,17 @@ async function handleUpload(
       // The client gets a stable, machine-readable `reason` plus a message
       // that names neither the endpoint nor the bucket; the operator gets
       // which operation failed, the transport code, the SDK's own retry
-      // count, and the underlying message.
+      // count, the underlying message, and — via `cause` — the stack
+      // (round-2 finding 2: the fields above are the quick-scan summary, but
+      // without the error object itself, console.error has nothing to print
+      // a stack trace from, and "object storage unreachable" with no stack
+      // is a harder outage to debug than it needs to be).
       console.error("[media] object storage unreachable", {
         operation: error.operation,
         code: error.code,
         attempts: error.attempts,
         message: error.message,
+        cause: error,
       });
       // Whatever already landed in the bucket (the original, and/or the
       // preview) before the failing call must not be left orphaned. If

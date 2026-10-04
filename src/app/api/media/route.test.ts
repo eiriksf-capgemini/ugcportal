@@ -932,7 +932,9 @@ describe("POST /api/media — object storage unreachable (ugcportal-1b2c)", () =
 
     // Structured server-side log naming which operation failed, the
     // transport code, the SDK's own attempt count, and the underlying
-    // message — not just "something went wrong" (round-1 finding 5).
+    // message — not just "something went wrong" (round-1 finding 5) — plus
+    // the error object itself as `cause`, so console.error has a stack to
+    // print (round-2 finding 2).
     expect(errorSpy).toHaveBeenCalledWith(
       "[media] object storage unreachable",
       expect.objectContaining({
@@ -940,6 +942,7 @@ describe("POST /api/media — object storage unreachable (ugcportal-1b2c)", () =
         code: "ECONNRESET",
         attempts: 3,
         message: "read ECONNRESET",
+        cause: expect.any(Error),
       }),
     );
 
@@ -1073,6 +1076,31 @@ describe("POST /api/media — object storage unreachable (ugcportal-1b2c)", () =
     // Not the storage-unreachable path: today that means the error simply
     // propagates, as it did before this bead (unchanged handling, per scope).
     await expect(POST(buildRequest(file))).rejects.toThrow("Access Denied");
+    expect(errorSpy).not.toHaveBeenCalledWith(
+      "[media] object storage unreachable",
+      expect.anything(),
+    );
+  });
+
+  it("does not classify a reset that happened after a real HTTP response as storage-unreachable (round-2 finding 1)", async () => {
+    // Shaped like a connection reset WHILE READING AN ALREADY-RECEIVED
+    // response body: it keeps the Node error `code` a transport failure
+    // would have (ECONNRESET), but `$metadata.httpStatusCode` is also set,
+    // because a real response (200) did arrive before the socket reset.
+    // classifyTransportFailure (src/lib/s3.ts) deliberately requires
+    // httpStatusCode to be undefined in EVERY branch, not only the
+    // $metadata-only fallback, precisely so this case is not classified as
+    // "storage unreachable" — the backend plainly was reached.
+    const midBodyReset = Object.assign(new Error("read ECONNRESET"), {
+      code: "ECONNRESET",
+      $metadata: { httpStatusCode: 200, attempts: 1 },
+    });
+    s3SendMock.mockRejectedValueOnce(midBodyReset);
+    const file = new File([REAL_PNG], "photo.png", { type: "image/png" });
+
+    // Not the storage-unreachable path: propagates unchanged, like any other
+    // non-transport-classified S3 error.
+    await expect(POST(buildRequest(file))).rejects.toThrow("read ECONNRESET");
     expect(errorSpy).not.toHaveBeenCalledWith(
       "[media] object storage unreachable",
       expect.anything(),
