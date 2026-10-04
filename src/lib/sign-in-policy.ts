@@ -200,8 +200,14 @@ function normalizeEmail(value: unknown): string | null {
  * non-string and blank to `null`. Shared by the address and the provider id
  * (PR #81 round 4) so a future change — Unicode case folding, say — happens
  * once.
+ *
+ * Exported since ugcportal-mzr, because src/lib/live-session.ts reads the
+ * same kind of value — columns written from these ones — off a session row,
+ * and had grown its own near-copy of this (PR #91 review, round 4, finding
+ * 3). "Blank counts as absent" has to mean the same thing on both sides of
+ * that write or the fallbacks stop lining up.
  */
-function normalizeString(value: unknown): string | null {
+export function normalizeString(value: unknown): string | null {
   if (typeof value !== "string") {
     return null;
   }
@@ -289,12 +295,16 @@ export function isBootstrapAdminSignIn(
 }
 
 export type PermittedIdentities = {
-  /** Usable entries, normalised, de-duplicated. Empty means nobody. */
-  entries: PermittedEntry[];
   /**
-   * The distinct addresses across `entries`, for reporting. Not the thing
-   * to decide on — a listed address may be bound to a provider — so
-   * `decideSignIn` reads `entries`.
+   * The distinct permitted addresses, in first-seen order, FOR REPORTING —
+   * the boot warning and the per-refusal log line. Not the thing to decide
+   * on, because a listed address may be bound to a provider: the decision
+   * goes through `entriesFor`.
+   *
+   * There is no flat `entries` array beside this any more (PR #91 review,
+   * round 3, finding 2). It was the only other way to reach the parsed
+   * entries, nothing read it once `entriesFor` existed, and a second public
+   * view of the same data is a second thing to keep frozen and in step.
    */
   emails: string[];
   /** Entries that were present but not usable, for the operator's benefit. */
@@ -307,6 +317,23 @@ export type PermittedIdentities = {
    * visitor, two very different server-log lines.
    */
   configured: boolean;
+  /**
+   * The entries for one address, in first-seen order. Empty for an address
+   * nobody listed.
+   *
+   * A lookup, not a scan (PR #91 review, round 2, finding 8). The decision
+   * below runs on every authenticated request since ugcportal-mzr, and it
+   * only ever wants the entries for ONE address; filtering the whole list
+   * each time made the per-request cost scale with how many people the
+   * operator has listed, when the parse had already visited every entry and
+   * could index them for free.
+   *
+   * A function over a closed-over `Map` rather than an exposed `Map` field,
+   * because this object is memoised and shared: `Object.freeze` does not
+   * stop `map.set`, so a reachable Map would be a hole in exactly the
+   * protection the freeze exists for.
+   */
+  entriesFor(email: string): readonly PermittedEntry[];
 };
 
 /**
@@ -335,8 +362,25 @@ export type PermittedIdentities = {
 export function permittedIdentities(
   env: SignInEnv = process.env,
 ): PermittedIdentities {
+  const raw = env[PERMITTED_EMAILS_VAR];
+  const rawBootstrap = env.ADMIN_BOOTSTRAP_EMAILS;
+  // Memoised on the two raw strings, because this now runs on EVERY
+  // authenticated request (`decideLiveSession`, ugcportal-mzr) and not only
+  // at sign-in, while the configuration changes about once a year.
+  //
+  // Keyed on the strings themselves rather than on the `env` object: the
+  // parse is a pure function of exactly these two values — nothing else is
+  // read — so two different env objects carrying the same two strings must
+  // produce the same answer, and a single mutated `process.env` carrying
+  // different ones must not reuse it. An env-object identity key would get
+  // the second case wrong, which is the case that matters: a stale permitted
+  // set is a revocation that does not happen.
+  const cached = cachedIdentities;
+  if (cached && cached.raw === raw && cached.rawBootstrap === rawBootstrap) {
+    return cached.value;
+  }
   const entries = [
-    ...splitList(env[PERMITTED_EMAILS_VAR]),
+    ...splitList(raw),
     // `splitList` directly, NOT `bootstrapAdminEmails(env.ADMIN_BOOTSTRAP_EMAILS)`
     // — that function has a default parameter reading `process.env`, so passing
     // the key of an env object that does not have it passes `undefined`, which
@@ -345,16 +389,25 @@ export function permittedIdentities(
     // mentioned: a gate granting from a source its caller believed it had
     // overridden (PR #45 review, round 1). Both lists are parsed by the same
     // `splitList`, so they still cannot drift.
-    ...splitList(env.ADMIN_BOOTSTRAP_EMAILS),
+    ...splitList(rawBootstrap),
   ];
 
-  // First occurrence wins, keyed by the (provider, address) tuple — the same
-  // Set/Map idiom as appendGalleryItems (gallery-items.ts) and parseTagNames
-  // (tags.ts), so "unique by what" is stated by the key rather than by a
-  // comparison. The key is the JSON of the pair, not a hand-joined string,
-  // so it needs no separator argument: `null` and every address serialise
-  // distinctly whatever characters they contain (PR #81 round 4).
-  const byKey = new Map<string, PermittedEntry>();
+  // ONE pass that builds everything (PR #91 review, round 3, finding 1).
+  //
+  // `seen` is the de-duplication: first occurrence wins, keyed by the
+  // (provider, address) tuple — the same Set/Map idiom as appendGalleryItems
+  // (gallery-items.ts) and parseTagNames (tags.ts), so "unique by what" is
+  // stated by the key rather than by a comparison. The key is the JSON of
+  // the pair, not a hand-joined string, so it needs no separator argument:
+  // `null` and every address serialise distinctly whatever characters they
+  // contain (PR #81 round 4).
+  //
+  // `byEmail` is the index every decision looks entries up by, and it is
+  // also where the distinct addresses come from: a Map iterates in insertion
+  // order, so its keys ARE the first-seen address order a second pass used
+  // to recompute.
+  const seen = new Set<string>();
+  const byEmail = new Map<string, PermittedEntry[]>();
   const malformed = new Set<string>();
   for (const entry of entries) {
     const usable = parseEntry(entry);
@@ -363,22 +416,50 @@ export function permittedIdentities(
       continue;
     }
     const key = JSON.stringify([usable.provider, usable.email]);
-    if (!byKey.has(key)) {
-      byKey.set(key, usable);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    const forEmail = byEmail.get(usable.email);
+    if (forEmail) {
+      forEmail.push(usable);
+    } else {
+      byEmail.set(usable.email, [usable]);
     }
   }
-  const parsed = Array.from(byKey.values());
-  // Derived, not tracked: the distinct addresses across the parsed entries,
-  // in first-seen order.
-  const emails = Array.from(new Set(parsed.map((entry) => entry.email)));
+  const emails = Array.from(byEmail.keys());
 
-  return {
-    entries: parsed,
-    emails,
-    malformed: Array.from(malformed),
+  // Frozen before it is shared. The memo above hands the same object to
+  // every caller, so a caller that mutated `emails` would be editing the
+  // permitted set for every later request in the process; freezing turns
+  // that from a silent, process-wide authorisation change into a throw (or,
+  // in sloppy mode, a no-op). The entries themselves are reachable only
+  // through `entriesFor`, which closes over `byEmail` rather than exposing
+  // it — `Object.freeze` does not stop `Map.set`.
+  const value: PermittedIdentities = Object.freeze({
+    emails: Object.freeze(emails) as string[],
+    malformed: Object.freeze(Array.from(malformed)) as string[],
     configured: entries.length > 0,
-  };
+    entriesFor: (email: string) => byEmail.get(email) ?? NO_ENTRIES,
+  });
+  cachedIdentities = { raw, rawBootstrap, value };
+  return value;
 }
+
+/** The answer for an address nobody listed. One array, never written to. */
+const NO_ENTRIES: readonly PermittedEntry[] = Object.freeze([]);
+
+/**
+ * The one parse kept across calls, keyed by the exact strings it was made
+ * from. Module-level and never invalidated by anything but a changed string:
+ * there is no TTL to tune and no way for it to go stale, because the key IS
+ * the input.
+ */
+let cachedIdentities: {
+  raw: string | undefined;
+  rawBootstrap: string | undefined;
+  value: PermittedIdentities;
+} | null = null;
 
 /**
  * Why a sign-in was refused. Server-side only: every one of these reaches the
@@ -394,6 +475,51 @@ export type SignInRefusal =
   | "not-permitted"
   /** Listed, but only for a provider other than the one asserting it. */
   | "wrong-provider";
+
+/**
+ * What each refusal means for a session that ALREADY EXISTS: is it a
+ * decision about the list, or a failure to evaluate the list at all?
+ *
+ * Lives here, beside the refusals themselves, rather than next to the code
+ * that acts on it (PR #91 review, round 3, finding 3). Adding a refusal and
+ * classifying it are then one edit in one file, and the `satisfies` below
+ * makes the second half compulsory: a sixth variant that nobody classifies
+ * is a compile error rather than a silent default.
+ *
+ * `"revoke"` means the answer is about THIS session and will not change on
+ * its own, so the row is deleted (src/lib/live-session.ts). `"keep"` means
+ * the policy could not be evaluated at all. Both refuse the request — fail
+ * closed, every time, that part is not conditional — and the difference is
+ * only what happens to the row.
+ *
+ * `no-configuration` is the whole of `"keep"`, and it is there because it
+ * is an OUTAGE, not a decision: a deployment that lost its environment
+ * variables refuses everybody, and deleting on it would log every user out
+ * of every device at the moment nobody can sign in to notice. Restoring the
+ * variable has to restore the sessions.
+ *
+ * `no-email` revokes, which is worth stating since it reads like the same
+ * kind of thing (PR #91 review, round 4 addendum, finding 8). It is not: it
+ * means this session has no address recorded AND the user row has none
+ * either, so there is nothing to judge and nothing outside the row that can
+ * change that. Classifying it `"keep"` left such a session refused on every
+ * request forever and never deleted — a row that can only be removed by
+ * expiring, for an identity that cannot sign in again either (the gate
+ * refuses `no-email` too). Deleting it is the same decision the gate
+ * already made, applied to the session that decision outlived.
+ *
+ * `unverified-email` cannot reach a live session at all — `decideLiveSession`
+ * never returns it, having no profile to read the claim from. It is
+ * classified `"keep"` because that is what an unreachable branch should be:
+ * the conservative answer, chosen by nobody's hand being forced.
+ */
+export const REFUSAL_EFFECT = {
+  "no-configuration": "keep",
+  "no-email": "revoke",
+  "unverified-email": "keep",
+  "not-permitted": "revoke",
+  "wrong-provider": "revoke",
+} satisfies Record<SignInRefusal, "revoke" | "keep">;
 
 export type SignInDecision =
   | { permitted: true; email: string }
@@ -510,6 +636,85 @@ export function decideSignIn(
 }
 
 /**
+ * The identity that minted a session that ALREADY EXISTS: the address the
+ * provider asserted for it and the provider it came through
+ * (`Session.signInEmail` / `Session.signInProvider`). Both are columns of
+ * the session row the adapter already loads, which is what keeps the
+ * re-check below free of extra queries — and what makes it a question about
+ * THIS session rather than about everything its owner has ever done.
+ */
+export type LiveSessionIdentity = {
+  email?: string | null;
+  /**
+   * `Session.signInProvider`. `unknown`, and not `SignInProvider`, because
+   * it is whatever the column holds: null for a session minted before the
+   * column existed, or one the migration's backfill could not attribute.
+   * `providerId` maps anything unrecognised to `null`, which fails closed
+   * against a bound entry.
+   */
+  provider?: unknown;
+};
+
+/**
+ * Is the identity holding an already-issued session STILL permitted
+ * (ugcportal-mzr)?
+ *
+ * The same decision as `decideSignIn`, over the same `evaluateSignIn`, asked
+ * at a different moment — which is the entire point. Before this, the policy
+ * was consulted once, at the door: `@auth/core` calls `callbacks.signIn` only
+ * on a sign-in, so removing someone from `ALLOWED_SIGNIN_EMAILS` stopped them
+ * signing in AGAIN and did nothing to the 30-day database session they were
+ * already holding. Asking the same question of a live session is what makes
+ * revocation a thing an operator can actually do.
+ *
+ * Deliberately NOT a second rule. Everything `decideSignIn` decides —
+ * closed by default, the union with ADMIN_BOOTSTRAP_EMAILS, provider
+ * binding, malformed entries permitting nobody — applies here unchanged,
+ * because both are projections of `evaluateSignIn`. A rule that applied at
+ * sign-in but not per request (or the reverse) would be the same defect
+ * ugcportal-egp was, one layer along.
+ *
+ * Two differences from a sign-in attempt, both forced by what a request has
+ * to work with, and both narrowing rather than widening:
+ *
+ *  - there is no fresh `profile`. The address judged is the one recorded on
+ *    the session when it was minted — which IS the address the gate judged
+ *    at sign-in, because `recordSignInIdentity` records `authorisedEmail`'s
+ *    answer. For a session minted before that column existed, the caller
+ *    falls back to the stored `User.email`, which is what this check judged
+ *    before the column existed; for anyone who has since changed their
+ *    provider address that is the stale one, so listing only the new address
+ *    revokes the old session and the next sign-in, judged on the fresh
+ *    address, mints a new one. Self-healing, in the safe direction;
+ *  - `email_verified` is not re-asserted on a request, so it is not re-read,
+ *    and THIS FUNCTION CANNOT RETURN `unverified-email`: that branch needs a
+ *    `profile` claim, and no caller here has one (PR #91 review, round 1,
+ *    finding 4). The claim was checked at sign-in against the address the
+ *    provider vouched for, and this function can only refuse identities that
+ *    one permitted. The refusal stays in `SignInRefusal` because the gate
+ *    can still return it; src/lib/live-session.ts says the same thing where
+ *    it classifies which refusals destroy a row.
+ *
+ * The `email` on a permitted answer is inert here: `SignInDecision` is the
+ * shared shape, and this function's only caller reads `permitted` and
+ * `reason` and nothing else. It is carried rather than stripped because a
+ * narrower return type at this one boundary would be a second decision type
+ * to keep in step with the first, for no caller's benefit.
+ */
+export function decideLiveSession(
+  identity: LiveSessionIdentity,
+  env: SignInEnv = process.env,
+): SignInDecision {
+  return evaluateSignIn(
+    {
+      user: { email: identity.email },
+      account: { provider: identity.provider },
+    },
+    env,
+  ).decision;
+}
+
+/**
  * Everything one sign-in attempt resolves to: the decision, plus the three
  * values the log line needs — the address judged, the provider asserted and
  * the parsed configuration. Computed once here so that `decideSignIn` and
@@ -554,7 +759,7 @@ function evaluateSignIn(
   if (!identities.configured) {
     return refuse("no-configuration");
   }
-  const listed = identities.entries.filter((entry) => entry.email === email);
+  const listed = identities.entriesFor(email);
   if (listed.length === 0) {
     return refuse("not-permitted");
   }
@@ -576,8 +781,19 @@ function signInProvider(attempt: SignInAttempt): SignInProvider | null {
   return providerId(attempt.account?.provider);
 }
 
-/** A configured provider id, or `null` for anything else. Fails closed. */
-function providerId(value: unknown): SignInProvider | null {
+/**
+ * A configured provider id, or `null` for anything else. Fails closed.
+ *
+ * Exported since ugcportal-mzr: this is the one definition of "which
+ * provider is this", and src/lib/live-session.ts now uses it on BOTH sides
+ * of the `Session.signInProvider` column — to canonicalise what a sign-in
+ * writes there, and (through `decideLiveSession`) to read it back on every
+ * later request (PR #91 review, round 5). A write path with its own idea of
+ * a valid provider is the "compares the wrong two things" family waiting to
+ * happen: ` GOOGLE ` stored verbatim is a value the reader maps to `null`,
+ * so the row looks attributed and behaves unattributed.
+ */
+export function providerId(value: unknown): SignInProvider | null {
   const normalized = normalizeString(value);
   return normalized !== null && isSignInProvider(normalized) ? normalized : null;
 }

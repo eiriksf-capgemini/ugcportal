@@ -5,6 +5,7 @@ import {
   SIGN_IN_PROVIDERS,
   type SignInEnv,
   bootstrapAdminEmails,
+  decideLiveSession,
   decideSignIn,
   isPermittedSignIn,
   permittedIdentities,
@@ -456,14 +457,21 @@ describe("decideSignIn binds an entry to its provider", () => {
 
   it("parses the prefix off the entry and keeps the address", () => {
     expect(permittedIdentities(bound)).toEqual({
-      entries: [
-        { email: GOOGLE_ONLY, provider: "google" },
-        { email: FACEBOOK_ONLY, provider: "facebook" },
-      ],
       emails: [GOOGLE_ONLY, FACEBOOK_ONLY],
       malformed: [],
       configured: true,
+      // The by-address index built during the parse (PR #91 review, round
+      // 2, finding 8). Asserted as part of the shape rather than ignored,
+      // so dropping it is a failure here rather than a silent return to
+      // scanning the array.
+      entriesFor: expect.any(Function),
     });
+    expect(permittedIdentities(bound).entriesFor(GOOGLE_ONLY)).toEqual([
+      { email: GOOGLE_ONLY, provider: "google" },
+    ]);
+    expect(permittedIdentities(bound).entriesFor("nobody@example.com")).toEqual(
+      [],
+    );
   });
 
   it("permits each address through the provider it is bound to", () => {
@@ -521,10 +529,14 @@ describe("decideSignIn binds an entry to its provider", () => {
   });
 
   it("treats an unknown or empty prefix as unusable, not as unbound", () => {
-    const { entries, malformed, configured } = permittedIdentities({
+    const identities = permittedIdentities({
       [PERMITTED_EMAILS_VAR]: `twitter:${GOOGLE_ONLY}, gogle:${FACEBOOK_ONLY}, google:, :${LISTED}`,
     });
-    expect(entries).toEqual([]);
+    const { malformed, configured } = identities;
+    // Nobody is permitted: no address is listed, and the one entry each of
+    // these addresses appears in was unusable.
+    expect(identities.emails).toEqual([]);
+    expect(identities.entriesFor(GOOGLE_ONLY)).toEqual([]);
     expect(malformed).toEqual([
       `twitter:${GOOGLE_ONLY}`,
       `gogle:${FACEBOOK_ONLY}`,
@@ -546,10 +558,12 @@ describe("decideSignIn binds an entry to its provider", () => {
     // PR #81 round 3: `google:facebook:a@b.com` used to parse as a bound entry
     // whose address was `facebook:a@b.com` — counted as permitted, reported
     // nowhere, matched by nobody.
-    const { entries, malformed } = permittedIdentities({
+    const identities = permittedIdentities({
       [PERMITTED_EMAILS_VAR]: `google:facebook:${GOOGLE_ONLY}, google:${GOOGLE_ONLY}:`,
     });
-    expect(entries).toEqual([]);
+    const { malformed } = identities;
+    expect(identities.emails).toEqual([]);
+    expect(identities.entriesFor(GOOGLE_ONLY)).toEqual([]);
     expect(malformed).toEqual([
       `google:facebook:${GOOGLE_ONLY}`,
       `google:${GOOGLE_ONLY}:`,
@@ -562,10 +576,13 @@ describe("decideSignIn binds an entry to its provider", () => {
   });
 
   it("de-duplicates by address AND provider", () => {
-    const { entries } = permittedIdentities({
+    const identities = permittedIdentities({
       [PERMITTED_EMAILS_VAR]: `google:${GOOGLE_ONLY},GOOGLE:${GOOGLE_ONLY},facebook:${GOOGLE_ONLY}`,
     });
-    expect(entries).toEqual([
+    // One address, two entries under it: the duplicate Google entry is
+    // dropped and the Facebook one is not.
+    expect(identities.emails).toEqual([GOOGLE_ONLY]);
+    expect(identities.entriesFor(GOOGLE_ONLY)).toEqual([
       { email: GOOGLE_ONLY, provider: "google" },
       { email: GOOGLE_ONLY, provider: "facebook" },
     ]);
@@ -657,5 +674,150 @@ describe("isPermittedSignIn", () => {
 
     expect(warn).not.toHaveBeenCalled();
     expect(error).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * ugcportal-mzr: the same rule, asked of a session that already exists.
+ *
+ * These cases are about what `decideLiveSession` does DIFFERENTLY from
+ * `decideSignIn` — judging the stored address and the recorded provider,
+ * with no fresh profile to read. Everything the two share (closed by
+ * default, the union with ADMIN_BOOTSTRAP_EMAILS, malformed entries) is
+ * already covered above and is the same code: both are projections of
+ * `evaluateSignIn`.
+ */
+describe("decideLiveSession re-asks the rule for an existing session", () => {
+  it("permits a listed address and refuses one that has been removed", () => {
+    expect(decideLiveSession({ email: LISTED }, env())).toEqual({
+      permitted: true,
+      email: LISTED,
+    });
+    expect(
+      decideLiveSession({ email: LISTED }, { [PERMITTED_EMAILS_VAR]: "" }),
+    ).toEqual({ permitted: false, reason: "no-configuration" });
+    expect(
+      decideLiveSession(
+        { email: LISTED },
+        { [PERMITTED_EMAILS_VAR]: "someone-else@example.com" },
+      ),
+    ).toEqual({ permitted: false, reason: "not-permitted" });
+  });
+
+  it("judges the recorded provider against a bound entry", () => {
+    const bound = { [PERMITTED_EMAILS_VAR]: `google:${LISTED}` };
+
+    expect(decideLiveSession({ email: LISTED, provider: "google" }, bound))
+      .toEqual({ permitted: true, email: LISTED });
+    expect(
+      decideLiveSession({ email: LISTED, provider: "facebook" }, bound),
+    ).toEqual({ permitted: false, reason: "wrong-provider" });
+  });
+
+  it("fails closed when no provider was recorded, but only for a bound entry", () => {
+    // A session minted before Session.signInProvider existed, or one the
+    // backfill could not attribute. Unrecognised is not "any".
+    for (const provider of [null, undefined, "", "not-a-provider", 42]) {
+      expect(
+        decideLiveSession(
+          { email: LISTED, provider },
+          { [PERMITTED_EMAILS_VAR]: `google:${LISTED}` },
+        ).permitted,
+      ).toBe(false);
+      // The other half of the pair: the same unrecorded provider against an
+      // UNBOUND entry is still permitted, so the refusals above are about
+      // the binding and not about the value being missing.
+      expect(decideLiveSession({ email: LISTED, provider }, env()).permitted).toBe(
+        true,
+      );
+    }
+  });
+
+  it("refuses a session whose row has no address", () => {
+    for (const email of [null, undefined, "", "   "]) {
+      expect(decideLiveSession({ email }, env())).toEqual({
+        permitted: false,
+        reason: "no-email",
+      });
+    }
+  });
+
+  it("does not re-ask for an email_verified claim a request cannot carry", () => {
+    // The sign-in gate refuses `email_verified: false`, and it is the only
+    // thing that can: a request carries no provider profile. If this
+    // function went looking for one it would find nothing and would have to
+    // either refuse everybody or invent a claim. It judges the address the
+    // sign-in it already permitted was judged on.
+    expect(decideLiveSession({ email: LISTED }, env()).permitted).toBe(true);
+  });
+});
+
+/**
+ * ugcportal-mzr / PR #91 review, round 1, finding 7: the parse is memoised,
+ * because `decideLiveSession` now runs on every authenticated request.
+ *
+ * The property that matters is NOT "it is fast" — it is that the memo cannot
+ * go stale, because a stale permitted set is a revocation that silently does
+ * not happen. The key is the pair of raw strings, so there is no window in
+ * which a changed variable and an old answer coexist.
+ */
+describe("permittedIdentities is memoised on the configuration, not the clock", () => {
+  it("reuses the same parse for the same strings", () => {
+    const first = permittedIdentities(env());
+    // A DIFFERENT env object carrying the same two strings: the parse reads
+    // nothing else, so the answer must be the same one.
+    const second = permittedIdentities(env());
+
+    expect(second).toBe(first);
+  });
+
+  it("re-parses the moment either variable changes", () => {
+    const before = permittedIdentities(env());
+    expect(before.emails).toEqual([LISTED]);
+
+    const after = permittedIdentities(
+      env({ [PERMITTED_EMAILS_VAR]: "someone-else@example.com" }),
+    );
+
+    expect(after).not.toBe(before);
+    expect(after.emails).toEqual(["someone-else@example.com"]);
+    // And the other variable is part of the key too, not just the first.
+    const withBootstrap = permittedIdentities(
+      env({ ADMIN_BOOTSTRAP_EMAILS: "admin@example.com" }),
+    );
+    expect(withBootstrap.emails).toEqual([LISTED, "admin@example.com"]);
+  });
+
+  it("hands out a frozen set, so one caller cannot edit the policy for the next", () => {
+    // The cost of sharing one object across every request: a caller that
+    // mutated it would be editing the permitted set process-wide. Frozen, so
+    // that is a throw rather than a silent authorisation change.
+    const identities = permittedIdentities(env());
+
+    expect(Object.isFrozen(identities)).toBe(true);
+    expect(Object.isFrozen(identities.emails)).toBe(true);
+    expect(() => {
+      (identities.emails as string[]).push("sneaked-in@example.com");
+    }).toThrow();
+    expect(permittedIdentities(env()).emails).toEqual([LISTED]);
+    // The entries themselves are reachable only through `entriesFor`, which
+    // closes over its Map rather than exposing it — so there is nothing to
+    // freeze and nothing to push onto. The array it hands back for an
+    // unlisted address is shared and frozen for the same reason.
+    expect(Object.isFrozen(identities.entriesFor("nobody@example.com"))).toBe(
+      true,
+    );
+  });
+
+  it("still answers the empty and absent cases through the memo", () => {
+    // Two configurations that are easy to collapse onto one cache entry and
+    // must not be: unset means "nobody has configured this", empty means
+    // "configured, and it names nobody" — the memo keys on the raw value, so
+    // `undefined` and `""` are different keys.
+    expect(permittedIdentities({}).configured).toBe(false);
+    expect(
+      permittedIdentities({ [PERMITTED_EMAILS_VAR]: "" }).configured,
+    ).toBe(false);
+    expect(permittedIdentities(env()).configured).toBe(true);
   });
 });
