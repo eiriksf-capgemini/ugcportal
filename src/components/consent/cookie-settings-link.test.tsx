@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import { ConsentProvider, useConsent } from "./consent-context";
 import { setupConsentTestRoot } from "./consent-test-support";
+import { COOKIE_BANNER_DECLINE_LABEL, CookieBanner } from "./cookie-banner";
 import { CookieSettingsLink } from "./cookie-settings-link";
 
 /**
@@ -58,6 +59,82 @@ describe("clicking it", () => {
     });
 
     expect(bannerOpenRef).toBe(true);
+  });
+});
+
+/**
+ * ugcportal-ysub item 7 (LOW, Safari). The banner used to work out which
+ * control to return focus to by reading `document.activeElement` at the
+ * moment it opened. WebKit does not move focus to a clicked `<button>` at
+ * all, so on Safari that read `<body>` — and `<body>` is focusable enough
+ * that `.focus()` on it succeeds, so the banner's "that didn't take, use
+ * the fallback" branch never fired either. The invoker is now passed
+ * explicitly from the click event's `currentTarget`, which does not depend
+ * on the browser having focused anything.
+ *
+ * jsdom reproduces the Safari shape exactly: `dispatchEvent(new
+ * MouseEvent("click"))` fires the handler without focusing the target, so
+ * this test runs the real wiring through the real failure condition.
+ */
+describe("hands the clicked control to the banner as the focus-restore target (ugcportal-ysub item 7)", () => {
+  function buttonLabelled(label: string): HTMLButtonElement {
+    const match = [...ctx.container().querySelectorAll("button")].find(
+      (candidate) => candidate.textContent === label,
+    );
+    if (!match) throw new Error(`no button labelled "${label}"`);
+    return match;
+  }
+
+  it("returns focus to the 'Cookies' button after the banner it opened is dismissed", () => {
+    act(() => {
+      ctx.root().render(
+        <ConsentProvider initialConsent="granted">
+          <CookieSettingsLink />
+          <CookieBanner />
+        </ConsentProvider>,
+      );
+    });
+
+    const cookiesButton = buttonLabelled("Cookies");
+    act(() => {
+      cookiesButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    // The precondition this whole fix is about: the click did NOT focus
+    // the button, so `document.activeElement` was never it.
+    expect(cookiesButton).not.toBe(document.body);
+
+    act(() => {
+      buttonLabelled(COOKIE_BANNER_DECLINE_LABEL).dispatchEvent(
+        new MouseEvent("click", { bubbles: true }),
+      );
+    });
+
+    expect(document.activeElement).toBe(cookiesButton);
+  });
+
+  it("MUTATION CHECK: a banner that was never opened by this control does not steal focus to it on dismiss", () => {
+    // Fixture mutation: same components, but the banner is already open at
+    // mount (a first visit, no stored choice), so nothing invoked it and
+    // there is nothing to restore to. If the assertion above were passing
+    // because the banner focuses this button on every close, this would
+    // fail.
+    act(() => {
+      ctx.root().render(
+        <ConsentProvider initialConsent={null}>
+          <CookieSettingsLink />
+          <CookieBanner />
+        </ConsentProvider>,
+      );
+    });
+
+    const cookiesButton = buttonLabelled("Cookies");
+    act(() => {
+      buttonLabelled(COOKIE_BANNER_DECLINE_LABEL).dispatchEvent(
+        new MouseEvent("click", { bubbles: true }),
+      );
+    });
+
+    expect(document.activeElement).not.toBe(cookiesButton);
   });
 });
 

@@ -5,6 +5,7 @@ import {
   useCallback,
   useContext,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -26,8 +27,28 @@ type ConsentContextValue = {
   bannerOpen: boolean;
   acceptOptional: () => void;
   onlyNecessary: () => void;
-  /** Reopens the choice — what the "Cookies" control (K4) calls. */
-  reopen: () => void;
+  /**
+   * Reopens the choice — what the "Cookies" control (K4) calls.
+   *
+   * `invoker` is the element that triggered the reopen, taken from the
+   * click event's own `currentTarget` (ugcportal-ysub item 7). The banner
+   * restores focus to it when the choice closes again; see
+   * `takeReopenInvoker`. Optional, because the banner's very first,
+   * mount-time open has no invoking control at all.
+   */
+  reopen: (invoker?: HTMLElement | null) => void;
+  /**
+   * Hands the element captured by the most recent `reopen()` to the one
+   * consumer that needs it (CookieBanner's focus-restoration effect) and
+   * clears it, so a later close cannot restore focus using a stale
+   * invoker from an earlier reopen.
+   *
+   * Kept in a ref rather than in state deliberately: it is read exactly
+   * once, inside a layout effect, and is never rendered — making it state
+   * would re-render every consumer of this context on a value nothing
+   * displays.
+   */
+  takeReopenInvoker: () => HTMLElement | null;
 };
 
 const ConsentContext = createContext<ConsentContextValue | null>(null);
@@ -68,13 +89,29 @@ export function ConsentProvider({
     setBannerOpen(false);
   }, []);
 
-  const reopen = useCallback(() => {
+  const reopenInvokerRef = useRef<HTMLElement | null>(null);
+
+  const reopen = useCallback((invoker?: HTMLElement | null) => {
+    reopenInvokerRef.current = invoker ?? null;
     setBannerOpen(true);
   }, []);
 
+  const takeReopenInvoker = useCallback(() => {
+    const invoker = reopenInvokerRef.current;
+    reopenInvokerRef.current = null;
+    return invoker;
+  }, []);
+
   const value = useMemo<ConsentContextValue>(
-    () => ({ consent, bannerOpen, acceptOptional, onlyNecessary, reopen }),
-    [consent, bannerOpen, acceptOptional, onlyNecessary, reopen],
+    () => ({
+      consent,
+      bannerOpen,
+      acceptOptional,
+      onlyNecessary,
+      reopen,
+      takeReopenInvoker,
+    }),
+    [consent, bannerOpen, acceptOptional, onlyNecessary, reopen, takeReopenInvoker],
   );
 
   return (

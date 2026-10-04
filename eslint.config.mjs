@@ -79,11 +79,72 @@ const GATED_SCRIPT_MESSAGE =
   "mount through that module instead, so it is gated on visitor consent " +
   "rather than bypassing it.";
 
+/**
+ * ugcportal-ysub item 3 (MEDIUM, CONFIRMED with Linter.verify): every
+ * `createElement` selector below matches the callee's NAME, so
+ * `import { createElement as h } from "react"; h("script", ...)` passed all
+ * of them — the call site spells `h`, not `createElement`. `no-restricted-
+ * syntax` is esquery over one file's AST with no scope analysis, so no
+ * selector can follow the alias back to its binding.
+ *
+ * Closed at the IMPORT instead, which is where the name is still
+ * `createElement` whatever it is bound to locally: `no-restricted-imports`
+ * matches `importNames` against the IMPORTED name, not the local one, so
+ * the alias is irrelevant. That is the bead's own stated alternative
+ * ("resolve the import binding ... or lint on the imported name").
+ *
+ * Deliberately bans `createElement` from react outright rather than only
+ * when called with "script": a rule that has to see the call site is
+ * exactly the rule the alias defeats. Nothing in this repo imports it
+ * today (JSX compiles to `jsx()` from react/jsx-runtime, not to a
+ * hand-written `createElement`), and the one module with a legitimate
+ * reason to construct a script element — the gated loader — is already
+ * exempt from this whole ruleset via `ignores`.
+ */
+const GATED_CREATE_ELEMENT_MESSAGE =
+  "React's createElement may not be imported outside " +
+  "src/components/consent/analytics-loader.tsx — a hand-written " +
+  "createElement(\"script\", ...) is exactly what JSX compiles a raw " +
+  "<script> down to, and an aliased import of it (createElement as h) is " +
+  "invisible to the call-site lint selectors. Write JSX instead, and route " +
+  "any tracking/affiliate script mount through the consent gate.";
+
 export const GATED_SCRIPT_IMPORT_OPTIONS = [
   {
-    paths: [{ name: "next/script", message: GATED_SCRIPT_MESSAGE }],
+    paths: [
+      { name: "next/script", message: GATED_SCRIPT_MESSAGE },
+      {
+        name: "react",
+        importNames: ["createElement"],
+        message: GATED_CREATE_ELEMENT_MESSAGE,
+      },
+    ],
   },
 ];
+
+/**
+ * DOM tag names are case-INSENSITIVE: `document.createElement("SCRIPT")`
+ * and `createElement("Script", ...)` build exactly the same
+ * HTMLScriptElement as the lowercase spelling (ugcportal-ysub, MEDIUM —
+ * the selectors below matched the literal string `"script"` and nothing
+ * else). An esquery attribute value written as `/.../i` is a real regex
+ * with real flags — verified against this repo's installed esquery 1.7.0,
+ * and against the merged config by Linter.verify in
+ * eslint-gated-script.test.ts.
+ *
+ * Anchored (`^...$`), so this is still "the tag name IS script", not "the
+ * argument CONTAINS script" — `createElement("scriptish")` is not a
+ * script element and must not be flagged as one.
+ *
+ * Note this does NOT apply to the JSX selector: in JSX a capitalised tag
+ * (`<Script />`) is a reference to a component VARIABLE, not the HTML
+ * element, so `<script>` really is the only spelling that produces a raw
+ * script tag there.
+ */
+const SCRIPT_TAG_NAME = "/^script$/i";
+
+/** `next/script`, as a plain Literal argument and as a no-substitution template literal. */
+const NEXT_SCRIPT_MODULE = "next/script";
 
 export const GATED_SCRIPT_SYNTAX_SELECTORS = [
   {
@@ -95,7 +156,7 @@ export const GATED_SCRIPT_SYNTAX_SELECTORS = [
   },
   {
     // Dot notation: document.createElement("script").
-    selector: 'CallExpression[callee.property.name="createElement"][arguments.0.value="script"]',
+    selector: `CallExpression[callee.property.name="createElement"][arguments.0.value=${SCRIPT_TAG_NAME}]`,
     message: GATED_SCRIPT_MESSAGE,
   },
   {
@@ -103,8 +164,7 @@ export const GATED_SCRIPT_SYNTAX_SELECTORS = [
     // the property is a string Literal (`.value`), not an Identifier
     // (`.name`), so this needs its own selector rather than reusing the
     // one above (review round 3, finding 2).
-    selector:
-      'CallExpression[callee.computed=true][callee.property.value="createElement"][arguments.0.value="script"]',
+    selector: `CallExpression[callee.computed=true][callee.property.value="createElement"][arguments.0.value=${SCRIPT_TAG_NAME}]`,
     message: GATED_SCRIPT_MESSAGE,
   },
   {
@@ -114,8 +174,22 @@ export const GATED_SCRIPT_SYNTAX_SELECTORS = [
     // `.` at all (the callee is a plain Identifier, not a MemberExpression,
     // so neither selector above matches it) and no JSX syntax for the
     // JSXOpeningElement selector above to see either (review round 4,
-    // finding 3).
-    selector: 'CallExpression[callee.name="createElement"][arguments.0.value="script"]',
+    // finding 3). An ALIASED import of the same function
+    // (`createElement as h`) is caught at its import instead — see
+    // GATED_CREATE_ELEMENT_MESSAGE above for why it cannot be caught here.
+    selector: `CallExpression[callee.name="createElement"][arguments.0.value=${SCRIPT_TAG_NAME}]`,
+    message: GATED_SCRIPT_MESSAGE,
+  },
+  {
+    // A BACKTICKED tag name: ``document.createElement(`script`)``, and the
+    // computed and bare-identifier spellings of the same thing. Found by
+    // the family-4 sibling sweep while adding the backticked `import()`
+    // and `require()` selectors below — a template literal has no
+    // `.value`, so all three `[arguments.0.value=...]` selectors above
+    // were blind to it. One `:matches()` rather than three near-identical
+    // selectors, since the only part that differs is how the callee is
+    // spelled. Same "no substitutions" restriction, for the same reason.
+    selector: `CallExpression:matches([callee.property.name="createElement"], [callee.property.value="createElement"], [callee.name="createElement"]) > TemplateLiteral[expressions.length=0] > TemplateElement[value.cooked=${SCRIPT_TAG_NAME}]`,
     message: GATED_SCRIPT_MESSAGE,
   },
   {
@@ -125,7 +199,36 @@ export const GATED_SCRIPT_SYNTAX_SELECTORS = [
     // RuleTester (eslint-gated-script.test.ts) — does NOT flag a dynamic
     // `ImportExpression` the way it flags a static `ImportDeclaration`, so
     // this shape needs its own selector here instead.
-    selector: 'ImportExpression[source.value="next/script"]',
+    selector: `ImportExpression[source.value="${NEXT_SCRIPT_MODULE}"]`,
+    message: GATED_SCRIPT_MESSAGE,
+  },
+  {
+    // The same dynamic import written with BACKTICKS:
+    // ``import(`next/script`)`` (ugcportal-ysub, MEDIUM). A template
+    // literal is a TemplateLiteral node, not a Literal, so it has no
+    // `.value` for the selector above to read at all — the specifier
+    // lives in `quasis[0].value.cooked`. Only a template with NO
+    // substitutions is matched, because that is the only case where the
+    // whole specifier is statically present in the source; a
+    // ``import(`${base}/script`)`` is the documented residual that no
+    // selector-based rule can see (see KNOWN LIMIT above).
+    selector: `ImportExpression > TemplateLiteral[expressions.length=0] > TemplateElement[value.cooked="${NEXT_SCRIPT_MODULE}"]`,
+    message: GATED_SCRIPT_MESSAGE,
+  },
+  {
+    // CommonJS: `require("next/script")` (ugcportal-ysub, MEDIUM).
+    // `no-restricted-imports` understands ESM declarations only, and the
+    // ImportExpression selectors above are a different node kind, so this
+    // was caught by nothing — in a `.cjs` file it was not even reached,
+    // since neither this ruleset's file globs nor the K6 grep's extension
+    // list included `.cjs` before this bead.
+    selector: `CallExpression[callee.name="require"][arguments.0.value="${NEXT_SCRIPT_MODULE}"]`,
+    message: GATED_SCRIPT_MESSAGE,
+  },
+  {
+    // ``require(`next/script`)`` — same template-literal shape as the
+    // dynamic import above, same reason it needs its own selector.
+    selector: `CallExpression[callee.name="require"] > TemplateLiteral[expressions.length=0] > TemplateElement[value.cooked="${NEXT_SCRIPT_MODULE}"]`,
     message: GATED_SCRIPT_MESSAGE,
   },
 ];
@@ -190,7 +293,11 @@ const eslintConfig = defineConfig([
     // CONFIRMED: a tracking snippet doesn't need TypeScript to execute, so
     // a plain .js/.mjs file was just as real a bypass surface as a .ts
     // one, and this object's old `files: ["**/*.ts"]` silently missed it).
-    files: ["**/*.ts", "**/*.js", "**/*.mjs"],
+    // .cjs added by ugcportal-ysub, alongside the `require("next/script")`
+    // selector: CommonJS executes just as happily as ESM, and `.cjs` was
+    // the one real source extension neither this ruleset nor the K6 grep
+    // looked at.
+    files: ["**/*.ts", "**/*.js", "**/*.mjs", "**/*.cjs"],
     rules: {
       "no-restricted-syntax": ["error", ...GATED_SCRIPT_SYNTAX_SELECTORS],
     },
@@ -198,8 +305,9 @@ const eslintConfig = defineConfig([
   {
     // A different rule key (no-restricted-imports), so this can freely
     // span every extension together without colliding with any object
-    // above. .js/.mjs added for the same reason as the object above.
-    files: ["**/*.ts", "**/*.tsx", "**/*.jsx", "**/*.js", "**/*.mjs"],
+    // above. .js/.mjs (and now .cjs) added for the same reason as the
+    // object above.
+    files: ["**/*.ts", "**/*.tsx", "**/*.jsx", "**/*.js", "**/*.mjs", "**/*.cjs"],
     ignores: [GATED_LOADER_PATH],
     rules: {
       "no-restricted-imports": ["error", ...GATED_SCRIPT_IMPORT_OPTIONS],

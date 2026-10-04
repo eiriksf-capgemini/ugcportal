@@ -89,7 +89,10 @@ const ALLOWED_RELATIVE_PATHS = new Set([
 // under src/ bypassed this scan silently). A tracking snippet doesn't
 // require TypeScript to execute; next.config.ts, scripts/, and any future
 // plain-JS file under src/ are just as real a bypass surface as a .ts one.
-const K6_SCANNED_EXTENSIONS = /\.(tsx|ts|jsx|js|mjs)$/;
+// `.cjs` added by ugcportal-ysub item 3: CommonJS is as executable as ESM,
+// and a `.cjs` file under src/ was covered by neither this scan's extension
+// list nor (before this bead) eslint.config.mjs's gated-script rules.
+const K6_SCANNED_EXTENSIONS = /\.(tsx|ts|jsx|js|mjs|cjs)$/;
 
 // No exclusions at all: unlike dual-meaning-usage.test.ts (which uses
 // isTestFile to skip test files because it only cares about shipped UI),
@@ -337,6 +340,57 @@ describe("findAnalyticsMarkerOffenders (the real scanner, exercised over a real 
     );
 
     expect(result).toEqual(["offender.mjs"]);
+  });
+
+  it("reports a vendor reference in a CommonJS .cjs file", () => {
+    // ugcportal-ysub item 3: `.cjs` was in neither this list nor the lint
+    // rule's file globs, so a CommonJS tracking snippet under src/ was
+    // invisible to both halves of the gate at once.
+    const root = fixture({
+      "offender.cjs": 'module.exports = { trackingSrc: "https://stats.example/x?umami" };',
+    });
+
+    const result = findAnalyticsMarkerOffenders(
+      walkSourceFiles(root, INCLUDE_EVERYTHING, K6_SCANNED_EXTENSIONS),
+      root,
+      new Set(),
+    );
+
+    expect(result).toEqual(["offender.cjs"]);
+  });
+
+  /**
+   * ugcportal-ysub item 1 (CONFIRMED medium, reproduced by execution): the
+   * `)` that closes an `if`/`while` CONDITION looks exactly like the `)`
+   * that closes a parenthesised VALUE to a character-based "is this `/`
+   * division?" heuristic — so the regex literal in statement position
+   * right after it was read as a division operator. With an ODD number of
+   * quote characters in that regex's own pattern, the first of them then
+   * opened a phantom string, and from there the scanner ran with inverted
+   * string parity: the `//` of a perfectly ordinary `https://` URL later
+   * in the file was read as a comment opener and the live analytics host
+   * after it was erased before the grep ever saw it.
+   *
+   * This is K3's "following should never happen" fixture: a real file on
+   * disk, walked by the real walker, read by the real reader, stripped by
+   * the real scanner, matched by the real marker.
+   */
+  it("reports a live analytics host that follows a control-flow ) and an odd-quoted regex", () => {
+    const root = fixture({
+      "offender.ts":
+        "export function hasCharset(header: string): void {\n" +
+        '  if (header) /charset="/i.test(header);\n' +
+        "}\n" +
+        'const trackingSrc = "https://stats.example/x?umami";\n',
+    });
+
+    const result = findAnalyticsMarkerOffenders(
+      walkSourceFiles(root, INCLUDE_EVERYTHING, K6_SCANNED_EXTENSIONS),
+      root,
+      new Set(),
+    );
+
+    expect(result).toEqual(["offender.ts"]);
   });
 
   it("MUTATION CHECK: reverting to the default (tsx|ts-only) extensions misses the .js/.mjs offenders", () => {

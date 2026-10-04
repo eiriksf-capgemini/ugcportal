@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { stripComments } from "./scan-source";
+import { stripComments, stripCssComments } from "./scan-source";
+import { legacyStripComments } from "./scan-source-legacy.test-support";
 
 /**
  * ugcportal-3wgp review round 3, MEDIUM (CONFIRMED, reproduced by the
@@ -265,5 +266,166 @@ describe("stripComments", () => {
     const code = 'const trackingSrc = "//stats.example/collect?x=trackerco";';
     expect(naiveStripComments(code)).not.toBe(code);
     expect(naiveStripComments(code)).not.toContain("trackerco");
+  });
+});
+
+/**
+ * ugcportal-ysub K1. Every fixture in this block is a shape the HAND-ROLLED
+ * scanner (preserved verbatim as `legacyStripComments` in
+ * scan-source-legacy.test-support.ts) got wrong, and that TypeScript's own
+ * parser gets right for free. Each one asserts BOTH directions, as the bead
+ * requires:
+ *
+ *   - what the parser-backed `stripComments` produces (every real comment
+ *     gone, no non-comment text lost); and
+ *   - that `legacyStripComments` produces something different and wrong, so
+ *     the fixture is anchored to a defect that actually shipped rather than
+ *     an invented one (review-standards family 3: an assertion whose needle
+ *     cannot be absent is not coverage).
+ *
+ * The "wrong" assertion is spelled out as a concrete expected string, not
+ * merely `not.toBe(code)` — a `not.toBe` would still pass if the legacy
+ * scanner were quietly replaced by something that failed differently, or
+ * not at all for the stated reason.
+ */
+describe("stripComments (ugcportal-ysub: TypeScript's lexer, not a hand-rolled one)", () => {
+  /**
+   * Item 1, MEDIUM (CONFIRMED by execution). The `)` that closes an
+   * `if`/`while` CONDITION is indistinguishable, to a character-based
+   * heuristic, from the `)` that closes a parenthesised VALUE — so a regex
+   * literal in statement position right after it was read as division. The
+   * regex here carries an ODD number of quote characters, so the first of
+   * them then opened a phantom string that ran on to the next quote,
+   * inverting the scanner's string parity: the `//` of an ordinary
+   * `https://` URL after it read as a comment opener and the rest of the
+   * file was erased from the scan.
+   */
+  const ITEM_1 =
+    'if (header) /charset="/i.test(header);\n' +
+    'const trackingSrc = "https://stats.example/x?trackerco";';
+
+  it("THE ITEM-1 NAMED BUG: a regex after an if-condition's ) does not desync the scanner", () => {
+    expect(stripComments(ITEM_1)).toBe(ITEM_1);
+  });
+
+  it("MUTATION CHECK: the hand-rolled scanner erases the live host after that same regex", () => {
+    expect(legacyStripComments(ITEM_1)).toBe(
+      'if (header) /charset="/i.test(header);\nconst trackingSrc = "https: ',
+    );
+    expect(legacyStripComments(ITEM_1)).not.toContain("trackerco");
+  });
+
+  /**
+   * Item 2, MEDIUM (CONFIRMED by execution). A stylesheet is not
+   * JavaScript: `url(https://cdn.example/bg.png)` is an ordinary UNQUOTED
+   * CSS url token with no string quotes to protect it, so a JavaScript
+   * lexer reads its `//` as a line comment and truncates the line —
+   * hiding a hex literal after it from the K2 raw-hex gate. Fixed by not
+   * handing CSS to a JavaScript lexer at all; no-raw-hex.test.ts dispatches
+   * on the file extension (see its own `stripSourceComments`).
+   */
+  const ITEM_2 =
+    ".hero { background: url(https://cdn.example/bg.png) no-repeat; border: 1px solid #14555f; }";
+  const ITEM_2_TRUNCATED = ".hero { background: url(https: ";
+
+  it("THE ITEM-2 NAMED BUG: stripCssComments keeps an unquoted url(https://...) intact", () => {
+    expect(stripCssComments(ITEM_2)).toBe(ITEM_2);
+  });
+
+  it("stripCssComments still strips a real CSS block comment", () => {
+    expect(stripCssComments(".a { /* note */ color: red; }")).toBe(".a {   color: red; }");
+  });
+
+  it("MUTATION CHECK: the JavaScript scanners both truncate that CSS line at the url's //", () => {
+    // The hand-rolled scanner AND the parser-backed one both do this: `//`
+    // really is a line comment in JavaScript, which is exactly why CSS
+    // needs its own stripper rather than a better JavaScript one.
+    expect(legacyStripComments(ITEM_2)).toBe(ITEM_2_TRUNCATED);
+    expect(stripComments(ITEM_2)).toBe(ITEM_2_TRUNCATED);
+  });
+
+  /**
+   * Item 4, LOW. `of` is NOT a reserved word — it is contextual, and
+   * `const of = 6; of / 2` is ordinary division. The hand-rolled scanner
+   * listed it among the keywords that can only precede an expression, so
+   * it read the `/` as a regex start, ran forward to the `/` inside the
+   * next string literal, greedily ate the character after it as a regex
+   * FLAG, and left the scanner mid-string — after which the real trailing
+   * comment was no longer recognised as one.
+   */
+  const ITEM_4 = 'const half = of / 2; const label = "a/b"; // real comment\nconst z = 1;';
+
+  it("THE ITEM-4 NAMED BUG: `of / 2` is division, and a real comment after it is still stripped", () => {
+    expect(stripComments(ITEM_4)).toBe(
+      'const half = of / 2; const label = "a/b";  \nconst z = 1;',
+    );
+  });
+
+  it("MUTATION CHECK: the hand-rolled scanner leaves that comment unstripped", () => {
+    expect(legacyStripComments(ITEM_4)).toBe(ITEM_4);
+  });
+
+  /**
+   * Item 5, LOW. A postfix `++`/`--` ends a VALUE, so the `/` after it is
+   * division. The hand-rolled scanner's division-permitting character
+   * class had no `+`, so it tried to read a regex, found its "closing"
+   * delimiter in the first `/` of the real `//` comment later on the line,
+   * and the comment survived.
+   */
+  const ITEM_5 = "let i = 0; const r = i++ / 2; // real comment\nconst z = 1;";
+
+  it("THE ITEM-5 NAMED BUG: `i++ / 2` is division, and a real comment after it is still stripped", () => {
+    expect(stripComments(ITEM_5)).toBe("let i = 0; const r = i++ / 2;  \nconst z = 1;");
+  });
+
+  it("MUTATION CHECK: the hand-rolled scanner leaves that comment unstripped too", () => {
+    expect(legacyStripComments(ITEM_5)).toBe(ITEM_5);
+  });
+
+  /**
+   * Item 6, LOW. Regex flags are an identifier-character run, so
+   * `/foo/instanceof` really does consume `instanceof` as (invalid) flags —
+   * that part the hand-rolled scanner got right. What it got wrong is what
+   * happens NEXT: having swallowed a keyword into the flag run, its
+   * "previous word" heuristic then saw `instanceof` before the following
+   * `/` and read THAT as another regex start, whose closing delimiter it
+   * found in the first `/` of the real `//` comment — which therefore
+   * survived. A deliberately lexer-level fixture: the point is which
+   * characters belong to which token, not that anyone would write this.
+   */
+  const ITEM_6 = "const weird = /foo/instanceof/ 2; // real comment\nconst z = 1;";
+
+  it("THE ITEM-6 NAMED BUG: greedy regex flags do not swallow the comment after them", () => {
+    expect(stripComments(ITEM_6)).toBe("const weird = /foo/instanceof/ 2;  \nconst z = 1;");
+  });
+
+  it("MUTATION CHECK: the hand-rolled scanner leaves that comment unstripped as well", () => {
+    expect(legacyStripComments(ITEM_6)).toBe(ITEM_6);
+  });
+
+  /**
+   * Not one of the numbered items, and the reason this block is not just a
+   * pile of `toBe(code)`: a replacement that quietly became "never strip
+   * anything" would satisfy every "no non-comment text is lost" assertion
+   * above while reintroducing round 2's finding 9 (an innocent comment
+   * discussing a vendor tripping the K6 grep). These two assert the other
+   * half of K1 — that every REAL comment is still removed.
+   */
+  it("MUTATION CHECK: the parser-backed scanner still strips plain comments", () => {
+    expect(stripComments("/* block */ const a = 1; // line\nconst b = 2;")).toBe(
+      "  const a = 1;  \nconst b = 2;",
+    );
+  });
+
+  it("strips a comment sitting between two tokens of the same statement", () => {
+    // A comment in front of a punctuation token rather than in front of a
+    // statement: it is leading trivia of `;`, a token no node-level walk
+    // visits. Guards the leaf-token walk specifically.
+    expect(stripComments("const a = 1 /* mid-statement */ ;")).toBe("const a = 1   ;");
+  });
+
+  it("does not mistake JSX text that merely looks like a comment for one", () => {
+    const code = "export const X = <p>\n  // not a comment, just text with trackerco\n</p>;";
+    expect(stripComments(code)).toBe(code);
   });
 });

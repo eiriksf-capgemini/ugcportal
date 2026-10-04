@@ -35,7 +35,12 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { isTestFile, stripComments, walkSourceFiles } from "./scan-source";
+import {
+  isTestFile,
+  stripComments,
+  stripCssComments,
+  walkSourceFiles,
+} from "./scan-source";
 
 const SRC_ROOT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -94,6 +99,24 @@ function stripHrefFragments(source: string): string {
   return source.replace(HREF_FRAGMENT, (match) => " ".repeat(match.length));
 }
 
+/**
+ * ugcportal-ysub item 2, CONFIRMED medium: this gate scans `.css` as well
+ * as `.tsx`/`.ts`, and a stylesheet is not JavaScript. Handing a `.css`
+ * file to the JavaScript comment stripper made `background: url(https://
+ * cdn.example/x.png)` — an ordinary UNQUOTED CSS url token, which has no
+ * string quotes for a JS lexer to protect it with — read as a `//` line
+ * comment and truncated, hiding any hex literal later on that same line
+ * from this scan entirely.
+ *
+ * CSS gets `stripCssComments` (`/* *\/` only, the only comment syntax CSS
+ * has); everything else gets the TypeScript-parser-backed `stripComments`.
+ * Keyed on the file extension rather than on content sniffing, because the
+ * walker already knows which extension it matched.
+ */
+function stripSourceComments(file: string, contents: string): string {
+  return file.endsWith(".css") ? stripCssComments(contents) : stripComments(contents);
+}
+
 const EXCLUDED_FILES = new Set([path.join(SRC_ROOT, "app", "globals.css")]);
 const DESIGN_LIB_DIR = path.join(SRC_ROOT, "lib", "design") + path.sep;
 
@@ -136,6 +159,41 @@ describe("stripHrefFragments", () => {
 });
 
 /**
+ * ugcportal-ysub item 2 (CONFIRMED medium): the exact shape this gate was
+ * blind to — an unquoted `url(https://...)` in a stylesheet, with a raw hex
+ * literal after it on the same line. Driven through the same dispatch
+ * function the real scan above uses, so a regression that routes `.css`
+ * back through the JavaScript stripper fails here.
+ */
+describe("stripSourceComments (ugcportal-ysub item 2: CSS is not JavaScript)", () => {
+  const CSS_WITH_URL =
+    ".hero { background: url(https://cdn.example/bg.png) no-repeat; border: 1px solid #14555f; }";
+
+  it("keeps an unquoted url(https://...) and the hex literal after it on the same line", () => {
+    const stripped = stripSourceComments("/src/app/theme.css", CSS_WITH_URL);
+    expect(stripped).toBe(CSS_WITH_URL);
+    expect(stripped.match(HEX_COLOR)).toEqual(["#14555f"]);
+  });
+
+  it("still strips a real CSS block comment", () => {
+    expect(
+      stripSourceComments("/src/app/theme.css", ".a { /* #14555f was here */ color: red; }"),
+    ).toBe(".a {   color: red; }");
+  });
+
+  it("MUTATION CHECK: routing the same CSS through the .ts path truncates it and loses the hex", () => {
+    // Fixture mutation, not a production-code change: the ONLY difference
+    // is the file extension handed to the dispatcher, which is exactly the
+    // defect (a .css file scanned by a JavaScript lexer). `//` inside the
+    // unquoted url token reads as a line comment, erasing the rest of the
+    // line — including the hex literal this gate exists to find.
+    const stripped = stripSourceComments("/src/app/theme.ts", CSS_WITH_URL);
+    expect(stripped).not.toBe(CSS_WITH_URL);
+    expect(stripped.match(HEX_COLOR)).toBeNull();
+  });
+});
+
+/**
  * Memoised (round 5): "finds files to scan" and the real assertion below it
  * both need the file list, and the source tree does not change mid-run, so
  * walking it twice bought nothing but a second filesystem traversal.
@@ -155,7 +213,7 @@ describe("no raw hex colour literals outside the tokens file", () => {
 
     const offenders: string[] = [];
     for (const file of files) {
-      const source = stripHrefFragments(stripComments(readFileSync(file, "utf8")));
+      const source = stripHrefFragments(stripSourceComments(file, readFileSync(file, "utf8")));
       const matches = source.match(HEX_COLOR);
       if (matches) {
         const relative = path.relative(path.dirname(SRC_ROOT), file);

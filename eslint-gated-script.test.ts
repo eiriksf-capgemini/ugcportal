@@ -135,7 +135,109 @@ describe("eslint.config.mjs: gated-script syntax selectors (JSX/createElement)",
           options: GATED_SCRIPT_SYNTAX_SELECTORS,
           errors: 1,
         },
+        // ugcportal-ysub: DOM tag names are case-insensitive, so each of
+        // these builds the same HTMLScriptElement as the lowercase
+        // spelling while matching none of the old literal `"script"`
+        // selectors.
+        {
+          code: 'document.createElement("SCRIPT");',
+          options: GATED_SCRIPT_SYNTAX_SELECTORS,
+          errors: 1,
+        },
+        {
+          code: 'document.createElement("Script");',
+          options: GATED_SCRIPT_SYNTAX_SELECTORS,
+          errors: 1,
+        },
+        {
+          code: 'document["createElement"]("SCRIPT");',
+          options: GATED_SCRIPT_SYNTAX_SELECTORS,
+          errors: 1,
+        },
+        {
+          code: 'import { createElement } from "react"; createElement("ScRiPt", {});',
+          options: GATED_SCRIPT_SYNTAX_SELECTORS,
+          errors: 1,
+        },
+        // ugcportal-ysub, family-4 sibling of the two template-literal
+        // module specifiers below: a backticked TAG NAME has no `.value`
+        // either, in any of the three callee spellings.
+        {
+          code: "document.createElement(`script`);",
+          options: GATED_SCRIPT_SYNTAX_SELECTORS,
+          errors: 1,
+        },
+        {
+          code: 'document["createElement"](`SCRIPT`);',
+          options: GATED_SCRIPT_SYNTAX_SELECTORS,
+          errors: 1,
+        },
+        {
+          code: 'import { createElement } from "react"; createElement(`script`, {});',
+          options: GATED_SCRIPT_SYNTAX_SELECTORS,
+          errors: 1,
+        },
+        // ugcportal-ysub: a no-substitution TEMPLATE literal specifier is
+        // a TemplateLiteral node with no `.value` at all, so the
+        // `[source.value=...]` selector could not see it.
+        {
+          code: "async function load() { await import(`next/script`); }",
+          options: GATED_SCRIPT_SYNTAX_SELECTORS,
+          errors: 1,
+        },
+        // ugcportal-ysub: CommonJS. no-restricted-imports only understands
+        // ESM declarations, so before this selector `require("next/script")`
+        // was caught by nothing at all.
+        {
+          code: 'const Script = require("next/script");',
+          options: GATED_SCRIPT_SYNTAX_SELECTORS,
+          errors: 1,
+        },
+        {
+          code: "const Script = require(`next/script`);",
+          options: GATED_SCRIPT_SYNTAX_SELECTORS,
+          errors: 1,
+        },
       ],
+    });
+  });
+
+  /**
+   * ugcportal-ysub, review-standards family 3: the `invalid` cases above
+   * prove the new selectors FIRE; these prove they still have a failing
+   * case, i.e. that they are matching the tag name rather than anything
+   * that merely contains it. Without these, widening `"script"` to
+   * `/script/i` (no anchors) would pass every assertion above while
+   * flagging `createElement("scripture")`.
+   */
+  it("does not widen past the tag name itself", () => {
+    tester.run("GATED_SCRIPT_SYNTAX_SELECTORS (anchoring)", noRestrictedSyntax, {
+      valid: [
+        { code: 'document.createElement("scriptish");', options: GATED_SCRIPT_SYNTAX_SELECTORS },
+        { code: 'document.createElement("noscript");', options: GATED_SCRIPT_SYNTAX_SELECTORS },
+        { code: "document.createElement(`scriptish`);", options: GATED_SCRIPT_SYNTAX_SELECTORS },
+        // A tag name only known at runtime — the documented residual the
+        // K6 grep backstops, not something a selector can close.
+        { code: "document.createElement(`${tag}script`);", options: GATED_SCRIPT_SYNTAX_SELECTORS },
+        {
+          code: 'async function load() { await import("next/script-helpers"); }',
+          options: GATED_SCRIPT_SYNTAX_SELECTORS,
+        },
+        {
+          code: "async function load() { await import(`next/script-helpers`); }",
+          options: GATED_SCRIPT_SYNTAX_SELECTORS,
+        },
+        { code: 'const x = require("next/image");', options: GATED_SCRIPT_SYNTAX_SELECTORS },
+        // A template literal WITH a substitution: the specifier is not
+        // statically present, which eslint.config.mjs documents as the
+        // residual the K6 grep backstops rather than something a selector
+        // can close.
+        {
+          code: "const x = require(`next/${name}`);",
+          options: GATED_SCRIPT_SYNTAX_SELECTORS,
+        },
+      ],
+      invalid: [],
     });
   });
 });
@@ -145,6 +247,17 @@ describe("eslint.config.mjs: gated-script import/export ban (no-restricted-impor
     tester.run("GATED_SCRIPT_IMPORT_OPTIONS", noRestrictedImports, {
       valid: [
         { code: 'import Something from "other-module";', options: GATED_SCRIPT_IMPORT_OPTIONS },
+        // react itself is not banned — only its `createElement` export is.
+        {
+          code: 'import { useState, useRef } from "react";',
+          options: GATED_SCRIPT_IMPORT_OPTIONS,
+        },
+        // ...and only from react: a `createElement` of someone else's is
+        // not React's, and the gate is about React's.
+        {
+          code: 'import { createElement } from "some-vdom-lib";',
+          options: GATED_SCRIPT_IMPORT_OPTIONS,
+        },
       ],
       invalid: [
         // A direct import, under any local binding name — round 1 already
@@ -172,6 +285,27 @@ describe("eslint.config.mjs: gated-script import/export ban (no-restricted-impor
         },
         {
           code: 'export * from "next/script";',
+          options: GATED_SCRIPT_IMPORT_OPTIONS,
+          errors: 1,
+        },
+        // ugcportal-ysub, MEDIUM (CONFIRMED with Linter.verify on PR #92):
+        // every call-site selector matches the callee's NAME, so an
+        // ALIASED import defeated all of them — `h("script", ...)` spells
+        // `h`. `importNames` matches the IMPORTED name, which the alias
+        // cannot change, so the import site catches what the call site
+        // structurally cannot.
+        {
+          code: 'import { createElement } from "react";',
+          options: GATED_SCRIPT_IMPORT_OPTIONS,
+          errors: 1,
+        },
+        {
+          code: 'import { createElement as h } from "react";',
+          options: GATED_SCRIPT_IMPORT_OPTIONS,
+          errors: 1,
+        },
+        {
+          code: 'export { createElement as h } from "react";',
           options: GATED_SCRIPT_IMPORT_OPTIONS,
           errors: 1,
         },
@@ -285,6 +419,82 @@ describe("eslintConfig (the real merged, exported config) wires the gated-script
       "src/components/evil.tsx",
     );
     expect(ruleIds).toContain("no-restricted-syntax");
+  });
+
+  /**
+   * K2 (ugcportal-ysub): the four shapes the bead names, each driven
+   * through the REAL merged config at a realistic path — not against the
+   * bare selector constants, because a selector that is right but wired to
+   * the wrong file set ships broken all the same.
+   */
+  it("K2: flags an ALIASED createElement import from react and the h(\"script\") call it enables", () => {
+    const ruleIds = ruleIdsFor(
+      'import { createElement as h } from "react";\n' +
+        'export function evil() { return h("script", { src: "https://evil.example/x.js" }); }',
+      "src/components/evil.tsx",
+    );
+    expect(ruleIds).toContain("no-restricted-imports");
+  });
+
+  it("K2: flags createElement(\"SCRIPT\") — DOM tag names are case-insensitive", () => {
+    const ruleIds = ruleIdsFor('document.createElement("SCRIPT");', "src/lib/evil.ts");
+    expect(ruleIds).toContain("no-restricted-syntax");
+  });
+
+  it("K2: flags a template-literal dynamic import of next/script", () => {
+    const ruleIds = ruleIdsFor(
+      "export async function load() { return import(`next/script`); }",
+      "src/lib/evil.ts",
+    );
+    expect(ruleIds).toContain("no-restricted-syntax");
+  });
+
+  it("K2: flags a CommonJS require(\"next/script\"), including in a .cjs file", () => {
+    expect(ruleIdsFor('const S = require("next/script");', "src/lib/evil.ts")).toContain(
+      "no-restricted-syntax",
+    );
+    expect(ruleIdsFor('const S = require("next/script");', "src/lib/evil.cjs")).toContain(
+      "no-restricted-syntax",
+    );
+  });
+
+  it("does NOT flag any of those four inside the gated loader itself", () => {
+    // The single allowed loader path stays the only exception — a new
+    // selector that fired even there would make the one legitimate caller
+    // unlintable, which is the failure mode opposite to a bypass and just
+    // as real.
+    expect(
+      ruleIdsFor(
+        'import { createElement as h } from "react";\nexport const x = h;',
+        GATED_LOADER_PATH,
+      ),
+    ).not.toContain("no-restricted-imports");
+    expect(
+      ruleIdsFor('export const x = () => document.createElement("SCRIPT");', GATED_LOADER_PATH),
+    ).not.toContain("no-restricted-syntax");
+  });
+
+  it("MUTATION CHECK: the same four shapes spelled just off-target raise neither rule", () => {
+    // Fixture mutation for the four assertions above: one character off
+    // the thing being banned in each case, so each needle really can be
+    // absent (review-standards family 3). If any of these started
+    // failing, the selectors would have widened past "this IS the gated
+    // module / the script tag" into "this mentions it".
+    expect(
+      ruleIdsFor('import { useMemo as h } from "react";\nexport const x = h;', "src/lib/fine.ts"),
+    ).not.toContain("no-restricted-imports");
+    expect(ruleIdsFor('document.createElement("scripture");', "src/lib/fine.ts")).not.toContain(
+      "no-restricted-syntax",
+    );
+    expect(
+      ruleIdsFor(
+        "export async function load() { return import(`next/script-helpers`); }",
+        "src/lib/fine.ts",
+      ),
+    ).not.toContain("no-restricted-syntax");
+    expect(ruleIdsFor('const S = require("next/image");', "src/lib/fine.cjs")).not.toContain(
+      "no-restricted-syntax",
+    );
   });
 
   it("MUTATION CHECK: an unrelated file/shape raises neither gated-script rule", () => {
