@@ -79,12 +79,24 @@ function walk(
  * implies TypeScript's JSX language variant, so a `.js` file with JSX in
  * it (which Next allows) still parses - and the TS-only `<T>()`/`<T>v`
  * ambiguity cannot arise there, because neither is valid JavaScript.
+ *
+ * The map is exported, and source-extensions.test.ts asserts it has an
+ * entry for every extension in src/lib/source-extensions.mjs's list
+ * (review round 3, finding 4) - so an extension added to the gate and the
+ * lint rules cannot quietly fall through to the fallback here.
  */
-function scriptKindFor(fileName: string): ts.ScriptKind {
-  if (/\.tsx$/i.test(fileName)) return ts.ScriptKind.TSX;
-  if (/\.jsx$/i.test(fileName)) return ts.ScriptKind.JSX;
-  if (/\.(js|mjs|cjs)$/i.test(fileName)) return ts.ScriptKind.JS;
-  return ts.ScriptKind.TS;
+export const SCRIPT_KIND_BY_EXTENSION: Readonly<Record<string, ts.ScriptKind>> = {
+  ts: ts.ScriptKind.TS,
+  tsx: ts.ScriptKind.TSX,
+  js: ts.ScriptKind.JS,
+  jsx: ts.ScriptKind.JSX,
+  mjs: ts.ScriptKind.JS,
+  cjs: ts.ScriptKind.JS,
+};
+
+export function scriptKindFor(fileName: string): ts.ScriptKind {
+  const extension = fileName.slice(fileName.lastIndexOf(".") + 1).toLowerCase();
+  return SCRIPT_KIND_BY_EXTENSION[extension] ?? ts.ScriptKind.TS;
 }
 
 /**
@@ -180,63 +192,134 @@ function scriptKindFor(fileName: string): ts.ScriptKind {
  * caller that scans both.
  */
 export function stripComments(source: string, fileName: string): string {
-  const sourceFile = ts.createSourceFile(
-    fileName,
-    source,
-    {
-      languageVersion: ts.ScriptTarget.Latest,
-      // Force module parsing; see this function's doc comment ("await").
-      // `externalModuleIndicator` is the field TypeScript's own parser
-      // reads to decide whether to reparse for top-level await; it exists
-      // at runtime but is stripped from the published type declarations,
-      // hence the cast. There is no public `ModuleDetectionKind.Force`
-      // equivalent on `createSourceFile`. Guarded rather than trusted: if
-      // a future TypeScript renames it, scan-source.test.ts's `await`
-      // fixture goes red instead of the scanner quietly regressing.
-      setExternalModuleIndicator: (file) => {
-        (file as ts.SourceFile & { externalModuleIndicator?: ts.Node }).externalModuleIndicator =
-          file;
-      },
-    },
-    /* setParentNodes */ true,
-    scriptKindFor(fileName),
-  );
+  /**
+   * Both fail-closed exits (review round 2, and round 3 finding 7). Says
+   * WHY at the point it happens, and hands the source back whole.
+   *
+   * Failing closed silently is its own trap: the gate that then fires
+   * reports only "vendor name found in <file>", and the obvious reading of
+   * that - when the only mention really is in a comment - is "false
+   * positive, add it to the allowlist", which permanently exempts a file
+   * for a reason nobody recorded. Naming the cause is what makes the right
+   * fix the obvious one.
+   *
+   * Returning the source whole is the conservative answer: the output is
+   * then a strict SUPERSET of the correctly-stripped text, so every marker
+   * a caller is hunting for is still present. A throw would abort the
+   * whole scan with a stack trace and no path; this leaves the gate
+   * running and naming the offending file in its own failure message.
+   */
+  function scanUnstripped(cause: string): string {
+    console.warn(`[scan-source] ${fileName}: ${cause}, scanned unstripped`);
+    return source;
+  }
 
   const ranges: ts.CommentRange[] = [];
   const seenPositions = new Set<number>();
 
-  function collectCommentsInGap(gapStart: number, gapEnd: number): void {
-    if (gapEnd <= gapStart) return;
-    for (const found of [
-      ts.getLeadingCommentRanges(source, gapStart),
-      ts.getTrailingCommentRanges(source, gapStart),
-    ]) {
-      for (const range of found ?? []) {
-        if (range.end > gapEnd) continue;
-        if (seenPositions.has(range.pos)) continue;
-        seenPositions.add(range.pos);
-        ranges.push(range);
+  try {
+    const sourceFile = ts.createSourceFile(
+      fileName,
+      source,
+      {
+        languageVersion: ts.ScriptTarget.Latest,
+        // Force module parsing; see this function's doc comment ("await").
+        // `externalModuleIndicator` is the field TypeScript's own parser
+        // reads to decide whether to reparse for top-level await; it exists
+        // at runtime but is stripped from the published type declarations,
+        // hence the cast. There is no public `ModuleDetectionKind.Force`
+        // equivalent on `createSourceFile`. Guarded rather than trusted: if
+        // a future TypeScript renames it, scan-source.test.ts's `await`
+        // fixture goes red instead of the scanner quietly regressing.
+        setExternalModuleIndicator: (file) => {
+          (file as ts.SourceFile & { externalModuleIndicator?: ts.Node }).externalModuleIndicator =
+            file;
+        },
+      },
+      // Parent pointers are not needed (round 3, finding 3): every
+      // `getStart` call below passes `sourceFile` explicitly, which is
+      // what `getStart` would otherwise walk up the parent chain to find.
+      /* setParentNodes */ false,
+      scriptKindFor(fileName),
+    );
+
+    /*
+     * One scanner, re-pointed at each gap (round 3, finding 3). The walk
+     * below is `ts.forEachChild`, which visits real NODES and skips bare
+     * tokens - so a comment sitting in front of a `;`, a `}` or an `else`
+     * is inside no node's range at all, and a node-only walk would miss
+     * it. What IS true is that every string, template, regex literal and
+     * JSX text in the file is a node, so the text BETWEEN two adjacent
+     * node ranges can only ever be punctuation, keywords, identifiers and
+     * trivia. Nothing in a gap can disguise itself as a comment, and that
+     * is exactly what makes it safe to hand those gaps - and only those
+     * gaps - to a plain scanner.
+     */
+    const scanner = ts.createScanner(
+      ts.ScriptTarget.Latest,
+      /* skipTrivia */ false,
+      ts.LanguageVariant.Standard,
+    );
+
+    const collectCommentsInGap = (gapStart: number, gapEnd: number): void => {
+      if (gapEnd <= gapStart) return;
+      scanner.setText(source, gapStart, gapEnd - gapStart);
+      let token = scanner.scan();
+      while (token !== ts.SyntaxKind.EndOfFileToken) {
+        if (
+          token === ts.SyntaxKind.SingleLineCommentTrivia ||
+          token === ts.SyntaxKind.MultiLineCommentTrivia
+        ) {
+          const pos = scanner.getTokenStart();
+          if (!seenPositions.has(pos)) {
+            seenPositions.add(pos);
+            ranges.push({ kind: token, pos, end: scanner.getTokenEnd() });
+          }
+        }
+        token = scanner.scan();
       }
-    }
-  }
+    };
 
-  function visit(node: ts.Node): void {
-    const children = node.getChildren(sourceFile);
-    if (children.length === 0) {
-      collectCommentsInGap(node.getFullStart(), node.getStart(sourceFile));
-      return;
-    }
-    for (const child of children) visit(child);
-  }
+    const visit = (node: ts.Node): void => {
+      // A token's own text is never a gap. A string, template or regex
+      // literal, and JSX TEXT, can each contain something a scanner would
+      // read as a comment opener while it is really live content
+      // (`<p>see //example.com/x</p>`) - descending into one is precisely
+      // how a scanner comes to erase it.
+      if (ts.isToken(node)) return;
+      let cursor = node.getStart(sourceFile);
+      ts.forEachChild(node, (child) => {
+        collectCommentsInGap(cursor, child.getStart(sourceFile));
+        visit(child);
+        cursor = child.end;
+      });
+      collectCommentsInGap(cursor, node.end);
+    };
 
-  visit(sourceFile);
+    // The file's own leading trivia sits before `sourceFile.getStart()`,
+    // so the walk - which starts there - cannot reach it.
+    collectCommentsInGap(0, sourceFile.getStart(sourceFile));
+    visit(sourceFile);
+  } catch (cause) {
+    /*
+     * Round 3, finding 7 (verified): TypeScript's parser is recursive, and
+     * roughly a thousand nested parentheses overflow the stack - a
+     * `RangeError` that, uncaught, aborts the ENTIRE scan rather than
+     * degrading one file. A gate that stops running is worse than a gate
+     * that reads one file conservatively, so this takes the same
+     * fail-closed path as an unterminated comment.
+     */
+    return scanUnstripped(
+      `could not be parsed (${cause instanceof Error ? cause.name : "unknown error"})`,
+    );
+  }
 
   /*
    * Fail closed on an unterminated block comment (round 1, finding 2).
-   * `indexOf` rather than "does the range's text end in `*​/`": the latter
-   * calls `/*​/` terminated, since its last two characters ARE `*​/` even
+   * `indexOf` rather than "does the range's text end in `*\/`": the latter
+   * calls `/*\/` terminated, since its last two characters ARE `*\/` even
    * though the scanner never found a closer after the opener. Asking the
-   * question the scanner itself asks - is there a `*​/` anywhere after
+   * question the scanner itself asks - is there a `*\/` anywhere after
    * `pos + 2` - has no such edge. It cannot false-positive either: a
    * genuinely terminated comment's own closer is at `end - 2`, which is
    * always at or after `pos + 2`.
@@ -246,19 +329,7 @@ export function stripComments(source: string, fileName: string): string {
       range.kind === ts.SyntaxKind.MultiLineCommentTrivia &&
       source.indexOf("*/", range.pos + 2) === -1
     ) {
-      /*
-       * Say so (review round 2, LOW). Failing closed silently is its own
-       * trap: the gate that then fires reports only "vendor name found in
-       * <file>", and the obvious reading of that - when the only mention
-       * really is in a comment - is "false positive, add it to the
-       * allowlist", which permanently exempts a file for a reason nobody
-       * recorded. Naming the cause at the point it happens is what makes
-       * the right fix (close the comment) the obvious one.
-       */
-      console.warn(
-        `[scan-source] ${fileName}: unterminated block comment, scanned unstripped`,
-      );
-      return source;
+      return scanUnstripped("unterminated block comment");
     }
   }
 

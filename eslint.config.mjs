@@ -2,6 +2,13 @@ import { defineConfig, globalIgnores } from "eslint/config";
 import nextVitals from "eslint-config-next/core-web-vitals";
 import nextTs from "eslint-config-next/typescript";
 
+import {
+  JSX_LINTED_EXTENSIONS,
+  NON_JSX_LINTED_EXTENSIONS,
+  globsFor,
+  JS_FAMILY_EXTENSIONS,
+} from "./src/lib/source-extensions.mjs";
+
 // Matches 3/4/6/8-digit hex color literals (e.g. #fff, #ffff, #ffffff, #ffffffff).
 const HEX_COLOR_REGEX =
   "#(?:[0-9a-fA-F]{3,4}\\b|[0-9a-fA-F]{6}\\b|[0-9a-fA-F]{8}\\b)";
@@ -203,12 +210,44 @@ const SCRIPT_TAG_NAME = "/^script$/i";
  * K6 grep backstops (see KNOWN LIMIT above), not something a selector can
  * close.
  */
-const CREATE_ELEMENT_CALLEE =
-  ":matches(" +
-  '[callee.property.name="createElement"], ' +
-  '[callee.computed=true][callee.property.value="createElement"], ' +
-  '[callee.computed=true][callee.property.expressions.length=0][callee.property.quasis.0.value.cooked="createElement"], ' +
-  '[callee.name="createElement"])';
+function calleeNamed(method) {
+  return (
+    ":matches(" +
+    `[callee.property.name="${method}"], ` +
+    `[callee.computed=true][callee.property.value="${method}"], ` +
+    `[callee.computed=true][callee.property.expressions.length=0][callee.property.quasis.0.value.cooked="${method}"], ` +
+    `[callee.name="${method}"])`
+  );
+}
+
+/**
+ * "Argument N is the string `script`", as a plain string literal and as a
+ * no-substitution template literal. Written as attribute paths rather than
+ * a `> TemplateLiteral` child combinator so it can say WHICH argument:
+ * `createElement` takes the tag name first, `createElementNS` takes it
+ * SECOND, after the namespace (review round 3, finding 1).
+ */
+function scriptTagArgument(index) {
+  return [
+    `[arguments.${index}.value=${SCRIPT_TAG_NAME}]`,
+    `[arguments.${index}.expressions.length=0][arguments.${index}.quasis.0.value.cooked=${SCRIPT_TAG_NAME}]`,
+  ];
+}
+
+const CREATE_ELEMENT_CALLEE = calleeNamed("createElement");
+
+/**
+ * `document.createElementNS(ns, "script")` (review round 3, finding 1,
+ * CONFIRMED): a different method, with the tag name as its SECOND
+ * argument, so every `arguments.0` selector was blind to it.
+ *
+ * Deliberately NOT filtered by namespace. The SVG namespace yields an
+ * `SVGScriptElement`, which executes exactly like an HTML one; the XHTML
+ * namespace yields the HTML one. There is no namespace for which
+ * constructing a `script` element outside the consent gate is fine, so
+ * asking about the namespace at all would only add a way to get it wrong.
+ */
+const CREATE_ELEMENT_NS_CALLEE = calleeNamed("createElementNS");
 
 export const GATED_SCRIPT_SYNTAX_SELECTORS = [
   {
@@ -218,22 +257,18 @@ export const GATED_SCRIPT_SYNTAX_SELECTORS = [
     selector: 'JSXOpeningElement[name.name="script"]',
     message: GATED_SCRIPT_MESSAGE,
   },
-  {
-    // A plain string tag name, in any callee spelling:
-    // document.createElement("script"), document["createElement"]("SCRIPT"),
-    // `document[`createElement`]("script")`, createElement("script", ...).
-    selector: `CallExpression${CREATE_ELEMENT_CALLEE}[arguments.0.value=${SCRIPT_TAG_NAME}]`,
+  // createElement: tag name first. createElementNS: namespace first, tag
+  // name SECOND. Each in both the string-literal and backticked spelling,
+  // across all four callee spellings — four selectors for what is one
+  // question asked of two methods at two argument positions.
+  ...scriptTagArgument(0).map((argument) => ({
+    selector: `CallExpression${CREATE_ELEMENT_CALLEE}${argument}`,
     message: GATED_SCRIPT_MESSAGE,
-  },
-  {
-    // A BACKTICKED tag name, in any callee spelling: a TemplateLiteral has
-    // no `.value` at all, so the selector above cannot see it. `>` reaches
-    // the ARGUMENT only — a backticked callee property sits one level
-    // deeper, inside the MemberExpression, so it cannot be mistaken for
-    // the tag name here.
-    selector: `CallExpression${CREATE_ELEMENT_CALLEE} > TemplateLiteral[expressions.length=0] > TemplateElement[value.cooked=${SCRIPT_TAG_NAME}]`,
+  })),
+  ...scriptTagArgument(1).map((argument) => ({
+    selector: `CallExpression${CREATE_ELEMENT_NS_CALLEE}${argument}`,
     message: GATED_SCRIPT_MESSAGE,
-  },
+  })),
   {
     // A dynamic `import("next/script")`. `no-restricted-imports` below
     // handles every static import/export-from form but — confirmed
@@ -316,7 +351,7 @@ const eslintConfig = defineConfig([
   {
     // Design-system guardrail (ugcportal-eh5) PLUS the script-shape ban,
     // for every other *.tsx/*.jsx file.
-    files: ["**/*.tsx", "**/*.jsx"],
+    files: globsFor(JSX_LINTED_EXTENSIONS),
     ignores: [GATED_LOADER_PATH],
     rules: {
       "no-restricted-syntax": [
@@ -338,8 +373,16 @@ const eslintConfig = defineConfig([
     // .cjs added by ugcportal-ysub, alongside the `require("next/script")`
     // selector: CommonJS executes just as happily as ESM, and `.cjs` was
     // the one real source extension neither this ruleset nor the K6 grep
-    // looked at.
-    files: ["**/*.ts", "**/*.js", "**/*.mjs", "**/*.cjs"],
+    // looked at. Both halves of the partition now come from
+    // src/lib/source-extensions.mjs, so widening one cannot leave the
+    // other behind (review round 3, finding 4).
+    files: globsFor(NON_JSX_LINTED_EXTENSIONS),
+    // Review round 3, finding 8: this was the one gated-script block with
+    // no loader exemption, purely because the loader happens to be a
+    // `.tsx` today and so never matched here. Renaming it to `.ts` would
+    // have started flagging the single legitimate caller. Stated, not
+    // relied on.
+    ignores: [GATED_LOADER_PATH],
     rules: {
       "no-restricted-syntax": ["error", ...GATED_SCRIPT_SYNTAX_SELECTORS],
     },
@@ -347,9 +390,9 @@ const eslintConfig = defineConfig([
   {
     // A different rule key (no-restricted-imports), so this can freely
     // span every extension together without colliding with any object
-    // above. .js/.mjs (and now .cjs) added for the same reason as the
-    // object above.
-    files: ["**/*.ts", "**/*.tsx", "**/*.jsx", "**/*.js", "**/*.mjs", "**/*.cjs"],
+    // above. Spans every JS-family extension at once, from the same
+    // shared list the partition above is derived from.
+    files: globsFor(JS_FAMILY_EXTENSIONS),
     ignores: [GATED_LOADER_PATH],
     rules: {
       "no-restricted-imports": ["error", ...GATED_SCRIPT_IMPORT_OPTIONS],

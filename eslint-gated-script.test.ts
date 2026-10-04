@@ -159,6 +159,41 @@ describe("eslint.config.mjs: gated-script syntax selectors (JSX/createElement)",
           options: GATED_SCRIPT_SYNTAX_SELECTORS,
           errors: 1,
         },
+        // Review round 3, finding 1 (CONFIRMED): createElementNS takes
+        // the NAMESPACE first and the tag name SECOND, so every
+        // `arguments.0` selector was blind to it. Not filtered by
+        // namespace on purpose — the SVG namespace yields an
+        // SVGScriptElement, which executes exactly like the HTML one.
+        {
+          code: 'document.createElementNS("http://www.w3.org/1999/xhtml", "script");',
+          options: GATED_SCRIPT_SYNTAX_SELECTORS,
+          errors: 1,
+        },
+        {
+          code: 'document.createElementNS("http://www.w3.org/2000/svg", "script");',
+          options: GATED_SCRIPT_SYNTAX_SELECTORS,
+          errors: 1,
+        },
+        {
+          code: 'document.createElementNS(ns, "SCRIPT");',
+          options: GATED_SCRIPT_SYNTAX_SELECTORS,
+          errors: 1,
+        },
+        {
+          code: "document.createElementNS(ns, `script`);",
+          options: GATED_SCRIPT_SYNTAX_SELECTORS,
+          errors: 1,
+        },
+        {
+          code: 'document["createElementNS"](ns, "script");',
+          options: GATED_SCRIPT_SYNTAX_SELECTORS,
+          errors: 1,
+        },
+        {
+          code: "document[`createElementNS`](ns, `SCRIPT`);",
+          options: GATED_SCRIPT_SYNTAX_SELECTORS,
+          errors: 1,
+        },
         // Review round 2, MEDIUM (CONFIRMED with Linter.verify): a
         // BACKTICKED COMPUTED CALLEE. Four hand-written selectors covered
         // seven of the eight (callee spelling x tag spelling) cells and
@@ -241,12 +276,26 @@ describe("eslint.config.mjs: gated-script syntax selectors (JSX/createElement)",
       valid: [
         { code: 'document.createElement("scriptish");', options: GATED_SCRIPT_SYNTAX_SELECTORS },
         { code: 'document.createElement("noscript");', options: GATED_SCRIPT_SYNTAX_SELECTORS },
+        { code: 'document.createElementNS("http://www.w3.org/2000/svg", "circle");', options: GATED_SCRIPT_SYNTAX_SELECTORS },
+        // The tag name is argument ONE for createElementNS. A namespace
+        // that happened to be the string "script" is not a script element,
+        // and must not be read as one.
+        { code: 'document.createElementNS("script", "div");', options: GATED_SCRIPT_SYNTAX_SELECTORS },
+        { code: "document.createElementNS(`script`, `div`);", options: GATED_SCRIPT_SYNTAX_SELECTORS },
+        // ...and symmetrically, createElement's tag name is argument ZERO:
+        // a SECOND argument spelling "script" is props, not a tag.
+        { code: 'document.createElement("div", "script");', options: GATED_SCRIPT_SYNTAX_SELECTORS },
+        { code: "document.createElement(`div`, `script`);", options: GATED_SCRIPT_SYNTAX_SELECTORS },
         { code: "document.createElement(`scriptish`);", options: GATED_SCRIPT_SYNTAX_SELECTORS },
         { code: "document[`createElement`](`scriptish`);", options: GATED_SCRIPT_SYNTAX_SELECTORS },
-        // A near-miss METHOD name, now that the callee is one `:matches()`
-        // — widening any of its four branches would light this up.
+        // A near-miss METHOD name in createElement's OWN argument shape:
+        // `createElementNS("script")` is a namespace argument, not a tag,
+        // and the createElement selectors must not reach across to it.
         { code: 'document["createElementNS"]("script");', options: GATED_SCRIPT_SYNTAX_SELECTORS },
         { code: "document[`createElementNS`](`script`);", options: GATED_SCRIPT_SYNTAX_SELECTORS },
+        // ...and a genuinely unrelated method with the tag in either slot.
+        { code: 'document.createTextNode("script");', options: GATED_SCRIPT_SYNTAX_SELECTORS },
+        { code: 'document.createElementFoo(ns, "script");', options: GATED_SCRIPT_SYNTAX_SELECTORS },
         // A tag name only known at runtime — the documented residual the
         // K6 grep backstops, not something a selector can close.
         { code: "document.createElement(`${tag}script`);", options: GATED_SCRIPT_SYNTAX_SELECTORS },
@@ -487,6 +536,90 @@ describe("eslintConfig (the real merged, exported config) wires the gated-script
     expect(ruleIdsFor("document[`createElement`](`SCRIPT`);", "src/lib/evil.ts")).toContain(
       "no-restricted-syntax",
     );
+  });
+
+  /**
+   * Review round 3, finding 1 (CONFIRMED): `createElementNS` puts the tag
+   * name in its SECOND argument, behind the namespace, so every
+   * `arguments.0` selector walked straight past it.
+   */
+  it("K2: flags document.createElementNS(ns, \"script\") in any namespace", () => {
+    expect(
+      ruleIdsFor(
+        'document.createElementNS("http://www.w3.org/1999/xhtml", "script");',
+        "src/lib/evil.ts",
+      ),
+    ).toContain("no-restricted-syntax");
+    // The SVG namespace builds an SVGScriptElement, which runs just as
+    // happily — which is why this is not filtered by namespace.
+    expect(
+      ruleIdsFor(
+        'document.createElementNS("http://www.w3.org/2000/svg", "SCRIPT");',
+        "src/lib/evil.ts",
+      ),
+    ).toContain("no-restricted-syntax");
+    expect(ruleIdsFor("document.createElementNS(ns, `script`);", "src/lib/evil.ts")).toContain(
+      "no-restricted-syntax",
+    );
+  });
+
+  it("MUTATION CHECK: createElementNS with \"script\" in the NAMESPACE slot raises nothing", () => {
+    // Fixture mutation for the assertion above: the same call with the two
+    // arguments swapped. The tag name is argument one; a namespace that
+    // happens to read "script" is not a script element. If the new
+    // selectors matched "any argument", this would fire.
+    expect(ruleIdsFor('document.createElementNS("script", "div");', "src/lib/fine.ts")).not.toContain(
+      "no-restricted-syntax",
+    );
+    expect(ruleIdsFor('document.createElementNS("http://www.w3.org/2000/svg", "circle");', "src/lib/fine.ts")).not.toContain(
+      "no-restricted-syntax",
+    );
+  });
+
+  /**
+   * Review round 3, finding 8: the `.ts`/`.js`/`.mjs`/`.cjs` block was the
+   * one gated-script config object with no loader exemption — harmless
+   * only because the loader happens to be a `.tsx` and so never matched
+   * it. Renaming the loader to `.ts` would have started flagging the one
+   * legitimate caller. This drives the same source through a `.ts` path to
+   * keep the exemption real rather than incidental.
+   */
+  it("exempts the gated loader from EVERY gated-script config object, not just the ones that match it today", () => {
+    // Review round 3, finding 8: the `.ts`/`.js`/`.mjs`/`.cjs` block was
+    // the one gated-script object with no `ignores`, and that was harmless
+    // only by accident — the loader is a `.tsx`, so that block never
+    // matched it. Renaming the loader to `.ts` would have started flagging
+    // the single legitimate caller, with nothing in the test suite to say
+    // so. Asserted structurally because the gap is structural: no input
+    // can exercise an exemption on a block the loader does not currently
+    // match.
+    const gatedScriptObjects = eslintConfig.filter(
+      (entry) =>
+        (entry.rules?.["no-restricted-syntax"] || entry.rules?.["no-restricted-imports"]) &&
+        !(entry.files as string[] | undefined)?.includes(GATED_LOADER_PATH),
+    );
+
+    expect(gatedScriptObjects.length).toBeGreaterThanOrEqual(3);
+    for (const entry of gatedScriptObjects) {
+      expect(
+        entry.ignores,
+        `the gated-script config object for ${JSON.stringify(entry.files)} has no ` +
+          `${GATED_LOADER_PATH} exemption — rename the loader to one of those extensions ` +
+          "and the one legitimate caller starts failing lint",
+      ).toContain(GATED_LOADER_PATH);
+    }
+  });
+
+  it("MUTATION CHECK: the loader-specific config object is NOT one of those, and carries no exemption", () => {
+    // Fixture mutation for the assertion above: the one config object that
+    // legitimately has no `ignores` is the loader's OWN, which exists to
+    // give it a reduced ruleset. If the filter above were vacuous (zero
+    // objects, or every object), this would not be distinguishable.
+    const loaderObjects = eslintConfig.filter((entry) =>
+      (entry.files as string[] | undefined)?.includes(GATED_LOADER_PATH),
+    );
+    expect(loaderObjects).toHaveLength(1);
+    expect(loaderObjects[0].ignores).toBeUndefined();
   });
 
   it("MUTATION CHECK: a backticked computed callee naming a DIFFERENT method raises nothing", () => {

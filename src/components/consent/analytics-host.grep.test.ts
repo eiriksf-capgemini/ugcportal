@@ -3,9 +3,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ANALYTICS_MARKER } from "@/lib/analytics-marker";
+import { JS_FAMILY_FILENAME_PATTERN } from "@/lib/source-extensions.mjs";
 import { stripComments, walkSourceFiles } from "@/lib/design/scan-source";
 
 import { GATED_LOADER_PATH } from "../../../eslint.config.mjs";
@@ -92,7 +93,12 @@ const ALLOWED_RELATIVE_PATHS = new Set([
 // `.cjs` added by ugcportal-ysub item 3: CommonJS is as executable as ESM,
 // and a `.cjs` file under src/ was covered by neither this scan's extension
 // list nor (before this bead) eslint.config.mjs's gated-script rules.
-const K6_SCANNED_EXTENSIONS = /\.(tsx|ts|jsx|js|mjs|cjs)$/;
+//
+// Read from src/lib/source-extensions.mjs rather than spelled out here
+// (review round 3, finding 4): this list and eslint.config.mjs's `files`
+// globs have to widen together, and the three times they did not, the gap
+// between them WAS the bypass.
+const K6_SCANNED_EXTENSIONS = JS_FAMILY_FILENAME_PATTERN;
 
 // No exclusions at all: unlike dual-meaning-usage.test.ts (which uses
 // isTestFile to skip test files because it only cares about shipped UI),
@@ -409,11 +415,24 @@ describe("findAnalyticsMarkerOffenders (the real scanner, exercised over a real 
         'const trackingSrc = "https://stats.example/x?umami";\n',
     });
 
-    const result = findAnalyticsMarkerOffenders(
-      walkSourceFiles(root, INCLUDE_EVERYTHING, K6_SCANNED_EXTENSIONS),
-      root,
-      new Set(),
-    );
+    // Spied rather than left to print (review round 3, finding 2), and
+    // asserted: the gate reporting the file is only half of what makes
+    // this usable — the warning is what tells whoever reads the failure
+    // WHY the file was scanned unstripped, instead of inviting them to
+    // allowlist it.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    let result: string[];
+    try {
+      result = findAnalyticsMarkerOffenders(
+        walkSourceFiles(root, INCLUDE_EVERYTHING, K6_SCANNED_EXTENSIONS),
+        root,
+        new Set(),
+      );
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0][0]).toContain("unterminated block comment");
+    } finally {
+      warn.mockRestore();
+    }
 
     expect(result).toEqual(["offender.ts"]);
   });

@@ -573,6 +573,90 @@ describe("CookieBanner focus/announce on reopen (finding 9)", () => {
     cookiesButton.remove();
   });
 
+  /**
+   * Review round 3, finding 6. `reopen()` can be called again while the
+   * banner is ALREADY open — the visitor clicks the footer "Cookies"
+   * control a second time, having not noticed the banner at the bottom of
+   * the page. That call changes nothing React can see
+   * (`setBannerOpen(true)` on an already-true value bails out), so the
+   * banner's effect does not re-run.
+   *
+   * Capturing the invoker at OPEN time therefore froze the FIRST click's
+   * control and could never be corrected: focus went back to the control
+   * the visitor used a minute ago rather than the one they just used, and
+   * the later invoker sat in the context's ref with nothing to consume
+   * it. Reading it at CLOSE time instead makes the last click win and
+   * leaves nothing behind.
+   */
+  it("restores focus to the LAST control that invoked the reopen, not the first", () => {
+    const first = document.createElement("button");
+    first.textContent = "Cookies (header)";
+    const second = document.createElement("button");
+    second.textContent = "Cookies (footer)";
+    document.body.append(first, second);
+
+    mountWithActions("granted");
+
+    act(() => {
+      actionsRef?.reopen(first);
+    });
+    // Already open — no transition, so the banner's effect does not run.
+    act(() => {
+      actionsRef?.reopen(second);
+    });
+    expect(ctx.container().querySelector('[aria-label="Cookies"]')).not.toBeNull();
+
+    act(() => {
+      actionsRef?.onlyNecessary();
+    });
+
+    expect(document.activeElement).toBe(second);
+    expect(document.activeElement).not.toBe(first);
+    first.remove();
+    second.remove();
+  });
+
+  it("leaves nothing stale behind: a later open with no invoker restores focus to nobody", () => {
+    // The other half of the same finding. After the sequence above, a
+    // reopen with NO invoking control must not resurrect either earlier
+    // button — which is what a ref that is written but never consumed
+    // would do.
+    const first = document.createElement("button");
+    const second = document.createElement("button");
+    document.body.append(first, second);
+
+    mountWithActions("granted");
+    act(() => {
+      actionsRef?.reopen(first);
+    });
+    act(() => {
+      actionsRef?.reopen(second);
+    });
+    act(() => {
+      actionsRef?.onlyNecessary();
+    });
+    expect(document.activeElement).toBe(second);
+
+    // Move focus somewhere neutral, then open and close again with no
+    // invoking control at all.
+    const elsewhere = document.createElement("input");
+    document.body.append(elsewhere);
+    elsewhere.focus();
+
+    act(() => {
+      actionsRef?.reopen();
+    });
+    act(() => {
+      actionsRef?.acceptOptional();
+    });
+
+    expect(document.activeElement).not.toBe(first);
+    expect(document.activeElement).not.toBe(second);
+    first.remove();
+    second.remove();
+    elsewhere.remove();
+  });
+
   it("MUTATION CHECK: with no invoker passed at all, the close leaves focus alone", () => {
     // Fixture mutation for the test above: the ONLY difference is that
     // `reopen()` is called with nothing, which is the mount-time-open

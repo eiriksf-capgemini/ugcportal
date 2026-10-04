@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { stripComments, stripCssComments } from "./scan-source";
-import { legacyStripComments } from "./scan-source-legacy.test-support";
+import {
+  legacyStripComments,
+  round3StripComments,
+  round5StripComments,
+} from "./scan-source-legacy.test-support";
 
 /**
  * ugcportal-3wgp review round 3, MEDIUM (CONFIRMED, reproduced by the
@@ -139,60 +143,9 @@ describe("stripComments", () => {
     // a real, previously-shipped defect rather than an invented one. This
     // was also confirmed directly against the real scan-source.ts via a
     // temporary revert-and-restore mutation check.
-    function round5PreFixStripComments(source: string): string {
-      let out = "";
-      let i = 0;
-      const n = source.length;
-      function isDivisionContext(): boolean {
-        let k = out.length - 1;
-        while (k >= 0 && /\s/.test(out[k])) k -= 1;
-        if (k < 0) return false;
-        const c = out[k];
-        if (/[A-Za-z0-9_$]/.test(c)) return true;
-        return /[)\]'"`]/.test(c); // `}` missing - the round-5 bug.
-      }
-      function tryRegexLiteralEnd(): number | null {
-        let j = i + 1;
-        let inClass = false;
-        while (j < n && source[j] !== "\n") {
-          const c = source[j];
-          if (c === "\\") { j += 2; continue; }
-          if (c === "[") { inClass = true; j += 1; continue; }
-          if (c === "]") { inClass = false; j += 1; continue; }
-          if (c === "/" && !inClass) {
-            j += 1;
-            while (j < n && /[a-zA-Z]/.test(source[j])) j += 1;
-            return j;
-          }
-          j += 1;
-        }
-        return null;
-      }
-      while (i < n) {
-        const ch = source[i];
-        if (ch === "/" && source[i + 1] === "*") {
-          const close = source.indexOf("*/", i + 2);
-          out += " ";
-          i = close === -1 ? n : close + 2;
-          continue;
-        }
-        if (ch === "/" && !isDivisionContext()) {
-          const end = tryRegexLiteralEnd();
-          if (end !== null) {
-            out += source.slice(i, end);
-            i = end;
-            continue;
-          }
-        }
-        out += ch;
-        i += 1;
-      }
-      return out;
-    }
-
     const code = "const x = {a:1} / 2; /* a real comment */ const y = 2;";
-    expect(round5PreFixStripComments(code)).toBe(code); // comment NOT stripped - the bug.
-    expect(round5PreFixStripComments(code)).not.toBe(
+    expect(round5StripComments(code)).toBe(code); // comment NOT stripped - the bug.
+    expect(round5StripComments(code)).not.toBe(
       "const x = {a:1} / 2;   const y = 2;",
     );
   });
@@ -209,43 +162,6 @@ describe("stripComments", () => {
     // actual shipped implementation (string-aware, regex-unaware) inline,
     // and confirms it corrupts the exact fixture above — proving this
     // test is anchored to a real, previously-shipped defect.
-    function round3StripComments(input: string): string {
-      let result = "";
-      let idx = 0;
-      const len = input.length;
-      function skipString(quote: string): number {
-        let j = idx + 1;
-        while (j < len && input[j] !== quote) {
-          j += input[j] === "\\" ? 2 : 1;
-        }
-        return Math.min(j + 1, len);
-      }
-      while (idx < len) {
-        const c = input[idx];
-        if (c === '"' || c === "'" || c === "`") {
-          const end = skipString(c);
-          result += input.slice(idx, end);
-          idx = end;
-          continue;
-        }
-        if (c === "/" && input[idx + 1] === "*") {
-          const close = input.indexOf("*/", idx + 2);
-          result += " ";
-          idx = close === -1 ? len : close + 2;
-          continue;
-        }
-        if (c === "/" && input[idx + 1] === "/") {
-          const newline = input.indexOf("\n", idx);
-          result += " ";
-          idx = newline === -1 ? len : newline;
-          continue;
-        }
-        result += c;
-        idx += 1;
-      }
-      return result;
-    }
-
     const code =
       'const DISPOSITION_NAME = /;\\s*name\\s*=\\s*"([^"]*)"/i;\n' +
       'const trackingSrc = "https://stats.example/x?trackerco";';
@@ -480,8 +396,18 @@ describe("stripComments (ugcportal-ysub: TypeScript's lexer, not a hand-rolled o
     'const a = 1; /* never closed\nconst trackingSrc = "https://stats.example/x?trackerco";\n';
 
   it("THE ROUND-1 FINDING-2 BUG: an unterminated block comment returns the source whole", () => {
-    expect(stripComments(UNTERMINATED, "fixture.ts")).toBe(UNTERMINATED);
-    expect(stripComments(UNTERMINATED, "fixture.ts")).toContain("trackerco");
+    // Spied, not left to print (review round 3, finding 2): a green run
+    // should be quiet, and a warning nobody silenced is a warning nobody
+    // reads. Asserted rather than merely swallowed — this fixture takes
+    // the fail-closed path, so the warning is part of what it is testing.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(stripComments(UNTERMINATED, "fixture.ts")).toBe(UNTERMINATED);
+      expect(stripComments(UNTERMINATED, "fixture.ts")).toContain("trackerco");
+      expect(warn).toHaveBeenCalledTimes(2);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("warns, naming the file, when it falls back to scanning unstripped", () => {
@@ -535,7 +461,56 @@ describe("stripComments (ugcportal-ysub: TypeScript's lexer, not a hand-rolled o
     // comment's text end in `*​/`": the naive version calls this closed.
     const code =
       'const a = 1; /*/\nconst trackingSrc = "https://stats.example/x?trackerco";\n';
-    expect(stripComments(code, "fixture.ts")).toBe(code);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(stripComments(code, "fixture.ts")).toBe(code);
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  /**
+   * Review round 3, finding 7 (verified): TypeScript's parser is
+   * recursive, and about a thousand nested parentheses overflow the stack.
+   * Uncaught, that `RangeError` aborts the ENTIRE scan — every later file
+   * goes unexamined and the gate reports nothing rather than reporting a
+   * problem. A gate that stops running is worse than a gate that reads one
+   * file conservatively, so this takes the same fail-closed path as an
+   * unterminated comment: warn, and hand the source back whole.
+   *
+   * 20000 rather than the ~1000 where it first bites: stack headroom
+   * varies by engine, platform and CI runner, and a fixture sitting near
+   * the threshold would be flaky somewhere.
+   */
+  const DEEPLY_NESTED = `const deep = ${"(".repeat(20000)}1${")".repeat(20000)}; // c\n`;
+
+  it("fails closed, loudly, on source too deeply nested for the parser", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(stripComments(DEEPLY_NESTED, "src/lib/deep.ts")).toBe(DEEPLY_NESTED);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0][0]).toContain("src/lib/deep.ts");
+      expect(warn.mock.calls[0][0]).toContain("could not be parsed");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("MUTATION CHECK: the same shape at a depth the parser handles IS stripped, quietly", () => {
+    // Fixture mutation: the identical source at a nesting depth well
+    // inside what the parser copes with. The comment is stripped and no
+    // warning fires — so the assertion above has a failing case and is not
+    // just describing what this function does to every input.
+    const shallow = `const deep = ${"(".repeat(50)}1${")".repeat(50)}; // c\n`;
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(stripComments(shallow, "src/lib/shallow.ts")).not.toBe(shallow);
+      expect(stripComments(shallow, "src/lib/shallow.ts")).not.toContain("// c");
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("MUTATION CHECK: `/**/` is a real, empty, CLOSED comment and is still stripped", () => {

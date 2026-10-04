@@ -146,7 +146,6 @@ export function CookieBanner() {
   const bannerRef = useRef<HTMLDivElement>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const wasOpenRef = useRef(bannerOpen);
-  const invokingElementRef = useRef<HTMLElement | null>(null);
 
   // Reserve space for the banner so it never covers interactive content
   // beneath it, for as long as it's open (round 1 finding 8, round 2
@@ -253,14 +252,24 @@ export function CookieBanner() {
     wasOpenRef.current = bannerOpen;
 
     if (bannerOpen && !wasOpen) {
-      invokingElementRef.current = takeReopenInvoker();
       headingRef.current?.focus();
       return;
     }
 
     if (!bannerOpen && wasOpen) {
-      const invoker = invokingElementRef.current;
-      invokingElementRef.current = null;
+      /*
+       * Read the invoker HERE, at close time, not back when the banner
+       * opened (ugcportal-ysub review round 3, finding 6). `reopen()` can
+       * be called again while the banner is ALREADY open - clicking the
+       * footer "Cookies" control a second time - and that call changes
+       * nothing React can see (`setBannerOpen(true)` on an already-true
+       * value bails out), so this effect does not re-run and a capture
+       * taken at open time could never be updated. The visitor's LAST
+       * click is the control they expect focus back on, and capturing at
+       * open time gave them their first; it also left the later invoker
+       * sitting in the context's ref with nothing to consume it.
+       */
+      const invoker = takeReopenInvoker();
       if (invoker) {
         invoker.focus();
         /*

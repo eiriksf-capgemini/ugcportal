@@ -130,3 +130,111 @@ export function legacyStripComments(source: string): string {
 
   return out;
 }
+
+/**
+ * Round 5's shipped `stripComments`: regex-literal aware, but with `}`
+ * missing from the division-permitting character class, so a `/` right
+ * after an object literal's closing brace (`{a:1} / 2`) read as a REGEX
+ * start and the real block comment after it survived unstripped.
+ *
+ * Moved here from scan-source.test.ts (review round 3, finding 5), which
+ * carried two historical scanners inline beside the one already extracted
+ * into this module. Same rule as `legacyStripComments` above: do not fix
+ * the bugs in it, they are the whole point.
+ */
+export function round5StripComments(source: string): string {
+  let out = "";
+  let i = 0;
+  const n = source.length;
+  function isDivisionContext(): boolean {
+    let k = out.length - 1;
+    while (k >= 0 && /\s/.test(out[k])) k -= 1;
+    if (k < 0) return false;
+    const c = out[k];
+    if (/[A-Za-z0-9_$]/.test(c)) return true;
+    return /[)\]'"`]/.test(c); // `}` missing - the round-5 bug.
+  }
+  function tryRegexLiteralEnd(): number | null {
+    let j = i + 1;
+    let inClass = false;
+    while (j < n && source[j] !== "\n") {
+      const c = source[j];
+      if (c === "\\") { j += 2; continue; }
+      if (c === "[") { inClass = true; j += 1; continue; }
+      if (c === "]") { inClass = false; j += 1; continue; }
+      if (c === "/" && !inClass) {
+        j += 1;
+        while (j < n && /[a-zA-Z]/.test(source[j])) j += 1;
+        return j;
+      }
+      j += 1;
+    }
+    return null;
+  }
+  while (i < n) {
+    const ch = source[i];
+    if (ch === "/" && source[i + 1] === "*") {
+      const close = source.indexOf("*/", i + 2);
+      out += " ";
+      i = close === -1 ? n : close + 2;
+      continue;
+    }
+    if (ch === "/" && !isDivisionContext()) {
+      const end = tryRegexLiteralEnd();
+      if (end !== null) {
+        out += source.slice(i, end);
+        i = end;
+        continue;
+      }
+    }
+    out += ch;
+    i += 1;
+  }
+  return out;
+}
+
+/**
+ * Round 3's shipped `stripComments`: string-aware, with no concept of a
+ * regex literal at all, so a quote character used inside a regex pattern
+ * desynced the string tracker and every line after it was scanned with
+ * inverted "am I inside a string" parity.
+ *
+ * Moved here from scan-source.test.ts (review round 3, finding 5). Do not
+ * fix the bugs in it either.
+ */
+export function round3StripComments(input: string): string {
+  let result = "";
+  let idx = 0;
+  const len = input.length;
+  function skipString(quote: string): number {
+    let j = idx + 1;
+    while (j < len && input[j] !== quote) {
+      j += input[j] === "\\" ? 2 : 1;
+    }
+    return Math.min(j + 1, len);
+  }
+  while (idx < len) {
+    const c = input[idx];
+    if (c === '"' || c === "'" || c === "`") {
+      const end = skipString(c);
+      result += input.slice(idx, end);
+      idx = end;
+      continue;
+    }
+    if (c === "/" && input[idx + 1] === "*") {
+      const close = input.indexOf("*/", idx + 2);
+      result += " ";
+      idx = close === -1 ? len : close + 2;
+      continue;
+    }
+    if (c === "/" && input[idx + 1] === "/") {
+      const newline = input.indexOf("\n", idx);
+      result += " ";
+      idx = newline === -1 ? len : newline;
+      continue;
+    }
+    result += c;
+    idx += 1;
+  }
+  return result;
+}
