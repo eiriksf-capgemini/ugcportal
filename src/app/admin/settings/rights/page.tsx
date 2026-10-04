@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 
 import { PAGE_CONTAINER_CLASS } from "@/components/site/page-shell";
+import { INLINE_LINK_CLASS } from "@/components/ui/inline-link";
 import { requireAdmin } from "@/lib/admin";
 import { prisma } from "@/lib/prisma";
 import { uploaderClearanceBlocker } from "@/lib/resale-rights";
@@ -171,7 +172,7 @@ export default async function ResaleRightsSettingsPage({
       <p className="mt-2 text-sm text-muted-foreground">
         See also{" "}
         <a
-          className="rounded-sm font-medium text-primary underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring"
+          className={INLINE_LINK_CLASS}
           href={ADMIN_USERS_PATH}
         >
           users and roles

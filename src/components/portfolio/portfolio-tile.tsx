@@ -1,4 +1,4 @@
-import { GALLERY_TILE_ASPECT_CLASS } from "@/components/gallery/containment";
+import { GALLERY_TILE_BASE_CLASS } from "@/components/gallery/containment";
 import {
   GalleryItemCaption,
   GalleryItemTags,
@@ -30,7 +30,10 @@ const PORTFOLIO_TILE_IMAGE_CLASS = "h-full w-full object-cover";
  * plain, non-`"use client"` module factored out of gallery.tsx specifically
  * for this, round-2 review — see that file's own comment for why) — rather
  * than a second, near-identical copy of each. `galleryItemAlt` is reused the
- * same way for the `<img alt>`.
+ * same way for the `<img alt>`, and the `<figure>`'s own shape/mat classes
+ * are `GALLERY_TILE_BASE_CLASS` (src/components/gallery/containment.ts,
+ * round-5 review — factored out of `GALLERY_TILE_CLASS` specifically so
+ * this component stopped hand-copying that string).
  *
  * WHAT IT DELIBERATELY DOES NOT REUSE: `gallery.tsx`'s `<button>` wrapper
  * and the PhotoSwipe activation/measuring machinery around it, for the
@@ -46,9 +49,7 @@ export function PortfolioTile({
 }) {
   return (
     <li data-portfolio-piece={piece.id}>
-      <figure
-        className={`relative block w-full overflow-hidden rounded-md bg-surface-1 ${GALLERY_TILE_ASPECT_CLASS}`}
-      >
+      <figure className={GALLERY_TILE_BASE_CLASS}>
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src={piece.previewSrc}

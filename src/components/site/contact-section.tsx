@@ -1,8 +1,27 @@
 import { ContactMailtoForm } from "@/components/site/contact-mailto-form";
 import { SECTION_HEADING_CLASS } from "@/components/site/section-heading";
-import { contactMailtoHref, resolveContactEmail } from "@/lib/contact";
+import { INLINE_LINK_CLASS } from "@/components/ui/inline-link";
+import {
+  contactMailtoHref,
+  isBareEmailAddress,
+  resolveContactEmail,
+} from "@/lib/contact";
 import { PRIVACY_PATH } from "@/lib/routes";
 import { CONTACT_INTRO, CONTACT_NOTICE } from "@/lib/site";
+
+/**
+ * A neutral fallback for the visible "email us directly" link text, for
+ * when `CONTACT_EMAIL` fails the same shape test
+ * `checkContactEmailConfiguration` (src/instrumentation.ts) warns about at
+ * boot (round-5 review). That boot check is a WARNING, not a block —
+ * `resolveContactEmail` still returns whatever is configured — so a
+ * misconfigured value (`"Jane Doe <jane@example.com>"`, say) would
+ * otherwise be shown to every visitor as the literal link text, not only
+ * logged for an operator to notice. `contactMailtoHref` already encodes it
+ * defensively for the `href` itself (round-2 review); this is the same
+ * defence for what a visitor actually READS.
+ */
+const CONTACT_EMAIL_FALLBACK_LABEL = "our email address";
 
 /**
  * The contact affordance for /about and /portfolio (ugcportal-qnq9.7, K5).
@@ -42,17 +61,12 @@ import { CONTACT_INTRO, CONTACT_NOTICE } from "@/lib/site";
  * unrelated reason (see each page file's own comment).
  */
 
-/**
- * Both inline links in this component (the privacy-statement link and the
- * "email us directly" fallback) share this exact styling — one constant
- * rather than the same long string written out twice (round-2 review).
- */
-const INLINE_LINK_CLASS =
-  "rounded-sm font-medium text-primary underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring";
-
 export function ContactSection({ defaultSubject }: { defaultSubject: string }) {
   const email = resolveContactEmail();
   const directHref = contactMailtoHref(email, { subject: defaultSubject });
+  const directLinkLabel = isBareEmailAddress(email)
+    ? email
+    : CONTACT_EMAIL_FALLBACK_LABEL;
 
   return (
     <section className="mt-10" data-page-section="contact">
@@ -74,7 +88,7 @@ export function ContactSection({ defaultSubject }: { defaultSubject: string }) {
       <p className="mt-4 text-sm text-muted-foreground">
         Prefer to email us directly?{" "}
         <a className={INLINE_LINK_CLASS} href={directHref} data-contact-direct-link="">
-          {email}
+          {directLinkLabel}
         </a>
       </p>
     </section>

@@ -70,6 +70,18 @@ describe("permittedIdentities", () => {
     expect(identities.configured).toBe(true);
   });
 
+  // Round-5 review: the shared shape check (src/lib/email-shape.ts) now
+  // rejects a trailing dot in the domain, closing a gap this module's own
+  // separately-maintained regex did not catch before the two were unified.
+  it("rejects a trailing dot in the domain as malformed", () => {
+    const identities = permittedIdentities({
+      [PERMITTED_EMAILS_VAR]: "owner@example.com.",
+    });
+
+    expect(identities.emails).toEqual([]);
+    expect(identities.malformed).toEqual(["owner@example.com."]);
+  });
+
   it("names the entries it cannot use and keeps the ones it can", () => {
     const identities = permittedIdentities({
       // A bare username, a missing dot in the domain, a semicolon separator

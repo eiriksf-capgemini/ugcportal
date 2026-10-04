@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
+import { GALLERY_TILE_BASE_CLASS } from "@/components/gallery/containment";
 import { PortfolioTile } from "@/components/portfolio/portfolio-tile";
 import type { GalleryItem } from "@/lib/gallery-items";
 import { SPEC_SAMPLE_LABEL } from "@/lib/portfolio";
@@ -90,5 +91,19 @@ describe("PortfolioTile", () => {
       </ul>,
     );
     expect(markup).not.toContain("group-hover:scale");
+  });
+
+  // Round-5 review: the figure's shape/mat classes come from the SAME
+  // GALLERY_TILE_BASE_CLASS constant gallery.tsx's own interactive tile
+  // composes (src/components/gallery/containment.ts), not a hand-copied
+  // string — this is the one place that would catch the two drifting
+  // apart again.
+  it("reuses GALLERY_TILE_BASE_CLASS for the figure's shape and mat", () => {
+    const markup = renderToStaticMarkup(
+      <ul>
+        <PortfolioTile piece={piece()} position={0} />
+      </ul>,
+    );
+    expect(markup).toContain(`<figure class="${GALLERY_TILE_BASE_CLASS}">`);
   });
 });

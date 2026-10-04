@@ -47,6 +47,8 @@
  * `checkSignInConfiguration` in src/instrumentation.ts.
  */
 
+import { isEmailShaped as isEmailShapedBase } from "@/lib/email-shape";
+
 /**
  * The permitted-address list. Comma-separated, compared case-insensitively.
  */
@@ -137,37 +139,35 @@ function parseEntry(entry: string): PermittedEntry | null {
 export type SignInEnv = Readonly<Record<string, string | undefined>>;
 
 /**
- * Shape-only, not RFC 5322: one `@`, something either side, and a dot in the
- * domain. Its job is to catch the entries that would otherwise fail silently
- * and confusingly — a bare username, a typo'd separator (`a@b.com;c@d.com`
- * is one entry, not two, because only commas split), a `*` someone wrote
- * expecting a wildcard. A stricter regex would reject valid addresses and
- * lock people out; a looser one would let `*` sit in the list looking like it
- * worked. Whitespace is excluded so a quoted `"a b"@c.com` is rejected rather
- * than half-normalised.
+ * The bare shape check itself — one `@`, something either side, a dot in
+ * the domain, no trailing dot — now lives in src/lib/email-shape.ts,
+ * shared with src/lib/contact.ts's `isBareEmailAddress` (round-5 review:
+ * the two used to carry separately maintained, near-identical regexes).
+ * This function layers this module's OWN two exclusions on top of that
+ * shared shape, because both are specific to parsing a permitted-sign-in-
+ * email list and have no business in the shared check:
+ *
+ * `*` is excluded explicitly rather than left to the shape check, because
+ * `*@example.com` IS email-shaped and is the single most likely way an
+ * operator would try to write "anyone at this domain". There is no wildcard
+ * here on purpose: a domain rule is one of the mechanisms Eirik has not
+ * chosen, and half-implementing it as a wildcard would silently be that
+ * choice. It is rejected loudly instead.
+ *
+ * `:` is excluded for the same reason in the other direction: it is the
+ * provider-prefix separator (see parseEntry), so once the prefix has been
+ * split off, an address that still contains one — `google:facebook:a@b.com`,
+ * `google:a@b.com:` — is a doubled or trailing prefix, not a mailbox. Left
+ * in, it would be counted as a permitted address that no provider can ever
+ * assert: the silently-permits-nobody state this module exists to report
+ * (PR #81 round 3). Neither configured provider issues addresses containing
+ * a colon, so nothing real is excluded.
  */
-const EMAIL_SHAPE = /^[^\s@,]+@[^\s@,]+\.[^\s@,]+$/;
-
 function isEmailShaped(value: string): boolean {
-  // `*` is excluded explicitly rather than left to the shape check, because
-  // `*@example.com` IS email-shaped and is the single most likely way an
-  // operator would try to write "anyone at this domain". There is no wildcard
-  // here on purpose: a domain rule is one of the mechanisms Eirik has not
-  // chosen, and half-implementing it as a wildcard would silently be that
-  // choice. It is rejected loudly instead.
-  //
-  // `:` is excluded for the same reason in the other direction: it is the
-  // provider-prefix separator (see parseEntry), so once the prefix has been
-  // split off, an address that still contains one — `google:facebook:a@b.com`,
-  // `google:a@b.com:` — is a doubled or trailing prefix, not a mailbox. Left
-  // in, it would be counted as a permitted address that no provider can ever
-  // assert: the silently-permits-nobody state this module exists to report
-  // (PR #81 round 3). Neither configured provider issues addresses containing
-  // a colon, so nothing real is excluded.
   if (value.includes("*") || value.includes(":")) {
     return false;
   }
-  return EMAIL_SHAPE.test(value);
+  return isEmailShapedBase(value);
 }
 
 /**

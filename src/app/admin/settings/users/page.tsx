@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 
 import { PAGE_CONTAINER_CLASS } from "@/components/site/page-shell";
 import { Button } from "@/components/ui/button";
+import { INLINE_LINK_CLASS } from "@/components/ui/inline-link";
 import { requireAdmin } from "@/lib/admin";
 import { prisma } from "@/lib/prisma";
 import { RIGHTS_SETTINGS_PATH } from "@/lib/routes";
@@ -60,7 +61,7 @@ export default async function AdminUsersPage({
       <p className="mt-2 text-sm text-muted-foreground">
         Admins can reach every admin-only screen, including{" "}
         <a
-          className="rounded-sm font-medium text-primary underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring"
+          className={INLINE_LINK_CLASS}
           href={RIGHTS_SETTINGS_PATH}
         >
           resale rights

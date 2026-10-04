@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import { buttonVariants } from "@/components/ui/button";
 import { TEXT_INPUT_CLASS } from "@/components/ui/text-input";
@@ -46,7 +46,17 @@ export function ContactMailtoForm({
   // (src/lib/contact.ts) already omits a falsy value, and an empty string
   // is falsy, so passing `message` straight through already omits `body=`
   // until something is typed.
-  const href = contactMailtoHref(email, { subject, body: message });
+  //
+  // `useMemo`, not a plain call (round-5 review): without it, this string
+  // was rebuilt on every render of this component, including one triggered
+  // by something that changes neither `email`, `subject` nor `message` —
+  // cheap today (this component has no other state to cause one), but a
+  // recomputation with nothing in its own three inputs to justify it reads
+  // as a hint even when it costs nothing yet.
+  const href = useMemo(
+    () => contactMailtoHref(email, { subject, body: message }),
+    [email, subject, message],
+  );
 
   return (
     <form

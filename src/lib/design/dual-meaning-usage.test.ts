@@ -157,10 +157,21 @@ function scanDualMeaningUsage(): Map<string, Partial<Record<DualMeaningToken, nu
  */
 const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> = {
   "src/app/auth/error/page.tsx": { "text-foreground": 1, "text-muted-foreground": 1 },
-  "src/app/admin/settings/rights/page.tsx": { "text-muted-foreground": 5, "text-primary": 2 },
+  // Round-5 review: the identical inline-link class string these three
+  // pages (and contact-section.tsx, below) each wrote out by hand is now
+  // one shared constant, src/components/ui/inline-link.ts's
+  // INLINE_LINK_CLASS — so "text-primary" appears in THIS file's own
+  // source text only where it is still written directly. rights/page.tsx
+  // keeps one: a second, differently-styled link elsewhere on that page
+  // that was never part of the duplicated string this round's finding was
+  // about (see INLINE_LINK_CLASS for why that one was left alone). users/
+  // page.tsx and instagram/page.tsx each had exactly one occurrence, which
+  // was the duplicated string, so both drop to zero "text-primary" of
+  // their own.
+  "src/app/admin/settings/rights/page.tsx": { "text-muted-foreground": 5, "text-primary": 1 },
   "src/app/admin/settings/rights/decision-form.tsx": { "text-muted-foreground": 3 },
-  "src/app/admin/settings/users/page.tsx": { "text-muted-foreground": 4, "text-primary": 1 },
-  "src/app/admin/settings/instagram/page.tsx": { "text-muted-foreground": 3, "text-primary": 1 },
+  "src/app/admin/settings/users/page.tsx": { "text-muted-foreground": 4 },
+  "src/app/admin/settings/instagram/page.tsx": { "text-muted-foreground": 3 },
   "src/app/upload/page.tsx": { "text-foreground": 1, "text-muted-foreground": 1 },
   "src/app/upload/upload-form.tsx": { "text-foreground": 2, "text-muted-foreground": 5 },
   "src/components/upload-link.tsx": { "text-foreground": 1, "text-primary": 1 },
@@ -210,19 +221,19 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
   // unconditionally, the K3 advertising-label branch is gone until
   // ugcportal-qnq9.1 lands) — one text-foreground usage now, not two.
   "src/components/portfolio/portfolio-tile.tsx": { "text-foreground": 1 },
-  // Round 2 extracted INLINE_LINK_CLASS as one constant for the two
-  // identically-styled links in this file, so "text-primary" now appears
-  // once in the source text, not twice (the literal is written once; both
-  // `<a>` elements reference the same constant).
-  "src/components/site/contact-section.tsx": {
-    "text-muted-foreground": 3,
-    "text-primary": 1,
-  },
+  // Round 2 extracted INLINE_LINK_CLASS as a LOCAL constant for the two
+  // identically-styled links in this file; round 5 moved that constant out
+  // to src/components/ui/inline-link.ts (shared with the three admin
+  // pages above), so "text-primary" no longer appears in this file's own
+  // source text at all — the two `<a>` elements import the string instead
+  // of writing it.
+  "src/components/site/contact-section.tsx": { "text-muted-foreground": 3 },
   "src/components/site/intro-section.tsx": { "text-muted-foreground": 1 },
   "src/components/site/what-we-offer-section.tsx": {
     "text-foreground": 1,
     "text-muted-foreground": 1,
   },
+  "src/components/ui/inline-link.ts": { "text-primary": 1 },
 };
 
 describe("dual-meaning token usage is audited, not just found", () => {

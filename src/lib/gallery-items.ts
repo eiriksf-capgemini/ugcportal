@@ -1,4 +1,4 @@
-import { isCurationTagSlug } from "@/lib/curation-tags";
+import { stripCurationTags } from "@/lib/curation-tags";
 import { hasUnsafeText, validateAltText, validateCaption } from "@/lib/media-rules";
 import { mediaPreviewPath } from "@/lib/routes";
 
@@ -152,7 +152,7 @@ function sanitizedMediaText(value: unknown, allowNewlines = false): string {
  * asserts that the uploader labelled the photograph something they did not.
  *
  * THIRD JOB (round-2 review of ugcportal-qnq9.7): any curation-only tag
- * (`isCurationTagSlug`, src/lib/curation-tags.ts — today just
+ * (`stripCurationTags`, src/lib/curation-tags.ts — today just drops
  * `PORTFOLIO_TAG_SLUG`) is dropped here too, unconditionally, for EVERY
  * caller of this function — not only the portfolio page. That tag exists
  * to CURATE an item for the portfolio page, not to describe its subject,
@@ -166,13 +166,23 @@ function sanitizedMediaText(value: unknown, allowNewlines = false): string {
  * where K6's "never imply something about this item that isn't true"
  * reasoning applies just as much as it does on the dedicated page.
  *
+ * Applied once, AFTER the loop below builds the sanitised list, rather
+ * than as a per-entry `continue` inside it (round-5 review: the two used
+ * to be interleaved, so sharing the actual filter with `public-media.ts`
+ * meant pulling it out to its own call first). Equivalent either way — a
+ * curation-only entry still safely passing the other checks changes
+ * nothing about whether it ends up in the final list — but a filter
+ * applied once, as its own step, is the one that can be the same function
+ * call both places need.
+ *
  * NOT the whole story any more (round 4): GET /api/public/media
  * (src/app/api/public/media/route.ts) serialises `listPublicMedia`'s
  * result straight to JSON without ever calling this function, so a direct
  * API consumer could still see the raw tag — fixed separately, in
  * `listPublicMedia` itself (src/lib/public-media.ts), which is the
- * boundary for THAT surface. Checked against the SAME `isCurationTagSlug`
- * set, so the two cannot disagree about which slugs are curation-only.
+ * boundary for THAT surface. Round 5 unified the two onto the SAME
+ * exported `stripCurationTags`, so they cannot disagree about which slugs
+ * are curation-only or how they are removed.
  */
 function toGalleryTags(value: unknown): GalleryTag[] {
   if (!Array.isArray(value)) return [];
@@ -183,13 +193,12 @@ function toGalleryTags(value: unknown): GalleryTag[] {
     const { slug, name } = entry as { slug?: unknown; name?: unknown };
     if (typeof slug !== "string" || slug === "") continue;
     if (typeof name !== "string" || name.trim() === "") continue;
-    if (isCurationTagSlug(slug)) continue;
     if (hasUnsafeText(name) || hasUnsafeText(slug)) continue;
     if (seen.has(slug)) continue;
     seen.add(slug);
     tags.push({ slug, name });
   }
-  return tags;
+  return stripCurationTags(tags);
 }
 
 function asIsoString(value: unknown): string | null {

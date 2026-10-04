@@ -57,6 +57,15 @@
 -- src/lib/seed-portfolio-tag-migration.test.ts, which seeds a free-minted
 -- "portfolio" row BEFORE applying this migration and asserts it is curated
 -- in place rather than the migration failing outright.
+-- `true`, consistently, in both branches below (round-5 review): the
+-- INSERT's own VALUES list and the ON CONFLICT branch used to spell this
+-- two different ways (`true` and `1`) — the same boolean, written
+-- inconsistently in one statement. SQLite treats them identically (3.23+
+-- recognises the TRUE/FALSE keywords; Prisma itself stores this column as
+-- an INTEGER either way), so this was never a correctness bug, only a
+-- "which one is the real spelling" question a reader had to stop and
+-- answer. `true` matches the sibling seed migration's own four-subject
+-- INSERT (20260928103000_add_media_tags), so that is the one kept.
 INSERT INTO "Tag" ("id", "slug", "name", "curated", "createdAt") VALUES
     ('tagseed00portfolio', 'portfolio', 'Portfolio', true, '2026-10-04T15:00:00.000+00:00')
-ON CONFLICT("slug") DO UPDATE SET "curated" = 1, "name" = excluded."name";
+ON CONFLICT("slug") DO UPDATE SET "curated" = true, "name" = excluded."name";

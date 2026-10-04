@@ -144,4 +144,12 @@ describe("isBareEmailAddress", () => {
   it("accepts a subdomain", () => {
     expect(isBareEmailAddress("jane@mail.example.com")).toBe(true);
   });
+
+  // Round-5 review: the shape check this delegates to
+  // (src/lib/email-shape.ts) now rejects this, closing a gap neither this
+  // function's nor sign-in-policy.ts's own separately-maintained regex
+  // caught before the two were unified.
+  it("rejects a trailing dot in the domain", () => {
+    expect(isBareEmailAddress("owner@example.com.")).toBe(false);
+  });
 });

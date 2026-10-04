@@ -1,3 +1,5 @@
+import { isEmailShaped } from "@/lib/email-shape";
+
 /**
  * The contact address the About and Portfolio pages' mailto form sends to
  * (ugcportal-qnq9.7), and the string-building for its `mailto:` links.
@@ -49,18 +51,15 @@ export function resolveContactEmail(): string {
  * would be mailed to as a single, malformed address (after encoding) rather
  * than silently repaired into the one the operator meant.
  *
- * ROUND-4 REVIEW: the first version of this checked only "no whitespace or
- * angle bracket", which accepted literally anything else — `"not-an-email"`,
- * a bare word with no `@` at all, read as "bare" just as happily as a real
- * address. Not a full RFC 5322 validator (this app has no reason to parse
- * quoted local parts, comments, or IP-literal domains), but it does require
- * the one shape that actually matters here: a non-empty local part, an `@`,
- * and a domain with at least one `.`.
+ * The actual shape check is `isEmailShaped` (src/lib/email-shape.ts),
+ * shared with src/lib/sign-in-policy.ts's own email-shape check (round-5
+ * review: the two used to carry separately maintained, near-identical
+ * regexes — see that module's own comment for the trailing-dot bug that
+ * duplication let slip through unfixed in one copy after the other was
+ * fixed).
  */
-const BARE_EMAIL_ADDRESS_PATTERN = /^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/;
-
 export function isBareEmailAddress(value: string): boolean {
-  return BARE_EMAIL_ADDRESS_PATTERN.test(value);
+  return isEmailShaped(value);
 }
 
 /** The named `mailto:` query parameters this site ever builds. */

@@ -31,3 +31,31 @@ export const CURATION_TAG_SLUGS: ReadonlySet<string> = new Set([
 export function isCurationTagSlug(slug: string): boolean {
   return CURATION_TAG_SLUGS.has(slug);
 }
+
+/**
+ * `tags`, with every curation-only entry removed — the ONE exported
+ * function both `src/lib/gallery-items.ts#toGalleryTags` (the main gallery
+ * feed and every other renderer) and `src/lib/public-media.ts` (the raw
+ * public JSON feed, independently of rendering) now call, rather than each
+ * keeping its own copy of the same one-line filter (round-5 review).
+ *
+ * Generic over `T extends { slug: string }` rather than importing either
+ * caller's own tag type (`GalleryTag`, `MediaTagLabel`) — both are already
+ * `{ slug, name }`, and importing one would make this module depend on a
+ * caller's type, which is exactly the kind of coupling the module's own
+ * "dependency-free" comment above exists to avoid.
+ *
+ * Tolerant of `tags` not being an array — the same defensive instinct
+ * `toGalleryTags` already applies to its own `unknown` input. Only
+ * `public-media.ts` has ever needed this in practice, for a reason specific
+ * to IT, not to this function: its own route test's hand-rolled Prisma mock
+ * predates the `tags` relation entirely (ugcportal-jsc) and returns rows
+ * with no `tags` property at all, so passing that straight through here
+ * would otherwise throw. Keeping the tolerance in the shared function,
+ * rather than asking each caller to guard before calling it, means neither
+ * caller has to remember to.
+ */
+export function stripCurationTags<T extends { slug: string }>(tags: T[]): T[] {
+  if (!Array.isArray(tags)) return tags;
+  return tags.filter((tag) => !isCurationTagSlug(tag.slug));
+}
