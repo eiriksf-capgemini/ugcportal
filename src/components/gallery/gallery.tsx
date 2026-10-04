@@ -627,10 +627,25 @@ function GalleryPaging({
         here once the "Load more" button it was on has unmounted. Still an
         ordinary polite live region otherwise — the ref does not change what
         it announces, only that it can also be focused deliberately.
+
+        `outline-hidden` + an explicit `focus:ring` (round-1 review finding,
+        ugcportal-jx4), not `outline-none` alone. `outline-none` drops the
+        outline unconditionally, including the forced-colors fallback outline
+        a real browser substitutes when every other outline is suppressed —
+        `outline-hidden` is this repo's existing idiom for keeping that
+        fallback (see src/components/app-shell.tsx's `<main>`, the skip
+        link's own programmatic-focus target). And the ring is `focus:`, not
+        `focus-visible:` like Button's own ring (src/components/ui/button.tsx)
+        — deliberately, because the input that led here is a MOUSE click on
+        "Load more", and a browser's `:focus-visible` heuristic keys off the
+        last input modality rather than off whether the focus move was
+        programmatic, so it is not reliable for a `.focus()` call that
+        follows a click. `focus:` paints the ring unconditionally whenever
+        this element is the one focused, which is exactly the case here.
       */}
       <p
         aria-live="polite"
-        className="text-sm text-muted-foreground outline-none"
+        className="rounded-sm text-sm text-muted-foreground outline-hidden focus:ring-3 focus:ring-ring/80"
         ref={statusRef}
         tabIndex={-1}
       >

@@ -220,6 +220,20 @@ describe("K2 — focus at the end of the list", () => {
 
     expect(document.activeElement).not.toBe(document.body);
     expect(document.activeElement).toBe(pagingStatus());
+
+    // Round-1 review finding: programmatic focus with no visible indicator
+    // is barely better than none, and `:focus-visible` is not trustworthy
+    // for this element — the input that led here was a MOUSE click on
+    // "Load more" (see the long comment on this <p> in gallery.tsx), and a
+    // browser's `:focus-visible` heuristic keys off the last input
+    // modality rather than off whether the focus move was programmatic. A
+    // computed style isn't available (jsdom applies no CSS), so this
+    // checks class-list membership instead — the same structural proxy the
+    // K1 disabled-attribute checks above already rely on, for the same
+    // reason.
+    const statusClasses = pagingStatus().className.split(/\s+/);
+    expect(statusClasses).toContain("focus:ring-3");
+    expect(statusClasses).toContain("focus:ring-ring/80");
   });
 
   it("does not move focus anywhere when there is more to load", async () => {
