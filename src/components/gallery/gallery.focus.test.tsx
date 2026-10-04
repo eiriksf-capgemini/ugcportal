@@ -315,3 +315,67 @@ describe("K2 guard — a visitor who tabbed elsewhere while the request was pend
     }
   });
 });
+
+describe("K2 guard — a mouse click that never focused the button", () => {
+  it("leaves focus exactly where it was once the last page arrives", async () => {
+    // Round-4 review finding: an earlier version of the guard also treated
+    // `document.activeElement === document.body` as "the button just
+    // unmounted, chase it with focus" — but the check runs BEFORE any
+    // state commit unmounts anything, so at that point `body` means only
+    // "nothing was ever focused". That is the ordinary case for a plain
+    // mouse click: Safari does not focus a button on click, and neither
+    // does the synthetic `dispatchEvent("click")` this suite's own `click`
+    // helper uses, below — deliberately NOT preceded by `button.focus()`,
+    // unlike every other test in this file, to reproduce exactly that
+    // visitor rather than the keyboard-activation one K1-K3 cover.
+    let resolveFetch: ((value: unknown) => void) | undefined;
+    const fetchMock = vi.fn().mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveFetch = resolve;
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await mount();
+    const button = loadMoreButton();
+
+    // The premise, asserted rather than assumed: a click helper that
+    // secretly also focused its target would make the rest of this test
+    // pass over a scenario it never actually reached.
+    expect(document.activeElement).not.toBe(button);
+    const before = document.activeElement;
+
+    await click(button);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    const finalPage = {
+      items: [
+        {
+          id: "three",
+          previewId: "pv-three",
+          publishedAt: "2026-03-03T00:00:00.000Z",
+        },
+      ],
+      hasMore: false,
+      nextCursor: null,
+    };
+    await act(async () => {
+      resolveFetch?.({
+        ok: true,
+        status: 200,
+        json: async () => finalPage,
+      });
+    });
+
+    await waitUntil(
+      () => loadMoreButtonOrNull() === null,
+      "the Load more button to be removed after the last page",
+    );
+
+    // Exactly where it was before the click — not pulled to the paging
+    // status, which is what an unrequested focus ring would look like.
+    expect(document.activeElement).toBe(before);
+    expect(document.activeElement).not.toBe(pagingStatus());
+  });
+});

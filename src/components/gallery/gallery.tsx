@@ -342,27 +342,31 @@ export function Gallery({
       if (!nextHasMore) {
         /*
          * The button this click is on is about to unmount (`{hasMore ? ...
-         * : null}` below) — but only chase it with focus if the visitor was
-         * actually still on it, or focus had already fallen to `<body>`
-         * because some earlier step already took it away (ugcportal-jx4
-         * round-2 review finding). Checked synchronously here, before this
-         * function returns and React gets a chance to re-render: nothing
-         * else runs between the state updates above and this line, so
-         * `document.activeElement` still reflects whatever the visitor's
-         * last actual action left it as, including a Tab elsewhere while
-         * this request was in flight — which must be left alone rather than
-         * overridden.
+         * : null}` below) — but only chase it with focus if the visitor is
+         * actually still ON IT right now (ugcportal-jx4 round-2/4 review
+         * findings). Checked synchronously here, before this function
+         * returns and React gets a chance to commit the re-render that
+         * removes the button: nothing else runs between the state updates
+         * above and this line, so `document.activeElement` still reflects
+         * whatever the visitor's last actual action left it as — including
+         * a Tab elsewhere while this request was in flight, which must be
+         * left alone rather than overridden.
          *
-         * No `=== null` branch (round-3 review finding): in an attached
-         * document `document.activeElement` is never `null` — with nothing
-         * focused it defaults to `<body>`, which the check above already
-         * covers — so the extra branch was dead code, not a second real
-         * case.
+         * No `=== document.body` branch (round-4 review finding; an earlier
+         * version had one, reasoning it meant "the button already
+         * unmounted"). That reasoning doesn't hold AT THIS POINT: nothing
+         * has unmounted yet, this check runs strictly before the state
+         * updates above are committed — so `activeElement === body` here
+         * means only "nothing was ever focused in the first place", which
+         * is the ordinary case for a plain mouse click (Safari does not
+         * focus a button on click, and neither does jsdom's synthetic
+         * click here). Treating that as "move focus" would hand a mouse
+         * visitor who never asked for keyboard focus an unrequested focus
+         * ring on the status line.
          */
-        const active = document.activeElement;
-        const stillOnControl =
-          active === loadMoreButtonRef.current || active === document.body;
-        if (stillOnControl) pagingStatusRef.current?.focus();
+        if (document.activeElement === loadMoreButtonRef.current) {
+          pagingStatusRef.current?.focus();
+        }
       }
     } catch {
       // Deliberately keeps `cursor` and `hasMore` as they were, so the retry
