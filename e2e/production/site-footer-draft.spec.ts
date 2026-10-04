@@ -12,22 +12,20 @@ import { footerLinkHrefs, uniqueFetchTargets } from "../footer-test-support";
  *
  *  1. every href the production footer actually renders must NOT resolve to
  *     a page carrying the `ugcportal:draft` meta tag (src/components/legal/
- *     legal-page.tsx's `DRAFT_META_NAME`) — the literal reading of K3;
- *  2. because today's real deployment configuration (no LEGAL_SIGN_OFF, no
- *     LEGAL_* env vars set — see playwright.config.ts's own comment) means
- *     BOTH /privacy and /licence are drafts right now, this also directly
- *     asserts the footer has in fact hidden/annotated them rather than
- *     passing (1) vacuously because there happened to be nothing to check.
- *
- * KNOWN GAP: this worktree has no path to flip LEGAL_SIGN_OFF to a non-null
- * value at request time (it's a module-level constant in src/lib/legal/
- * contact.ts, not an env var), so the "pages ARE signed off, in production,
- * and get linked normally" branch is covered at the unit level only
- * (src/components/site-footer.test.tsx's own "MUTATION CHECK: links
- * Privacy and Licence normally outside production" case proves the OTHER
- * half of that same branch — non-production — with the real loaders; this
- * file proves the production branch with whatever readiness is really
- * configured today, which is "still draft").
+ *     legal-page.tsx's `DRAFT_META_NAME`) — the literal reading of K3, and
+ *     an invariant that holds whatever today's real readiness is;
+ *  2. the footer's Privacy/Licence links must match whatever that real
+ *     readiness ACTUALLY is right now — read live from each page's own
+ *     response, not assumed — so this test keeps meaning something however
+ *     src/lib/legal/contact.ts's real `LEGAL_SIGN_OFF` changes over time
+ *     (round-1 review follow-up: ugcportal-alg signed off the real
+ *     /privacy and /licence after this file was first written, which
+ *     silently flipped a hard-coded "both are drafts today" assumption
+ *     this test used to make — this worktree's env happens to still leave
+ *     them in draft today for an unrelated reason, no LEGAL_* variable is
+ *     set in e2e/production/playwright.config.ts's webServer, but a future
+ *     run with them configured must not need this file edited to stay
+ *     correct).
  */
 
 test("production footer never links a page carrying the draft marker", async ({
@@ -49,29 +47,43 @@ test("production footer never links a page carrying the draft marker", async ({
   }
 });
 
-test("today's real configuration: /privacy and /licence ARE drafts, and the footer does not link either", async ({
+test("the footer's Privacy/Licence links match today's REAL readiness, whichever way that reads", async ({
   page,
   request,
 }) => {
-  // Confirms the premise the test above would otherwise pass vacuously
-  // without: these two pages really do carry the draft marker right now
-  // (no LEGAL_SIGN_OFF, see src/lib/legal/contact.ts), so the footer
-  // omitting their <a href> is a real effect of the guard, not an absence
-  // of anything to guard against.
-  for (const path of ["/privacy", "/licence"]) {
+  // Read whether each page is ACTUALLY a draft right now, live — not
+  // assumed — so this test adapts to whatever src/lib/legal/contact.ts's
+  // real LEGAL_SIGN_OFF currently says, rather than hard-coding "both are
+  // drafts today" as a premise that silently goes stale the moment that
+  // changes (see this file's own header comment).
+  const draftByPath = new Map<string, boolean>();
+  for (const path of ["/privacy", "/licence"] as const) {
     const response = await request.get(path);
     const body = await response.text();
-    expect(body, path).toContain('name="ugcportal:draft"');
+    draftByPath.set(path, /<meta[^>]+name="ugcportal:draft"/.test(body));
   }
 
   await page.goto("/");
   const hrefs = await footerLinkHrefs(page);
-  expect(hrefs).not.toContain("/privacy");
-  expect(hrefs).not.toContain("/licence");
-
-  // Still named for the visitor, as inert text, not vanished outright — see
-  // src/components/site-footer.tsx's FooterNavLink.
   const footerText = await page.locator("footer[data-site-footer]").innerText();
-  expect(footerText).toContain("Privacy");
-  expect(footerText).toContain("Licence and rights");
+
+  for (const [path, label] of [
+    ["/privacy", "Privacy"],
+    ["/licence", "Licence and rights"],
+  ] as const) {
+    if (draftByPath.get(path)) {
+      expect(hrefs, `${path} is a draft right now, so the footer must not link it`).not.toContain(
+        path,
+      );
+      // Still named for the visitor, as inert text annotated "(coming
+      // soon)", not vanished outright and not merely recoloured — see
+      // src/components/site-footer.tsx's FooterNavLink.
+      expect(footerText, path).toContain(`${label} (coming soon)`);
+    } else {
+      expect(
+        hrefs,
+        `${path} is NOT a draft right now, so the footer should link it normally`,
+      ).toContain(path);
+    }
+  }
 });

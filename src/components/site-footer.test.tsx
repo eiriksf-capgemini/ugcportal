@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ConsentProvider } from "@/components/consent/consent-context";
 import {
-  FILLED_LEGAL_ENV,
+  UNSET_LEGAL_ENV,
   textContent,
 } from "@/lib/legal/legal-page.test-support";
 import {
@@ -17,7 +17,7 @@ import {
 } from "@/lib/routes";
 import { SITE_NAME } from "@/lib/site";
 
-import { SiteFooter } from "./site-footer";
+import { FooterNavLink, SiteFooter } from "./site-footer";
 
 /**
  * ugcportal-akv6.
@@ -26,13 +26,20 @@ import { SiteFooter } from "./site-footer";
  * K2: a reviewable snapshot of every visible string (see
  * "K2: every visible string, for review" below) — Eirik should read this
  * list in the PR diff, not just trust that the component compiles.
- * K3: the production draft-link guard, at the integration level — this
- * file proves SiteFooter actually wires `linkBlockedInProduction` (the
- * pure rule itself, round-1 review moved it to
- * src/lib/legal/publishable.ts and unit-tests it there) to the real
- * `LEGAL_PAGES` readiness. The real e2e coverage (an actual production
- * server, the meta tag read from the rendered page) lives in
- * e2e/production/site-footer-draft.spec.ts.
+ * K3: the production draft-link guard, split across three layers so no one
+ * of them has to assume a value for src/lib/legal/contact.ts's real
+ * LEGAL_SIGN_OFF (a fact about this repo's actual legal text, which
+ * changes over time — ugcportal-alg signed off the real pages after this
+ * component was first written, which is exactly the kind of change this
+ * split is meant to survive): the pure "is this page blocked" rule
+ * (`linkBlockedInProduction`, fully fixture-injectable) is unit-tested in
+ * src/lib/legal/publishable.ts's own test file; "what does FooterNavLink
+ * DO with a `blocked` flag" is unit-tested directly below; "does SiteFooter
+ * actually wire the two together" is tested below that, with a
+ * deliberately-incomplete configuration fixture that forces the outcome
+ * deterministically regardless of the real sign-off. The real e2e coverage
+ * (an actual production server, today's REAL readiness, the meta tag read
+ * from the rendered page) lives in e2e/production/site-footer-draft.spec.ts.
  */
 
 afterEach(() => {
@@ -104,7 +111,7 @@ describe("K2: every visible string, for review", () => {
     const text = textContent(renderWithConsent(false));
     for (const needle of [
       SITE_NAME,
-      "Food, wine and drink, technology and books, photographed.",
+      "Food, books and home technology — including wine accessories, never alcohol itself.",
       "Pages",
       "About",
       "Portfolio",
@@ -128,28 +135,68 @@ describe("K2: every visible string, for review", () => {
   });
 });
 
+describe("FooterNavLink: the rendering rule for a given `blocked` flag", () => {
+  // Deliberately decoupled from WHETHER a real page is currently blocked —
+  // that depends on src/lib/legal/contact.ts's real LEGAL_SIGN_OFF, which
+  // is a fact about this repo's actual legal text (ugcportal-alg signed
+  // off the real /privacy and /licence after this component was first
+  // written) and not a thing a component test should assume a value for.
+  // The pure "is a page blocked" computation is unit-tested with fully
+  // injectable fixtures in src/lib/legal/publishable.test.ts
+  // (linkBlockedInProduction); this only tests what FooterNavLink DOES
+  // with that boolean once it has it.
+  function renderLink(blocked: boolean): string {
+    return renderToStaticMarkup(
+      <FooterNavLink label="Privacy" href={PRIVACY_PATH} blocked={blocked} />,
+    );
+  }
+
+  it("blocked=true: inert, non-link text with a visible, assistive-tech-readable annotation", () => {
+    const markup = renderLink(true);
+    expect(markup).not.toContain(`href="${PRIVACY_PATH}"`);
+    expect(markup).toContain(`data-footer-draft-link="${PRIVACY_PATH}"`);
+    // Plain text content, not merely a muted colour (which an inconsistent
+    // screen reader or a colour-blind visitor would miss) and not an
+    // aria-hidden decoration (which would HIDE it from assistive tech).
+    expect(textContent(markup)).toContain("Privacy (coming soon)");
+  });
+
+  it("MUTATION CHECK: blocked=false renders a real link instead, with no draft annotation", () => {
+    const markup = renderLink(false);
+    expect(markup).toContain(`href="${PRIVACY_PATH}"`);
+    expect(markup).not.toContain("data-footer-draft-link");
+    expect(markup).not.toContain("coming soon");
+  });
+});
+
 describe.each([
   ["full", false],
   ["compact", true],
 ] as const)(
-  "K3: a draft legal page is never linked once NODE_ENV is production (%s variant)",
+  "SiteFooter wiring: the production guard is NODE_ENV-gated, not draft-gated (%s variant)",
   (_name, compact) => {
-    // Review-standards family 4 (sibling omission): FooterNavLink and the
-    // `blocked` flags it is given are shared, unparameterised, by both
-    // variants — but a guard that is only ever exercised against one
-    // variant and assumed to hold for its sibling is exactly the shape that
-    // family names, so both are driven through this same suite rather than
-    // trusting that shared code implies shared coverage.
+    // Review-standards family 4 (sibling omission): the same wiring and the
+    // `blocked` flags it produces are shared, unparameterised, by both
+    // variants — but a guard only ever exercised against one variant and
+    // assumed to hold for its sibling is exactly the shape that family
+    // names, so both are driven through this same suite.
+    //
+    // UNSET_LEGAL_ENV, not a filled-in fixture (round-1 review follow-up):
+    // with every LEGAL_* variable blank, `legalReadiness` reports
+    // `missing.length > 0`, which makes `blocked` — and therefore `draft`
+    // — true REGARDLESS of src/lib/legal/contact.ts's real LEGAL_SIGN_OFF
+    // (`draft = blocked || !signedOff`; `blocked` alone is enough). That
+    // makes this test's outcome depend only on NODE_ENV, the one axis it
+    // means to exercise, rather than on whatever the real sign-off
+    // currently says about the real prose — which is a fact about this
+    // repo's legal text, not a fixture this test should assume.
     afterEach(() => {
       vi.unstubAllEnvs();
     });
 
-    it("replaces Privacy and Licence with inert, non-link text in production while they are drafts", () => {
-      // LEGAL_SIGN_OFF is null today (src/lib/legal/contact.ts), so both
-      // pages are a draft regardless of these values — filled on purpose,
-      // to prove this is the sign-off gate and not a missing-variable one.
+    it("blocks Privacy and Licence in production while configuration is incomplete", () => {
       vi.stubEnv("NODE_ENV", "production");
-      for (const [name, value] of Object.entries(FILLED_LEGAL_ENV)) {
+      for (const [name, value] of Object.entries(UNSET_LEGAL_ENV)) {
         vi.stubEnv(name, value);
       }
 
@@ -158,19 +205,11 @@ describe.each([
       expect(markup).not.toContain(`href="${LICENCE_PATH}"`);
       expect(markup).toContain(`data-footer-draft-link="${PRIVACY_PATH}"`);
       expect(markup).toContain(`data-footer-draft-link="${LICENCE_PATH}"`);
-      // Still named, so a visitor learns the page exists rather than seeing
-      // it vanish — and annotated as plain, assistive-tech-readable text
-      // (not merely a muted colour, which an inconsistent screen reader or
-      // a colour-blind visitor would miss entirely), so it's clear it
-      // isn't simply a broken link.
-      const text = textContent(markup);
-      expect(text).toContain("Privacy (coming soon)");
-      expect(text).toContain("Licence and rights (coming soon)");
     });
 
-    it("MUTATION CHECK: links Privacy and Licence normally outside production, even though they're still drafts", () => {
+    it("MUTATION CHECK: links Privacy and Licence normally outside production, with the SAME incomplete configuration", () => {
       vi.stubEnv("NODE_ENV", "development");
-      for (const [name, value] of Object.entries(FILLED_LEGAL_ENV)) {
+      for (const [name, value] of Object.entries(UNSET_LEGAL_ENV)) {
         vi.stubEnv(name, value);
       }
 
@@ -178,7 +217,6 @@ describe.each([
       expect(markup).toContain(`href="${PRIVACY_PATH}"`);
       expect(markup).toContain(`href="${LICENCE_PATH}"`);
       expect(markup).not.toContain("data-footer-draft-link");
-      expect(markup).not.toContain("coming soon");
     });
   },
 );

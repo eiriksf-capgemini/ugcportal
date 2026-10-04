@@ -16,7 +16,7 @@ import {
   PORTFOLIO_PATH,
   PRIVACY_PATH,
 } from "@/lib/routes";
-import { SITE_DESCRIPTION, SITE_NAME } from "@/lib/site";
+import { SITE_NAME } from "@/lib/site";
 
 /**
  * The site footer (ugcportal-akv6), split out of src/components/app-shell.tsx
@@ -59,6 +59,24 @@ import { SITE_DESCRIPTION, SITE_NAME } from "@/lib/site";
 const FOOTER_HEADING_CLASS = "text-sm font-medium text-foreground";
 
 /**
+ * A STAND-IN for the footer's brand blurb (round-1 review follow-up, PR
+ * #96) — deliberately NOT `SITE_DESCRIPTION` from src/lib/site.ts, whose
+ * text ("Food, wine and drink, technology and books, photographed.")
+ * names alcohol as a subject directly, which the Decisions table's "Wine
+ * angle" row forbids (wine ACCESSORIES — glasses, coolers, apps — never
+ * alcohol itself; see src/lib/site.ts's own `INTRO_PARAGRAPHS` for the
+ * same rule applied to the About page's copy).
+ *
+ * TODO(ugcportal-akv6): replace this with `SITE_TAGLINE` once PR #94
+ * merges and introduces it in src/lib/site.ts — that is meant to be the
+ * one shared, compliant tagline every surface reaches for; this is only a
+ * placeholder so the footer does not ship non-compliant copy while #94 is
+ * still in review.
+ */
+const FOOTER_ABOUT_LINE =
+  "Food, books and home technology — including wine accessories, never alcohol itself.";
+
+/**
  * The registered LegalPage for a route this footer links to (round-1
  * review: previously went through each page's own `loadPrivacy`/
  * `loadLicence` loader, which also builds the full rendered prose from the
@@ -95,7 +113,17 @@ function legalLinkBlocked(path: string): boolean {
 /** The visible, assistive-tech-readable suffix on a blocked legal link — see FooterNavLink. */
 const COMING_SOON_SUFFIX = " (coming soon)";
 
-function FooterNavLink({
+/**
+ * Exported (round-1 review follow-up, PR #96) so its rendering rule — given
+ * a `blocked` flag, which markup comes out — can be unit-tested directly,
+ * independent of whatever the REAL `LEGAL_SIGN_OFF` (src/lib/legal/
+ * contact.ts) happens to say today. That constant is a fact about this
+ * repo's actual legal text, not a test fixture, and it changes over time
+ * (ugcportal-alg signed off the real pages after this component was first
+ * written — see src/components/site-footer.test.tsx's own comment on why
+ * its K3 tests no longer render a live SiteFooter against it).
+ */
+export function FooterNavLink({
   label,
   href,
   blocked,
@@ -176,7 +204,7 @@ export function SiteFooter({ compact = false }: { compact?: boolean }) {
         <div>
           <p className="font-medium text-foreground">{SITE_NAME}</p>
           <p className="mt-2 max-w-prose text-muted-foreground">
-            {SITE_DESCRIPTION}
+            {FOOTER_ABOUT_LINE}
           </p>
         </div>
 
