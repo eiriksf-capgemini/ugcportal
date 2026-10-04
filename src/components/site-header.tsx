@@ -1,6 +1,9 @@
 import Link from "next/link";
 
+import { cn } from "cn";
+
 import { AuthStatus } from "@/components/auth-status";
+import { HEADER_NAV_LINK_CLASS } from "@/components/header-nav-link";
 import { MobileNavToggle, type NavItem } from "@/components/mobile-nav-toggle";
 import { PrimaryNavLink } from "@/components/primary-nav-link";
 import { UploadNavLink } from "@/components/upload-nav-link";
@@ -80,10 +83,23 @@ export function SiteHeader() {
             "Gallery" nav item aria-current="page" at once would be a
             confusing double signal for no benefit), so it carries no
             aria-current.
+
+            HEADER_NAV_LINK_CLASS (PR #94 review round 4, reuse finding),
+            not the same suffix re-spelled a third time: this wordmark used
+            to carry its own literal copy of the shared base link styling
+            src/components/header-nav-link.ts already named and exported for
+            upload-link.tsx and primary-nav-link.tsx (round 1, low finding
+            4) - a third, independent copy of the identical string is
+            exactly the drift that extraction exists to prevent. `tracking-
+            tight` is this link's own addition on top, not part of the
+            shared base.
           */}
           <Link
             href="/"
-            className="min-w-12 shrink-[999] truncate rounded-sm text-sm font-medium tracking-tight text-foreground transition-colors hover:text-primary focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring"
+            className={cn(
+              HEADER_NAV_LINK_CLASS,
+              "min-w-12 shrink-[999] truncate tracking-tight",
+            )}
           >
             {SITE_NAME}
           </Link>

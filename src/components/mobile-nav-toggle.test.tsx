@@ -30,6 +30,7 @@ beforeEach(() => {
     true;
   vi.clearAllMocks();
   pathnameMock.mockReturnValue("/");
+  stubMatchMedia();
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
@@ -59,6 +60,35 @@ function panel(): HTMLElement | null {
 }
 
 /**
+ * jsdom ships no `window.matchMedia` at all (confirmed empirically, same as
+ * src/components/gallery/gallery.unmount.test.tsx's own PhotoSwipe stub
+ * needing one for the same reason) - stubbed here, scoped to this file only,
+ * so the dismiss-on-resize effect below has something real to attach a
+ * "change" listener to. Captures that listener so the test can fire it by
+ * hand, rather than trying to make jsdom's own (nonexistent) viewport
+ * actually resize.
+ */
+let matchMediaChangeListener: ((event: MediaQueryListEvent) => void) | null = null;
+
+function stubMatchMedia(): void {
+  matchMediaChangeListener = null;
+  window.matchMedia = ((query: string) => ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addEventListener: (type: string, listener: (event: MediaQueryListEvent) => void) => {
+      if (type === "change") matchMediaChangeListener = listener;
+    },
+    removeEventListener: (type: string) => {
+      if (type === "change") matchMediaChangeListener = null;
+    },
+    addListener() {},
+    removeListener() {},
+    dispatchEvent: () => false,
+  })) as unknown as typeof window.matchMedia;
+}
+
+/**
  * `@base-ui/react/popover`'s floating-ui-based positioning and its dismiss
  * listeners both settle across a microtask/effect cycle beyond the one
  * `act()` flushes synchronously for the triggering click itself - confirmed
@@ -82,6 +112,26 @@ describe("MobileNavToggle (ugcportal-14k9)", () => {
     expect(toggleButton().textContent).toContain("Open menu");
   });
 
+  /**
+   * ugcportal-14k9 PR #94 review round 4, finding 3: Popover.Trigger's own
+   * default `aria-haspopup="dialog"` agreed with Popup's own now-overridden
+   * default role - once the panel's real role became "navigation", the
+   * trigger's claim that activating it opens a DIALOG was simply wrong, and
+   * relabelling it to another ARIA token (e.g. "menu") would have been just
+   * as wrong - this disclosure's items are plain links, not real menuitems
+   * with arrow-key roving focus. Checked for ABSENCE, not for an empty
+   * string / "false": `aria-haspopup={undefined}` must make React omit the
+   * attribute entirely (WAI-ARIA's own disclosure pattern uses no
+   * aria-haspopup at all), not render a present-but-empty one.
+   */
+  it("carries no aria-haspopup - it discloses plain content, not a dialog or menu", () => {
+    act(() => {
+      root.render(<MobileNavToggle items={ITEMS} />);
+    });
+
+    expect(toggleButton().hasAttribute("aria-haspopup")).toBe(false);
+  });
+
   it("K1: activating the toggle opens the panel, with every nav item reachable inside it", () => {
     act(() => {
       root.render(<MobileNavToggle items={ITEMS} />);
@@ -98,6 +148,30 @@ describe("MobileNavToggle (ugcportal-14k9)", () => {
     const links = [...(nav?.querySelectorAll("a") ?? [])];
     expect(links.map((a) => a.getAttribute("href"))).toEqual(["/", "/about"]);
     expect(links.map((a) => a.textContent)).toEqual(["Gallery", "About"]);
+  });
+
+  /**
+   * ugcportal-14k9 PR #94 review round 4, finding 1: the panel used to carry
+   * `z-10` on its positioner, below the header's own sticky `z-20`
+   * (src/components/app-shell.tsx) - once the page was scrolled far enough
+   * for the header to be genuinely "stuck" in front of content, the open
+   * panel painted UNDER it instead of over it. Checked by finding the
+   * element that actually carries the z-index utility and confirming it is
+   * a real ANCESTOR of the rendered panel, not merely that "z-30" appears
+   * somewhere in the document.
+   */
+  it("the panel's positioner renders above the header's own sticky z-20", () => {
+    act(() => {
+      root.render(<MobileNavToggle items={ITEMS} />);
+    });
+
+    act(() => {
+      toggleButton().click();
+    });
+
+    const positioner = document.querySelector(".z-30");
+    expect(positioner, "no element carrying z-30 found while the panel is open").not.toBeNull();
+    expect(positioner?.contains(panel())).toBe(true);
   });
 
   it("activating the toggle again closes the panel", () => {
@@ -198,6 +272,36 @@ describe("MobileNavToggle (ugcportal-14k9)", () => {
       document.body.click();
     });
     await flush();
+
+    expect(panel()).toBeNull();
+    expect(toggleButton().getAttribute("aria-expanded")).toBe("false");
+  });
+
+  /**
+   * ugcportal-14k9 PR #94 review round 4, finding 2: widening the viewport
+   * from under `md` to at or above it, with the panel open, used to leave
+   * BOTH this panel and site-header.tsx's always-visible desktop `<nav>`
+   * carrying the landmark name "Main navigation" at once. Fired by hand via
+   * the stubbed `matchMedia` above, since jsdom has no real viewport to
+   * resize.
+   */
+  it("closes the panel on a matchMedia change reporting the viewport is now at or above md", () => {
+    act(() => {
+      root.render(<MobileNavToggle items={ITEMS} />);
+    });
+
+    act(() => {
+      toggleButton().click();
+    });
+    expect(panel(), "panel did not open").not.toBeNull();
+    expect(
+      matchMediaChangeListener,
+      "no matchMedia 'change' listener was registered while the panel was open",
+    ).not.toBeNull();
+
+    act(() => {
+      matchMediaChangeListener?.({ matches: true } as MediaQueryListEvent);
+    });
 
     expect(panel()).toBeNull();
     expect(toggleButton().getAttribute("aria-expanded")).toBe("false");

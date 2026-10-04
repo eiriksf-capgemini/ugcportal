@@ -23,6 +23,11 @@ import { describe, expect, it, vi } from "vitest";
  * walking a parent tree (confirmed there empirically too). This file has
  * nothing to say about either's gating logic - only about the document they
  * render inside.
+ *
+ * `next/headers`'s `cookies()` is mocked the same way src/lib/consent.server.
+ * test.ts does it: `RootLayout` now awaits `readConsentCookieOnServer()`
+ * (ugcportal-3wgp) before returning, and `cookies()` throws outside a real
+ * Next.js request scope, which a plain vitest run is not one.
  */
 vi.mock("@/components/upload-nav-link", () => ({
   UploadNavLink: () => null,
@@ -35,11 +40,23 @@ vi.mock("next/font/google", () => ({
   Geist_Mono: () => ({ variable: "mock-geist-mono" }),
   Fraunces: () => ({ variable: "mock-fraunces" }),
 }));
+vi.mock("next/headers", () => ({
+  cookies: async () => ({
+    get: () => undefined,
+  }),
+}));
 
 const { default: RootLayout } = await import("./layout");
 
-function renderLayout(): string {
-  const element = RootLayout({
+/**
+ * `RootLayout` is an `async function` (ugcportal-3wgp: it awaits
+ * `readConsentCookieOnServer()` before returning), so this awaits the
+ * element it resolves to before handing it to `renderToStaticMarkup` -
+ * passing a `Promise<ReactElement>` straight to `renderToStaticMarkup`
+ * would not render the layout at all.
+ */
+async function renderLayout(): Promise<string> {
+  const element = await RootLayout({
     children: <div data-testid="page-content" />,
     params: Promise.resolve({}),
   } as Parameters<typeof RootLayout>[0]);
@@ -47,8 +64,8 @@ function renderLayout(): string {
 }
 
 describe("RootLayout (ugcportal-14k9 K2)", () => {
-  it('renders <html lang="en">', () => {
-    const markup = renderLayout();
+  it('renders <html lang="en">', async () => {
+    const markup = await renderLayout();
 
     expect(markup).toMatch(/^<html[^>]*\blang="en"/);
   });
@@ -67,8 +84,8 @@ describe("RootLayout (ugcportal-14k9 K2)", () => {
     expect(decoy).not.toMatch(/^<html[^>]*\blang="en"/);
   });
 
-  it("renders the page content passed as children, inside the single AppShell main landmark", () => {
-    const markup = renderLayout();
+  it("renders the page content passed as children, inside the single AppShell main landmark", async () => {
+    const markup = await renderLayout();
 
     expect(markup).toContain('data-testid="page-content"');
     expect([...markup.matchAll(/<main\b/g)]).toHaveLength(1);

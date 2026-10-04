@@ -253,16 +253,21 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
    * retired with it, since the literal class string no longer appears in
    * that file. The sticky header is bg-background, so the page-canvas
    * tokens are exactly right here, same as the wordmark always was.
+   *
+   * Round 4 reuse finding: the wordmark itself ALSO now imports
+   * HEADER_NAV_LINK_CLASS (cn(HEADER_NAV_LINK_CLASS, "min-w-12 shrink-[999]
+   * truncate tracking-tight")) instead of re-spelling the same suffix a
+   * third time, so site-header.tsx's own text-foreground/text-primary count
+   * drops to zero - only the tagline's text-muted-foreground remains
+   * literal in that file. header-nav-link.ts's own count is unchanged: the
+   * wordmark is a second CALLER of the existing constant, not a second
+   * definition of it.
    */
   "src/components/header-nav-link.ts": { "text-foreground": 1, "text-primary": 1 },
   // Just the aria-[current=page]:text-primary highlight this component adds
   // on top of the shared base class above.
   "src/components/primary-nav-link.tsx": { "text-primary": 1 },
-  "src/components/site-header.tsx": {
-    "text-foreground": 1,
-    "text-primary": 1,
-    "text-muted-foreground": 1,
-  },
+  "src/components/site-header.tsx": { "text-muted-foreground": 1 },
   // The footer's own text-muted-foreground, unchanged by ugcportal-14k9 and
   // unrelated to the header move above - app-shell.tsx still renders it
   // directly on bg-background, same as always.

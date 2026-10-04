@@ -1,5 +1,7 @@
 import AxeBuilder from "@axe-core/playwright";
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test } from "@playwright/test";
+
+import { hasHorizontalScroll } from "./has-horizontal-scroll";
 
 /**
  * K1/K2/K3 browser verification for the header (ugcportal-14k9).
@@ -31,12 +33,6 @@ const VIEWPORTS = {
  * instead of three that could silently stop agreeing with each other.
  */
 const MD_BREAKPOINT = 768;
-
-async function hasHorizontalScroll(page: Page): Promise<boolean> {
-  return page.evaluate(
-    () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
-  );
-}
 
 for (const [name, viewport] of Object.entries(VIEWPORTS)) {
   test.describe(`header at ${name} (${viewport.width}px)`, () => {
@@ -93,10 +89,13 @@ for (const [name, viewport] of Object.entries(VIEWPORTS)) {
         await expect(page.getByRole("button", { name: "Open menu" })).toBeFocused();
         await page.keyboard.press("Enter");
         // `@base-ui/react/popover`'s own default `initialFocus` (PR #94
-        // review round 3): opening via a KEYBOARD interaction moves focus
-        // straight to the first tabbable element inside the panel, not
-        // left on the toggle button the way the hand-rolled version this
-        // replaced did - one fewer Tab press to reach "Gallery" below.
+        // review round 3/4): opening via any NON-TOUCH interaction - a
+        // click or, as here, Enter on the trigger - moves focus straight
+        // to the first tabbable element inside the panel; touch is the
+        // one documented exception (it focuses the popup itself instead,
+        // to avoid opening the virtual keyboard). Not "keyboard only", and
+        // not left on the toggle button the way the hand-rolled version
+        // this replaced did - one fewer Tab press to reach "Gallery" below.
       }
 
       const nav = page.getByRole("navigation", { name: "Main navigation" });
@@ -104,11 +103,10 @@ for (const [name, viewport] of Object.entries(VIEWPORTS)) {
       await page.keyboard.press("Tab");
       await expect(nav.getByRole("link", { name: "About" })).toBeFocused();
 
-      // K3: ugcportal-qnq9.7 (the About page) is being built concurrently
-      // and does not exist in this worktree yet, so activating this link is
-      // expected to 404 rather than prove a destination page - this test
-      // only claims the nav ITEM is keyboard-activatable, which K1 asks for,
-      // not that the destination renders.
+      // ugcportal-qnq9.7 (the About page) shipped in #93 — this just proves
+      // the nav ITEM is keyboard-activatable and navigates, which is all K1
+      // asks for; the page's own content is e2e/about-portfolio.spec.ts's
+      // claim, not this file's.
       await page.keyboard.press("Enter");
       await expect(page).toHaveURL(/\/about$/);
     });

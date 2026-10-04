@@ -9,6 +9,7 @@ import {
   GLOBALS_CSS_PATH,
   loadThemeTokens,
   resolveToken,
+  type Declaration,
   type ThemeMode,
 } from "@/lib/design/tokens";
 
@@ -41,6 +42,18 @@ vi.mock("next/navigation", () => ({ usePathname: pathnameMock }));
 const { MobileNavToggle } = await import("./mobile-nav-toggle");
 
 const ITEMS = [{ href: "/", label: "Gallery" }];
+
+/**
+ * Read and parsed ONCE per mode (PR #94 review round 4, reuse finding), not
+ * once per `it.each` case: globals.css does not change between the "light"
+ * and "dark" iterations below, so re-reading and re-parsing it a second time
+ * bought nothing but a second filesystem read - the same reasoning
+ * contrast.test.ts's own `tokensByMode` already applies.
+ */
+const TOKENS_BY_MODE: Record<ThemeMode, Map<string, Declaration>> = {
+  light: loadThemeTokens(GLOBALS_CSS_PATH, "light"),
+  dark: loadThemeTokens(GLOBALS_CSS_PATH, "dark"),
+};
 
 let container: HTMLDivElement;
 let root: Root;
@@ -105,7 +118,7 @@ describe("MobileNavToggle K3 contrast (ugcportal-14k9 PR #94 review round 1)", (
       });
 
       const token = resolveToggleForegroundToken(toggleButton().className);
-      const themeTokens = loadThemeTokens(GLOBALS_CSS_PATH, mode);
+      const themeTokens = TOKENS_BY_MODE[mode];
       const foreground = parseColor(resolveToken(token, themeTokens));
       const background = parseColor(resolveToken("--background", themeTokens));
       const ratio = contrastRatio(foreground, background);

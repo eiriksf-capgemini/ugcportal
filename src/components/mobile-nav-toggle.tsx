@@ -2,12 +2,23 @@
 
 import { Popover } from "@base-ui/react/popover";
 import { Menu, X } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { PrimaryNavLink } from "@/components/primary-nav-link";
 
 export type NavItem = { href: string; label: string };
+
+/**
+ * Tailwind's default `md` breakpoint - the same width this component's own
+ * `md:hidden`/`hidden md:flex` pair switches on, and e2e/header.spec.ts's
+ * own `MD_BREAKPOINT` constant. Not imported from one shared module across
+ * the Tailwind-class/JS boundary (Tailwind's breakpoints live in compiled
+ * CSS, not a value either side could import) - kept here, next to the only
+ * other place in this file width matters, rather than a third independent
+ * copy of the number in some other location.
+ */
+const MD_BREAKPOINT_PX = 768;
 
 /**
  * The collapsed, small-viewport form of the header's main navigation
@@ -64,16 +75,83 @@ export type NavItem = { href: string; label: string };
  * confirmed from `@base-ui/react`'s own `mergeProps` docstring that props
  * merge "Object.assign style, rightmost wins", and this component's own
  * props are the rightmost entry in Popup's internal merge order.
+ *
+ * `Popover.Trigger` has the matching default on the OTHER side of the same
+ * mistake (PR #94 review round 4, finding 3): it sets `aria-haspopup="dialog"`
+ * to agree with Popup's own now-overridden default. Rather than relabel it
+ * to another ARIA token that is just as wrong (`"menu"` would claim actual
+ * menu/menuitem keyboard semantics — arrow-key roving focus — this disclosure
+ * does not implement; the nav items are plain links), it is removed
+ * entirely below. WAI-ARIA's own disclosure pattern uses `aria-expanded` and
+ * `aria-controls` alone, with no `aria-haspopup` at all, for exactly this
+ * shape: a button that reveals plain content, not a menu/listbox/tree/grid/
+ * dialog widget.
+ *
+ * The panel renders above this header's own sticky z-20 (PR #94 review
+ * round 4, finding 1): `z-30` on the positioner, not the `z-10` this shipped
+ * with, which let the panel paint UNDER the sticky header once the page was
+ * scrolled far enough for the header to be "stuck" in front of it. z-30 is
+ * still below the cookie-consent banner's z-40 (src/components/consent/
+ * cookie-banner.tsx) — see app-shell.tsx's own stacking-tier comment.
+ *
+ * Also dismisses on a `matchMedia` change past `md` (PR #94 review round 4,
+ * finding 2): widening the viewport from under `md` to at or above it, with
+ * the panel open, swaps which of this component's two renderings of
+ * `items` is visible — this one hides, the always-visible desktop `<nav>`
+ * in site-header.tsx takes over — and without this, BOTH would carry the
+ * landmark name "Main navigation" at once for as long as this one stayed
+ * open, which is two landmarks with the same accessible name coexisting in
+ * the tree. Closing this one the moment the breakpoint crosses keeps there
+ * being exactly one.
+ *
+ * Mounting: this component (and therefore a live `Popover.Root`) renders
+ * on every page load regardless of viewport, including at desktop widths
+ * where its own trigger is always `md:hidden` and never interacted with.
+ * Left as-is deliberately — the alternative, mounting it only below `md`,
+ * needs either a CSS-media-query-aware conditional render (a `useEffect`
+ * reading `matchMedia` just to decide whether to render at all, doing at
+ * mount time the same width check the dismiss-on-resize effect above
+ * already does at runtime) or a server-side viewport guess, neither of
+ * which this component's idle cost at desktop widths (an unopened popover
+ * with no listeners attached while closed) justifies building.
  */
 export function MobileNavToggle({ items }: { items: NavItem[] }) {
   const [open, setOpen] = useState(false);
+
+  /*
+   * Dismiss on growing past `md` (PR #94 review round 4, finding 2) - see
+   * this component's own docstring for why two coexisting "Main navigation"
+   * landmarks is the failure this prevents. Only attached while `open`:
+   * nothing needs to listen for a breakpoint change while there is nothing
+   * open to dismiss, consistent with this component's existing "nothing
+   * exists while closed" shape elsewhere (the panel itself, `{open && ...}`
+   * in earlier revisions, now `Popover`'s own mount-on-open).
+   */
+  useEffect(() => {
+    if (!open) return;
+    const mediaQuery = window.matchMedia(`(min-width: ${MD_BREAKPOINT_PX}px)`);
+    const handleChange = (event: MediaQueryListEvent) => {
+      if (event.matches) setOpen(false);
+    };
+    mediaQuery.addEventListener("change", handleChange);
+    return () => mediaQuery.removeEventListener("change", handleChange);
+  }, [open]);
 
   return (
     <Popover.Root open={open} onOpenChange={setOpen}>
       <div className="relative md:hidden">
         <Popover.Trigger
           render={(triggerProps, state) => (
-            <Button {...triggerProps} type="button" variant="outline" size="icon">
+            <Button
+              {...triggerProps}
+              // Removes Popover's own default "dialog" - see this file's
+              // docstring for why no aria-haspopup value is the right one,
+              // not a relabelled one.
+              aria-haspopup={undefined}
+              type="button"
+              variant="outline"
+              size="icon"
+            >
               {state.open ? <X aria-hidden="true" /> : <Menu aria-hidden="true" />}
               <span className="sr-only">{state.open ? "Close menu" : "Open menu"}</span>
             </Button>
@@ -81,7 +159,7 @@ export function MobileNavToggle({ items }: { items: NavItem[] }) {
         />
 
         <Popover.Portal>
-          <Popover.Positioner align="end" sideOffset={8} className="z-10">
+          <Popover.Positioner align="end" sideOffset={8} className="z-30">
             <Popover.Popup
               role="navigation"
               aria-label="Main navigation"
