@@ -111,7 +111,7 @@ describe("K2: every visible string, for review", () => {
     const text = textContent(renderWithConsent(false));
     for (const needle of [
       SITE_NAME,
-      "Food, books and home technology — including wine accessories, never alcohol itself.",
+      "Original photography of food, books, home technology and wine accessories.",
       "Pages",
       "About",
       "Portfolio",

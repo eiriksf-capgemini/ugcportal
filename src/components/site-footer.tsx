@@ -74,7 +74,7 @@ const FOOTER_HEADING_CLASS = "text-sm font-medium text-foreground";
  * still in review.
  */
 const FOOTER_ABOUT_LINE =
-  "Food, books and home technology — including wine accessories, never alcohol itself.";
+  "Original photography of food, books, home technology and wine accessories.";
 
 /**
  * The registered LegalPage for a route this footer links to (round-1
