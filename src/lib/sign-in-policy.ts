@@ -191,6 +191,17 @@ function isEmailShaped(value: string): boolean {
  * same person.
  */
 function normalizeEmail(value: unknown): string | null {
+  return normalizeString(value);
+}
+
+/**
+ * The one definition of "comparable form" for an untrusted optional string
+ * from Auth.js or configuration: trim, lowercase, and collapse absent,
+ * non-string and blank to `null`. Shared by the address and the provider id
+ * (PR #81 round 4) so a future change — Unicode case folding, say — happens
+ * once.
+ */
+function normalizeString(value: unknown): string | null {
   if (typeof value !== "string") {
     return null;
   }
@@ -302,11 +313,12 @@ export function permittedIdentities(
     ...splitList(env.ADMIN_BOOTSTRAP_EMAILS),
   ];
 
-  // First occurrence wins, keyed by (provider, address) — the same Set/Map
-  // idiom as appendGalleryItems (gallery-items.ts) and parseTagNames
+  // First occurrence wins, keyed by the (provider, address) tuple — the same
+  // Set/Map idiom as appendGalleryItems (gallery-items.ts) and parseTagNames
   // (tags.ts), so "unique by what" is stated by the key rather than by a
-  // comparison. `provider ?? ""` keeps an unbound entry's key distinct from
-  // every bound one without a separator clash: ids contain no `:`.
+  // comparison. The key is the JSON of the pair, not a hand-joined string,
+  // so it needs no separator argument: `null` and every address serialise
+  // distinctly whatever characters they contain (PR #81 round 4).
   const byKey = new Map<string, PermittedEntry>();
   const malformed = new Set<string>();
   for (const entry of entries) {
@@ -315,7 +327,7 @@ export function permittedIdentities(
       malformed.add(entry);
       continue;
     }
-    const key = `${usable.provider ?? ""}:${usable.email}`;
+    const key = JSON.stringify([usable.provider, usable.email]);
     if (!byKey.has(key)) {
       byKey.set(key, usable);
     }
@@ -448,6 +460,12 @@ export function authorisedEmail(attempt: SignInAttempt): string | null {
  *
  * Reads as the order it decides in: is there an address at all, does the
  * provider stand behind it, is anything configured, is it on the list.
+ *
+ * A VIEW, not a layer: this and `isPermittedSignIn` are two thin projections
+ * of `evaluateSignIn`, and neither calls the other. Production reaches only
+ * `isPermittedSignIn`; this one exists so the decision can be asserted on
+ * directly, without capturing log output. A change meant for production
+ * belongs in `evaluateSignIn`, where both will see it (PR #81 round 4).
  */
 export function decideSignIn(
   attempt: SignInAttempt,
@@ -520,12 +538,8 @@ function evaluateSignIn(
 
 /** The provider id asserted by this attempt, or `null` when there is none. */
 function signInProvider(attempt: SignInAttempt): SignInProvider | null {
-  const raw = attempt.account?.provider;
-  if (typeof raw !== "string") {
-    return null;
-  }
-  const normalized = raw.trim().toLowerCase();
-  return isSignInProvider(normalized) ? normalized : null;
+  const normalized = normalizeString(attempt.account?.provider);
+  return normalized !== null && isSignInProvider(normalized) ? normalized : null;
 }
 
 /**
