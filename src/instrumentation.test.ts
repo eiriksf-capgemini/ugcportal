@@ -5,8 +5,7 @@ import {
   checkSignInConfiguration,
   register,
 } from "@/instrumentation";
-import { legalPages } from "@/lib/legal/pages";
-import { unresolvedPlaceholders } from "@/lib/legal/publishable";
+import { FILLED_LEGAL_ENV, stubLegalEnv } from "@/lib/legal/legal-page.test-support";
 import { PERMITTED_EMAILS_VAR } from "@/lib/sign-in-policy";
 
 const PROD = { NODE_ENV: "production" } as NodeJS.ProcessEnv;
@@ -143,29 +142,28 @@ describe("the legal-pages startup check", () => {
     vi.restoreAllMocks();
   });
 
-  it("is announced at boot in production if and only if a placeholder remains", async () => {
-    const remaining = legalPages().some(
-      (page) => unresolvedPlaceholders(page).length > 0,
-    );
-    vi.stubEnv("NODE_ENV", "production");
+  async function legalLinesFromBoot(): Promise<string[]> {
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
-
     await register();
-
-    const legalLines = errors.mock.calls
+    return errors.mock.calls
       .map((call) => String(call[0]))
       .filter((line) => line.startsWith("[legal]"));
-    expect(legalLines.length > 0).toBe(remaining);
+  }
+
+  it("names an unset LEGAL_* variable at boot, in production and out", async () => {
+    stubLegalEnv("production", { ...FILLED_LEGAL_ENV, LEGAL_CONTROLLER_NAME: "" });
+    const inProduction = await legalLinesFromBoot();
+    expect(inProduction.join("\n")).toContain("LEGAL_CONTROLLER_NAME is not set");
+    expect(inProduction.join("\n")).toContain("Production will not serve");
+
+    stubLegalEnv("development", { ...FILLED_LEGAL_ENV, LEGAL_CONTROLLER_NAME: "" });
+    const inDevelopment = await legalLinesFromBoot();
+    expect(inDevelopment.join("\n")).toContain("LEGAL_CONTROLLER_NAME is not set");
+    expect(inDevelopment.join("\n")).not.toContain("Production will not serve");
   });
 
-  it("says nothing outside production", async () => {
-    vi.stubEnv("NODE_ENV", "development");
-    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
-
-    await register();
-
-    expect(
-      errors.mock.calls.map((call) => String(call[0])).filter((l) => l.startsWith("[legal]")),
-    ).toEqual([]);
+  it("is quiet once every variable is set", async () => {
+    stubLegalEnv("production", FILLED_LEGAL_ENV);
+    expect(await legalLinesFromBoot()).toEqual([]);
   });
 });

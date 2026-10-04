@@ -1,77 +1,93 @@
 /**
  * Who is behind the site, for the privacy statement and the licence page
- * (ugcportal-qnq9.4).
+ * (ugcportal-qnq9.4) — read from the environment, like every other piece of
+ * required configuration in this repo (requireEnv in src/lib/s3.ts, the
+ * boot warnings in src/instrumentation.ts).
  *
- * The data controller is the person in whose name the site and its accounts
- * are registered (docs/ugc-research.md, decisions table, "Owner"). Her name
- * and the contact address are not in any source file this code can read, so
- * they are PLACEHOLDERS here, in the one format `findPlaceholders` looks for
- * — `[UPPER-CASE WORDS IN SQUARE BRACKETS]` — and the operator fills them in
- * before the pages go live.
+ * Environment rather than source (PR #90 review round 2): the controller is
+ * a private person (docs/ugc-research.md, decisions table, "Owner"), and her
+ * name does not belong in a public source tree; the hosting and storage
+ * providers are deployment facts src/lib/s3.ts is deliberately agnostic
+ * about. "Unset" is also binary, where a bracketed placeholder in prose was
+ * a heuristic.
  *
- * The two hosting entries are placeholders for the same reason: src/lib/s3.ts
- * is provider-agnostic by design, nothing in this repository names the VPS,
- * and GDPR Art. 13(1)(e)-(f) wants the recipient and any transfer outside
- * the EEA named. Guessing (DreamObjects, say — ugcportal-odx is still open)
- * would be exactly the "claim the code does not back" this bead exists to
- * avoid.
+ * Why each exists — GDPR Art. 13(1):
+ *  - LEGAL_CONTROLLER_NAME   (a) the identity of the controller;
+ *  - LEGAL_CONTACT_EMAIL     (a) the controller's contact details, and
+ *                            Art. 12: where data-subject requests go;
+ *  - LEGAL_HOSTING_PROVIDER  (e) the recipient that operates the server
+ *                            (sees IP addresses, holds the database), and
+ *                            (f) whether that is outside the EEA;
+ *  - LEGAL_STORAGE_PROVIDER  (e)/(f) the same for the object store that
+ *                            holds uploads and rights evidence.
  *
- * Production refuses to render either page while a placeholder remains —
- * see src/lib/legal/publishable.ts.
+ * While a variable is unset the pages render its name in square brackets
+ * (`unsetMarker`), production refuses to serve them, and boot says so — see
+ * src/lib/legal/publishable.ts. Documented in env.example.
  */
+
+export const LEGAL_CONTACT_VARS = {
+  controllerName: "LEGAL_CONTROLLER_NAME",
+  contactEmail: "LEGAL_CONTACT_EMAIL",
+  hostingProvider: "LEGAL_HOSTING_PROVIDER",
+  storageProvider: "LEGAL_STORAGE_PROVIDER",
+} as const;
+
+export type LegalContactField = keyof typeof LEGAL_CONTACT_VARS;
+export type LegalContactVar = (typeof LEGAL_CONTACT_VARS)[LegalContactField];
+export type LegalContact = Record<LegalContactField, string>;
+
+export type LegalContactReading = {
+  /** Every field filled — from the environment, or with `unsetMarker`. */
+  contact: LegalContact;
+  /** The variables that were unset or blank, in LEGAL_CONTACT_VARS order. */
+  missing: LegalContactVar[];
+};
 
 /**
- * Anything in square brackets — `[CONTROLLER NAME]`, `[fill in later]`,
- * `[Todo: confirm]` — plus the bare words TODO and TBD in any case, as whole
- * words. Deliberately broad (PR #90 review round 1): the first version
- * matched only upper-case tokens, which left a lower-case reminder free to
- * ship to production unredacted. The legal pages contain no legitimate
- * bracketed prose, so there is nothing for a broad match to trip over, and
- * if that ever changes the right move is to reword the prose, not to narrow
- * the guard. Not configurable, so there is exactly one notion of
- * "placeholder" for the pages, the guard and the tests.
+ * What an unset variable renders as: `[LEGAL_CONTROLLER_NAME]`. Bracketed
+ * so it is unmistakable on a dev screen, and so the prose scan in
+ * publishable.ts (the second line of defence) would also catch it.
  */
-export const PLACEHOLDER_PATTERN = /\[[^\]\n]+\]|\b(?:TODO|TBD)\b/gi;
-
-/** Every placeholder token found in the given texts, in order, deduplicated. */
-export function findPlaceholders(texts: Iterable<string>): string[] {
-  const found = new Set<string>();
-  for (const text of texts) {
-    for (const match of text.matchAll(PLACEHOLDER_PATTERN)) {
-      found.add(match[0]);
-    }
-  }
-  return Array.from(found);
+export function unsetMarker(name: LegalContactVar): string {
+  return `[${name}]`;
 }
 
-export type LegalContact = {
-  /** The data controller: the person the site is registered to. */
-  controllerName: string;
-  /** Where data-subject requests, licence requests and objections go. */
-  contactEmail: string;
-  /** The company that runs the server the site is served from, and its country. */
-  hostingProvider: string;
-  /** The S3-compatible object-storage provider (src/lib/s3.ts), and its country. */
-  storageProvider: string;
-};
-
-export const LEGAL_CONTACT: LegalContact = {
-  controllerName: "[CONTROLLER NAME]",
-  contactEmail: "[CONTACT EMAIL]",
-  hostingProvider: "[HOSTING PROVIDER, COUNTRY]",
-  storageProvider: "[OBJECT-STORAGE PROVIDER, COUNTRY]",
-};
+/** Reads the four variables; never throws, so a dev page can show what is missing. */
+export function readLegalContact(
+  env: NodeJS.ProcessEnv = process.env,
+): LegalContactReading {
+  const missing: LegalContactVar[] = [];
+  const contact = {} as LegalContact;
+  for (const field of Object.keys(LEGAL_CONTACT_VARS) as LegalContactField[]) {
+    const name = LEGAL_CONTACT_VARS[field];
+    const value = env[name]?.trim();
+    if (value) {
+      contact[field] = value;
+    } else {
+      contact[field] = unsetMarker(name);
+      missing.push(name);
+    }
+  }
+  return { contact, missing };
+}
 
 /**
- * Review state of the legal pages. `draft` until whoever plays the DPO role
- * has signed the text off (ugcportal-alg gates ugcportal-yck; the bead's own
- * notes say the pages "cannot be published without ugcportal-alg's
- * sign-off"). While draft, each page shows a visible notice and carries a
- * `ugcportal:draft` meta tag — the marker ugcportal-akv6's footer guard
- * reads. Flip to `published` in the same change that removes the last
- * placeholder.
+ * The human sign-off ugcportal-alg requires before the draft marker comes
+ * off (bead K4: "review by whoever plays the DPO/legal role for this project
+ * before the draft marker is removed"). A source constant, not an
+ * environment variable, because it is a fact about THIS text at THIS
+ * revision: set it in the same PR that makes the reviewed change, so the
+ * sign-off and the words it covers move together. `null` until then.
+ *
+ * Sign-off is one of the three things that keep a page in draft (see
+ * `legalReadiness` in publishable.ts); unlike the other two it is not a
+ * configuration problem, so it does not stop production from serving the
+ * page — it keeps the draft notice, the `ugcportal:draft` meta tag that
+ * ugcportal-akv6's footer guard reads, and `noindex` in place.
  */
-export const LEGAL_REVIEW_STATUS: "draft" | "published" = "draft";
+export type LegalSignOff = { by: string; date: string; bead: string };
+export const LEGAL_SIGN_OFF: LegalSignOff | null = null;
 
 /** The ISO date the text was last checked against the code. */
 export const LEGAL_LAST_REVIEWED = "2026-10-04";

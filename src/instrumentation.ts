@@ -111,9 +111,10 @@ export async function register(): Promise<void> {
   for (const warning of [
     checkEvidenceEncryption(),
     checkSignInConfiguration(),
-    // ugcportal-qnq9.4: a legal page still carrying "[CONTROLLER NAME]"
-    // refuses to render in production (src/lib/legal/publishable.ts); say
-    // so at boot rather than leaving it to the first visitor to find.
+    // ugcportal-qnq9.4: while a LEGAL_* variable is unset (env.example) the
+    // legal pages refuse to render in production (src/lib/legal/
+    // publishable.ts); say which at boot rather than leaving it to the
+    // first visitor to find.
     checkLegalPagesPublishable(legalPages()),
   ]) {
     if (warning) {

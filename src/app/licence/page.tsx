@@ -1,35 +1,29 @@
-import {
-  LegalPageFrame,
-  LegalParagraphs,
-  LegalSection,
-  legalMetadata,
-} from "@/components/legal/legal-page";
-import { assertPublishable } from "@/lib/legal/publishable";
-import { LICENCE_PATH } from "@/lib/routes";
+import type { Metadata } from "next";
 
-import { LICENCE_INTRO, LICENCE_SECTIONS, licenceTexts } from "./content";
+import { LegalPageFrame, LegalProse, legalMetadata } from "@/components/legal/legal-page";
+import { assertPublishable, legalReadiness } from "@/lib/legal/publishable";
 
-export const metadata = legalMetadata("Licence");
+import { loadLicence } from "./content";
 
 /**
  * The licence text (ugcportal-qnq9.4). All text lives in ./content.ts; this
- * file only lays it out. Same production guard as /privacy: a licence page
- * telling people to e-mail "[CONTACT EMAIL]" is not published.
+ * file only lays it out. Same reading, guard and draft logic as /privacy —
+ * see that page's header.
  */
+
+export function generateMetadata(): Metadata {
+  return legalMetadata("Licence", legalReadiness([loadLicence().page]).draft);
+}
+
 export default function LicencePage() {
-  assertPublishable({ path: LICENCE_PATH, texts: licenceTexts() });
+  const { content, page } = loadLicence();
+  assertPublishable(page);
+  const { draft } = legalReadiness([page]);
 
   return (
-    <LegalPageFrame title="Licence" intro={LICENCE_INTRO}>
-      {LICENCE_SECTIONS.map((section) => (
-        <LegalSection
-          key={section.id}
-          id={section.id}
-          testId={`licence-section-${section.id}`}
-          title={section.title}
-        >
-          <LegalParagraphs paragraphs={section.paragraphs} />
-        </LegalSection>
+    <LegalPageFrame title="Licence" intro={content.intro} draft={draft}>
+      {content.sections.map((section) => (
+        <LegalProse key={section.id} section={section} testIdPrefix="licence-section" />
       ))}
     </LegalPageFrame>
   );

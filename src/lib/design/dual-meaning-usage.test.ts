@@ -156,21 +156,26 @@ function scanDualMeaningUsage(): Map<string, Partial<Record<DualMeaningToken, nu
  * text-muted-foreground, the same token its sibling already uses.
  */
 const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> = {
-  "src/app/auth/error/page.tsx": { "text-foreground": 1, "text-muted-foreground": 1 },
+  // The page h1 moved out of auth/error, upload and the legal frame into
+  // src/components/page-title.tsx (ugcportal-qnq9.4, PR #90 round 2); it
+  // still renders straight on --background inside the app shell's <main>,
+  // so the page-canvas token stays the correct one.
+  "src/components/page-title.tsx": { "text-foreground": 1 },
+  "src/app/auth/error/page.tsx": { "text-muted-foreground": 1 },
   // ugcportal-qnq9.4: the legal pages render straight on --background inside
   // the app shell's <main>, with no surface well of their own - the same
-  // situation as auth/error/page.tsx and upload/page.tsx above, so the
-  // page-canvas pair is the correct one.
-  "src/app/privacy/page.tsx": { "text-foreground": 1, "text-muted-foreground": 1 },
+  // situation as auth/error/page.tsx and upload/page.tsx, so the page-canvas
+  // pair is the correct one.
+  "src/app/privacy/page.tsx": { "text-foreground": 1 },
   "src/components/legal/legal-page.tsx": {
-    "text-foreground": 3,
+    "text-foreground": 2,
     "text-muted-foreground": 5,
   },
   "src/app/admin/settings/rights/page.tsx": { "text-muted-foreground": 5, "text-primary": 2 },
   "src/app/admin/settings/rights/decision-form.tsx": { "text-muted-foreground": 3 },
   "src/app/admin/settings/users/page.tsx": { "text-muted-foreground": 4, "text-primary": 1 },
   "src/app/admin/settings/instagram/page.tsx": { "text-muted-foreground": 3, "text-primary": 1 },
-  "src/app/upload/page.tsx": { "text-foreground": 1, "text-muted-foreground": 1 },
+  "src/app/upload/page.tsx": { "text-muted-foreground": 1 },
   "src/app/upload/upload-form.tsx": { "text-foreground": 2, "text-muted-foreground": 5 },
   "src/components/upload-link.tsx": { "text-foreground": 1, "text-primary": 1 },
   "src/components/ui/button.tsx": { "border-primary": 1, "text-primary": 2 },

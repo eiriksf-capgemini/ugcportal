@@ -1,16 +1,20 @@
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
 import { isTestFile, stripComments, walkSourceFiles } from "@/lib/design/scan-source";
+import {
+  FILLED_CONTACT,
+  REPO_ROOT,
+  itReviewPointersExist,
+} from "@/lib/legal/legal-page.test-support";
 
 import {
   MODEL_COVERAGE,
-  PRIVACY_CATEGORIES,
-  PRIVACY_COOKIES,
-  PRIVACY_RIGHTS,
   UNDETERMINED_RETENTION_TEXT,
+  privacyContent,
+  privacyProseSections,
   retentionText,
   type Retention,
 } from "./content";
@@ -22,21 +26,21 @@ import {
  *    "not personal data"), so a new table forces a decision about the page.
  *  - K3: an undetermined retention renders the fixed sentence and never a
  *    number of days/months/years.
- *  - K5: every file a category claims as its backing exists, and the two
- *    negative claims the page makes about the application ("does not record
- *    your IP address or browser", "sets no cookies of its own when browsing")
- *    are checked against the source tree, not asserted from memory.
+ *  - K5: every review pointer names a file that exists (a re-prompt, not a
+ *    proof — see src/lib/legal/section.ts), and the negative claims the page
+ *    makes about the application ("does not record your IP address or
+ *    browser", "sets no cookies of its own when browsing") are checked
+ *    against the source tree, not asserted from memory.
  */
 
-const REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
 const SRC_ROOT = path.join(REPO_ROOT, "src");
+const content = privacyContent(FILLED_CONTACT);
+const categoryIds = new Set(content.categories.map((category) => category.id));
 
 function schemaModels(): string[] {
   const schema = readFileSync(path.join(REPO_ROOT, "prisma", "schema.prisma"), "utf8");
   return Array.from(schema.matchAll(/^model\s+(\w+)\s*\{/gm), (m) => m[1]);
 }
-
-const categoryIds = new Set(PRIVACY_CATEGORIES.map((category) => category.id));
 
 /** A number followed by a unit of time — the thing K3 forbids inventing. */
 const NUMERIC_PERIOD = /\b\d+\s*(?:day|week|month|year)s?\b/i;
@@ -81,7 +85,7 @@ describe("K2: every model in prisma/schema.prisma is covered", () => {
 });
 
 describe("K1: every category states the Art. 13 items", () => {
-  it.each(PRIVACY_CATEGORIES.map((category) => [category.id, category] as const))(
+  it.each(content.categories.map((category) => [category.id, category] as const))(
     "%s",
     (_id, category) => {
       expect(category.what.length).toBeGreaterThan(0);
@@ -93,13 +97,24 @@ describe("K1: every category states the Art. 13 items", () => {
     },
   );
 
-  it("uses each category id once", () => {
-    expect(categoryIds.size).toBe(PRIVACY_CATEGORIES.length);
+  it("uses each category id once, and no prose section reuses one", () => {
+    expect(categoryIds.size).toBe(content.categories.length);
+    for (const section of privacyProseSections(content)) {
+      expect(categoryIds).not.toContain(section.id);
+    }
+  });
+
+  it("puts the configured contact where Art. 13 wants it", () => {
+    expect(content.controller.paragraphs.join(" ")).toContain(FILLED_CONTACT.controllerName);
+    expect(content.controller.paragraphs.join(" ")).toContain(FILLED_CONTACT.contactEmail);
+    expect(content.rights.paragraphs.join(" ")).toContain(FILLED_CONTACT.contactEmail);
+    expect(content.transfers.paragraphs.join(" ")).toContain(FILLED_CONTACT.hostingProvider);
+    expect(content.transfers.paragraphs.join(" ")).toContain(FILLED_CONTACT.storageProvider);
   });
 });
 
 describe("K3: an undetermined retention is never a number", () => {
-  const undetermined = PRIVACY_CATEGORIES.filter(
+  const undetermined = content.categories.filter(
     (category) => category.retention.kind === "undetermined",
   );
 
@@ -131,42 +146,37 @@ describe("K3: an undetermined retention is never a number", () => {
   it("a stated period is one the code enforces: sessions, uploads", () => {
     // The only two retention facts the code makes true today. Anything
     // else claiming a period has to come with the file that enforces it.
-    const stated = PRIVACY_CATEGORIES.filter(
-      (category) => category.retention.kind === "stated",
-    ).map((category) => category.id);
+    const stated = content.categories
+      .filter((category) => category.retention.kind === "stated")
+      .map((category) => category.id);
     expect(stated.sort()).toEqual(["sessions", "uploads"]);
   });
 });
 
-describe("K5: every claim points at a file that exists", () => {
-  const sources = [
-    ...PRIVACY_CATEGORIES.map((category) => [category.id, category.backedBy] as const),
-    [PRIVACY_COOKIES.id, PRIVACY_COOKIES.backedBy] as const,
-    [PRIVACY_RIGHTS.id, PRIVACY_RIGHTS.backedBy] as const,
-  ];
+describe("K5: every review pointer names a file that exists", () => {
+  itReviewPointersExist([...content.categories, ...privacyProseSections(content)]);
 
-  it.each(sources)("%s", (_id, backedBy) => {
-    expect(backedBy.length).toBeGreaterThan(0);
-    for (const file of backedBy) {
-      expect(existsSync(path.join(REPO_ROOT, file)), file).toBe(true);
+  it("every category has at least one pointer", () => {
+    // Prose sections may be pure policy; a data category never is.
+    for (const category of content.categories) {
+      expect(category.reviewAgainst.length, category.id).toBeGreaterThan(0);
     }
-  });
-
-  it("would notice a renamed file", () => {
-    expect(existsSync(path.join(REPO_ROOT, "src/lib/does-not-exist.ts"))).toBe(false);
   });
 });
 
 /**
- * The two negative claims, checked mechanically. Application source only:
- * tests and the generated Prisma client are excluded, and so is this file.
+ * The negative claims, checked mechanically. Application source only:
+ * tests, test support and the generated Prisma client are excluded.
  */
 function applicationSources(): { file: string; code: string }[] {
-  return walkSourceFiles(SRC_ROOT, (file) => isTestFile(file) || file.includes("/generated/"))
-    .map((file) => ({
-      file: path.relative(REPO_ROOT, file),
-      code: stripComments(readFileSync(file, "utf8")),
-    }));
+  return walkSourceFiles(
+    SRC_ROOT,
+    (file) =>
+      isTestFile(file) || file.includes("/generated/") || file.endsWith(".test-support.ts"),
+  ).map((file) => ({
+    file: path.relative(REPO_ROOT, file),
+    code: stripComments(readFileSync(file, "utf8")),
+  }));
 }
 
 describe("the negative claims hold against the source tree", () => {
@@ -178,7 +188,7 @@ describe("the negative claims hold against the source tree", () => {
 
   it("nothing reads a visitor's IP address or user agent", () => {
     // "the application code does not record your IP address, your browser
-    // or what you looked at" (category `visitors`, `logs`).
+    // or what you looked at" (categories `visitors`, `logs`).
     const pattern = /x-forwarded-for|x-real-ip|remoteAddress|user-agent|userAgent/i;
     const offenders = sources.filter(({ code }) => pattern.test(code)).map((s) => s.file);
     expect(offenders).toEqual([]);

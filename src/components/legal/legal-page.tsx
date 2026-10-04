@@ -1,20 +1,23 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
 
-import { LEGAL_LAST_REVIEWED, LEGAL_REVIEW_STATUS } from "@/lib/legal/contact";
+import { PageTitle } from "@/components/page-title";
+import { LEGAL_LAST_REVIEWED } from "@/lib/legal/contact";
+import type { LegalListSection, LegalProseSection } from "@/lib/legal/section";
 
 /**
- * The frame shared by /privacy and /licence (ugcportal-qnq9.4): one heading
- * scale, one draft notice, one "last checked" line, so the two pages cannot
- * drift apart on anything but their text.
+ * The frame shared by /privacy and /licence (ugcportal-qnq9.4): one draft
+ * notice, one "last checked" line, one way to render a section, so the two
+ * pages cannot drift apart on anything but their text.
  *
  * Renders into the app shell's single <main> (src/components/app-shell.tsx)
- * and adds no landmark of its own. Same width as the sign-in error page
- * (max-w-xl is too narrow for a definition list; max-w-3xl, like /upload,
- * fits one). Colour tokens are the page-canvas pair, text-foreground and
- * text-muted-foreground, because this renders straight on --background —
- * see the note in src/app/upload/page.tsx and the pin in
+ * and adds no landmark of its own. max-w-3xl, like /upload: wide enough for
+ * a definition list. Colour tokens are the page-canvas pair, because this
+ * renders straight on --background — see the pin in
  * src/lib/design/dual-meaning-usage.test.ts.
+ *
+ * Whether the page is a draft is decided by `legalReadiness` in
+ * src/lib/legal/publishable.ts and passed in; nothing here decides it.
  */
 
 /**
@@ -25,37 +28,39 @@ import { LEGAL_LAST_REVIEWED, LEGAL_REVIEW_STATUS } from "@/lib/legal/contact";
 export const DRAFT_META_NAME = "ugcportal:draft";
 
 export const DRAFT_NOTICE =
-  "Draft. This text is written from the code and checked against it, but it has not yet been signed off, and the contact details are still to be filled in.";
+  "Draft. This text is written from the code and checked against it, but it is not yet complete or signed off.";
 
 /** Page metadata for a legal page: titled, and marked as a draft while it is one. */
-export function legalMetadata(title: string): Metadata {
-  if (LEGAL_REVIEW_STATUS !== "draft") {
+export function legalMetadata(title: string, draft: boolean): Metadata {
+  if (!draft) {
     return { title };
   }
   return {
     title,
-    // Not indexed while draft: a search engine quoting "[CONTROLLER NAME]"
+    // Not indexed while draft: a search engine quoting "[LEGAL_CONTACT_EMAIL]"
     // back at a visitor is a worse outcome than a page that is hard to find.
     robots: { index: false, follow: false },
     other: { [DRAFT_META_NAME]: "true" },
   };
 }
 
+const PARAGRAPH_CLASS = "mt-3 max-w-prose text-sm text-muted-foreground";
+
 export function LegalPageFrame({
   title,
   intro,
+  draft,
   children,
 }: {
   title: string;
   intro: readonly string[];
+  draft: boolean;
   children: ReactNode;
 }) {
   return (
     <div className="mx-auto w-full max-w-3xl px-4 py-12 sm:px-6">
-      <h1 className="text-2xl font-medium tracking-tight text-foreground sm:text-3xl">
-        {title}
-      </h1>
-      {LEGAL_REVIEW_STATUS === "draft" ? (
+      <PageTitle>{title}</PageTitle>
+      {draft ? (
         <p
           role="status"
           data-testid="legal-draft-notice"
@@ -64,11 +69,7 @@ export function LegalPageFrame({
           {DRAFT_NOTICE}
         </p>
       ) : null}
-      {intro.map((paragraph, index) => (
-        <p key={index} className="mt-4 max-w-prose text-sm text-muted-foreground">
-          {paragraph}
-        </p>
-      ))}
+      <LegalParagraphs paragraphs={intro} />
       {children}
       <p className="mt-12 max-w-prose text-xs text-muted-foreground">
         Last checked against the code: {LEGAL_LAST_REVIEWED}.
@@ -100,20 +101,54 @@ export function LegalSection({
 }
 
 /**
- * Keyed by position, not by text (PR #90 review round 1): two identical
- * paragraphs would collide on a text key. The content is static data from
- * ./content.ts and is never reordered at runtime, so an index is a stable
- * identity here.
+ * A prose or list section from a content module, under a test id built from
+ * the given prefix and the section's id. Lists render their items before
+ * their paragraphs, matching `sectionTexts` in src/lib/legal/section.ts.
+ */
+export function LegalProse({
+  section,
+  testIdPrefix,
+}: {
+  section: LegalProseSection | LegalListSection;
+  testIdPrefix: string;
+}) {
+  return (
+    <LegalSection
+      id={section.id}
+      testId={`${testIdPrefix}-${section.id}`}
+      title={section.title}
+    >
+      {"items" in section ? <LegalList items={section.items} /> : null}
+      <LegalParagraphs paragraphs={section.paragraphs} />
+    </LegalSection>
+  );
+}
+
+/**
+ * Keyed by position, not by text (PR #90 round 1): two identical paragraphs
+ * would collide on a text key. The content is static data from a content
+ * module and is never reordered at runtime, so an index is a stable
+ * identity here. The same holds for LegalList and LegalFacts below.
  */
 export function LegalParagraphs({ paragraphs }: { paragraphs: readonly string[] }) {
   return (
     <>
       {paragraphs.map((paragraph, index) => (
-        <p key={index} className="mt-3 max-w-prose text-sm text-muted-foreground">
+        <p key={index} className={PARAGRAPH_CLASS}>
           {paragraph}
         </p>
       ))}
     </>
+  );
+}
+
+export function LegalList({ items }: { items: readonly string[] }) {
+  return (
+    <ul className="mt-3 max-w-prose list-disc space-y-1 pl-5 text-sm text-muted-foreground">
+      {items.map((item, index) => (
+        <li key={index}>{item}</li>
+      ))}
+    </ul>
   );
 }
 
@@ -126,10 +161,9 @@ export function LegalFacts({
   return (
     <dl className="mt-4 grid max-w-prose grid-cols-1 gap-x-6 gap-y-2 text-sm sm:grid-cols-[max-content_1fr]">
       {facts.map((fact, index) => (
-        // A fragment keyed per row, so dt and dd stay siblings inside the dl
-        // (a wrapper div between them is invalid in a grid dl for assistive
-        // tech in some browsers). Keyed by position for the same reason as
-        // LegalParagraphs above.
+        // A fragment per row, so dt and dd stay siblings inside the dl (a
+        // wrapper div between them is invalid in a grid dl for assistive
+        // tech in some browsers).
         <LegalFact key={index} {...fact} />
       ))}
     </dl>
