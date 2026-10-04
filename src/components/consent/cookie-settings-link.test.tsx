@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 import { act, useEffect } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { ConsentProvider, useConsent } from "./consent-context";
+import { setupConsentTestRoot } from "./consent-test-support";
 import { CookieSettingsLink } from "./cookie-settings-link";
 
 /**
@@ -14,24 +14,7 @@ import { CookieSettingsLink } from "./cookie-settings-link";
  * analytics-loader.test.tsx; this file is just the control itself.
  */
 
-let container: HTMLDivElement;
-let root: Root;
-
-beforeEach(() => {
-  (
-    globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }
-  ).IS_REACT_ACT_ENVIRONMENT = true;
-  container = document.createElement("div");
-  document.body.append(container);
-  root = createRoot(container);
-});
-
-afterEach(() => {
-  act(() => {
-    root.unmount();
-  });
-  container.remove();
-});
+const ctx = setupConsentTestRoot();
 
 let bannerOpenRef: boolean | undefined;
 
@@ -45,13 +28,13 @@ function Probe() {
 
 it("is labelled 'Cookies' and is a real button, not a link", () => {
   act(() => {
-    root.render(
+    ctx.root().render(
       <ConsentProvider initialConsent="granted">
         <CookieSettingsLink />
       </ConsentProvider>,
     );
   });
-  const button = container.querySelector("button");
+  const button = ctx.container().querySelector("button");
   expect(button).not.toBeNull();
   expect(button?.textContent).toBe("Cookies");
   expect(button?.tagName).toBe("BUTTON");
@@ -60,7 +43,7 @@ it("is labelled 'Cookies' and is a real button, not a link", () => {
 describe("clicking it", () => {
   it("reopens the banner even though a choice was already made", () => {
     act(() => {
-      root.render(
+      ctx.root().render(
         <ConsentProvider initialConsent="granted">
           <Probe />
           <CookieSettingsLink />
@@ -69,7 +52,7 @@ describe("clicking it", () => {
     });
     expect(bannerOpenRef).toBe(false);
 
-    const button = container.querySelector("button");
+    const button = ctx.container().querySelector("button");
     act(() => {
       button?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });

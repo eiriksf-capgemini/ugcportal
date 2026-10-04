@@ -75,6 +75,22 @@ import { useConsent } from "./consent-context";
  */
 export const ANALYTICS_COOKIE_NAMES: readonly string[] = [];
 
+/**
+ * Deletes each named cookie with `deleteCookie`'s DEFAULT attributes (plain
+ * `Lax`, `Secure` only inferred from the current page's own protocol).
+ *
+ * Review round 3, finding 3: that default is only correct by accident while
+ * `ANALYTICS_COOKIE_NAMES` is empty. `src/lib/cookies.ts`'s own `deleteCookie`
+ * fix (round 2, finding 5) exists precisely because a cookie written with
+ * `SameSite=None`/`Secure` is NOT reliably cleared by a delete that omits
+ * those same attributes — a browser can silently ignore the delete. So
+ * whoever adds the first real entry to `ANALYTICS_COOKIE_NAMES` must also
+ * check what `SameSite`/`Secure` the vendor's docs say IT writes, and pass
+ * those same attributes through here (extending this function's signature
+ * to carry per-cookie options, not just names, if they differ) — not
+ * assume this function's current defaults are good enough for every future
+ * vendor.
+ */
 export function clearAnalyticsCookies(
   names: readonly string[] = ANALYTICS_COOKIE_NAMES,
 ): void {

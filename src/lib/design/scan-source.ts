@@ -53,21 +53,72 @@ function walk(
 }
 
 /**
- * Strips `/* *\/` and `//` line comments from TS/TSX/CSS source.
+ * Strips `/* *\/` and `//` comments from TS/TSX/CSS source, honouring
+ * string and template-literal boundaries.
  *
- * The line-comment half uses a negative lookbehind for `:` rather than
- * usage.ts's `(^|[^:\w])` class-name boundary (ugcportal-rw9j review round
- * 1): that boundary also excludes any `//` immediately after a word
- * character with no separating space - `5//#abc123` left a genuine comment
- * un-stripped and reported a false-positive "raw hex" finding. The
- * lookbehind only has to avoid treating a URL's `://` as a comment opener;
- * neither caller of this function has class names to bound the way usage.ts
- * does.
+ * ugcportal-3wgp review round 3 (CONFIRMED medium, reproduced by the
+ * reviewer): the previous version was a pair of regexes with no notion of
+ * "inside a string" at all. Its line-comment half specifically excluded a
+ * `//` immediately preceded by `:`, to avoid treating a URL's `://` as a
+ * comment opener - but a PROTOCOL-RELATIVE URL (`"//stats.example/collect"`,
+ * no scheme, no leading `:`) has nothing before its `//` for that lookbehind
+ * to see, so the regex treated it as a real comment start and erased the
+ * rest of the line - including a live, executed string literal, not a
+ * comment at all. A vendor host reached only via such a URL would have been
+ * invisible to analytics-host.grep.test.ts's K6 scan after this function ran
+ * (confirmed: `src = "//stats.example/x?umami"` stripped to `src = "`).
+ *
+ * This is a tiny single-pass scanner instead: it tracks whether the current
+ * position is inside a `'`/`"`/`` ` `` string (honouring `\`-escapes) and
+ * only treats `//`/`/* ` as comment openers OUTSIDE one. A nested template
+ * literal inside a `${...}` substitution (`` `a${`b`}c` ``) is out of scope -
+ * this repo's own source never does that, and the two real callers
+ * (no-raw-hex.test.ts, dual-meaning-usage.test.ts) plus this bead's K6 grep
+ * all only need "don't mistake a URL or any other string content for a
+ * comment", not full lexical correctness.
  */
 export function stripComments(source: string): string {
-  return source
-    .replace(/\/\*[\s\S]*?\*\//g, " ")
-    .replace(/(?<!:)\/\/[^\n]*/g, " ");
+  let out = "";
+  let i = 0;
+  const n = source.length;
+
+  function skipString(quote: string): number {
+    let j = i + 1;
+    while (j < n && source[j] !== quote) {
+      j += source[j] === "\\" ? 2 : 1;
+    }
+    return Math.min(j + 1, n);
+  }
+
+  while (i < n) {
+    const ch = source[i];
+
+    if (ch === '"' || ch === "'" || ch === "`") {
+      const end = skipString(ch);
+      out += source.slice(i, end);
+      i = end;
+      continue;
+    }
+
+    if (ch === "/" && source[i + 1] === "*") {
+      const close = source.indexOf("*/", i + 2);
+      out += " ";
+      i = close === -1 ? n : close + 2;
+      continue;
+    }
+
+    if (ch === "/" && source[i + 1] === "/") {
+      const newline = source.indexOf("\n", i);
+      out += " ";
+      i = newline === -1 ? n : newline;
+      continue;
+    }
+
+    out += ch;
+    i += 1;
+  }
+
+  return out;
 }
 
 /** True for a `*.test.ts(x)`/`*.spec.ts(x)` or `*.spec.css` file - not shipped UI, so not worth scanning. */

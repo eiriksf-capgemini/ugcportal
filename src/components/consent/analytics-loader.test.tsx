@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
 import { act, useEffect } from "react";
-import { createRoot, type Root } from "react-dom/client";
+import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { readStoredConsent } from "@/lib/consent";
+
+import { setupConsentTestRoot } from "./consent-test-support";
 
 /**
  * K1-K4 (ugcportal-3wgp): AnalyticsLoader is the ONLY place a tracking
@@ -45,8 +47,7 @@ const UMAMI_DISABLE_STORAGE_KEY = "umami.disabled";
 const ANALYTICS_SRC_VAR = "NEXT_PUBLIC_UMAMI_SRC";
 const ANALYTICS_WEBSITE_ID_VAR = "NEXT_PUBLIC_UMAMI_WEBSITE_ID";
 
-let container: HTMLDivElement;
-let root: Root;
+const ctx = setupConsentTestRoot();
 
 function setAnalyticsEnv(): void {
   process.env[ANALYTICS_SRC_VAR] = "https://analytics.example.com/script.js";
@@ -59,22 +60,12 @@ function clearAnalyticsEnv(): void {
 }
 
 beforeEach(() => {
-  (
-    globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }
-  ).IS_REACT_ACT_ENVIRONMENT = true;
   scriptMock.mockClear();
   clearAnalyticsEnv();
   window.localStorage.removeItem(UMAMI_DISABLE_STORAGE_KEY);
-  container = document.createElement("div");
-  document.body.append(container);
-  root = createRoot(container);
 });
 
 afterEach(() => {
-  act(() => {
-    root.unmount();
-  });
-  container.remove();
   clearAnalyticsEnv();
 });
 
@@ -90,7 +81,7 @@ function Actions() {
 
 function mount(initialConsent: "granted" | "denied" | null): void {
   act(() => {
-    root.render(
+    ctx.root().render(
       <ConsentProvider initialConsent={initialConsent}>
         <Actions />
         <AnalyticsLoader />
@@ -155,20 +146,37 @@ describe("K3: only-necessary", () => {
       actionsRef?.onlyNecessary();
     });
 
-    // Simulate a later visit: a fresh ConsentProvider, seeded the way
-    // src/app/layout.tsx would seed it — from the cookie written just now.
+    // Simulate a later visit: a genuinely fresh React root (a real new page
+    // load gets a fresh one — a root cannot be render()'d again once
+    // unmount()'d), seeded the way src/app/layout.tsx would seed it — from
+    // the cookie written just now. Deliberately local to this one test
+    // rather than added to setupConsentTestRoot's shared shape: no other
+    // consent suite needs a mid-test "simulate a fresh page load" (review
+    // round 3, finding 8's shared helper is for the boilerplate every
+    // suite needs, not a one-off).
     act(() => {
-      root.unmount();
+      ctx.root().unmount();
     });
-    container.remove();
-    container = document.createElement("div");
-    document.body.append(container);
-    root = createRoot(container);
+    const freshContainer = document.createElement("div");
+    document.body.append(freshContainer);
+    const freshRoot = createRoot(freshContainer);
 
-    mount(readStoredConsent());
+    act(() => {
+      freshRoot.render(
+        <ConsentProvider initialConsent={readStoredConsent()}>
+          <Actions />
+          <AnalyticsLoader />
+        </ConsentProvider>,
+      );
+    });
 
     expect(actionsRef?.bannerOpen).toBe(false);
     expect(scriptMock).not.toHaveBeenCalled();
+
+    act(() => {
+      freshRoot.unmount();
+    });
+    freshContainer.remove();
   });
 });
 

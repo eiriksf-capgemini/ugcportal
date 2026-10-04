@@ -51,7 +51,24 @@ export const HEX_COLOR_SELECTORS = [
  *   (and `anything.createElement("script")` generally — there is no
  *   legitimate non-`document` receiver for this in a browser DOM context),
  *   the programmatic-DOM-construction bypass that uses no JSX and no
- *   import at all.
+ *   import at all, in both its dot-notation and computed/bracket forms
+ *   (`x["createElement"]("script")`).
+ *
+ *   KNOWN LIMIT (review round 3, finding 2), inherent to static AST
+ *   selectors rather than fixable by adding another one: every selector
+ *   here matches a LITERAL AST shape. `document.createElement(someVar)`
+ *   where `someVar` happens to hold the string `"script"` at runtime, or
+ *   `import(someVar)` where `someVar` holds `"next/script"`, cannot be
+ *   caught — the value isn't present in the source text for a selector to
+ *   match at all, only computable at runtime. The computed-property
+ *   *shape* (`x["createElement"]`, a literal string key via bracket
+ *   notation rather than dot notation) IS caught, since the literal string
+ *   is still present in the AST; a fully dynamic key or argument is not,
+ *   and no selector-based rule can close that — it would need real
+ *   data-flow analysis. The K6 grep test (analytics-host.grep.test.ts) is
+ *   the backstop for exactly this residual gap: it does not care how a
+ *   vendor's host string reached the page, only that the string itself
+ *   appears somewhere in the source.
  */
 const GATED_SCRIPT_MESSAGE =
   "next/script (or a raw <script> element, however constructed) may only " +
@@ -75,7 +92,17 @@ export const GATED_SCRIPT_SYNTAX_SELECTORS = [
     message: GATED_SCRIPT_MESSAGE,
   },
   {
+    // Dot notation: document.createElement("script").
     selector: 'CallExpression[callee.property.name="createElement"][arguments.0.value="script"]',
+    message: GATED_SCRIPT_MESSAGE,
+  },
+  {
+    // Computed/bracket notation: document["createElement"]("script") —
+    // the property is a string Literal (`.value`), not an Identifier
+    // (`.name`), so this needs its own selector rather than reusing the
+    // one above (review round 3, finding 2).
+    selector:
+      'CallExpression[callee.computed=true][callee.property.value="createElement"][arguments.0.value="script"]',
     message: GATED_SCRIPT_MESSAGE,
   },
   {
@@ -90,7 +117,10 @@ export const GATED_SCRIPT_SYNTAX_SELECTORS = [
   },
 ];
 
-const GATED_LOADER_PATH = "src/components/consent/analytics-loader.tsx";
+// Exported (review round 3, finding 5 — reuse) so analytics-host.grep.test.ts
+// doesn't carry its own independent copy of this path; repo-root-relative,
+// matching how ESLint's own `files`/`ignores` glob matching works here.
+export const GATED_LOADER_PATH = "src/components/consent/analytics-loader.tsx";
 
 const eslintConfig = defineConfig([
   ...nextVitals,

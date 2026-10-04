@@ -1,40 +1,28 @@
 // @vitest-environment jsdom
 import { act, useEffect } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
 import { CONSENT_COOKIE_NAME, readStoredConsent } from "@/lib/consent";
 
 import { ConsentProvider, useConsent } from "./consent-context";
+import { setupConsentTestRoot } from "./consent-test-support";
 
 /**
- * createRoot/act mounting, same pattern as src/app/upload/upload-form.clock
- * .test.tsx and its siblings — the one other place in this repo that needs a
- * real DOM and real state transitions rather than a single static render.
+ * createRoot/act mounting via setupConsentTestRoot (review round 3, finding
+ * 8 — shared across this file and its three siblings), same pattern as
+ * src/app/upload/upload-form.clock.test.tsx and its siblings — the one
+ * other place in this repo that needs a real DOM and real state transitions
+ * rather than a single static render.
  */
 
-let container: HTMLDivElement;
-let root: Root;
+const ctx = setupConsentTestRoot();
 
 function clearCookie(): void {
   document.cookie = `${CONSENT_COOKIE_NAME}=; Max-Age=0; Path=/`;
 }
 
 beforeEach(() => {
-  (
-    globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }
-  ).IS_REACT_ACT_ENVIRONMENT = true;
   clearCookie();
-  container = document.createElement("div");
-  document.body.append(container);
-  root = createRoot(container);
-});
-
-afterEach(() => {
-  act(() => {
-    root.unmount();
-  });
-  container.remove();
 });
 
 type Snapshot = {
@@ -64,7 +52,7 @@ function mount(
   onAction?: (actions: ReturnType<typeof useConsent>) => void,
 ): void {
   act(() => {
-    root.render(
+    ctx.root().render(
       <ConsentProvider initialConsent={initialConsent}>
         <Probe onAction={onAction} />
       </ConsentProvider>,
@@ -140,39 +128,6 @@ describe("ConsentProvider actions", () => {
     expect(latest?.consent).toBe("granted");
   });
 
-  it("reopenCount starts at 0 and does not increment on the initial mount-time open (review round 1, finding 9)", () => {
-    let actions: ReturnType<typeof useConsent> | undefined;
-    mount(null, (value) => {
-      actions = value;
-    });
-
-    // bannerOpen is already true here (no stored choice), but reopen() was
-    // never called — CookieBanner must not treat this as a reason to move
-    // focus/announce.
-    expect(actions?.bannerOpen).toBe(true);
-    expect(actions?.reopenCount).toBe(0);
-  });
-
-  it("reopenCount increments once per reopen() call", () => {
-    let actions: ReturnType<typeof useConsent> | undefined;
-    mount("granted", (value) => {
-      actions = value;
-    });
-
-    act(() => {
-      actions?.reopen();
-    });
-    expect(actions?.reopenCount).toBe(1);
-
-    act(() => {
-      actions?.onlyNecessary();
-    });
-    act(() => {
-      actions?.reopen();
-    });
-    expect(actions?.reopenCount).toBe(2);
-  });
-
   it("switching the choice after reopening overwrites the earlier one (K4 withdrawal)", () => {
     let actions: ReturnType<typeof useConsent> | undefined;
     mount("granted", (value) => {
@@ -196,7 +151,7 @@ describe("useConsent outside a provider", () => {
   it("throws rather than silently reporting no choice", () => {
     expect(() => {
       act(() => {
-        root.render(<Probe />);
+        ctx.root().render(<Probe />);
       });
     }).toThrow(/useConsent must be used within a ConsentProvider/);
   });

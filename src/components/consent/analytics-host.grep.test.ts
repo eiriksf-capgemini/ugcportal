@@ -7,6 +7,8 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { stripComments, walkSourceFiles } from "@/lib/design/scan-source";
 
+import { GATED_LOADER_PATH } from "../../../eslint.config.mjs";
+
 /**
  * K6 (ugcportal-3wgp): "the gate being bypassed by a script placed outside
  * it" must never happen. This is belt-and-braces alongside
@@ -53,9 +55,13 @@ const SRC_ROOT = path.resolve(
 );
 
 // Relative to SRC_ROOT itself (not the repo root) — see
-// findAnalyticsMarkerOffenders's own doc comment for why.
+// findAnalyticsMarkerOffenders's own doc comment for why. The loader's own
+// path comes from eslint.config.mjs's exported GATED_LOADER_PATH (review
+// round 3, finding 5 — reuse) rather than a second hardcoded copy here;
+// GATED_LOADER_PATH is repo-root-relative (ESLint's own convention), so the
+// leading "src/" is stripped to match this file's SRC_ROOT-relative one.
 const ALLOWED_RELATIVE_PATHS = new Set([
-  "components/consent/analytics-loader.tsx",
+  GATED_LOADER_PATH.replace(/^src\//, ""),
   "components/consent/analytics-loader.test.tsx",
   "components/consent/analytics-host.grep.test.ts",
 ]);
@@ -217,6 +223,30 @@ describe("findAnalyticsMarkerOffenders (the real scanner, exercised over a real 
     // comment-only test above.
     const root = fixture({
       "offender.ts": '// unrelated comment\nconst trackingSrc = "https://stats.example/umami.js";',
+    });
+
+    const result = findAnalyticsMarkerOffenders(
+      walkSourceFiles(root, INCLUDE_EVERYTHING),
+      root,
+      new Set(),
+    );
+
+    expect(result).toEqual(["offender.ts"]);
+  });
+
+  /**
+   * Review round 3, MEDIUM (CONFIRMED, reproduced by the reviewer): the old
+   * stripComments erased everything from an unprefixed `//` to end of
+   * line, so a PROTOCOL-RELATIVE URL (no scheme, so nothing precedes its
+   * `//`) inside a live string literal was mistaken for a comment opener —
+   * the rest of the line, including "umami", vanished before this scan
+   * ever ran. See scan-source.test.ts for the unit-level fixture on
+   * stripComments itself; this is the end-to-end version, through the
+   * real K6 scanner.
+   */
+  it("reports a vendor reference reached only via a protocol-relative URL in a string", () => {
+    const root = fixture({
+      "offender.ts": 'const trackingSrc = "//stats.example/collect?x=umami";',
     });
 
     const result = findAnalyticsMarkerOffenders(

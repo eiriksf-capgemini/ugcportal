@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 import { act, useEffect } from "react";
-import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { ConsentProvider, useConsent } from "./consent-context";
+import { setupConsentTestRoot } from "./consent-test-support";
 import {
   COOKIE_BANNER_ACCEPT_LABEL,
   COOKIE_BANNER_COPY,
@@ -24,28 +24,11 @@ import {
  * is a visible, deliberate diff to this test.
  */
 
-let container: HTMLDivElement;
-let root: Root;
-
-beforeEach(() => {
-  (
-    globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }
-  ).IS_REACT_ACT_ENVIRONMENT = true;
-  container = document.createElement("div");
-  document.body.append(container);
-  root = createRoot(container);
-});
-
-afterEach(() => {
-  act(() => {
-    root.unmount();
-  });
-  container.remove();
-});
+const ctx = setupConsentTestRoot();
 
 function mountOpenBanner(): void {
   act(() => {
-    root.render(
+    ctx.root().render(
       <ConsentProvider initialConsent={null}>
         <CookieBanner />
       </ConsentProvider>,
@@ -65,7 +48,7 @@ function Actions() {
 
 function mountWithActions(initialConsent: "granted" | "denied" | null): void {
   act(() => {
-    root.render(
+    ctx.root().render(
       <ConsentProvider initialConsent={initialConsent}>
         <Actions />
         <CookieBanner />
@@ -77,7 +60,7 @@ function mountWithActions(initialConsent: "granted" | "denied" | null): void {
 describe("CookieBanner copy (K5)", () => {
   it("renders the exact reviewed paragraph, once, naming what is optional and what it is for", () => {
     mountOpenBanner();
-    const paragraph = container.querySelector("p");
+    const paragraph = ctx.container().querySelector("p");
     expect(paragraph).not.toBeNull();
     expect(paragraph?.textContent).toBe(COOKIE_BANNER_COPY);
 
@@ -94,14 +77,14 @@ describe("CookieBanner copy (K5)", () => {
 
   it("is exactly one paragraph", () => {
     mountOpenBanner();
-    expect(container.querySelectorAll("p")).toHaveLength(1);
+    expect(ctx.container().querySelectorAll("p")).toHaveLength(1);
   });
 });
 
 describe("CookieBanner buttons (K5: equally prominent, no dark pattern)", () => {
   it("renders both choices as real, focusable buttons with the exact labels", () => {
     mountOpenBanner();
-    const buttons = [...container.querySelectorAll("button")];
+    const buttons = [...ctx.container().querySelectorAll("button")];
     const labels = buttons.map((button) => button.textContent);
     expect(labels).toContain(COOKIE_BANNER_ACCEPT_LABEL);
     expect(labels).toContain(COOKIE_BANNER_DECLINE_LABEL);
@@ -109,7 +92,7 @@ describe("CookieBanner buttons (K5: equally prominent, no dark pattern)", () => 
 
   it("both buttons carry the exact same class list (same variant/size — equally prominent)", () => {
     mountOpenBanner();
-    const buttons = [...container.querySelectorAll("button")];
+    const buttons = [...ctx.container().querySelectorAll("button")];
     const accept = buttons.find((b) => b.textContent === COOKIE_BANNER_ACCEPT_LABEL);
     const decline = buttons.find((b) => b.textContent === COOKIE_BANNER_DECLINE_LABEL);
     expect(accept).toBeDefined();
@@ -119,7 +102,7 @@ describe("CookieBanner buttons (K5: equally prominent, no dark pattern)", () => 
 
   it("neither button is disabled or pre-selected", () => {
     mountOpenBanner();
-    for (const button of container.querySelectorAll("button")) {
+    for (const button of ctx.container().querySelectorAll("button")) {
       expect(button.disabled).toBe(false);
       expect(button.getAttribute("aria-pressed")).toBeNull();
     }
@@ -129,18 +112,18 @@ describe("CookieBanner buttons (K5: equally prominent, no dark pattern)", () => 
 describe("CookieBanner visibility", () => {
   it("does not render once the banner is closed (accepted)", () => {
     act(() => {
-      root.render(
+      ctx.root().render(
         <ConsentProvider initialConsent="granted">
           <CookieBanner />
         </ConsentProvider>,
       );
     });
-    expect(container.querySelector('[aria-label="Cookies"]')).toBeNull();
+    expect(ctx.container().querySelector('[aria-label="Cookies"]')).toBeNull();
   });
 
   it("is reachable as an ARIA region named 'Cookies'", () => {
     mountOpenBanner();
-    const region = container.querySelector('[role="region"][aria-label="Cookies"]');
+    const region = ctx.container().querySelector('[role="region"][aria-label="Cookies"]');
     expect(region).not.toBeNull();
   });
 });
@@ -177,18 +160,24 @@ describe("CookieBanner reserves space for itself while open (round 1 finding 8, 
   let originalResizeObserver: typeof ResizeObserver | undefined;
 
   class FakeResizeObserver {
-    #callback: ResizeObserverCallback;
     constructor(callback: ResizeObserverCallback) {
-      this.#callback = callback;
       resizeObserverCallbacks.push(callback);
     }
     observe(): void {}
     unobserve(): void {}
     disconnect(): void {}
-    // Exposed so tests can drive a resize notification manually.
-    trigger(): void {
-      this.#callback([] as unknown as ResizeObserverEntry[], this as unknown as ResizeObserver);
-    }
+  }
+
+  /**
+   * A minimal, real-enough ResizeObserverEntry — just the two shapes
+   * production code reads (review round 3, finding 7: `borderBoxSize`
+   * first, `contentRect` as fallback).
+   */
+  function fakeResizeEntry(blockSize: number): ResizeObserverEntry {
+    return {
+      borderBoxSize: [{ blockSize, inlineSize: 0 }],
+      contentRect: { height: blockSize } as DOMRectReadOnly,
+    } as unknown as ResizeObserverEntry;
   }
 
   beforeEach(() => {
@@ -231,23 +220,52 @@ describe("CookieBanner reserves space for itself while open (round 1 finding 8, 
     expect(reservedHeight()).toBe(`${STUBBED_HEIGHT_PX}px`);
   });
 
-  it("registers a ResizeObserver on the banner and updates the variable when it fires with a new size", () => {
+  it("registers a ResizeObserver on the banner and updates the variable using the ENTRY's own size when it fires", () => {
     mountOpenBanner();
     expect(reservedHeight()).toBe(`${STUBBED_HEIGHT_PX}px`);
     expect(resizeObserverCallbacks).toHaveLength(1);
 
-    // Simulate the banner wrapping to a second line on a narrower viewport.
+    // Deliberately do NOT change the offsetHeight stub here (review round
+    // 3, finding 7): if production code still re-read el.offsetHeight
+    // inside the callback instead of using the entry's own reported size,
+    // this would observe the OLD (unchanged) STUBBED_HEIGHT_PX instead of
+    // the new value the entry claims — proving the callback actually
+    // consumes `entries[0].borderBoxSize`, not a re-read.
+    const newSize = STUBBED_HEIGHT_PX * 2;
+    act(() => {
+      resizeObserverCallbacks[0]?.([fakeResizeEntry(newSize)], {} as ResizeObserver);
+    });
+
+    expect(reservedHeight()).toBe(`${newSize}px`);
+  });
+
+  it("falls back to contentRect.height when borderBoxSize is unavailable", () => {
+    mountOpenBanner();
+    const entry = {
+      contentRect: { height: 77 } as DOMRectReadOnly,
+    } as unknown as ResizeObserverEntry;
+
+    act(() => {
+      resizeObserverCallbacks[0]?.([entry], {} as ResizeObserver);
+    });
+
+    expect(reservedHeight()).toBe("77px");
+  });
+
+  it("MUTATION CHECK: falls back to el.offsetHeight when the callback fires with no entries at all", () => {
+    mountOpenBanner();
     Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
       configurable: true,
       get(): number {
-        return STUBBED_HEIGHT_PX * 2;
+        return 42;
       },
     });
+
     act(() => {
-      resizeObserverCallbacks[0]?.([] as unknown as ResizeObserverEntry[], {} as ResizeObserver);
+      resizeObserverCallbacks[0]?.([], {} as ResizeObserver);
     });
 
-    expect(reservedHeight()).toBe(`${STUBBED_HEIGHT_PX * 2}px`);
+    expect(reservedHeight()).toBe("42px");
   });
 
   it("clears the reserved-height variable again once the banner closes", () => {
@@ -266,7 +284,7 @@ describe("CookieBanner reserves space for itself while open (round 1 finding 8, 
     expect(reservedHeight()).toBe(`${STUBBED_HEIGHT_PX}px`);
 
     act(() => {
-      root.unmount();
+      ctx.root().unmount();
     });
 
     expect(reservedHeight()).toBe("");
@@ -299,7 +317,7 @@ describe("CookieBanner reserves space for itself while open (round 1 finding 8, 
 describe("CookieBanner focus/announce on reopen (finding 9)", () => {
   it("carries aria-live=\"polite\" on the region", () => {
     mountOpenBanner();
-    const region = container.querySelector('[role="region"][aria-label="Cookies"]');
+    const region = ctx.container().querySelector('[role="region"][aria-label="Cookies"]');
     expect(region?.getAttribute("aria-live")).toBe("polite");
   });
 
@@ -313,13 +331,13 @@ describe("CookieBanner focus/announce on reopen (finding 9)", () => {
 
   it("moves focus to the banner's heading when reopened via reopen()", () => {
     mountWithActions("granted");
-    expect(container.querySelector('[aria-label="Cookies"]')).toBeNull();
+    expect(ctx.container().querySelector('[aria-label="Cookies"]')).toBeNull();
 
     act(() => {
       actionsRef?.reopen();
     });
 
-    const heading = container.querySelector("h2");
+    const heading = ctx.container().querySelector("h2");
     expect(heading).not.toBeNull();
     expect(heading?.textContent).toBe("Cookies");
     expect(document.activeElement).toBe(heading);
@@ -334,7 +352,7 @@ describe("CookieBanner focus/announce on reopen (finding 9)", () => {
     act(() => {
       actionsRef?.onlyNecessary();
     });
-    expect(container.querySelector('[aria-label="Cookies"]')).toBeNull();
+    expect(ctx.container().querySelector('[aria-label="Cookies"]')).toBeNull();
 
     // Deliberately move focus elsewhere to prove the SECOND reopen() is
     // what brings it back, not a focus that merely never left.
@@ -347,8 +365,41 @@ describe("CookieBanner focus/announce on reopen (finding 9)", () => {
       actionsRef?.reopen();
     });
 
-    const heading = container.querySelector("h2");
+    const heading = ctx.container().querySelector("h2");
     expect(document.activeElement).toBe(heading);
     elsewhere.remove();
+  });
+
+  /**
+   * Review round 3, CONFIRMED low, finding 4: the previous guard tracked
+   * whether `reopen()` had ever been called (via a `reopenCount` that
+   * changed), not whether the banner was actually CLOSED beforehand. A
+   * first-visit visitor with no stored choice already sees the banner
+   * open; if they (or something else on the page) triggers `reopen()`
+   * while it is still showing, the old guard still saw "reopenCount
+   * changed" and yanked focus into a banner that never actually
+   * disappeared and reappeared — exactly the surprising, unannounced
+   * focus move K4/finding 9 exists to prevent, just reached a different
+   * way.
+   */
+  it("does NOT move focus when 'Cookies' is activated while the first-visit banner is already open", () => {
+    const focusTarget = document.createElement("button");
+    document.body.append(focusTarget);
+    focusTarget.focus();
+
+    mountWithActions(null);
+    expect(ctx.container().querySelector('[aria-label="Cookies"]')).not.toBeNull();
+    // Mounting itself must not have moved focus either (the existing
+    // "initial mount-time open" test above covers this; re-asserted here
+    // as the starting condition this test's own action depends on).
+    expect(document.activeElement).toBe(focusTarget);
+
+    act(() => {
+      actionsRef?.reopen();
+    });
+
+    expect(ctx.container().querySelector('[aria-label="Cookies"]')).not.toBeNull();
+    expect(document.activeElement).toBe(focusTarget);
+    focusTarget.remove();
   });
 });

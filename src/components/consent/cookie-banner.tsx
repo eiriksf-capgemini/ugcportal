@@ -66,13 +66,24 @@ const useIsomorphicLayoutEffect =
  *   its own differently-named variable, rather than two consumers racing
  *   to overwrite the same bare property.
  * - Finding 9 (reopening via "Cookies" neither moves focus nor announces):
- *   fixed by moving focus to a heading inside the banner whenever
- *   `reopenCount` increments (never on the very first, no-stored-choice
- *   open — see consent-context.tsx's own comment on why). This is the
- *   PRIMARY, reliable announcement mechanism — a focus move is always
- *   perceivable to assistive tech, in every browser/screen-reader
- *   combination, because it is the same signal any other reopened control
- *   relies on.
+ *   fixed by moving focus to a heading inside the banner on a genuine
+ *   CLOSED -> OPEN transition. This is the PRIMARY, reliable announcement
+ *   mechanism — a focus move is always perceivable to assistive tech, in
+ *   every browser/screen-reader combination, because it is the same
+ *   signal any other reopened control relies on.
+ * - Round 3 finding 4: the first version of this fix tracked a `reopenCount`
+ *   that incremented on every `reopen()` call, and moved focus whenever
+ *   that count changed (while the banner was open). That is not the same
+ *   thing as "the banner just transitioned from closed to open" — clicking
+ *   the footer "Cookies" control WHILE the first-visit banner was still
+ *   showing (never yet dismissed) also called `reopen()`, incrementing the
+ *   count and yanking focus into a banner that was already visible and
+ *   that the visitor may have been about to interact with elsewhere. Fixed
+ *   by tracking whether the banner was ACTUALLY closed on the previous
+ *   render instead (`wasOpenRef` below) — `reopenCount` is no longer
+ *   needed anywhere (removed from ConsentContext entirely) since every
+ *   post-mount `bannerOpen` closed -> open transition is, by construction,
+ *   only ever caused by `reopen()` in the first place.
  * - Round 2 finding 8: `aria-live="polite"` was also added in round 1, on
  *   the theory that it would announce the region's reappearance even
  *   before focus lands. That's optimistic: this whole subtree unmounts
@@ -87,29 +98,57 @@ const useIsomorphicLayoutEffect =
  *   worthwhile attribute that costs nothing when it doesn't help.
  */
 export function CookieBanner() {
-  const { bannerOpen, acceptOptional, onlyNecessary, reopenCount } = useConsent();
+  const { bannerOpen, acceptOptional, onlyNecessary } = useConsent();
   const bannerRef = useRef<HTMLDivElement>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
-  const lastHandledReopenCount = useRef(reopenCount);
+  const wasOpenRef = useRef(bannerOpen);
 
   // Reserve space for the banner so it never covers interactive content
   // beneath it, for as long as it's open (round 1 finding 8, round 2
   // finding 4 — see this component's own doc comment above for both).
+  //
+  // Round 3, finding 9: a ResizeObserver plus a CSS variable is heavier
+  // than two hardcoded heights (one for mobile, one for desktop) would be.
+  // Kept anyway: the banner's real height isn't actually two discrete
+  // values — it depends on viewport width continuously (the copy wraps at
+  // whatever width it wraps at, not at one named breakpoint), on the
+  // visitor's font-size/zoom settings, and on the copy's own length, which
+  // a future edit could change. Two hardcoded numbers would be a pair of
+  // magic constants silently wrong the next time any of those shift;
+  // measuring the real rendered box is correct by construction regardless
+  // of why it changed.
   useIsomorphicLayoutEffect(() => {
     if (!bannerOpen) return undefined;
     const el = bannerRef.current;
     if (!el) return undefined;
 
-    const applyReservedHeight = () => {
-      document.body.style.setProperty(
-        "--cookie-banner-reserved-height",
-        `${el.offsetHeight}px`,
-      );
+    const applyReservedHeight = (height: number) => {
+      document.body.style.setProperty("--cookie-banner-reserved-height", `${height}px`);
     };
-    applyReservedHeight();
+    applyReservedHeight(el.offsetHeight);
 
     const supportsResizeObserver = typeof ResizeObserver !== "undefined";
-    const observer = supportsResizeObserver ? new ResizeObserver(applyReservedHeight) : null;
+    const observer = supportsResizeObserver
+      ? new ResizeObserver((entries) => {
+          /*
+           * Reads the SIZE THE OBSERVER ITSELF ALREADY MEASURED off the
+           * entry (review round 3, finding 7), rather than re-reading
+           * `el.offsetHeight` inside the callback — the observer has
+           * already done that measurement; reading `offsetHeight` again
+           * here would force a second, redundant synchronous layout.
+           * `borderBoxSize` is the full box (border + padding + content),
+           * matching what `offsetHeight` measures on the initial call
+           * above; `contentRect` is content-box only and would
+           * under-measure a banner with padding, so it is only the
+           * fallback for an environment that provides neither (an older
+           * engine with a partial ResizeObserver polyfill).
+           */
+          const entry = entries[0];
+          const height =
+            entry?.borderBoxSize?.[0]?.blockSize ?? entry?.contentRect.height ?? el.offsetHeight;
+          applyReservedHeight(height);
+        })
+      : null;
     observer?.observe(el);
 
     return () => {
@@ -118,15 +157,18 @@ export function CookieBanner() {
     };
   }, [bannerOpen]);
 
-  // Finding 9: move focus into the banner when it was explicitly reopened
-  // (reopenCount changed since last render) — but not on the initial
-  // mount-time open a first-time visitor with no stored choice gets, which
-  // is why this compares against a ref rather than firing on every open.
+  // Finding 9: move focus into the banner on a genuine CLOSED -> OPEN
+  // transition — never on the initial mount-time open a first-time
+  // visitor with no stored choice gets (wasOpenRef's initial value equals
+  // bannerOpen's own initial value, so there is no "transition" to detect
+  // on the first render either way), and never when "Cookies" is clicked
+  // while the banner is ALREADY showing (round 3 finding 4 — see this
+  // component's own doc comment above).
   useIsomorphicLayoutEffect(() => {
-    if (reopenCount === lastHandledReopenCount.current) return;
-    lastHandledReopenCount.current = reopenCount;
-    if (bannerOpen) headingRef.current?.focus();
-  }, [reopenCount, bannerOpen]);
+    const transitionedToOpen = bannerOpen && !wasOpenRef.current;
+    wasOpenRef.current = bannerOpen;
+    if (transitionedToOpen) headingRef.current?.focus();
+  }, [bannerOpen]);
 
   if (!bannerOpen) return null;
 

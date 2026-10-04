@@ -51,6 +51,16 @@ export function getCookie(name: string): string | null {
  * sense, never actually persisted by the browser. The discriminated union
  * below makes `{ sameSite: "None" }` with no `secure` (or `secure: false`)
  * a compile error instead of a runtime footgun a caller could hit blind.
+ *
+ * Round 3, finding 10: this discriminated union serves exactly one call
+ * site today (nothing in this repo passes `sameSite: "None"` yet) — a
+ * runtime guard (throw inside `setCookie` if `sameSite === "None"` and
+ * `!secure`) would cover that one site with less type-level machinery.
+ * Kept as a type anyway: this is exactly what round 2's own review asked
+ * for ("make the type forbid it"), and a compile-time error is strictly
+ * stronger than a runtime throw for a mistake this specific — it is caught
+ * in the editor and in review, before the code ever runs, rather than only
+ * when a test happens to exercise that exact call with that exact caller.
  */
 type SameSiteOptions =
   | { sameSite?: "Lax" | "Strict"; secure?: boolean }
