@@ -3,8 +3,6 @@ import NextAuth, {
   type DefaultSession,
   type NextAuthConfig,
 } from "next-auth";
-import Facebook from "next-auth/providers/facebook";
-import Google from "next-auth/providers/google";
 import { cache } from "react";
 
 import type { Role } from "@/generated/prisma/enums";
@@ -12,6 +10,7 @@ import { reconcileBootstrapAdmin } from "@/lib/admin-bootstrap";
 import { prisma } from "@/lib/prisma";
 import { AUTH_ERROR_PATH } from "@/lib/routes";
 import { isPermittedSignIn } from "@/lib/sign-in-policy";
+import { signInProviders } from "@/lib/sign-in-providers";
 
 declare module "next-auth" {
   interface Session {
@@ -125,16 +124,10 @@ export const authConfig = {
       await reconcileBootstrapAdmin(user);
     },
   },
-  providers: [
-    Google({
-      clientId: process.env.AUTH_GOOGLE_ID,
-      clientSecret: process.env.AUTH_GOOGLE_SECRET,
-    }),
-    Facebook({
-      clientId: process.env.AUTH_FACEBOOK_ID,
-      clientSecret: process.env.AUTH_FACEBOOK_SECRET,
-    }),
-  ],
+  // Built from SIGN_IN_PROVIDERS in src/lib/sign-in-providers.ts, so the
+  // providers configured here and the prefixes the allowlist accepts are one
+  // list (ugcportal-1551).
+  providers: signInProviders,
 } satisfies NextAuthConfig;
 
 export const { handlers, auth, signIn, signOut } = NextAuth(authConfig);

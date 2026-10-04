@@ -542,6 +542,25 @@ describe("decideSignIn binds an entry to its provider", () => {
     }
   });
 
+  it("treats a doubled or trailing prefix as unusable rather than as an address nobody can assert", () => {
+    // PR #81 round 3: `google:facebook:a@b.com` used to parse as a bound entry
+    // whose address was `facebook:a@b.com` — counted as permitted, reported
+    // nowhere, matched by nobody.
+    const { entries, malformed } = permittedIdentities({
+      [PERMITTED_EMAILS_VAR]: `google:facebook:${GOOGLE_ONLY}, google:${GOOGLE_ONLY}:`,
+    });
+    expect(entries).toEqual([]);
+    expect(malformed).toEqual([
+      `google:facebook:${GOOGLE_ONLY}`,
+      `google:${GOOGLE_ONLY}:`,
+    ]);
+    expect(
+      decideSignIn(via("google", GOOGLE_ONLY), {
+        [PERMITTED_EMAILS_VAR]: `google:facebook:${GOOGLE_ONLY}`,
+      }).permitted,
+    ).toBe(false);
+  });
+
   it("de-duplicates by address AND provider", () => {
     const { entries } = permittedIdentities({
       [PERMITTED_EMAILS_VAR]: `google:${GOOGLE_ONLY},GOOGLE:${GOOGLE_ONLY},facebook:${GOOGLE_ONLY}`,

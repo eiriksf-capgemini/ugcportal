@@ -63,13 +63,17 @@ export const SIGN_IN_PROVIDERS = ["google", "facebook"] as const;
 export type SignInProvider = (typeof SIGN_IN_PROVIDERS)[number];
 
 /**
- * Why this is a hand-maintained list rather than derived from
- * `authConfig.providers`: this module is imported by src/instrumentation.ts,
- * which also runs in the Edge instrumentation bundle, and src/lib/auth.ts
- * imports the Prisma client, which cannot load there. The import is
- * therefore one-way (auth.ts -> here), and the test in src/lib/auth.test.ts
- * that pins the two lists together is the mechanism that keeps them equal,
- * not a convenience. (PR #81 round 1, finding 3.)
+ * This list is the SOURCE the configured providers are built from, not a
+ * copy of them: src/lib/sign-in-providers.ts maps each id here to its
+ * Auth.js provider factory under a `satisfies Record<SignInProvider, ...>`
+ * check, so adding a provider there without adding its id here (or the
+ * reverse) fails to compile. It lives in this module rather than next to the
+ * factories because src/instrumentation.ts imports this file in the Edge
+ * instrumentation bundle and must not pull in the provider modules or the
+ * Prisma client. The test in src/lib/auth.test.ts that compares the ids with
+ * `authConfig.providers` remains, as the check that the Auth.js id each
+ * factory reports really is the key it was built from. (PR #81 rounds 1 and
+ * 3, finding 3.)
  */
 
 /**
@@ -151,7 +155,16 @@ function isEmailShaped(value: string): boolean {
   // here on purpose: a domain rule is one of the mechanisms Eirik has not
   // chosen, and half-implementing it as a wildcard would silently be that
   // choice. It is rejected loudly instead.
-  if (value.includes("*")) {
+  //
+  // `:` is excluded for the same reason in the other direction: it is the
+  // provider-prefix separator (see parseEntry), so once the prefix has been
+  // split off, an address that still contains one — `google:facebook:a@b.com`,
+  // `google:a@b.com:` — is a doubled or trailing prefix, not a mailbox. Left
+  // in, it would be counted as a permitted address that no provider can ever
+  // assert: the silently-permits-nobody state this module exists to report
+  // (PR #81 round 3). Neither configured provider issues addresses containing
+  // a colon, so nothing real is excluded.
+  if (value.includes("*") || value.includes(":")) {
     return false;
   }
   return EMAIL_SHAPE.test(value);
@@ -289,29 +302,35 @@ export function permittedIdentities(
     ...splitList(env.ADMIN_BOOTSTRAP_EMAILS),
   ];
 
-  const parsed: PermittedEntry[] = [];
-  const malformed: string[] = [];
+  // First occurrence wins, keyed by (provider, address) — the same Set/Map
+  // idiom as appendGalleryItems (gallery-items.ts) and parseTagNames
+  // (tags.ts), so "unique by what" is stated by the key rather than by a
+  // comparison. `provider ?? ""` keeps an unbound entry's key distinct from
+  // every bound one without a separator clash: ids contain no `:`.
+  const byKey = new Map<string, PermittedEntry>();
+  const malformed = new Set<string>();
   for (const entry of entries) {
     const usable = parseEntry(entry);
     if (!usable) {
-      if (!malformed.includes(entry)) {
-        malformed.push(entry);
-      }
+      malformed.add(entry);
       continue;
     }
-    if (
-      !parsed.some(
-        (seen) => seen.email === usable.email && seen.provider === usable.provider,
-      )
-    ) {
-      parsed.push(usable);
+    const key = `${usable.provider ?? ""}:${usable.email}`;
+    if (!byKey.has(key)) {
+      byKey.set(key, usable);
     }
   }
+  const parsed = Array.from(byKey.values());
   // Derived, not tracked: the distinct addresses across the parsed entries,
   // in first-seen order.
   const emails = Array.from(new Set(parsed.map((entry) => entry.email)));
 
-  return { entries: parsed, emails, malformed, configured: entries.length > 0 };
+  return {
+    entries: parsed,
+    emails,
+    malformed: Array.from(malformed),
+    configured: entries.length > 0,
+  };
 }
 
 /**
