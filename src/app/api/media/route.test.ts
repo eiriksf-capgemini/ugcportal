@@ -72,10 +72,18 @@ vi.mock("@/lib/prisma", () => ({
   },
 }));
 
-vi.mock("@/lib/s3", () => ({
-  getS3Client: () => ({ send: s3SendMock }),
-  getBucketName: () => "test-bucket",
-}));
+// Only getS3Client/getBucketName are replaced — classifyTransportFailure,
+// ObjectStorageUnreachableError and sendWithTransportClassification are the
+// real implementation, so these tests exercise the actual classification
+// logic (round-1 review finding 1's fix) rather than a second copy of it.
+vi.mock("@/lib/s3", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/s3")>();
+  return {
+    ...actual,
+    getS3Client: () => ({ send: s3SendMock }),
+    getBucketName: () => "test-bucket",
+  };
+});
 
 // Wraps, rather than replaces, the real implementation: every existing test
 // below still exercises actual watermark generation (sharp, the real
@@ -91,7 +99,9 @@ vi.mock("@/lib/watermark", async (importOriginal) => {
   };
 });
 
-const { GET, POST } = await import("@/app/api/media/route");
+const { GET, POST, resetObjectStorageUnreachableLogThrottles } = await import(
+  "@/app/api/media/route"
+);
 const { encodeMediaCursor } = await import("@/lib/media-listing");
 // Dynamic, after the vi.mock calls: @/lib/tags imports the Prisma client at
 // module scope, so a static import here would evaluate that mock factory
@@ -832,6 +842,503 @@ describe("POST /api/media", () => {
       expect.objectContaining({ cause: expect.any(Error) }),
     );
     errorSpy.mockRestore();
+  });
+
+  /**
+   * Round-4 review finding (MEDIUM): an earlier version routed this line
+   * through a throttle whose deferred flush replayed whichever `log()`
+   * call's closure happened to schedule it — so when BOTH the original's
+   * and the preview's cleanup deletes failed (storedKeys always has at most
+   * these two), the second one's key name and cause were silently never
+   * logged anywhere. The fix (this PR) is to not throttle this line at all:
+   * orphaned keys are distinct and rare, and each one is the only record of
+   * an object that needs manual cleanup.
+   */
+  it("logs each distinct orphaned key separately when cleanup fails for more than one (round-4 finding)", async () => {
+    authMock.mockResolvedValue({ user: { id: "user-1" } });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    let deleteCount = 0;
+    s3SendMock.mockImplementation(async (command) => {
+      if (command instanceof DeleteObjectCommand) {
+        deleteCount += 1;
+        // Distinct errors, not the same one twice, so the two log calls
+        // below are also distinguishable by `cause`, not only by `key`.
+        throw new Error(`delete denied #${deleteCount}`);
+      }
+      return {};
+    });
+    mediaCreateMock.mockRejectedValue(new Error("db down"));
+    const file = new File([REAL_PNG], "photo.png", { type: "image/png" });
+
+    await expect(POST(buildRequest(file))).rejects.toThrow("db down");
+
+    const puts = s3SendMock.mock.calls
+      .map((call) => call[0])
+      .filter((c): c is PutObjectCommand => c instanceof PutObjectCommand);
+    expect(puts).toHaveLength(2); // the original and the preview both stored
+    const storedObjectKeys = puts.map((p) => p.input.Key);
+    expect(storedObjectKeys[0]).not.toBe(storedObjectKeys[1]);
+
+    const cleanupFailureCalls = errorSpy.mock.calls.filter(
+      (call) => call[0] === "[media] failed to clean up orphaned object",
+    );
+    // Both keys, not just one — the whole point of this test.
+    expect(cleanupFailureCalls).toHaveLength(2);
+    const loggedKeys = cleanupFailureCalls
+      .map((call) => (call[1] as { key?: unknown }).key)
+      .sort();
+    expect(loggedKeys).toEqual([...storedObjectKeys].sort());
+
+    errorSpy.mockRestore();
+
+    // Mutation check (round-4, per the coordinator's instruction): with the
+    // per-key console.error above replaced by a stand-in that only ever logs
+    // the FIRST catch to run and silently drops any later one — the exact
+    // shape of the original shared-closure-flush bug, reduced to its
+    // observable effect — `cleanupFailureCalls` drops to length 1 and this
+    // test fails. Confirmed by hand, then restored to the unconditional
+    // per-key logging above.
+  });
+});
+
+/**
+ * ugcportal-1b2c: a transport-level S3 failure (the storage endpoint itself
+ * unreachable — connection refused/reset, DNS failure, timed out) used to
+ * surface as a bare, unhandled 500 with a raw SDK stack trace. These assert
+ * the deliberate 503 instead: a stable, non-disclosing body; one structured
+ * log line naming the transport code and the SDK's own retry count; and that
+ * whatever already landed in the bucket before the failing call is cleaned
+ * up rather than left orphaned.
+ */
+describe("POST /api/media — object storage unreachable (ugcportal-1b2c)", () => {
+  /**
+   * Stands in for what the AWS SDK actually throws on a transport failure —
+   * see @smithy/node-http-handler's NODEJS_TIMEOUT_ERROR_CODES: the original
+   * Node error (ECONNRESET, ECONNREFUSED, ...) gets its `name` overwritten to
+   * `"TimeoutError"`, but keeps its own `code`, and @smithy/core's retry
+   * middleware stamps `$metadata` (attempts, totalRetryDelay) onto it once
+   * retries are exhausted — with no `httpStatusCode`, because no response
+   * was ever received.
+   */
+  function transportError({
+    name = "TimeoutError",
+    code,
+    attempts = 3,
+  }: { name?: string; code?: string; attempts?: number } = {}): Error & {
+    code?: string;
+    $metadata: { attempts: number; totalRetryDelay: number };
+  } {
+    const error = new Error(`read ${code ?? "ECONNRESET"}`) as Error & {
+      code?: string;
+      $metadata: { attempts: number; totalRetryDelay: number };
+    };
+    error.name = name;
+    if (code !== undefined) error.code = code;
+    error.$metadata = { attempts, totalRetryDelay: 101 };
+    return error;
+  }
+
+  /**
+   * An error shape the classifier must also catch even though it matches
+   * neither a known transport `code` nor the SDK's `TimeoutError` rename:
+   * `$metadata` present, with no `httpStatusCode` because no HTTP response
+   * ever came back. Exercises the fallback branch of
+   * `classifyTransportFailure` (src/lib/s3.ts) on its own, independent of the
+   * code/name checks above it.
+   */
+  function metadataOnlyTransportError(): Error & {
+    $metadata: { attempts: number };
+  } {
+    const error = new Error("socket hang up") as Error & {
+      $metadata: { attempts: number };
+    };
+    error.$metadata = { attempts: 2 };
+    return error;
+  }
+
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    authMock.mockResolvedValue({ user: { id: "user-1" } });
+    errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    // The storage-unreachable log line is throttled module-level state
+    // (round-3 finding 5; round-4 removed throttling from the separate
+    // per-key cleanup-failure line, so only this one remains) — reset
+    // between tests so one test's line does not silently suppress the next
+    // test's identical assertion.
+    resetObjectStorageUnreachableLogThrottles();
+  });
+
+  afterEach(() => {
+    errorSpy.mockRestore();
+  });
+
+  it("answers 503, not a bare 500, when the original PutObject hits a transport error", async () => {
+    s3SendMock.mockRejectedValueOnce(
+      transportError({ code: "ECONNRESET", attempts: 3 }),
+    );
+    const file = new File([REAL_PNG], "photo.png", { type: "image/png" });
+
+    const response = await POST(buildRequest(file));
+
+    expect(response.status).toBe(503);
+    const responseBody: unknown = await response.json();
+    expect(responseBody).toEqual({
+      error: expect.stringContaining("temporarily unavailable"),
+      // Stable, machine-readable — src/app/upload/outcomes.ts's 503 case
+      // reads this to tell this failure apart from the "too many uploads"
+      // shed 503, which carries no `reason` at all (round-1 finding 2).
+      reason: "object_storage_unavailable",
+    });
+    // Non-disclosing: neither the bucket name nor anything endpoint-shaped
+    // makes it into the client-facing body.
+    expect(JSON.stringify(responseBody)).not.toContain("test-bucket");
+
+    // Structured server-side log naming which operation failed, the
+    // transport code, the SDK's own attempt count, and the underlying
+    // message — not just "something went wrong" (round-1 finding 5) — plus
+    // the error object itself as `cause`, so console.error has a stack to
+    // print (round-2 finding 2).
+    expect(errorSpy).toHaveBeenCalledWith(
+      "[media] object storage unreachable",
+      expect.objectContaining({
+        operation: "original",
+        code: "ECONNRESET",
+        attempts: 3,
+        message: "read ECONNRESET",
+        cause: expect.any(Error),
+      }),
+    );
+
+    // Nothing had landed in the bucket yet, so there is nothing to clean up,
+    // and the DB transaction must never have been reached.
+    const commands = s3SendMock.mock.calls.map((call) => call[0]);
+    expect(commands.filter((c) => c instanceof DeleteObjectCommand)).toHaveLength(0);
+    expect(mediaCreateMock).not.toHaveBeenCalled();
+
+    // Mutation check (see PR body): with `s3SendMock.mockRejectedValueOnce`
+    // above replaced by a resolved value, this test fails (201, not 503) —
+    // confirmed by hand, then restored to the throwing form above.
+  });
+
+  it("answers 503 and cleans up the original when the preview PutObject hits a transport error", async () => {
+    s3SendMock
+      .mockResolvedValueOnce({}) // original PutObject
+      .mockRejectedValueOnce(transportError({ name: "TimeoutError", code: "ETIMEDOUT" })) // preview PutObject
+      .mockResolvedValueOnce({}); // compensating DeleteObject
+    const file = new File([REAL_PNG], "photo.png", { type: "image/png" });
+
+    const response = await POST(buildRequest(file));
+
+    expect(response.status).toBe(503);
+    expect(errorSpy).toHaveBeenCalledWith(
+      "[media] object storage unreachable",
+      expect.objectContaining({
+        operation: "preview",
+        code: "ETIMEDOUT",
+        attempts: 3,
+        message: "read ETIMEDOUT",
+      }),
+    );
+
+    const commands = s3SendMock.mock.calls.map((call) => call[0]);
+    const puts = commands.filter((c) => c instanceof PutObjectCommand);
+    const deletes = commands.filter((c) => c instanceof DeleteObjectCommand);
+    expect(puts).toHaveLength(2);
+    // Only the original made it into the bucket — that is what must be
+    // cleaned up, not the preview that never landed.
+    expect(deletes).toHaveLength(1);
+    expect((deletes[0] as DeleteObjectCommand).input.Key).toBe(
+      (puts[0] as PutObjectCommand).input.Key,
+    );
+    expect(mediaCreateMock).not.toHaveBeenCalled();
+
+    // Mutation check: made the compensating delete also reject below (next
+    // test) and confirmed the 503 still answers rather than throwing.
+  });
+
+  it("still answers 503, without masking the original error, when the compensating cleanup delete itself fails", async () => {
+    let putCount = 0;
+    s3SendMock.mockImplementation(async (command) => {
+      if (command instanceof DeleteObjectCommand) {
+        throw transportError({ code: "ECONNREFUSED" });
+      }
+      if (command instanceof PutObjectCommand) {
+        putCount += 1;
+        // The first PutObjectCommand (the original) succeeds; the second
+        // (the preview) is the one that fails.
+        if (putCount === 2) {
+          throw transportError({ code: "ECONNREFUSED" });
+        }
+        return {};
+      }
+      return {};
+    });
+    const file = new File([REAL_PNG], "photo.png", { type: "image/png" });
+
+    const response = await POST(buildRequest(file));
+
+    // The storage-unreachable 503 still answers — a cleanup failure must not
+    // turn into an unhandled rejection or mask the original classification.
+    expect(response.status).toBe(503);
+    const responseBody: unknown = await response.json();
+    expect(responseBody).toEqual({
+      error: expect.stringContaining("temporarily unavailable"),
+      reason: "object_storage_unavailable",
+    });
+
+    // Both failures are logged: the storage-unreachable line for the
+    // original cause (the preview PutObject, labelled as such), and the
+    // cleanup-failure line for the delete that could not reach the bucket
+    // either.
+    expect(errorSpy).toHaveBeenCalledWith(
+      "[media] object storage unreachable",
+      expect.objectContaining({ operation: "preview", code: "ECONNREFUSED" }),
+    );
+    expect(errorSpy).toHaveBeenCalledWith(
+      "[media] failed to clean up orphaned object",
+      expect.objectContaining({ cause: expect.any(Error) }),
+    );
+
+    // Mutation check: with the delete mock above changed to resolve `{}`
+    // instead of throwing, the second expectation (the cleanup-failure log)
+    // stops firing — confirmed by hand, then restored to the throwing form
+    // above.
+  });
+
+  it("classifies a transport error that carries $metadata but no known code or TimeoutError name", async () => {
+    s3SendMock.mockRejectedValueOnce(metadataOnlyTransportError());
+    const file = new File([REAL_PNG], "photo.png", { type: "image/png" });
+
+    const response = await POST(buildRequest(file));
+
+    expect(response.status).toBe(503);
+    expect(errorSpy).toHaveBeenCalledWith(
+      "[media] object storage unreachable",
+      expect.objectContaining({
+        operation: "original",
+        // Round-3 finding 3: a plain `new Error(...)` has no real `code`,
+        // and falling back to `err.name` used to log the literal string
+        // "Error" here — meaningless, but reads as though it were a real
+        // code. "unknown" says plainly that none was available.
+        code: "unknown",
+        attempts: 2,
+        message: "socket hang up",
+      }),
+    );
+
+    // Mutation check: giving this same error a real `$metadata.httpStatusCode`
+    // (as a genuine service error like AccessDenied would carry) must take it
+    // OUT of this branch — asserted directly below.
+  });
+
+  it("does not classify a $metadata-only error that stopped after a single attempt as storage-unreachable (round-5 finding 1)", async () => {
+    // Shaped like a signing failure (bad credentials) or a local TLS
+    // validation error: no `httpStatusCode` (no response was ever
+    // received), but also no `code` the SDK recognises, AND — the
+    // discriminator this test exists for — `attempts: 1`. A genuine
+    // transport failure is exactly what the SDK's own retry middleware
+    // retries, so it never stops at the first attempt (its default
+    // maxAttempts is 3); a permanent, local failure does, because retrying
+    // it could never have helped. Answering the latter with a retryable 503
+    // would tell a caller to try again when trying again can never work.
+    const singleAttemptError = new Error("could not sign request") as Error & {
+      $metadata: { attempts: number };
+    };
+    singleAttemptError.$metadata = { attempts: 1 };
+    s3SendMock.mockRejectedValueOnce(singleAttemptError);
+    const file = new File([REAL_PNG], "photo.png", { type: "image/png" });
+
+    // Not the storage-unreachable path: propagates unchanged, same as the
+    // genuine-service-error case above.
+    await expect(POST(buildRequest(file))).rejects.toThrow(
+      "could not sign request",
+    );
+    expect(errorSpy).not.toHaveBeenCalledWith(
+      "[media] object storage unreachable",
+      expect.anything(),
+    );
+
+    // Mutation check: with the `attempts > 1` guard removed from
+    // classifyTransportFailure (src/lib/s3.ts), this error IS classified —
+    // confirmed by hand, then restored. The existing
+    // metadataOnlyTransportError() test above (attempts: 2) keeps passing
+    // throughout, since it is unaffected by this guard.
+  });
+
+  it("does not classify a genuine S3 service error (one with an httpStatusCode) as storage-unreachable", async () => {
+    const serviceError = new Error("Access Denied") as Error & {
+      name: string;
+      $metadata: { httpStatusCode: number; attempts: number };
+    };
+    serviceError.name = "AccessDenied";
+    serviceError.$metadata = { httpStatusCode: 403, attempts: 1 };
+    s3SendMock.mockRejectedValueOnce(serviceError);
+    const file = new File([REAL_PNG], "photo.png", { type: "image/png" });
+
+    // Not the storage-unreachable path: today that means the error simply
+    // propagates, as it did before this bead (unchanged handling, per scope).
+    await expect(POST(buildRequest(file))).rejects.toThrow("Access Denied");
+    expect(errorSpy).not.toHaveBeenCalledWith(
+      "[media] object storage unreachable",
+      expect.anything(),
+    );
+  });
+
+  it("does not classify a reset that happened after a real HTTP response as storage-unreachable (round-2 finding 1)", async () => {
+    // Shaped like a connection reset WHILE READING AN ALREADY-RECEIVED
+    // response body: it keeps the Node error `code` a transport failure
+    // would have (ECONNRESET), but `$metadata.httpStatusCode` is also set,
+    // because a real response (200) did arrive before the socket reset.
+    // classifyTransportFailure (src/lib/s3.ts) deliberately requires
+    // httpStatusCode to be undefined in EVERY branch, not only the
+    // $metadata-only fallback, precisely so this case is not classified as
+    // "storage unreachable" — the backend plainly was reached.
+    const midBodyReset = Object.assign(new Error("read ECONNRESET"), {
+      code: "ECONNRESET",
+      $metadata: { httpStatusCode: 200, attempts: 1 },
+    });
+    s3SendMock.mockRejectedValueOnce(midBodyReset);
+    const file = new File([REAL_PNG], "photo.png", { type: "image/png" });
+
+    // Not the storage-unreachable path: propagates unchanged, like any other
+    // non-transport-classified S3 error.
+    await expect(POST(buildRequest(file))).rejects.toThrow("read ECONNRESET");
+    expect(errorSpy).not.toHaveBeenCalledWith(
+      "[media] object storage unreachable",
+      expect.anything(),
+    );
+  });
+
+  /**
+   * No `$metadata` at all — unlike `transportError` above. The point of
+   * these cases is to isolate the explicit `code` check in
+   * `classifyTransportFailure` (src/lib/s3.ts): a fixture that also carried
+   * `$metadata` with no `httpStatusCode` would be classified by THAT
+   * fallback regardless of whether the code list recognised it, which would
+   * make this test pass whether or not the codes below were actually in the
+   * list — exactly the "assertion that cannot fail" shape review standards
+   * warn about. Without `$metadata`, classification can only succeed here
+   * via the `code` check.
+   */
+  function codeOnlyTransportError(code: string): Error & { code: string } {
+    const error = new Error(`system error ${code}`) as Error & {
+      code: string;
+    };
+    error.code = code;
+    return error;
+  }
+
+  // Round-1 review finding 6: the code list previously claimed to mirror the
+  // SDK's own classification while actually omitting EPIPE, EHOSTUNREACH,
+  // ENETUNREACH and EAI_AGAIN. These are @smithy/core's
+  // NODEJS_TIMEOUT_ERROR_CODES/NODEJS_NETWORK_ERROR_CODES entries that
+  // TRANSPORT_ERROR_CODES (src/lib/s3.ts) previously left out. ENOTFOUND
+  // added per round-3 finding 4 — it was already in TRANSPORT_ERROR_CODES
+  // but, unlike the others here, had no coverage through this
+  // `codeOnlyTransportError` fixture (only through `transportError`
+  // elsewhere, which also sets `$metadata` and so cannot isolate the `code`
+  // check the way this block does — see that fixture's own doc comment).
+  it.each(["EPIPE", "EHOSTUNREACH", "ENETUNREACH", "EAI_AGAIN", "ENOTFOUND"])(
+    "classifies %s as storage-unreachable, aligned with @smithy/core's own lists",
+    async (code) => {
+      s3SendMock.mockRejectedValueOnce(codeOnlyTransportError(code));
+      const file = new File([REAL_PNG], "photo.png", { type: "image/png" });
+
+      const response = await POST(buildRequest(file));
+
+      expect(response.status).toBe(503);
+      expect(errorSpy).toHaveBeenCalledWith(
+        "[media] object storage unreachable",
+        expect.objectContaining({ operation: "original", code }),
+      );
+    },
+  );
+
+  it("treats a transport-shaped error from the DB write as the pre-existing DB-failure behaviour, not storage-unreachable (round-1 findings 1 and 3)", async () => {
+    s3SendMock.mockResolvedValue({});
+    // Shaped exactly like the S3 transport errors above (same `code`, same
+    // $metadata.attempts) — the point is that this alone must not be enough
+    // to route it into the storage-unreachable branch, because it never
+    // passed through sendWithTransportClassification: nothing in this route
+    // wraps prisma.$transaction with it.
+    const dbError = Object.assign(new Error("read ECONNRESET"), {
+      code: "ECONNRESET",
+      $metadata: { attempts: 3 },
+    });
+    mediaCreateMock.mockRejectedValue(dbError);
+    const file = new File([REAL_PNG], "photo.png", { type: "image/png" });
+
+    // Pre-existing DB-failure behaviour (see "deletes both the original and
+    // the preview if the DB write fails" above): the error simply
+    // propagates, not a 503.
+    await expect(POST(buildRequest(file))).rejects.toThrow("read ECONNRESET");
+    expect(errorSpy).not.toHaveBeenCalledWith(
+      "[media] object storage unreachable",
+      expect.anything(),
+    );
+
+    // And the compensating cleanup still ran, exactly as it does for any
+    // other DB failure.
+    const commands = s3SendMock.mock.calls.map((call) => call[0]);
+    expect(commands.filter((c) => c instanceof DeleteObjectCommand)).toHaveLength(2);
+
+    // Mutation check (round-1 finding 3, per the coordinator's instruction):
+    // with this exact error shape instead rejected from the original
+    // PutObject send (an S3 rejection, not a DB one), the behaviour flips —
+    // confirmed by hand: status 503, `reason: "object_storage_unavailable"`,
+    // and the "[media] object storage unreachable" log fires. Restored to
+    // the DB-rejection form above afterwards.
+  });
+
+  it("throttles the storage-unreachable log line across a burst of requests, rather than logging once per request (round-3 finding 5)", async () => {
+    vi.useFakeTimers();
+    try {
+      // Every send() rejects for the duration of this test, standing in for
+      // a sustained outage across several uploads — not `mockRejectedValueOnce`,
+      // which would only cover the first request.
+      s3SendMock.mockRejectedValue(transportError({ code: "ECONNRESET" }));
+      // A video, not an image: it skips generateWatermarkedPreview (no
+      // preview is made for VIDEO, ugcportal-pmb) entirely, so two requests
+      // in a row cost no real image-processing work and nothing here
+      // competes with the fake timers below for an async callback.
+      const buildVideoRequest = () =>
+        buildRequest(new File([MP4_HEADER], "clip.mp4", { type: "video/mp4" }));
+
+      const first = await POST(buildVideoRequest());
+      expect(first.status).toBe(503);
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+
+      // A second request, still inside the throttle window: it still gets
+      // its own correct 503 (throttling the LOG must never throttle the
+      // RESPONSE), but the log line itself does not fire again yet.
+      const second = await POST(buildVideoRequest());
+      expect(second.status).toBe(503);
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+
+      // The window elapses with nothing further happening: the scheduled
+      // flush reports the one occurrence the throttle swallowed, with no
+      // third request needed to trigger it. A deliberately DIFFERENT,
+      // payload-free message (round-4 review finding): the flush never
+      // carries a particular request's operation/code/attempts/message/
+      // cause, only a count — see createThrottledLog's own doc comment for
+      // why reusing the first request's closure here was the bug.
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(errorSpy).toHaveBeenCalledTimes(2);
+      expect(errorSpy).toHaveBeenNthCalledWith(
+        2,
+        "[media] object storage unreachable (additional occurrences suppressed)",
+        { suppressed: 1 },
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+
+    // Mutation check: removing `objectStorageUnreachableLog.log(...)` in
+    // route.ts (calling `console.error` directly instead, as rounds 1-2
+    // left it) makes `errorSpy` get called a second time immediately after
+    // the second request, before the timers are ever advanced — confirmed
+    // by hand, then restored.
   });
 });
 

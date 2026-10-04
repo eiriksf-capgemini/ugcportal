@@ -1,0 +1,71 @@
+-- Curates the "portfolio" tag (ugcportal-qnq9.7).
+--
+-- No schema change: the Tag table and its `curated` column already exist
+-- (20260928103000_add_media_tags). This migration is pure seed data, the
+-- same shape as that one's own four-subject seed, and for the same reason:
+-- without a curated row, the upload page's tag picker has no way to offer
+-- "Portfolio" at all, and the portfolio page (src/lib/portfolio.ts) would
+-- have nothing to select on.
+--
+-- WHY A TAG, RATHER THAN A SCHEMA COLUMN. The portfolio page needs a way to
+-- mark a published photograph as a sample to show prospective brands. A
+-- dedicated `Media.isPortfolioSample` boolean would be a real column, a real
+-- migration, and a second, parallel "how is this item curated" mechanism
+-- living beside the one Tag/`curated` already is. The existing curated-tag
+-- picker (src/lib/tags.ts' `listPickerTags`, gated on `curated = true`) is
+-- the least invasive mechanism that already does exactly what is needed:
+-- lets the small, allowlisted set of uploaders (ugcportal-egp) attach a label
+-- to their own published work through the upload form they already use, with
+-- no new admin screen and no new write path. See src/lib/portfolio.ts for how
+-- the selection query uses it, and why it strips this one tag back out of
+-- what a visitor sees under the photograph (a visitor does not need to be
+-- told the curation mechanism; they need to see the label was chosen for
+-- them, same as `food` or `wine-drink`).
+--
+-- "Portfolio" sits beside four subject-area tags (Food, Wine & drink,
+-- Technology, Books) in one sense only: it reuses the same flag and the same
+-- picker. It is not a fifth subject — it answers "is this shown on the
+-- portfolio page", not "what is this a photograph of" — and that is a
+-- deliberate, acceptable blend of two different questions through one small
+-- mechanism, not a claim that curation and subject-matter are the same kind
+-- of fact. Revisit if the picker ever needs to tell the two apart in its own
+-- UI; nothing about the page the picker renders on required that split for
+-- this bead's two uploaders.
+--
+-- `createdAt` is written explicitly, matching the seed migration's own
+-- reasoning: SQLite's `DEFAULT CURRENT_TIMESTAMP` and the libsql adapter's
+-- ISO-8601 write are two different formats in one TEXT column, and
+-- `listPickerTags` orders by it. A later date than the four subject seeds
+-- (which predate every real upload on purpose) is intentional here: this tag
+-- is curated the day this bead ships, not retroactively declared to predate
+-- the gallery's content.
+--
+-- ON CONFLICT("slug") DO UPDATE, not a bare INSERT (round-4 review: a real
+-- deployment hazard, not a hypothetical one). `Tag.slug` is UNIQUE, and
+-- minting a tag by naming it on an upload is allowed for any account
+-- permitted to sign in (src/lib/tags.ts) — an uploader could have already
+-- typed "Portfolio" (or "portfolio", which slugs to the same identity key)
+-- as a free-text subject before this migration ever ran, on an instance
+-- that has been live a while. A bare INSERT would then fail this migration
+-- outright with a UNIQUE constraint violation, on exactly the deployment
+-- where this feature is needed most. The conflict path instead CURATES
+-- whatever row already claims that slug and renames it to this migration's
+-- canonical display name — it deliberately does NOT touch that row's own
+-- "id" or "createdAt": those belong to whoever minted it first, and
+-- overwriting them would silently rewrite history for a row this
+-- migration did not create. See
+-- src/lib/seed-portfolio-tag-migration.test.ts, which seeds a free-minted
+-- "portfolio" row BEFORE applying this migration and asserts it is curated
+-- in place rather than the migration failing outright.
+-- `true`, consistently, in both branches below (round-5 review): the
+-- INSERT's own VALUES list and the ON CONFLICT branch used to spell this
+-- two different ways (`true` and `1`) — the same boolean, written
+-- inconsistently in one statement. SQLite treats them identically (3.23+
+-- recognises the TRUE/FALSE keywords; Prisma itself stores this column as
+-- an INTEGER either way), so this was never a correctness bug, only a
+-- "which one is the real spelling" question a reader had to stop and
+-- answer. `true` matches the sibling seed migration's own four-subject
+-- INSERT (20260928103000_add_media_tags), so that is the one kept.
+INSERT INTO "Tag" ("id", "slug", "name", "curated", "createdAt") VALUES
+    ('tagseed00portfolio', 'portfolio', 'Portfolio', true, '2026-10-04T15:00:00.000+00:00')
+ON CONFLICT("slug") DO UPDATE SET "curated" = true, "name" = excluded."name";

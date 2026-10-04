@@ -18,12 +18,18 @@ export const RIGHTS_DECISION_PATH = "/api/admin/rights/decision";
 export const UPLOAD_PATH = "/upload";
 export const MEDIA_UPLOAD_PATH = "/api/media";
 
-// The header nav's "About" destination (ugcportal-14k9). The page itself is
-// ugcportal-qnq9.7's job, built concurrently with this bead — this constant
-// exists so the header can link to it now, rather than the header and the
-// eventual page each spelling "/about" separately and risking the usual
-// drift. Expect this to 404 until that bead lands.
+/**
+ * The public about and portfolio pages (ugcportal-qnq9.7). English route
+ * names, matching the Decisions table's language rule — unlike
+ * ugcportal-qnq9.4's /personvern and /lisens, which keep their Norwegian
+ * names despite English content (see that bead's own title).
+ *
+ * `ABOUT_PATH` is also the header's link target (ugcportal-14k9, PR #94,
+ * which landed after this page) — one constant, so the header and the page
+ * cannot drift from each other if the route were ever renamed.
+ */
 export const ABOUT_PATH = "/about";
+export const PORTFOLIO_PATH = "/portfolio";
 
 /**
  * The multipart field POST /api/media reads the subject tags out of
@@ -75,6 +81,18 @@ export const MEDIA_PREVIEW_PATH = "/api/media/preview";
  * with nothing detecting it (PR #45 review, round 3).
  */
 export const AUTH_ERROR_PATH = "/auth/error";
+
+/**
+ * The privacy statement and the licence text (ugcportal-qnq9.4).
+ *
+ * English paths, not /personvern and /lisens: the site's language is English
+ * (docs/ugc-research.md, decisions table), and a route a reader cannot
+ * pronounce is one they will not find. Norwegian law still governs the
+ * CONTENT — see the pages themselves. Named here so the footer
+ * (ugcportal-akv6) and the pages cannot drift apart.
+ */
+export const PRIVACY_PATH = "/privacy";
+export const LICENCE_PATH = "/licence";
 
 /**
  * Where to send a visitor who has to sign in first.

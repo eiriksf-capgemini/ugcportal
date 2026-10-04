@@ -18,7 +18,15 @@ describe("requireAdmin", () => {
     const session = { user: { id: "admin-1", role: "ADMIN" } };
     getSessionMock.mockResolvedValue(session);
 
-    await expect(requireAdmin()).resolves.toBe(session);
+    // `toEqual`, not `toBe`: since ugcportal-mzr made `Session["user"]`
+    // optional, this gate rebuilds the session around the user it has just
+    // proved is there (see AdminSession), so the value is equal rather than
+    // identical. What callers rely on is the content and the narrower type,
+    // neither of which the copy changes.
+    await expect(requireAdmin()).resolves.toEqual(session);
+    // And the user really is on it — the narrowing is the point of the
+    // rebuild, so a version that dropped it must not pass.
+    expect((await requireAdmin())?.user.id).toBe("admin-1");
   });
 
   it("returns null for anyone else", async () => {

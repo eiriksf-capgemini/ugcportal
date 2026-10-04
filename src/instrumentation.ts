@@ -5,6 +5,9 @@
  * a quiet difference in how data is stored — the kind nobody discovers until
  * an audit — or, for the sign-in gate below, as an unexplained refusal.
  */
+import { CONTACT_EMAIL_PLACEHOLDER, isBareEmailAddress } from "@/lib/contact";
+import { LEGAL_PAGES } from "@/lib/legal/pages";
+import { checkLegalPagesPublishable } from "@/lib/legal/publishable";
 import {
   PERMITTED_EMAILS_VAR,
   PROVIDER_PREFIX_HINT,
@@ -105,8 +108,65 @@ export function checkSignInConfiguration(
   return null;
 }
 
+/**
+ * The contact address the About and Portfolio pages' mailto form sends to
+ * (ugcportal-qnq9.7). `resolveContactEmail` (src/lib/contact.ts) falls back
+ * to a clearly-fake placeholder whenever `CONTACT_EMAIL` is unset — fine in
+ * every environment except production, where a visitor would otherwise mail
+ * an address nobody reads. Same shape as the two checks above: a warning
+ * rather than a refusal to boot, because the rest of the site is useful
+ * without a working contact form.
+ *
+ * TWO DIFFERENT PROBLEMS, two different conditions for warning about them
+ * (round-2 review added the second). "Unset" is fine everywhere except
+ * production — dev and CI never configure it, same reasoning as the
+ * evidence-encryption check above. A MALFORMED value — `CONTACT_EMAIL` set
+ * to something other than a bare address, e.g. "Jane Doe
+ * <jane@example.com>" — is worth flagging in every environment, the same
+ * way the sign-in check below is unconditional: it is a real configuration
+ * mistake the moment it is made, not merely "not got round to yet", and
+ * `contactMailtoHref` (src/lib/contact.ts) does no parsing of that shape —
+ * it would build a mailto href against the whole malformed string.
+ */
+export function checkContactEmailConfiguration(
+  env: NodeJS.ProcessEnv = process.env,
+): string | null {
+  const configured = env.CONTACT_EMAIL?.trim();
+
+  if (configured && !isBareEmailAddress(configured)) {
+    return (
+      `[contact] CONTACT_EMAIL is set to "${configured}", which is not a ` +
+      'bare email address (it contains whitespace or an angle bracket — ' +
+      '"Jane Doe <jane@example.com>" rather than "jane@example.com"). ' +
+      "Nothing parses a display name out of it before building a mailto: " +
+      "link. Set it to the address alone. See env.example."
+    );
+  }
+
+  if (env.NODE_ENV !== "production") {
+    return null;
+  }
+  if (configured) {
+    return null;
+  }
+  return (
+    "[contact] CONTACT_EMAIL is not set. The About and Portfolio pages' " +
+    `contact form will show the placeholder address (${CONTACT_EMAIL_PLACEHOLDER}) ` +
+    "to every visitor until it is. See env.example."
+  );
+}
+
 export async function register(): Promise<void> {
-  for (const warning of [checkEvidenceEncryption(), checkSignInConfiguration()]) {
+  for (const warning of [
+    checkEvidenceEncryption(),
+    checkSignInConfiguration(),
+    checkContactEmailConfiguration(),
+    // ugcportal-qnq9.4: while a LEGAL_* variable is unset (env.example) the
+    // legal pages refuse to render in production (src/lib/legal/
+    // publishable.ts); say which at boot rather than leaving it to the
+    // first visitor to find.
+    checkLegalPagesPublishable(LEGAL_PAGES),
+  ]) {
     if (warning) {
       console.error(warning);
     }

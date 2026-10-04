@@ -10,14 +10,15 @@ import {
 } from "react";
 
 import {
-  GALLERY_CAPTION_CLASS,
   GALLERY_GRID_CLASS,
   GALLERY_STATE_CONTAINER_CLASS,
-  GALLERY_TAG_CLASS,
-  GALLERY_TAG_LIST_CLASS,
   GALLERY_TILE_CLASS,
   GALLERY_TILE_IMAGE_CLASS,
 } from "@/components/gallery/containment";
+import {
+  GalleryItemCaption,
+  GalleryItemTags,
+} from "@/components/gallery/gallery-item";
 import {
   createActivationGate,
   ensureSizes,
@@ -517,67 +518,16 @@ export function Gallery({
 }
 
 /**
- * The caption under one tile (ugcportal-gwr). Mirrors `figure > img[alt] +
- * figcaption` from docs/design/forside.html's reference sketch — not a
- * literal `<figcaption>`, since the tile is not inside a `<figure>` and
- * introducing one here is a larger structural change than this bead's render
- * half needs, but the same idea: a short, optional, visible line of text
- * under the photograph, separate from the button that opens it.
- *
- * RENDERS NOTHING when there is no caption, for the same reason
- * `GalleryItemTags` renders nothing when there are no tags: an untagged,
- * uncaptioned item is the ordinary case for most of this library, and an
- * empty element would still carry this one's margin.
- *
- * Plain text, nothing else. React escapes it the same way it escapes a tag
- * name, so a caption containing `<script>` renders as those literal
- * characters rather than executing (K2's XSS criterion) — the same guarantee
- * `GalleryItemTags` already has, for the same reason: nothing on this path
- * uses `dangerouslySetInnerHTML`.
+ * `GalleryItemCaption` and `GalleryItemTags` used to live here (ugcportal-gwr,
+ * ugcportal-jsc), and round 1 of ugcportal-qnq9.7 exported them for
+ * `PortfolioTile` to reuse. Round 2 moved the implementations to
+ * src/components/gallery/gallery-item.tsx, a plain module with no
+ * `"use client"` — this file's own `"use client"` pulls its entire client
+ * bundle (PhotoSwipe, `Gallery`'s state) along with anything imported from
+ * it, which /about and /portfolio have no reason to pay for. Both are
+ * imported from there above and used exactly as before in this file's own
+ * render, below.
  */
-function GalleryItemCaption({ item }: { item: GalleryItem }) {
-  if (item.caption === "") return null;
-  return (
-    <p className={GALLERY_CAPTION_CLASS} data-gallery-caption={item.id}>
-      {item.caption}
-    </p>
-  );
-}
-
-/**
- * The subject tags under one tile (ugcportal-jsc).
- *
- * RENDERS NOTHING AT ALL when there are none — not an empty `<ul>`, not a
- * spacer, not a dash. An untagged item is the ordinary case for everything
- * uploaded before tagging existed, and an empty element still carries this
- * list's `mt-1.5`, so the untagged tiles in a mixed grid would sit six pixels
- * higher than their neighbours for no reason a visitor could see. An empty
- * list is also announced as a list with no items, which is worse than
- * silence.
- *
- * A `<ul>`, because it is a list of labels about the item beside it, and
- * screen readers announce its length — "list, 2 items" is exactly the useful
- * thing to hear here.
- *
- * `name` goes in as text and nothing else. React escapes it, so a tag called
- * `<img onerror=…>` renders as those characters rather than as an element;
- * the characters escaping does NOT neutralise — the bidi overrides — are
- * refused at the write path (src/lib/tags.ts) and dropped again at the read
- * path (`toGalleryTags`), so there is nothing left here that needs handling.
- * Nothing on this path uses `dangerouslySetInnerHTML`, and nothing should.
- */
-function GalleryItemTags({ item }: { item: GalleryItem }) {
-  if (item.tags.length === 0) return null;
-  return (
-    <ul className={GALLERY_TAG_LIST_CLASS}>
-      {item.tags.map((tag) => (
-        <li key={tag.slug} className={GALLERY_TAG_CLASS} data-gallery-tag={tag.slug}>
-          {tag.name}
-        </li>
-      ))}
-    </ul>
-  );
-}
 
 /**
  * The whole-page "nothing published" state. Its sibling, `GalleryUnavailable`

@@ -1,5 +1,7 @@
 import { redirect } from "next/navigation";
 
+import { PAGE_CONTAINER_CLASS } from "@/components/site/page-shell";
+import { PageTitle } from "@/components/page-title";
 import { getSession } from "@/lib/auth";
 import { UPLOAD_PATH, signInPath } from "@/lib/routes";
 import { listPickerTags } from "@/lib/tags";
@@ -75,7 +77,7 @@ export default async function UploadPage() {
       No <main> here — src/components/app-shell.tsx owns the page's single
       main landmark, and a second one would break the skip link.
     */
-    <div className="mx-auto w-full max-w-3xl px-4 py-12 sm:px-6">
+    <div className={PAGE_CONTAINER_CLASS}>
       {/*
         text-foreground/text-muted-foreground, not text-ink/text-ink-muted
         (ugcportal-rw9j review round 4): this heading and intro sit directly
@@ -85,9 +87,7 @@ export default async function UploadPage() {
         canvas in light mode; the semantic foreground/muted-foreground tokens
         are the ones actually mode-aware for the page canvas.
       */}
-      <h1 className="text-2xl font-medium tracking-tight text-foreground sm:text-3xl">
-        Upload
-      </h1>
+      <PageTitle>Upload</PageTitle>
       <p className="mt-3 max-w-prose text-sm text-muted-foreground">
         Add images and video to your library. Each image is watermarked as it
         arrives, and only that watermarked copy is ever displayed.

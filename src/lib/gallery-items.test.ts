@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { PORTFOLIO_TAG_SLUG } from "@/lib/curation-tags";
 import {
   appendGalleryItems,
   galleryItemAlt,
@@ -535,5 +536,26 @@ describe("the tags on a mapped item", () => {
         { slug: "food", name: "FOOD" },
       ]),
     ).toEqual([{ slug: "food", name: "Food" }]);
+  });
+
+  // ugcportal-qnq9.7 round-2 review: PORTFOLIO_TAG_SLUG exists to curate
+  // which photos show on /portfolio, not to describe a subject, and this is
+  // the ONE boundary every public surface's tags cross — the main gallery
+  // feed included, not only the portfolio page's own selection
+  // (src/lib/portfolio.ts). Round 1 filtered it only on that one surface;
+  // this is the fix moved to where it covers all of them.
+  it("drops the portfolio curation tag, keeping any real subject alongside it", () => {
+    expect(
+      mappedTags([
+        { slug: "food", name: "Food" },
+        { slug: PORTFOLIO_TAG_SLUG, name: "Portfolio" },
+      ]),
+    ).toEqual([{ slug: "food", name: "Food" }]);
+  });
+
+  it("drops the portfolio curation tag even when it is the only tag", () => {
+    expect(mappedTags([{ slug: PORTFOLIO_TAG_SLUG, name: "Portfolio" }])).toEqual(
+      [],
+    );
   });
 });

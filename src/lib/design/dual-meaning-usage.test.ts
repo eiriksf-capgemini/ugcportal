@@ -186,69 +186,77 @@ function scanDualMeaningUsage(): Map<string, Partial<Record<DualMeaningToken, nu
  * text-muted-foreground, the same token its sibling already uses.
  */
 const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> = {
-  "src/app/auth/error/page.tsx": { "text-foreground": 1, "text-muted-foreground": 1 },
-  "src/app/admin/settings/rights/page.tsx": { "text-muted-foreground": 5, "text-primary": 2 },
-  // text-ink counts added (ugcportal-14k9 PR #94 review round 1, low finding
-  // 5): every field in this form - five identically-styled inputs/textareas
-  // - renders inside the resale-rights decision screen's plain page canvas,
-  // not any well, which is exactly why its OWN entry already carried
-  // text-muted-foreground rather than text-ink-muted; text-ink here is the
-  // matching body-text token for the same safe context, pre-existing and
-  // unrelated to the review finding - the finding was about a NEW usage
-  // outside a well (mobile-nav-toggle.tsx's since-reverted `ghost`), not
-  // about any of these.
+  // The page h1 moved out of auth/error, upload and the legal frame into
+  // src/components/page-title.tsx (ugcportal-qnq9.4, PR #90 round 2); it
+  // still renders straight on --background inside the app shell's <main>,
+  // so the page-canvas token stays the correct one.
+  "src/components/page-title.tsx": { "text-foreground": 1 },
+  "src/app/auth/error/page.tsx": { "text-muted-foreground": 1 },
+  // ugcportal-qnq9.4: the legal pages render straight on --background inside
+  // the app shell's <main>, with no surface well of their own - the same
+  // situation as auth/error/page.tsx and upload/page.tsx, so the page-canvas
+  // pair is the correct one.
+  "src/components/legal/legal-page.tsx": {
+    "text-foreground": 3,
+    "text-muted-foreground": 5,
+  },
+  // ugcportal-qnq9.7 round 5: the inline-link class string these admin pages
+  // wrote out by hand is now INLINE_LINK_CLASS (src/components/ui/inline-link.ts),
+  // so their own "text-primary" counts drop; rights/page.tsx keeps one
+  // differently-styled link of its own.
+  "src/app/admin/settings/rights/page.tsx": { "text-muted-foreground": 5, "text-primary": 1 },
+  // text-ink counts (ugcportal-14k9 PR #94 review round 1, low finding 5):
+  // every field in this form - five identically-styled inputs/textareas -
+  // renders on the resale-rights decision screen's plain page canvas, not
+  // any well; text-ink here is the pre-existing body-text token for that
+  // same safe context, pinned so a new usage cannot land silently.
   "src/app/admin/settings/rights/decision-form.tsx": {
     "text-muted-foreground": 3,
     "text-ink": 5,
   },
-  "src/app/admin/settings/users/page.tsx": { "text-muted-foreground": 4, "text-primary": 1 },
-  "src/app/admin/settings/instagram/page.tsx": { "text-muted-foreground": 3, "text-primary": 1 },
-  "src/app/upload/page.tsx": { "text-foreground": 1, "text-muted-foreground": 1 },
-  // text-ink: 4 added (low finding 5) - the alt-text label, the alt-text
-  // input, the caption label and the caption input, all inside the upload
-  // form's own plain-canvas fields (ugcportal-gwr), same reasoning as
-  // decision-form.tsx above.
+  "src/app/admin/settings/users/page.tsx": { "text-muted-foreground": 4 },
+  "src/app/admin/settings/instagram/page.tsx": { "text-muted-foreground": 3 },
+  "src/app/upload/page.tsx": { "text-muted-foreground": 1 },
+  // text-ink: 2 (low finding 5) - the alt-text and caption labels, on the
+  // upload form's own plain canvas (ugcportal-gwr). The two inputs that
+  // used to make this 4 now take their class from the shared
+  // text-input.ts constant (ugcportal-qnq9.7 round 3), audited below.
   "src/app/upload/upload-form.tsx": {
     "text-foreground": 2,
     "text-muted-foreground": 5,
-    "text-ink": 4,
+    "text-ink": 2,
   },
-  // text-ink: 1 added (low finding 5) - the queued file's name, inside the
-  // upload page's own plain canvas (ugcportal-n3c), same reasoning as above.
+  // text-ink: 1 (low finding 5) - the queued file's name, on the upload
+  // page's own plain canvas (ugcportal-n3c).
   "src/app/upload/upload-queue-list.tsx": { "text-ink": 1 },
-  // text-ink: 2 added (low finding 5) - button.tsx's OWN two usages
-  // (NEUTRAL_OUTLINE_STYLE and the `ghost` variant), each documented in
-  // that file as measured and safe only inside one of the old near-black
-  // wells, never against --background. Pinning the count here means a
-  // future edit INSIDE button.tsx that adds a third text-ink usage (a new
-  // variant, say) cannot land silently - but, per this file's header
-  // comment above, it does NOT extend to catching a caller elsewhere
-  // choosing `variant="ghost"` on an unsafe background: that is a
-  // component-composition usage with no "text-ink" substring of its own,
-  // which is this scanner's documented scope limit, confirmed (not
-  // assumed) against this PR's own round-1 finding. mobile-nav-toggle.
-  // contrast.test.tsx is the real guard for that case.
+  // Merge of ugcportal-qnq9.7 (PR #93) with this bead's text-ink audit: the
+  // shared input class (one text-ink, on the input's own bg-surface-1 fill,
+  // the same well-interior case as decision-form.tsx's bg-surface-3 fields)
+  // and the About/Portfolio contact form's two field labels, on the page
+  // canvas exactly like upload-form.tsx's labels above.
+  "src/components/ui/text-input.ts": { "text-ink": 1 },
+  "src/components/site/contact-mailto-form.tsx": { "text-ink": 2 },
+  // text-ink: 2 (low finding 5) - button.tsx's OWN two usages
+  // (NEUTRAL_OUTLINE_STYLE and the `ghost` variant), each documented there
+  // as measured and safe only inside one of the old near-black wells. Pinned
+  // so a third usage inside button.tsx cannot land silently; a caller
+  // choosing `variant="ghost"` on an unsafe background has no "text-ink"
+  // substring of its own and is this scanner's documented scope limit -
+  // mobile-nav-toggle.contrast.test.tsx is the guard for that case.
   "src/components/ui/button.tsx": { "border-primary": 1, "text-primary": 2, "text-ink": 2 },
   /*
-   * ugcportal-14k9: these two usages are what app-shell.tsx's own former
-   * entry used to cover (wordmark text-foreground/hover:text-primary, the
-   * tagline's text-muted-foreground) before the header's markup moved out
-   * of that file wholesale into site-header.tsx. The nav links' shared base
-   * class (text-foreground/hover:text-primary) now lives in its own module,
-   * src/components/header-nav-link.ts, shared with upload-link.tsx (PR #94
-   * review round 1, low finding 4) - upload-link.tsx's own former entry for
-   * these two tokens is retired along with it, since the literal class
-   * string no longer appears in that file's own source text. Same
-   * background every one of these audits already covered: the sticky
-   * header is bg-background, so --foreground/--primary/--muted-foreground's
-   * "whatever pairs with --background" meaning is exactly right here, same
-   * as the wordmark always was.
+   * ugcportal-14k9: the wordmark and tagline tokens app-shell.tsx's former
+   * entry covered moved with the header's markup into site-header.tsx. The
+   * nav links' shared base class (text-foreground/hover:text-primary) lives
+   * in src/components/header-nav-link.ts, shared with upload-link.tsx (PR
+   * #94 round 1, low finding 4) - upload-link.tsx's own former entry is
+   * retired with it, since the literal class string no longer appears in
+   * that file. The sticky header is bg-background, so the page-canvas
+   * tokens are exactly right here, same as the wordmark always was.
    */
   "src/components/header-nav-link.ts": { "text-foreground": 1, "text-primary": 1 },
-  // Just the aria-[current=page]:text-primary highlighting this component
-  // adds on top of the shared base class above - the base class's own
-  // text-foreground/text-primary moved to header-nav-link.ts and are no
-  // longer literal text in this file.
+  // Just the aria-[current=page]:text-primary highlight this component adds
+  // on top of the shared base class above.
   "src/components/primary-nav-link.tsx": { "text-primary": 1 },
   "src/components/site-header.tsx": {
     "text-foreground": 1,
@@ -266,6 +274,52 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
   },
   "src/components/gallery/containment.ts": { "text-muted-foreground": 2 },
   "src/components/auth-status.tsx": { "text-muted-foreground": 1 },
+
+  /*
+   * ugcportal-qnq9.7: the public About and Portfolio pages, and the shared
+   * sections they're built from. Every entry below renders directly on the
+   * page canvas (--background) — none of these sit inside a --card/
+   * --popover/--muted/--accent/--secondary/--destructive-surface/--sidebar
+   * fill or any src/components/gallery/containment.ts well, which is the one
+   * condition that would need text-ink/text-ink-muted instead (see this
+   * file's header comment).
+   *
+   * Round 2 moved the shared `<h1>` both pages used to carry out to
+   * `src/components/site/page-shell.tsx` (`PageShell`) — so
+   * `src/app/about/page.tsx` carries none of these tokens directly any more
+   * (no entry below: an audited file with zero matches simply isn't one).
+   *
+   * Round 3 did the same for the shared `<h2>` section heading
+   * (`src/components/site/section-heading.ts`, `SECTION_HEADING_CLASS`):
+   * `/portfolio`'s own `text-foreground` count is now zero too (its
+   * "Samples" `<h2>` moved to the constant; its empty-state `<p>` still
+   * accounts for the one `text-muted-foreground`), and
+   * `contact-section.tsx`'s "Get in touch" `<h2>` moved the same way, so
+   * that file's own `text-foreground` count also dropped to zero.
+   * `what-we-offer-section.tsx` keeps one `text-foreground` of its own —
+   * its per-item `<dt>`, not the section `<h2>`, which also moved to the
+   * shared constant.
+   */
+  "src/app/portfolio/page.tsx": { "text-muted-foreground": 1 },
+  "src/components/site/page-shell.tsx": { "text-foreground": 1 },
+  "src/components/site/section-heading.ts": { "text-foreground": 1 },
+  // Round-1 review simplified this component (K2's spec marker renders
+  // unconditionally, the K3 advertising-label branch is gone until
+  // ugcportal-qnq9.1 lands) — one text-foreground usage now, not two.
+  "src/components/portfolio/portfolio-tile.tsx": { "text-foreground": 1 },
+  // Round 2 extracted INLINE_LINK_CLASS as a LOCAL constant for the two
+  // identically-styled links in this file; round 5 moved that constant out
+  // to src/components/ui/inline-link.ts (shared with the three admin
+  // pages above), so "text-primary" no longer appears in this file's own
+  // source text at all — the two `<a>` elements import the string instead
+  // of writing it.
+  "src/components/site/contact-section.tsx": { "text-muted-foreground": 3 },
+  "src/components/site/intro-section.tsx": { "text-muted-foreground": 1 },
+  "src/components/site/what-we-offer-section.tsx": {
+    "text-foreground": 1,
+    "text-muted-foreground": 1,
+  },
+  "src/components/ui/inline-link.ts": { "text-primary": 1 },
 };
 
 describe("dual-meaning token usage is audited, not just found", () => {
