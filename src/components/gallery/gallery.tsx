@@ -343,7 +343,7 @@ export function Gallery({
         /*
          * The button this click is on is about to unmount (`{hasMore ? ...
          * : null}` below) — but only chase it with focus if the visitor was
-         * actually still on it, or focus had already landed on <body>/null
+         * actually still on it, or focus had already fallen to `<body>`
          * because some earlier step already took it away (ugcportal-jx4
          * round-2 review finding). Checked synchronously here, before this
          * function returns and React gets a chance to re-render: nothing
@@ -352,12 +352,16 @@ export function Gallery({
          * last actual action left it as, including a Tab elsewhere while
          * this request was in flight — which must be left alone rather than
          * overridden.
+         *
+         * No `=== null` branch (round-3 review finding): in an attached
+         * document `document.activeElement` is never `null` — with nothing
+         * focused it defaults to `<body>`, which the check above already
+         * covers — so the extra branch was dead code, not a second real
+         * case.
          */
         const active = document.activeElement;
         const stillOnControl =
-          active === loadMoreButtonRef.current ||
-          active === document.body ||
-          active === null;
+          active === loadMoreButtonRef.current || active === document.body;
         if (stillOnControl) pagingStatusRef.current?.focus();
       }
     } catch {

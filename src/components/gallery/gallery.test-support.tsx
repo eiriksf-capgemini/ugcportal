@@ -96,6 +96,14 @@ export async function unmountGallery(root: Root): Promise<void> {
  * Waits for `condition`, polling inside `act` so pending promises and React
  * effects the caller does not control directly get a chance to flush, and
  * fails with a label naming what never came rather than a bare timeout.
+ *
+ * Also used outside a React tree entirely (lightbox.test.ts, which drives
+ * PhotoSwipe directly): `act` around an ordinary `setTimeout` is harmless
+ * when nothing React-owned is pending, and the polling itself answers a
+ * jsdom gap specific to that file's PhotoSwipe opens/closes — they are CSS
+ * transitions, jsdom never fires `transitionend`, so both complete on the
+ * library's own fallback timer (duration + 500ms) rather than on an event a
+ * fixed-sleep test could wait for cheaply and reliably.
  */
 export async function waitUntil(
   condition: () => boolean,

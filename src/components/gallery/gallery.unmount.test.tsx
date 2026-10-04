@@ -130,10 +130,18 @@ beforeAll(() => {
 const ctx = setupGalleryTestRoot();
 
 afterEach(() => {
-  // The shared `afterEach` above (registered first, inside
-  // `setupGalleryTestRoot`) already unmounts `ctx.root` and removes
-  // `ctx.container` — neither of which this cleanup reads — so this is
-  // purely the PhotoSwipe-specific state only this file's tests touch.
+  /*
+   * Runs BEFORE the shared `afterEach` inside `setupGalleryTestRoot`, not
+   * after: Vitest runs same-scope `afterEach` hooks in reverse registration
+   * order (no `sequence.hooks` override in vitest.config.ts to change that),
+   * and this one is registered second. So at the point this callback runs,
+   * `ctx.root` has NOT been unmounted yet and `ctx.container` is still in
+   * the document — this cleanup just never reads either of those, for the
+   * PhotoSwipe-specific state below. `stale?.destroy?.()` in particular is
+   * safe to call whether or not the root has unmounted by the time it runs,
+   * since PhotoSwipe's own `destroy()` is idempotent (a no-op once `pswp` is
+   * already undefined) regardless of ordering either way.
+   */
   measurements.length = 0;
   requested.length = 0;
   (globalThis as unknown as { Image: unknown }).Image = realImage;
