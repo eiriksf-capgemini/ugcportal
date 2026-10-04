@@ -9,6 +9,7 @@ import {
   useState,
 } from "react";
 
+import { TEXT_INPUT_CLASS } from "@/components/ui/text-input";
 import { ACCEPTED_MIME_TYPES } from "@/lib/media-rules";
 
 import { altTextFieldError, captionFieldError } from "./alt-text";
@@ -732,7 +733,7 @@ function AltTextFields({
         onChange={(event) => onAltTextChange(event.target.value)}
         aria-invalid={altTextError !== null}
         aria-describedby={altTextError !== null ? altTextErrorId : undefined}
-        className="mt-2 block w-full rounded-md border border-line-strong bg-surface-1 px-3 py-2 text-sm text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+        className={TEXT_INPUT_CLASS}
       />
       {/* Rendered unconditionally, empty when there is nothing wrong — the
           same rule GalleryPaging and the tag picker's cap message follow, so
@@ -760,7 +761,7 @@ function AltTextFields({
         onChange={(event) => onCaptionChange(event.target.value)}
         aria-invalid={captionError !== null}
         aria-describedby={captionError !== null ? captionErrorId : undefined}
-        className="mt-2 block w-full rounded-md border border-line-strong bg-surface-1 px-3 py-2 text-sm text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+        className={TEXT_INPUT_CLASS}
       />
       {/* `id` + `aria-describedby` above, matching the alt text field's own
           pattern (review round 3 finding 3) — without it, `aria-invalid`

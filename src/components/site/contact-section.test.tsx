@@ -1,0 +1,48 @@
+import { renderToStaticMarkup } from "react-dom/server";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { ContactSection } from "@/components/site/contact-section";
+
+/**
+ * Round-5 review: when `CONTACT_EMAIL` fails
+ * `checkContactEmailConfiguration`'s own shape test (src/instrumentation.ts
+ * only WARNS about this at boot; it does not block `resolveContactEmail`
+ * from returning the value anyway), the "email us directly" link must not
+ * show the raw, possibly malformed value as its visible text — a visitor
+ * reading `"Jane Doe <jane@example.com>"` learns nothing useful and sees an
+ * internal misconfiguration verbatim.
+ */
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
+describe("ContactSection — the direct-email link label", () => {
+  it("shows the real address when it is shaped like one", () => {
+    vi.stubEnv("CONTACT_EMAIL", "owner@example.com");
+    const markup = renderToStaticMarkup(
+      <ContactSection defaultSubject="Hello" />,
+    );
+    expect(markup).toContain(">owner@example.com<");
+  });
+
+  it("shows a neutral label, not the raw value, when CONTACT_EMAIL is malformed", () => {
+    vi.stubEnv("CONTACT_EMAIL", "Jane Doe <jane@example.com>");
+    const markup = renderToStaticMarkup(
+      <ContactSection defaultSubject="Hello" />,
+    );
+    expect(markup).not.toContain("Jane Doe");
+    // The raw value is still encoded into the href as a (best-effort)
+    // defence in depth — see contactMailtoHref's own comment — just not
+    // shown as the link's visible text.
+    expect(markup).toContain("our email address");
+  });
+
+  it("still builds a usable href even when the label falls back", () => {
+    vi.stubEnv("CONTACT_EMAIL", "Jane Doe <jane@example.com>");
+    const markup = renderToStaticMarkup(
+      <ContactSection defaultSubject="Hello" />,
+    );
+    expect(markup).toContain('data-contact-direct-link=""');
+    expect(markup).toMatch(/href="mailto:[^"]+"/);
+  });
+});

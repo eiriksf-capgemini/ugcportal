@@ -1,6 +1,8 @@
 import { notFound } from "next/navigation";
 
+import { PAGE_CONTAINER_CLASS } from "@/components/site/page-shell";
 import { Button } from "@/components/ui/button";
+import { INLINE_LINK_CLASS } from "@/components/ui/inline-link";
 import { requireAdmin } from "@/lib/admin";
 import { prisma } from "@/lib/prisma";
 import {
@@ -44,7 +46,7 @@ export default async function InstagramSettingsPage({
   const errorMessage = outcomeMessage(error);
 
   return (
-    <div className="mx-auto w-full max-w-3xl flex-1 px-4 py-12 sm:px-6">
+    <div className={PAGE_CONTAINER_CLASS}>
       <h1 className="text-2xl font-semibold tracking-tight">
         Instagram accounts
       </h1>
@@ -53,7 +55,7 @@ export default async function InstagramSettingsPage({
         portal. Connecting an account grants no right to sell anything from it
         — resale rights are recorded per uploader and per upload on the{" "}
         <a
-          className="rounded-sm font-medium text-primary underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring"
+          className={INLINE_LINK_CLASS}
           href={RIGHTS_SETTINGS_PATH}
         >
           resale-rights screen

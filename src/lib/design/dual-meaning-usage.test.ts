@@ -170,10 +170,14 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
     "text-foreground": 3,
     "text-muted-foreground": 5,
   },
-  "src/app/admin/settings/rights/page.tsx": { "text-muted-foreground": 5, "text-primary": 2 },
+  // ugcportal-qnq9.7 round 5: the inline-link class string these admin pages
+  // wrote out by hand is now INLINE_LINK_CLASS (src/components/ui/inline-link.ts),
+  // so their own "text-primary" counts drop; rights/page.tsx keeps one
+  // differently-styled link of its own.
+  "src/app/admin/settings/rights/page.tsx": { "text-muted-foreground": 5, "text-primary": 1 },
   "src/app/admin/settings/rights/decision-form.tsx": { "text-muted-foreground": 3 },
-  "src/app/admin/settings/users/page.tsx": { "text-muted-foreground": 4, "text-primary": 1 },
-  "src/app/admin/settings/instagram/page.tsx": { "text-muted-foreground": 3, "text-primary": 1 },
+  "src/app/admin/settings/users/page.tsx": { "text-muted-foreground": 4 },
+  "src/app/admin/settings/instagram/page.tsx": { "text-muted-foreground": 3 },
   "src/app/upload/page.tsx": { "text-muted-foreground": 1 },
   "src/app/upload/upload-form.tsx": { "text-foreground": 2, "text-muted-foreground": 5 },
   "src/components/upload-link.tsx": { "text-foreground": 1, "text-primary": 1 },
@@ -200,6 +204,52 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
   // comment, added after an axe run caught text-primary on bg-popover at
   // 1.81:1 in dark mode) — the safe case.
   "src/components/consent/cookie-banner.tsx": { "text-foreground": 1 },
+
+  /*
+   * ugcportal-qnq9.7: the public About and Portfolio pages, and the shared
+   * sections they're built from. Every entry below renders directly on the
+   * page canvas (--background) — none of these sit inside a --card/
+   * --popover/--muted/--accent/--secondary/--destructive-surface/--sidebar
+   * fill or any src/components/gallery/containment.ts well, which is the one
+   * condition that would need text-ink/text-ink-muted instead (see this
+   * file's header comment).
+   *
+   * Round 2 moved the shared `<h1>` both pages used to carry out to
+   * `src/components/site/page-shell.tsx` (`PageShell`) — so
+   * `src/app/about/page.tsx` carries none of these tokens directly any more
+   * (no entry below: an audited file with zero matches simply isn't one).
+   *
+   * Round 3 did the same for the shared `<h2>` section heading
+   * (`src/components/site/section-heading.ts`, `SECTION_HEADING_CLASS`):
+   * `/portfolio`'s own `text-foreground` count is now zero too (its
+   * "Samples" `<h2>` moved to the constant; its empty-state `<p>` still
+   * accounts for the one `text-muted-foreground`), and
+   * `contact-section.tsx`'s "Get in touch" `<h2>` moved the same way, so
+   * that file's own `text-foreground` count also dropped to zero.
+   * `what-we-offer-section.tsx` keeps one `text-foreground` of its own —
+   * its per-item `<dt>`, not the section `<h2>`, which also moved to the
+   * shared constant.
+   */
+  "src/app/portfolio/page.tsx": { "text-muted-foreground": 1 },
+  "src/components/site/page-shell.tsx": { "text-foreground": 1 },
+  "src/components/site/section-heading.ts": { "text-foreground": 1 },
+  // Round-1 review simplified this component (K2's spec marker renders
+  // unconditionally, the K3 advertising-label branch is gone until
+  // ugcportal-qnq9.1 lands) — one text-foreground usage now, not two.
+  "src/components/portfolio/portfolio-tile.tsx": { "text-foreground": 1 },
+  // Round 2 extracted INLINE_LINK_CLASS as a LOCAL constant for the two
+  // identically-styled links in this file; round 5 moved that constant out
+  // to src/components/ui/inline-link.ts (shared with the three admin
+  // pages above), so "text-primary" no longer appears in this file's own
+  // source text at all — the two `<a>` elements import the string instead
+  // of writing it.
+  "src/components/site/contact-section.tsx": { "text-muted-foreground": 3 },
+  "src/components/site/intro-section.tsx": { "text-muted-foreground": 1 },
+  "src/components/site/what-we-offer-section.tsx": {
+    "text-foreground": 1,
+    "text-muted-foreground": 1,
+  },
+  "src/components/ui/inline-link.ts": { "text-primary": 1 },
 };
 
 describe("dual-meaning token usage is audited, not just found", () => {

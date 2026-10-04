@@ -1,3 +1,4 @@
+import { stripCurationTags } from "@/lib/curation-tags";
 import { hasUnsafeText, validateAltText, validateCaption } from "@/lib/media-rules";
 import { mediaPreviewPath } from "@/lib/routes";
 
@@ -149,6 +150,39 @@ function sanitizedMediaText(value: unknown, allowNewlines = false): string {
  * Dropping is the right answer rather than stripping. A name with the
  * override removed is a DIFFERENT name that nobody chose, and showing it
  * asserts that the uploader labelled the photograph something they did not.
+ *
+ * THIRD JOB (round-2 review of ugcportal-qnq9.7): any curation-only tag
+ * (`stripCurationTags`, src/lib/curation-tags.ts — today just drops
+ * `PORTFOLIO_TAG_SLUG`) is dropped here too, unconditionally, for EVERY
+ * caller of this function — not only the portfolio page. That tag exists
+ * to CURATE an item for the portfolio page, not to describe its subject,
+ * and this function is the boundary a published item's tags cross on
+ * their way to any RENDERED public surface: the main gallery feed
+ * (src/app/page.tsx) just as much as src/lib/portfolio.ts's own render.
+ * Filtering it only in the portfolio-specific code (round 1's fix) left a
+ * real gap: a photo tagged both "portfolio" and a real subject like "food"
+ * would still show a "Portfolio" chip to every visitor of the ordinary
+ * home-page gallery, leaking the internal curation mechanism exactly
+ * where K6's "never imply something about this item that isn't true"
+ * reasoning applies just as much as it does on the dedicated page.
+ *
+ * Applied once, AFTER the loop below builds the sanitised list, rather
+ * than as a per-entry `continue` inside it (round-5 review: the two used
+ * to be interleaved, so sharing the actual filter with `public-media.ts`
+ * meant pulling it out to its own call first). Equivalent either way — a
+ * curation-only entry still safely passing the other checks changes
+ * nothing about whether it ends up in the final list — but a filter
+ * applied once, as its own step, is the one that can be the same function
+ * call both places need.
+ *
+ * NOT the whole story any more (round 4): GET /api/public/media
+ * (src/app/api/public/media/route.ts) serialises `listPublicMedia`'s
+ * result straight to JSON without ever calling this function, so a direct
+ * API consumer could still see the raw tag — fixed separately, in
+ * `listPublicMedia` itself (src/lib/public-media.ts), which is the
+ * boundary for THAT surface. Round 5 unified the two onto the SAME
+ * exported `stripCurationTags`, so they cannot disagree about which slugs
+ * are curation-only or how they are removed.
  */
 function toGalleryTags(value: unknown): GalleryTag[] {
   if (!Array.isArray(value)) return [];
@@ -164,7 +198,7 @@ function toGalleryTags(value: unknown): GalleryTag[] {
     seen.add(slug);
     tags.push({ slug, name });
   }
-  return tags;
+  return stripCurationTags(tags);
 }
 
 function asIsoString(value: unknown): string | null {

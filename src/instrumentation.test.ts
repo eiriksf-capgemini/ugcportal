@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  checkContactEmailConfiguration,
   checkEvidenceEncryption,
   checkSignInConfiguration,
   register,
 } from "@/instrumentation";
+import { CONTACT_EMAIL_PLACEHOLDER } from "@/lib/contact";
 import { FILLED_LEGAL_ENV, stubLegalEnv } from "@/lib/legal/legal-page.test-support";
 import { PERMITTED_EMAILS_VAR } from "@/lib/sign-in-policy";
 
@@ -127,6 +129,97 @@ describe("the sign-in configuration startup check", () => {
       "NOBODY can sign in",
     );
     expect(checkSignInConfiguration({})).toContain("NOBODY can sign in");
+  });
+});
+
+/**
+ * ugcportal-qnq9.7 round-1 review: moved out of src/lib/contact.ts's own
+ * `resolveContactEmail`, which used to throw at render time. Same shape as
+ * the two checks above — a warning at boot, not a refusal to boot.
+ */
+describe("the contact-email startup check", () => {
+  it("warns when production has nothing configured", () => {
+    const warning = checkContactEmailConfiguration({
+      NODE_ENV: "production",
+    } as NodeJS.ProcessEnv);
+
+    expect(warning).toContain("CONTACT_EMAIL is not set");
+    expect(warning).toContain(CONTACT_EMAIL_PLACEHOLDER);
+    expect(warning).toContain("env.example");
+  });
+
+  it("warns when production's CONTACT_EMAIL is whitespace-only", () => {
+    expect(
+      checkContactEmailConfiguration({
+        NODE_ENV: "production",
+        CONTACT_EMAIL: "   ",
+      } as NodeJS.ProcessEnv),
+    ).toContain("CONTACT_EMAIL is not set");
+  });
+
+  it("is quiet once a real address is configured", () => {
+    expect(
+      checkContactEmailConfiguration({
+        NODE_ENV: "production",
+        CONTACT_EMAIL: "owner@example.com",
+      } as NodeJS.ProcessEnv),
+    ).toBeNull();
+  });
+
+  it("says nothing outside production when simply unset", () => {
+    // Local dev and CI never set CONTACT_EMAIL; warning there would train
+    // people to ignore it, same reasoning as the evidence-encryption check.
+    expect(
+      checkContactEmailConfiguration({ NODE_ENV: "development" } as NodeJS.ProcessEnv),
+    ).toBeNull();
+    expect(
+      checkContactEmailConfiguration({ NODE_ENV: "test" } as NodeJS.ProcessEnv),
+    ).toBeNull();
+  });
+
+  // Round-2 review: a malformed value is a real mistake the moment it is
+  // made, so — unlike "simply unset" above — this is flagged in every
+  // environment, the same way the sign-in check's own malformed-entry case
+  // is unconditional.
+  describe("rejects anything that is not a bare address", () => {
+    it('warns on "Name <addr>" even outside production', () => {
+      const warning = checkContactEmailConfiguration({
+        NODE_ENV: "development",
+        CONTACT_EMAIL: "Jane Doe <jane@example.com>",
+      } as NodeJS.ProcessEnv);
+
+      expect(warning).toContain("not a");
+      expect(warning).toContain("bare email address");
+      expect(warning).toContain("Jane Doe <jane@example.com>");
+    });
+
+    it("warns on a value containing any whitespace", () => {
+      expect(
+        checkContactEmailConfiguration({
+          NODE_ENV: "development",
+          CONTACT_EMAIL: "jane doe@example.com",
+        } as NodeJS.ProcessEnv),
+      ).toContain("bare email address");
+    });
+
+    it("still warns in production, in place of the usual 'is not set' message", () => {
+      const warning = checkContactEmailConfiguration({
+        NODE_ENV: "production",
+        CONTACT_EMAIL: "Jane Doe <jane@example.com>",
+      } as NodeJS.ProcessEnv);
+
+      expect(warning).toContain("bare email address");
+      expect(warning).not.toContain("CONTACT_EMAIL is not set");
+    });
+
+    it("is quiet for an ordinary bare address", () => {
+      expect(
+        checkContactEmailConfiguration({
+          NODE_ENV: "development",
+          CONTACT_EMAIL: "jane@example.com",
+        } as NodeJS.ProcessEnv),
+      ).toBeNull();
+    });
   });
 });
 
