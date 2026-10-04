@@ -207,7 +207,7 @@ Accessories are not alcohol, so you can promote and earn from them. Two parts of
 | 3–6 | Make 6–10 spec pieces across books, food, tech and wine accessories (empty glasses, cooler features) | Portfolio page and a one-page rate card |
 | 5–8 | Join 1–2 affiliate networks (Adtraction first). Add labelled links to evergreen posts. | First passive links live |
 | 7–12 | Pitch 10–20 Nordic brands. Test one global platform that accepts Norway. | First 1–2 paid jobs |
-| 12 | Review: income, hours, enjoyment. Decide hobby or ENK. Plan hiking and camping content for spring. | Go / adjust decision |
+| 12 | Review: income, hours, enjoyment. Decide whether it stays a hobby or becomes a registered business. Plan hiking and camping content for spring. | Go / adjust decision |
 
 ---
 
@@ -293,7 +293,7 @@ Accessories are not alcohol, so you can promote and earn from them. Two parts of
 ### 5.7 English-language notes
 
 - **Norwegian law still applies.** You run the site from Norway, so the alcohol ban and labelling rules apply even when you post in English.
-- **Labelling:** the label must be clear to your audience. Using **"Ad / Reklame"** (or "Advertisement / Annonse") covers both English-speaking and Norwegian followers. Use the platform's paid-partnership tool as well, not instead.
+- **Labelling:** the label must be clear to your audience. Using **"Advertisement / Reklame"** (or "Advertisement / Annonse") covers both English-speaking and Norwegian followers. Use the platform's paid-partnership tool as well, not instead.
 - **Affiliate networks:** Nordic programmes (Adtraction etc.) suit a Nordic audience. For an international English-speaking audience, consider international networks such as Awin as you grow.
 
 ---
