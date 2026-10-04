@@ -12,9 +12,15 @@ import { SITE_NAME, SITE_DESCRIPTION } from "@/lib/site";
  * - H2 sections with prose and markdown link lists to public content
  */
 export function GET(): Response {
+  // Build blockquote by prefixing each line of the description with "> "
+  // to preserve llms.txt spec structure even if description contains newlines.
+  const blockquoteLines = SITE_DESCRIPTION.split("\n")
+    .map((line) => `> ${line}`)
+    .join("\n");
+
   const content = `# ${SITE_NAME}
 
-> ${SITE_DESCRIPTION}
+${blockquoteLines}
 
 ## Public Gallery
 
