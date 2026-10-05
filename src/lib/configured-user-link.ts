@@ -354,12 +354,27 @@ export function withConfiguredUserLinking(
           // the string this insert actually wrote, and therefore the string
           // the row in the way actually holds — while `signIn.email` is
           // that address normalised, which is what the array and the gate
-          // speak. They are the same string for everything this app writes;
-          // when @auth/core hands over something else, printing only the
-          // normalised one would name an address that matches no row, and
-          // the operator's `WHERE "email" = ...` would quietly update
-          // nothing. So print what is stored, and the permitted form beside
-          // it when the two differ.
+          // speak.
+          //
+          // THE TWO ARE EQUAL TODAY BY LUCK, NOT BY CONSTRUCTION (PR #100
+          // round 2, low). Nothing on the write path normalises: `createUser`
+          // above stores `data.email` — @auth/core's `profile.email` —
+          // verbatim, and this app has no check anywhere that it is
+          // canonical. It happens to be, because Google and Facebook both
+          // return lowercase, unpadded addresses, which is a fact about
+          // those two providers and not a property of this code: hand the
+          // replay ` Eiriksanderfjeld@Gmail.com ` and the row is written
+          // with the padding and the capitals intact, its stored spelling
+          // differing from its permitted one. A third provider, a changed
+          // one, or a hand-inserted row is all it takes for that to be the
+          // normal case.
+          //
+          // So the message does not assume it. Printing only the normalised
+          // form would name an address that matches no row, and the
+          // operator's `WHERE "email" = ...` — the exact comparison
+          // docs/access-control.md hands them — would quietly update
+          // nothing. Print what is stored, with the permitted form beside it
+          // when the two differ.
           const address =
             data.email === signIn.email
               ? signIn.email
