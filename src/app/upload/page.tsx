@@ -32,8 +32,9 @@ export default async function UploadPage() {
     (an anonymous visitor reaches that state on purpose) and wrong here,
     where "signed out" and "the database didn't answer" must stay
     distinguishable. Left unguarded, a rejection propagates out of this
-    function instead of being silently redirected to sign-in alongside - the
-    request errors, which is what failing CLOSED means for a gate.
+    function instead of being silently redirected to sign-in alongside a
+    genuinely signed-out visitor — the request errors, which is what failing
+    CLOSED means for a gate.
   */
   const session = await getSession();
 

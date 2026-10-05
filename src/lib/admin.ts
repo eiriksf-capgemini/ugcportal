@@ -39,7 +39,7 @@ export async function requireAdmin(): Promise<AdminSession | null> {
     "the database didn't answer" into "not an admin" here would make a
     connectivity blip indistinguishable from a legitimate refusal, and a
     caller cannot tell the two apart from `null` alone. Left unguarded, a
-    rejection propagates out of this function instead - the request errors
+    rejection propagates out of this function instead — the request errors
     rather than quietly resolving to "no, you may not" OR "yes, carry on",
     which is what failing CLOSED means for a gate: refuse to answer rather
     than risk answering wrong.

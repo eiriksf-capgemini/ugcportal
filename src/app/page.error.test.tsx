@@ -314,14 +314,24 @@ describe("Home() in isolation: a failed session read never crashes its render", 
  *    its own call through the shared fail-safe, not a change inside the
  *    real `getSession()`/`auth()` (src/lib/auth.ts) that this mock would
  *    hide from the test.
- * 2. `mockSession.rejectionPromise` (see that mock's own comment above) is
- *    what makes "exactly one error line is logged for the request" below a
- *    meaningful assertion rather than a vacuous one: all three calls below
- *    share the identical rejected promise, the same way the real
- *    `cache()`-memoized `getSession()` guarantees for one real request, so
- *    the single log line is evidence of the dedupe in src/lib/session-or-
- *    anonymous.ts, not an accident of three independent rejections that
- *    each happened to log once.
+ * 2. `mockSession.rejectionPromise` (see that mock's own comment above)
+ *    makes all three calls below share the identical rejected promise,
+ *    MIRRORING what a real request's `cache()`-memoized `getSession()`
+ *    hands its callers — it does not, on its own, PROVE the single-log
+ *    behaviour the way a real render would (round-1 review of this PR,
+ *    finding 1): this harness has no way to put `Home`, `AuthStatus` and
+ *    `UploadNavLink` behind one real React render (see point 1 above), so
+ *    it cannot exercise the `cache()` wrapper on `resolveSessionOrAnonymous`
+ *    itself (src/lib/session-or-anonymous.ts) the way production does.
+ *    What this test DOES prove honestly is that three callers sharing one
+ *    rejected promise, as `cache()` would give them, still produce exactly
+ *    one logged line between them — the `WeakSet` dedupe that module's own
+ *    comment documents as its belt-and-braces path for exactly this
+ *    harness limitation. The real, load-bearing guarantee (one log line
+ *    per actual request) was confirmed separately, live, on a dev server
+ *    (round-1 review of this PR: one line for `/`, one for `/about`) —
+ *    this test is evidence the dedupe mechanism works, not the sole proof
+ *    that production behaves this way.
  */
 describe("the assembled shell: AuthStatus and UploadNavLink survive a rejected getSession() the same way Home() does", () => {
   it("all three resolve to signed-out markup, the hero's CTA points at sign-in, and the request logs exactly once", async () => {
