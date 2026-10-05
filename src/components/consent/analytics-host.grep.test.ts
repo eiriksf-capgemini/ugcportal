@@ -158,6 +158,50 @@ describe("K6: the analytics host/script name appears nowhere outside the gated l
   });
 });
 
+/**
+ * Review round 4: the scanner's three fail-closed exits hand a file back
+ * UNSTRIPPED, which is safe but noisy — a comment that merely discusses
+ * the vendor would then trip the scan above, and the obvious reading of
+ * that failure is "false positive, allowlist it". So the conservative
+ * path must not be reachable by real source, and that is asserted rather
+ * than assumed: every JS-family file under src/ parses cleanly today.
+ *
+ * This lives here because this file already walks the whole tree with the
+ * extension list the check needs, and because a regression would show up
+ * first as a mystery failure of the scan above.
+ */
+describe("no file under src/ takes the scanner's fail-closed path", () => {
+  it("strips every JS-family file under src/ without one warning", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      for (const file of walkSourceFiles(SRC_ROOT, INCLUDE_EVERYTHING, K6_SCANNED_EXTENSIONS)) {
+        stripComments(readFileSync(file, "utf8"), file);
+      }
+      expect(
+        warn.mock.calls.map((call) => String(call[0])),
+        "a file under src/ no longer parses cleanly, so it is being scanned " +
+          "unstripped — the K6 and K2 gates are reading its comments as live code",
+      ).toEqual([]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("MUTATION CHECK: a file that does NOT parse cleanly is reported by that same check", () => {
+    // Fixture mutation for the assertion above: the same loop over a
+    // fixture directory containing one unparseable file. If the warning
+    // were never emitted at all — a spy on the wrong channel, say — this
+    // would be indistinguishable from the real tree being clean.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      stripComments('<R a="\nexport const x = 1;\n', "/tmp/does-not-parse.tsx");
+      expect(warn.mock.calls.map((call) => String(call[0]))).not.toEqual([]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});
+
 describe("findAnalyticsMarkerOffenders (the real scanner, exercised over a real fixture on disk)", () => {
   const created: string[] = [];
 
@@ -476,6 +520,35 @@ describe("findAnalyticsMarkerOffenders (the real scanner, exercised over a real 
     );
 
     expect(result).toEqual(["offender.ts"]);
+  });
+
+  /**
+   * Review round 4, CONFIRMED medium, end to end. One unterminated
+   * attribute string made the scanner delete the live analytics host on
+   * the next line — silently — and this grep stayed green with the
+   * offending file sitting in the tree. K3's "following should never
+   * happen", reached by a third route.
+   */
+  it("reports a live analytics host after an unterminated string literal", () => {
+    const root = fixture({
+      "zz-evil.mjs":
+        '<R a="\n' + 'export const trackingSrc = "https://stats.example/x?umami";\n',
+    });
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    let result: string[];
+    try {
+      result = findAnalyticsMarkerOffenders(
+        walkSourceFiles(root, INCLUDE_EVERYTHING, K6_SCANNED_EXTENSIONS),
+        root,
+        new Set(),
+      );
+      expect(warn.mock.calls[0]?.[0]).toContain("did not parse cleanly");
+    } finally {
+      warn.mockRestore();
+    }
+
+    expect(result).toEqual(["zz-evil.mjs"]);
   });
 
   it("MUTATION CHECK: reverting to the default (tsx|ts-only) extensions misses the .js/.mjs offenders", () => {

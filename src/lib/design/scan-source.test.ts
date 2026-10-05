@@ -131,8 +131,32 @@ describe("stripComments", () => {
    * paths before committing to this fixture.
    */
   it("treats a regex literal after 'await' as a regex, not division (and still strips a real comment after it)", () => {
-    const code = 'await /name="([^"]*)"/i.test(s); /* real comment */ const z = 1;';
-    expect(stripComments(code, "fixture.ts")).toBe('await /name="([^"]*)"/i.test(s);   const z = 1;');
+    // Inside an async body, which is where real `await` lives. Round 5's
+    // fixture had this at the top level of a file with no import or
+    // export, and TypeScript reads `await /re/` THERE as `await` the
+    // identifier divided by something — its own `isAwaitExpression`
+    // lookahead only treats `await` as an operator when an identifier,
+    // keyword or literal follows on the same line, and `/` is none of
+    // those. That shape reports diagnostics and now takes the fail-closed
+    // path; the test below pins it. The finding this fixture exists for —
+    // "a regex after `await` is a regex, not division" — is unchanged.
+    const code =
+      'async function f(s) { await /name="([^"]*)"/i.test(s); /* real comment */ const z = 1; }';
+    expect(stripComments(code, "fixture.ts")).toBe(
+      'async function f(s) { await /name="([^"]*)"/i.test(s);   const z = 1; }',
+    );
+  });
+
+  it("fails closed on a top-level `await /re/`, which TypeScript itself cannot read as a regex", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const code = 'await /name="([^"]*)"/i.test(s); /* real comment */ const z = 1;';
+      expect(stripComments(code, "fixture.ts")).toBe(code);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0][0]).toContain("did not parse cleanly");
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("MUTATION CHECK: without '}' in the division class, the block comment after {a:1} / 2 survives unstripped", () => {
@@ -252,12 +276,40 @@ describe("stripComments (ugcportal-ysub: TypeScript's lexer, not a hand-rolled o
     expect(stripCssComments(".a { /* note */ color: red; }")).toBe(".a {   color: red; }");
   });
 
-  it("MUTATION CHECK: the JavaScript scanners both truncate that CSS line at the url's //", () => {
-    // The hand-rolled scanner AND the parser-backed one both do this: `//`
-    // really is a line comment in JavaScript, which is exactly why CSS
-    // needs its own stripper rather than a better JavaScript one.
+  it("MUTATION CHECK: the hand-rolled scanner truncated that CSS line at the url's //", () => {
+    // Why CSS needs its own stripper, in two different failure modes.
+    //
+    // The hand-rolled lexer read the `//` inside the unquoted url token as
+    // a line comment and deleted the rest of the line, hex literal and
+    // all — a false NEGATIVE for the K2 gate.
     expect(legacyStripComments(ITEM_2)).toBe(ITEM_2_TRUNCATED);
-    expect(stripComments(ITEM_2, "fixture.ts")).toBe(ITEM_2_TRUNCATED);
+  });
+
+  it("MUTATION CHECK: the parser-backed scanner refuses the same CSS outright", () => {
+    // The parser-backed one does not truncate, because a stylesheet is not
+    // a parseable program: it reports diagnostics and takes the
+    // fail-closed path, handing the text back whole. That is safe for the
+    // host grep but WRONG for the hex gate, which would then see every
+    // commented-out hex literal in the file as live — a false POSITIVE.
+    // Neither scanner can do CSS; `stripCssComments` is why that no longer
+    // matters.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(stripComments(ITEM_2, "fixture.ts")).toBe(ITEM_2);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0][0]).toContain("did not parse cleanly");
+    } finally {
+      warn.mockRestore();
+    }
+    // The concrete consequence: a CSS comment survives the JavaScript path.
+    const commented = ".a { /* #14555f was here */ color: red; }";
+    const quiet = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(stripComments(commented, "fixture.ts")).toContain("#14555f");
+      expect(stripCssComments(commented)).not.toContain("#14555f");
+    } finally {
+      quiet.mockRestore();
+    }
   });
 
   /**
@@ -335,8 +387,11 @@ describe("stripComments (ugcportal-ysub: TypeScript's lexer, not a hand-rolled o
 
   it("strips a comment sitting between two tokens of the same statement", () => {
     // A comment in front of a punctuation token rather than in front of a
-    // statement: it is leading trivia of `;`, a token no node-level walk
-    // visits. Guards the leaf-token walk specifically.
+    // statement. `ts.forEachChild` never visits the `;`, so this comment
+    // is inside no node's range: it lives in the GAP between the end of
+    // the last child and the end of the statement, and it is the gap scan
+    // that finds it. Guards that specifically — a walk that only looked at
+    // node boundaries would miss it.
     expect(stripComments("const a = 1 /* mid-statement */ ;", "fixture.ts")).toBe("const a = 1   ;");
   });
 
@@ -519,6 +574,104 @@ describe("stripComments (ugcportal-ysub: TypeScript's lexer, not a hand-rolled o
     expect(stripComments("const a = 1; /**/ const b = 2;", "fixture.ts")).toBe(
       "const a = 1;   const b = 2;",
     );
+  });
+
+  /**
+   * Review round 4, CONFIRMED medium. The gap scan is only safe because
+   * every literal in a CLEANLY PARSED file is a node; when TypeScript
+   * error-recovers it skips tokens, and a gap can then start INSIDE a
+   * string literal. At that point the gap scanner reads the `//` of an
+   * ordinary `https://` URL as a line comment and deletes live source.
+   *
+   * One unterminated attribute string on line 1 is enough. Before the
+   * parse-clean precondition, this returned
+   * `<R a="\nexport const trackingSrc = "https: \n` — the live analytics
+   * host gone, with no warning of any kind. Planted as a real file under
+   * src/, the K6 grep stayed green; the end-to-end version of that is in
+   * analytics-host.grep.test.ts.
+   *
+   * Checked in every dialect the scanner parses, because the shape of the
+   * recovery differs per dialect and the invariant does not.
+   */
+  const ERROR_RECOVERY_REPRO =
+    '<R a="\nexport const trackingSrc = "https://stats.example/x?trackerco";\n';
+
+  it.each(["evil.tsx", "evil.jsx", "evil.js", "evil.mjs", "evil.cjs"])(
+    "fails closed rather than deleting live source after an unterminated string (%s)",
+    (fileName) => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const out = stripComments(ERROR_RECOVERY_REPRO, fileName);
+        expect(out).toBe(ERROR_RECOVERY_REPRO);
+        expect(out).toContain("trackerco");
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(warn.mock.calls[0][0]).toContain(fileName);
+        expect(warn.mock.calls[0][0]).toContain("did not parse cleanly");
+      } finally {
+        warn.mockRestore();
+      }
+    },
+  );
+
+  it("MUTATION CHECK: terminate that string and the same file strips normally, quietly", () => {
+    // Fixture mutation: one closing quote added to line 1, nothing else.
+    // The file parses, the gap invariant holds, the scan runs — and the
+    // host is still there because it was never in a comment to begin
+    // with. Without this, "returns the source unchanged" could be passing
+    // because the scanner strips nothing from anything.
+    const terminated =
+      '<R a="" />;\nexport const trackingSrc = "https://stats.example/x?trackerco"; // c\n';
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const out = stripComments(terminated, "fine.tsx");
+      expect(out).not.toBe(terminated);
+      expect(out).not.toContain("// c");
+      expect(out).toContain("trackerco");
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  /**
+   * `parseDiagnostics` is present at runtime but stripped from
+   * TypeScript's published type declarations, so the precondition above
+   * reads it through a cast. That makes it exactly the kind of dependency
+   * that can rot silently: a rename, and the cast yields `undefined`, the
+   * gate never fires, and the medium above comes back with every other
+   * test still green.
+   *
+   * This asserts the field is really there, really an array, and really
+   * non-empty for a known-bad source under the pinned TypeScript — so a
+   * rename turns THIS red, pointing at the one line that needs changing.
+   */
+  it("GUARD: TypeScript still reports parseDiagnostics on a known-bad source", async () => {
+    const ts = (await import("typescript")).default;
+    const sourceFile = ts.createSourceFile(
+      "broken.ts",
+      "const a = (((;",
+      ts.ScriptTarget.Latest,
+      false,
+      ts.ScriptKind.TS,
+    );
+    const diagnostics = (sourceFile as unknown as { parseDiagnostics?: unknown })
+      .parseDiagnostics;
+    expect(Array.isArray(diagnostics)).toBe(true);
+    expect((diagnostics as unknown[]).length).toBeGreaterThan(0);
+  });
+
+  it("GUARD: ...and reports none on a well-formed source", () => {
+    // The other direction, so the guard above cannot pass on a field that
+    // is simply always non-empty.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(stripComments("export const a = 1; // c\n", "fine.ts")).toBe(
+        "export const a = 1;  \n",
+      );
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("does not mistake JSX text that merely looks like a comment for one", () => {

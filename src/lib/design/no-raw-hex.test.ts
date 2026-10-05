@@ -33,7 +33,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   isTestFile,
@@ -181,15 +181,27 @@ describe("stripSourceComments (ugcportal-ysub item 2: CSS is not JavaScript)", (
     ).toBe(".a {   color: red; }");
   });
 
-  it("MUTATION CHECK: routing the same CSS through the .ts path truncates it and loses the hex", () => {
+  it("MUTATION CHECK: routing the same CSS through the .ts path stops stripping comments at all", () => {
     // Fixture mutation, not a production-code change: the ONLY difference
     // is the file extension handed to the dispatcher, which is exactly the
-    // defect (a .css file scanned by a JavaScript lexer). `//` inside the
-    // unquoted url token reads as a line comment, erasing the rest of the
-    // line — including the hex literal this gate exists to find.
-    const stripped = stripSourceComments("/src/app/theme.ts", CSS_WITH_URL);
-    expect(stripped).not.toBe(CSS_WITH_URL);
-    expect(stripped.match(HEX_COLOR)).toBeNull();
+    // defect (a .css file scanned by a JavaScript lexer).
+    //
+    // What goes wrong has changed shape since this check was written, and
+    // the new shape is worth pinning: a stylesheet is not a parseable
+    // program, so the JavaScript path reports diagnostics and takes its
+    // fail-closed exit, handing the text back whole. Nothing is truncated
+    // any more — but nothing is STRIPPED either, so a hex literal sitting
+    // inside a CSS comment reads to this gate as a live one. A false
+    // positive rather than the old false negative; still not CSS.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const commented = ".a { /* #14555f was here */ color: red; }";
+      expect(stripSourceComments("/src/app/theme.ts", commented)).toContain("#14555f");
+      expect(stripSourceComments("/src/app/theme.css", commented)).not.toContain("#14555f");
+      expect(warn).toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
 

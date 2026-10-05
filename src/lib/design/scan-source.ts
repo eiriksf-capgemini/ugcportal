@@ -87,6 +87,12 @@ function walk(
  * (review round 3, finding 4) - so an extension added to the gate and the
  * lint rules cannot quietly fall through to the fallback here.
  */
+/**
+ * TypeScript's `'*\/' expected.` - an unterminated block comment. Named so
+ * the fail-closed path can say which cause it hit; see `stripComments`.
+ */
+const UNTERMINATED_BLOCK_COMMENT = 1010;
+
 export const SCRIPT_KIND_BY_EXTENSION: Readonly<Record<string, ts.ScriptKind>> = {
   ts: ts.ScriptKind.TS,
   tsx: ts.ScriptKind.TSX,
@@ -141,31 +147,29 @@ export function scriptKindFor(fileName: string): ts.ScriptKind {
  * (including nested substitutions), JSX text and flag sequences correctly
  * by construction, because that is its job.
  *
- * How it works: parse the source, then walk every LEAF token and take the
- * comment ranges sitting in the trivia gap between the end of the previous
- * token and the start of this one. Leading comment ranges alone are not
- * enough - TypeScript reports a comment on the same line as preceding code
- * as a TRAILING range (`getLeadingCommentRanges` only starts collecting
- * after a line break), so both are asked and the union taken.
+ * How it works: parse the source, check the parse was clean (see THE
+ * PRECONDITION below - it is load-bearing, not a formality), then walk the
+ * tree with `ts.forEachChild` and scan the GAPS between adjacent node
+ * ranges for comments.
  *
- * Two details that are load-bearing:
+ * Why the gaps, and why a plain scanner is safe in them: `forEachChild`
+ * visits real NODES and skips bare tokens, so a comment in front of a
+ * `;`, a `}` or an `else` is inside no node's range at all and a
+ * node-only walk would miss it. The gaps are where those comments live.
+ * And every string, template, regex literal and JSX text in a cleanly
+ * parsed file IS a node, so the text between two adjacent node ranges can
+ * only be punctuation, keywords, identifiers and trivia - nothing there
+ * can disguise itself as a comment. That is the whole invariant, and it is
+ * why the gap scan does not need to re-derive "am I inside a string".
  *
- *   - Ranges are clipped to `[token.getFullStart(), token.getStart())`.
- *     JSX TEXT cannot contain comments - `<p>see //example.com/x</p>` is
- *     literal text - but the trivia scanner, asked to scan from inside it,
- *     would happily report one. TypeScript's own `getTokenPosOfNode` has
- *     the same special case for exactly this reason, which makes a JsxText
- *     token's trivia gap empty and the clip drop the false positive.
- *   - The file is parsed as a MODULE (`setExternalModuleIndicator`).
- *     Otherwise a top-level `await` in a file with no import/export is, by
- *     the real language rules, an ordinary identifier - so `await /re/` is
- *     division and the regex is not a regex. Parsing everything as a
- *     module keeps `await` meaning `await`. The file kinds these scanners
- *     see that are NOT ES modules are the CommonJS ones, `.cjs` and
- *     `.cts` (both in src/lib/source-extensions.mjs's list, neither
- *     present in this repo today), where a top-level `await` is a syntax
- *     error anyway - so there is no real CommonJS source this choice can
- *     misread, only invalid source it reads differently.
+ * `visit` returning early on `ts.isToken(node)` is the other half of it.
+ * A token's own text must never be scanned as a gap: a string, template
+ * or regex literal, and JSX TEXT, can each contain something a scanner
+ * reads as a comment opener while it is really live content
+ * (`<p>see //example.com/x</p>`, `"https://stats.example/x"`). Descending
+ * into one is precisely how a scanner comes to erase it - which is what
+ * four earlier hand-written versions of this function did, one case at a
+ * time.
  *
  * Output shape is unchanged from every previous version, because callers
  * match patterns against it: each comment collapses to a single space, so
@@ -181,19 +185,27 @@ export function scriptKindFor(fileName: string): ts.ScriptKind {
  * files wrong, so "forgot to pass it" must be a compile error rather than
  * a quiet mis-parse (ugcportal-ysub review round 1, finding 1).
  *
- * UNTERMINATED BLOCK COMMENT: returns `source` completely unstripped
- * (round 1, finding 2, CONFIRMED). A `/*` with no `*\/` after it runs to
- * end of file, so stripping it erases every remaining line - and a live
- * analytics host on one of those lines then vanished before the K6 grep
- * could see it, which is exactly the "following should never happen" this
- * bead's K3 names. Returning the source whole is the fail-CLOSED answer:
- * the output is then a strict superset of the correctly-stripped text, so
- * every marker a caller is hunting for is still present. The alternative
- * considered was throwing; returning unstripped is better here because
- * the gate still runs and still names the offending FILE in its own
- * failure message, where a throw aborts the whole scan with a stack trace
- * and no path. Real source cannot reach this state and still compile, so
- * the cost of the conservative answer is zero in practice.
+ * THREE FAIL-CLOSED EXITS, all taking the same path - warn naming the
+ * file and the cause, return `source` completely unstripped:
+ *
+ *   - the parse reported ANY diagnostic (round 4, CONFIRMED medium), which
+ *     includes an unterminated block comment (round 1, finding 2) as
+ *     TypeScript's code 1010. See THE PRECONDITION in the body for why
+ *     this has to be all diagnostics rather than a chosen subset.
+ *   - the parse or walk THREW (round 3, finding 7): roughly a thousand
+ *     nested parentheses overflow TypeScript's recursive parser, and an
+ *     uncaught `RangeError` aborts the entire scan rather than degrading
+ *     one file.
+ *
+ * Returning the source whole is the conservative answer: the output is
+ * then a strict superset of the correctly-stripped text, so every marker
+ * a caller is hunting for is still present. Throwing was considered and
+ * rejected - the gate still runs this way, and still names the offending
+ * FILE in its own failure message, where a throw aborts the scan with a
+ * stack trace and no path. Real source cannot reach any of these states
+ * and still compile, which is asserted directly: every JS-family file
+ * under src/ is checked to parse cleanly, so this path is never taken on
+ * real source and cannot decay into background noise.
  *
  * This is for JavaScript-family source only. CSS is not JavaScript - see
  * `stripCssComments` below, and no-raw-hex.test.ts, which is the one
@@ -229,21 +241,7 @@ export function stripComments(source: string, fileName: string): string {
     const sourceFile = ts.createSourceFile(
       fileName,
       source,
-      {
-        languageVersion: ts.ScriptTarget.Latest,
-        // Force module parsing; see this function's doc comment ("await").
-        // `externalModuleIndicator` is the field TypeScript's own parser
-        // reads to decide whether to reparse for top-level await; it exists
-        // at runtime but is stripped from the published type declarations,
-        // hence the cast. There is no public `ModuleDetectionKind.Force`
-        // equivalent on `createSourceFile`. Guarded rather than trusted: if
-        // a future TypeScript renames it, scan-source.test.ts's `await`
-        // fixture goes red instead of the scanner quietly regressing.
-        setExternalModuleIndicator: (file) => {
-          (file as ts.SourceFile & { externalModuleIndicator?: ts.Node }).externalModuleIndicator =
-            file;
-        },
-      },
+      ts.ScriptTarget.Latest,
       // Parent pointers are not needed (round 3, finding 3): every
       // `getStart` call below passes `sourceFile` explicitly, which is
       // what `getStart` would otherwise walk up the parent chain to find.
@@ -252,16 +250,66 @@ export function stripComments(source: string, fileName: string): string {
     );
 
     /*
-     * One scanner, re-pointed at each gap (round 3, finding 3). The walk
-     * below is `ts.forEachChild`, which visits real NODES and skips bare
-     * tokens - so a comment sitting in front of a `;`, a `}` or an `else`
-     * is inside no node's range at all, and a node-only walk would miss
-     * it. What IS true is that every string, template, regex literal and
-     * JSX text in the file is a node, so the text BETWEEN two adjacent
-     * node ranges can only ever be punctuation, keywords, identifiers and
-     * trivia. Nothing in a gap can disguise itself as a comment, and that
-     * is exactly what makes it safe to hand those gaps - and only those
-     * gaps - to a plain scanner.
+     * THE PRECONDITION (round 4, CONFIRMED medium). Everything below
+     * depends on node ranges covering every literal in the file, and that
+     * is only true of source TypeScript parsed without complaint. When the
+     * parser ERROR-RECOVERS, it skips tokens, and a gap can then begin
+     * INSIDE a string literal - at which point the gap scanner, which is
+     * deliberately a plain scanner, reads the `//` of a perfectly ordinary
+     * `https://` URL as a line comment and deletes live source.
+     *
+     * Reproduced in every dialect: a file whose first line is `<R a="` -
+     * one unterminated attribute string - made the line after it, a live
+     * `export const trackingSrc = "https://stats.example/x?umami"`, come
+     * back as `export const trackingSrc = "https: ` with no warning at
+     * all. Planted as a real file under src/, the K6 grep stayed green.
+     *
+     * So: if the parse was not clean, do not reason about it. This is the
+     * same fail-closed exit as an unterminated comment and a thrown parse,
+     * and it is deliberately ALL diagnostics rather than the subset that
+     * looks dangerous - working out which error recoveries happen to keep
+     * literals inside nodes is exactly the case-by-case lexical reasoning
+     * this whole function exists to stop doing.
+     *
+     * `parseDiagnostics` is present at runtime but stripped from the
+     * published type declarations, hence the cast; scan-source.test.ts
+     * asserts a known-bad source really does produce a non-empty array
+     * under the pinned TypeScript, so a rename turns that test red rather
+     * than silently disabling this gate. It is also asserted to be EMPTY
+     * for every JS-family file under src/ today, so the conservative path
+     * is never taken on real source and cannot become background noise.
+     */
+    const parseDiagnostics = (sourceFile as ts.SourceFile & {
+      parseDiagnostics?: readonly ts.Diagnostic[];
+    }).parseDiagnostics;
+    if (parseDiagnostics && parseDiagnostics.length > 0) {
+      /*
+       * An unterminated block comment (round 1, finding 2) is a parse
+       * diagnostic like any other - TypeScript reports it as 1010, `'*\/'
+       * expected` - so it arrives here rather than needing its own check
+       * after the walk. Named separately anyway, because it is by far the
+       * likeliest real cause and "close the comment" is a much more useful
+       * thing to read than "did not parse cleanly".
+       */
+      const unterminatedComment = parseDiagnostics.some(
+        (diagnostic) => diagnostic.code === UNTERMINATED_BLOCK_COMMENT,
+      );
+      return scanUnstripped(
+        unterminatedComment ? "unterminated block comment" : "did not parse cleanly",
+      );
+    }
+
+    /*
+     * One scanner, re-pointed at each gap (round 3, finding 3).
+     *
+     * Safe because of the precondition checked immediately above, and only
+     * because of it: in a CLEANLY PARSED file every string, template,
+     * regex literal and JSX text is a node, so a gap between two adjacent
+     * node ranges holds nothing but punctuation, keywords, identifiers and
+     * trivia, and nothing in it can disguise itself as a comment. Error
+     * recovery breaks that - it skips tokens, so a gap can start inside a
+     * string literal - which is why a file with any parse diagnostic never
+     * reaches this code.
      */
     const scanner = ts.createScanner(
       ts.ScriptTarget.Latest,
@@ -289,11 +337,8 @@ export function stripComments(source: string, fileName: string): string {
     };
 
     const visit = (node: ts.Node): void => {
-      // A token's own text is never a gap. A string, template or regex
-      // literal, and JSX TEXT, can each contain something a scanner would
-      // read as a comment opener while it is really live content
-      // (`<p>see //example.com/x</p>`) - descending into one is precisely
-      // how a scanner comes to erase it.
+      // Load-bearing, not an optimisation: a token's own text must never
+      // be scanned as a gap. See this function's doc comment.
       if (ts.isToken(node)) return;
       let cursor = node.getStart(sourceFile);
       ts.forEachChild(node, (child) => {
@@ -320,25 +365,6 @@ export function stripComments(source: string, fileName: string): string {
     return scanUnstripped(
       `could not be parsed (${cause instanceof Error ? cause.name : "unknown error"})`,
     );
-  }
-
-  /*
-   * Fail closed on an unterminated block comment (round 1, finding 2).
-   * `indexOf` rather than "does the range's text end in `*\/`": the latter
-   * calls `/*\/` terminated, since its last two characters ARE `*\/` even
-   * though the scanner never found a closer after the opener. Asking the
-   * question the scanner itself asks - is there a `*\/` anywhere after
-   * `pos + 2` - has no such edge. It cannot false-positive either: a
-   * genuinely terminated comment's own closer is at `end - 2`, which is
-   * always at or after `pos + 2`.
-   */
-  for (const range of ranges) {
-    if (
-      range.kind === ts.SyntaxKind.MultiLineCommentTrivia &&
-      source.indexOf("*/", range.pos + 2) === -1
-    ) {
-      return scanUnstripped("unterminated block comment");
-    }
   }
 
   ranges.sort((a, b) => a.pos - b.pos);
