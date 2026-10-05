@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ConsentProvider } from "@/components/consent/consent-context";
 import {
+  FILLED_LEGAL_ENV,
   UNSET_LEGAL_ENV,
   textContent,
 } from "@/lib/legal/legal-page.test-support";
@@ -217,6 +218,32 @@ describe.each([
       expect(markup).toContain(`href="${PRIVACY_PATH}"`);
       expect(markup).toContain(`href="${LICENCE_PATH}"`);
       expect(markup).not.toContain("data-footer-draft-link");
+    });
+
+    // Round-2 review, MEDIUM: the positive path — configured AND signed
+    // off, in production — was untested; every test above exercises a
+    // BLOCKED outcome. FILLED_LEGAL_ENV makes `missing.length === 0`; the
+    // real `LEGAL_SIGN_OFF` (src/lib/legal/contact.ts, set by ugcportal-alg
+    // in PR #99) is left to its default rather than injected, because it
+    // already matches the real /privacy and /licence prose's current
+    // digests today — this test is therefore read as "the footer correctly
+    // links once a page IS actually configured and signed off", using the
+    // real fact rather than a synthetic one. Mutation-verified (see PR
+    // description): with the sign-off `legalLinkBlocked` reads forced to
+    // `null` instead of the real constant, this test fails — confirming it
+    // is genuinely exercising the sign-off, not merely the filled
+    // configuration.
+    it("links Privacy and Licence normally in production once configured and signed off (today's real sign-off)", () => {
+      vi.stubEnv("NODE_ENV", "production");
+      for (const [name, value] of Object.entries(FILLED_LEGAL_ENV)) {
+        vi.stubEnv(name, value);
+      }
+
+      const markup = render(compact);
+      expect(markup).toContain(`href="${PRIVACY_PATH}"`);
+      expect(markup).toContain(`href="${LICENCE_PATH}"`);
+      expect(markup).not.toContain("data-footer-draft-link");
+      expect(markup).not.toContain("coming soon");
     });
   },
 );

@@ -23,13 +23,6 @@ describe("ContactSection — the footer's anchor target (ugcportal-akv6)", () =>
     );
     expect(markup).toContain('id="contact"');
   });
-
-  it("MUTATION CHECK: a different id would not satisfy the check above", () => {
-    const markup = renderToStaticMarkup(
-      <ContactSection defaultSubject="Hello" />,
-    );
-    expect(markup).not.toContain('id="get-in-touch"');
-  });
 });
 
 describe("ContactSection — the direct-email link label", () => {

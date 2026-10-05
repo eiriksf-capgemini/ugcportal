@@ -16,7 +16,13 @@ export async function footerLinkHrefs(page: Page): Promise<string[]> {
   const hrefs = await footer
     .locator("a[href]")
     .evaluateAll((anchors) => anchors.map((a) => a.getAttribute("href") ?? ""));
-  return hrefs.filter((href) => href !== "");
+  // Filter on the href with any "#fragment" STRIPPED, not the raw string
+  // (round-2 review): a fragment-only href ("#foo", nothing before the
+  // hash) would survive a raw `!== ""` check and then collapse to an empty
+  // string in `uniqueFetchTargets` ("#foo".split("#")[0] === ""), which
+  // would silently fetch the baseURL itself rather than a real target —
+  // passing a 200 check for a link that was never actually a page.
+  return hrefs.filter((href) => href.split("#")[0] !== "");
 }
 
 /**

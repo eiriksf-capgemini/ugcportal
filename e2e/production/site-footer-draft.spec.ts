@@ -39,10 +39,19 @@ test("production footer never links a page carrying the draft marker", async ({
 
   for (const target of targets) {
     const response = await request.get(target);
+    const status = response.status();
     const body = await response.text();
     const isDraft = /<meta[^>]+name="ugcportal:draft"/.test(body);
     expect(isDraft, `${target} must not be linked from a production footer while draft`).toBe(
       false,
+    );
+    // Round-2 review: isDraft===false alone does not prove the page is
+    // healthy — a target that 500'd for a wholly unrelated reason would
+    // ALSO read isDraft===false (a generic error page carries no draft
+    // meta tag either) and this loop would silently pass over it. Every
+    // target this test allows through must be a genuinely working page.
+    expect(status, `${target} must answer 200 (not draft, and not broken some other way)`).toBe(
+      200,
     );
   }
 });
@@ -59,8 +68,17 @@ test("the footer's Privacy/Licence links match today's REAL readiness, whichever
   const draftByPath = new Map<string, boolean>();
   for (const path of ["/privacy", "/licence"] as const) {
     const response = await request.get(path);
+    const status = response.status();
     const body = await response.text();
-    draftByPath.set(path, /<meta[^>]+name="ugcportal:draft"/.test(body));
+    const isDraft = /<meta[^>]+name="ugcportal:draft"/.test(body);
+    draftByPath.set(path, isDraft);
+    // Round-2 review: assert the pairing explicitly rather than reading
+    // the meta tag out of whatever status happened to come back.
+    // `assertPublishable` (src/lib/legal/publishable.ts) throws in
+    // production for a blocked page, so draft and 500 travel together
+    // here — a draft page that somehow answered 200, or a configured one
+    // that still 500'd, would otherwise go unnoticed.
+    expect(status, `${path}: draft=${isDraft}`).toBe(isDraft ? 500 : 200);
   }
 
   await page.goto("/");
