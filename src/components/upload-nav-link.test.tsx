@@ -81,4 +81,26 @@ describe("UploadNavLink (ugcportal-t0y)", () => {
     expect(match, 'no <nav aria-label="Primary"> landmark found').not.toBeNull();
     expect(match?.[1]).toMatch(UPLOAD_ANCHOR);
   });
+
+  /**
+   * ugcportal-8df3: UploadNavLink reads the session through the shared
+   * fail-safe (src/lib/session-or-anonymous.ts), not `getSession()`
+   * directly — so a rejected read degrades to "render nothing", the same
+   * all-or-nothing signed-out shape K2 above already covers, instead of
+   * crashing this component (and, with it, every page it is rendered on).
+   * This file mocks `@/lib/auth`, not the fail-safe module itself, so the
+   * real `resolveSessionOrAnonymous` runs here.
+   *
+   * THE FIXTURE MUTATION: remove the `try`/`catch` from
+   * src/lib/session-or-anonymous.ts (or swap this component back to a bare
+   * `await getSession()`) and this test fails — `UploadNavLink()` rejects
+   * instead of resolving to `null`.
+   */
+  it("renders nothing, not a crash, when the session read fails (fails closed to signed-out)", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    getSessionMock.mockRejectedValue(new Error("getSession() failed (simulated)"));
+
+    await expect(UploadNavLink()).resolves.toBeNull();
+    expect(consoleError).toHaveBeenCalledOnce();
+  });
 });

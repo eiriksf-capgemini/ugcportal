@@ -24,6 +24,17 @@ export const metadata = {
  * server so it is on screen before any JavaScript arrives.
  */
 export default async function UploadPage() {
+  /*
+    The raw getSession(), not src/lib/session-or-anonymous.ts's shared
+    fail-safe (ugcportal-8df3). This page is an auth GATE, not a decorative
+    widget: that helper degrades a failed session read to "signed out",
+    which is right for AuthStatus/UploadNavLink/the home page's hero
+    (an anonymous visitor reaches that state on purpose) and wrong here,
+    where "signed out" and "the database didn't answer" must stay
+    distinguishable. Left unguarded, a rejection propagates out of this
+    function instead of being silently redirected to sign-in alongside - the
+    request errors, which is what failing CLOSED means for a gate.
+  */
   const session = await getSession();
 
   /*

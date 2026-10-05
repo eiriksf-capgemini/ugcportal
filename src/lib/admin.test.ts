@@ -41,4 +41,27 @@ describe("requireAdmin", () => {
       await expect(requireAdmin()).resolves.toBeNull();
     }
   });
+
+  /**
+   * ugcportal-8df3 K2: "Following should never happen: an auth gate
+   * (upload page, requireAdmin) treating a failed session read as signed
+   * out." A failed read must stay distinguishable from `null` — resolving
+   * to `null` here would be indistinguishable from "signed out" to every
+   * caller, which is exactly the ambiguity this gate must not create. This
+   * is why `requireAdmin` calls the raw `getSession()` rather than
+   * src/lib/session-or-anonymous.ts's shared fail-safe — see the comment
+   * on that call site.
+   *
+   * THE FIXTURE MUTATION: swap `requireAdmin`'s `getSession()` call for
+   * `resolveSessionOrAnonymous()` and this test fails — the rejection
+   * would be swallowed and `requireAdmin()` would resolve to `null`
+   * instead of rejecting.
+   */
+  it("propagates rather than resolving to null when the session read fails (fails CLOSED)", async () => {
+    getSessionMock.mockRejectedValue(new Error("getSession() failed (simulated)"));
+
+    await expect(requireAdmin()).rejects.toThrow(
+      "getSession() failed (simulated)",
+    );
+  });
 });

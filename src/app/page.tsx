@@ -4,7 +4,6 @@ import { Gallery } from "@/components/gallery/gallery";
 import { GalleryUnavailable } from "@/components/gallery/gallery-unavailable";
 import { EmptyState } from "@/components/home/empty-state";
 import { Hero } from "@/components/home/hero";
-import { getSession } from "@/lib/auth";
 import { isGenuinelyEmptyPage, toGalleryItems } from "@/lib/gallery-items";
 import {
   listPublicMedia,
@@ -12,65 +11,7 @@ import {
   type PublicMediaResult,
 } from "@/lib/public-media";
 import { hasSignedInUser } from "@/lib/session";
-
-/**
- * Wraps a `getSession()` call so a REJECTION never reaches a caller inside
- * `Home()` (round-1 review, CONFIRMED medium; round-2 review: scope note
- * below).
- *
- * `getSession()` can reject — a dropped database connection reading the
- * session row, the same class of failure `listPublicMedia` already has to
- * survive below — and before this existed, `await sessionPromise` was
- * unguarded on EVERY branch of `Home()`, including inside the `catch` block
- * that exists specifically to degrade a LISTING failure gracefully into
- * `GalleryUnavailable`. A rejected session read there would have thrown
- * again, inside that catch, past the one boundary this page has — crashing
- * `Home()`'s OWN render over a session-read failure the gallery data wasn't
- * even what failed. Degrading to the anonymous case (`signedIn: false`) is
- * the same choice this page already makes for an actual anonymous visitor,
- * so a visitor whose session merely couldn't be checked sees `Home()` render
- * exactly what it renders for one — the hero's call to action falling back
- * to "Sign in to upload" — never a broken `Home()` — at the cost of one
- * logged line an operator can act on.
- *
- * SCOPE, STATED PLAINLY (round-2 review, CONFIRMED medium): this only
- * protects `Home()`'s OWN render. `getSession()` is `cache()`-memoized per
- * request (src/lib/auth.ts), so src/components/auth-status.tsx and
- * src/components/upload-nav-link.tsx — rendered by `AppShell` as
- * `Home()`'s siblings on every real page, including this one — call the
- * SAME underlying promise independently and UNGUARDED. A rejection there
- * still crashes them, and therefore the whole assembled page (confirmed on
- * a real dev server: `/` answers HTTP 500), even on a request where this
- * function below works exactly as intended. That gap is real, is not fixed
- * by this function, and is tracked as its own bead, ugcportal-8df3 — see
- * this file's own `it.fails` regression marker (page.error.test.tsx) for
- * where that is kept visible rather than silently assumed closed.
- *
- * Called immediately on the raw `getSession()` call, not on an already-
- * created `sessionPromise` variable awaited later: an `async` function's
- * body runs synchronously up to its first `await`, so `resolveSignedIn(
- * getSession())` attaches this `try`/`await` to the promise in the SAME
- * tick `getSession()` creates it — there is no window where the raw,
- * unhandled promise could log Node's own "unhandled rejection" warning
- * before anything caught it. `const sessionPromise = getSession();` followed
- * by a LATER `resolveSignedIn(sessionPromise)` (this file's own round-1
- * shape) left exactly that window open, for however long
- * `listPublicMedia` took to settle in between (round-2 review, low
- * finding).
- */
-async function resolveSignedIn(
-  sessionPromise: ReturnType<typeof getSession>,
-): Promise<boolean> {
-  try {
-    return hasSignedInUser(await sessionPromise);
-  } catch (error) {
-    console.error(
-      "[src/app/page.tsx] the home page's getSession() call failed; treating this visitor as signed out",
-      error,
-    );
-    return false;
-  }
-}
+import { resolveSessionOrAnonymous } from "@/lib/session-or-anonymous";
 
 /**
  * The hero plus `GalleryUnavailable`, the fragment both the thrown-failure
@@ -124,19 +65,24 @@ export const dynamic = "force-dynamic";
 
 export default async function Home() {
   /*
-   * `resolveSignedIn` wraps the raw `getSession()` call IMMEDIATELY (see its
-   * own comment for why that timing matters), so `sessionPromise` here is
-   * already a `Promise<boolean>` that never rejects — both branches below
-   * just `await` it, cheaply, as many times as they need to.
+   * `resolveSessionOrAnonymous()` (src/lib/session-or-anonymous.ts,
+   * ugcportal-8df3) is the one shared fail-safe: it awaits the raw
+   * `getSession()` and degrades a rejection to `null` (the real anonymous
+   * shape) rather than letting it crash this render — so `sessionPromise`
+   * here is a `Promise<Session | null>` that never rejects, and both
+   * branches below just `await` it, cheaply, as many times as they need to,
+   * then ask `hasSignedInUser` the same question every other caller asks.
    *
    * Kicked off here and awaited only once the listing below has settled —
    * NOT serialised in between the two, so the session round trip overlaps
    * the listing one, the same "independent reads should not block on each
    * other" reasoning src/components/upload-nav-link.tsx and
-   * src/components/auth-status.tsx already apply for THEIR OWN,
-   * independent reads of the same cached session — see `resolveSignedIn`'s
-   * own comment for why this page's fix does not yet extend to those two
-   * (ugcportal-8df3).
+   * src/components/auth-status.tsx apply for THEIR OWN, independent calls
+   * to the SAME `resolveSessionOrAnonymous()` — all three share one adapter
+   * round trip (via `getSession`'s own `cache()`) and, since ugcportal-8df3,
+   * one fail-safe and one logged line between them too (see that module's
+   * own comment for how the single log is kept to one even though all three
+   * callers can reach the `catch` independently).
    *
    * This is a DIFFERENT session read from the one src/app/page.test.tsx's
    * own `vi.mock("@/lib/auth", ...)` guards against: that mock stubs plain
@@ -156,7 +102,7 @@ export default async function Home() {
    * `renderToStaticMarkup(await Home())`. `<Hero>` is therefore a plain,
    * synchronous component taking the resolved boolean as a prop.
    */
-  const sessionPromise = resolveSignedIn(getSession());
+  const sessionPromise = resolveSessionOrAnonymous();
 
   /*
    * `listMedia` only reports `ok: false` for a malformed `?cursor=`, and the
@@ -190,10 +136,10 @@ export default async function Home() {
   try {
     result = await listPublicMedia(publicMediaListingUrl());
   } catch {
-    return unavailable(await sessionPromise);
+    return unavailable(hasSignedInUser(await sessionPromise));
   }
 
-  const signedIn = await sessionPromise;
+  const signedIn = hasSignedInUser(await sessionPromise);
 
   if (!result.ok) {
     return unavailable(signedIn);

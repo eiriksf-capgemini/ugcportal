@@ -1,5 +1,5 @@
 import { UploadLink } from "@/components/upload-link";
-import { getSession } from "@/lib/auth";
+import { resolveSessionOrAnonymous } from "@/lib/session-or-anonymous";
 import { hasSignedInUser } from "@/lib/session";
 
 /**
@@ -22,9 +22,16 @@ import { hasSignedInUser } from "@/lib/session";
  *    page's own data fetching for every single page, including "/" for an
  *    anonymous gallery visitor who will never see this link at all. Kept as
  *    a sibling element instead, this renders concurrently with `{children}`
- *    and with AuthStatus, both of which call the same cache()-memoized
- *    `getSession()` (src/lib/auth.ts), so the two cost one adapter round
- *    trip between them rather than either duplicating it or serialising it.
+ *    and with AuthStatus, both of which call
+ *    `resolveSessionOrAnonymous()` (src/lib/session-or-anonymous.ts,
+ *    ugcportal-8df3), which in turn awaits the same cache()-memoized
+ *    `getSession()` (src/lib/auth.ts) — so the two cost one adapter round
+ *    trip between them rather than either duplicating it or serialising it —
+ *    and degrades a rejected read to "signed out" instead of crashing this
+ *    component (and, with it, every page it is rendered on) the way a bare
+ *    `await getSession()` here used to (ugcportal-8df3's own premise: this
+ *    file and AuthStatus were the gap `Home()`'s own fail-safe did not cover
+ *    — see that module's doc comment).
  * 2. It lets this gating logic be unit tested in isolation — the same way
  *    src/app/upload/page.test.tsx tests its page directly — rather than
  *    needing a renderer that can resolve a nested async child while walking
@@ -46,7 +53,7 @@ import { hasSignedInUser } from "@/lib/session";
  * them a high-severity upload-body-truncation regression.
  */
 export async function UploadNavLink() {
-  const session = await getSession();
+  const session = await resolveSessionOrAnonymous();
 
   if (!hasSignedInUser(session)) return null;
 

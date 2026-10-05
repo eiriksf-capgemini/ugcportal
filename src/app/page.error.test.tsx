@@ -34,25 +34,55 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 /**
  * `@/lib/auth`, mocked where previously nothing here was (ugcportal-6dvg):
- * `Home()` now also reads `getSession()` for the front page's hero, on every
- * branch including this file's failed-listing one — a visitor is still owed
- * an answer to "what is this site" when the gallery fails to load. Left
- * unmocked, that would pull next-auth's real module graph, including
- * `next/server`, into this node test run. `null`, the true anonymous case
- * every test below already simulates by never seeding a session.
+ * `Home()` now also reads `getSession()` (via the shared fail-safe,
+ * src/lib/session-or-anonymous.ts, ugcportal-8df3) for the front page's
+ * hero, on every branch including this file's failed-listing one — a
+ * visitor is still owed an answer to "what is this site" when the gallery
+ * fails to load. Left unmocked, that would pull next-auth's real module
+ * graph, including `next/server`, into this node test run. `null`, the true
+ * anonymous case every test below already simulates by never seeding a
+ * session. `@/lib/session-or-anonymous` itself is NOT mocked — its real
+ * implementation runs against this mocked `getSession`, which is what lets
+ * this file assert on the fail-safe's own behaviour (the single log line)
+ * rather than assuming it.
  *
  * `mockSession.rejects` (round-1 review, CONFIRMED medium): a SEPARATE
  * controllable flag, parallel to `mockListing` below, so the "a failed
  * session read never crashes the page" describe block can make `getSession`
  * reject without a second mock module — `Home()` reads this at render time,
  * same as `mockListing.current`.
+ *
+ * `mockSession.rejectionPromise` (ugcportal-8df3): when `rejects` is true,
+ * every call returns the SAME rejected promise instance rather than a fresh
+ * one each time. This mirrors what the real `getSession()` actually
+ * guarantees in production — it is `cache()`-memoized per request
+ * (src/lib/auth.ts), so `Home()`, `AuthStatus()` and `UploadNavLink()` all
+ * await the identical promise for one request — which is the premise the
+ * shared fail-safe's single-log dedupe (keyed on that promise's identity,
+ * see src/lib/session-or-anonymous.ts) depends on. Without this, three
+ * independently-rejecting promises below would also be a legitimate test of
+ * "each caller survives a rejection", but could never prove "exactly once
+ * per request", since nothing would be shared for the dedupe to key on.
+ * Created lazily, not eagerly at module scope, and reset to `null` in
+ * `afterEach`, so a test that leaves `rejects` false never allocates an
+ * unused rejected promise (which Node would otherwise warn about as
+ * unhandled the moment a test run ends without ever awaiting it).
  */
-const mockSession = vi.hoisted(() => ({ rejects: false }));
+const mockSession = vi.hoisted(
+  () =>
+    ({ rejects: false, rejectionPromise: null }) as {
+      rejects: boolean;
+      rejectionPromise: Promise<never> | null;
+    },
+);
 vi.mock("@/lib/auth", () => ({
-  getSession: () =>
-    mockSession.rejects
-      ? Promise.reject(new Error("getSession() failed (simulated)"))
-      : Promise.resolve(null),
+  getSession: () => {
+    if (!mockSession.rejects) return Promise.resolve(null);
+    mockSession.rejectionPromise ??= Promise.reject(
+      new Error("getSession() failed (simulated)"),
+    );
+    return mockSession.rejectionPromise;
+  },
 }));
 
 // The one spelling of "a malformed cursor" this file needs, shared by the
@@ -93,7 +123,7 @@ vi.mock("@/lib/public-media", () => ({
 }));
 
 const { default: Home } = await import("@/app/page");
-// Only for the `it.fails` shell-session-gap marker further down this file —
+// Only for the "assembled shell" describe block further down this file —
 // both independently call the same mocked `@/lib/auth` module above.
 const { AuthStatus } = await import("@/components/auth-status");
 const { UploadNavLink } = await import("@/components/upload-nav-link");
@@ -110,6 +140,7 @@ afterEach(() => {
   mockListing.current = FAILED_LISTING;
   mockListing.throws = false;
   mockSession.rejects = false;
+  mockSession.rejectionPromise = null;
 });
 
 describe("K1/K4 — a failed listing never renders as an empty gallery", () => {
@@ -182,17 +213,16 @@ describe("K3 — this harness can also produce the genuinely-empty branch", () =
  * ugcportal-6dvg, round-1 review, CONFIRMED medium: a `getSession()`
  * rejection must degrade to the anonymous case (the hero's "Sign in to
  * upload"), never crash `Home()`'s OWN render — on BOTH of this file's
- * branches, since `resolveSignedIn` (src/app/page.tsx) is called from
- * inside the `catch` that exists for a failed LISTING too, not only from
- * the success path.
+ * branches, since `resolveSessionOrAnonymous()` (src/lib/session-or-
+ * anonymous.ts) is called from inside the `catch` that exists for a failed
+ * LISTING too, not only from the success path.
  *
  * "Home() in isolation" (round-2 review, low finding — an earlier version
  * of this describe block's own title claimed "the page", which overclaims
  * what is actually exercised here): `renderHome()` below calls `Home()`
  * directly, never the assembled app (`AppShell` plus `AuthStatus` plus
- * `UploadNavLink`, every real page's actual tree). See the separate
- * `it.fails` marker further down this file for the part of this claim that
- * does NOT yet hold once those three are assembled together.
+ * `UploadNavLink`, every real page's actual tree). See the "assembled shell"
+ * describe block further down this file for that part of the claim.
  */
 describe("Home() in isolation: a failed session read never crashes its render", () => {
   it("Home() in isolation: falls back to the anonymous hero when getSession() rejects and the listing itself also failed", async () => {
@@ -211,7 +241,9 @@ describe("Home() in isolation: a failed session read never crashes its render", 
     // working, but with nothing for an operator to find) could have shipped
     // unnoticed.
     expect(consoleError).toHaveBeenCalledOnce();
-    expect(consoleError.mock.calls[0][0]).toContain("the home page's getSession()");
+    expect(consoleError.mock.calls[0][0]).toContain(
+      "the shared session read",
+    );
   });
 
   it("Home() in isolation: falls back to the anonymous hero when getSession() rejects but the listing succeeds, and the gallery branch renders normally", async () => {
@@ -227,22 +259,24 @@ describe("Home() in isolation: a failed session read never crashes its render", 
     expect(markup).toContain("Sign in to upload");
     expect(markup).toContain('data-gallery-state="empty"');
     expect(consoleError).toHaveBeenCalledOnce();
-    expect(consoleError.mock.calls[0][0]).toContain("the home page's getSession()");
+    expect(consoleError.mock.calls[0][0]).toContain(
+      "the shared session read",
+    );
   });
 });
 
 /**
- * ugcportal-6dvg round-2 review, CONFIRMED medium, deliberately NOT fixed
- * in this PR (that work is bead ugcportal-8df3 — see src/app/page.tsx's own
- * `resolveSignedIn` comment for the full scope note).
+ * ugcportal-6dvg round-2 review, CONFIRMED medium; fixed by ugcportal-8df3.
  *
  * `getSession()` is `cache()`-memoized per request (src/lib/auth.ts), and
  * AppShell renders `Home()` alongside TWO other independent readers of that
  * SAME memoized promise — `AuthStatus` (src/components/auth-status.tsx) and
- * `UploadNavLink` (src/components/upload-nav-link.tsx) — each still calling
- * `await getSession()` completely unguarded. A rejection crashes them even
- * on a request where `Home()` itself, fixed above, recovers cleanly —
- * confirmed on a real dev server: `/` answers HTTP 500.
+ * `UploadNavLink` (src/components/upload-nav-link.tsx). Before ugcportal-8df3
+ * all three called `getSession()` directly and unguarded, so a rejection
+ * crashed them even on a request where `Home()` itself recovered cleanly —
+ * confirmed on a real dev server: `/` answered HTTP 500. All three now go
+ * through `resolveSessionOrAnonymous()` (src/lib/session-or-anonymous.ts),
+ * the one shared fail-safe.
  *
  * NOT exercised through `renderToStaticMarkup(AppShell({children: ...}))`,
  * deliberately: `AppShell` renders real, unresolved `<UploadNavLink />` and
@@ -253,56 +287,45 @@ describe("Home() in isolation: a failed session read never crashes its render", 
  * the moment it meets one, regardless of whether `getSession()` ever
  * rejects (see src/components/app-shell.nav.test.tsx's own comment, which
  * is why that file stubs both components out rather than executing them).
- * A render-shaped test here would therefore fail for the WRONG reason even
- * once ugcportal-8df3 ships its fix, which is worse than no test at all —
- * it would look like continuing proof of this exact gap while actually
- * being evidence of an unrelated, pre-existing harness limitation. Calling
- * the three async functions directly — the same way React actually invokes
- * them, as `AppShell`'s independent sibling children, none of them awaiting
- * another's result first — isolates the real claim instead.
+ * A render-shaped test here would therefore fail for the WRONG reason —
+ * evidence of an unrelated, pre-existing harness limitation, not of this
+ * claim. Calling the three async functions directly — the same way React
+ * actually invokes them, as `AppShell`'s independent sibling children, none
+ * of them awaiting another's result first — isolates the real claim
+ * instead.
  *
- * `it.fails`, not `test.todo`: this runs today and genuinely fails (the
- * assertions below are false right now), proving the gap is real rather
- * than aspirational. The day ugcportal-8df3 gives `AuthStatus`/
- * `UploadNavLink` the same fail-safe `Home()` already has, all three
- * promises start resolving, the assertions below all pass, the test body
- * stops throwing, and `it.fails` itself then reports "expected the test to
- * fail, but it passed" — forcing this marker to be revisited and converted
- * to a real, non-inverted test rather than silently going stale.
+ * This describe block is the tripwire this file used to carry as
+ * `it.fails("ugcportal-8df3 (not fixed here): ...")` (see git history for
+ * its original form): that marker ran today and genuinely failed, proving
+ * the gap was real rather than aspirational, and was ALWAYS meant to be
+ * converted to an ordinary, non-inverted test the day the fix landed rather
+ * than left as a permanently-inverted assertion — see its own comment,
+ * preserved below, for why `it.fails` rather than `test.todo` in the first
+ * place.
  *
- * TWO LIMITS ON WHAT "flips" MEANS HERE (round-3 review, low finding —
- * stated plainly rather than left implicit):
+ * TWO LIMITS ON WHAT "fixed" MEANS HERE, carried over from that marker's own
+ * comment (round-3 review, low finding — stated plainly rather than left
+ * implicit):
  *
  * 1. This file's own top-level `vi.mock("@/lib/auth", ...)` replaces the
- *    WHOLE module, `getSession` included. If ugcportal-8df3 is fixed inside
- *    the REAL `getSession()`/`auth()` (src/lib/auth.ts) rather than inside
- *    `AuthStatus`/`UploadNavLink` themselves, this test's mock would still
- *    export the same rejecting stub it always has, and this tripwire would
- *    NOT flip — it would keep failing (correctly, by `it.fails`'s own
- *    accounting) for a fix this file cannot see at all. It only self-flips
- *    if ugcportal-8df3 follows the same shape `resolveSignedIn` already
- *    does for `Home()`: each CALLER wrapping its own `await getSession()`.
- * 2. This mock's `getSession` is a plain arrow function, not wrapped in
- *    `cache()` the way the real one is — so `Home()`, `AuthStatus()` and
- *    `UploadNavLink()` below each get their OWN independently-rejecting
- *    promise, not the one SHARED memoized promise production code actually
- *    has them all await. That still proves the claim this test exists to
- *    make ("an unguarded `await getSession()` crashes its caller"), since
- *    the failure mode is the missing guard, not the sharing — but it is
- *    not a literal reproduction of the cache()-memoization mechanism the
- *    bug report (and src/app/page.tsx's own `resolveSignedIn` comment)
- *    describes, and a reader should not assume this test exercises that
- *    specific part.
+ *    WHOLE module, `getSession` included — so this test is evidence that
+ *    ugcportal-8df3 was fixed the way `resolveSessionOrAnonymous` actually
+ *    does it: each CALLER (`Home`, `AuthStatus`, `UploadNavLink`) wrapping
+ *    its own call through the shared fail-safe, not a change inside the
+ *    real `getSession()`/`auth()` (src/lib/auth.ts) that this mock would
+ *    hide from the test.
+ * 2. `mockSession.rejectionPromise` (see that mock's own comment above) is
+ *    what makes "exactly one error line is logged for the request" below a
+ *    meaningful assertion rather than a vacuous one: all three calls below
+ *    share the identical rejected promise, the same way the real
+ *    `cache()`-memoized `getSession()` guarantees for one real request, so
+ *    the single log line is evidence of the dedupe in src/lib/session-or-
+ *    anonymous.ts, not an accident of three independent rejections that
+ *    each happened to log once.
  */
-it.fails(
-  "ugcportal-8df3 (not fixed here): AuthStatus and UploadNavLink do not yet survive a rejected getSession() the way Home() does",
-  async () => {
-    // Spied and silenced, same as the two sibling tests above — `Home()`
-    // logs on its own guarded path; `AuthStatus()`/`UploadNavLink()` do not
-    // log at all today (they have no catch to log from), so this is here
-    // for output cleanliness and consistency, not an assertion on a call
-    // count that would itself change shape once ugcportal-8df3 lands.
-    vi.spyOn(console, "error").mockImplementation(() => {});
+describe("the assembled shell: AuthStatus and UploadNavLink survive a rejected getSession() the same way Home() does", () => {
+  it("all three resolve to signed-out markup, the hero's CTA points at sign-in, and the request logs exactly once", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     mockSession.rejects = true;
 
     const [homeResult, authResult, navResult] = await Promise.allSettled([
@@ -311,10 +334,64 @@ it.fails(
       UploadNavLink(),
     ]);
 
-    expect(homeResult.status, "Home() is fixed and must resolve").toBe(
+    expect(homeResult.status, "Home() must resolve, not reject").toBe(
       "fulfilled",
     );
-    expect(authResult.status).toBe("fulfilled");
-    expect(navResult.status).toBe("fulfilled");
-  },
-);
+    expect(authResult.status, "AuthStatus() must resolve, not reject").toBe(
+      "fulfilled",
+    );
+    expect(
+      navResult.status,
+      "UploadNavLink() must resolve, not reject",
+    ).toBe("fulfilled");
+
+    // `homeResult`/`authResult` are known-fulfilled by the assertions above,
+    // but TypeScript's `PromiseSettledResult` union does not narrow on a
+    // separate `expect(...).toBe("fulfilled")` call — hence the explicit
+    // guards below, which also fail with a clearer message than a bare
+    // `.value` access on a rejected result would.
+    if (homeResult.status !== "fulfilled") throw homeResult.reason;
+    if (authResult.status !== "fulfilled") throw authResult.reason;
+    if (navResult.status !== "fulfilled") throw navResult.reason;
+
+    const homeMarkup = renderToStaticMarkup(homeResult.value);
+    expect(homeMarkup).toContain("Sign in to upload");
+
+    const authMarkup = renderToStaticMarkup(authResult.value);
+    expect(authMarkup).toContain("Google");
+    expect(authMarkup).toContain("Facebook");
+    expect(authMarkup).not.toContain("Sign out");
+
+    // UploadNavLink() renders `null` (no `<nav>` at all) for a signed-out
+    // visitor — see that component's own "all-or-nothing" comment — so
+    // resolving to `null` IS the signed-out markup here, not a crash.
+    expect(navResult.value).toBeNull();
+
+    // Exactly one log for the whole request, not three — see
+    // src/lib/session-or-anonymous.ts's own comment for the WeakSet dedupe
+    // this proves, and `mockSession.rejectionPromise`'s comment above for
+    // why this mock can prove it at all.
+    expect(consoleError).toHaveBeenCalledOnce();
+    expect(consoleError.mock.calls[0][0]).toContain(
+      "the shared session read",
+    );
+  });
+
+  /**
+   * THE FIXTURE MUTATION (review-standards family 3): proves the shared
+   * log line's content really does distinguish "not yet signed in" from a
+   * failed read, rather than merely asserting on something both messages
+   * would satisfy. If this test's assertion were weakened to anything both
+   * a successful anonymous render AND a failed read would log, this would
+   * never fail — so a successful anonymous render (`mockSession.rejects =
+   * false`) must not log at all.
+   */
+  it("logs nothing when getSession() answers null outright (the real anonymous case, not a failure)", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    mockSession.rejects = false;
+
+    await Promise.all([Home(), AuthStatus(), UploadNavLink()]);
+
+    expect(consoleError).not.toHaveBeenCalled();
+  });
+});
