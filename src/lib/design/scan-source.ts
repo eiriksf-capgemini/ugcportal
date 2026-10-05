@@ -74,11 +74,13 @@ function walk(
  *
  * TS is the fallback for an unrecognised extension rather than TSX,
  * deliberately: TSX is the dialect that loses information, and a file
- * that really does contain JSX always carries one of the four extensions
- * named here. `.js`/`.mjs`/`.cjs` map to `ScriptKind.JS`, which already
- * implies TypeScript's JSX language variant, so a `.js` file with JSX in
- * it (which Next allows) still parses - and the TS-only `<T>()`/`<T>v`
+ * that really does contain JSX always carries `.tsx`, `.jsx` or `.js`.
+ * `.js`/`.mjs`/`.cjs` map to `ScriptKind.JS`, which already implies
+ * TypeScript's JSX language variant, so a `.js` file with JSX in it
+ * (which Next allows) still parses - and the TS-only `<T>()`/`<T>v`
  * ambiguity cannot arise there, because neither is valid JavaScript.
+ * `.mts`/`.cts` map to plain TS: the flavour decides module resolution,
+ * not syntax.
  *
  * The map is exported, and source-extensions.test.ts asserts it has an
  * entry for every extension in src/lib/source-extensions.mjs's list
@@ -88,6 +90,11 @@ function walk(
 export const SCRIPT_KIND_BY_EXTENSION: Readonly<Record<string, ts.ScriptKind>> = {
   ts: ts.ScriptKind.TS,
   tsx: ts.ScriptKind.TSX,
+  // TypeScript's own module-flavoured extensions. Same dialect as `.ts`:
+  // the flavour decides module resolution, not syntax, and neither can
+  // carry JSX (`.mtsx` would be the JSX one).
+  mts: ts.ScriptKind.TS,
+  cts: ts.ScriptKind.TS,
   js: ts.ScriptKind.JS,
   jsx: ts.ScriptKind.JSX,
   mjs: ts.ScriptKind.JS,
@@ -154,9 +161,10 @@ export function scriptKindFor(fileName: string): ts.ScriptKind {
  *     the real language rules, an ordinary identifier - so `await /re/` is
  *     division and the regex is not a regex. Parsing everything as a
  *     module keeps `await` meaning `await`. The file kinds these scanners
- *     see that are NOT ES modules are the CommonJS ones - `.cjs`, and
- *     `.cts` if one is ever added - where a top-level `await` is a syntax
- *     error anyway, so there is no real CommonJS source this choice can
+ *     see that are NOT ES modules are the CommonJS ones, `.cjs` and
+ *     `.cts` (both in src/lib/source-extensions.mjs's list, neither
+ *     present in this repo today), where a top-level `await` is a syntax
+ *     error anyway - so there is no real CommonJS source this choice can
  *     misread, only invalid source it reads differently.
  *
  * Output shape is unchanged from every previous version, because callers

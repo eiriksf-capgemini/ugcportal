@@ -69,15 +69,34 @@ export const HEX_COLOR_SELECTORS = [
  *   where `someVar` happens to hold the string `"script"` at runtime, or
  *   `import(someVar)` where `someVar` holds `"next/script"`, cannot be
  *   caught — the value isn't present in the source text for a selector to
- *   match at all, only computable at runtime. The computed-property
- *   *shape* (`x["createElement"]`, a literal string key via bracket
- *   notation rather than dot notation) IS caught, since the literal string
- *   is still present in the AST; a fully dynamic key or argument is not,
- *   and no selector-based rule can close that — it would need real
- *   data-flow analysis. The K6 grep test (analytics-host.grep.test.ts) is
- *   the backstop for exactly this residual gap: it does not care how a
- *   vendor's host string reached the page, only that the string itself
- *   appears somewhere in the source.
+ *   match at all, only computable at runtime.
+ *
+ *   What IS caught is the computed-property *shape*: a literal string or
+ *   backticked key via bracket notation rather than dot notation
+ *   (`x["createElement"]`, ``module[`require`]``), because the literal is
+ *   still there in the AST. That claim used to be written here while
+ *   being true of `createElement` only — the `require` selectors read a
+ *   single callee spelling until review round 3's second pass, so
+ *   `module["require"]("next/script")` passed. Every method this ruleset
+ *   names now goes through `calleeNamed`, which is what makes the
+ *   sentence true rather than aspirational.
+ *
+ *   Genuinely residual, needing real data-flow analysis rather than
+ *   another selector:
+ *
+ *     - a fully dynamic key or argument (`createElement(tag)`,
+ *       `import(specifier)`, `` require(`next/${name}`) ``);
+ *     - `createRequire(import.meta.url)("next/script")` — the callee is
+ *       the RETURN VALUE of a call, so there is no `require` identifier
+ *       or property anywhere in the expression to match on, under any
+ *       spelling;
+ *     - an aliased method reference (`const e = document.createElement;
+ *       e("script")`).
+ *
+ *   The K6 grep test (analytics-host.grep.test.ts) is the backstop for
+ *   exactly these: it does not care how a vendor's host string reached
+ *   the page, only that the string itself appears somewhere in the
+ *   source.
  */
 const GATED_SCRIPT_MESSAGE =
   "next/script (or a raw <script> element, however constructed) may only " +
@@ -234,6 +253,18 @@ function scriptTagArgument(index) {
   ];
 }
 
+/**
+ * "Argument N is the gated module specifier", as a plain string literal
+ * and as a no-substitution template literal — the same pair as
+ * `scriptTagArgument`, for a module path rather than a tag name.
+ */
+function scriptModuleArgument(index) {
+  return [
+    `[arguments.${index}.value="${NEXT_SCRIPT_MODULE}"]`,
+    `[arguments.${index}.expressions.length=0][arguments.${index}.quasis.0.value.cooked="${NEXT_SCRIPT_MODULE}"]`,
+  ];
+}
+
 const CREATE_ELEMENT_CALLEE = calleeNamed("createElement");
 
 /**
@@ -292,22 +323,26 @@ export const GATED_SCRIPT_SYNTAX_SELECTORS = [
     selector: `ImportExpression > TemplateLiteral[expressions.length=0] > TemplateElement[value.cooked="${NEXT_SCRIPT_MODULE}"]`,
     message: GATED_SCRIPT_MESSAGE,
   },
-  {
-    // CommonJS: `require("next/script")` (ugcportal-ysub, MEDIUM).
-    // `no-restricted-imports` understands ESM declarations only, and the
-    // ImportExpression selectors above are a different node kind, so this
-    // was caught by nothing — in a `.cjs` file it was not even reached,
-    // since neither this ruleset's file globs nor the K6 grep's extension
-    // list included `.cjs` before this bead.
-    selector: `CallExpression[callee.name="require"][arguments.0.value="${NEXT_SCRIPT_MODULE}"]`,
+  // CommonJS: `require("next/script")` (ugcportal-ysub, MEDIUM).
+  // `no-restricted-imports` understands ESM declarations only, and the
+  // ImportExpression selectors above are a different node kind, so this
+  // was caught by nothing — in a `.cjs` file it was not even reached,
+  // since neither this ruleset's file globs nor the K6 grep's extension
+  // list included `.cjs` before this bead.
+  //
+  // Review round 3, second pass (CONFIRMED with Linter.verify on the
+  // merged config): these two read `[callee.name="require"]` — ONE
+  // spelling — while `calleeNamed` was already giving `createElement` and
+  // `createElementNS` four. `module.require("next/script")`,
+  // `module["require"](...)`, ``module[`require`](...)``,
+  // `globalThis.require(...)` and `process.mainModule.require(...)` all
+  // passed. `require` is a function like any other: reached through a
+  // member expression it is the same function, so it gets the same
+  // four-spelling treatment.
+  ...scriptModuleArgument(0).map((argument) => ({
+    selector: `CallExpression${calleeNamed("require")}${argument}`,
     message: GATED_SCRIPT_MESSAGE,
-  },
-  {
-    // ``require(`next/script`)`` — same template-literal shape as the
-    // dynamic import above, same reason it needs its own selector.
-    selector: `CallExpression[callee.name="require"] > TemplateLiteral[expressions.length=0] > TemplateElement[value.cooked="${NEXT_SCRIPT_MODULE}"]`,
-    message: GATED_SCRIPT_MESSAGE,
-  },
+  })),
 ];
 
 // Exported (review round 3, finding 5 — reuse) so analytics-host.grep.test.ts

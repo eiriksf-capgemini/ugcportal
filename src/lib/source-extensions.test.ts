@@ -49,7 +49,7 @@ describe("every JS-family extension list derives from the one shared list", () =
     for (const extension of JS_FAMILY_EXTENSIONS) {
       expect(JS_FAMILY_FILENAME_PATTERN.test(`evil.${extension}`)).toBe(true);
     }
-    for (const extension of ["css", "json", "md", "txt", "tsxx", "mts"]) {
+    for (const extension of ["css", "json", "md", "txt", "tsxx", "coffee"]) {
       expect(JS_FAMILY_FILENAME_PATTERN.test(`evil.${extension}`)).toBe(false);
     }
   });

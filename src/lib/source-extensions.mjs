@@ -24,8 +24,27 @@
  * Extensions whose files can execute a tracking snippet. `.ts`/`.tsx` need
  * a compiler, the rest do not - which is the point: "it needs TypeScript"
  * was never a reason a file could not be a bypass.
+ *
+ * `.mts`/`.cts` are here even though this repo has no such file today
+ * (review round 3, second pass): scan-source.ts's own prose already
+ * reasoned about `.cts` as a CommonJS source kind while no list actually
+ * contained it, which is the "a comment claims what the code does not do"
+ * shape, and the extension pair is exactly the sort of thing that arrives
+ * with a toolchain change rather than a deliberate decision. Listing them
+ * now costs nothing and means the first one to appear is covered by the
+ * lint rules, the grep and the parser's dialect map at once, instead of
+ * by whichever of the three someone remembers.
  */
-export const JS_FAMILY_EXTENSIONS = ["ts", "tsx", "js", "jsx", "mjs", "cjs"];
+export const JS_FAMILY_EXTENSIONS = [
+  "ts",
+  "tsx",
+  "mts",
+  "cts",
+  "js",
+  "jsx",
+  "mjs",
+  "cjs",
+];
 
 /**
  * The subset eslint.config.mjs gives the JSX-shaped selectors to (a raw

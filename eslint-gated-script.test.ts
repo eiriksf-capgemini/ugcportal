@@ -259,6 +259,35 @@ describe("eslint.config.mjs: gated-script syntax selectors (JSX/createElement)",
           options: GATED_SCRIPT_SYNTAX_SELECTORS,
           errors: 1,
         },
+        // Review round 3, second pass (CONFIRMED with Linter.verify on the
+        // merged config): `require` had ONE callee spelling while
+        // createElement had four, so every member-expression route to the
+        // same function walked past the ban.
+        {
+          code: 'const S = module.require("next/script");',
+          options: GATED_SCRIPT_SYNTAX_SELECTORS,
+          errors: 1,
+        },
+        {
+          code: 'const S = module["require"]("next/script");',
+          options: GATED_SCRIPT_SYNTAX_SELECTORS,
+          errors: 1,
+        },
+        {
+          code: "const S = module[`require`](`next/script`);",
+          options: GATED_SCRIPT_SYNTAX_SELECTORS,
+          errors: 1,
+        },
+        {
+          code: 'const S = globalThis.require("next/script");',
+          options: GATED_SCRIPT_SYNTAX_SELECTORS,
+          errors: 1,
+        },
+        {
+          code: 'const S = process.mainModule.require("next/script");',
+          options: GATED_SCRIPT_SYNTAX_SELECTORS,
+          errors: 1,
+        },
       ],
     });
   });
@@ -310,6 +339,20 @@ describe("eslint.config.mjs: gated-script syntax selectors (JSX/createElement)",
           options: GATED_SCRIPT_SYNTAX_SELECTORS,
         },
         { code: 'const x = require("next/image");', options: GATED_SCRIPT_SYNTAX_SELECTORS },
+        { code: 'const x = module.require("next/image");', options: GATED_SCRIPT_SYNTAX_SELECTORS },
+        { code: "const x = module[`require`](`next/image`);", options: GATED_SCRIPT_SYNTAX_SELECTORS },
+        // A near-miss METHOD name, now that `require` has four spellings.
+        { code: 'const x = requireSomething("next/script");', options: GATED_SCRIPT_SYNTAX_SELECTORS },
+        { code: 'const x = module.requireFoo("next/script");', options: GATED_SCRIPT_SYNTAX_SELECTORS },
+        // The documented data-flow residual: the callee is the RETURN
+        // VALUE of a call, so there is no `require` identifier or property
+        // anywhere in the expression for any selector to match. Listed as
+        // valid because it is a stated KNOWN LIMIT backstopped by the K6
+        // grep, not because it is safe.
+        {
+          code: 'const x = createRequire(import.meta.url)("next/script");',
+          options: GATED_SCRIPT_SYNTAX_SELECTORS,
+        },
         // A template literal WITH a substitution: the specifier is not
         // statically present, which eslint.config.mjs documents as the
         // residual the K6 grep backstops rather than something a selector
@@ -648,6 +691,64 @@ describe("eslintConfig (the real merged, exported config) wires the gated-script
     expect(ruleIdsFor('const S = require("next/script");', "src/lib/evil.cjs")).toContain(
       "no-restricted-syntax",
     );
+  });
+
+  /**
+   * Review round 3, second pass, MEDIUM (CONFIRMED with Linter.verify in
+   * both `.ts` and `.cjs`): `require` read a single callee spelling while
+   * `createElement`/`createElementNS` read four, so every one of these
+   * reached `next/script` with the ban silent. `require` is a function
+   * like any other — through a member expression it is the same function.
+   */
+  it.each([
+    'module.require("next/script");',
+    'module["require"]("next/script");',
+    "module[`require`](`next/script`);",
+    'globalThis.require("next/script");',
+    'process.mainModule.require("next/script");',
+  ])("K2: flags %s, in a .ts file and a .cjs one alike", (code) => {
+    expect(ruleIdsFor(code, "src/lib/evil.ts")).toContain("no-restricted-syntax");
+    expect(ruleIdsFor(code, "src/lib/evil.cjs")).toContain("no-restricted-syntax");
+  });
+
+  it("MUTATION CHECK: the same five spellings pointed at a different module raise nothing", () => {
+    // Fixture mutation for the five above: `next/image` rather than
+    // `next/script`, nothing else changed. If the new callee spellings had
+    // widened to "any require-ish call", these would fire and the
+    // assertions above would be reading a needle that cannot be absent.
+    for (const code of [
+      'module.require("next/image");',
+      'module["require"]("next/image");',
+      "module[`require`](`next/image`);",
+      'globalThis.require("next/image");',
+      'process.mainModule.require("next/image");',
+    ]) {
+      expect(ruleIdsFor(code, "src/lib/fine.ts")).not.toContain("no-restricted-syntax");
+      expect(ruleIdsFor(code, "src/lib/fine.cjs")).not.toContain("no-restricted-syntax");
+    }
+  });
+
+  it("MUTATION CHECK: a near-miss method name is not a require, under any spelling", () => {
+    // The other direction: `requireSomething`/`requireFoo` are different
+    // functions, and `calleeNamed` anchors on the exact name.
+    expect(ruleIdsFor('requireSomething("next/script");', "src/lib/fine.ts")).not.toContain(
+      "no-restricted-syntax",
+    );
+    expect(ruleIdsFor('module.requireFoo("next/script");', "src/lib/fine.ts")).not.toContain(
+      "no-restricted-syntax",
+    );
+  });
+
+  it("documents, by asserting it, that createRequire(import.meta.url)(...) is NOT caught", () => {
+    // A stated KNOWN LIMIT, pinned rather than left to be rediscovered:
+    // the callee is the return value of a call, so no `require` identifier
+    // or property exists anywhere in the expression for a selector to
+    // match. If a future change DID catch it, this test going red is the
+    // prompt to delete it and the prose together — which is the point of
+    // asserting a limit rather than only writing it down.
+    expect(
+      ruleIdsFor('const S = createRequire(import.meta.url)("next/script");', "src/lib/evil.ts"),
+    ).not.toContain("no-restricted-syntax");
   });
 
   it("does NOT flag any of those four inside the gated loader itself", () => {
