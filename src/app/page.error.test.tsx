@@ -324,18 +324,20 @@ describe("Home() in isolation: a failed session read never crashes its render", 
  *    makes all three calls below share the identical rejected promise,
  *    MIRRORING what a real request's `cache()`-memoized `getSession()`
  *    hands its callers. src/lib/session-or-anonymous.ts's own comment
- *    states the measured facts this test's claim rests on (round-1/round-2/
- *    round-3 review of this PR — each round corrected the previous one's
- *    overclaim, so stated plainly here rather than re-approximated): inside
+ *    states the measured facts this test's claim rests on in full (round-1/
+ *    round-2/round-3/round-4 review of this PR — each round corrected the
+ *    previous one's overclaim, so deferred to rather than re-approximated
+ *    here, which is exactly where the drift kept creeping back in): inside
  *    a real render the two dedupe layers there (the `WeakSet`, and
  *    `cache()` wrapping `resolveSessionOrAnonymous` itself) are REDUNDANT
- *    with each other — either alone is already sufficient, because
- *    `getSession()`'s own `cache()` means all three siblings would reach
- *    the same promise regardless. Outside a render — which is what calling
- *    `Home`, `AuthStatus` and `UploadNavLink` directly, below, actually is,
- *    since this harness has no way to put them behind one real render (see
- *    point 1 above) — NEITHER layer dedupes anything for the real
- *    implementation: `cache()` falls through uncached, and the real
+ *    with each other — either alone is already sufficient, for the two
+ *    separate reasons that module's comment gives for each layer. Outside
+ *    a render — which is what calling `Home`, `AuthStatus` and
+ *    `UploadNavLink` directly, below, actually is, since this harness has
+ *    no way to put them behind one real render (see the unnumbered
+ *    paragraph above this list, "NOT exercised through
+ *    `renderToStaticMarkup(...)`") — NEITHER layer dedupes anything for the
+ *    real implementation: `cache()` falls through uncached, and the real
  *    `getSession()` falls through too and hands back an unshared promise
  *    per call. This test exercises the `WeakSet` specifically, by giving it
  *    outside a render the one thing it needs (a shared promise) via the
