@@ -196,3 +196,59 @@ describe("useOptionalConsent", () => {
     expect(optionalRef?.consent).toBe("granted");
   });
 });
+
+/**
+ * ugcportal-ysub item 7: the reopen invoker is carried here rather than
+ * inferred by CookieBanner from `document.activeElement`, because the
+ * browser that needed the fallback most (Safari, which does not focus a
+ * clicked button) is exactly the one where `activeElement` is not the
+ * control that was clicked.
+ */
+describe("reopen(invoker) / takeReopenInvoker (ugcportal-ysub item 7)", () => {
+  let actions: ReturnType<typeof useConsent> | undefined;
+
+  beforeEach(() => {
+    actions = undefined;
+    mount("granted", (value) => {
+      actions = value;
+    });
+  });
+
+  it("hands back exactly the element reopen() was called with", () => {
+    const invoker = document.createElement("button");
+    act(() => {
+      actions?.reopen(invoker);
+    });
+    expect(actions?.takeReopenInvoker()).toBe(invoker);
+  });
+
+  it("is one-shot: a second read returns null, so a later close cannot reuse a stale invoker", () => {
+    const invoker = document.createElement("button");
+    act(() => {
+      actions?.reopen(invoker);
+    });
+    expect(actions?.takeReopenInvoker()).toBe(invoker);
+    expect(actions?.takeReopenInvoker()).toBeNull();
+  });
+
+  it("returns null when reopen() was called with no invoker at all", () => {
+    act(() => {
+      actions?.reopen();
+    });
+    expect(actions?.takeReopenInvoker()).toBeNull();
+  });
+
+  it("MUTATION CHECK: a second reopen() with no invoker clears a previously captured one", () => {
+    // The needle really can change: capture, then reopen again from
+    // somewhere with no invoking control, and the old element must not
+    // still be handed out.
+    const invoker = document.createElement("button");
+    act(() => {
+      actions?.reopen(invoker);
+    });
+    act(() => {
+      actions?.reopen();
+    });
+    expect(actions?.takeReopenInvoker()).toBeNull();
+  });
+});

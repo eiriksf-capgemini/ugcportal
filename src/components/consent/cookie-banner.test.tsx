@@ -430,6 +430,13 @@ describe("CookieBanner focus/announce on reopen (finding 9)", () => {
    * button unmounts (typically <body>) — lost, not returned anywhere
    * meaningful. Fixed to restore focus to whatever invoked the reopen (the
    * footer "Cookies" control, in the one real path that reaches this).
+   *
+   * ugcportal-ysub item 7: the invoker is passed EXPLICITLY to `reopen()`
+   * now — cookie-settings-link.tsx passes its click event's own
+   * `currentTarget` — rather than being inferred from
+   * `document.activeElement`. These tests pass it the same way, which is
+   * also why they no longer need to focus the button first for the
+   * restore to work.
    */
   it("restores focus to the invoking control (the 'Cookies' button) when the reopened banner is dismissed", () => {
     const cookiesButton = document.createElement("button");
@@ -441,7 +448,7 @@ describe("CookieBanner focus/announce on reopen (finding 9)", () => {
     expect(document.activeElement).toBe(cookiesButton);
 
     act(() => {
-      actionsRef?.reopen();
+      actionsRef?.reopen(cookiesButton);
     });
     expect(document.activeElement).toBe(ctx.container().querySelector("h2"));
 
@@ -462,7 +469,7 @@ describe("CookieBanner focus/announce on reopen (finding 9)", () => {
     cookiesButton.focus();
 
     act(() => {
-      actionsRef?.reopen();
+      actionsRef?.reopen(cookiesButton);
     });
     act(() => {
       actionsRef?.acceptOptional();
@@ -472,20 +479,29 @@ describe("CookieBanner focus/announce on reopen (finding 9)", () => {
     cookiesButton.remove();
   });
 
-  it("MUTATION CHECK: does not try to restore focus to an invoker that no longer exists in the DOM", () => {
+  /**
+   * ugcportal-ysub item 7, the DETACHED half. The round-5 code asked two
+   * questions in sequence — `document.contains(invoker)` first, then "did
+   * `.focus()` take" — and only the second could reach the fallback. So an
+   * invoker removed from the DOM between capture and restore (the footer
+   * re-rendered without it, a route change) skipped the fallback entirely
+   * and left focus on an unannounced <body>. Both shapes now run the one
+   * path and both end in the fallback.
+   */
+  it("falls back when the invoker was removed from the DOM between reopen and close", () => {
     const cookiesButton = document.createElement("button");
     document.body.append(cookiesButton);
+
+    const liveTrigger = document.createElement("button");
+    liveTrigger.setAttribute("data-cookie-settings-trigger", "");
+    document.body.append(liveTrigger);
 
     mountWithActions("granted");
     cookiesButton.focus();
 
     act(() => {
-      actionsRef?.reopen();
+      actionsRef?.reopen(cookiesButton);
     });
-    // The invoking control is removed from the DOM entirely before the
-    // banner closes (e.g. the footer re-rendered without it) — restoring
-    // focus to a detached element would be a no-op in real browsers, but
-    // must not throw here either.
     cookiesButton.remove();
 
     expect(() => {
@@ -493,6 +509,177 @@ describe("CookieBanner focus/announce on reopen (finding 9)", () => {
         actionsRef?.onlyNecessary();
       });
     }).not.toThrow();
+
+    expect(document.activeElement).toBe(liveTrigger);
+    liveTrigger.remove();
+  });
+
+  it("MUTATION CHECK: the same close with the invoker left ATTACHED restores to it, not to the fallback", () => {
+    // Fixture mutation for the test above: identical except that
+    // `cookiesButton.remove()` never happens. If the fallback fired
+    // unconditionally on every close, this would land on `liveTrigger`
+    // and fail — so the previous test's needle really can be absent.
+    const cookiesButton = document.createElement("button");
+    document.body.append(cookiesButton);
+
+    const liveTrigger = document.createElement("button");
+    liveTrigger.setAttribute("data-cookie-settings-trigger", "");
+    document.body.append(liveTrigger);
+
+    mountWithActions("granted");
+    cookiesButton.focus();
+
+    act(() => {
+      actionsRef?.reopen(cookiesButton);
+    });
+
+    act(() => {
+      actionsRef?.onlyNecessary();
+    });
+
+    expect(document.activeElement).toBe(cookiesButton);
+    cookiesButton.remove();
+    liveTrigger.remove();
+  });
+
+  /**
+   * ugcportal-ysub item 7, the Safari half. WebKit does not move focus to
+   * a clicked <button>, so the round-5 code — which captured
+   * `document.activeElement` when the banner opened — captured <body>
+   * there. <body> is focusable enough that `.focus()` on it "succeeds",
+   * so the fallback never fired on exactly the browser it was written
+   * for. The invoker now comes from the click event instead, so what gets
+   * captured does not depend on whether the browser focused the button.
+   */
+  it("restores focus to the clicked control even when nothing was focused at reopen time (Safari)", () => {
+    const cookiesButton = document.createElement("button");
+    cookiesButton.textContent = "Cookies";
+    document.body.append(cookiesButton);
+
+    mountWithActions("granted");
+    // Exactly WebKit's behaviour on a button click: the click happens,
+    // but activeElement never leaves <body>.
+    (document.activeElement as HTMLElement | null)?.blur();
+    expect(document.activeElement).toBe(document.body);
+
+    act(() => {
+      actionsRef?.reopen(cookiesButton);
+    });
+    act(() => {
+      actionsRef?.onlyNecessary();
+    });
+
+    expect(document.activeElement).toBe(cookiesButton);
+    cookiesButton.remove();
+  });
+
+  /**
+   * Review round 3, finding 6. `reopen()` can be called again while the
+   * banner is ALREADY open — the visitor clicks the footer "Cookies"
+   * control a second time, having not noticed the banner at the bottom of
+   * the page. That call changes nothing React can see
+   * (`setBannerOpen(true)` on an already-true value bails out), so the
+   * banner's effect does not re-run.
+   *
+   * Capturing the invoker at OPEN time therefore froze the FIRST click's
+   * control and could never be corrected: focus went back to the control
+   * the visitor used a minute ago rather than the one they just used, and
+   * the later invoker sat in the context's ref with nothing to consume
+   * it. Reading it at CLOSE time instead makes the last click win and
+   * leaves nothing behind.
+   */
+  it("restores focus to the LAST control that invoked the reopen, not the first", () => {
+    const first = document.createElement("button");
+    first.textContent = "Cookies (header)";
+    const second = document.createElement("button");
+    second.textContent = "Cookies (footer)";
+    document.body.append(first, second);
+
+    mountWithActions("granted");
+
+    act(() => {
+      actionsRef?.reopen(first);
+    });
+    // Already open — no transition, so the banner's effect does not run.
+    act(() => {
+      actionsRef?.reopen(second);
+    });
+    expect(ctx.container().querySelector('[aria-label="Cookies"]')).not.toBeNull();
+
+    act(() => {
+      actionsRef?.onlyNecessary();
+    });
+
+    expect(document.activeElement).toBe(second);
+    expect(document.activeElement).not.toBe(first);
+    first.remove();
+    second.remove();
+  });
+
+  it("leaves nothing stale behind: a later open with no invoker restores focus to nobody", () => {
+    // The other half of the same finding. After the sequence above, a
+    // reopen with NO invoking control must not resurrect either earlier
+    // button — which is what a ref that is written but never consumed
+    // would do.
+    const first = document.createElement("button");
+    const second = document.createElement("button");
+    document.body.append(first, second);
+
+    mountWithActions("granted");
+    act(() => {
+      actionsRef?.reopen(first);
+    });
+    act(() => {
+      actionsRef?.reopen(second);
+    });
+    act(() => {
+      actionsRef?.onlyNecessary();
+    });
+    expect(document.activeElement).toBe(second);
+
+    // Move focus somewhere neutral, then open and close again with no
+    // invoking control at all.
+    const elsewhere = document.createElement("input");
+    document.body.append(elsewhere);
+    elsewhere.focus();
+
+    act(() => {
+      actionsRef?.reopen();
+    });
+    act(() => {
+      actionsRef?.acceptOptional();
+    });
+
+    expect(document.activeElement).not.toBe(first);
+    expect(document.activeElement).not.toBe(second);
+    first.remove();
+    second.remove();
+    elsewhere.remove();
+  });
+
+  it("MUTATION CHECK: with no invoker passed at all, the close leaves focus alone", () => {
+    // Fixture mutation for the test above: the ONLY difference is that
+    // `reopen()` is called with nothing, which is the mount-time-open
+    // case (no control was clicked). Nothing to restore to, so nothing is
+    // restored — proving the assertion above is reading the element the
+    // caller passed rather than something the banner would have focused
+    // regardless.
+    const cookiesButton = document.createElement("button");
+    cookiesButton.textContent = "Cookies";
+    document.body.append(cookiesButton);
+
+    mountWithActions("granted");
+    (document.activeElement as HTMLElement | null)?.blur();
+
+    act(() => {
+      actionsRef?.reopen();
+    });
+    act(() => {
+      actionsRef?.onlyNecessary();
+    });
+
+    expect(document.activeElement).not.toBe(cookiesButton);
+    cookiesButton.remove();
   });
 
   /**
@@ -517,7 +704,7 @@ describe("CookieBanner focus/announce on reopen (finding 9)", () => {
 
     mountWithActions("granted");
     act(() => {
-      actionsRef?.reopen();
+      actionsRef?.reopen(cookiesButton);
     });
 
     act(() => {
@@ -541,7 +728,7 @@ describe("CookieBanner focus/announce on reopen (finding 9)", () => {
 
     mountWithActions("granted");
     act(() => {
-      actionsRef?.reopen();
+      actionsRef?.reopen(cookiesButton);
     });
 
     act(() => {
@@ -570,7 +757,7 @@ describe("CookieBanner focus/announce on reopen (finding 9)", () => {
     cookiesButton.focus();
 
     act(() => {
-      actionsRef?.reopen();
+      actionsRef?.reopen(cookiesButton);
     });
     act(() => {
       actionsRef?.onlyNecessary();

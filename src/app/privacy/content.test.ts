@@ -195,7 +195,7 @@ function applicationSources(): { file: string; code: string }[] {
       isTestFile(file) || file.includes("/generated/") || file.endsWith(".test-support.ts"),
   ).map((file) => ({
     file: path.relative(REPO_ROOT, file),
-    code: stripComments(readFileSync(file, "utf8")),
+    code: stripComments(readFileSync(file, "utf8"), file),
   }));
 }
 
@@ -252,9 +252,8 @@ describe("the negative claims hold against the source tree", () => {
     // render is AnalyticsLoader, which is the single place a tracking script
     // may mount and is itself gated on consent (ugcportal-3wgp K2/K6, guarded
     // by eslint.config.mjs and analytics-host.grep.test.ts).
-    const layout = stripComments(
-      readFileSync(path.join(SRC_ROOT, "app", "layout.tsx"), "utf8"),
-    );
+    const layoutPath = path.join(SRC_ROOT, "app", "layout.tsx");
+    const layout = stripComments(readFileSync(layoutPath, "utf8"), layoutPath);
     expect(layout).not.toMatch(/next\/script|<script|umami|gtag/i);
     expect(layout).toMatch(/@\/components\/consent\/analytics-loader/);
     // Any other "analytics" in the layout is a second mount point.

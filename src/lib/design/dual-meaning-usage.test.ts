@@ -146,7 +146,7 @@ function scanDualMeaningUsage(): Map<string, Partial<Record<DualMeaningToken, nu
 
   const found = new Map<string, Partial<Record<DualMeaningToken, number>>>();
   for (const file of files) {
-    const source = stripComments(readFileSync(file, "utf8"));
+    const source = stripComments(readFileSync(file, "utf8"), file);
     const relative = path.relative(path.dirname(SRC_ROOT), file);
 
     TOKEN_PATTERN.lastIndex = 0;
