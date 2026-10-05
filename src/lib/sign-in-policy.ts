@@ -303,6 +303,379 @@ export function isBootstrapAdminSignIn(
   });
 }
 
+/* -------------------------------------------------------------------------
+ * The committed users array (ugcportal-t33p).
+ *
+ * THIS LIVES HERE, in the module that decides who may sign in, and it did
+ * not at first — it was src/lib/configured-users.ts, which imported this one
+ * for the parser. PR #98 review found why that cannot stand: an array entry
+ * the review calls broken (an identity listed under two people, two names
+ * that slug to one handle) must not be PERMITTED either, or it is reported
+ * at boot and admitted at sign-in anyway. That makes `permittedIdentities`
+ * depend on the review and the review depend on the parser, which is a
+ * cycle for as long as the two live in different modules. Merged rather than
+ * split with a lazy import, because "who may sign in" and "which identities
+ * are the same person" are now one question with one answer.
+ *
+ * Still no Prisma and no provider modules here: src/instrumentation.ts reads
+ * all of this at boot, including in the Edge bundle. The half that writes to
+ * the database is src/lib/configured-user-link.ts.
+ * ---------------------------------------------------------------------- */
+
+/**
+ * One identity from the array, parsed: the provider id and the normalised
+ * address. Both halves are mandatory — an entry that does not yield both is
+ * not an identity, it is a configuration mistake, and `reviewConfiguredUsers`
+ * both reports it and removes it.
+ */
+export type ConfiguredIdentityRef = {
+  provider: SignInProvider;
+  email: string;
+};
+
+/**
+ * Letters the handle has an opinion about, because the operator is Norwegian
+ * and `Bjørn` would otherwise lose a letter. Mapped explicitly rather than
+ * through `normalize("NFKD")`, which decomposes `å` but leaves `ø` and `æ`
+ * alone, so the result would be inconsistent between letters a reader thinks
+ * of as one family.
+ *
+ * Deliberately NOT exhaustive over the world's alphabets, and that is safe
+ * because of the companion check: a letter this map does not know is
+ * REPORTED (`Łukasz` would silently become `ukasz`), not quietly dropped.
+ * Extending this map is the fix, and the boot message says so.
+ */
+const TRANSLITERATIONS: ReadonlyMap<string, string> = new Map([
+  ["æ", "ae"],
+  ["ø", "o"],
+  ["å", "a"],
+  ["ä", "a"],
+  ["ö", "o"],
+  ["ü", "u"],
+  ["é", "e"],
+  ["è", "e"],
+  ["ß", "ss"],
+]);
+
+/**
+ * The stable handle for one configured person: the key their single `User`
+ * row is found by (`User.configuredHandle`).
+ *
+ * DERIVED FROM `name`, AND THAT IS THE WHOLE DESIGN DECISION. The handle has
+ * to be stable across adding and reordering a person's identities — that is
+ * the edit this feature exists to make safe — so it cannot come from the
+ * identities. `name` is the only other thing the array knows about a person.
+ *
+ * The cost, stated so nobody has to discover it: RENAMING a person changes
+ * their handle, and the next sign-in then finds no row and creates a second,
+ * empty user. It is not detectable at boot (no database in the Edge bundle),
+ * so it is documented instead, with the one-line `UPDATE` that makes a
+ * rename safe, under "Renaming a person" in docs/access-control.md.
+ *
+ * `null` for a name that yields no handle at all. Not an empty string: a
+ * blank handle is a value `User.configuredHandle`'s UNIQUE index accepts
+ * once, which would silently adopt the first such person and fail for the
+ * second.
+ */
+export function configuredUserHandle(user: ConfiguredUser): string | null {
+  const slug = [...user.name.toLowerCase()]
+    .map((character) => TRANSLITERATIONS.get(character) ?? character)
+    .join("")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return slug.length > 0 ? slug : null;
+}
+
+/**
+ * Every letter or digit in this name that the handle would SILENTLY DROP
+ * (PR #98 review, low 2).
+ *
+ * `Łukasz` becomes `ukasz`: a stable, unique, perfectly functional handle
+ * for a person whose name it has quietly mangled, and — worse — one that
+ * collides with a different person actually called `Ukasz`. The dropped
+ * characters are letters and digits only: a space, a hyphen, an apostrophe
+ * or a full stop becomes a separator by design, and reporting those would
+ * train the operator to ignore this check.
+ */
+function droppedFromHandle(name: string): string[] {
+  const dropped: string[] = [];
+  for (const character of name.toLowerCase()) {
+    if (TRANSLITERATIONS.has(character) || /[a-z0-9]/.test(character)) {
+      continue;
+    }
+    if (/[\p{L}\p{N}]/u.test(character)) {
+      dropped.push(character);
+    }
+  }
+  return dropped;
+}
+
+/**
+ * The identities of one configured person, parsed; unusable ones dropped.
+ *
+ * An entry whose provider half is missing is dropped too, even though
+ * `ConfiguredIdentity` has no unbound form: the type constrains what can be
+ * WRITTEN, and this is what the runtime relies on. An unbound identity would
+ * match an address through either provider, which is the K5 failure ("two
+ * different people merged because they share an e-mail") one edit away.
+ */
+export function configuredIdentities(
+  user: ConfiguredUser,
+): ConfiguredIdentityRef[] {
+  const parsed: ConfiguredIdentityRef[] = [];
+  for (const identity of user.identities) {
+    const entry = parsePermittedEntry(identity.trim().toLowerCase());
+    if (entry === null || entry.provider === null) {
+      continue;
+    }
+    parsed.push({ provider: entry.provider, email: entry.email });
+  }
+  return parsed;
+}
+
+/**
+ * What the array says, and what is wrong with it.
+ *
+ * `sound` IS THE ARRAY AS FAR AS THE REST OF THIS APP IS CONCERNED. Every
+ * user and every identity named in `problems` has been removed from it, so a
+ * reported mistake cannot also be acted on — which was the defect PR #98
+ * review found: `problems` was printed at boot and the raw array was used
+ * anyway, so an identity listed under two people still signed in as the
+ * first of them, and two names slugging to one handle still landed on one
+ * row.
+ */
+export type ConfiguredUsersReview = {
+  sound: readonly ConfiguredUser[];
+  problems: string[];
+};
+
+/**
+ * Review the array: report every mistake, and remove whatever it names.
+ *
+ * REMOVAL IS FAIL-CLOSED IN BOTH DIRECTIONS, which is the point. A removed
+ * identity is not permitted by the array (so, unless an env var names it
+ * too, that identity cannot sign in at all) and it links nothing (so it
+ * cannot land on somebody else's user). An operator who mistypes is locked
+ * out of the thing they mistyped rather than quietly given the wrong
+ * answer — and told, at boot, in one line naming the file.
+ *
+ * A user is removed WHOLE when the problem is about them (no identities, no
+ * usable handle, a handle that drops a letter, a handle another person also
+ * has). One identity is removed when the problem is about it (malformed,
+ * unknown provider, claimed by more than one person — in which case it is
+ * removed from EVERY claimant, because which of them meant it is exactly
+ * what nobody can tell).
+ *
+ * Memoised on the array's identity, for the same reason and with the same
+ * caveat as `permittedIdentities`: it runs on the sign-in path and on every
+ * authenticated request, and nothing mutates the array in place.
+ */
+export function reviewConfiguredUsers(
+  users: readonly ConfiguredUser[] = CONFIGURED_USERS,
+): ConfiguredUsersReview {
+  const cached = cachedReview;
+  if (cached && cached.users === users) {
+    return cached.value;
+  }
+
+  const problems: string[] = [];
+  /** Indices of the users removed whole. */
+  const unsoundUsers = new Set<number>();
+  /** `provider:address` keys removed from everybody. */
+  const unsoundIdentities = new Set<string>();
+  /** Which users claim each identity, by index, for the duplicate check. */
+  const claimants = new Map<string, Set<number>>();
+  /** Which users derive each handle, for the collision check. */
+  const handles = new Map<string, number[]>();
+
+  users.forEach((user, index) => {
+    const label = user.name.trim().length > 0 ? user.name : "(unnamed user)";
+
+    if (user.identities.length === 0) {
+      unsoundUsers.add(index);
+      problems.push(
+        `[auth] Configured user "${label}" has no identities, so nobody can ` +
+          "sign in as them and no User row will ever be linked to them. " +
+          `Give them at least one ${PROVIDER_PREFIX_HINT} identity in ` +
+          "src/config/users.ts, or remove the entry.",
+      );
+    }
+
+    const handle = configuredUserHandle(user);
+    if (handle === null) {
+      unsoundUsers.add(index);
+      problems.push(
+        `[auth] Configured user "${label}" has a name that yields no usable ` +
+          "handle (it contains no letters or digits), so their identities " +
+          "cannot be linked to a single User row. Until it is fixed they " +
+          "are ignored entirely and cannot sign in through the array. See " +
+          "src/config/users.ts.",
+      );
+    } else {
+      handles.set(handle, [...(handles.get(handle) ?? []), index]);
+      const dropped = droppedFromHandle(user.name);
+      if (dropped.length > 0) {
+        unsoundUsers.add(index);
+        problems.push(
+          `[auth] Configured user "${label}" has a name whose handle would ` +
+            `silently drop ${dropped.map((c) => `"${c}"`).join(", ")} ` +
+            `(it becomes "${handle}"), which both mangles their name and ` +
+            "risks colliding with somebody else's. Until it is fixed they " +
+            "are ignored entirely and cannot sign in through the array. Add " +
+            "the letter to TRANSLITERATIONS in src/lib/sign-in-policy.ts, or " +
+            "use an ASCII name in src/config/users.ts.",
+        );
+      }
+    }
+
+    for (const identity of user.identities) {
+      const normalized = identity.trim().toLowerCase();
+      const parsed = parsePermittedEntry(normalized);
+      if (parsed === null || parsed.provider === null) {
+        unsoundIdentities.add(normalized);
+        problems.push(describeUnusableIdentity(label, identity));
+        continue;
+      }
+      const key = `${parsed.provider}:${parsed.email}`;
+      const claimed = claimants.get(key);
+      if (claimed) {
+        claimed.add(index);
+      } else {
+        claimants.set(key, new Set([index]));
+      }
+    }
+  });
+
+  for (const [identity, indices] of claimants) {
+    if (indices.size > 1) {
+      unsoundIdentities.add(identity);
+      const names = [...indices].map((index) => users[index].name);
+      problems.push(
+        `[auth] The identity ${identity} is listed under more than one ` +
+          `configured user (${names.join(", ")}), and nothing can tell which ` +
+          "of them meant it, so it is ignored for all of them and cannot " +
+          "sign in through the array. Remove the duplicate in " +
+          "src/config/users.ts.",
+      );
+    }
+  }
+
+  for (const [handle, indices] of handles) {
+    if (indices.length > 1) {
+      const names = indices.map((index) => users[index].name);
+      for (const index of indices) {
+        unsoundUsers.add(index);
+      }
+      problems.push(
+        `[auth] More than one configured user has the handle "${handle}" ` +
+          `(${names.join(", ")}). The handle is UNIQUE on User, so they ` +
+          "would compete for one row; all of them are ignored and cannot " +
+          "sign in through the array until they have distinguishable names " +
+          "in src/config/users.ts.",
+      );
+    }
+  }
+
+  const sound: ConfiguredUser[] = [];
+  users.forEach((user, index) => {
+    if (unsoundUsers.has(index)) {
+      return;
+    }
+    const identities = user.identities.filter(
+      (identity) => !unsoundIdentities.has(identity.trim().toLowerCase()),
+    );
+    // A user with nothing left permits and links nothing; dropping them here
+    // keeps every later loop over `sound` free of entries that cannot match.
+    if (identities.length > 0) {
+      sound.push({ name: user.name, identities });
+    }
+  });
+
+  const value: ConfiguredUsersReview = Object.freeze({
+    sound: Object.freeze(sound) as readonly ConfiguredUser[],
+    problems: Object.freeze(problems) as string[],
+  });
+  cachedReview = { users, value };
+  return value;
+}
+
+let cachedReview: {
+  users: readonly ConfiguredUser[];
+  value: ConfiguredUsersReview;
+} | null = null;
+
+/** Everything wrong with the array, as lines an operator can act on. */
+export function configuredUserProblems(
+  users: readonly ConfiguredUser[] = CONFIGURED_USERS,
+): string[] {
+  return reviewConfiguredUsers(users).problems;
+}
+
+/**
+ * Why one identity string is unusable, told apart rather than lumped
+ * together: an unknown provider and a malformed address are two different
+ * typos with two different fixes, and "it is ignored" is useless to an
+ * operator who cannot see which half is wrong.
+ */
+function describeUnusableIdentity(name: string, identity: string): string {
+  const normalized = identity.trim().toLowerCase();
+  const colon = normalized.indexOf(":");
+  const prefix = colon === -1 ? "" : normalized.slice(0, colon).trim();
+  if (colon === -1 || providerId(prefix) === null) {
+    return (
+      `[auth] Configured user "${name}" has the identity "${identity}", ` +
+      `which names no known provider. Each identity must begin with ` +
+      `${PROVIDER_PREFIX_HINT}. It permits nobody and links nothing. ` +
+      "See src/config/users.ts."
+    );
+  }
+  return (
+    `[auth] Configured user "${name}" has the identity "${identity}", whose ` +
+    "address is not one exact email address (wildcards, blanks and a second " +
+    "provider prefix are all rejected). It permits nobody and links " +
+    "nothing. See src/config/users.ts."
+  );
+}
+
+/**
+ * Which configured person, if any, THIS (provider, address) pair is.
+ *
+ * EXACT ON BOTH HALVES (ugcportal-t33p K5). Not the domain, not the local
+ * part, not the provider alone, and not the address alone — the two
+ * together, each normalised the way the gate normalises them (`providerId`
+ * and `normalizeString`, so the string the gate permitted is the string
+ * matched here). An address listed under `google:` is not this person when
+ * Facebook asserts it.
+ *
+ * ALWAYS OVER THE REVIEWED ARRAY, never the raw one: that is the single
+ * place soundness is enforced, so there is no caller that can forget it
+ * (PR #98 review, medium 2). `reviewConfiguredUsers` is memoised on the
+ * array, so this costs one map lookup after the first call.
+ *
+ * Linear over a handful of people, deliberately. It runs a few times per
+ * SIGN-IN — once in each wrapped adapter method that needs it — never per
+ * request, and an index built at module load would be a second
+ * representation of the array to keep in step with the first.
+ */
+export function findConfiguredUser(
+  identity: { provider?: unknown; email?: unknown },
+  users: readonly ConfiguredUser[] = CONFIGURED_USERS,
+): ConfiguredUser | null {
+  const provider = providerId(identity.provider);
+  const email = normalizeString(identity.email);
+  if (provider === null || email === null) {
+    return null;
+  }
+  for (const user of reviewConfiguredUsers(users).sound) {
+    for (const candidate of configuredIdentities(user)) {
+      if (candidate.provider === provider && candidate.email === email) {
+        return user;
+      }
+    }
+  }
+  return null;
+}
+
 export type PermittedIdentities = {
   /**
    * The distinct permitted addresses, in first-seen order, FOR REPORTING —
@@ -446,6 +819,16 @@ export function permittedIdentities(
     // every source. The array is operator data too, and nothing stops
     // somebody writing two addresses in one entry.
     //
+    // THE REVIEWED ARRAY, not the raw one (PR #98 review, medium 2). An
+    // identity the review rejects must not be permitted either, or the boot
+    // check reports it and the gate admits it anyway. A consequence worth
+    // stating: a rejected identity now needs an explicit ALLOWED_SIGNIN_EMAILS
+    // entry to sign in at all. A second consequence, which is what makes the
+    // malformed reporting honest: every entry that reaches `malformed` below
+    // came from one of the two ENVIRONMENT VARIABLES, because the array's own
+    // unusable entries were removed here and are reported — naming their own
+    // file — by `configuredUserProblems` instead (PR #98 review, low 3).
+    //
     // UNIONED, not substituted: `ALLOWED_SIGNIN_EMAILS` keeps working for
     // somebody who is not (yet) a person in the array, and a person in the
     // array needs no env var. Being listed here is itself the grant, the
@@ -453,7 +836,11 @@ export function permittedIdentities(
     // else: every identity here is provider-BOUND by construction (there is
     // no unbound form of `ConfiguredIdentity`), so the same address through
     // the other provider is still refused with `wrong-provider`.
-    ...splitList(users.flatMap((user) => user.identities).join(",")),
+    ...splitList(
+      reviewConfiguredUsers(users)
+        .sound.flatMap((user) => user.identities)
+        .join(","),
+    ),
   ];
 
   // ONE pass that builds everything (PR #91 review, round 3, finding 1).

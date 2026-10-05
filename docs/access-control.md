@@ -176,6 +176,20 @@ happen to share an e-mail domain, or a provider, are two people.
 publicly (`ugcportal-137`). `User.name` is set from it when the row is
 created and is not rewritten afterwards.
 
+**Revocation stays per identity, by design** (`ugcportal-mzr`): removing one
+of a person's identities refuses and deletes only the sessions that identity
+minted, because each session is judged on the `signInProvider` /`signInEmail`
+recorded on its own row — their other identity keeps working, on its own
+devices, until it too is removed. Sharing a `User` row changed who owns the
+uploads; it deliberately did not make revocation an action against a person.
+
+**A sign-in made while somebody else's session is open is refused**, not
+linked. Auth.js's already-signed-in branch attaches the new account to
+whoever holds the session cookie, which for an identity in the array would
+hand one person's account to another; `linkAccount` is wrapped to refuse
+that, write nothing, and send the visitor to the Access Denied page. Sign out
+first, then sign in.
+
 #### Adding a person who already has an account
 
 Add them to the array and restart. If they have **never** signed in, that is

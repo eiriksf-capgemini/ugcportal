@@ -2,21 +2,25 @@ import { describe, expect, it } from "vitest";
 
 import { CONFIGURED_USERS, type ConfiguredUser } from "@/config/users";
 import {
+  PERMITTED_EMAILS_VAR,
+  type SignInEnv,
   configuredIdentities,
   configuredUserHandle,
   configuredUserProblems,
-  findConfiguredUser,
-} from "@/lib/configured-users";
-import {
-  PERMITTED_EMAILS_VAR,
-  type SignInEnv,
   decideSignIn,
+  findConfiguredUser,
   permittedIdentities,
+  reviewConfiguredUsers,
 } from "@/lib/sign-in-policy";
 
 /**
  * The committed users array as the gate and the linking read it
  * (ugcportal-t33p K3 and the lookup half of K5).
+ *
+ * The code under test moved into src/lib/sign-in-policy.ts in PR #98's
+ * first review round: the array's REVIEW now decides what is permitted, so
+ * it and the permitted set cannot live in two modules without a cycle. This
+ * file keeps its name because it still tests one feature — the array.
  *
  * This file deliberately does NOT mock src/config/users.ts the way
  * src/lib/sign-in-policy.test.ts does: three of its describes drive the real
@@ -106,20 +110,39 @@ describe("the array's identities are permitted in addition to the env vars (K3)"
     expect(identities.malformed).toEqual([]);
   });
 
-  it("reports an unusable identity as malformed rather than permitting it", () => {
-    // Same bargain the env-var parser makes: an entry that permits nobody is
-    // named rather than silently dropped.
-    const identities = permittedIdentities(NO_ENV, [
+  it("permits nobody for an unusable identity, and reports it by its own file", () => {
+    // PROVENANCE (PR #98 review, low 3). `malformed` is the list the boot
+    // message attributes to ALLOWED_SIGNIN_EMAILS/ADMIN_BOOTSTRAP_EMAILS, so
+    // an array identity must not land in it under a message naming the wrong
+    // place to go and fix it. The review removes it first, and reports it
+    // naming src/config/users.ts.
+    const users: readonly ConfiguredUser[] = [
       { name: "Bad", identities: ["google:*@example.com"] },
-    ]);
+    ];
+    const identities = permittedIdentities(NO_ENV, users);
 
     expect(identities.emails).toEqual([]);
-    expect(identities.malformed).toEqual(["google:*@example.com"]);
+    expect(identities.malformed).toEqual([]);
+
+    const problems = configuredUserProblems(users);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain("google:*@example.com");
+    expect(problems[0]).toContain("src/config/users.ts");
+
     expect(
-      decideSignIn(attempt("anyone@example.com", "google"), NO_ENV, [
-        { name: "Bad", identities: ["google:*@example.com"] },
-      ]),
-    ).toEqual({ permitted: false, reason: "not-permitted" });
+      decideSignIn(attempt("anyone@example.com", "google"), NO_ENV, users),
+    ).toEqual({ permitted: false, reason: "no-configuration" });
+  });
+
+  it("still attributes an unusable ENV entry to the environment", () => {
+    // The other half of the same split: `malformed` keeps exactly the
+    // entries the boot message is entitled to blame on a variable.
+    const identities = permittedIdentities(
+      { [PERMITTED_EMAILS_VAR]: "*@example.com" },
+      FIXTURE,
+    );
+
+    expect(identities.malformed).toEqual(["*@example.com"]);
   });
 
   it("permits every identity in the REAL committed array, through its own provider", () => {
@@ -255,6 +278,85 @@ describe("findConfiguredUser matches an exact (provider, address) pair (K5)", ()
   });
 });
 
+describe("what the review reports, it also removes (PR #98 round 1, medium 2)", () => {
+  it("drops a duplicated identity from every claimant, not just the second", () => {
+    // Nothing can tell which of them meant it, so neither gets it. Dropping
+    // only the later one would make the array's ORDER decide who owns a
+    // disputed identity, which is the quietest possible way to merge two
+    // people.
+    const { sound, problems } = reviewConfiguredUsers([
+      {
+        name: "Ada",
+        identities: ["google:shared@example.com", "google:ada@example.com"],
+      },
+      { name: "Grace", identities: ["google:shared@example.com"] },
+    ]);
+
+    expect(problems).toHaveLength(1);
+    expect(sound.flatMap((user) => user.identities)).toEqual([
+      "google:ada@example.com",
+    ]);
+    expect(findConfiguredUser(
+      { provider: "google", email: "shared@example.com" },
+      [
+        {
+          name: "Ada",
+          identities: ["google:shared@example.com", "google:ada@example.com"],
+        },
+        { name: "Grace", identities: ["google:shared@example.com"] },
+      ],
+    )).toBeNull();
+  });
+
+  it("drops both people whose names collide on one handle", () => {
+    const users: readonly ConfiguredUser[] = [
+      { name: "Kari", identities: ["facebook:kari@example.com"] },
+      { name: "KARI ", identities: ["google:kari@example.com"] },
+    ];
+    const { sound } = reviewConfiguredUsers(users);
+
+    expect(sound).toEqual([]);
+    expect(
+      findConfiguredUser({ provider: "facebook", email: "kari@example.com" }, users),
+    ).toBeNull();
+    expect(permittedIdentities(NO_ENV, users).emails).toEqual([]);
+  });
+
+  it("drops a person whose handle would lose a letter", () => {
+    const users: readonly ConfiguredUser[] = [
+      { name: "Łukasz", identities: ["google:lukasz@example.com"] },
+    ];
+
+    expect(reviewConfiguredUsers(users).sound).toEqual([]);
+    expect(
+      findConfiguredUser({ provider: "google", email: "lukasz@example.com" }, users),
+    ).toBeNull();
+  });
+
+  it("keeps a sound person beside an unsound one", () => {
+    // The control for all three above: removal is targeted, not a sulk. One
+    // broken entry must not take the rest of the household offline.
+    const users: readonly ConfiguredUser[] = [
+      { name: "Nobody", identities: [] },
+      { name: "Ada", identities: ["google:ada@example.com"] },
+    ];
+    const { sound } = reviewConfiguredUsers(users);
+
+    expect(sound.map((user) => user.name)).toEqual(["Ada"]);
+    expect(
+      findConfiguredUser({ provider: "google", email: "ada@example.com" }, users)
+        ?.name,
+    ).toBe("Ada");
+  });
+
+  it("leaves the real committed array entirely sound", () => {
+    const { sound, problems } = reviewConfiguredUsers();
+
+    expect(problems).toEqual([]);
+    expect(sound).toEqual(CONFIGURED_USERS);
+  });
+});
+
 describe("configuredUserHandle", () => {
   it("derives a stable handle from the name", () => {
     expect(configuredUserHandle({ name: "Eirik", identities: [] })).toBe("eirik");
@@ -374,6 +476,38 @@ describe("configuredUserProblems reports what is wrong with the array", () => {
 
     expect(problems).toHaveLength(1);
     expect(problems[0]).toContain('handle "mary-ann"');
+  });
+
+  it("reports a name whose handle would silently drop a letter", () => {
+    // PR #98 review, low 2. `Łukasz` becomes `ukasz`: stable and unique and
+    // not his name — and one keystroke from colliding with a real `Ukasz`.
+    const problems = configuredUserProblems([
+      { name: "Łukasz", identities: ["google:lukasz@example.com"] },
+    ]);
+
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain('"ł"');
+    expect(problems[0]).toContain('becomes "ukasz"');
+    expect(problems[0]).toContain("TRANSLITERATIONS");
+  });
+
+  it("does not report a letter it knows how to transliterate", () => {
+    // The control: `ø` is in the map, so `Bjørn` is sound. Without this the
+    // check above could be "every non-ASCII name is reported", which would
+    // flag the operator's own household.
+    expect(
+      configuredUserProblems([
+        { name: "Bjørn", identities: ["google:bjorn@example.com"] },
+      ]),
+    ).toEqual([]);
+  });
+
+  it("does not report punctuation, which is a separator by design", () => {
+    expect(
+      configuredUserProblems([
+        { name: "Mary-Ann O'Brien Jr.", identities: ["google:m@example.com"] },
+      ]),
+    ).toEqual([]);
   });
 
   it("reports a name that yields no handle at all", () => {

@@ -22,7 +22,7 @@ import type { SignInProvider } from "@/lib/sign-in-policy";
  *  - all of one person's identities LINK to one `User` row, so they share an
  *    id, a role and an upload history (src/lib/configured-user-link.ts);
  *  - the row is found by a handle derived from `name`
- *    (`configuredUserHandle` in src/lib/configured-users.ts), never by email.
+ *    (`configuredUserHandle` in src/lib/sign-in-policy.ts), never by email.
  *
  * `name` IS THEREFORE A KEY, not merely a label. Renaming a person here
  * changes their handle, and the next sign-in would create a second, empty

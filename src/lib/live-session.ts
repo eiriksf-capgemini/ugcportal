@@ -483,8 +483,24 @@ export function rememberSignInIdentity(attempt: SignInAttempt): void {
 }
 
 /**
- * The identity THIS request's sign-in asserted, or `undefined` outside a
- * wrapped Auth.js request.
+ * The identity THIS request's sign-in asserted.
+ *
+ * THREE ANSWERS, NOT TWO, and the middle one is the easy mistake (PR #98
+ * review, low 5):
+ *
+ *   `undefined`            — no store at all, i.e. this code is not running
+ *                            inside a handler wrapped by `withSignInIdentity`
+ *                            (a route handler of this app's own, a script, a
+ *                            test that forgot the wrapper).
+ *   `{ null, null }`       — inside a wrapped request that is NOT a sign-in,
+ *                            or one whose sign-in the gate refused. The store
+ *                            exists; `rememberSignInIdentity` never filled it.
+ *   `{ provider, email }`  — a sign-in the gate permitted, on this request.
+ *
+ * Only the third is an identity. A reader must therefore check the FIELDS,
+ * not merely that an object came back — which is why every caller passes
+ * them through `providerId` / `normalizeString`, both of which answer `null`
+ * for `null`, so the second case fails closed on its own.
  *
  * THE POST-GATE HANDOFF, read by a second consumer since ugcportal-t33p:
  * src/lib/configured-user-link.ts needs to know which (provider, address) is

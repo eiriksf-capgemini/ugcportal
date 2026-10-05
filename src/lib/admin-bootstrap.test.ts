@@ -11,6 +11,11 @@ vi.mock("@/lib/roles", () => ({ setUserRole: setUserRoleMock }));
 const { bootstrapAdminEmails, reconcileBootstrapAdmin } = await import(
   "@/lib/admin-bootstrap"
 );
+// The REAL slot mechanism, not a stand-in: what is under test is that the
+// promotion reads the address the gate put there (PR #98 review, low 6).
+const { withSignInIdentity, rememberSignInIdentity } = await import(
+  "@/lib/live-session"
+);
 
 const originalEnv = process.env.ADMIN_BOOTSTRAP_EMAILS;
 
@@ -146,5 +151,105 @@ describe("reconcileBootstrapAdmin", () => {
     await expect(
       reconcileBootstrapAdmin({ id: "user-1", email: "first@example.com" }),
     ).resolves.toBe(false);
+  });
+});
+
+/**
+ * ugcportal-t33p made one user hold several addresses, and `User.email` is
+ * whichever of them signed in FIRST — @auth/core never refreshes it. So the
+ * promotion has to be judged on the address THIS sign-in was permitted
+ * under, which is the one the gate put in the request's identity slot
+ * (PR #98 review, low 6).
+ */
+describe("the bootstrap judges the address this sign-in was permitted under", () => {
+  const wrapped = withSignInIdentity({
+    run: ((flow: () => Promise<unknown>) => flow()) as (
+      ...args: never[]
+    ) => unknown,
+  });
+  function inSignInRequest<T>(flow: () => Promise<T>): Promise<T> {
+    return (wrapped.run as unknown as (f: () => Promise<T>) => Promise<T>)(flow);
+  }
+
+  it("promotes somebody bootstrapped under their SECOND identity", async () => {
+    // The case that silently did nothing before: the row was created by an
+    // earlier sign-in under `other@example.com`, and the operator listed the
+    // address this sign-in actually used.
+    process.env.ADMIN_BOOTSTRAP_EMAILS = "google:second@example.com";
+
+    await expect(
+      inSignInRequest(async () => {
+        rememberSignInIdentity({
+          user: { email: "other@example.com" },
+          account: { provider: "google" },
+          profile: { email: "second@example.com" },
+        });
+        return reconcileBootstrapAdmin(
+          { id: "user-1", email: "other@example.com" },
+          { provider: "google" },
+        );
+      }),
+    ).resolves.toBe(true);
+    expect(setUserRoleMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("still honours the provider binding on that address", async () => {
+    // Fail-closed: reading a fresher address must not also loosen the
+    // binding the entry names.
+    process.env.ADMIN_BOOTSTRAP_EMAILS = "facebook:second@example.com";
+
+    await expect(
+      inSignInRequest(async () => {
+        rememberSignInIdentity({
+          user: { email: "other@example.com" },
+          account: { provider: "google" },
+          profile: { email: "second@example.com" },
+        });
+        return reconcileBootstrapAdmin(
+          { id: "user-1", email: "other@example.com" },
+          { provider: "google" },
+        );
+      }),
+    ).resolves.toBe(false);
+    expect(setUserRoleMock).not.toHaveBeenCalled();
+  });
+
+  it("promotes nobody the slot does not name, even if the row's address is listed", async () => {
+    // The other direction, and the one that makes this a narrowing rather
+    // than a widening: the stored address is listed, the permitted one is
+    // not, and the sign-in that is actually happening wins.
+    process.env.ADMIN_BOOTSTRAP_EMAILS = "first@example.com";
+
+    await expect(
+      inSignInRequest(async () => {
+        rememberSignInIdentity({
+          user: { email: "first@example.com" },
+          account: { provider: "google" },
+          profile: { email: "unlisted@example.com" },
+        });
+        return reconcileBootstrapAdmin(
+          { id: "user-1", email: "first@example.com" },
+          { provider: "google" },
+        );
+      }),
+    ).resolves.toBe(false);
+  });
+
+  it("falls back to the stored address when the slot is empty", async () => {
+    // An unfilled slot carries nulls (a request that is not a sign-in), and
+    // outside a wrapped request there is no slot at all. Both must behave
+    // exactly as every caller did before this change.
+    process.env.ADMIN_BOOTSTRAP_EMAILS = "first@example.com";
+
+    await expect(
+      inSignInRequest(() =>
+        reconcileBootstrapAdmin({ id: "user-1", email: "first@example.com" }),
+      ),
+    ).resolves.toBe(true);
+
+    setUserRoleMock.mockClear();
+    await expect(
+      reconcileBootstrapAdmin({ id: "user-1", email: "first@example.com" }),
+    ).resolves.toBe(true);
   });
 });

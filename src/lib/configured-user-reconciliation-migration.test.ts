@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { CONFIGURED_USERS } from "@/config/users";
-import { configuredUserHandle } from "@/lib/configured-users";
+import { configuredUserHandle } from "@/lib/sign-in-policy";
 import { parsePermittedEntry } from "@/lib/sign-in-policy";
 import {
   applyMigration,

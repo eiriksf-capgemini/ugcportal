@@ -1,6 +1,8 @@
+import { AuthError } from "@auth/core/errors";
 import type { Adapter, AdapterUser } from "next-auth/adapters";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { decideSignIn } from "@/lib/sign-in-policy";
 import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db";
 
 /**
@@ -49,6 +51,12 @@ type Identity = {
   subject: string;
   /** What the provider calls them, which is NOT what the array calls them. */
   providerName?: string;
+  /**
+   * A session cookie this browser already carries when the OAuth callback
+   * runs — somebody else's, usually. @auth/core takes a different branch
+   * entirely when one is present (PR #98 review, medium 1).
+   */
+  withSessionToken?: string;
 };
 
 /**
@@ -118,14 +126,47 @@ async function replayOAuthSignIn(identity: Identity): Promise<SignInOutcome> {
         | "createUser"
         | "linkAccount"
         | "createSession"
+        | "getSessionAndUser"
       >
     >;
+
+    // 1b. THE SESSION COOKIE THIS BROWSER ALREADY HAS, if any
+    //     (handle-login.js:47-53). @auth/core loads it BEFORE deciding
+    //     anything, and its presence changes which branch runs below.
+    const signedIn = identity.withSessionToken
+      ? ((await adapter.getSessionAndUser(identity.withSessionToken))?.user ??
+        null)
+      : null;
 
     // 2. An account that is already linked already names its user.
     let resolved = await adapter.getUserByAccount({
       provider: account.provider,
       providerAccountId: account.providerAccountId,
     });
+
+    if (resolved && signedIn) {
+      // handle-login.js:175-182: signed in as somebody else, and this
+      // account already belongs to a third party.
+      if (resolved.id !== signedIn.id) {
+        throw new Error("OAuthAccountNotLinked");
+      }
+      return { permitted: true, userId: resolved.id, sessionToken: identity.withSessionToken! };
+    }
+
+    if (!resolved && signedIn) {
+      // THE BRANCH medium 1 IS ABOUT (handle-login.js:206-212). No
+      // getUserByEmail, no createUser: @auth/core links this brand-new
+      // account straight onto whoever owns the session cookie.
+      await adapter.linkAccount({
+        ...account,
+        userId: signedIn.id,
+      } as Parameters<typeof adapter.linkAccount>[0]);
+      return {
+        permitted: true,
+        userId: signedIn.id,
+        sessionToken: identity.withSessionToken!,
+      };
+    }
 
     if (!resolved) {
       // 3. Otherwise: does some other row already hold this address?
@@ -547,6 +588,374 @@ describe("linking is post-gate and unreachable from the gate (K5)", () => {
     });
 
     expect(found?.id).toBe(existing.id);
+  });
+});
+
+describe("an open session cannot capture somebody else's identity (PR #98 round 1, medium 1)", () => {
+  /** Gry, signed in, holding a live session cookie on this browser. */
+  async function gryIsSignedIn(): Promise<{ userId: string; token: string }> {
+    const gry = await replayOAuthSignIn({
+      provider: "facebook",
+      email: GRY_FACEBOOK,
+      subject: "facebook-subject-gry",
+    });
+    const outcome = gry as { userId: string; sessionToken: string };
+    return { userId: outcome.userId, token: outcome.sessionToken };
+  }
+
+  it("refuses the sign-in instead of linking the account to the signed-in user", async () => {
+    const gry = await gryIsSignedIn();
+
+    await expect(
+      replayOAuthSignIn({
+        provider: "google",
+        email: EIRIK_GOOGLE,
+        subject: "google-subject-eirik",
+        withSessionToken: gry.token,
+      }),
+    ).rejects.toThrow(/belongs to a different user/);
+  });
+
+  it("writes no Account row at all, so Eirik never resolves to Gry", async () => {
+    const gry = await gryIsSignedIn();
+
+    await replayOAuthSignIn({
+      provider: "google",
+      email: EIRIK_GOOGLE,
+      subject: "google-subject-eirik",
+      withSessionToken: gry.token,
+    }).catch(() => undefined);
+
+    // The row that would have done the damage: `getUserByAccount` on
+    // Eirik's Google subject is what every later sign-in of his consults.
+    expect(
+      await prisma.account.findUnique({
+        where: {
+          provider_providerAccountId: {
+            provider: "google",
+            providerAccountId: "google-subject-eirik",
+          },
+        },
+      }),
+    ).toBeNull();
+    // And nothing crossed onto Gry.
+    const gryAccounts = await prisma.account.findMany({
+      where: { userId: gry.userId },
+    });
+    expect(gryAccounts.map((account) => account.provider)).toEqual(["facebook"]);
+  });
+
+  it("leaves Eirik able to sign in as himself afterwards", async () => {
+    // The refusal must not be a lockout: the attempt wrote nothing, so the
+    // same identity on a clean browser gets its own user as usual.
+    const gry = await gryIsSignedIn();
+    await replayOAuthSignIn({
+      provider: "google",
+      email: EIRIK_GOOGLE,
+      subject: "google-subject-eirik",
+      withSessionToken: gry.token,
+    }).catch(() => undefined);
+
+    const eirik = await replayOAuthSignIn({
+      provider: "google",
+      email: EIRIK_GOOGLE,
+      subject: "google-subject-eirik",
+    });
+
+    expect(eirik.permitted).toBe(true);
+    expect((eirik as { userId: string }).userId).not.toBe(gry.userId);
+    const row = await prisma.user.findUniqueOrThrow({
+      where: { id: (eirik as { userId: string }).userId },
+    });
+    expect(row.configuredHandle).toBe("eirik");
+  });
+
+  it("still links when the signed-in user IS the configured person", async () => {
+    // The permitted half of the same branch, and the control for the
+    // refusals above: Eirik, signed in through Google, adds Facebook. Same
+    // code path, same wrapper, opposite answer — one user, two accounts.
+    const first = await replayOAuthSignIn({
+      provider: "google",
+      email: EIRIK_GOOGLE,
+      subject: "google-subject-eirik",
+    });
+    const eirik = first as { userId: string; sessionToken: string };
+
+    const second = await replayOAuthSignIn({
+      provider: "facebook",
+      email: EIRIK_FACEBOOK,
+      subject: "facebook-subject-eirik",
+      withSessionToken: eirik.sessionToken,
+    });
+
+    expect((second as { userId: string }).userId).toBe(eirik.userId);
+    const accounts = await prisma.account.findMany({
+      where: { userId: eirik.userId },
+      orderBy: { provider: "asc" },
+    });
+    expect(accounts.map((account) => account.provider)).toEqual([
+      "facebook",
+      "google",
+    ]);
+  });
+
+  it("leaves an identity nobody configured on @auth/core's own behaviour", async () => {
+    // The wrapper narrows nothing for an unlisted identity: @auth/core's
+    // signed-in branch links it to the open session exactly as it always
+    // has. Changing that is a different bead, not this one.
+    process.env.ALLOWED_SIGNIN_EMAILS = "google:colleague@example.com";
+    try {
+      const gry = await gryIsSignedIn();
+
+      const outcome = await replayOAuthSignIn({
+        provider: "google",
+        email: "colleague@example.com",
+        subject: "google-subject-colleague",
+        withSessionToken: gry.token,
+      });
+
+      expect((outcome as { userId: string }).userId).toBe(gry.userId);
+    } finally {
+      delete process.env.ALLOWED_SIGNIN_EMAILS;
+    }
+  });
+
+  it("refuses with an error that lands on this app's Access Denied page", async () => {
+    // PINNED, because the routing is the whole reason this class was chosen
+    // over `AccountNotLinked` (which reads better and goes somewhere else).
+    // @auth/core sends an AuthError to `config.pages[error.kind]`, and this
+    // config sets `pages.error` and no `pages.signIn`.
+    const gry = await gryIsSignedIn();
+
+    const refusal = await replayOAuthSignIn({
+      provider: "google",
+      email: EIRIK_GOOGLE,
+      subject: "google-subject-eirik",
+      withSessionToken: gry.token,
+    }).then(
+      () => null,
+      (error: unknown) => error as { type?: string; kind?: string },
+    );
+
+    // `kind` is what @auth/core indexes `config.pages` with
+    // (index.js:135-137). "error" is `pages.error`, this app's own Access
+    // Denied page; "signIn" — which `AccountNotLinked` carries — would be
+    // `pages.signIn`, unset here, so @auth/core's built-in sign-in page.
+    expect(refusal?.kind).toBe("error");
+    // `type` becomes `?error=`, and only a type in @auth/core's client-safe
+    // set survives; anything else is replaced with "Configuration", which
+    // this app's error copy reads as a broken deployment rather than a
+    // refusal. "AccessDenied" is in that set and has its own copy
+    // (src/app/auth/error/outcomes.ts).
+    expect(refusal?.type).toBe("AccessDenied");
+    // And it really is one of @auth/core's errors, which is the precondition
+    // for any of the above being consulted at all.
+    expect(refusal).toBeInstanceOf(AuthError);
+  });
+});
+
+describe("an array the boot check calls broken is not acted on either (PR #98 round 1, medium 2)", () => {
+  /**
+   * Both scenarios need an env entry, because a rejected identity is no
+   * longer permitted by the array at all — that is half the fix. What is
+   * being checked is that having signed in, they get the ORDINARY Auth.js
+   * treatment: their own user, no handle, nobody else's row.
+   */
+  const BOTH = "google:shared@example.com,facebook:kari@example.com,google:kari@example.com";
+
+  it("refuses an identity two people claim, and links it to neither", async () => {
+    const users = [
+      { name: "Ada", identities: ["google:shared@example.com"] },
+      { name: "Grace", identities: ["google:shared@example.com"] },
+    ] as const;
+
+    // Not permitted by the array...
+    expect(
+      decideSignIn(
+        {
+          user: { email: "shared@example.com" },
+          account: { provider: "google" },
+          profile: { email: "shared@example.com" },
+        },
+        {},
+        users,
+      ),
+    ).toEqual({ permitted: false, reason: "no-configuration" });
+
+    // ...and, admitted by the env var instead, linked to nobody.
+    process.env.ALLOWED_SIGNIN_EMAILS = BOTH;
+    try {
+      const { withConfiguredUserLinking } = await import(
+        "@/lib/configured-user-link"
+      );
+      const adapter = withConfiguredUserLinking(
+        authConfig.adapter as Adapter,
+        users,
+      );
+      const created = await inSignInRequest(async () => {
+        const { rememberSignInIdentity } = await import("@/lib/live-session");
+        rememberSignInIdentity({
+          user: { email: "shared@example.com" },
+          account: { provider: "google" },
+          profile: { email: "shared@example.com" },
+        });
+        return adapter.createUser!({
+          name: "From Google",
+          email: "shared@example.com",
+          emailVerified: null,
+        } as unknown as AdapterUser);
+      });
+
+      const row = await prisma.user.findUniqueOrThrow({
+        where: { id: created.id },
+      });
+      expect(row.configuredHandle).toBeNull();
+      expect(row.name).toBe("From Google");
+    } finally {
+      delete process.env.ALLOWED_SIGNIN_EMAILS;
+    }
+  });
+
+  it("refuses two people whose names slug to one handle, and gives them separate users", async () => {
+    const users = [
+      { name: "Kari", identities: ["facebook:kari@example.com"] },
+      { name: "KARI ", identities: ["google:kari@example.com"] },
+    ] as const;
+
+    expect(
+      decideSignIn(
+        {
+          user: { email: "kari@example.com" },
+          account: { provider: "facebook" },
+          profile: { email: "kari@example.com" },
+        },
+        {},
+        users,
+      ),
+    ).toEqual({ permitted: false, reason: "no-configuration" });
+
+    process.env.ALLOWED_SIGNIN_EMAILS = BOTH;
+    try {
+      const { withConfiguredUserLinking } = await import(
+        "@/lib/configured-user-link"
+      );
+      const adapter = withConfiguredUserLinking(
+        authConfig.adapter as Adapter,
+        users,
+      );
+
+      const made = [];
+      for (const provider of ["facebook", "google"] as const) {
+        made.push(
+          await inSignInRequest(async () => {
+            const { rememberSignInIdentity } = await import(
+              "@/lib/live-session"
+            );
+            rememberSignInIdentity({
+              user: { email: "kari@example.com" },
+              account: { provider },
+              profile: { email: "kari@example.com" },
+            });
+            return adapter.createUser!({
+              name: `From ${provider}`,
+              email: `kari+${provider}@example.com`,
+              emailVerified: null,
+            } as unknown as AdapterUser);
+          }),
+        );
+      }
+
+      // Two people, two users — NOT one row they competed for.
+      expect(made[0].id).not.toBe(made[1].id);
+      const rows = await prisma.user.findMany({
+        where: { id: { in: made.map((user) => user.id) } },
+      });
+      expect(rows.map((row) => row.configuredHandle)).toEqual([null, null]);
+    } finally {
+      delete process.env.ALLOWED_SIGNIN_EMAILS;
+    }
+  });
+});
+
+describe("getUserByEmail only withholds the address the gate judged (PR #98 round 1, low 1)", () => {
+  it("answers honestly about a DIFFERENT address during a configured sign-in", async () => {
+    const colleague = await prisma.user.create({
+      data: { email: "colleague@example.com", name: "Colleague" },
+    });
+
+    const found = await inSignInRequest(async () => {
+      const { rememberSignInIdentity } = await import("@/lib/live-session");
+      // Eirik is the one signing in...
+      rememberSignInIdentity({
+        user: { email: EIRIK_GOOGLE },
+        account: { provider: "google" },
+        profile: { email: EIRIK_GOOGLE },
+      });
+      // ...so a lookup for somebody else's address is none of this
+      // wrapper's business and must still find them.
+      return (authConfig.adapter as Adapter).getUserByEmail!(
+        "colleague@example.com",
+      );
+    });
+
+    expect(found?.id).toBe(colleague.id);
+  });
+
+  it("still withholds the slot's own address when a row really holds it", async () => {
+    // The control for the test above, and the half that must keep working:
+    // a row with this exact address EXISTS, so `null` here can only be the
+    // wrapper withholding it. (Without the row, this assertion could not
+    // fail — the plain adapter would answer `null` too.)
+    await prisma.user.create({ data: { email: EIRIK_GOOGLE, name: "Older" } });
+
+    const found = await inSignInRequest(async () => {
+      const { rememberSignInIdentity } = await import("@/lib/live-session");
+      rememberSignInIdentity({
+        user: { email: EIRIK_GOOGLE },
+        account: { provider: "google" },
+        profile: { email: EIRIK_GOOGLE },
+      });
+      return (authConfig.adapter as Adapter).getUserByEmail!(EIRIK_GOOGLE);
+    });
+
+    expect(found).toBeNull();
+  });
+
+  it("compares the two addresses normalised, and delegates everything else", async () => {
+    // WHICH CALLS REACH THE ADAPTER UNDERNEATH, which is the actual claim —
+    // and one the real Prisma adapter cannot show, because it answers `null`
+    // for a padded or upper-cased address whether or not the wrapper
+    // withheld it. A spy makes the difference visible.
+    const { withConfiguredUserLinking } = await import(
+      "@/lib/configured-user-link"
+    );
+    const delegated: string[] = [];
+    const stub = {
+      ...(authConfig.adapter as Adapter),
+      getUserByEmail: async (email: string) => {
+        delegated.push(email);
+        return null;
+      },
+    } as Adapter;
+    const adapter = withConfiguredUserLinking(stub);
+
+    await inSignInRequest(async () => {
+      const { rememberSignInIdentity } = await import("@/lib/live-session");
+      rememberSignInIdentity({
+        user: { email: EIRIK_GOOGLE },
+        account: { provider: "google" },
+        profile: { email: EIRIK_GOOGLE },
+      });
+      // The slot's own address, in three spellings the gate treats as one.
+      await adapter.getUserByEmail!(EIRIK_GOOGLE);
+      await adapter.getUserByEmail!(EIRIK_GOOGLE.toUpperCase());
+      await adapter.getUserByEmail!(`  ${EIRIK_GOOGLE}  `);
+      // Somebody else's, twice over.
+      await adapter.getUserByEmail!("colleague@example.com");
+      await adapter.getUserByEmail!(EIRIK_FACEBOOK);
+    });
+
+    expect(delegated).toEqual(["colleague@example.com", EIRIK_FACEBOOK]);
   });
 });
 

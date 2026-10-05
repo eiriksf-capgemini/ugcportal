@@ -1,11 +1,16 @@
+import { AccessDenied } from "@auth/core/errors";
 import type { Adapter, AdapterUser } from "next-auth/adapters";
 
 import { CONFIGURED_USERS, type ConfiguredUser } from "@/config/users";
 import type { UserUncheckedCreateInput } from "@/generated/prisma/models";
-import { configuredUserHandle, findConfiguredUser } from "@/lib/configured-users";
 import { currentSignInIdentity } from "@/lib/live-session";
 import { prisma } from "@/lib/prisma";
 import { PRISMA_UNIQUE_VIOLATION, prismaErrorCode } from "@/lib/prisma-errors";
+import {
+  configuredUserHandle,
+  findConfiguredUser,
+  normalizeString,
+} from "@/lib/sign-in-policy";
 
 /**
  * One person, several sign-in identities (ugcportal-t33p).
@@ -25,8 +30,21 @@ import { PRISMA_UNIQUE_VIOLATION, prismaErrorCode } from "@/lib/prisma-errors";
  *   6. `adapter.createSession(...)`;
  *   7. **`events.signIn`** — where the first-admin bootstrap runs.
  *
- * This module wraps steps 4 and 5. They are POST-GATE: step 2 has already
- * permitted the identity, and a refused sign-in never reaches them.
+ * This module wraps steps 4 and 5 — and the OTHER call to `linkAccount`,
+ * the one that does not come after either of them. All are POST-GATE: step 2
+ * has already permitted the identity, and a refused sign-in never reaches
+ * them.
+ *
+ * THAT OTHER `linkAccount` IS THE ONE THAT MATTERS MOST (PR #98 review,
+ * medium 1). When the request already carries a session cookie, @auth/core
+ * takes a different branch entirely (handle-login.js:206-212): no
+ * `getUserByEmail`, no `createUser`, just
+ * `linkAccount({ ...account, userId: <the SIGNED-IN user>.id })`. So if Gry
+ * is signed in on this browser and Eirik then signs in with Google, Eirik's
+ * Google `Account` row is attached to GRY's user — and every later sign-in
+ * of his resolves, through `getUserByAccount`, to Gry. Two people, one
+ * account: exactly the merge K5 forbids, arriving through the one adapter
+ * method the first version of this wrapper left alone.
  *
  * ON K5's EXACT WORDING, which asks that linking "runs from the same
  * post-gate path as the bootstrap event (events.signIn)". It cannot run from
@@ -52,8 +70,8 @@ import { PRISMA_UNIQUE_VIOLATION, prismaErrorCode } from "@/lib/prisma-errors";
  * an Account row that already exists already points at a user, and that
  * pointer is the authoritative answer to "whose account is this". Rewriting
  * it here would mean re-deciding ownership on every sign-in; moving a
- * pre-existing account to the configured user is a one-off, done by the
- * reconciliation in src/lib/configured-user-reconciliation.ts.
+ * pre-existing account to the configured user is a one-off, done by
+ * prisma/migrations/20261005120500_reconcile_configured_users.
  */
 
 /**
@@ -77,29 +95,45 @@ export function withConfiguredUserLinking(
 ): Adapter {
   const createUser = adapter.createUser?.bind(adapter);
   const getUserByEmail = adapter.getUserByEmail?.bind(adapter);
-  if (!createUser || !getUserByEmail) {
+  const linkAccount = adapter.linkAccount?.bind(adapter);
+  if (!createUser || !getUserByEmail || !linkAccount) {
     // At construction, not per request — the same decision `withSessionIdentity`
     // makes for `createSession` and for the same reason: an adapter missing
     // these would silently give every configured person a second user per
-    // provider, which is the defect this wrapper exists to remove, with
-    // nothing anywhere saying why.
+    // provider, or (without `linkAccount`) leave the hijack above unguarded,
+    // with nothing anywhere saying why.
     throw new Error(
-      "[auth] The configured adapter has no createUser/getUserByEmail, so a " +
-        "person's sign-in identities cannot be linked to one user. See " +
-        "src/lib/configured-user-link.ts (ugcportal-t33p).",
+      "[auth] The configured adapter has no createUser/getUserByEmail/" +
+        "linkAccount, so a person's sign-in identities cannot be linked to " +
+        "one user. See src/lib/configured-user-link.ts (ugcportal-t33p).",
     );
   }
 
-  /** The configured person signing in on THIS request, if any. */
-  const signingIn = (): ConfiguredUser | null => {
+  /**
+   * The configured person signing in on THIS request, and the address they
+   * were permitted under. Both come from the one post-gate slot.
+   *
+   * `findConfiguredUser` reads the REVIEWED array (`reviewConfiguredUsers`
+   * in src/lib/sign-in-policy.ts), so a person or identity the boot check
+   * reports as broken answers `null` here and takes the unwrapped adapter
+   * path — reported and acted on are the same set, which they were not
+   * before (PR #98 review, medium 2). The review is memoised on the array,
+   * so it is computed once however many times this is called.
+   */
+  const signingIn = (): {
+    person: ConfiguredUser;
+    email: string;
+  } | null => {
     const identity = currentSignInIdentity();
     if (!identity) {
       return null;
     }
-    return findConfiguredUser(
+    const person = findConfiguredUser(
       { provider: identity.signInProvider, email: identity.signInEmail },
       users,
     );
+    const email = normalizeString(identity.signInEmail);
+    return person && email ? { person, email } : null;
   };
 
   return {
@@ -132,9 +166,18 @@ export function withConfiguredUserLinking(
      * An identity not in the array is unaffected: the lookup runs, the throw
      * stands, and the protection @auth/core ships with is exactly where it
      * was.
+     *
+     * NARROWED TO THE SLOT'S OWN ADDRESS (PR #98 review, low 1). The first
+     * version answered `null` to ANY address while a configured identity was
+     * signing in. @auth/core only ever asks about `profile.email` on this
+     * path, so no production call was wrong — but the method is public on
+     * the adapter, and "suppress every lookup for the duration of this
+     * request" is a far wider claim than the one being made, which is about
+     * one address. Asked about anybody else, it answers honestly.
      */
     getUserByEmail: async (email) => {
-      if (signingIn()) {
+      const signIn = signingIn();
+      if (signIn && normalizeString(email) === signIn.email) {
         return null;
       }
       return getUserByEmail(email);
@@ -160,10 +203,11 @@ export function withConfiguredUserLinking(
      * procedure, which has to touch the row anyway.
      */
     createUser: async (data) => {
-      const person = signingIn();
-      if (!person) {
+      const signIn = signingIn();
+      if (!signIn) {
         return createUser(data);
       }
+      const { person } = signIn;
       const handle = configuredUserHandle(person);
       if (handle === null) {
         // Reported at boot by `configuredUserProblems`; here it can only
@@ -204,6 +248,81 @@ export function withConfiguredUserLinking(
         }
         return raced;
       }
+    },
+
+    /**
+     * A configured identity's `Account` row may only ever be attached to
+     * that person's own user (PR #98 review, medium 1).
+     *
+     * On the path this wrapper already handled, `createUser` has just
+     * returned the person's row and @auth/core passes its id straight back
+     * here, so this agrees and passes through. The call that needs the
+     * guard is the OTHER one — the already-signed-in branch, which hands
+     * over whoever owns the SESSION COOKIE on this browser and never
+     * consults the identity signing in. Without this, Gry's session plus
+     * Eirik's Google sign-in puts Eirik's account on Gry's user, and
+     * `getUserByAccount` then resolves him to her for good.
+     *
+     * REFUSES RATHER THAN REDIRECTS THE WRITE. Silently re-pointing the
+     * link at the right user would mean a visitor signed in as one person
+     * quietly acquiring an account for another, which is a different
+     * surprise rather than a smaller one; and the browser's session still
+     * belongs to the first person either way. Refusing leaves every row
+     * where it was and ends the attempt.
+     *
+     * `AccessDenied` is the refusal, and the choice is load-bearing: it is
+     * `kind: "error"`, so @auth/core redirects to `pages.error` — this app's
+     * own Access Denied page (src/app/auth/error/page.tsx) — with the same
+     * words every other refusal gets. `AccountNotLinked`, which reads like
+     * the better name, is `kind: "signIn"` and would land on @auth/core's
+     * BUILT-IN sign-in page instead, since this config sets no `pages.signIn`
+     * — the "sign in again" loop PR #45 deliberately replaced. Both are in
+     * @auth/core's `clientErrors` set, so neither leaks anything; only one
+     * goes where this app's refusals go. Pinned by a test.
+     *
+     * A person whose row carries no handle yet (they signed in before
+     * ugcportal-t33p and the reconciliation has not run) is refused here
+     * too, because nothing can prove the incoming user is theirs. Running
+     * prisma/migrations/20261005120500_reconcile_configured_users stamps the
+     * handle and the same sign-in then passes.
+     *
+     * `Promise<void>`, so the wrapped adapter's return value is discarded.
+     * Not a swallowed result: `Adapter["linkAccount"]` is declared as
+     * `Promise<void> | Awaitable<AdapterAccount | null | undefined>`, which
+     * no single function can satisfy both halves of, and @auth/core itself
+     * never reads the value — both call sites are a bare
+     * `await linkAccount({ ... })` (handle-login.js:209 and :142). Choosing
+     * `void` is the half that needs no cast.
+     */
+    linkAccount: async (data): Promise<void> => {
+      const signIn = signingIn();
+      if (!signIn) {
+        await linkAccount(data);
+        return;
+      }
+      const handle = configuredUserHandle(signIn.person);
+      if (handle === null) {
+        // Reported at boot, and the review would normally have removed this
+        // person already; falling through gives the unmodified Auth.js
+        // behaviour rather than failing a sign-in over a diagnostic.
+        await linkAccount(data);
+        return;
+      }
+      const owner = await findByHandle(handle);
+      if (owner && owner.id === data.userId) {
+        await linkAccount(data);
+        return;
+      }
+      console.error(
+        `[auth] Refused to link a ${data.provider} account for configured ` +
+          `user "${signIn.person.name}" to user ${data.userId}, which is ` +
+          `not their row (${owner?.id ?? "they have none yet"}). This is ` +
+          "what a sign-in made while another person's session is open looks " +
+          "like; nothing was written. See src/lib/configured-user-link.ts.",
+      );
+      throw new AccessDenied(
+        "This sign-in identity belongs to a different user on this instance.",
+      );
     },
   };
 }

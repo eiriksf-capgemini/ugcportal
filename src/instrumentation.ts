@@ -6,7 +6,6 @@
  * an audit — or, for the sign-in gate below, as an unexplained refusal.
  */
 import { CONFIGURED_USERS, type ConfiguredUser } from "@/config/users";
-import { configuredUserProblems } from "@/lib/configured-users";
 import { CONTACT_EMAIL_PLACEHOLDER, isBareEmailAddress } from "@/lib/contact";
 import { LEGAL_PAGES } from "@/lib/legal/pages";
 import { checkLegalPagesPublishable } from "@/lib/legal/publishable";
@@ -14,6 +13,7 @@ import {
   PERMITTED_EMAILS_VAR,
   PROVIDER_PREFIX_HINT,
   type SignInEnv,
+  configuredUserProblems,
   permittedIdentities,
 } from "@/lib/sign-in-policy";
 
@@ -101,6 +101,12 @@ export function checkSignInConfiguration(
       `${malformed.join(", ")}. Each entry must be one exact email address, ` +
       `optionally prefixed with ${PROVIDER_PREFIX_HINT} ` +
       "to bind it to that provider; wildcards and domain patterns are not supported. " +
+      // Only ever environment entries reach here: the users array's own
+      // unusable identities are removed by `reviewConfiguredUsers` before
+      // `permittedIdentities` sees them, and reported — naming their own
+      // file — by `checkConfiguredUsers` below (PR #98 review, low 3).
+      "(These came from the environment; problems in src/config/users.ts are " +
+      "reported separately, on their own lines.) " +
       `${emails.length === 0 ? "NOBODY can sign in to this instance." : `${emails.length} address(es) remain permitted.`} ` +
       "See docs/access-control.md."
     );
@@ -134,7 +140,7 @@ export function checkSignInConfiguration(
  * until somebody cannot sign in.
  *
  * The rule itself lives in `configuredUserProblems`
- * (src/lib/configured-users.ts) rather than here, for the same reason the
+ * (src/lib/sign-in-policy.ts) rather than here, for the same reason the
  * sign-in rule lives in src/lib/sign-in-policy.ts: this file is the boot
  * hook, not a second opinion about what a valid identity is.
  *
