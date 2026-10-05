@@ -1,10 +1,11 @@
 /**
- * K2 (ugcportal-ig4g): "a motion-reduce:transform-none guard paired with a
- * scale-*, translate-*, rotate-* or skew-* utility" must never happen
- * anywhere under src/, as a source-scan test rather than a one-off grep -
- * the same shape as no-raw-hex.test.ts and dual-meaning-usage.test.ts, and
- * sharing their walker/comment-stripper via scan-source.ts (ugcportal-rw9j
- * review round 4) rather than a third hand-rolled copy of either.
+ * K2 (ugcportal-ig4g): an interaction-triggered utility that sets scale/
+ * translate/rotate/skew/transform/animation must be gated by `motion-safe:`
+ * somewhere in its variant chain - must never ship ungated anywhere under
+ * src/, as a source-scan test rather than a one-off grep - the same shape
+ * as no-raw-hex.test.ts and dual-meaning-usage.test.ts, and sharing their
+ * walker/comment-stripper via scan-source.ts (ugcportal-rw9j review round
+ * 4) rather than a third hand-rolled copy of either.
  *
  * THE RULE, round 2 (PR #101 round-1 review): round 1 of this scan checked
  * for `motion-reduce:transform-none` co-occurring with a scale/translate/
@@ -18,18 +19,22 @@
  * cannot see that.
  *
  * So the rule is no longer about a GUARD at all. It is about the utility
- * itself: any `hover:`/`group-hover:`/`peer-hover:`/`focus:`/`focus-visible:`/
- * `focus-within:`/`active:`-TRIGGERED `scale-*`/`translate-*`/`rotate-*`/
- * `skew-*`/`animate-*`/`[transform:...]` utility must carry `motion-safe:`
- * somewhere in its variant chain. `motion-safe:` moves the entire rule
- * inside `@media (prefers-reduced-motion: no-preference)`, so under
- * `reduce` the rule does not exist in the stylesheet at all - specificity
- * never gets a chance to matter, because there is no competing rule to
- * out-rank. This one rule flags all three shapes a `motion-reduce:`-only
- * approach cannot tell apart: the original `transform-none` pairing, the
- * still-broken `scale-none` pairing, and a hover utility with NO guard at
- * all - a `motion-reduce:` override, present or absent, correct or not, is
- * irrelevant to whether this utility is actually safe.
+ * itself: whenever an INTERACTION-TRIGGERED segment (see
+ * `isInteractionTriggerSegment`'s own comment for the full, generated set -
+ * deliberately not hand-listed here a second time, which is exactly what
+ * made rounds 2 and 3 of this review each find "one more shape") sits next
+ * to a DANGEROUS utility segment (`isInteractionTriggerSegment`'s sibling,
+ * `DANGEROUS_UTILITY_SEGMENT` - same reasoning, not re-listed here), the
+ * utility must carry `motion-safe:` somewhere in its variant chain.
+ * `motion-safe:` moves the entire rule inside `@media (prefers-reduced-
+ * motion: no-preference)`, so under `reduce` the rule does not exist in
+ * the stylesheet at all - specificity never gets a chance to matter,
+ * because there is no competing rule to out-rank. This one rule flags
+ * every shape a `motion-reduce:`-only approach cannot tell apart: the
+ * original `transform-none` pairing, the still-broken `scale-none`
+ * pairing, and an interaction-triggered utility with NO guard at all - a
+ * `motion-reduce:` override, present or absent, correct or not, is
+ * irrelevant to whether the utility itself is actually safe.
  *
  * POSITION of `motion-safe:` in the chain does NOT matter (round-2 review,
  * PR #101: an earlier version of this scan required it to be the
@@ -101,62 +106,156 @@ const STRING_LITERAL = /"([^"\n]*)"|'([^'\n]*)'|`([^`\n]*)`/g;
 
 /**
  * A scale/translate/rotate/skew/animate utility SEGMENT, OR an arbitrary
- * `[transform:...]` property segment, anchored to the WHOLE segment (not a
- * substring search) - this function is only ever called on one already-
- * isolated piece of a token's variant chain (see `splitVariantSegments`),
- * so there is no surrounding text to accidentally match inside. Optional
- * leading `-` for Tailwind's negative-value spelling (`-translate-y-0.5`).
- * The longer `translate-x`/`translate-y`/`skew-x`/`skew-y` alternatives are
- * listed before their bare `translate`/`skew` counterparts so the regex
- * cannot stop one utility short.
+ * property/value spelling of the same four transform-family CSS
+ * properties, anchored to the WHOLE segment (not a substring search) -
+ * this function is only ever called on one already-isolated piece of a
+ * token's variant chain (see `splitVariantSegments`), so there is no
+ * surrounding text to accidentally match inside.
  *
- * `animate-*` (round-2 review, PR #101): `hover:animate-pulse` is exactly
- * as unguarded a motion effect as `hover:scale-105` - confirmed empirically,
- * it compiles to a bare `@media (hover: hover) { .hover\:animate-pulse:hover
- * { animation: ...} }` with no reduced-motion gate of its own.
+ * NAMED utilities (`scale-110`, `-translate-y-0.5`, `rotate-6`, `skew-x-3`,
+ * `animate-pulse`): optional leading `-` for Tailwind's negative-value
+ * spelling; the longer `translate-x`/`translate-y`/`skew-x`/`skew-y`
+ * alternatives are listed before their bare `translate`/`skew`
+ * counterparts so the regex cannot stop one utility short.
  *
- * `[transform:...]` (round-2 review): Tailwind's arbitrary-property syntax
- * lets `group-hover:[transform:scale(1.04)]` set `transform` directly,
- * bypassing the named `scale-*`/`rotate-*` utilities entirely while being
- * exactly as real a hover-triggered transform - confirmed it compiles to an
- * equally ungated `@media (hover: hover) { ...{ transform: scale(1.04); } }`
- * with no bracket content needing to look like a transform FUNCTION for
- * this to matter; only the arbitrary PROPERTY name (`transform`) is
- * checked, matching what the gate actually needs to answer: is this
- * property one `prefers-reduced-motion: reduce` cares about.
+ * EXCLUDED (round-3 review, PR #101): the `-none` form of every named
+ * utility here (`animate-none`, `scale-none`, `translate-none`, `rotate-
+ * none` - `skew-none` does not exist as a Tailwind utility, confirmed, so
+ * it is not a channel at all). Each REMOVES motion rather than applies it -
+ * confirmed empirically, `hover:animate-none` compiles to a bare `@media
+ * (hover: hover) { animation: none; }` - so a hover-triggered `*-none` is
+ * the SAFE direction, the opposite of what this gate exists to catch, and
+ * must never be flagged (this is also the shape `containment.ts`'s own
+ * `motion-reduce:scale-none` belt-and-braces entry uses, on the OTHER side
+ * of a `motion-reduce:` guard rather than a trigger, but the exclusion
+ * applies regardless of which side of a guard a `*-none` sits on).
+ *
+ * ARBITRARY forms (round-2 and round-3 review): Tailwind's arbitrary-
+ * property syntax (`[scale:1.1]`, `[translate:4px_0]`, `[rotate:6deg]`,
+ * `[skew:3deg]`, `[transform:scale(1.04)]`) and its first-class arbitrary-
+ * VALUE utility `transform-[scale(1.04)]` all compile identically to their
+ * named-utility sibling when interaction-triggered - confirmed by compiling
+ * each (e.g. `group-hover:[scale:1.1]` compiles to an ungated `scale: 1.1`,
+ * exactly like `group-hover:scale-110`). `transform-none` (no brackets) is
+ * excluded the same way the other `-none` forms are, by requiring a
+ * literal `[` to open the `transform-[...]` arbitrary value - `transform-
+ * none` never has one.
  */
 const DANGEROUS_UTILITY_SEGMENT =
-  /^(?:-?(?:scale|translate-x|translate-y|translate|rotate|skew-x|skew-y|skew|animate)-[\w.%[\]()-]+|\[transform:[^\]]*\])$/;
+  /^(?:-?(?:scale|translate-x|translate-y|translate|rotate|skew-x|skew-y|skew|animate)-(?!none$)[\w.%[\]()-]+|\[(?:scale|translate|rotate|skew|transform):[^\]]*\]|transform-\[[^\]]*\])$/;
 
 /**
- * The variant STEMS whose presence means a utility only ever applies on an
- * INTERACTION, not unconditionally - exactly the set the reduced-motion
- * guard actually matters for. Checked against the STEM of a segment (see
- * `variantStem` below), not the segment verbatim, because `group-hover` and
- * `peer-hover` both have a NAMED form (`group-hover/button`, `peer-hover/
- * field`) that still means exactly the same thing to the cascade - Tailwind
- * compiles `group-hover/button:translate-y-px` to a rule scoped to
- * `.group\/button` rather than the unnamed `.group`, with the same
- * unguarded `@media (hover: hover)` wrapper, confirmed empirically. Each
- * entry listed explicitly (not inferred from a substring like "contains
- * hover") so this stays an auditable list rather than a heuristic that
- * could also match an unrelated future variant that merely contains one of
- * these words.
+ * Whether a variant SEGMENT (already stripped of any `/name` suffix - see
+ * `variantStem`) means a utility only ever applies on an INTERACTION, not
+ * unconditionally - exactly the condition the reduced-motion guard
+ * actually matters for.
+ *
+ * GENERALISED (round-3 review, PR #101) rather than hand-listed one shape
+ * at a time, which is what produced three successive review rounds each
+ * finding "one more shape" this scan missed - scale/rotate/skew/animate/
+ * transform as the property side (round 2), then position-independence and
+ * peer-hover/focus-visible/focus-within/named-group/[transform:...]/
+ * animate-* as the trigger side (round 2 again), now this. A fixed list
+ * can always be one case short of whatever interaction variant someone
+ * writes next; the cartesian PRODUCT of a small set of prefixes and stems,
+ * plus the small set of Tailwind's state-ATTRIBUTE variant families, is
+ * what this is reorganised around instead, so "is this combination
+ * covered" is a question about the GENERATOR, not about whether someone
+ * remembered to add a new string to a list.
+ *
+ * Two families, confirmed by compiling a representative of each:
+ *
+ * 1. PSEUDO-CLASS-SHAPED triggers: the cartesian product of
+ *    `TRIGGER_PREFIXES` (no prefix, `group-`, `peer-`, `in-`, `not-`) and
+ *    `BASE_TRIGGER_STEMS` (`hover`, `focus`, `focus-visible`, `focus-
+ *    within`, `active`) - `group-hover`, `peer-focus-within`, `in-hover`,
+ *    `not-active`, and so on. `in-*` (Tailwind v4's ancestor variant that
+ *    needs no `group` class) and `not-*` (negation) compile to their own,
+ *    equally real rules - confirmed `in-hover:scale-105` compiles inside
+ *    `@media (hover: hover)` with an ancestor selector, and `not-hover:
+ *    scale-105` compiles to an unconditional `:not(:hover)` rule PLUS an
+ *    `@media not (hover: hover)` duplicate for touch devices - neither has
+ *    anything to do with `prefers-reduced-motion` on its own.
+ * 2. STATE-ATTRIBUTE triggers, which are not prefix+stem combinations at
+ *    all: `aria-*` (`aria-expanded`, `aria-pressed`, ... and the arbitrary
+ *    `aria-[...]` form), `data-[...]`, `has-[...]`, and the fully arbitrary
+ *    `[&:hover]`-shaped selector variant (matched only when its bracket
+ *    content names one of the same pseudo-classes `BASE_TRIGGER_STEMS`
+ *    already covers, so `[&:last-child]` - nothing to do with interaction -
+ *    is correctly NOT a trigger). Confirmed `aria-expanded:translate-y-px`,
+ *    `data-[state=open]:scale-105` and `has-[:focus-visible]:translate-y-
+ *    px` all compile with NO media gate of their own at all (a plain
+ *    attribute/`:has()` selector), which is exactly button.tsx's and
+ *    upload-form.tsx's own real, ungated press-motion shape this round
+ *    fixed.
+ *
+ * What this does NOT claim to be exhaustive of, stated rather than
+ * silently assumed: Tailwind's variant grammar is large (container
+ * queries, `:nth-*`, print, etc.) and this still only recognises the
+ * families a real interaction in this codebase has exercised so far. The
+ * generator shape is what makes the NEXT one cheap to add, not a claim
+ * that none remains.
  */
-const TRIGGER_VARIANTS = new Set([
+const BASE_TRIGGER_STEMS = [
   "hover",
-  "group-hover",
-  "peer-hover",
   "focus",
   "focus-visible",
   "focus-within",
   "active",
-]);
+] as const;
 
-/** The part of a variant segment before an optional `/name` suffix - see `TRIGGER_VARIANTS`'s own comment for why this is what gets matched. */
+/** `group-`/`peer-` are selector-scoped (an ancestor carrying `group`/`peer`); `in-` is Tailwind v4's ancestor variant that needs no such class; `not-` is negation. `""` (no prefix) is the bare stem itself. */
+const TRIGGER_PREFIXES = ["", "group-", "peer-", "in-", "not-"] as const;
+
+const NAMED_TRIGGER_VARIANTS: ReadonlySet<string> = new Set(
+  BASE_TRIGGER_STEMS.flatMap((stem) => TRIGGER_PREFIXES.map((prefix) => `${prefix}${stem}`)),
+);
+
+/** A fixed `aria-word` variant (`aria-expanded`, `aria-pressed`, ...) or the arbitrary `aria-[...]` form. */
+const ARIA_STATE_VARIANT = /^aria-(?:[\w-]+|\[[^\]]*\])$/;
+/** Tailwind's arbitrary data-attribute variant, `data-[state=open]` and similar. */
+const DATA_STATE_VARIANT = /^data-\[[^\]]*\]$/;
+/** Tailwind's `:has()` variant, `has-[:focus-visible]` and similar. */
+const HAS_STATE_VARIANT = /^has-\[[^\]]*\]$/;
+/** The fully arbitrary selector-variant escape hatch, `[&:hover]` and similar - a trigger only when its bracket content names one of `BASE_TRIGGER_STEMS`' own pseudo-classes, so an unrelated arbitrary selector (`[&:last-child]`) is correctly not one. */
+const ARBITRARY_SELECTOR_VARIANT = /^\[&[^\]]*\]$/;
+const ARBITRARY_SELECTOR_NAMES_A_TRIGGER_PSEUDO =
+  /:(?:hover|focus-visible|focus-within|focus|active)\b/;
+
+function isInteractionTriggerSegment(segment: string): boolean {
+  const stem = variantStem(segment);
+  if (NAMED_TRIGGER_VARIANTS.has(stem)) return true;
+  if (ARIA_STATE_VARIANT.test(stem)) return true;
+  if (DATA_STATE_VARIANT.test(stem)) return true;
+  if (HAS_STATE_VARIANT.test(stem)) return true;
+  if (
+    ARBITRARY_SELECTOR_VARIANT.test(stem) &&
+    ARBITRARY_SELECTOR_NAMES_A_TRIGGER_PSEUDO.test(stem)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * The part of a variant segment before an optional `/name` suffix
+ * (`group-hover/button` into `group-hover`; `peer-hover/field` into `peer-
+ * hover`) - Tailwind scopes a NAMED group/peer variant to `.group\/name`
+ * rather than the unnamed `.group`, confirmed empirically, but the rule
+ * this gate checks (is the trigger gated by `motion-safe:`) does not care
+ * which ancestor the selector points at. Bracket/paren depth-aware, same
+ * reasoning as `splitVariantSegments` below: an arbitrary value containing
+ * a literal `/` (a URL, say) must not be mistaken for a name separator.
+ */
 function variantStem(segment: string): string {
-  const slashIndex = segment.indexOf("/");
-  return slashIndex === -1 ? segment : segment.slice(0, slashIndex);
+  let depth = 0;
+  for (let index = 0; index < segment.length; index += 1) {
+    const char = segment[index];
+    if (char === "[" || char === "(") depth += 1;
+    else if (char === "]" || char === ")") depth -= 1;
+    else if (char === "/" && depth === 0) return segment.slice(0, index);
+  }
+  return segment;
 }
 
 /**
@@ -218,7 +317,7 @@ function isUngatedInteractionMotionUtility(token: string): boolean {
   if (!DANGEROUS_UTILITY_SEGMENT.test(utility)) return false;
   const variantSegments = segments.slice(0, -1);
   const hasTrigger = variantSegments.some((segment) =>
-    TRIGGER_VARIANTS.has(variantStem(segment)),
+    isInteractionTriggerSegment(segment),
   );
   if (!hasTrigger) return false;
   // PRESENCE, not position (round-2 review, PR #101 - see this file's
@@ -266,7 +365,7 @@ export function findUngatedInteractionMotionUtilities(
   return offenders;
 }
 
-describe("K2: every hover/group-hover/peer-hover/focus/focus-visible/focus-within/active scale-translate-rotate-skew-animate-transform utility carries motion-safe: somewhere in its chain", () => {
+describe("K2: every interaction-triggered scale/translate/rotate/skew/animate/transform utility carries motion-safe: somewhere in its chain", () => {
   const files = walkSourceFiles(SRC_ROOT, isExcluded);
 
   it("finds files to scan", () => {
@@ -278,10 +377,11 @@ describe("K2: every hover/group-hover/peer-hover/focus/focus-visible/focus-withi
 
     expect(
       offenders,
-      `A hover:/group-hover:/peer-hover:/focus:/focus-visible:/focus-within:/` +
-        `active:-triggered scale-*/translate-*/rotate-*/skew-*/animate-*/` +
-        `[transform:...] utility with no motion-safe: anywhere in its variant ` +
-        `chain, found in: ${offenders.join(", ")}. Tailwind 4 compiles these ` +
+      `An interaction-triggered scale/translate/rotate/skew/animate/transform ` +
+        `utility with no motion-safe: anywhere in its variant chain, found in: ` +
+        `${offenders.join(", ")}. See isInteractionTriggerSegment's and ` +
+        `DANGEROUS_UTILITY_SEGMENT's own comments in this file for exactly which ` +
+        `variants and utilities that covers. Tailwind 4 compiles these ` +
         `utilities to their own standalone CSS properties with no reduced-` +
         `motion media context of their own, and a motion-reduce:* override on ` +
         `the result cannot reliably out-specificity them (see src/components/` +
@@ -516,6 +616,124 @@ describe("findUngatedInteractionMotionUtilities (the real scanner, exercised ove
     const root = fixture({
       "hero-like.ts":
         'export const CLASS = "motion-safe:animate-[home-fade-in_700ms_ease-out_both] motion-reduce:animate-none";',
+    });
+
+    expect(scan(root)).toEqual([]);
+  });
+
+  /**
+   * ARBITRARY property/value forms (round-3 review, PR #101): each
+   * confirmed by compiling it that it produces the SAME ungated shape as
+   * its named-utility sibling - e.g. `group-hover:[scale:1.1]` compiles to
+   * an ungated `scale: 1.1`, exactly like `group-hover:scale-110`.
+   */
+  it.each([
+    ["arbitrary [scale:...] property", "group-hover:[scale:1.1]"],
+    ["arbitrary [translate:...] property", "group-hover:[translate:4px_0]"],
+    ["arbitrary [rotate:...] property", "group-hover:[rotate:6deg]"],
+    ["arbitrary [skew:...] property", "group-hover:[skew:3deg]"],
+    ["first-class transform-[...] arbitrary-value utility", "hover:transform-[scale(1.04)]"],
+  ])("also catches an ungated %s", (_label, classString) => {
+    const root = fixture({
+      "other-utility.ts": `export const CLASS = "${classString}";`,
+    });
+
+    expect(scan(root)).toEqual([path.join(path.basename(root), "other-utility.ts")]);
+  });
+
+  it.each([
+    ["motion-safe:group-hover:[scale:...]", "motion-safe:group-hover:[scale:1.1]"],
+    ["motion-safe:group-hover:[translate:...]", "motion-safe:group-hover:[translate:4px_0]"],
+    ["motion-safe:group-hover:[rotate:...]", "motion-safe:group-hover:[rotate:6deg]"],
+    ["motion-safe:group-hover:[skew:...]", "motion-safe:group-hover:[skew:3deg]"],
+    ["motion-safe:hover:transform-[...]", "motion-safe:hover:transform-[scale(1.04)]"],
+  ])("does not flag the same %s once motion-safe-gated", (_label, classString) => {
+    const root = fixture({
+      "other-utility.ts": `export const CLASS = "${classString}";`,
+    });
+
+    expect(scan(root)).toEqual([]);
+  });
+
+  /**
+   * THE `-none` EXCLUSION (round-3 review, PR #101): each of these REMOVES
+   * motion rather than applying it - confirmed by compiling, e.g.
+   * `hover:animate-none` compiles to a bare `@media (hover: hover) {
+   * animation: none; }`, the SAFE direction, not the dangerous one this
+   * gate exists to catch. None of these five should ever be flagged, with
+   * or without a trigger, with or without motion-safe:.
+   */
+  it.each([
+    ["hover:animate-none", "hover:animate-none"],
+    ["hover:scale-none", "hover:scale-none"],
+    ["hover:translate-none", "hover:translate-none"],
+    ["hover:rotate-none", "hover:rotate-none"],
+    ["hover:transform-none", "hover:transform-none"],
+  ])("does not flag %s - it removes motion, it does not apply it", (_label, classString) => {
+    const root = fixture({
+      "none-form.ts": `export const CLASS = "${classString}";`,
+    });
+
+    expect(scan(root)).toEqual([]);
+  });
+
+  /**
+   * STATE-ATTRIBUTE and further pseudo-class-shaped triggers (round-3
+   * review, PR #101) - each confirmed by compiling it that the utility
+   * compiles with NO `prefers-reduced-motion` gate at all when written
+   * bare, same as every trigger above. `aria-expanded`/`has-[:focus-
+   * visible]` are the two shapes this round's audit of the real tree found
+   * and fixed in button.tsx/upload-form.tsx (see those files' own
+   * comments); the rest complete the family these two belong to rather
+   * than waiting for a fourth round to find them one at a time.
+   */
+  it.each([
+    ["aria-expanded: translate (button.tsx's own pre-fix shape)", "aria-expanded:translate-y-px"],
+    ["aria-pressed: scale", "aria-pressed:scale-105"],
+    ["aria-selected: scale", "aria-selected:scale-105"],
+    ["aria-checked: scale", "aria-checked:scale-105"],
+    ["arbitrary aria-[...]: scale", "aria-[current=page]:scale-105"],
+    ["data-[...]: scale", "data-[state=open]:scale-105"],
+    ["has-[...]: translate (upload-form.tsx's own pre-fix shape)", "has-[:focus-visible]:translate-y-px"],
+    ["in-hover: scale", "in-hover:scale-105"],
+    ["in-focus: scale", "in-focus:scale-105"],
+    ["not-hover: scale", "not-hover:scale-105"],
+    ["arbitrary [&:hover]: scale", "[&:hover]:scale-105"],
+  ])("also catches an ungated %s utility", (_label, classString) => {
+    const root = fixture({
+      "other-utility.ts": `export const CLASS = "${classString}";`,
+    });
+
+    expect(scan(root)).toEqual([path.join(path.basename(root), "other-utility.ts")]);
+  });
+
+  it.each([
+    ["motion-safe:aria-expanded:translate", "motion-safe:aria-expanded:translate-y-px"],
+    ["motion-safe:aria-pressed:scale", "motion-safe:aria-pressed:scale-105"],
+    ["motion-safe:aria-selected:scale", "motion-safe:aria-selected:scale-105"],
+    ["motion-safe:aria-checked:scale", "motion-safe:aria-checked:scale-105"],
+    ["motion-safe:arbitrary aria-[...]:scale", "motion-safe:aria-[current=page]:scale-105"],
+    ["motion-safe:data-[...]:scale", "motion-safe:data-[state=open]:scale-105"],
+    ["motion-safe:has-[...]:translate", "motion-safe:has-[:focus-visible]:translate-y-px"],
+    ["motion-safe:in-hover:scale", "motion-safe:in-hover:scale-105"],
+    ["motion-safe:in-focus:scale", "motion-safe:in-focus:scale-105"],
+    ["motion-safe:not-hover:scale", "motion-safe:not-hover:scale-105"],
+    ["motion-safe:arbitrary [&:hover]:scale", "motion-safe:[&:hover]:scale-105"],
+  ])("does not flag the same %s utility once motion-safe-gated", (_label, classString) => {
+    const root = fixture({
+      "other-utility.ts": `export const CLASS = "${classString}";`,
+    });
+
+    expect(scan(root)).toEqual([]);
+  });
+
+  it("does not flag an unrelated arbitrary selector that names no interaction pseudo-class", () => {
+    // [&:last-child] has nothing to do with interaction or motion - this is
+    // the false-positive ARBITRARY_SELECTOR_VARIANT's own pseudo-class
+    // check exists to avoid (a blanket "any [&...] is a trigger" rule
+    // would wrongly flag this).
+    const root = fixture({
+      "unrelated.ts": 'export const CLASS = "[&:last-child]:translate-y-px";',
     });
 
     expect(scan(root)).toEqual([]);
