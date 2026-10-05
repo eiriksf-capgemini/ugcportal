@@ -272,8 +272,17 @@ src/config/users.ts     Ada = google:x@example.com, facebook:x@example.com
 
 — then the seed carries a row for each, the Facebook one matches the account
 that legacy row does have, and a reconciliation migration adopts it after
-all. The log line names the migration in that case, and running it is the
-right move.
+all. The log line names the migration in that case.
+
+**"A reconciliation migration", not necessarily the one it names.** The log
+line points at `20261005120500_reconcile_configured_users` because that is
+the one in the tree, and re-running it *is* the whole cure for anybody who
+was in the array when it was written. For anybody added since, it is a no-op
+— it carries a snapshot, and acts only on the identities named inside it, as
+"Adding a person who already has an account" above says. There the right move
+is a **new** reconciliation migration, copied from that one with its
+`INSERT INTO "_ConfiguredIdentitySeed"` rows replaced; the recipe is in that
+section, and the log line says so too.
 
 Either way, check it really is the same human before you adopt the row. If it
 is not, the fix is a different address, not a stamped handle.
