@@ -837,19 +837,22 @@ export type PermittedIdentities = {
    * operator configured it and you are not on it" — the same refusal to the
    * visitor, two very different server-log lines.
    *
-   * SINCE ugcportal-t33p THIS IS NORMALLY TRUE, because src/config/users.ts
-   * is committed and non-empty, and that is the intended consequence rather
-   * than an accident: an instance whose users array lists people IS
-   * configured, whatever its environment says. Two things follow. The boot
-   * warning for "neither variable is set" (`checkSignInConfiguration` in
-   * src/instrumentation.ts) no longer fires while the array has anybody in
-   * it — correctly, since those people can sign in. And `no-configuration`,
-   * the one refusal classified `"keep"` in REFUSAL_EFFECT because it means
-   * an OUTAGE rather than a decision, becomes unreachable for the same
-   * reason: with the array populated there is no state in which the policy
-   * cannot be evaluated at all, so a lost `ALLOWED_SIGNIN_EMAILS` now
-   * revokes the sessions of anyone who was permitted ONLY by that variable.
-   * Emptying the array restores the old behaviour exactly.
+   * SINCE ugcportal-t33p THE ARRAY COUNTS TOO, and an instance whose users
+   * array lists usable people IS configured whatever its environment says.
+   * So on this repository, where src/config/users.ts is committed and
+   * sound, this is normally true and `no-configuration` is normally out of
+   * reach — which means a lost `ALLOWED_SIGNIN_EMAILS` revokes the sessions
+   * of anyone who was permitted ONLY by that variable, rather than being
+   * treated as the outage `REFUSAL_EFFECT` classifies `"keep"`.
+   *
+   * NORMALLY, NOT ALWAYS, and the difference is load-bearing (PR #98 round
+   * 4, low 1): what is counted is the REVIEWED array, so an array that is
+   * populated but wholly unsound — every person named in a boot problem,
+   * which is the state `reviewConfiguredUsers` is for — contributes nothing
+   * here. That instance is `configured: false`, gets the "NOBODY can sign
+   * in" boot warning, and answers `no-configuration`, exactly as an empty
+   * one does. Several tests depend on reaching that state; none of this is
+   * hypothetical.
    */
   configured: boolean;
   /**

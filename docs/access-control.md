@@ -242,6 +242,30 @@ sqlite3 "${DB#file:}" \
 Either way, do it **before** their next sign-in. Afterwards they have two
 rows and need the merge, not the stamp.
 
+#### When only the `UPDATE` will do
+
+The migration — this one or a new one — matches a row on **both** halves:
+`User.email` equal to the seed address *and* an `Account` for the seed
+provider. So it cannot adopt a row that holds the address through a
+**different** provider, and there is a way to end up with exactly that:
+
+```
+src/config/users.ts     Ada = google:x@example.com
+ALLOWED_SIGNIN_EMAILS   facebook:x@example.com
+```
+
+The Facebook sign-in is not a configured identity, so it takes an ordinary
+row holding `x@example.com` with a Facebook account on it. Ada's Google
+sign-in then cannot create her row — `User.email` is UNIQUE — and no
+migration can adopt the one in the way, because the join needs a Google
+account that row does not have. **The one-line `UPDATE` above is the only
+cure**, and the log line says so: it names the providers the offending row
+actually has and points here rather than at a migration that would be a
+no-op.
+
+Check it really is the same human before you run it. If it is not, the fix
+is a different address, not a stamped handle.
+
 #### Renaming a person
 
 **The `name` in the array is a key, not a label.** The handle is derived from
@@ -276,9 +300,24 @@ boot log says one thing and the gate does another. The full list:
 | A person whose handle would silently drop a letter (`Łukasz` → `ukasz`) | that person is dropped |
 | Two people whose names slug to the same handle | **both** are dropped — the handle is UNIQUE |
 
-A dropped identity can still be admitted by `ALLOWED_SIGNIN_EMAILS`, where it
-gets a user of its own and no handle, exactly as any other allowlisted address
-does. Being dropped costs the linking, not the access.
+**Being dropped costs the access as well as the linking**, unless something
+else admits the address. The array is a source of permission, so an identity
+removed from it is no longer permitted *by it*:
+
+* with **no** `ALLOWED_SIGNIN_EMAILS` entry for the address, the sign-in is
+  refused at the gate — `no-configuration` if the array was the only source
+  configured at all, `not-permitted` otherwise;
+* with an entry for it, the sign-in is permitted and gets an **ordinary,
+  handle-less user**, exactly as any other allowlisted address does. It is
+  not linked to anybody, which is the point.
+
+There is one more way it can fail, and it is the case the drop exists to
+prevent: if two people were listed under one address and an entry now admits
+both, the first to sign in takes the row and the second is refused by
+Auth.js's own `OAuthAccountNotLinked` — `getUserByEmail` finds the first
+person's row, and because neither identity is configured any more this
+wrapper does not withhold it. That refusal is Auth.js's, writes nothing and
+logs nothing here; the boot line naming the collision is the explanation.
 
 One address at **both** providers for **one** person is not on this list and
 never will be: that is one row, and the point of the array.

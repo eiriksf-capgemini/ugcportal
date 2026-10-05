@@ -7,9 +7,11 @@ import { currentSignInIdentity } from "@/lib/live-session";
 import { prisma } from "@/lib/prisma";
 import { PRISMA_UNIQUE_VIOLATION, prismaErrorCode } from "@/lib/prisma-errors";
 import {
+  type SignInProvider,
   configuredUserHandle,
   findConfiguredUser,
   normalizeString,
+  providerId,
 } from "@/lib/sign-in-policy";
 
 /**
@@ -132,6 +134,12 @@ export function withConfiguredUserLinking(
   const signingIn = (): {
     person: ConfiguredUser;
     email: string;
+    /**
+     * Carried as well as the address because the reconciliation migration
+     * joins on BOTH — see the lockout message in `createUser`, which has to
+     * know whether that migration could adopt the offending row at all.
+     */
+    provider: SignInProvider;
   } | null => {
     const identity = currentSignInIdentity();
     if (!identity) {
@@ -142,7 +150,10 @@ export function withConfiguredUserLinking(
       users,
     );
     const email = normalizeString(identity.signInEmail);
-    return person && email ? { person, email } : null;
+    const provider = providerId(identity.signInProvider);
+    return person && email && provider
+      ? { person, email, provider }
+      : null;
   };
 
   return {
@@ -262,14 +273,40 @@ export function withConfiguredUserLinking(
           // LOCKOUT: that person cannot sign in until somebody acts. So say
           // which handle, which address, and what the cure is (PR #98
           // round 2, low).
+          //
+          // WHICH CURE DEPENDS ON THE OFFENDING ROW (PR #98 round 4, low 4).
+          // The reconciliation migration joins `User.email` to its seed
+          // address AND `Account.provider` to its seed provider, so it can
+          // only adopt a row that already has an account with the provider
+          // signing in. The sibling of round 3's collision arrives from two
+          // SOURCES rather than two array entries — `google:x@y.com` in the
+          // array, `facebook:x@y.com` in ALLOWED_SIGNIN_EMAILS — and leaves
+          // a row holding the address with only a Facebook account on it.
+          // Telling that operator to run the migration (or to write a new
+          // one) is telling them to run a no-op; only the hand `UPDATE`
+          // reaches it.
+          const holder = await prisma.user.findUnique({
+            where: { email: signIn.email },
+            select: { id: true, accounts: { select: { provider: true } } },
+          });
+          const linked = holder?.accounts.map((account) => account.provider) ?? [];
+          const adoptable = linked.includes(signIn.provider);
+          const cure = adoptable
+            ? "run prisma/migrations/20261005120500_reconcile_configured_users " +
+              "(or, for somebody added to the array since, a new " +
+              "reconciliation migration; see docs/access-control.md)"
+            : `that row has no ${signIn.provider} account (it has: ` +
+              `${linked.length > 0 ? linked.join(", ") : "none"}), so the ` +
+              "reconciliation migration cannot adopt it — its join needs a " +
+              "matching Account.provider. Use the one-line UPDATE under " +
+              '"Adding a person who already has an account" in ' +
+              "docs/access-control.md, after checking it really is the " +
+              "same person";
           console.error(
             `[auth] Could not create the user row for configured handle ` +
               `"${handle}": another row already holds the address ` +
               `${signIn.email}. ${person.name} cannot sign in until that ` +
-              "row is adopted — run " +
-              "prisma/migrations/20261005120500_reconcile_configured_users " +
-              "(or, for somebody added to the array since, a new " +
-              "reconciliation migration; see docs/access-control.md).",
+              `row is adopted — ${cure}.`,
             error,
           );
           throw error;
@@ -419,10 +456,18 @@ export function withConfiguredUserLinking(
  * WHO ACTUALLY READS `email` OFF THIS, since the cast is a promise the
  * database does not keep. @auth/core takes `.id` from it (`linkAccount`,
  * `createSession`) and hands the object on to `events.signIn`, where this
- * app's `reconcileBootstrapAdmin` reads `.email` — and that function opens
- * with `if (!user.id || !user.email) return false`, so a null address is a
- * promotion that does not happen rather than a crash. Which is also the
- * right answer: a row with no address matches no bootstrap entry.
+ * app's `reconcileBootstrapAdmin` reads it.
+ *
+ * AND IT NO LONGER DEPENDS ON IT (PR #98 round 1, low 6; corrected here in
+ * round 4, which found this comment still describing the old rule). That
+ * function reads `currentSignInIdentity()?.signInEmail ?? user.email` — the
+ * address THIS sign-in was permitted under, falling back to the stored one
+ * only outside a sign-in. Inside one, which is the only way this cast is
+ * ever reached, the slot is filled and a null `User.email` is simply not
+ * consulted: such a user IS promoted, on the address the gate judged.
+ * `if (!user.id || !email) return false` then guards the case where neither
+ * source has an address, so a null here is a promotion that does not happen
+ * rather than a crash either way.
  */
 async function findByHandle(handle: string): Promise<AdapterUser | null> {
   const row = await prisma.user.findUnique({ where: { configuredHandle: handle } });

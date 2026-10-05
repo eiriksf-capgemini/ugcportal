@@ -1186,7 +1186,17 @@ describe("one address under two people never reaches the database (PR #98 round 
         TWO_PEOPLE,
       );
 
-      const create = (provider: "google" | "facebook") =>
+      // STEPS 4 AND 5 OF @auth/core's OAuth branch, in that order. The
+      // `getUserByEmail` is not decoration: it is what refuses the second
+      // of them, and an earlier version of this test called `createUser`
+      // straight away, so it asserted a P2002 the real flow never reaches
+      // (PR #98 round 4). Neither identity is configured any more — the
+      // review dropped both — so the wrapper does not withhold the lookup,
+      // the first person's row comes back, and @auth/core throws
+      // OAuthAccountNotLinked without this feature writing or logging
+      // anything.
+      const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+      const signIn = (provider: "google" | "facebook") =>
         inSignInRequest(async () => {
           const { rememberSignInIdentity } = await import(
             "@/lib/live-session"
@@ -1196,6 +1206,10 @@ describe("one address under two people never reaches the database (PR #98 round 
             account: { provider },
             profile: { email: SHARED },
           });
+          const byEmail = await adapter.getUserByEmail!(SHARED);
+          if (byEmail) {
+            throw new Error("OAuthAccountNotLinked");
+          }
           return adapter.createUser!({
             name: `From ${provider}`,
             email: SHARED,
@@ -1203,8 +1217,17 @@ describe("one address under two people never reaches the database (PR #98 round 
           } as unknown as AdapterUser);
         });
 
-      const first = await create("google");
-      await expect(create("facebook")).rejects.toThrow();
+      const first = await signIn("google");
+      await expect(signIn("facebook")).rejects.toThrow(
+        /OAuthAccountNotLinked/,
+      );
+      // Auth.js's refusal, not ours: no lockout line, because the P2002
+      // branch is never reached.
+      expect(
+        errors.mock.calls
+          .map((call) => String(call[0]))
+          .filter((text) => text.includes("Could not create the user row")),
+      ).toEqual([]);
 
       const rows = await prisma.user.findMany({ where: { email: SHARED } });
       expect(rows).toHaveLength(1);
@@ -1370,11 +1393,93 @@ describe("a lockout says which row to adopt and how (PR #98 round 2, low)", () =
       .find((text) => text.includes("Could not create the user row"));
 
     expect(line).toBeDefined();
-    // Which person, which address, and what to run.
+    // Which person, which address, and somewhere to go. WHICH cure it names
+    // depends on what the offending row has on it, and the two branches have
+    // a test each below — this one owns only the parts that are true of
+    // both. (Its own fixture, a row with no accounts at all, takes the
+    // "cannot adopt" branch, and correctly: the migration's join needs an
+    // Account, and there is none.)
     expect(line).toContain('"eirik"');
     expect(line).toContain(EIRIK_GOOGLE);
-    expect(line).toContain("20261005120500_reconcile_configured_users");
+    expect(line).toContain("cannot sign in until that row is adopted");
     expect(line).toContain("docs/access-control.md");
+  });
+
+  it("sends the operator to the UPDATE when no migration could adopt the row", async () => {
+    // THE CROSS-SOURCE SIBLING of the round-3 collision (PR #98 round 4,
+    // low 4): `google:x` in the array, `facebook:x` in the env var. The
+    // Facebook sign-in is not a configured identity, so it takes an
+    // ordinary row holding the address with a FACEBOOK account on it. The
+    // Google sign-in then cannot create Eirik's row — and the reconciliation
+    // migration cannot adopt that one either, because its join needs an
+    // Account with the provider that is signing in. Telling the operator to
+    // run it would be telling them to run a no-op.
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const holder = await prisma.user.create({
+      data: { email: EIRIK_GOOGLE, name: "Arrived Via Facebook" },
+    });
+    await prisma.account.create({
+      data: {
+        userId: holder.id,
+        provider: "facebook",
+        providerAccountId: "facebook-subject-other",
+        type: "oauth",
+      },
+    });
+
+    await expect(
+      replayOAuthSignIn({
+        provider: "google",
+        email: EIRIK_GOOGLE,
+        subject: "google-subject-eirik",
+      }),
+    ).rejects.toThrow();
+
+    const line = errors.mock.calls
+      .map((call) => String(call[0]))
+      .find((text) => text.includes("Could not create the user row"));
+
+    expect(line).toBeDefined();
+    expect(line).toContain("has no google account");
+    expect(line).toContain("(it has: facebook)");
+    expect(line).toContain("cannot adopt it");
+    expect(line).toContain("UPDATE");
+    expect(line).toContain("docs/access-control.md");
+    // And it does NOT send them to the migration, which is the whole point.
+    expect(line).not.toContain("20261005120500_reconcile_configured_users");
+  });
+
+  it("sends them to the migration when it COULD adopt the row", async () => {
+    // The other branch, and the control: the offending row already has an
+    // account with the provider signing in, so the migration's join matches
+    // and running it really is the cure.
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const holder = await prisma.user.create({
+      data: { email: EIRIK_GOOGLE, name: "Arrived Via Google" },
+    });
+    await prisma.account.create({
+      data: {
+        userId: holder.id,
+        provider: "google",
+        providerAccountId: "google-subject-older",
+        type: "oauth",
+      },
+    });
+
+    await expect(
+      replayOAuthSignIn({
+        provider: "google",
+        email: EIRIK_GOOGLE,
+        subject: "google-subject-eirik",
+      }),
+    ).rejects.toThrow();
+
+    const line = errors.mock.calls
+      .map((call) => String(call[0]))
+      .find((text) => text.includes("Could not create the user row"));
+
+    expect(line).toContain("20261005120500_reconcile_configured_users");
+    expect(line).not.toContain("cannot adopt it");
   });
 
   it("does not log it when the handle row simply raced into existence", async () => {

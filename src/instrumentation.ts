@@ -79,13 +79,18 @@ export function checkEvidenceEncryption(
  * where someone hits this first, and env.example ships the variable empty.
  *
  * SINCE ugcportal-t33p the permitted set also contains the identities in
- * src/config/users.ts, so the "nothing is set at all" branch below only
- * fires on an instance whose users array is ALSO empty. That is the right
- * reading of "nobody can sign in" rather than a hole in it — an instance
- * with people in the array is configured, whatever its environment says —
- * and the array's own mistakes are reported separately by
- * `checkConfiguredUsers`, because they are a different kind of problem with
- * a different fix.
+ * src/config/users.ts, so the "nothing is set at all" branch below does not
+ * fire merely because the two variables are empty. That is the right reading
+ * of "nobody can sign in" rather than a hole in it — an instance with usable
+ * people in the array is configured, whatever its environment says.
+ *
+ * USABLE is the word that matters (PR #98 round 4, low 1). What counts is
+ * the REVIEWED array, so an instance whose array is populated but wholly
+ * unsound — every person in it named by `checkConfiguredUsers` below — gets
+ * this warning too, and correctly: nobody can sign in there either. The two
+ * checks then both speak, which is what an operator in that state needs,
+ * because the array's own mistakes have a different fix from an unset
+ * variable and are reported separately for that reason.
  */
 export function checkSignInConfiguration(
   env: SignInEnv = process.env,
