@@ -48,17 +48,21 @@ export const ABOUT_CONTACT_PATH = `${ABOUT_PATH}#contact`;
  * The fragment half of a `"/path#fragment"` route constant — e.g.
  * `pathFragment(ABOUT_CONTACT_PATH) === "contact"` — for a caller that
  * needs the bare anchor name (an element's `id`) rather than the full
- * navigable path. Throws on a path with no fragment at all: a caller
- * reaching for this always has a specific fragment-bearing constant in
- * mind, so a missing "#" is a mistake at the call site, not a case to
- * return an empty string for and let render as `id=""`.
+ * navigable path. Throws on anything that would otherwise yield an empty
+ * string — a path with no "#" at all ("/about"), AND a path whose
+ * fragment is empty ("/about#", round-4 review: the "#" was present but
+ * nothing followed it, which this function missed before) — rather than
+ * return `""` and let a caller render `id=""`: a caller reaching for this
+ * always has a specific fragment-bearing constant in mind, so either case
+ * is a mistake at the call site, not one to paper over.
  */
 export function pathFragment(path: string): string {
   const hashIndex = path.indexOf("#");
-  if (hashIndex === -1) {
-    throw new Error(`pathFragment: "${path}" has no "#fragment" to extract.`);
+  const fragment = hashIndex === -1 ? "" : path.slice(hashIndex + 1);
+  if (fragment === "") {
+    throw new Error(`pathFragment: "${path}" has no non-empty "#fragment" to extract.`);
   }
-  return path.slice(hashIndex + 1);
+  return fragment;
 }
 
 /**

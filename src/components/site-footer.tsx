@@ -67,7 +67,7 @@ const FOOTER_HEADING_CLASS = "text-sm font-medium text-foreground";
  * alcohol itself; see src/lib/site.ts's own `INTRO_PARAGRAPHS` for the
  * same rule applied to the About page's copy).
  *
- * TODO(ugcportal-akv6): replace this with `SITE_TAGLINE` once PR #94
+ * TODO(ugcportal-ew7m): replace this with `SITE_TAGLINE` once PR #94
  * merges and introduces it in src/lib/site.ts — that is meant to be the
  * one shared, compliant tagline every surface reaches for; this is only a
  * placeholder so the footer does not ship non-compliant copy while #94 is

@@ -9,9 +9,15 @@ import { expect, type Page } from "@playwright/test";
  */
 
 /**
- * Every href the site footer's own <a> elements carry, fragment included —
- * this is the RAW list ("every link the footer renders"), not yet filtered
- * down to "things worth fetching"; see `uniqueFetchTargets` for that.
+ * Every href the site footer's own <a> elements carry, fragment included.
+ * The only filtering here is dropping a literal empty string — a trivial
+ * guard deliberately DUPLICATED with the stronger one in
+ * `uniqueFetchTargets` below (round-4 review: that function must not rely
+ * on this one having pre-filtered for it, so both guard independently).
+ * A fragment-only href, or an off-origin/`mailto:` one, passes through
+ * unfiltered here; this is "every link the footer renders", not yet
+ * narrowed to "things worth fetching as a same-origin page" — see
+ * `uniqueFetchTargets` for that.
  */
 export async function footerLinkHrefs(page: Page): Promise<string[]> {
   const footer = page.locator("footer[data-site-footer]");
