@@ -79,11 +79,13 @@ const FOOTER_ABOUT_LINE =
 /**
  * The registered LegalPage for a route this footer links to (round-1
  * review: previously went through each page's own `loadPrivacy`/
- * `loadLicence` loader, which also builds the full rendered prose from the
- * live LEGAL_* contact on every single render of every page, just to read
- * one boolean — see src/lib/legal/pages.ts's own comment for why LEGAL_PAGES
- * is the right thing to read instead). Throws rather than silently treating
- * an unregistered path as safe: a footer link to a legal page that isn't in
+ * `loadLicence` loader instead, which builds the full rendered prose from
+ * the live LEGAL_* contact once per request — on /privacy and /licence
+ * themselves the footer's call would be a cache hit, but on every OTHER
+ * page it would be a real, avoidable prose-build just to read one boolean
+ * — see src/lib/legal/pages.ts's own comment for why LEGAL_PAGES is the
+ * right thing to read instead). Throws rather than silently treating an
+ * unregistered path as safe: a footer link to a legal page that isn't in
  * LEGAL_PAGES is a bug in this file, not a page that happens to be fine to
  * link.
  */
