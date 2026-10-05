@@ -323,21 +323,28 @@ describe("Home() in isolation: a failed session read never crashes its render", 
  * 2. `mockSession.rejectionPromise` (see that mock's own comment above)
  *    makes all three calls below share the identical rejected promise,
  *    MIRRORING what a real request's `cache()`-memoized `getSession()`
- *    hands its callers — it does not, on its own, PROVE the single-log
- *    behaviour the way a real render would (round-1 review of this PR,
- *    finding 1): this harness has no way to put `Home`, `AuthStatus` and
- *    `UploadNavLink` behind one real React render (see point 1 above), so
- *    it cannot exercise the `cache()` wrapper on `resolveSessionOrAnonymous`
- *    itself (src/lib/session-or-anonymous.ts) the way production does.
- *    What this test DOES prove honestly is that three callers sharing one
- *    rejected promise, as `cache()` would give them, still produce exactly
- *    one logged line between them — the `WeakSet` dedupe that module's own
- *    comment documents as its belt-and-braces path for exactly this
- *    harness limitation. The real, load-bearing guarantee (one log line
- *    per actual request) was confirmed separately, live, on a dev server
- *    (round-1 review of this PR: one line for `/`, one for `/about`) —
- *    this test is evidence the dedupe mechanism works, not the sole proof
- *    that production behaves this way.
+ *    hands its callers. src/lib/session-or-anonymous.ts's own comment
+ *    states the measured facts this test's claim rests on (round-1/round-2/
+ *    round-3 review of this PR — each round corrected the previous one's
+ *    overclaim, so stated plainly here rather than re-approximated): inside
+ *    a real render the two dedupe layers there (the `WeakSet`, and
+ *    `cache()` wrapping `resolveSessionOrAnonymous` itself) are REDUNDANT
+ *    with each other — either alone is already sufficient, because
+ *    `getSession()`'s own `cache()` means all three siblings would reach
+ *    the same promise regardless. Outside a render — which is what calling
+ *    `Home`, `AuthStatus` and `UploadNavLink` directly, below, actually is,
+ *    since this harness has no way to put them behind one real render (see
+ *    point 1 above) — NEITHER layer dedupes anything for the real
+ *    implementation: `cache()` falls through uncached, and the real
+ *    `getSession()` falls through too and hands back an unshared promise
+ *    per call. This test exercises the `WeakSet` specifically, by giving it
+ *    outside a render the one thing it needs (a shared promise) via the
+ *    mock above standing in for what `cache()` gives for free inside one.
+ *    The `cache()` path itself — the mechanism production actually
+ *    runs on inside a real render — was verified separately, live, on a
+ *    dev server (round-1 review of this PR: one line for `/`, one for
+ *    `/about`); this test is evidence the `WeakSet` dedupe mechanism works,
+ *    not evidence of which layer production relies on.
  */
 describe("the assembled shell: AuthStatus and UploadNavLink survive a rejected getSession() the same way Home() does", () => {
   it("all three resolve to signed-out markup, the hero's CTA points at sign-in, and the request logs exactly once", async () => {
