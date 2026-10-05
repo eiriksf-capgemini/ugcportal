@@ -286,13 +286,19 @@ export function withConfiguredUserLinking(
      * prisma/migrations/20261005120500_reconcile_configured_users stamps the
      * handle and the same sign-in then passes.
      *
+     * WRAPPING THE METHOD, not a path, is what makes this complete:
+     * @auth/core calls `linkAccount` from FOUR places (handle-login.js:133
+     * and :161 on the WebAuthn branches, :209 on the signed-in OAuth branch,
+     * :264 on the new-user one), and every one of them goes through this.
+     * A guard written into the two paths this wrapper already knew about
+     * would have been the sibling-omission defect one layer along.
+     *
      * `Promise<void>`, so the wrapped adapter's return value is discarded.
      * Not a swallowed result: `Adapter["linkAccount"]` is declared as
      * `Promise<void> | Awaitable<AdapterAccount | null | undefined>`, which
-     * no single function can satisfy both halves of, and @auth/core itself
-     * never reads the value — both call sites are a bare
-     * `await linkAccount({ ... })` (handle-login.js:209 and :142). Choosing
-     * `void` is the half that needs no cast.
+     * no single function can satisfy both halves of, and none of those four
+     * call sites reads the value — each is a bare
+     * `await linkAccount({ ... })`. Choosing `void` needs no cast.
      */
     linkAccount: async (data): Promise<void> => {
       const signIn = signingIn();

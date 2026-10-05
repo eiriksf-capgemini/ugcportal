@@ -131,7 +131,7 @@ async function replayOAuthSignIn(identity: Identity): Promise<SignInOutcome> {
     >;
 
     // 1b. THE SESSION COOKIE THIS BROWSER ALREADY HAS, if any
-    //     (handle-login.js:47-53). @auth/core loads it BEFORE deciding
+    //     (handle-login.js:48). @auth/core loads it BEFORE deciding
     //     anything, and its presence changes which branch runs below.
     const signedIn = identity.withSessionToken
       ? ((await adapter.getSessionAndUser(identity.withSessionToken))?.user ??
@@ -145,7 +145,7 @@ async function replayOAuthSignIn(identity: Identity): Promise<SignInOutcome> {
     });
 
     if (resolved && signedIn) {
-      // handle-login.js:175-182: signed in as somebody else, and this
+      // handle-login.js:180-188: signed in as somebody else, and this
       // account already belongs to a third party.
       if (resolved.id !== signedIn.id) {
         throw new Error("OAuthAccountNotLinked");
