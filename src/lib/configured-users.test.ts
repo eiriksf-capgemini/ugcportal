@@ -352,6 +352,77 @@ describe("what the review reports, it also removes (PR #98 round 1, medium 2)", 
     ]);
   });
 
+  it("drops one address listed under two people, whatever their providers", () => {
+    // PR #98 round 3. These are two DISTINCT identities — different
+    // providers — so the per-pair duplicate check had nothing to say about
+    // them. `User.email` does: it is UNIQUE on the address alone, so these
+    // are two rows that cannot both exist. Whoever signed in second got a
+    // P2002 and a lockout, carrying a log line that told the operator to
+    // adopt the row already holding the address — which would have put
+    // Bob's handle on Ada's user.
+    const users: readonly ConfiguredUser[] = [
+      { name: "Ada", identities: ["google:shared@example.com"] },
+      { name: "Bob", identities: ["facebook:shared@example.com"] },
+    ];
+    const { sound, problems } = reviewConfiguredUsers(users);
+
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain("shared@example.com");
+    expect(problems[0]).toContain("Ada");
+    expect(problems[0]).toContain("Bob");
+    expect(problems[0]).toContain("UNIQUE");
+
+    expect(sound).toEqual([]);
+    for (const provider of ["google", "facebook"] as const) {
+      expect(
+        findConfiguredUser(
+          { provider, email: "shared@example.com" },
+          users,
+        ),
+      ).toBeNull();
+      expect(
+        decideSignIn(attempt("shared@example.com", provider), NO_ENV, users),
+      ).toEqual({ permitted: false, reason: "no-configuration" });
+    }
+  });
+
+  it("keeps ONE person holding the same address at both providers", () => {
+    // THE MIRROR CASE, and the whole point of the feature — one human whose
+    // Google and Facebook accounts carry the same address is one row. The
+    // check above groups by person, not by address alone, so two entries
+    // with one claimant are not a collision.
+    const users: readonly ConfiguredUser[] = [
+      {
+        name: "Ada",
+        identities: ["google:ada@example.com", "facebook:ada@example.com"],
+      },
+    ];
+    const { sound, problems } = reviewConfiguredUsers(users);
+
+    expect(problems).toEqual([]);
+    expect(sound).toEqual(users);
+    for (const provider of ["google", "facebook"] as const) {
+      expect(
+        findConfiguredUser({ provider, email: "ada@example.com" }, users)?.name,
+      ).toBe("Ada");
+      expect(
+        decideSignIn(attempt("ada@example.com", provider), NO_ENV, users),
+      ).toEqual({ permitted: true, email: "ada@example.com" });
+    }
+  });
+
+  it("says it once when the two people share the identity, not the address only", () => {
+    // The exact-duplicate case is a subset of the address case, and the
+    // per-identity message is the better of the two. One mistake, one line.
+    const { problems } = reviewConfiguredUsers([
+      { name: "Ada", identities: ["google:shared@example.com"] },
+      { name: "Bob", identities: ["google:shared@example.com"] },
+    ]);
+
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain("The identity google:shared@example.com");
+  });
+
   it("drops both people whose names collide on one handle", () => {
     const users: readonly ConfiguredUser[] = [
       { name: "Kari", identities: ["facebook:kari@example.com"] },

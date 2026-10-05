@@ -2,6 +2,7 @@ import { AuthError } from "@auth/core/errors";
 import type { Adapter, AdapterUser } from "next-auth/adapters";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { ConfiguredUser } from "@/config/users";
 import { decideSignIn } from "@/lib/sign-in-policy";
 import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db";
 
@@ -1139,6 +1140,125 @@ describe("an array the boot check calls broken is not acted on either (PR #98 ro
     } finally {
       delete process.env.ALLOWED_SIGNIN_EMAILS;
     }
+  });
+});
+
+describe("one address under two people never reaches the database (PR #98 round 3)", () => {
+  const SHARED = "shared@example.com";
+  const TWO_PEOPLE: readonly ConfiguredUser[] = [
+    { name: "Ada", identities: ["google:shared@example.com"] },
+    { name: "Bob", identities: ["facebook:shared@example.com"] },
+  ];
+
+  it("permits neither through the array, and says so once", async () => {
+    const { configuredUserProblems } = await import("@/lib/sign-in-policy");
+
+    expect(configuredUserProblems(TWO_PEOPLE)).toHaveLength(1);
+    for (const provider of ["google", "facebook"] as const) {
+      expect(
+        decideSignIn(
+          {
+            user: { email: SHARED },
+            account: { provider },
+            profile: { email: SHARED },
+          },
+          {},
+          TWO_PEOPLE,
+        ),
+      ).toEqual({ permitted: false, reason: "no-configuration" });
+    }
+  });
+
+  it("creates no second row, and stamps no handle on the first", async () => {
+    // Admitted by the env var instead, which is what the review leaves them
+    // — so what happens next is Auth.js's own rule about two people sharing
+    // an address, not this feature quietly merging them. The first gets an
+    // ordinary row; the second cannot have one, and crucially the row that
+    // exists carries NO handle, so nothing can later be told to "adopt" it
+    // on the wrong person's behalf.
+    process.env.ALLOWED_SIGNIN_EMAILS = `google:${SHARED},facebook:${SHARED}`;
+    try {
+      const { withConfiguredUserLinking } = await import(
+        "@/lib/configured-user-link"
+      );
+      const adapter = withConfiguredUserLinking(
+        authConfig.adapter as Adapter,
+        TWO_PEOPLE,
+      );
+
+      const create = (provider: "google" | "facebook") =>
+        inSignInRequest(async () => {
+          const { rememberSignInIdentity } = await import(
+            "@/lib/live-session"
+          );
+          rememberSignInIdentity({
+            user: { email: SHARED },
+            account: { provider },
+            profile: { email: SHARED },
+          });
+          return adapter.createUser!({
+            name: `From ${provider}`,
+            email: SHARED,
+            emailVerified: null,
+          } as unknown as AdapterUser);
+        });
+
+      const first = await create("google");
+      await expect(create("facebook")).rejects.toThrow();
+
+      const rows = await prisma.user.findMany({ where: { email: SHARED } });
+      expect(rows).toHaveLength(1);
+      expect(rows[0].id).toBe(first.id);
+      expect(rows[0].configuredHandle).toBeNull();
+      expect(
+        await prisma.user.count({
+          where: { configuredHandle: { in: ["ada", "bob"] } },
+        }),
+      ).toBe(0);
+    } finally {
+      delete process.env.ALLOWED_SIGNIN_EMAILS;
+    }
+  });
+
+  it("still links ONE person who holds that address at both providers", async () => {
+    // The control, driven through the same adapter: the mirror case is the
+    // feature working, and this must not have been broken by the check.
+    const onePerson: readonly ConfiguredUser[] = [
+      {
+        name: "Ada",
+        identities: ["google:shared@example.com", "facebook:shared@example.com"],
+      },
+    ];
+    const { withConfiguredUserLinking } = await import(
+      "@/lib/configured-user-link"
+    );
+    const adapter = withConfiguredUserLinking(
+      authConfig.adapter as Adapter,
+      onePerson,
+    );
+
+    const create = (provider: "google" | "facebook") =>
+      inSignInRequest(async () => {
+        const { rememberSignInIdentity } = await import("@/lib/live-session");
+        rememberSignInIdentity({
+          user: { email: SHARED },
+          account: { provider },
+          profile: { email: SHARED },
+        });
+        return adapter.createUser!({
+          name: `From ${provider}`,
+          email: SHARED,
+          emailVerified: null,
+        } as unknown as AdapterUser);
+      });
+
+    const first = await create("google");
+    const second = await create("facebook");
+
+    expect(second.id).toBe(first.id);
+    expect(
+      await prisma.user.count({ where: { configuredHandle: "ada" } }),
+    ).toBe(1);
   });
 });
 

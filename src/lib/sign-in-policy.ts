@@ -122,12 +122,17 @@ export type PermittedEntry = {
  * another entry that silently permits nobody, and treating it as unbound
  * would permit the address on providers the operator did not name.
  *
- * Exported since ugcportal-t33p, because src/lib/configured-users.ts parses
- * the SAME syntax out of the committed users array (src/config/users.ts) —
- * and whether `google:Eirik@Example.com ` and `google:eirik@example.com`
- * are one identity has to be decided in one place, or the gate and the
- * linking can disagree about who just signed in. That module is the only
- * other caller; it imports this one and never the reverse.
+ * Exported since ugcportal-t33p, because the committed users array
+ * (src/config/users.ts) is written in the SAME syntax — and whether
+ * `google:Eirik@Example.com ` and `google:eirik@example.com` are one identity
+ * has to be decided in one place, or the gate and the linking can disagree
+ * about who just signed in. `reviewConfiguredUsers` below is the caller that
+ * matters: it parses every identity in the array through this, once, and the
+ * canonical string it builds is what everything downstream compares. Outside
+ * this module the only caller is
+ * src/lib/configured-user-reconciliation-migration.test.ts, which checks that
+ * the identities hand-written into a reconciliation migration are the ones
+ * this parser would produce.
  */
 export function parsePermittedEntry(entry: string): PermittedEntry | null {
   const colon = entry.indexOf(":");
@@ -493,6 +498,16 @@ export function reviewConfiguredUsers(
   const unsoundIdentities = new Set<ConfiguredIdentity>();
   /** Which users claim each identity, by index, for the duplicate check. */
   const claimants = new Map<ConfiguredIdentity, Set<number>>();
+  /**
+   * Which users claim each ADDRESS, ignoring the provider.
+   *
+   * A second index over the same entries, and not redundant with the one
+   * above, because the DATABASE has an opinion the array does not: `User.
+   * email` is UNIQUE on the address alone (prisma/schema.prisma). Two
+   * different people listed under one address are therefore two rows that
+   * cannot both exist, however different their providers are.
+   */
+  const addressClaimants = new Map<string, Set<number>>();
   /** Which users derive each handle, for the collision check. */
   const handles = new Map<string, number[]>();
 
@@ -520,12 +535,15 @@ export function reviewConfiguredUsers(
   const parsed = users.map((user) =>
     user.identities.map((raw) => {
       const entry = parsePermittedEntry(raw.trim().toLowerCase());
+      const usable = entry !== null && entry.provider !== null;
       return {
         raw,
-        key:
-          entry && entry.provider !== null
-            ? (`${entry.provider}:${entry.email}` as ConfiguredIdentity)
-            : null,
+        key: usable
+          ? (`${entry.provider}:${entry.email}` as ConfiguredIdentity)
+          : null,
+        // The address on its own, because `User.email` is UNIQUE on exactly
+        // that and not on the pair — see the cross-person check below.
+        email: usable ? entry.email : null,
       };
     }),
   );
@@ -571,7 +589,10 @@ export function reviewConfiguredUsers(
     }
 
     for (const entry of parsed[index]) {
-      if (entry.key === null) {
+      // `key` and `email` are set together or not at all; both are named so
+      // the compiler narrows both, rather than being told to trust one from
+      // the other.
+      if (entry.key === null || entry.email === null) {
         problems.push(describeUnusableIdentity(label, entry.raw));
         continue;
       }
@@ -580,6 +601,12 @@ export function reviewConfiguredUsers(
         claimed.add(index);
       } else {
         claimants.set(entry.key, new Set([index]));
+      }
+      const byAddress = addressClaimants.get(entry.email);
+      if (byAddress) {
+        byAddress.add(index);
+      } else {
+        addressClaimants.set(entry.email, new Set([index]));
       }
     }
   });
@@ -596,6 +623,65 @@ export function reviewConfiguredUsers(
           "src/config/users.ts.",
       );
     }
+  }
+
+  /**
+   * ONE ADDRESS, TWO PEOPLE (PR #98 round 3).
+   *
+   * The check above is per (provider, address) pair, which is the right
+   * grain for "who is this sign-in" and the wrong one for what the database
+   * will accept. `User.email` is UNIQUE on the ADDRESS, so
+   * `google:shared@example.com` under Ada and `facebook:shared@example.com`
+   * under Bob are two perfectly distinct identities and two rows that cannot
+   * both exist. Nothing reported it: whoever signed in second got a P2002
+   * out of `createUser`, no handle row to fall back to, and a lockout —
+   * carrying a log line that told the operator to adopt the row that already
+   * held the address, which would have stamped Bob's handle onto ADA's user.
+   * Two humans, one account, arrived at by following the instructions.
+   *
+   * SO: both lose it. Each can still be admitted by an env entry, where
+   * Auth.js's own behaviour for two people sharing an address applies
+   * unchanged — which is to say the second of them still cannot have a row,
+   * but that is the database's rule rather than this feature silently
+   * merging them.
+   *
+   * THE MIRROR CASE IS DELIBERATELY FINE and must stay so: ONE person with
+   * the same address at both providers is one row, which is the whole point
+   * of the feature. That is why this groups by user index — two entries, one
+   * claimant, no problem.
+   *
+   * Conservative on purpose where the two checks overlap: if the duplicate
+   * check above already removed every identity carrying this address, it has
+   * said the same thing better, so nothing is added here. Otherwise every
+   * identity on the address goes, including one that might have survived the
+   * removals above — fewer identities is the safe direction, and reasoning
+   * about which survivors are still safe would mean iterating to a fixpoint.
+   */
+  for (const [address, indices] of addressClaimants) {
+    if (indices.size <= 1) {
+      continue;
+    }
+    const carrying = parsed
+      .flat()
+      .filter((entry) => entry.email === address && entry.key !== null)
+      .map((entry) => entry.key as ConfiguredIdentity);
+    if (carrying.every((key) => unsoundIdentities.has(key))) {
+      continue;
+    }
+    for (const key of carrying) {
+      unsoundIdentities.add(key);
+    }
+    const names = [...indices].map((index) => users[index].name);
+    problems.push(
+      `[auth] The address ${address} is listed under more than one ` +
+        `configured user (${names.join(", ")}); one e-mail address can ` +
+        "belong to one account, because User.email is UNIQUE, so the second " +
+        "of them to sign in could never get a row. Every identity carrying " +
+        "that address is ignored and cannot sign in through the array. Give " +
+        "them an address each in src/config/users.ts. (The same address at " +
+        "BOTH providers for ONE person is fine, and is the point of the " +
+        "array.)",
+    );
   }
 
   for (const [handle, indices] of handles) {
@@ -1115,8 +1201,12 @@ function assertedUnverified(claim: unknown): boolean {
  *    round 2).
  *
  * What it does NOT do is write the fresh address back. `User.email` stays
- * stale, which matters in exactly one place — `reconcileBootstrapAdmin`
- * matches the persisted address — and is recorded in docs/access-control.md.
+ * stale, which since ugcportal-t33p matters for DISPLAY and audit only — the
+ * header, `RoleChange.actorEmail`, the uploader label — and is recorded in
+ * docs/access-control.md. It used also to decide the first-admin bootstrap;
+ * `reconcileBootstrapAdmin` now reads the address THIS sign-in was permitted
+ * under, out of the request's identity slot, which is this function's own
+ * answer (PR #98 round 1, low 6). One address decides both.
  */
 export function authorisedEmail(attempt: SignInAttempt): string | null {
   return (

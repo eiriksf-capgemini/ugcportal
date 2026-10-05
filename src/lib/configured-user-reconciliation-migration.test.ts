@@ -481,21 +481,38 @@ describe("no reconciliation migration's copy of the array has drifted", () => {
     expect(seeded.length).toBeGreaterThan(0);
   });
 
+  /**
+   * Which file a bad tuple came from, in the failure message.
+   *
+   * Collected and then unused in the first version of this scan, which was
+   * harmless while only one migration seeded this table and useless the
+   * moment a second did — the whole reason the scan was widened is that
+   * operators are expected to write more of these, and "expected 'eirikk'
+   * to be 'eirik'" across four candidate files is a worse place to start
+   * than it needs to be (PR #98 round 3, low 4).
+   */
+  const from = (row: { migration: string; name: string }) =>
+    `${row.migration} (${row.name})`;
+
   it("uses the handle `configuredUserHandle` derives for each name", () => {
     // A migration is history and its MEMBERSHIP is allowed to age — adding
     // a person later does not mean editing it. What must not drift is the
     // derivation: a hand-typed handle that the code would not produce would
     // adopt nobody, silently.
     for (const row of seeded) {
-      expect(configuredUserHandle({ name: row.name, identities: [] })).toBe(
-        row.handle,
-      );
+      expect(
+        configuredUserHandle({ name: row.name, identities: [] }),
+        from(row),
+      ).toBe(row.handle);
     }
   });
 
   it("uses the (provider, address) pair the policy parser produces", () => {
     for (const row of seeded) {
-      expect(parsePermittedEntry(`${row.provider}:${row.email}`)).toEqual({
+      expect(
+        parsePermittedEntry(`${row.provider}:${row.email}`),
+        from(row),
+      ).toEqual({
         provider: row.provider,
         email: row.email,
       });
@@ -508,7 +525,7 @@ describe("no reconciliation migration's copy of the array has drifted", () => {
     // running code will never ask for.
     const names = new Set(CONFIGURED_USERS.map((user) => user.name));
     for (const row of seeded) {
-      expect(names).toContain(row.name);
+      expect(names, from(row)).toContain(row.name);
     }
   });
 });

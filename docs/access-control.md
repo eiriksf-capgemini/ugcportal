@@ -259,11 +259,29 @@ sqlite3 "${DB#file:}" \
 # then edit src/config/users.ts and redeploy
 ```
 
-`checkConfiguredUsers` in `src/instrumentation.ts` reports the mistakes that
-*are* visible without a database, each on its own line at startup: an identity
-listed under two people, an identity naming an unknown provider, a person with
-no identities, a malformed address, and two names that would slug to the same
-handle.
+`checkConfiguredUsers` in `src/instrumentation.ts` reports every mistake that
+*is* visible without a database, each on its own line at startup, and
+**removes whatever it names** — a reported identity or person is neither
+permitted through the array nor linked, so there is no state in which the
+boot log says one thing and the gate does another. The full list:
+
+| What | What happens to it |
+| --- | --- |
+| An identity naming an unknown provider (`twitter:`, `gogle:`) | that identity is dropped |
+| An identity whose address is not one exact address (`google:`, a wildcard, a doubled prefix) | that identity is dropped |
+| One identity listed under two people | dropped from **both** — nothing can tell which of them meant it |
+| One **address** listed under two people, at any providers | every identity carrying it is dropped: `User.email` is UNIQUE, so the second of them could never have a row |
+| A person with no identities | that person is dropped |
+| A person whose name yields no handle at all (no letters or digits) | that person is dropped |
+| A person whose handle would silently drop a letter (`Łukasz` → `ukasz`) | that person is dropped |
+| Two people whose names slug to the same handle | **both** are dropped — the handle is UNIQUE |
+
+A dropped identity can still be admitted by `ALLOWED_SIGNIN_EMAILS`, where it
+gets a user of its own and no handle, exactly as any other allowlisted address
+does. Being dropped costs the linking, not the access.
+
+One address at **both** providers for **one** person is not on this list and
+never will be: that is one row, and the point of the array.
 
 ### The one-off reconciliation for people who already have two users
 
@@ -600,10 +618,15 @@ database.
 ownership is by `user.id`, admin by `role`, and sign-in by the address above
 — but it is what gets *displayed and recorded*: the header
 (`src/components/auth-status.tsx`), the actor on a role change
-(`RoleChange.actorEmail`), the uploader label on the rights screen, and the
-address `reconcileBootstrapAdmin` matches. So a bootstrap entry must name the
-address that was stored when the account was created, and an audit trail may
-name an address its owner no longer uses.
+(`RoleChange.actorEmail`), and the uploader label on the rights screen. So an
+audit trail may name an address its owner no longer uses.
+
+It is **no longer** what the first-admin bootstrap matches. Since
+`ugcportal-t33p`, `reconcileBootstrapAdmin` judges the address *this* sign-in
+was permitted under — the one the gate put in the request's identity slot —
+falling back to `User.email` only outside a sign-in. So a bootstrap entry
+names the address you will actually arrive with, and a stale stored address
+does not silently stop the promotion.
 
 ## How this composes with the first-admin bootstrap
 
@@ -633,15 +656,20 @@ If the mechanism is ever replaced with one that does not naturally contain the
 bootstrap list, the replacement must union it in explicitly, or bootstrap on a
 fresh deployment stops working and the instance cannot get its first admin.
 
-**One interaction worth knowing about, since `ugcportal-t33p`.**
-`reconcileBootstrapAdmin` matches the address stored on `User.email` (see
-"Known limitation, accepted" above), and for somebody in the users array that
-is whichever of their identities signed in *first* — Auth.js never refreshes
-it afterwards. So if you bootstrap a person who has two identities, list the
-address they will arrive with on their first sign-in, or list both. Nothing
-about the bootstrap itself changed: it still promotes a listed address with no
-role history, through the provider a bound entry names, and it still runs as
-an event after the gate.
+**One thing that changed with `ugcportal-t33p`, and it is a simplification.**
+Once a person can hold two identities on one row, `User.email` is whichever
+of them signed in first — so matching the promotion against it would have
+meant bootstrapping somebody under one address and watching nothing happen.
+`reconcileBootstrapAdmin` therefore judges **the address this sign-in was
+permitted under**, taken from the identity slot the gate fills, and falls back
+to the stored address only when there is no sign-in in scope.
+
+So: **name the identity they will arrive with**. A provider-bound entry
+(`google:someone@example.com`) promotes on a Google sign-in by that address
+whatever `User.email` happens to say, and there is no reason to list both of
+a person's addresses. Nothing else about the bootstrap changed: it still
+promotes only a listed address with no role history, only through the provider
+a bound entry names, and it still runs as an event after the gate.
 
 ## What a refused visitor sees
 

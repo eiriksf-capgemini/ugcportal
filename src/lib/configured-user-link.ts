@@ -149,7 +149,7 @@ export function withConfiguredUserLinking(
     ...adapter,
 
     /**
-     * For a configured identity: nobody, always.
+     * For a configured identity asked about ITS OWN address: nobody.
      *
      * NOT a shortcut, and not "there happens to be no row" — it is the
      * statement that a configured person's row is never found by address.
@@ -309,10 +309,15 @@ export function withConfiguredUserLinking(
      * goes where this app's refusals go. Pinned by a test.
      *
      * A person whose row carries no handle yet (they signed in before
-     * ugcportal-t33p and the reconciliation has not run) is refused here
-     * too, because nothing can prove the incoming user is theirs. Running
-     * prisma/migrations/20261005120500_reconcile_configured_users stamps the
-     * handle and the same sign-in then passes.
+     * ugcportal-t33p and nothing has adopted their row) is refused here too,
+     * because nothing can prove the incoming user is theirs. Stamping the
+     * handle makes the same sign-in pass — but note WHICH stamping:
+     * prisma/migrations/20261005120500_reconcile_configured_users carries a
+     * snapshot of the array as it stood when it was written, so re-running
+     * it does nothing for anybody added since. For them it is a new
+     * reconciliation migration, or the single `UPDATE` in
+     * docs/access-control.md under "Adding a person who already has an
+     * account".
      *
      * WRAPPING THE METHOD, not a path, is what makes this complete:
      * @auth/core calls `linkAccount` from FOUR places (handle-login.js:133
