@@ -104,11 +104,58 @@ export const GALLERY_TILE_CLASS = `group ${GALLERY_TILE_BASE_CLASS} cursor-zoom-
  * The hover scale is the one micro-interaction here (the bead leaves these to
  * this bead's own judgement). It is on the image, not the tile, so the tile's
  * footprint in the grid never changes and neighbouring tiles cannot be
- * displaced by a hover. `motion-reduce:` opts the whole thing out for anyone
- * who has asked for less motion.
+ * displaced by a hover.
+ *
+ * TWO BUGS, not one, were hiding here (ugcportal-ig4g, found in PR #97's
+ * round 4, outside that PR's own diff) — fixing only the first still left
+ * the tile scaling under reduced motion, confirmed empirically against a
+ * real browser (see the mutation-check note below).
+ *
+ * BUG 1, the property mismatch: Tailwind 4's `scale-*`/`translate-*`/
+ * `rotate-*`/`skew-*` utilities compile to the STANDALONE CSS properties
+ * `scale`/`translate`/`rotate` — not to `transform` — confirmed empirically
+ * the same way PR #97 confirmed it for `empty-state.tsx`'s own hover-lift,
+ * by compiling globals.css and reading the generated rule:
+ * `.group-hover\:scale-\[1\.04\]…{ scale: 1.04; }`. The guard that used to
+ * sit here, `motion-reduce:transform-none`, overrode a property this
+ * element never sets, so it changed nothing.
+ *
+ * BUG 2, the one that survives fixing BUG 1 alone: simply swapping in
+ * `motion-reduce:scale-none` is STILL a no-op, for a completely different
+ * reason — CSS SPECIFICITY, not property name. Tailwind compiles
+ * `group-hover:scale-[1.04]` to `.group-hover\:scale-\[1\.04\]:is(:where(
+ * .group):hover *) { scale: 1.04; }` — `:where()` is specificity-zero, but
+ * the compound selector still carries the class (0,1,0) plus the `:is()`
+ * pseudo-class's own (0,1,0) from the `:hover` inside it, for a total of
+ * (0,2,0). A bare `.motion-reduce\:scale-none { scale: none; }` is only
+ * (0,1,0): LOWER specificity, so the hover rule wins on every hover
+ * regardless of source order or of `prefers-reduced-motion`, because
+ * nothing here gates the hover rule's MEDIA CONTEXT — it has none; it is
+ * unconditional, present under both `reduce` and `no-preference` alike.
+ * Verified against a real Chromium instance with `reducedMotion: "reduce"`
+ * emulated: with only BUG 1 fixed, a hovered tile's computed `scale` still
+ * read `"1.04"`, not `"none"`.
+ *
+ * The actual fix is the one `empty-state.tsx`'s own hover-lift already
+ * uses and documents: `motion-safe:` on the TRIGGERING utility itself,
+ * not (only) a `motion-reduce:` override on the result. `motion-safe:
+ * group-hover:scale-[1.04]` compiles inside `@media (prefers-reduced-
+ * motion: no-preference)`, so under `reduce` the rule does not exist in
+ * the stylesheet AT ALL — specificity never gets a chance to matter,
+ * because there is no competing rule to out-rank. `motion-reduce:scale-
+ * none` is kept anyway, same as `empty-state.tsx`'s `motion-reduce:
+ * translate-none`: the two media queries (`no-preference` vs `reduce`)
+ * are mutually exclusive, so this guard never has anything live to
+ * override, but it is a documented, deliberately inert belt-and-braces
+ * entry rather than a functioning second guard. `motion-reduce:
+ * transition-none` is real and is kept for the same reason it always
+ * was: `transition-transform` is the `transform` property's transition
+ * shorthand in this Tailwind version, and that guard still matters for
+ * anyone whose browser is briefly in `no-preference` and switches, or for
+ * any future unconditional `transition-transform` sibling.
  */
 export const GALLERY_TILE_IMAGE_CLASS =
-  "h-full w-full object-cover transition-transform duration-300 ease-out group-hover:scale-[1.04] motion-reduce:transform-none motion-reduce:transition-none";
+  "h-full w-full object-cover transition-transform duration-300 ease-out motion-safe:group-hover:scale-[1.04] motion-reduce:scale-none motion-reduce:transition-none";
 
 /**
  * The caption under one tile (ugcportal-gwr). Quiet body text — unlike the
