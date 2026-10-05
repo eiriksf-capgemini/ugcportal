@@ -373,9 +373,10 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
    * this bead's own quality gates need a green `npx vitest run` to mean
    * anything. A straight cherry-pick cannot bring this one line in alone:
    * it was written as a MERGE conflict resolution, not a standalone commit
-   * diff, so this is a manual, identical copy of that same line and
-   * comment. Collapses to a no-op (same line already present) once #96
-   * actually merges.
+   * diff, so the entry and its comment below this paragraph are a manual
+   * copy of that resolution's — this paragraph itself is the one addition
+   * on top, recording why the copy exists. Collapses to a no-op (same
+   * entry already present) once #96 actually merges.
    */
   "src/components/home/hero.tsx": { "text-ink": 2 },
 };

@@ -68,8 +68,21 @@ const buttonVariants = cva(
    * it. `aria-disabled:opacity-50` reuses the same alpha the `disabled:`
    * variant already applies, so it carries no new value for the contrast
    * gate's own alpha-coverage check (src/lib/design/usage.ts) to learn.
+   *
+   * `motion-safe:` on `active:not-aria-[haspopup]:translate-y-px` (ugcportal-
+   * ig4g, closing ugcportal-52ue): the 1px press offset is a `translate-*`
+   * utility with no `motion-safe:`/`motion-reduce:` guard at all, the exact
+   * "no-guard" shape src/lib/design/motion-reduce-pairing.test.ts's K2 scan
+   * now flags for any `hover:`/`group-hover:`/`active:`/`focus:`-triggered
+   * scale/translate/rotate/skew utility — under `prefers-reduced-motion:
+   * reduce` it still animated on every press. `motion-safe:` on the
+   * triggering utility itself (not a `motion-reduce:translate-none` override
+   * on the result) is the same fix containment.ts's own hover scale uses,
+   * for the same reason: it removes the rule from the stylesheet entirely
+   * under `reduce`, rather than relying on it losing a specificity contest
+   * it might not win.
    */
-  "group/button inline-flex shrink-0 items-center justify-center rounded-lg border border-transparent bg-clip-padding text-sm font-medium whitespace-nowrap transition-all outline-none select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/80 active:not-aria-[haspopup]:translate-y-px disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 aria-invalid:border-destructive/75 aria-invalid:ring-3 aria-invalid:ring-destructive/80 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+  "group/button inline-flex shrink-0 items-center justify-center rounded-lg border border-transparent bg-clip-padding text-sm font-medium whitespace-nowrap transition-all outline-none select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/80 motion-safe:active:not-aria-[haspopup]:translate-y-px disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 aria-invalid:border-destructive/75 aria-invalid:ring-3 aria-invalid:ring-destructive/80 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
   {
     variants: {
       variant: {

@@ -1,4 +1,3 @@
-import { createClient } from "@libsql/client";
 import { expect, test } from "@playwright/test";
 
 /**
@@ -12,122 +11,81 @@ import { expect, test } from "@playwright/test";
  * touched the property the hover utility actually sets, and the tile still
  * scaled 4% on hover, instantly, under reduce.
  *
- * e2e/front-page-motion.spec.ts's own K3 gallery-tile test (ugcportal-6dvg)
- * checks a DIFFERENT, narrower claim - that `transitionProperty` resolves to
- * `none` under reduce - and is SKIPPED whenever the dev database has no
- * published media, because this repo ships no e2e seeding infrastructure
- * (ugcportal-4zgy). This file does not rely on that gap staying open: it
- * seeds its own published row directly in `beforeAll`/`afterAll`, against
- * whichever DATABASE_URL the running dev server was started with (see
- * playwright.config.ts's own comment on `PORT` - the two have to agree,
- * and do, because both are read from the same environment at the command
- * line: `PORT=3800 DATABASE_URL=file:./e2e-dev.db npx playwright test
- * e2e/gallery-tile-reduced-motion.spec.ts`).
- *
- * RAW SQL via `@libsql/client` (already a devDependency), NOT the app's own
- * Prisma client (`@/lib/prisma`, and the `seedMedia` fixture
- * src/lib/test-support/media-fixtures.ts shares with
- * src/lib/portfolio.test.ts and src/app/page.test.tsx): tried first, and
- * reverted. Playwright Test's own module loader transforms every file -
- * including every module a spec imports - to CommonJS, and Prisma 7's
- * generated client (src/generated/prisma/client.ts) uses `import.meta`
- * somewhere in its own module graph, same as it does when loaded by
- * Next.js or Vitest (both of which run it as real ESM and never hit this).
- * Under Playwright's loader that throws `SyntaxError: Cannot use
- * 'import.meta' outside a module` before a single test runs. `@libsql/
- * client` is a plain CommonJS-compatible package with no such dependency,
- * so it loads cleanly in this runner. The duplication this trades for - a
- * second, SQL-shaped description of one `Media`/`User` row rather than
- * reusing `seedMedia` - is bounded to this one file and does not touch the
- * schema: both tables have no `@@map`/`@map` renames (confirmed against
- * prisma/schema.prisma and the actual sqlite_master `CREATE TABLE`), so the
- * column names below are exactly the Prisma field names.
+ * ROUND-1 REVIEW (PR #101): the previous version of this file seeded its
+ * own `Media`/`User` row directly via `@libsql/client` SQL in `beforeAll`/
+ * `afterAll`, against a dedicated worktree-local database and port. Removed
+ * entirely - raw SQL writes against the SAME SQLite file the dev server
+ * also had open hit `SQLITE_BUSY` under Playwright's own parallel workers
+ * roughly a third of the time, and the row this file seeded (and later
+ * deleted) broke two OTHER suites that assume whatever the dev database
+ * happens to hold stays put for the duration of a run:
+ * `e2e/front-page.spec.ts`'s empty-gallery assertion, and
+ * `e2e/front-page-motion.spec.ts`'s own K3 gallery-tile test, which flipped
+ * from its documented skip to actually running (and then losing its row
+ * mid-run) once this file's seed existed. This file now follows that SAME
+ * test's own convention instead: no seeding, no database access at all -
+ * skip when the dev database (whatever it holds, from whoever's run it is)
+ * has no published tile to check. See that file's own comment for why
+ * there is no e2e seeding infrastructure yet (ugcportal-4zgy).
  *
  * Not wired into CI, same reason as every other file in this directory
  * (playwright.config.ts's own comment): no running server, no database.
  */
 
-const SEED_USER_ID = "e2e-ig4g-user";
-const SEED_MEDIA_ID = "e2e-ig4g-tile";
+test.describe("gallery tile hover scale honours prefers-reduced-motion", () => {
+  test("the hover scale is a real, visible effect under ordinary motion (positive control)", async ({
+    page,
+  }) => {
+    await page.goto("/");
 
-const db = createClient({ url: process.env.DATABASE_URL ?? "file:./dev.db" });
+    const tileImages = page.locator("[data-gallery-tile] img");
+    if ((await tileImages.count()) === 0) {
+      // Same gap e2e/front-page-motion.spec.ts's own K3 gallery-tile test
+      // documents: no e2e seeding infrastructure (ugcportal-4zgy), so
+      // whether a tile exists here depends on whatever the dev database
+      // happens to hold.
+      test.skip(true, "no gallery tile in this dev database to check");
+    }
 
-test.beforeAll(async () => {
-  // Idempotent cleanup first: a previous run that crashed before its own
-  // afterAll could leave this row behind, and a UNIQUE `key`/`previewKey`/
-  // `previewId` collision would then fail this run's insert with a
-  // confusing error that has nothing to do with reduced motion.
-  await db.execute({ sql: "DELETE FROM Media WHERE id = ?", args: [SEED_MEDIA_ID] });
-  await db.execute({ sql: "DELETE FROM User WHERE id = ?", args: [SEED_USER_ID] });
-
-  await db.execute({
-    sql: 'INSERT INTO User (id, email, name, "updatedAt") VALUES (?, ?, ?, CURRENT_TIMESTAMP)',
-    args: [SEED_USER_ID, "ig4g-e2e@example.invalid", "ugcportal-ig4g e2e fixture"],
+    const tileImage = tileImages.first();
+    await tileImage.hover();
+    await expect(tileImage).not.toHaveCSS("scale", "none");
   });
-
-  // Shape matches seedMedia's own default (src/lib/test-support/media-
-  // fixtures.ts): published, with a preview, real (if fake) alt text - the
-  // one real difference being no tags, which this test does not need.
-  await db.execute({
-    sql: `INSERT INTO Media
-            (id, "userId", kind, key, "previewKey", "previewId", "mimeType",
-             "sizeBytes", "originalName", "altText", "createdAt", "publishedAt")
-          VALUES (?, ?, 'IMAGE', ?, ?, ?, 'image/jpeg', 4096, ?, ?, ?, ?)`,
-    args: [
-      SEED_MEDIA_ID,
-      SEED_USER_ID,
-      `media/${SEED_USER_ID}/${SEED_MEDIA_ID}-original.jpg`,
-      `previews/${SEED_USER_ID}/${SEED_MEDIA_ID}.webp`,
-      `pv-${SEED_MEDIA_ID}`,
-      `${SEED_MEDIA_ID}.jpg`,
-      "A photograph seeded for ugcportal-ig4g's reduced-motion check",
-      "2026-10-05T09:00:00.000Z",
-      "2026-10-05T10:00:00.000Z",
-    ],
-  });
-});
-
-test.afterAll(async () => {
-  await db.execute({ sql: "DELETE FROM Media WHERE id = ?", args: [SEED_MEDIA_ID] });
-  await db.execute({ sql: "DELETE FROM User WHERE id = ?", args: [SEED_USER_ID] });
-  db.close();
-});
-
-test.describe("reduced motion: the gallery tile's hover scale is actually neutralised", () => {
-  test.use({ reducedMotion: "reduce" });
 
   test("K1: hovering a tile under prefers-reduced-motion: reduce leaves the image's computed scale at none", async ({
     page,
   }) => {
     await page.goto("/");
 
-    const tileImage = page.locator(`[data-gallery-tile="${SEED_MEDIA_ID}"] img`);
-    await expect(tileImage).toBeVisible();
+    const tileImages = page.locator("[data-gallery-tile] img");
+    if ((await tileImages.count()) === 0) {
+      test.skip(true, "no gallery tile in this dev database to check");
+    }
+
+    const tileImage = tileImages.first();
+
+    // HOVER WITNESS (round-1 review): proves hovering THIS element, in
+    // THIS run's environment, really does register at all and produce a
+    // non-none scale - under the default, ordinary-motion emulation this
+    // test has not yet touched. Without this, "scale: none" below could
+    // just as easily mean "the hover never registered" (a flaky selector,
+    // a layout surprise, a browser quirk) as "the reduced-motion guard
+    // worked" - this is the SAME assertion the positive-control test above
+    // makes independently, repeated here so THIS test cannot pass for the
+    // wrong reason.
+    await tileImage.hover();
+    await expect(tileImage).not.toHaveCSS("scale", "none");
+
+    // Reload under reduce, rather than toggling emulateMedia live on an
+    // already-hovered page: a real visitor's reduced-motion preference is
+    // already set when they land on the page, not flipped mid-session, so
+    // reloading is the more faithful simulation - and it also exercises
+    // Next's own SSR output fresh rather than reusing a CSSOM already
+    // built under the old media state.
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.reload();
 
     await tileImage.hover();
-
-    // Playwright's own auto-retrying `toHaveCSS`, not a one-shot read: this
-    // is a hover effect, and the assertion should settle on whatever the
-    // browser actually computes once the hover has registered - the same
-    // reasoning front-page-motion.spec.ts's own positive control already
-    // uses for its translate check.
     await expect(tileImage).toHaveCSS("scale", "none");
-  });
-});
-
-test.describe("positive control: the hover scale is a real, visible effect under ordinary motion", () => {
-  test.use({ reducedMotion: "no-preference" });
-
-  test("the same tile's hover scale is NOT none when motion is not reduced", async ({ page }) => {
-    await page.goto("/");
-
-    const tileImage = page.locator(`[data-gallery-tile="${SEED_MEDIA_ID}"] img`);
-    await expect(tileImage).toBeVisible();
-
-    await tileImage.hover();
-
-    await expect
-      .poll(() => tileImage.evaluate((el) => getComputedStyle(el).scale))
-      .not.toBe("none");
   });
 });

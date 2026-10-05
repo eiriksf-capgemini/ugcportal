@@ -129,28 +129,49 @@ export const GALLERY_TILE_CLASS = `group ${GALLERY_TILE_BASE_CLASS} cursor-zoom-
  * pseudo-class's own (0,1,0) from the `:hover` inside it, for a total of
  * (0,2,0). A bare `.motion-reduce\:scale-none { scale: none; }` is only
  * (0,1,0): LOWER specificity, so the hover rule wins on every hover
- * regardless of source order or of `prefers-reduced-motion`, because
- * nothing here gates the hover rule's MEDIA CONTEXT — it has none; it is
- * unconditional, present under both `reduce` and `no-preference` alike.
- * Verified against a real Chromium instance with `reducedMotion: "reduce"`
- * emulated: with only BUG 1 fixed, a hovered tile's computed `scale` still
- * read `"1.04"`, not `"none"`.
+ * regardless of source order or of `prefers-reduced-motion`. That rule DOES
+ * sit inside its own `@media (hover: hover)` — Tailwind's default guard
+ * against sticky `:hover` on a touch screen — but that is a DEVICE-
+ * CAPABILITY query, unrelated to motion preference: round-1 review,
+ * corrected after an earlier version of this comment overclaimed the rule
+ * was unconditional with no media gate at all. What it actually has is NO
+ * REDUCED-MOTION media context: `(hover: hover)` is true or false the same
+ * way regardless of `prefers-reduced-motion`, so a hover-capable mouse
+ * user with `reduce` set still matches it. Verified against a real
+ * Chromium instance with `reducedMotion: "reduce"` emulated: with only BUG
+ * 1 fixed, a hovered tile's computed `scale` still read `"1.04"`, not
+ * `"none"`.
  *
  * The actual fix is the one `empty-state.tsx`'s own hover-lift already
  * uses and documents: `motion-safe:` on the TRIGGERING utility itself,
  * not (only) a `motion-reduce:` override on the result. `motion-safe:
- * group-hover:scale-[1.04]` compiles inside `@media (prefers-reduced-
- * motion: no-preference)`, so under `reduce` the rule does not exist in
- * the stylesheet AT ALL — specificity never gets a chance to matter,
- * because there is no competing rule to out-rank. `motion-reduce:scale-
- * none` is kept anyway, same as `empty-state.tsx`'s `motion-reduce:
- * translate-none`: the two media queries (`no-preference` vs `reduce`)
- * are mutually exclusive, so this guard never has anything live to
- * override, but it is a documented, deliberately inert belt-and-braces
- * entry rather than a functioning second guard. `motion-reduce:
- * transition-none` is real and is kept for the same reason it always
- * was: `transition-transform` is the `transform` property's transition
- * shorthand in this Tailwind version, and that guard still matters for
+ * group-hover:scale-[1.04]` compiles nested inside BOTH `@media (prefers-
+ * reduced-motion: no-preference)` and, inside that, `@media (hover:
+ * hover)` — so under `reduce` the rule does not exist in the stylesheet AT
+ * ALL, for any device: specificity never gets a chance to matter, because
+ * there is no competing rule to out-rank. `motion-reduce:scale-none` is
+ * kept anyway, same as `empty-state.tsx`'s `motion-reduce:translate-none`:
+ * the two `prefers-reduced-motion` media queries (`no-preference` vs
+ * `reduce`) are mutually exclusive, so this guard never has anything live
+ * to override, but it is a documented, deliberately inert belt-and-braces
+ * entry rather than a functioning second guard.
+ *
+ * ON A USER AGENT WITH NO SUPPORT for the `prefers-reduced-motion` media
+ * feature at all (the same no-support case `hero.tsx`'s own
+ * `HERO_DECORATIVE_SHAPE_CLASS` comment names for its fade-in): an unknown
+ * media feature makes BOTH `no-preference` and `reduce` evaluate false, so
+ * NEITHER `motion-safe:group-hover:scale-[1.04]` NOR `motion-reduce:scale-
+ * none` ever applies. Unlike the hero's shapes, which have an unconditional
+ * `opacity-100` baseline for exactly this case, there is no equivalent
+ * fallback here — the practical result is that the hover scale is simply
+ * ABSENT on such a browser, which is the fail-safe direction (no motion,
+ * rather than unguarded motion) and needs no separate handling.
+ *
+ * `motion-reduce:transition-none` is real and is kept for the reason it
+ * always was, now more completely stated: `transition-transform` compiles
+ * (Tailwind 4.3.3) to `transition-property: transform, translate, scale,
+ * rotate`, not to `transform` alone, so it already covers the `scale`
+ * transition this element actually uses — the guard still matters for
  * anyone whose browser is briefly in `no-preference` and switches, or for
  * any future unconditional `transition-transform` sibling.
  */
