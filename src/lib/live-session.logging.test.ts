@@ -1,6 +1,14 @@
 import type { Session } from "next-auth";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+/**
+ * The committed users array is emptied here, as in
+ * src/lib/sign-in-policy.test.ts: the throttle is demonstrated on the
+ * `no-configuration` channel, and the real array (ugcportal-t33p) makes that
+ * refusal unreachable by always naming somebody.
+ */
+vi.mock("@/config/users", () => ({ CONFIGURED_USERS: [] }));
+
 import { PERMITTED_EMAILS_VAR } from "@/lib/sign-in-policy";
 import { pinEnvironment } from "@/lib/test-support/env";
 import { callbackSession } from "@/lib/test-support/session";

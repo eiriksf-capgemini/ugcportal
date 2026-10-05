@@ -33,8 +33,15 @@ upload surface will not rediscover it.
 1. **Sign-in is refused by default.** With no configuration present, nobody
    can sign in. This is the part that is not up for renegotiation — the whole
    defect was that the open case was the default.
-2. **The permitted set comes from configuration, never from code.** No
-   hardcoded address, no domain literal, no "if the database is empty" branch.
+2. **The permitted set comes from configuration, never from a rule the code
+   invents.** No domain literal, no "if the database is empty" branch, no
+   wildcard. Since `ugcportal-t33p` part of that configuration is a committed
+   TypeScript module (`src/config/users.ts`) rather than an environment
+   variable, and the distinction being kept is the one that matters: those are
+   still *addresses an operator wrote down*, reviewed in a diff, not a
+   predicate the code evaluates. The repository is private, the list changes
+   when a person is added, and committing it is what lets the compiler check
+   the provider half and lets one commit mean one answer on every deployment.
 3. **There is exactly one place that decides.** `evaluateSignIn` in
    [`src/lib/sign-in-policy.ts`](../src/lib/sign-in-policy.ts), reached two
    ways: through `isPermittedSignIn` from the `signIn` callback in
@@ -72,7 +79,8 @@ upload surface will not rediscover it.
 ## What is provisional
 
 **The rule itself.** Today it is a configured allowlist of exact email
-addresses (`ALLOWED_SIGNIN_EMAILS`, unioned with `ADMIN_BOOTSTRAP_EMAILS`).
+addresses (`ALLOWED_SIGNIN_EMAILS`, unioned with `ADMIN_BOOTSTRAP_EMAILS` and
+with every identity in `src/config/users.ts`).
 
 Whether the right rule is an allowlist, an invite system, a domain match, or
 manual approval of each request is a **product decision that has not been
@@ -102,14 +110,271 @@ Deliberately **not** implemented, because each would silently be the decision:
 
 ## What an operator has to do
 
-| Variable | Effect |
+| Source | Effect |
 | --- | --- |
-| `ALLOWED_SIGNIN_EMAILS` | Comma-separated exact addresses permitted to sign in, each optionally bound to one provider with a `google:` or `facebook:` prefix. **This is the one that decides who can upload.** |
+| [`src/config/users.ts`](../src/config/users.ts) | The people this instance is for, each with the identities that belong to them. **Every identity listed here may sign in, and all of one person's identities share one user.** The usual place to add somebody (`ugcportal-t33p`). |
+| `ALLOWED_SIGNIN_EMAILS` | Comma-separated exact addresses permitted to sign in, each optionally bound to one provider with a `google:` or `facebook:` prefix. For somebody who is not (yet) a person in the array — a colleague who only needs to upload. |
 | `ADMIN_BOOTSTRAP_EMAILS` | First-admin bootstrap (`ugcportal-lu7`). Also grants sign-in — see below. |
 
-Neither set: nobody can sign in, and the server says so loudly at startup
+All three are **unioned into one permitted set**. Nothing set anywhere, and
+the array empty: nobody can sign in, and the server says so loudly at startup
 (`checkSignInConfiguration` in `src/instrumentation.ts`). See `env.example`
-for the full notes.
+for the full notes on the two variables.
+
+### One person, several sign-in identities
+
+Auth.js links an OAuth account by the provider's stable subject and otherwise
+falls back to the e-mail address, so one person arriving through Google with
+one address and through Facebook with another used to become **two users** —
+two upload histories, two role rows, two of everything that hangs off
+`User.id`. `src/config/users.ts` is the answer:
+
+```ts
+export const CONFIGURED_USERS: readonly ConfiguredUser[] = [
+  {
+    name: "Eirik",
+    identities: [
+      "google:eiriksanderfjeld@gmail.com",
+      "facebook:eirik@sander-fjeld.com",
+    ],
+  },
+  // ...
+];
+```
+
+The identity syntax is the same `provider:address` form
+`ALLOWED_SIGNIN_EMAILS` accepts (`ugcportal-1551`), and the provider half is
+checked **by the compiler** — `twitter:` or a typo'd `gogle:` does not build.
+There is no unbound form: an identity here always names exactly one provider.
+
+**Where the linking happens, and why it is after the gate.** @auth/core's
+OAuth callback runs `callbacks.signIn` — the gate — and only then asks the
+adapter to find or create the user. `src/lib/configured-user-link.ts` wraps
+three adapter methods — `getUserByEmail`, `createUser` and `linkAccount` —
+so that for an identity in the array:
+
+* the user is **never** resolved by e-mail address;
+* the user **is** resolved by a stable handle derived from `name`
+  (`eirik`), stored in `User.configuredHandle`, created on the person's first
+  sign-in and found by every later one; and
+* an `Account` row is only ever attached to that person's own user.
+
+The pair it matches on comes from the AsyncLocalStorage slot that
+`callbacks.signIn` fills *after* it has permitted the identity — the same
+mechanism that records which identity minted a session (`ugcportal-mzr`). So
+there is no path on which linking happens for an identity the gate refused,
+and nothing the gate itself calls writes a row. An identity that is not in
+the array goes through the unwrapped adapter, unchanged: no handle, one user
+per identity, and @auth/core's own `OAuthAccountNotLinked` protection exactly
+where it was.
+
+The lookup is on the **exact** (provider, normalised address) pair. Never the
+domain, never the provider alone, never the address alone. Two people who
+happen to share an e-mail domain, or a provider, are two people.
+
+**What the array does not do:** it grants no role (that is still
+`ADMIN_BOOTSTRAP_EMAILS` and the admin screen), and it displays nothing
+publicly (`ugcportal-137`). `User.name` is set from it when the row is
+created and is not rewritten afterwards.
+
+**Revocation stays per identity, by design** (`ugcportal-mzr`): removing one
+of a person's identities refuses and deletes only the sessions that identity
+minted, because each session is judged on the `signInProvider` /`signInEmail`
+recorded on its own row — their other identity keeps working, on its own
+devices, until it too is removed. Sharing a `User` row changed who owns the
+uploads; it deliberately did not make revocation an action against a person.
+
+**A sign-in made while somebody else's session is open is refused**, not
+linked. Auth.js's already-signed-in branch attaches the new account to
+whoever holds the session cookie, with no reference to the identity actually
+signing in. `linkAccount` is wrapped to refuse that, write nothing, and send
+the visitor to the Access Denied page. **It refuses in both directions**:
+
+* an identity **in the array**, arriving on top of anybody else's session —
+  that person's account would land on the session-holder's row; and
+* an identity **not** in the array (admitted by `ALLOWED_SIGNIN_EMAILS`),
+  arriving on top of a **configured person's** session — the stranger's
+  account would land on theirs, and `getUserByAccount` would resolve the
+  stranger to that person from then on: their uploads, their role, their
+  rights clearance.
+
+The limit, stated rather than implied: two addresses that are *both* only in
+`ALLOWED_SIGNIN_EMAILS` still behave exactly as Auth.js makes them behave,
+because neither row belongs to a configured person. Changing that is a
+decision about Auth.js's own default, not something this feature took.
+
+Sign out first, then sign in.
+
+#### Adding a person who already has an account
+
+Add them to the array and restart. If they have **never** signed in, that is
+the whole operation — their first sign-in creates the row with the handle
+already on it.
+
+If they have signed in before (through `ALLOWED_SIGNIN_EMAILS`, say), they
+already own a user row with no handle, and possibly more than one. That row
+has to be adopted, or their next sign-in creates a second, empty user beside
+it — and **re-running the existing reconciliation migration will not do it**.
+That migration carries a *snapshot* of the array as it stood when it was
+written (SQL cannot read a TypeScript module), so re-applying it is a no-op
+for anybody added since: it is idempotent precisely because it only ever acts
+on the four identities named inside it.
+
+So adopting a newly-added person is a **new migration**. The cheapest correct
+one is a copy of `20261005120500_reconcile_configured_users` with its
+`INSERT INTO "_ConfiguredIdentitySeed"` rows replaced by the new person's —
+every other statement is generic over that table and needs no edit. Give it a
+later timestamp, and check the handle you type against what
+`configuredUserHandle` derives (the test in
+`src/lib/configured-user-reconciliation-migration.test.ts` does this for
+every migration that carries seed rows, so a typo fails CI rather than
+adopting nobody).
+
+For a single person who has only ever had one user, the whole of it is one
+statement, and running it by hand is reasonable:
+
+```bash
+DB="${DATABASE_URL:-file:./dev.db}"
+sqlite3 "${DB#file:}" \
+  "UPDATE \"User\" SET \"configuredHandle\" = 'their-handle' WHERE \"email\" = 'the-address-they-signed-in-with';"
+```
+
+Either way, do it **before** their next sign-in. Afterwards they have two
+rows and need the merge, not the stamp.
+
+#### When only the `UPDATE` will do
+
+The migration — this one or a new one — matches a row on **both** halves:
+`User.email` equal to the seed address *and* an `Account` for the seed
+provider. So it cannot adopt a row that holds the address through a
+**different** provider, and there is a way to end up with exactly that:
+
+```
+src/config/users.ts     Ada = google:x@example.com
+ALLOWED_SIGNIN_EMAILS   facebook:x@example.com
+```
+
+The Facebook sign-in is not a configured identity, so it takes an ordinary
+row holding `x@example.com` with a Facebook account on it. Ada's Google
+sign-in then cannot create her row — `User.email` is UNIQUE — and no
+migration can adopt the one in the way, because the only provider Ada lists
+for that address is Google and the row has no Google account. **Here the
+one-line `UPDATE` above is the cure**, and the log line says so: it names the
+providers the offending row actually has, and the ones the array would have
+accepted, rather than pointing at a migration that would be a no-op.
+
+**It depends on what the person lists, not on which provider they are signing
+in with.** If Ada listed the address at *both* providers —
+
+```
+src/config/users.ts     Ada = google:x@example.com, facebook:x@example.com
+```
+
+— then the seed carries a row for each, the Facebook one matches the account
+that legacy row does have, and a reconciliation migration adopts it after
+all. The log line names the migration in that case, and running it is the
+right move.
+
+Either way, check it really is the same human before you adopt the row. If it
+is not, the fix is a different address, not a stamped handle.
+
+#### Renaming a person
+
+**The `name` in the array is a key, not a label.** The handle is derived from
+it, so changing `Eirik` to `Eirik S-F` changes the handle to `eirik-s-f`, and
+the next sign-in finds no row with that handle and creates a second, empty
+user — the exact split this feature removes. It cannot be detected at boot,
+because the check that runs there has no database.
+
+So a rename is two steps, in this order:
+
+```bash
+DB="${DATABASE_URL:-file:./dev.db}"
+sqlite3 "${DB#file:}" \
+  "UPDATE \"User\" SET \"configuredHandle\" = 'new-handle' WHERE \"configuredHandle\" = 'old-handle';"
+# then edit src/config/users.ts and redeploy
+```
+
+`checkConfiguredUsers` in `src/instrumentation.ts` reports every mistake that
+*is* visible without a database, each on its own line at startup, and
+**removes whatever it names** — a reported identity or person is neither
+permitted through the array nor linked, so there is no state in which the
+boot log says one thing and the gate does another. The full list:
+
+| What | What happens to it |
+| --- | --- |
+| An identity naming an unknown provider (`twitter:`, `gogle:`) | that identity is dropped |
+| An identity whose address is not one exact address (`google:`, a wildcard, a doubled prefix) | that identity is dropped |
+| One identity listed under two people | dropped from **both** — nothing can tell which of them meant it |
+| One **address** listed under two people, at any providers | every identity carrying it is dropped: `User.email` is UNIQUE, so the second of them could never have a row |
+| A person with no identities | that person is dropped |
+| A person whose name yields no handle at all (no letters or digits) | that person is dropped |
+| A person whose handle would silently drop a letter (`Łukasz` → `ukasz`) | that person is dropped |
+| Two people whose names slug to the same handle | **both** are dropped — the handle is UNIQUE |
+
+**Being dropped costs the access as well as the linking**, unless something
+else admits the address. The array is a source of permission, so an identity
+removed from it is no longer permitted *by it*:
+
+* with **no** `ALLOWED_SIGNIN_EMAILS` entry for the address, the sign-in is
+  refused at the gate — `no-configuration` if the array was the only source
+  configured at all, `not-permitted` otherwise;
+* with an entry for it, the sign-in is permitted and gets an **ordinary,
+  handle-less user**, exactly as any other allowlisted address does. It is
+  not linked to anybody, which is the point.
+
+There is one more way it can fail, and it is the case the drop exists to
+prevent: if two people were listed under one address and an entry now admits
+both, the first to sign in takes the row and the second is refused by
+Auth.js's own `OAuthAccountNotLinked` — `getUserByEmail` finds the first
+person's row, and because neither identity is configured any more this
+wrapper does not withhold it. That refusal is Auth.js's, writes nothing and
+logs nothing here; the boot line naming the collision is the explanation.
+
+One address at **both** providers for **one** person is not on this list and
+never will be: that is one row, and the point of the array.
+
+### The one-off reconciliation for people who already have two users
+
+`prisma/migrations/20261005120500_reconcile_configured_users` is a data-only
+migration. For each person in the array *as of the commit that added it*, it
+finds every user matching one of their exact (provider, address) identities,
+keeps the **oldest**, stamps it with the handle and the configured name, and
+moves everything the others own onto it — `Account`, `Session`, `Media`,
+`RoleChange` (both the target and the actor columns), `ResaleRightsEvent`, and
+the remaining user foreign keys — before deleting them.
+
+It is **idempotent**: after it has run, each person has one user and there is
+nothing left to move, so applying it again writes the same values and changes
+no row. A stray that still owns something which cannot be moved (a second
+standing `ResaleRightsReview`, for instance, which is unique per user) is
+**left in place rather than deleted**, because deleting it would destroy that
+row through the cascade. Such a user is inert — its accounts have moved, so
+nobody can sign in as it — and shows up here:
+
+```bash
+DB="${DATABASE_URL:-file:./dev.db}"
+sqlite3 "${DB#file:}" \
+  "SELECT u.id, u.email FROM \"User\" u
+   WHERE u.\"configuredHandle\" IS NULL
+     AND NOT EXISTS (SELECT 1 FROM \"Account\" a WHERE a.\"userId\" = u.\"id\");"
+```
+
+Its copy of the array is a **snapshot**, not a reference — SQL cannot read a
+TypeScript module. Adding a person later does not mean editing this migration;
+it means a new one, if they already had an account (see "Adding a person who
+already has an account" above). A test
+(`src/lib/configured-user-reconciliation-migration.test.ts`) checks the one
+thing that could drift silently: that each handle in the SQL is what
+`configuredUserHandle` derives from that name, and each identity is what the
+policy's own parser parses.
+
+A migration rather than a script under `scripts/`, because this repository has
+no way to *run* a TypeScript script — the generated Prisma client is
+TypeScript, every module imports through the `@/*` path alias, and nothing in
+`devDependencies` resolves either from Node. A migration is the mechanism
+already used twice here for moving data, and it comes with a test convention
+that a hand-run script does not.
 
 ### Revoking access takes effect on the next request
 
@@ -227,6 +492,12 @@ knows about, so a new client against a database that has not had
 the operator, on every page. The migration itself is additive (two nullable
 columns and a backfill) and is harmless to the running old code, which simply
 never selects them.
+
+The same applies to `20261005120000_add_user_configured_handle`
+(`ugcportal-t33p`), one nullable column on `User` with a UNIQUE index, and to
+`20261005120500_reconcile_configured_users`, which only moves rows. Both are
+harmless to the old code, and the new code cannot read `User` at all until the
+first has run.
 
 ### What the first deploy of the sign-in gate still needs
 
@@ -398,15 +669,21 @@ database.
 ownership is by `user.id`, admin by `role`, and sign-in by the address above
 — but it is what gets *displayed and recorded*: the header
 (`src/components/auth-status.tsx`), the actor on a role change
-(`RoleChange.actorEmail`), the uploader label on the rights screen, and the
-address `reconcileBootstrapAdmin` matches. So a bootstrap entry must name the
-address that was stored when the account was created, and an audit trail may
-name an address its owner no longer uses.
+(`RoleChange.actorEmail`), and the uploader label on the rights screen. So an
+audit trail may name an address its owner no longer uses.
+
+It is **no longer** what the first-admin bootstrap matches. Since
+`ugcportal-t33p`, `reconcileBootstrapAdmin` judges the address *this* sign-in
+was permitted under — the one the gate put in the request's identity slot —
+falling back to `User.email` only outside a sign-in. So a bootstrap entry
+names the address you will actually arrive with, and a stale stored address
+does not silently stop the promotion.
 
 ## How this composes with the first-admin bootstrap
 
-`ADMIN_BOOTSTRAP_EMAILS` and `ALLOWED_SIGNIN_EMAILS` are **unioned into one
-permitted set**. Consequences, both intended:
+`ADMIN_BOOTSTRAP_EMAILS`, `ALLOWED_SIGNIN_EMAILS` and the identities in
+`src/config/users.ts` are **unioned into one permitted set**. Consequences,
+both intended:
 
 - a fresh deployment that sets only `ADMIN_BOOTSTRAP_EMAILS` still works, so
   `ugcportal-lu7` is not broken by this;
@@ -429,6 +706,21 @@ anyway.
 If the mechanism is ever replaced with one that does not naturally contain the
 bootstrap list, the replacement must union it in explicitly, or bootstrap on a
 fresh deployment stops working and the instance cannot get its first admin.
+
+**One thing that changed with `ugcportal-t33p`, and it is a simplification.**
+Once a person can hold two identities on one row, `User.email` is whichever
+of them signed in first — so matching the promotion against it would have
+meant bootstrapping somebody under one address and watching nothing happen.
+`reconcileBootstrapAdmin` therefore judges **the address this sign-in was
+permitted under**, taken from the identity slot the gate fills, and falls back
+to the stored address only when there is no sign-in in scope.
+
+So: **name the identity they will arrive with**. A provider-bound entry
+(`google:someone@example.com`) promotes on a Google sign-in by that address
+whatever `User.email` happens to say, and there is no reason to list both of
+a person's addresses. Nothing else about the bootstrap changed: it still
+promotes only a listed address with no role history, only through the provider
+a bound entry names, and it still runs as an event after the gate.
 
 ## What a refused visitor sees
 

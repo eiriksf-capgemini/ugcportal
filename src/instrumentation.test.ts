@@ -1,6 +1,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+/**
+ * The committed users array is emptied for this file, for the same reason
+ * src/lib/sign-in-policy.test.ts empties it: these are the tests for what
+ * the sign-in ENV VARS report at boot, and with the real array unioned in
+ * (ugcportal-t33p) "nobody can sign in" is never true. The array's own boot
+ * check is `checkConfiguredUsers`, tested below against fixtures it is
+ * handed directly, so this line hides nothing from it.
+ */
+vi.mock("@/config/users", () => ({ CONFIGURED_USERS: [] }));
+
 import {
+  checkConfiguredUsers,
   checkContactEmailConfiguration,
   checkEvidenceEncryption,
   checkSignInConfiguration,
@@ -129,6 +140,64 @@ describe("the sign-in configuration startup check", () => {
       "NOBODY can sign in",
     );
     expect(checkSignInConfiguration({})).toContain("NOBODY can sign in");
+  });
+});
+
+/**
+ * ugcportal-t33p, scope item 5: the committed users array is checked at boot
+ * too, and separately from the env vars above, because its mistakes are a
+ * different kind of problem with a different fix.
+ *
+ * The rule lives in `configuredUserProblems` and has its own tests in
+ * src/lib/configured-users.test.ts. What is asserted here is that the boot
+ * hook exposes it and reports each of the four shapes the bead names — an
+ * identity under two users, an unknown provider, a user with no identities,
+ * and a malformed identity — as its own line. The fixtures are handed in
+ * directly, so this does not depend on what the real array happens to say.
+ */
+describe("the configured-users startup check", () => {
+  it("is quiet for a sound array", () => {
+    expect(
+      checkConfiguredUsers([
+        { name: "Ada", identities: ["google:ada@example.com"] },
+      ]),
+    ).toEqual([]);
+  });
+
+  it("reports each of the four problems as its own line", () => {
+    const problems = checkConfiguredUsers([
+      { name: "Ada", identities: ["google:shared@example.com"] },
+      { name: "Grace", identities: ["google:shared@example.com"] },
+      { name: "Edsger", identities: ["twitter:edsger@example.com"] },
+      { name: "Nobody", identities: [] },
+      { name: "Alan", identities: ["google:*@example.com"] },
+    ] as unknown as Parameters<typeof checkConfiguredUsers>[0]);
+
+    // One line each — folding them into one string is how three get missed.
+    expect(problems).toHaveLength(4);
+    expect(problems.filter((line) => line.includes("more than one"))).toHaveLength(1);
+    expect(
+      problems.filter((line) => line.includes("names no known provider")),
+    ).toHaveLength(1);
+    expect(problems.filter((line) => line.includes("has no identities"))).toHaveLength(1);
+    expect(
+      problems.filter((line) => line.includes("not one exact email address")),
+    ).toHaveLength(1);
+  });
+
+  it("names the file to edit on every line", () => {
+    // Every other check in this file points at env.example; this one has to
+    // point at the module, or the operator has nowhere to go.
+    const problems = checkConfiguredUsers([
+      { name: "Nobody", identities: [] },
+      { name: "Alan", identities: ["google:*@example.com"] },
+    ]);
+
+    expect(problems).toHaveLength(2);
+    for (const problem of problems) {
+      expect(problem).toContain("src/config/users.ts");
+      expect(problem.startsWith("[auth]")).toBe(true);
+    }
   });
 });
 

@@ -43,6 +43,37 @@ model User {
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
+  // WHICH CONFIGURED PERSON THIS ROW IS (ugcportal-t33p): the stable handle
+  // derived from `name` in src/config/users.ts (`configuredUserHandle`), and
+  // the only key a configured person's row is ever looked up by at sign-in.
+  //
+  // It exists because the alternative is e-mail, and e-mail is exactly what
+  // cannot answer the question. @auth/core links an Account by the
+  // provider's stable subject and falls back to `User.email`, so one person
+  // arriving through two providers with two addresses becomes two users —
+  // two upload histories, two role rows. The handle is the one value that is
+  // the same for both of their identities, and it comes from configuration
+  // rather than from anything a provider asserts.
+  //
+  // NULLABLE, and null is the ordinary case for anyone not in the array:
+  // somebody admitted by ALLOWED_SIGNIN_EMAILS alone keeps the unmodified
+  // Auth.js behaviour, one user per identity. SQLite (and Prisma) allow any
+  // number of NULLs under a UNIQUE index, which is what makes "unique among
+  // configured people, absent for everyone else" expressible in one column.
+  //
+  // UNIQUE because two rows claiming the same person is the split this
+  // column removes; the adapter wrapper in src/lib/configured-user-link.ts
+  // relies on the constraint to settle a race between two simultaneous first
+  // sign-ins, and src/instrumentation.ts reports two configured names that
+  // would slug to the same handle before either of them ever signs in.
+  //
+  // NOT a foreign key to anything and not an enum: the array is committed
+  // TypeScript, not a table, so the database cannot check this value and
+  // must not pretend to. A handle here that no longer appears in the array
+  // (a person removed, or renamed) is an orphan the next sign-in would walk
+  // past — see "Renaming a person" in docs/access-control.md.
+  configuredHandle String? @unique
+
   accounts           Account[]
   sessions           Session[]
   media              Media[]

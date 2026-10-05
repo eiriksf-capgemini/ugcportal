@@ -1,3 +1,4 @@
+import { currentSignInIdentity } from "@/lib/live-session";
 import { prisma } from "@/lib/prisma";
 import { setUserRole } from "@/lib/roles";
 import {
@@ -47,12 +48,26 @@ export async function reconcileBootstrapAdmin(
   // closed against bound entries and is ignored by unbound ones.
   account?: { provider?: unknown } | null,
 ): Promise<boolean> {
-  if (!user.id || !user.email) {
+  // THE ADDRESS THIS SIGN-IN WAS JUDGED ON, not the one stored on the row
+  // (PR #98 review, low 6). They were the same thing until ugcportal-t33p:
+  // one identity, one user, one address. Now a person can hold two
+  // identities on one user, and `User.email` is whichever of them signed in
+  // FIRST — @auth/core never refreshes it. So an operator who bootstraps
+  // somebody under their Facebook address, on a user created by their
+  // earlier Google sign-in, got no promotion and no explanation.
+  //
+  // Not a widening: the slot's address is the one `isPermittedSignIn` just
+  // permitted on THIS request, it is still matched against
+  // ADMIN_BOOTSTRAP_EMAILS and still bound to the provider the entry names,
+  // and the role-history guard below is untouched. Outside a wrapped
+  // request there is no slot (see `currentSignInIdentity`), and an
+  // unfilled slot carries `null`, so both fall back to the stored address —
+  // the behaviour every caller had before.
+  const email = currentSignInIdentity()?.signInEmail ?? user.email;
+  if (!user.id || !email) {
     return false;
   }
-  if (
-    !isBootstrapAdminSignIn({ email: user.email, provider: account?.provider })
-  ) {
+  if (!isBootstrapAdminSignIn({ email, provider: account?.provider })) {
     return false;
   }
 

@@ -1,5 +1,19 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+/**
+ * THE USERS ARRAY IS EMPTIED FOR THIS WHOLE FILE (ugcportal-t33p).
+ *
+ * Since that bead, `permittedIdentities` unions src/config/users.ts into the
+ * permitted set, so with the real array in place every assertion below about
+ * `emails`, `configured` and the `no-configuration` refusal would be about
+ * this instance's four real addresses rather than about the fixture the test
+ * states. Emptying it keeps this file what it has always been — the tests
+ * for the ENV-VAR rule — and the array's own contribution is tested against
+ * the real one in src/lib/configured-users.test.ts, which is also where the
+ * union itself is asserted, so nothing goes uncovered by this line.
+ */
+vi.mock("@/config/users", () => ({ CONFIGURED_USERS: [] }));
+
 import {
   PERMITTED_EMAILS_VAR,
   SIGN_IN_PROVIDERS,
