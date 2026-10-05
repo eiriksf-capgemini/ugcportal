@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ContactSection } from "@/components/site/contact-section";
+import { ABOUT_CONTACT_PATH, pathFragment } from "@/lib/routes";
 
 /**
  * Round-5 review: when `CONTACT_EMAIL` fails
@@ -17,11 +18,15 @@ afterEach(() => {
 });
 
 describe("ContactSection — the footer's anchor target (ugcportal-akv6)", () => {
-  it(`carries id="contact", the footer's ABOUT_CONTACT_PATH fragment target`, () => {
+  it("carries the id ABOUT_CONTACT_PATH's fragment names, not a separately hand-typed literal", () => {
     const markup = renderToStaticMarkup(
       <ContactSection defaultSubject="Hello" />,
     );
-    expect(markup).toContain('id="contact"');
+    // Derived from the SAME route constant the footer's Contact link
+    // builds its href from (round-3 review), rather than asserting the
+    // literal "contact" independently of it — the two could otherwise
+    // drift apart without either assertion noticing.
+    expect(markup).toContain(`id="${pathFragment(ABOUT_CONTACT_PATH)}"`);
   });
 });
 

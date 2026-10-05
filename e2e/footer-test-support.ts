@@ -8,7 +8,11 @@ import { expect, type Page } from "@playwright/test";
  * those two files before this.
  */
 
-/** Every href the site footer's own <a> elements carry, fragment included. */
+/**
+ * Every href the site footer's own <a> elements carry, fragment included —
+ * this is the RAW list ("every link the footer renders"), not yet filtered
+ * down to "things worth fetching"; see `uniqueFetchTargets` for that.
+ */
 export async function footerLinkHrefs(page: Page): Promise<string[]> {
   const footer = page.locator("footer[data-site-footer]");
   await footer.scrollIntoViewIfNeeded();
@@ -16,20 +20,38 @@ export async function footerLinkHrefs(page: Page): Promise<string[]> {
   const hrefs = await footer
     .locator("a[href]")
     .evaluateAll((anchors) => anchors.map((a) => a.getAttribute("href") ?? ""));
-  // Filter on the href with any "#fragment" STRIPPED, not the raw string
-  // (round-2 review): a fragment-only href ("#foo", nothing before the
-  // hash) would survive a raw `!== ""` check and then collapse to an empty
-  // string in `uniqueFetchTargets` ("#foo".split("#")[0] === ""), which
-  // would silently fetch the baseURL itself rather than a real target —
-  // passing a 200 check for a link that was never actually a page.
-  return hrefs.filter((href) => href.split("#")[0] !== "");
+  return hrefs.filter((href) => href !== "");
+}
+
+/** True for "mailto:...", "https://...", "tel:...", etc — anything with a URI scheme. */
+function hasScheme(href: string): boolean {
+  return /^[a-z][a-z0-9+.-]*:/i.test(href);
 }
 
 /**
- * The same hrefs, deduplicated and with any "#fragment" stripped — a
- * fragment is never sent to the server, so "/about#contact" is a request
- * for "/about", not for a literal (non-existent) path with a "#" in it.
+ * The hrefs that are actually worth fetching as a same-origin page:
+ * deduplicated, any "#fragment" stripped (a fragment is never sent to the
+ * server, so "/about#contact" is a request for "/about", not a literal
+ * non-existent path with a "#" in it), with the fragment-stripped-empty
+ * and off-origin cases guarded HERE rather than left to the caller
+ * (round-3 review — this function's whole job is "produce fetchable
+ * targets", so it should not rely on `footerLinkHrefs` having pre-filtered
+ * for it):
+ *
+ *  - a fragment-only href ("#foo", nothing before the hash) would
+ *    otherwise collapse to an empty string after stripping
+ *    ("#foo".split("#")[0] === ""), which would silently fetch the
+ *    baseURL itself rather than a real target;
+ *  - a `mailto:`/`tel:`/etc link, or an absolute off-origin URL (a future
+ *    Instagram/Pinterest link, say) is not a same-origin page K1's "every
+ *    footer link target answers 200" means to check, and treating it as
+ *    a path to request would either behave oddly against this test's
+ *    baseURL-relative `request.get` or genuinely reach out to a third
+ *    party during a test run.
  */
 export function uniqueFetchTargets(hrefs: readonly string[]): string[] {
-  return [...new Set(hrefs.map((href) => href.split("#")[0]))];
+  const targets = hrefs
+    .map((href) => href.split("#")[0])
+    .filter((href) => href !== "" && !hasScheme(href) && !href.startsWith("//"));
+  return [...new Set(targets)];
 }

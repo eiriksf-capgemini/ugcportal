@@ -34,12 +34,32 @@ export const PORTFOLIO_PATH = "/portfolio";
 
 /**
  * The "Get in touch" section on /about, as a fragment anchor (ugcportal-akv6).
- * ContactSection (src/components/site/contact-section.tsx) carries the
- * matching `id="contact"`; named here, like every other route in this
- * module, so the footer's "Contact" link cannot hand-type "/about#contact"
- * a second time and drift from it if the section ever moves.
+ * Named here, like every other route in this module, so the footer's
+ * "Contact" link cannot hand-type "/about#contact" a second time and drift
+ * from it if the section ever moves. ContactSection (src/components/site/
+ * contact-section.tsx) derives its own `id` from THIS constant via
+ * `pathFragment` below, rather than also hand-typing "contact" as a
+ * separate literal (round-3 review) — the two could otherwise drift apart
+ * independently of each other.
  */
 export const ABOUT_CONTACT_PATH = `${ABOUT_PATH}#contact`;
+
+/**
+ * The fragment half of a `"/path#fragment"` route constant — e.g.
+ * `pathFragment(ABOUT_CONTACT_PATH) === "contact"` — for a caller that
+ * needs the bare anchor name (an element's `id`) rather than the full
+ * navigable path. Throws on a path with no fragment at all: a caller
+ * reaching for this always has a specific fragment-bearing constant in
+ * mind, so a missing "#" is a mistake at the call site, not a case to
+ * return an empty string for and let render as `id=""`.
+ */
+export function pathFragment(path: string): string {
+  const hashIndex = path.indexOf("#");
+  if (hashIndex === -1) {
+    throw new Error(`pathFragment: "${path}" has no "#fragment" to extract.`);
+  }
+  return path.slice(hashIndex + 1);
+}
 
 /**
  * /llms.txt (ugcportal-o7l), per https://llmstxt.org. The route lives at

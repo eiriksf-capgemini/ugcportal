@@ -349,6 +349,22 @@ describe("linkBlockedInProduction (ugcportal-akv6 K3; reused by ugcportal-nf9l f
     expect(readiness.draft).toBe(false);
     expect(linkBlockedInProduction(readiness, filled)).toBe(false);
   });
+
+  it("round-3 review: blocks a STALE sign-off too (fully configured, draft=true, but blocked=false)", () => {
+    // The branch the e2e suite can observe but not control (a real
+    // deployment's sign-off can go stale without ever becoming
+    // unconfigured) — same fixture as "treats a sign-off for different
+    // prose as no sign-off" above: the prose changed after SIGNED was
+    // recorded, so signedOff=false and draft=true, but configuration is
+    // fine so blocked stays false. `linkBlockedInProduction` must key off
+    // `draft`, not `blocked`, or a stale-sign-off page would wrongly get
+    // linked in production despite reading as a draft (DRAFT_META_NAME
+    // still present — see src/components/legal/legal-page.tsx).
+    const edited = examplePage("Write to {email}, any time.");
+    const readiness = legalReadiness([edited], filled, SIGNED);
+    expect(readiness).toMatchObject({ blocked: false, draft: true });
+    expect(linkBlockedInProduction(readiness, filled)).toBe(true);
+  });
 });
 
 describe("the real legal pages", () => {

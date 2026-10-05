@@ -72,13 +72,29 @@ test("the footer's Privacy/Licence links match today's REAL readiness, whichever
     const body = await response.text();
     const isDraft = /<meta[^>]+name="ugcportal:draft"/.test(body);
     draftByPath.set(path, isDraft);
-    // Round-2 review: assert the pairing explicitly rather than reading
-    // the meta tag out of whatever status happened to come back.
-    // `assertPublishable` (src/lib/legal/publishable.ts) throws in
-    // production for a blocked page, so draft and 500 travel together
-    // here — a draft page that somehow answered 200, or a configured one
-    // that still 500'd, would otherwise go unnoticed.
-    expect(status, `${path}: draft=${isDraft}`).toBe(isDraft ? 500 : 200);
+    // Round-3 review, CONFIRMED: 500 travels with `blocked`
+    // (missing config, or a stray placeholder), not with `draft`
+    // (`draft = blocked || !signedOff`, src/lib/legal/publishable.ts) —
+    // `assertPublishable` only throws when `blocked`. A page that IS fully
+    // configured but has a STALE sign-off (the authored prose changed
+    // since LEGAL_SIGN_OFF was recorded, or it was reverted) is
+    // blocked=false, draft=true, and serves 200 WITH the draft meta tag —
+    // round 2's "draft => 500" pairing demanded 500 for exactly that case
+    // and aborted this test before the footer assertions below ever ran
+    // (verified against a real `next start` with the sign-off digest
+    // patched to simulate it). Observable-only pairing instead: a page
+    // WITHOUT the meta tag must answer 200; a page WITH it may answer
+    // either 200 (stale sign-off) or 500 (blocked) — this test does not
+    // get to demand which, only that one of the two is consistent with
+    // carrying the marker at all. The footer assertions below then judge
+    // against `isDraft` itself (whichever readiness the page reported),
+    // not against the status.
+    if (isDraft) {
+      expect([200, 500], `${path}: a draft page may answer 200 (stale sign-off) or 500 (blocked)`)
+        .toContain(status);
+    } else {
+      expect(status, `${path}: not draft, so must answer 200`).toBe(200);
+    }
   }
 
   await page.goto("/");

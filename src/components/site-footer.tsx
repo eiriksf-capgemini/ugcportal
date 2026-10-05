@@ -120,8 +120,11 @@ const COMING_SOON_SUFFIX = " (coming soon)";
  * contact.ts) happens to say today. That constant is a fact about this
  * repo's actual legal text, not a test fixture, and it changes over time
  * (ugcportal-alg signed off the real pages after this component was first
- * written — see src/components/site-footer.test.tsx's own comment on why
- * its K3 tests no longer render a live SiteFooter against it).
+ * written) — testing the rendering rule here independently of it means
+ * most of this file's K3 coverage does not need to assume a value for it.
+ * One case still deliberately DOES render a live SiteFooter against the
+ * real sign-off, on purpose — see src/components/site-footer.test.tsx's
+ * own header comment for all four cases.
  */
 export function FooterNavLink({
   label,

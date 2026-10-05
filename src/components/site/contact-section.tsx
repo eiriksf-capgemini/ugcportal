@@ -6,7 +6,7 @@ import {
   isBareEmailAddress,
   resolveContactEmail,
 } from "@/lib/contact";
-import { PRIVACY_PATH } from "@/lib/routes";
+import { ABOUT_CONTACT_PATH, PRIVACY_PATH, pathFragment } from "@/lib/routes";
 import { CONTACT_INTRO, CONTACT_NOTICE } from "@/lib/site";
 
 /**
@@ -69,9 +69,12 @@ export function ContactSection({ defaultSubject }: { defaultSubject: string }) {
     : CONTACT_EMAIL_FALLBACK_LABEL;
 
   return (
-    // id="contact" is the footer's link target (ABOUT_CONTACT_PATH,
-    // src/lib/routes.ts, ugcportal-akv6) — data-page-section="contact" above
-    // was a test hook only and nothing a fragment link could navigate to.
+    // id derived from ABOUT_CONTACT_PATH itself (src/lib/routes.ts), not a
+    // second hand-typed "contact" literal (round-3 review) — the footer's
+    // Contact link and this section's navigation target would otherwise
+    // be two independent places that happen to agree today and could
+    // silently drift apart. data-page-section="contact" above was a test
+    // hook only and nothing a fragment link could navigate to.
     //
     // scroll-mt-[var(--header-height,...)], not scroll-mt-14 (round-1
     // review): PR #94 introduces --header-height on the shell, and once
@@ -82,7 +85,7 @@ export function ContactSection({ defaultSubject }: { defaultSubject: string }) {
     // match #94's --header-height exactly once that lands, or this reverts
     // to the bug it fixes.
     <section
-      id="contact"
+      id={pathFragment(ABOUT_CONTACT_PATH)}
       className="mt-10 scroll-mt-[var(--header-height,3.5rem)]"
       data-page-section="contact"
     >

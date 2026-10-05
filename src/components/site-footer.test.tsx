@@ -27,20 +27,32 @@ import { FooterNavLink, SiteFooter } from "./site-footer";
  * K2: a reviewable snapshot of every visible string (see
  * "K2: every visible string, for review" below) — Eirik should read this
  * list in the PR diff, not just trust that the component compiles.
- * K3: the production draft-link guard, split across three layers so no one
- * of them has to assume a value for src/lib/legal/contact.ts's real
- * LEGAL_SIGN_OFF (a fact about this repo's actual legal text, which
- * changes over time — ugcportal-alg signed off the real pages after this
- * component was first written, which is exactly the kind of change this
- * split is meant to survive): the pure "is this page blocked" rule
- * (`linkBlockedInProduction`, fully fixture-injectable) is unit-tested in
- * src/lib/legal/publishable.ts's own test file; "what does FooterNavLink
- * DO with a `blocked` flag" is unit-tested directly below; "does SiteFooter
- * actually wire the two together" is tested below that, with a
- * deliberately-incomplete configuration fixture that forces the outcome
- * deterministically regardless of the real sign-off. The real e2e coverage
- * (an actual production server, today's REAL readiness, the meta tag read
- * from the rendered page) lives in e2e/production/site-footer-draft.spec.ts.
+ * K3: the production draft-link guard, split across four cases (round-3
+ * review: an earlier version of this comment claimed NONE of them render a
+ * live SiteFooter against the real src/lib/legal/contact.ts LEGAL_SIGN_OFF
+ * — false, the fourth one below does, deliberately):
+ *
+ *  1. the pure "is this readiness blocked from linking" rule
+ *     (`linkBlockedInProduction`, fully fixture-injectable — including a
+ *     STALE sign-off, draft=true/blocked=false) is unit-tested in
+ *     src/lib/legal/publishable.ts's own test file;
+ *  2. "what does FooterNavLink DO with a `blocked` flag" is unit-tested
+ *     directly below, independent of how that flag was computed;
+ *  3. "does SiteFooter actually wire the two together" is tested below
+ *     that, with a deliberately-incomplete configuration fixture that
+ *     forces a blocked outcome deterministically regardless of the real
+ *     sign-off (missing config alone is enough — see that describe
+ *     block's own comment);
+ *  4. the POSITIVE path — configured AND signed off, in production — is
+ *     ALSO tested below that, against today's REAL LEGAL_SIGN_OFF rather
+ *     than a fixture (ugcportal-alg signed off the real pages after this
+ *     component was first written; this case exists precisely because
+ *     that is a fact that changes over time and the other three cases
+ *     cannot exercise it at all).
+ *
+ * The real e2e coverage (an actual production server, today's REAL
+ * readiness, the meta tag read from the rendered page) lives in
+ * e2e/production/site-footer-draft.spec.ts.
  */
 
 afterEach(() => {
@@ -174,7 +186,7 @@ describe.each([
   ["full", false],
   ["compact", true],
 ] as const)(
-  "SiteFooter wiring: the production guard is NODE_ENV-gated, not draft-gated (%s variant)",
+  "SiteFooter wiring: blocked while incomplete or unsigned, linked once real and signed off (%s variant)",
   (_name, compact) => {
     // Review-standards family 4 (sibling omission): the same wiring and the
     // `blocked` flags it produces are shared, unparameterised, by both
@@ -182,15 +194,22 @@ describe.each([
     // assumed to hold for its sibling is exactly the shape that family
     // names, so both are driven through this same suite.
     //
-    // UNSET_LEGAL_ENV, not a filled-in fixture (round-1 review follow-up):
-    // with every LEGAL_* variable blank, `legalReadiness` reports
-    // `missing.length > 0`, which makes `blocked` — and therefore `draft`
-    // — true REGARDLESS of src/lib/legal/contact.ts's real LEGAL_SIGN_OFF
-    // (`draft = blocked || !signedOff`; `blocked` alone is enough). That
-    // makes this test's outcome depend only on NODE_ENV, the one axis it
-    // means to exercise, rather than on whatever the real sign-off
-    // currently says about the real prose — which is a fact about this
-    // repo's legal text, not a fixture this test should assume.
+    // Three cases below, not one (round-3 review — an earlier version of
+    // this comment, and this describe block's own title, implied the
+    // first two were the whole story and that no test here renders a live
+    // SiteFooter against the real sign-off; the third does, deliberately):
+    //
+    //  - UNSET_LEGAL_ENV, not a filled-in fixture: with every LEGAL_*
+    //    variable blank, `legalReadiness` reports `missing.length > 0`,
+    //    which makes `blocked` — and therefore `draft` — true REGARDLESS
+    //    of src/lib/legal/contact.ts's real LEGAL_SIGN_OFF (`draft =
+    //    blocked || !signedOff`; `blocked` alone is enough). That makes
+    //    the first two tests' outcome depend only on NODE_ENV, the one
+    //    axis they mean to exercise, rather than on whatever the real
+    //    sign-off currently says about the real prose;
+    //  - the third test is the POSITIVE case those two cannot reach: fully
+    //    configured (FILLED_LEGAL_ENV) AND actually signed off, against
+    //    today's real LEGAL_SIGN_OFF rather than a fixture.
     afterEach(() => {
       vi.unstubAllEnvs();
     });
