@@ -81,8 +81,9 @@ export default async function Home() {
    * to the SAME `resolveSessionOrAnonymous()` — all three share one adapter
    * round trip (via `getSession`'s own `cache()`) and, since ugcportal-8df3,
    * one fail-safe and one logged line between them too (see that module's
-   * own comment for how the single log is kept to one even though all three
-   * callers can reach the `catch` independently).
+   * own comment: inside one real render `cache()` runs the fail-safe's own
+   * body exactly once, so the other two callers never even reach its
+   * `catch` — they receive that one call's already-settled result).
    *
    * This is a DIFFERENT session read from the one src/app/page.test.tsx's
    * own `vi.mock("@/lib/auth", ...)` guards against: that mock stubs plain

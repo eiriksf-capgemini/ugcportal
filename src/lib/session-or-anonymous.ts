@@ -29,40 +29,48 @@ import { getSession } from "@/lib/auth";
  * indistinguishable from a legitimate refusal — see the comments on those
  * two call sites for why failing closed means crashing, not redirecting.
  *
- * LOGGED ONCE PER REQUEST, not once per caller — and in real production
- * code, `cache()` wrapping this exported function IS the whole mechanism
- * (round-1 review of this PR, finding 1 — an earlier version of this
- * comment claimed the `WeakSet` below did the real work; it does not, see
- * the correction below). `getSession()` is itself `cache()`-memoized per
- * request (src/lib/auth.ts), and wrapping THIS function the same way means
- * that within one real React Server Component render, `Home`, `AuthStatus`
- * and `UploadNavLink` all calling `resolveSessionOrAnonymous()` (no
- * arguments) get `cache()`-deduped to exactly ONE execution of the body
- * below for the whole render — the other two callers receive that one
- * execution's already-settled result directly, so the `catch` block below
- * never runs a second time to consult the `WeakSet` at all. Confirmed live
- * on a dev server (round-1 review): a rejected session read produced
- * exactly one logged line for `/` and exactly one for `/about`.
+ * LOGGED ONCE PER REQUEST, not once per caller (round-2 review of this PR,
+ * finding 1 — an earlier version of this comment, itself a round-1
+ * correction, still had this wrong: it said the `WeakSet` only matters
+ * OUTSIDE a render, which overclaims what the `WeakSet` does there — see
+ * the measured facts below). There are two dedupe layers here, and inside
+ * a real React Server Component render they are REDUNDANT with each other
+ * — either alone is already sufficient, because `getSession()` is itself
+ * `cache()`-memoized per request (src/lib/auth.ts): within one render,
+ * `Home`, `AuthStatus` and `UploadNavLink` all calling
+ * `resolveSessionOrAnonymous()` reach a `getSession()` that hands back the
+ * SAME promise regardless of anything below. That alone is enough for the
+ * `WeakSet` to dedupe the log even with the outer `cache()` wrapper
+ * removed; separately, the outer `cache()` wrapping THIS function is
+ * enough on its own, with the `WeakSet` check forced open, to collapse all
+ * three callers to exactly ONE execution of the body below for the whole
+ * render. Confirmed live on a dev server (round-1 review): a rejected
+ * session read produced exactly one logged line for `/` and exactly one
+ * for `/about`.
  *
- * The `WeakSet` is belt-and-braces, not load-bearing, and only matters
  * OUTSIDE an active render — a plain, direct call, which is the one thing
  * this repo's own test harness has to make (`renderToStaticMarkup` cannot
  * resolve nested async Server Components; see src/app/page.error.test.tsx's
- * comment). There, `cache()` transparently falls through to an uncached
- * call (confirmed empirically, the same way src/lib/auth.ts's own comment
- * on `getSession` documents for that function), so each direct call runs
- * the body independently — but the REAL `getSession()`, called the same
- * way, ALSO falls through to an uncached call and hands back a fresh,
- * unshared promise every time. So in genuine production code reached this
- * way, the two rejected `getSession()` promises the `WeakSet` would need to
- * recognise as "the same one" never actually arise: inside a render,
- * `cache()` above already prevents a second execution; outside one, nothing
- * ever shares a promise for the `WeakSet` to key on. The `WeakSet` only
- * does real work in this file's own test suite (page.error.test.tsx's
- * "assembled shell" describe block), which mocks `getSession()` to hand
- * three direct calls the SAME promise — deliberately reproducing what a
- * real render's `cache()` would give them for free, since the harness has
- * no way to put those three calls behind an actual render.
+ * comment) — NEITHER layer dedupes anything for the real implementation.
+ * `cache()` transparently falls through to an uncached call there
+ * (confirmed empirically, the same way src/lib/auth.ts's own comment on
+ * `getSession` documents for that function), so the outer wrapper stops
+ * collapsing calls; and the REAL `getSession()`, called the same way, ALSO
+ * falls through to an uncached call and hands back a fresh, unshared
+ * promise every time, so the `WeakSet` has no shared key to dedupe on
+ * either. Three direct calls to the real implementation outside a render
+ * would therefore log three times, not one.
+ *
+ * This file's own test suite (page.error.test.tsx's "assembled shell"
+ * describe block) exercises the `WeakSet` specifically, not the `cache()`
+ * path: its mock makes `getSession()` hand three direct calls the SAME
+ * promise — reproducing, by hand, what a real render's `cache()` gives for
+ * free — which is the one case outside a render where the `WeakSet` has
+ * something to key on. The `cache()` path (the mechanism that actually
+ * carries the guarantee inside a real render) is verified only live, on a
+ * dev server, not by any test in this repo — this harness cannot put
+ * `Home`, `AuthStatus` and `UploadNavLink` behind one real render to
+ * exercise it directly.
  */
 const loggedSessionRejections = new WeakSet<Promise<unknown>>();
 

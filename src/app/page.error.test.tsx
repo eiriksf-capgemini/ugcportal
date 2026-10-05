@@ -57,12 +57,18 @@ import { afterEach, describe, expect, it, vi } from "vitest";
  * one each time. This mirrors what the real `getSession()` actually
  * guarantees in production — it is `cache()`-memoized per request
  * (src/lib/auth.ts), so `Home()`, `AuthStatus()` and `UploadNavLink()` all
- * await the identical promise for one request — which is the premise the
- * shared fail-safe's single-log dedupe (keyed on that promise's identity,
- * see src/lib/session-or-anonymous.ts) depends on. Without this, three
+ * await the identical promise for one request. That sharing is one of TWO
+ * mechanisms that independently make the shared fail-safe log once per
+ * request inside a real render (round-2 review of this PR, finding 2 — an
+ * earlier version of this comment called it "the premise the dedupe
+ * depends on", as if it were the only route; see src/lib/session-or-
+ * anonymous.ts's own comment for the other one, `cache()` wrapping the
+ * fail-safe itself, and for why only the sharing this mock reproduces is
+ * exercisable outside a render at all). Without this, three
  * independently-rejecting promises below would also be a legitimate test of
  * "each caller survives a rejection", but could never prove "exactly once
- * per request", since nothing would be shared for the dedupe to key on.
+ * per request" the way THIS mock can, since nothing would be shared for
+ * the `WeakSet` dedupe to key on.
  * Created lazily, not eagerly at module scope, and reset to `null` in
  * `afterEach`, so a test that leaves `rejects` false never allocates an
  * unused rejected promise (which Node would otherwise warn about as
@@ -377,10 +383,13 @@ describe("the assembled shell: AuthStatus and UploadNavLink survive a rejected g
     // resolving to `null` IS the signed-out markup here, not a crash.
     expect(navResult.value).toBeNull();
 
-    // Exactly one log for the whole request, not three — see
-    // src/lib/session-or-anonymous.ts's own comment for the WeakSet dedupe
-    // this proves, and `mockSession.rejectionPromise`'s comment above for
-    // why this mock can prove it at all.
+    // Exactly one log for the whole request, not three. This proves the
+    // `WeakSet` dedupe in src/lib/session-or-anonymous.ts fires correctly
+    // against a shared rejected promise (`mockSession.rejectionPromise`'s
+    // comment above explains why this mock, not a render, is what gives it
+    // one to key on) — it is NOT proof of the `cache()` path that real
+    // production actually relies on inside a render, which that module's
+    // own comment is explicit is verified live, on a dev server, instead.
     expect(consoleError).toHaveBeenCalledOnce();
     expect(consoleError.mock.calls[0][0]).toContain(
       "the shared session read",
