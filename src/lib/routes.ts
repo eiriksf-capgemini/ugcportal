@@ -24,10 +24,9 @@ export const MEDIA_UPLOAD_PATH = "/api/media";
  * ugcportal-qnq9.4's /personvern and /lisens, which keep their Norwegian
  * names despite English content (see that bead's own title).
  *
- * `ABOUT_PATH` is also the header's link target (ugcportal-14k9, concurrent
- * with this bead) — named here so that bead imports the same constant
- * rather than a hand-typed "/about" that could drift from this route if it
- * were ever renamed.
+ * `ABOUT_PATH` is also the header's link target (ugcportal-14k9, PR #94,
+ * which landed after this page) — one constant, so the header and the page
+ * cannot drift from each other if the route were ever renamed.
  */
 export const ABOUT_PATH = "/about";
 export const PORTFOLIO_PATH = "/portfolio";

@@ -17,15 +17,18 @@ import type { SeedMediaOptions } from "@/lib/test-support/media-fixtures";
  * says about them. A stubbed feed would prove the component can draw whatever
  * it is handed, which was never the half in doubt.
  *
- * The session helper throws rather than returning null, exactly as it does
- * next door: the public gallery must not consult the session, and a stub that
- * answered null would behave identically for the anonymous visitor this file
- * simulates — the one caller who would never reveal the bug.
+ * `auth` throws rather than returning null, exactly as it does next door: the
+ * public gallery must not consult the session, and a stub that answered null
+ * would behave identically for the anonymous visitor this file simulates —
+ * the one caller who would never reveal the bug. `getSession` (a separate
+ * concern — see src/app/page.test.tsx's own comment) resolves `null`: the
+ * true anonymous case, backing the front page's hero (ugcportal-6dvg).
  */
 vi.mock("@/lib/auth", () => ({
   auth: () => {
     throw new Error("the public gallery must not consult the session");
   },
+  getSession: () => Promise.resolve(null),
 }));
 
 const database = createTemporaryDatabase();
@@ -518,11 +521,17 @@ describe("K4 — one gallery, never a section or a route per tag", () => {
      *
      * Counted rather than pattern-matched against the subject names, which
      * is what the first version of this did and what made it fail for the
-     * wrong reason: SITE_DESCRIPTION is literally "Food, wine and drink,
-     * technology and books, photographed.", so a "no heading starts with a
-     * subject name" rule flags the page's own tagline. A section per tag
-     * shows up as extra headings whatever they are called, so counting is
-     * both the stricter check and the one that means what it says.
+     * wrong reason: the page's own h1 used to be SITE_DESCRIPTION, then
+     * briefly SITE_TAGLINE (ugcportal-14k9 PR #94 round 1), both of which
+     * name the same subjects a tag section would — so a "no heading starts
+     * with a subject name" rule flagged the page's own heading rather than
+     * an actual regression. Round 2 settled the h1 on "Gallery" instead (see
+     * gallery.tsx's own comment for why neither earlier version was right),
+     * which no longer collides with any subject name — but the count-based
+     * check is kept rather than reintroducing a pattern match, since a
+     * section per tag shows up as extra headings whatever they are called,
+     * making counting both the stricter check and the one least likely to
+     * need revisiting the next time this heading's copy changes.
      */
     expect([...markup.matchAll(/<h[1-6]\b/g)]).toHaveLength(1);
   });

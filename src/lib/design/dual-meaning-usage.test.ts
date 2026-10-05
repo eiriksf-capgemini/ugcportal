@@ -77,12 +77,42 @@ const SRC_ROOT = path.resolve(
  * or `border-primary` inside `border-primary-hover` (ugcportal-rw9j's own
  * PETROL_OUTLINE_STYLE uses exactly that pair, deliberately not pinned here
  * since --primary-hover is not one of the dual-meaning tokens).
+ *
+ * `text-ink` (ugcportal-14k9 PR #94 review round 1, low finding 5) is NOT a
+ * fifth dual-meaning token - its meaning never changed, and `button.tsx`
+ * documents it as safe only inside one of the old near-black wells, never
+ * against `--background`. It is pinned here anyway, for a related but
+ * distinct reason: this file's own mechanism - fail loudly on any (file,
+ * count) this scanner has not seen audited before - catches a NEW file
+ * typing the literal `text-ink` class string somewhere outside an audited
+ * well, the moment it happens, rather than at review.
+ *
+ * What it does NOT catch, confirmed empirically rather than assumed: PR
+ * #94's own round-1 medium finding was `<Button variant="ghost">` inside
+ * mobile-nav-toggle.tsx, not a literal `text-ink` string in that file - this
+ * is exactly the scope limit this file's own docstring already names
+ * ("it cannot see one reaching a file through component composition -
+ * `<Button variant="outline">`... carries no `border-primary`/`text-primary`
+ * substring of their own"). Reverting that variant back to `"ghost"` and
+ * re-running this suite leaves it green, because `ghost` is a string inside
+ * button.tsx, not inside mobile-nav-toggle.tsx. The real guard against THAT
+ * class of regression is mobile-nav-toggle.contrast.test.tsx, which resolves
+ * whichever token the component's REAL rendered className carries and
+ * measures it directly - confirmed to catch the identical mutation this
+ * paragraph describes. `text-ink`'s addition here is still worth having for
+ * what it DOES catch (the literal-string case), just not a substitute for
+ * that component-level test.
+ *
+ * The negative lookahead above still matters for this addition the same way
+ * it does for the other four: `text-ink-muted` is a different, unrelated
+ * token and must not be swallowed into `text-ink`'s count.
  */
 const DUAL_MEANING_TOKENS = [
   "text-foreground",
   "text-primary",
   "text-muted-foreground",
   "border-primary",
+  "text-ink",
 ] as const;
 type DualMeaningToken = (typeof DUAL_MEANING_TOKENS)[number];
 
@@ -116,7 +146,7 @@ function scanDualMeaningUsage(): Map<string, Partial<Record<DualMeaningToken, nu
 
   const found = new Map<string, Partial<Record<DualMeaningToken, number>>>();
   for (const file of files) {
-    const source = stripComments(readFileSync(file, "utf8"));
+    const source = stripComments(readFileSync(file, "utf8"), file);
     const relative = path.relative(path.dirname(SRC_ROOT), file);
 
     TOKEN_PATTERN.lastIndex = 0;
@@ -175,20 +205,75 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
   // so their own "text-primary" counts drop; rights/page.tsx keeps one
   // differently-styled link of its own.
   "src/app/admin/settings/rights/page.tsx": { "text-muted-foreground": 5, "text-primary": 1 },
-  "src/app/admin/settings/rights/decision-form.tsx": { "text-muted-foreground": 3 },
+  // text-ink counts (ugcportal-14k9 PR #94 review round 1, low finding 5):
+  // every field in this form - five identically-styled inputs/textareas -
+  // renders on the resale-rights decision screen's plain page canvas, not
+  // any well; text-ink here is the pre-existing body-text token for that
+  // same safe context, pinned so a new usage cannot land silently.
+  "src/app/admin/settings/rights/decision-form.tsx": {
+    "text-muted-foreground": 3,
+    "text-ink": 5,
+  },
   "src/app/admin/settings/users/page.tsx": { "text-muted-foreground": 4 },
   "src/app/admin/settings/instagram/page.tsx": { "text-muted-foreground": 3 },
   "src/app/upload/page.tsx": { "text-muted-foreground": 1 },
-  "src/app/upload/upload-form.tsx": { "text-foreground": 2, "text-muted-foreground": 5 },
-  "src/components/upload-link.tsx": { "text-foreground": 1, "text-primary": 1 },
-  "src/components/ui/button.tsx": { "border-primary": 1, "text-primary": 2 },
-  // ugcportal-akv6 moved the footer (and its one text-muted-foreground
-  // usage) out to src/components/site-footer.tsx; the header markup this
-  // bead left untouched keeps its own text-foreground/text-primary pair.
-  "src/components/app-shell.tsx": {
-    "text-foreground": 1,
-    "text-primary": 1,
+  // text-ink: 2 (low finding 5) - the alt-text and caption labels, on the
+  // upload form's own plain canvas (ugcportal-gwr). The two inputs that
+  // used to make this 4 now take their class from the shared
+  // text-input.ts constant (ugcportal-qnq9.7 round 3), audited below.
+  "src/app/upload/upload-form.tsx": {
+    "text-foreground": 2,
+    "text-muted-foreground": 5,
+    "text-ink": 2,
   },
+  // text-ink: 1 (low finding 5) - the queued file's name, on the upload
+  // page's own plain canvas (ugcportal-n3c).
+  "src/app/upload/upload-queue-list.tsx": { "text-ink": 1 },
+  // Merge of ugcportal-qnq9.7 (PR #93) with this bead's text-ink audit: the
+  // shared input class (one text-ink, on the input's own bg-surface-1 fill,
+  // the same well-interior case as decision-form.tsx's bg-surface-3 fields)
+  // and the About/Portfolio contact form's two field labels, on the page
+  // canvas exactly like upload-form.tsx's labels above.
+  "src/components/ui/text-input.ts": { "text-ink": 1 },
+  "src/components/site/contact-mailto-form.tsx": { "text-ink": 2 },
+  // text-ink: 2 (low finding 5) - button.tsx's OWN two usages
+  // (NEUTRAL_OUTLINE_STYLE and the `ghost` variant), each documented there
+  // as measured and safe only inside one of the old near-black wells. Pinned
+  // so a third usage inside button.tsx cannot land silently; a caller
+  // choosing `variant="ghost"` on an unsafe background has no "text-ink"
+  // substring of its own and is this scanner's documented scope limit -
+  // mobile-nav-toggle.contrast.test.tsx is the guard for that case.
+  "src/components/ui/button.tsx": { "border-primary": 1, "text-primary": 2, "text-ink": 2 },
+  /*
+   * ugcportal-14k9: the wordmark and tagline tokens app-shell.tsx's former
+   * entry covered moved with the header's markup into site-header.tsx. The
+   * nav links' shared base class (text-foreground/hover:text-primary) lives
+   * in src/components/header-nav-link.ts, shared with upload-link.tsx (PR
+   * #94 round 1, low finding 4) - upload-link.tsx's own former entry is
+   * retired with it, since the literal class string no longer appears in
+   * that file. The sticky header is bg-background, so the page-canvas
+   * tokens are exactly right here, same as the wordmark always was.
+   *
+   * Round 4 reuse finding: the wordmark itself ALSO now imports
+   * HEADER_NAV_LINK_CLASS (cn(HEADER_NAV_LINK_CLASS, "min-w-12 shrink-[999]
+   * truncate tracking-tight")) instead of re-spelling the same suffix a
+   * third time, so site-header.tsx's own text-foreground/text-primary count
+   * drops to zero - only the tagline's text-muted-foreground remains
+   * literal in that file. header-nav-link.ts's own count is unchanged: the
+   * wordmark is a second CALLER of the existing constant, not a second
+   * definition of it.
+   */
+  "src/components/header-nav-link.ts": { "text-foreground": 1, "text-primary": 1 },
+  // Just the aria-[current=page]:text-primary highlight this component adds
+  // on top of the shared base class above.
+  "src/components/primary-nav-link.tsx": { "text-primary": 1 },
+  "src/components/site-header.tsx": { "text-muted-foreground": 1 },
+  // app-shell.tsx itself carries no entry (round-6 review, merge with
+  // ugcportal-14k9): the header's markup moved out to site-header.tsx
+  // above and the footer's moved out to site-footer.tsx below, so the
+  // file this bead's own doc comment still calls "the application frame"
+  // is left with no literal className of its own for any of these four
+  // tokens — zero matches, per this file's own "zero matches" rule.
   "src/components/gallery/gallery.tsx": { "text-foreground": 2, "text-muted-foreground": 2 },
   "src/components/gallery/gallery-unavailable.tsx": {
     "text-foreground": 1,
@@ -282,6 +367,39 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
     "text-muted-foreground": 4,
     "text-foreground": 2,
   },
+
+  /*
+   * ugcportal-6dvg: the front page's "living empty state" — rendered by
+   * src/app/page.tsx directly on --background inside the app shell's
+   * <main>, the exact same placement as GalleryEmpty/GalleryUnavailable it
+   * replaces when the gallery is genuinely empty (not inside any well), so
+   * the page-canvas pair is the correct one here too. Two text-foreground:
+   * the heading and the "see the portfolio" link; one text-muted-foreground:
+   * the supporting paragraph.
+   */
+  "src/components/home/empty-state.tsx": {
+    "text-foreground": 2,
+    "text-muted-foreground": 1,
+  },
+  /*
+   * ugcportal-6dvg's own hero.tsx: the front page's hero, which renders
+   * inside its own petrol-gradient well instead of --background and uses
+   * `text-ink` only (round-2 review, low finding: this comment used to
+   * also say "text-ink-muted" — that token measured below threshold on
+   * this specific well and was dropped from hero.tsx entirely during this
+   * bead's own round-1 review fix; see hero.tsx's own comment on its lead
+   * paragraph), measured safe in contrast.ts's ink-on-hero-petrol.
+   *
+   * ugcportal-akv6 round 6: this entry itself was MISSING from main at the
+   * point PR #96 merged origin/main in — "text-ink" was already a tracked
+   * token by the time #97 (this file's bead) shipped, so the file's own
+   * dual-meaning-usage audit should already have required this entry; the
+   * two literal `text-ink` usages are the heading and the lead paragraph
+   * (hero.tsx lines ~161 and ~173). Confirmed against a clean checkout of
+   * origin/main at 35800c9 before adding this — this test fails there
+   * too, independent of this merge.
+   */
+  "src/components/home/hero.tsx": { "text-ink": 2 },
 };
 
 describe("dual-meaning token usage is audited, not just found", () => {

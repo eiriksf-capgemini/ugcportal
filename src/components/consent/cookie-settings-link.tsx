@@ -41,7 +41,18 @@ export function CookieSettingsLink() {
   return (
     <button
       type="button"
-      onClick={reopen}
+      /*
+       * ugcportal-ysub item 7: the invoking element is passed EXPLICITLY,
+       * from this click event's own `currentTarget` (always this button,
+       * whatever was clicked inside it), rather than being inferred by
+       * cookie-banner.tsx from `document.activeElement` when the banner
+       * opens. Safari/WebKit does not focus a clicked <button> at all, so
+       * `activeElement` there was <body> — an element that IS focusable
+       * enough for `.focus()` to "succeed", so the banner's own fallback
+       * never fired and focus landed on an unannounced <body> on exactly
+       * the browser the fallback existed for.
+       */
+      onClick={(event) => reopen(event.currentTarget)}
       // Round 5, finding 3: cookie-banner.tsx's focus-restoration effect
       // looks this up fresh (by this stable attribute, not by holding a
       // ref to this component) as its first fallback target when the

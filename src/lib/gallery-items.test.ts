@@ -5,6 +5,7 @@ import {
   appendGalleryItems,
   galleryItemAlt,
   galleryItemLabel,
+  isGenuinelyEmptyPage,
   toGalleryItem,
   toGalleryItems,
   type GalleryItem,
@@ -557,5 +558,31 @@ describe("the tags on a mapped item", () => {
     expect(mappedTags([{ slug: PORTFOLIO_TAG_SLUG, name: "Portfolio" }])).toEqual(
       [],
     );
+  });
+});
+
+/**
+ * ugcportal-6dvg round-2 review, low finding: nothing asserted the `&&
+ * !hasMore` half of this function's own expression before this — the whole
+ * suite passed with `items.length === 0` alone (K1 and K2's existing
+ * end-to-end tests in src/app/page.test.tsx never seed a first page that is
+ * BOTH empty AND still has a cursor, so neither one would have noticed this
+ * clause silently going missing).
+ */
+describe("isGenuinelyEmptyPage", () => {
+  it("is true for an empty page with no further pages", () => {
+    expect(isGenuinelyEmptyPage([], false)).toBe(true);
+  });
+
+  it("is false for an empty page that still has more to come", () => {
+    // THE FIXTURE MUTATION this clause exists for: an empty first page
+    // with a cursor is "this page happened to be empty", not "nothing is
+    // published" — see this function's own comment.
+    expect(isGenuinelyEmptyPage([], true)).toBe(false);
+  });
+
+  it("is false whenever the page has at least one item, regardless of hasMore", () => {
+    expect(isGenuinelyEmptyPage(["one item"], false)).toBe(false);
+    expect(isGenuinelyEmptyPage(["one item"], true)).toBe(false);
   });
 });

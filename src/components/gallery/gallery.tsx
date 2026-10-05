@@ -35,7 +35,6 @@ import {
   type GalleryItem,
 } from "@/lib/gallery-items";
 import { publicMediaListingPath } from "@/lib/routes";
-import { SITE_DESCRIPTION } from "@/lib/site";
 
 /**
  * The public gallery (ugcportal-71y): a grid of watermarked previews, a
@@ -420,13 +419,28 @@ export function Gallery({
         began at the grid, and the empty state was the only branch that kept a
         heading at all.
 
-        It is the site description rather than the word "Gallery", because
-        this IS the site's front page and the tagline says what the
-        photographs are of. Sized modestly on purpose — the surround is
-        supposed to recede behind the pictures.
+        "Gallery", not a repeated description (ugcportal-14k9 PR #94 review,
+        two rounds of the same mistake worth recording both of): round 1
+        found this heading repeating SITE_DESCRIPTION, which by then
+        duplicated the header's own new SITE_TAGLINE in different words.
+        Round 1's fix switched it TO SITE_TAGLINE - which round 2 then found
+        duplicates the header's tagline WORD FOR WORD a few dozen pixels
+        below it, since src/components/site-header.tsx renders that exact
+        same constant. Neither "say it differently" nor "say it the same way
+        twice" was right; the actual fix is to stop this heading from
+        restating site-wide copy at all. "Gallery" names what THIS page is
+        rather than what the site is - the same word the header's own nav
+        link already uses for this destination (src/components/site-
+        header.tsx's NAV_ITEMS), so it cannot drift into being a second
+        description no matter how either SITE_TAGLINE or SITE_DESCRIPTION's
+        wording changes later. src/app/page.test.tsx's regression test
+        asserts the tagline sentence appears exactly once on the rendered
+        page (through AppShell, not just this component in isolation) for
+        exactly this reason - a heading-text change here is not something a
+        component-only test would have caught either time.
       */}
       <h1 className="max-w-2xl text-xl leading-tight font-medium tracking-tight text-balance text-foreground sm:text-2xl">
-        {SITE_DESCRIPTION}
+        Gallery
       </h1>
 
       <ul className={`mt-6 ${GALLERY_GRID_CLASS}`}>

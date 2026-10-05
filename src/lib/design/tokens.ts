@@ -33,7 +33,17 @@ function fail(message: string): never {
   throw new Error(`[design/tokens] ${message}`);
 }
 
-/** Strips `/* ... *​/` comments. CSS has no string escapes we need to survive. */
+/**
+ * Strips `/* ... *​/` comments. CSS has no string escapes we need to survive.
+ *
+ * The same regex also lives in `stripCssComments` in scan-source.ts
+ * (ugcportal-ysub review round 2). Kept separate on purpose: that one
+ * replaces a comment with a SPACE so two tokens cannot fuse, this one
+ * erases it, and this module's callers (`parseDeclarations` below) are
+ * tuned to the erasing form. Importing it would also pull `node:fs` and
+ * the `typescript` devDependency into this module's graph for one regex.
+ * Change one, look at the other.
+ */
 function stripComments(css: string): string {
   return css.replace(/\/\*[\s\S]*?\*\//g, "");
 }

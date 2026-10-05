@@ -28,11 +28,13 @@ const useIsomorphicLayoutEffect =
   typeof window !== "undefined" ? useLayoutEffect : useEffect;
 
 /**
- * Round 5, LOW finding 3: where to send focus when the captured invoker is
- * still attached to the document but `.focus()` on it did not actually move
- * `document.activeElement` (e.g. it became `disabled`/`inert`/lost its own
- * focusability between capture and restore). Exported for its own direct
- * unit test, independent of the full banner mount/unmount cycle.
+ * Round 5, LOW finding 3: where to send focus when `.focus()` on the
+ * captured invoker did not actually move `document.activeElement` —
+ * whether because it went `disabled`/`inert`/lost its focusability between
+ * capture and restore, or because it was removed from the document
+ * altogether (ugcportal-ysub item 7 folded those two into one path; both
+ * arrive here now). Exported for its own direct unit test, independent of
+ * the full banner mount/unmount cycle.
  *
  * First choice: the live "Cookies" trigger, looked up fresh by the stable
  * `data-cookie-settings-trigger` attribute (cookie-settings-link.tsx) —
@@ -52,7 +54,13 @@ const useIsomorphicLayoutEffect =
  */
 export function focusFallbackTarget(): void {
   const trigger = document.querySelector<HTMLElement>("[data-cookie-settings-trigger]");
-  if (trigger && document.contains(trigger)) {
+  if (trigger) {
+    // ugcportal-ysub, family-4 sibling of the containment check removed
+    // from the restore path below: this one asked `document.contains(
+    // trigger)` about an element `document.querySelector` had just
+    // returned, so it could never be false — a guard with no failing
+    // case. The question that matters is the same one here as there:
+    // did `.focus()` actually take?
     trigger.focus();
     if (document.activeElement === trigger) return;
   }
@@ -134,11 +142,10 @@ export function focusFallbackTarget(): void {
  *   worthwhile attribute that costs nothing when it doesn't help.
  */
 export function CookieBanner() {
-  const { bannerOpen, acceptOptional, onlyNecessary } = useConsent();
+  const { bannerOpen, acceptOptional, onlyNecessary, takeReopenInvoker } = useConsent();
   const bannerRef = useRef<HTMLDivElement>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const wasOpenRef = useRef(bannerOpen);
-  const invokingElementRef = useRef<HTMLElement | null>(null);
 
   // Reserve space for the banner so it never covers interactive content
   // beneath it, for as long as it's open (round 1 finding 8, round 2
@@ -225,41 +232,68 @@ export function CookieBanner() {
   // wherever the browser defaults it once the clicked button unmounts
   // (typically <body>) — lost, rather than returned anywhere meaningful.
   // Fixed the way any accessible disclosure/dialog pattern does: capture
-  // whatever had focus right before the banner opens on a REOPEN (the
-  // footer "Cookies" control, in the one real path that reaches this),
-  // and restore focus to it when the banner closes again. The very first,
-  // mount-time open has no real "invoking control" at all (nothing was
-  // clicked — the page simply loaded with the banner already showing), so
-  // there is nothing captured for that case and closing it leaves the
-  // browser's own default behaviour, same as before this fix for exactly
-  // that one case.
+  // the control that invoked the REOPEN and restore focus to it when the
+  // banner closes again. The very first, mount-time open has no real
+  // "invoking control" at all (nothing was clicked — the page simply
+  // loaded with the banner already showing), so there is nothing captured
+  // for that case and closing it leaves the browser's own default
+  // behaviour, same as before this fix for exactly that one case.
+  //
+  // ugcportal-ysub item 7: the invoker is now whatever the caller of
+  // `reopen()` passed — cookie-settings-link.tsx passes its click event's
+  // own `currentTarget` — rather than whatever `document.activeElement`
+  // happened to be at open time. Those are not the same thing: Safari/
+  // WebKit does not move focus to a clicked <button>, so on that browser
+  // `activeElement` was <body>, and <body> is focusable enough that
+  // `.focus()` on it "succeeds" — the fallback below therefore never
+  // fired, on exactly the browser it was written for.
   useIsomorphicLayoutEffect(() => {
     const wasOpen = wasOpenRef.current;
     wasOpenRef.current = bannerOpen;
 
     if (bannerOpen && !wasOpen) {
-      invokingElementRef.current =
-        document.activeElement instanceof HTMLElement ? document.activeElement : null;
       headingRef.current?.focus();
       return;
     }
 
     if (!bannerOpen && wasOpen) {
-      const invoker = invokingElementRef.current;
-      invokingElementRef.current = null;
-      if (invoker && document.contains(invoker)) {
+      /*
+       * Read the invoker HERE, at close time, not back when the banner
+       * opened (ugcportal-ysub review round 3, finding 6). `reopen()` can
+       * be called again while the banner is ALREADY open - clicking the
+       * footer "Cookies" control a second time - and that call changes
+       * nothing React can see (`setBannerOpen(true)` on an already-true
+       * value bails out), so this effect does not re-run and a capture
+       * taken at open time could never be updated. The visitor's LAST
+       * click is the control they expect focus back on, and capturing at
+       * open time gave them their first; it also left the later invoker
+       * sitting in the context's ref with nothing to consume it.
+       */
+      const invoker = takeReopenInvoker();
+      if (invoker) {
         invoker.focus();
-        // Round 5, LOW finding 3: being attached (`document.contains`) is
-        // necessary but not sufficient for `.focus()` to actually take —
-        // the invoker could have gone `disabled`, `inert`, lost its
-        // `tabIndex`, or otherwise become unfocusable between capture and
-        // restore, in which case `.focus()` silently no-ops and focus is
-        // left exactly where this whole effect exists to prevent: an
-        // unannounced <body>. Detect that and fall back instead.
+        /*
+         * ONE fallback path, not two (ugcportal-ysub item 7). The round-5
+         * version asked two questions — `document.contains(invoker)`
+         * first, then "did `.focus()` actually take" — and only the
+         * second one could reach the fallback. So a DETACHED invoker
+         * (removed from the DOM between capture and restore) failed the
+         * first question, skipped the second, and fell back to nothing at
+         * all: focus stayed on an unannounced <body>, which is precisely
+         * what this effect exists to prevent.
+         *
+         * `.focus()` on a detached element is a harmless no-op in every
+         * browser, so there is nothing for the containment check to
+         * protect against — and afterwards `document.activeElement` is
+         * not the invoker, which is the single question that actually
+         * matters. Attached-but-unfocusable (gone `disabled`/`inert`,
+         * lost its `tabIndex`) and detached-entirely now converge on the
+         * same answer and the same fallback.
+         */
         if (document.activeElement !== invoker) focusFallbackTarget();
       }
     }
-  }, [bannerOpen]);
+  }, [bannerOpen, takeReopenInvoker]);
 
   if (!bannerOpen) return null;
 

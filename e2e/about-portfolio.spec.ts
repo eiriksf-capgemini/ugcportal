@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
 
+import { hasHorizontalScroll } from "./has-horizontal-scroll";
+
 /**
  * K1 (ugcportal-qnq9.7): /about and /portfolio both return 200 and render at
  * 320px width without horizontal overflow.
@@ -21,15 +23,6 @@ for (const path of ["/about", "/portfolio"] as const) {
     const response = await page.goto(path);
     expect(response?.status()).toBe(200);
 
-    const widths = await page.evaluate(() => ({
-      scrollWidth: document.documentElement.scrollWidth,
-      clientWidth: document.documentElement.clientWidth,
-    }));
-
-    // A real horizontal scrollbar is visible overflow; one stray pixel from
-    // sub-pixel layout rounding is not. Two points of tolerance is tight
-    // enough to still catch a tile grid, a long word, or a fixed-width
-    // element pushing the layout wider than the viewport.
-    expect(widths.scrollWidth).toBeLessThanOrEqual(widths.clientWidth + 2);
+    expect(await hasHorizontalScroll(page)).toBe(false);
   });
 }

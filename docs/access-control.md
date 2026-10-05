@@ -491,5 +491,6 @@ config-error branch — it catches one specific `?callbackUrl=/auth/error`
 loop, not a gated page. Gate this page and a refused visitor loops: 302 to
 `/auth/error`, the gate redirects them to sign in, the sign-in is refused,
 302 to `/auth/error`, forever. Calling `auth()` is not itself the hazard —
-`AppShell` → `AuthStatus` already does, on every page — redirecting on its
-result is.
+`AppShell` → `SiteHeader` → `AuthStatus` already does, on every page
+(ugcportal-14k9 moved `AuthStatus` out of `AppShell` directly and into
+`SiteHeader`) — redirecting on its result is.

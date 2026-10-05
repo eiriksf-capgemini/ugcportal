@@ -4,22 +4,53 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db";
 
 /**
- * The session helper, stubbed to THROW rather than to return null.
+ * The session helper. `auth` is stubbed to THROW rather than to return null;
+ * `getSession` is stubbed to resolve as an anonymous visitor.
  *
  * Not squeamishness about next-auth's module graph — though it is that too,
  * since importing it for real pulls `next/server` into a node test run. It is
  * the assertion: GET /api/public/media's header says the feed "deliberately
  * never calls auth(), because the answer must not depend on who is asking",
  * and the gallery is now a second reader of the same rows. A stub returning
- * null would let a future `auth()` call slip in and behave identically for an
- * anonymous visitor, which is exactly the caller this test simulates and
- * exactly the one who would never reveal the bug. Throwing makes any such call
- * fail here, loudly, in the anonymous case.
+ * null for `auth` would let a future direct `auth()` call slip in and behave
+ * identically for an anonymous visitor, which is exactly the caller this test
+ * simulates and exactly the one who would never reveal the bug. Throwing
+ * makes any such call fail here, loudly, in the anonymous case.
+ *
+ * `getSession` is a SEPARATE stub, not a relaxation of the guarantee above:
+ * it backs the front page's hero (ugcportal-6dvg K1), a concern entirely
+ * independent of which rows the listing serves — `listPublicMedia` and
+ * `<Gallery>` never call it, only `Home()` itself does, to pick the hero's
+ * call-to-action target. A real `vi.fn()` (not a bare arrow function),
+ * defaulting to `null` — the true anonymous case every test in this file
+ * simulates by never seeding a session — so the one K1 test below that
+ * needs a SIGNED-IN visitor can override it with `mockResolvedValueOnce`
+ * without disturbing every other test's default.
  */
+const getSessionMock = vi.fn();
+getSessionMock.mockResolvedValue(null);
 vi.mock("@/lib/auth", () => ({
   auth: () => {
     throw new Error("the public gallery must not consult the session");
   },
+  getSession: () => getSessionMock(),
+}));
+
+/**
+ * Stubbed only for the one test below that renders the full page through
+ * AppShell (ugcportal-14k9 PR #94 review round 2, finding 1) rather than
+ * Home()/Gallery alone. Both are real async Server Components that import
+ * `getSession` from "@/lib/auth" - a module this file's own mock above
+ * replaces wholesale, so an un-stubbed UploadNavLink/AuthStatus would call
+ * `undefined()` the moment AppShell's tree actually resolves them. Harmless
+ * for every OTHER test in this file, which renders Home()/Gallery directly
+ * and never touches either.
+ */
+vi.mock("@/components/upload-nav-link", () => ({
+  UploadNavLink: () => null,
+}));
+vi.mock("@/components/auth-status", () => ({
+  AuthStatus: () => null,
 }));
 
 /**
@@ -42,6 +73,7 @@ vi.mock("@/lib/auth", () => ({
 const database = createTemporaryDatabase();
 const { prisma } = await import("@/lib/prisma");
 const { default: Home } = await import("@/app/page");
+const { AppShell } = await import("@/components/app-shell");
 const { GET } = await import("@/app/api/public/media/route");
 const { mediaPreviewPath, publicMediaListingPath } = await import(
   "@/lib/routes"
@@ -190,6 +222,51 @@ beforeEach(async () => {
   await prisma.user.create({
     data: { id: UPLOADER, email: "uploader@example.com", role: "USER" },
   });
+  // Clears call history only, not the default resolved value set above —
+  // a test that overrode it with `mockResolvedValueOnce` already consumed
+  // that override on its one call, so there is nothing left to leak.
+  getSessionMock.mockClear();
+});
+
+/**
+ * ugcportal-6dvg K1: the hero's call to action tracks session state, on the
+ * real assembled Home() page (src/components/home/hero.test.tsx covers the
+ * same claim against `<Hero>` in isolation — this is the "wired as well as
+ * written" half, the same reasoning src/lib/auth.ts's own comment on
+ * `authConfig` gives for testing the sign-in gate as wired).
+ */
+describe("K1 — the front page hero's call to action tracks session state", () => {
+  it("signed out (the default for every test in this file), the call to action leads to sign-in", async () => {
+    const markup = await renderGallery();
+
+    expect(markup).toContain("Sign in to upload");
+    expect(markup).not.toContain('href="/upload"');
+  });
+
+  it("signed in, the call to action leads straight to /upload", async () => {
+    getSessionMock.mockResolvedValueOnce({
+      user: { id: "user-1", email: "someone@example.com", role: "USER" },
+    });
+
+    const markup = await renderGallery();
+
+    expect(markup).toContain('href="/upload"');
+    expect(markup).not.toContain("Sign in to upload");
+  });
+});
+
+describe("K2 — the hero renders above the gallery, and the empty state does not render", () => {
+  it("with published items present, shows the hero's title above the gallery grid and no living-empty-state marker", async () => {
+    await seedMedia({ id: "a", createdAt: new Date("2026-03-01T00:00:00Z") });
+
+    const markup = await renderGallery();
+
+    const heroIndex = markup.indexOf("Real photos of the things you actually use.");
+    const tileIndex = markup.indexOf('data-gallery-tile="a"');
+    expect(heroIndex).toBeGreaterThanOrEqual(0);
+    expect(tileIndex).toBeGreaterThan(heroIndex);
+    expect(markup).not.toContain("data-home-empty-state");
+  });
 });
 
 describe("K1 — the gallery renders published previews to an anonymous visitor", () => {
@@ -247,6 +324,33 @@ describe("K1 — the gallery renders published previews to an anonymous visitor"
     expect(await renderGallery()).not.toContain("<main");
   });
 
+  /**
+   * ugcportal-14k9 PR #94 review, two rounds of the same mistake. Round 1
+   * found the gallery's own h1 repeating SITE_DESCRIPTION — the same
+   * sentence src/app/layout.tsx puts in `<meta name="description">` — once
+   * the header (src/components/site-header.tsx) started rendering
+   * SITE_TAGLINE on every page too, duplicating it in different words.
+   * Round 1's own fix (switching this heading TO SITE_TAGLINE) just swapped
+   * which sentence got duplicated — round 2 found it now repeats the
+   * header's tagline WORD FOR WORD. The actual fix is for this heading to
+   * stop restating site-wide copy at all: "Gallery" names the page, the
+   * same word the header's own nav link already uses for it, so it cannot
+   * drift into a second description no matter what either SITE_TAGLINE or
+   * SITE_DESCRIPTION says later. The cross-component duplication claim
+   * itself — that the tagline sentence appears exactly once on the whole
+   * rendered page — is asserted below, through AppShell, not here: a
+   * Gallery-only render cannot see the header's copy at all, which is
+   * exactly how round 1's fix shipped a new instance of the round-1 bug
+   * with every Gallery-only test still green.
+   */
+  it("gives the gallery its own heading, not site-wide copy", async () => {
+    await seedMedia({ id: "a", createdAt: new Date("2026-03-01T00:00:00Z") });
+
+    const markup = await renderGallery();
+
+    expect(markup).toMatch(/<h1[^>]*>Gallery<\/h1>/);
+  });
+
   it("shows an empty state, not a broken grid, when nothing is published", async () => {
     await seedMedia({
       id: "private",
@@ -265,6 +369,30 @@ describe("K1 — the gallery renders published previews to an anonymous visitor"
     // case's half of that distinction, pinned here where the row really is
     // absent rather than where a fetch failed.
     expect(markup).toContain('data-gallery-state="empty"');
+  });
+});
+
+/**
+ * ugcportal-14k9 PR #94 review round 2, finding 1. Rendered through
+ * `AppShell`, not `Home()`/`Gallery` alone - the bug both review rounds
+ * found is a relationship BETWEEN two components (the header's tagline and
+ * the gallery's own heading), which no render of either component in
+ * isolation can observe. Every other test in this file renders `Home()`
+ * directly for exactly that narrower, component-scoped reason; this is the
+ * one claim that needs the composed page instead.
+ */
+describe("the header's tagline is not duplicated elsewhere on the composed page", () => {
+  const TAGLINE =
+    "Original photography of food, wine accessories, technology and books.";
+
+  it("appears exactly once across the whole rendered home page", async () => {
+    await seedMedia({ id: "a", createdAt: new Date("2026-03-01T00:00:00Z") });
+
+    const page = await Home();
+    const markup = renderToStaticMarkup(AppShell({ children: page }));
+
+    const occurrences = markup.split(TAGLINE).length - 1;
+    expect(occurrences, markup).toBe(1);
   });
 });
 
