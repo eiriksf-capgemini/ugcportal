@@ -16,7 +16,7 @@ import {
   PORTFOLIO_PATH,
   PRIVACY_PATH,
 } from "@/lib/routes";
-import { SITE_NAME } from "@/lib/site";
+import { SITE_NAME, SITE_TAGLINE } from "@/lib/site";
 
 /**
  * The site footer (ugcportal-akv6), split out of src/components/app-shell.tsx
@@ -59,31 +59,16 @@ import { SITE_NAME } from "@/lib/site";
 const FOOTER_HEADING_CLASS = "text-sm font-medium text-foreground";
 
 /**
- * A STAND-IN for the footer's brand blurb (round-1 review follow-up, PR
- * #96) — deliberately NOT `SITE_DESCRIPTION` from src/lib/site.ts, whose
- * text ("Food, wine and drink, technology and books, photographed.")
- * names alcohol as a subject directly, which the Decisions table's "Wine
- * angle" row forbids (wine ACCESSORIES — glasses, coolers, apps — never
- * alcohol itself; see src/lib/site.ts's own `INTRO_PARAGRAPHS` for the
- * same rule applied to the About page's copy).
- *
- * TODO(ugcportal-ew7m): replace this with `SITE_TAGLINE` once PR #94
- * merges and introduces it in src/lib/site.ts — that is meant to be the
- * one shared, compliant tagline every surface reaches for; this is only a
- * placeholder so the footer does not ship non-compliant copy while #94 is
- * still in review.
- */
-const FOOTER_ABOUT_LINE =
-  "Original photography of food, books, home technology and wine accessories.";
-
-/**
  * The registered LegalPage for a route this footer links to (round-1
  * review: previously went through each page's own `loadPrivacy`/
  * `loadLicence` loader instead, which builds the full rendered prose from
- * the live LEGAL_* contact once per request — on /privacy and /licence
- * themselves the footer's call would be a cache hit, but on every OTHER
- * page it would be a real, avoidable prose-build just to read one boolean
- * — see src/lib/legal/pages.ts's own comment for why LEGAL_PAGES is the
+ * the live LEGAL_* contact once per request — round-6 review: the
+ * rejected design's real cost is ONE avoidable prose-build on /privacy
+ * and on /licence each (the footer still calls the OTHER page's loader
+ * there — /privacy's own render only makes loadPrivacy() a cache hit, not
+ * loadLicence()), and TWO avoidable prose-builds, just to read one
+ * boolean each, on every other page, where neither call is a cache hit —
+ * see src/lib/legal/pages.ts's own comment for why LEGAL_PAGES is the
  * right thing to read instead). Throws rather than silently treating an
  * unregistered path as safe: a footer link to a legal page that isn't in
  * LEGAL_PAGES is a bug in this file, not a page that happens to be fine to
@@ -209,7 +194,7 @@ export function SiteFooter({ compact = false }: { compact?: boolean }) {
         <div>
           <p className="font-medium text-foreground">{SITE_NAME}</p>
           <p className="mt-2 max-w-prose text-muted-foreground">
-            {FOOTER_ABOUT_LINE}
+            {SITE_TAGLINE}
           </p>
         </div>
 

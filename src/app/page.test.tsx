@@ -380,19 +380,28 @@ describe("K1 — the gallery renders published previews to an anonymous visitor"
  * isolation can observe. Every other test in this file renders `Home()`
  * directly for exactly that narrower, component-scoped reason; this is the
  * one claim that needs the composed page instead.
+ *
+ * Round 6 (ugcportal-akv6): the expected count moved from 1 to 2 when the
+ * footer (src/components/site-footer.tsx) started reusing the SAME
+ * `SITE_TAGLINE` constant for its own brand blurb, by design - the header
+ * and the footer legitimately showing the one shared tagline is not the
+ * bug this test was written to catch. What it must still catch is a THIRD
+ * occurrence: the gallery's own heading (or anything else on the page)
+ * independently repeating the same sentence, which is exactly the shape
+ * of the original finding.
  */
-describe("the header's tagline is not duplicated elsewhere on the composed page", () => {
+describe("the header's tagline is not duplicated beyond the header and footer", () => {
   const TAGLINE =
     "Original photography of food, wine accessories, technology and books.";
 
-  it("appears exactly once across the whole rendered home page", async () => {
+  it("appears exactly twice across the whole rendered home page - the header and the footer, nowhere else", async () => {
     await seedMedia({ id: "a", createdAt: new Date("2026-03-01T00:00:00Z") });
 
     const page = await Home();
     const markup = renderToStaticMarkup(AppShell({ children: page }));
 
     const occurrences = markup.split(TAGLINE).length - 1;
-    expect(occurrences, markup).toBe(1);
+    expect(occurrences, markup).toBe(2);
   });
 });
 
