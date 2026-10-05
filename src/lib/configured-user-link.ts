@@ -7,11 +7,10 @@ import { currentSignInIdentity } from "@/lib/live-session";
 import { prisma } from "@/lib/prisma";
 import { PRISMA_UNIQUE_VIOLATION, prismaErrorCode } from "@/lib/prisma-errors";
 import {
-  type SignInProvider,
+  configuredIdentities,
   configuredUserHandle,
   findConfiguredUser,
   normalizeString,
-  providerId,
 } from "@/lib/sign-in-policy";
 
 /**
@@ -134,12 +133,6 @@ export function withConfiguredUserLinking(
   const signingIn = (): {
     person: ConfiguredUser;
     email: string;
-    /**
-     * Carried as well as the address because the reconciliation migration
-     * joins on BOTH — see the lockout message in `createUser`, which has to
-     * know whether that migration could adopt the offending row at all.
-     */
-    provider: SignInProvider;
   } | null => {
     const identity = currentSignInIdentity();
     if (!identity) {
@@ -150,10 +143,7 @@ export function withConfiguredUserLinking(
       users,
     );
     const email = normalizeString(identity.signInEmail);
-    const provider = providerId(identity.signInProvider);
-    return person && email && provider
-      ? { person, email, provider }
-      : null;
+    return person && email ? { person, email } : null;
   };
 
   return {
@@ -275,27 +265,74 @@ export function withConfiguredUserLinking(
           // round 2, low).
           //
           // WHICH CURE DEPENDS ON THE OFFENDING ROW (PR #98 round 4, low 4).
-          // The reconciliation migration joins `User.email` to its seed
-          // address AND `Account.provider` to its seed provider, so it can
-          // only adopt a row that already has an account with the provider
-          // signing in. The sibling of round 3's collision arrives from two
-          // SOURCES rather than two array entries — `google:x@y.com` in the
-          // array, `facebook:x@y.com` in ALLOWED_SIGNIN_EMAILS — and leaves
-          // a row holding the address with only a Facebook account on it.
-          // Telling that operator to run the migration (or to write a new
-          // one) is telling them to run a no-op; only the hand `UPDATE`
-          // reaches it.
-          const holder = await prisma.user.findUnique({
-            where: { email: signIn.email },
-            select: { id: true, accounts: { select: { provider: true } } },
-          });
-          const linked = holder?.accounts.map((account) => account.provider) ?? [];
-          const adoptable = linked.includes(signIn.provider);
+          // The reconciliation migration joins `User.email` to a seed
+          // address AND `Account.provider` to THAT SEED ROW's provider, so
+          // it can only adopt a row that already carries an account for one
+          // of the providers the person lists. The sibling of round 3's
+          // collision arrives from two SOURCES rather than two array
+          // entries — `google:x@y.com` in the array, `facebook:x@y.com` in
+          // ALLOWED_SIGNIN_EMAILS — and leaves a row holding the address
+          // with only a Facebook account on it. Telling that operator to run
+          // the migration (or to write a new one) is telling them to run a
+          // no-op; only the hand `UPDATE` reaches it.
+          //
+          // PER PERSON, NOT PER SIGN-IN (PR #98 round 5, low 1). The seed
+          // carries one row per IDENTITY, so a person who lists the same
+          // address at BOTH providers — blessed, and the point of the
+          // feature — gets two seed rows for it, and a legacy row with only
+          // the other provider's account is adopted through the other seed
+          // row. Predicting the join from the provider signing in would have
+          // told that operator the migration could not help when it could.
+          // What decides it is every provider THIS PERSON lists for THIS
+          // address.
+          const wanted = new Set(
+            configuredIdentities(person)
+              .filter((identity) => identity.email === signIn.email)
+              .map((identity) => identity.provider as string),
+          );
+          // NORMALISED ON BOTH HALVES, the way the migration normalises them
+          // (`lower(trim(...))` on the address and the provider alike).
+          // Nothing this app writes is non-canonical — `authorisedEmail`
+          // lowercases before anything is persisted, `providerId`
+          // canonicalises the session's provider, and @auth/core writes the
+          // provider id straight from the provider config — so this is
+          // parity with the migration rather than a case anyone has seen.
+          // The row that matters is one an older import or a hand fix-up
+          // left in mixed case, for which a raw comparison would name the
+          // wrong cure to somebody already confused.
+          //
+          // THE TWO HALVES ARE NOT EQUALLY REACHABLE, and saying so is the
+          // point of writing it down: only the PROVIDER can actually differ
+          // here. Arriving in this branch at all means `User.email`
+          // collided, and that UNIQUE index compares the stored string
+          // exactly — so the row in the way necessarily holds the address in
+          // precisely the form being looked up, and the `lower(trim(...))`
+          // on the address cannot change the answer. It is written that way
+          // so the two implementations of "same address" stay one rule, not
+          // because this path can tell them apart.
+          //
+          // A raw lookup because `mode: "insensitive"` is a PostgreSQL
+          // feature Prisma does not offer on SQLite, and scanning `User` in
+          // JS to compare addresses is not a thing to do on a sign-in path.
+          const [holder] = await prisma.$queryRaw<{ id: string }[]>`
+            SELECT "id" FROM "User"
+            WHERE lower(trim("email")) = ${signIn.email}
+            LIMIT 1
+          `;
+          const linked = holder
+            ? (
+                await prisma.account.findMany({
+                  where: { userId: holder.id },
+                  select: { provider: true },
+                })
+              ).map((account) => normalizeString(account.provider) ?? "(blank)")
+            : [];
+          const adoptable = linked.some((provider) => wanted.has(provider));
           const cure = adoptable
             ? "run prisma/migrations/20261005120500_reconcile_configured_users " +
               "(or, for somebody added to the array since, a new " +
               "reconciliation migration; see docs/access-control.md)"
-            : `that row has no ${signIn.provider} account (it has: ` +
+            : `that row has no ${[...wanted].join(" or ")} account (it has: ` +
               `${linked.length > 0 ? linked.join(", ") : "none"}), so the ` +
               "reconciliation migration cannot adopt it — its join needs a " +
               "matching Account.provider. Use the one-line UPDATE under " +

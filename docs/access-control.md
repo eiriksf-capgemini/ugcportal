@@ -257,14 +257,26 @@ ALLOWED_SIGNIN_EMAILS   facebook:x@example.com
 The Facebook sign-in is not a configured identity, so it takes an ordinary
 row holding `x@example.com` with a Facebook account on it. Ada's Google
 sign-in then cannot create her row — `User.email` is UNIQUE — and no
-migration can adopt the one in the way, because the join needs a Google
-account that row does not have. **The one-line `UPDATE` above is the only
-cure**, and the log line says so: it names the providers the offending row
-actually has and points here rather than at a migration that would be a
-no-op.
+migration can adopt the one in the way, because the only provider Ada lists
+for that address is Google and the row has no Google account. **Here the
+one-line `UPDATE` above is the cure**, and the log line says so: it names the
+providers the offending row actually has, and the ones the array would have
+accepted, rather than pointing at a migration that would be a no-op.
 
-Check it really is the same human before you run it. If it is not, the fix
-is a different address, not a stamped handle.
+**It depends on what the person lists, not on which provider they are signing
+in with.** If Ada listed the address at *both* providers —
+
+```
+src/config/users.ts     Ada = google:x@example.com, facebook:x@example.com
+```
+
+— then the seed carries a row for each, the Facebook one matches the account
+that legacy row does have, and a reconciliation migration adopts it after
+all. The log line names the migration in that case, and running it is the
+right move.
+
+Either way, check it really is the same human before you adopt the row. If it
+is not, the fix is a different address, not a stamped handle.
 
 #### Renaming a person
 

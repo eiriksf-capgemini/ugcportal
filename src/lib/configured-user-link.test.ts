@@ -1195,7 +1195,6 @@ describe("one address under two people never reaches the database (PR #98 round 
       // the first person's row comes back, and @auth/core throws
       // OAuthAccountNotLinked without this feature writing or logging
       // anything.
-      const errors = vi.spyOn(console, "error").mockImplementation(() => {});
       const signIn = (provider: "google" | "facebook") =>
         inSignInRequest(async () => {
           const { rememberSignInIdentity } = await import(
@@ -1221,14 +1220,16 @@ describe("one address under two people never reaches the database (PR #98 round 
       await expect(signIn("facebook")).rejects.toThrow(
         /OAuthAccountNotLinked/,
       );
-      // Auth.js's refusal, not ours: no lockout line, because the P2002
-      // branch is never reached.
-      expect(
-        errors.mock.calls
-          .map((call) => String(call[0]))
-          .filter((text) => text.includes("Could not create the user row")),
-      ).toEqual([]);
-
+      // This refusal is Auth.js's, and the lockout line is not written —
+      // but there is DELIBERATELY NO ASSERTION ABOUT THAT HERE (PR #98
+      // round 5, low 3). Both identities were dropped by the review, so
+      // `signingIn()` answers null, `createUser` never takes the configured
+      // path, and the branch that logs is unreachable in this state: the
+      // needle could not be present whatever the implementation did, which
+      // is an assertion with no failing case rather than coverage. The
+      // absence of that line where it IS reachable is asserted by "does not
+      // log it when the handle row simply raced into existence" above,
+      // which a mutation can and does break.
       const rows = await prisma.user.findMany({ where: { email: SHARED } });
       expect(rows).toHaveLength(1);
       expect(rows[0].id).toBe(first.id);
@@ -1478,6 +1479,164 @@ describe("a lockout says which row to adopt and how (PR #98 round 2, low)", () =
       .map((call) => String(call[0]))
       .find((text) => text.includes("Could not create the user row"));
 
+    expect(line).toContain("20261005120500_reconcile_configured_users");
+    expect(line).not.toContain("cannot adopt it");
+  });
+
+  /**
+   * The same two branches, for a person who lists ONE address at BOTH
+   * providers (PR #98 round 5, low 1).
+   *
+   * The migration seeds one row per IDENTITY, so such a person gets two of
+   * them for that address and a legacy row carrying either provider's
+   * account is adopted through the matching one. Deciding adoptability from
+   * the provider SIGNING IN — which is what the round-4 version did — tells
+   * that operator the migration cannot help in exactly the case where it
+   * can, and sends them to a hand `UPDATE` they did not need.
+   *
+   * Driven through an injected array, because the committed one has nobody
+   * holding one address at two providers; `createUser` is called directly
+   * because the P2002 branch is what is under test, and the real flow's
+   * `getUserByEmail` is withheld for a configured identity anyway, so this
+   * is the sequence it would follow.
+   */
+  describe("for a person listing one address at both providers", () => {
+    const SHARED = "both@example.com";
+
+    async function lockoutLine(
+      person: ConfiguredUser,
+      holderProvider: string,
+    ): Promise<string | undefined> {
+      const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+      const holder = await prisma.user.create({
+        data: { email: SHARED, name: "Arrived Earlier" },
+      });
+      await prisma.account.create({
+        data: {
+          userId: holder.id,
+          provider: holderProvider,
+          providerAccountId: `${holderProvider}-subject-earlier`,
+          type: "oauth",
+        },
+      });
+
+      const { withConfiguredUserLinking } = await import(
+        "@/lib/configured-user-link"
+      );
+      const adapter = withConfiguredUserLinking(authConfig.adapter as Adapter, [
+        person,
+      ]);
+
+      await expect(
+        inSignInRequest(async () => {
+          const { rememberSignInIdentity } = await import(
+            "@/lib/live-session"
+          );
+          rememberSignInIdentity({
+            user: { email: SHARED },
+            account: { provider: "google" },
+            profile: { email: SHARED },
+          });
+          return adapter.createUser!({
+            name: "From Google",
+            email: SHARED,
+            emailVerified: null,
+          } as unknown as AdapterUser);
+        }),
+      ).rejects.toThrow();
+
+      return errors.mock.calls
+        .map((call) => String(call[0]))
+        .find((text) => text.includes("Could not create the user row"));
+    }
+
+    const BOTH: ConfiguredUser = {
+      name: "Bothways",
+      identities: ["google:both@example.com", "facebook:both@example.com"],
+    };
+    const GOOGLE_ONLY: ConfiguredUser = {
+      name: "Bothways",
+      identities: ["google:both@example.com"],
+    };
+
+    it("names the migration when the row carries the OTHER listed provider", async () => {
+      // Google is signing in; the row in the way has only a Facebook
+      // account — and Facebook is listed for this address too, so a fresh
+      // reconciliation adopts it through that seed row.
+      const line = await lockoutLine(BOTH, "facebook");
+
+      expect(line).toContain("20261005120500_reconcile_configured_users");
+      expect(line).not.toContain("cannot adopt it");
+    });
+
+    it("names the migration when the row carries the provider signing in", async () => {
+      const line = await lockoutLine(BOTH, "google");
+
+      expect(line).toContain("20261005120500_reconcile_configured_users");
+      expect(line).not.toContain("cannot adopt it");
+    });
+
+    it("still refuses when the row's provider is one they do NOT list", async () => {
+      // The control, and the round-4 case unchanged: only Google is listed
+      // for this address, the row has only Facebook, so no seed row can
+      // match it and the UPDATE really is the only cure.
+      const line = await lockoutLine(GOOGLE_ONLY, "facebook");
+
+      expect(line).toContain("has no google account");
+      expect(line).toContain("(it has: facebook)");
+      expect(line).toContain("cannot adopt it");
+      expect(line).not.toContain("20261005120500_reconcile_configured_users");
+    });
+
+    it("names both listed providers when neither is on the row", async () => {
+      // The message has to say what would have worked, and for this person
+      // that is either of two.
+      const line = await lockoutLine(BOTH, "apple");
+
+      expect(line).toContain("has no google or facebook account");
+      expect(line).toContain("(it has: apple)");
+    });
+  });
+
+  it("compares the row's provider the way the migration does", async () => {
+    // DEFENSIVE PARITY (PR #98 round 5, low 2). Nothing this app writes is
+    // non-canonical, so this is about a row an older import or a hand fix-up
+    // left in mixed case: the migration compares `lower(trim(...))`, and a
+    // message that compared the raw string would name the wrong cure for
+    // exactly the row somebody is already confused about.
+    //
+    // THE PROVIDER IS THE HALF THAT CAN DIFFER. The address cannot: getting
+    // here at all means `User.email` collided, and that index compares the
+    // stored string exactly, so a row that reaches this branch holds the
+    // address in precisely the form being looked up. The lookup is still
+    // written `lower(trim(...))`, for parity with the migration rather than
+    // because this path can tell the difference.
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const holder = await prisma.user.create({
+      data: { email: EIRIK_GOOGLE, name: "Mixed Case Provider" },
+    });
+    await prisma.account.create({
+      data: {
+        userId: holder.id,
+        provider: " GOOGLE ",
+        providerAccountId: "google-subject-mixed",
+        type: "oauth",
+      },
+    });
+
+    await expect(
+      replayOAuthSignIn({
+        provider: "google",
+        email: EIRIK_GOOGLE,
+        subject: "google-subject-eirik",
+      }),
+    ).rejects.toThrow();
+
+    const line = errors.mock.calls
+      .map((call) => String(call[0]))
+      .find((text) => text.includes("Could not create the user row"));
+
+    // Found despite the padding and the case, and its account recognised.
     expect(line).toContain("20261005120500_reconcile_configured_users");
     expect(line).not.toContain("cannot adopt it");
   });
