@@ -352,19 +352,21 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
    * ugcportal-akv6: the site footer. Renders directly on --background
    * (the app shell's <footer>, no --card/--popover/--muted/etc. fill
    * behind it — the same safe case as the header and
-   * cookie-settings-link.tsx above). Four text-muted-foreground: the
-   * brand description paragraph, the blocked-draft-link <span>, the
-   * compact variant's own wrapping <div> (not the "SITE_NAME · © year"
-   * <span> it contains, which carries no class of its own — round-2
-   * review finding), and the full variant's copyright line
-   * (FOOTER_LINK_CLASS's own one moved to footer-link.ts above, round 1).
-   * Two text-foreground: the brand name, and
-   * FOOTER_HEADING_CLASS's own definition (reused by both the "Pages" and
-   * "Legal" headings — FOOTER_LINK_CLASS's "hover:text-foreground" moved
-   * out the same way).
+   * cookie-settings-link.tsx above). Three text-muted-foreground
+   * (Eirik's decision on PR #96: dropped the footer's own about/tagline
+   * line entirely rather than duplicating the header's SITE_TAGLINE,
+   * which removed one of the four this used to carry — the brand
+   * description paragraph): the blocked-draft-link <span>, the compact
+   * variant's own wrapping <div> (not the "SITE_NAME · © year" <span> it
+   * contains, which carries no class of its own — round-2 review
+   * finding), and the full variant's copyright line (FOOTER_LINK_CLASS's
+   * own one moved to footer-link.ts above, round 1). Two text-foreground:
+   * the brand name, and FOOTER_HEADING_CLASS's own definition (reused by
+   * both the "Pages" and "Legal" headings — FOOTER_LINK_CLASS's
+   * "hover:text-foreground" moved out the same way).
    */
   "src/components/site-footer.tsx": {
-    "text-muted-foreground": 4,
+    "text-muted-foreground": 3,
     "text-foreground": 2,
   },
 
