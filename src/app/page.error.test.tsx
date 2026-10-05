@@ -93,6 +93,10 @@ vi.mock("@/lib/public-media", () => ({
 }));
 
 const { default: Home } = await import("@/app/page");
+// Only for the `it.fails` shell-session-gap marker further down this file —
+// both independently call the same mocked `@/lib/auth` module above.
+const { AuthStatus } = await import("@/components/auth-status");
+const { UploadNavLink } = await import("@/components/upload-nav-link");
 
 async function renderHome(): Promise<string> {
   return renderToStaticMarkup(await Home());
@@ -177,12 +181,22 @@ describe("K3 — this harness can also produce the genuinely-empty branch", () =
 /**
  * ugcportal-6dvg, round-1 review, CONFIRMED medium: a `getSession()`
  * rejection must degrade to the anonymous case (the hero's "Sign in to
- * upload"), never crash the page — on BOTH of this file's branches, since
- * `resolveSignedIn` (src/app/page.tsx) is called from inside the `catch`
- * that exists for a failed LISTING too, not only from the success path.
+ * upload"), never crash `Home()`'s OWN render — on BOTH of this file's
+ * branches, since `resolveSignedIn` (src/app/page.tsx) is called from
+ * inside the `catch` that exists for a failed LISTING too, not only from
+ * the success path.
+ *
+ * "Home() in isolation" (round-2 review, low finding — an earlier version
+ * of this describe block's own title claimed "the page", which overclaims
+ * what is actually exercised here): `renderHome()` below calls `Home()`
+ * directly, never the assembled app (`AppShell` plus `AuthStatus` plus
+ * `UploadNavLink`, every real page's actual tree). See the separate
+ * `it.fails` marker further down this file for the part of this claim that
+ * does NOT yet hold once those three are assembled together.
  */
-describe("a failed session read never crashes the page", () => {
-  it("falls back to the anonymous hero when getSession() rejects and the listing itself also failed", async () => {
+describe("Home() in isolation: a failed session read never crashes its render", () => {
+  it("Home() in isolation: falls back to the anonymous hero when getSession() rejects and the listing itself also failed", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     mockSession.rejects = true;
     // The default `mockListing.current` (reset in `afterEach` above) is
     // already the failed-listing case — explicit here for the reader.
@@ -192,9 +206,16 @@ describe("a failed session read never crashes the page", () => {
 
     expect(markup).toContain("Sign in to upload");
     expect(markup).toContain('data-gallery-state="error"');
+    // Round-2 review, low finding: the logged line was created but never
+    // actually asserted before this — a silent failure mode (the fallback
+    // working, but with nothing for an operator to find) could have shipped
+    // unnoticed.
+    expect(consoleError).toHaveBeenCalledOnce();
+    expect(consoleError.mock.calls[0][0]).toContain("the home page's getSession()");
   });
 
-  it("falls back to the anonymous hero when getSession() rejects but the listing succeeds, and the gallery branch renders normally", async () => {
+  it("Home() in isolation: falls back to the anonymous hero when getSession() rejects but the listing succeeds, and the gallery branch renders normally", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     mockSession.rejects = true;
     mockListing.current = {
       ok: true,
@@ -205,5 +226,65 @@ describe("a failed session read never crashes the page", () => {
 
     expect(markup).toContain("Sign in to upload");
     expect(markup).toContain('data-gallery-state="empty"');
+    expect(consoleError).toHaveBeenCalledOnce();
+    expect(consoleError.mock.calls[0][0]).toContain("the home page's getSession()");
   });
 });
+
+/**
+ * ugcportal-6dvg round-2 review, CONFIRMED medium, deliberately NOT fixed
+ * in this PR (that work is bead ugcportal-8df3 — see src/app/page.tsx's own
+ * `resolveSignedIn` comment for the full scope note).
+ *
+ * `getSession()` is `cache()`-memoized per request (src/lib/auth.ts), and
+ * AppShell renders `Home()` alongside TWO other independent readers of that
+ * SAME memoized promise — `AuthStatus` (src/components/auth-status.tsx) and
+ * `UploadNavLink` (src/components/upload-nav-link.tsx) — each still calling
+ * `await getSession()` completely unguarded. A rejection crashes them even
+ * on a request where `Home()` itself, fixed above, recovers cleanly —
+ * confirmed on a real dev server: `/` answers HTTP 500.
+ *
+ * NOT exercised through `renderToStaticMarkup(AppShell({children: ...}))`,
+ * deliberately: `AppShell` renders real, unresolved `<UploadNavLink />` and
+ * `<AuthStatus />` elements internally (it does not accept them as props),
+ * and this renderer cannot resolve a nested async Server Component reached
+ * while walking an already-rendering tree AT ALL — confirmed empirically,
+ * it throws "A component suspended while responding to synchronous input"
+ * the moment it meets one, regardless of whether `getSession()` ever
+ * rejects (see src/components/app-shell.nav.test.tsx's own comment, which
+ * is why that file stubs both components out rather than executing them).
+ * A render-shaped test here would therefore fail for the WRONG reason even
+ * once ugcportal-8df3 ships its fix, which is worse than no test at all —
+ * it would look like continuing proof of this exact gap while actually
+ * being evidence of an unrelated, pre-existing harness limitation. Calling
+ * the three async functions directly — the same way React actually invokes
+ * them, as `AppShell`'s independent sibling children, none of them awaiting
+ * another's result first — isolates the real claim instead.
+ *
+ * `it.fails`, not `test.todo`: this runs today and genuinely fails (the
+ * assertions below are false right now), proving the gap is real rather
+ * than aspirational. The day ugcportal-8df3 gives `AuthStatus`/
+ * `UploadNavLink` the same fail-safe `Home()` already has, all three
+ * promises start resolving, the assertions below all pass, the test body
+ * stops throwing, and `it.fails` itself then reports "expected the test to
+ * fail, but it passed" — forcing this marker to be revisited and converted
+ * to a real, non-inverted test rather than silently going stale.
+ */
+it.fails(
+  "ugcportal-8df3 (not fixed here): AuthStatus and UploadNavLink do not yet survive a rejected getSession() the way Home() does",
+  async () => {
+    mockSession.rejects = true;
+
+    const [homeResult, authResult, navResult] = await Promise.allSettled([
+      Home(),
+      AuthStatus(),
+      UploadNavLink(),
+    ]);
+
+    expect(homeResult.status, "Home() is fixed and must resolve").toBe(
+      "fulfilled",
+    );
+    expect(authResult.status).toBe("fulfilled");
+    expect(navResult.status).toBe("fulfilled");
+  },
+);

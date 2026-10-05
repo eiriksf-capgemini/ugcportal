@@ -260,8 +260,12 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
    * the heading and the "see the portfolio" link; one text-muted-foreground:
    * the supporting paragraph. The front page's OTHER new component,
    * src/components/home/hero.tsx, renders inside its own petrol-gradient
-   * well instead and uses text-ink/text-ink-muted (not tracked by this
-   * file — see its own comment and contrast.ts's ink-on-hero-petrol).
+   * well instead and uses text-ink only (round-2 review, low finding: this
+   * comment used to also say "text-ink-muted" — that token measured below
+   * threshold on this specific well and was dropped from hero.tsx entirely
+   * during this bead's own round-1 review fix; see hero.tsx's own comment
+   * on its lead paragraph). Neither is tracked by this file — see hero.tsx's
+   * own comment and contrast.ts's ink-on-hero-petrol.
    */
   "src/components/home/empty-state.tsx": {
     "text-foreground": 2,

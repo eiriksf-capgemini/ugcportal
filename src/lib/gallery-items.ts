@@ -262,6 +262,20 @@ export function toGalleryItem(row: PublicMediaRowish): GalleryItem | null {
  * disappears is not the one anybody would predict. The first occurrence is the
  * one kept, so the page keeps the order the feed sent.
  */
+export function toGalleryItems(rows: unknown): GalleryItem[] {
+  if (!Array.isArray(rows)) return [];
+  const items: GalleryItem[] = [];
+  const seen = new Set<string>();
+  for (const row of rows) {
+    if (typeof row !== "object" || row === null) continue;
+    const item = toGalleryItem(row as PublicMediaRowish);
+    if (item === null || seen.has(item.id)) continue;
+    seen.add(item.id);
+    items.push(item);
+  }
+  return items;
+}
+
 /**
  * Whether a page of the public feed is GENUINELY empty — "nothing is
  * published", not merely "this particular page happened to have nothing on
@@ -272,9 +286,19 @@ export function toGalleryItem(row: PublicMediaRowish): GalleryItem | null {
  * a visitor on "nothing is published yet" with no way to ask for the rest.
  *
  * Exported here (round-1 review, low finding) so src/app/page.tsx
- * (ugcportal-6dvg) can make the IDENTICAL decision gallery.tsx makes
+ * (ugcportal-6dvg) can evaluate the SAME EXPRESSION gallery.tsx uses
  * internally, from one function, rather than a second hand-copied boolean
  * expression that could drift from it.
+ *
+ * Same expression, NOT a guarantee of the same answer (round-2 review, low
+ * finding — an earlier version of this comment implied otherwise): the one
+ * caller outside this module, src/app/page.tsx, passes this the LISTING's
+ * raw `result.page.items`/`result.page.hasMore`, while
+ * src/components/gallery/gallery.tsx evaluates the identical expression
+ * over `toGalleryItems(...)`-filtered items and its own derived
+ * `initialHasMore && initialCursor !== null` — see that call site's own
+ * comment for exactly where the two inputs can part ways. Recorded on
+ * ugcportal-3wcd, which also tracks the separate, structural gap below.
  *
  * NOT YET the single implementation, and that gap is real rather than
  * silently left: gallery.tsx's own `if (items.length === 0 && !hasMore)`
@@ -290,20 +314,6 @@ export function isGenuinelyEmptyPage(
   hasMore: boolean,
 ): boolean {
   return items.length === 0 && !hasMore;
-}
-
-export function toGalleryItems(rows: unknown): GalleryItem[] {
-  if (!Array.isArray(rows)) return [];
-  const items: GalleryItem[] = [];
-  const seen = new Set<string>();
-  for (const row of rows) {
-    if (typeof row !== "object" || row === null) continue;
-    const item = toGalleryItem(row as PublicMediaRowish);
-    if (item === null || seen.has(item.id)) continue;
-    seen.add(item.id);
-    items.push(item);
-  }
-  return items;
 }
 
 /**

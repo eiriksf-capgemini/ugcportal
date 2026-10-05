@@ -14,22 +14,49 @@ import {
 import { hasSignedInUser } from "@/lib/session";
 
 /**
- * Resolves the session promise Home() kicked off, never letting a REJECTION
- * reach a caller (round-1 review, CONFIRMED medium).
+ * Wraps a `getSession()` call so a REJECTION never reaches a caller inside
+ * `Home()` (round-1 review, CONFIRMED medium; round-2 review: scope note
+ * below).
  *
  * `getSession()` can reject — a dropped database connection reading the
  * session row, the same class of failure `listPublicMedia` already has to
  * survive below — and before this existed, `await sessionPromise` was
- * unguarded on EVERY branch, including inside the `catch` block that exists
- * specifically to degrade a LISTING failure gracefully into
+ * unguarded on EVERY branch of `Home()`, including inside the `catch` block
+ * that exists specifically to degrade a LISTING failure gracefully into
  * `GalleryUnavailable`. A rejected session read there would have thrown
  * again, inside that catch, past the one boundary this page has — crashing
- * the whole home page over a session-read failure the gallery data wasn't
+ * `Home()`'s OWN render over a session-read failure the gallery data wasn't
  * even what failed. Degrading to the anonymous case (`signedIn: false`) is
  * the same choice this page already makes for an actual anonymous visitor,
- * so a visitor whose session merely couldn't be checked sees exactly what an
- * anonymous one does — never a broken page — at the cost of one logged
- * line an operator can act on.
+ * so a visitor whose session merely couldn't be checked sees `Home()` render
+ * exactly what it renders for one — the hero's call to action falling back
+ * to "Sign in to upload" — never a broken `Home()` — at the cost of one
+ * logged line an operator can act on.
+ *
+ * SCOPE, STATED PLAINLY (round-2 review, CONFIRMED medium): this only
+ * protects `Home()`'s OWN render. `getSession()` is `cache()`-memoized per
+ * request (src/lib/auth.ts), so src/components/auth-status.tsx and
+ * src/components/upload-nav-link.tsx — rendered by `AppShell` as
+ * `Home()`'s siblings on every real page, including this one — call the
+ * SAME underlying promise independently and UNGUARDED. A rejection there
+ * still crashes them, and therefore the whole assembled page (confirmed on
+ * a real dev server: `/` answers HTTP 500), even on a request where this
+ * function below works exactly as intended. That gap is real, is not fixed
+ * by this function, and is tracked as its own bead, ugcportal-8df3 — see
+ * this file's own `it.fails` regression marker (page.error.test.tsx) for
+ * where that is kept visible rather than silently assumed closed.
+ *
+ * Called immediately on the raw `getSession()` call, not on an already-
+ * created `sessionPromise` variable awaited later: an `async` function's
+ * body runs synchronously up to its first `await`, so `resolveSignedIn(
+ * getSession())` attaches this `try`/`await` to the promise in the SAME
+ * tick `getSession()` creates it — there is no window where the raw,
+ * unhandled promise could log Node's own "unhandled rejection" warning
+ * before anything caught it. `const sessionPromise = getSession();` followed
+ * by a LATER `resolveSignedIn(sessionPromise)` (this file's own round-1
+ * shape) left exactly that window open, for however long
+ * `listPublicMedia` took to settle in between (round-2 review, low
+ * finding).
  */
 async function resolveSignedIn(
   sessionPromise: ReturnType<typeof getSession>,
@@ -37,7 +64,10 @@ async function resolveSignedIn(
   try {
     return hasSignedInUser(await sessionPromise);
   } catch (error) {
-    console.error("[home] getSession() failed; treating the visitor as signed out", error);
+    console.error(
+      "[src/app/page.tsx] the home page's getSession() call failed; treating this visitor as signed out",
+      error,
+    );
     return false;
   }
 }
@@ -94,12 +124,19 @@ export const dynamic = "force-dynamic";
 
 export default async function Home() {
   /*
+   * `resolveSignedIn` wraps the raw `getSession()` call IMMEDIATELY (see its
+   * own comment for why that timing matters), so `sessionPromise` here is
+   * already a `Promise<boolean>` that never rejects — both branches below
+   * just `await` it, cheaply, as many times as they need to.
+   *
    * Kicked off here and awaited only once the listing below has settled —
    * NOT serialised in between the two, so the session round trip overlaps
    * the listing one, the same "independent reads should not block on each
    * other" reasoning src/components/upload-nav-link.tsx and
-   * src/components/auth-status.tsx already apply (see getSession's own
-   * comment in src/lib/auth.ts).
+   * src/components/auth-status.tsx already apply for THEIR OWN,
+   * independent reads of the same cached session — see `resolveSignedIn`'s
+   * own comment for why this page's fix does not yet extend to those two
+   * (ugcportal-8df3).
    *
    * This is a DIFFERENT session read from the one src/app/page.test.tsx's
    * own `vi.mock("@/lib/auth", ...)` guards against: that mock stubs plain
@@ -119,7 +156,7 @@ export default async function Home() {
    * `renderToStaticMarkup(await Home())`. `<Hero>` is therefore a plain,
    * synchronous component taking the resolved boolean as a prop.
    */
-  const sessionPromise = getSession();
+  const sessionPromise = resolveSignedIn(getSession());
 
   /*
    * `listMedia` only reports `ok: false` for a malformed `?cursor=`, and the
@@ -153,10 +190,10 @@ export default async function Home() {
   try {
     result = await listPublicMedia(publicMediaListingUrl());
   } catch {
-    return unavailable(await resolveSignedIn(sessionPromise));
+    return unavailable(await sessionPromise);
   }
 
-  const signedIn = await resolveSignedIn(sessionPromise);
+  const signedIn = await sessionPromise;
 
   if (!result.ok) {
     return unavailable(signedIn);
@@ -165,15 +202,28 @@ export default async function Home() {
   /*
    * The front page's own "living empty state" (ugcportal-6dvg K1/K2),
    * src/components/home/empty-state.tsx, rendered INSTEAD of `<Gallery>`
-   * under exactly the condition `<Gallery>`'s own internal `GalleryEmpty`
+   * under the SAME EXPRESSION `<Gallery>`'s own internal `GalleryEmpty`
    * (src/components/gallery/gallery.tsx) uses, via the shared
    * `isGenuinelyEmptyPage` (src/lib/gallery-items.ts) rather than a second
    * hand-copied boolean expression — see that function's own comment for
    * the one place gallery.tsx's own copy could not also be swapped onto it
-   * without exceeding this bead's scope. Computed here from the SAME
-   * `result.page` values `<Gallery>` is about to receive as props (not
-   * re-derived inside either component), so the two decisions cannot
-   * disagree with each other.
+   * without exceeding this bead's scope.
+   *
+   * NOT a guarantee the two decisions "cannot disagree" (round-2 review,
+   * low finding — an earlier version of this comment overclaimed exactly
+   * that): this call passes the RAW values from `result.page` —
+   * `result.page.items` (every row the listing returned, unfiltered) and
+   * `result.page.hasMore` as reported — while `<Gallery>` below receives
+   * `toGalleryItems(result.page.items)` (rows the lightbox/grid can
+   * actually use; a row missing a usable preview is dropped) as
+   * `initialItems`, and derives its OWN internal `hasMore` as
+   * `initialHasMore && initialCursor !== null` (src/components/gallery/
+   * gallery.tsx), not `initialHasMore` alone. Same expression, different
+   * inputs that happen to agree whenever the feed's own data is healthy —
+   * a listing that reported `hasMore: true` with a `null` cursor, or a
+   * page of rows that were all individually unusable, is exactly the case
+   * where they would not. Recorded on ugcportal-3wcd rather than left as
+   * an assumption only this comment stated.
    */
   const isGenuinelyEmpty = isGenuinelyEmptyPage(
     result.page.items,

@@ -18,7 +18,12 @@ test("K3: the hero's decorative surfaces have no computed animation under reduce
 }) => {
   await page.goto("/");
 
-  const shapes = page.locator("[data-home-hero] >> div[aria-hidden='true'] > span");
+  // `[data-home-hero-decoration] span` (round-2 review, low finding), not
+  // the structural `div[aria-hidden='true'] > span` this used to select by:
+  // the same selector front-page.spec.ts's own geometry check already uses
+  // for these shapes, so a future markup change to HeroDecoration's wrapper
+  // cannot silently desync the two checks from each other.
+  const shapes = page.locator("[data-home-hero-decoration] span");
   const count = await shapes.count();
   expect(count).toBeGreaterThan(0);
 
@@ -31,6 +36,11 @@ test("K3: the hero's decorative surfaces have no computed animation under reduce
       };
     });
     expect(computed.animationName).toBe("none");
+    // Round-2 review, low finding: this value was captured but never
+    // actually asserted before — decoration, not coverage. "none" as the
+    // animation name is already enough on its own to mean nothing animates,
+    // but the CSS-initial duration confirms it from the other side too.
+    expect(computed.animationDuration).toBe("0s");
   }
 });
 
@@ -73,4 +83,9 @@ test("K3: the empty state's portfolio link has no computed transition under redu
     return { transitionProperty: style.transitionProperty, transform: style.transform };
   });
   expect(computed.transitionProperty).toBe("none");
+  // Round-2 review, low finding: captured but never asserted before — this
+  // link's `motion-reduce:transform-none` is the explicit, belt-and-braces
+  // half (see empty-state.tsx's own class list), parallel to hero.tsx's
+  // `motion-reduce:animate-none` on its decorative shapes.
+  expect(computed.transform).toBe("none");
 });
