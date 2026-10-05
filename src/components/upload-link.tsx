@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
 
+import { HEADER_NAV_LINK_CLASS, useAriaCurrentPage } from "@/components/header-nav-link";
 import { UPLOAD_PATH } from "@/lib/routes";
 
 /**
@@ -36,22 +36,16 @@ import { UPLOAD_PATH } from "@/lib/routes";
  * Router's client-side navigation bookkeeping — unlike the root layout — it
  * re-renders, and this re-evaluates, on every soft navigation.
  *
- * `aria-current={isCurrentPage ? "page" : undefined}`, deliberately not a
- * bare boolean: aria-current="false" is its own present, ARIA-legal token
- * distinct from the attribute's absence, and React renders exactly that
- * string for a bare `false` prop value — confirmed against the actual
- * markup in upload-link.test.tsx, not assumed.
+ * The `aria-current` derivation and the base link class are shared with
+ * src/components/primary-nav-link.tsx via src/components/header-nav-link.ts
+ * (ugcportal-14k9 PR #94 review round 1, low finding 4) rather than each
+ * hand-spelling its own copy — see that file's own comment.
  */
 export function UploadLink() {
-  const pathname = usePathname();
-  const isCurrentPage = pathname === UPLOAD_PATH;
+  const ariaCurrent = useAriaCurrentPage(UPLOAD_PATH);
 
   return (
-    <Link
-      href={UPLOAD_PATH}
-      aria-current={isCurrentPage ? "page" : undefined}
-      className="rounded-sm text-sm font-medium text-foreground transition-colors hover:text-primary focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring"
-    >
+    <Link href={UPLOAD_PATH} aria-current={ariaCurrent} className={HEADER_NAV_LINK_CLASS}>
       Upload
     </Link>
   );

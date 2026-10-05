@@ -1,5 +1,7 @@
 import type { ReactNode } from "react";
 
+import { cn } from "cn";
+
 /**
  * The shared container for a top-level page's content, independent of any
  * particular `<h1>` styling (round-4 review).
@@ -28,9 +30,22 @@ import type { ReactNode } from "react";
 export const PAGE_CONTAINER_CLASS =
   "mx-auto w-full max-w-3xl flex-1 px-4 py-12 sm:px-6";
 
+/**
+ * The centring/width/horizontal-padding shell every `max-w-6xl` surface in
+ * this app shares - PAGE_CONTAINER_CLASS above uses `max-w-3xl` instead, so
+ * it is not built from this. Exported (PR #94 review round 5, reuse finding
+ * 6) so src/components/site-header.tsx can compose the header's own
+ * container from the same string instead of re-spelling it a second time:
+ * the header does NOT want this file's own `flex-1 py-12` (its height is a
+ * precise, named-constant sum - see site-header.tsx's `HEADER_HEIGHT_PX` -
+ * that `py-12` would silently break), so it is kept deliberately separate
+ * from `WIDE_PAGE_CONTAINER_CLASS` below rather than folded into one
+ * constant neither caller could use whole.
+ */
+export const SIX_XL_CONTAINER_CLASS = "mx-auto w-full max-w-6xl px-4 sm:px-6";
+
 /** The same container, at the wider max-width /portfolio's sample grid needs. */
-const WIDE_PAGE_CONTAINER_CLASS =
-  "mx-auto w-full max-w-6xl flex-1 px-4 py-12 sm:px-6";
+const WIDE_PAGE_CONTAINER_CLASS = cn(SIX_XL_CONTAINER_CLASS, "flex-1 py-12");
 
 /**
  * The shared container AND `<h1>` for /about and /portfolio specifically

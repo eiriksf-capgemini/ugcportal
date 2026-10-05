@@ -1,3 +1,7 @@
+import { cn } from "cn";
+
+import { FOCUS_RING_CLASS } from "@/components/ui/focus-ring";
+
 /**
  * The shared styling for an inline text link — an `<a>` inside a sentence
  * of body text, as opposed to a button-like call to action
@@ -12,6 +16,13 @@
  * One constant, not the same long string written out across
  * src/components/site/contact-section.tsx and the three admin settings
  * pages (rights, users, instagram) — round-5 review.
+ *
+ * `FOCUS_RING_CLASS` (round 5, reuse finding 7): the trailing three
+ * `focus-visible:*` utilities were ALSO duplicated, verbatim, in
+ * src/components/header-nav-link.ts's `HEADER_NAV_LINK_CLASS` - pulled out
+ * to its own shared constant rather than fixed in only one of the two.
  */
-export const INLINE_LINK_CLASS =
-  "rounded-sm font-medium text-primary underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring";
+export const INLINE_LINK_CLASS = cn(
+  "rounded-sm font-medium text-primary underline underline-offset-4",
+  FOCUS_RING_CLASS,
+);

@@ -56,10 +56,11 @@ describe("the sign-in error page", () => {
       provider, so the page importing `@/lib/auth` and calling `auth()`
       would fail HERE. It does NOT prove the page is safe in production by
       that route — in production the page renders inside AppShell →
-      AuthStatus, which calls `auth()` on every page and tolerates a null
-      session fine. Calling auth() is not the hazard; redirecting on it is,
-      and no unit test of this page can see that. The invariant is held by
-      the note in page.tsx and by review.
+      SiteHeader → AuthStatus (ugcportal-14k9 moved AuthStatus out of
+      AppShell directly and into site-header.tsx), which calls `auth()` on
+      every page and tolerates a null session fine. Calling auth() is not
+      the hazard; redirecting on it is, and no unit test of this page can
+      see that. The invariant is held by the note in page.tsx and by review.
     */
     await expect(render("AccessDenied")).resolves.toContain("Access denied");
   });

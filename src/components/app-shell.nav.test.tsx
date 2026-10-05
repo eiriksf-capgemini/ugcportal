@@ -2,8 +2,6 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 
-import { SITE_NAME } from "@/lib/site";
-
 /**
  * ugcportal-t0y round 1 medium finding: AppShell must stay a plain
  * synchronous function. React can only start rendering a component's
@@ -20,9 +18,21 @@ import { SITE_NAME } from "@/lib/site";
  * component while walking a parent tree — confirmed empirically, it throws
  * "A component suspended while responding to synchronous input" the moment
  * it meets one — so a *real* UploadNavLink/AuthStatus embedded unresolved
- * inside AppShell's tree cannot be rendered by this test harness at all.
- * These tests are about the shell's own static structure (nav placement, the
- * single <main>, the skip link), not about either child's gating logic.
+ * inside AppShell's tree cannot be rendered by this test harness at all
+ * (and AppShell's own tree still reaches both, transitively, through
+ * `<SiteHeader />` - the mocks are still load-bearing here even though
+ * neither stub's PLACEMENT is this file's concern any more, see below).
+ *
+ * These tests are about the shell's OWN static structure - the single
+ * <main>, the skip link, AppShell staying synchronous - not nav placement
+ * (PR #94 review round 6, finding 5): the wordmark, the nav, and the auth
+ * slot all moved into src/components/site-header.tsx wholesale
+ * (ugcportal-14k9), and the ordering assertion this file used to carry for
+ * them was, by that point, testing SiteHeader's own internal composition
+ * through two layers of mocking rather than anything AppShell itself still
+ * does. That assertion now lives in site-header.test.tsx, merged with the
+ * equivalent check already there rather than kept as two partial,
+ * independently-drifting copies.
  */
 vi.mock("@/components/upload-nav-link", () => ({
   UploadNavLink: () => (
@@ -58,28 +68,6 @@ describe("AppShell (ugcportal-t0y)", () => {
     // Promise instead of a React element.
     const result = AppShell({ children: null });
     expect(result).not.toBeInstanceOf(Promise);
-  });
-
-  it("places the nav slot between the wordmark and the auth widget", () => {
-    // SITE_NAME imported rather than the literal "UGC Portal" spelled again:
-    // app-shell.tsx already imports the same constant (ugcportal-t0y round 2
-    // finding), so a site rename can never desync this test from what the
-    // component actually renders.
-    const markup = renderShell();
-    const wordmark = markup.indexOf(`>${SITE_NAME}<`);
-    const nav = markup.indexOf('data-testid="nav-stub"');
-    const auth = markup.indexOf('data-testid="auth-stub"');
-
-    // Explicit presence checks, not just the `-1` floor the ordering
-    // comparisons below rely on: without these, `wordmark === -1` (not
-    // found) would still satisfy `nav > wordmark` and `auth > nav` for any
-    // real index, making the ordering claim pass vacuously.
-    expect(wordmark, "wordmark not found in markup").toBeGreaterThan(-1);
-    expect(nav, "nav stub not found in markup").toBeGreaterThan(-1);
-    expect(auth, "auth stub not found in markup").toBeGreaterThan(-1);
-
-    expect(nav).toBeGreaterThan(wordmark);
-    expect(auth).toBeGreaterThan(nav);
   });
 
   it("renders exactly one <main>, and keeps the skip link's target", () => {

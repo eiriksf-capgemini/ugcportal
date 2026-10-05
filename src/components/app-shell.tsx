@@ -1,9 +1,7 @@
-import Link from "next/link";
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 
-import { AuthStatus } from "@/components/auth-status";
 import { CookieSettingsLink } from "@/components/consent/cookie-settings-link";
-import { UploadNavLink } from "@/components/upload-nav-link";
+import { HEADER_HEIGHT_PX, SiteHeader } from "@/components/site-header";
 import { SITE_NAME } from "@/lib/site";
 
 /**
@@ -19,7 +17,10 @@ import { SITE_NAME } from "@/lib/site";
  * page's single main landmark.
  *
  * Frame budget:
- *   header   56px (h-14), sticky, opaque
+ *   header   variable, sticky, opaque (ugcportal-14k9: a wordmark/nav row
+ *            plus a fixed-height tagline row; see src/components/site-
+ *            header.tsx's HEADER_HEIGHT_PX and the `--header-height` note
+ *            on the root div below for the number this grew to)
  *   content  flex-1, page decides its own max width and padding
  *   footer   auto, hairline above
  *
@@ -32,6 +33,11 @@ import { SITE_NAME } from "@/lib/site";
  * scrolling feed. Text on a blurred photograph has no defined contrast ratio,
  * so it is exactly the thing the contrast gate in src/lib/design cannot check
  * and a reader cannot rely on.
+ *
+ * The header's own markup (wordmark, tagline, nav, mobile menu, the auth and
+ * upload-link slots) lives in src/components/site-header.tsx, not here
+ * (ugcportal-14k9) — this file keeps owning the frame itself: the skip link,
+ * the single <main> landmark, and the footer.
  *
  * DOCUMENTED DEPENDENCY (ugcportal-3wgp review round 4, finding 9; updated
  * round 5, finding 7): the footer renders `CookieSettingsLink`, which only
@@ -58,8 +64,22 @@ export function AppShell({ children }: { children: ReactNode }) {
       height on the ancestor chain to resolve against, and `body` only has a
       min-height, so `min-h-full` collapsed here and left the footer floating
       in the middle of a short page.
+
+      `--header-height` (PR #94 review round 2, finding 3) is declared HERE,
+      on the root div, rather than on <SiteHeader />'s own <header> element -
+      not a style choice, a CSS constraint: a custom property cascades to an
+      element's DESCENDANTS, and <header>/<main> are siblings under this div,
+      not ancestor and descendant. Declaring it on their nearest common
+      ancestor is the only place in this tree where both can read it. The
+      NUMBER itself is not re-derived here, though: it is imported straight
+      from site-header.tsx's own HEADER_HEIGHT_PX (see that file's comment
+      for the arithmetic), so this file does not carry a second, independent
+      guess of the header's height the way `scroll-mt-24` used to.
     */
-    <div className="flex min-h-dvh flex-col bg-background">
+    <div
+      className="flex min-h-dvh flex-col bg-background"
+      style={{ "--header-height": `${HEADER_HEIGHT_PX}px` } as CSSProperties}
+    >
       {/*
         `fixed`, not `absolute`. This wrapper is not a containing block, so an
         absolutely positioned skip link resolves against the initial
@@ -95,99 +115,54 @@ export function AppShell({ children }: { children: ReactNode }) {
         z-20: this header's own sticky tier. No longer the only one in the
         app (review round 1, ugcportal-3wgp, finding 5) — the cookie-consent
         banner (src/components/consent/cookie-banner.tsx) is the first
-        overlay, at z-40, deliberately above this header. There is still no
-        documented tier SCALE (no --z-* tokens in globals.css); whoever adds
-        a third stacking context should introduce one rather than everyone
-        picking their own bigger number.
+        overlay, at z-40, deliberately above this header. The mobile nav
+        popover (src/components/mobile-nav-toggle.tsx, ugcportal-14k9) is
+        the second, at a z-index higher than this header's z-20 so the panel
+        does not paint under the sticky header when opened on a scrolled
+        page — see that file's own comment. There is still no documented
+        tier SCALE (no --z-* tokens in globals.css); whoever adds a fourth
+        stacking context should introduce one rather than everyone picking
+        their own bigger number.
+
+        The header's own content (wordmark, tagline, nav, the mobile menu,
+        and the UploadNavLink/AuthStatus slots this file used to render
+        inline) moved to src/components/site-header.tsx wholesale, including
+        the `<header>` element itself, for ugcportal-14k9 — see that file's
+        docstring. The shrink/truncate tuning the wordmark and the auth
+        wrapper carry (what to give way first as the row runs out of width)
+        moved with it rather than being re-derived; it is unchanged.
       */}
-      <header className="sticky top-0 z-20 border-b border-border bg-background">
-        <div className="mx-auto flex h-14 w-full max-w-6xl items-center gap-4 px-4 sm:px-6">
-          <Link
-            href="/"
-            /*
-              shrink-[999] sets an explicit yield order for the header row:
-              the wordmark gives way first, then the signed-in user's name,
-              and the nav link and button labels never do. Flexbox distributes
-              shrinkage in proportion to base-size x shrink-factor, so an
-              outsized factor here means the wordmark is fully consumed before
-              any pressure reaches the actions.
-
-              min-w-12 (3rem), not min-w-0 (ugcportal-t0y round 2 finding):
-              the nav slot this bead added is shrink-0, so it and its gap now
-              take a fixed ~70px out of the row before any shrinkage is
-              distributed at all, and at a 320px viewport with a long
-              signed-in email, a shrink-[999] item with NO floor can be
-              squeezed to zero width - taking the only link back to "/" with
-              it. A small floor keeps a truncated sliver of the wordmark on
-              screen (and clickable) in that case; it does not fully solve
-              narrow-viewport layout, which is ugcportal-2al's job.
-            */
-            className="min-w-12 shrink-[999] truncate rounded-sm text-sm font-medium tracking-tight text-foreground transition-colors hover:text-primary focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring"
-          >
-            {SITE_NAME}
-          </Link>
-          {/*
-            The nav slot (ugcportal-t0y). /upload is the first destination
-            reachable from the app's own chrome - the three admin settings
-            screens (users, rights, instagram) are real destinations too and
-            still have none of their own, a gap this bead's scope does not
-            cover.
-
-            UploadNavLink is its own component (src/components/upload-nav-
-            link.tsx), not inlined here, so this function can stay a plain
-            synchronous one: React only starts rendering `children` once
-            AppShell itself has returned, so an `await` in *this* function's
-            body - the shape round 1 of this bead shipped with - would
-            serialise the session lookup ahead of the page's own data
-            fetching for every page, including an anonymous gallery visitor
-            on "/" who will never see this link at all. Kept as a sibling
-            element instead, it renders concurrently with `{children}` and
-            with AuthStatus - see that component's own comment for how the
-            two avoid paying for the session twice between them despite
-            neither awaiting the other.
-
-            A real <nav> landmark, not a bare <a>, so a screen reader user can
-            jump to it directly; aria-label distinguishes it from a future
-            second nav region rather than leaving both as an unlabelled
-            "navigation" landmark. It sits in DOM order between the wordmark
-            and the auth actions, so tab order reads left to right exactly as
-            the row is laid out - no tabIndex tricks, and no change to the
-            skip link's target or position.
-          */}
-          <UploadNavLink />
-
-          {/*
-            Auth is the other header action. min-w-0, and no shrink-0. The
-            two together used to cancel:
-            shrink-0 sized this to max-content, which made the truncate on the
-            signed-in user's name inert and sent a long email off the right
-            edge at 320-375px.
-
-            Relying on the default `min-width: auto` instead does not work
-            either, and the reason is worth writing down. min-width:0 on the
-            name removes its *floor*; it does not cap its min-content
-            contribution, and `truncate` sets white-space: nowrap, so that
-            contribution is the full width of the text. The wrapper's
-            automatic minimum would therefore be the whole untruncated email -
-            measured at 700px for a long address - and it would refuse to
-            shrink at all. Hence min-w-0 here, with the yield order set
-            explicitly on the wordmark above rather than left to min-content.
-          */}
-          <div className="ml-auto flex min-w-0 items-center gap-2">
-            <AuthStatus />
-          </div>
-        </div>
-      </header>
+      <SiteHeader />
 
       {/*
         tabIndex={-1} so the skip link actually moves focus: a plain #hash
         jump scrolls but leaves focus on the link in most engines, so the next
         Tab continues from the header the user was trying to skip.
 
-        scroll-mt-14 matches the 56px sticky header. Without it the browser
-        scrolls this element's top edge to viewport top, the header covers it,
-        and "Skip to content" lands the reader 56px into their own content -
-        past the <h1> on both admin screens. Keep the two in step.
+        scroll-mt-* matches the sticky header's height. Without it the
+        browser scrolls this element's top edge to viewport top, the header
+        covers it, and "Skip to content" lands the reader inside their own
+        content, under the header, rather than just below it - past the
+        <h1> on both admin screens (ugcportal-axu), and exactly the K3
+        failure ugcportal-14k9 names: a sticky header that hides the focused
+        element with no working skip link.
+
+        scroll-mt-[var(--header-height)], not a literal scroll-mt-24 any
+        more (PR #94 review round 2, finding 3): the root div above declares
+        `--header-height` from site-header.tsx's own HEADER_HEIGHT_PX, so
+        this reads the SAME number the header's rows are sized from rather
+        than a second, independently-reasoned Tailwind scale value that
+        happened to agree with it. `[var(--header-height)]`, not a
+        `${HEADER_HEIGHT_PX}px` template literal baked into the class name:
+        Tailwind's source scan looks for a literal arbitrary-value string in
+        the compiled output, and a template-literal interpolation does not
+        produce one at the point Tailwind reads this file's text - `var(...)`
+        is itself the literal, resolved later by the browser's own cascade,
+        which is exactly what makes this safe to write once here rather than
+        import-and-interpolate. e2e/header.spec.ts still verifies the real
+        relationship directly - that the focused element's top is at or
+        below the sticky header's bottom, post-skip, at each tested viewport
+        - rather than trusting this arithmetic, single-sourced or not.
 
         outline-hidden only for this programmatic focus: a full-width ring
         round the entire content region is noise, and every control inside it
@@ -196,7 +171,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       <main
         id="main-content"
         tabIndex={-1}
-        className="flex flex-1 scroll-mt-14 flex-col outline-hidden"
+        className="flex flex-1 scroll-mt-[var(--header-height)] flex-col outline-hidden"
       >
         {children}
       </main>
