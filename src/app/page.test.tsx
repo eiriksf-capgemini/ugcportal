@@ -4,22 +4,36 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db";
 
 /**
- * The session helper, stubbed to THROW rather than to return null.
+ * The session helper. `auth` is stubbed to THROW rather than to return null;
+ * `getSession` is stubbed to resolve as an anonymous visitor.
  *
  * Not squeamishness about next-auth's module graph — though it is that too,
  * since importing it for real pulls `next/server` into a node test run. It is
  * the assertion: GET /api/public/media's header says the feed "deliberately
  * never calls auth(), because the answer must not depend on who is asking",
  * and the gallery is now a second reader of the same rows. A stub returning
- * null would let a future `auth()` call slip in and behave identically for an
- * anonymous visitor, which is exactly the caller this test simulates and
- * exactly the one who would never reveal the bug. Throwing makes any such call
- * fail here, loudly, in the anonymous case.
+ * null for `auth` would let a future direct `auth()` call slip in and behave
+ * identically for an anonymous visitor, which is exactly the caller this test
+ * simulates and exactly the one who would never reveal the bug. Throwing
+ * makes any such call fail here, loudly, in the anonymous case.
+ *
+ * `getSession` is a SEPARATE stub, not a relaxation of the guarantee above:
+ * it backs the front page's hero (ugcportal-6dvg K1), a concern entirely
+ * independent of which rows the listing serves — `listPublicMedia` and
+ * `<Gallery>` never call it, only `Home()` itself does, to pick the hero's
+ * call-to-action target. A real `vi.fn()` (not a bare arrow function),
+ * defaulting to `null` — the true anonymous case every test in this file
+ * simulates by never seeding a session — so the one K1 test below that
+ * needs a SIGNED-IN visitor can override it with `mockResolvedValueOnce`
+ * without disturbing every other test's default.
  */
+const getSessionMock = vi.fn();
+getSessionMock.mockResolvedValue(null);
 vi.mock("@/lib/auth", () => ({
   auth: () => {
     throw new Error("the public gallery must not consult the session");
   },
+  getSession: () => getSessionMock(),
 }));
 
 /**
@@ -207,6 +221,51 @@ beforeEach(async () => {
   await prisma.user.deleteMany({});
   await prisma.user.create({
     data: { id: UPLOADER, email: "uploader@example.com", role: "USER" },
+  });
+  // Clears call history only, not the default resolved value set above —
+  // a test that overrode it with `mockResolvedValueOnce` already consumed
+  // that override on its one call, so there is nothing left to leak.
+  getSessionMock.mockClear();
+});
+
+/**
+ * ugcportal-6dvg K1: the hero's call to action tracks session state, on the
+ * real assembled Home() page (src/components/home/hero.test.tsx covers the
+ * same claim against `<Hero>` in isolation — this is the "wired as well as
+ * written" half, the same reasoning src/lib/auth.ts's own comment on
+ * `authConfig` gives for testing the sign-in gate as wired).
+ */
+describe("K1 — the front page hero's call to action tracks session state", () => {
+  it("signed out (the default for every test in this file), the call to action leads to sign-in", async () => {
+    const markup = await renderGallery();
+
+    expect(markup).toContain("Sign in to upload");
+    expect(markup).not.toContain('href="/upload"');
+  });
+
+  it("signed in, the call to action leads straight to /upload", async () => {
+    getSessionMock.mockResolvedValueOnce({
+      user: { id: "user-1", email: "someone@example.com", role: "USER" },
+    });
+
+    const markup = await renderGallery();
+
+    expect(markup).toContain('href="/upload"');
+    expect(markup).not.toContain("Sign in to upload");
+  });
+});
+
+describe("K2 — the hero renders above the gallery, and the empty state does not render", () => {
+  it("with published items present, shows the hero's title above the gallery grid and no living-empty-state marker", async () => {
+    await seedMedia({ id: "a", createdAt: new Date("2026-03-01T00:00:00Z") });
+
+    const markup = await renderGallery();
+
+    const heroIndex = markup.indexOf("Real photos of the things you actually use.");
+    const tileIndex = markup.indexOf('data-gallery-tile="a"');
+    expect(heroIndex).toBeGreaterThanOrEqual(0);
+    expect(tileIndex).toBeGreaterThan(heroIndex);
+    expect(markup).not.toContain("data-home-empty-state");
   });
 });
 

@@ -133,6 +133,63 @@
   --ink-muted-petrol: #6b6b63;
 }
 
+/*
+ * The front page hero (ugcportal-6dvg, src/components/home/hero.tsx).
+ *
+ * A plain class rather than a Tailwind arbitrary-value utility
+ * (`bg-[linear-gradient(...)]`) on the element itself: both stops are the
+ * hex petrol tokens just above, so this is one named, commented rule instead
+ * of a long bracketed utility string repeating them. Fixed regardless of
+ * `prefers-color-scheme` — like the lightbox's `--color-scrim` below, this is
+ * a deliberately brand-coloured well, not the page canvas, so it does not
+ * participate in light/dark mode at all.
+ *
+ * `--petrol-700`, the LIGHTER of the two stops, is the worse case for the
+ * light `--color-ink` text this surface carries (both the title and the
+ * lead paragraph — see `ink-on-hero-petrol` in src/lib/design/contrast.ts,
+ * checked against exactly this stop, and src/components/home/hero.tsx's own
+ * comment on why the lead uses `text-ink` rather than `text-ink-muted`
+ * here). The gradient only gets darker toward `--petrol-900`, which can
+ * only improve that contrast, never worsen it.
+ *
+ * That claim holds only as long as nothing else renders BEHIND the text at
+ * a lighter tint than this stop — see hero.tsx's own decorative-shapes
+ * comment for the one place this bead first got that wrong and how the
+ * layout now rules it out structurally rather than by colour choice alone.
+ */
+.home-hero-surface {
+  background-image: linear-gradient(135deg, var(--petrol-700), var(--petrol-900));
+}
+
+/*
+ * The hero's decorative fade-in (ugcportal-6dvg K3), and ONLY the hero's —
+ * nothing in src/components/gallery/* (K3's other half, the tile hover-scale)
+ * is defined here, because that one already exists and this bead was told not
+ * to touch it (see GALLERY_TILE_IMAGE_CLASS's own `motion-reduce:` comment in
+ * src/components/gallery/containment.ts).
+ *
+ * Deliberately NOT wrapped in `@media (prefers-reduced-motion: no-preference)`
+ * itself: an element only ever gets `animation-name: home-fade-in` from the
+ * `motion-safe:animate-[home-fade-in_...]` utility at its call site, which
+ * Tailwind already scopes to that exact media feature — wrapping the
+ * keyframes too would be redundant, not more correct. Under
+ * `prefers-reduced-motion: reduce`, no element references this name, so
+ * `getComputedStyle(el).animationName` reads the CSS-initial `"none"` there,
+ * which is what src/components/home/hero.tsx's own `motion-reduce:animate-none`
+ * additionally forces explicitly, belt-and-braces, and what the e2e reduced-
+ * motion spec (e2e/front-page-motion.spec.ts) asserts.
+ */
+@keyframes home-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
 @theme {
   --color-petrol-50: oklch(0.98 0.014 205);
   --color-petrol-100: oklch(0.95 0.028 205);

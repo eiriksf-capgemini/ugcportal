@@ -335,6 +335,27 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
     "text-muted-foreground": 1,
   },
   "src/components/ui/inline-link.ts": { "text-primary": 1 },
+
+  /*
+   * ugcportal-6dvg: the front page's "living empty state" — rendered by
+   * src/app/page.tsx directly on --background inside the app shell's
+   * <main>, the exact same placement as GalleryEmpty/GalleryUnavailable it
+   * replaces when the gallery is genuinely empty (not inside any well), so
+   * the page-canvas pair is the correct one here too. Two text-foreground:
+   * the heading and the "see the portfolio" link; one text-muted-foreground:
+   * the supporting paragraph. The front page's OTHER new component,
+   * src/components/home/hero.tsx, renders inside its own petrol-gradient
+   * well instead and uses text-ink only (round-2 review, low finding: this
+   * comment used to also say "text-ink-muted" — that token measured below
+   * threshold on this specific well and was dropped from hero.tsx entirely
+   * during this bead's own round-1 review fix; see hero.tsx's own comment
+   * on its lead paragraph). Neither is tracked by this file — see hero.tsx's
+   * own comment and contrast.ts's ink-on-hero-petrol.
+   */
+  "src/components/home/empty-state.tsx": {
+    "text-foreground": 2,
+    "text-muted-foreground": 1,
+  },
 };
 
 describe("dual-meaning token usage is audited, not just found", () => {

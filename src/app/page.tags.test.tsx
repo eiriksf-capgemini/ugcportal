@@ -17,15 +17,18 @@ import type { SeedMediaOptions } from "@/lib/test-support/media-fixtures";
  * says about them. A stubbed feed would prove the component can draw whatever
  * it is handed, which was never the half in doubt.
  *
- * The session helper throws rather than returning null, exactly as it does
- * next door: the public gallery must not consult the session, and a stub that
- * answered null would behave identically for the anonymous visitor this file
- * simulates — the one caller who would never reveal the bug.
+ * `auth` throws rather than returning null, exactly as it does next door: the
+ * public gallery must not consult the session, and a stub that answered null
+ * would behave identically for the anonymous visitor this file simulates —
+ * the one caller who would never reveal the bug. `getSession` (a separate
+ * concern — see src/app/page.test.tsx's own comment) resolves `null`: the
+ * true anonymous case, backing the front page's hero (ugcportal-6dvg).
  */
 vi.mock("@/lib/auth", () => ({
   auth: () => {
     throw new Error("the public gallery must not consult the session");
   },
+  getSession: () => Promise.resolve(null),
 }));
 
 const database = createTemporaryDatabase();
