@@ -6,7 +6,10 @@ import { expect, test } from "@playwright/test";
  * and, where a gallery tile actually exists to check, its own pre-existing
  * hover-scale transition (src/components/gallery/containment.ts,
  * untouched by this bead) still resolves to the same "nothing computed
- * transitions" state.
+ * transitions" state. The "positive controls" describe block further down
+ * this file proves the other half of that claim — that both effects are
+ * real, visible ones under ORDINARY motion — under its own
+ * `reducedMotion: "no-preference"` override.
  *
  * Not wired into CI, same as e2e/petrol-theme.spec.ts — see
  * playwright.config.ts's own comment.
@@ -126,22 +129,23 @@ test("K3: the empty state's portfolio link has no computed transition under redu
 });
 
 /**
- * The positive control for the test above (round-4 review, low finding):
- * nothing in this file previously proved the hover-lift is a REAL, visible
- * effect under ordinary motion — only that it stays suppressed under
- * `reduce`. Without this, every assertion in the test above could pass
- * just as happily if `motion-safe:hover:-translate-y-0.5` were deleted
- * outright (no hover effect ever, under any motion preference), which is
- * exactly the "weaker implementation that still passes" shape
- * review-standards asks every assertion to be checked against.
+ * Positive controls (round-4/round-5 review, low findings): nothing in this
+ * file previously proved either reduced-motion-gated effect is a REAL,
+ * visible one under ordinary motion — only that each stays suppressed under
+ * `reduce`. Without these, every assertion in the two tests above this
+ * block could pass just as happily if the underlying `motion-safe:`
+ * utilities were deleted outright (no effect ever, under any motion
+ * preference), which is exactly the "weaker implementation that still
+ * passes" shape review-standards asks every assertion to be checked
+ * against.
  *
  * A separate `test.describe` with its own `test.use({ reducedMotion:
  * "no-preference" })`, overriding this file's own top-level
  * `reducedMotion: "reduce"` for just this block — Playwright scopes
- * `test.use()` to the nearest enclosing `describe`, so the three tests
- * above are unaffected.
+ * `test.use()` to the nearest enclosing `describe`, so the tests above are
+ * unaffected.
  */
-test.describe("positive control: the hover-lift is real under ordinary motion", () => {
+test.describe("positive controls: the motion-safe effects are real under ordinary motion", () => {
   test.use({ reducedMotion: "no-preference" });
 
   test("the empty state's portfolio link actually lifts on hover when motion is not reduced", async ({
@@ -157,11 +161,54 @@ test.describe("positive control: the hover-lift is real under ordinary motion", 
     }
 
     await link.hover();
-    // Waits for the 200ms transition (motion-safe:duration-200) to settle
-    // at its end value, rather than racing it — `-translate-y-0.5` is
-    // `calc(var(--spacing) * -.5)`, which this app's `--spacing` resolves
-    // to `-2px` (confirmed against the generated CSS), so the SETTLED
-    // value is the literal, non-approximate "0px -2px" asserted below.
+    /*
+     * Waits for the 200ms transition (motion-safe:duration-200) to settle
+     * at its end value, rather than racing it, via Playwright's own
+     * auto-retrying `toHaveCSS` — `-translate-y-0.5` is `calc(var(--spacing)
+     * * -.5)`, and `--spacing` itself is `.25rem` (confirmed against the
+     * generated CSS), NOT `-2px` (round-5 review, low finding — an earlier
+     * version of this comment attributed the pixel value to `--spacing`
+     * directly). `.25rem * -.5` is `-.125rem`, which is `-2px` only at the
+     * browser's DEFAULT root font size of 16px (`1rem = 16px`) — this
+     * suite never sets a custom root font size, so that default is what is
+     * actually in effect here, but the hard-coded "0px -2px" literal below
+     * depends on it rather than on `--spacing` alone.
+     */
     await expect(link).toHaveCSS("translate", "0px -2px");
+  });
+
+  /**
+   * Round-5 review, low finding: the sibling of the hover-lift control
+   * above, for the hero's OTHER `motion-safe:`-gated effect — the
+   * decorative shapes' fade-in. Nothing previously proved
+   * `motion-safe:animate-[home-fade-in_700ms_ease-out_both]` actually
+   * applies the keyframe at all under ordinary motion: deleting it from
+   * hero.tsx left every one of this suite's other checks (and all 2584
+   * unit tests) green, while under `no-preference` the three shapes would
+   * stay at `opacity: 0` forever (their own base, no-motion-preference-
+   * expressed value — see `HeroDecoration`'s own comment) with nothing
+   * ever animating them to `opacity: 1`.
+   */
+  test("the hero's decorative shapes actually fade in when motion is not reduced", async ({
+    page,
+  }) => {
+    await page.goto("/");
+
+    const shapes = page.locator("[data-home-hero-decoration] span");
+    const count = await shapes.count();
+    expect(count).toBeGreaterThan(0);
+
+    for (let index = 0; index < count; index += 1) {
+      const shape = shapes.nth(index);
+      const animationName = await shape.evaluate(
+        (el) => getComputedStyle(el).animationName,
+      );
+      expect(animationName).toBe("home-fade-in");
+      // Waits for the animation (up to 700ms, plus each shape's own
+      // staggered 0/150/300ms delay) to actually finish and settle at its
+      // `to` keyframe (`opacity: 1`), via the same auto-retrying assertion
+      // as the hover-lift control above, rather than a fixed sleep.
+      await expect(shape).toHaveCSS("opacity", "1");
+    }
   });
 });
