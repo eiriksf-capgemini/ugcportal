@@ -1,22 +1,28 @@
-import { getSession, signIn, signOut } from "@/lib/auth";
+import { signIn, signOut } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
+import { resolveSessionOrAnonymous } from "@/lib/session-or-anonymous";
 import { hasSignedInUser } from "@/lib/session";
 
 /**
  * Renders the sign-in/sign-out affordance for the current request's
  * session.
  *
- * Calls `getSession()` — the `cache()`-memoized `auth()` in src/lib/auth.ts —
- * rather than a plain `auth()` (ugcportal-t0y round 1 medium finding): this
- * and src/components/upload-nav-link.tsx both need the session, both render
- * as independent children of AppShell, and both calling the memoized version
- * means the two cost one adapter round trip between them rather than two.
- * A first attempt at avoiding that duplication instead had AppShell resolve
- * the session itself and pass it down as a prop, which removed the
- * duplicate but forced AppShell to `await` before it could return
- * `{children}` — serialising the session lookup ahead of the page's own
- * data fetching on every render. `cache()` gets both: no duplicate query,
- * and no component forced to block its siblings on it.
+ * Reads `resolveSessionOrAnonymous()` (src/lib/session-or-anonymous.ts,
+ * ugcportal-8df3), not `getSession()` directly (ugcportal-t0y round 1
+ * medium finding, superseded): that helper awaits the same
+ * `cache()`-memoized `getSession()` this and src/components/upload-
+ * nav-link.tsx both need — so the two still cost one adapter round trip
+ * between them rather than two — and ALSO degrades a rejected read to the
+ * anonymous case instead of crashing this component and, with it, every
+ * page `AppShell` renders it on (see that module's own comment for why a
+ * decorative widget like this one must never fail closed the way
+ * src/lib/admin.ts's `requireAdmin` does). A first attempt at avoiding the
+ * round-trip duplication instead had AppShell resolve the session itself
+ * and pass it down as a prop, which removed the duplicate but forced
+ * AppShell to `await` before it could return `{children}` — serialising
+ * the session lookup ahead of the page's own data fetching on every
+ * render. `cache()` gets both: no duplicate query, and no component forced
+ * to block its siblings on it.
  *
  * Gated on `hasSignedInUser` (src/lib/session.ts), not a hand-spelled
  * `!session?.user` (ugcportal-t0y round 3 finding 1): that used to disagree
@@ -29,7 +35,7 @@ import { hasSignedInUser } from "@/lib/session";
  * predicate.
  */
 export async function AuthStatus() {
-  const session = await getSession();
+  const session = await resolveSessionOrAnonymous();
 
   if (!hasSignedInUser(session)) {
     return (

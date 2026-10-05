@@ -1,5 +1,5 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
  * ugcportal-t0y round 1 low finding: nothing anywhere asserted on
@@ -23,6 +23,26 @@ async function renderStatus(): Promise<string> {
 
 beforeEach(() => {
   vi.clearAllMocks();
+});
+
+/**
+ * ugcportal-8df3 round-1 review, finding 3: the rejection test below
+ * (`vi.spyOn(console, "error")`, `getSessionMock.mockRejectedValue(...)`)
+ * is never otherwise undone. `vi.clearAllMocks()` in `beforeEach` above only
+ * clears call history — not a spy's restored implementation, nor a mock's
+ * configured resolved/rejected value — so without this, a leftover
+ * console.error spy or a still-rejecting `getSessionMock` could silently
+ * leak into whichever test runs after it. Harmless today only because that
+ * test happens to be last in this file; the same anti-pattern src/app/
+ * page.error.test.tsx's own top comment warns about by name for a different
+ * mock. `vi.restoreAllMocks()` undoes the spy; `getSessionMock.mockReset()`
+ * is explicit (not left to restoreAllMocks' documented but easy-to-miss
+ * fallback behaviour for a plain `vi.fn()`) so a reader does not have to
+ * know that nuance to see this mock is clean between tests.
+ */
+afterEach(() => {
+  vi.restoreAllMocks();
+  getSessionMock.mockReset();
 });
 
 describe("AuthStatus (ugcportal-t0y)", () => {
@@ -109,5 +129,31 @@ describe("AuthStatus (ugcportal-t0y)", () => {
     expect(() => {
       expect(solidFillClassList).not.toContain("bg-primary text-primary-foreground");
     }).toThrow();
+  });
+
+  /**
+   * ugcportal-8df3: AuthStatus reads the session through the shared
+   * fail-safe (src/lib/session-or-anonymous.ts), not `getSession()`
+   * directly — so a rejected read degrades to the signed-out markup
+   * instead of crashing this component (and, with it, every page it is
+   * rendered on; see src/components/site-header.tsx). This file mocks
+   * `@/lib/auth`, not the fail-safe module itself, so the real
+   * `resolveSessionOrAnonymous` runs here.
+   *
+   * THE FIXTURE MUTATION: remove the `try`/`catch` from
+   * src/lib/session-or-anonymous.ts (or swap this component back to a bare
+   * `await getSession()`) and this test fails — `renderStatus()` rejects
+   * instead of resolving to the signed-out markup.
+   */
+  it("falls back to the signed-out markup when the session read fails", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    getSessionMock.mockRejectedValue(new Error("getSession() failed (simulated)"));
+
+    const markup = await renderStatus();
+
+    expect(markup).toContain("Google");
+    expect(markup).toContain("Facebook");
+    expect(markup).not.toContain("Sign out");
+    expect(consoleError).toHaveBeenCalledOnce();
   });
 });

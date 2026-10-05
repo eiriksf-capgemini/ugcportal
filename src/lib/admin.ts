@@ -30,6 +30,20 @@ import { getSession } from "@/lib/auth";
 export type AdminSession = Session & { user: NonNullable<Session["user"]> };
 
 export async function requireAdmin(): Promise<AdminSession | null> {
+  /*
+    The raw getSession(), not src/lib/session-or-anonymous.ts's shared
+    fail-safe (ugcportal-8df3). That helper exists for the shell's
+    DECORATIVE widgets (AuthStatus, UploadNavLink, the home page's hero),
+    where a failed session read degrading to "signed out" is exactly the
+    state an anonymous visitor can reach on purpose. This is a GATE: folding
+    "the database didn't answer" into "not an admin" here would make a
+    connectivity blip indistinguishable from a legitimate refusal, and a
+    caller cannot tell the two apart from `null` alone. Left unguarded, a
+    rejection propagates out of this function instead — the request errors
+    rather than quietly resolving to "no, you may not" OR "yes, carry on",
+    which is what failing CLOSED means for a gate: refuse to answer rather
+    than risk answering wrong.
+  */
   const session = await getSession();
   const user = session?.user;
   if (!session || !user?.id || user.role !== "ADMIN") {

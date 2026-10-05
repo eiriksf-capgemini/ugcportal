@@ -93,6 +93,31 @@ describe("the upload page is gated (K5)", () => {
     authMock.mockResolvedValue({ expires: "2026-12-01T00:00:00.000Z" });
     await expect(renderPage()).rejects.toThrow(`NEXT_REDIRECT:${SIGN_IN_URL}`);
   });
+
+  /**
+   * ugcportal-8df3 K2: "Following should never happen: an auth gate (upload
+   * page, requireAdmin) treating a failed session read as signed out." A
+   * redirect to sign-in (the branch every test above exercises) is what
+   * this page does for a REAL signed-out visitor; a failed read must stay
+   * distinguishable from that, not quietly take the same branch. This is
+   * why this page calls the raw `getSession()` rather than src/lib/
+   * session-or-anonymous.ts's shared fail-safe — see the comment on that
+   * call site.
+   *
+   * THE FIXTURE MUTATION: swap this page's `getSession()` call for
+   * `resolveSessionOrAnonymous()` and this test fails — the rejection
+   * would be swallowed, `session` would resolve to `null`, and the page
+   * would redirect (`NEXT_REDIRECT:...`) instead of propagating the
+   * original error.
+   */
+  it("propagates rather than redirecting to sign-in when the session read fails (fails CLOSED)", async () => {
+    authMock.mockRejectedValue(new Error("getSession() failed (simulated)"));
+
+    await expect(renderPage()).rejects.toThrow(
+      "getSession() failed (simulated)",
+    );
+    expect(redirectMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("the upload page, for someone signed in", () => {
