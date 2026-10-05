@@ -602,26 +602,46 @@ export const PAIRINGS: Pairing[] = [
    * The hero's own call-to-action: a light petrol-tint fill with a dark
    * label, mirroring the fill-light/label-dark pairing already established
    * for default-neutral / the upload dropzone (see petrol-900-on-petrol-400
-   * above) — but spelled with tokens that actually compile to a Tailwind
-   * utility. `--color-petrol-900` (that pairing's label token) has no
-   * `bg-`/`text-petrol-900` utility: it is declared in the OKLCH near-black
-   * `:root` block, not `@theme` (see that block's own "stopping Tailwind
-   * emitting bg-petrol-900 and friends" comment), so `text-petrol-900`
-   * compiles to no rule at all — confirmed empirically by compiling
-   * globals.css and checking the generated utilities, not assumed. Filed as
-   * a pre-existing issue (not this bead's file) rather than silently
-   * reused: see the PR description. `--color-surface-0` IS in `@theme` (so
-   * `text-surface-0` is real), is a genuine near-black, and is not one of
-   * this file's existing surface entries' FOREGROUND uses — only its
-   * background ones — so this is a new foreground use of an existing token,
-   * not a new token.
+   * above) — but spelled with a LABEL token that actually compiles to a
+   * Tailwind utility. `--color-petrol-900` (that pairing's label token) has
+   * no `bg-`/`text-petrol-900` utility: it is declared in the OKLCH
+   * near-black `:root` block, not `@theme` (see that block's own "stopping
+   * Tailwind emitting bg-petrol-900 and friends" comment), so
+   * `text-petrol-900` compiles to no rule at all — confirmed empirically by
+   * compiling globals.css and checking the generated utilities, not
+   * assumed. Filed as a pre-existing issue (not this bead's file) rather
+   * than silently reused: see the PR description. `--color-surface-0` IS in
+   * `@theme` (so `text-surface-0` is real), is a genuine near-black, and is
+   * not one of this file's existing surface entries' FOREGROUND uses — only
+   * its background ones — so this is a new foreground use of an existing
+   * token, not a new token.
+   *
+   * `--color-petrol-100`, NOT `--petrol-100` (round-3 review, CONFIRMED
+   * medium — an earlier version of this entry checked the wrong one): this
+   * app has TWO separately-declared petrol-100 tokens (see globals.css's own
+   * "two blocks, and the split is the whole point" comment) — `--petrol-100`
+   * is the hex reference-palette value (`#cfe8e7`), declared in `:root` and
+   * never exposed as a Tailwind utility, while `--color-petrol-100` is the
+   * OKLCH scale value (`oklch(0.95 0.028 205)`) inside `@theme`, which is
+   * what `bg-petrol-100` — the actual class on hero.tsx's CTA — resolves
+   * to. Checking the hex one verified a ratio for a colour this button never
+   * paints; the sibling `petrol-400-fill-on-old-surface-*` pairing above
+   * already gets this right, checking `--color-petrol-400`, not
+   * `--petrol-400`.
    */
   {
     id: "surface-0-on-petrol-100",
     foreground: "--color-surface-0",
-    background: ["--petrol-100"],
+    background: ["--color-petrol-100"],
     requirement: "body",
     usage: "The hero's call-to-action label, on its light petrol-tint fill.",
+  },
+  {
+    id: "surface-0-on-petrol-100-hover",
+    foreground: "--color-surface-0",
+    background: ["--color-petrol-200"],
+    requirement: "body",
+    usage: "The hero's call-to-action label, on its light petrol-tint fill, hovered (hover:bg-petrol-200).",
   },
 ];
 

@@ -63,9 +63,24 @@ export function EmptyState() {
         Photographs appear here as soon as they are published. Nothing is
         hidden from you — the gallery is genuinely empty.
       </p>
+      {/*
+        `motion-reduce:translate-none`, not `-transform-none` (round-3
+        review finding, caught while verifying a related low finding):
+        Tailwind v4's `translate-y-*` utilities (including `hover:
+        -translate-y-0.5` below) compile to the standalone CSS `translate`
+        property, not `transform` — confirmed empirically by compiling
+        globals.css and reading the generated rule
+        (`.hover\:-translate-y-0\.5:hover { translate: ...; }`). An earlier
+        `motion-reduce:transform-none` here was accordingly a no-op: it set
+        a property nothing else on this element ever touches, so it
+        provided no actual belt-and-braces protection — `motion-safe:`
+        gating the hover utility in the first place was doing all the real
+        work. `translate-none` is the version that actually overrides the
+        same property the hover utility sets.
+      */}
       <Link
         href={PORTFOLIO_PATH}
-        className="mt-6 inline-flex w-fit items-center gap-1.5 rounded-md border border-input px-3 py-2 text-sm font-medium text-foreground motion-safe:transition-transform motion-safe:duration-200 motion-safe:ease-out motion-safe:hover:-translate-y-0.5 motion-reduce:transition-none motion-reduce:transform-none"
+        className="mt-6 inline-flex w-fit items-center gap-1.5 rounded-md border border-input px-3 py-2 text-sm font-medium text-foreground motion-safe:transition-transform motion-safe:duration-200 motion-safe:ease-out motion-safe:hover:-translate-y-0.5 motion-reduce:transition-none motion-reduce:translate-none"
       >
         See what is already finished, in the portfolio
       </Link>

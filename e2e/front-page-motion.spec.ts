@@ -78,14 +78,35 @@ test("K3: the empty state's portfolio link has no computed transition under redu
     test.skip(true, "gallery is not empty in this dev database");
   }
 
-  const computed = await link.evaluate((el) => {
+  const resting = await link.evaluate((el) => getComputedStyle(el).transitionProperty);
+  expect(resting).toBe("none");
+
+  /*
+   * Round-3 review, low finding: reading the computed style WITHOUT ever
+   * hovering cannot fail regardless of `motion-reduce:translate-none` —
+   * this link's base (non-`:hover`) style never moves it at all, only
+   * `motion-safe:hover:-translate-y-0.5` does, so the computed value would
+   * already read inert even if that reduced-motion override were deleted
+   * outright. Hovering first is what actually exercises it: under ordinary
+   * motion this same hover would compute a real translate offset, and
+   * asserting it is suppressed here, WHILE hovered, under
+   * `reducedMotion: "reduce"`, is the claim this test exists to make.
+   *
+   * `translate`, NOT `transform` (round-3 review: caught while fixing the
+   * finding above — checking `.transform` here would have stayed vacuous
+   * even hovered, for a different reason than "never hovered"). Tailwind
+   * v4's `-translate-y-*` utilities compile to the standalone CSS
+   * `translate` property, confirmed by compiling globals.css and reading
+   * the generated rule — `transform` is a completely different property
+   * this utility never touches, and empty-state.tsx's own comment on this
+   * link records the same discovery for the production code's
+   * `motion-reduce:` override, which had the identical bug.
+   */
+  await link.hover();
+  const hovered = await link.evaluate((el) => {
     const style = getComputedStyle(el);
-    return { transitionProperty: style.transitionProperty, transform: style.transform };
+    return { transitionProperty: style.transitionProperty, translate: style.translate };
   });
-  expect(computed.transitionProperty).toBe("none");
-  // Round-2 review, low finding: captured but never asserted before — this
-  // link's `motion-reduce:transform-none` is the explicit, belt-and-braces
-  // half (see empty-state.tsx's own class list), parallel to hero.tsx's
-  // `motion-reduce:animate-none` on its decorative shapes.
-  expect(computed.transform).toBe("none");
+  expect(hovered.transitionProperty).toBe("none");
+  expect(hovered.translate).toBe("none");
 });

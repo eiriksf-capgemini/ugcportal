@@ -125,6 +125,19 @@ export function Hero({ signedIn }: HeroProps) {
     ? { href: UPLOAD_PATH, label: "Upload" }
     : { href: signInPath(UPLOAD_PATH), label: "Sign in to upload" };
 
+  /*
+   * Session-aware (round-3 review, low finding): an earlier, static version
+   * of this sentence always said "...or sign in to add your own" — true
+   * beside the signed-out CTA above, but a visitor who is ALREADY signed in
+   * (CTA: "Upload") was being told to sign in a second time, right next to
+   * a button that does not ask them to. The rest of the lead paragraph is
+   * identical either way; only this closing clause names the action that
+   * matches the CTA actually on screen.
+   */
+  const closingSentence = signedIn
+    ? "Browse what is already up, or add your own."
+    : "Browse what is already up, or sign in to add your own.";
+
   return (
     <section data-home-hero className="home-hero-surface relative isolate overflow-hidden">
       <div className="relative mx-auto flex w-full max-w-6xl flex-col gap-8 px-4 py-16 sm:flex-row sm:items-center sm:px-6 sm:py-20">
@@ -162,7 +175,7 @@ export function Hero({ signedIn }: HeroProps) {
             and wine accessories — think glasses, coolers and the apps that
             go with them — photographed by real people, not studios. Every
             picture here was taken by someone who actually owns the thing in
-            frame. Browse what is already up, or sign in to add your own.
+            frame. {closingSentence}
           </p>
           <div className="mt-2">
             <Link

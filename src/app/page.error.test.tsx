@@ -269,10 +269,40 @@ describe("Home() in isolation: a failed session read never crashes its render", 
  * stops throwing, and `it.fails` itself then reports "expected the test to
  * fail, but it passed" — forcing this marker to be revisited and converted
  * to a real, non-inverted test rather than silently going stale.
+ *
+ * TWO LIMITS ON WHAT "flips" MEANS HERE (round-3 review, low finding —
+ * stated plainly rather than left implicit):
+ *
+ * 1. This file's own top-level `vi.mock("@/lib/auth", ...)` replaces the
+ *    WHOLE module, `getSession` included. If ugcportal-8df3 is fixed inside
+ *    the REAL `getSession()`/`auth()` (src/lib/auth.ts) rather than inside
+ *    `AuthStatus`/`UploadNavLink` themselves, this test's mock would still
+ *    export the same rejecting stub it always has, and this tripwire would
+ *    NOT flip — it would keep failing (correctly, by `it.fails`'s own
+ *    accounting) for a fix this file cannot see at all. It only self-flips
+ *    if ugcportal-8df3 follows the same shape `resolveSignedIn` already
+ *    does for `Home()`: each CALLER wrapping its own `await getSession()`.
+ * 2. This mock's `getSession` is a plain arrow function, not wrapped in
+ *    `cache()` the way the real one is — so `Home()`, `AuthStatus()` and
+ *    `UploadNavLink()` below each get their OWN independently-rejecting
+ *    promise, not the one SHARED memoized promise production code actually
+ *    has them all await. That still proves the claim this test exists to
+ *    make ("an unguarded `await getSession()` crashes its caller"), since
+ *    the failure mode is the missing guard, not the sharing — but it is
+ *    not a literal reproduction of the cache()-memoization mechanism the
+ *    bug report (and src/app/page.tsx's own `resolveSignedIn` comment)
+ *    describes, and a reader should not assume this test exercises that
+ *    specific part.
  */
 it.fails(
   "ugcportal-8df3 (not fixed here): AuthStatus and UploadNavLink do not yet survive a rejected getSession() the way Home() does",
   async () => {
+    // Spied and silenced, same as the two sibling tests above — `Home()`
+    // logs on its own guarded path; `AuthStatus()`/`UploadNavLink()` do not
+    // log at all today (they have no catch to log from), so this is here
+    // for output cleanliness and consistency, not an assertion on a call
+    // count that would itself change shape once ugcportal-8df3 lands.
+    vi.spyOn(console, "error").mockImplementation(() => {});
     mockSession.rejects = true;
 
     const [homeResult, authResult, navResult] = await Promise.allSettled([

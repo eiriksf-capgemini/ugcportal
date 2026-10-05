@@ -47,6 +47,20 @@ describe("Hero (ugcportal-6dvg)", () => {
   });
 
   /*
+   * Round-3 review, low finding: an earlier, static version of the lead's
+   * closing sentence always said "...or sign in to add your own" — true
+   * beside the signed-out CTA, but wrong beside the signed-in one ("Upload"),
+   * which does not ask a visitor who is already signed in to sign in again.
+   */
+  it("K1: the lead's closing sentence names sign-in only when signed out", () => {
+    expect(render(false)).toContain(
+      "Browse what is already up, or sign in to add your own.",
+    );
+    expect(render(true)).toContain("Browse what is already up, or add your own.");
+    expect(render(true)).not.toContain("sign in to add your own");
+  });
+
+  /*
    * K4: no stock photo or third-party image in the hero. Checks for the
    * absence of an <img> element AND of any `url(...)` reference inside a
    * `style` attribute or class name that points outside this app's own
