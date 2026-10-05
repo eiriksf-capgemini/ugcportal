@@ -343,19 +343,41 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
    * replaces when the gallery is genuinely empty (not inside any well), so
    * the page-canvas pair is the correct one here too. Two text-foreground:
    * the heading and the "see the portfolio" link; one text-muted-foreground:
-   * the supporting paragraph. The front page's OTHER new component,
-   * src/components/home/hero.tsx, renders inside its own petrol-gradient
-   * well instead and uses text-ink only (round-2 review, low finding: this
-   * comment used to also say "text-ink-muted" — that token measured below
-   * threshold on this specific well and was dropped from hero.tsx entirely
-   * during this bead's own round-1 review fix; see hero.tsx's own comment
-   * on its lead paragraph). Neither is tracked by this file — see hero.tsx's
-   * own comment and contrast.ts's ink-on-hero-petrol.
+   * the supporting paragraph.
    */
   "src/components/home/empty-state.tsx": {
     "text-foreground": 2,
     "text-muted-foreground": 1,
   },
+  /*
+   * ugcportal-6dvg's own hero.tsx: the front page's hero, which renders
+   * inside its own petrol-gradient well instead of --background and uses
+   * `text-ink` only (round-2 review, low finding: this comment used to
+   * also say "text-ink-muted" — that token measured below threshold on
+   * this specific well and was dropped from hero.tsx entirely during this
+   * bead's own round-1 review fix; see hero.tsx's own comment on its lead
+   * paragraph), measured safe in contrast.ts's ink-on-hero-petrol.
+   *
+   * ugcportal-akv6 round 6: this entry itself was MISSING from main at the
+   * point PR #96 merged origin/main in — "text-ink" was already a tracked
+   * token by the time #97 (this file's bead) shipped, so the file's own
+   * dual-meaning-usage audit should already have required this entry; the
+   * two literal `text-ink` usages are the heading and the lead paragraph
+   * (hero.tsx lines ~161 and ~173). Confirmed against a clean checkout of
+   * origin/main at 35800c9 before adding this — this test fails there
+   * too, independent of this merge.
+   *
+   * ugcportal-ig4g: ported by hand from PR #96's merge-conflict resolution
+   * (commit 2ef98a7bb4 on feat/ugcportal-akv6-footer) rather than waiting
+   * for #96 to land — main itself is red on this gate (ugcportal-ld8c) and
+   * this bead's own quality gates need a green `npx vitest run` to mean
+   * anything. A straight cherry-pick cannot bring this one line in alone:
+   * it was written as a MERGE conflict resolution, not a standalone commit
+   * diff, so this is a manual, identical copy of that same line and
+   * comment. Collapses to a no-op (same line already present) once #96
+   * actually merges.
+   */
+  "src/components/home/hero.tsx": { "text-ink": 2 },
 };
 
 describe("dual-meaning token usage is audited, not just found", () => {
