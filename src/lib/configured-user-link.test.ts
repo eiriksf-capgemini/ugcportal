@@ -1695,6 +1695,60 @@ describe("a lockout says which row to adopt and how (PR #98 round 2, low)", () =
     expect(line).toContain("has no google account");
     expect(line).toContain("(it has: facebook (stored as ' FACEBOOK '))");
     expect(line).toContain("cannot adopt it");
+    // AND THE ADDRESS IS ECHOED VERBATIM in the ordinary case, with no
+    // second form appended (PR #100 round 1, low 4). The row holds exactly
+    // what the insert wrote here, so there is nothing to disambiguate and
+    // the line says the address once — the divergent case is the test
+    // below, which is also this assertion's failing fixture.
+    expect(line).toContain(`the address ${EIRIK_GOOGLE}.`);
+  });
+
+  it("prints the address as stored when it is not the permitted spelling (ugcportal-qqgi)", async () => {
+    // THE ADDRESS GETS THE PROVIDER'S TREATMENT, and this is the case that
+    // makes it matter (PR #100 round 1, low 4). The gate normalises the
+    // address it permits — `rememberSignInIdentity` stores
+    // `authorisedEmail`'s answer — but what lands in `User.email` is the
+    // string @auth/core hands the adapter, verbatim. So one spelling from
+    // the provider becomes two values, the lookup keys on the written one,
+    // and a line that named only the permitted one would send the operator
+    // to a `WHERE "email" = ...` matching no row at all.
+    //
+    // ONE SPELLING IN, through the full replay: the gate normalises what it
+    // puts in the slot, `createUser` receives `profile.email` untouched, and
+    // the divergence is the harness doing exactly what @auth/core does
+    // rather than anything this test arranges.
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const AS_SPELLED = ` Eiriksanderfjeld@Gmail.com `;
+    const holder = await prisma.user.create({
+      data: { email: AS_SPELLED, name: "Stored As Spelled" },
+    });
+    await prisma.account.create({
+      data: {
+        userId: holder.id,
+        provider: "facebook",
+        providerAccountId: "facebook-subject-as-spelled",
+        type: "oauth",
+      },
+    });
+
+    await expect(
+      replayOAuthSignIn({
+        provider: "google",
+        email: AS_SPELLED,
+        subject: "google-subject-eirik",
+      }),
+    ).rejects.toThrow();
+
+    const line = errors.mock.calls
+      .map((call) => String(call[0]))
+      .find((text) => text.includes("Could not create the user row"));
+
+    // What the row holds, quoted so the padding is visible, and the
+    // permitted form beside it.
+    expect(line).toContain(`'${AS_SPELLED}' (permitted as ${EIRIK_GOOGLE})`);
+    // And it is that row being described: the lookup found it by the exact
+    // address, so the providers listed are its own.
+    expect(line).toContain("(it has: facebook)");
   });
 
   it("describes the row that collided, not a canonically equal twin (ugcportal-qqgi K2)", async () => {
@@ -1752,200 +1806,205 @@ describe("a lockout says which row to adopt and how (PR #98 round 2, low)", () =
     expect(line).not.toContain("cannot adopt it");
     expect(line).not.toContain("apple");
   });
+});
 
-  /**
-   * A REAL P2002 RACE, which the test that used to stand here never reached
-   * (ugcportal-qqgi, escalated from PR #98's round-6 cap).
-   *
-   * The catch branch in `createUser` decides which `User` row @auth/core
-   * attaches the new `Account` to, and nothing exercised it. The old test
-   * wrapped `authConfig.adapter` — which is ALREADY wrapped, since
-   * `authConfig` composes
-   * `withConfiguredUserLinking(withSessionIdentity(PrismaAdapter(prisma)))`
-   * — so the INNER wrapper's own handle lookup found the row the hook had
-   * just inserted and returned it. No duplicate insert, no P2002, no catch.
-   * Measured on PR #98's head bfa50eea: an unconditional `console.error` at
-   * the top of the catch, `return raced` replaced by a throw, and
-   * `return raced` replaced by another user's row each left all 2667 tests
-   * green.
-   *
-   * So this wraps the UNWRAPPED Prisma adapter, and the collision is real:
-   * the loser's handle lookup misses, the other request's whole sign-in
-   * completes from inside the loser's insert call, and the loser's insert
-   * then hits `User.configuredHandle`'s UNIQUE index.
-   *
-   * THE TWO IDENTITIES ARE THE PRODUCTION CASE — Eirik's Google and his
-   * Facebook, which this bead makes an ordinary thing to hold at once — and
-   * they carry DIFFERENT addresses, so the only column that can collide is
-   * the handle. That is what makes this the race rather than the lockout
-   * the tests above cover: no row anywhere holds the address, so the
-   * `!raced` branch could not be taken even if the re-read came back empty.
-   *
-   * `createUser` and `linkAccount` are driven directly, in that order,
-   * because that is steps 4 and 5 of @auth/core's OAuth branch
-   * (handle-login.js:255-264); the `getUserByEmail` between them is
-   * withheld for a configured identity anyway.
-   */
-  describe("the loser of a real createUser race lands on the winner's row (ugcportal-qqgi K1)", () => {
-    const WINNER = {
-      provider: "facebook" as const,
-      email: EIRIK_FACEBOOK,
-      subject: "facebook-subject-eirik",
+/**
+ * A REAL P2002 RACE, which the test that used to stand here never reached
+ * (ugcportal-qqgi, escalated from PR #98's round-6 cap).
+ *
+ * The catch branch in `createUser` decides which `User` row @auth/core
+ * attaches the new `Account` to, and nothing exercised it. The old test
+ * wrapped `authConfig.adapter` — which is ALREADY wrapped, since
+ * `authConfig` composes
+ * `withConfiguredUserLinking(withSessionIdentity(PrismaAdapter(prisma)))`
+ * — so the INNER wrapper's own handle lookup found the row the hook had
+ * just inserted and returned it. No duplicate insert, no P2002, no catch.
+ * Measured on PR #98's head bfa50eea: an unconditional `console.error` at
+ * the top of the catch, `return raced` replaced by a throw, and
+ * `return raced` replaced by another user's row each left all 2667 tests
+ * green.
+ *
+ * So this wraps the UNWRAPPED Prisma adapter, and the collision is real:
+ * the loser's handle lookup misses, the other request's whole sign-in
+ * completes from inside the loser's insert call, and the loser's insert
+ * then hits `User.configuredHandle`'s UNIQUE index.
+ *
+ * THE TWO IDENTITIES ARE THE PRODUCTION CASE — Eirik's Google and his
+ * Facebook, which this bead makes an ordinary thing to hold at once — and
+ * they carry DIFFERENT addresses, so the only column that can collide is
+ * the handle. That is what makes this the race rather than the lockout
+ * the lockout tests cover, and it is the FIXTURE that decides it: the
+ * winner's row carries the handle by the time the loser re-reads it, so
+ * the re-read answers with a row and `if (!raced)` — the lockout branch,
+ * taken precisely when that re-read comes back EMPTY — is not entered.
+ * Nothing holds the loser's address either, so there would be no
+ * offending row for that branch to describe even if it were.
+ *
+ * `createUser` and `linkAccount` are driven directly, in that order,
+ * because together they are step 5 of @auth/core's OAuth branch
+ * (handle-login.js:255-264). Step 4's `getUserByEmail`, which runs BEFORE
+ * them, is withheld for a configured identity anyway — see the module
+ * header's numbering.
+ */
+describe("the loser of a real createUser race lands on the winner's row (ugcportal-qqgi K1)", () => {
+  const WINNER = {
+    provider: "facebook" as const,
+    email: EIRIK_FACEBOOK,
+    subject: "facebook-subject-eirik",
+  };
+  const LOSER = {
+    provider: "google" as const,
+    email: EIRIK_GOOGLE,
+    subject: "google-subject-eirik",
+  };
+
+  type Race = {
+    /** What the loser's `createUser` handed back to @auth/core. */
+    resolved: AdapterUser;
+    /** The row the other request inserted, or null if it never ran. */
+    winner: AdapterUser | null;
+    /** A row belonging to nobody in the array. */
+    decoy: { id: string };
+    /** Calls that reached the UNWRAPPED adapter's `createUser`. */
+    inserts: number;
+    /** Prisma's code for each insert that was rejected. */
+    collided: (string | undefined)[];
+    /** Every `console.error` written during the whole race. */
+    logged: string[];
+  };
+
+  async function runRace(): Promise<Race> {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    // SOMEBODY ELSE'S ROW, present so that "return some other user's row"
+    // is a failure this fixture can express rather than one it has to
+    // imagine.
+    const decoy = await prisma.user.create({
+      data: { email: "decoy@example.com", name: "Not Eirik" },
+    });
+
+    const { withConfiguredUserLinking } = await import(
+      "@/lib/configured-user-link"
+    );
+    const { rememberSignInIdentity } = await import("@/lib/live-session");
+    const base = PrismaAdapter(prisma) as Adapter;
+    const insert = base.createUser!.bind(base);
+
+    let winner: AdapterUser | null = null;
+    let otherRequestStarted = false;
+    let inserts = 0;
+    const collided: (string | undefined)[] = [];
+
+    const racing: Adapter = {
+      ...base,
+      createUser: async (data) => {
+        inserts += 1;
+        if (!otherRequestStarted) {
+          // The flag goes up BEFORE the await, or the other request's own
+          // insert arrives here and recurses forever.
+          otherRequestStarted = true;
+          // THE OTHER TAB, landing between this request's handle lookup
+          // and its insert. Its handle lookup misses too — the row does
+          // not exist yet — so it inserts, and wins.
+          winner = await signIn(WINNER);
+        }
+        try {
+          return await insert(data);
+        } catch (error) {
+          collided.push(prismaErrorCode(error));
+          throw error;
+        }
+      },
     };
-    const LOSER = {
-      provider: "google" as const,
-      email: EIRIK_GOOGLE,
-      subject: "google-subject-eirik",
-    };
+    const adapter = withConfiguredUserLinking(racing);
 
-    type Race = {
-      /** What the loser's `createUser` handed back to @auth/core. */
-      resolved: AdapterUser;
-      /** The row the other request inserted, or null if it never ran. */
-      winner: AdapterUser | null;
-      /** A row belonging to nobody in the array. */
-      decoy: { id: string };
-      /** Calls that reached the UNWRAPPED adapter's `createUser`. */
-      inserts: number;
-      /** Prisma's code for each insert that was rejected. */
-      collided: (string | undefined)[];
-      /** Every `console.error` written during the whole race. */
-      logged: string[];
-    };
-
-    async function runRace(): Promise<Race> {
-      const errors = vi.spyOn(console, "error").mockImplementation(() => {});
-      // SOMEBODY ELSE'S ROW, present so that "return some other user's row"
-      // is a failure this fixture can express rather than one it has to
-      // imagine.
-      const decoy = await prisma.user.create({
-        data: { email: "decoy@example.com", name: "Not Eirik" },
-      });
-
-      const { withConfiguredUserLinking } = await import(
-        "@/lib/configured-user-link"
-      );
-      const { rememberSignInIdentity } = await import("@/lib/live-session");
-      const base = PrismaAdapter(prisma) as Adapter;
-      const insert = base.createUser!.bind(base);
-
-      let winner: AdapterUser | null = null;
-      let otherRequestStarted = false;
-      let inserts = 0;
-      const collided: (string | undefined)[] = [];
-
-      const racing: Adapter = {
-        ...base,
-        createUser: async (data) => {
-          inserts += 1;
-          if (!otherRequestStarted) {
-            // The flag goes up BEFORE the await, or the other request's own
-            // insert arrives here and recurses forever.
-            otherRequestStarted = true;
-            // THE OTHER TAB, landing between this request's handle lookup
-            // and its insert. Its handle lookup misses too — the row does
-            // not exist yet — so it inserts, and wins.
-            winner = await signIn(WINNER);
-          }
-          try {
-            return await insert(data);
-          } catch (error) {
-            collided.push(prismaErrorCode(error));
-            throw error;
-          }
-        },
-      };
-      const adapter = withConfiguredUserLinking(racing);
-
-      async function signIn(identity: typeof LOSER | typeof WINNER) {
-        return inSignInRequest(async () => {
-          rememberSignInIdentity({
-            user: { email: identity.email },
-            account: { provider: identity.provider },
-            profile: { email: identity.email },
-          });
-          const user = await adapter.createUser!({
-            name: `From ${identity.provider}`,
-            email: identity.email,
-            emailVerified: null,
-          } as unknown as AdapterUser);
-          await adapter.linkAccount!({
-            provider: identity.provider,
-            type: "oauth",
-            providerAccountId: identity.subject,
-            userId: user.id,
-          } as Parameters<NonNullable<Adapter["linkAccount"]>>[0]);
-          return user;
+    async function signIn(identity: typeof LOSER | typeof WINNER) {
+      return inSignInRequest(async () => {
+        rememberSignInIdentity({
+          user: { email: identity.email },
+          account: { provider: identity.provider },
+          profile: { email: identity.email },
         });
-      }
-
-      const resolved = await signIn(LOSER);
-      return {
-        resolved,
-        winner,
-        decoy,
-        inserts,
-        collided,
-        logged: errors.mock.calls.map((call) => String(call[0])),
-      };
+        const user = await adapter.createUser!({
+          name: `From ${identity.provider}`,
+          email: identity.email,
+          emailVerified: null,
+        } as unknown as AdapterUser);
+        await adapter.linkAccount!({
+          provider: identity.provider,
+          type: "oauth",
+          providerAccountId: identity.subject,
+          userId: user.id,
+        } as Parameters<NonNullable<Adapter["linkAccount"]>>[0]);
+        return user;
+      });
     }
 
-    it("really did collide, which is what the old test did not do", async () => {
-      // THE GUARD ON EVERY ASSERTION BELOW. If the loser's insert never
-      // reaches the database, the catch is never entered and the three
-      // tests that follow are statements about the handle lookup instead —
-      // which is exactly how the branch went untested for six rounds. Two
-      // calls into the unwrapped adapter, one of them rejected with P2002.
-      const { inserts, collided } = await runRace();
+    const resolved = await signIn(LOSER);
+    return {
+      resolved,
+      winner,
+      decoy,
+      inserts,
+      collided,
+      logged: errors.mock.calls.map((call) => String(call[0])),
+    };
+  }
 
-      expect(inserts).toBe(2);
-      expect(collided).toEqual([PRISMA_UNIQUE_VIOLATION]);
+  it("really did collide, which is what the old test did not do", async () => {
+    // THE GUARD ON EVERY ASSERTION BELOW. If the loser's insert never
+    // reaches the database, the catch is never entered and the three
+    // tests that follow are statements about the handle lookup instead —
+    // which is exactly how the branch went untested for six rounds. Two
+    // calls into the unwrapped adapter, one of them rejected with P2002.
+    const { inserts, collided } = await runRace();
+
+    expect(inserts).toBe(2);
+    expect(collided).toEqual([PRISMA_UNIQUE_VIOLATION]);
+  });
+
+  it("hands @auth/core the winner's row, not a new one and not another user's", async () => {
+    const { resolved, winner, decoy } = await runRace();
+
+    expect(winner).not.toBeNull();
+    expect(resolved.id).toBe(winner?.id);
+    expect(resolved.id).not.toBe(decoy.id);
+    // The winner came in on FACEBOOK, so its address is the other one —
+    // a row that merely looks right (the loser's own data, inserted
+    // somehow) would carry the Google address instead.
+    expect(resolved.email).toBe(EIRIK_FACEBOOK);
+    expect(
+      await prisma.user.findMany({
+        where: { configuredHandle: "eirik" },
+        select: { id: true },
+      }),
+    ).toEqual([{ id: winner?.id }]);
+  });
+
+  it("says nothing, because a race is not a lockout", async () => {
+    // NOT FILTERED to the lockout line: the recovery is silent, full
+    // stop, so any `console.error` at all from this flow — including one
+    // written unconditionally at the top of the catch — fails this.
+    const { logged } = await runRace();
+
+    expect(logged).toEqual([]);
+  });
+
+  it("lets the next linkAccount for that identity attach to the winner", async () => {
+    // WHY THE ROW MATTERS. @auth/core passes whatever `createUser`
+    // returned straight to `linkAccount`, so the loser's Google account
+    // lands on the winner's row — and the guard there, which refuses any
+    // row that is not this person's, agrees rather than refusing.
+    const { winner } = await runRace();
+
+    const accounts = await prisma.account.findMany({
+      orderBy: { provider: "asc" },
+      select: { provider: true, userId: true },
     });
 
-    it("hands @auth/core the winner's row, not a new one and not another user's", async () => {
-      const { resolved, winner, decoy } = await runRace();
-
-      expect(winner).not.toBeNull();
-      expect(resolved.id).toBe(winner?.id);
-      expect(resolved.id).not.toBe(decoy.id);
-      // The winner came in on FACEBOOK, so its address is the other one —
-      // a row that merely looks right (the loser's own data, inserted
-      // somehow) would carry the Google address instead.
-      expect(resolved.email).toBe(EIRIK_FACEBOOK);
-      expect(
-        await prisma.user.findMany({
-          where: { configuredHandle: "eirik" },
-          select: { id: true },
-        }),
-      ).toEqual([{ id: winner?.id }]);
-    });
-
-    it("says nothing, because a race is not a lockout", async () => {
-      // NOT FILTERED to the lockout line: the recovery is silent, full
-      // stop, so any `console.error` at all from this flow — including one
-      // written unconditionally at the top of the catch — fails this.
-      const { logged } = await runRace();
-
-      expect(logged).toEqual([]);
-    });
-
-    it("lets the next linkAccount for that identity attach to the winner", async () => {
-      // WHY THE ROW MATTERS. @auth/core passes whatever `createUser`
-      // returned straight to `linkAccount`, so the loser's Google account
-      // lands on the winner's row — and the guard there, which refuses any
-      // row that is not this person's, agrees rather than refusing.
-      const { winner } = await runRace();
-
-      const accounts = await prisma.account.findMany({
-        orderBy: { provider: "asc" },
-        select: { provider: true, userId: true },
-      });
-
-      expect(accounts).toEqual([
-        { provider: "facebook", userId: winner?.id },
-        { provider: "google", userId: winner?.id },
-      ]);
-    });
+    expect(accounts).toEqual([
+      { provider: "facebook", userId: winner?.id },
+      { provider: "google", userId: winner?.id },
+    ]);
   });
 });
 

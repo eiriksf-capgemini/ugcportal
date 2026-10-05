@@ -239,6 +239,12 @@ sqlite3 "${DB#file:}" \
   "UPDATE \"User\" SET \"configuredHandle\" = 'their-handle' WHERE \"email\" = 'the-address-they-signed-in-with';"
 ```
 
+`User.email` is compared **exactly** here — SQLite's unique index on it is
+case- and space-sensitive — so paste the address exactly as the lockout log
+line prints it, quotes and all, rather than retyping it lowercase. That line
+prints what the row actually holds, and says `'What.Was@Stored '
+(permitted as what.was@stored)` when the two differ.
+
 Either way, do it **before** their next sign-in. Afterwards they have two
 rows and need the merge, not the stamp.
 

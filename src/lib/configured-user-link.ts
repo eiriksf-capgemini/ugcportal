@@ -349,6 +349,21 @@ export function withConfiguredUserLinking(
           const described = linked.map(({ raw, normalised }) =>
             raw === normalised ? normalised : `${normalised} (stored as '${raw}')`,
           );
+          // THE ADDRESS GETS THE SAME TREATMENT, for the same reason (PR
+          // #100 round 1, low 4). The lookup above keys on `data.email` —
+          // the string this insert actually wrote, and therefore the string
+          // the row in the way actually holds — while `signIn.email` is
+          // that address normalised, which is what the array and the gate
+          // speak. They are the same string for everything this app writes;
+          // when @auth/core hands over something else, printing only the
+          // normalised one would name an address that matches no row, and
+          // the operator's `WHERE "email" = ...` would quietly update
+          // nothing. So print what is stored, and the permitted form beside
+          // it when the two differ.
+          const address =
+            data.email === signIn.email
+              ? signIn.email
+              : `'${data.email}' (permitted as ${signIn.email})`;
           const cure = adoptable
             ? "run prisma/migrations/20261005120500_reconcile_configured_users " +
               "(or, for somebody added to the array since, a new " +
@@ -363,7 +378,7 @@ export function withConfiguredUserLinking(
           console.error(
             `[auth] Could not create the user row for configured handle ` +
               `"${handle}": another row already holds the address ` +
-              `${signIn.email}. ${person.name} cannot sign in until that ` +
+              `${address}. ${person.name} cannot sign in until that ` +
               `row is adopted — ${cure}.`,
             error,
           );
