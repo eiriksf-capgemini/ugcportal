@@ -24,6 +24,7 @@ import {
   findPlaceholders,
   legalPage,
   legalReadiness,
+  linkBlockedInProduction,
 } from "@/lib/legal/publishable";
 import { LICENCE_PATH, PRIVACY_PATH } from "@/lib/routes";
 
@@ -327,6 +328,42 @@ describe("assertPublishable", () => {
     expect(() => assertPublishable(legalReadiness([cleanPage], dev), dev)).not.toThrow();
     const test = { NODE_ENV: "test", ...FILLED_LEGAL_ENV } as NodeJS.ProcessEnv;
     expect(() => assertPublishable(legalReadiness([strayPage], test), test)).not.toThrow();
+  });
+});
+
+describe("linkBlockedInProduction (ugcportal-akv6 K3; reused by ugcportal-nf9l for About)", () => {
+  it("blocks a draft page once NODE_ENV is production", () => {
+    const readiness = legalReadiness([cleanPage], filled, null);
+    expect(readiness.draft).toBe(true);
+    expect(linkBlockedInProduction(readiness, filled)).toBe(true);
+  });
+
+  it("MUTATION CHECK: does not block the same draft page outside production", () => {
+    const readiness = legalReadiness([cleanPage], filled, null);
+    expect(readiness.draft).toBe(true);
+    expect(linkBlockedInProduction(readiness, DEV)).toBe(false);
+  });
+
+  it("does not block a page that is not a draft, even in production", () => {
+    const readiness = legalReadiness([cleanPage], filled, SIGNED);
+    expect(readiness.draft).toBe(false);
+    expect(linkBlockedInProduction(readiness, filled)).toBe(false);
+  });
+
+  it("round-3 review: blocks a STALE sign-off too (fully configured, draft=true, but blocked=false)", () => {
+    // The branch the e2e suite can observe but not control (a real
+    // deployment's sign-off can go stale without ever becoming
+    // unconfigured) — same fixture as "treats a sign-off for different
+    // prose as no sign-off" above: the prose changed after SIGNED was
+    // recorded, so signedOff=false and draft=true, but configuration is
+    // fine so blocked stays false. `linkBlockedInProduction` must key off
+    // `draft`, not `blocked`, or a stale-sign-off page would wrongly get
+    // linked in production despite reading as a draft (DRAFT_META_NAME
+    // still present — see src/components/legal/legal-page.tsx).
+    const edited = examplePage("Write to {email}, any time.");
+    const readiness = legalReadiness([edited], filled, SIGNED);
+    expect(readiness).toMatchObject({ blocked: false, draft: true });
+    expect(linkBlockedInProduction(readiness, filled)).toBe(true);
   });
 });
 

@@ -268,10 +268,12 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
   // on top of the shared base class above.
   "src/components/primary-nav-link.tsx": { "text-primary": 1 },
   "src/components/site-header.tsx": { "text-muted-foreground": 1 },
-  // The footer's own text-muted-foreground, unchanged by ugcportal-14k9 and
-  // unrelated to the header move above - app-shell.tsx still renders it
-  // directly on bg-background, same as always.
-  "src/components/app-shell.tsx": { "text-muted-foreground": 1 },
+  // app-shell.tsx itself carries no entry (round-6 review, merge with
+  // ugcportal-14k9): the header's markup moved out to site-header.tsx
+  // above and the footer's moved out to site-footer.tsx below, so the
+  // file this bead's own doc comment still calls "the application frame"
+  // is left with no literal className of its own for any of these four
+  // tokens — zero matches, per this file's own "zero matches" rule.
   "src/components/gallery/gallery.tsx": { "text-foreground": 2, "text-muted-foreground": 2 },
   "src/components/gallery/gallery-unavailable.tsx": {
     "text-foreground": 1,
@@ -279,12 +281,11 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
   },
   "src/components/gallery/containment.ts": { "text-muted-foreground": 2 },
   "src/components/auth-status.tsx": { "text-muted-foreground": 1 },
-  // Renders directly in app-shell.tsx's footer, which sits on --background
-  // (no --card/--popover/--muted/etc. fill behind it) — the safe case.
-  "src/components/consent/cookie-settings-link.tsx": {
-    "text-muted-foreground": 1,
-    "text-foreground": 1,
-  },
+  // cookie-settings-link.tsx carried its own literal class string here
+  // until PR #96 round-1 review (ugcportal-akv6): it now imports
+  // FOOTER_LINK_CLASS from src/components/ui/footer-link.ts instead
+  // (shared with site-footer.tsx), so its own source text carries neither
+  // token any more — no entry, per this file's own "zero matches" rule.
   // Deliberately bg-background, not bg-popover (see this file's own
   // comment, added after an axe run caught text-primary on bg-popover at
   // 1.81:1 in dark mode) — the safe case.
@@ -337,25 +338,70 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
   "src/components/ui/inline-link.ts": { "text-primary": 1 },
 
   /*
+   * ugcportal-akv6, PR #96 round 1: FOOTER_LINK_CLASS moved out to its own
+   * module (shared between site-footer.tsx and cookie-settings-link.tsx,
+   * same reasoning as inline-link.ts above). Renders on --background via
+   * both its callers — it carries no background of its own.
+   */
+  "src/components/ui/footer-link.ts": {
+    "text-muted-foreground": 1,
+    "text-foreground": 1,
+  },
+
+  /*
+   * ugcportal-akv6: the site footer. Renders directly on --background
+   * (the app shell's <footer>, no --card/--popover/--muted/etc. fill
+   * behind it — the same safe case as the header and
+   * cookie-settings-link.tsx above). Three text-muted-foreground
+   * (Eirik's decision on PR #96: dropped the footer's own about/tagline
+   * line entirely rather than duplicating the header's SITE_TAGLINE,
+   * which removed one of the four this used to carry — the brand
+   * description paragraph): the blocked-draft-link <span>, the compact
+   * variant's own wrapping <div> (not the "SITE_NAME · © year" <span> it
+   * contains, which carries no class of its own — round-2 review
+   * finding), and the full variant's copyright line (FOOTER_LINK_CLASS's
+   * own one moved to footer-link.ts above, round 1). Two text-foreground:
+   * the brand name, and FOOTER_HEADING_CLASS's own definition (reused by
+   * both the "Pages" and "Legal" headings — FOOTER_LINK_CLASS's
+   * "hover:text-foreground" moved out the same way).
+   */
+  "src/components/site-footer.tsx": {
+    "text-muted-foreground": 3,
+    "text-foreground": 2,
+  },
+
+  /*
    * ugcportal-6dvg: the front page's "living empty state" — rendered by
    * src/app/page.tsx directly on --background inside the app shell's
    * <main>, the exact same placement as GalleryEmpty/GalleryUnavailable it
    * replaces when the gallery is genuinely empty (not inside any well), so
    * the page-canvas pair is the correct one here too. Two text-foreground:
    * the heading and the "see the portfolio" link; one text-muted-foreground:
-   * the supporting paragraph. The front page's OTHER new component,
-   * src/components/home/hero.tsx, renders inside its own petrol-gradient
-   * well instead and uses text-ink only (round-2 review, low finding: this
-   * comment used to also say "text-ink-muted" — that token measured below
-   * threshold on this specific well and was dropped from hero.tsx entirely
-   * during this bead's own round-1 review fix; see hero.tsx's own comment
-   * on its lead paragraph). Neither is tracked by this file — see hero.tsx's
-   * own comment and contrast.ts's ink-on-hero-petrol.
+   * the supporting paragraph.
    */
   "src/components/home/empty-state.tsx": {
     "text-foreground": 2,
     "text-muted-foreground": 1,
   },
+  /*
+   * ugcportal-6dvg's own hero.tsx: the front page's hero, which renders
+   * inside its own petrol-gradient well instead of --background and uses
+   * `text-ink` only (round-2 review, low finding: this comment used to
+   * also say "text-ink-muted" — that token measured below threshold on
+   * this specific well and was dropped from hero.tsx entirely during this
+   * bead's own round-1 review fix; see hero.tsx's own comment on its lead
+   * paragraph), measured safe in contrast.ts's ink-on-hero-petrol.
+   *
+   * ugcportal-akv6 round 6: this entry itself was MISSING from main at the
+   * point PR #96 merged origin/main in — "text-ink" was already a tracked
+   * token by the time #97 (this file's bead) shipped, so the file's own
+   * dual-meaning-usage audit should already have required this entry; the
+   * two literal `text-ink` usages are the heading and the lead paragraph
+   * (hero.tsx lines ~161 and ~173). Confirmed against a clean checkout of
+   * origin/main at 35800c9 before adding this — this test fails there
+   * too, independent of this merge.
+   */
+  "src/components/home/hero.tsx": { "text-ink": 2 },
 };
 
 describe("dual-meaning token usage is audited, not just found", () => {

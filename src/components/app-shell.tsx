@@ -1,8 +1,7 @@
 import type { CSSProperties, ReactNode } from "react";
 
-import { CookieSettingsLink } from "@/components/consent/cookie-settings-link";
 import { HEADER_HEIGHT_PX, SiteHeader } from "@/components/site-header";
-import { SITE_NAME } from "@/lib/site";
+import { SiteFooter } from "@/components/site-footer";
 
 /**
  * The application frame (ugcportal-axu).
@@ -40,10 +39,11 @@ import { SITE_NAME } from "@/lib/site";
  * the single <main> landmark, and the footer.
  *
  * DOCUMENTED DEPENDENCY (ugcportal-3wgp review round 4, finding 9; updated
- * round 5, finding 7): the footer renders `CookieSettingsLink`, which only
- * actually does anything with a `ConsentProvider` above it in the tree.
- * `src/app/layout.tsx` provides one for every real page; anything else
- * rendering `AppShell` directly should do the same to get a working
+ * round 5, finding 7; footer itself moved out to src/components/site-
+ * footer.tsx by ugcportal-akv6): the footer renders `CookieSettingsLink`,
+ * which only actually does anything with a `ConsentProvider` above it in
+ * the tree. `src/app/layout.tsx` provides one for every real page; anything
+ * else rendering `AppShell` directly should do the same to get a working
  * "Cookies" control. This is no longer a HARD dependency, though, the way
  * round 4 documented it: `CookieSettingsLink` now degrades gracefully
  * (renders nothing — see its own doc comment) rather than throwing when no
@@ -176,13 +176,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         {children}
       </main>
 
-      <footer className="border-t border-border">
-        <div className="mx-auto flex w-full max-w-6xl items-center justify-between gap-4 px-4 py-6 text-xs text-muted-foreground sm:px-6">
-          <span>{SITE_NAME}</span>
-          {/* ugcportal-3wgp K4 — reopens the cookie choice. ugcportal-akv6 owns final footer placement. */}
-          <CookieSettingsLink />
-        </div>
-      </footer>
+      <SiteFooter />
     </div>
   );
 }
