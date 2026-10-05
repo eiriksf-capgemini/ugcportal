@@ -48,7 +48,18 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SITE_HEADER_PATH = path.join(HERE, "site-header.tsx");
 
 function siteHeaderSourceWithoutComments(): string {
-  return stripComments(readFileSync(SITE_HEADER_PATH, "utf8"));
+  // Second argument (the file name) was missing here (ugcportal-akv6
+  // round 6, discovered while merging origin/main): confirmed against a
+  // clean checkout of origin/main at 35800c9 that both `npm run
+  // typecheck` ("Expected 2 arguments, but got 1") and this test
+  // ("expected exactly one h-14 utility... found 4") already failed there
+  // before this merge, independent of it. `stripComments` requires the
+  // path so `ts.createSourceFile` can pick the right parser for it
+  // (scriptKindFor); without it, parsing throws, and `stripComments`
+  // fails CLOSED by returning the source UNSTRIPPED (see its own doc
+  // comment on `scanUnstripped`) - which is why every class token below
+  // was matching its own comment mentions too, not just its real usage.
+  return stripComments(readFileSync(SITE_HEADER_PATH, "utf8"), SITE_HEADER_PATH);
 }
 
 /**
