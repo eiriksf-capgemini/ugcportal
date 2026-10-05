@@ -13,6 +13,14 @@ import { defineConfig, devices } from "@playwright/test";
  */
 export default defineConfig({
   testDir: "./e2e",
+  // e2e/production/* is a DIFFERENT suite with its own config and its own
+  // real `next start` server on a different port (ugcportal-akv6's K3
+  // check) — testDir's default recursive scan would otherwise also pick up
+  // those specs here and run them against this config's `npm run dev`
+  // server, which is a different NODE_ENV and would make a production-only
+  // assertion fail for the wrong reason. Run that suite explicitly with
+  // `npm run test:e2e:footer-draft-guard` instead.
+  testIgnore: ["**/production/**"],
   fullyParallel: true,
   retries: 0,
   reporter: [["list"]],

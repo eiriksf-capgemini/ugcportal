@@ -231,3 +231,26 @@ export function assertPublishable(
     throw new Error(warning);
   }
 }
+
+/**
+ * Whether a caller — anything that points AT a legal page rather than
+ * rendering it — must not link to it at all, once NODE_ENV is production
+ * (ugcportal-akv6 K3: "never link a draft legal page in production"; the
+ * same rule is reused for the About page's own outbound link by
+ * ugcportal-nf9l). Reads the SAME `LegalReadiness` `assertPublishable`
+ * guards the page's own render with — this is a STRICTER rule layered on
+ * top for a caller that isn't the page's own render guard, not a second
+ * opinion about what "draft" means: outside production a draft page still
+ * renders (with its notice visible), so a linking caller may still link to
+ * it there.
+ *
+ * `env` is a parameter, same convention as `legalReadiness` and
+ * `assertPublishable` themselves, so a test can exercise the production
+ * branch without mutating the real `process.env`.
+ */
+export function linkBlockedInProduction(
+  readiness: LegalReadiness,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return readiness.draft && env.NODE_ENV === "production";
+}
