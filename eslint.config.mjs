@@ -93,10 +93,23 @@ export const HEX_COLOR_SELECTORS = [
  *     - an aliased method reference (`const e = document.createElement;
  *       e("script")`).
  *
+ *   STATICALLY MATCHABLE, DELIBERATELY NOT ENUMERATED (review round 5):
+ *   the `Function.prototype` indirections — `require.call(null,
+ *   "next/script")`, `require.apply(null, ["next/script"])`,
+ *   `Reflect.apply(require, null, ["next/script"])`,
+ *   `document.createElement.call(document, "script")`. These are NOT
+ *   data-flow residuals: both the function's name and the literal
+ *   specifier are right there in the source, and selectors for them are
+ *   writable. They are left out because enumerating them means a fresh
+ *   selector per (method x indirection x argument position x literal
+ *   form), and that matrix is where this ruleset has already shipped two
+ *   confirmed holes — the cost of the next one is higher than the cost of
+ *   not reaching for `.call` to mount a tracking script. If one ever
+ *   appears, add it.
+ *
  *   The K6 grep test (analytics-host.grep.test.ts) is the backstop for
- *   exactly these: it does not care how a vendor's host string reached
- *   the page, only that the string itself appears somewhere in the
- *   source.
+ *   both lists: it does not care how a vendor's host string reached the
+ *   page, only that the string itself appears somewhere in the source.
  */
 const GATED_SCRIPT_MESSAGE =
   "next/script (or a raw <script> element, however constructed) may only " +
@@ -397,11 +410,15 @@ const eslintConfig = defineConfig([
     },
   },
   {
-    // Plain .ts/.js/.mjs files never carry JSX, so no hex-colour/JSX-
-    // selector concern here — but the script-shape ban
-    // (document.createElement) still applies, and no-restricted-imports
-    // (next config object) needs this file set covered too for the
-    // barrel-re-export shape. .js/.mjs added (review round 4, finding 2 —
+    // .ts/.mts/.cts/.js/.mjs/.cjs. This half gets the SAME
+    // GATED_SCRIPT_SYNTAX_SELECTORS as the JSX half above, raw-`<script>`
+    // selector included: a `.js` file can carry JSX (Next compiles it),
+    // and a selector that cannot match costs nothing. What the two halves
+    // actually differ by is the hex-colour guardrail, which only the JSX
+    // half gets — see src/lib/source-extensions.mjs for why they have to
+    // be partitioned at all. no-restricted-imports (next config object)
+    // needs this file set covered too, for the barrel-re-export shape.
+    // .js/.mjs added (review round 4, finding 2 —
     // CONFIRMED: a tracking snippet doesn't need TypeScript to execute, so
     // a plain .js/.mjs file was just as real a bypass surface as a .ts
     // one, and this object's old `files: ["**/*.ts"]` silently missed it).

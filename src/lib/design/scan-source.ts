@@ -97,8 +97,10 @@ export const SCRIPT_KIND_BY_EXTENSION: Readonly<Record<string, ts.ScriptKind>> =
   ts: ts.ScriptKind.TS,
   tsx: ts.ScriptKind.TSX,
   // TypeScript's own module-flavoured extensions. Same dialect as `.ts`:
-  // the flavour decides module resolution, not syntax, and neither can
-  // carry JSX (`.mtsx` would be the JSX one).
+  // the flavour decides module resolution, not syntax. Neither can carry
+  // JSX, because TypeScript defines no JSX variant for them - there is no
+  // `.mtsx`/`.ctsx`, so JSX in an ESM- or CJS-flavoured TypeScript file
+  // has to live in a plain `.tsx`.
   mts: ts.ScriptKind.TS,
   cts: ts.ScriptKind.TS,
   js: ts.ScriptKind.JS,
@@ -185,7 +187,7 @@ export function scriptKindFor(fileName: string): ts.ScriptKind {
  * files wrong, so "forgot to pass it" must be a compile error rather than
  * a quiet mis-parse (ugcportal-ysub review round 1, finding 1).
  *
- * THREE FAIL-CLOSED EXITS, all taking the same path - warn naming the
+ * TWO FAIL-CLOSED EXITS, both taking the same path - warn naming the
  * file and the cause, return `source` completely unstripped:
  *
  *   - the parse reported ANY diagnostic (round 4, CONFIRMED medium), which
@@ -213,8 +215,10 @@ export function scriptKindFor(fileName: string): ts.ScriptKind {
  */
 export function stripComments(source: string, fileName: string): string {
   /**
-   * Both fail-closed exits (review round 2, and round 3 finding 7). Says
-   * WHY at the point it happens, and hands the source back whole.
+   * Both fail-closed exits route through here (see the two bullets in
+   * this function's doc comment: a parse diagnostic, which includes an
+   * unterminated block comment, and a thrown parse). Says WHY at the
+   * point it happens, and hands the source back whole.
    *
    * Failing closed silently is its own trap: the gate that then fires
    * reports only "vendor name found in <file>", and the obvious reading of

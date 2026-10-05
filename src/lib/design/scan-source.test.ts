@@ -131,15 +131,19 @@ describe("stripComments", () => {
    * paths before committing to this fixture.
    */
   it("treats a regex literal after 'await' as a regex, not division (and still strips a real comment after it)", () => {
-    // Inside an async body, which is where real `await` lives. Round 5's
-    // fixture had this at the top level of a file with no import or
-    // export, and TypeScript reads `await /re/` THERE as `await` the
-    // identifier divided by something — its own `isAwaitExpression`
-    // lookahead only treats `await` as an operator when an identifier,
-    // keyword or literal follows on the same line, and `/` is none of
-    // those. That shape reports diagnostics and now takes the fail-closed
-    // path; the test below pins it. The finding this fixture exists for —
-    // "a regex after `await` is a regex, not division" — is unchanged.
+    // Inside an async body, which is where real `await` lives.
+    //
+    // Round 5's fixture had this at the top level of a file with no import
+    // or export — a SCRIPT, not a module. Top-level `await` is only an
+    // operator in a module, so in a script TypeScript falls back to its
+    // `isAwaitExpression` lookahead, which treats `await` as an operator
+    // only when an identifier, keyword or literal follows on the same
+    // line; `/` is none of those, so it reads `await` as an identifier and
+    // the `/` as division. Measured: in a module `await /abc/.test(s)`
+    // parses clean with a real regex literal, in a script it does not.
+    // The script shape now takes the fail-closed path, pinned by the test
+    // below. The finding this fixture exists for — "a regex after `await`
+    // is a regex, not division" — is unchanged.
     const code =
       'async function f(s) { await /name="([^"]*)"/i.test(s); /* real comment */ const z = 1; }';
     expect(stripComments(code, "fixture.ts")).toBe(
@@ -147,7 +151,7 @@ describe("stripComments", () => {
     );
   });
 
-  it("fails closed on a top-level `await /re/`, which TypeScript itself cannot read as a regex", () => {
+  it("fails closed on a top-level `await /re/` in a script with no import or export", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
       const code = 'await /name="([^"]*)"/i.test(s); /* real comment */ const z = 1;';

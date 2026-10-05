@@ -188,10 +188,13 @@ describe("no file under src/ takes the scanner's fail-closed path", () => {
   });
 
   it("MUTATION CHECK: a file that does NOT parse cleanly is reported by that same check", () => {
-    // Fixture mutation for the assertion above: the same loop over a
-    // fixture directory containing one unparseable file. If the warning
-    // were never emitted at all — a spy on the wrong channel, say — this
-    // would be indistinguishable from the real tree being clean.
+    // Fixture mutation for the assertion above. Deliberately NOT a
+    // directory walk: one unparseable source, handed straight to
+    // `stripComments`, is the whole of what the check above would see if a
+    // file under src/ stopped parsing. If the warning were never emitted
+    // at all — a spy on the wrong channel, say — a green run above would
+    // be indistinguishable from the real tree being clean, and this is
+    // what tells those two apart.
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
       stripComments('<R a="\nexport const x = 1;\n', "/tmp/does-not-parse.tsx");
