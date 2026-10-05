@@ -32,6 +32,48 @@ export const ABOUT_PATH = "/about";
 export const PORTFOLIO_PATH = "/portfolio";
 
 /**
+ * The "Get in touch" section on /about, as a fragment anchor (ugcportal-akv6).
+ * Named here, like every other route in this module, so the footer's
+ * "Contact" link cannot hand-type "/about#contact" a second time and drift
+ * from it if the section ever moves. ContactSection (src/components/site/
+ * contact-section.tsx) derives its own `id` from THIS constant via
+ * `pathFragment` below, rather than also hand-typing "contact" as a
+ * separate literal (round-3 review) — the two could otherwise drift apart
+ * independently of each other.
+ */
+export const ABOUT_CONTACT_PATH = `${ABOUT_PATH}#contact`;
+
+/**
+ * The fragment half of a `"/path#fragment"` route constant — e.g.
+ * `pathFragment(ABOUT_CONTACT_PATH) === "contact"` — for a caller that
+ * needs the bare anchor name (an element's `id`) rather than the full
+ * navigable path. Throws on anything that would otherwise yield an empty
+ * string — a path with no "#" at all ("/about"), AND a path whose
+ * fragment is empty ("/about#", round-4 review: the "#" was present but
+ * nothing followed it, which this function missed before) — rather than
+ * return `""` and let a caller render `id=""`: a caller reaching for this
+ * always has a specific fragment-bearing constant in mind, so either case
+ * is a mistake at the call site, not one to paper over.
+ */
+export function pathFragment(path: string): string {
+  const hashIndex = path.indexOf("#");
+  const fragment = hashIndex === -1 ? "" : path.slice(hashIndex + 1);
+  if (fragment === "") {
+    throw new Error(`pathFragment: "${path}" has no non-empty "#fragment" to extract.`);
+  }
+  return fragment;
+}
+
+/**
+ * /llms.txt (ugcportal-o7l), per https://llmstxt.org. The route lives at
+ * src/app/llms.txt/route.ts — a literal directory name, not a dynamic
+ * segment, so this is the one and only path it answers at. Named here,
+ * like every other route in this module, so the footer (ugcportal-akv6)
+ * cannot hand-type "/llms.txt" a second time and drift from it.
+ */
+export const LLMS_TXT_PATH = "/llms.txt";
+
+/**
  * The multipart field POST /api/media reads the subject tags out of
  * (ugcportal-jsc), named here because the browser writes it and the route
  * reads it and a field name spelled twice is one that eventually differs —

@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:e2e": "playwright test",
+    "test:e2e:footer-draft-guard": "playwright test --config=e2e/production/playwright.config.ts",
     "postinstall": "prisma generate"
   },
   "dependencies": {

@@ -6,7 +6,7 @@ import {
   isBareEmailAddress,
   resolveContactEmail,
 } from "@/lib/contact";
-import { PRIVACY_PATH } from "@/lib/routes";
+import { ABOUT_CONTACT_PATH, PRIVACY_PATH, pathFragment } from "@/lib/routes";
 import { CONTACT_INTRO, CONTACT_NOTICE } from "@/lib/site";
 
 /**
@@ -69,7 +69,32 @@ export function ContactSection({ defaultSubject }: { defaultSubject: string }) {
     : CONTACT_EMAIL_FALLBACK_LABEL;
 
   return (
-    <section className="mt-10" data-page-section="contact">
+    // id derived from ABOUT_CONTACT_PATH itself (src/lib/routes.ts), not a
+    // second hand-typed "contact" literal (round-3 review) — the footer's
+    // Contact link and this section's navigation target would otherwise
+    // be two independent places that happen to agree today and could
+    // silently drift apart. data-page-section="contact" above was a test
+    // hook only and nothing a fragment link could navigate to.
+    //
+    // scroll-mt-[var(--header-height,...)], not scroll-mt-14 (round-1
+    // review): PR #94 now sets --header-height on AppShell's root div
+    // unconditionally, to 85px (src/components/site-header.tsx's
+    // HEADER_HEIGHT_PX), so that is what this resolves to for any real
+    // page. The 3.5rem (56px) fallback is a CSS `var(--x, fallback)`
+    // default — only ever consulted while --header-height is unset at
+    // all, never once it is (round-6 review: this used to say the
+    // fallback "must match #94's --header-height exactly... or this
+    // reverts to the bug it fixes", which is backwards — a real page
+    // under AppShell never reads the fallback in the first place, so it
+    // cannot go stale against it). It is dead code for every real page,
+    // and exists only for ContactSection rendered WITHOUT AppShell above
+    // it (an isolated test, say), where the variable genuinely is unset
+    // and 0 is the wrong number to fall back to.
+    <section
+      id={pathFragment(ABOUT_CONTACT_PATH)}
+      className="mt-10 scroll-mt-[var(--header-height,3.5rem)]"
+      data-page-section="contact"
+    >
       <h2 className={SECTION_HEADING_CLASS}>Get in touch</h2>
       <p className="mt-2 max-w-prose text-sm text-muted-foreground">
         {CONTACT_INTRO}

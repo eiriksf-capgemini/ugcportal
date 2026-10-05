@@ -268,10 +268,12 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
   // on top of the shared base class above.
   "src/components/primary-nav-link.tsx": { "text-primary": 1 },
   "src/components/site-header.tsx": { "text-muted-foreground": 1 },
-  // The footer's own text-muted-foreground, unchanged by ugcportal-14k9 and
-  // unrelated to the header move above - app-shell.tsx still renders it
-  // directly on bg-background, same as always.
-  "src/components/app-shell.tsx": { "text-muted-foreground": 1 },
+  // app-shell.tsx itself carries no entry (round-6 review, merge with
+  // ugcportal-14k9): the header's markup moved out to site-header.tsx
+  // above and the footer's moved out to site-footer.tsx below, so the
+  // file this bead's own doc comment still calls "the application frame"
+  // is left with no literal className of its own for any of these four
+  // tokens — zero matches, per this file's own "zero matches" rule.
   "src/components/gallery/gallery.tsx": { "text-foreground": 2, "text-muted-foreground": 2 },
   "src/components/gallery/gallery-unavailable.tsx": {
     "text-foreground": 1,
@@ -279,12 +281,11 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
   },
   "src/components/gallery/containment.ts": { "text-muted-foreground": 2 },
   "src/components/auth-status.tsx": { "text-muted-foreground": 1 },
-  // Renders directly in app-shell.tsx's footer, which sits on --background
-  // (no --card/--popover/--muted/etc. fill behind it) — the safe case.
-  "src/components/consent/cookie-settings-link.tsx": {
-    "text-muted-foreground": 1,
-    "text-foreground": 1,
-  },
+  // cookie-settings-link.tsx carried its own literal class string here
+  // until PR #96 round-1 review (ugcportal-akv6): it now imports
+  // FOOTER_LINK_CLASS from src/components/ui/footer-link.ts instead
+  // (shared with site-footer.tsx), so its own source text carries neither
+  // token any more — no entry, per this file's own "zero matches" rule.
   // Deliberately bg-background, not bg-popover (see this file's own
   // comment, added after an axe run caught text-primary on bg-popover at
   // 1.81:1 in dark mode) — the safe case.
@@ -337,6 +338,39 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
   "src/components/ui/inline-link.ts": { "text-primary": 1 },
 
   /*
+   * ugcportal-akv6, PR #96 round 1: FOOTER_LINK_CLASS moved out to its own
+   * module (shared between site-footer.tsx and cookie-settings-link.tsx,
+   * same reasoning as inline-link.ts above). Renders on --background via
+   * both its callers — it carries no background of its own.
+   */
+  "src/components/ui/footer-link.ts": {
+    "text-muted-foreground": 1,
+    "text-foreground": 1,
+  },
+
+  /*
+   * ugcportal-akv6: the site footer. Renders directly on --background
+   * (the app shell's <footer>, no --card/--popover/--muted/etc. fill
+   * behind it — the same safe case as the header and
+   * cookie-settings-link.tsx above). Three text-muted-foreground
+   * (Eirik's decision on PR #96: dropped the footer's own about/tagline
+   * line entirely rather than duplicating the header's SITE_TAGLINE,
+   * which removed one of the four this used to carry — the brand
+   * description paragraph): the blocked-draft-link <span>, the compact
+   * variant's own wrapping <div> (not the "SITE_NAME · © year" <span> it
+   * contains, which carries no class of its own — round-2 review
+   * finding), and the full variant's copyright line (FOOTER_LINK_CLASS's
+   * own one moved to footer-link.ts above, round 1). Two text-foreground:
+   * the brand name, and FOOTER_HEADING_CLASS's own definition (reused by
+   * both the "Pages" and "Legal" headings — FOOTER_LINK_CLASS's
+   * "hover:text-foreground" moved out the same way).
+   */
+  "src/components/site-footer.tsx": {
+    "text-muted-foreground": 3,
+    "text-foreground": 2,
+  },
+
+  /*
    * ugcportal-6dvg: the front page's "living empty state" — rendered by
    * src/app/page.tsx directly on --background inside the app shell's
    * <main>, the exact same placement as GalleryEmpty/GalleryUnavailable it
@@ -366,17 +400,6 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
    * (hero.tsx lines ~161 and ~173). Confirmed against a clean checkout of
    * origin/main at 35800c9 before adding this — this test fails there
    * too, independent of this merge.
-   *
-   * ugcportal-ig4g: ported by hand from PR #96's merge-conflict resolution
-   * (commit 2ef98a7bb4 on feat/ugcportal-akv6-footer) rather than waiting
-   * for #96 to land — main itself is red on this gate (ugcportal-ld8c) and
-   * this bead's own quality gates need a green `npx vitest run` to mean
-   * anything. A straight cherry-pick cannot bring this one line in alone:
-   * it was written as a MERGE conflict resolution, not a standalone commit
-   * diff, so the entry and its comment below this paragraph are a manual
-   * copy of that resolution's — this paragraph itself is the one addition
-   * on top, recording why the copy exists. Collapses to a no-op (same
-   * entry already present) once #96 actually merges.
    */
   "src/components/home/hero.tsx": { "text-ink": 2 },
 };
