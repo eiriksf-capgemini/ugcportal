@@ -41,9 +41,10 @@
  * Self-test: npm test -- runs scripts/sweep-candidates.test.mjs (vitest).
  *
  * KNOWN LIMITATION (ugcportal-lykb): the "HEAD" half of every comparison
- * this script makes -- getChangedFiles/getChangedLineNumbersByFile/readFile
- * below -- is the currently CHECKED-OUT HEAD, not necessarily the content
- * of whatever is actually being pushed. When invoked from
+ * this script makes -- getChangedFiles/getChangedLineNumbersByFile/
+ * readFileAtHead, shared with scripts/claims-audit.mjs via
+ * scripts/lib/git-diff.mjs -- is the currently CHECKED-OUT HEAD, not
+ * necessarily the content of whatever is actually being pushed. When invoked from
  * .beads/hooks/pre-push (see that file's own KNOWN LIMITATION note), an
  * unusual push -- a different local branch than the one checked out, an
  * explicit SHA, `git push origin X:main` -- means this script silently
@@ -69,10 +70,9 @@
  * hand-patched in as it's discovered.
  */
 
-import { execFileSync } from "node:child_process";
-
 import ts from "typescript";
 
+import { getChangedFiles, getChangedLineNumbersByFile, readFileAtHead, resolveDefaultBase } from "./lib/git-diff.mjs";
 import { isMainModule } from "./lib/is-main.mjs";
 
 const TEST_FILE_RE = /\.(test|spec)\.[cm]?[jt]sx?$/;
@@ -238,73 +238,14 @@ export function findSiblingGuardOmissions(content, changedLines, filePath) {
   return candidates;
 }
 
-// --- git integration (not unit-tested directly; the two functions above
-// are, against synthetic fixtures per ugcportal-plp6 K1/K2) ---------------
-
-function resolveDefaultBase() {
-  try {
-    execFileSync("git", ["rev-parse", "--verify", "origin/main"], { stdio: ["ignore", "ignore", "ignore"] });
-    return "origin/main";
-  } catch {
-    return "HEAD~1";
-  }
-}
-
-// NOTE (ugcportal-lykb): `...HEAD` is checked-out HEAD, not necessarily
-// what's actually being pushed -- see the KNOWN LIMITATION note in this
-// file's header docstring.
-function getChangedFiles(base) {
-  const out = execFileSync("git", ["diff", "--name-only", `${base}...HEAD`], { encoding: "utf8" });
-  return out.split("\n").filter(Boolean);
-}
-
-/**
- * One `git diff` call for the whole PR, not one per file (an earlier
- * version spawned a `git diff -U0 base...HEAD -- <file>` per changed file,
- * which review found could mean ~100 subprocess spawns on a 50-file PR for
- * data a single whole-diff parse already has).
- *
- * NOTE (ugcportal-lykb): `...HEAD` is checked-out HEAD, not necessarily
- * what's actually being pushed -- see the KNOWN LIMITATION note in this
- * file's header docstring.
- *
- * @returns {Map<string, Set<number>>} filePath -> changed absolute line numbers
- */
-function getChangedLineNumbersByFile(base) {
-  const out = execFileSync("git", ["diff", "-U0", `${base}...HEAD`], { encoding: "utf8" });
-  const result = new Map();
-  let currentFile = null;
-  let newLine = null;
-  for (const line of out.split("\n")) {
-    const fileHeader = /^\+\+\+ b\/(.+)$/.exec(line);
-    if (fileHeader) {
-      currentFile = fileHeader[1];
-      if (!result.has(currentFile)) result.set(currentFile, new Set());
-      newLine = null;
-      continue;
-    }
-    const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/.exec(line);
-    if (hunk) {
-      newLine = Number(hunk[1]);
-      continue;
-    }
-    if (currentFile === null || newLine === null) continue;
-    if (line.startsWith("+") && !line.startsWith("+++")) {
-      result.get(currentFile).add(newLine);
-      newLine++;
-    } else if (!line.startsWith("-")) {
-      newLine++;
-    }
-  }
-  return result;
-}
-
-// NOTE (ugcportal-lykb): reads the file's content at checked-out HEAD, not
-// necessarily what's actually being pushed -- see the KNOWN LIMITATION
-// note in this file's header docstring.
-function readFile(filePath) {
-  return execFileSync("git", ["show", `HEAD:${filePath}`], { encoding: "utf8" });
-}
+// --- git integration: scripts/lib/git-diff.mjs (not unit-tested directly;
+// the two functions above are, against synthetic fixtures per
+// ugcportal-plp6 K1/K2). One `git diff` call covers the whole PR, not one
+// per file (an earlier version spawned a `git diff -U0 base...HEAD -- <file>`
+// per changed file, which review found could mean ~100 subprocess spawns on
+// a 50-file PR for data a single whole-diff parse already has). Every
+// helper there reads checked-out HEAD, not necessarily what is being pushed
+// -- see the KNOWN LIMITATION note in this file's header docstring. -------
 
 function main() {
   const args = process.argv.slice(2);
@@ -334,7 +275,7 @@ function main() {
     if (TEST_FILE_RE.test(filePath)) {
       let content;
       try {
-        content = readFile(filePath);
+        content = readFileAtHead(filePath);
       } catch {
         continue; // deleted file
       }
@@ -352,7 +293,7 @@ function main() {
     if (SOURCE_FILE_RE.test(filePath) && !TEST_FILE_RE.test(filePath)) {
       let content;
       try {
-        content = readFile(filePath);
+        content = readFileAtHead(filePath);
       } catch {
         continue;
       }
