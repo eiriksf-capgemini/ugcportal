@@ -32,8 +32,14 @@ describe("front page strings (ugcportal-6dvg K4)", () => {
   /*
    * A snapshot, not read by any assertion below — this is the artifact for
    * a HUMAN (Eirik) to review against docs/ugc-research.md's decisions
-   * table, per K4's own "Verified by". Also reproduced in the PR
-   * description.
+   * table, per K4's own "Verified by". The snapshot FILE
+   * (src/components/home/__snapshots__/front-page-strings.test.tsx.snap)
+   * is the one place this is guaranteed current (round-4 review, low
+   * finding: an earlier version of this comment also claimed the PR
+   * description reproduces it, which the PR body cannot keep in step with
+   * every wording change this file's own strings go through — the snapshot
+   * file is already current by construction, since this test fails the
+   * moment it is not).
    */
   it("snapshot: every string the hero and empty state render, for review", () => {
     expect({

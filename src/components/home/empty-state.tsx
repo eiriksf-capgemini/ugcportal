@@ -75,8 +75,18 @@ export function EmptyState() {
         a property nothing else on this element ever touches, so it
         provided no actual belt-and-braces protection — `motion-safe:`
         gating the hover utility in the first place was doing all the real
-        work. `translate-none` is the version that actually overrides the
-        same property the hover utility sets.
+        work.
+
+        `translate-none` STILL never wins anything (round-4 review, low
+        finding — the previous sentence here overclaimed that it does):
+        `motion-safe:hover:-translate-y-0.5` and `motion-reduce:
+        translate-none` compile into two MUTUALLY EXCLUSIVE media queries
+        (`no-preference` vs `reduce`), so the hover rule this override would
+        need to beat never coexists with it in the first place — whichever
+        one applies, the other's rule does not exist at all. Kept anyway as
+        a documented, deliberately inert belt-and-braces entry (matching
+        the correct CSS property this time, unlike the `-transform-none` it
+        replaced), not because it changes what is rendered.
       */}
       <Link
         href={PORTFOLIO_PATH}
