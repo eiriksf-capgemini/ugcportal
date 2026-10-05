@@ -290,59 +290,110 @@ export function withConfiguredUserLinking(
               .filter((identity) => identity.email === signIn.email)
               .map((identity) => identity.provider as string),
           );
-          // NORMALISED ON BOTH HALVES, the way the migration normalises them
-          // (`lower(trim(...))` on the address and the provider alike).
-          // Nothing this app writes is non-canonical — `authorisedEmail`
-          // lowercases before anything is persisted, `providerId`
-          // canonicalises the session's provider, and @auth/core writes the
-          // provider id straight from the provider config — so this is
-          // parity with the migration rather than a case anyone has seen.
-          // The row that matters is one an older import or a hand fix-up
-          // left in mixed case, for which a raw comparison would name the
-          // wrong cure to somebody already confused.
+          // THE ADDRESS IS MATCHED EXACTLY; the provider is normalised the
+          // way the migration normalises it. The asymmetry is the point,
+          // and it is the one thing to get right here, because this lookup
+          // exists to describe THE ROW THAT BLOCKED THIS INSERT, and only
+          // an exact comparison identifies it (PR #98 round 6 low 2, fixed in
+          // ugcportal-qqgi).
           //
-          // THE TWO HALVES ARE NOT EQUALLY REACHABLE, and saying so is the
-          // point of writing it down: only the PROVIDER can actually differ
-          // here. Arriving in this branch at all means `User.email`
-          // collided, and that UNIQUE index compares the stored string
-          // exactly — so the row in the way necessarily holds the address in
-          // precisely the form being looked up, and the `lower(trim(...))`
-          // on the address cannot change the answer. It is written that way
-          // so the two implementations of "same address" stay one rule, not
-          // because this path can tell them apart.
+          // Reaching this branch means the insert collided on `User.email`:
+          // that is the only other UNIQUE column it touches, the handle
+          // having just been re-read and found absent. The index compares
+          // the stored string exactly — SQLite's unique index is
+          // case-sensitive, and `User_email_key` carries no
+          // `COLLATE NOCASE` — so the blocking row holds precisely the
+          // string written here, and `findUnique` returns that row or
+          // nobody.
           //
-          // A raw lookup because `mode: "insensitive"` is a PostgreSQL
-          // feature Prisma does not offer on SQLite, and scanning `User` in
-          // JS to compare addresses is not a thing to do on a sign-in path.
-          const [holder] = await prisma.$queryRaw<{ id: string }[]>`
-            SELECT "id" FROM "User"
-            WHERE lower(trim("email")) = ${signIn.email}
-            LIMIT 1
-          `;
+          // Matching any wider could only ADD rows that blocked nothing. A
+          // canonically equal TWIN — ` x@y.com ` beside `x@y.com`, which an
+          // older import or a hand fix-up can leave behind — satisfies
+          // `lower(trim("email"))` while colliding with no insert at all,
+          // and the earlier raw lookup's `LIMIT 1` with no `ORDER BY` was
+          // as free to return it as the culprit. The line then listed the
+          // twin's providers, and could say "cannot adopt" about a row that
+          // was never in the way while the row that was went undescribed.
+          //
+          // The PROVIDER keeps its normalisation, because nothing compared
+          // it to decide this collision: a row left as " GOOGLE " by an
+          // older import or a hand fix-up really can turn up, and a raw
+          // comparison would name the wrong cure to somebody already
+          // confused. The migration lowercases and trims it too, so the two
+          // implementations of "same provider" stay one rule. The RAW
+          // string is printed beside the normalised one, so such a row is
+          // visible rather than silently tidied into `google` (PR #98 round 6
+          // low 3, fixed in ugcportal-qqgi) — the anomaly is the thing the
+          // person reading this line most needs to see.
+          const holder = await prisma.user.findUnique({
+            where: { email: data.email },
+            select: { id: true },
+          });
           const linked = holder
             ? (
                 await prisma.account.findMany({
                   where: { userId: holder.id },
                   select: { provider: true },
                 })
-              ).map((account) => normalizeString(account.provider) ?? "(blank)")
+              ).map((account) => ({
+                raw: account.provider,
+                normalised: normalizeString(account.provider) ?? "(blank)",
+              }))
             : [];
-          const adoptable = linked.some((provider) => wanted.has(provider));
+          const adoptable = linked.some(({ normalised }) =>
+            wanted.has(normalised),
+          );
+          // `google` on its own when the stored string already is `google`,
+          // which is every row this app wrote; `google (stored as ' GOOGLE ')`
+          // for the one it did not.
+          const described = linked.map(({ raw, normalised }) =>
+            raw === normalised ? normalised : `${normalised} (stored as '${raw}')`,
+          );
+          // THE ADDRESS GETS THE SAME TREATMENT, for the same reason (PR
+          // #100 round 1, low 4). The lookup above keys on `data.email` —
+          // the string this insert actually wrote, and therefore the string
+          // the row in the way actually holds — while `signIn.email` is
+          // that address normalised, which is what the array and the gate
+          // speak.
+          //
+          // THE TWO ARE EQUAL TODAY BY LUCK, NOT BY CONSTRUCTION (PR #100
+          // round 2, low). Nothing on the write path normalises: `createUser`
+          // above stores `data.email` — @auth/core's `profile.email` —
+          // verbatim, and this app has no check anywhere that it is
+          // canonical. It happens to be, because Google and Facebook both
+          // return lowercase, unpadded addresses, which is a fact about
+          // those two providers and not a property of this code: hand the
+          // replay ` Eiriksanderfjeld@Gmail.com ` and the row is written
+          // with the padding and the capitals intact, its stored spelling
+          // differing from its permitted one. A third provider, a changed
+          // one, or a hand-inserted row is all it takes for that to be the
+          // normal case.
+          //
+          // So the message does not assume it. Printing only the normalised
+          // form would name an address that matches no row, and the
+          // operator's `WHERE "email" = ...` — the exact comparison
+          // docs/access-control.md hands them — would quietly update
+          // nothing. Print what is stored, with the permitted form beside it
+          // when the two differ.
+          const address =
+            data.email === signIn.email
+              ? signIn.email
+              : `'${data.email}' (permitted as ${signIn.email})`;
           const cure = adoptable
             ? "run prisma/migrations/20261005120500_reconcile_configured_users " +
               "(or, for somebody added to the array since, a new " +
               "reconciliation migration; see docs/access-control.md)"
             : `that row has no ${[...wanted].join(" or ")} account (it has: ` +
-              `${linked.length > 0 ? linked.join(", ") : "none"}), so the ` +
-              "reconciliation migration cannot adopt it — its join needs a " +
-              "matching Account.provider. Use the one-line UPDATE under " +
+              `${described.length > 0 ? described.join(", ") : "none"}), ` +
+              "so the reconciliation migration cannot adopt it — its join " +
+              "needs a matching Account.provider. Use the one-line UPDATE under " +
               '"Adding a person who already has an account" in ' +
               "docs/access-control.md, after checking it really is the " +
               "same person";
           console.error(
             `[auth] Could not create the user row for configured handle ` +
               `"${handle}": another row already holds the address ` +
-              `${signIn.email}. ${person.name} cannot sign in until that ` +
+              `${address}. ${person.name} cannot sign in until that ` +
               `row is adopted — ${cure}.`,
             error,
           );
