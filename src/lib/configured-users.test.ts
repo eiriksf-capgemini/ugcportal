@@ -308,6 +308,50 @@ describe("what the review reports, it also removes (PR #98 round 1, medium 2)", 
     )).toBeNull();
   });
 
+  it("drops a duplicate written with different SPACING from both of them", () => {
+    // PR #98 round 2, medium 1. `parsePermittedEntry` trims around the
+    // colon, so these two strings are one identity — the duplicate check saw
+    // that and reported it. The filter did not: it asked whether
+    // `"google: shared@example.com"` (inner space and all) was in the
+    // unsound set, which held the PARSED key, so Ada kept the identity the
+    // report had just removed and the address signed in as her.
+    const users: readonly ConfiguredUser[] = [
+      { name: "Ada", identities: ["google: shared@example.com"] },
+      { name: "Grace", identities: ["google:shared@example.com"] },
+    ];
+    const { sound, problems } = reviewConfiguredUsers(users);
+
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain("more than one");
+    // Nobody keeps it...
+    expect(sound).toEqual([]);
+    // ...nobody is found by it...
+    expect(
+      findConfiguredUser(
+        { provider: "google", email: "shared@example.com" },
+        users,
+      ),
+    ).toBeNull();
+    // ...and it is not permitted either.
+    expect(permittedIdentities(NO_ENV, users).emails).toEqual([]);
+    expect(
+      decideSignIn(attempt("shared@example.com", "google"), NO_ENV, users),
+    ).toEqual({ permitted: false, reason: "no-configuration" });
+  });
+
+  it("hands out one canonical spelling, whatever spacing was written", () => {
+    // Why the above cannot come back: `sound` no longer carries the raw
+    // strings at all. Everything downstream sees the parser's own spelling,
+    // so there is no second form for a later comparison to miss.
+    const { sound } = reviewConfiguredUsers([
+      { name: "Ada", identities: ["google:  Ada@Example.COM  "] },
+    ]);
+
+    expect(sound).toEqual([
+      { name: "Ada", identities: ["google:ada@example.com"] },
+    ]);
+  });
+
   it("drops both people whose names collide on one handle", () => {
     const users: readonly ConfiguredUser[] = [
       { name: "Kari", identities: ["facebook:kari@example.com"] },

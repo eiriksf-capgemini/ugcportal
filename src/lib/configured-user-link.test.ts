@@ -203,6 +203,105 @@ async function replayOAuthSignIn(identity: Identity): Promise<SignInOutcome> {
   });
 }
 
+/**
+ * @auth/core's WEBAUTHN sign-in, replayed the same way
+ * (handle-login.js:88-170, the `account.type === "webauthn"` branch).
+ *
+ * A SECOND BRANCH, not a variation on the first, and it is here for a
+ * structural reason rather than because this app offers passkeys: it reaches
+ * `linkAccount` from two more call sites (:133 when a session is already
+ * open, :161 after creating a user) and calls `getUserByEmail` on a path the
+ * OAuth harness never touches. A guard written into the paths the OAuth
+ * replay exercises — rather than into the adapter METHOD — passes every test
+ * above and fails the ones below.
+ *
+ * `provider` is deliberately not one of SIGN_IN_PROVIDERS, which is the
+ * point: `providerId` maps it to `null`, so `signingIn()` is always `null`
+ * here and the only guard that can fire is the one that asks about the
+ * TARGET row. That is medium 2's direction, on a path medium 2 was not
+ * reported against.
+ */
+async function replayWebAuthnSignIn(options: {
+  email: string;
+  subject: string;
+  withSessionToken?: string;
+}): Promise<{ permitted: boolean; userId?: string }> {
+  return inSignInRequest(async () => {
+    const account = {
+      provider: "webauthn",
+      type: "webauthn" as const,
+      providerAccountId: options.subject,
+    };
+    const user = {
+      id: options.subject,
+      name: "Passkey Holder",
+      email: options.email,
+      image: null,
+    };
+    const profile = { email: options.email, name: user.name };
+
+    const permitted = await authConfig.callbacks.signIn({
+      user,
+      account,
+      profile,
+    } as unknown as Parameters<typeof authConfig.callbacks.signIn>[0]);
+    if (permitted !== true) {
+      return { permitted: false };
+    }
+
+    const adapter = authConfig.adapter as Required<
+      Pick<
+        Adapter,
+        | "getUserByAccount"
+        | "getUserByEmail"
+        | "createUser"
+        | "linkAccount"
+        | "createSession"
+        | "getSessionAndUser"
+      >
+    >;
+
+    const signedIn = options.withSessionToken
+      ? ((await adapter.getSessionAndUser(options.withSessionToken))?.user ??
+        null)
+      : null;
+
+    const byAccount = await adapter.getUserByAccount({
+      provider: account.provider,
+      providerAccountId: account.providerAccountId,
+    });
+    if (byAccount) {
+      return { permitted: true, userId: byAccount.id };
+    }
+
+    if (signedIn) {
+      // handle-login.js:133 — the second of the four linkAccount call sites.
+      await adapter.linkAccount({
+        ...account,
+        userId: signedIn.id,
+      } as Parameters<typeof adapter.linkAccount>[0]);
+      return { permitted: true, userId: signedIn.id };
+    }
+
+    // handle-login.js:141-149 — getUserByEmail on a path the OAuth replay
+    // does not reach.
+    const byEmail = await adapter.getUserByEmail(profile.email);
+    if (byEmail) {
+      throw new Error("AccountNotLinked");
+    }
+    const created = await adapter.createUser({
+      ...user,
+      emailVerified: null,
+    } as unknown as AdapterUser);
+    // handle-login.js:161 — the third call site.
+    await adapter.linkAccount({
+      ...account,
+      userId: created.id,
+    } as Parameters<typeof adapter.linkAccount>[0]);
+    return { permitted: true, userId: created.id };
+  });
+}
+
 beforeAll(async () => {
   await applyMigrations(prisma);
 });
@@ -699,22 +798,33 @@ describe("an open session cannot capture somebody else's identity (PR #98 round 
     ]);
   });
 
-  it("leaves an identity nobody configured on @auth/core's own behaviour", async () => {
-    // The wrapper narrows nothing for an unlisted identity: @auth/core's
-    // signed-in branch links it to the open session exactly as it always
-    // has. Changing that is a different bead, not this one.
+  it("refuses an unlisted identity onto this row too, from the other side", async () => {
+    // THIS TEST ASSERTED THE OPPOSITE IN ROUND 1, and that is worth leaving
+    // on the record: it claimed the wrapper "narrows nothing for an unlisted
+    // identity", so a colleague admitted by ALLOWED_SIGNIN_EMAILS linking
+    // onto GRY's open session was fine and a matter for a different bead.
+    // Round 2 found that it is the same defect from the other end — the
+    // colleague's account lands on Gry's row and `getUserByAccount` resolves
+    // them to her for good — so the test was encoding the hole as intended
+    // behaviour. The guard now asks about the target row as well as the
+    // identity, and the legitimate case (an ordinary row, no handle) has its
+    // own test in the round-2 block below.
     process.env.ALLOWED_SIGNIN_EMAILS = "google:colleague@example.com";
     try {
       const gry = await gryIsSignedIn();
 
-      const outcome = await replayOAuthSignIn({
-        provider: "google",
-        email: "colleague@example.com",
-        subject: "google-subject-colleague",
-        withSessionToken: gry.token,
-      });
+      await expect(
+        replayOAuthSignIn({
+          provider: "google",
+          email: "colleague@example.com",
+          subject: "google-subject-colleague",
+          withSessionToken: gry.token,
+        }),
+      ).rejects.toThrow(/cannot be added to the signed-in user/);
 
-      expect((outcome as { userId: string }).userId).toBe(gry.userId);
+      expect(
+        await prisma.account.count({ where: { userId: gry.userId } }),
+      ).toBe(1);
     } finally {
       delete process.env.ALLOWED_SIGNIN_EMAILS;
     }
@@ -751,6 +861,161 @@ describe("an open session cannot capture somebody else's identity (PR #98 round 
     // And it really is one of @auth/core's errors, which is the precondition
     // for any of the above being consulted at all.
     expect(refusal).toBeInstanceOf(AuthError);
+  });
+});
+
+describe("a stranger cannot attach themselves to a configured person's row (PR #98 round 2, medium 2)", () => {
+  /** Eirik, signed in, with a live session cookie and a stamped handle. */
+  async function eirikIsSignedIn(): Promise<{ userId: string; token: string }> {
+    const outcome = (await replayOAuthSignIn({
+      provider: "google",
+      email: EIRIK_GOOGLE,
+      subject: "google-subject-eirik",
+    })) as { userId: string; sessionToken: string };
+    return { userId: outcome.userId, token: outcome.sessionToken };
+  }
+
+  it("refuses an env-var-only identity signing in on top of his session (OAuth, :209)", async () => {
+    // THE MIRROR IMAGE of round 1's finding. The identity is permitted —
+    // ALLOWED_SIGNIN_EMAILS names it — and belongs to nobody in the array,
+    // so the "is this the right person's row?" guard says nothing about it.
+    // What stops it is the row: Eirik's carries a handle.
+    process.env.ALLOWED_SIGNIN_EMAILS = "google:colleague@example.com";
+    try {
+      const eirik = await eirikIsSignedIn();
+
+      await expect(
+        replayOAuthSignIn({
+          provider: "google",
+          email: "colleague@example.com",
+          subject: "google-subject-colleague",
+          withSessionToken: eirik.token,
+        }),
+      ).rejects.toThrow(/cannot be added to the signed-in user/);
+
+      // No new Account row anywhere...
+      expect(
+        await prisma.account.findUnique({
+          where: {
+            provider_providerAccountId: {
+              provider: "google",
+              providerAccountId: "google-subject-colleague",
+            },
+          },
+        }),
+      ).toBeNull();
+      // ...and Eirik still owns exactly his own.
+      const eirikAccounts = await prisma.account.findMany({
+        where: { userId: eirik.userId },
+      });
+      expect(eirikAccounts.map((account) => account.providerAccountId)).toEqual(
+        ["google-subject-eirik"],
+      );
+      // His session survives: the refusal is about the write, not about him.
+      expect(
+        await prisma.session.findUnique({
+          where: { sessionToken: eirik.token },
+        }),
+      ).not.toBeNull();
+    } finally {
+      delete process.env.ALLOWED_SIGNIN_EMAILS;
+    }
+  });
+
+  it("refuses it on the WebAuthn path too (:133), because the METHOD is wrapped", async () => {
+    // The same refusal, reached through a branch this wrapper's own code
+    // says nothing about. A guard written into the OAuth path would pass
+    // every assertion above and fail here.
+    process.env.ALLOWED_SIGNIN_EMAILS = "colleague@example.com";
+    try {
+      const eirik = await eirikIsSignedIn();
+
+      await expect(
+        replayWebAuthnSignIn({
+          email: "colleague@example.com",
+          subject: "passkey-colleague",
+          withSessionToken: eirik.token,
+        }),
+      ).rejects.toThrow(/cannot be added to the signed-in user/);
+
+      expect(
+        await prisma.account.findUnique({
+          where: {
+            provider_providerAccountId: {
+              provider: "webauthn",
+              providerAccountId: "passkey-colleague",
+            },
+          },
+        }),
+      ).toBeNull();
+      expect(
+        await prisma.account.count({ where: { userId: eirik.userId } }),
+      ).toBe(1);
+    } finally {
+      delete process.env.ALLOWED_SIGNIN_EMAILS;
+    }
+  });
+
+  it("leaves an ordinary user's row alone, on both paths", async () => {
+    // The control, and the limit of this guard: a row with no handle is not
+    // a configured person's, so two allowlisted colleagues sharing a browser
+    // get exactly Auth.js's own behaviour. Widening that is a decision about
+    // Auth.js's default, not this bead.
+    process.env.ALLOWED_SIGNIN_EMAILS =
+      "google:colleague@example.com,second@example.com";
+    try {
+      const colleague = (await replayOAuthSignIn({
+        provider: "google",
+        email: "colleague@example.com",
+        subject: "google-subject-colleague",
+      })) as { userId: string; sessionToken: string };
+      expect(
+        (
+          await prisma.user.findUniqueOrThrow({
+            where: { id: colleague.userId },
+          })
+        ).configuredHandle,
+      ).toBeNull();
+
+      const webauthn = await replayWebAuthnSignIn({
+        email: "second@example.com",
+        subject: "passkey-second",
+        withSessionToken: colleague.sessionToken,
+      });
+
+      expect(webauthn.userId).toBe(colleague.userId);
+      expect(
+        await prisma.account.count({ where: { userId: colleague.userId } }),
+      ).toBe(2);
+    } finally {
+      delete process.env.ALLOWED_SIGNIN_EMAILS;
+    }
+  });
+
+  it("still lets a brand-new passkey user create their own row (:161)", async () => {
+    // The third linkAccount call site, with no session open: nothing to
+    // refuse, and the `getUserByEmail` the WebAuthn branch makes on its way
+    // there must answer normally.
+    process.env.ALLOWED_SIGNIN_EMAILS = "passkey@example.com";
+    try {
+      const outcome = await replayWebAuthnSignIn({
+        email: "passkey@example.com",
+        subject: "passkey-new",
+      });
+
+      expect(outcome.permitted).toBe(true);
+      const account = await prisma.account.findUniqueOrThrow({
+        where: {
+          provider_providerAccountId: {
+            provider: "webauthn",
+            providerAccountId: "passkey-new",
+          },
+        },
+      });
+      expect(account.userId).toBe(outcome.userId);
+    } finally {
+      delete process.env.ALLOWED_SIGNIN_EMAILS;
+    }
   });
 });
 
@@ -956,6 +1221,91 @@ describe("getUserByEmail only withholds the address the gate judged (PR #98 roun
     });
 
     expect(delegated).toEqual(["colleague@example.com", EIRIK_FACEBOOK]);
+  });
+});
+
+describe("a lockout says which row to adopt and how (PR #98 round 2, low)", () => {
+  it("names the handle, the colliding address and the cure before rethrowing", async () => {
+    // The pre-ugcportal-t33p state: some OTHER row already holds the address
+    // this person signs in with, so creating theirs violates `User.email`'s
+    // UNIQUE index. Rethrowing is right — a sign-in that silently did
+    // nothing would be worse — but it is also a LOCKOUT, and a bare P2002
+    // from inside an adapter tells the operator nothing about which of the
+    // three or four things that could mean it is.
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    await prisma.user.create({
+      data: { email: EIRIK_GOOGLE, name: "Somebody Else", configuredHandle: null },
+    });
+
+    await expect(
+      replayOAuthSignIn({
+        provider: "google",
+        email: EIRIK_GOOGLE,
+        subject: "google-subject-eirik",
+      }),
+    ).rejects.toThrow();
+
+    const line = errors.mock.calls
+      .map((call) => String(call[0]))
+      .find((text) => text.includes("Could not create the user row"));
+
+    expect(line).toBeDefined();
+    // Which person, which address, and what to run.
+    expect(line).toContain('"eirik"');
+    expect(line).toContain(EIRIK_GOOGLE);
+    expect(line).toContain("20261005120500_reconcile_configured_users");
+    expect(line).toContain("docs/access-control.md");
+  });
+
+  it("does not log it when the handle row simply raced into existence", async () => {
+    // The other P2002 this path can see, and the one that is NOT a lockout:
+    // two sign-ins by the same person at the same moment. The loser re-reads
+    // the winner's row and returns it, so there is nothing to tell anybody.
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { withConfiguredUserLinking } = await import(
+      "@/lib/configured-user-link"
+    );
+
+    const racy = {
+      ...(authConfig.adapter as Adapter),
+      createUser: async (data: AdapterUser) => {
+        // Stand in for the other request having just won: the row exists by
+        // the time this insert runs.
+        await prisma.user.create({
+          data: {
+            email: "winner@example.com",
+            name: "Eirik",
+            configuredHandle: "eirik",
+          },
+        });
+        return (authConfig.adapter as Adapter).createUser!(data);
+      },
+    } as Adapter;
+    const adapter = withConfiguredUserLinking(racy);
+
+    const resolved = await inSignInRequest(async () => {
+      const { rememberSignInIdentity } = await import("@/lib/live-session");
+      rememberSignInIdentity({
+        user: { email: EIRIK_GOOGLE },
+        account: { provider: "google" },
+        profile: { email: EIRIK_GOOGLE },
+      });
+      return adapter.createUser!({
+        name: "From Google",
+        email: EIRIK_GOOGLE,
+        emailVerified: null,
+      } as unknown as AdapterUser);
+    });
+
+    expect(
+      (await prisma.user.findUniqueOrThrow({ where: { id: resolved.id } }))
+        .configuredHandle,
+    ).toBe("eirik");
+    expect(
+      errors.mock.calls
+        .map((call) => String(call[0]))
+        .filter((text) => text.includes("Could not create the user row")),
+    ).toEqual([]);
   });
 });
 

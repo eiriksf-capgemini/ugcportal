@@ -48,7 +48,11 @@
  * `checkSignInConfiguration` in src/instrumentation.ts.
  */
 
-import { CONFIGURED_USERS, type ConfiguredUser } from "@/config/users";
+import {
+  CONFIGURED_USERS,
+  type ConfiguredIdentity,
+  type ConfiguredUser,
+} from "@/config/users";
 import { isEmailShaped as isEmailShapedBase } from "@/lib/email-shape";
 
 /**
@@ -481,12 +485,50 @@ export function reviewConfiguredUsers(
   const problems: string[] = [];
   /** Indices of the users removed whole. */
   const unsoundUsers = new Set<number>();
-  /** `provider:address` keys removed from everybody. */
-  const unsoundIdentities = new Set<string>();
+  /**
+   * Canonical `provider:address` keys removed from everybody. ONE key
+   * space — see `parsed` below for the round-2 defect that came of having
+   * two.
+   */
+  const unsoundIdentities = new Set<ConfiguredIdentity>();
   /** Which users claim each identity, by index, for the duplicate check. */
-  const claimants = new Map<string, Set<number>>();
+  const claimants = new Map<ConfiguredIdentity, Set<number>>();
   /** Which users derive each handle, for the collision check. */
   const handles = new Map<string, number[]>();
+
+  /**
+   * EVERY IDENTITY, PARSED ONCE, UP FRONT — and the fix for PR #98 round 2,
+   * medium 1.
+   *
+   * There used to be two key spaces in one set. The duplicate check keyed on
+   * the PARSED pair (`parsePermittedEntry` trims around the colon, so
+   * `"google: x@y.com"` parses to `google:x@y.com`), while the filter at the
+   * bottom asked `unsoundIdentities.has(identity.trim().toLowerCase())` —
+   * which for that entry is `"google: x@y.com"`, inner space and all. The
+   * two never matched, so an identity listed under two people was reported
+   * as a duplicate and then kept by whichever of them wrote the spacing the
+   * filter could not recognise. `findConfiguredUser` returned that person,
+   * and the address was permitted: reported and acted on had come apart
+   * again, one layer down from where round 1 put them together.
+   *
+   * So the parse happens once, here, and the canonical `provider:address`
+   * string it produces is the ONLY key anything downstream uses — the
+   * duplicate map, the unsound set, the filter, and the identities handed
+   * out in `sound`. An entry that does not parse has no key at all, which
+   * is what removes it: there is no second spelling for the filter to miss.
+   */
+  const parsed = users.map((user) =>
+    user.identities.map((raw) => {
+      const entry = parsePermittedEntry(raw.trim().toLowerCase());
+      return {
+        raw,
+        key:
+          entry && entry.provider !== null
+            ? (`${entry.provider}:${entry.email}` as ConfiguredIdentity)
+            : null,
+      };
+    }),
+  );
 
   users.forEach((user, index) => {
     const label = user.name.trim().length > 0 ? user.name : "(unnamed user)";
@@ -528,20 +570,16 @@ export function reviewConfiguredUsers(
       }
     }
 
-    for (const identity of user.identities) {
-      const normalized = identity.trim().toLowerCase();
-      const parsed = parsePermittedEntry(normalized);
-      if (parsed === null || parsed.provider === null) {
-        unsoundIdentities.add(normalized);
-        problems.push(describeUnusableIdentity(label, identity));
+    for (const entry of parsed[index]) {
+      if (entry.key === null) {
+        problems.push(describeUnusableIdentity(label, entry.raw));
         continue;
       }
-      const key = `${parsed.provider}:${parsed.email}`;
-      const claimed = claimants.get(key);
+      const claimed = claimants.get(entry.key);
       if (claimed) {
         claimed.add(index);
       } else {
-        claimants.set(key, new Set([index]));
+        claimants.set(entry.key, new Set([index]));
       }
     }
   });
@@ -581,9 +619,23 @@ export function reviewConfiguredUsers(
     if (unsoundUsers.has(index)) {
       return;
     }
-    const identities = user.identities.filter(
-      (identity) => !unsoundIdentities.has(identity.trim().toLowerCase()),
-    );
+    // CANONICAL KEYS, not the raw strings the operator typed. An entry with
+    // no key did not parse and is gone by construction; the rest are handed
+    // on in the one spelling every later comparison uses, so `"google:
+    // x@y.com"` cannot survive as a second name for an identity that was
+    // removed. Deduplicated because one person may write the same identity
+    // twice (which is harmless, and not a problem worth reporting) and two
+    // copies of it in `sound` would be two of everything downstream.
+    const identities = [
+      ...new Set(
+        parsed[index]
+          .map((entry) => entry.key)
+          .filter(
+            (key): key is ConfiguredIdentity =>
+              key !== null && !unsoundIdentities.has(key),
+          ),
+      ),
+    ];
     // A user with nothing left permits and links nothing; dropping them here
     // keeps every later loop over `sound` free of entries that cannot match.
     if (identities.length > 0) {

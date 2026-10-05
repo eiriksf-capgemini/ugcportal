@@ -4,12 +4,15 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { CONFIGURED_USERS } from "@/config/users";
-import { configuredUserHandle } from "@/lib/sign-in-policy";
-import { parsePermittedEntry } from "@/lib/sign-in-policy";
+import {
+  configuredUserHandle,
+  parsePermittedEntry,
+} from "@/lib/sign-in-policy";
 import {
   applyMigration,
   applyMigrations,
   createTemporaryDatabase,
+  migrationNames,
 } from "@/lib/test-support/db";
 
 /**
@@ -441,26 +444,36 @@ describe("a stray that still owns something is kept rather than quietly destroye
   });
 });
 
-describe("the migration's copy of the array has not drifted from the derivation", () => {
-  const sql = readFileSync(
-    path.resolve(
-      __dirname,
-      `../../prisma/migrations/${MIGRATION_NAME}/migration.sql`,
-    ),
-    "utf8",
-  );
-
-  /** The seed rows, as (handle, name, provider, email) tuples. */
-  const seeded = [
-    ...sql.matchAll(
-      /\(\s*'([a-z0-9-]+)',\s*'([^']+)',\s*'([a-z]+)',\s*'([^']+)'\s*\)/g,
-    ),
-  ].map(([, handle, name, provider, email]) => ({
-    handle,
-    name,
-    provider,
-    email,
-  }));
+describe("no reconciliation migration's copy of the array has drifted", () => {
+  /**
+   * EVERY migration that seeds `_ConfiguredIdentitySeed`, not just the one
+   * this file drives (PR #98 round 2). Adding a person who already has an
+   * account means writing a NEW reconciliation migration — that is what
+   * docs/access-control.md tells an operator to do, because re-running this
+   * one is a no-op for anybody it does not name — and the handle in that new
+   * file is hand-typed. A check that only ever looked at the first such
+   * migration would watch the one file nobody is going to edit again.
+   */
+  const seeded = migrationNames().flatMap((name) => {
+    const sql = readFileSync(
+      path.resolve(__dirname, `../../prisma/migrations/${name}/migration.sql`),
+      "utf8",
+    );
+    if (!sql.includes("_ConfiguredIdentitySeed")) {
+      return [];
+    }
+    return [
+      ...sql.matchAll(
+        /\(\s*'([a-z0-9-]+)',\s*'([^']+)',\s*'([a-z]+)',\s*'([^']+)'\s*\)/g,
+      ),
+    ].map(([, handle, personName, provider, email]) => ({
+      migration: name,
+      handle,
+      name: personName,
+      provider,
+      email,
+    }));
+  });
 
   it("found the seed rows at all", () => {
     // Guards the two checks below against passing on an empty list because

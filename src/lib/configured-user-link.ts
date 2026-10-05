@@ -30,10 +30,10 @@ import {
  *   6. `adapter.createSession(...)`;
  *   7. **`events.signIn`** — where the first-admin bootstrap runs.
  *
- * This module wraps steps 4 and 5 — and the OTHER call to `linkAccount`,
- * the one that does not come after either of them. All are POST-GATE: step 2
- * has already permitted the identity, and a refused sign-in never reaches
- * them.
+ * This module wraps steps 4 and 5 — and `linkAccount` wherever @auth/core
+ * calls it, including the call that comes after neither of them. All are
+ * POST-GATE: step 2 has already permitted the identity, and a refused
+ * sign-in never reaches them.
  *
  * THAT OTHER `linkAccount` IS THE ONE THAT MATTERS MOST (PR #98 review,
  * medium 1). When the request already carries a session cookie, @auth/core
@@ -45,6 +45,15 @@ import {
  * of his resolves, through `getUserByAccount`, to Gry. Two people, one
  * account: exactly the merge K5 forbids, arriving through the one adapter
  * method the first version of this wrapper left alone.
+ *
+ * IT RUNS IN BOTH DIRECTIONS, which the first version of the guard did not
+ * (round 2, medium 2). "A configured identity may only be linked to its own
+ * person's row" leaves the mirror image open: an identity belonging to
+ * NOBODY in the array, admitted by `ALLOWED_SIGNIN_EMAILS`, signing in on
+ * top of a configured person's session, and being attached to THEIR row.
+ * Same outcome, same branch, opposite end. So the guard asks both
+ * questions — whose identity is this, and whose row is that — and refuses
+ * unless the two are the same person.
  *
  * ON K5's EXACT WORDING, which asks that linking "runs from the same
  * post-gate path as the bootstrap event (events.signIn)". It cannot run from
@@ -244,6 +253,25 @@ export function withConfiguredUserLinking(
         }
         const raced = await findByHandle(handle);
         if (!raced) {
+          // NOT A RACE, then: the only other UNIQUE column this insert
+          // touches is `User.email`, so some OTHER row already holds this
+          // person's address — the pre-ugcportal-t33p state the
+          // reconciliation exists to clear up. Rethrowing is right (a
+          // sign-in that silently did nothing would be worse), but a bare
+          // P2002 from inside an adapter is unreadable, and this is a
+          // LOCKOUT: that person cannot sign in until somebody acts. So say
+          // which handle, which address, and what the cure is (PR #98
+          // round 2, low).
+          console.error(
+            `[auth] Could not create the user row for configured handle ` +
+              `"${handle}": another row already holds the address ` +
+              `${signIn.email}. ${person.name} cannot sign in until that ` +
+              "row is adopted — run " +
+              "prisma/migrations/20261005120500_reconcile_configured_users " +
+              "(or, for somebody added to the array since, a new " +
+              "reconciliation migration; see docs/access-control.md).",
+            error,
+          );
           throw error;
         }
         return raced;
@@ -303,6 +331,45 @@ export function withConfiguredUserLinking(
     linkAccount: async (data): Promise<void> => {
       const signIn = signingIn();
       if (!signIn) {
+        // THE OTHER DIRECTION (PR #98 round 2, medium 2). The guard below
+        // asks "is this identity's person the row being written to?", which
+        // says nothing at all when the identity belongs to NOBODY in the
+        // array — and that is the same attack from the other end. An address
+        // admitted by ALLOWED_SIGNIN_EMAILS alone, signing in on top of a
+        // configured person's open session, reaches
+        // handle-login.js:209 with `userId` set to that person's row: the
+        // stranger's `Account` is attached to it, and from then on
+        // `getUserByAccount` resolves the stranger to that person — their
+        // uploads, their role, their rights clearance.
+        //
+        // So a row that belongs to a configured person may only ever be
+        // linked by one of THEIR identities. `configuredHandle` is exactly
+        // "this row belongs to a configured person", which is why the check
+        // is one column read and not a scan of the array.
+        //
+        // Everyone else is untouched: an ordinary user's row has a null
+        // handle, so two allowlisted colleagues sharing a browser behave
+        // exactly as Auth.js has always made them behave. Widening that is a
+        // separate decision about Auth.js's own default, not this bead.
+        const target = data.userId
+          ? await prisma.user.findUnique({
+              where: { id: data.userId },
+              select: { configuredHandle: true },
+            })
+          : null;
+        if (target?.configuredHandle) {
+          console.error(
+            `[auth] Refused to link a ${data.provider} account to user ` +
+              `${data.userId}, which belongs to configured user ` +
+              `"${target.configuredHandle}" — the identity signing in is ` +
+              "not one of theirs. This is what signing in on top of " +
+              "somebody else's open session looks like; nothing was " +
+              "written. See src/lib/configured-user-link.ts.",
+          );
+          throw new AccessDenied(
+            "That account cannot be added to the signed-in user.",
+          );
+        }
         await linkAccount(data);
         return;
       }

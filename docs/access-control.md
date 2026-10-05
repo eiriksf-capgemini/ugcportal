@@ -150,13 +150,14 @@ There is no unbound form: an identity here always names exactly one provider.
 **Where the linking happens, and why it is after the gate.** @auth/core's
 OAuth callback runs `callbacks.signIn` — the gate — and only then asks the
 adapter to find or create the user. `src/lib/configured-user-link.ts` wraps
-two adapter methods, `getUserByEmail` and `createUser`, so that for an
-identity in the array:
+three adapter methods — `getUserByEmail`, `createUser` and `linkAccount` —
+so that for an identity in the array:
 
-* the user is **never** resolved by e-mail address, and
+* the user is **never** resolved by e-mail address;
 * the user **is** resolved by a stable handle derived from `name`
   (`eirik`), stored in `User.configuredHandle`, created on the person's first
-  sign-in and found by every later one.
+  sign-in and found by every later one; and
+* an `Account` row is only ever attached to that person's own user.
 
 The pair it matches on comes from the AsyncLocalStorage slot that
 `callbacks.signIn` fills *after* it has permitted the identity — the same
@@ -185,10 +186,24 @@ uploads; it deliberately did not make revocation an action against a person.
 
 **A sign-in made while somebody else's session is open is refused**, not
 linked. Auth.js's already-signed-in branch attaches the new account to
-whoever holds the session cookie, which for an identity in the array would
-hand one person's account to another; `linkAccount` is wrapped to refuse
-that, write nothing, and send the visitor to the Access Denied page. Sign out
-first, then sign in.
+whoever holds the session cookie, with no reference to the identity actually
+signing in. `linkAccount` is wrapped to refuse that, write nothing, and send
+the visitor to the Access Denied page. **It refuses in both directions**:
+
+* an identity **in the array**, arriving on top of anybody else's session —
+  that person's account would land on the session-holder's row; and
+* an identity **not** in the array (admitted by `ALLOWED_SIGNIN_EMAILS`),
+  arriving on top of a **configured person's** session — the stranger's
+  account would land on theirs, and `getUserByAccount` would resolve the
+  stranger to that person from then on: their uploads, their role, their
+  rights clearance.
+
+The limit, stated rather than implied: two addresses that are *both* only in
+`ALLOWED_SIGNIN_EMAILS` still behave exactly as Auth.js makes them behave,
+because neither row belongs to a configured person. Changing that is a
+decision about Auth.js's own default, not something this feature took.
+
+Sign out first, then sign in.
 
 #### Adding a person who already has an account
 
@@ -197,9 +212,35 @@ the whole operation — their first sign-in creates the row with the handle
 already on it.
 
 If they have signed in before (through `ALLOWED_SIGNIN_EMAILS`, say), they
-already own a user row with no handle, and possibly more than one. Re-run the
-reconciliation below, which adopts the row they already have instead of
-leaving them to collect a second one.
+already own a user row with no handle, and possibly more than one. That row
+has to be adopted, or their next sign-in creates a second, empty user beside
+it — and **re-running the existing reconciliation migration will not do it**.
+That migration carries a *snapshot* of the array as it stood when it was
+written (SQL cannot read a TypeScript module), so re-applying it is a no-op
+for anybody added since: it is idempotent precisely because it only ever acts
+on the four identities named inside it.
+
+So adopting a newly-added person is a **new migration**. The cheapest correct
+one is a copy of `20261005120500_reconcile_configured_users` with its
+`INSERT INTO "_ConfiguredIdentitySeed"` rows replaced by the new person's —
+every other statement is generic over that table and needs no edit. Give it a
+later timestamp, and check the handle you type against what
+`configuredUserHandle` derives (the test in
+`src/lib/configured-user-reconciliation-migration.test.ts` does this for
+every migration that carries seed rows, so a typo fails CI rather than
+adopting nobody).
+
+For a single person who has only ever had one user, the whole of it is one
+statement, and running it by hand is reasonable:
+
+```bash
+DB="${DATABASE_URL:-file:./dev.db}"
+sqlite3 "${DB#file:}" \
+  "UPDATE \"User\" SET \"configuredHandle\" = 'their-handle' WHERE \"email\" = 'the-address-they-signed-in-with';"
+```
+
+Either way, do it **before** their next sign-in. Afterwards they have two
+rows and need the merge, not the stamp.
 
 #### Renaming a person
 
