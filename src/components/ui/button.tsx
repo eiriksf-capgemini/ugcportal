@@ -69,8 +69,15 @@ const buttonVariants = cva(
    * variant already applies, so it carries no new value for the contrast
    * gate's own alpha-coverage check (src/lib/design/usage.ts) to learn.
    *
-   * `motion-safe:` on `active:not-aria-[haspopup]:translate-y-px` (ugcportal-
-   * ig4g, closing ugcportal-52ue): the 1px press offset is a `translate-*`
+   * `motion-safe:` on `active:not-aria-[haspopup]: translate-y-px` (space
+   * inserted before the utility, here only - round-5 review: Tailwind's
+   * source scanner reads raw file bytes, not AST-aware JS, so the bare,
+   * un-prefixed combination written UNBROKEN in a comment is itself a
+   * valid candidate and got compiled into the real production stylesheet,
+   * reintroducing the exact ungated rule this fix removes; see
+   * containment.ts's own `GALLERY_TILE_IMAGE_CLASS` comment, which hit the
+   * identical problem, for the full account) (ugcportal-ig4g, closing
+   * ugcportal-52ue): the 1px press offset is a `translate-*`
    * utility with no `motion-safe:`/`motion-reduce:` guard at all, the exact
    * "no-guard" shape src/lib/design/motion-reduce-pairing.test.ts's K2 scan
    * now flags for any `hover:`/`group-hover:`/`active:`/`focus:`-triggered

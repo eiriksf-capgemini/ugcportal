@@ -9,7 +9,12 @@ import { SPEC_SAMPLE_LABEL } from "@/lib/portfolio";
 /**
  * The image's own classes, deliberately NOT `GALLERY_TILE_IMAGE_CLASS`
  * (src/components/gallery/containment.ts). That constant's hover scale
- * (`group-hover:scale-[1.04]`) is an affordance for an element that DOES
+ * (`motion-safe:group-hover: scale-[1.04]` - space inserted before the
+ * utility here only, round-5 review: Tailwind's source scanner reads raw
+ * file bytes, so writing the bare trigger+utility combination UNBROKEN in
+ * a comment is itself a valid candidate and compiles into the real
+ * production stylesheet - see globals.css's own `@source not` comment for
+ * the full account) is an affordance for an element that DOES
  * something on activation — gallery.tsx's tile is a `<button>` that opens
  * the lightbox. This tile is a `<figure>`: nothing happens when you hover or
  * click it (there is no per-item page yet to expand into — ugcportal-

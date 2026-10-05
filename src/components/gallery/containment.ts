@@ -116,15 +116,27 @@ export const GALLERY_TILE_CLASS = `group ${GALLERY_TILE_BASE_CLASS} cursor-zoom-
  * `scale`/`translate`/`rotate` — not to `transform` — confirmed empirically
  * the same way PR #97 confirmed it for `empty-state.tsx`'s own hover-lift,
  * by compiling globals.css and reading the generated rule:
- * `.group-hover\:scale-\[1\.04\]…{ scale: 1.04; }`. The guard that used to
+ * `.group-hover\: scale-\[1\.04\]…{ scale: 1.04; }` (space inserted after
+ * the escaped colon, same reason as every other bare mention in this
+ * comment - see BUG 2 below). The guard that used to
  * sit here, `motion-reduce:transform-none`, overrode a property this
  * element never sets, so it changed nothing.
  *
  * BUG 2, the one that survives fixing BUG 1 alone: simply swapping in
  * `motion-reduce:scale-none` is STILL a no-op, for a completely different
  * reason — CSS SPECIFICITY, not property name. Tailwind compiles
- * `group-hover:scale-[1.04]` to `.group-hover\:scale-\[1\.04\]:is(:where(
- * .group):hover *) { scale: 1.04; }` — `:where()` is specificity-zero, but
+ * `group-hover: scale-[1.04]` (space inserted here, and everywhere else in
+ * this comment the BARE, un-prefixed combination is named, on purpose —
+ * round-5 review: Tailwind's own source scanner reads raw file bytes, not
+ * AST-aware JS, so writing that same combination UNBROKEN inside a comment
+ * is itself a valid candidate, and got compiled into the real production
+ * stylesheet, reintroducing the exact ungated rule this bead fixed —
+ * confirmed: removing the space measurably shrank the built CSS; see
+ * motion-reduce-pairing.test.ts's own header for the full account and
+ * src/app/globals.css's `@source not` exclusion for the OTHER half of
+ * this fix, test-fixture classes) to `.group-hover\: scale-\[1\.04\]:is(
+ * :where(.group):hover *) { scale: 1.04; }` (space inserted after the
+ * escaped colon here too) — `:where()` is specificity-zero, but
  * the compound selector still carries the class (0,1,0) plus the `:is()`
  * pseudo-class's own (0,1,0) from the `:hover` inside it, for a total of
  * (0,2,0). A bare `.motion-reduce\:scale-none { scale: none; }` is only
@@ -145,8 +157,15 @@ export const GALLERY_TILE_CLASS = `group ${GALLERY_TILE_BASE_CLASS} cursor-zoom-
  * The actual fix is the one `empty-state.tsx`'s own hover-lift already
  * uses and documents: `motion-safe:` on the TRIGGERING utility itself,
  * not (only) a `motion-reduce:` override on the result. `motion-safe:
- * group-hover:scale-[1.04]` compiles nested inside BOTH `@media (prefers-
- * reduced-motion: no-preference)` and, inside that, `@media (hover:
+ * group-hover: scale-[1.04]` (space inserted before the utility here too,
+ * same reason as BUG 2 above - this exact sentence used to wrap across a
+ * line break right between `motion-safe:` and `group-hover:`, and
+ * Tailwind's scanner reads the two halves as SEPARATE whitespace-delimited
+ * candidates, not one reassembled one - so the comment's own line wrap
+ * was silently producing the bare, ungated candidate on its own, even
+ * with `motion-safe:` sitting right before it) compiles nested inside
+ * BOTH `@media (prefers-reduced-motion: no-preference)` and, inside that,
+ * `@media (hover:
  * hover)` — so under `reduce` the rule does not exist in the stylesheet AT
  * ALL, for any device: specificity never gets a chance to matter, because
  * there is no competing rule to out-rank. `motion-reduce:scale-none` is

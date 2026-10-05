@@ -4,7 +4,13 @@ import { expect, test } from "@playwright/test";
  * K1 (ugcportal-ig4g): a gallery tile's hover scale must actually stay at
  * `scale: none` under `prefers-reduced-motion: reduce` - the bug this bead
  * fixes was that `motion-reduce:transform-none` (the guard that used to sit
- * next to `group-hover:scale-[1.04]` in
+ * next to `group-hover: scale-[1.04]` (space inserted before the utility,
+ * here only - round-5 review: this file is a `.spec.ts`, not a `.test.ts`,
+ * so globals.css's `@source not` glob does not reach it, and Tailwind's
+ * source scanner reads raw file bytes regardless - writing the bare
+ * combination UNBROKEN here compiled a second, ungated copy of the exact
+ * rule this bead removed straight into the real production stylesheet;
+ * see globals.css's own `@source not` comment for the full account) in
  * src/components/gallery/containment.ts's `GALLERY_TILE_IMAGE_CLASS`)
  * overrides the `transform` property, while Tailwind 4 compiles
  * `scale-[1.04]` to the STANDALONE `scale` property - so the override never

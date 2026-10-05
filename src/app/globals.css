@@ -1,4 +1,65 @@
 @import "tailwindcss";
+/*
+ * Excludes every *.test.ts/*.test.tsx under src/ from Tailwind's automatic
+ * source scan (ugcportal-ig4g, round-5 review) - VERIFIED by direct
+ * before/after measurement of the real `next build` output, not merely by
+ * this directive parsing without error.
+ *
+ * Tailwind's candidate scanner reads raw file bytes looking for anything
+ * SHAPED like a utility class - it has no notion of "this is a test
+ * fixture string, not a real className" the way this repo's own vitest
+ * source-scan tests (scan-source.ts's stripComments) do. Measured:
+ * src/lib/design/motion-reduce-pairing.test.ts's own fixtures - dozens of
+ * deliberately-synthetic class strings, including the exact PRE-FIX,
+ * ungated `active:not-aria-[haspopup]: translate-y-px` and `group-hover:
+ * scale-[1.04]` (both spaced, here only, for the same reason every other
+ * file below names) this bead removed from real components - were
+ * compiling straight into the production stylesheet anyway, adding ~147
+ * dead rules nothing ever renders. `../` is required rather than a bare
+ * double-star glob anchored here (NOT written out literally in this
+ * comment - the two characters "star slash" close a CSS comment, which is
+ * exactly why this sentence has to dance around them): `@source` globs
+ * resolve relative to THIS file's own directory (src/app), and every test
+ * file this reaches is a SIBLING of src/app (src/lib, src/components,
+ * ...), not inside it.
+ *
+ * NOT equally effective for everything of this shape, stated rather than
+ * assumed (round-5 review): the top-level e2e/ directory holds Playwright
+ * specs, not *.test.ts files, and e2e/gallery-tile-reduced-motion.spec.ts's
+ * own top comment was ALSO found leaking the identical bare string into
+ * the real build. Several `@source not` globs aimed at e2e/ were tried
+ * here (a recursive glob, an exact relative path, an absolute path, a
+ * path with no leading `../` at all) and NONE of them measurably changed
+ * the built output, for a reason this investigation could not pin down in
+ * the time available - unlike the src/ exclusion above, which IS confirmed
+ * working by the same measurement technique. So e2e/'s own occurrence is
+ * fixed the OTHER way instead - breaking the string directly, the same as
+ * every PRODUCTION file below - and this comment says so plainly rather
+ * than shipping an unverified `@source not` line that LOOKS like protection
+ * it cannot be shown to provide. A future e2e spec that needs to quote a
+ * dangerous bare combination for illustration needs the same manual
+ * "space inserted" treatment; the glob here only ever covers src/ test
+ * files.
+ *
+ * The underlying problem is not test-only, and this exclusion is only half
+ * the fix: a doc comment in ANY file - test, spec, or production - that
+ * spells out a real, dangerous-looking utility class UNBROKEN for
+ * illustration has the exact same effect, confirmed by this bead's own
+ * containment.ts, button.tsx, portfolio-tile.tsx and the e2e spec just
+ * named (see each file's own "space inserted here" comments). A whole
+ * production file cannot be excluded from the scan without losing the real
+ * utility classes it also legitimately ships, so each of those is fixed by
+ * breaking the specific string instead, file by file, rather than by a
+ * glob.
+ *
+ * containment.motion-safe.test.ts pins the end state: it compiles the REAL
+ * (unrestricted) globals.css and asserts neither removed rule exists in
+ * the output, so a reintroduced bare mention anywhere Tailwind actually
+ * scans - a new test fixture, or a future comment - fails a gate rather
+ * than silently growing the stylesheet again.
+ */
+@source not "../**/*.test.ts";
+@source not "../**/*.test.tsx";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 /*

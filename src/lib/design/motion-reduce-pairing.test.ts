@@ -143,9 +143,34 @@ const STRING_LITERAL = /"([^"\n]*)"|'([^'\n]*)'|`([^`\n]*)`/g;
  * excluded the same way the other `-none` forms are, by requiring a
  * literal `[` to open the `transform-[...]` arbitrary value - `transform-
  * none` never has one.
+ *
+ * LONGHAND and CUSTOM-PROPERTY arbitrary forms (round-5 review): the same
+ * channel, one level more specific. `[animation-name:...]`,
+ * `[animation-duration:...]` and `[transition:...]` each confirmed
+ * compiling to an equally ungated longhand declaration (`hover:
+ * [animation-name:wiggle]` compiles to a bare `animation-name: wiggle`).
+ * `[--tw-translate-y:...]` and `[--tw-scale-x:...]` (explicitly asked for
+ * in review) confirmed compiling to an ungated CUSTOM PROPERTY
+ * declaration - Tailwind's OWN named `translate-y-*`/`scale-*` utilities
+ * are themselves implemented by setting these same custom properties
+ * (confirmed in the compiled output of the named utilities earlier in
+ * this file's own history), so setting one directly via arbitrary syntax
+ * is the identical bypass the named-utility checks above exist for, one
+ * layer down. GENERALISED (same reasoning as `isInteractionTriggerSegment`
+ * below) to every axis of all four transform-family custom properties
+ * Tailwind defines - `--tw-translate-{x,y,z}`, `--tw-scale-{x,y,z}`,
+ * `--tw-rotate-{x,y,z}`, `--tw-skew-{x,y}` (confirmed present in the
+ * compiled `@property` preamble) - rather than hand-listing only the two
+ * axes review happened to name, which is exactly the shape that produced
+ * four prior rounds of "one more axis/shape" on this file. The `[xyz]`
+ * character class below also accepts the non-existent `skew-z`; that is a
+ * harmless OVER-match (no real Tailwind utility ever writes it, so
+ * nothing legitimate is affected) in the same safe direction this round's
+ * fix to `ARBITRARY_SELECTOR_TRIGGER_PSEUDO` accepts, not a claim every
+ * combination is a real Tailwind custom property.
  */
 const DANGEROUS_UTILITY_SEGMENT =
-  /^(?:-?(?:scale|translate-x|translate-y|translate|rotate|skew-x|skew-y|skew|animate)-(?!none$)[\w.%[\]()-]+|\[(?:scale|translate|rotate|skew|transform|animation):[^\]]*\]|transform-\[[^\]]*\])$/;
+  /^(?:-?(?:scale|translate-x|translate-y|translate|rotate|skew-x|skew-y|skew|animate)-(?!none$)[\w.%[\]()-]+|\[(?:scale|translate|rotate|skew|transform|animation|animation-name|animation-duration|transition|--tw-(?:translate|scale|rotate|skew)-[xyz]):[^\]]*\]|transform-\[[^\]]*\])$/;
 
 /**
  * Whether a variant SEGMENT (already stripped of any `/name` suffix - see
@@ -154,20 +179,23 @@ const DANGEROUS_UTILITY_SEGMENT =
  * actually matters for.
  *
  * GENERALISED (round-3 review, PR #101) rather than hand-listed one shape
- * at a time, which is what produced three successive review rounds each
+ * at a time, which is what produced five successive review rounds each
  * finding "one more shape" this scan missed - scale/rotate/skew/animate/
  * transform as the property side (round 2), then position-independence and
  * peer-hover/focus-visible/focus-within/named-group/[transform:...]/
  * animate-* as the trigger side (round 2 again), then the state-attribute
  * families (round 3), then (round 4) the SAME prefix product applied to
  * those state-attribute families too, a wider arbitrary-selector match,
- * and two more base stems. A fixed list can always be one case short of
- * whatever interaction variant someone writes next; the cartesian PRODUCT
- * of a small set of prefixes and stems, plus a small set of Tailwind's
- * state-ATTRIBUTE variant families (themselves also prefixable), is what
- * this is reorganised around instead, so "is this combination covered" is
- * a question about the GENERATOR, not about whether someone remembered to
- * add a new string to a list.
+ * and two more base stems, then (round 5) the BARE word forms of `has-*`
+ * and `data-*` (this family had only ever covered their BRACKETED forms),
+ * longhand/custom-property arbitrary properties, and a regex precision fix.
+ * A fixed list can always be one case short of whatever interaction variant
+ * someone writes next; the cartesian PRODUCT of a small set of prefixes
+ * and stems, plus a small set of Tailwind's state-ATTRIBUTE variant
+ * families (themselves also prefixable), is what this is reorganised
+ * around instead, so "is this combination covered" is a question about
+ * the GENERATOR, not about whether someone remembered to add a new string
+ * to a list.
  *
  * Two families, confirmed by compiling a representative of each:
  *
@@ -204,15 +232,24 @@ const DANGEROUS_UTILITY_SEGMENT =
  *    which has no interaction trigger either).
  *
  * 2. STATE-ATTRIBUTE triggers: `aria-*` (`aria-expanded`, `aria-pressed`,
- *    ... and the arbitrary `aria-[...]` form), `data-[...]` and `has-[...]`
- *    - NOT prefix+stem combinations themselves, but (round 4) each one
- *      STILL composes with the same `group-`/`peer-`/`in-`/`not-` prefixes
- *      as the pseudo-class stems above, confirmed by compiling one of
- *      each: `group-data-[state=open]:scale-105`, `peer-aria-expanded:
- *      translate-y-px`, `in-has-[:focus-visible]:translate-y-px` and
- *      `not-aria-expanded:translate-y-px` all compile to real, equally
- *      ungated rules (an attribute selector composed onto `.group`/
- *      `.peer`, an ancestor selector, and a `:not()` wrapper
+ *    ... and the arbitrary `aria-[...]` form), `data-*` (round 5: both the
+ *    bare `data-open`/`data-active`/any `data-<word>` form AND the
+ *    arbitrary `data-[...]` form - only the latter was covered before this
+ *    round) and `has-*` (round 5, same gap: both the bare `has-hover`/
+ *    `has-open`/etc form - via `TRIGGER_PREFIXES`'s own `"has-"` entry,
+ *    the SAME cartesian product as family 1 above, since `has-<pseudo>` IS
+ *    a prefix+stem combination even though `aria-*`/`data-*` are not - and
+ *    the bracketed `has-[...]` form)
+ *    - the bracketed forms (`data-[...]`, `has-[...]`) are NOT prefix+stem
+ *      combinations themselves, but (round 4) each STILL composes with the
+ *      same `group-`/`peer-`/`in-`/`not-` prefixes (`STATE_ATTRIBUTE_
+ *      PREFIXES`, deliberately NOT including `has-` - see that constant's
+ *      own comment for why) as the pseudo-class stems above, confirmed by
+ *      compiling one of each: `group-data-[state=open]:scale-105`,
+ *      `peer-aria-expanded:translate-y-px`, `in-has-[:focus-visible]:
+ *      translate-y-px` and `not-aria-expanded:translate-y-px` all compile
+ *      to real, equally ungated rules (an attribute selector composed onto
+ *      `.group`/`.peer`, an ancestor selector, and a `:not()` wrapper
  *      respectively) - `stripTriggerPrefix` strips a leading prefix before
  *      testing a segment against these three patterns, the same way
  *      `NAMED_TRIGGER_VARIANTS` bakes the product directly into its set.
@@ -254,26 +291,43 @@ const BASE_TRIGGER_STEMS = [
   "checked",
 ] as const;
 
-/** `group-`/`peer-` are selector-scoped (an ancestor carrying `group`/`peer`); `in-` is Tailwind v4's ancestor variant that needs no such class; `not-` is negation. `""` (no prefix) is the bare stem itself. */
-const TRIGGER_PREFIXES = ["", "group-", "peer-", "in-", "not-"] as const;
+/** `group-`/`peer-` are selector-scoped (an ancestor carrying `group`/`peer`); `in-` is Tailwind v4's ancestor variant that needs no such class; `not-` is negation; `has-` (round-5 review) is Tailwind's bare `:has(:pseudo)` form - `has-hover:scale-105` compiles to `.has-hover\:scale-105:has(:hover)`, confirmed, the bare-word sibling of the bracketed `has-[:focus-visible]` form `HAS_STATE_VARIANT` below already covers. `""` (no prefix) is the bare stem itself. */
+const TRIGGER_PREFIXES = ["", "group-", "peer-", "in-", "not-", "has-"] as const;
 
 const NAMED_TRIGGER_VARIANTS: ReadonlySet<string> = new Set(
   BASE_TRIGGER_STEMS.flatMap((stem) => TRIGGER_PREFIXES.map((prefix) => `${prefix}${stem}`)),
 );
 
+/**
+ * The prefixes that compose with the STATE-ATTRIBUTE families
+ * (`stripTriggerPrefix` below) - deliberately NARROWER than
+ * `TRIGGER_PREFIXES` above, and NOT including `"has-"` (round-5 review,
+ * found the hard way): `has-` already has its OWN dedicated bracketed-form
+ * regex (`HAS_STATE_VARIANT`), and stripping it here too would eat the
+ * `has-` off the FRONT of `has-[:focus-visible]` before that regex ever
+ * saw it, leaving a stem (`[:focus-visible]`) neither `HAS_STATE_VARIANT`
+ * (which requires the literal `has-` it just lost) nor
+ * `isArbitrarySelectorTrigger` (which requires the stem to START with
+ * `[`, not `h`) can recognise - silently un-flagging the exact
+ * `has-[:focus-visible]:translate-y-px` shape this gate exists to catch.
+ * Confirmed by this bead's own fixture suite failing when `"has-"` was
+ * (wrongly) included here.
+ */
+const STATE_ATTRIBUTE_PREFIXES = ["group-", "peer-", "in-", "not-"] as const;
+
 /** Strips one leading `group-`/`peer-`/`in-`/`not-` prefix, if present, before a segment is tested against the state-attribute patterns below - see this function's own call site's comment for the compiled evidence that Tailwind composes these families with the same four prefixes the pseudo-class stems use. */
 function stripTriggerPrefix(stem: string): string {
-  for (const prefix of TRIGGER_PREFIXES) {
-    if (prefix && stem.startsWith(prefix)) return stem.slice(prefix.length);
+  for (const prefix of STATE_ATTRIBUTE_PREFIXES) {
+    if (stem.startsWith(prefix)) return stem.slice(prefix.length);
   }
   return stem;
 }
 
 /** A fixed `aria-word` variant (`aria-expanded`, `aria-pressed`, ...) or the arbitrary `aria-[...]` form. */
 const ARIA_STATE_VARIANT = /^aria-(?:[\w-]+|\[[^\]]*\])$/;
-/** Tailwind's arbitrary data-attribute variant, `data-[state=open]` and similar. */
-const DATA_STATE_VARIANT = /^data-\[[^\]]*\]$/;
-/** Tailwind's `:has()` variant, `has-[:focus-visible]` and similar. */
+/** Tailwind's bare `data-<word>` variant (`data-open`, `data-active`, `data-hover`, any `data-<word>` - confirmed each compiles to an ungated attribute selector) or the arbitrary `data-[...]` form - symmetric with `ARIA_STATE_VARIANT` above (round-5 review: the bare form was missing). */
+const DATA_STATE_VARIANT = /^data-(?:[\w-]+|\[[^\]]*\])$/;
+/** Tailwind's `:has()` variant, `has-[:focus-visible]` and similar - the BRACKETED form; the bare `has-<pseudo>` form (`has-hover`, `has-open`, ...) is covered separately, via `TRIGGER_PREFIXES`'s own `"has-"` entry. */
 const HAS_STATE_VARIANT = /^has-\[[^\]]*\]$/;
 
 /**
@@ -281,20 +335,35 @@ const HAS_STATE_VARIANT = /^has-\[[^\]]*\]$/;
  * arbitrary selector's bracket content - the same set `BASE_TRIGGER_STEMS`'
  * own plain pseudo-classes cover.
  *
- * `(?![a-z])`, not a trailing `\b` (round-4 review, found while adding the
+ * `(?![a-z-])`, not a trailing `\b` (round-4 review, found while adding the
  * `[.sidebar:hover_&]` fixture): Tailwind's arbitrary-value syntax writes a
  * literal space as `_` (so `[.sidebar:hover_&]` compiles the real selector
  * `.sidebar:hover &`), and `_` is a WORD character in regex terms - `\b`
  * between "hover" and "_" never fires, so `\bhover\b`-style matching missed
- * this real, compiling shape entirely. A negative lookahead for a
- * following LOWERCASE LETTER still rejects an unrelated pseudo-class that
- * merely starts with the same letters (`:hoverboard`, not a real
- * selector but worth not matching anyway) while accepting every real
- * terminator a compiled selector can place right after one of these names:
- * `_` (Tailwind's space), `)`, `]`, `:`, `,`, `.`, or end of string.
+ * this real, compiling shape entirely.
+ *
+ * The `-` in the lookahead's character class is round-5 review's own
+ * fix, for a case the round-4 comment here overclaimed: with only
+ * `(?![a-z])`, `:focus-visiblex` (not a real pseudo-class) still MATCHED -
+ * not via the `focus-visible` alternative (its own lookahead correctly
+ * rejects the trailing `x`), but by the regex engine BACKTRACKING to the
+ * bare `focus` alternative, whose lookahead only checked for a following
+ * LETTER and so accepted the `-` right after it. `focus-visible`/`focus-
+ * within` are listed before bare `focus` so the regex prefers the longer
+ * match first, but alternation still falls back to the shorter one on
+ * failure - excluding a following `-` too closes that fallback, because
+ * no real CSS pseudo-class name is `focus` followed by a literal `-` that
+ * ISN'T immediately `-visible` or `-within` (both already matched, and
+ * matched first, by their own longer alternatives). Residual, stated
+ * rather than silently fixed further: this still accepts the harmless
+ * over-match `:hoverboard` style name sharing a PREFIX with no trailing
+ * `-` or letter (e.g. a hypothetical `:hoverfoo)`, which nothing in this
+ * codebase's real CSS vocabulary produces) - the safe direction for a
+ * gate whose job is to flag a possible motion risk, not a CSS selector
+ * parser.
  */
 const ARBITRARY_SELECTOR_TRIGGER_PSEUDO =
-  /:(?:hover|focus-visible|focus-within|focus|active)(?![a-z])/;
+  /:(?:hover|focus-visible|focus-within|focus|active)(?![a-z-])/;
 
 /**
  * Whether `stem` is Tailwind's fully arbitrary selector-variant escape
@@ -1024,4 +1093,133 @@ describe("findUngatedInteractionMotionUtilities (the real scanner, exercised ove
       expect(scan(root)).toEqual([]);
     },
   );
+
+  /**
+   * BARE has-* family (round-5 review): `has-hover`/`has-open`/etc, the
+   * word-form sibling of the already-covered bracketed `has-[...]` form -
+   * each confirmed compiling to an ungated `:has(:pseudo)` selector.
+   */
+  it.each([
+    ["has-hover: scale", "has-hover:scale-105"],
+    ["has-focus: scale", "has-focus:scale-105"],
+    ["has-focus-visible: scale", "has-focus-visible:scale-105"],
+    ["has-focus-within: scale", "has-focus-within:scale-105"],
+    ["has-active: scale", "has-active:scale-105"],
+    ["has-checked: translate", "has-checked:translate-y-px"],
+    ["has-open: scale", "has-open:scale-105"],
+  ])("also catches an ungated %s utility", (_label, classString) => {
+    const root = fixture({
+      "other-utility.ts": `export const CLASS = "${classString}";`,
+    });
+
+    expect(scan(root)).toEqual([path.join(path.basename(root), "other-utility.ts")]);
+  });
+
+  it.each([
+    ["motion-safe:has-hover:scale", "motion-safe:has-hover:scale-105"],
+    ["motion-safe:has-focus:scale", "motion-safe:has-focus:scale-105"],
+    ["motion-safe:has-focus-visible:scale", "motion-safe:has-focus-visible:scale-105"],
+    ["motion-safe:has-focus-within:scale", "motion-safe:has-focus-within:scale-105"],
+    ["motion-safe:has-active:scale", "motion-safe:has-active:scale-105"],
+    ["motion-safe:has-checked:translate", "motion-safe:has-checked:translate-y-px"],
+    ["motion-safe:has-open:scale", "motion-safe:has-open:scale-105"],
+  ])("does not flag the same %s utility once motion-safe-gated", (_label, classString) => {
+    const root = fixture({
+      "other-utility.ts": `export const CLASS = "${classString}";`,
+    });
+
+    expect(scan(root)).toEqual([]);
+  });
+
+  /**
+   * BARE data-* family (round-5 review), symmetric with aria-*: any
+   * `data-<word>`, each confirmed compiling to an ungated attribute
+   * selector.
+   */
+  it.each([
+    ["data-open: scale", "data-open:scale-105"],
+    ["data-active: scale", "data-active:scale-105"],
+    ["data-focus: scale", "data-focus:scale-105"],
+    ["data-hover: scale", "data-hover:scale-105"],
+    ["arbitrary data-<word>: scale", "data-whatever:scale-105"],
+  ])("also catches an ungated %s utility", (_label, classString) => {
+    const root = fixture({
+      "other-utility.ts": `export const CLASS = "${classString}";`,
+    });
+
+    expect(scan(root)).toEqual([path.join(path.basename(root), "other-utility.ts")]);
+  });
+
+  it.each([
+    ["motion-safe:data-open:scale", "motion-safe:data-open:scale-105"],
+    ["motion-safe:data-active:scale", "motion-safe:data-active:scale-105"],
+    ["motion-safe:data-focus:scale", "motion-safe:data-focus:scale-105"],
+    ["motion-safe:data-hover:scale", "motion-safe:data-hover:scale-105"],
+    ["motion-safe:data-<word>:scale", "motion-safe:data-whatever:scale-105"],
+  ])("does not flag the same %s utility once motion-safe-gated", (_label, classString) => {
+    const root = fixture({
+      "other-utility.ts": `export const CLASS = "${classString}";`,
+    });
+
+    expect(scan(root)).toEqual([]);
+  });
+
+  /**
+   * ARBITRARY LONGHAND and CUSTOM-PROPERTY forms (round-5 review): each
+   * confirmed compiling to an equally ungated declaration when
+   * interaction-triggered, the same channel as [transform:...]/
+   * [animation:...] one level more specific.
+   */
+  it.each([
+    ["hover: arbitrary [animation-name:...]", "hover:[animation-name:wiggle]"],
+    ["hover: arbitrary [animation-duration:...]", "hover:[animation-duration:1s]"],
+    ["hover: arbitrary [transition:...]", "hover:[transition:transform_1s]"],
+    ["group-hover: arbitrary [--tw-translate-y:...]", "group-hover:[--tw-translate-y:10px]"],
+    ["group-hover: arbitrary [--tw-scale-x:...]", "group-hover:[--tw-scale-x:1.1]"],
+  ])("also catches an ungated %s", (_label, classString) => {
+    const root = fixture({
+      "other-utility.ts": `export const CLASS = "${classString}";`,
+    });
+
+    expect(scan(root)).toEqual([path.join(path.basename(root), "other-utility.ts")]);
+  });
+
+  it.each([
+    [
+      "motion-safe:hover:[animation-name:...]",
+      "motion-safe:hover:[animation-name:wiggle]",
+    ],
+    [
+      "motion-safe:hover:[animation-duration:...]",
+      "motion-safe:hover:[animation-duration:1s]",
+    ],
+    [
+      "motion-safe:hover:[transition:...]",
+      "motion-safe:hover:[transition:transform_1s]",
+    ],
+    [
+      "motion-safe:group-hover:[--tw-translate-y:...]",
+      "motion-safe:group-hover:[--tw-translate-y:10px]",
+    ],
+    [
+      "motion-safe:group-hover:[--tw-scale-x:...]",
+      "motion-safe:group-hover:[--tw-scale-x:1.1]",
+    ],
+  ])("does not flag the same %s once motion-safe-gated", (_label, classString) => {
+    const root = fixture({
+      "other-utility.ts": `export const CLASS = "${classString}";`,
+    });
+
+    expect(scan(root)).toEqual([]);
+  });
+
+  it("does not flag :focus-visiblex as a trigger inside an arbitrary selector (round-5 review)", () => {
+    // The fixture that caught the ARBITRARY_SELECTOR_TRIGGER_PSEUDO
+    // overclaim this round corrected - see that regex's own comment.
+    const root = fixture({
+      "unrelated.ts": 'export const CLASS = "[&:focus-visiblex]:translate-y-px";',
+    });
+
+    expect(scan(root)).toEqual([]);
+  });
 });
