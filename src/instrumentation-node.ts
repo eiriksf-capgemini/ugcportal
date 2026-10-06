@@ -206,22 +206,31 @@ export async function checkS3Reachability({
 /**
  * Every boot check that belongs behind the Node-runtime guard. Called once
  * from src/instrumentation.ts's `register()`.
+ *
+ * The legal-pages check is logged FIRST, before the S3 probe is even
+ * started, not gathered into one array and logged together (round-2 review
+ * finding 1): it is synchronous and independent of S3 reachability, so
+ * there is no reason for a slow or hanging S3 endpoint to sit in front of
+ * it. Under the old ordering a GDPR-relevant warning could be delayed up to
+ * `S3_REACHABILITY_TIMEOUT_MS` behind the S3 probe, and lost entirely if the
+ * process was killed in that window. The S3 probe itself stays awaited
+ * here, not fire-and-forget — that part is the bead's own K2 design (`bd
+ * show ugcportal-ze1o`), not an oversight: `register()` must still resolve
+ * only once the probe has settled or timed out.
  */
 export async function registerNodeOnlyChecks(): Promise<void> {
-  // Awaited before the loop, not inside it: every other check here is
-  // synchronous, and spreading one async call into the array under test
-  // would not change the warning's shape, only how it is computed.
+  // ugcportal-qnq9.4: while a LEGAL_* variable is unset (env.example) the
+  // legal pages refuse to render in production (src/lib/legal/
+  // publishable.ts); say which at boot rather than leaving it to the first
+  // visitor to find. Computed and logged before the S3 probe starts — see
+  // this function's own doc comment above.
+  const legalWarning = checkLegalPagesPublishable(LEGAL_PAGES);
+  if (legalWarning) {
+    console.error(legalWarning);
+  }
+
   const s3Warning = await checkS3Reachability();
-  for (const warning of [
-    // ugcportal-qnq9.4: while a LEGAL_* variable is unset (env.example) the
-    // legal pages refuse to render in production (src/lib/legal/
-    // publishable.ts); say which at boot rather than leaving it to the
-    // first visitor to find.
-    checkLegalPagesPublishable(LEGAL_PAGES),
-    s3Warning,
-  ]) {
-    if (warning) {
-      console.error(warning);
-    }
+  if (s3Warning) {
+    console.error(s3Warning);
   }
 }

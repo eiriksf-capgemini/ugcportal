@@ -151,21 +151,33 @@ describe("the S3 reachability startup check (ugcportal-ze1o)", () => {
 
   /**
    * K3's other half: the test above uses a probe that resolves, so it only
-   * proves there is no *scheduled* re-check after success. A single eager
-   * retry on FAILURE (no loop, no timer — just calling `probe()` a second
-   * time from inside the catch block) is the gap this closes directly on
-   * the failure path: found and confirmed by fixture-mutating
-   * `checkS3Reachability` to retry once inline on failure (pre-review),
-   * this test fails as expected against that mutation. (Round-1 review
-   * finding 4: a prior version of this suite also had a static source-regex
-   * check here for `setInterval(`/`while(`, which this call-count assertion
-   * already subsumes — it catches any retry shape, not just those two — so
-   * the regex check was removed rather than kept as a narrower duplicate.)
+   * proves there is no *scheduled* re-check after success. A retry on
+   * FAILURE from inside the catch block — eager (no loop, no timer, just
+   * calling `probe()` a second time synchronously) or scheduled (a
+   * `setTimeout`/`setInterval` call queued from the catch block) — is the
+   * gap this closes on the failure path: found and confirmed by
+   * fixture-mutating `checkS3Reachability` to retry once inline on failure
+   * (pre-review), and again, separately, by mutating in a
+   * `setTimeout`-scheduled retry instead (round-2 review finding 2); both
+   * mutations fail this test as expected. Fake timers plus advancing well
+   * past any plausible retry delay after the awaited call resolves is what
+   * catches the scheduled shape specifically — real timers with an
+   * immediate assertion (this test's round-1/round-2 form) would let a
+   * `setTimeout`-scheduled retry pass unnoticed, the same gap the removed
+   * `setInterval`/`while` source-regex check also would not have caught.
    */
   it("never invokes the probe again after a failure, either (K3 failure-path)", async () => {
+    vi.useFakeTimers();
     const probe = vi.fn().mockRejectedValue(transportError("ECONNREFUSED"));
 
     await checkS3Reachability({ probe, env: env({ S3_ENDPOINT: ENDPOINT }) });
+    expect(probe).toHaveBeenCalledTimes(1);
+
+    // Run well past any plausible scheduled-retry delay and flush every
+    // pending timer, so a `setTimeout`/`setInterval` retry queued from the
+    // catch block (which would not increment the call count until its own
+    // timer fires) has every chance to fire before this asserts again.
+    await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
     expect(probe).toHaveBeenCalledTimes(1);
   });
 
@@ -284,5 +296,49 @@ describe("registerNodeOnlyChecks() wiring the S3 check through @/lib/s3 (ugcport
       .filter((line) => line.startsWith("[storage]"));
     expect(storageLines).toHaveLength(1);
     expect(storageLines[0]).toContain("ECONNREFUSED");
+  });
+
+  /**
+   * Round-2 review finding 1: the legal-pages check is synchronous and
+   * independent of S3 reachability, so it must not sit behind the S3
+   * probe's up-to-3-second wait — a hanging endpoint would otherwise delay
+   * this GDPR-relevant warning for no reason, and lose it entirely if the
+   * process died in that window. A probe that never resolves on its own
+   * (only the fake-timer advance below ever settles it, via
+   * `S3_REACHABILITY_TIMEOUT_MS`) makes the ordering observable directly:
+   * if the legal check were still computed/logged only after awaiting the
+   * S3 probe, no warning at all would be logged yet at the point this test
+   * asserts one.
+   */
+  it("logs the legal warning before the S3 probe resolves, not delayed behind it (round-2 finding 1)", async () => {
+    vi.useFakeTimers();
+    vi.resetModules();
+    vi.doMock("@/lib/s3", () => ({
+      getS3Client: () => ({ send: () => new Promise(() => {}) }),
+      getBucketName: () => "ugcportal-dev",
+      classifyTransportFailure: () => null,
+    }));
+    vi.doMock("@/lib/legal/pages", () => ({ LEGAL_PAGES: [] }));
+    vi.doMock("@/lib/legal/publishable", () => ({
+      checkLegalPagesPublishable: () => "[legal] test warning, independent of S3",
+    }));
+
+    const { registerNodeOnlyChecks, S3_REACHABILITY_TIMEOUT_MS: timeoutMs } = await import(
+      "@/instrumentation-node"
+    );
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const resultPromise = registerNodeOnlyChecks();
+
+    // Synchronous, immediately after calling -- no await, no microtask
+    // flush -- because the legal check must already be logged by now, well
+    // before the S3 probe's own timeout is even advanced below.
+    expect(errors.mock.calls.map((call) => String(call[0]))).toEqual([
+      "[legal] test warning, independent of S3",
+    ]);
+
+    await vi.advanceTimersByTimeAsync(timeoutMs);
+    await resultPromise;
+    vi.useRealTimers();
   });
 });
