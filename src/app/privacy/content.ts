@@ -216,6 +216,8 @@ export function privacyContent(contact: LegalContact): PrivacyContent {
           "src/lib/media-access.ts",
           "src/app/api/media/[id]/route.ts",
           "src/app/api/media/[id]/publish/route.ts",
+          "src/app/api/media/[id]/disclosure/route.ts",
+          "src/lib/advertising-disclosure.ts",
           "src/lib/s3.ts",
           "prisma/schema.prisma",
         ],
@@ -441,6 +443,27 @@ export const MODEL_COVERAGE: Readonly<
   ResaleRightsEvent: { category: "audit" },
   MediaListing: { category: "rights" },
   MediaRightsClearance: { category: "rights" },
+  // The advertising disclosure sits with the uploads rather than with the
+  // rights records, even though MediaListing.sponsoredContent looks similar:
+  // that one answers "may this be RESOLD" for an administrator, and this one
+  // is the uploader's own declaration about their own item, deleted with the
+  // item (ugcportal-qnq9.1).
+  //
+  // THE CATEGORY'S PROSE DOES NOT YET NAME THIS RECORD, and that is a known,
+  // deliberate gap rather than an oversight. The `what` paragraphs above are
+  // what LEGAL_SIGN_OFF certifies by digest (src/lib/legal/publishable.ts):
+  // adding a sentence changes the digest, which correctly drops /privacy back
+  // to draft until a human has read and approved the new wording. Nobody but
+  // the person named in LEGAL_SIGN_OFF can do that, so the sentence and the
+  // re-sign-off are a follow-up with a human in it. Until then the mapping
+  // here is the honest answer to "which category covers this table", the
+  // record is not published anywhere (ugcportal-qnq9.1 part B is what makes
+  // the label public), and the page under-describes rather than misdescribes.
+  MediaAdvertisingDisclosure: { category: "uploads" },
+  BenefitSource: {
+    notPersonalData:
+      "Brand names (the company behind a paid or gifted item), shared across items so a brand is one row rather than one per item; a company, not a visitor or an account holder.",
+  },
 };
 
 /**

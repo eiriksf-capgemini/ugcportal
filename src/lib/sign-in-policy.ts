@@ -66,16 +66,12 @@ export const PERMITTED_EMAILS_VAR = "ALLOWED_SIGNIN_EMAILS";
  * MUST match the providers configured in src/lib/auth.ts; a test there
  * asserts the two lists agree, so adding a provider without listing it here
  * fails a test rather than silently making `newprovider:addr` malformed.
- */
-export const SIGN_IN_PROVIDERS = ["google", "facebook"] as const;
-export type SignInProvider = (typeof SIGN_IN_PROVIDERS)[number];
-
-/**
- * This list is the SOURCE the configured providers are built from, not a
+ *
+ * THIS LIST IS THE SOURCE the configured providers are built from, not a
  * copy of them: src/lib/sign-in-providers.ts maps each id here to its
  * Auth.js provider factory under a `satisfies Record<SignInProvider, ...>`
  * check, so adding a provider there without adding its id here (or the
- * reverse) fails to compile. It lives in this module rather than next to the
+ * reverse) fails to compile. It lives in THIS module rather than next to the
  * factories because src/instrumentation.ts imports this file in the Edge
  * instrumentation bundle and must not pull in the provider modules or the
  * Prisma client. The test in src/lib/auth.test.ts that compares the ids with
@@ -83,6 +79,8 @@ export type SignInProvider = (typeof SIGN_IN_PROVIDERS)[number];
  * factory reports really is the key it was built from. (PR #81 rounds 1 and
  * 3, finding 3.)
  */
+export const SIGN_IN_PROVIDERS = ["google", "facebook"] as const;
+export type SignInProvider = (typeof SIGN_IN_PROVIDERS)[number];
 
 /**
  * How an operator is told to write a bound entry, in every message that
@@ -109,6 +107,28 @@ export type PermittedEntry = {
 };
 
 /**
+ * Does a parsed entry's binding admit THIS identity's asserted provider?
+ * `null` on the entry (unbound) matches any provider, including none; a
+ * bound provider matches only itself. The caller still has to check the
+ * ADDRESS half — this is only ever the second half of "does this entry match
+ * this address and provider".
+ *
+ * The ONE definition of that half, shared since ugcportal-qlfo (PR #81 round
+ * 6 cap, low 1) by `evaluateSignIn` (the gate, judging `ALLOWED_SIGNIN_EMAILS`
+ * plus the committed users array) and `isBootstrapAdminSignIn` (the
+ * first-admin promotion, judging `ADMIN_BOOTSTRAP_EMAILS`). Before this it was
+ * written out twice, and nothing stopped the two copies drifting apart on
+ * exactly the rule PR #81 added — which would mean the gate and the
+ * promotion disagreeing about who a bound entry matches.
+ */
+function entryMatchesProvider(
+  entry: { provider: SignInProvider | null },
+  provider: SignInProvider | null,
+): boolean {
+  return entry.provider === null || entry.provider === provider;
+}
+
+/**
  * Parse one trimmed, lowercased entry. `null` means unusable.
  *
  * The separator is the first `:`. A colon can in principle appear in an
@@ -121,6 +141,28 @@ export type PermittedEntry = {
  * malformed, not "unbound": treating it as a plain address would be
  * another entry that silently permits nobody, and treating it as unbound
  * would permit the address on providers the operator did not name.
+ *
+ * WHITESPACE AROUND THE SEPARATOR (`google : x@y.com`, `google: x@y.com`,
+ * `google :x@y.com`) IS ACCEPTED AND TRIMMED, not malformed — a DECISION,
+ * not an accident of `.trim()` being there (ugcportal-qlfo item 2, which
+ * considered the other answer and rejected it). The module's general stance
+ * is that a deviation is reported rather than silently repaired (see the
+ * unknown-prefix and doubled-prefix cases below), and padded colon spacing
+ * looked like a candidate for the same treatment. It is not, because
+ * `reviewConfiguredUsers` below already depends on the opposite answer for a
+ * real fix: PR #98 round 2 found that TWO spellings of the same identity —
+ * one with, one without, space after the colon — were being treated as the
+ * SAME entry by the duplicate check (which used this parser's trimmed,
+ * canonical form as its key) but as DIFFERENT entries by the filter that
+ * acted on it (which compared untrimmed strings), so a duplicate the review
+ * reported as removed was quietly kept and signed in anyway. Making colon
+ * spacing malformed here would not restore that defect, but it would
+ * contradict `reviewConfiguredUsers`'s own comment on the fix, and the
+ * committed users array (src/config/users.ts) and the env vars share this
+ * one parser specifically so operator typos in either are judged the same
+ * way — rejecting them here while that comment still describes trimming as
+ * the intended behaviour is the inconsistency this module exists to avoid.
+ * So: accepted, and trimmed, on purpose.
  *
  * Exported since ugcportal-t33p, because the committed users array
  * (src/config/users.ts) is written in the SAME syntax — and whether
@@ -292,6 +334,21 @@ export function bootstrapAdminEmails(
  * `raw` is a parameter, not read from an injected env object, because the
  * only caller is src/lib/admin-bootstrap.ts and its tests, which set the
  * variable on process.env.
+ *
+ * ADMIN_BOOTSTRAP_EMAILS IS SPLIT AND PARSED HERE, INDEPENDENTLY of
+ * `permittedIdentities` (below) parsing the same raw string again as part of
+ * its own combined pass — two passes over the same short list, once per
+ * sign-in. Sized for ugcportal-qlfo item 4 and left as two passes rather than
+ * shared: the cost is a handful of string-split and regex operations over a
+ * list that, per `permittedIdentities`'s own comment, "changes about once a
+ * year," on the sign-in path rather than a per-request one. Sharing one
+ * memoised parse between the two would mean threading pre-parsed entries
+ * through `permittedIdentities`'s single combined pass — kept single on
+ * purpose (see that function's own "ONE pass that builds everything" comment,
+ * PR #91 review round 3 finding 1 — a DIFFERENT single-pass decision than
+ * `reviewConfiguredUsers`'s, which is about its own, separate loop) — which is
+ * more surface on an authorisation path than this negligible cost justifies.
+ * Recorded here rather than fixed.
  */
 export function isBootstrapAdminSignIn(
   identity: { email: unknown; provider?: unknown },
@@ -307,7 +364,7 @@ export function isBootstrapAdminSignIn(
     return (
       parsed !== null &&
       parsed.email === email &&
-      (parsed.provider === null || parsed.provider === provider)
+      entryMatchesProvider(parsed, provider)
     );
   });
 }
@@ -517,7 +574,9 @@ export function reviewConfiguredUsers(
    *
    * There used to be two key spaces in one set. The duplicate check keyed on
    * the PARSED pair (`parsePermittedEntry` trims around the colon, so
-   * `"google: x@y.com"` parses to `google:x@y.com`), while the filter at the
+   * `"google: x@y.com"` parses to `google:x@y.com` — a DELIBERATE decision,
+   * re-examined and kept by ugcportal-qlfo item 2, precisely because this is
+   * the fix that decision would otherwise undo), while the filter at the
    * bottom asked `unsoundIdentities.has(identity.trim().toLowerCase())` —
    * which for that entry is `"google: x@y.com"`, inner space and all. The
    * two never matched, so an identity listed under two people was reported
@@ -902,6 +961,10 @@ export function permittedIdentities(
   users: readonly ConfiguredUser[] = CONFIGURED_USERS,
 ): PermittedIdentities {
   const raw = env[PERMITTED_EMAILS_VAR];
+  // Parsed again below, independently of `isBootstrapAdminSignIn`'s own read
+  // of the same variable — see that function's doc comment for why this
+  // duplicate parse (ugcportal-qlfo item 4) was sized and left alone rather
+  // than shared.
   const rawBootstrap = env.ADMIN_BOOTSTRAP_EMAILS;
   // Memoised on the two raw strings, because this now runs on EVERY
   // authenticated request (`decideLiveSession`, ugcportal-mzr) and not only
@@ -1378,9 +1441,12 @@ function evaluateSignIn(
   // An unbound entry permits the address from any configured provider; a
   // bound one only from the provider it names. A missing or unrecognised
   // provider is `null`, which fails closed against bound entries rather than
-  // matching the first of them.
-  const permitted = listed.some(
-    (entry) => entry.provider === null || entry.provider === provider,
+  // matching the first of them. `entryMatchesProvider` is the one definition
+  // of this rule, shared with `isBootstrapAdminSignIn` (ugcportal-qlfo item
+  // 1), so the gate and the bootstrap promotion cannot silently disagree
+  // about which entries match.
+  const permitted = listed.some((entry) =>
+    entryMatchesProvider(entry, provider),
   );
   if (!permitted) {
     return refuse("wrong-provider");

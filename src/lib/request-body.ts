@@ -196,6 +196,13 @@ export async function readCappedFormData(
  * container's upload budget, and every other upload took a 503 for five
  * minutes. 30 seconds is far longer than any real pause in a TCP stream that
  * is still alive.
+ *
+ * It applies from the first read of the body, including
+ * {@link peekDeclaredPartType}'s (ugcportal-dvb). The peek runs before any
+ * reservation exists, so a stall there costs no bytes — but it cost a request
+ * slot for the whole of `requestTimeout`, and N connections sending a valid
+ * multipart Content-Type plus a few bytes held N slots. The byte bounds above
+ * said nothing about that, because nothing had been reserved to bound.
  */
 export const BODY_STALL_TIMEOUT_MS = 30_000;
 
@@ -229,41 +236,72 @@ function stallGuarded(
   timeoutMs: number,
 ): ReadableStream<Uint8Array> {
   const reader = source.getReader();
-  return new ReadableStream<Uint8Array>({
-    async pull(controller) {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      try {
-        const { done, value } = await Promise.race([
-          reader.read(),
-          new Promise<never>((_resolve, reject) => {
-            timer = setTimeout(() => reject(new BodyStalledError()), timeoutMs);
-            // Never hold the event loop open for a timer nobody is waiting on.
-            timer.unref?.();
-          }),
-        ]);
-        if (done) {
-          controller.close();
-          return;
+  return new ReadableStream<Uint8Array>(
+    {
+      async pull(controller) {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          const { done, value } = await Promise.race([
+            reader.read(),
+            new Promise<never>((_resolve, reject) => {
+              timer = setTimeout(
+                () => reject(new BodyStalledError()),
+                timeoutMs,
+              );
+              // Never hold the event loop open for a timer nobody is waiting
+              // on.
+              timer.unref?.();
+            }),
+          ]);
+          if (done) {
+            controller.close();
+            return;
+          }
+          controller.enqueue(value);
+        } catch (error) {
+          // Tear the source down explicitly. Erroring *this* stream does not
+          // propagate upstream, and `cancel` below only runs when the
+          // teardown came from downstream — so without this the source stays
+          // locked with a read outstanding, and the request body is left
+          // un-torn-down after the 408. That is half the point of not waiting
+          // for requestTimeout. Rejections are swallowed because the error
+          // being reported is the stall, not whatever cancelling a
+          // possibly-already-dead stream does.
+          //
+          // REQUESTED, NOT AWAITED (ugcportal-dvb). `cancel()` closes this
+          // reader's stream and settles its pending read before it returns;
+          // the promise it hands back only tracks the *source's* own teardown,
+          // and for an incoming HTTP body that one does not settle while the
+          // client holds the connection open. So awaiting it made the 408 wait
+          // for the client to disconnect — the exact behaviour this timeout
+          // exists to stop waiting for — which no test with an instantly
+          // cancelling stream could see, and a stalled upload on a real socket
+          // got no answer until Node's requestTimeout. The bead has the
+          // before/after measurement off `next dev`; the behaviour is pinned
+          // by "answers without waiting for the source's own teardown" and by
+          // "returns on the timeout even when the body's teardown never
+          // finishes".
+          void reader.cancel(error).catch(() => {});
+          throw error;
+        } finally {
+          if (timer) clearTimeout(timer);
         }
-        controller.enqueue(value);
-      } catch (error) {
-        // Tear the source down explicitly. Erroring *this* stream does not
-        // propagate upstream, and `cancel` below only runs when the teardown
-        // came from downstream — so without this the source stays locked with
-        // a read outstanding, and the request body is left un-torn-down after
-        // the 408. That is half the point of not waiting for requestTimeout.
-        // Swallowed because the error being reported is the stall, not
-        // whatever cancelling a possibly-already-dead stream does.
-        await reader.cancel(error).catch(() => {});
-        throw error;
-      } finally {
-        if (timer) clearTimeout(timer);
-      }
+      },
+      cancel(reason) {
+        return reader.cancel(reason);
+      },
     },
-    cancel(reason) {
-      return reader.cancel(reason);
-    },
-  });
+    // No read-ahead of its own. A ReadableStream fills its queue as soon as
+    // it has one, so the default strategy would pull a chunk the consumer has
+    // not asked for and hold it here — one chunk more of the client's body
+    // resident than before this wrapper existed, on a path whose whole
+    // purpose is to decide what may be held before holding it. With a
+    // high-water mark of 0 the guard pulls only when something reads, so it
+    // observes the silence without adding to what is buffered. Pinned by
+    // route.test.ts "refuses a burst without buffering it", which counts
+    // pulls off the request body.
+    { highWaterMark: 0 },
+  );
 }
 
 /**
@@ -313,6 +351,13 @@ export async function readCappedFormDataFrom(
     headers,
     // Stall guard outside the cap, so the byte counter only ever sees chunks
     // that actually arrived.
+    //
+    // A body handed over by peekDeclaredPartType is already guarded, so on the
+    // upload path two guards cover the same bytes. Deliberate: both raise the
+    // same BodyStalledError and both land on the 408 below, so the overlap
+    // changes no answer and costs one extra timer per chunk — while dropping
+    // this one would leave readCappedFormData (no peek, see above) and any
+    // future caller depending on a guard installed somewhere else.
     body: cappedBody(
       stallGuarded(body, options.stallTimeoutMs ?? BODY_STALL_TIMEOUT_MS),
       limit,
@@ -425,6 +470,15 @@ export function multipartBoundary(contentType: string | null): string | null {
  * boundary, the part not reached in range, no Content-Type — yields `null`
  * and the caller's fallback, so a body this cannot read is bounded exactly as
  * well as it was before, never worse.
+ *
+ * The read is idle-bounded by {@link BODY_STALL_TIMEOUT_MS}, which is what
+ * ugcportal-dvb was about: this await happens before the caller has reserved
+ * anything, so a client that sends a valid multipart Content-Type and ~100
+ * bytes and then goes quiet costs no memory at all — but it used to hold the
+ * request slot until Node's `requestTimeout`, because the only stall guard on
+ * the path was installed afterwards, by {@link readCappedFormDataFrom}. A
+ * stall now cancels the request body here and is re-raised on the returned
+ * stream, where the caller's existing handling answers 408.
  */
 export async function peekDeclaredPartType(
   body: ReadableStream<Uint8Array>,
@@ -432,19 +486,31 @@ export async function peekDeclaredPartType(
     fieldName: string;
     boundary: string | null;
     maxHeaderBytes?: number;
+    /** Overrides {@link BODY_STALL_TIMEOUT_MS}; exposed for tests. */
+    stallTimeoutMs?: number;
   },
 ): Promise<PeekedMultipartBody> {
   const maxHeaderBytes = options.maxHeaderBytes ?? PART_HEADER_PEEK_BYTES;
-  const reader = body.getReader();
+  // The guard goes on before the first read and before the boundary early-out
+  // below, so every stream this function returns carries it and no path
+  // through here can read the body unguarded (ugcportal-dvb). It used to be
+  // installed by readCappedFormDataFrom, which runs after this function has
+  // already awaited the client.
+  const guarded = stallGuarded(
+    body,
+    options.stallTimeoutMs ?? BODY_STALL_TIMEOUT_MS,
+  );
+  const reader = guarded.getReader();
   const head: Uint8Array[] = [];
   let headBytes = 0;
   let text = "";
   let declaredContentType: string | null = null;
   let ended = false;
+  let stall: unknown = null;
 
   if (options.boundary === null) {
     reader.releaseLock();
-    return { declaredContentType: null, body };
+    return { declaredContentType: null, body: guarded };
   }
 
   try {
@@ -468,13 +534,22 @@ export async function peekDeclaredPartType(
         options.fieldName,
       );
     }
-  } catch {
+  } catch (error) {
     // A broken or reset connection is reported by the parse below, on the
     // replayed stream, rather than as a distinct error here.
     ended = true;
+    // A stall is the exception, and is carried rather than flattened into a
+    // truncated body: the guard has already cancelled the source, and a
+    // truncated body would be parsed as malformed multipart and answered 400.
+    // Re-emitted after the head so the single reader of this stream reaches
+    // the same 408 as a stall anywhere else in the read.
+    if (isBodyStalled(error)) stall = error;
   }
 
-  return { declaredContentType, body: replay(head, ended ? null : reader) };
+  return {
+    declaredContentType,
+    body: replay(head, ended ? null : reader, stall),
+  };
 }
 
 /** `name="file"` out of a Content-Disposition line (RFC 7578 quoted-string). */
@@ -527,16 +602,27 @@ function findDeclaredType(
  *
  * `reader` is null when the source is already exhausted (or errored), in
  * which case the replayed head is the whole body.
+ *
+ * `failure`, when given, is raised once the head has been replayed instead of
+ * closing the stream — so a read that ended in a stall ends this stream in a
+ * stall too, rather than looking to the parser like a body that simply
+ * stopped. The head is still emitted first: it is the bytes the client really
+ * sent, and withholding them would change what the error is about.
  */
 function replay(
   head: Uint8Array[],
   reader: ReadableStreamDefaultReader<Uint8Array> | null,
+  failure: unknown = null,
 ): ReadableStream<Uint8Array> {
   let index = 0;
   return new ReadableStream<Uint8Array>({
     async pull(controller) {
       if (index < head.length) {
         controller.enqueue(head[index++]);
+        return;
+      }
+      if (failure !== null) {
+        controller.error(failure);
         return;
       }
       if (!reader) {

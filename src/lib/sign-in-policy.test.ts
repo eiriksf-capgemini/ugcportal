@@ -18,9 +18,11 @@ import {
   PERMITTED_EMAILS_VAR,
   SIGN_IN_PROVIDERS,
   type SignInEnv,
+  type SignInProvider,
   bootstrapAdminEmails,
   decideLiveSession,
   decideSignIn,
+  isBootstrapAdminSignIn,
   isPermittedSignIn,
   permittedIdentities,
 } from "@/lib/sign-in-policy";
@@ -601,6 +603,33 @@ describe("decideSignIn binds an entry to its provider", () => {
     ).toBe(false);
   });
 
+  it("accepts and trims whitespace around the separator, on purpose (ugcportal-qlfo K3)", () => {
+    // DECISION (ugcportal-qlfo item 2): `google : addr`, `google: addr` and
+    // `google :addr` are all ACCEPTED, parsing the same as the unpadded
+    // `google:addr` — the opposite of this module's usual "report, don't
+    // repair" stance (see the unknown-prefix and doubled-prefix cases
+    // above), kept deliberately rather than changed, because
+    // `reviewConfiguredUsers`'s own comment on the PR #98 round 2 defect
+    // depends on this exact trimming: the duplicate check there keys on
+    // `parsePermittedEntry`'s trimmed, canonical spelling, and making colon
+    // spacing malformed would not reinstate that defect but WOULD put this
+    // function's behaviour at odds with that comment's claim about it.
+    // Recorded here, in the test the module's own stance demands.
+    const padded = permittedIdentities({
+      [PERMITTED_EMAILS_VAR]: `google : ${GOOGLE_ONLY}, google: ${FACEBOOK_ONLY}, google :${LISTED}`,
+    });
+    expect(padded.malformed).toEqual([]);
+    expect(padded.emails).toEqual([GOOGLE_ONLY, FACEBOOK_ONLY, LISTED]);
+    expect(padded.entriesFor(GOOGLE_ONLY)).toEqual([
+      { email: GOOGLE_ONLY, provider: "google" },
+    ]);
+    // Same parse as the unpadded form a user would actually write.
+    expect(
+      permittedIdentities({ [PERMITTED_EMAILS_VAR]: `google:${GOOGLE_ONLY}` })
+        .entriesFor(GOOGLE_ONLY),
+    ).toEqual(padded.entriesFor(GOOGLE_ONLY));
+  });
+
   it("de-duplicates by address AND provider", () => {
     const identities = permittedIdentities({
       [PERMITTED_EMAILS_VAR]: `google:${GOOGLE_ONLY},GOOGLE:${GOOGLE_ONLY},facebook:${GOOGLE_ONLY}`,
@@ -636,6 +665,91 @@ describe("decideSignIn binds an entry to its provider", () => {
     expect(message).toContain("wrong-provider");
     expect(message).not.toContain("person@");
   });
+});
+
+/**
+ * ugcportal-qlfo K2: the gate (`evaluateSignIn`, reached here through
+ * `decideSignIn`) and the first-admin promotion (`isBootstrapAdminSignIn`)
+ * share ONE definition of "does this entry match this address and provider"
+ * (`entryMatchesProvider`). Feeding the same (entry, address, provider)
+ * triple down both paths must produce the same answer on every one of them —
+ * the "following should never happen" this bead names is the two disagreeing.
+ *
+ * Because both call sites defer to the one function, a mutation to it (say,
+ * dropping the `entry.provider === null` branch, or flipping `===` to
+ * `!==`) flips every case below on BOTH paths at once, which is what makes
+ * this a test of the sharing and not just of either path alone: two separate
+ * copies of the predicate could each pass their own half of this table while
+ * still disagreeing with each other, but a single shared one cannot.
+ */
+describe("the gate and the bootstrap promotion agree on entry matching (ugcportal-qlfo K2)", () => {
+  const ADDRESS = "shared@example.com";
+
+  it.each<{
+    label: string;
+    entryProvider: SignInProvider | null;
+    signInProvider: SignInProvider | null;
+    expected: boolean;
+  }>([
+    {
+      label: "unbound entry, asserted through google",
+      entryProvider: null,
+      signInProvider: "google",
+      expected: true,
+    },
+    {
+      label: "unbound entry, asserted through facebook",
+      entryProvider: null,
+      signInProvider: "facebook",
+      expected: true,
+    },
+    {
+      label: "unbound entry, no provider asserted",
+      entryProvider: null,
+      signInProvider: null,
+      expected: true,
+    },
+    {
+      label: "bound entry, matching provider asserted",
+      entryProvider: "google",
+      signInProvider: "google",
+      expected: true,
+    },
+    {
+      label: "bound entry, the OTHER provider asserted",
+      entryProvider: "google",
+      signInProvider: "facebook",
+      expected: false,
+    },
+    {
+      label: "bound entry, no provider asserted",
+      entryProvider: "google",
+      signInProvider: null,
+      expected: false,
+    },
+  ])(
+    "$label: both paths answer $expected",
+    ({ entryProvider, signInProvider, expected }) => {
+      const entry = entryProvider ? `${entryProvider}:${ADDRESS}` : ADDRESS;
+
+      const gateDecision = decideSignIn(
+        {
+          user: { email: ADDRESS },
+          account: signInProvider ? { provider: signInProvider } : null,
+          profile: { email: ADDRESS, email_verified: true },
+        },
+        { [PERMITTED_EMAILS_VAR]: entry },
+      );
+      expect(gateDecision.permitted).toBe(expected);
+
+      expect(
+        isBootstrapAdminSignIn(
+          { email: ADDRESS, provider: signInProvider },
+          entry,
+        ),
+      ).toBe(expected);
+    },
+  );
 });
 
 describe("isPermittedSignIn", () => {
