@@ -1,4 +1,5 @@
 import { stripCurationTags } from "@/lib/curation-tags";
+import { dedupeBy } from "@/lib/dedupe";
 import { hasUnsafeText, validateAltText, validateCaption } from "@/lib/media-rules";
 import { mediaPreviewPath } from "@/lib/routes";
 
@@ -328,24 +329,29 @@ export function isGenuinelyEmptyPage(
  * an id within one page both survived, and the comment here claimed a net that
  * was not under that half of the fall. The failure it claimed to catch —
  * duplicate React keys — was therefore exactly the failure it let through.
+ * `dedupeBy` (src/lib/dedupe.ts, ugcportal-oejb) now keeps both halves of
+ * that guarantee: `existing`'s own ids are its seed, so `incoming` is deduped
+ * against them AND against itself in the same pass, without copying
+ * `existing` into a combined array first — this runs on every "load more"
+ * fetch of what can be a long-scrolled gallery, so that copy is an
+ * allocation worth not paying for.
  *
  * Still a display safety net rather than a proof: it keeps the keys unique if
  * the cursor contract is ever broken, and says nothing about whether it is.
  *
- * It returns the existing array unchanged when there is nothing new, so a
- * repeated final page does not re-render the grid.
+ * It returns the existing array unchanged when there is nothing new (by
+ * `===`, not just by value), so a repeated final page does not re-render the
+ * grid.
  */
 export function appendGalleryItems(
   existing: GalleryItem[],
   incoming: GalleryItem[],
 ): GalleryItem[] {
-  const seen = new Set(existing.map((item) => item.id));
-  const fresh: GalleryItem[] = [];
-  for (const item of incoming) {
-    if (seen.has(item.id)) continue;
-    seen.add(item.id);
-    fresh.push(item);
-  }
+  const fresh = dedupeBy(
+    incoming,
+    (item) => item.id,
+    existing.map((item) => item.id),
+  );
   return fresh.length === 0 ? existing : [...existing, ...fresh];
 }
 
