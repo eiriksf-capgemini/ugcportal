@@ -1,3 +1,4 @@
+import { DraftLegalLabel } from "@/components/site-footer";
 import { ContactMailtoForm } from "@/components/site/contact-mailto-form";
 import { SECTION_HEADING_CLASS } from "@/components/site/section-heading";
 import { INLINE_LINK_CLASS } from "@/components/ui/inline-link";
@@ -6,6 +7,7 @@ import {
   isBareEmailAddress,
   resolveContactEmail,
 } from "@/lib/contact";
+import { legalLinkBlocked } from "@/lib/legal/pages";
 import { ABOUT_CONTACT_PATH, PRIVACY_PATH, pathFragment } from "@/lib/routes";
 import { CONTACT_INTRO, CONTACT_NOTICE } from "@/lib/site";
 
@@ -47,8 +49,19 @@ const CONTACT_EMAIL_FALLBACK_LABEL = "our email address";
  * K5: the notice above the form states what happens and why BEFORE
  * submission (nothing is collected server-side at all; the visitor's own
  * mail client is the entire path), and links to the privacy statement
- * (`PRIVACY_PATH`, src/lib/routes.ts — ugcportal-qnq9.4's /privacy, not yet
- * merged — see that bead's PR for the gap).
+ * (`PRIVACY_PATH`, src/lib/routes.ts) — UNLESS that page is still a draft
+ * (ugcportal-nf9l): `legalLinkBlocked` (src/lib/legal/pages.ts) reads the
+ * same readiness /privacy's own render guards itself with, via the SAME
+ * function the footer's Privacy link reads (src/components/site-footer.tsx)
+ * — so the footer and this notice cannot disagree about whether /privacy
+ * is safe to link in production (K2; by construction, and exercised
+ * directly in src/components/legal-link-consistency.test.tsx). Blocked:
+ * the same label renders as inert text instead of an anchor, through the
+ * SAME `DraftLegalLabel` (src/components/site-footer.tsx) FooterNavLink's
+ * own blocked branch renders — not a separate span that merely claims the
+ * same treatment (round-1 review: an earlier version here did exactly
+ * that, and silently had neither the muted colour nor the "(coming soon)"
+ * suffix FooterNavLink's actually has).
  *
  * Calls `resolveContactEmail()` ITSELF, inside this component's render,
  * rather than receiving the email as a prop computed by its caller — so
@@ -67,6 +80,7 @@ export function ContactSection({ defaultSubject }: { defaultSubject: string }) {
   const directLinkLabel = isBareEmailAddress(email)
     ? email
     : CONTACT_EMAIL_FALLBACK_LABEL;
+  const privacyBlocked = legalLinkBlocked(PRIVACY_PATH);
 
   return (
     // id derived from ABOUT_CONTACT_PATH itself (src/lib/routes.ts), not a
@@ -102,9 +116,22 @@ export function ContactSection({ defaultSubject }: { defaultSubject: string }) {
 
       <p className="mt-4 max-w-prose text-xs text-muted-foreground" data-contact-notice="">
         {CONTACT_NOTICE}{" "}
-        <a className={INLINE_LINK_CLASS} href={PRIVACY_PATH}>
-          Read our privacy statement
-        </a>
+        {privacyBlocked ? (
+          // K1/K3: the same label, rendered as inert, non-navigating text
+          // rather than omitted outright, via the shared DraftLegalLabel
+          // (src/components/site-footer.tsx) — instead of an
+          // <a href="/privacy"> while the statement is still a draft in
+          // production.
+          <DraftLegalLabel
+            label="Read our privacy statement"
+            path={PRIVACY_PATH}
+            dataAttr="data-contact-privacy-draft"
+          />
+        ) : (
+          <a className={INLINE_LINK_CLASS} href={PRIVACY_PATH}>
+            Read our privacy statement
+          </a>
+        )}
         .
       </p>
 

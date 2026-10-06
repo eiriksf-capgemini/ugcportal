@@ -1,3 +1,4 @@
+import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
 
 /**
@@ -47,6 +48,47 @@ test("K1: the living empty state offers an action, on a genuinely empty gallery"
 });
 
 /**
+ * ugcportal-qqnt.1 K1: the hero carries the h1, at a computed font size
+ * strictly larger than the first <h2> after it — a pixel-level claim the
+ * vitest-level class-name checks (src/components/type-scale.test.tsx)
+ * cannot make, since nothing there compiles Tailwind.
+ */
+test("K1: the hero's h1 computes a larger font size than the first h2 after it", async ({
+  page,
+}) => {
+  await page.goto("/");
+
+  const h1 = page.locator("[data-home-hero] h1");
+  await expect(h1).toHaveText("Real photos of the things you actually use.");
+  // This dev database is empty (this file's own header comment), so the
+  // first <h2> after the hero is the living empty state's.
+  const h2 = page.locator("[data-home-empty-state] h2");
+  await expect(h2).toHaveText("Nothing is published yet.");
+
+  const [h1Size, h2Size] = await Promise.all([
+    h1.evaluate((el) => parseFloat(getComputedStyle(el).fontSize)),
+    h2.evaluate((el) => parseFloat(getComputedStyle(el).fontSize)),
+  ]);
+  expect(h1Size, `h1: ${h1Size}px, h2: ${h2Size}px`).toBeGreaterThan(h2Size);
+});
+
+/**
+ * ugcportal-qqnt.1 K3: no heading level is skipped on the home page, and no
+ * second element carries the display utility — axe's `heading-order` rule
+ * catches a skip (h1 straight to h3); K3's other half (at most one display
+ * title) is the render-based count in src/components/type-scale.test.tsx,
+ * since axe has no notion of "this class is the display one".
+ */
+test("K3: no heading level is skipped on the home page", async ({ page }) => {
+  await page.goto("/");
+
+  const results = await new AxeBuilder({ page })
+    .withRules(["heading-order"])
+    .analyze();
+  expect(results.violations, JSON.stringify(results.violations, null, 2)).toEqual([]);
+});
+
+/**
  * Round-1 review, CONFIRMED medium: an earlier hero layout positioned the
  * three decorative shapes `absolute`, spanning the WHOLE hero, which put the
  * near-white `bg-petrol-100` circle directly behind the `text-ink` lead
@@ -84,7 +126,9 @@ for (const width of [360, 768, 1024]) {
       };
       return {
         textRects: [
-          ...document.querySelectorAll("[data-home-hero] p, [data-home-hero] a"),
+          ...document.querySelectorAll(
+            "[data-home-hero] h1, [data-home-hero] p, [data-home-hero] a",
+          ),
         ].map(toRect),
         shapeRects: [
           ...document.querySelectorAll("[data-home-hero-decoration] span"),

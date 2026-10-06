@@ -1,5 +1,8 @@
 import Link from "next/link";
 
+import { cn } from "cn";
+
+import { DISPLAY_TITLE_CLASS } from "@/components/type-scale";
 import { signInPath, UPLOAD_PATH } from "@/lib/routes";
 
 export type HeroProps = {
@@ -143,24 +146,23 @@ export function Hero({ signedIn }: HeroProps) {
       <div className="relative mx-auto flex w-full max-w-6xl flex-col gap-8 px-4 py-16 sm:flex-row sm:items-center sm:px-6 sm:py-20">
         <div className="flex min-w-0 flex-1 flex-col gap-4">
           {/*
-            Deliberately NOT a heading element (confirmed the hard way,
-            twice: an `<h1>` here broke src/app/page.tags.test.tsx's "emits
-            one continuous item set however many distinct tags are
-            present", which also asserts the full Home() markup carries
-            exactly one h1-h6 total; see also
-            src/components/home/empty-state.tsx's own comment for the
-            opposite failure an `<h2>` there caused once this was fixed).
-            Whichever of <Gallery> (its own heading), the new EmptyState
-            (also an `<h1>`) or GalleryUnavailable (its own <h1>) is
-            rendered below this hero already supplies that one heading —
-            see each component's own comment — and the two of those three
-            this bead did not write are not this bead's to edit ("do not
-            change grid logic" covers Gallery's empty/unavailable siblings
-            too). Styled to read as the page's title regardless.
+            The page's one real <h1> (ugcportal-qqnt.1). Earlier, this was
+            deliberately NOT a heading element, because
+            src/app/page.tags.test.tsx asserted exactly one heading in the
+            whole page and whichever of <Gallery>, EmptyState or
+            GalleryUnavailable rendered below already supplied it, at a size
+            that competed with this title rather than reading as a smaller
+            section — see src/components/gallery/gallery.tsx,
+            src/components/home/empty-state.tsx and
+            src/components/gallery/gallery-unavailable.tsx for the matching
+            fix: each of their own headings is now an <h2> at
+            SECTION_TITLE_CLASS. DISPLAY_TITLE_CLASS
+            (src/components/type-scale.ts) is the one display size shared
+            with /about and /portfolio's own page titles.
           */}
-          <p className="max-w-2xl font-heading text-2xl leading-tight font-medium tracking-tight text-balance text-ink sm:text-4xl">
+          <h1 className={cn("max-w-2xl text-ink", DISPLAY_TITLE_CLASS)}>
             Real photos of the things you actually use.
-          </p>
+          </h1>
           {/*
             text-ink, not text-ink-muted (src/lib/design/contrast.ts):
             measured at 4.15:1 against this well's lighter --petrol-700

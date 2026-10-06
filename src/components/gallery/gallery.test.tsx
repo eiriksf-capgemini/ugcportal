@@ -10,6 +10,7 @@ import {
   GALLERY_TILE_ASPECT_CLASS,
   GALLERY_TILE_CLASS,
   GALLERY_TILE_IMAGE_CLASS,
+  GALLERY_TILE_VIDEO_BADGE_WRAPPER_CLASS,
 } from "@/components/gallery/containment";
 import { toGalleryItems } from "@/lib/gallery-items";
 
@@ -227,6 +228,59 @@ describe("K7 — differently shaped previews form one consistent arrangement", (
   });
 });
 
+describe("ugcportal-dzz — a VIDEO tile gets a play affordance, an IMAGE tile does not", () => {
+  const MIXED_KINDS = toGalleryItems([
+    { id: "a-photo", previewId: "pv-photo", publishedAt: "2026-03-01T00:00:00.000Z", kind: "IMAGE" },
+    { id: "a-video", previewId: "pv-video", publishedAt: "2026-03-02T00:00:00.000Z", kind: "VIDEO" },
+  ]);
+
+  it("renders the play badge only on the VIDEO tile's markup", () => {
+    const markup = render({ initialItems: MIXED_KINDS });
+    const photoTile = tiles(markup).find((tile) => tile.includes('data-gallery-tile="a-photo"'));
+    const videoTile = tiles(markup).find((tile) => tile.includes('data-gallery-tile="a-video"'));
+    expect(photoTile).toBeDefined();
+    expect(videoTile).toBeDefined();
+
+    // tiles() only captures the opening <button> tag, so pull each tile's
+    // full markup (button through its matching </button>) to look inside it.
+    const photoIndex = markup.indexOf(photoTile as string);
+    const videoIndex = markup.indexOf(videoTile as string);
+    const photoMarkup = markup.slice(photoIndex, markup.indexOf("</button>", photoIndex));
+    const videoMarkup = markup.slice(videoIndex, markup.indexOf("</button>", videoIndex));
+
+    expect(videoMarkup).toContain("svg");
+    expect(photoMarkup).not.toContain("svg");
+  });
+
+  it("marks the play badge's own wrapper aria-hidden, so the tile announces one accessible name", () => {
+    const markup = render({ initialItems: MIXED_KINDS });
+    const videoTile = tiles(markup).find((tile) => tile.includes('data-gallery-tile="a-video"')) as string;
+    const videoIndex = markup.indexOf(videoTile);
+    const videoMarkup = markup.slice(videoIndex, markup.indexOf("</button>", videoIndex));
+
+    // Pinned to the WRAPPER's own opening tag, not merely "two or more
+    // aria-hidden="true" somewhere in the tile" — lucide's <svg> carries its
+    // own aria-hidden default regardless of this wrapper's, so a looser count
+    // check would stay green even if the wrapper span's own attribute were
+    // removed (verified: deleting just that attribute still left the <img>'s
+    // and the <svg>'s own aria-hidden, so a `>= 2` count never dropped).
+    expect(videoMarkup).toContain(
+      `<span aria-hidden="true" class="${GALLERY_TILE_VIDEO_BADGE_WRAPPER_CLASS}">`,
+    );
+    // Nothing inside the button carries its own aria-label — the button's is
+    // the only accessible name anything here announces.
+    expect(videoMarkup.match(/aria-label="/g)?.length).toBe(1);
+  });
+
+  it("names the VIDEO tile's accessible name with 'video', not 'photograph'", () => {
+    const markup = render({ initialItems: MIXED_KINDS });
+    // "photograph" / "video" is a position-counted placeholder — the photo is
+    // first in MIXED_KINDS (position 1), the video second (position 2).
+    expect(markup).toContain('aria-label="Open photograph 1, published 1 March 2026"');
+    expect(markup).toContain('aria-label="Open video 2, published 2 March 2026"');
+  });
+});
+
 describe("the states around the grid", () => {
   it("offers a load-more control only when the feed says there is more", () => {
     const withMore = render({ initialCursor: "cursor-1", initialHasMore: true });
@@ -342,26 +396,33 @@ describe("the states around the grid", () => {
    * reasons about landing "past the <h1>" — the shell documents the assumption
    * that a page has one. The gallery shipped without: the empty state kept a
    * heading and the populated state, the one people actually see, had none.
+   *
+   * <h2>, not <h1> (ugcportal-qqnt.1): `<Gallery>` renders standalone here,
+   * without the hero that now supplies the real page-level `<h1>` on every
+   * real page it composes with (src/app/page.tsx). Its own heading — "Gallery"
+   * with photographs, GalleryEmpty's "Nothing is published yet." when empty —
+   * steps down to SECTION_TITLE_CLASS instead.
    */
   it.each([
     { label: "with photographs", props: {} },
     { label: "when empty", props: { initialItems: [] } },
-  ])("has exactly one <h1> $label", ({ props }) => {
+  ])("has exactly one <h2> $label", ({ props }) => {
     const headings = [
-      ...render(props).matchAll(/<h1\b[^>]*>([\s\S]*?)<\/h1>/g),
+      ...render(props).matchAll(/<h2\b[^>]*>([\s\S]*?)<\/h2>/g),
     ].map((match) => match[1]);
 
     expect(headings).toHaveLength(1);
     expect(headings[0].replace(/<[^>]*>/g, "").trim().length).toBeGreaterThan(0);
   });
 
-  it("starts the document outline at h1, not further down", () => {
-    // A page whose first heading is an h2 is a broken outline even when an h1
-    // exists elsewhere, so check the order rather than only the presence.
+  it("starts its own outline at h2 — the page's h1 is composed above it by the hero", () => {
+    // A page whose first heading skips from h1 to h3 is a broken outline;
+    // rendered standalone, this component's own first heading is h2, since
+    // the h1 it used to render here now lives in the hero composed above it.
     const levels = [...render().matchAll(/<h([1-6])\b/g)].map((match) =>
       Number(match[1]),
     );
-    expect(levels[0]).toBe(1);
+    expect(levels[0]).toBe(2);
   });
 });
 

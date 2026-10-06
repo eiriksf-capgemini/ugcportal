@@ -701,49 +701,63 @@ describe("generateWatermarkedPreview under concurrency", () => {
   });
 
   it("throttles the shed log instead of adding a log storm to a load problem", async () => {
-    process.env.WATERMARK_MAX_CONCURRENCY = "1";
-    process.env.WATERMARK_QUEUE_LIMIT = "0";
-    resetWatermarkConcurrencyGate();
-    warnSpy.mockClear();
-
-    const input = await source();
-    // Two separate bursts, well inside the throttle interval.
-    await Promise.allSettled(
-      Array.from({ length: 6 }, () => generateWatermarkedPreview(input)),
-    );
-    await Promise.allSettled(
-      Array.from({ length: 6 }, () => generateWatermarkedPreview(input)),
-    );
-
-    const shedLines = warnSpy.mock.calls
-      .map(([line]) => line as string)
-      .filter((line) => line.includes("shed an upload"));
-    expect(shedLines).toHaveLength(1);
-
-    const tailLines = () =>
-      warnSpy.mock.calls
-        .map(([line]) => line as string)
-        .filter((line) => line.includes("more upload(s) since the last line"));
-
-    // Reading the stats inside the window must NOT emit. That was round-8
-    // finding 2: the flush reset the interval, so a health check polling
-    // every second during sustained shedding produced a line per second
-    // while the line itself claimed one per 10000ms. Callers may ask; they
-    // do not get to restart the clock.
-    const duringWindow = watermarkConcurrencyStats();
-    expect(duringWindow.shed).toBeGreaterThan(1);
-    expect(tailLines()).toHaveLength(0);
-
-    // ...but the swallowed ones are not lost either. This is the half the
-    // throttle originally dropped: the suppressed count was only ever
-    // flushed by the *next logged* shed, so a burst that sheds and then goes
-    // quiet reported one upload out of ten. Once the window has genuinely
-    // elapsed the tail is reported — by a timer in production, and here by
-    // moving the clock rather than waiting ten real seconds.
-    const nowSpy = vi
-      .spyOn(Date, "now")
-      .mockReturnValue(Date.now() + SHED_LOG_INTERVAL_MS + 1);
+    // Fake timers for the WHOLE test (ugcportal-qz1u item 1), installed
+    // before anything sheds: `vi.useFakeTimers()` resets `performance.now()`
+    // to `0` the moment it installs, discarding whatever real elapsed time
+    // came before it. If installed only around the later window-advance
+    // below, the throttle's `lastAt` (seeded from the REAL clock by the
+    // first shed, above) would be compared against a `now` that had
+    // silently restarted from `0`, undercounting the elapsed window by
+    // however much real time had already passed. Real sharp preview
+    // generation and `Promise.allSettled` below are unaffected: fake timers
+    // replace `setTimeout`/`setInterval`/`Date`/`performance.now()`, not how
+    // native-code promises (sharp's own worker-thread results) resolve, and
+    // this test's fixture (`WATERMARK_QUEUE_LIMIT=0`) sheds immediately
+    // rather than queuing, so no timeout-driven `setTimeout` is in play
+    // either.
+    vi.useFakeTimers();
     try {
+      process.env.WATERMARK_MAX_CONCURRENCY = "1";
+      process.env.WATERMARK_QUEUE_LIMIT = "0";
+      resetWatermarkConcurrencyGate();
+      warnSpy.mockClear();
+
+      const input = await source();
+      // Two separate bursts, well inside the throttle interval.
+      await Promise.allSettled(
+        Array.from({ length: 6 }, () => generateWatermarkedPreview(input)),
+      );
+      await Promise.allSettled(
+        Array.from({ length: 6 }, () => generateWatermarkedPreview(input)),
+      );
+
+      const shedLines = warnSpy.mock.calls
+        .map(([line]) => line as string)
+        .filter((line) => line.includes("shed an upload"));
+      expect(shedLines).toHaveLength(1);
+
+      const tailLines = () =>
+        warnSpy.mock.calls
+          .map(([line]) => line as string)
+          .filter((line) => line.includes("more upload(s) since the last line"));
+
+      // Reading the stats inside the window must NOT emit. That was round-8
+      // finding 2: the flush reset the interval, so a health check polling
+      // every second during sustained shedding produced a line per second
+      // while the line itself claimed one per 10000ms. Callers may ask; they
+      // do not get to restart the clock.
+      const duringWindow = watermarkConcurrencyStats();
+      expect(duringWindow.shed).toBeGreaterThan(1);
+      expect(tailLines()).toHaveLength(0);
+
+      // ...but the swallowed ones are not lost either. This is the half the
+      // throttle originally dropped: the suppressed count was only ever
+      // flushed by the *next logged* shed, so a burst that sheds and then goes
+      // quiet reported one upload out of ten. Once the window has genuinely
+      // elapsed the tail is reported — by a timer in production, and here by
+      // advancing the fake-timer clock (which `performance.now()` moves with
+      // — ugcportal-qz1u item 1) rather than waiting ten real seconds.
+      vi.advanceTimersByTime(SHED_LOG_INTERVAL_MS + 1);
       const stats = watermarkConcurrencyStats();
       const tail = tailLines();
       expect(tail).toHaveLength(1);
@@ -752,7 +766,7 @@ describe("generateWatermarkedPreview under concurrency", () => {
       const reported = Number(/shed (\d+) more/.exec(tail[0])?.[1]);
       expect(reported).toBe(stats.shed - 1);
     } finally {
-      nowSpy.mockRestore();
+      vi.useRealTimers();
     }
   });
 

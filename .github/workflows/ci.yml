@@ -32,13 +32,9 @@ jobs:
         env:
           BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
-          CHANGED=$(git diff --name-only "origin/${BASE_REF}...HEAD")
-          echo "Changed files:"
-          echo "$CHANGED"
-          if echo "$CHANGED" | grep -Ex '(\.claude/settings(\.local)?\.json|CLAUDE\.md)'; then
-            echo "::error::This PR touches .claude/settings.json, .claude/settings.local.json, or CLAUDE.md. Per CLAUDE.md policy, changes to these files must go through a dedicated PR for human review and must never be bundled with unrelated work. Split this change out."
-            exit 1
-          fi
+          CHANGED_FILES=$(git diff --name-only "origin/${BASE_REF}...HEAD")
+          export CHANGED_FILES
+          node scripts/check-sensitive-files.mjs
 
       - name: Check version fields match
         run: |

@@ -321,12 +321,27 @@ export function parseRetryAfter(
 }
 
 /**
+ * `unknown` narrowed to a plain, non-null object record — the one guard
+ * `retryAfterFromBody`, `detailFrom` and `storageUnavailableReason` below
+ * each separately repeated against the same parsed-JSON-response-body shape
+ * (ugcportal-qz1u item 4). `typeof body !== "object"` rejects every
+ * primitive AND `null` (whose own `typeof` is famously `"object"`), so the
+ * explicit `=== null` check stays required here, same as it was in each of
+ * the three copies.
+ */
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (typeof value !== "object" || value === null) return null;
+  return value as Record<string, unknown>;
+}
+
+/**
  * A positive, finite number of seconds from the response body's
  * `retryAfterSeconds`, or null. Used only when the header is missing.
  */
 function retryAfterFromBody(body: unknown): number | null {
-  if (typeof body !== "object" || body === null) return null;
-  const value = (body as { retryAfterSeconds?: unknown }).retryAfterSeconds;
+  const record = asRecord(body);
+  if (!record) return null;
+  const value = record.retryAfterSeconds;
   /*
     All three clauses earn their place.
 
@@ -350,8 +365,9 @@ function retryAfterFromBody(body: unknown): number | null {
 const MAX_DETAIL_LENGTH = 300;
 
 function detailFrom(body: unknown): string | null {
-  if (typeof body !== "object" || body === null) return null;
-  const error = (body as { error?: unknown }).error;
+  const record = asRecord(body);
+  if (!record) return null;
+  const error = record.error;
   if (typeof error !== "string") return null;
   const trimmed = error.trim();
   if (trimmed === "" || trimmed.length > MAX_DETAIL_LENGTH) return null;
@@ -367,8 +383,9 @@ function detailFrom(body: unknown): string | null {
  * either route changed its wording.
  */
 function storageUnavailableReason(body: unknown): boolean {
-  if (typeof body !== "object" || body === null) return false;
-  return (body as { reason?: unknown }).reason === "object_storage_unavailable";
+  const record = asRecord(body);
+  if (!record) return false;
+  return record.reason === "object_storage_unavailable";
 }
 
 export type UploadResponseSummary = {
