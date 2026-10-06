@@ -15,11 +15,24 @@ import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db"
 
 const database = createTemporaryDatabase();
 const { prisma } = await import("@/lib/prisma");
-const { benefitSourceSlug, resolveBenefitSource, validateBenefitSourceName } =
-  await import("@/lib/benefit-source");
+const {
+  benefitSourceSlug,
+  recordBrandAlcoholLinked,
+  resolveBenefitSource,
+  validateBenefitSourceName,
+} = await import("@/lib/benefit-source");
+
+const ADMIN_A = "admin-a-benefit-source";
+const ADMIN_B = "admin-b-benefit-source";
 
 beforeAll(async () => {
   await applyMigrations(prisma);
+  await prisma.user.create({
+    data: { id: ADMIN_A, email: "admin-a-benefit-source@example.com", role: "ADMIN" },
+  });
+  await prisma.user.create({
+    data: { id: ADMIN_B, email: "admin-b-benefit-source@example.com", role: "ADMIN" },
+  });
 });
 
 afterAll(async () => {
@@ -133,5 +146,83 @@ describe("resolveBenefitSource, against a real database", () => {
     expect(
       await prisma.benefitSource.count({ where: { slug: "coravin" } }),
     ).toBe(0);
+  });
+});
+
+describe("recordBrandAlcoholLinked (ugcportal-mqh8), against a real database", () => {
+  async function seedBrand(slug: string, alcoholLinked: boolean | null) {
+    return prisma.benefitSource.create({
+      data: {
+        slug,
+        name: slug,
+        alcoholLinked,
+        alcoholAnsweredAt: alcoholLinked === null ? null : new Date("2026-01-01T00:00:00.000Z"),
+        alcoholAnsweredByUserId: alcoholLinked === null ? null : ADMIN_A,
+      },
+    });
+  }
+
+  it("records an unchecked brand as alcohol-linked, dated and attributed", async () => {
+    const brand = await seedBrand("mqh8-unchecked", null);
+
+    const outcome = await recordBrandAlcoholLinked(brand.id, ADMIN_A);
+
+    expect(outcome).toBe("recorded");
+    const row = await prisma.benefitSource.findUniqueOrThrow({
+      where: { id: brand.id },
+      select: { alcoholLinked: true, alcoholAnsweredAt: true, alcoholAnsweredByUserId: true },
+    });
+    expect(row.alcoholLinked).toBe(true);
+    expect(row.alcoholAnsweredAt).toBeInstanceOf(Date);
+    expect(row.alcoholAnsweredByUserId).toBe(ADMIN_A);
+  });
+
+  it("records a brand previously answered `no` as alcohol-linked", async () => {
+    const brand = await seedBrand("mqh8-previously-clean", false);
+
+    const outcome = await recordBrandAlcoholLinked(brand.id, ADMIN_B);
+
+    expect(outcome).toBe("recorded");
+    expect(
+      (
+        await prisma.benefitSource.findUniqueOrThrow({
+          where: { id: brand.id },
+          select: { alcoholLinked: true },
+        })
+      ).alcoholLinked,
+    ).toBe(true);
+  });
+
+  it("is a monotone no-op on a brand already recorded as alcohol-linked, by a DIFFERENT actor", async () => {
+    const brand = await seedBrand("mqh8-already-linked", true);
+
+    const outcome = await recordBrandAlcoholLinked(brand.id, ADMIN_B);
+
+    expect(outcome).toBe("already-recorded");
+    const row = await prisma.benefitSource.findUniqueOrThrow({
+      where: { id: brand.id },
+      select: { alcoholLinked: true, alcoholAnsweredAt: true, alcoholAnsweredByUserId: true },
+    });
+    // Unchanged: the `where` clause matches nothing once the brand already
+    // carries an answer, so the first recording's date and name survive a
+    // second attempt rather than being restamped by it.
+    expect(row.alcoholLinked).toBe(true);
+    expect(row.alcoholAnsweredAt).toEqual(new Date("2026-01-01T00:00:00.000Z"));
+    expect(row.alcoholAnsweredByUserId).toBe(ADMIN_A);
+  });
+
+  it("reports a brand id that names no row", async () => {
+    const outcome = await recordBrandAlcoholLinked("no-such-brand-id", ADMIN_A);
+    expect(outcome).toBe("not-found");
+  });
+
+  it("has no parameter through which a caller could ever write `false`", () => {
+    // Not a runtime assertion — there is no such call to make — but the
+    // signature itself is the proof: the only two parameters are the brand
+    // and the actor, so the function body is the only place `alcoholLinked`
+    // is set, and it is set to the literal `true` there (see its own
+    // docstring). A reviewer or a later edit that added a third parameter
+    // here would widen the function's arity, which this length check pins.
+    expect(recordBrandAlcoholLinked.length).toBe(2);
   });
 });

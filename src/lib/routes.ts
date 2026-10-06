@@ -13,6 +13,15 @@ export const RIGHTS_SETTINGS_PATH = "/admin/settings/rights";
 // have its own body cap instead of raising the global one (ugcportal-0ss).
 export const RIGHTS_DECISION_PATH = "/api/admin/rights/decision";
 
+// The brand list (ugcportal-mqh8): every benefit source anyone has named,
+// its alcohol answer, and the one monotone action that can record one as
+// "yes". A sibling of the uploader list above, not a tab on it — a brand and
+// an uploader are different vocabularies with different actions.
+export const RIGHTS_BRANDS_PATH = "/admin/settings/rights/brands";
+// The only route that may write BenefitSource.alcoholLinked = true — see
+// that route's own docstring for the grep that backs this claim.
+export const RIGHTS_BRAND_ALCOHOL_PATH = "/api/admin/rights/brands/alcohol";
+
 // Manual upload (ugcportal-n3c). Since the Instagram integration was
 // deferred, this page is the only door media comes in through.
 export const UPLOAD_PATH = "/upload";
