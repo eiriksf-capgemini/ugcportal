@@ -73,6 +73,15 @@ describe("ContactSection — the privacy link (ugcportal-nf9l K1)", () => {
     expect(markup).not.toContain(`href="${PRIVACY_PATH}"`);
     expect(markup).toContain("Read our privacy statement");
     expect(markup).toContain(`data-contact-privacy-draft="${PRIVACY_PATH}"`);
+    // Round-1 review, LOW: an earlier version claimed "the same treatment
+    // FooterNavLink gives" without sharing the rendering, so it silently
+    // had neither FooterNavLink's muted colour nor its "(coming soon)"
+    // suffix. Now routed through the SAME DraftLegalLabel
+    // (src/components/site-footer.tsx) — this pins that the suffix (and
+    // so the shared component) is actually what rendered, not a
+    // same-looking span reimplemented in each file.
+    expect(markup).toContain("text-muted-foreground italic");
+    expect(markup).toContain("Read our privacy statement (coming soon)");
   });
 
   it("MUTATION CHECK: links /privacy normally outside production, with the SAME draft configuration", () => {

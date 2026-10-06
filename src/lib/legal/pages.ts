@@ -65,5 +65,5 @@ export function legalPageFor(path: string): LegalPage {
  * src/components/legal-link-consistency.test.tsx.
  */
 export function legalLinkBlocked(path: string, env: NodeJS.ProcessEnv = process.env): boolean {
-  return linkBlockedInProduction(legalReadiness([legalPageFor(path)]), env);
+  return linkBlockedInProduction(legalReadiness([legalPageFor(path)], env), env);
 }

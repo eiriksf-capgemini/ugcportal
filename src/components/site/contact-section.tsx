@@ -1,3 +1,4 @@
+import { DraftLegalLabel } from "@/components/site-footer";
 import { ContactMailtoForm } from "@/components/site/contact-mailto-form";
 import { SECTION_HEADING_CLASS } from "@/components/site/section-heading";
 import { INLINE_LINK_CLASS } from "@/components/ui/inline-link";
@@ -55,8 +56,12 @@ const CONTACT_EMAIL_FALLBACK_LABEL = "our email address";
  * — so the footer and this notice cannot disagree about whether /privacy
  * is safe to link in production (K2; by construction, and exercised
  * directly in src/components/legal-link-consistency.test.tsx). Blocked:
- * the same label renders as inert text instead of an anchor, same
- * treatment as the footer's FooterNavLink.
+ * the same label renders as inert text instead of an anchor, through the
+ * SAME `DraftLegalLabel` (src/components/site-footer.tsx) FooterNavLink's
+ * own blocked branch renders — not a separate span that merely claims the
+ * same treatment (round-1 review: an earlier version here did exactly
+ * that, and silently had neither the muted colour nor the "(coming soon)"
+ * suffix FooterNavLink's actually has).
  *
  * Calls `resolveContactEmail()` ITSELF, inside this component's render,
  * rather than receiving the email as a prop computed by its caller — so
@@ -113,13 +118,15 @@ export function ContactSection({ defaultSubject }: { defaultSubject: string }) {
         {CONTACT_NOTICE}{" "}
         {privacyBlocked ? (
           // K1/K3: the same label, rendered as inert, non-navigating text
-          // rather than omitted outright — the same treatment
-          // FooterNavLink gives a blocked footer link (src/components/
-          // site-footer.tsx) — instead of an <a href="/privacy"> while the
-          // statement is still a draft in production.
-          <span className="italic" data-contact-privacy-draft={PRIVACY_PATH}>
-            Read our privacy statement
-          </span>
+          // rather than omitted outright, via the shared DraftLegalLabel
+          // (src/components/site-footer.tsx) — instead of an
+          // <a href="/privacy"> while the statement is still a draft in
+          // production.
+          <DraftLegalLabel
+            label="Read our privacy statement"
+            path={PRIVACY_PATH}
+            dataAttr="data-contact-privacy-draft"
+          />
         ) : (
           <a className={INLINE_LINK_CLASS} href={PRIVACY_PATH}>
             Read our privacy statement

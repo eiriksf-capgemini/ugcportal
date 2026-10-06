@@ -66,4 +66,42 @@ describe("legalLinkBlocked", () => {
       /not registered in LEGAL_PAGES/,
     );
   });
+
+  // Round-1 review, CONFIRMED medium: legalLinkBlocked accepted an `env`
+  // parameter but passed only `pages` to `legalReadiness`, so `missing`/
+  // `strayPlaceholders`/`signedOff`/`draft`/`blocked` were always computed
+  // off the real `process.env` — only the final NODE_ENV check in
+  // `linkBlockedInProduction` ever read the argument. NODE_ENV is held at
+  // "production" in BOTH process.env and the explicit argument below (so a
+  // buggy version cannot pass by accident on the final NODE_ENV check
+  // alone); only the LEGAL_* configuration disagrees between the two, which
+  // is exactly the part a version that forgets to thread `env` into
+  // `legalReadiness` would get from the wrong source.
+  it("follows the explicit env argument's configuration, not process.env's, when the two disagree", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    for (const [name, value] of Object.entries(UNSET_LEGAL_ENV)) {
+      vi.stubEnv(name, value);
+    }
+    // process.env is unconfigured (would block on its own); the explicit
+    // argument is fully configured and production — not blocked.
+    const explicitFilled = {
+      NODE_ENV: "production",
+      ...FILLED_LEGAL_ENV,
+    } as NodeJS.ProcessEnv;
+    expect(legalLinkBlocked(PRIVACY_PATH, explicitFilled)).toBe(false);
+  });
+
+  it("MUTATION CHECK: the reverse disagreement also follows the argument", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    for (const [name, value] of Object.entries(FILLED_LEGAL_ENV)) {
+      vi.stubEnv(name, value);
+    }
+    // process.env is fully configured and signed off (would NOT block on
+    // its own); the explicit argument is unconfigured — blocked.
+    const explicitUnset = {
+      NODE_ENV: "production",
+      ...UNSET_LEGAL_ENV,
+    } as NodeJS.ProcessEnv;
+    expect(legalLinkBlocked(PRIVACY_PATH, explicitUnset)).toBe(true);
+  });
 });
