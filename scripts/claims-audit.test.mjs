@@ -47,12 +47,15 @@ import {
   extractBodyLines,
   extractComments,
   extractProseLines,
+  findBacktickRanges,
   findDoneVerbClassForSpan,
   findDoneVerbOccurrences,
   findPathReferences,
   findQuotedSpans,
+  findSentenceContaining,
   parseArgs,
   referenceExists,
+  splitIntoSentences,
   tokenStillInDiff,
 } from "./claims-audit.mjs";
 import { parseUnifiedDiffAddedLines } from "./lib/git-diff.mjs";
@@ -461,6 +464,61 @@ describe("findDoneVerbOccurrences / findDoneVerbClassForSpan (ugcportal-bn94 rou
   });
 });
 
+describe("splitIntoSentences / findBacktickRanges / findSentenceContaining (ugcportal-bn94 round 2)", () => {
+  it("splits on period/semicolon/question/exclamation + space + uppercase, backtick or quote", () => {
+    const sentences = splitIntoSentences("First sentence. Second one! Third? `Fourth` one; \"Fifth\" one.");
+    expect(sentences.map((s) => s.text.trim())).toEqual(["First sentence.", "Second one!", "Third?", "`Fourth` one;", '"Fifth" one.']);
+  });
+
+  it("does not split a numbered-list marker followed by markdown bold ('2. **LOW')", () => {
+    // "*" is in none of the three lookahead categories (uppercase letter,
+    // backtick, quote) -- a bare numbered-list marker must not be read as
+    // two sentences.
+    const sentences = splitIntoSentences("2. **LOW, confirmed** — true. The next part.");
+    expect(sentences).toHaveLength(2);
+    expect(sentences[0].text).toBe("2. **LOW, confirmed** — true. ");
+    expect(sentences[1].text).toBe("The next part.");
+  });
+
+  it("reassembles the original string exactly via start/end offsets", () => {
+    const text = 'First. `code.Here` is fine. "Quoted." Last one';
+    const sentences = splitIntoSentences(text);
+    expect(sentences.map((s) => text.slice(s.start, s.end)).join("")).toBe(text);
+  });
+
+  it("returns one sentence spanning the whole input when no boundary is found", () => {
+    expect(splitIntoSentences("no sentence boundary here at all")).toEqual([
+      { start: 0, end: 32, text: "no sentence boundary here at all" },
+    ]);
+  });
+
+  it("findBacktickRanges pairs backticks and ignores an unpaired trailing one", () => {
+    expect(findBacktickRanges("a `b` c `d` e")).toEqual([
+      [2, 4],
+      [8, 10],
+    ]);
+    expect(findBacktickRanges("a `unpaired")).toEqual([]);
+  });
+
+  it("does NOT split on a sentence-boundary-shaped period INSIDE a backtick span (round 2's own requirement)", () => {
+    // "a. B" inside the backticks looks exactly like a real boundary (period,
+    // space, uppercase) -- it must not split there; the genuine boundary
+    // after "same." (outside any backtick span) must still split.
+    const text = "The constant `a. B` stays the same. It was not touched.";
+    const sentences = splitIntoSentences(text);
+    expect(sentences).toHaveLength(2);
+    expect(sentences[0].text).toBe("The constant `a. B` stays the same. ");
+    expect(sentences[1].text).toBe("It was not touched.");
+  });
+
+  it("findSentenceContaining maps an index back to the sentence it falls in", () => {
+    const text = "First one. Second one.";
+    const sentences = splitIntoSentences(text);
+    expect(findSentenceContaining(sentences, text.indexOf("First"))).toBe(sentences[0]);
+    expect(findSentenceContaining(sentences, text.indexOf("Second"))).toBe(sentences[1]);
+  });
+});
+
 describe("auditBodyText (ugcportal-bn94)", () => {
   const NO_DONE = { doneClaimStillPresent: [], doneClaimStillAbsent: [], doneClaimToVerify: [] };
 
@@ -633,6 +691,39 @@ describe("auditBodyText (ugcportal-bn94)", () => {
     // test below) keep that same separation all the way to stdout.
     expect(fileModeCandidates).toEqual([]);
     expect(bodyModeCandidates).toHaveLength(1);
+  });
+
+  it("round 2 finding, reproduced verbatim against PR #147's own body: a multi-sentence paragraph's two unrelated earlier spans are not misattributed to a late 'restored' in a different sentence", () => {
+    // This exact paragraph is PR #147 round 2's own body text (one physical
+    // Markdown line, three sentences). Its only DONE verb ("restored") is
+    // in sentence 3, about `expect(result.ok).toBe(false)`; sentences 1 and
+    // 2 have no DONE verb at all, so `validateAdvertisingLabel(...)` and
+    // "only the term match does" -- both in sentence 2 -- must not be
+    // scored in any direction. Before this fix, whole-line nearest-by-
+    // position assigned both to "restored" (nothing closer to compare
+    // against in the whole paragraph) and reported them `DONE contradicted,
+    // absent from diff` -- neither sentence was making a restoration claim.
+    const paragraph =
+      'The round-2 finding was right, including that the sentence argued against the assertion it was attached to. Measured at the previous head: `validateAdvertisingLabel("Reklame (foo)")` is `ok === false` with the **generic** message and **no** forbidden marker, so the allowlist does refuse the padded form, and "only the term match does" was false. The claim also contradicted the helper header 20 lines above and would have justified reverting the 13 padded rows to `expect(result.ok).toBe(false)` — the round-1 defect, restored on the authority of a comment added to fix it.';
+    // The diff genuinely contains the one span sentence 3 actually governs
+    // (restored, so present is correct) -- this fixture's point is the two
+    // EARLIER spans, not this one, so it is given a diff that resolves
+    // cleanly rather than one engineered to also test the RESTORATION
+    // direction again (that's covered by the dedicated fixture above).
+    const diffText = [
+      "diff --git a/x.test.ts b/x.test.ts",
+      "--- a/x.test.ts",
+      "+++ b/x.test.ts",
+      "@@ -1 +1 @@",
+      "+  expect(result.ok).toBe(false);",
+    ].join("\n");
+    const out = auditBodyText(paragraph, { diffText });
+    expect(out).toHaveLength(1);
+    expect(out[0].categories).toContain("DONE");
+    // The requirement, verbatim: zero contradicted hits.
+    expect(out[0].doneClaimStillPresent).toEqual([]);
+    expect(out[0].doneClaimStillAbsent).toEqual([]);
+    expect(out[0].doneClaimToVerify).toEqual([]);
   });
 });
 

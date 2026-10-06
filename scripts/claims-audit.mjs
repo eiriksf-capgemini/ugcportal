@@ -79,7 +79,13 @@
  * files the diff touched.
  *
  *   DONE   a line matching one of three verb classes, each quoted span
- *          assigned to whichever occurrence of ANY class sits nearest it
+ *          scoped to its OWN SENTENCE first (`splitIntoSentences`, a
+ *          conservative backtick-aware sentence splitter -- round 2's own
+ *          review found a PR body "line" is often a whole multi-sentence
+ *          paragraph, and plain nearest-by-position across the WHOLE line
+ *          misattributed two early, unrelated spans in PR #147's real body
+ *          to a late, unrelated "restored"), then assigned to whichever
+ *          occurrence of ANY class WITHIN THAT SENTENCE sits nearest it
  *          (`findDoneVerbOccurrences`/`findDoneVerbClassForSpan` -- see
  *          their file-level doc comment for why this is PER SPAN, not one
  *          verdict per line: round 1 of this PR's own review, F1, found
@@ -87,10 +93,11 @@
  *          two `[ -n ... ]` empty-string guards. Fixed by restoring both
  *          guards (`$me`/`$pr_author`...)") that a single shared direction,
  *          or any fixed per-line precedence among the three classes, gets
- *          one of this bead's own two real reproductions backwards). Each
- *          span is then checked against the diff (`gh pr diff <n>`, or the
- *          local working tree's diff for `--body`) in ITS assigned verb's
- *          own direction:
+ *          one of this bead's own two real reproductions backwards). A
+ *          span whose own sentence has no DONE verb at all is not a DONE
+ *          claim, full stop. Each remaining span is then checked against
+ *          the diff (`gh pr diff <n>`, or the local working tree's diff for
+ *          `--body`) in ITS assigned verb's own direction:
  *            REMOVAL (deleted/removed/dropped/no longer/eliminated/struck/
  *              gone): a quoted span STILL on an added/unchanged line is
  *              "DONE contradicted" (observed 2026-10-06: PR #147's body
@@ -391,6 +398,98 @@ export function findDoneVerbClassForSpan(occurrences, spanIndex) {
 export function classifyDoneVerb(text) {
   return findDoneVerbOccurrences(text)[0]?.cls ?? null;
 }
+
+// ugcportal-bn94 round 2's own review (new finding, confirmed): nearest-by-
+// position alone is sound WITHIN one sentence or clause, but a PR body
+// "line" is frequently a whole multi-sentence paragraph (bodies aren't
+// hard-wrapped), and nearest-by-position has no sentence-boundary awareness
+// at that scope. Reproduced against PR #147's real body: a paragraph whose
+// only DONE verb ("restored") sits at the END, about one specific clause,
+// while two EARLIER spans belonging to unrelated sentences ("Measured at
+// the previous head: `validateAdvertisingLabel(...)` is `ok === false`
+// ...") got assigned to "restored" anyway, for lack of anything closer to
+// compare against, and were reported contradicted for a restoration claim
+// neither sentence was making.
+//
+// SENTENCE_BOUNDARY_RE below is intentionally conservative, not a real
+// sentence tokenizer: a period/semicolon/question mark/exclamation mark,
+// then a single space, then an uppercase letter, a backtick or a quote
+// mark. That specific lookahead set matters -- "2. **LOW" (a markdown
+// numbered-list marker followed by a bold-markup asterisk) does NOT split,
+// because "*" is in none of those three categories, so a plain numbered
+// list item is not mistaken for a two-sentence line. A period inside a
+// backtick code span (`foo.bar()`) must never count as a boundary either,
+// even though the regex alone cannot tell the difference -- findBacktickRanges
+// below finds every paired `` `...` `` span first, and any candidate
+// boundary whose punctuation mark falls inside one of those ranges is
+// discarded before splitting.
+const SENTENCE_BOUNDARY_RE = /[.;?!] (?=[A-Z`"'])/g;
+
+/**
+ * The character-index ranges `[start, end]` of every paired backtick span
+ * in `text` (both delimiters' own positions, exclusive content between
+ * them) -- an unpaired trailing backtick is ignored, since there is no
+ * matching close to make a range from.
+ *
+ * @param {string} text
+ * @returns {[number, number][]}
+ */
+export function findBacktickRanges(text) {
+  const ranges = [];
+  let openIndex = null;
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] !== "`") continue;
+    if (openIndex === null) openIndex = i;
+    else {
+      ranges.push([openIndex, i]);
+      openIndex = null;
+    }
+  }
+  return ranges;
+}
+
+/**
+ * Splits `text` into sentences at SENTENCE_BOUNDARY_RE matches, except any
+ * whose punctuation mark falls strictly inside a backtick span (see the
+ * file comment above `SENTENCE_BOUNDARY_RE` for why). Each sentence is
+ * `{ start, end, text }` with `start`/`end` the ORIGINAL string's character
+ * offsets (`text.slice(start, end)` reproduces `.text`), so a caller can map
+ * an index from `findQuotedSpans`/`findDoneVerbOccurrences` straight back
+ * to which sentence it falls in without re-searching the whole line.
+ * Returns a single sentence spanning the whole input when no boundary is
+ * found (the common case for most PR-body lines, which really are one
+ * sentence).
+ *
+ * @param {string} text
+ * @returns {{ start: number, end: number, text: string }[]}
+ */
+export function splitIntoSentences(text) {
+  const backtickRanges = findBacktickRanges(text);
+  const cutPoints = [];
+  for (const match of text.matchAll(SENTENCE_BOUNDARY_RE)) {
+    const punctuationIndex = match.index;
+    const insideBacktickSpan = backtickRanges.some(([open, close]) => punctuationIndex > open && punctuationIndex < close);
+    if (!insideBacktickSpan) cutPoints.push(punctuationIndex + match[0].length);
+  }
+  const starts = [0, ...cutPoints];
+  const ends = [...cutPoints, text.length];
+  return starts.map((start, i) => ({ start, end: ends[i], text: text.slice(start, ends[i]) }));
+}
+
+/**
+ * The sentence (from `splitIntoSentences`'s output) whose `[start, end)`
+ * range contains `index`, or the LAST sentence if `index` lands exactly at
+ * (or past) the text's own length -- defensive only; every real caller here
+ * passes an index `splitIntoSentences` already covers.
+ *
+ * @param {{ start: number, end: number, text: string }[]} sentences
+ * @param {number} index
+ * @returns {{ start: number, end: number, text: string }}
+ */
+export function findSentenceContaining(sentences, index) {
+  return sentences.find((s) => index >= s.start && index < s.end) ?? sentences[sentences.length - 1];
+}
+
 // A quoted or code-span token: "24 characters", `[ -n "$me" ]`. Double quotes
 // and backticks only -- a single-quote pair is not reliable prose punctuation
 // to pair on, since an ordinary contraction's apostrophe ("isn't ... won't")
@@ -555,15 +654,24 @@ export function extractBodyLines(bodyText) {
  * comment (ABSOLUTE/MEASUREMENT/TEMPORAL/HISTORY via classifyClaimLine,
  * REFERENCE via findPathReferences/referenceExists), plus DONE: a line with
  * any DONE-verb occurrence (findDoneVerbOccurrences) is reported with
- * category "DONE", and EACH of its quoted spans (findQuotedSpans) is
- * assigned to whichever occurrence sits nearest it
- * (findDoneVerbClassForSpan) and checked against `diffText`
- * (tokenStillInDiff) in THAT occurrence's direction -- round 1's F1 finding
- * on this PR itself (reproduced against PR #142's own body, "...it had
- * dropped the two `[ -n ... ]` empty-string guards. Fixed by restoring both
- * guards (`$me`/`$pr_author`...)") is exactly what one direction for the
- * whole line gets backwards, since that one line carries both a REMOVAL
- * verb ("dropped") and a NEUTRAL one ("Fixed") governing different spans:
+ * category "DONE", and EACH of its quoted spans (findQuotedSpans) is first
+ * scoped to its OWN sentence (splitIntoSentences/findSentenceContaining),
+ * then assigned to whichever DONE-verb occurrence WITHIN THAT SENTENCE sits
+ * nearest it (findDoneVerbClassForSpan, given only that sentence's
+ * occurrences) and checked against `diffText` (tokenStillInDiff) in THAT
+ * occurrence's direction. Two real reproductions drove this, both this
+ * bead's own: round 1's F1 (PR #142's body, "...it had dropped the two
+ * `[ -n ... ]` empty-string guards. Fixed by restoring both guards
+ * (`$me`/`$pr_author`...)") showed one direction for a whole LINE is wrong
+ * when the line carries more than one verb class; round 2's own finding
+ * (PR #147's body, a three-sentence paragraph whose only DONE verb,
+ * "restored", sits in the last sentence) showed nearest-by-position across
+ * a whole multi-sentence paragraph is ALSO wrong, assigning two earlier,
+ * unrelated spans in sentences with no DONE verb at all to that one late
+ * "restored" for lack of anything closer to compare against. A span whose
+ * OWN sentence has no DONE-verb occurrence is not a DONE claim at all --
+ * it never reaches `findDoneVerbClassForSpan` and lands in none of the
+ * three result arrays below:
  *
  *   REMOVAL      a span still present is the contradiction -> doneClaimStillPresent.
  *   RESTORATION  a span still absent is the contradiction -> doneClaimStillAbsent.
@@ -598,9 +706,22 @@ export function auditBodyText(bodyText, { diffText = null, existingFiles = [] } 
     let doneClaimStillAbsent = [];
     let doneClaimToVerify = [];
     if (isDoneClaim) {
+      // A PR-body "line" is frequently a whole multi-sentence paragraph
+      // (bodies aren't hard-wrapped), and nearest-by-position alone has no
+      // sentence-boundary awareness -- round 2's own review reproduced this
+      // directly against PR #147's real body: an early, unrelated span got
+      // assigned to a late "restored" with nothing closer in the WHOLE LINE
+      // to compare against. Scoping each span's candidate verbs to its OWN
+      // sentence first (splitIntoSentences/findSentenceContaining) fixes
+      // that: a span in a sentence with no DONE verb at all is not a DONE
+      // claim, full stop -- it never reaches `findDoneVerbClassForSpan`.
+      const sentences = splitIntoSentences(text);
       for (const span of findQuotedSpans(text)) {
         const spanIndex = text.lastIndexOf(span);
-        const cls = findDoneVerbClassForSpan(verbOccurrences, spanIndex);
+        const sentence = findSentenceContaining(sentences, spanIndex);
+        const sentenceVerbOccurrences = verbOccurrences.filter((occ) => occ.index >= sentence.start && occ.index < sentence.end);
+        if (sentenceVerbOccurrences.length === 0) continue;
+        const cls = findDoneVerbClassForSpan(sentenceVerbOccurrences, spanIndex);
         if (cls === "neutral") {
           // NEUTRAL never scores a direction, with or without diffText --
           // "fixed"/"corrected" alone says nothing about whether the span
