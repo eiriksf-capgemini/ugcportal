@@ -7,8 +7,6 @@
  */
 import { CONFIGURED_USERS, type ConfiguredUser } from "@/config/users";
 import { CONTACT_EMAIL_PLACEHOLDER, isBareEmailAddress } from "@/lib/contact";
-import { LEGAL_PAGES } from "@/lib/legal/pages";
-import { checkLegalPagesPublishable } from "@/lib/legal/publishable";
 import {
   PERMITTED_EMAILS_VAR,
   PROVIDER_PREFIX_HINT,
@@ -216,14 +214,23 @@ export async function register(): Promise<void> {
     // one line per problem, and each gets its own console line.
     ...checkConfiguredUsers(),
     checkContactEmailConfiguration(),
-    // ugcportal-qnq9.4: while a LEGAL_* variable is unset (env.example) the
-    // legal pages refuse to render in production (src/lib/legal/
-    // publishable.ts); say which at boot rather than leaving it to the
-    // first visitor to find.
-    checkLegalPagesPublishable(LEGAL_PAGES),
   ]) {
     if (warning) {
       console.error(warning);
     }
+  }
+
+  // Next compiles THIS file for both runtimes it instruments — node and
+  // edge. A static import here would reach both compiled bundles, whatever
+  // it is used for. The Node-only checks (today: the legal-pages digest,
+  // which needs node:crypto) live in src/instrumentation-node.ts and are
+  // reached only through this dynamic import, gated on the runtime Next
+  // itself reports — the pattern Next's docs recommend for this — so the
+  // edge compile never asks for that module at all (ugcportal-177y; see
+  // that module's own doc comment for why the check couldn't simply move to
+  // Web Crypto instead).
+  if (process.env.NEXT_RUNTIME === "nodejs") {
+    const { registerNodeOnlyChecks } = await import("./instrumentation-node");
+    await registerNodeOnlyChecks();
   }
 }

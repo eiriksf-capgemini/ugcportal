@@ -1,3 +1,7 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
+
+import ts from "typescript";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 /**
@@ -18,7 +22,11 @@ import {
   register,
 } from "@/instrumentation";
 import { CONTACT_EMAIL_PLACEHOLDER } from "@/lib/contact";
-import { FILLED_LEGAL_ENV, stubLegalEnv } from "@/lib/legal/legal-page.test-support";
+import {
+  FILLED_LEGAL_ENV,
+  REPO_ROOT,
+  stubLegalEnv,
+} from "@/lib/legal/legal-page.test-support";
 import { PERMITTED_EMAILS_VAR } from "@/lib/sign-in-policy";
 
 const PROD = { NODE_ENV: "production" } as NodeJS.ProcessEnv;
@@ -297,6 +305,11 @@ describe("the contact-email startup check", () => {
  * The check itself is tested in src/lib/legal/publishable.test.ts; this
  * proves register() actually calls it, in whichever state the repository's
  * contact block is in.
+ *
+ * ugcportal-177y moved this check behind a dynamic import gated on
+ * `NEXT_RUNTIME === "nodejs"` (src/instrumentation-node.ts), so every test
+ * here that expects the check to run stubs that variable the same way Next
+ * sets it for the real node compile.
  */
 describe("the legal-pages startup check", () => {
   afterEach(() => {
@@ -305,6 +318,7 @@ describe("the legal-pages startup check", () => {
   });
 
   async function legalLinesFromBoot(): Promise<string[]> {
+    vi.stubEnv("NEXT_RUNTIME", "nodejs");
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     await register();
     return errors.mock.calls
@@ -327,5 +341,195 @@ describe("the legal-pages startup check", () => {
   it("is quiet once every variable is set", async () => {
     stubLegalEnv("production", FILLED_LEGAL_ENV);
     expect(await legalLinesFromBoot()).toEqual([]);
+  });
+
+  it("does not run this check at all outside the node runtime (ugcportal-177y)", async () => {
+    // The needle-can-be-absent control for every "names an unset..." test
+    // above: with the same blocked configuration, but NEXT_RUNTIME left as
+    // Next sets it for the edge compile, the dynamic import in register()
+    // must never fire and this file must log nothing.
+    stubLegalEnv("production", { ...FILLED_LEGAL_ENV, LEGAL_CONTROLLER_NAME: "" });
+    vi.stubEnv("NEXT_RUNTIME", "edge");
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    await register();
+    const legalLines = errors.mock.calls
+      .map((call) => String(call[0]))
+      .filter((line) => line.startsWith("[legal]"));
+    expect(legalLines).toEqual([]);
+  });
+});
+
+/**
+ * K3 (ugcportal-177y): moving the legal-pages check behind the
+ * NEXT_RUNTIME guard must not silently drop any of the OTHER boot checks
+ * that were never part of the problem. This drives every warning branch at
+ * once, under the runtime value Next actually sets for the compile that
+ * really executes at startup, and asserts they all still speak.
+ */
+describe("register() under the node runtime (ugcportal-177y, K3)", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it("still runs every pre-existing boot check when NEXT_RUNTIME is nodejs", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("NEXT_RUNTIME", "nodejs");
+    vi.stubEnv(PERMITTED_EMAILS_VAR, "");
+    vi.stubEnv("ADMIN_BOOTSTRAP_EMAILS", "");
+    vi.stubEnv("CONTACT_EMAIL", "");
+    vi.stubEnv("S3_EVIDENCE_SSE", "");
+    vi.stubEnv("S3_EVIDENCE_ENCRYPTED_AT_BUCKET", "");
+    stubLegalEnv("production", { ...FILLED_LEGAL_ENV, LEGAL_CONTROLLER_NAME: "" });
+
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    await register();
+    const lines = errors.mock.calls.map((call) => String(call[0]));
+
+    expect(lines.some((line) => line.includes("WITHOUT server-side encryption"))).toBe(
+      true,
+    );
+    expect(lines.some((line) => line.includes("NOBODY can sign in"))).toBe(true);
+    expect(lines.some((line) => line.includes("CONTACT_EMAIL is not set"))).toBe(true);
+    expect(lines.some((line) => line.startsWith("[legal]"))).toBe(true);
+  });
+});
+
+/**
+ * K4 (ugcportal-177y): "Following should never happen: a Node built-in
+ * reaching the Edge Instrumentation bundle again." This walks
+ * src/instrumentation.ts's STATIC import graph — the modules reachable
+ * without a dynamic `import()`, which is exactly what Next bundles into the
+ * edge compile — and asserts none of them has a static import of a `node:`
+ * built-in. It is scoped to this repository's own source (relative and `@/`
+ * specifiers); a bare package specifier (`next`, `@aws-sdk/...`) is treated
+ * as an external dependency and not walked into, matching how this bug was
+ * actually investigated (bd notes on ugcportal-177y): "the users array's own
+ * unusable identities..." etc. all name files under src/, not node_modules.
+ *
+ * The walker uses the TypeScript compiler's own AST (`ts.isImportDeclaration`
+ * / `ts.isExportDeclaration`) rather than a regex, specifically so a dynamic
+ * `import(...)` call expression — a different AST node entirely — is never
+ * mistaken for a static one. The two "control" tests below exercise that
+ * distinction directly against fixtures, so a walker that stopped telling
+ * static and dynamic imports apart would be caught here, not only by the
+ * real-file test going green for the wrong reason.
+ */
+describe("the edge-safe static import graph (ugcportal-177y, K4)", () => {
+  function staticImportSpecifiers(source: string, fileName: string): string[] {
+    const sourceFile = ts.createSourceFile(
+      fileName,
+      source,
+      ts.ScriptTarget.Latest,
+      true,
+      fileName.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+    );
+    const specifiers: string[] = [];
+    function visit(node: ts.Node) {
+      if (
+        (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
+        node.moduleSpecifier &&
+        ts.isStringLiteral(node.moduleSpecifier)
+      ) {
+        specifiers.push(node.moduleSpecifier.text);
+      }
+      ts.forEachChild(node, visit);
+    }
+    visit(sourceFile);
+    return specifiers;
+  }
+
+  const RESOLVABLE_EXTENSIONS = [".ts", ".tsx", ".js", ".jsx"];
+
+  function resolveOwnSourceFile(specifier: string, fromFile: string): string | null {
+    let basePath: string;
+    if (specifier.startsWith(".")) {
+      basePath = path.resolve(path.dirname(fromFile), specifier);
+    } else if (specifier.startsWith("@/")) {
+      basePath = path.join(REPO_ROOT, "src", specifier.slice(2));
+    } else {
+      // An external package (e.g. "next", "@aws-sdk/client-s3") — not this
+      // repository's own source, so not walked into. See the describe-level
+      // doc comment for why.
+      return null;
+    }
+    for (const ext of RESOLVABLE_EXTENSIONS) {
+      try {
+        readFileSync(basePath + ext, "utf8");
+        return basePath + ext;
+      } catch {
+        // try the next extension
+      }
+    }
+    for (const ext of RESOLVABLE_EXTENSIONS) {
+      try {
+        readFileSync(path.join(basePath, "index" + ext), "utf8");
+        return path.join(basePath, "index" + ext);
+      } catch {
+        // try the next extension
+      }
+    }
+    try {
+      readFileSync(basePath, "utf8");
+      return basePath;
+    } catch {
+      return null;
+    }
+  }
+
+  function walkStaticImportGraph(entryFile: string): {
+    visited: string[];
+    nodeBuiltins: { file: string; specifier: string }[];
+  } {
+    const visited = new Set<string>();
+    const nodeBuiltins: { file: string; specifier: string }[] = [];
+    const queue = [entryFile];
+    while (queue.length > 0) {
+      const file = queue.shift();
+      if (file === undefined || visited.has(file)) continue;
+      visited.add(file);
+      const source = readFileSync(file, "utf8");
+      for (const specifier of staticImportSpecifiers(source, file)) {
+        if (specifier.startsWith("node:")) {
+          nodeBuiltins.push({ file, specifier });
+          continue;
+        }
+        const resolved = resolveOwnSourceFile(specifier, file);
+        if (resolved && !visited.has(resolved)) {
+          queue.push(resolved);
+        }
+      }
+    }
+    return { visited: Array.from(visited), nodeBuiltins };
+  }
+
+  it("flags a direct static import of a node builtin (control)", () => {
+    const specifiers = staticImportSpecifiers(
+      'import { createHash } from "node:crypto";\n',
+      "virtual.ts",
+    );
+    expect(specifiers).toContain("node:crypto");
+  });
+
+  it("does not see a dynamic import() call at all (control)", () => {
+    // This is the exact shape ugcportal-177y's fix relies on: if the walker
+    // ever started treating a dynamic import like a static one, this test
+    // would fail and the real-file test below would start failing too, for
+    // the right reason — not pass vacuously.
+    const specifiers = staticImportSpecifiers(
+      'async function f() { const mod = await import("node:crypto"); return mod; }\n',
+      "virtual.ts",
+    );
+    expect(specifiers).not.toContain("node:crypto");
+  });
+
+  it("never reaches a node: builtin from src/instrumentation.ts's static imports", () => {
+    const entry = path.join(REPO_ROOT, "src", "instrumentation.ts");
+    const { visited, nodeBuiltins } = walkStaticImportGraph(entry);
+
+    expect(nodeBuiltins).toEqual([]);
+    // Not vacuous: the walk actually traversed this repo's own modules
+    // beyond the entry file (config/users, contact, sign-in-policy, ...).
+    expect(visited.length).toBeGreaterThan(1);
   });
 });
