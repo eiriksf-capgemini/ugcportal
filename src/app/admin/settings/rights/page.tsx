@@ -191,14 +191,28 @@ export default async function ResaleRightsSettingsPage({
         </p>
         <ul className="mt-2 list-disc space-y-1 pl-5 text-ink-muted">
           {TRIAGE_FACTS.map((fact) => (
-            <li key={fact.field}>{fact.question}</li>
+            <li key={fact.field}>
+              {fact.question}
+              {/*
+                Which kind of question this is, read off the registry rather
+                than written out here, so the one fact no clearance settles
+                cannot be presented as if an admin could sign it away
+                (ugcportal-qnq9.3).
+              */}
+              {fact.settledBy === "nothing" ? (
+                <span className="block text-xs">
+                  A &ldquo;yes&rdquo; here is final: no clearance lifts it.
+                </span>
+              ) : null}
+            </li>
           ))}
         </ul>
         <p className="mt-2 text-xs text-ink-muted">
           Unanswered is not &ldquo;no&rdquo;: an upload with any of these
           left blank cannot be sold, and a &ldquo;yes&rdquo; needs its own
-          clearance on that layer. No admin screen asks them yet, so no
-          upload is sellable today.
+          clearance on that layer — except where the list above says a
+          &ldquo;yes&rdquo; is final, which no clearance can reopen. No admin
+          screen asks them yet, so no upload is sellable today.
         </p>
       </div>
       {/*

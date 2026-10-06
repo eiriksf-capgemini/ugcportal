@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   CURRENT_CHECKLIST_VERSION,
   MEDIA_GATE_SELECT,
+  TRIAGE_FACTS,
   evaluateSellability,
 } from "@/lib/resale-rights";
 import {
@@ -88,6 +89,23 @@ beforeAll(async () => {
   // it is here so the next one does not break this file in a way that
   // looks like a defect in the migration under test.
   await applyMigrations(prisma, { startAfter: MINORS_MIGRATION! });
+
+  // The catch-up above can bring triage columns of its own, and it
+  // backfills them NULL for exactly the same reason this one does. Left
+  // alone, `triage_incomplete` below would be true whether or not the
+  // migration under test had added anything — overdetermined, and passing
+  // for the wrong reason. So every OTHER registered fact is answered `no`
+  // here, leaving `depictsMinors` the only unanswered question in the row.
+  // Derived from TRIAGE_FACTS rather than listed, so the fact after
+  // ugcportal-qnq9.3's needs no edit here either.
+  await prisma.mediaListing.update({
+    where: { id: "listing-1" },
+    data: Object.fromEntries(
+      TRIAGE_FACTS.filter((fact) => fact.field !== "depictsMinors").map(
+        (fact) => [fact.field, false],
+      ),
+    ),
+  });
 });
 
 afterAll(async () => {
@@ -121,6 +139,25 @@ describe("ugcportal-qn3: adding the minors fact to an existing database", () => 
     // the blocked result below about the new question and not about the
     // ALTER TABLE having damaged the row.
     expect(listing.depictsPeople).toBe(false);
+  });
+
+  it("leaves no other triage question unanswered", async () => {
+    // The premise of the two cases below, asserted rather than assumed:
+    // they attribute `triage_incomplete` to `depictsMinors`, which only
+    // holds while it is the one fact with no answer.
+    // The whole row rather than a `select` built from the registry: a
+    // dynamic select is not a shape Prisma's types accept, and reading
+    // every column costs nothing on one row.
+    const listing = await prisma.mediaListing.findUniqueOrThrow({
+      where: { id: "listing-1" },
+    });
+
+    for (const fact of TRIAGE_FACTS) {
+      expect(
+        listing[fact.field],
+        `${fact.field} is not answered as expected`,
+      ).toBe(fact.field === "depictsMinors" ? null : false);
+    }
   });
 
   it("blocks an upload that was sellable until the question existed", async () => {

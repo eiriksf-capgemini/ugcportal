@@ -485,7 +485,7 @@ describe("authorization", () => {
  * it lists ALL of them.
  *
  * Iterated off the generated RightsLayer enum rather than a hand-written
- * list of five sentences, so adding a layer to schema.prisma fails here
+ * hand-written list of sentences, so adding a layer to schema.prisma fails here
  * until it is both registered in TRIAGE_FACTS and therefore rendered.
  * A hand-list would have gone on passing while the screen silently told an
  * admin about a subset of what actually blocks.
@@ -523,9 +523,43 @@ describe("the per-upload triage questions (ugcportal-qn3)", () => {
     expect(await renderPage()).toContain("Is anyone shown under 18?");
   });
 
+  it("names the alcohol question specifically", async () => {
+    // ugcportal-qnq9.3, asserted by its words rather than only through the
+    // loop above, which would still pass if every question were replaced by
+    // the same placeholder. The clause about what the glass actually holds
+    // is the §3.1a standard itself, so it is part of what is pinned: a
+    // question asking only "is there alcohol in it?" would invite the
+    // grape-juice answer the rule explicitly does not accept.
+    const markup = await renderPage();
+    expect(markup).toContain("Is alcohol visible, named or clearly evoked");
+    expect(markup).toContain(escapeHtml("whatever it actually holds?"));
+  });
+
+  it("marks a question no clearance can settle as final", async () => {
+    // The screen's other sentence says a "yes" needs a clearance on that
+    // layer. For ALCOHOL that is not true and an admin acting on it would
+    // go looking for a signature that settles nothing, so the exception is
+    // rendered per question, off `settledBy`.
+    const markup = await renderPage();
+    const unsettleable = TRIAGE_FACTS.filter(
+      (fact) => fact.settledBy === "nothing",
+    );
+    // Guards the loop: with no such fact registered the assertions below
+    // would vacuously pass against a screen that renders no note at all.
+    expect(unsettleable.length).toBeGreaterThan(0);
+    for (const fact of unsettleable) {
+      const question = escapeHtml(fact.question);
+      const after = markup.slice(markup.indexOf(question));
+      expect(
+        after.slice(0, after.indexOf("</li>")),
+        `${fact.layer}'s question does not say a yes is final`,
+      ).toContain(escapeHtml("A “yes” here is final"));
+    }
+  });
+
   it("says that leaving one unanswered blocks the sale", async () => {
     // The screen has to carry the mechanism's one surprising rule.
-    // Without it, an admin reads five optional-looking questions.
+    // Without it, an admin reads a list of optional-looking questions.
     const markup = await renderPage();
     expect(markup).toContain("cannot be sold");
   });

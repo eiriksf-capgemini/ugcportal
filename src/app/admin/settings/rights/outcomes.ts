@@ -67,6 +67,8 @@ export const BLOCKER_MESSAGES: Record<SellabilityBlocker, string> = {
     "A model release is on file, but no admin has confirmed it covers this use. This is the layer with a named individual behind it.",
   minors_uncleared:
     "Someone under 18 is shown, and no admin has recorded a MINORS clearance. A release signed by a child is not a release: the guardian has to have consented, specifically and in writing, to online commercial publication. Clearing the people layer does not answer this.",
+  alcohol_depicted:
+    "Alcohol is visible or clearly evoked in this upload, so it cannot be sold or carry a price. Norwegian law bans alcohol from appearing in advertising for other products, and the test is what the picture looks like — a glass that reads as wine is caught whatever it actually held. Nothing clears this one: an empty glass or a cooler shown empty is an accessory, and that is a different answer to the same question.",
   third_party_layer_uncleared:
     "Music, a third-party creator or a sponsorship is involved and has not been cleared for this upload.",
 };

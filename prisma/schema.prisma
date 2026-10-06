@@ -239,7 +239,7 @@ model Media {
   createdAt    DateTime  @default(now())
   publishedAt  DateTime?
 
-  user    User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user                  User                        @relation(fields: [userId], references: [id], onDelete: Cascade)
   // Subject tags (ugcportal-jsc). Many-to-many, because one photograph really
   // is more than one subject — a wine shot for a cookbook is food and books —
   // and forcing a single choice would make the label a lie rather than a
@@ -251,11 +251,11 @@ model Media {
   // and an explicit model would be a third table and a nested select to store
   // no additional fact. If that changes it is a migration, not a reason to
   // pre-build one now.
-  tags    Tag[]
+  tags                  Tag[]
   // The sale record for this upload, if an admin has put it forward
   // (ugcportal-vsm). Optional, and its absence is not sellable — see
   // `not_listed_for_sale` in src/lib/resale-rights.ts.
-  listing MediaListing?
+  listing               MediaListing?
   // The advertising-disclosure record for this upload (ugcportal-qnq9.1),
   // if the operator has answered "was a benefit received for this". A
   // SEPARATE table rather than columns here, and separate from
@@ -543,10 +543,11 @@ enum ResaleRightsRoute {
   EXPLICIT_CONSENT
 }
 
-// The rights layers that vary per upload (checklist Part C.2–C.5) and can be
-// present but handled. Each is cleared on its own: a licence for the music
-// says nothing about an uncredited third-party creator, and neither says
-// anything about undisclosed sponsorship.
+// The rights layers that vary per upload (checklist Part C.2–C.5). Most can
+// be present but handled, and each is then cleared on its own: a licence for
+// the music says nothing about an uncredited third-party creator, and
+// neither says anything about undisclosed sponsorship. ALCOHOL is the
+// exception - see the note above the enum itself.
 //
 // PEOPLE was initially left out on the grounds that it is settled by a model
 // release on file rather than by a written justification. That was wrong in
@@ -565,6 +566,20 @@ enum ResaleRightsRoute {
 // prevent — and it would leave "is a minor shown" unanswerable by anything
 // but reading free text.
 //
+// ALCOHOL is the one member that is NOT "present but handled", and the enum
+// header above says "can be" rather than "must be" for that reason
+// (ugcportal-qnq9.3, docs/ugc-research.md §3.1a). Alcohol visible in an
+// image the site earns from is alkoholloven § 9-2's ban on alcohol
+// appearing in advertising for other products; there is no justification an
+// admin could write that makes it lawful, so its TriageFact is registered
+// `settledBy: "nothing"` and the gate never consults a clearance for it. The
+// value exists here anyway because the registry is keyed one-entry-per-layer
+// and that is what makes the question askable, attributable and blocking -
+// and because a MediaRightsClearance row naming ALCOHOL is then an inert
+// record rather than an unrecognised enum value the writer could mistake for
+// a bypass (src/lib/resale-rights.test.ts, "stays blocked even with a
+// clearance on its own layer").
+//
 // EVERY MEMBER OF THIS ENUM MUST HAVE A TriageFact REGISTERED AGAINST IT in
 // src/lib/resale-rights.ts. The gate iterates that registry rather than a
 // hand-written list, so adding a value here without an entry there leaves
@@ -578,6 +593,7 @@ enum RightsLayer {
   MUSIC
   THIRD_PARTY_CREATOR
   SPONSORED_CONTENT
+  ALCOHOL
 }
 
 // What a ResaleRightsEvent row was recorded against.
@@ -761,6 +777,17 @@ model MediaListing {
   containsMusic     Boolean?
   thirdPartyCreator Boolean?
   sponsoredContent  Boolean?
+  // Is alcohol visible, named or clearly evoked (ugcportal-qnq9.3,
+  // docs/ugc-research.md §3.1a)? Nullable and untriaged by default like the
+  // rest. Unlike the rest, `true` is the end of the question rather than the
+  // start of a clearance: nothing an admin can record makes an item showing
+  // alcohol sellable, because § 3.1a's standard is what the picture looks
+  // like - "whatever the glass actually contains" - so "it was grape juice"
+  // settles nothing. An EMPTY glass or a cooler shown empty is an accessory
+  // and answers `false` here, which is the whole point: accessories are
+  // monetisable and this column is what keeps them distinguishable from the
+  // drink.
+  depictsAlcohol    Boolean?
   // Who completed the triage above, and when.
   //
   // Read by the gate, not just recorded: every flag here is an assertion
@@ -771,7 +798,8 @@ model MediaListing {
   // a person to be people-free and have it sell.
   //
   // It is still not a clearance: a layer that is *present* is settled by
-  // its own MediaRightsClearance row.
+  // its own MediaRightsClearance row - except ALCOHOL, which nothing
+  // settles.
   triagedByUserId   String?
   triagedAt         DateTime?
 
