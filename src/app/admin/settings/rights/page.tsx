@@ -195,11 +195,18 @@ export default async function ResaleRightsSettingsPage({
               {fact.question}
               {/*
                 Which kind of question this is, read off the registry rather
-                than written out here, so the one fact no clearance settles
-                cannot be presented as if an admin could sign it away
-                (ugcportal-qnq9.3).
+                than written out here, so a fact no clearance settles is not
+                presented as if an admin could sign it away
+                (ugcportal-qnq9.3). Asserted by "marks a question no
+                clearance can settle as final" in page.test.tsx, which reads
+                the registry and looks for this note inside that question's
+                own <li>.
+
+                The same `!== "clearance"` reading the gate uses in
+                `triageBlocker`, so a discriminant neither side recognises
+                leaves the screen saying what the gate does.
               */}
-              {fact.settledBy === "nothing" ? (
+              {fact.settledBy !== "clearance" ? (
                 <span className="block text-xs">
                   A &ldquo;yes&rdquo; here is final: no clearance lifts it.
                 </span>

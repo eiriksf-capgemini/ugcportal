@@ -822,6 +822,13 @@ model MediaListing {
 // which meant one reason of "music licence purchased" silently settled all
 // three - the gate's contract inverted.
 //
+// A row here is only consulted for a layer whose TriageFact says a clearance
+// settles it. ALCOHOL's does not, so a row naming that layer is accepted by
+// this table and read by nothing - see the note above the RightsLayer enum,
+// and "refuses a `yes` even with an ALCOHOL clearance recorded"
+// (src/lib/alcohol-triage-migration.test.ts), which writes one against a real
+// database and watches the gate refuse anyway.
+//
 // `clearedBy` is a relation, not a snapshot, because the gate re-reads the
 // clearer's role at evaluation time: a justification signed by someone who
 // has since been demoted is not one this instance stands behind. Audit

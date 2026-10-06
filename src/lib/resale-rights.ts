@@ -429,8 +429,12 @@ export type TriageFact = TriageFactBase &
         /**
          * Not available here: `alsoRequires` describes what a clearance
          * needs alongside it, and there is no clearance to go alongside.
-         * Declared as `never` so an entry carrying one fails `tsc` rather
-         * than registering a predicate the gate would never call.
+         * Optional-`never` leaves `undefined` as the only value this
+         * property may hold, so an entry that carries a predicate fails
+         * `tsc` rather than registering one the gate would never call —
+         * verified by mutation (adding `alsoRequires: () => null` to the
+         * ALCOHOL entry fails `npm run typecheck` with "Type '() => null' is
+         * not assignable to type 'undefined'").
          */
         readonly alsoRequires?: never;
       }
@@ -561,7 +565,17 @@ export function triageBlocker(listing: GateListing): SellabilityBlocker | null {
     // clearance is consulted, so none can be written to get past it. This
     // branch is what makes ALCOHOL a stop rather than a hurdle, and it is
     // read off the registry so the rule lives beside the fact it governs.
-    if (fact.settledBy === "nothing") {
+    //
+    // Written as `!== "clearance"` rather than `=== "nothing"`, for the same
+    // reason phase 3 skips on `=== false` rather than `!== true`. `tsc`
+    // refuses an entry with a missing or unrecognised `settledBy` (verified
+    // by mutation: removing the key from the ALCOHOL entry fails
+    // `npm run typecheck`), but an object that reached here some other way —
+    // a hand-built fixture, a registry assembled at runtime — would then
+    // have an unreadable discriminant, and the readings differ on exactly
+    // that input: this one blocks, `=== "nothing"` would fall through to the
+    // clearance path and sell on an admin's signature.
+    if (fact.settledBy !== "clearance") {
       return fact.blocker;
     }
     const missingEvidence = fact.alsoRequires?.(listing) ?? null;

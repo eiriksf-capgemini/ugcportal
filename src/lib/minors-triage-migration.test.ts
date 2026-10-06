@@ -95,7 +95,9 @@ beforeAll(async () => {
   // alone, `triage_incomplete` below would be true whether or not the
   // migration under test had added anything — overdetermined, and passing
   // for the wrong reason. So every OTHER registered fact is answered `no`
-  // here, leaving `depictsMinors` the only unanswered question in the row.
+  // here, leaving `depictsMinors` the only unanswered question in the row —
+  // which the case named "leaves no other triage question unanswered"
+  // checks for itself rather than taking this comment's word for it.
   // Derived from TRIAGE_FACTS rather than listed, so the fact after
   // ugcportal-qnq9.3's needs no edit here either.
   await prisma.mediaListing.update({
