@@ -130,6 +130,7 @@ export type SellabilityBlocker =
   | "model_release_missing"
   | "model_release_unverified"
   | "minors_uncleared"
+  | "alcohol_depicted"
   | "third_party_layer_uncleared";
 
 export type SellabilityResult =
@@ -173,6 +174,12 @@ export type GateListing = {
   containsMusic: boolean | null;
   thirdPartyCreator: boolean | null;
   sponsoredContent: boolean | null;
+  /**
+   * Is alcohol visible, named or clearly evoked (ugcportal-qnq9.3)? The one
+   * fact in the registry that no clearance settles; see the ALCOHOL entry in
+   * TRIAGE_FACTS below.
+   */
+  depictsAlcohol: boolean | null;
   /**
    * Who signed off the triage flags above, with their *current* role. Every
    * one of those flags is an assertion about someone else's rights — "no
@@ -245,6 +252,7 @@ export const MEDIA_GATE_SELECT = {
       containsMusic: true,
       thirdPartyCreator: true,
       sponsoredContent: true,
+      depictsAlcohol: true,
       triagedByUserId: true,
       triagedBy: { select: { role: true } },
       layerClearances: {
@@ -333,7 +341,10 @@ function layerIsCleared(listing: GateListing, layer: RightsLayer): boolean {
  *   2. PRESENT NEEDS ITS OWN CLEARANCE. `true` is settled only by a
  *      MediaRightsClearance for *that* layer, signed by someone who is an
  *      ADMIN at read time. No clearance covers two layers, so no single
- *      admin-written sentence settles two legal questions.
+ *      admin-written sentence settles two legal questions. A fact may also
+ *      declare that NOTHING settles it (`settledBy: "nothing"`, today only
+ *      ALCOHOL): there the registry says so once, rather than each call
+ *      site remembering which of the answers is final.
  *   3. ADDING A FACT DOES NOT FAIL OPEN. The only way to add one is to add
  *      a RightsLayer and register it here: a layer with no entry fails
  *      "registers exactly one fact per RightsLayer, no more and no fewer"
@@ -357,10 +368,11 @@ export type TriageFactField = Extract<
   string
 >;
 
-export type TriageFact = {
+/** The part of a triage fact that does not depend on how `true` is settled. */
+type TriageFactBase = {
   /** The nullable Boolean column on MediaListing holding the answer. */
   readonly field: TriageFactField;
-  /** The layer whose MediaRightsClearance settles a `true` answer. */
+  /** The layer this fact is registered against, one per RightsLayer. */
   readonly layer: RightsLayer;
   /**
    * The yes/no question an admin answers, as the curation form will ask it
@@ -370,16 +382,63 @@ export type TriageFact = {
    * layer the schema declares", src/app/admin/settings/rights/page.test.tsx).
    */
   readonly question: string;
-  /** Returned when the answer is `true` and the layer is not cleared. */
-  readonly uncleared: SellabilityBlocker;
   /**
-   * An extra requirement checked *before* the clearance when the answer is
-   * `true` — today only PEOPLE, which needs the release file itself on top
-   * of an admin saying it covers this use. Returns its own blocker, or null
-   * when satisfied.
+   * Returned when the answer is `true` and nothing has settled it. For a
+   * `settledBy: "clearance"` fact that means the layer has no admin-signed
+   * justification; for a `settledBy: "nothing"` fact it is simply what a
+   * `true` answer returns, because there is nothing that could settle it.
    */
-  readonly alsoRequires?: (listing: GateListing) => SellabilityBlocker | null;
+  readonly blocker: SellabilityBlocker;
 };
+
+/**
+ * One registered fact, discriminated by what a `true` answer is held
+ * against.
+ *
+ * `settledBy` is REQUIRED on every entry rather than an optional
+ * "unclearable" flag, and that is the fail-closed direction: an optional
+ * negative flag left off a new entry would quietly make it clearable, which
+ * is exactly the shape of mistake the rest of this module is built to
+ * refuse. Written as a discriminated union, `tsc` refuses an entry that does
+ * not say which kind it is.
+ */
+export type TriageFact = TriageFactBase &
+  (
+    | {
+        /**
+         * `true` is settled by a MediaRightsClearance for this fact's layer,
+         * signed by someone who is an ADMIN at read time.
+         */
+        readonly settledBy: "clearance";
+        /**
+         * An extra requirement checked *before* the clearance when the
+         * answer is `true` — today only PEOPLE, which needs the release file
+         * itself on top of an admin saying it covers this use. Returns its
+         * own blocker, or null when satisfied.
+         */
+        readonly alsoRequires?: (
+          listing: GateListing,
+        ) => SellabilityBlocker | null;
+      }
+    | {
+        /**
+         * `true` is final: no clearance, and no evidence file, makes this
+         * upload sellable. Today only ALCOHOL (ugcportal-qnq9.3).
+         */
+        readonly settledBy: "nothing";
+        /**
+         * Not available here: `alsoRequires` describes what a clearance
+         * needs alongside it, and there is no clearance to go alongside.
+         * Optional-`never` leaves `undefined` as the only value this
+         * property may hold, so an entry that carries a predicate fails
+         * `tsc` rather than registering one the gate would never call —
+         * verified by mutation (adding `alsoRequires: () => null` to the
+         * ALCOHOL entry fails `npm run typecheck` with "Type '() => null' is
+         * not assignable to type 'undefined'").
+         */
+        readonly alsoRequires?: never;
+      }
+  );
 
 /**
  * Every rights layer, in the order the gate asks about them.
@@ -393,7 +452,8 @@ export const TRIAGE_FACTS: readonly TriageFact[] = [
     field: "depictsPeople",
     layer: RightsLayer.PEOPLE,
     question: "Is an identifiable person shown?",
-    uncleared: "model_release_unverified",
+    settledBy: "clearance",
+    blocker: "model_release_unverified",
     // The release file, on top of the clearance. A key alone is free text:
     // it can point at a document licensing something else, or at nothing.
     alsoRequires: (listing) =>
@@ -403,7 +463,8 @@ export const TRIAGE_FACTS: readonly TriageFact[] = [
     field: "depictsMinors",
     layer: RightsLayer.MINORS,
     question: "Is anyone shown under 18?",
-    uncleared: "minors_uncleared",
+    settledBy: "clearance",
+    blocker: "minors_uncleared",
     // No `alsoRequires` naming a guardian-consent document, deliberately.
     // What that document must say — specific, written, naming online
     // commercial publication, with the child's own view where they are old
@@ -416,19 +477,44 @@ export const TRIAGE_FACTS: readonly TriageFact[] = [
     field: "containsMusic",
     layer: RightsLayer.MUSIC,
     question: "Is there audible music?",
-    uncleared: "third_party_layer_uncleared",
+    settledBy: "clearance",
+    blocker: "third_party_layer_uncleared",
   },
   {
     field: "thirdPartyCreator",
     layer: RightsLayer.THIRD_PARTY_CREATOR,
     question: "Did anyone other than the uploader create or co-create it?",
-    uncleared: "third_party_layer_uncleared",
+    settledBy: "clearance",
+    blocker: "third_party_layer_uncleared",
   },
   {
     field: "sponsoredContent",
     layer: RightsLayer.SPONSORED_CONTENT,
     question: "Was it made for a brand, or under a sponsorship?",
-    uncleared: "third_party_layer_uncleared",
+    settledBy: "clearance",
+    blocker: "third_party_layer_uncleared",
+  },
+  {
+    // ugcportal-qnq9.3 / docs/ugc-research.md §3.1a. The site's wine angle
+    // is ACCESSORIES — empty glasses, coolers, tool-type apps — and those
+    // are monetisable. The drink is not: alkoholloven § 9-2 bans alcohol
+    // from appearing in advertising for other products, and
+    // Helsedirektoratet's examples count a picture that gives a clear
+    // association with alcohol *whatever the glass actually contains*.
+    //
+    // So the question is about what the image looks like, not about what
+    // was really in the glass, and the answer is `settledBy: "nothing"`
+    // rather than a layer somebody could clear. A clearance reading "it was
+    // grape juice" would be a true sentence that does not make the picture
+    // lawful to advertise with, and the registry is the only place that can
+    // say so once for every caller. The fix for a `true` here is a different
+    // photograph, not a signature.
+    field: "depictsAlcohol",
+    layer: RightsLayer.ALCOHOL,
+    question:
+      "Is alcohol visible, named or clearly evoked — including a glass that reads as wine or beer, whatever it actually holds?",
+    settledBy: "nothing",
+    blocker: "alcohol_depicted",
   },
 ];
 
@@ -440,13 +526,14 @@ export const TRIAGE_FACTS: readonly TriageFact[] = [
  *
  *   1. Every fact answered. One unanswered question blocks the upload, not
  *      just its own layer — a half-filled triage is not a triage, and
- *      answering four of five must not sell anything.
+ *      answering all but one of them must not sell anything.
  *   2. The answers attributable to a current ADMIN. Each one is an
  *      assertion about a third party's rights and the dangerous direction
  *      is `false` ("no identifiable person here" is what sells the
  *      photograph), so an unsigned or since-demoted signature voids all of
  *      them at once rather than per fact.
- *   3. Each `true` settled on its own terms.
+ *   3. Each `true` settled on its own terms — or, for a fact the registry
+ *      marks `settledBy: "nothing"`, not settled at all.
  */
 export function triageBlocker(listing: GateListing): SellabilityBlocker | null {
   for (const fact of TRIAGE_FACTS) {
@@ -474,12 +561,29 @@ export function triageBlocker(listing: GateListing): SellabilityBlocker | null {
     if (!isTriaged(answer)) {
       return "triage_incomplete";
     }
+    // A fact nothing settles is answered here and goes no further: no
+    // clearance is consulted, so none can be written to get past it. This
+    // branch is what makes ALCOHOL a stop rather than a hurdle, and it is
+    // read off the registry so the rule lives beside the fact it governs.
+    //
+    // Written as `!== "clearance"` rather than `=== "nothing"`, for the same
+    // reason phase 3 skips on `=== false` rather than `!== true`. `tsc`
+    // refuses an entry with a missing or unrecognised `settledBy` (verified
+    // by mutation: removing the key from the ALCOHOL entry fails
+    // `npm run typecheck`), but an object that reached here some other way —
+    // a hand-built fixture, a registry assembled at runtime — would then
+    // have an unreadable discriminant, and the readings differ on exactly
+    // that input: this one blocks, `=== "nothing"` would fall through to the
+    // clearance path and sell on an admin's signature.
+    if (fact.settledBy !== "clearance") {
+      return fact.blocker;
+    }
     const missingEvidence = fact.alsoRequires?.(listing) ?? null;
     if (missingEvidence) {
       return missingEvidence;
     }
     if (!layerIsCleared(listing, fact.layer)) {
-      return fact.uncleared;
+      return fact.blocker;
     }
   }
 

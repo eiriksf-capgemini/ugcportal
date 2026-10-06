@@ -44,6 +44,7 @@ function clearListing(overrides: Partial<GateListing> = {}): GateListing {
     containsMusic: false,
     thirdPartyCreator: false,
     sponsoredContent: false,
+    depictsAlcohol: false,
     // The triage is signed by a current admin: every flag above is an
     // assertion about a third party's rights, so the gate wants a name.
     triagedByUserId: "admin-1",
@@ -506,6 +507,7 @@ describe("per-upload triage (checklist Part C)", () => {
     containsMusic: {},
     thirdPartyCreator: {},
     sponsoredContent: {},
+    depictsAlcohol: {},
   };
 
   /** A justification for one layer, signed by a current admin. */
@@ -534,12 +536,27 @@ describe("per-upload triage (checklist Part C)", () => {
     });
   }
 
-  /** Every registered fact answered `true`, with the evidence each needs. */
+  /**
+   * Every fact a clearance can settle, answered `true`, with the evidence
+   * each needs.
+   *
+   * A fact the registry marks `settledBy: "nothing"` is deliberately left
+   * at the baseline `false`. Answering one `true` is an unconditional stop,
+   * so including it here would make every case below report THAT fact's
+   * blocker instead of the one it is about — the cases would still fail for
+   * a broken gate, but they would stop being about the layer they name.
+   * Each such fact gets its own `true` case: the per-fact table below
+   * overrides its own field, and ugcportal-qnq9.3's describe covers ALCOHOL
+   * in full.
+   */
   function allFactsPresent(
     overrides: Partial<GateListing> = {},
   ): Partial<GateListing> {
     const listing: Partial<GateListing> = {};
     for (const fact of TRIAGE_FACTS) {
+      if (fact.settledBy === "nothing") {
+        continue;
+      }
       Object.assign(listing, { [fact.field]: true }, FACT_EXTRAS[fact.field]);
     }
     return { ...listing, ...overrides };
@@ -566,16 +583,35 @@ describe("per-upload triage (checklist Part C)", () => {
       it("blocks when present with no clearance", () => {
         expect(evaluateSellability(factPresent(fact), NOW)).toEqual({
           sellable: false,
-          blocker: fact.uncleared,
+          blocker: fact.blocker,
         });
       });
 
-      it("passes once cleared with a reason by a current admin", () => {
-        const upload = factPresent(fact, {
-          layerClearances: [clearance(fact.layer)],
+      if (fact.settledBy === "clearance") {
+        it("passes once cleared with a reason by a current admin", () => {
+          const upload = factPresent(fact, {
+            layerClearances: [clearance(fact.layer)],
+          });
+          expect(evaluateSellability(upload, NOW)).toEqual({ sellable: true });
         });
-        expect(evaluateSellability(upload, NOW)).toEqual({ sellable: true });
-      });
+      } else {
+        /**
+         * The inverse of the case above, for a fact the registry says
+         * nothing settles. This is the assertion that makes `settledBy`
+         * load-bearing rather than decorative: a clearance on this fact's
+         * OWN layer, signed by a current admin, with a reason — the exact
+         * input that sells every other layer — must leave it blocked.
+         */
+        it("stays blocked even with a clearance on its own layer", () => {
+          const upload = factPresent(fact, {
+            layerClearances: [clearance(fact.layer)],
+          });
+          expect(evaluateSellability(upload, NOW)).toEqual({
+            sellable: false,
+            blocker: fact.blocker,
+          });
+        });
+      }
 
       it("blocks when its clearance has no reason", () => {
         const upload = factPresent(fact, {
@@ -583,7 +619,7 @@ describe("per-upload triage (checklist Part C)", () => {
         });
         expect(evaluateSellability(upload, NOW)).toEqual({
           sellable: false,
-          blocker: fact.uncleared,
+          blocker: fact.blocker,
         });
       });
 
@@ -607,7 +643,7 @@ describe("per-upload triage (checklist Part C)", () => {
         });
         expect(evaluateSellability(upload, NOW)).toEqual({
           sellable: false,
-          blocker: fact.uncleared,
+          blocker: fact.blocker,
         });
       });
 
@@ -638,6 +674,11 @@ describe("per-upload triage (checklist Part C)", () => {
       it("keeps blocking when every OTHER layer is cleared", () => {
         const upload = withListing(
           allFactsPresent({
+            // Spelled out rather than left to allFactsPresent, which skips
+            // the facts no clearance settles: this case is about THIS fact
+            // being present, whichever kind it is.
+            [fact.field]: true,
+            ...FACT_EXTRAS[fact.field],
             layerClearances: TRIAGE_FACTS.filter(
               (other) => other.layer !== fact.layer,
             ).map((other) => clearance(other.layer)),
@@ -645,13 +686,17 @@ describe("per-upload triage (checklist Part C)", () => {
         );
         expect(evaluateSellability(upload, NOW)).toEqual({
           sellable: false,
-          blocker: fact.uncleared,
+          blocker: fact.blocker,
         });
       });
     });
   }
 
   it("accepts an upload whose every layer is cleared in its own right", () => {
+    // Every layer gets a clearance, including the ones no fact consults.
+    // That is the point of the `allFactsPresent` shape: a clearance written
+    // against a `settledBy: "nothing"` layer is an inert record, so its
+    // presence must not change the answer either way.
     const upload = withListing(
       allFactsPresent({
         layerClearances: TRIAGE_FACTS.map((fact) => clearance(fact.layer)),
@@ -823,6 +868,243 @@ describe("ugcportal-qn3: minors as a triage fact", () => {
 });
 
 /**
+ * ugcportal-qnq9.3: alcohol as a triage fact, and the one way it is not
+ * like the others.
+ *
+ * docs/ugc-research.md §3.1a: alkoholloven § 9-2 bans alcohol from
+ * appearing in advertising for other products, and Helsedirektoratet's
+ * examples include pictures giving a clear association with alcohol
+ * *whatever the glass actually contains*. The site's chosen angle is wine
+ * ACCESSORIES — empty glasses, coolers, tool-type apps — and those are
+ * monetisable.
+ *
+ * So this fact has to cut in both directions, and both are tested here:
+ * `false` sells, because that is the entire business angle; `true` never
+ * sells, and no clearance changes that; `null` blocks like every other
+ * unanswered question.
+ */
+describe("ugcportal-qnq9.3: alcohol as a triage fact", () => {
+  /** An ALCOHOL justification signed by a current admin. */
+  function alcoholClearance(
+    overrides: Partial<GateLayerClearance> = {},
+  ): GateLayerClearance {
+    return {
+      layer: RightsLayer.ALCOHOL,
+      reason: "It was grape juice, not wine.",
+      clearedByUserId: "admin-1",
+      clearedBy: { role: "ADMIN" },
+      ...overrides,
+    };
+  }
+
+  /**
+   * The direction the rewritten bead exists for. An empty glass is an
+   * accessory, not alcohol, and an accessory is sellable — a gate that
+   * blocked everything wine-adjacent would pass every other test in this
+   * describe and kill the angle the site is being built for.
+   */
+  it("sells an upload that answers the question `no`", () => {
+    expect(
+      evaluateSellability(withListing({ depictsAlcohol: false }), NOW),
+    ).toEqual({ sellable: true });
+  });
+
+  it("blocks an upload in which alcohol is visible", () => {
+    expect(
+      evaluateSellability(withListing({ depictsAlcohol: true }), NOW),
+    ).toEqual({ sellable: false, blocker: "alcohol_depicted" });
+  });
+
+  /**
+   * The guardrail, written as a FIXTURE MUTATION rather than two unrelated
+   * "expect blocked" assertions, which would both pass against a gate
+   * rewritten to block everything.
+   *
+   * An admin signing "it was grape juice" is writing a sentence that may
+   * well be true and that §3.1a still does not accept: the standard is what
+   * the picture looks like. The same clearance shape settles MUSIC two
+   * lines down, so the fixture is demonstrably a working one.
+   */
+  it("is not settled by an ALCOHOL clearance, however well signed", () => {
+    expect(
+      evaluateSellability(
+        withListing({
+          depictsAlcohol: true,
+          layerClearances: [alcoholClearance()],
+        }),
+        NOW,
+      ),
+    ).toEqual({ sellable: false, blocker: "alcohol_depicted" });
+
+    // The same input shape on a layer a clearance CAN settle does reach
+    // sellable, so the assertion above is about ALCOHOL rather than about
+    // `clearance()` being broken here.
+    expect(
+      evaluateSellability(
+        withListing({
+          containsMusic: true,
+          layerClearances: [
+            {
+              layer: RightsLayer.MUSIC,
+              reason: "Sync and master licence covering resale, on file.",
+              clearedByUserId: "admin-1",
+              clearedBy: { role: "ADMIN" },
+            },
+          ],
+        }),
+        NOW,
+      ),
+    ).toEqual({ sellable: true });
+  });
+
+  it("stays blocked when every other layer is present and cleared", () => {
+    // Nothing else is left to blame: every clearable fact is `true` and
+    // carries its own admin-signed justification, so the only reason this
+    // upload does not sell is the alcohol in it.
+    const upload = withListing({
+      depictsPeople: true,
+      modelReleaseKey: "rights-evidence/owner-1/release.pdf",
+      depictsMinors: true,
+      containsMusic: true,
+      thirdPartyCreator: true,
+      sponsoredContent: true,
+      depictsAlcohol: true,
+      layerClearances: Object.values(RightsLayer).map((layer) => ({
+        layer,
+        reason: "Cleared, with evidence on file.",
+        clearedByUserId: "admin-1",
+        clearedBy: { role: "ADMIN" as const },
+      })),
+    });
+
+    expect(evaluateSellability(upload, NOW)).toEqual({
+      sellable: false,
+      blocker: "alcohol_depicted",
+    });
+  });
+
+  it("blocks an upload where nobody has answered the alcohol question", () => {
+    expect(
+      evaluateSellability(withListing({ depictsAlcohol: null }), NOW),
+    ).toEqual({ sellable: false, blocker: "triage_incomplete" });
+  });
+
+  it("does not read an unanswered alcohol question as a `no`", () => {
+    // Stated as a comparison, like the minors case above: the same upload
+    // sells with the question answered `false` and blocks with it
+    // unanswered. If `null` ever starts meaning `false`, these converge —
+    // and on this question that would publish a price beside a glass of
+    // wine nobody was ever asked about.
+    expect(
+      evaluateSellability(withListing({ depictsAlcohol: false }), NOW),
+    ).toEqual({ sellable: true });
+    expect(
+      evaluateSellability(withListing({ depictsAlcohol: null }), NOW).sellable,
+    ).toBe(false);
+  });
+
+  /**
+   * The wiring itself, pinned once. Not a tautology over the type: each
+   * assertion names a value `tsc` would accept any other member of its
+   * union in place of, and getting any of them wrong — a clearable
+   * `settledBy`, a different column, a blocker meant for another layer —
+   * produces a gate that still compiles and still passes the generic
+   * per-fact table.
+   */
+  it("is registered against ALCOHOL as a fact nothing settles", () => {
+    const fact = TRIAGE_FACTS.find(
+      (candidate) => candidate.layer === RightsLayer.ALCOHOL,
+    );
+
+    expect(fact?.field).toBe("depictsAlcohol");
+    expect(fact?.settledBy).toBe("nothing");
+    expect(fact?.blocker).toBe("alcohol_depicted");
+  });
+
+  /**
+   * THE FAIL-CLOSED READING OF `settledBy`, which is the whole reason the
+   * gate asks `!== "clearance"` rather than `=== "nothing"`.
+   *
+   * `tsc` rejects an entry with a missing or unrecognised discriminant, so
+   * no input reachable through the committed registry can tell the two
+   * readings apart — which is precisely why the difference would otherwise
+   * go unguarded. They diverge on exactly one input: a fact whose
+   * `settledBy` is neither literal. `!== "clearance"` blocks it;
+   * `=== "nothing"` falls through to the clearance path and sells it on an
+   * admin's signature.
+   *
+   * The only way to put such a fact in front of `triageBlocker` is to put
+   * it in the registry the gate iterates: its signature takes a listing and
+   * nothing else, and the facts it walks are the module-level
+   * `TRIAGE_FACTS` — `readonly` in the type and a plain array at runtime.
+   * So the entry is spliced in and restored in a `finally`, which keeps the
+   * rest of this file (and the generated case table above, built at
+   * collection time from the real registry) looking at the real one.
+   */
+  it("blocks a fact whose discriminant it does not recognise", () => {
+    const registry = TRIAGE_FACTS as TriageFact[];
+    const index = registry.findIndex(
+      (candidate) => candidate.layer === RightsLayer.ALCOHOL,
+    );
+    expect(index).toBeGreaterThanOrEqual(0);
+    const original = registry[index];
+
+    // Present, and cleared on its own layer with a reason by a current
+    // admin: the exact input that sells every `settledBy: "clearance"`
+    // fact in the registry.
+    const upload = withListing({
+      depictsAlcohol: true,
+      layerClearances: [alcoholClearance()],
+    });
+
+    try {
+      registry[index] = {
+        ...original,
+        settledBy: "decide-this-later",
+      } as unknown as TriageFact;
+
+      expect(evaluateSellability(upload, NOW)).toEqual({
+        sellable: false,
+        blocker: "alcohol_depicted",
+      });
+
+      // The control, and the half that makes the assertion above about the
+      // discriminant rather than about the fixture: the SAME spliced entry
+      // with a value the gate does recognise reaches the clearance path and
+      // sells. Without it, a gate rewritten to refuse everything would pass
+      // the case above.
+      registry[index] = {
+        ...original,
+        settledBy: "clearance",
+      } as unknown as TriageFact;
+
+      expect(evaluateSellability(upload, NOW)).toEqual({ sellable: true });
+    } finally {
+      registry[index] = original;
+    }
+
+    // Restored, and asserted rather than assumed: a leaked mutation would
+    // otherwise surface as an unrelated failure somewhere later in the run.
+    expect(TRIAGE_FACTS[index]).toBe(original);
+    expect(evaluateSellability(upload, NOW)).toEqual({
+      sellable: false,
+      blocker: "alcohol_depicted",
+    });
+  });
+
+  it("asks about the picture rather than about what was in the glass", () => {
+    // §3.1a's actual standard, and the reason the question is phrased the
+    // way it is. A question an admin could answer "no, it was juice" would
+    // record the wrong fact perfectly.
+    const fact = TRIAGE_FACTS.find(
+      (candidate) => candidate.layer === RightsLayer.ALCOHOL,
+    );
+
+    expect(fact?.question).toContain("whatever it actually holds");
+  });
+});
+
+/**
  * K5: the mechanism, not the fact. The failure mode is a second author
  * adding `depictsSomething Boolean?` to MediaListing, writing it from a
  * form, and nothing ever reading it — a "triage fact" that is decorative
@@ -852,13 +1134,13 @@ describe("ugcportal-qn3: the triage-fact mechanism", () => {
 
   // THERE IS NO TEST HERE FOR "every fact's blocker has words on the admin
   // screen", and the omission is deliberate. Anything this file could
-  // assert about `fact.uncleared` on its own is a tautology: it is typed
+  // assert about `fact.blocker` on its own is a tautology: it is typed
   // SellabilityBlocker, a closed union of non-empty literals, so every
   // in-type value passes a `typeof`/length check and an out-of-type one
   // fails `tsc` before any test runs. The claim is carried by `has a
-  // sentence for every triage fact's uncleared blocker` in
+  // sentence for every triage fact's blocker` in
   // src/app/admin/settings/rights/outcomes.test.ts, which indexes
-  // BLOCKER_MESSAGES by `fact.uncleared` and so fails on a blocker with no
+  // BLOCKER_MESSAGES by `fact.blocker` and so fails on a blocker with no
   // wording. It lives there because that is where the wording map is.
 
   it("asks a question for every fact, so a form can be generated from it", () => {

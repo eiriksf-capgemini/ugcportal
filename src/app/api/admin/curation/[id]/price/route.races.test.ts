@@ -44,6 +44,7 @@ const SELLABLE_UPLOAD = {
     containsMusic: false,
     thirdPartyCreator: false,
     sponsoredContent: false,
+    depictsAlcohol: false,
     triagedByUserId: "admin-1",
     triagedBy: { role: "ADMIN" },
     layerClearances: [],
