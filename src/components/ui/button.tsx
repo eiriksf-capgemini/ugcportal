@@ -87,6 +87,25 @@ const PETROL_OUTLINE_STYLE =
 const NEUTRAL_OUTLINE_STYLE =
   "border-input bg-transparent text-ink hover:border-input hover:bg-accent hover:text-accent-foreground hover:no-underline aria-expanded:border-input aria-expanded:bg-accent aria-expanded:no-underline"
 
+/**
+ * `sm`'s box-model/typography/icon-sizing tokens, named once so `header-sm`
+ * (ugcportal-qqnt.2 round 2, finding 5 - LOW, CONFIRMED) derives from the
+ * SAME tokens `sm` uses rather than hand-copying them a second time. Before
+ * this, `header-sm`'s definition retyped `sm`'s `h-7`/`gap-1`/`px-2.5`/
+ * `text-[0.8rem]`/icon-size classes verbatim, so a future edit to `sm`'s box
+ * model could silently drift the two apart with nothing to catch it (the
+ * regression guard in button-system.test.tsx checks `sm` against a
+ * historical snapshot of ITSELF, not against `header-sm`). `sm`'s own radius
+ * cap and its `in-data-[slot=button-group]:rounded-lg` escape hatch stay OUT
+ * of these three constants on purpose: that is the one thing `header-sm` is
+ * supposed to differ on (see the `size` comment below) - sharing it too
+ * would undo the whole point of `header-sm` existing.
+ */
+const SM_BOX_MODEL = "h-7 gap-1"
+const SM_PADDING_AND_TEXT = "px-2.5 text-[0.8rem]"
+const SM_ICON_SIZING =
+  "has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-3.5"
+
 const buttonVariants = cva(
   /*
    * `aria-disabled:pointer-events-none aria-disabled:opacity-50` sits right
@@ -246,12 +265,13 @@ const buttonVariants = cva(
         default:
           "h-8 gap-1.5 px-2.5 has-data-[icon=inline-end]:pr-2 has-data-[icon=inline-start]:pl-2",
         xs: "h-6 gap-1 rounded-[min(var(--radius-md),10px)] px-2 text-xs in-data-[slot=button-group]:rounded-lg has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-3",
-        sm: "h-7 gap-1 rounded-[min(var(--radius-md),12px)] px-2.5 text-[0.8rem] in-data-[slot=button-group]:rounded-lg has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-3.5",
-        // See the `size` comment above: identical to `sm` except for the
-        // radius cap, reserved for the header's public-page controls so K2
-        // holds without changing what every other `size="sm"` caller renders.
-        "header-sm":
-          "h-7 gap-1 px-2.5 text-[0.8rem] has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-3.5",
+        sm: `${SM_BOX_MODEL} rounded-[min(var(--radius-md),12px)] ${SM_PADDING_AND_TEXT} in-data-[slot=button-group]:rounded-lg ${SM_ICON_SIZING}`,
+        // See the `size` comment above: derived from the SAME
+        // SM_BOX_MODEL/SM_PADDING_AND_TEXT/SM_ICON_SIZING constants `sm`
+        // itself uses, minus the radius cap, reserved for the header's
+        // public-page controls so K2 holds without changing what every
+        // other `size="sm"` caller renders.
+        "header-sm": `${SM_BOX_MODEL} ${SM_PADDING_AND_TEXT} ${SM_ICON_SIZING}`,
         lg: "h-9 gap-1.5 px-2.5 has-data-[icon=inline-end]:pr-2 has-data-[icon=inline-start]:pl-2",
         icon: "size-8",
         "icon-xs":

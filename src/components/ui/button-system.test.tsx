@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { renderToStaticMarkup } from "react-dom/server";
@@ -57,12 +57,45 @@ function unescapeClassAttr(value: string): string {
   return value.replaceAll("&amp;", "&").replaceAll("&#x27;", "'");
 }
 
+/**
+ * Round-2 review, LOW, CONFIRMED: `classAttrOf` used to interpolate
+ * `textContent` into a `RegExp` unescaped, so a regex metacharacter in the
+ * needle (`.`, `(`, `+`, ...) would be read as regex syntax instead of a
+ * literal character — dormant today, since every call site in this file
+ * passes a hardcoded literal label, but worth hardening rather than leaving
+ * for whoever reuses this helper with less-controlled content next.
+ */
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function classAttrOf(markup: string, textContent: string): string {
-  const pattern = new RegExp(`class="([^"]*)"[^>]*>${textContent}`);
+  const pattern = new RegExp(`class="([^"]*)"[^>]*>${escapeRegExp(textContent)}`);
   const match = pattern.exec(markup);
   if (!match) throw new Error(`no element found containing "${textContent}" in: ${markup}`);
   return unescapeClassAttr(match[1]);
 }
+
+describe("classAttrOf escapes regex metacharacters in its needle (round-2 review, finding 6)", () => {
+  it("finds the real element, not an earlier decoy an unescaped '.' would also match as a wildcard", () => {
+    // Without escaping, "." in the needle is a regex wildcard matching any
+    // character, so the pattern would also match the decoy's "v1X2" (X
+    // standing in for the literal "." in "v1.2") — and since RegExp#exec
+    // scans left to right, it would find THAT match first, because the
+    // decoy appears earlier in the markup than the real element.
+    const markup =
+      '<span class="decoy-class">v1X2</span><a class="real-class">v1.2</a>';
+    expect(classAttrOf(markup, "v1.2")).toBe("real-class");
+  });
+
+  /*
+   * FIXTURE MUTATION CHECK (performed by hand, not left in the suite):
+   * temporarily reverted classAttrOf to interpolate the raw, unescaped
+   * `textContent` (the pre-fix round-2 shape) and confirmed this assertion
+   * failed, returning "decoy-class" instead of "real-class" — exactly the
+   * wrong-element match the finding describes. Reverted.
+   */
+});
 
 describe("K1 — the hero and empty-state links resolve to buttonVariants, not a hand-written class string", () => {
   it("the hero's CTA carries every class default-tint/lg produces", () => {
@@ -211,6 +244,53 @@ describe("K3 — no hand-written button-shaped className outside buttonVariants"
     "src/components/site-footer.tsx",
   ];
 
+  /**
+   * Round-2 review, LOW, PLAUSIBLE (finding 7): `files` above is a
+   * hardcoded 4-entry array, not a glob over the directories the bead's
+   * own K3 wording names ("a source-scan test over src/components/home and
+   * src/components/site-*"). Confirmed exactly complete today by the
+   * reviewer's own grep — not an under-scoping bug now, but a file added
+   * under either path later would silently not be scanned unless someone
+   * remembers to add it here too.
+   *
+   * CHOSEN: a completeness test over a glob. A glob would make this
+   * self-updating, but it would also hide exactly what K3 scans behind a
+   * pattern a reviewer has to evaluate mentally; the repo's own convention
+   * for "this named list must stay complete" is a test like this one, not
+   * a glob (GALLERY_TILE_BASE_CLASS's shared-string check, the
+   * MODEL_COVERAGE completeness test in src/app/privacy/content.test.ts).
+   * This keeps `files` explicit and reviewable, and fails loudly — instead
+   * of silently skipping a new file — the moment it drifts from disk.
+   *
+   * FIXTURE MUTATION CHECK (performed by hand, not left in the suite):
+   * temporarily added `src/components/home/dummy-mutation-check.ts` and
+   * confirmed this assertion failed, listing the new file as unaccounted
+   * for; removed it.
+   */
+  it("files is exactly every non-test component file under src/components/home/ and every site-* file under src/components/", () => {
+    function listNonTestFiles(dirRel: string, nameFilter: RegExp): string[] {
+      const dirAbs = resolve(process.cwd(), dirRel);
+      return readdirSync(dirAbs)
+        .filter(
+          (name) =>
+            nameFilter.test(name) &&
+            !/\.test\.(tsx|ts)$/.test(name) &&
+            statSync(resolve(dirAbs, name)).isFile(),
+        )
+        .map((name) => `${dirRel}/${name}`);
+    }
+
+    const onDisk = new Set([
+      ...listNonTestFiles("src/components/home", /\.(tsx|ts)$/),
+      ...listNonTestFiles("src/components", /^site-.*\.(tsx|ts)$/),
+    ]);
+
+    expect(
+      onDisk,
+      `K3's hardcoded files array is out of date against what is on disk: ${[...onDisk].sort().join(", ")}`,
+    ).toEqual(new Set(files));
+  });
+
   it.each(files)("%s carries no inline-flex...rounded- class string", (file) => {
     const source = readFileSync(resolve(process.cwd(), file), "utf8");
     expect(hasHandWrittenButtonShape(source), source).toBe(false);
@@ -237,10 +317,22 @@ describe("K3 — no hand-written button-shaped className outside buttonVariants"
       ).toBe(true);
     });
 
-    it("neither token present in the same literal is not a false positive", () => {
+    it("both tokens present, but in two separate class strings, is a real near miss — not a false positive", () => {
+      /*
+       * Round-2 review, LOW, CONFIRMED (mine): the previous version of this
+       * fixture was `'className="flex items-center gap-2 bg-petrol-100"
+       * otherClassName="rounded-lg block"'` — it never contained the
+       * substring `inline-flex` at all (only `flex`), so it could not have
+       * failed regardless of what the patterns' middle character class
+       * allowed to cross a quote boundary. This fixture actually contains
+       * BOTH `inline-flex` and `rounded-` — in two DIFFERENT string
+       * literals, not the same one — so it exercises the real property
+       * under test: the `[^`"']*` segment must not cross a quote/
+       * backtick boundary to join them.
+       */
       expect(
         hasHandWrittenButtonShape(
-          'className="flex items-center gap-2 bg-petrol-100" otherClassName="rounded-lg block"',
+          'className="inline-flex items-center gap-2 bg-petrol-100" otherClassName="rounded-lg block"',
         ),
       ).toBe(false);
     });
@@ -250,15 +342,20 @@ describe("K3 — no hand-written button-shaped className outside buttonVariants"
    * FIXTURE MUTATION CHECK (performed by hand, not left in the suite):
    * - Forward-order case: dropped `rounded-lg` from its fixture string and
    *   confirmed the assertion flipped to failing (back to `false`); restored.
-   * - Reverse-order case, the one this round's finding is actually about:
+   * - Reverse-order case, the one round 1's finding is actually about:
    *   temporarily reverted `hasHandWrittenButtonShape` to
    *   `FORWARD_PATTERN.test(source)` only — i.e. exactly the pre-fix round-1
    *   pattern — and confirmed this fixture's assertion failed (`toBe(true)`
    *   no longer held, the literal bypass the review found); reverted to the
    *   OR'd two-pattern form above.
-   * - Negative case: temporarily changed its fixture to a single literal
-   *   containing both tokens ("...rounded-lg inline-flex...") and confirmed
-   *   the assertion flipped to failing (`toBe(false)` no longer held),
-   *   proving it is a real check rather than one that always returns false.
+   * - Negative case (round-2 review, LOW, CONFIRMED): the OLD, vacuous
+   *   fixture (no `inline-flex` substring at all) still passed every
+   *   mutation below — proving nothing. This one does the job: temporarily
+   *   replaced both patterns' `[^`"']*` middle segment with a greedy
+   *   `.*` (the reviewer's own mutation, removing the quote-boundary-
+   *   stopping protection entirely) and confirmed THIS assertion now fails
+   *   (`toBe(false)` no longer holds, `.*` joins the two literals across
+   *   the boundary) — exactly the near miss the finding describes. Reverted
+   *   to `[^`"']*` immediately after.
    */
 });

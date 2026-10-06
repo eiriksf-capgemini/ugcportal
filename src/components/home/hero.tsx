@@ -189,6 +189,24 @@ export function Hero({ signedIn }: HeroProps) {
             text-surface-0 / hover:bg-petrol-200), so the contrast pairings
             already measuring them (surface-0-on-petrol-100 and its own
             -hover entry in src/lib/design/contrast.ts) still apply.
+
+            Horizontal padding changes (round-2 review, LOW, CONFIRMED):
+            `size="lg"` gives `px-2.5`, not the `px-4` the hand-rolled
+            className this replaces used — the same value every other
+            `size="lg"` caller gets, not a regression specific to this call
+            site.
+
+            Focus-visible outline (round-2 review, MEDIUM, CONFIRMED,
+            disclosed rather than fixed here per scope freeze): this link
+            used to draw a real CSS `outline` on focus; `buttonVariants`'
+            shared base class instead sets `outline-none` plus a box-shadow
+            ring, which forced-colors/Windows-High-Contrast-Mode drops
+            entirely (verified: focused, computed `outlineStyle: "none"`,
+            `boxShadow: "none"` under `forced-colors: active` emulation).
+            This is not new to this diff — every pre-existing `<Button>` in
+            the app already has this gap in the SHARED base class (same
+            result on the header's own sign-in buttons) — so it is fixed in
+            the shared mechanism, not per call site: see ugcportal-oavb.
           */}
           <div className="mt-2">
             <Link href={cta.href} className={buttonVariants({ variant: "default-tint", size: "lg" })}>

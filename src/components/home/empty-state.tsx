@@ -122,6 +122,23 @@ export function EmptyState() {
         still picks the single-line width where it fits (390px and up, see
         the PR's own screenshots), and only clamps at the viewport's own
         width where it does not.
+
+        Horizontal padding changes too (round-2 review, LOW, CONFIRMED):
+        `size="lg"` gives `px-2.5`, not the `px-3` the hand-rolled className
+        this replaces used — the same value every other `size="lg"` caller
+        gets, not something specific to this call site.
+
+        Focus-visible outline (round-2 review, MEDIUM, CONFIRMED, disclosed
+        rather than fixed here per scope freeze): this link used to draw a
+        real CSS `outline` on focus; `buttonVariants`' shared base class
+        instead sets `outline-none` plus a box-shadow ring, which forced-
+        colors/Windows-High-Contrast-Mode drops entirely (verified: focused,
+        computed `outlineStyle: "none"`, `boxShadow: "none"` under
+        `forced-colors: active` emulation). Not new to this diff — every
+        pre-existing `<Button>` in the app already has this gap in the
+        SHARED base class (same result on the header's own sign-in
+        buttons) — so it is fixed in the shared mechanism, not per call
+        site: see ugcportal-oavb.
       */}
       <Link
         href={PORTFOLIO_PATH}
