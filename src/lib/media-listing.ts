@@ -403,8 +403,19 @@ function decodeMediaCursor(raw: string): MediaCursor | null {
  * the conflation is what made earlier versions silently vacuous: the anonymous
  * projection has no `previewKey` at all, so reading it yields `undefined`, and
  * `undefined !== null` passes everything.
+ *
+ * EXPORTED (ugcportal-qnq9.16, item 1 of the lows deferred from PR #93's
+ * round-6 review) so src/lib/portfolio.ts's `listPortfolioPieces` — a direct
+ * Prisma query against this same anonymous scope, not a `listMedia` caller —
+ * can apply the identical post-query re-check rather than trusting the
+ * where-clause alone. That review finding named the risk precisely: today
+ * `PUBLIC_MEDIA_SCOPE` already filters both columns at the query, so this is
+ * defense-in-depth, not a live bug — but it is the exact same defense-in-depth
+ * this function already gives every `listMedia` caller, and a future schema
+ * or query change should not have one anonymous-scope reader covered and the
+ * other not.
  */
-function hasCompletePreview(
+export function hasCompletePreview(
   row: { previewId?: string | null; previewKey?: string | null },
   scope: MediaListingScope,
 ): boolean {

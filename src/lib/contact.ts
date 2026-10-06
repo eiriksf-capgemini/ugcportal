@@ -1,5 +1,3 @@
-import { isEmailShaped } from "@/lib/email-shape";
-
 /**
  * The contact address the About and Portfolio pages' mailto form sends to
  * (ugcportal-qnq9.7), and the string-building for its `mailto:` links.
@@ -51,16 +49,20 @@ export function resolveContactEmail(): string {
  * would be mailed to as a single, malformed address (after encoding) rather
  * than silently repaired into the one the operator meant.
  *
- * The actual shape check is `isEmailShaped` (src/lib/email-shape.ts),
- * shared with src/lib/sign-in-policy.ts's own email-shape check (round-5
- * review: the two used to carry separately maintained, near-identical
- * regexes — see that module's own comment for the trailing-dot bug that
- * duplication let slip through unfixed in one copy after the other was
- * fixed).
+ * A RE-EXPORT, not a wrapper function (ugcportal-qnq9.16, item 6 of the lows
+ * deferred from PR #93's round-6 review): the shape check itself is
+ * `isEmailShaped` (src/lib/email-shape.ts), shared with
+ * src/lib/sign-in-policy.ts's own email-shape check (round-5 review: the
+ * two used to carry separately maintained, near-identical regexes — see
+ * that module's own comment for the trailing-dot bug that duplication let
+ * slip through unfixed in one copy after the other was fixed). A function
+ * here that only called straight through to `isEmailShaped` was an extra
+ * hop for a reader chasing the real logic with no behaviour of its own;
+ * aliasing the export instead keeps the name this module's own callers
+ * (src/instrumentation.ts, src/components/site/contact-section.tsx) and
+ * src/lib/contact.test.ts already import, with nothing left to call through.
  */
-export function isBareEmailAddress(value: string): boolean {
-  return isEmailShaped(value);
-}
+export { isEmailShaped as isBareEmailAddress } from "@/lib/email-shape";
 
 /** The named `mailto:` query parameters this site ever builds. */
 export type MailtoParams = { subject?: string; body?: string };

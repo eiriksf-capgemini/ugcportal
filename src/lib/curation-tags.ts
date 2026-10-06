@@ -45,17 +45,21 @@ export function isCurationTagSlug(slug: string): boolean {
  * caller's type, which is exactly the kind of coupling the module's own
  * "dependency-free" comment above exists to avoid.
  *
- * Tolerant of `tags` not being an array — the same defensive instinct
- * `toGalleryTags` already applies to its own `unknown` input. Only
- * `public-media.ts` has ever needed this in practice, for a reason specific
- * to IT, not to this function: its own route test's hand-rolled Prisma mock
- * predates the `tags` relation entirely (ugcportal-jsc) and returns rows
- * with no `tags` property at all, so passing that straight through here
- * would otherwise throw. Keeping the tolerance in the shared function,
- * rather than asking each caller to guard before calling it, means neither
- * caller has to remember to.
+ * NOT tolerant of `tags` not being an array (ugcportal-qnq9.16, item 3 of
+ * the lows deferred from PR #93's round-6 review). An earlier version
+ * returned `tags` unchanged whenever it was not an array — not for any
+ * caller's real contract, but solely because
+ * src/app/api/public/media/route.test.ts's hand-rolled Prisma mock predates
+ * the `tags` relation (ugcportal-jsc) and its `Row` fixture never set one,
+ * so every row that mock produced had `tags: undefined` and would otherwise
+ * have thrown here. That mock now seeds `tags: []` like every other fixture
+ * in this codebase (src/lib/test-support/media-fixtures.ts), so there is
+ * nothing left to tolerate: every real caller reads a Prisma `tags`
+ * relation, which Prisma always projects as an array, and a non-array value
+ * reaching here is a genuine contract violation — `MEDIA_ANONYMOUS_SELECT`'s
+ * `tags` relation dropped from a real query, say — that should fail loudly
+ * rather than silently pass the bad value to every renderer downstream.
  */
 export function stripCurationTags<T extends { slug: string }>(tags: T[]): T[] {
-  if (!Array.isArray(tags)) return tags;
   return tags.filter((tag) => !isCurationTagSlug(tag.slug));
 }

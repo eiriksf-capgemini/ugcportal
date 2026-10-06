@@ -1,6 +1,7 @@
 import { PORTFOLIO_TAG_SLUG } from "@/lib/curation-tags";
 import { MEDIA_ANONYMOUS_SELECT } from "@/lib/media-access";
 import { toGalleryItems, type GalleryItem } from "@/lib/gallery-items";
+import { hasCompletePreview } from "@/lib/media-listing";
 import { prisma } from "@/lib/prisma";
 import { PUBLIC_MEDIA_SCOPE } from "@/lib/public-media";
 
@@ -133,6 +134,15 @@ export const MAX_PORTFOLIO_PIECES = 24;
  * "one place" was this file, which still left the main gallery feed
  * leaking the tag on any item that happened to be both published and
  * portfolio-tagged.
+ *
+ * APPLIES `hasCompletePreview` (src/lib/media-listing.ts) BEFORE mapping to
+ * `GalleryItem` (ugcportal-qnq9.16, round-6 review of PR #93, item 1): the
+ * same defense-in-depth re-check `listMedia` applies to every row it reads
+ * under this identical anonymous scope, so this direct Prisma query is not
+ * the one anonymous-scope reader relying on the where-clause alone. Not a
+ * live bug today — `PUBLIC_MEDIA_SCOPE` already filters both preview columns
+ * at the query — but the two readers of that scope should not silently part
+ * ways on how defensively they treat it.
  */
 export async function listPortfolioPieces(): Promise<GalleryItem[]> {
   const rows = await prisma.media.findMany({
@@ -146,5 +156,7 @@ export async function listPortfolioPieces(): Promise<GalleryItem[]> {
     take: MAX_PORTFOLIO_PIECES,
   });
 
-  return toGalleryItems(rows);
+  const complete = rows.filter((row) => hasCompletePreview(row, PUBLIC_MEDIA_SCOPE));
+
+  return toGalleryItems(complete);
 }

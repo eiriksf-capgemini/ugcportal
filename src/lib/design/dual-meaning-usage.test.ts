@@ -217,25 +217,30 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
   "src/app/admin/settings/users/page.tsx": { "text-muted-foreground": 4 },
   "src/app/admin/settings/instagram/page.tsx": { "text-muted-foreground": 3 },
   "src/app/upload/page.tsx": { "text-muted-foreground": 1 },
-  // text-ink: 2 (low finding 5) - the alt-text and caption labels, on the
-  // upload form's own plain canvas (ugcportal-gwr). The two inputs that
-  // used to make this 4 now take their class from the shared
-  // text-input.ts constant (ugcportal-qnq9.7 round 3), audited below.
+  // text-ink used to be 2 here (low finding 5): the alt-text and caption
+  // labels, on the upload form's own plain canvas (ugcportal-gwr). The two
+  // inputs that used to make this 4 already took their class from the
+  // shared text-input.ts constant (ugcportal-qnq9.7 round 3); the two
+  // labels now do too (ugcportal-qnq9.16, item 4 of the lows deferred from
+  // PR #93's round-6 review — TEXT_LABEL_CLASS, audited below), so this
+  // file carries no literal "text-ink" of its own left to pin.
   "src/app/upload/upload-form.tsx": {
     "text-foreground": 2,
     "text-muted-foreground": 5,
-    "text-ink": 2,
   },
   // text-ink: 1 (low finding 5) - the queued file's name, on the upload
   // page's own plain canvas (ugcportal-n3c).
   "src/app/upload/upload-queue-list.tsx": { "text-ink": 1 },
-  // Merge of ugcportal-qnq9.7 (PR #93) with this bead's text-ink audit: the
-  // shared input class (one text-ink, on the input's own bg-surface-1 fill,
-  // the same well-interior case as decision-form.tsx's bg-surface-3 fields)
-  // and the About/Portfolio contact form's two field labels, on the page
-  // canvas exactly like upload-form.tsx's labels above.
-  "src/components/ui/text-input.ts": { "text-ink": 1 },
-  "src/components/site/contact-mailto-form.tsx": { "text-ink": 2 },
+  // text-ink: 2 (ugcportal-qnq9.16, item 4 of the lows deferred from PR
+  // #93's round-6 review): TEXT_INPUT_CLASS's one usage (on the input's
+  // own bg-surface-1 fill, the same well-interior case as
+  // decision-form.tsx's bg-surface-3 fields) plus TEXT_LABEL_CLASS's one
+  // (on the page canvas, the same case upload-form.tsx's and the
+  // About/Portfolio contact form's labels were each pinned under before
+  // both were extracted to this one shared constant). Both shared by
+  // upload-form.tsx and contact-mailto-form.tsx, neither of which has a
+  // literal "text-ink" of its own left to pin as a result.
+  "src/components/ui/text-input.ts": { "text-ink": 2 },
   // text-ink: 2 (low finding 5) - button.tsx's OWN two usages
   // (NEUTRAL_OUTLINE_STYLE and the `ghost` variant), each documented there
   // as measured and safe only inside one of the old near-black wells. Pinned
