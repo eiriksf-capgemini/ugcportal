@@ -2,6 +2,8 @@ import type { ReactNode } from "react";
 
 import { cn } from "cn";
 
+import { DISPLAY_TITLE_CLASS } from "@/components/type-scale";
+
 /**
  * The shared container for a top-level page's content, independent of any
  * particular `<h1>` styling (round-4 review).
@@ -53,6 +55,12 @@ const WIDE_PAGE_CONTAINER_CLASS = cn(SIX_XL_CONTAINER_CLASS, "flex-1 py-12");
  * their copy is deliberately kept in step — see src/app/about/page.tsx's own
  * comment), so they get the fuller component rather than only the constant
  * above.
+ *
+ * DISPLAY_TITLE_CLASS (ugcportal-qqnt.1), not this file's own, smaller
+ * `text-2xl font-semibold` any more: the type-scale bead's K2 asks /about
+ * and /portfolio's titles to share the same display utility the home page's
+ * hero does (src/components/home/hero.tsx), so the three public pages agree
+ * on what their own page title looks like.
  */
 export function PageShell({
   title,
@@ -65,9 +73,7 @@ export function PageShell({
 }) {
   return (
     <div className={wide ? WIDE_PAGE_CONTAINER_CLASS : PAGE_CONTAINER_CLASS}>
-      <h1 className="text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
-        {title}
-      </h1>
+      <h1 className={cn("text-foreground", DISPLAY_TITLE_CLASS)}>{title}</h1>
       {children}
     </div>
   );

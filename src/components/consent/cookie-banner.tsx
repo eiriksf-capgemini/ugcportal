@@ -42,11 +42,16 @@ const useIsomorphicLayoutEffect =
  * control is right there even though the one originally captured is not.
  *
  * Second choice: the page's own `<h1>`. Every page in this repo renders
- * exactly one (app-shell.tsx's own documented convention, enforced by
- * gallery.test.tsx's "has exactly one <h1>"), so it is always present and
- * is already the visitor's own landmark for "where this page's content
- * starts" — a far more sensible landing spot than an unannounced, unfocused
- * <body>. Headings are not natively focusable; `tabIndex="-1"` is added if
+ * exactly one (app-shell.tsx's own documented convention) — on the home
+ * page, that is now the hero's own title (src/components/home/hero.tsx,
+ * ugcportal-qqnt.1; see src/app/page.tags.test.tsx and
+ * src/components/type-scale.test.tsx for the tests that pin it across the
+ * page's own branches), where it used to be whichever of Gallery/EmptyState/
+ * GalleryUnavailable was on screen; every other page keeps its own h1 as
+ * before — so it is always present and is already the visitor's own landmark
+ * for "where this page's content starts" — a far more sensible landing spot
+ * than an unannounced, unfocused <body>. Headings are not natively
+ * focusable; `tabIndex="-1"` is added if
  * missing (the same technique this component's own sr-only `<h2>` already
  * relies on above) and left in place afterwards — that only removes the
  * element from the SEQUENTIAL tab order's reach (Tab/Shift+Tab), not from
