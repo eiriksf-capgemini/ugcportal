@@ -5,6 +5,7 @@ import { GalleryUnavailable } from "@/components/gallery/gallery-unavailable";
 import { EmptyState } from "@/components/home/empty-state";
 import { Hero } from "@/components/home/hero";
 import { isGenuinelyEmptyPage, toGalleryItems } from "@/lib/gallery-items";
+import { listPortfolioPieces } from "@/lib/portfolio";
 import {
   listPublicMedia,
   publicMediaListingUrl,
@@ -175,11 +176,21 @@ export default async function Home() {
     result.page.hasMore,
   );
 
+  /*
+   * The portfolio sample for the living empty state (ugcportal-qqnt.5),
+   * read only on the branch that can use it — `<Gallery>` never reads
+   * `listPortfolioPieces` at all, so a page with published media pays
+   * nothing extra for this. `EmptyState` stays a plain, synchronous
+   * component (see its own comment for why); the query is awaited here,
+   * the same way `signedIn` above is resolved before `<Hero>` ever sees it.
+   */
+  const portfolioPieces = isGenuinelyEmpty ? await listPortfolioPieces() : [];
+
   return (
     <>
       <Hero signedIn={signedIn} />
       {isGenuinelyEmpty ? (
-        <EmptyState />
+        <EmptyState pieces={portfolioPieces} />
       ) : (
         <Gallery
           initialItems={toGalleryItems(result.page.items)}

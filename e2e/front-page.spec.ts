@@ -48,6 +48,92 @@ test("K1: the living empty state offers an action, on a genuinely empty gallery"
 });
 
 /**
+ * ugcportal-qqnt.5: the bug this bead fixes, and the one case this suite's
+ * own seed-free dev database (this file's own header comment) can exercise
+ * end to end. K1's OTHER half — the "From the portfolio" title and a tile
+ * row actually rendering, against real portfolio pieces — is NOT
+ * reachable here: `listPortfolioPieces` and `listPublicMedia` both read
+ * through the identical `PUBLIC_MEDIA_SCOPE` (src/lib/public-media.ts), so a
+ * real portfolio piece is, by construction, ALSO a published row the main
+ * feed would show — seeding one would un-empty the gallery and render
+ * `<Gallery>`, not `<EmptyState>`, defeating the very scenario this test
+ * needs (confirmed by hand: seeding one through the real publish pipeline
+ * against this suite's own dev database renders the ordinary `<Gallery>`
+ * grid, not the empty state, exactly as this reasoning predicts). That half
+ * is covered at the component level instead (src/components/home/
+ * empty-state.test.tsx's six/one/zero-piece cases, where `pieces` is
+ * supplied directly rather than read from a database) and at the wiring
+ * level (src/app/page.portfolio-wiring.test.tsx, with `listPortfolioPieces`
+ * mocked for exactly that reason — see that file's own header comment).
+ *
+ * What IS real and checkable here, with zero pieces: the regression this
+ * bead was filed over — "an outline link... clipped by the viewport bottom
+ * at 1440x900" (this bead's own premise note) — is gone, strictly, at
+ * 1440x900, the one viewport K1's own acceptance criterion names for "inside
+ * the viewport". At 390x844 the check is looser (reachable and correctly
+ * rendered, not "never requires scrolling"): the hero above this component
+ * already fills that viewport on its own today (a long lead and decorative
+ * circles — src/components/home/hero.tsx, owned by the still-open sibling
+ * ugcportal-qqnt.4, out of this bead's scope to touch), so a strict
+ * containment claim at 390x844 would be coupled to that unmerged bead's own
+ * fix rather than to anything this one changed.
+ */
+test("K1: the empty state's title and its portfolio link are fully inside the viewport at 1440x900", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/");
+
+  const emptyState = page.locator("[data-home-empty-state]");
+  await expect(emptyState).toBeVisible();
+
+  const title = emptyState.locator("h2").first();
+  const link = emptyState.getByRole("link", { name: /portfolio/i });
+  await expect(title).toBeVisible();
+  await expect(link).toBeVisible();
+
+  const [titleBox, linkBox] = await Promise.all([
+    title.boundingBox(),
+    link.boundingBox(),
+  ]);
+  expect(titleBox, "title has no bounding box").not.toBeNull();
+  expect(linkBox, "link has no bounding box").not.toBeNull();
+  expect(
+    titleBox!.y + titleBox!.height,
+    `title bottom ${titleBox!.y + titleBox!.height} vs viewport height 900`,
+  ).toBeLessThanOrEqual(900);
+  expect(
+    linkBox!.y + linkBox!.height,
+    `link bottom ${linkBox!.y + linkBox!.height} vs viewport height 900`,
+  ).toBeLessThanOrEqual(900);
+
+  // K2: no portfolio piece exists in this suite's seed-free database, so no
+  // tile row and no second, "From the portfolio" section title render.
+  await expect(emptyState.locator("h2")).toHaveCount(1);
+  await expect(page.locator("[data-portfolio-piece]")).toHaveCount(0);
+});
+
+test("K2: the empty state renders correctly (title, one-line copy, portfolio link, no tile row) at 390x844", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/");
+
+  const emptyState = page.locator("[data-home-empty-state]");
+  await emptyState.scrollIntoViewIfNeeded();
+  await expect(emptyState).toBeVisible();
+  await expect(emptyState.locator("h2").first()).toHaveText(
+    "Nothing is published yet.",
+  );
+  await expect(
+    emptyState.getByRole("link", { name: /portfolio/i }),
+  ).toBeVisible();
+
+  await expect(emptyState.locator("h2")).toHaveCount(1);
+  await expect(page.locator("[data-portfolio-piece]")).toHaveCount(0);
+});
+
+/**
  * ugcportal-qqnt.1 K1: the hero carries the h1, at a computed font size
  * strictly larger than the first <h2> after it — a pixel-level claim the
  * vitest-level class-name checks (src/components/type-scale.test.tsx)

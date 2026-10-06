@@ -383,6 +383,37 @@ describe("K1 — the gallery renders published previews to an anonymous visitor"
 });
 
 /**
+ * ugcportal-qqnt.5 K2: the living empty state's portfolio tile row, against
+ * the real `listPortfolioPieces` (src/lib/portfolio.ts) and a real,
+ * genuinely empty database — nothing published, so no portfolio piece
+ * either, the ordinary state of a brand-new instance.
+ *
+ * THE OTHER HALF OF K1 (at least one real portfolio piece reaching the tile
+ * row through `Home()`'s own wiring) IS DELIBERATELY NOT HERE: a portfolio
+ * piece is, by construction, ALSO a published Media row
+ * (`listPortfolioPieces` and `listPublicMedia` both read through the
+ * identical `PUBLIC_MEDIA_SCOPE`, src/lib/public-media.ts — see
+ * src/lib/portfolio.ts's own comment), so seeding one through the real
+ * publish pipeline necessarily makes `result.page.items` non-empty too,
+ * which makes `isGenuinelyEmptyPage` false and renders `<Gallery>`, not
+ * `<EmptyState>`, for that exact row — the opposite of what K1 needs to
+ * observe. That combination is therefore unreachable through this file's
+ * own "real database" discipline; src/app/page.portfolio-wiring.test.tsx
+ * covers K1's wiring claim instead, with `@/lib/portfolio` mocked for
+ * exactly that reason (see that file's own header comment). This file keeps
+ * covering the one genuinely-empty-database case that needs no mock.
+ */
+describe("ugcportal-qqnt.5 K2 — the empty state's portfolio tile row, against a real empty database", () => {
+  it("renders no tile row at all when no portfolio piece exists either", async () => {
+    const markup = await renderGallery();
+
+    expect(markup).toContain("Nothing is published yet.");
+    expect(markup).not.toContain("data-portfolio-piece");
+    expect(markup).not.toContain("From the portfolio");
+  });
+});
+
+/**
  * ugcportal-14k9 PR #94 review round 2, finding 1. Rendered through
  * `AppShell`, not `Home()`/`Gallery` alone - the bug both review rounds
  * found is a relationship BETWEEN two components (the header's tagline and

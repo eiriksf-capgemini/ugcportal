@@ -1,8 +1,21 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { EmptyState } from "./empty-state";
 import { Hero } from "./hero";
+
+/**
+ * `EmptyState` now renders `PortfolioTile` (ugcportal-qqnt.5), whose module
+ * graph reaches `@/lib/portfolio` -> `@/lib/media-access` -> `@/lib/auth` at
+ * import time — the same reason src/components/portfolio/portfolio-tile.test.tsx
+ * mocks this. This file never signs anyone in or out; the stub only exists
+ * so importing `EmptyState` does not pull in next-auth's own module graph.
+ */
+vi.mock("@/lib/auth", () => ({
+  auth: () => {
+    throw new Error("rendering these components must not consult the session");
+  },
+}));
 
 /**
  * ugcportal-6dvg K4: "Following should never happen: a stock photo or
@@ -26,7 +39,17 @@ function visibleText(markup: string): string {
 
 const HERO_SIGNED_OUT = visibleText(renderToStaticMarkup(<Hero signedIn={false} />));
 const HERO_SIGNED_IN = visibleText(renderToStaticMarkup(<Hero signedIn={true} />));
-const EMPTY_STATE = visibleText(renderToStaticMarkup(<EmptyState />));
+/*
+ * `pieces={[]}` (ugcportal-qqnt.5): this guardrail is about the component's
+ * OWN authored copy — the heading, the one-line fallback, the portfolio
+ * link's label — not about an uploader's free-text caption, which is
+ * neither fixed copy nor something this file's fixtures control. The
+ * zero-pieces branch renders every string this component can ever show
+ * except the portfolio tile row, which carries no text of its own (the
+ * tiles are images with an aria-label, not visible copy — see
+ * portfolio-tile.test.tsx).
+ */
+const EMPTY_STATE = visibleText(renderToStaticMarkup(<EmptyState pieces={[]} />));
 
 describe("front page strings (ugcportal-6dvg K4)", () => {
   /*
