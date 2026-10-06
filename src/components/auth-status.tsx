@@ -55,6 +55,14 @@ export async function AuthStatus() {
           Hidden with sr-only rather than removed, so the accessible name
           stays "Sign in with Google" at every width. The visible text remains
           a substring of it, which is what WCAG 2.5.3 asks of a visible label.
+
+          size="header-sm", not "sm" (ugcportal-qqnt.2, round-1 review): same
+          compact h-7/px-2.5 footprint as "sm" - still the same width budget
+          the 320px note above depends on - but without "sm"'s own smaller
+          radius cap, so this control computes the same rounded-lg radius
+          (K2) as the hero's and empty state's size="lg" controls. See
+          button.tsx's own `size` comment for why that is a distinct size
+          rather than a change to "sm" itself.
         */}
         <form
           action={async () => {
@@ -62,7 +70,7 @@ export async function AuthStatus() {
             await signIn("google");
           }}
         >
-          <Button type="submit" variant="outline" size="sm">
+          <Button type="submit" variant="outline" size="header-sm">
             <span className="sr-only sm:not-sr-only">Sign in with&nbsp;</span>
             Google
           </Button>
@@ -73,7 +81,7 @@ export async function AuthStatus() {
             await signIn("facebook");
           }}
         >
-          <Button type="submit" variant="outline" size="sm">
+          <Button type="submit" variant="outline" size="header-sm">
             <span className="sr-only sm:not-sr-only">Sign in with&nbsp;</span>
             Facebook
           </Button>
@@ -99,7 +107,7 @@ export async function AuthStatus() {
       <span className="min-w-0 truncate text-sm text-muted-foreground">
         {session.user.name ?? session.user.email}
       </span>
-      <Button type="submit" variant="outline" size="sm">
+      <Button type="submit" variant="outline" size="header-sm">
         Sign out
       </Button>
     </form>

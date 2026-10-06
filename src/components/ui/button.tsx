@@ -48,12 +48,63 @@ import { cn } from "cn"
  *    --color-line-strong, already measured at 3:1+ against every near-black
  *    surface including this one (control-edge-on-destructive-surface in
  *    contrast.ts).
+ * 6. THE RULE (ugcportal-qqnt.2): every button-like control on the public
+ *    pages (header, hero, empty state) resolves to one of this file's own
+ *    `buttonVariants` class sets - never a hand-written `inline-flex ...
+ *    rounded-*` string at the call site (button-system.test.tsx's K3
+ *    describe block enforces the second half of that; round-1 review,
+ *    CONFIRMED low - an earlier version of this sentence pointed at
+ *    src/components/type-scale.test.tsx instead, which exists but is
+ *    entirely about heading type-scale sizing and asserts nothing about
+ *    hand-written button classes).
+ *    Which variant is primary depends on the SURFACE, not on taste:
+ *      - on --background (the paper canvas): `default` is primary, `outline`
+ *        is secondary - this is what src/components/auth-status.tsx's
+ *        sign-in controls and the empty state's portfolio link both use.
+ *      - on the hero's petrol-GRADIENT well (`.home-hero-surface`):
+ *        `default-tint` is primary - see that variant's own comment for why
+ *        it is not `default-neutral`.
+ *      - on the untouched near-black surface scale (bg-surface-0..4 /
+ *        bg-destructive-surface - fase 2's job, not this bead's):
+ *        `default-neutral` is primary, `outline-neutral` is secondary.
+ *    The shared `rounded-lg` radius (`--radius-lg`, 10px - the same figure
+ *    docs/design/tokens.css's `--radius-card` names for a tile, which is why
+ *    src/components/gallery/containment.ts's `GALLERY_TILE_BASE_CLASS` moved
+ *    onto `rounded-lg` too) applies to every PUBLIC-PAGE button-like control
+ *    this bead actually touches - hero's and empty state's `lg`-sized
+ *    controls, and the header's sign-in/sign-out controls via the
+ *    `header-sm` size below - not to every `size` key wholesale (round-1
+ *    review, CONFIRMED medium: an earlier version of this change removed
+ *    the smaller radius cap from `xs`/`sm`/`icon-xs`/`icon-sm` entirely,
+ *    which silently changed the computed radius of every OTHER `size="sm"`
+ *    caller this bead neither touches nor verifies - see the `size`
+ *    variants' own comment below for the restored cap and the new
+ *    `header-sm` size).
  */
 const PETROL_OUTLINE_STYLE =
   "border-primary bg-transparent text-primary hover:border-primary-hover hover:underline aria-expanded:border-primary-hover aria-expanded:underline"
 
 const NEUTRAL_OUTLINE_STYLE =
   "border-input bg-transparent text-ink hover:border-input hover:bg-accent hover:text-accent-foreground hover:no-underline aria-expanded:border-input aria-expanded:bg-accent aria-expanded:no-underline"
+
+/**
+ * `sm`'s box-model/typography/icon-sizing tokens, named once so `header-sm`
+ * (ugcportal-qqnt.2 round 2, finding 5 - LOW, CONFIRMED) derives from the
+ * SAME tokens `sm` uses rather than hand-copying them a second time. Before
+ * this, `header-sm`'s definition retyped `sm`'s `h-7`/`gap-1`/`px-2.5`/
+ * `text-[0.8rem]`/icon-size classes verbatim, so a future edit to `sm`'s box
+ * model could silently drift the two apart with nothing to catch it (the
+ * regression guard in button-system.test.tsx checks `sm` against a
+ * historical snapshot of ITSELF, not against `header-sm`). `sm`'s own radius
+ * cap and its `in-data-[slot=button-group]:rounded-lg` escape hatch stay OUT
+ * of these three constants on purpose: that is the one thing `header-sm` is
+ * supposed to differ on (see the `size` comment below) - sharing it too
+ * would undo the whole point of `header-sm` existing.
+ */
+const SM_BOX_MODEL = "h-7 gap-1"
+const SM_PADDING_AND_TEXT = "px-2.5 text-[0.8rem]"
+const SM_ICON_SIZING =
+  "has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-3.5"
 
 const buttonVariants = cva(
   /*
@@ -116,8 +167,42 @@ const buttonVariants = cva(
          * paints. `hover:brightness-95` rather than a second new token: this
          * is a contrast fix for an untouched-surface caller, not a second
          * filled-button treatment to design and verify.
+         *
+         * KNOWN GAP, NOT FIXED HERE (ugcportal-ei5c): `text-petrol-900` does
+         * not compile to any rule at all - `--color-petrol-900` (the OKLCH
+         * near-black scale's version of this token) is declared in :root,
+         * not @theme, specifically so Tailwind does NOT emit a `text-`/`bg-`
+         * utility for it (see globals.css's own "stopping Tailwind emitting
+         * bg-petrol-900 and friends" comment) - confirmed empirically by
+         * compiling globals.css and checking the generated utilities. This
+         * variant's label therefore renders in whatever colour the caller
+         * otherwise inherits, not petrol-900. Filed as its own bead rather
+         * than fixed as a side effect of ugcportal-qqnt.2's button-system
+         * consolidation, which does not otherwise touch this variant's
+         * colours or its one caller (the upload queue's "Try again"
+         * button, out of scope per that bead's own description).
          */
         "default-neutral": "bg-petrol-400 text-petrol-900 hover:brightness-95",
+        /*
+         * ugcportal-qqnt.2: the primary action on the front page's petrol-
+         * GRADIENT well (`.home-hero-surface`, src/components/home/
+         * hero.tsx) - a DIFFERENT surface from `default-neutral`'s untouched
+         * near-black surface scale, so it needs its own fill rather than
+         * reusing that one (a near-black-tuned fill is not verified against
+         * this gradient, and vice versa). Light petrol-tint fill, dark
+         * label - the same fill-light/label-dark shape `default-neutral`
+         * uses, but with `text-surface-0` rather than `text-petrol-900`:
+         * `--color-surface-0` IS declared in `@theme`, so this is a working
+         * label where `default-neutral`'s is not (see that variant's own
+         * "KNOWN GAP" comment) - this is not a second attempt at fixing
+         * that gap, only a variant that never had it. Colours and hover
+         * step are exactly what the hero's own hand-styled CTA already
+         * used, moved here unchanged: `surface-0-on-petrol-100` and
+         * `surface-0-on-petrol-100-hover` in contrast.ts measure this exact
+         * fill/label/hover-fill combination already, so adopting the shared
+         * Button here needed no new contrast pairing.
+         */
+        "default-tint": "bg-petrol-100 text-surface-0 hover:bg-petrol-200",
         outline: PETROL_OUTLINE_STYLE,
         secondary: PETROL_OUTLINE_STYLE,
         "outline-neutral": NEUTRAL_OUTLINE_STYLE,
@@ -138,11 +223,55 @@ const buttonVariants = cva(
           "border-destructive/75 bg-destructive-surface text-destructive hover:bg-destructive-surface-hover focus-visible:border-destructive focus-visible:ring-destructive/80",
         link: "text-primary underline-offset-4 hover:underline",
       },
+      /*
+       * ugcportal-qqnt.2, round-1 review (CONFIRMED medium): `xs`/`sm`/
+       * `icon-xs`/`icon-sm` cap their radius at a smaller
+       * `rounded-[min(var(--radius-md),Npx)]` than the base class's own
+       * `rounded-lg`, with an `in-data-[slot=button-group]:rounded-lg`
+       * override standing by for the one context (a `ButtonGroup`) that
+       * needs the base radius back. An earlier version of this bead removed
+       * that cap from all four sizes entirely, on the theory that "one
+       * radius token for all interactive elements" (this bead's own
+       * description) meant no size should keep a smaller one. That silently
+       * changed the COMPUTED radius of every `size="sm"`/`"xs"` caller this
+       * bead neither touches nor verifies -
+       * src/app/admin/settings/instagram/page.tsx,
+       * src/app/admin/settings/rights/decision-form.tsx,
+       * src/app/admin/settings/users/page.tsx,
+       * src/app/upload/upload-queue-list.tsx, src/app/auth/error/page.tsx
+       * and src/components/consent/cookie-banner.tsx all render a
+       * `size="sm"` button today, none of them in this bead's stated scope
+       * (admin and upload buttons are explicitly OUT of scope per the
+       * bead's own description). The cap below is restored byte-for-byte
+       * from before this bead - button-system.test.tsx's regression guard
+       * renders CookieBanner and asserts its button's computed class list
+       * is unchanged - so every one of those callers keeps the exact
+       * radius it had before this bead, unexamined and unchanged.
+       *
+       * `header-sm`, not a change to `sm` itself, is how
+       * src/components/auth-status.tsx's sign-in/sign-out controls get the
+       * one radius K2 asks for: identical `h-7`/`gap-1`/`px-2.5`/
+       * `text-[0.8rem]` dimensions to `sm` (so the header stays exactly as
+       * compact at 320px - see auth-status.tsx's own comment on why that
+       * width matters there), but WITHOUT the radius cap, so it falls
+       * through to the base class's `rounded-lg` the same way hero's and
+       * empty state's uncapped `lg` controls do. Whether the all-sizes-10px
+       * radius is the right design for every OTHER `sm`/`xs` caller too is
+       * an open question this bead does not decide here - noted in the
+       * PR body as a follow-up for the parent epic (ugcportal-qqnt), not
+       * settled by this change.
+       */
       size: {
         default:
           "h-8 gap-1.5 px-2.5 has-data-[icon=inline-end]:pr-2 has-data-[icon=inline-start]:pl-2",
         xs: "h-6 gap-1 rounded-[min(var(--radius-md),10px)] px-2 text-xs in-data-[slot=button-group]:rounded-lg has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-3",
-        sm: "h-7 gap-1 rounded-[min(var(--radius-md),12px)] px-2.5 text-[0.8rem] in-data-[slot=button-group]:rounded-lg has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-3.5",
+        sm: `${SM_BOX_MODEL} rounded-[min(var(--radius-md),12px)] ${SM_PADDING_AND_TEXT} in-data-[slot=button-group]:rounded-lg ${SM_ICON_SIZING}`,
+        // See the `size` comment above: derived from the SAME
+        // SM_BOX_MODEL/SM_PADDING_AND_TEXT/SM_ICON_SIZING constants `sm`
+        // itself uses, minus the radius cap, reserved for the header's
+        // public-page controls so K2 holds without changing what every
+        // other `size="sm"` caller renders.
+        "header-sm": `${SM_BOX_MODEL} ${SM_PADDING_AND_TEXT} ${SM_ICON_SIZING}`,
         lg: "h-9 gap-1.5 px-2.5 has-data-[icon=inline-end]:pr-2 has-data-[icon=inline-start]:pl-2",
         icon: "size-8",
         "icon-xs":

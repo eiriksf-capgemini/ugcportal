@@ -79,8 +79,16 @@ export const GALLERY_TILE_ASPECT_CLASS = "aspect-square";
  * NOT interactive (see that component's own comment for why it carries
  * none of `GALLERY_TILE_CLASS`'s `group`/`cursor-zoom-in`/focus-ring
  * classes below).
+ *
+ * `rounded-lg`, not `rounded-md` (ugcportal-qqnt.2): the one radius token
+ * the button system now shares (src/components/ui/button.tsx's own header
+ * comment, point 6) is `--radius-lg` at 10px, the same figure
+ * docs/design/tokens.css names for `--radius-card` — so a tile and a
+ * button on the same public page now round by the same amount, rather than
+ * the tile's own smaller `rounded-md` (8px) reading as a third, unrelated
+ * shape beside them.
  */
-export const GALLERY_TILE_BASE_CLASS = `relative block w-full overflow-hidden rounded-md bg-surface-1 ${GALLERY_TILE_ASPECT_CLASS}`;
+export const GALLERY_TILE_BASE_CLASS = `relative block w-full overflow-hidden rounded-lg bg-surface-1 ${GALLERY_TILE_ASPECT_CLASS}`;
 
 /**
  * One INTERACTIVE tile (gallery.tsx's own `<button>`, which opens the
