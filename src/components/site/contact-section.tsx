@@ -53,9 +53,10 @@ const CONTACT_EMAIL_FALLBACK_LABEL = "our email address";
  * same readiness /privacy's own render guards itself with, via the SAME
  * function the footer's Privacy link reads (src/components/site-footer.tsx)
  * — so the footer and this notice cannot disagree about whether /privacy
- * is safe to link in production (K2). Blocked: the same label renders as
- * inert text instead of an anchor, same treatment as the footer's
- * FooterNavLink.
+ * is safe to link in production (K2; by construction, and exercised
+ * directly in src/components/legal-link-consistency.test.tsx). Blocked:
+ * the same label renders as inert text instead of an anchor, same
+ * treatment as the footer's FooterNavLink.
  *
  * Calls `resolveContactEmail()` ITSELF, inside this component's render,
  * rather than receiving the email as a prop computed by its caller — so

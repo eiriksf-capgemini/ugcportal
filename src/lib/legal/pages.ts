@@ -59,7 +59,10 @@ export function legalPageFor(path: string): LegalPage {
  * each reads the SAME `LegalPage` record (via `legalPageFor` above) through
  * the SAME `legalReadiness`/`linkBlockedInProduction` pair
  * (src/lib/legal/publishable.ts), rather than each computing its own
- * opinion that could drift from the other's.
+ * opinion that could drift from the other's. Agreement is by construction
+ * (same function, same path, same default `env` parameter) and is also
+ * exercised directly, as behaviour rather than an import grep, by
+ * src/components/legal-link-consistency.test.tsx.
  */
 export function legalLinkBlocked(path: string, env: NodeJS.ProcessEnv = process.env): boolean {
   return linkBlockedInProduction(legalReadiness([legalPageFor(path)]), env);
