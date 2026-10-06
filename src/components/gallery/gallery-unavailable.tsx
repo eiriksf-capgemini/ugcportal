@@ -1,4 +1,7 @@
+import { cn } from "cn";
+
 import { GALLERY_STATE_CONTAINER_CLASS } from "@/components/gallery/containment";
+import { SECTION_TITLE_CLASS } from "@/components/type-scale";
 
 /**
  * What the home page renders when `listPublicMedia` answers `ok: false`
@@ -33,9 +36,17 @@ import { GALLERY_STATE_CONTAINER_CLASS } from "@/components/gallery/containment"
 export function GalleryUnavailable() {
   return (
     <div className={GALLERY_STATE_CONTAINER_CLASS} data-gallery-state="error">
-      <h1 className="max-w-2xl text-2xl leading-tight font-medium tracking-tight text-balance text-foreground sm:text-3xl">
+      {/*
+        An <h2>, not an <h1> (ugcportal-qqnt.1): src/components/home/
+        hero.tsx's title is the page's one real <h1> on every branch Home()
+        renders, including this one — see that file's own comment. This
+        heading steps down to SECTION_TITLE_CLASS
+        (src/components/type-scale.ts), the same size EmptyState and
+        Gallery's own headings use.
+      */}
+      <h2 className={cn("max-w-2xl text-foreground", SECTION_TITLE_CLASS)}>
         The gallery could not be loaded.
-      </h1>
+      </h2>
       <p className="mt-4 max-w-prose text-sm text-muted-foreground">
         {/*
           No `role="alert"`. It would do two different things depending on

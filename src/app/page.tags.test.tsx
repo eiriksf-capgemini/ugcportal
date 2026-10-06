@@ -517,23 +517,29 @@ describe("K4 — one gallery, never a section or a route per tag", () => {
       "i0",
     ]);
     /*
-     * And ONE heading on the whole page — the site's own h1.
+     * TWO headings now, not one (ugcportal-qqnt.1): the hero's own <h1> and
+     * the gallery's section <h2>. The total count is kept — at 2, where it
+     * used to be pinned at 1 — rather than dropped in favour of checking the
+     * h1 and h2 counts separately: a section per tag could just as easily
+     * land at h3 (one level under "Gallery") as at a second h1 or h2, and
+     * only the TOTAL catches that shape regardless of which level it picks.
      *
-     * Counted rather than pattern-matched against the subject names, which
-     * is what the first version of this did and what made it fail for the
-     * wrong reason: the page's own h1 used to be SITE_DESCRIPTION, then
-     * briefly SITE_TAGLINE (ugcportal-14k9 PR #94 round 1), both of which
-     * name the same subjects a tag section would — so a "no heading starts
-     * with a subject name" rule flagged the page's own heading rather than
-     * an actual regression. Round 2 settled the h1 on "Gallery" instead (see
-     * gallery.tsx's own comment for why neither earlier version was right),
-     * which no longer collides with any subject name — but the count-based
-     * check is kept rather than reintroducing a pattern match, since a
-     * section per tag shows up as extra headings whatever they are called,
-     * making counting both the stricter check and the one least likely to
-     * need revisiting the next time this heading's copy changes.
+     * The h1's own text is pinned rather than pattern-matched against the
+     * subject names, which is what the first version of this did and what
+     * made it fail for the wrong reason: the page's own heading used to be
+     * SITE_DESCRIPTION, then briefly SITE_TAGLINE (ugcportal-14k9 PR #94
+     * round 1), both of which name the same subjects a tag section would —
+     * so a "no heading starts with a subject name" rule flagged the page's
+     * own heading rather than an actual regression. Pinning the hero's exact
+     * sentence (src/components/home/hero.tsx) checks a DIFFERENT thing than
+     * the total above does: that the page's one `<h1>` really is the hero's,
+     * not that nothing resembling a tag section was added — the total is
+     * what catches that.
      */
-    expect([...markup.matchAll(/<h[1-6]\b/g)]).toHaveLength(1);
+    const h1s = [...markup.matchAll(/<h1\b[^>]*>([^<]*)<\/h1>/g)];
+    expect(h1s).toHaveLength(1);
+    expect(h1s[0][1]).toBe("Real photos of the things you actually use.");
+    expect([...markup.matchAll(/<h[1-6]\b/g)]).toHaveLength(2);
   });
 });
 

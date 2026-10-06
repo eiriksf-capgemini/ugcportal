@@ -90,28 +90,43 @@ describe("throttles repeated failures (ugcportal-0dh round 2: unauthenticated, u
   });
 
   it("reports the suppressed count once the window has genuinely elapsed", async () => {
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const { listPublicMedia, LISTING_FAILURE_LOG_INTERVAL_MS } =
-      await freshListPublicMedia();
+    // Fake timers from the START of the test (ugcportal-qz1u item 1), not
+    // installed partway through: `vi.useFakeTimers()` resets
+    // `performance.now()` to `0` at the moment it installs, discarding
+    // whatever real elapsed time came before it — so the three calls below
+    // that seed `lastAt` have to run under the SAME fake clock the later
+    // `vi.advanceTimersByTime` advances, or the throttle ends up comparing
+    // a real-clock `lastAt` against a fake-clock `now` that both silently
+    // restarted from `0`.
+    vi.useFakeTimers();
+    try {
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const { listPublicMedia, LISTING_FAILURE_LOG_INTERVAL_MS } =
+        await freshListPublicMedia();
 
-    await listPublicMedia(BAD_CURSOR_URL); // logs (first after a quiet start)
-    await listPublicMedia(BAD_CURSOR_URL); // suppressed, 1
-    await listPublicMedia(BAD_CURSOR_URL); // suppressed, 2
+      await listPublicMedia(BAD_CURSOR_URL); // logs (first after a quiet start)
+      await listPublicMedia(BAD_CURSOR_URL); // suppressed, 1
+      await listPublicMedia(BAD_CURSOR_URL); // suppressed, 2
 
-    // Moving the clock, not waiting out the real interval — the same
-    // technique watermark.concurrency.test.ts uses for logShedUpload, and for
-    // the same reason: a caller must not be able to restart the window by
-    // asking again sooner, only by time actually having passed.
-    const nowSpy = vi
-      .spyOn(Date, "now")
-      .mockReturnValue(Date.now() + LISTING_FAILURE_LOG_INTERVAL_MS + 1);
-    await listPublicMedia(BAD_CURSOR_URL);
-    nowSpy.mockRestore();
+      // Moving the clock, not waiting out the real interval — a caller must
+      // not be able to restart the window by asking again sooner, only by
+      // time actually having passed. `performance.now()` is what the
+      // throttle measures its window with (a monotonic clock, immune to a
+      // stepped wall clock — the point of item 1); only advancing the
+      // fake-timer clock moves it, unlike the `vi.spyOn(Date, "now")` this
+      // test used before item 1, which no longer affects the throttle at
+      // all.
+      vi.advanceTimersByTime(LISTING_FAILURE_LOG_INTERVAL_MS + 1);
+      await listPublicMedia(BAD_CURSOR_URL);
 
-    expect(errorSpy).toHaveBeenCalledTimes(2);
-    // The two lines must account for every failure between them: one named
-    // by the first line, the other two by this one's `suppressed` count.
-    expect(errorSpy.mock.calls[1][1]).toMatchObject({ suppressed: 2 });
+      expect(errorSpy).toHaveBeenCalledTimes(2);
+      // The two lines must account for every failure between them: one
+      // named by the first line, the other two by this one's `suppressed`
+      // count.
+      expect(errorSpy.mock.calls[1][1]).toMatchObject({ suppressed: 2 });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   /**

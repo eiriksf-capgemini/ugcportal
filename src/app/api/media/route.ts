@@ -36,7 +36,10 @@ import {
   sendWithTransportClassification,
 } from "@/lib/s3";
 import { parseTagNames, resolveTagRows } from "@/lib/tags";
-import { createThrottledLog } from "@/lib/throttled-log";
+import {
+  DEFAULT_THROTTLE_INTERVAL_MS,
+  createThrottledLog,
+} from "@/lib/throttled-log";
 import type { UploadReservation } from "@/lib/upload-memory";
 import {
   UploadMemoryExhaustedError,
@@ -86,7 +89,7 @@ function sanitizeFilename(name: string): string {
  * real chance of losing the one piece of information that line exists to
  * preserve.
  */
-const OBJECT_STORAGE_UNREACHABLE_LOG_INTERVAL_MS = 10_000;
+const OBJECT_STORAGE_UNREACHABLE_LOG_INTERVAL_MS = DEFAULT_THROTTLE_INTERVAL_MS;
 
 const objectStorageUnreachableLog = createThrottledLog({
   intervalMs: OBJECT_STORAGE_UNREACHABLE_LOG_INTERVAL_MS,
@@ -748,11 +751,6 @@ async function handleUpload(
       );
     }
 
-    // Best-effort compensation so a failed preview upload or DB hiccup doesn't
-    // leave untracked objects sitting in the bucket forever. Failures here are
-    // swallowed because the original error is the one worth propagating — but
-    // they are logged, not discarded: a compensation that is quietly failing
-    // every time leaks storage indefinitely with nothing to notice it by.
     await cleanupStoredKeys(storedKeys);
     throw error;
   }

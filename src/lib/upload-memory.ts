@@ -3,7 +3,10 @@ import {
   MAX_UPLOAD_BYTES,
   declaredUploadCapBytes,
 } from "@/lib/media";
-import { createThrottledLog } from "@/lib/throttled-log";
+import {
+  DEFAULT_THROTTLE_INTERVAL_MS,
+  createThrottledLog,
+} from "@/lib/throttled-log";
 import {
   PREVIEW_BYTES_PER_OPERATION,
   PREVIEW_PROCESS_BASELINE_BYTES,
@@ -1042,7 +1045,7 @@ const mib = (bytes: number) => `${Math.round(bytes / (1024 * 1024))} MB`;
  * upload path was invisible: one stalled client holding the budget produced
  * nothing but 503s with no record of why.
  */
-export const SHED_LOG_INTERVAL_MS = 10_000;
+export const SHED_LOG_INTERVAL_MS = DEFAULT_THROTTLE_INTERVAL_MS;
 
 /**
  * Built on `createThrottledLog` (ugcportal-z3lo). This module's own
