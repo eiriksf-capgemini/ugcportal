@@ -13,7 +13,17 @@ import { auth } from "@/lib/auth";
 import { PREVIEW_CONTENT_TYPE, PREVIEW_KEY_PREFIX } from "@/lib/media";
 import { MEDIA_PREVIEW_DELIVERY_SELECT } from "@/lib/media-access";
 import { prisma } from "@/lib/prisma";
-import { getBucketName, getS3Client } from "@/lib/s3";
+import {
+  ObjectStorageUnreachableError,
+  getBucketName,
+  getS3Client,
+  objectStorageUnreachableLogFields,
+  sendWithTransportClassification,
+} from "@/lib/s3";
+import {
+  DEFAULT_THROTTLE_INTERVAL_MS,
+  createThrottledLog,
+} from "@/lib/throttled-log";
 
 /**
  * GET /api/media/preview/[previewId] — the watermarked preview's bytes
@@ -97,6 +107,105 @@ function previewUnavailable(): NextResponse {
     { error: "Failed to load preview" },
     { status: 500, headers: { "cache-control": "no-store" } },
   );
+}
+
+/**
+ * How long to tell a client to wait before asking for these bytes again
+ * (ugcportal-98rb K1's retry hint).
+ *
+ * Five seconds, and the number is a hint rather than a measurement: nothing
+ * here knows how long a storage outage will last. It is chosen to be short
+ * enough that a gallery recovers on its own within a page refresh or two of
+ * storage coming back, and long enough that a page holding thirty <img>
+ * tags does not re-stampede this process every few hundred milliseconds for
+ * the whole outage.
+ */
+export const PREVIEW_STORAGE_RETRY_AFTER_SECONDS = 5;
+
+/**
+ * Object storage could not be REACHED — as distinct from `previewUnavailable`
+ * above, which is "something went wrong on this side" and covers a reachable
+ * endpoint answering AccessDenied, NoSuchBucket, or anything else it chose to
+ * send back (ugcportal-98rb K1: the two must stay distinguishable in the
+ * response, not only in the log).
+ *
+ * 503 rather than 500 because the condition is transient and retrying can
+ * actually work, which is the whole content of the distinction for a caller.
+ *
+ * Same fixed-string discipline as `previewUnavailable`: the SDK error names
+ * the bucket and the key, and the key is the one value this route exists to
+ * keep out of responses, so nothing from the cause is interpolated. The
+ * `reason` field is the same stable machine code POST /api/media's own
+ * storage-unreachable 503 sends (`object_storage_unavailable`, read by
+ * src/app/upload/outcomes.ts), so a client that already knows how to tell
+ * that 503 from the "too many uploads" shed 503 needs no second vocabulary
+ * for this one.
+ *
+ * `no-store`, not the `private, no-cache` of the success path: this body is
+ * a transient fault, and a cached copy of it — even one a browser would
+ * revalidate — is a gallery tile that stays broken after storage came back.
+ * `Retry-After` is the retry hint, in seconds, the form RFC 9110 defines for
+ * a 503.
+ */
+function previewStorageUnavailable(): NextResponse {
+  return NextResponse.json(
+    {
+      error:
+        "Object storage is temporarily unavailable. Please try again shortly.",
+      reason: "object_storage_unavailable",
+    },
+    {
+      status: 503,
+      headers: {
+        "cache-control": "no-store",
+        "Retry-After": String(PREVIEW_STORAGE_RETRY_AFTER_SECONDS),
+      },
+    },
+  );
+}
+
+/**
+ * Shortest interval between "object storage unreachable" lines from this
+ * route.
+ *
+ * Throttled where DELETE /api/media/[id]'s sibling line deliberately is not,
+ * and the difference is volume: this route serves one request per image per
+ * gallery view, so a storage outage with a single visitor scrolling a
+ * thirty-tile gallery produces thirty identical lines a second, saying the
+ * one thing already true of all of them. POST /api/media's own
+ * storage-unreachable line is throttled for exactly this reason
+ * (ugcportal-1b2c round-3 finding 5) and this is the higher-volume route of
+ * the two.
+ *
+ * Nothing per-request is lost to the throttle: unlike the orphaned-key lines
+ * in the delete paths, every suppressed occurrence here would carry the same
+ * operation and the same transport code, and the flush reports how many
+ * there were. `flush: true` for the same reason the upload path sets it —
+ * the tail of an outage burst (how many preview requests actually failed) is
+ * the part worth keeping.
+ */
+const PREVIEW_STORAGE_UNREACHABLE_LOG_INTERVAL_MS = DEFAULT_THROTTLE_INTERVAL_MS;
+
+const previewStorageUnreachableLog = createThrottledLog({
+  intervalMs: PREVIEW_STORAGE_UNREACHABLE_LOG_INTERVAL_MS,
+  flush: true,
+  onFlush: (suppressed) => {
+    console.error(
+      "[media] object storage unreachable (additional occurrences suppressed)",
+      { suppressed },
+    );
+  },
+});
+
+/**
+ * Test-only: the throttle above is module-level state, so a test file that
+ * triggers the storage-unreachable line in more than one `it` block needs to
+ * reset it between them — otherwise every assertion past the first looks for
+ * a line the throttle correctly, and silently, swallowed. Mirrors
+ * `resetObjectStorageUnreachableLogThrottles` in src/app/api/media/route.ts.
+ */
+export function resetPreviewStorageUnreachableLogThrottle(): void {
+  previewStorageUnreachableLog.reset();
 }
 
 /**
@@ -434,10 +543,33 @@ export async function GET(
 
   let object;
   try {
-    object = await getS3Client().send(
-      new GetObjectCommand({ Bucket: getBucketName(), Key: previewKey }),
+    // Through the shared classifier (src/lib/s3.ts) rather than a bare
+    // `send`, so a connection this route never got an answer to is told
+    // apart from an answer it did get — ugcportal-98rb K1. Classifying at
+    // the source, around the S3 call alone, is what makes the `instanceof`
+    // in the catch below safe: nothing else inside this try can produce an
+    // `ObjectStorageUnreachableError`.
+    object = await sendWithTransportClassification("preview-fetch", () =>
+      getS3Client().send(
+        new GetObjectCommand({ Bucket: getBucketName(), Key: previewKey }),
+      ),
     );
   } catch (error) {
+    if (error instanceof ObjectStorageUnreachableError) {
+      // Checked before `isMissingObject`: an unreachable backend sent no
+      // response at all, so it is not a missing object, and answering 404
+      // for it would make a storage outage look like an empty gallery — the
+      // same silent-misconfiguration failure `isMissingObject`'s own doc
+      // comment refuses `NoSuchBucket` for.
+      const unreachable = error;
+      previewStorageUnreachableLog.log((suppressed) => {
+        console.error("[media] object storage unreachable", {
+          ...objectStorageUnreachableLogFields(unreachable),
+          ...(suppressed > 0 ? { suppressed } : {}),
+        });
+      });
+      return previewStorageUnavailable();
+    }
     if (isMissingObject(error)) {
       // The row says there is a preview and storage disagrees. Answering 404
       // through the same helper as every other miss keeps this from becoming a

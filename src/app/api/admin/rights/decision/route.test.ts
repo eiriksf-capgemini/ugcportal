@@ -20,6 +20,14 @@ vi.mock("@/lib/rights-evidence", () => ({
 }));
 
 const { POST } = await import("@/app/api/admin/rights/decision/route");
+// Not mocked anywhere in this file: the route's transport branch matches on
+// this exact class, so the tests have to throw the real one.
+const { ObjectStorageUnreachableError } = await import("@/lib/s3");
+
+/** One small attached evidence file, fresh per call (a File is single-use). */
+function file(): File {
+  return new File([new Uint8Array([1])], "a.pdf");
+}
 
 const URL_ = "http://localhost/api/admin/rights/decision";
 
@@ -473,6 +481,114 @@ describe("evidence upload", () => {
       "rights_evidence_failed",
     );
     expect(setResaleRightsStatusMock).not.toHaveBeenCalled();
+  });
+
+  /**
+   * ugcportal-98rb K2. An unreachable bucket and a bucket that refused the
+   * request both leave the decision unrecorded, but they ask different
+   * things of the admin reading the screen — "wait and resubmit" versus
+   * "someone has to go and look at the configuration" — so they must not
+   * arrive as the same `?error=` code.
+   *
+   * A redirect rather than a 503, deliberately: this endpoint is posted to
+   * by a plain HTML form with no JavaScript, and a JSON 503 would be
+   * rendered to the admin as a raw error document with their typed reason
+   * gone. See the route's own comment at the catch.
+   */
+  describe("object storage unreachable (ugcportal-98rb K2)", () => {
+    function unreachable(): InstanceType<typeof ObjectStorageUnreachableError> {
+      return new ObjectStorageUnreachableError(
+        "evidence",
+        Object.assign(new Error("socket hang up"), { code: "ECONNREFUSED" }),
+        { code: "ECONNREFUSED", attempts: 3 },
+      );
+    }
+
+    it("redirects with a code distinct from rights_evidence_failed", async () => {
+      putRightsEvidenceMock.mockRejectedValue(unreachable());
+      const consoleError = vi
+        .spyOn(console, "error")
+        .mockImplementation(() => {});
+
+      const outcome = outcomeOf(await post(decisionForm({ evidence: file() })));
+      consoleError.mockRestore();
+
+      expectReopened(outcome, "rights_storage_unavailable");
+      expect(outcome.error).not.toBe("rights_evidence_failed");
+    });
+
+    it("changes no ResaleRightsReview row", async () => {
+      putRightsEvidenceMock.mockRejectedValue(unreachable());
+      const consoleError = vi
+        .spyOn(console, "error")
+        .mockImplementation(() => {});
+
+      await post(decisionForm({ evidence: file() }));
+      consoleError.mockRestore();
+
+      // The writer is the only thing that touches ResaleRightsReview, and
+      // it is below the upload in the handler, so never reaching it is
+      // what "nothing was recorded" means here.
+      expect(setResaleRightsStatusMock).not.toHaveBeenCalled();
+      expect(revalidatePathMock).not.toHaveBeenCalled();
+      // And nothing to clean up either: the upload never produced a key.
+      expect(deleteRightsEvidenceMock).not.toHaveBeenCalled();
+    });
+
+    it("logs the same structured line the other S3 routes log", async () => {
+      putRightsEvidenceMock.mockRejectedValue(unreachable());
+      const consoleError = vi
+        .spyOn(console, "error")
+        .mockImplementation(() => {});
+
+      await post(decisionForm({ evidence: file() }));
+      const calls = [...consoleError.mock.calls];
+      consoleError.mockRestore();
+
+      expect(calls).toHaveLength(1);
+      expect(calls[0][0]).toBe("[resale-rights] object storage unreachable");
+      expect(calls[0][1]).toMatchObject({
+        uploaderUserId: "uploader-1",
+        operation: "evidence",
+        code: "ECONNREFUSED",
+        attempts: 3,
+        message: "socket hang up",
+      });
+      expect((calls[0][1] as { cause: unknown }).cause).toBeInstanceOf(Error);
+    });
+
+    it("keeps rights_evidence_failed for a failure that is not a transport one", async () => {
+      // The fixture mutation for the pair: only the error class changes,
+      // and the `?error=` code must change with it. Without the branch in
+      // the route, both of these produce rights_evidence_failed and the
+      // test above is the one that fails.
+      putRightsEvidenceMock.mockRejectedValue(
+        Object.assign(new Error("Access Denied"), {
+          name: "AccessDenied",
+          $metadata: { httpStatusCode: 403, attempts: 1 },
+        }),
+      );
+      const consoleError = vi
+        .spyOn(console, "error")
+        .mockImplementation(() => {});
+
+      const outcome = outcomeOf(await post(decisionForm({ evidence: file() })));
+      consoleError.mockRestore();
+
+      expectReopened(outcome, "rights_evidence_failed");
+      expect(setResaleRightsStatusMock).not.toHaveBeenCalled();
+    });
+
+    it("has a sentence of its own on the settings screen", async () => {
+      // A code with no message renders as a blank error on the page, which
+      // is worse than the generic one it replaced.
+      const { outcomeMessage } = await import(
+        "@/app/admin/settings/rights/outcomes"
+      );
+      const unavailable = outcomeMessage("rights_storage_unavailable");
+      expect(unavailable).toBeTypeOf("string");
+      expect(unavailable).not.toBe(outcomeMessage("rights_evidence_failed"));
+    });
   });
 
   // The upload happens before the write so a clearance can never name

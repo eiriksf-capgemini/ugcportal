@@ -12,6 +12,10 @@ import {
   putRightsEvidence,
 } from "@/lib/rights-evidence";
 import { RIGHTS_SETTINGS_PATH } from "@/lib/routes";
+import {
+  ObjectStorageUnreachableError,
+  objectStorageUnreachableLogFields,
+} from "@/lib/s3";
 
 /**
  * Record a resale-rights decision for one uploader (ugcportal-0ss, checklist
@@ -87,7 +91,17 @@ function settingsRedirect(
 
   // 303: the browser must follow a POST redirect with GET, or the settings
   // page is re-requested as a POST.
-  return NextResponse.redirect(url, 303);
+  //
+  // `no-store` (ugcportal-98rb): a 303 is not cacheable by default, so this
+  // changes nothing for a conforming cache — it is here for the ones that
+  // are not, and because the Location this carries encodes a one-shot
+  // outcome (`?error=`, `?rights=recorded`, `?edit=<uploader>`). A stored
+  // copy of any of those replayed onto a later POST would send the admin to
+  // a screen reporting a decision that is not the one they just made.
+  return NextResponse.redirect(url, {
+    status: 303,
+    headers: { "cache-control": "no-store" },
+  });
 }
 
 /**
@@ -227,6 +241,37 @@ export async function POST(request: Request) {
         contentType: file.type,
       });
     } catch (cause) {
+      if (cause instanceof ObjectStorageUnreachableError) {
+        // ugcportal-98rb K2. A redirect, not a 503, and that is the bead's
+        // own acceptance criterion rather than a softening of it: this
+        // endpoint is posted to by a plain HTML form with no JavaScript (see
+        // this file's top doc comment), so a 503 JSON body would be rendered
+        // to the admin as a raw error document with their typed reason lost
+        // and no way back. What K2 asks for is that the outage be
+        // DISTINGUISHABLE, and the distinct `?error=` code is what carries
+        // that here — `rights_storage_unavailable` means "come back in a
+        // moment", `rights_evidence_failed` means "this will keep failing
+        // until someone looks at the logs". Each has its own sentence in
+        // src/app/admin/settings/rights/outcomes.ts.
+        //
+        // Nothing is written either way: `setResaleRightsStatus` is below
+        // this block and is never reached, so no ResaleRightsReview row
+        // changes and no clearance ends up naming evidence that was never
+        // stored.
+        //
+        // Not throttled, unlike the preview route's line: this is an
+        // admin-only form submission, so the volume ceiling is however fast
+        // one human can resubmit a form, and each line names the uploader
+        // the attempt was about.
+        console.error("[resale-rights] object storage unreachable", {
+          uploaderUserId,
+          ...objectStorageUnreachableLogFields(cause),
+        });
+        return settingsRedirect(request, {
+          error: "rights_storage_unavailable",
+          reopenFor: uploaderUserId,
+        });
+      }
       console.error("[resale-rights] evidence upload failed", {
         uploaderUserId,
         cause,

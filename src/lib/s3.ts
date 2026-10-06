@@ -217,8 +217,26 @@ export function classifyTransportFailure(
  * Widen it when a sibling route (ugcportal-98rb) adds a genuinely new
  * operation — e.g. the preview GET route's `GetObjectCommand` — rather than
  * loosening it back to `string`.
+ *
+ * ugcportal-98rb widened it exactly that way: the first three members are
+ * POST /api/media's own, the last four are the sibling S3 calls that now
+ * route through `sendWithTransportClassification` too. One member per CALL
+ * SITE rather than per command type, because the label exists so a log line
+ * says which call failed, and two different routes both issuing a
+ * `DeleteObjectCommand` are the case that needs telling apart.
  */
-export type ObjectStorageOperation = "original" | "preview" | "cleanup";
+export type ObjectStorageOperation =
+  // POST /api/media (ugcportal-1b2c).
+  | "original"
+  | "preview"
+  | "cleanup"
+  // GET /api/media/preview/[previewId] — the preview bytes (ugcportal-98rb).
+  | "preview-fetch"
+  // POST /api/admin/rights/decision, via src/lib/rights-evidence.ts.
+  | "evidence"
+  | "evidence-cleanup"
+  // DELETE /api/media/[id]'s best-effort object removal.
+  | "media-delete";
 
 /**
  * Thrown by `sendWithTransportClassification` in place of whatever the SDK
@@ -258,6 +276,60 @@ export class ObjectStorageUnreachableError extends Error {
     this.attempts = info.attempts;
     this.cause = cause;
   }
+}
+
+/**
+ * The fields every "object storage unreachable" log line in this codebase
+ * reports, built in one place so the siblings cannot drift apart in what
+ * they say about the same failure (ugcportal-98rb K1/K2: "the SAME
+ * structured line is logged").
+ *
+ * What each field is for:
+ *  - `operation` — which call site failed, since a route can make more than
+ *    one S3 call inside the same try/catch;
+ *  - `code` — the transport code `classifyTransportFailure` recognised
+ *    (`ECONNREFUSED`, `ETIMEDOUT`, ...), which is what distinguishes this
+ *    from a credentials or bucket-policy failure at a glance;
+ *  - `attempts` — how many tries the SDK's own retry middleware made before
+ *    giving up. `undefined` when the error carried no `$metadata` at all;
+ *  - `message` — the underlying SDK error's message, for a quick scan;
+ *  - `cause` — the `ObjectStorageUnreachableError` itself, so `console.error`
+ *    has an Error object to print a stack from and Node unfolds the original
+ *    SDK error through its own `cause` chain. Dropping it leaves an outage
+ *    with no stack at all (round-2 finding 2 on ugcportal-1b2c).
+ *
+ * Deliberately NOT a console call of its own: the log PREFIX differs by
+ * subsystem (`[media]`, `[resale-rights]`), one caller throttles the line
+ * and the others must not, and two callers add their own context (the
+ * uploader id, the orphaned key). Returning the fields lets each caller
+ * spread them into its own line and keep the half that is genuinely its
+ * own.
+ *
+ * POST /api/media's own storage-unreachable line (src/app/api/media/route.ts)
+ * still builds this object inline rather than calling this function — it was
+ * written first, and ugcportal-98rb's scope freeze kept this branch out of
+ * that file (PR #149 is in flight against it). The field names here mirror
+ * that line exactly; the duplication is deliberate for now and noted in the
+ * PR as a follow-up, not claimed to be already shared.
+ */
+export type ObjectStorageUnreachableLogFields = {
+  operation: ObjectStorageOperation;
+  code: string;
+  attempts: number | undefined;
+  message: string;
+  cause: ObjectStorageUnreachableError;
+};
+
+export function objectStorageUnreachableLogFields(
+  error: ObjectStorageUnreachableError,
+): ObjectStorageUnreachableLogFields {
+  return {
+    operation: error.operation,
+    code: error.code,
+    attempts: error.attempts,
+    message: error.message,
+    cause: error,
+  };
 }
 
 /**

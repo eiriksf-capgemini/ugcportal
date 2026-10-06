@@ -13,6 +13,7 @@ describe("outcomeMessage", () => {
       "rights_invalid_valid_until",
       "rights_evidence_too_large",
       "rights_evidence_failed",
+      "rights_storage_unavailable",
       "rights_uploader_not_found",
       "rights_actor_not_admin",
       "rights_holder_missing",
