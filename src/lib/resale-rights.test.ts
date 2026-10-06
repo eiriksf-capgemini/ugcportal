@@ -9,10 +9,14 @@ import {
   type GateReview,
   type GateUpload,
   MEDIA_GATE_SELECT,
+  TRIAGE_FACTS,
+  type TriageFact,
+  type TriageFactField,
   evaluateSellability,
   isResaleRightsRoute,
   isResaleRightsStatus,
   isSellable,
+  triageBlocker,
   uploaderClearanceBlocker,
 } from "@/lib/resale-rights";
 
@@ -35,6 +39,7 @@ function clearListing(overrides: Partial<GateListing> = {}): GateListing {
   return {
     layerClearances: [],
     depictsPeople: false,
+    depictsMinors: false,
     modelReleaseKey: null,
     containsMusic: false,
     thirdPartyCreator: false,
@@ -106,18 +111,22 @@ describe("ugcportal-vsm: the clearance is the uploader's, reached through the fi
     expect(MEDIA_GATE_SELECT.user.select.resaleRightsReview).toBeTruthy();
     // The listing half carries triage and layer clearances only — nothing
     // that could name a different review.
+    //
+    // The triage columns come from TRIAGE_FACTS rather than a hand-list, so
+    // a fact registered later is covered here the moment it exists; the
+    // four non-fact keys stay written out, which is what keeps this an
+    // assertion that nothing ELSE has crept in (ugcportal-qn3).
     expect(
       Object.keys(MEDIA_GATE_SELECT.listing.select).sort(),
-    ).toEqual([
-      "containsMusic",
-      "depictsPeople",
-      "layerClearances",
-      "modelReleaseKey",
-      "sponsoredContent",
-      "thirdPartyCreator",
-      "triagedBy",
-      "triagedByUserId",
-    ]);
+    ).toEqual(
+      [
+        ...TRIAGE_FACTS.map((fact) => fact.field),
+        "layerClearances",
+        "modelReleaseKey",
+        "triagedBy",
+        "triagedByUserId",
+      ].sort(),
+    );
   });
 
   it("refuses a file whose uploader has no review, however well triaged", () => {
@@ -361,12 +370,7 @@ describe("per-upload triage (checklist Part C)", () => {
    * skipping the model-release requirement entirely, because `undefined` is
    * also falsy. Every flag is now checked for being a real boolean.
    */
-  it.each([
-    "depictsPeople",
-    "containsMusic",
-    "thirdPartyCreator",
-    "sponsoredContent",
-  ] as const)(
+  it.each(TRIAGE_FACTS.map((fact) => fact.field))(
     "treats an undefined %s as untriaged rather than as false",
     (field) => {
       expect(
@@ -419,7 +423,7 @@ describe("per-upload triage (checklist Part C)", () => {
   });
 
   /**
-   * People is the strictest of the four layers, not the loosest. An earlier
+   * People is the strictest of the layers, not the loosest. An earlier
    * revision settled it with a free-text key and a boolean — no author, no
    * role re-check — while the three commercial layers each required an
    * admin-signed clearance. That had it exactly backwards: this is the one
@@ -487,11 +491,22 @@ describe("per-upload triage (checklist Part C)", () => {
     });
   });
 
-  const LAYERS = [
-    ["containsMusic", RightsLayer.MUSIC],
-    ["thirdPartyCreator", RightsLayer.THIRD_PARTY_CREATOR],
-    ["sponsoredContent", RightsLayer.SPONSORED_CONTENT],
-  ] as const;
+  /**
+   * What a fact needs on the listing BESIDES its own `true`, before a
+   * clearance can settle it — today only the PEOPLE release file.
+   *
+   * A `Record` over every triage-fact field, not a partial map: adding a
+   * nullable Boolean to GateListing stops this file compiling until
+   * someone says what the new fact needs, which is what keeps the
+   * generated cases below from covering a subset (ugcportal-qn3 K5).
+   */
+  const FACT_EXTRAS: Record<TriageFactField, Partial<GateListing>> = {
+    depictsPeople: { modelReleaseKey: "rights-evidence/owner-1/release.pdf" },
+    depictsMinors: {},
+    containsMusic: {},
+    thirdPartyCreator: {},
+    sponsoredContent: {},
+  };
 
   /** A justification for one layer, signed by a current admin. */
   function clearance(
@@ -507,111 +522,421 @@ describe("per-upload triage (checklist Part C)", () => {
     };
   }
 
-  for (const [field, layer] of LAYERS) {
-    it(`refuses an un-triaged ${field}`, () => {
-      expect(evaluateSellability(withListing({ [field]: null }), NOW)).toEqual({
-        sellable: false,
-        blocker: "triage_incomplete",
-      });
+  /** The baseline upload with exactly one fact answered `true`. */
+  function factPresent(
+    fact: TriageFact,
+    overrides: Partial<GateListing> = {},
+  ): GateUpload {
+    return withListing({
+      [fact.field]: true,
+      ...FACT_EXTRAS[fact.field],
+      ...overrides,
     });
+  }
 
-    it(`refuses ${field} = true with no clearance`, () => {
-      expect(evaluateSellability(withListing({ [field]: true }), NOW)).toEqual({
-        sellable: false,
-        blocker: "third_party_layer_uncleared",
-      });
-    });
-
-    it(`accepts ${field} = true once cleared with a reason`, () => {
-      const upload = withListing({
-        [field]: true,
-        layerClearances: [clearance(layer)],
-      });
-      expect(evaluateSellability(upload, NOW).sellable).toBe(true);
-    });
-
-    it(`refuses ${field} = true when its clearance has no reason`, () => {
-      const upload = withListing({
-        [field]: true,
-        layerClearances: [clearance(layer, { reason: "   " })],
-      });
-      expect(evaluateSellability(upload, NOW).sellable).toBe(false);
-    });
-
-    it(`refuses ${field} = true when nobody signed its clearance`, () => {
-      const upload = withListing({
-        [field]: true,
-        layerClearances: [
-          clearance(layer, { clearedByUserId: null, clearedBy: null }),
-        ],
-      });
-      expect(evaluateSellability(upload, NOW).sellable).toBe(false);
-    });
-
-    // The same read-time role re-check the uploader's reviewer gets. Without
-    // it, a demoted admin's justifications keep working as long as some
-    // other admin signed the uploader's clearance.
-    it(`refuses ${field} = true when its clearer is no longer an ADMIN`, () => {
-      const upload = withListing({
-        [field]: true,
-        layerClearances: [clearance(layer, { clearedBy: { role: "USER" } })],
-      });
-      expect(evaluateSellability(upload, NOW)).toEqual({
-        sellable: false,
-        blocker: "third_party_layer_uncleared",
-      });
-    });
-
-    it(`refuses ${field} = true when its clearer's account is gone`, () => {
-      const upload = withListing({
-        [field]: true,
-        layerClearances: [clearance(layer, { clearedBy: null })],
-      });
-      expect(evaluateSellability(upload, NOW).sellable).toBe(false);
-    });
+  /** Every registered fact answered `true`, with the evidence each needs. */
+  function allFactsPresent(
+    overrides: Partial<GateListing> = {},
+  ): Partial<GateListing> {
+    const listing: Partial<GateListing> = {};
+    for (const fact of TRIAGE_FACTS) {
+      Object.assign(listing, { [fact.field]: true }, FACT_EXTRAS[fact.field]);
+    }
+    return { ...listing, ...overrides };
   }
 
   /**
-   * The bug this structure exists to prevent: one justification used to
-   * settle all three layers, so "music licence purchased" made an upload
-   * with an untriaged collaborator and an undisclosed sponsorship sellable.
+   * ONE CASE TABLE, GENERATED FROM THE REGISTRY THE GATE ITERATES.
+   *
+   * This used to be a hand-written list of the three commercial layers,
+   * with PEOPLE covered separately above — which is exactly the shape that
+   * lets a layer added later be covered by neither. Driving it from
+   * TRIAGE_FACTS means a new fact arrives with all of these assertions
+   * already made about it, and the coverage test in "the triage-fact
+   * mechanism" below fails the suite for a RightsLayer with no entry.
    */
-  for (const [field, layer] of LAYERS) {
-    it(`clearing ${field} leaves the other layers blocking`, () => {
-      const others = LAYERS.filter(([other]) => other !== field);
-      const upload = withListing({
-        [field]: true,
-        [others[0][0]]: true,
-        [others[1][0]]: true,
-        layerClearances: [clearance(layer)],
+  for (const fact of TRIAGE_FACTS) {
+    describe(`triage fact ${fact.field} (${fact.layer})`, () => {
+      it("blocks the whole upload while it is unanswered", () => {
+        expect(
+          evaluateSellability(withListing({ [fact.field]: null }), NOW),
+        ).toEqual({ sellable: false, blocker: "triage_incomplete" });
       });
 
-      expect(evaluateSellability(upload, NOW)).toEqual({
-        sellable: false,
-        blocker: "third_party_layer_uncleared",
-      });
-    });
-
-    it(`a clearance for a different layer does not settle ${field}`, () => {
-      const other = LAYERS.find(([name]) => name !== field)![1];
-      const upload = withListing({
-        [field]: true,
-        layerClearances: [clearance(other)],
+      it("blocks when present with no clearance", () => {
+        expect(evaluateSellability(factPresent(fact), NOW)).toEqual({
+          sellable: false,
+          blocker: fact.uncleared,
+        });
       });
 
-      expect(evaluateSellability(upload, NOW).sellable).toBe(false);
+      it("passes once cleared with a reason by a current admin", () => {
+        const upload = factPresent(fact, {
+          layerClearances: [clearance(fact.layer)],
+        });
+        expect(evaluateSellability(upload, NOW)).toEqual({ sellable: true });
+      });
+
+      it("blocks when its clearance has no reason", () => {
+        const upload = factPresent(fact, {
+          layerClearances: [clearance(fact.layer, { reason: "   " })],
+        });
+        expect(evaluateSellability(upload, NOW)).toEqual({
+          sellable: false,
+          blocker: fact.uncleared,
+        });
+      });
+
+      it("blocks when nobody signed its clearance", () => {
+        const upload = factPresent(fact, {
+          layerClearances: [
+            clearance(fact.layer, { clearedByUserId: null, clearedBy: null }),
+          ],
+        });
+        expect(evaluateSellability(upload, NOW).sellable).toBe(false);
+      });
+
+      // The same read-time role re-check the uploader's reviewer gets.
+      // Without it, a demoted admin's justifications keep working as long
+      // as some other admin signed the uploader's clearance.
+      it("blocks when its clearer is no longer an ADMIN", () => {
+        const upload = factPresent(fact, {
+          layerClearances: [
+            clearance(fact.layer, { clearedBy: { role: "USER" } }),
+          ],
+        });
+        expect(evaluateSellability(upload, NOW)).toEqual({
+          sellable: false,
+          blocker: fact.uncleared,
+        });
+      });
+
+      it("blocks when its clearer's account is gone", () => {
+        const upload = factPresent(fact, {
+          layerClearances: [clearance(fact.layer, { clearedBy: null })],
+        });
+        expect(evaluateSellability(upload, NOW).sellable).toBe(false);
+      });
+
+      /**
+       * The bug this structure exists to prevent: one justification used
+       * to settle every layer, so "music licence purchased" made an upload
+       * with an undisclosed sponsorship sellable.
+       */
+      it("is not settled by a clearance on some other layer", () => {
+        for (const other of TRIAGE_FACTS) {
+          if (other.layer === fact.layer) {
+            continue;
+          }
+          const upload = factPresent(fact, {
+            layerClearances: [clearance(other.layer)],
+          });
+          expect(evaluateSellability(upload, NOW).sellable).toBe(false);
+        }
+      });
+
+      it("keeps blocking when every OTHER layer is cleared", () => {
+        const upload = withListing(
+          allFactsPresent({
+            layerClearances: TRIAGE_FACTS.filter(
+              (other) => other.layer !== fact.layer,
+            ).map((other) => clearance(other.layer)),
+          }),
+        );
+        expect(evaluateSellability(upload, NOW)).toEqual({
+          sellable: false,
+          blocker: fact.uncleared,
+        });
+      });
     });
   }
 
-  it("accepts an upload whose three layers are each cleared in their own right", () => {
+  it("accepts an upload whose every layer is cleared in its own right", () => {
+    const upload = withListing(
+      allFactsPresent({
+        layerClearances: TRIAGE_FACTS.map((fact) => clearance(fact.layer)),
+      }),
+    );
+
+    expect(evaluateSellability(upload, NOW)).toEqual({ sellable: true });
+  });
+});
+
+/**
+ * ugcportal-qn3: minors, and the mechanism the fact rides on.
+ *
+ * Two things are under test here and they are deliberately separate. One is
+ * the MINORS fact itself — a depicted child blocks until an admin records a
+ * MINORS clearance, and nothing else settles it. The other is the shape:
+ * that `null` blocks by default, per fact, for every fact, because the gate
+ * iterates one registry rather than a hand-written list of columns.
+ */
+describe("ugcportal-qn3: minors as a triage fact", () => {
+  /** A MINORS justification signed by a current admin. */
+  function minorsClearance(
+    overrides: Partial<GateLayerClearance> = {},
+  ): GateLayerClearance {
+    return {
+      layer: RightsLayer.MINORS,
+      reason:
+        "Guardian consent on file, signed, naming online commercial publication.",
+      clearedByUserId: "admin-1",
+      clearedBy: { role: "ADMIN" },
+      ...overrides,
+    };
+  }
+
+  // K1
+  it("blocks a depicted minor with no MINORS clearance", () => {
+    expect(
+      evaluateSellability(withListing({ depictsMinors: true }), NOW),
+    ).toEqual({ sellable: false, blocker: "minors_uncleared" });
+  });
+
+  // K1, the demoted-clearer half. A clearance signed by someone who is no
+  // longer an admin is not one this instance stands behind, and the whole
+  // point of re-reading the role at evaluation time is that a demotion
+  // reaches the clearances that person already signed.
+  it("blocks a depicted minor whose clearer is no longer an ADMIN", () => {
     const upload = withListing({
+      depictsMinors: true,
+      layerClearances: [minorsClearance({ clearedBy: { role: "USER" } })],
+    });
+    expect(evaluateSellability(upload, NOW)).toEqual({
+      sellable: false,
+      blocker: "minors_uncleared",
+    });
+  });
+
+  // K2
+  it("blocks an upload where nobody has answered the minors question", () => {
+    expect(
+      evaluateSellability(withListing({ depictsMinors: null }), NOW),
+    ).toEqual({ sellable: false, blocker: "triage_incomplete" });
+  });
+
+  it("does not read an unanswered minors question as a `no`", () => {
+    // The distinction the whole mechanism exists for, stated as a
+    // comparison rather than two separate assertions: the same upload is
+    // sellable with the question answered `false` and blocked with it
+    // unanswered. If `null` ever starts meaning `false`, these converge.
+    expect(
+      evaluateSellability(withListing({ depictsMinors: false }), NOW),
+    ).toEqual({ sellable: true });
+    expect(
+      evaluateSellability(withListing({ depictsMinors: null }), NOW).sellable,
+    ).toBe(false);
+  });
+
+  /**
+   * K3. Asserts the NEXT blocker rather than `sellable: true`, so the test
+   * cannot pass by the gate short-circuiting somewhere before the minors
+   * check and never reaching it: music is also present and uncleared here,
+   * and MUSIC is asked AFTER minors in TRIAGE_FACTS.
+   */
+  it("passes the minors check once cleared and goes on to the next blocker", () => {
+    const upload = withListing({
+      depictsMinors: true,
       containsMusic: true,
-      thirdPartyCreator: true,
-      sponsoredContent: true,
-      layerClearances: LAYERS.map(([, layer]) => clearance(layer)),
+      layerClearances: [minorsClearance()],
+    });
+
+    expect(evaluateSellability(upload, NOW)).toEqual({
+      sellable: false,
+      blocker: "third_party_layer_uncleared",
+    });
+  });
+
+  it("clears the upload once minors and the layer after it are both settled", () => {
+    const upload = withListing({
+      depictsMinors: true,
+      containsMusic: true,
+      layerClearances: [
+        minorsClearance(),
+        {
+          layer: RightsLayer.MUSIC,
+          reason: "Sync and master licence covering resale, on file.",
+          clearedByUserId: "admin-1",
+          clearedBy: { role: "ADMIN" },
+        },
+      ],
     });
 
     expect(evaluateSellability(upload, NOW)).toEqual({ sellable: true });
+  });
+
+  /**
+   * K4, the guardrail: a PEOPLE clearance must never settle a depicted
+   * minor. A child IS an identifiable person, so the tempting shortcut is
+   * to treat the model release as covering both — but a release signed by
+   * a child is not a release, and the admin who wrote the PEOPLE reason
+   * was answering a different question.
+   *
+   * Written as a FIXTURE MUTATION rather than two unrelated cases: the
+   * same upload is evaluated with the PEOPLE layer uncleared and then
+   * cleared, and the mutation must not move it to sellable. A pair of
+   * independent "expect blocked" assertions would both pass against a gate
+   * that had been rewritten to block everything.
+   */
+  it("does not let a PEOPLE clearance settle a depicted minor", () => {
+    const base: Partial<GateListing> = {
+      depictsPeople: true,
+      depictsMinors: true,
+      modelReleaseKey: "rights-evidence/owner-1/release.pdf",
+    };
+    const peopleClearance: GateLayerClearance = {
+      layer: RightsLayer.PEOPLE,
+      reason: "Release read; covers commercial resale, no time limit.",
+      clearedByUserId: "admin-1",
+      clearedBy: { role: "ADMIN" },
+    };
+
+    // Before the mutation: blocked, and blocked on PEOPLE.
+    expect(evaluateSellability(withListing(base), NOW)).toEqual({
+      sellable: false,
+      blocker: "model_release_unverified",
+    });
+
+    // After it: the PEOPLE blocker is gone — so the clearance really did
+    // take effect, and this is not a fixture that was broken some other
+    // way — and the upload is still not sellable.
+    const mutated = evaluateSellability(
+      withListing({ ...base, layerClearances: [peopleClearance] }),
+      NOW,
+    );
+    expect(mutated).toEqual({ sellable: false, blocker: "minors_uncleared" });
+
+    // The same mutation on an upload with NO minor shown does reach
+    // sellable, which is what makes the assertion above about minors
+    // rather than about the fixture never being sellable at all.
+    expect(
+      evaluateSellability(
+        withListing({
+          ...base,
+          depictsMinors: false,
+          layerClearances: [peopleClearance],
+        }),
+        NOW,
+      ),
+    ).toEqual({ sellable: true });
+  });
+});
+
+/**
+ * K5: the mechanism, not the fact. The failure mode is a second author
+ * adding `depictsSomething Boolean?` to MediaListing, writing it from a
+ * form, and nothing ever reading it — a "triage fact" that is decorative
+ * while the upload sells regardless.
+ */
+describe("ugcportal-qn3: the triage-fact mechanism", () => {
+  /**
+   * The registration check. A RightsLayer with no TRIAGE_FACTS entry fails
+   * the suite here, which is the only thing standing between "added an
+   * enum value" and "added an enum value nothing enforces". The converse
+   * is covered too: an entry for a layer the schema does not declare.
+   */
+  it("registers exactly one fact per RightsLayer, no more and no fewer", () => {
+    const registered = TRIAGE_FACTS.map((fact) => fact.layer).sort();
+    const declared = Object.values(RightsLayer).sort();
+
+    expect(registered).toEqual(declared);
+    // Spelled out so a duplicate entry — which `toEqual` on sorted arrays
+    // would catch only by length — reads as its own failure.
+    expect(new Set(registered).size).toBe(TRIAGE_FACTS.length);
+  });
+
+  it("stores each fact in its own column", () => {
+    const fields = TRIAGE_FACTS.map((fact) => fact.field);
+    expect(new Set(fields).size).toBe(fields.length);
+  });
+
+  // THERE IS NO TEST HERE FOR "every fact's blocker has words on the admin
+  // screen", and the omission is deliberate. Anything this file could
+  // assert about `fact.uncleared` on its own is a tautology: it is typed
+  // SellabilityBlocker, a closed union of non-empty literals, so every
+  // in-type value passes a `typeof`/length check and an out-of-type one
+  // fails `tsc` before any test runs. The claim is carried by `has a
+  // sentence for every triage fact's uncleared blocker` in
+  // src/app/admin/settings/rights/outcomes.test.ts, which indexes
+  // BLOCKER_MESSAGES by `fact.uncleared` and so fails on a blocker with no
+  // wording. It lives there because that is where the wording map is.
+
+  it("asks a question for every fact, so a form can be generated from it", () => {
+    for (const fact of TRIAGE_FACTS) {
+      expect(fact.question.trim().length).toBeGreaterThan(0);
+    }
+  });
+
+  /**
+   * NULL BLOCKS, FOR EVERY REGISTERED FACT — generated from the registry,
+   * so a fact added later is asserted about without anyone remembering.
+   *
+   * This is the one that would have caught the copied-boolean mistake:
+   * a column with no registry entry is not iterated here, and the
+   * registration test above is what makes that impossible to reach.
+   */
+  for (const fact of TRIAGE_FACTS) {
+    it(`blocks on an unanswered ${fact.field}, by itself`, () => {
+      // Everything else about this listing is clean and signed, so
+      // `triage_incomplete` can only be coming from this one column.
+      expect(
+        evaluateSellability(withListing({ [fact.field]: null }), NOW),
+      ).toEqual({ sellable: false, blocker: "triage_incomplete" });
+    });
+  }
+
+  it("refuses the whole upload while any one fact is unanswered", () => {
+    // Answering all but one is not a triage. Asserted against the real
+    // count rather than a hard-coded 5, so it keeps meaning the same thing
+    // when a fact is added.
+    expect(TRIAGE_FACTS.length).toBeGreaterThan(1);
+    for (const unanswered of TRIAGE_FACTS) {
+      const listing: Partial<GateListing> = {};
+      for (const fact of TRIAGE_FACTS) {
+        listing[fact.field] = fact.field === unanswered.field ? null : false;
+      }
+      expect(evaluateSellability(withListing(listing), NOW).sellable).toBe(
+        false,
+      );
+    }
+  });
+
+  it("voids every answer at once when nobody currently admin signed them", () => {
+    // Per upload, not per fact: the signature is what makes any of the
+    // answers an assertion somebody is behind.
+    expect(
+      evaluateSellability(
+        withListing({ triagedByUserId: "admin-1", triagedBy: { role: "USER" } }),
+        NOW,
+      ),
+    ).toEqual({ sellable: false, blocker: "triage_not_signed_by_admin" });
+  });
+
+  it("asks whether a fact is answered before it asks who signed it", () => {
+    // Order matters for the message an admin sees: an upload that is both
+    // untriaged and unsigned is reported as untriaged, because that is the
+    // first thing to do about it.
+    expect(
+      evaluateSellability(
+        withListing({
+          depictsMinors: null,
+          triagedByUserId: null,
+          triagedBy: null,
+        }),
+        NOW,
+      ),
+    ).toEqual({ sellable: false, blocker: "triage_incomplete" });
+  });
+
+  it("is the same function the gate uses, not a second copy of the rule", () => {
+    // triageBlocker is exported for the admin screen and for tests; a copy
+    // of the logic living in evaluateSellability is exactly how the two
+    // drift. Asserted by agreement on a case each of them must answer.
+    const listing = clearListing({ depictsMinors: true });
+    expect(triageBlocker(listing)).toBe("minors_uncleared");
+    expect(
+      evaluateSellability(sellableUpload({ listing }), NOW),
+    ).toEqual({ sellable: false, blocker: "minors_uncleared" });
   });
 });
 

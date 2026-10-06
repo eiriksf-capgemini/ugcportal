@@ -1,7 +1,11 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { CURRENT_CHECKLIST_VERSION } from "@/lib/resale-rights";
+import { RightsLayer } from "@/generated/prisma/enums";
+import {
+  CURRENT_CHECKLIST_VERSION,
+  TRIAGE_FACTS,
+} from "@/lib/resale-rights";
 import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db";
 
 /**
@@ -42,9 +46,11 @@ vi.mock("next/navigation", () => ({ notFound: notFoundMock }));
 
 const database = createTemporaryDatabase();
 const { prisma } = await import("@/lib/prisma");
-const { default: ResaleRightsSettingsPage, MAX_UPLOADERS } = await import(
-  "@/app/admin/settings/rights/page"
-);
+const {
+  default: ResaleRightsSettingsPage,
+  MAX_UPLOADERS,
+  UPLOADER_LIST_ID,
+} = await import("@/app/admin/settings/rights/page");
 
 const ADMIN = { user: { id: "admin-1", email: "admin@example.com", role: "ADMIN" } };
 
@@ -71,10 +77,37 @@ async function renderPage(
  * test than the one intended.
  */
 function listedEmails(markup: string): string[] {
-  const list = /<ul\b[^>]*>([\s\S]*?)<\/ul>/.exec(markup)?.[1] ?? "";
+  // Matched by id rather than as "the first <ul>": the screen renders a
+  // second list above this one (the per-upload triage questions), and
+  // the positional version quietly measured that instead, reporting
+  // zero uploader rows on a page that had plenty (ugcportal-qn3).
+  const list =
+    new RegExp(`<ul\\b[^>]*id="${UPLOADER_LIST_ID}"[^>]*>([\\s\\S]*?)</ul>`).exec(
+      markup,
+    )?.[1] ?? "";
   return [...list.matchAll(/<li\b[^>]*>([\s\S]*?)<\/li>/g)].map(
     (row) => /([\w.+-]+@example\.com)/.exec(row[1])?.[1] ?? "",
   );
+}
+
+/**
+ * The five characters `react-dom/server` escapes in a text child, so a
+ * question containing an apostrophe or an ampersand can still be matched
+ * against the rendered markup. Measured rather than assumed:
+ * `renderToStaticMarkup(<p>{`a&b<c>d"e'f`}</p>)` returns
+ * `<p>a&amp;b&lt;c&gt;d&quot;e&#x27;f</p>`, which the first case below
+ * pins so this helper cannot quietly stop matching what React emits.
+ *
+ * None of today's questions contains any of them; the helper exists so
+ * that one that does fails for a real reason rather than on escaping.
+ */
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#x27;");
 }
 
 const TRUNCATION_NOTICE = `Showing the first ${MAX_UPLOADERS} uploaders`;
@@ -444,5 +477,56 @@ describe("authorization", () => {
     authMock.mockResolvedValue({ user: { id: "u-1", role: "USER" } });
 
     await expect(renderPage()).rejects.toThrow("NEXT_NOT_FOUND");
+  });
+});
+
+/**
+ * ugcportal-qn3 K2: the screen lists the per-upload triage questions, and
+ * it lists ALL of them.
+ *
+ * Iterated off the generated RightsLayer enum rather than a hand-written
+ * list of five sentences, so adding a layer to schema.prisma fails here
+ * until it is both registered in TRIAGE_FACTS and therefore rendered.
+ * A hand-list would have gone on passing while the screen silently told an
+ * admin about a subset of what actually blocks.
+ */
+describe("the per-upload triage questions (ugcportal-qn3)", () => {
+  beforeEach(() => {
+    authMock.mockResolvedValue(ADMIN);
+  });
+
+  it("escapes a question the way React renders one", async () => {
+    // The helper below is only load-bearing if it agrees with
+    // react-dom/server. Asserted against a render rather than against a
+    // hand-written expectation of what React does.
+    const sample = `a&b<c>d"e'f`;
+    expect(renderToStaticMarkup(<p>{sample}</p>)).toBe(
+      `<p>${escapeHtml(sample)}</p>`,
+    );
+  });
+
+  it("asks a question for every rights layer the schema declares", async () => {
+    const markup = await renderPage();
+
+    expect(TRIAGE_FACTS).toHaveLength(Object.values(RightsLayer).length);
+    for (const layer of Object.values(RightsLayer)) {
+      const fact = TRIAGE_FACTS.find((candidate) => candidate.layer === layer);
+      expect(fact, `no triage fact registered for ${layer}`).toBeTruthy();
+      expect(markup).toContain(escapeHtml(fact!.question));
+    }
+  });
+
+  it("names the minors question specifically", async () => {
+    // The fact this bead exists for, asserted by its words rather than
+    // only through the loop above — which would still pass if every
+    // question were replaced by the same placeholder.
+    expect(await renderPage()).toContain("Is anyone shown under 18?");
+  });
+
+  it("says that leaving one unanswered blocks the sale", async () => {
+    // The screen has to carry the mechanism's one surprising rule.
+    // Without it, an admin reads five optional-looking questions.
+    const markup = await renderPage();
+    expect(markup).toContain("cannot be sold");
   });
 });
