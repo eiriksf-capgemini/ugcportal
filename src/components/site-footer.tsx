@@ -11,7 +11,7 @@ import {
   PORTFOLIO_PATH,
   PRIVACY_PATH,
 } from "@/lib/routes";
-import { SITE_NAME } from "@/lib/site";
+import { SITE_NAME, SITE_TAGLINE } from "@/lib/site";
 
 /**
  * The site footer (ugcportal-akv6), split out of src/components/app-shell.tsx
@@ -175,6 +175,13 @@ export function SiteFooter({ compact = false }: { compact?: boolean }) {
       <div className="mx-auto grid w-full max-w-6xl gap-10 px-4 py-10 text-sm sm:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,1fr)] sm:px-6">
         <div>
           <p className="font-medium text-foreground">{SITE_NAME}</p>
+          {/*
+            SITE_TAGLINE, relocated here from the header's own second row
+            (ugcportal-qqnt.3 — see that module's own comment on site.ts):
+            still a one-line, muted description of the site, just no longer
+            repeating what the hero also says one scroll above it.
+          */}
+          <p className="mt-2 max-w-prose text-sm text-muted-foreground">{SITE_TAGLINE}</p>
           <p className="mt-2 text-xs text-muted-foreground">
             © {year} {SITE_NAME}
           </p>

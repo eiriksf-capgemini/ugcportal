@@ -265,20 +265,20 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
    * that file. The sticky header is bg-background, so the page-canvas
    * tokens are exactly right here, same as the wordmark always was.
    *
-   * Round 4 reuse finding: the wordmark itself ALSO now imports
-   * HEADER_NAV_LINK_CLASS (cn(HEADER_NAV_LINK_CLASS, "min-w-12 shrink-[999]
-   * truncate tracking-tight")) instead of re-spelling the same suffix a
-   * third time, so site-header.tsx's own text-foreground/text-primary count
-   * drops to zero - only the tagline's text-muted-foreground remains
-   * literal in that file. header-nav-link.ts's own count is unchanged: the
-   * wordmark is a second CALLER of the existing constant, not a second
-   * definition of it.
+   * ugcportal-qqnt.3: the wordmark stopped sharing HEADER_NAV_LINK_CLASS
+   * (K1 asks it to be visibly bigger than the nav links - text-lg/
+   * font-heading - which that shared class's own text-sm/font-medium would
+   * have fought), so it now carries its own literal `text-foreground
+   * hover:text-primary` pair directly in site-header.tsx instead of
+   * reaching it through that import. The tagline row (and its
+   * text-muted-foreground) moved to the footer in the same change - see
+   * site-footer.tsx's own entry below, which gained it.
    */
   "src/components/header-nav-link.ts": { "text-foreground": 1, "text-primary": 1 },
   // Just the aria-[current=page]:text-primary highlight this component adds
   // on top of the shared base class above.
   "src/components/primary-nav-link.tsx": { "text-primary": 1 },
-  "src/components/site-header.tsx": { "text-muted-foreground": 1 },
+  "src/components/site-header.tsx": { "text-foreground": 1, "text-primary": 1 },
   // app-shell.tsx itself carries no entry (round-6 review, merge with
   // ugcportal-14k9): the header's markup moved out to site-header.tsx
   // above and the footer's moved out to site-footer.tsx below, so the
@@ -377,11 +377,13 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
    * ugcportal-akv6: the site footer. Renders directly on --background
    * (the app shell's <footer>, no --card/--popover/--muted/etc. fill
    * behind it — the same safe case as the header and
-   * cookie-settings-link.tsx above). Three text-muted-foreground
-   * (Eirik's decision on PR #96: dropped the footer's own about/tagline
-   * line entirely rather than duplicating the header's SITE_TAGLINE,
-   * which removed one of the four this used to carry — the brand
-   * description paragraph): the blocked-draft-link <span>, the compact
+   * cookie-settings-link.tsx above). Four text-muted-foreground (was three
+   * - PR #96 originally dropped the footer's own about/tagline line
+   * rather than duplicating the header's SITE_TAGLINE; ugcportal-qqnt.3
+   * reversed that call the OTHER way - it removed the header's own
+   * tagline row instead, and moved SITE_TAGLINE here so the one-sentence
+   * description is not lost outright): the blocked-draft-link <span>, the
+   * new SITE_TAGLINE <p> in the full variant's brand column, the compact
    * variant's own wrapping <div> (not the "SITE_NAME · © year" <span> it
    * contains, which carries no class of its own — round-2 review
    * finding), and the full variant's copyright line (FOOTER_LINK_CLASS's
@@ -391,7 +393,7 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
    * "hover:text-foreground" moved out the same way).
    */
   "src/components/site-footer.tsx": {
-    "text-muted-foreground": 3,
+    "text-muted-foreground": 4,
     "text-foreground": 2,
   },
 

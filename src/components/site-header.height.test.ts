@@ -1,21 +1,25 @@
 /**
  * PR #94 review round 4, finding 5: `HEADER_HEIGHT_PX`'s arithmetic
- * (site-header.tsx's own comment: 56px `h-14` + 28px `h-7` + 1px
- * `border-b` = 85px) was only ever checked for real by e2e/header.spec.ts,
- * which CI does not run (playwright.config.ts needs a live `npm run dev`
- * server - see that file's own comment). This compiles the REAL utility
- * classes site-header.tsx actually ships against the real, vendored
- * Tailwind and the real stylesheet - the same technique app-shell.test.tsx
- * uses for the skip link's padding cascade - rather than re-typing the
- * arithmetic as a second, hand-copied assertion that could drift from the
- * component the same way the component's own comment already warns against.
+ * (site-header.tsx's own comment: 56px `h-14` + 1px `border-b` = 57px) was
+ * only ever checked for real by e2e/header.spec.ts, which CI does not run
+ * (playwright.config.ts needs a live `npm run dev` server - see that file's
+ * own comment). This compiles the REAL utility classes site-header.tsx
+ * actually ships against the real, vendored Tailwind and the real
+ * stylesheet - the same technique app-shell.test.tsx uses for the skip
+ * link's padding cascade - rather than re-typing the arithmetic as a second,
+ * hand-copied assertion that could drift from the component the same way the
+ * component's own comment already warns against.
  *
- * Round 5, finding 4: site-header.tsx now expresses the arithmetic as three
- * named constants (`WORDMARK_ROW_PX`/`TAGLINE_ROW_PX`/`BORDER_PX`), each
- * mirroring one Tailwind class, rather than a single pre-summed `85`. This
- * file checks each one individually against its real compiled value, not
- * only the total - see the test's own comment for why that is strictly
- * stronger than checking the sum alone.
+ * Round 5, finding 4: site-header.tsx expresses the arithmetic as named
+ * constants (`WORDMARK_ROW_PX`/`BORDER_PX`), each mirroring one Tailwind
+ * class, rather than a single pre-summed total. This file checks each one
+ * individually against its real compiled value, not only the total - see the
+ * test's own comment for why that is strictly stronger than checking the sum
+ * alone.
+ *
+ * ugcportal-qqnt.3 dropped the header's second, fixed-height tagline row
+ * (`h-7`/`TAGLINE_ROW_PX`) entirely - SITE_TAGLINE moved to the footer - so
+ * this file now checks only the two terms that remain.
  */
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -40,9 +44,7 @@ import { GLOBALS_CSS_PATH } from "@/lib/design/tokens";
 vi.mock("@/components/upload-nav-link", () => ({ UploadNavLink: () => null }));
 vi.mock("@/components/auth-status", () => ({ AuthStatus: () => null }));
 
-const { BORDER_PX, HEADER_HEIGHT_PX, TAGLINE_ROW_PX, WORDMARK_ROW_PX } = await import(
-  "./site-header"
-);
+const { BORDER_PX, HEADER_HEIGHT_PX, WORDMARK_ROW_PX } = await import("./site-header");
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SITE_HEADER_PATH = path.join(HERE, "site-header.tsx");
@@ -134,32 +136,32 @@ function borderBottomWidthPx(css: string): number {
   return Number(match[1]);
 }
 
-describe("HEADER_HEIGHT_PX (ugcportal-14k9 PR #94 review round 4/5)", () => {
-  it("each named constant equals the real compiled value of the Tailwind class it mirrors, and the three sum to HEADER_HEIGHT_PX", async () => {
+describe("HEADER_HEIGHT_PX (ugcportal-14k9 PR #94 review round 4/5; ugcportal-qqnt.3 one-row update)", () => {
+  it("each named constant equals the real compiled value of the Tailwind class it mirrors, and the two sum to HEADER_HEIGHT_PX", async () => {
     const source = siteHeaderSourceWithoutComments();
     assertSoleClassToken(source, "h-14");
-    assertSoleClassToken(source, "h-7");
     assertSoleClassToken(source, "border-b");
 
-    const css = await compile("h-14 h-7 border-b");
+    const css = await compile("h-14 border-b");
     const resolvedSpacingPx = spacingPx(css);
 
     const row1HeightPx = spacingMultiplePx(css, "h-14", resolvedSpacingPx);
-    const taglineHeightPx = spacingMultiplePx(css, "h-7", resolvedSpacingPx);
     const borderPx = borderBottomWidthPx(css);
 
     // round 5, finding 4: checked individually against the NAMED constant
     // each mirrors, not only as a pre-summed total - a wrong WORDMARK_ROW_PX
-    // compensated by a wrong TAGLINE_ROW_PX could still sum to the right
+    // compensated by a wrong BORDER_PX could still sum to the right
     // HEADER_HEIGHT_PX, which the total-only version of this test (round 4)
     // could not have told apart from both being right.
     expect(row1HeightPx, "WORDMARK_ROW_PX vs. the real h-14").toBe(WORDMARK_ROW_PX);
-    expect(taglineHeightPx, "TAGLINE_ROW_PX vs. the real h-7").toBe(TAGLINE_ROW_PX);
     expect(borderPx, "BORDER_PX vs. the real border-b").toBe(BORDER_PX);
     expect(
-      row1HeightPx + taglineHeightPx + borderPx,
-      `h-14 (${row1HeightPx}px) + h-7 (${taglineHeightPx}px) + border-b (${borderPx}px)`,
+      row1HeightPx + borderPx,
+      `h-14 (${row1HeightPx}px) + border-b (${borderPx}px)`,
     ).toBe(HEADER_HEIGHT_PX);
+
+    // K1: one row, no taller than 64px.
+    expect(HEADER_HEIGHT_PX).toBeLessThanOrEqual(64);
   });
 
   /**
@@ -170,14 +172,48 @@ describe("HEADER_HEIGHT_PX (ugcportal-14k9 PR #94 review round 4/5)", () => {
    * longer equals `HEADER_HEIGHT_PX` either.
    */
   it("the checks above fail against a wrong row height", async () => {
-    const css = await compile("h-16 h-7 border-b");
+    const css = await compile("h-16 border-b");
     const resolvedSpacingPx = spacingPx(css);
 
     const wrongRow1HeightPx = spacingMultiplePx(css, "h-16", resolvedSpacingPx);
-    const taglineHeightPx = spacingMultiplePx(css, "h-7", resolvedSpacingPx);
     const borderPx = borderBottomWidthPx(css);
 
     expect(wrongRow1HeightPx).not.toBe(WORDMARK_ROW_PX);
-    expect(wrongRow1HeightPx + taglineHeightPx + borderPx).not.toBe(HEADER_HEIGHT_PX);
+    expect(wrongRow1HeightPx + borderPx).not.toBe(HEADER_HEIGHT_PX);
+  });
+
+  /**
+   * ugcportal-qqnt.3: site-header.tsx's own comment and
+   * site-header.test.tsx's both state the brand mark is 28px (docs/design/
+   * forside.html's `.brand-mark`, `size-7` in this repo's spacing scale) -
+   * a MEASUREMENT claim (review-standards section 5) that belongs in a test
+   * that fails if it drifts, not only in prose. `size-7` is a single
+   * utility that sets both `width` and `height` to the same `calc(...)`
+   * expression (confirmed by compiling it in isolation), so
+   * `spacingMultiplePx` - written for an `h-N` utility's `height` property -
+   * reads the right value here too without needing a second helper.
+   */
+  it("the brand mark (`size-7`) compiles to 28px", async () => {
+    const source = siteHeaderSourceWithoutComments();
+    assertSoleClassToken(source, "size-7");
+
+    const css = await compile("size-7");
+    const resolvedSpacingPx = spacingPx(css);
+    const brandMarkSizePx = spacingMultiplePx(css, "size-7", resolvedSpacingPx);
+
+    expect(brandMarkSizePx).toBe(28);
+  });
+
+  /**
+   * THE FIXTURE MUTATION (review-standards family 3): confirms the check
+   * above can actually fail, against a deliberately wrong size (`size-6`,
+   * 24px, not the real `size-7`).
+   */
+  it("the brand mark check above fails against a wrong size", async () => {
+    const css = await compile("size-6");
+    const resolvedSpacingPx = spacingPx(css);
+    const wrongSizePx = spacingMultiplePx(css, "size-6", resolvedSpacingPx);
+
+    expect(wrongSizePx).not.toBe(28);
   });
 });
