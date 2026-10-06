@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
+import type { GalleryItem } from "@/lib/gallery-items";
 import { PORTFOLIO_PATH, UPLOAD_PATH } from "@/lib/routes";
 
 import { Hero } from "./hero";
@@ -13,20 +14,61 @@ import { Hero } from "./hero";
  * ugcportal-qqnt.3), so unlike the version this replaces there is no third
  * href to distinguish.
  *
- * `Hero` is a plain, synchronous component taking `signedIn` as a prop (see
- * its own comment for why), so this is a trivial, un-mocked render — no
- * `vi.mock("@/lib/auth", ...)` needed at all, unlike
- * src/components/upload-nav-link.test.tsx and
+ * `Hero` is a plain, synchronous component taking `signedIn` and
+ * `portfolioPieces` as props (see HeroProps's own comment for why), so this
+ * is a trivial, un-mocked render — no `vi.mock("@/lib/auth", ...)` or Prisma
+ * needed at all, unlike src/components/upload-nav-link.test.tsx and
  * src/components/auth-status.test.tsx, which test components that resolve
- * the session themselves.
+ * the session themselves, or src/app/page.test.tsx, which drives the real
+ * `listPortfolioPieces()` read against a seeded database. `portfolioPieces`
+ * defaults to `[]` here (every three-fallback-tile case, K1's own "zero
+ * pieces" shape) so the many pre-existing calls below that only care about
+ * the CTA/copy do not all have to spell it out.
  */
-function render(signedIn: boolean): string {
-  return renderToStaticMarkup(<Hero signedIn={signedIn} />);
+function render(signedIn: boolean, portfolioPieces: GalleryItem[] = []): string {
+  return renderToStaticMarkup(<Hero signedIn={signedIn} portfolioPieces={portfolioPieces} />);
 }
 
 /** Every `href="..."` value in a markup string, in order of appearance. */
 function hrefsOf(markup: string): string[] {
   return [...markup.matchAll(/href="([^"]*)"/g)].map((match) => match[1]);
+}
+
+/**
+ * A minimal, valid `GalleryItem` fixture (the same shape
+ * src/components/portfolio/portfolio-tile.test.tsx's own `piece()` builds,
+ * independently, for the same reason: `GalleryItem` carries several fields
+ * this component never reads — `caption`, `tags`, `advertisingLabel` — and a
+ * test fixture should still be a complete, valid value of the type rather
+ * than a partial object that happens to have the fields this file touches).
+ */
+function piece(overrides: Partial<GalleryItem> = {}): GalleryItem {
+  return {
+    id: "piece-1",
+    previewSrc: "/api/media/preview/pv-1",
+    kind: "IMAGE",
+    publishedAt: "2026-03-04T10:00:00.000Z",
+    altText: "A flat-lay of a book, a coffee cup and a reading lamp",
+    caption: "",
+    tags: [],
+    advertisingLabel: null,
+    ...overrides,
+  };
+}
+
+/** Every `<img ...>` tag in a markup string, as whole-tag strings. */
+function imgTags(markup: string): string[] {
+  return markup.match(/<img\b[^>]*\/?>/g) ?? [];
+}
+
+/** One named attribute's value off a single `<img ...>` (or any) tag string. */
+function attr(tag: string, name: string): string | undefined {
+  return new RegExp(`${name}="([^"]*)"`).exec(tag)?.[1];
+}
+
+/** How many of the neutral fallback tiles (K1) a markup string carries. */
+function fallbackTileCount(markup: string): number {
+  return (markup.match(/data-home-hero-visual-fallback/g) ?? []).length;
 }
 
 describe("Hero (ugcportal-qqnt.4)", () => {
@@ -77,16 +119,24 @@ describe("Hero (ugcportal-qqnt.4)", () => {
   });
 
   /*
-   * K4: no stock photo or third-party image in the hero. Checks for the
-   * absence of an <img> element AND of any `url(...)` reference inside a
-   * `style` attribute or class name that points outside this app's own
-   * origin — a background image set via inline style would not show up as
-   * an <img> at all.
+   * K4: still no STOCK photo or third-party asset in the hero —
+   * ugcportal-qqnt.4 K1 below DOES now render real `<img>`s, but every one
+   * is a genuine, already-published portfolio piece served from this app's
+   * own origin, never an external URL. Checks both an `<img src>` AND any
+   * `url(...)` reference inside a `style` attribute or class name that
+   * points outside this app's own origin — a background image set via
+   * inline style would not show up as an `<img>` at all.
    */
-  it("K4: renders no <img>, and no background-image url() pointing outside the app's own origin", () => {
-    const markup = render(false);
+  it("K4: every <img> src is same-origin, and no url() reference points outside the app's own origin", () => {
+    const markup = render(false, [
+      piece({ id: "a", previewSrc: "/api/media/preview/a" }),
+      piece({ id: "b", previewSrc: "/api/media/preview/b" }),
+      piece({ id: "c", previewSrc: "/api/media/preview/c" }),
+    ]);
 
-    expect(markup).not.toMatch(/<img\b/i);
+    for (const tag of imgTags(markup)) {
+      expect(attr(tag, "src"), tag).toMatch(/^\/(?!\/)/);
+    }
 
     const urls = [...markup.matchAll(/url\(([^)]+)\)/g)].map((match) =>
       match[1].replace(/^['"]|['"]$/g, ""),
@@ -97,6 +147,128 @@ describe("Hero (ugcportal-qqnt.4)", () => {
         `unexpected external-looking url(): ${url}`,
       ).toBe(true);
     }
+  });
+
+  it("K4: zero portfolio pieces renders no <img> at all, only the neutral fallback tiles", () => {
+    const markup = render(false, []);
+
+    expect(markup).not.toMatch(/<img\b/i);
+  });
+
+  /*
+   * ugcportal-qqnt.4 K1: the hero's photographic visual — up to three
+   * overlapping real preview images, falling back to a neutral petrol tile
+   * for whichever slot(s) have no curated preview, and the old
+   * `data-home-hero-decoration` marker gone for good.
+   */
+  describe("K1: the hero's photographic visual", () => {
+    const threePieces = [
+      piece({
+        id: "a",
+        previewSrc: "/api/media/preview/a",
+        altText: "A kitchen counter with coffee gear",
+      }),
+      piece({
+        id: "b",
+        previewSrc: "/api/media/preview/b",
+        altText: "A stack of paperback novels",
+      }),
+      piece({
+        id: "c",
+        previewSrc: "/api/media/preview/c",
+        altText: "A pair of wine glasses on a shelf",
+      }),
+    ];
+
+    it("three pieces: three <img> elements with non-empty alt text, no fallback tile, and no decoration marker", () => {
+      const markup = render(false, threePieces);
+      const imgs = imgTags(markup);
+
+      expect(imgs).toHaveLength(3);
+      imgs.forEach((tag, index) => {
+        expect(attr(tag, "alt"), tag).toBe(threePieces[index].altText);
+        expect(attr(tag, "alt")).not.toBe("");
+        expect(attr(tag, "src")).toBe(threePieces[index].previewSrc);
+      });
+      expect(fallbackTileCount(markup)).toBe(0);
+      expect(markup).not.toContain("data-home-hero-decoration");
+      expect(markup).toContain("data-home-hero-visual");
+    });
+
+    it("one piece: one <img> plus two fallback tiles", () => {
+      const markup = render(false, [threePieces[0]]);
+      const imgs = imgTags(markup);
+
+      expect(imgs).toHaveLength(1);
+      expect(attr(imgs[0], "alt")).toBe(threePieces[0].altText);
+      expect(fallbackTileCount(markup)).toBe(2);
+      expect(markup).not.toContain("data-home-hero-decoration");
+    });
+
+    it("zero pieces: three fallback tiles, no <img>, and still no decoration marker", () => {
+      const markup = render(false, []);
+
+      expect(imgTags(markup)).toHaveLength(0);
+      expect(fallbackTileCount(markup)).toBe(3);
+      expect(markup).not.toContain("data-home-hero-decoration");
+      expect(markup).toContain("data-home-hero-visual");
+    });
+
+    it("more than three curated pieces: only the first three render", () => {
+      const markup = render(false, [
+        ...threePieces,
+        piece({ id: "d", previewSrc: "/api/media/preview/d", altText: "A fourth photo" }),
+      ]);
+
+      expect(imgTags(markup)).toHaveLength(3);
+      expect(markup).not.toContain("/api/media/preview/d");
+    });
+
+    /*
+     * K3's "a hero image loads without width and height (layout shift)"
+     * guard: every rendered <img> — not only the fallback-free three-piece
+     * case — carries non-empty, numeric width/height HTML attributes.
+     */
+    it("every <img> carries non-empty, numeric width and height attributes", () => {
+      for (const pieces of [threePieces, [threePieces[0]]]) {
+        const markup = render(false, pieces);
+        for (const tag of imgTags(markup)) {
+          const width = attr(tag, "width");
+          const height = attr(tag, "height");
+          expect(width, tag).toBeTruthy();
+          expect(height, tag).toBeTruthy();
+          expect(Number.isNaN(Number(width)), tag).toBe(false);
+          expect(Number.isNaN(Number(height)), tag).toBe(false);
+        }
+      }
+    });
+
+    /*
+     * `galleryItemAlt`'s own fallback (src/lib/gallery-items.ts): an empty
+     * `altText` never reaches the rendered `<img alt>` as an empty string —
+     * this component relies on that contract rather than re-implementing
+     * its own "what if there is no description" branch.
+     */
+    it("an empty altText still renders a non-empty <img alt>, via galleryItemAlt's own placeholder", () => {
+      const markup = render(false, [piece({ altText: "" })]);
+      const imgs = imgTags(markup);
+
+      expect(imgs).toHaveLength(1);
+      expect(attr(imgs[0], "alt")).toBeTruthy();
+    });
+
+    /*
+     * FIXTURE MUTATION CHECKS (performed by hand while writing this
+     * describe block, not left in the suite): (1) temporarily hardcoded
+     * `HeroVisual`'s fallback count to always be `0`, confirmed the "one
+     * piece: ... plus two fallback tiles" test above failed on the wrong
+     * count, then reverted; (2) temporarily made the `shown` slice keep all
+     * four pieces instead of the first three, confirmed the "more than
+     * three" test above failed, then reverted; (3) temporarily hardcoded
+     * `width`/`height` to `undefined`, confirmed the width/height test
+     * above failed on `toBeTruthy()`, then reverted. See the PR description
+     * for the full list of these checks across this bead.
+     */
   });
 
   /*

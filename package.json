@@ -12,7 +12,8 @@
     "test": "vitest run",
     "test:e2e": "playwright test",
     "test:e2e:footer-draft-guard": "playwright test --config=e2e/production/playwright.config.ts",
-    "test:e2e:alcohol-commerce": "playwright test --config=e2e/seeded/playwright.config.ts",
+    "test:e2e:alcohol-commerce": "playwright test --config=e2e/seeded/playwright.config.ts alcohol-commerce.spec.ts",
+    "test:e2e:hero-portfolio": "playwright test --config=e2e/seeded/playwright.config.ts front-page-hero-portfolio.spec.ts",
     "postinstall": "prisma generate"
   },
   "dependencies": {

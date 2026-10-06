@@ -24,8 +24,8 @@ function visibleText(markup: string): string {
     .trim();
 }
 
-const HERO_SIGNED_OUT = visibleText(renderToStaticMarkup(<Hero signedIn={false} />));
-const HERO_SIGNED_IN = visibleText(renderToStaticMarkup(<Hero signedIn={true} />));
+const HERO_SIGNED_OUT = visibleText(renderToStaticMarkup(<Hero signedIn={false} portfolioPieces={[]} />));
+const HERO_SIGNED_IN = visibleText(renderToStaticMarkup(<Hero signedIn={true} portfolioPieces={[]} />));
 const EMPTY_STATE = visibleText(renderToStaticMarkup(<EmptyState />));
 
 describe("front page strings (ugcportal-6dvg K4)", () => {

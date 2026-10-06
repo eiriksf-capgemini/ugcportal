@@ -33,6 +33,19 @@ test("the hero renders for an anonymous visitor, above whatever the gallery show
   const heroCta = hero.getByRole("link", { name: "See the portfolio" });
   await expect(heroCta).toBeVisible();
   await expect(heroCta).toHaveAttribute("href", "/portfolio");
+
+  /*
+   * ugcportal-qqnt.4 K1's other half, checked on THIS suite's own
+   * zero-portfolio-pieces database (see this file's own header comment):
+   * `HeroDecoration`'s old marker must never reappear, on any count of
+   * curated pieces, not only the seeded three-piece case
+   * e2e/seeded/front-page-hero-portfolio.spec.ts covers. Zero pieces is a
+   * real, tested shape (hero.test.tsx's own "zero pieces" case) — three
+   * neutral fallback tiles and no `<img>` at all, not a missing one.
+   */
+  await expect(page.locator("[data-home-hero-decoration]")).toHaveCount(0);
+  await expect(page.locator("[data-home-hero-visual] img")).toHaveCount(0);
+  await expect(page.locator("[data-home-hero-visual-fallback]")).toHaveCount(3);
 });
 
 test("K1: the living empty state offers an action, on a genuinely empty gallery", async ({
@@ -146,10 +159,19 @@ test("K1/K2: the hero CTA, the empty-state link and the header's sign-in buttons
  * roughly 1:1 wherever the two actually overlapped. src/lib/design/
  * contrast.ts could not catch this (it checks declared token pairs, not
  * what two elements happen to composite to at a given breakpoint); only
- * measuring real client rects in a browser found it. The fix
- * (src/components/home/hero.tsx's `HeroDecoration`) confines the shapes to
- * their own flex-sibling box, which this test checks geometrically rather
- * than trusting the structure to hold.
+ * measuring real client rects in a browser found it. The fix confines the
+ * shapes to their own flex-sibling box, which this test checks
+ * geometrically rather than trusting the structure to hold.
+ *
+ * RETARGETED (ugcportal-qqnt.4), not removed: the fix this test guards is
+ * `HeroDecoration`'s original containment box, which K1 kept (same classes,
+ * same flex-sibling placement) under a new name, `HeroVisual` — see that
+ * component's own comment for why the geometric guarantee still holds for
+ * whatever mix of real `<img>` tiles and neutral fallback `<div>`s it
+ * renders. `[data-home-hero-decoration] span` selected the three circles
+ * this box used to hold; `[data-home-hero-visual] > *` selects whichever of
+ * the two tile kinds actually renders now, the same selector
+ * e2e/front-page-motion.spec.ts also uses, for the same reason.
  */
 type Rect = { x: number; y: number; width: number; height: number };
 
@@ -163,7 +185,7 @@ function intersects(a: Rect, b: Rect): boolean {
 }
 
 for (const width of [360, 768, 1024]) {
-  test(`no decorative shape intersects the hero's text or CTA at ${width}px`, async ({
+  test(`no hero visual tile intersects the hero's text or CTA at ${width}px`, async ({
     page,
   }) => {
     await page.setViewportSize({ width, height: 900 });
@@ -181,7 +203,7 @@ for (const width of [360, 768, 1024]) {
           ),
         ].map(toRect),
         shapeRects: [
-          ...document.querySelectorAll("[data-home-hero-decoration] span"),
+          ...document.querySelectorAll("[data-home-hero-visual] > *"),
         ].map(toRect),
       };
     });
@@ -193,12 +215,35 @@ for (const width of [360, 768, 1024]) {
       for (const shape of shapeRects) {
         expect(
           intersects(text, shape),
-          `text rect ${JSON.stringify(text)} intersects decorative shape rect ${JSON.stringify(shape)} at ${width}px`,
+          `text rect ${JSON.stringify(text)} intersects hero visual tile rect ${JSON.stringify(shape)} at ${width}px`,
         ).toBe(false);
       }
     }
   });
 }
+
+/**
+ * ugcportal-qqnt.4 K3: "hero plus header stay at or under 620px at
+ * 1440x900" — measured for real (the hero's own vertical padding was
+ * reduced for exactly this, hero.tsx's own comment on its outer `<div>`),
+ * not trusted to the Tailwind class arithmetic alone. The header sits
+ * directly above the hero in source order with nothing between them
+ * (src/components/app-shell.tsx), so the hero section's own bottom edge,
+ * measured from the viewport's top, already includes the header's height —
+ * there is no second, separate "header height" to add.
+ */
+test("K3: the hero plus the header stay at or under 620px at 1440x900", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/");
+
+  const heroBottom = await page
+    .locator("[data-home-hero]")
+    .evaluate((el) => el.getBoundingClientRect().bottom);
+
+  expect(heroBottom, `hero's own bottom edge: ${heroBottom}px`).toBeLessThanOrEqual(620);
+});
 
 /**
  * Round-4 fix, ugcportal-qqnt.2 (round-3 review's one outstanding medium,

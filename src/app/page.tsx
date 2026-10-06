@@ -4,7 +4,8 @@ import { Gallery } from "@/components/gallery/gallery";
 import { GalleryUnavailable } from "@/components/gallery/gallery-unavailable";
 import { EmptyState } from "@/components/home/empty-state";
 import { Hero } from "@/components/home/hero";
-import { isGenuinelyEmptyPage, toGalleryItems } from "@/lib/gallery-items";
+import { isGenuinelyEmptyPage, toGalleryItems, type GalleryItem } from "@/lib/gallery-items";
+import { listPortfolioPieces } from "@/lib/portfolio";
 import {
   listPublicMedia,
   publicMediaListingUrl,
@@ -21,13 +22,41 @@ import { resolveSessionOrAnonymous } from "@/lib/session-or-anonymous";
  * different control flow (`catch` vs. an `if`) for reasons that comment
  * explains — only the JSX itself was duplicated, not the branching.
  */
-function unavailable(signedIn: boolean): ReactElement {
+function unavailable(signedIn: boolean, portfolioPieces: GalleryItem[]): ReactElement {
   return (
     <>
-      <Hero signedIn={signedIn} />
+      <Hero signedIn={signedIn} portfolioPieces={portfolioPieces} />
       <GalleryUnavailable />
     </>
   );
+}
+
+/**
+ * The hero's photographic tiles (ugcportal-qqnt.4 K1) degrade to the
+ * fallback petrol tiles `<HeroVisual>` itself already renders for an
+ * under-filled set, rather than crashing `Home()`'s render, the same
+ * resilience `resolveSessionOrAnonymous` gives the session read just below
+ * — a dropped database connection reading curated portfolio pieces is a
+ * real possibility on the SAME database `listPublicMedia` and
+ * `resolveSessionOrAnonymous` already guard against independently, not a
+ * hypothetical one invented for symmetry.
+ *
+ * Not wrapped in `cache()`/a `WeakSet` dedupe the way that module's own
+ * session read is: this function has exactly one caller (`Home` below),
+ * where the session read has three (this page, AuthStatus, UploadNavLink)
+ * that can all independently hit the identical rejected promise in one
+ * render — there is nothing here for a second layer to dedupe.
+ */
+async function resolveHeroPortfolioPieces(): Promise<GalleryItem[]> {
+  try {
+    return await listPortfolioPieces();
+  } catch (error) {
+    console.error(
+      "[src/app/page.tsx] the hero's portfolio-preview read failed; falling back to the neutral placeholder tiles",
+      error,
+    );
+    return [];
+  }
 }
 
 /**
@@ -104,6 +133,13 @@ export default async function Home() {
    * synchronous component taking the resolved boolean as a prop.
    */
   const sessionPromise = resolveSessionOrAnonymous();
+  /*
+   * Kicked off here too, alongside `sessionPromise`, rather than awaited
+   * immediately — the same "independent reads should not block on each
+   * other" reasoning as that promise's own comment, now for a THIRD,
+   * independent read (the session, the listing, and this) instead of two.
+   */
+  const portfolioPiecesPromise = resolveHeroPortfolioPieces();
 
   /*
    * `listMedia` only reports `ok: false` for a malformed `?cursor=`, and the
@@ -137,13 +173,13 @@ export default async function Home() {
   try {
     result = await listPublicMedia(publicMediaListingUrl());
   } catch {
-    return unavailable(hasSignedInUser(await sessionPromise));
+    return unavailable(hasSignedInUser(await sessionPromise), await portfolioPiecesPromise);
   }
 
   const signedIn = hasSignedInUser(await sessionPromise);
 
   if (!result.ok) {
-    return unavailable(signedIn);
+    return unavailable(signedIn, await portfolioPiecesPromise);
   }
 
   /*
@@ -177,7 +213,7 @@ export default async function Home() {
 
   return (
     <>
-      <Hero signedIn={signedIn} />
+      <Hero signedIn={signedIn} portfolioPieces={await portfolioPiecesPromise} />
       {isGenuinelyEmpty ? (
         <EmptyState />
       ) : (

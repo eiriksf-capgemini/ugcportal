@@ -128,6 +128,25 @@ vi.mock("@/lib/public-media", () => ({
   publicMediaListingUrl: () => "http://listing.internal/api/public/media",
 }));
 
+/**
+ * `@/lib/portfolio`, mocked wholesale (ugcportal-qqnt.4): `Home()` now also
+ * reads `listPortfolioPieces()` for the hero's photographic visual, on every
+ * branch this file exercises. Left unmocked, that function's own module
+ * graph reaches `@/lib/public-media` for `PUBLIC_MEDIA_SCOPE` — a NAMED
+ * export this file's own mock of that module above does not provide (it
+ * mocks only `listPublicMedia`/`publicMediaListingUrl`, the two names this
+ * file's OWN claims are about), which would make every render below log a
+ * second, unrelated error and break this file's own "logs exactly once"/
+ * "logs nothing" assertions on the UNRELATED session-read fail-safe. This
+ * file's claims are about session-read resilience and the failed-listing
+ * branch, not the hero's portfolio read, so an empty array — the same
+ * "nothing curated yet" shape a real, freshly seeded database would answer
+ * with — is the right fixture here, not a real Prisma round trip.
+ */
+vi.mock("@/lib/portfolio", () => ({
+  listPortfolioPieces: vi.fn(async () => []),
+}));
+
 const { default: Home } = await import("@/app/page");
 // Only for the "assembled shell" describe block further down this file —
 // both independently call the same mocked `@/lib/auth` module above.
