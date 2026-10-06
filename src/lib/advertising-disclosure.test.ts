@@ -145,8 +145,11 @@ describe("forbidden advertising labels (K3)", () => {
       // The failure this guards is a label that slips a rejected word past an
       // exact-match check by padding it: "Reklame (gifted)" is still a
       // disclosure using a word Forbrukertilsynet named as unacceptable.
-      // Note the padding is itself a PERMITTED label, so the allowlist alone
-      // would not refuse this on wording — only the term match does.
+      // The allowlist refuses the padded form too — the extra word makes the
+      // sequence match no permitted label — so, exactly as in the header
+      // above, `ok === false` cannot tell the two paths apart here either.
+      // The marker is what shows the forbidden term, not the allowlist,
+      // produced this refusal.
       expectForbiddenRefusal(`Reklame (${term})`, term);
     },
   );
