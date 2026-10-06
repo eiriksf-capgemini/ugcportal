@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 
+import { cache } from "react";
+
 import {
   LEGAL_CONTACT_VARS,
   LEGAL_SIGN_OFF,
@@ -118,6 +120,15 @@ export function legalPage(
 export type LegalReadiness = {
   /** The routes this readiness describes, in the order given. */
   paths: string[];
+  /**
+   * The subset of `paths` that is actually blocked — a page whose OWN
+   * `requires` names one of `missing`, or whose own authored prose has a
+   * stray placeholder (ugcportal-qnq9.15 item 1, PR #90 round-6 cap: the
+   * boot message used to name every page given, even one fully configured
+   * and blocked by nothing, whenever ANY other given page was blocked).
+   * `blockerWarning` names only these.
+   */
+  blockedPaths: string[];
   /** LEGAL_* variables that are unset AND required by at least one of the pages given. */
   missing: LegalContactVar[];
   /** Placeholders in the authored prose. */
@@ -143,9 +154,18 @@ export function legalReadiness(
     pages.flatMap((page) => page.requires.map((field) => LEGAL_CONTACT_VARS[field])),
   );
   const missing = readLegalContact(env).missing.filter((name) => required.has(name));
+  const missingSet = new Set(missing);
   const strayPlaceholders = pages
     .map((page) => ({ path: page.path, tokens: findPlaceholders(page.authored) }))
     .filter(({ tokens }) => tokens.length > 0);
+  const strayPaths = new Set(strayPlaceholders.map(({ path }) => path));
+  const blockedPaths = pages
+    .filter(
+      (page) =>
+        page.requires.some((field) => missingSet.has(LEGAL_CONTACT_VARS[field])) ||
+        strayPaths.has(page.path),
+    )
+    .map((page) => page.path);
   const digests = Object.fromEntries(pages.map((page) => [page.path, page.authoredSha256]));
   const blocked = missing.length > 0 || strayPlaceholders.length > 0;
   // A sign-off certifies specific words: a page whose prose has changed
@@ -155,6 +175,7 @@ export function legalReadiness(
     pages.every((page) => signOff.authoredSha256[page.path] === page.authoredSha256);
   return {
     paths: pages.map((page) => page.path),
+    blockedPaths,
     missing,
     strayPlaceholders,
     digests,
@@ -176,7 +197,12 @@ export function blockerWarning(
   if (!readiness.blocked) {
     return null;
   }
-  const paths = readiness.paths.join(", ");
+  // Name only the pages actually blocked (ugcportal-qnq9.15 item 1), not
+  // every page this readiness happens to describe: with /licence needing
+  // only the controller and the contact (round 5), setting just those two
+  // leaves /licence unblocked while /privacy still is — a message naming
+  // both would send an operator to "fix" a page that already works.
+  const paths = readiness.blockedPaths.join(", ");
   const lines: string[] = [];
   if (readiness.missing.length > 0) {
     lines.push(
@@ -230,6 +256,37 @@ export function assertPublishable(
   if (warning !== null) {
     throw new Error(warning);
   }
+}
+
+/** What a legal page's per-request loader returns — content, the page record, and its readiness. */
+export type LegalPageLoad<TContent> = {
+  content: TContent;
+  page: LegalPage;
+  readiness: LegalReadiness;
+};
+
+/**
+ * Builds the one per-request loader every legal page needs (ugcportal-
+ * qnq9.15 item 4: `loadPrivacy` and `loadLicence`, PR #90, were identical
+ * cache()-wrapped boilerplate — the content built from the live contact,
+ * the page record, and the readiness computed once and shared by
+ * `generateMetadata`, the component and `assertPublishable`, round 4).
+ *
+ * Called once per legal page, at module load, each call producing its OWN
+ * `cache()`-wrapped function — a third legal page adds one line here, not a
+ * fourth copy of this shape.
+ */
+export function createLegalPageLoader<TContent>(
+  page: LegalPage,
+  contentFor: (contact: LegalContact) => TContent,
+): (env?: NodeJS.ProcessEnv) => LegalPageLoad<TContent> {
+  return cache(
+    (env: NodeJS.ProcessEnv = process.env): LegalPageLoad<TContent> => ({
+      content: contentFor(readLegalContact(env).contact),
+      page,
+      readiness: legalReadiness([page], env),
+    }),
+  );
 }
 
 /**

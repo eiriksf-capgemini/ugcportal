@@ -1,12 +1,5 @@
-import { cache } from "react";
-
-import { type LegalContact, readLegalContact } from "@/lib/legal/contact";
-import {
-  type LegalPage,
-  type LegalReadiness,
-  legalPage,
-  legalReadiness,
-} from "@/lib/legal/publishable";
+import { type LegalContact } from "@/lib/legal/contact";
+import { type LegalPage, createLegalPageLoader, legalPage } from "@/lib/legal/publishable";
 import {
   type LegalListSection,
   type LegalProseSection,
@@ -507,19 +500,12 @@ export const PRIVACY_PAGE: LegalPage = legalPage(PRIVACY_PATH, (contact) =>
  * and its readiness — computed once here, so `generateMetadata`, the
  * component and its guard all read the same result.
  *
- * Wrapped in React's `cache` (the same idiom as `getSession` in
+ * `createLegalPageLoader` (src/lib/legal/publishable.ts; ugcportal-qnq9.15
+ * item 4) wraps this in React's `cache` (the same idiom as `getSession` in
  * src/lib/auth.ts) so `generateMetadata` and the page component, which both
  * call this with no arguments during one request, share one build rather
  * than two. Outside a server-component render — tests, the boot check —
  * `cache` is a pass-through, which is why the tests can change the stubbed
  * environment between calls.
  */
-export const loadPrivacy = cache(
-  (
-    env: NodeJS.ProcessEnv = process.env,
-  ): { content: PrivacyContent; page: LegalPage; readiness: LegalReadiness } => ({
-    content: privacyContent(readLegalContact(env).contact),
-    page: PRIVACY_PAGE,
-    readiness: legalReadiness([PRIVACY_PAGE], env),
-  }),
-);
+export const loadPrivacy = createLegalPageLoader(PRIVACY_PAGE, privacyContent);

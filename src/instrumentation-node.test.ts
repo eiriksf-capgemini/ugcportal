@@ -285,6 +285,7 @@ describe("registerNodeOnlyChecks() wiring the S3 check through @/lib/s3 (ugcport
     }));
     vi.doMock("@/lib/legal/pages", () => ({ LEGAL_PAGES: [] }));
     vi.doMock("@/lib/legal/publishable", () => ({ checkLegalPagesPublishable: () => null }));
+    vi.doMock("@/lib/legal/contact", () => ({ suspiciousLegalValueWarning: () => null }));
 
     const { registerNodeOnlyChecks } = await import("@/instrumentation-node");
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -309,6 +310,12 @@ describe("registerNodeOnlyChecks() wiring the S3 check through @/lib/s3 (ugcport
    * if the legal check were still computed/logged only after awaiting the
    * S3 probe, no warning at all would be logged yet at the point this test
    * asserts one.
+   *
+   * ugcportal-qnq9.15 item 2 added a third check in this same group — the
+   * operator-value sanity scan (`suspiciousLegalValueWarning`,
+   * src/lib/legal/contact.ts) — logged between the legal-pages check and
+   * the site-origin check, so this test's expected order grew a middle
+   * line rather than needing a sibling test of its own.
    */
   it("logs the legal warning before the S3 probe resolves, not delayed behind it (round-2 finding 1)", async () => {
     vi.useFakeTimers();
@@ -321,6 +328,12 @@ describe("registerNodeOnlyChecks() wiring the S3 check through @/lib/s3 (ugcport
     vi.doMock("@/lib/legal/pages", () => ({ LEGAL_PAGES: [] }));
     vi.doMock("@/lib/legal/publishable", () => ({
       checkLegalPagesPublishable: () => "[legal] test warning, independent of S3",
+    }));
+    // A real warning here too (same reasoning as the site-origin mock
+    // below): proves this line is not delayed behind the S3 probe either,
+    // not just that it is quiet.
+    vi.doMock("@/lib/legal/contact", () => ({
+      suspiciousLegalValueWarning: () => "[legal] test suspicious-value warning, independent of S3",
     }));
     // ugcportal-qnq9.12 (round 2 review, non-blocking note): a real warning
     // here, not a quiet `null`, is what lets this test RACE the site-origin
@@ -341,12 +354,14 @@ describe("registerNodeOnlyChecks() wiring the S3 check through @/lib/s3 (ugcport
     const resultPromise = registerNodeOnlyChecks();
 
     // Synchronous, immediately after calling -- no await, no microtask
-    // flush -- because BOTH the legal and site-origin checks must already be
-    // logged by now, well before the S3 probe's own timeout is even advanced
-    // below. Order matters here too: legal first, matching
+    // flush -- because ALL THREE of the legal, suspicious-value and
+    // site-origin checks must already be logged by now, well before the S3
+    // probe's own timeout is even advanced below. Order matters here too:
+    // legal, then the suspicious-value scan, then site-origin, matching
     // `registerNodeOnlyChecks`'s own doc comment and source order.
     expect(errors.mock.calls.map((call) => String(call[0]))).toEqual([
       "[legal] test warning, independent of S3",
+      "[legal] test suspicious-value warning, independent of S3",
       "[origin] test warning, independent of S3",
     ]);
 
