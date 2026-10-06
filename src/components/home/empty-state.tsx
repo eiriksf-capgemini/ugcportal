@@ -7,15 +7,18 @@ import { PORTFOLIO_PATH } from "@/lib/routes";
  * The front page's "living empty state" (ugcportal-6dvg K1/K2): what
  * src/app/page.tsx renders INSTEAD of `<Gallery>` the moment it already
  * knows, server-side, that the gallery is genuinely empty — the SAME
- * EXPRESSION (`items.length === 0 && !hasMore`) `<Gallery>`'s own internal
- * `GalleryEmpty` (src/components/gallery/gallery.tsx) uses, computed once in
+ * EXPRESSION `<Gallery>`'s own internal `GalleryEmpty`
+ * (src/components/gallery/gallery.tsx) uses, both now via the shared
+ * `isGenuinelyEmptyPage` (src/lib/gallery-items.ts; ugcportal-3wcd
+ * consolidated gallery.tsx's own inline copy onto it), computed once in
  * page.tsx rather than re-derived here. NOT a guarantee the two decisions
  * can never disagree (round-2 review, low finding): page.tsx's call uses
  * the LISTING's raw `result.page` values, while `<Gallery>` evaluates the
  * same expression over `toGalleryItems(...)`-filtered items and its own
  * `initialHasMore && initialCursor !== null` — see page.tsx's own comment
- * on `isGenuinelyEmpty` for exactly where those two can part ways, and
- * ugcportal-3wcd for where that gap is tracked.
+ * on `isGenuinelyEmpty` for exactly where those two can part ways. That
+ * gap is about the two callers' INPUTS, not the implementation, and is out
+ * of ugcportal-3wcd's scope to close.
  *
  * A SEPARATE module, for exactly the reason GalleryUnavailable
  * (src/components/gallery/gallery-unavailable.tsx) already is one rather

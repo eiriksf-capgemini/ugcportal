@@ -288,26 +288,22 @@ export function toGalleryItems(rows: unknown): GalleryItem[] {
  * Exported here (round-1 review, low finding) so src/app/page.tsx
  * (ugcportal-6dvg) can evaluate the SAME EXPRESSION gallery.tsx uses
  * internally, from one function, rather than a second hand-copied boolean
- * expression that could drift from it.
+ * expression that could drift from it. src/components/gallery/gallery.tsx
+ * (ugcportal-3wcd) now calls this directly too, rather than spelling the
+ * expression out inline a second time.
  *
- * Same expression, NOT a guarantee of the same answer (round-2 review, low
- * finding — an earlier version of this comment implied otherwise): the one
- * caller outside this module, src/app/page.tsx, passes this the LISTING's
- * raw `result.page.items`/`result.page.hasMore`, while
- * src/components/gallery/gallery.tsx evaluates the identical expression
- * over `toGalleryItems(...)`-filtered items and its own derived
- * `initialHasMore && initialCursor !== null` — see that call site's own
- * comment for exactly where the two inputs can part ways. Recorded on
- * ugcportal-3wcd, which also tracks the separate, structural gap below.
- *
- * NOT YET the single implementation, and that gap is real rather than
- * silently left: gallery.tsx's own `if (items.length === 0 && !hasMore)`
- * still spells this out inline — ugcportal-6dvg's own scope was explicitly
- * "do not change grid logic" for every file under src/components/gallery/*,
- * which that line is one of, so this function could not be swapped in
- * there without exceeding that scope. Tracked as ugcportal-3wcd (filed
- * alongside this fix) for whoever next has authority to touch that file to
- * finish the consolidation.
+ * Same expression, NOT a guarantee of the same answer, because the two
+ * callers are handed different INPUTS (round-2 review, low finding — an
+ * earlier version of this comment implied otherwise): src/app/page.tsx
+ * passes the LISTING's raw `result.page.items`/`result.page.hasMore`, while
+ * src/components/gallery/gallery.tsx passes `toGalleryItems(...)`-filtered
+ * items and its own derived `initialHasMore && initialCursor !== null` — see
+ * that call site's own comment for exactly where the two inputs can part
+ * ways. The INPUT SET THIS FUNCTION IS DEFINED OVER is whichever
+ * `(items, hasMore)` pair a caller hands it; today only unhealthy data (a
+ * row this module's own filtering would have dropped, or a feed response
+ * disagreeing with itself about `hasMore`/the cursor) can make the two
+ * callers' answers differ.
  */
 export function isGenuinelyEmptyPage(
   items: ReadonlyArray<unknown>,
