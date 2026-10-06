@@ -33,8 +33,10 @@ import { SITE_NAME } from "@/lib/site";
  * to it, so nothing on the page told a visitor whose site this was. The
  * tagline row is gone (SITE_TAGLINE now lives on the footer — see that
  * module's own comment on site.ts — not deleted), and the wordmark gained a
- * small petrol brand mark (docs/design/forside.html's `.brand-mark`, a 28px
- * petrol square) plus its own `font-heading`/`text-lg`/`font-medium`
+ * small petrol brand mark (docs/design/forside.html's `.brand-mark`, a
+ * 28px petrol square - src/components/site-header.height.test.ts compiles
+ * `size-7` and checks that number directly) plus its own `font-heading`/
+ * `text-lg`/`font-medium`
  * treatment — larger than the nav links' `text-sm` (K1) — so the one
  * remaining row reads brand-first rather than as a flat list of
  * equally-weighted strings. The sign-in side also collapsed from two

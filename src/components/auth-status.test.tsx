@@ -276,8 +276,9 @@ describe("AuthStatus (ugcportal-t0y)", () => {
  * PARENT hands it as props (src/components/sign-in-menu.tsx) - it is this
  * file, `auth-status.tsx`, that still owns both `signIn("google")` and
  * `signIn("facebook")` calls. Scans the REAL file on disk, comments
- * stripped first (`stripComments`, the same technique site-header.height.
- * test.ts and several other source-scan tests in this repo use) so a mere
+ * stripped first (`stripComments`, the same technique
+ * src/components/site-header.height.test.ts and several other source-scan
+ * tests in this repo use) so a mere
  * mention of either call in a comment - this very file's own docstring
  * includes one - cannot make this pass while the real call is gone.
  */

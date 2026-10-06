@@ -186,7 +186,12 @@ describe("SiteHeader (ugcportal-14k9)", () => {
     expect(navLinkAttrs).toContain("text-sm");
   });
 
-  /** K1: the mockup's 28px petrol brand mark (docs/design/forside.html's `.brand-mark`), decorative. */
+  /**
+   * K1: the mockup's petrol brand mark (docs/design/forside.html's
+   * `.brand-mark`), decorative. The exact 28px figure is compiled and
+   * checked in src/components/site-header.height.test.ts, not here - this
+   * test only pins that the decorative, petrol-filled span exists.
+   */
   it("K1: a decorative brand mark renders beside the wordmark", () => {
     const markup = renderHeader();
 

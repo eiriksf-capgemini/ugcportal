@@ -181,4 +181,39 @@ describe("HEADER_HEIGHT_PX (ugcportal-14k9 PR #94 review round 4/5; ugcportal-qq
     expect(wrongRow1HeightPx).not.toBe(WORDMARK_ROW_PX);
     expect(wrongRow1HeightPx + borderPx).not.toBe(HEADER_HEIGHT_PX);
   });
+
+  /**
+   * ugcportal-qqnt.3: site-header.tsx's own comment and
+   * site-header.test.tsx's both state the brand mark is 28px (docs/design/
+   * forside.html's `.brand-mark`, `size-7` in this repo's spacing scale) -
+   * a MEASUREMENT claim (review-standards section 5) that belongs in a test
+   * that fails if it drifts, not only in prose. `size-7` is a single
+   * utility that sets both `width` and `height` to the same `calc(...)`
+   * expression (confirmed by compiling it in isolation), so
+   * `spacingMultiplePx` - written for an `h-N` utility's `height` property -
+   * reads the right value here too without needing a second helper.
+   */
+  it("the brand mark (`size-7`) compiles to 28px", async () => {
+    const source = siteHeaderSourceWithoutComments();
+    assertSoleClassToken(source, "size-7");
+
+    const css = await compile("size-7");
+    const resolvedSpacingPx = spacingPx(css);
+    const brandMarkSizePx = spacingMultiplePx(css, "size-7", resolvedSpacingPx);
+
+    expect(brandMarkSizePx).toBe(28);
+  });
+
+  /**
+   * THE FIXTURE MUTATION (review-standards family 3): confirms the check
+   * above can actually fail, against a deliberately wrong size (`size-6`,
+   * 24px, not the real `size-7`).
+   */
+  it("the brand mark check above fails against a wrong size", async () => {
+    const css = await compile("size-6");
+    const resolvedSpacingPx = spacingPx(css);
+    const wrongSizePx = spacingMultiplePx(css, "size-6", resolvedSpacingPx);
+
+    expect(wrongSizePx).not.toBe(28);
+  });
 });
