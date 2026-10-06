@@ -8,6 +8,7 @@ import {
   renderGallery,
   unmountGallery,
   waitUntil,
+  click,
 } from "@/components/gallery/gallery.test-support";
 import { toGalleryItems } from "@/lib/gallery-items";
 
@@ -157,7 +158,7 @@ afterEach(() => {
 });
 
 async function mount(): Promise<void> {
-  await renderGallery(ctx.root(), {
+  await renderGallery(ctx.root, {
     initialItems: ITEMS,
     initialCursor: null,
     initialHasMore: false,
@@ -166,17 +167,15 @@ async function mount(): Promise<void> {
 
 /** Clicks the tile at `index`, the way a visitor does. */
 async function clickTile(index: number): Promise<void> {
-  const tiles = ctx.container().querySelectorAll<HTMLButtonElement>(
+  const tiles = ctx.container.querySelectorAll<HTMLButtonElement>(
     "button[data-gallery-tile]",
   );
   expect(tiles).toHaveLength(ITEMS.length);
-  await act(async () => {
-    tiles[index].dispatchEvent(new MouseEvent("click", { bubbles: true }));
-  });
+  await click(tiles[index]);
 }
 
 async function unmount(): Promise<void> {
-  await unmountGallery(ctx.root());
+  await unmountGallery(ctx.root);
 }
 
 describe("a viewer that is open when the gallery unmounts", () => {
@@ -226,9 +225,7 @@ describe("a viewer that is open when the gallery unmounts", () => {
         "button[data-gallery-tile]",
       );
       expect(tile).not.toBeNull();
-      await act(async () => {
-        tile?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-      });
+      await click(tile as HTMLButtonElement);
 
       await waitUntil(
         () => openInstance() !== undefined,
