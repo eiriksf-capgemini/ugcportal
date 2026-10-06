@@ -272,8 +272,8 @@ test.describe("forced colors: focus stays visible on the hero CTA and the empty-
  * exercises for radius/fill parity.
  *
  * ugcportal-qqnt.3 round 1 review: the Google button no longer renders until
- * the single "Sign in" control (K1) is activated (src/components/sign-in-
- * menu.tsx) - reaching it needs opening that disclosure first, which this
+ * the single "Sign in" control (K1) is activated
+ * (src/components/sign-in-menu.tsx) - reaching it needs opening that disclosure first, which this
  * test previously did not do at all (timed out waiting for an element that
  * never appeared). Opened via the KEYBOARD here (`.focus()` + Enter on the
  * trigger), not a `.click()`: confirmed empirically that a mouse-click open
