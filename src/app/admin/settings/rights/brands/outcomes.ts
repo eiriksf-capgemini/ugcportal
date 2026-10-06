@@ -9,8 +9,19 @@ const OUTCOME_MESSAGES: Record<string, string> = {
     "That brand no longer exists, so there was nothing to record. The list has been refreshed.",
   brand_id_missing:
     "No brand was named in that request, so nothing was recorded.",
-  brand_actor_not_admin:
-    "Your admin role was revoked since you signed in, so nothing was recorded.",
+  // No `brand_actor_not_admin` here, UNLIKE the sibling resale-rights
+  // module's `rights_actor_not_admin` one level up. A non-admin is answered
+  // the plain JSON 403 `requireAdminAccess` returns directly —
+  // the same shape every other admin API route in this product uses for
+  // "not an admin" (POST /api/admin/curation/[id]/price,
+  // POST /api/admin/rights/decision), not a redirect — because the page
+  // this route's form lives on already refuses a non-admin at render
+  // (`notFound()`), so there is no legitimate path by which a signed-in
+  // non-admin is ever looking at the form to retype after an error. The
+  // sibling route's redirect exists because its write
+  // (`setResaleRightsStatus`) re-checks the actor's role itself, after an
+  // evidence upload that gives a revoked admin's role time to change
+  // mid-request; this route has no such multi-step write to re-check inside.
 };
 
 /**

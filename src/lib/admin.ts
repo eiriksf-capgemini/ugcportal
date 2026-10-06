@@ -71,12 +71,16 @@ export type AdminAccessResult =
  * route, so telling an anonymous caller apart from a signed-in non-admin
  * would leak that the route exists to the first of the two. This function
  * exists because ugcportal-mqh8's brand list is explicitly specified the
- * other way — 401 then 403, matching docs/access-control.md's general rule
- * for a surface that is reached by more than one audience (401 is "you have
- * not told me who you are", 403 is "I know who you are, and the answer is
- * no") — not a general replacement for `requireAdmin`. Most admin routes
- * should keep calling `requireAdmin` and answering 403 to both; introduce
- * this split only where an acceptance criterion asks for it by name.
+ * other way — 401 then 403, the ordinary HTTP distinction between the two
+ * codes (401: no credentials were presented at all; 403: credentials were
+ * presented and the answer is no) — not a general replacement for
+ * `requireAdmin`. No document in this repo states a general rule either way
+ * for an admin-gated route; `requireAdmin`'s own docstring above and
+ * `requireOwnedMedia`'s note on 403-vs-404 (src/lib/media-access.ts) are
+ * where the 403-for-both convention this function departs from is actually
+ * written down. Most admin routes should keep calling `requireAdmin` and
+ * answering 403 to both; introduce this split only where an acceptance
+ * criterion asks for it by name.
  *
  * Mirrors `MediaAccessResult` (src/lib/media-access.ts) in shape, for the
  * same reason that one gives: answering "may this caller do this" and
