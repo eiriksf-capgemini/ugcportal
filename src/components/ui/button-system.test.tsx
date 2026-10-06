@@ -6,6 +6,11 @@ import { describe, expect, it } from "vitest";
 
 import { cn } from "cn";
 
+import { ConsentProvider } from "@/components/consent/consent-context";
+import {
+  COOKIE_BANNER_DECLINE_LABEL,
+  CookieBanner,
+} from "@/components/consent/cookie-banner";
 import { EmptyState } from "@/components/home/empty-state";
 import { Hero } from "@/components/home/hero";
 
@@ -120,6 +125,42 @@ describe("K1 — the hero and empty-state links resolve to buttonVariants, not a
    */
 });
 
+describe("regression guard (round-1 review, CONFIRMED medium, finding 2) — an out-of-scope caller's computed classes are unchanged", () => {
+  /**
+   * The round-1 finding: removing `sm`'s own radius cap (see button.tsx's
+   * `size` comment) would have silently changed the COMPUTED radius of
+   * every `size="sm"` button this bead does not touch — cookie-banner.tsx's
+   * two buttons among them. This asserts the fix (the restored cap) by
+   * EXACT equality against a snapshot of what `cn(buttonVariants({variant:
+   * "outline", size: "sm"}))` produced on `origin/main`, before this bead —
+   * captured by running a standalone script against that commit's
+   * button.tsx (same `cva`/`cn` calls, same variant/size literals) rather
+   * than guessed by hand, so a real drift in any token this button composes
+   * from — not only the radius — fails this test, not only a radius-shaped
+   * one.
+   */
+  const MAIN_COOKIE_BANNER_BUTTON_CLASS =
+    "group/button inline-flex shrink-0 items-center justify-center border bg-clip-padding font-medium whitespace-nowrap transition-all outline-none select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/80 motion-safe:active:not-aria-[haspopup]:translate-y-px disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 aria-invalid:border-destructive/75 aria-invalid:ring-3 aria-invalid:ring-destructive/80 [&_svg]:pointer-events-none [&_svg]:shrink-0 border-primary bg-transparent text-primary hover:border-primary-hover hover:underline aria-expanded:border-primary-hover aria-expanded:underline h-7 gap-1 rounded-[min(var(--radius-md),12px)] px-2.5 text-[0.8rem] in-data-[slot=button-group]:rounded-lg has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-3.5";
+
+  it("CookieBanner's decline button carries exactly the classes it did on main, byte for byte", () => {
+    const markup = renderToStaticMarkup(
+      <ConsentProvider initialConsent={null}>
+        <CookieBanner />
+      </ConsentProvider>,
+    );
+    const classAttr = classAttrOf(markup, COOKIE_BANNER_DECLINE_LABEL);
+    expect(classAttr).toBe(MAIN_COOKIE_BANNER_BUTTON_CLASS);
+  });
+
+  /*
+   * FIXTURE MUTATION CHECK (performed by hand, not left in the suite): with
+   * the round-1 regression reproduced (the `sm` cap removed, matching this
+   * PR's own pre-fix state), this assertion failed with the actual rendered
+   * class list containing `rounded-lg` where `rounded-[min(var(--radius-md),
+   * 12px)]` belongs — the exact drift the finding describes. Reverted.
+   */
+});
+
 describe("K2 — one radius token for every interactive shape", () => {
   it("every variant and the tile base share the exact rounded-lg radius utility", () => {
     const containment = readFileSync(
@@ -144,8 +185,24 @@ describe("K3 — no hand-written button-shaped className outside buttonVariants"
    * are plain components with no reason to discuss this combination in
    * prose, and the two directories named are small enough to read by eye if
    * this ever produces a surprising hit.
+   *
+   * ORDER-INDEPENDENT (round-1 review, CONFIRMED medium): a single
+   * `inline-flex[^`"']*rounded-` pattern only matches when `inline-flex`
+   * appears BEFORE `rounded-*` in the string. `"rounded-lg inline-flex
+   * items-center bg-petrol-100"` — the identical hand-rolled shape with the
+   * two utilities swapped — sailed through undetected, a blind spot a
+   * routine class-order change (a Tailwind class-sorter plugin, or just a
+   * different author's habit) could fall into silently. Two mirrored
+   * patterns, OR'd, so either order inside the same string literal (still
+   * bounded by a quote/backtick either side, same scope as before) trips
+   * the guard.
    */
-  const DANGEROUS_PATTERN = /inline-flex[^`"']*rounded-/;
+  const FORWARD_PATTERN = /inline-flex[^`"']*rounded-/;
+  const BACKWARD_PATTERN = /rounded-[^`"']*inline-flex/;
+
+  function hasHandWrittenButtonShape(source: string): boolean {
+    return FORWARD_PATTERN.test(source) || BACKWARD_PATTERN.test(source);
+  }
 
   const files = [
     "src/components/home/hero.tsx",
@@ -156,18 +213,52 @@ describe("K3 — no hand-written button-shaped className outside buttonVariants"
 
   it.each(files)("%s carries no inline-flex...rounded- class string", (file) => {
     const source = readFileSync(resolve(process.cwd(), file), "utf8");
-    expect(DANGEROUS_PATTERN.test(source), source).toBe(false);
+    expect(hasHandWrittenButtonShape(source), source).toBe(false);
   });
 
   /*
-   * Guards the guard: the pattern itself has to be able to fire, or the
-   * checks above pass vacuously whatever these files contain.
+   * Guards the guard: the pattern itself has to be able to fire, in either
+   * order, or the checks above pass vacuously whatever these files contain.
    */
-  it("the pattern itself matches the shape it is meant to catch", () => {
-    expect(
-      DANGEROUS_PATTERN.test(
-        'className="inline-flex items-center rounded-lg bg-petrol-100"',
-      ),
-    ).toBe(true);
+  describe("the pattern itself matches the shape it is meant to catch, regardless of order", () => {
+    it("inline-flex before rounded-", () => {
+      expect(
+        hasHandWrittenButtonShape(
+          'className="inline-flex items-center rounded-lg bg-petrol-100"',
+        ),
+      ).toBe(true);
+    });
+
+    it("rounded- before inline-flex (round-1 review: the pre-fix single pattern missed this order)", () => {
+      expect(
+        hasHandWrittenButtonShape(
+          'className="rounded-lg inline-flex items-center bg-petrol-100"',
+        ),
+      ).toBe(true);
+    });
+
+    it("neither token present in the same literal is not a false positive", () => {
+      expect(
+        hasHandWrittenButtonShape(
+          'className="flex items-center gap-2 bg-petrol-100" otherClassName="rounded-lg block"',
+        ),
+      ).toBe(false);
+    });
   });
+
+  /*
+   * FIXTURE MUTATION CHECK (performed by hand, not left in the suite):
+   * - Forward-order case: dropped `rounded-lg` from its fixture string and
+   *   confirmed the assertion flipped to failing (back to `false`); restored.
+   * - Reverse-order case, the one this round's finding is actually about:
+   *   temporarily reverted `hasHandWrittenButtonShape` to
+   *   `FORWARD_PATTERN.test(source)` only — i.e. exactly the pre-fix round-1
+   *   pattern — and confirmed this fixture's assertion failed (`toBe(true)`
+   *   no longer held, the literal bypass the review found); reverted to the
+   *   OR'd two-pattern form above.
+   * - Negative case: temporarily changed its fixture to a single literal
+   *   containing both tokens ("...rounded-lg inline-flex...") and confirmed
+   *   the assertion flipped to failing (`toBe(false)` no longer held),
+   *   proving it is a real check rather than one that always returns false.
+   */
 });

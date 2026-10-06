@@ -51,8 +51,12 @@ import { cn } from "cn"
  * 6. THE RULE (ugcportal-qqnt.2): every button-like control on the public
  *    pages (header, hero, empty state) resolves to one of this file's own
  *    `buttonVariants` class sets - never a hand-written `inline-flex ...
- *    rounded-*` string at the call site (src/components/type-scale.test.tsx
- *    and a dedicated source-scan test enforce the second half of that).
+ *    rounded-*` string at the call site (button-system.test.tsx's K3
+ *    describe block enforces the second half of that; round-1 review,
+ *    CONFIRMED low - an earlier version of this sentence pointed at
+ *    src/components/type-scale.test.tsx instead, which exists but is
+ *    entirely about heading type-scale sizing and asserts nothing about
+ *    hand-written button classes).
  *    Which variant is primary depends on the SURFACE, not on taste:
  *      - on --background (the paper canvas): `default` is primary, `outline`
  *        is secondary - this is what src/components/auth-status.tsx's
@@ -63,14 +67,19 @@ import { cn } from "cn"
  *      - on the untouched near-black surface scale (bg-surface-0..4 /
  *        bg-destructive-surface - fase 2's job, not this bead's):
  *        `default-neutral` is primary, `outline-neutral` is secondary.
- *    Every one of them shares this file's one `rounded-lg` radius
- *    (`--radius-lg`, 10px) - the same figure docs/design/tokens.css's
- *    `--radius-card` names for a tile, which is why
- *    src/components/gallery/containment.ts's `GALLERY_TILE_BASE_CLASS`
- *    was moved onto `rounded-lg` too rather than its own, smaller
- *    `rounded-md` (8px): one radius for every interactive shape on the
- *    public pages, not one for controls and a different one for the
- *    photographs they sit beside.
+ *    The shared `rounded-lg` radius (`--radius-lg`, 10px - the same figure
+ *    docs/design/tokens.css's `--radius-card` names for a tile, which is why
+ *    src/components/gallery/containment.ts's `GALLERY_TILE_BASE_CLASS` moved
+ *    onto `rounded-lg` too) applies to every PUBLIC-PAGE button-like control
+ *    this bead actually touches - hero's and empty state's `lg`-sized
+ *    controls, and the header's sign-in/sign-out controls via the
+ *    `header-sm` size below - not to every `size` key wholesale (round-1
+ *    review, CONFIRMED medium: an earlier version of this change removed
+ *    the smaller radius cap from `xs`/`sm`/`icon-xs`/`icon-sm` entirely,
+ *    which silently changed the computed radius of every OTHER `size="sm"`
+ *    caller this bead neither touches nor verifies - see the `size`
+ *    variants' own comment below for the restored cap and the new
+ *    `header-sm` size).
  */
 const PETROL_OUTLINE_STYLE =
   "border-primary bg-transparent text-primary hover:border-primary-hover hover:underline aria-expanded:border-primary-hover aria-expanded:underline"
@@ -196,29 +205,57 @@ const buttonVariants = cva(
         link: "text-primary underline-offset-4 hover:underline",
       },
       /*
-       * ugcportal-qqnt.2: every size used to round its own way — `xs`/`sm`/
-       * `icon-xs`/`icon-sm` each capped at a smaller `rounded-[min(var(
-       * --radius-md),Npx)]` than the base class's own `rounded-lg`, with an
-       * `in-data-[slot=button-group]:rounded-lg` override standing by for
-       * the one context (a `ButtonGroup`) that needed the base radius back.
-       * "One radius token for all interactive elements" (this bead's own
-       * description) means that smaller-size exception goes: every size
-       * now keeps the shared `rounded-lg` the base class already applies,
-       * so the `in-data-[slot=button-group]:` override has nothing left to
-       * override and is removed with it rather than kept as a dead no-op.
-       * This is the change that makes src/components/auth-status.tsx's own
-       * `size="sm"` sign-in buttons compute the identical radius the hero
-       * and empty-state's `size="lg"` controls do (e2e/front-page.spec.ts).
+       * ugcportal-qqnt.2, round-1 review (CONFIRMED medium): `xs`/`sm`/
+       * `icon-xs`/`icon-sm` cap their radius at a smaller
+       * `rounded-[min(var(--radius-md),Npx)]` than the base class's own
+       * `rounded-lg`, with an `in-data-[slot=button-group]:rounded-lg`
+       * override standing by for the one context (a `ButtonGroup`) that
+       * needs the base radius back. An earlier version of this bead removed
+       * that cap from all four sizes entirely, on the theory that "one
+       * radius token for all interactive elements" (this bead's own
+       * description) meant no size should keep a smaller one. That silently
+       * changed the COMPUTED radius of every `size="sm"`/`"xs"` caller this
+       * bead neither touches nor verifies -
+       * src/app/admin/settings/instagram/page.tsx,
+       * .../rights/decision-form.tsx, .../users/page.tsx,
+       * src/app/upload/upload-queue-list.tsx, src/app/auth/error/page.tsx
+       * and src/components/consent/cookie-banner.tsx all render a
+       * `size="sm"` button today, none of them in this bead's stated scope
+       * (admin and upload buttons are explicitly OUT of scope per the
+       * bead's own description). The cap below is restored byte-for-byte
+       * from before this bead - button-system.test.tsx's regression guard
+       * renders CookieBanner and asserts its button's computed class list
+       * is unchanged - so every one of those callers keeps the exact
+       * radius it had before this bead, unexamined and unchanged.
+       *
+       * `header-sm`, not a change to `sm` itself, is how
+       * src/components/auth-status.tsx's sign-in/sign-out controls get the
+       * one radius K2 asks for: identical `h-7`/`gap-1`/`px-2.5`/
+       * `text-[0.8rem]` dimensions to `sm` (so the header stays exactly as
+       * compact at 320px - see auth-status.tsx's own comment on why that
+       * width matters there), but WITHOUT the radius cap, so it falls
+       * through to the base class's `rounded-lg` the same way hero's and
+       * empty state's uncapped `lg` controls do. Whether the all-sizes-10px
+       * radius is the right design for every OTHER `sm`/`xs` caller too is
+       * an open question this bead does not decide here - follow-up filed
+       * on the parent epic (ugcportal-qqnt), not settled by this change.
        */
       size: {
         default:
           "h-8 gap-1.5 px-2.5 has-data-[icon=inline-end]:pr-2 has-data-[icon=inline-start]:pl-2",
-        xs: "h-6 gap-1 px-2 text-xs has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-3",
-        sm: "h-7 gap-1 px-2.5 text-[0.8rem] has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-3.5",
+        xs: "h-6 gap-1 rounded-[min(var(--radius-md),10px)] px-2 text-xs in-data-[slot=button-group]:rounded-lg has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-3",
+        sm: "h-7 gap-1 rounded-[min(var(--radius-md),12px)] px-2.5 text-[0.8rem] in-data-[slot=button-group]:rounded-lg has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-3.5",
+        // See the `size` comment above: identical to `sm` except for the
+        // radius cap, reserved for the header's public-page controls so K2
+        // holds without changing what every other `size="sm"` caller renders.
+        "header-sm":
+          "h-7 gap-1 px-2.5 text-[0.8rem] has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-3.5",
         lg: "h-9 gap-1.5 px-2.5 has-data-[icon=inline-end]:pr-2 has-data-[icon=inline-start]:pl-2",
         icon: "size-8",
-        "icon-xs": "size-6 [&_svg:not([class*='size-'])]:size-3",
-        "icon-sm": "size-7",
+        "icon-xs":
+          "size-6 rounded-[min(var(--radius-md),10px)] in-data-[slot=button-group]:rounded-lg [&_svg:not([class*='size-'])]:size-3",
+        "icon-sm":
+          "size-7 rounded-[min(var(--radius-md),12px)] in-data-[slot=button-group]:rounded-lg",
         "icon-lg": "size-9",
       },
     },
