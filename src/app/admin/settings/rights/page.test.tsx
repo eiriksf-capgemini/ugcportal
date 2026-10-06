@@ -95,15 +95,42 @@ async function createUploaderWithMedia(id: string, email: string) {
   });
 }
 
-/** `count` uploaders whose emails sort in creation order. */
+/**
+ * `count` uploaders whose emails sort in creation order, seeded in two bulk
+ * inserts rather than `count` serial round trips.
+ *
+ * ugcportal-qudv: the per-row version awaited a `user.create` and a
+ * `media.create` in a loop, so a page's worth of uploaders cost two
+ * sequential round trips against the real SQLite connection per uploader.
+ * That stayed under vitest's default timeout on an unloaded machine but not
+ * on a loaded CI runner, because each round trip's overhead — not the row
+ * count — is what scales with runner contention (see the bead for the CI
+ * run and timings that motivated this). `createMany` issues one statement
+ * per table regardless of `count`, so the cost no longer scales with
+ * contention the same way.
+ */
 async function createUploaders(count: number, prefix = "u") {
-  for (let index = 0; index < count; index += 1) {
-    const padded = String(index).padStart(4, "0");
-    await createUploaderWithMedia(
-      `${prefix}-${padded}`,
-      `${prefix}${padded}@example.com`,
-    );
-  }
+  const ids = Array.from({ length: count }, (_, index) =>
+    `${prefix}-${String(index).padStart(4, "0")}`,
+  );
+  await prisma.user.createMany({
+    data: ids.map((id, index) => ({
+      id,
+      email: `${prefix}${String(index).padStart(4, "0")}@example.com`,
+      role: "USER" as const,
+    })),
+  });
+  await prisma.media.createMany({
+    data: ids.map((id) => ({
+      id: `media-${id}`,
+      userId: id,
+      kind: "IMAGE" as const,
+      key: `uploads/${id}/a.jpg`,
+      mimeType: "image/jpeg",
+      sizeBytes: 10,
+      originalName: "a.jpg",
+    })),
+  });
 }
 
 beforeAll(async () => {
