@@ -850,16 +850,16 @@ describe("ugcportal-qn3: the triage-fact mechanism", () => {
     expect(new Set(fields).size).toBe(fields.length);
   });
 
-  it("gives every fact a blocker the admin screen has words for", () => {
-    // BLOCKER_MESSAGES is a total Record over SellabilityBlocker, so the
-    // sentence is enforced by tsc; what is checked here is that the
-    // blocker a fact names is a real member of that closed set rather than
-    // an ad-hoc string, which is what makes the UI lookup total.
-    for (const fact of TRIAGE_FACTS) {
-      expect(typeof fact.uncleared).toBe("string");
-      expect(fact.uncleared.length).toBeGreaterThan(0);
-    }
-  });
+  // THERE IS NO TEST HERE FOR "every fact's blocker has words on the admin
+  // screen", and the omission is deliberate. Anything this file could
+  // assert about `fact.uncleared` on its own is a tautology: it is typed
+  // SellabilityBlocker, a closed union of non-empty literals, so every
+  // in-type value passes a `typeof`/length check and an out-of-type one
+  // fails `tsc` before any test runs. The claim is carried by `has a
+  // sentence for every triage fact's uncleared blocker` in
+  // src/app/admin/settings/rights/outcomes.test.ts, which indexes
+  // BLOCKER_MESSAGES by `fact.uncleared` and so fails on a blocker with no
+  // wording. It lives there because that is where the wording map is.
 
   it("asks a question for every fact, so a form can be generated from it", () => {
     for (const fact of TRIAGE_FACTS) {

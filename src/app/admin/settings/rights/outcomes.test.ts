@@ -46,14 +46,34 @@ describe("BLOCKER_MESSAGES", () => {
     }
   });
 
+  /**
+   * THE ONE PLACE that checks every registered triage fact's blocker has
+   * wording (ugcportal-qn3). Here rather than beside TRIAGE_FACTS because
+   * this is where the wording map is; a test next to the registry could
+   * only inspect `fact.uncleared` itself, which proves nothing a type
+   * does not already.
+   *
+   * `tsc` covers the static half: BLOCKER_MESSAGES is a total `Record`
+   * over SellabilityBlocker, and `uncleared` is typed to that union. What
+   * is left for runtime is the half a type cannot see — a key present but
+   * empty, a key reachable only through the prototype, or the Record
+   * widened to a Partial by a later hand. Each of those lands on a layer
+   * added later arriving with an undefined lookup in front of an admin
+   * instead of a sentence.
+   */
   it("has a sentence for every triage fact's uncleared blocker", () => {
-    // The Record type makes BLOCKER_MESSAGES total over SellabilityBlocker,
-    // which is not quite the same claim: this one is that the blocker each
-    // registered fact names is a member of that closed set, so a layer
-    // added later arrives with words an admin can read rather than with an
-    // undefined lookup (ugcportal-qn3).
     for (const fact of TRIAGE_FACTS) {
-      expect(BLOCKER_MESSAGES[fact.uncleared].length).toBeGreaterThan(10);
+      // `hasOwn`, not truthiness: `?error=toString` is the same mistake
+      // outcomeMessage guards against one function up, and an inherited
+      // member would otherwise pass the length check below.
+      expect(
+        Object.hasOwn(BLOCKER_MESSAGES, fact.uncleared),
+        `${fact.layer} names the blocker ${fact.uncleared}, which has no wording`,
+      ).toBe(true);
+      expect(
+        BLOCKER_MESSAGES[fact.uncleared].length,
+        `${fact.layer}'s blocker ${fact.uncleared} has no real sentence`,
+      ).toBeGreaterThan(10);
     }
   });
 

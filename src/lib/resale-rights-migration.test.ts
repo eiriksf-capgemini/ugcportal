@@ -43,7 +43,7 @@ const REANCHOR_MIGRATION = migrationNames().find((name) =>
 const database = createTemporaryDatabase();
 const { prisma } = await import("@/lib/prisma");
 
-/** The four tables the re-anchoring rewrites, counted by raw SQL. */
+/** The four tables the re-anchoring rewrites. */
 const RIGHTS_TABLES = [
   "ResaleRightsReview",
   "ResaleRightsEvent",
@@ -51,18 +51,56 @@ const RIGHTS_TABLES = [
   "MediaRightsClearance",
 ] as const;
 
-async function rightsRowCounts(): Promise<Record<string, number>> {
-  const counts: Record<string, number> = {};
-  for (const table of RIGHTS_TABLES) {
-    const [row] = await prisma.$queryRawUnsafe<{ n: bigint | number }[]>(
-      `SELECT count(*) AS n FROM "${table}"`,
-    );
-    counts[table] = Number(row.n);
-  }
-  return counts;
+/**
+ * Every row of those four, as text, read by raw SQL rather than through
+ * the generated client — which cannot read this database at the moment
+ * the first snapshot is taken (see applyMigrations' `startAfter`).
+ *
+ * CONTENT, NOT COUNTS. `count(*)` catches an INSERT and a DELETE and is
+ * blind to an UPDATE-style backfill, which leaves every count identical
+ * while changing exactly the rows this file goes on to assert about.
+ * Comparing the rows catches all three.
+ *
+ * `columns` pins the projection to the column list as it was at the first
+ * snapshot, so a later migration that merely ADDs a column is not read as
+ * a change to rows it did not touch. Ordered by `id`, which all four
+ * tables have, so the comparison does not depend on SQLite's row order.
+ */
+async function columnsOf(table: string): Promise<string[]> {
+  const rows = await prisma.$queryRawUnsafe<{ name: string }[]>(
+    `PRAGMA table_info("${table}")`,
+  );
+  return rows.map((row) => row.name);
 }
 
-let rightsRowCountsAfterReanchor: Record<string, number>;
+type RightsSnapshot = {
+  columns: Record<string, string[]>;
+  rows: Record<string, string>;
+};
+
+async function rightsSnapshot(
+  columns?: Record<string, string[]>,
+): Promise<RightsSnapshot> {
+  const snapshot: RightsSnapshot = { columns: {}, rows: {} };
+  for (const table of RIGHTS_TABLES) {
+    snapshot.columns[table] = columns?.[table] ?? (await columnsOf(table));
+    const projection = snapshot.columns[table]
+      .map((column) => `"${column}"`)
+      .join(", ");
+    const rows = await prisma.$queryRawUnsafe<Record<string, unknown>[]>(
+      `SELECT ${projection} FROM "${table}" ORDER BY "id"`,
+    );
+    // Stringified so the comparison does not turn on how the driver types
+    // a column (bigint vs number, Date vs string), which is not what this
+    // guard is about.
+    snapshot.rows[table] = JSON.stringify(rows, (_key, value) =>
+      typeof value === "bigint" ? value.toString() : value,
+    );
+  }
+  return snapshot;
+}
+
+let rightsAfterReanchor: RightsSnapshot;
 
 /**
  * The pre-change audit row is dated EARLY ON THE SAME UTC DAY the migration
@@ -129,17 +167,13 @@ beforeAll(async () => {
 
   await applyMigration(prisma, REANCHOR_MIGRATION!);
 
-  /**
-   * What the migration under test left behind, counted through raw SQL
-   * while the database is still at exactly that migration — before the
-   * catch-up below, and without the generated client, which is the only
-   * way to look at this state at all (see applyMigrations' `startAfter`).
-   */
-  rightsRowCountsAfterReanchor = await rightsRowCounts();
+  // What the migration under test left behind, while the database is
+  // still at exactly that migration.
+  rightsAfterReanchor = await rightsSnapshot();
 
   // Catch the schema up to the current migrations, so the assertions below
   // can read through Prisma. They are still about what the re-anchoring
-  // did: `leaves the rights tables exactly as the re-anchoring left them`
+  // did: `leaves every rights row exactly as the re-anchoring left it`
   // checks that for itself rather than asserting it in a comment.
   await applyMigrations(prisma, { startAfter: REANCHOR_MIGRATION! });
 });
@@ -156,12 +190,18 @@ describe("ugcportal-vsm K2: nothing becomes sellable", () => {
    * Every assertion in this file now runs against a database that has had
    * the migrations AFTER the re-anchoring applied to it too, because the
    * generated client cannot read one that has not. That is only sound
-   * while none of those later migrations touches the rights tables — and
-   * one that did (a backfill, a cleanup) would otherwise make this file
-   * quietly measure its effect and attribute it to ugcportal-vsm.
+   * while none of those later migrations changes the rights rows — and one
+   * that did would otherwise make this file quietly measure its effect and
+   * attribute it to ugcportal-vsm.
+   *
+   * What this compares is every row of the four tables, on the columns
+   * they had at that moment: an inserted row, a deleted row and an updated
+   * one are all caught. A later migration that only ADDs a column is not,
+   * deliberately — it changes nothing this file goes on to read.
    */
-  it("leaves the rights tables exactly as the re-anchoring left them", async () => {
-    expect(await rightsRowCounts()).toEqual(rightsRowCountsAfterReanchor);
+  it("leaves every rights row exactly as the re-anchoring left it", async () => {
+    const now = await rightsSnapshot(rightsAfterReanchor.columns);
+    expect(now.rows).toEqual(rightsAfterReanchor.rows);
   });
 
   it("carries no review row forward, so every uploader is UNREVIEWED", async () => {

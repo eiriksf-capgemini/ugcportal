@@ -544,7 +544,7 @@ enum ResaleRightsRoute {
 // PEOPLE was initially left out on the grounds that it is settled by a model
 // release on file rather than by a written justification. That was wrong in
 // the direction that matters: it made the one layer with a named individual
-// behind it the *loosest* of the four, settled by a free-text key and a
+// behind it the *loosest* of them, settled by a free-text key and a
 // boolean with no author. A release now needs both — the file, and an admin
 // who says it covers this use (åndsverkloven § 104, GDPR art 9).
 //
