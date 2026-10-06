@@ -272,15 +272,11 @@ function statusLineWithin(row: ParentNode): HTMLParagraphElement {
 }
 
 /**
- * The queue's always-present fallback landing spot — see `addFilesLabelRef`
- * in upload-form.tsx.
+ * The queue's always-present fallback landing spot — see `fileInputRef` in
+ * upload-form.tsx.
  */
-function addFilesLabelOrNull(): HTMLLabelElement | null {
-  return (
-    [...container.querySelectorAll("label")].find(
-      (candidate) => candidate.textContent === "Choose files",
-    ) ?? null
-  );
+function fileInputOrNull(): HTMLInputElement | null {
+  return container.querySelector<HTMLInputElement>('input[type="file"]');
 }
 
 describe("K1 — focus survives a retry that unmounts 'Try again' (ugcportal-ff2a)", () => {
@@ -647,7 +643,7 @@ describe("Remove/Clear guard — focus parked elsewhere is left alone (ugcportal
 });
 
 describe("Clear — focus survives dismissing the only row in the queue (ugcportal-ff2a)", () => {
-  it("falls back to the 'Choose files' label once Clear dismisses the only row left", async () => {
+  it("falls back to the file input once Clear dismisses the only row left", async () => {
     mount();
     setAltText("A fox crossing a snowy field at dawn");
     addFile(imageFile());
@@ -672,13 +668,32 @@ describe("Clear — focus survives dismissing the only row in the queue (ugcport
     );
 
     // The only row in the queue, so there is no neighbouring row's control
-    // to land on either — the "Choose files" label is the one control this
-    // page always has (see `dismiss()` in upload-form.tsx), named explicitly
-    // here rather than inferred from wherever the DOM happens to place it.
-    const label = addFilesLabelOrNull();
-    expect(label).not.toBeNull();
+    // to land on either — the file input is the one control this page
+    // always has (see `dismiss()` in upload-form.tsx), named explicitly here
+    // rather than inferred from wherever the DOM happens to place it.
+    const fileInput = fileInputOrNull();
+    expect(fileInput).not.toBeNull();
     expect(document.activeElement).not.toBe(document.body);
-    expect(document.activeElement).toBe(label);
+    expect(document.activeElement).toBe(fileInput);
+
+    // ugcportal-ff2a: the landing spot must be the real, keyboard-operable
+    // control, not a decorative stand-in with no native activation of its
+    // own — a label standing in for the input produces zero `keydown`
+    // deliveries to it. Dispatched at `document.activeElement`, not at
+    // `fileInput` directly, so this would fail again if the fallback ever
+    // pointed somewhere else.
+    let reachedInput = false;
+    fileInput?.addEventListener(
+      "keydown",
+      () => {
+        reachedInput = true;
+      },
+      { once: true },
+    );
+    document.activeElement?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+    );
+    expect(reachedInput).toBe(true);
   });
 });
 
