@@ -21,6 +21,15 @@
  * Each fixture is shaped like a real finding from the v0.5.0 review rounds
  * (docs/process/review-rounds-v0.5.0.md, Part 1) or from this PR's own
  * review rounds, named in the test title.
+ *
+ * PR body mode (ugcportal-bn94) gets its own describe blocks below: pure
+ * fixtures for auditBodyText/findQuotedSpans/tokenStillInDiff/
+ * extractBodyLines against literal body/diff strings (no `gh` involved --
+ * the same "pure function, literal fixture" shape
+ * scripts/sweep-merged-branches.test.mjs uses for its own `gh`-adjacent
+ * parsing), and one real-git-repo describe block proving `--body` reads
+ * stdin and diffs the local working tree, and that its printed counts are
+ * never summed with file mode's (K2).
  */
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -31,13 +40,17 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  auditBodyText,
   auditContent,
   classifyClaimLine,
+  extractBodyLines,
   extractComments,
   extractProseLines,
   findPathReferences,
+  findQuotedSpans,
   parseArgs,
   referenceExists,
+  tokenStillInDiff,
 } from "./claims-audit.mjs";
 import { parseUnifiedDiffAddedLines } from "./lib/git-diff.mjs";
 
@@ -271,6 +284,167 @@ describe("parseArgs", () => {
   });
 });
 
+describe("parseArgs: PR body mode (ugcportal-bn94)", () => {
+  it("recognizes --pr <n> and --pr=<n> the same way", () => {
+    expect(parseArgs(["--pr", "147"])).toEqual({ base: undefined, allLines: false, prNumber: 147 });
+    expect(parseArgs(["--pr=147"])).toEqual({ base: undefined, allLines: false, prNumber: 147 });
+  });
+
+  it("recognizes --body, reading the body from stdin", () => {
+    expect(parseArgs(["--body"])).toEqual({ base: undefined, allLines: false, bodyFromStdin: true });
+  });
+
+  it("names the problem for a missing or non-numeric --pr value, instead of silently falling back to file mode", () => {
+    expect(parseArgs(["--pr"]).error).toMatch(/requires a PR number/);
+    expect(parseArgs(["--pr", "abc"]).error).toMatch(/requires a PR number/);
+    expect(parseArgs(["--pr="]).error).toMatch(/requires a PR number/);
+    expect(parseArgs(["--pr=abc"]).error).toMatch(/requires a PR number/);
+  });
+
+  it("rejects --pr and --body combined -- two body sources is not a silent choice this script makes for you", () => {
+    expect(parseArgs(["--pr", "147", "--body"]).error).toMatch(/mutually exclusive/);
+  });
+
+  it("rejects --all-lines combined with either PR-body source -- a body has no added-lines concept", () => {
+    expect(parseArgs(["--pr", "147", "--all-lines"]).error).toMatch(/does not apply to PR-body mode/);
+    expect(parseArgs(["--body", "--all-lines"]).error).toMatch(/does not apply to PR-body mode/);
+  });
+
+  it("rejects --base combined with --pr -- that PR's diff comes from `gh pr diff`, not a local ref", () => {
+    expect(parseArgs(["--pr", "147", "--base", "origin/main"]).error).toMatch(/does not apply to --pr/);
+  });
+
+  it("allows --base combined with --body -- stdin mode diffs the local working tree against it", () => {
+    expect(parseArgs(["--body", "--base", "origin/main"])).toEqual({ base: "origin/main", allLines: false, bodyFromStdin: true });
+  });
+});
+
+describe("extractBodyLines", () => {
+  it("takes every non-blank line of a PR body, 1-indexed, same granularity as a Markdown file's prose", () => {
+    expect(extractBodyLines("## Summary\n\nFixed the bug.\n")).toEqual([
+      { line: 1, text: "## Summary" },
+      { line: 3, text: "Fixed the bug." },
+    ]);
+  });
+});
+
+describe("findQuotedSpans", () => {
+  it("extracts a double-quoted span and a backtick code span, each once", () => {
+    const text = 'the wrong "24 characters" vs `[ -n "$me" ]`';
+    expect(findQuotedSpans(text)).toEqual(["24 characters", '[ -n "$me" ]']);
+  });
+
+  it("does not pair an ordinary contraction's apostrophes into a false span (no single-quote pattern at all)", () => {
+    expect(findQuotedSpans("isn't related to won't happen")).toEqual([]);
+  });
+
+  it("ignores a lone punctuation mark too short to be a real referenced token", () => {
+    expect(findQuotedSpans('a quoted "-" here')).toEqual([]);
+  });
+});
+
+describe("tokenStillInDiff", () => {
+  const diff = [
+    "diff --git a/a.ts b/a.ts",
+    "--- a/a.ts",
+    "+++ b/a.ts",
+    "@@ -1,2 +1,3 @@",
+    "-const old = 1;",
+    "+const kept = 1; // 24 characters max",
+    " const unchanged = 2;",
+  ].join("\n");
+
+  it("finds a token on an ADDED line (PR #147, 2026-10-06: a 'deleted' number that was not)", () => {
+    expect(tokenStillInDiff("24 characters", diff)).toBe(true);
+  });
+
+  it("finds a token on an unchanged CONTEXT line", () => {
+    expect(tokenStillInDiff("unchanged", diff)).toBe(true);
+  });
+
+  it("does not count a token that only ever appeared on a REMOVED line as still present", () => {
+    expect(tokenStillInDiff("const old", diff)).toBe(false);
+  });
+
+  it("ignores a match against a file-header line (+++ b/path / --- a/path), not real file content", () => {
+    expect(tokenStillInDiff("a.ts", diff)).toBe(false);
+  });
+
+  it("returns false for an empty token rather than matching every line", () => {
+    expect(tokenStillInDiff("", diff)).toBe(false);
+  });
+});
+
+describe("auditBodyText (ugcportal-bn94)", () => {
+  it("K1: reports a PR body's test count as a MEASUREMENT candidate with its line", () => {
+    const body = "## Pre-review\n\n1. Gates: vitest 165 files / 3520 tests, all green.\n";
+    expect(auditBodyText(body)).toEqual([
+      {
+        line: 3,
+        text: "1. Gates: vitest 165 files / 3520 tests, all green.",
+        categories: ["MEASUREMENT"],
+        missingReferences: [],
+        doneClaimStillPresent: [],
+      },
+    ]);
+  });
+
+  it("flags a DONE claim and confirms it against the diff (PR #147, 2026-10-06: a 'deleted' number that was still on an added line)", () => {
+    const body = 'Eight fixed: one MEASUREMENT deleted (the wrong "24 characters"); five ABSOLUTEs weakened.\n';
+    const diffText = ["diff --git a/x.ts b/x.ts", "--- a/x.ts", "+++ b/x.ts", "@@ -1 +1 @@", "+ * a label of at most 24 characters."].join("\n");
+    expect(auditBodyText(body, { diffText })).toEqual([
+      {
+        line: 1,
+        text: 'Eight fixed: one MEASUREMENT deleted (the wrong "24 characters"); five ABSOLUTEs weakened.',
+        categories: ["DONE"],
+        missingReferences: [],
+        doneClaimStillPresent: ["24 characters"],
+      },
+    ]);
+  });
+
+  it("flags a DONE claim without the contradiction check when no diff is available -- still worth a human's look", () => {
+    const body = "Both guards restored and fixed.\n";
+    expect(auditBodyText(body)).toEqual([
+      { line: 1, text: "Both guards restored and fixed.", categories: ["DONE"], missingReferences: [], doneClaimStillPresent: [] },
+    ]);
+  });
+
+  it("flags 'both X corrected' and 'all N corrected' as DONE -- the verb alone matches, no separate aggregate pattern needed", () => {
+    expect(auditBodyText("Both issues corrected.\n").map((c) => c.categories)).toEqual([["DONE"]]);
+    expect(auditBodyText("All three findings corrected.\n").map((c) => c.categories)).toEqual([["DONE"]]);
+  });
+
+  it("is silent for an ordinary sentence with no claim, no reference and no done verb", () => {
+    expect(auditBodyText("This PR adds a button to the gallery footer.\n")).toEqual([]);
+  });
+
+  it("names a file the body points at that does not exist in the tree, same REFERENCE semantics as a comment", () => {
+    const out = auditBodyText("See configured-users.ts for details.\n", { existingFiles: ["src/lib/routes.ts"] });
+    expect(out).toEqual([
+      {
+        line: 1,
+        text: "See configured-users.ts for details.",
+        categories: [],
+        missingReferences: ["configured-users.ts"],
+        doneClaimStillPresent: [],
+      },
+    ]);
+  });
+
+  it("K2: body-mode candidates are a wholly separate list from file-mode's, never unioned (a clean diff, a dirty body)", () => {
+    const fileModeCandidates = auditContent("const a = 1;\n", "a.ts", new Set([1]), { existingFiles: [] });
+    const bodyModeCandidates = auditBodyText("This never fails on any path.\n");
+    // auditBodyText's signature takes no file-mode candidates as input, and
+    // auditContent's takes no body text -- there is no shared accumulator
+    // either could write into, so the two counts below cannot be summed by
+    // accident; main()'s two printed banners (see the --body end-to-end
+    // test below) keep that same separation all the way to stdout.
+    expect(fileModeCandidates).toEqual([]);
+    expect(bodyModeCandidates).toHaveLength(1);
+  });
+});
+
 // --- fixture repo: working tree and --base (ugcportal-np1i) --------------
 //
 // Real git repositories in a mkdtemp directory, never the shared checkout
@@ -360,13 +534,17 @@ function makeFixtureRepo() {
   // case round 3's H1 needs, since every other fixture test's `cwd: repo`
   // structurally could not have exposed a cwd-relative-path bug.
   const runScriptFrom = (subdir, args = []) => execFileSync("node", [SCRIPT_PATH, ...args], { cwd: path.join(repo, subdir), env, encoding: "utf8" });
+  // PR body mode's `--body` source (ugcportal-bn94): pipes `stdin` in as the
+  // PR body text, the same way the pre-review skill feeds a draft body in
+  // before `gh pr create` has even run.
+  const runScriptStdin = (args, stdin) => execFileSync("node", [SCRIPT_PATH, ...args], { cwd: repo, env, encoding: "utf8", input: stdin });
 
   git(["init", "--quiet", "--initial-branch=main"]);
   writeFile("README.md", "# fixture\n");
   git(["add", "README.md"]);
   commit("initial commit");
 
-  return { repo, env, git, commit, writeFile, runScript, runScriptFrom };
+  return { repo, env, git, commit, writeFile, runScript, runScriptFrom, runScriptStdin };
 }
 
 afterEach(() => {
@@ -574,5 +752,54 @@ describe("working tree and --base (ugcportal-np1i)", () => {
     // literally 0) would also fail this assertion, and so would the
     // sibling.ts-reference regression described above.
     expect(fromSubdir).toBe(fromRoot);
+  });
+});
+
+describe("--body end-to-end, real git repo (ugcportal-bn94)", () => {
+  it("audits a body piped on stdin against the local working tree's diff, confirming a DONE claim", () => {
+    const { writeFile, git, commit, runScriptStdin } = makeFixtureRepo();
+    writeFile("x.ts", "const a = 1;\n");
+    git(["add", "x.ts"]);
+    commit("add x.ts");
+    writeFile("x.ts", 'const a = 1;\n// a label of at most 24 characters\nconst b = 2;\n');
+
+    const body = 'Fixed: the stale comment with "24 characters" was deleted.\n';
+    const out = runScriptStdin(["--body"], body);
+
+    expect(out).toContain("--- claims-audit: PR BODY claims (source: stdin)");
+    expect(out).toContain("body candidates found: 1");
+    expect(out).toContain('DONE contradicted, still in diff: "24 characters"');
+  });
+
+  it("K2: --body's counts are printed in their own block, never summed with a separate file-mode run's", () => {
+    const { writeFile, git, commit, runScriptStdin, runScript } = makeFixtureRepo();
+    writeFile("clean.ts", "const a = 1;\n");
+    git(["add", "clean.ts"]);
+    commit("add clean.ts, nothing claim-shaped");
+
+    const fileModeOut = runScript();
+    const bodyModeOut = runScriptStdin(["--body"], "This never fails on any path.\n");
+
+    expect(fileModeOut).toContain("candidates found: 0");
+    expect(bodyModeOut).toContain("body candidates found: 1");
+    // Neither run's output names the other's count: a clean file-mode run
+    // and a dirty body-mode run over the SAME tree produce two independent
+    // banners/numbers, not one run whose single total a dirty body could
+    // hide behind a clean diff (or vice versa).
+    expect(fileModeOut).not.toContain("body candidates found");
+    expect(bodyModeOut).not.toMatch(/^candidates found:/m);
+  });
+
+  it("flags an empty body as an error rather than a silent zero", () => {
+    const { runScriptStdin } = makeFixtureRepo();
+    let error;
+    try {
+      runScriptStdin(["--body"], "\n\n");
+    } catch (err) {
+      error = err;
+    }
+    expect(error).toBeDefined();
+    expect(error.status).not.toBe(0);
+    expect(error.stderr ?? "").toMatch(/empty -- nothing to audit/);
   });
 });

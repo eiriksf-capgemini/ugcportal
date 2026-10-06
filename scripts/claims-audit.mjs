@@ -67,6 +67,43 @@
  *                ends with, that token -- a stale pointer, or a dependency
  *                file the comment should name as one.
  *
+ * PR BODY MODE (`--pr <n>` / `--body`, ugcportal-bn94): the five categories
+ * above plus one more, over the PR's DESCRIPTION rather than its diff. The
+ * bead's own evidence is why this exists: on PR #125 five of six round 1-3
+ * findings were Family 1 claims sitting in the body, not a comment; #107's
+ * round-3 low and #117's F3 were body-only; #112 round 4's stale figures
+ * were in the body's own pre-review checklist. A PR body is prose a reviewer
+ * reads before the diff, so a false "N corrected" or "copied verbatim"
+ * costs exactly the review round a stale comment does, and this script
+ * could not see it at all before this mode existed -- it only ever read
+ * files the diff touched.
+ *
+ *   DONE   a line matching deleted/removed/fixed/corrected (`both X
+ *          corrected`/`all N corrected` need no separate pattern -- the
+ *          aggregate count sits next to the same verb). Checked against the
+ *          diff (`gh pr diff <n>`, or the local working tree's diff for
+ *          `--body`): any quoted or code-span token (`"24 characters"`,
+ *          `` `[ -n "$me" ]` ``) in that line that STILL appears on an added
+ *          or unchanged line is reported as "DONE contradicted" -- the diff
+ *          itself, not a human's second-guessing, shows the claim is false
+ *          (observed 2026-10-06: PR #147's body said a stale "24 characters"
+ *          comment was gone, and the diff still had it on an added line).
+ *          When no diff is available, or a line names nothing quotable, the
+ *          line is still flagged DONE for a human to check by hand.
+ *
+ * Body-mode output is a SEPARATE block with its own "body candidates found"
+ * count, never summed into file-mode's "candidates found" (K2): the two
+ * modes are mutually exclusive per invocation (parseArgs refuses `--pr`/
+ * `--body` combined with each other or with `--all-lines`), so there is no
+ * shared total to compute even by accident. `--pr <n>` fetches both the
+ * body (`gh pr view <n> --json body -q .body`) and the diff (`gh pr diff
+ * <n>`) over the network; `--body` reads the body from stdin instead (the
+ * shape the pre-review skill uses on a draft body before `gh pr create` has
+ * even run) and diffs the local working tree against `--base` (or its
+ * default), the same ref resolution file mode uses. Out of scope, per the
+ * bead: auditing review comments, and changing the five original
+ * categories' vocabulary -- DONE is additive, not a rewrite of ABSOLUTE.
+ *
  * Comments are found with the TypeScript compiler API's own AST
  * (`typescript` is already a project dependency), never a hand-rolled
  * tokenizer -- the same decision scripts/sweep-candidates.mjs records, for
@@ -88,6 +125,17 @@
  *       added lines -- the sweep for stale SIBLINGS of a sentence a fix
  *       just changed (the Family 4 case: PR #102 found the same corrected
  *       model stated five places, over four rounds).
+ *
+ *   node scripts/claims-audit.mjs --pr <n>
+ *     PR BODY MODE (ugcportal-bn94, see above): fetches PR <n>'s body and
+ *       diff with `gh` and audits the body text. `--pr=<n>` works the same.
+ *   node scripts/claims-audit.mjs --body < /tmp/pr-body-draft.md
+ *     PR BODY MODE from stdin: audits a not-yet-posted body (what the
+ *       pre-review skill runs) against the LOCAL working tree's diff,
+ *       using `--base` the same way file mode does.
+ *     Neither form combines with `--all-lines` (a body has no added-lines
+ *       concept) or with each other; `--pr` does not take `--base` (its
+ *       diff is the PR's own, from `gh`, not a local ref).
  *
  * Self-test: npm test -- runs scripts/claims-audit.test.mjs (vitest).
  *
@@ -145,12 +193,15 @@
  * what is actually on disk.
  */
 
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
 
 import ts from "typescript";
 
 import {
   getChangedLineNumbersSince,
+  getUnifiedDiffSince,
   listTrackedFiles,
   listUntrackedFiles,
   readFileFromWorkingTree,
@@ -158,6 +209,11 @@ import {
   resolveMergeBase,
 } from "./lib/git-diff.mjs";
 import { isMainModule } from "./lib/is-main.mjs";
+
+// A PR diff (or body) can be large; same ceiling as scripts/lib/git-diff.mjs's
+// LARGE_MAX_BUFFER, kept local here since this constant is about `gh`
+// subprocess output, not a `git` plumbing concern that file owns.
+const GH_MAX_BUFFER = 64 * 1024 * 1024;
 
 const TS_FAMILY_RE = /\.[cm]?[jt]sx?$/;
 const MARKDOWN_RE = /\.mdx?$/;
@@ -181,6 +237,27 @@ const MEASUREMENT_RE =
 const PATH_RE =
   /(?<![\w@$/.-])((?:[\w.-]+\/)*[\w.-]+\.(?:[cm]?[jt]sx?|css|scss|md|mdx|prisma|sh|ya?ml|json|html|pem|sql))(?::(\d+)(?:-\d+)?)?(?![\w/-])/g;
 const URL_RE = /https?:\/\/\S+/g;
+
+// ugcportal-bn94: a PR-body "done" claim -- the body says a thing was
+// deleted, removed, fixed or corrected, which (unlike ABSOLUTE/MEASUREMENT/
+// TEMPORAL/HISTORY, all judged from the sentence alone) is mechanically
+// checkable whenever the sentence also names what, in a quoted span: if
+// that literal text is still sitting in an added or unchanged line of the
+// diff, the "done" claim is contradicted by the diff itself, not merely
+// worth a human's judgement. "both X corrected" / "all N corrected" need no
+// separate pattern -- the aggregate count is just the quantifier next to the
+// same verb this regex already matches ("...both guards restored" still
+// contains "restored"? no -- but "...both corrected"/"all three fixed" do
+// contain "corrected"/"fixed", which this regex does match).
+const DONE_RE = /\b(deleted|removed|fixed|corrected)\b/i;
+// A quoted or code-span token: "24 characters", `[ -n "$me" ]`. Double quotes
+// and backticks only -- a single-quote pair is not reliable prose punctuation
+// to pair on, since an ordinary contraction's apostrophe ("isn't ... won't")
+// would otherwise pair across two unrelated words as if it were one quoted
+// span. Requires at least 2 characters so a lone punctuation mark inside
+// quotes does not become a token every line of the universe would trivially
+// contain.
+const QUOTED_SPAN_RE = /"([^"\n]{2,200})"|`([^`\n]{2,200})`/g;
 
 /**
  * Which claim categories a single comment line triggers.
@@ -235,6 +312,131 @@ export function referenceExists(token, fromFile, existingFiles) {
   if (existing.has(relative)) return true;
   const suffix = `/${token}`;
   return existingFiles.some((p) => p.endsWith(suffix));
+}
+
+/**
+ * Quoted or code-span tokens in a line, as plain strings with the quote
+ * marks stripped, deduplicated and order-preserved. These are the only
+ * "referenced text" a done-claim check (below) trusts enough to search the
+ * diff for literally -- a bare word or number in free prose is too likely to
+ * recur by coincidence, but a quoted phrase or a code span is, by the
+ * writer's own formatting, the specific thing the sentence is about.
+ *
+ * @param {string} text
+ * @returns {string[]}
+ */
+export function findQuotedSpans(text) {
+  const spans = [];
+  const seen = new Set();
+  for (const match of text.matchAll(QUOTED_SPAN_RE)) {
+    const span = match[1] ?? match[2];
+    if (!seen.has(span)) {
+      seen.add(span);
+      spans.push(span);
+    }
+  }
+  return spans;
+}
+
+/**
+ * True when `token` (a literal substring, not a pattern) appears on an ADDED
+ * line or an unchanged CONTEXT line of `diffText` -- a standard unified diff
+ * with git's normal context (not `-U0`: a done claim's referenced text can
+ * sit on a line the diff never touched at all, and `-U0`'s zero-context
+ * output would not include that line to search). File-header lines (`+++
+ * b/path`, `--- a/path`) are excluded so a token that happens to equal part
+ * of a file's own path is not mistaken for code content. A line that was
+ * only REMOVED (`-`, and not `---`) does not count: that is exactly what a
+ * true "deleted" or "removed" claim predicts, not a contradiction of it.
+ *
+ * @param {string} token
+ * @param {string} diffText
+ * @returns {boolean}
+ */
+export function tokenStillInDiff(token, diffText) {
+  if (!token) return false;
+  for (const line of diffText.split("\n")) {
+    if (line.startsWith("+++") || line.startsWith("---")) continue;
+    if (line.startsWith("+") || line.startsWith(" ")) {
+      if (line.slice(1).includes(token)) return true;
+    }
+  }
+  return false;
+}
+
+// --- PR body audit (ugcportal-bn94) ---------------------------------------
+//
+// claims-audit's original mode (below, in main()) only ever read files the
+// diff touched -- a PR's own DESCRIPTION, where most late-round Family 1
+// findings now land (the bead's own evidence: PR #125 round 3, #107 round 3,
+// #112 round 4), was invisible to it. This section runs the SAME claim
+// vocabulary (ABSOLUTE/MEASUREMENT/TEMPORAL/HISTORY/REFERENCE -- none of it
+// changed, per the bead's explicit "out of scope") over the PR body's own
+// text, plus one new category that only makes sense for a body: a "done"
+// claim (DONE_RE above) that the diff itself can contradict.
+//
+// Deliberately a SEPARATE code path from the file-mode audit above/below,
+// with its own candidate list and its own printed counts -- never unioned
+// into the file-mode count (K2): a clean diff must never hide a dirty body,
+// and a dirty diff must never bury a clean body's count inside a larger
+// combined number a reader would misread as "the diff's problem", when it
+// was the prose that was wrong. The two modes are also mutually exclusive
+// per run (see parseArgs/main below): there is structurally no shared
+// "total" to accidentally compute in the first place.
+
+/**
+ * Every non-blank line of a PR body, as `{ line, text }` -- the same
+ * granularity extractProseLines uses for a Markdown file (every line is
+ * prose; a PR body has no comment markers to strip), since a PR body IS
+ * Markdown.
+ *
+ * @param {string} bodyText
+ * @returns {{ line: number, text: string }[]}
+ */
+export function extractBodyLines(bodyText) {
+  const out = [];
+  bodyText.split("\n").forEach((raw, i) => {
+    const text = raw.trim();
+    if (text !== "") out.push({ line: i + 1, text });
+  });
+  return out;
+}
+
+/**
+ * @typedef {{ line: number, text: string, categories: string[],
+ *            missingReferences: string[], doneClaimStillPresent: string[] }} BodyClaimCandidate
+ */
+
+/**
+ * Audits a PR body's text with the same categories auditContent uses for a
+ * comment (ABSOLUTE/MEASUREMENT/TEMPORAL/HISTORY via classifyClaimLine,
+ * REFERENCE via findPathReferences/referenceExists), plus DONE: a line
+ * matching DONE_RE is reported with category "DONE", and any of its quoted
+ * spans found still present in `diffText` (via tokenStillInDiff) is reported
+ * in `doneClaimStillPresent` -- a "this thing was deleted/removed/fixed/
+ * corrected" claim the diff itself shows is not true. `diffText` is optional
+ * (null when no diff could be fetched): a DONE line is still flagged for a
+ * human either way, only the mechanical contradiction check is skipped, per
+ * the bead's "where that is mechanically checkable".
+ *
+ * @param {string} bodyText
+ * @param {{ diffText?: string | null, existingFiles?: string[] }} options
+ * @returns {BodyClaimCandidate[]}
+ */
+export function auditBodyText(bodyText, { diffText = null, existingFiles = [] } = {}) {
+  const candidates = [];
+  for (const { line, text } of extractBodyLines(bodyText)) {
+    const categories = classifyClaimLine(text);
+    const missingReferences = findPathReferences(text)
+      .filter((ref) => !referenceExists(ref.token, "", existingFiles))
+      .map((ref) => ref.token);
+    const isDoneClaim = DONE_RE.test(text);
+    const doneClaimStillPresent = isDoneClaim && diffText ? findQuotedSpans(text).filter((span) => tokenStillInDiff(span, diffText)) : [];
+    if (isDoneClaim) categories.push("DONE");
+    if (categories.length === 0 && missingReferences.length === 0) continue;
+    candidates.push({ line, text, categories, missingReferences, doneClaimStillPresent });
+  }
+  return candidates;
 }
 
 // --- comment extraction --------------------------------------------------
@@ -389,31 +591,43 @@ export function auditContent(content, filePath, changedLines, { existingFiles })
   return candidates;
 }
 
-const KNOWN_FLAGS_HELP = "recognized: --base <ref>, --base=<ref>, --all-lines";
+const KNOWN_FLAGS_HELP = "recognized: --base <ref>, --base=<ref>, --all-lines, --pr <n>, --pr=<n>, --body";
 
 /**
- * Parses argv into `{ base, allLines }`, or a single named `error` instead
- * of any silent fallback. Replaces the narrower parseBaseArg (ugcportal-np1i
- * round 1 findings L1/L2):
+ * Parses argv into `{ base, allLines, prNumber, bodyFromStdin }`, or a
+ * single named `error` instead of any silent fallback. Replaces the
+ * narrower parseBaseArg (ugcportal-np1i round 1 findings L1/L2):
  *
  * - `--base <ref>` and `--base=<ref>` both set `base`, the same (K2).
  * - `--base` followed by nothing, by an empty `=value`, or by a token that
  *   itself looks like a flag (`--base --all-lines` -- the shape an unset
  *   shell variable in a wrapper script produces) is a named "requires a
  *   value" error (L1), not a silent swallow of the next flag as the ref.
- * - Any other `--`-prefixed token that isn't `--all-lines` -- a genuine typo
- *   like `--bas=foo`, not just a broken `--base` -- is a named "unknown
+ * - `--pr <n>` and `--pr=<n>` (ugcportal-bn94) switch to PR-body mode: `n`
+ *   must be a bare positive integer, the same "requires a value" shape as
+ *   `--base` above for anything else (missing, flag-shaped, non-numeric).
+ * - `--body` (ugcportal-bn94) also switches to PR-body mode, reading the
+ *   body text from stdin instead of fetching it with `gh pr view`.
+ * - `--pr` and `--body` are mutually exclusive (two body sources), and
+ *   neither combines with `--all-lines` (a PR body has no "added lines"
+ *   concept -- the whole body is always audited) or `--base` on `--pr`
+ *   specifically (its diff comes from `gh pr diff <n>`, not a local ref;
+ *   `--base` DOES combine with `--body`, which diffs the local working tree).
+ * - Any other `--`-prefixed token that isn't one of the above -- a genuine
+ *   typo like `--bas=foo`, not just a broken `--base` -- is a named "unknown
  *   flag" error (L2), not a silent fallback to the default base.
  * - A bare positional argument (no leading `--`) is also a named error:
  *   this script takes no positional arguments, so one is almost always a
  *   mistyped flag.
  *
  * @param {string[]} args
- * @returns {{ base?: string, allLines: boolean, error?: string }}
+ * @returns {{ base?: string, allLines: boolean, prNumber?: number, bodyFromStdin?: boolean, error?: string }}
  */
 export function parseArgs(args) {
   let base;
   let allLines = false;
+  let prNumber;
+  let bodyFromStdin = false;
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === "--base") {
@@ -437,12 +651,42 @@ export function parseArgs(args) {
       allLines = true;
       continue;
     }
+    if (arg === "--pr") {
+      const value = args[i + 1];
+      if (value === undefined || !/^\d+$/.test(value)) {
+        return { allLines, error: "--pr requires a PR number, e.g. --pr 147 or --pr=147" };
+      }
+      prNumber = Number(value);
+      i++;
+      continue;
+    }
+    if (arg.startsWith("--pr=")) {
+      const value = arg.slice("--pr=".length);
+      if (!/^\d+$/.test(value)) {
+        return { allLines, error: "--pr= requires a PR number after the =, e.g. --pr=147" };
+      }
+      prNumber = Number(value);
+      continue;
+    }
+    if (arg === "--body") {
+      bodyFromStdin = true;
+      continue;
+    }
     if (arg.startsWith("--")) {
       return { allLines, error: `unknown flag: ${arg} (${KNOWN_FLAGS_HELP})` };
     }
     return { allLines, error: `unexpected argument: ${arg} (${KNOWN_FLAGS_HELP})` };
   }
-  return { base, allLines };
+  if (prNumber !== undefined && bodyFromStdin) {
+    return { allLines, error: "--pr and --body are mutually exclusive -- pick one PR-body source" };
+  }
+  if (allLines && (prNumber !== undefined || bodyFromStdin)) {
+    return { allLines, error: "--all-lines does not apply to PR-body mode (--pr / --body) -- the whole body is always audited" };
+  }
+  if (base !== undefined && prNumber !== undefined) {
+    return { allLines, error: "--base does not apply to --pr <n> -- its diff comes from `gh pr diff <n>`, not a local ref" };
+  }
+  return { base, allLines, prNumber, bodyFromStdin: bodyFromStdin || undefined };
 }
 
 function allLineNumbers(content) {
@@ -452,12 +696,129 @@ function allLineNumbers(content) {
   return lines;
 }
 
+/**
+ * The impure half of PR-body mode: fetches the body text and (best-effort)
+ * a diff to check "done" claims against, then prints auditBodyText's result
+ * in a block that never shares a "candidates found" line, a counts line, or
+ * any other printed total with file-mode's (K2). Exits non-zero only when
+ * the body itself could not be obtained at all (an empty or unreadable PR
+ * body makes every other step meaningless) -- same refusal posture as
+ * file-mode's workingTreeReadFailed guard below, but body-mode's own
+ * failure, never combined with it. A diff that cannot be fetched degrades
+ * to flagging DONE claims without the mechanical contradiction check,
+ * rather than refusing the whole run, since the ABSOLUTE/MEASUREMENT/
+ * TEMPORAL/HISTORY/REFERENCE categories do not need a diff at all.
+ *
+ * @param {{ prNumber?: number, base?: string }} parsed `bodyFromStdin` itself
+ *   is not read here -- the caller already established that exactly one of
+ *   `prNumber`/`bodyFromStdin` is set (main()'s dispatch condition), so
+ *   `prNumber === undefined` already means "read the body from stdin".
+ */
+function runBodyMode({ prNumber, base: explicitBase }) {
+  const source = prNumber !== undefined ? `PR #${prNumber}` : "stdin";
+  let bodyText;
+  let diffText = null;
+
+  if (prNumber !== undefined) {
+    try {
+      bodyText = execFileSync("gh", ["pr", "view", String(prNumber), "--json", "body", "-q", ".body"], {
+        encoding: "utf8",
+        maxBuffer: GH_MAX_BUFFER,
+      });
+    } catch (err) {
+      console.error(`claims-audit: gh pr view ${prNumber} --json body failed: ${((err.stderr ?? err.message) + "").trim()}`);
+      process.exit(1);
+    }
+    try {
+      diffText = execFileSync("gh", ["pr", "diff", String(prNumber)], { encoding: "utf8", maxBuffer: GH_MAX_BUFFER });
+    } catch (err) {
+      console.error(
+        `claims-audit: gh pr diff ${prNumber} failed (${((err.stderr ?? err.message) + "").trim()}) -- DONE claims will be flagged without the mechanical still-present check.`,
+      );
+    }
+  } else {
+    try {
+      bodyText = fs.readFileSync(0, "utf8");
+    } catch (err) {
+      console.error(`claims-audit: could not read a PR body from stdin: ${err.message}`);
+      process.exit(1);
+    }
+    const base = explicitBase ?? resolveDefaultBase();
+    let mergeBase = null;
+    try {
+      mergeBase = resolveMergeBase(base);
+    } catch (err) {
+      if (explicitBase !== undefined) {
+        // An explicitly-given --base that doesn't resolve is refused, same
+        // as file-mode's M1 (ugcportal-np1i): a silent fall-through here
+        // would report DONE claims checked against a diff the caller never
+        // asked for.
+        console.error(`claims-audit: --base ${base} does not resolve against HEAD: ${err.message}`);
+        process.exit(1);
+      }
+      // No explicit --base, and the computed default (e.g. HEAD~1 before a
+      // second commit exists) doesn't resolve either: there is no earlier
+      // commit to diff against, but the working tree may still be worth
+      // reporting against HEAD alone, below.
+    }
+    const diffRef = mergeBase ?? "HEAD";
+    try {
+      diffText = getUnifiedDiffSince(diffRef);
+    } catch (err) {
+      console.error(
+        `claims-audit: could not diff ${diffRef} against the working tree (${err.message}) -- DONE claims will be flagged without the mechanical still-present check.`,
+      );
+    }
+  }
+
+  if (bodyText.trim() === "") {
+    console.error(`claims-audit: the PR body (source: ${source}) is empty -- nothing to audit.`);
+    process.exit(1);
+  }
+
+  let existingFiles = [];
+  try {
+    existingFiles = [...listTrackedFiles(), ...listUntrackedFiles()];
+  } catch (err) {
+    console.error(`claims-audit: git ls-files failed, REFERENCE checks disabled: ${err.message}`);
+  }
+
+  const candidates = auditBodyText(bodyText, { diffText, existingFiles });
+
+  const counts = { ABSOLUTE: 0, MEASUREMENT: 0, TEMPORAL: 0, HISTORY: 0, DONE: 0, "REFERENCE not found": 0, "DONE contradicted": 0 };
+  console.log(`--- claims-audit: PR BODY claims (source: ${source}${diffText === null ? ", no diff available" : ""}) ---`);
+  console.log(`body candidates found: ${candidates.length}`);
+  for (const c of candidates) {
+    for (const cat of c.categories) counts[cat]++;
+    if (c.missingReferences.length > 0) counts["REFERENCE not found"]++;
+    if (c.doneClaimStillPresent.length > 0) counts["DONE contradicted"]++;
+    const tags = [
+      ...c.categories,
+      ...c.missingReferences.map((t) => `REFERENCE not found: ${t}`),
+      ...c.doneClaimStillPresent.map((t) => `DONE contradicted, still in diff: ${JSON.stringify(t)}`),
+    ].join(", ");
+    console.log(`  body:${c.line} [${tags}] ${c.text}`);
+  }
+  console.log(
+    `by category: ${Object.entries(counts)
+      .map(([k, v]) => `${k} ${v}`)
+      .join(", ")}`,
+  );
+  console.log(
+    "(advisory only -- does not affect exit status; printed and counted separately from file-mode's candidates, never merged into that count (K2); a DONE contradicted by the diff is strong evidence the claim is false, not merely worth asking about)",
+  );
+}
+
 function main() {
   const args = process.argv.slice(2);
-  const { base: explicitBase, allLines, error: argError } = parseArgs(args);
+  const { base: explicitBase, allLines, prNumber, bodyFromStdin, error: argError } = parseArgs(args);
   if (argError) {
     console.error(`claims-audit: ${argError}`);
     process.exit(1);
+  }
+  if (prNumber !== undefined || bodyFromStdin) {
+    runBodyMode({ prNumber, bodyFromStdin, base: explicitBase });
+    return;
   }
   const base = explicitBase ?? resolveDefaultBase();
   const baseWasExplicit = explicitBase !== undefined;
