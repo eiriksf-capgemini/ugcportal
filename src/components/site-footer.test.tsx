@@ -111,6 +111,34 @@ describe("K2: every visible string, for review", () => {
    * across both variants. Reviewed in the PR description as the K2
    * acceptance criterion asks ("a snapshot of the footer strings reviewed
    * by Eirik") — this is that snapshot, in a form a diff actually shows.
+   *
+   * ugcportal-6uxr K1: this used to be a `for (needle of [...]) expect(text,
+   * needle).toContain(needle)` loop, which is inclusion-only — it can never
+   * fail on an ADDITION. Re-adding a line the PR already removed (or
+   * appending a brand-new one) leaves every `toContain` green, because
+   * `toContain` only asks "is this substring present somewhere", never "is
+   * there anything else". The literal `EXPECTED_FULL_TEXT`/
+   * `EXPECTED_COMPACT_TEXT` strings below are an exact equality check on the
+   * footer's full `textContent` instead — the only way to make the claim
+   * "every visible string" hold in BOTH directions (an omission still fails
+   * equality, same as before; now an addition fails it too). Spelled out
+   * literally here rather than built by concatenating the imported
+   * `SITE_NAME`/`SITE_TAGLINE` constants with the other literal labels: a
+   * `textContent === SITE_NAME + ...` comparison would still pass if
+   * `SITE_TAGLINE`'s own value changed, since both sides would change
+   * together — the same self-reference flaw site-header.test.tsx's own
+   * EXPECTED_SITE_NAME comment names and rejects for the header's strings.
+   *
+   * MUTATION (performed once, verified, and reverted — not left in the
+   * tree): appended an extra sentence to the rendered tagline paragraph in
+   * site-footer.tsx (simulating "a string is added to the footer"). Before
+   * this change, the old `toContain`-loop stayed green under that mutation
+   * (every original needle is still present; the loop never notices the
+   * addition). After this change, `expect(text).toBe(EXPECTED_FULL_TEXT)`
+   * failed immediately, reporting the actual string with the extra sentence
+   * appended vs. the expected literal — confirming the exact-equality
+   * assertion is the one that catches an addition, not just a removal.
+   * Reverted immediately after.
    */
   function renderWithConsent(compact: boolean): string {
     return renderToStaticMarkup(
@@ -120,32 +148,22 @@ describe("K2: every visible string, for review", () => {
     );
   }
 
+  const EXPECTED_FULL_TEXT =
+    `${SITE_NAME}${SITE_TAGLINE}© ${new Date().getFullYear()} ${SITE_NAME}` +
+    "PagesAboutPortfolioLicence and rightsPrivacyContactllms.txtLegalCookies";
+
+  const EXPECTED_COMPACT_TEXT =
+    `${SITE_NAME} · © ${new Date().getFullYear()}` +
+    "AboutPortfolioLicence and rightsPrivacyContactllms.txtCookies";
+
   it("full variant", () => {
     const text = textContent(renderWithConsent(false));
-    for (const needle of [
-      SITE_NAME,
-      // ugcportal-qqnt.3: relocated here from the header's own second row.
-      SITE_TAGLINE,
-      "Pages",
-      "About",
-      "Portfolio",
-      "Licence and rights",
-      "Privacy",
-      "Contact",
-      "llms.txt",
-      "Legal",
-      "Cookies",
-    ]) {
-      expect(text, needle).toContain(needle);
-    }
+    expect(text).toBe(EXPECTED_FULL_TEXT);
   });
 
   it("compact variant", () => {
     const text = textContent(renderWithConsent(true));
-    expect(text).toContain(`${SITE_NAME} ·`);
-    for (const needle of ["About", "Portfolio", "Licence and rights", "Privacy", "Contact", "llms.txt", "Cookies"]) {
-      expect(text, needle).toContain(needle);
-    }
+    expect(text).toBe(EXPECTED_COMPACT_TEXT);
   });
 });
 
