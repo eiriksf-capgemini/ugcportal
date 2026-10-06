@@ -1025,21 +1025,21 @@ describe("ugcportal-qnq9.3: alcohol as a triage fact", () => {
    * THE FAIL-CLOSED READING OF `settledBy`, which is the whole reason the
    * gate asks `!== "clearance"` rather than `=== "nothing"`.
    *
-   * `tsc` rejects an entry with a missing or unrecognised discriminant
-   * (PR #157 measured both), so no input reachable through the committed
-   * registry can tell the two readings apart — which is precisely why the
-   * difference would otherwise go unguarded, and why review round 1 asked
-   * for this case. The two readings diverge on exactly one input: a fact
-   * whose `settledBy` is neither literal. `!== "clearance"` blocks it;
+   * `tsc` rejects an entry with a missing or unrecognised discriminant, so
+   * no input reachable through the committed registry can tell the two
+   * readings apart — which is precisely why the difference would otherwise
+   * go unguarded. They diverge on exactly one input: a fact whose
+   * `settledBy` is neither literal. `!== "clearance"` blocks it;
    * `=== "nothing"` falls through to the clearance path and sells it on an
    * admin's signature.
    *
    * The only way to put such a fact in front of `triageBlocker` is to put
-   * it in the registry the gate iterates — `TRIAGE_FACTS` is `readonly` in
-   * the type and a plain array at runtime — so the entry is spliced in and
-   * restored in a `finally`, which keeps the rest of this file (and the
-   * generated case table above, built at collection time from the real
-   * registry) looking at the real one.
+   * it in the registry the gate iterates: its signature takes a listing and
+   * nothing else, and the facts it walks are the module-level
+   * `TRIAGE_FACTS` — `readonly` in the type and a plain array at runtime.
+   * So the entry is spliced in and restored in a `finally`, which keeps the
+   * rest of this file (and the generated case table above, built at
+   * collection time from the real registry) looking at the real one.
    */
   it("blocks a fact whose discriminant it does not recognise", () => {
     const registry = TRIAGE_FACTS as TriageFact[];
