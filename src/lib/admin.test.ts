@@ -4,7 +4,7 @@ const getSessionMock = vi.fn();
 
 vi.mock("@/lib/auth", () => ({ getSession: getSessionMock }));
 
-const { requireAdmin } = await import("@/lib/admin");
+const { requireAdmin, requireAdminAccess } = await import("@/lib/admin");
 
 beforeEach(() => {
   getSessionMock.mockReset();
@@ -61,6 +61,56 @@ describe("requireAdmin", () => {
     getSessionMock.mockRejectedValue(new Error("getSession() failed (simulated)"));
 
     await expect(requireAdmin()).rejects.toThrow(
+      "getSession() failed (simulated)",
+    );
+  });
+});
+
+/**
+ * `requireAdmin` by another shape (ugcportal-mqh8 K4): 401 for nobody
+ * signed in, 403 for a signed-in non-admin — distinct status codes rather
+ * than `requireAdmin`'s collapse of both to one `null`.
+ */
+describe("requireAdminAccess", () => {
+  it("answers ok for a signed-in admin", async () => {
+    const session = { user: { id: "admin-1", role: "ADMIN" } };
+    getSessionMock.mockResolvedValue(session);
+
+    const result = await requireAdminAccess();
+
+    expect(result).toEqual({ ok: true, session });
+  });
+
+  it.each([null, {}, { user: {} }])(
+    "answers 401 for %j (nobody signed in)",
+    async (session) => {
+      getSessionMock.mockResolvedValue(session);
+      await expect(requireAdminAccess()).resolves.toEqual({
+        ok: false,
+        status: 401,
+        error: "Unauthorized",
+      });
+    },
+  );
+
+  it.each([
+    { user: { id: "user-1", role: "USER" } },
+    { user: { id: "user-1" } },
+  ])("answers 403 for a signed-in non-admin %j", async (session) => {
+    getSessionMock.mockResolvedValue(session);
+    await expect(requireAdminAccess()).resolves.toEqual({
+      ok: false,
+      status: 403,
+      error: "Forbidden",
+    });
+  });
+
+  it("propagates rather than resolving to a refusal when the session read fails (fails CLOSED)", async () => {
+    getSessionMock.mockRejectedValue(
+      new Error("getSession() failed (simulated)"),
+    );
+
+    await expect(requireAdminAccess()).rejects.toThrow(
       "getSession() failed (simulated)",
     );
   });

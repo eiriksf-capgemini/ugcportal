@@ -7,6 +7,7 @@ import { prisma } from "@/lib/prisma";
 import { TRIAGE_FACTS, uploaderClearanceBlocker } from "@/lib/resale-rights";
 import {
   ADMIN_USERS_PATH,
+  RIGHTS_BRANDS_PATH,
   RIGHTS_DECISION_PATH,
   RIGHTS_SETTINGS_PATH,
 } from "@/lib/routes";
@@ -249,7 +250,15 @@ export default async function ResaleRightsSettingsPage({
         >
           users and roles
         </a>
-        , which decides who may record a decision here at all.
+        , which decides who may record a decision here at all, and{" "}
+        <a
+          className={INLINE_LINK_CLASS}
+          href={RIGHTS_BRANDS_PATH}
+        >
+          brands
+        </a>
+        , which records whether a company behind a benefit produces, imports
+        or sells alcohol (ugcportal-mqh8).
       </p>
 
       {rights === "recorded" ? (

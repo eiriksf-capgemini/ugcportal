@@ -2,13 +2,26 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { Gallery } from "@/components/gallery/gallery";
 import { GalleryUnavailable } from "@/components/gallery/gallery-unavailable";
 import { EmptyState } from "@/components/home/empty-state";
 import { Hero } from "@/components/home/hero";
 import { toGalleryItems } from "@/lib/gallery-items";
+
+/**
+ * `EmptyState` now renders `PortfolioTile` (ugcportal-qqnt.5), whose module
+ * graph reaches `@/lib/portfolio` -> `@/lib/media-access` -> `@/lib/auth` at
+ * import time — the same reason src/components/portfolio/portfolio-tile.test.tsx
+ * mocks this. This file never signs anyone in or out; the stub only exists
+ * so importing `EmptyState` does not pull in next-auth's own module graph.
+ */
+vi.mock("@/lib/auth", () => ({
+  auth: () => {
+    throw new Error("rendering these components must not consult the session");
+  },
+}));
 
 /**
  * ugcportal-qqnt.1: the front page's type scale is ONE shared pair of
@@ -52,7 +65,7 @@ describe("K1/K3 — exactly one display title and one section title per branch",
    * cover for heading PRESENCE; this file adds the SIZE claim).
    */
   const branches: Record<string, () => string> = {
-    "empty state": () => renderToStaticMarkup(<EmptyState />),
+    "empty state": () => renderToStaticMarkup(<EmptyState pieces={[]} />),
     unavailable: () => renderToStaticMarkup(<GalleryUnavailable />),
     "gallery with items": () =>
       renderToStaticMarkup(

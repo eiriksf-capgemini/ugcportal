@@ -205,6 +205,12 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
   // so their own "text-primary" counts drop; rights/page.tsx keeps one
   // differently-styled link of its own.
   "src/app/admin/settings/rights/page.tsx": { "text-muted-foreground": 5, "text-primary": 1 },
+  // ugcportal-mqh8: the brand list renders on the same plain page canvas as
+  // its sibling above - the body copy and the brand slug both sit outside
+  // any bg-muted/bg-destructive-surface well (those wells use text-ink/
+  // text-ink-muted instead, per contrast.ts), so the page-canvas token is
+  // the correct one here too.
+  "src/app/admin/settings/rights/brands/page.tsx": { "text-muted-foreground": 5 },
   // text-ink counts (ugcportal-14k9 PR #94 review round 1, low finding 5):
   // every field in this form - five identically-styled inputs/textareas -
   // renders on the resale-rights decision screen's plain page canvas, not
@@ -405,8 +411,16 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
    * own PETROL_OUTLINE_STYLE, not in this file's source text, so it is that
    * file's count which carries it, not this one's.
    */
+  /*
+   * ugcportal-qqnt.5: two `text-foreground` usages now, not one — the
+   * "Nothing is published yet." heading (pre-existing) and the new "From
+   * the portfolio" tile-row title. Both audited the same way: this
+   * component's own container (`GALLERY_STATE_CONTAINER_CLASS`) sets no
+   * background of its own, so every heading inside it renders straight on
+   * `--background`, the safe case this file's own header comment names.
+   */
   "src/components/home/empty-state.tsx": {
-    "text-foreground": 1,
+    "text-foreground": 2,
     "text-muted-foreground": 1,
   },
   /*

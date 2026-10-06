@@ -129,19 +129,28 @@ vi.mock("@/lib/public-media", () => ({
 }));
 
 /**
- * `@/lib/portfolio`, mocked wholesale (ugcportal-qqnt.4): `Home()` now also
- * reads `listPortfolioPieces()` for the hero's photographic visual, on every
- * branch this file exercises. Left unmocked, that function's own module
- * graph reaches `@/lib/public-media` for `PUBLIC_MEDIA_SCOPE` — a NAMED
- * export this file's own mock of that module above does not provide (it
- * mocks only `listPublicMedia`/`publicMediaListingUrl`, the two names this
- * file's OWN claims are about), which would make every render below log a
- * second, unrelated error and break this file's own "logs exactly once"/
- * "logs nothing" assertions on the UNRELATED session-read fail-safe. This
- * file's claims are about session-read resilience and the failed-listing
- * branch, not the hero's portfolio read, so an empty array — the same
- * "nothing curated yet" shape a real, freshly seeded database would answer
- * with — is the right fixture here, not a real Prisma round trip.
+ * `@/lib/portfolio`, mocked wholesale: `Home()` now reads
+ * `listPortfolioPieces()` unconditionally, ONCE, feeding both the hero's
+ * photographic visual (ugcportal-qqnt.4 K1, on every branch this file
+ * exercises) and the living empty state's own portfolio sample
+ * (ugcportal-qqnt.5, on the genuinely-empty branch) from that one result —
+ * see src/app/page.tsx's own comment on `portfolioPieces` for why this is a
+ * single shared read rather than two. This file has no database at all
+ * (see its own header comment: every branch here is forced by mocking
+ * `@/lib/public-media`, not by seeding real rows), and the real function's
+ * own module graph reaches `@/lib/public-media` for `PUBLIC_MEDIA_SCOPE` —
+ * a NAMED export this file's own mock of that module above does not
+ * provide (it mocks only `listPublicMedia`/`publicMediaListingUrl`, the two
+ * names this file's OWN claims are about) — so the real function would
+ * either throw outright or log a second, unrelated error and break this
+ * file's own "logs exactly once"/"logs nothing" assertions on the
+ * UNRELATED session-read fail-safe. This file's claims are about
+ * session-read resilience and the failed-listing branch, not the portfolio
+ * read itself — the hero's and the empty state's own rendering of real
+ * `pieces` are covered by hero.test.tsx, empty-state.test.tsx and
+ * page.test.tsx — so an empty array, the same "nothing curated yet" shape
+ * a real, freshly seeded database would answer with, is the right fixture
+ * here, not a real Prisma round trip.
  */
 vi.mock("@/lib/portfolio", () => ({
   listPortfolioPieces: vi.fn(async () => []),

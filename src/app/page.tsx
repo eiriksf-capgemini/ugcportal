@@ -211,11 +211,31 @@ export default async function Home() {
     result.page.hasMore,
   );
 
+  /*
+   * ONE read, shared by the hero (ugcportal-qqnt.4 K1) and the living empty
+   * state's own portfolio sample (ugcportal-qqnt.5) — not two. `<Hero>`
+   * needs `listPortfolioPieces()` on EVERY render regardless of gallery
+   * state (`portfolioPiecesPromise` above, kicked off unconditionally,
+   * already the single fetch this page makes), so `<EmptyState>` reuses
+   * that SAME already-resolved array rather than issuing a second,
+   * redundant Prisma query for the identical rows — the one thing the
+   * ORIGINAL version of this line (before the hero also needed this data)
+   * optimised for ("read only on the branch that can use it") no longer
+   * applies now that the hero's own read already pays that cost on every
+   * branch; sharing the one result is strictly cheaper than reintroducing
+   * a second query just to preserve that no-longer-relevant optimisation.
+   * `EmptyState` stays a plain, synchronous component (see its own comment
+   * for why) and still only ever SEES this array on the genuinely-empty
+   * branch (the ternary below, unchanged) — an on-screen gallery never
+   * reads it either way.
+   */
+  const portfolioPieces = await portfolioPiecesPromise;
+
   return (
     <>
-      <Hero signedIn={signedIn} portfolioPieces={await portfolioPiecesPromise} />
+      <Hero signedIn={signedIn} portfolioPieces={portfolioPieces} />
       {isGenuinelyEmpty ? (
-        <EmptyState />
+        <EmptyState pieces={portfolioPieces} />
       ) : (
         <Gallery
           initialItems={toGalleryItems(result.page.items)}
