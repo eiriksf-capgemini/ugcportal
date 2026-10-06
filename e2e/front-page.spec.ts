@@ -79,11 +79,12 @@ test("K1: the living empty state offers an action, on a genuinely empty gallery"
  * test adds is regression coverage going forward, not a claim that this
  * diff is what removed the clip. At 390x844 the check is looser (reachable
  * and correctly rendered, not "never requires scrolling"): the hero above
- * this component already fills that viewport on its own today (a long lead
- * and decorative circles — src/components/home/hero.tsx, owned by the
- * still-open sibling ugcportal-qqnt.4, out of this bead's scope to touch),
- * so a strict containment claim at 390x844 would be coupled to that
- * unmerged bead's own fix rather than to anything this one changed.
+ * this component (its lead copy and decorative circles,
+ * src/components/home/hero.tsx — out of this bead's scope to touch; a
+ * shorter hero lead is a separate, sibling bead, ugcportal-qqnt.4) already
+ * fills a 390x844 viewport on its own, measured at this branch's head. A
+ * strict containment claim at 390x844 would be coupled to whatever that
+ * sibling bead eventually ships, not to anything this one changed.
  */
 test("K1: the empty state's title and its portfolio link are fully inside the viewport at 1440x900", async ({
   page,
