@@ -199,7 +199,12 @@ const UPLOAD_FIELD_NAME = "file";
  *     are bounds on bytes with no bound on time, and one stalled connection
  *     holds its whole reservation until Node's 300-second requestTimeout —
  *     enough, on a 1 GB container, for a handful of them to 503 every other
- *     upload for five minutes (round-1 finding 2).
+ *     upload for five minutes (round-1 finding 2). It covers the peek below
+ *     too, not only the read: the peek is the only place this handler waits
+ *     on the client before a reservation exists, so the cost of stalling
+ *     there was a request slot rather than bytes, and bound 3 had nothing to
+ *     notice it by (ugcportal-dvb). peekDeclaredPartType installs the guard
+ *     itself, so the two cannot be wired up in the wrong order here.
  *
  * On either refusal the remaining body is left unread rather than cancelled.
  * Cancelling a request body by hand has a known failure mode with
@@ -238,6 +243,17 @@ export async function POST(request: Request) {
   // file part wherever the form put it, instead of only when it happens to be
   // first (round-1 finding 1: a caption field rendered before the file input
   // is an ordinary form, and used to cost a ~430 MB reservation).
+  //
+  // Bounded in time as well as in bytes (bound 4 above): the peek cancels the
+  // request body on its own idle timeout and re-raises the stall on the
+  // stream it returns, so a client that goes quiet here is answered by the
+  // 408 branch in handleUpload. That is one path for every stall rather than
+  // a second one here, at the cost of a reservation taken and released around
+  // a body already known to be dead — the peeked head, and no further bytes
+  // off the wire. The reservation can still answer first, on its own terms:
+  // 413 for a Content-Length that would not fit even on an idle process, 503
+  // during a burst. Both are true of the request whether or not it stalled,
+  // so neither is the stall being misreported.
   const peeked = await peekDeclaredPartType(request.body, {
     fieldName: UPLOAD_FIELD_NAME,
     boundary: multipartBoundary(request.headers.get("content-type")),

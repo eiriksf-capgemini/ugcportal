@@ -88,7 +88,11 @@ import type { WatermarkConcurrencySettings } from "@/lib/watermark";
  *    small multiple of PART_HEADER_PEEK_BYTES per concurrent request — the
  *    chunks held, which can overshoot the threshold by one chunk since a
  *    chunk cannot be half-read, plus a decoded copy of them for the header
- *    search. Tens of kilobytes against the 205 MB it replaces.
+ *    search. Tens of kilobytes against the 205 MB it replaces. Bounded in
+ *    time even so: the peek reads under BODY_STALL_TIMEOUT_MS as the rest of
+ *    the body does (ugcportal-dvb), so the request slot is not held for
+ *    Node's requestTimeout by a client that goes quiet while those tens of
+ *    kilobytes are the only thing it has sent.
  *  - **The parser's working memory.** The reservation prices the two copies
  *    the handler holds (see UPLOAD_BODY_COPIES), which is the same model
  *    ugcportal-e86 used; whatever undici allocates transiently while parsing
