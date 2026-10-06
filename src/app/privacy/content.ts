@@ -211,6 +211,7 @@ export function privacyContent(contact: LegalContact): PrivacyContent {
           "src/app/api/media/[id]/route.ts",
           "src/app/api/media/[id]/publish/route.ts",
           "src/app/api/media/[id]/disclosure/route.ts",
+          "src/app/api/media/[id]/commercial-links/route.ts",
           "src/lib/advertising-disclosure.ts",
           "src/lib/s3.ts",
           "prisma/schema.prisma",
@@ -455,6 +456,24 @@ export const MODEL_COVERAGE: Readonly<
   // gallery tile, the lightbox, the per-item page and the public feed JSON
   // (ugcportal-e0jv, part B).
   MediaAdvertisingDisclosure: { category: "uploads" },
+  // The commercial outbound links on an item (ugcportal-qnq9.2.1). WITH THE
+  // UPLOADS, for the same reason the disclosure above is: it is the
+  // uploader's own record about their own item, cascade-deleted with the item,
+  // and not an administrator's judgement about a third party.
+  //
+  // THE UPLOADS CATEGORY'S PROSE IS NOT CHANGED BY THIS BEAD, and that is a
+  // decision rather than an omission. Its `recipients` sentence lists what
+  // everyone can see of a published item and ends "and nothing else"; that
+  // sentence is still true, because nothing renders a commercial link — no
+  // public read path selects the relation, and the marker, the `rel` tokens
+  // and the surfaces are ugcportal-qnq9.2.2. When that bead publishes the
+  // destination, this category's `what` and `recipients` need a sentence
+  // naming it and LEGAL_SIGN_OFF (src/lib/legal/contact.ts) has to be
+  // re-recorded against the new digest in the same PR — exactly the sequence
+  // ugcportal-mj50 went through for the disclosure. The attach route is in
+  // this category's `reviewAgainst` list so that the next reader of this page
+  // is pointed at it.
+  CommercialLink: { category: "uploads" },
   BenefitSource: {
     notPersonalData:
       "Brand names (the company behind a paid or gifted item), shared across items so a brand is one row rather than one per item; a company, not a visitor or an account holder.",

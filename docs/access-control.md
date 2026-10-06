@@ -576,8 +576,9 @@ the evidence:
    a narrow operation. Enumerated from `prisma/schema.prisma` as of 457323d
    (`ugcportal-vsm`) by walking every `onDelete: Cascade` relation
    transitively from `User`, and re-derived the same way for
-   `ugcportal-qnq9.1` when `MediaAdvertisingDisclosure` was added — re-derive
-   it that way again rather than trusting this list to have aged well.
+   `ugcportal-qnq9.1` when `MediaAdvertisingDisclosure` was added and again
+   for `ugcportal-qnq9.2.1` when `CommercialLink` was — re-derive it that way
+   again rather than trusting this list to have aged well.
    `src/lib/access-control-doc.test.ts` fails if it ever stops matching the
    schema, so the table below is current even when this paragraph's commit
    reference is not:
@@ -590,6 +591,7 @@ the evidence:
    | `MediaListing` | `Media` | price and sale state |
    | `MediaRightsClearance` | `MediaListing` | the clearance on each upload |
    | `MediaAdvertisingDisclosure` | `Media` | the advertising-disclosure record: whether a benefit was received, what it was, which brand it came from, its market value, and the label (`ugcportal-qnq9.1`). The `BenefitSource` brand row itself is **not** destroyed — it is `onDelete: Restrict`, shared vocabulary rather than one person's data |
+   | `CommercialLink` | `Media` | every commercial outbound link on the upload: its destination, its affiliate network and which brand it points at (`ugcportal-qnq9.2.1`). The `BenefitSource` it names is **not** destroyed, for the same `onDelete: Restrict` reason as the row above — so deleting a user erases where their links pointed while leaving the brand vocabulary, and the brand's alcohol answer, intact for everyone else |
    | `ResaleRightsReview` | `ResaleRightsReview.uploader` | **the uploader's standing rights clearance**, with its `evidenceKey`/`evidenceSha256` pointers into `rights-evidence/` |
    | `InstagramAccount` | `InstagramAccount.connectedBy` | **the connected account including `accessTokenEncrypted`** — note this is whoever *ran* the connect, not a property of the account being deleted |
 

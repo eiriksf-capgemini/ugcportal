@@ -267,6 +267,11 @@ model Media {
   // comment at the bottom of this file for why those are three different
   // questions.
   advertisingDisclosure MediaAdvertisingDisclosure?
+  // The commercial outbound links on this upload (ugcportal-qnq9.2.1). ONE TO
+  // MANY, unlike the disclosure one line up, because §3.2's labelling rule is
+  // per link and an item can carry more than one — see CommercialLink's own
+  // comment at the bottom of this file.
+  commercialLinks       CommercialLink[]
 
   @@index([userId])
   // Matches the listing query in GET /api/media exactly: filter on userId,
@@ -981,6 +986,11 @@ model BenefitSource {
   alcoholAnsweredByUserId String?
 
   disclosures       MediaAdvertisingDisclosure[]
+  /// Every commercial link pointing at this brand (ugcportal-qnq9.2.1). The
+  /// second reader of `alcoholLinked`, and the reason this column is a fact
+  /// about the company rather than about one photograph: the answer recorded
+  /// here refuses a benefit AND a link, on every item either ever appears on.
+  commercialLinks   CommercialLink[]
   alcoholAnsweredBy User?                        @relation("BenefitSourceAlcoholAnswerer", fields: [alcoholAnsweredByUserId], references: [id], onDelete: SetNull)
 
   @@index([alcoholAnsweredByUserId])
@@ -1061,5 +1071,118 @@ model MediaAdvertisingDisclosure {
   /// deliberate act rather than a quiet data loss.
   benefitSource BenefitSource? @relation(fields: [benefitSourceId], references: [id], onDelete: Restrict)
 
+  @@index([benefitSourceId])
+}
+
+// --- commercial outbound links (ugcportal-qnq9.2.1) --------------------------
+//
+// Forbrukertilsynet requires a page carrying affiliate links to be labelled at
+// the top AND at each link (docs/ugc-research.md §3.2, §2 step 5, §5.7). The
+// top-of-page label already exists as MediaAdvertisingDisclosure.label; this
+// is the record the per-link half will be rendered from (ugcportal-qnq9.2.2).
+//
+// WHY A SECOND TABLE RATHER THAN COLUMNS ON THE DISCLOSURE.
+// MediaAdvertisingDisclosure is 1:1 with Media and single-valued: one benefit,
+// one brand, one label. A gifted glass can perfectly well carry two links — the
+// manufacturer and the retailer — and §3.2's rule is per LINK, so a shape that
+// can only hold one would make the second link either unrecordable or
+// unlabelled. Neither is an option.
+
+/// Which affiliate network a link is routed through.
+///
+/// AN EXTENSIBLE SET, NOT ONE HARDCODED NETWORK, which §2 step 5 and §5.7 ask
+/// for directly: Adtraction first (§4 weeks 5-8), Awin, Partner-Ads,
+/// Tradedoubler and Adrecord for a Nordic audience, and §5.7 adds that an
+/// international network is worth considering as the site grows.
+///
+/// `OTHER` IS A MEMBER OF THE ENUM rather than a reason to make this a free-text
+/// column. The five names are the ones the research document settled on, and an
+/// enum is what makes "which network was this" answerable across the table
+/// without reconciling spellings. `OTHER` carries its name in
+/// `networkOther` beside it, so a sixth network is recordable the day it is
+/// joined and promotable to a member of this list when it is worth one — a
+/// migration, not a blocked operator.
+enum CommercialLinkNetwork {
+  ADTRACTION
+  AWIN
+  PARTNER_ADS
+  TRADEDOUBLER
+  ADRECORD
+  OTHER
+}
+
+/// One commercial outbound link on one item (ugcportal-qnq9.2.1).
+///
+/// ONE-TO-MANY ON MEDIA. See the block comment above for why this is not three
+/// columns on the disclosure.
+model CommercialLink {
+  id      String @id @default(cuid())
+  mediaId String
+
+  /// The destination, as `URL.href` canonicalised it — https only, no
+  /// embedded credentials, bounded in length, and free of the control and
+  /// bidi characters every other user-typed string in this product is
+  /// screened for. Validated by `validateCommercialLinkUrl`
+  /// (src/lib/commercial-link.ts) before it is written; TEXT with no
+  /// database-level constraint, so that validator is the only thing that
+  /// keeps the column's promise and the renderer (ugcportal-qnq9.2.2) is
+  /// expected to re-check rather than to trust it, for the reason
+  /// `isPermittedAdvertisingLabel` gives next door.
+  url String
+
+  /// Which network, and — for `OTHER` only — its name.
+  ///
+  /// `networkOther` is NULL for the five named members and non-null for
+  /// `OTHER`. That pairing is enforced by the write path
+  /// (POST /api/media/[id]/commercial-links) rather than by a CHECK
+  /// constraint: SQLite would take one, but Prisma has no syntax for it, so a
+  /// hand-written constraint in the migration would be invisible in this file
+  /// — and `prisma migrate diff` generates the next table change from this
+  /// file. 20261006170000 is the worked example: adding one column to
+  /// BenefitSource produced a CREATE/INSERT-SELECT/DROP/RENAME of the whole
+  /// table, rebuilt from the schema, so anything only the migration knew
+  /// about would not have survived it. The route refuses both halves of the
+  /// contradiction instead — `OTHER` with no name, and a named member with a
+  /// stray free-text name.
+  network      CommercialLinkNetwork
+  networkOther String?
+
+  /// The brand at the other end of the link. REQUIRED, unlike the
+  /// disclosure's own nullable `benefitSourceId`: a disclosure exists in
+  /// states that have no brand at all ("no benefit received", "not
+  /// answered"), and a commercial link does not — there is no such thing as a
+  /// commercial link to nobody, and §3.1a practical rule 1 is a question
+  /// about a company that has to have a company to be about.
+  ///
+  /// NOT NECESSARILY THE SAME BRAND as the disclosure on the same item. The
+  /// glass was gifted by its maker; the link may well point at a retailer.
+  /// Both are checked, independently, by `alcoholLinkedBrandRefusal`.
+  benefitSourceId String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  media         Media         @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+  /// Restrict, the same call MediaAdvertisingDisclosure.benefitSource makes
+  /// and for the same reason: deleting a brand must not silently erase who a
+  /// published commercial link points at. Nothing in the product deletes a
+  /// BenefitSource.
+  benefitSource BenefitSource @relation(fields: [benefitSourceId], references: [id], onDelete: Restrict)
+
+  /// One destination at most once per item. A double-submitted form is the
+  /// ordinary way a duplicate arrives, and two identical labelled links under
+  /// one photograph are a rendering defect nobody chose. The route answers 409
+  /// on the violation rather than treating the second attach as a success it
+  /// was not.
+  ///
+  /// This also serves every lookup by `mediaId` (the renderer's read), which
+  /// is why there is no separate `@@index([mediaId])` — on SQLite a composite
+  /// unique index is usable for its leading column, so a second index on
+  /// `mediaId` alone would be write cost for no read.
+  @@unique([mediaId, url])
+  /// SQLite does not index a child foreign key automatically, and the
+  /// `Restrict` above is what needs one: enforcing it means answering "does
+  /// any commercial link still point at this brand" on every attempted
+  /// BenefitSource delete, which without this is a full scan.
   @@index([benefitSourceId])
 }
