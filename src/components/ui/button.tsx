@@ -239,12 +239,12 @@ const buttonVariants = cva(
          * `--color-petrol-100` (L 0.95), lighter than this variant's
          * `--color-petrol-400` (L 0.72), so the ratio does not carry over.
          * The upload dropzone's "Choose files" label
-         * (src/app/upload/upload-form.tsx) pastes the same
-         * `bg-petrol-400`/`text-petrol-900` pair directly rather than
-         * going through this variant, so it keeps the identical
-         * never-compiles bug - disclosed, not fixed, in contrast.ts and in
-         * that file's own comment, since it is not a call site of this
-         * variant and is out of this bead's stated scope.
+         * (src/app/upload/upload-form.tsx) pastes the same `bg-petrol-400`
+         * fill directly rather than going through this variant - disclosed,
+         * not fixed, here (out of this bead's stated scope) but fixed by
+         * ugcportal-z1nh onto this same `text-surface-0` label, with its own
+         * comment on why it stays a hand-styled label rather than adopting
+         * this variant wholesale.
          */
         "default-neutral": "bg-petrol-400 text-surface-0 hover:brightness-95",
         /*
