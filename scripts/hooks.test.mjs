@@ -205,7 +205,11 @@ const BRANCHES = [
   { name: "none (plain fallback)", firstWord: "env", shellPrelude: "", includeRealPerl: false },
 ];
 
-describe("pre-push hook: _ugcportal_run strips git's hook-injected repo env (K1)", () => {
+// ugcportal-9faa: each branch below spawns real `sh`/`perl`/`git` child
+// processes against a fixture repo -- real subprocess latency with no
+// shared state to cache (every case needs its own fixture), measured up to
+// ~1.4s unloaded already. Explicit timeout, not a bigger global default.
+describe("pre-push hook: _ugcportal_run strips git's hook-injected repo env (K1)", { timeout: 20_000 }, () => {
   const hookSource = fs.readFileSync(HOOK_PATH, "utf8");
   const runFnSource = extractFunction(hookSource, "_ugcportal_run");
 
@@ -281,7 +285,11 @@ describe("pre-push hook: _ugcportal_run strips git's hook-injected repo env (K1)
   }
 });
 
-describe("pre-push hook: a test run under it cannot mutate the real repo (K2)", () => {
+// ugcportal-9faa: builds a real fixture git repository (with a committed
+// hook file) per case and spawns git/sh against it -- real subprocess
+// latency, measured up to ~2.8s unloaded already, with no shared state to
+// cache. Explicit timeout, not a bigger global default.
+describe("pre-push hook: a test run under it cannot mutate the real repo (K2)", { timeout: 20_000 }, () => {
   if (process.platform === "win32") {
     it.skip("POSIX-sh fixture, skipped on win32", () => {});
     return;

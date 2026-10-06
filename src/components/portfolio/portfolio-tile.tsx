@@ -1,5 +1,6 @@
 import { GALLERY_TILE_BASE_CLASS } from "@/components/gallery/containment";
 import {
+  GalleryItemAdvertisingLabel,
   GalleryItemCaption,
   GalleryItemTags,
 } from "@/components/gallery/gallery-item";
@@ -54,6 +55,17 @@ export function PortfolioTile({
 }) {
   return (
     <li data-portfolio-piece={piece.id}>
+      {/*
+        The advertising-disclosure label (ugcportal-e0jv), FIRST — same
+        reasoning as gallery.tsx's own tile: Forbrukertilsynet's rule is
+        that the label is visible before anything else about the item. A
+        portfolio piece is curated by a tag (PORTFOLIO_TAG_SLUG), not
+        exempted from being a labelled benefit — nothing stops an operator
+        curating a paid/gifted piece into this page, and this component
+        used to render nothing for one (see PortfolioSpecMarker's own
+        former comment, which pointed at this exact bead to fix it).
+      */}
+      <GalleryItemAdvertisingLabel item={piece} />
       <figure className={GALLERY_TILE_BASE_CLASS}>
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
@@ -66,18 +78,32 @@ export function PortfolioTile({
         />
       </figure>
       <GalleryItemCaption item={piece} />
-      <PortfolioSpecMarker />
+      {/*
+        MUTUALLY EXCLUSIVE with the advertising label above, never both
+        (ugcportal-e0jv): "Spec sample, not a client commission" and
+        "Advertisement / Reklame" are opposite claims about the same piece,
+        and showing both would assert them simultaneously. This is the K3
+        branch `SPEC_SAMPLE_LABEL`'s own comment names as not implemented
+        until this bead's field existed to drive it — it exists now.
+      */}
+      {piece.advertisingLabel === null ? <PortfolioSpecMarker /> : null}
       <GalleryItemTags item={piece} />
     </li>
   );
 }
 
 /**
- * K2: the spec/concept marker, rendered UNCONDITIONALLY on every piece — see
- * `SPEC_SAMPLE_LABEL`'s own comment in src/lib/portfolio.ts for why. K3 (an
- * advertising-disclosure label instead, for a real paid/gifted job) is not
- * implemented here; it is ugcportal-qnq9.1's field to add, and this
- * component's own render, not before.
+ * K2: the spec/concept marker. Rendered on every piece that carries NO
+ * advertising label (see the caller's own conditional, just above its one
+ * use) — it used to be unconditional, back when there was no field
+ * recording a real paid/gifted job to branch on at all; see
+ * `SPEC_SAMPLE_LABEL`'s own comment in src/lib/portfolio.ts for that
+ * history. K3 (the advertising-label branch, ugcportal-e0jv) is implemented
+ * now, as `GalleryItemAdvertisingLabel` at the top of `PortfolioTile`, not
+ * as a second branch of this function — the two markers never coexist, so
+ * there was no reason to fold the advertising label's own rendering (and
+ * its own, differently-styled badge, see GALLERY_ADVERTISING_LABEL_CLASS)
+ * into this one.
  */
 function PortfolioSpecMarker() {
   return (

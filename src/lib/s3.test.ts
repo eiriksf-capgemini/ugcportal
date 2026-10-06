@@ -3,7 +3,11 @@ import { createRequire } from "node:module";
 import { isTransientError } from "@smithy/core/retry";
 import { describe, expect, it } from "vitest";
 
-import { TRANSPORT_ERROR_CODES } from "./s3";
+import {
+  ObjectStorageUnreachableError,
+  TRANSPORT_ERROR_CODES,
+  objectStorageUnreachableLogFields,
+} from "./s3";
 
 /**
  * Pins TRANSPORT_ERROR_CODES (src/lib/s3.ts) against the INSTALLED
@@ -90,3 +94,49 @@ describe("the reverse direction (every @smithy/core transport code is in TRANSPO
     );
   });
 });
+
+describe("objectStorageUnreachableLogFields (ugcportal-98rb)", () => {
+  // Each caller's log line adds its own prefix and its own extra context,
+  // so the only thing holding them in agreement about the FAILURE itself is
+  // that they all spread this one object. If a field is dropped here it is
+  // dropped from every one of them at once, which is the point — and is why
+  // the field set is pinned exactly rather than spot-checked. The callers
+  // are deliberately not counted or named here — a hand-written count in
+  // this very comment said "three" while there were four. The
+  // authoritative list is the "lists every caller of
+  // objectStorageUnreachableLogFields" assertion in
+  // src/lib/s3-call-sites.test.ts, which derives it from the AST.
+  const cause = Object.assign(new Error("socket hang up"), {
+    code: "ECONNREFUSED",
+  });
+  const error = new ObjectStorageUnreachableError("preview-fetch", cause, {
+    code: "ECONNREFUSED",
+    attempts: 3,
+  });
+
+  it("reports exactly the operation, code, attempts, message and cause", () => {
+    expect(objectStorageUnreachableLogFields(error)).toEqual({
+      operation: "preview-fetch",
+      code: "ECONNREFUSED",
+      attempts: 3,
+      message: "socket hang up",
+      cause: error,
+    });
+  });
+
+  it("carries the error itself as `cause`, so a log line has a stack to print", () => {
+    // Not the raw SDK error: that one is reachable from here as
+    // `cause.cause`, and Node's own cause-chain printing unfolds both.
+    const fields = objectStorageUnreachableLogFields(error);
+    expect(fields.cause).toBe(error);
+    expect(fields.cause.cause).toBe(cause);
+  });
+
+  it("reports an absent attempt count as undefined rather than inventing one", () => {
+    const noAttempts = new ObjectStorageUnreachableError("evidence", cause, {
+      code: "ECONNRESET",
+    });
+    expect(objectStorageUnreachableLogFields(noAttempts).attempts).toBeUndefined();
+  });
+});
+

@@ -43,6 +43,7 @@ import { CONTACT_EMAIL_PLACEHOLDER } from "@/lib/contact";
 import { parseEvidenceSSESetting } from "@/lib/evidence-encryption";
 import {
   FILLED_LEGAL_ENV,
+  PLAUSIBLE_LEGAL_ENV,
   REPO_ROOT,
   stubLegalEnv,
 } from "@/lib/legal/legal-page.test-support";
@@ -472,8 +473,35 @@ describe("the legal-pages startup check", () => {
   });
 
   it("is quiet once every variable is set", async () => {
-    stubLegalEnv("production", FILLED_LEGAL_ENV);
+    // PLAUSIBLE_LEGAL_ENV, not FILLED_LEGAL_ENV: the latter's own values
+    // deliberately reuse env.example's illustrative text (see that
+    // constant's doc comment), which is exactly what the warn-only
+    // operator-value sanity check below exists to flag — this test's point
+    // is a deployment with nothing AT ALL for boot to say.
+    stubLegalEnv("production", PLAUSIBLE_LEGAL_ENV);
     expect(await legalLinesFromBoot()).toEqual([]);
+  });
+
+  it("warns, without blocking, when a SET value still reads like env.example's own sample text (ugcportal-qnq9.15 item 2)", async () => {
+    // FILLED_LEGAL_ENV is the control for that: every variable it sets is
+    // non-blank (so the configuration check above is quiet), but three of
+    // its four values are copy-pasted from env.example's own illustrative
+    // text, so the warn-only scan has something to say about this exact
+    // fixture. One console.error call (same one-line-per-finding-joined-
+    // by-\n idiom `blockerWarning` already uses), naming all three.
+    // Verified by mutation: removing the call to `suspiciousLegalValueWarning`
+    // from registerNodeOnlyChecks makes this fail (an empty array instead).
+    stubLegalEnv("production", FILLED_LEGAL_ENV);
+    const legalLines = await legalLinesFromBoot();
+    expect(legalLines).toHaveLength(1);
+    const warning = legalLines[0];
+    expect(warning).toContain("LEGAL_CONTACT_EMAIL");
+    expect(warning).toContain("LEGAL_HOSTING_PROVIDER");
+    expect(warning).toContain("LEGAL_STORAGE_PROVIDER");
+    expect(warning).toContain("still reads like env.example's own sample text");
+    // Never the configuration-blocking wording — this is advisory only.
+    expect(warning).not.toContain("is not set");
+    expect(warning).not.toContain("Production will not serve");
   });
 
   it("does not run this check at all outside the node runtime (ugcportal-177y)", async () => {

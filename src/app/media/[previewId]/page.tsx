@@ -1,7 +1,10 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 
-import { GalleryItemTags } from "@/components/gallery/gallery-item";
+import {
+  GalleryItemAdvertisingLabel,
+  GalleryItemTags,
+} from "@/components/gallery/gallery-item";
 import { PageShell } from "@/components/site/page-shell";
 import {
   getPublicMediaItem,
@@ -96,6 +99,27 @@ export default async function MediaItemPage({ params }: RouteContext) {
 
   return (
     <PageShell title={title}>
+      {/*
+        The advertising-disclosure label (ugcportal-e0jv K1, part B of
+        ugcportal-qnq9.1), FIRST — ahead of the photograph itself, same
+        reasoning as the gallery tile and the lightbox: Forbrukertilsynet's
+        rule is that the label is visible before anything else about the
+        item. Renders nothing for an unlabelled item (K3/K4) — the
+        conditional wrapper, not an unconditional one, is deliberate: an
+        unconditional `mt-3` wrapper would still carry its own margin for
+        an ordinary unlabelled item, the exact "empty element, non-empty
+        margin" gap GalleryItemTags' own comment warns about. `mt-3`, not a
+        change to the shared class: PageShell's own `<h1>` carries no
+        bottom margin of its own (it normally relies on the figure's `mt-6`
+        below for the gap), and this is the one caller of
+        `GalleryItemAdvertisingLabel` that renders directly under a
+        heading rather than under a grid tile or a lightbox panel.
+      */}
+      {item.advertisingLabel !== null ? (
+        <div className="mt-3">
+          <GalleryItemAdvertisingLabel item={item} />
+        </div>
+      ) : null}
       <figure className="mt-6 overflow-hidden rounded-md bg-surface-1">
         {/* eslint-disable-next-line @next/next/no-img-element -- same
             reasoning as src/components/portfolio/portfolio-tile.tsx: the

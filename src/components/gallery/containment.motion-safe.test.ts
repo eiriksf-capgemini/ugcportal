@@ -282,7 +282,12 @@ function findBareUngatedMentions(files: readonly string[], root: string): string
   return offenders;
 }
 
-describe("no file Tailwind's real build can scan ships either pre-fix string bare and unprefixed (ugcportal-ig4g, round-5 review)", () => {
+// ugcportal-9faa: walks the whole repository tree (not just src/) looking
+// for a bare pattern in raw file bytes — no TypeScript parse, so cheaper
+// than this bead's other tree-walking fixes, but still a real tree-wide
+// walk+read (606ms unloaded) a busy machine can push further. Explicit
+// timeout, not a bigger global default.
+describe("no file Tailwind's real build can scan ships either pre-fix string bare and unprefixed (ugcportal-ig4g, round-5 review)", { timeout: 15_000 }, () => {
   const REPO_ROOT = path.resolve(path.dirname(GLOBALS_CSS_PATH), "..", "..");
 
   it("finds no bare, unprefixed mention of either removed rule in any scanned file", () => {

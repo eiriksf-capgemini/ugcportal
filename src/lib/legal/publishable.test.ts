@@ -1,17 +1,20 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   LEGAL_CONTACT_VARS,
   SENTINEL_CONTACT,
   type LegalSignOff,
   readLegalContact,
+  suspiciousLegalValueWarning,
+  suspiciousLegalValues,
 } from "@/lib/legal/contact";
 import {
   BRACKETED_LEGAL_ENV,
   FILLED_LEGAL_ENV,
+  PLAUSIBLE_LEGAL_ENV,
   REPO_ROOT,
   UNSET_LEGAL_ENV,
 } from "@/lib/legal/legal-page.test-support";
@@ -21,6 +24,7 @@ import {
   assertPublishable,
   authoredDigest,
   checkLegalPagesPublishable,
+  createLegalPageLoader,
   findPlaceholders,
   legalPage,
   legalReadiness,
@@ -100,6 +104,69 @@ describe("readLegalContact", () => {
   });
 });
 
+describe("suspiciousLegalValues / suspiciousLegalValueWarning (ugcportal-qnq9.15 item 2)", () => {
+  // Deliberately NOT FILLED_LEGAL_ENV: three of its four values already
+  // contain the word "example" ("Example Hosting AS, Norway", "Example
+  // Objects GmbH, Germany", "kari@example.com") — good for every OTHER test
+  // in this file, which only cares that the variables are non-blank, but
+  // exactly the thing this check exists to flag. PLAUSIBLE_LEGAL_ENV (same
+  // test-support module) is the honest control for "does not flag a
+  // legitimate value".
+  const plausible = { ...PROD, ...PLAUSIBLE_LEGAL_ENV } as NodeJS.ProcessEnv;
+
+  it("flags a SET value that still reads as env.example's own sample text", () => {
+    // "Example Hosting AS, Norway" is env.example's own illustrative value
+    // for LEGAL_HOSTING_PROVIDER — an operator who pasted it literally
+    // would otherwise publish it with no warning at all.
+    const found = suspiciousLegalValues({
+      ...plausible,
+      LEGAL_HOSTING_PROVIDER: "Example Hosting AS, Norway",
+    });
+    expect(found).toEqual([{ name: "LEGAL_HOSTING_PROVIDER", value: "Example Hosting AS, Norway" }]);
+  });
+
+  it("flags a bare TODO left in a SET value, case-insensitively", () => {
+    expect(
+      suspiciousLegalValues({ ...plausible, LEGAL_CONTROLLER_NAME: "todo: ask Eirik" }),
+    ).toEqual([{ name: "LEGAL_CONTROLLER_NAME", value: "todo: ask Eirik" }]);
+  });
+
+  it("does not flag a legitimate operator value with neither signal", () => {
+    // The control: a value containing neither "example" nor "todo" must not
+    // warn, or this would nag on every real deployment.
+    expect(suspiciousLegalValues(plausible)).toEqual([]);
+  });
+
+  it("does not flag an UNSET variable — that is readLegalContact's `missing`, not this", () => {
+    // An unset variable renders as `[LEGAL_CONTROLLER_NAME]`, which itself
+    // contains neither "example" nor "todo", but the exclusion is explicit
+    // (by name, via `missing`) rather than incidental: this must stay true
+    // even if a future variable name changed to contain either word.
+    expect(suspiciousLegalValues(unset)).toEqual([]);
+  });
+
+  it("never blocks or marks a page a draft, whatever it finds (round 3's promise holds)", () => {
+    // Verified by mutation: folding this into `legalReadiness`'s `blocked`
+    // would make `blocked` true below; as written it is not, even though
+    // FILLED_LEGAL_ENV (used here, not `plausible`, precisely because it
+    // DOES trip this check on three of its four fields) is what every other
+    // "the real legal pages" test treats as a fully configured deployment.
+    expect(suspiciousLegalValues(filled).length).toBeGreaterThan(0);
+    const readiness = legalReadiness(LEGAL_PAGES, filled);
+    expect(readiness.blocked).toBe(false);
+  });
+
+  it("suspiciousLegalValueWarning is null when nothing is flagged, and names the variable and value when it is", () => {
+    expect(suspiciousLegalValueWarning(plausible)).toBeNull();
+    const warning = suspiciousLegalValueWarning({
+      ...plausible,
+      LEGAL_CONTACT_EMAIL: "kari@example.com",
+    });
+    expect(warning).toContain("LEGAL_CONTACT_EMAIL");
+    expect(warning).toContain("kari@example.com");
+  });
+});
+
 describe("findPlaceholders", () => {
   it("finds every bracketed token, whatever its case", () => {
     // PR #90 review round 1: the first pattern was upper-case only, so a
@@ -162,6 +229,70 @@ describe("legalPage", () => {
   });
 });
 
+describe("createLegalPageLoader (ugcportal-qnq9.15 item 4)", () => {
+  // The one shape loadPrivacy/loadLicence (src/app/privacy/content.ts,
+  // src/app/licence/content.ts) now both delegate to, instead of each
+  // hand-rolling the same cache()-wrapped { content, page, readiness }
+  // object. Exercised directly here, against a throwaway page, rather than
+  // through either real loader: those stay covered by their own existing
+  // page tests, unchanged (K4).
+  type Built = { controllerName: string };
+  const page = legalPage("/loader-example", (contact) => [
+    `Run by ${contact.controllerName}.`,
+  ]);
+  const contentFor = (contact: { controllerName: string }): Built => ({
+    controllerName: contact.controllerName,
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("returns the given page record and content built from the configured contact", () => {
+    const load = createLegalPageLoader(page, contentFor);
+    const result = load(filled);
+    expect(result.page).toBe(page);
+    expect(result.content).toEqual({ controllerName: FILLED_LEGAL_ENV.LEGAL_CONTROLLER_NAME });
+  });
+
+  it("returns the SAME readiness legalReadiness([page], env) would compute, from the ARGUMENT, not process.env", () => {
+    // process.env and the explicit argument deliberately disagree (same
+    // technique as pages.test.ts's "follows the explicit env argument's
+    // configuration, not process.env's"): process.env stubbed fully
+    // configured (so dropping `env` internally would read it as NOT
+    // blocked), the explicit argument unconfigured (blocked). Verified by
+    // mutation: calling `legalReadiness([page])` without `env` inside
+    // createLegalPageLoader makes this fail — readiness.blocked flips to
+    // false because it would be computed from the stubbed process.env
+    // instead of the unconfigured argument.
+    for (const name of Object.values(LEGAL_CONTACT_VARS)) {
+      vi.stubEnv(name, FILLED_LEGAL_ENV[name]);
+    }
+    const load = createLegalPageLoader(page, contentFor);
+    const env = { ...unset, LEGAL_CONTROLLER_NAME: "" };
+    const readiness = load(env).readiness;
+    expect(readiness).toEqual(legalReadiness([page], env));
+    expect(readiness.blocked).toBe(true);
+  });
+
+  it("defaults to process.env, same convention as every other reader in this module", () => {
+    const load = createLegalPageLoader(page, contentFor);
+    // No stubbing here — proves the parameter is optional and falls back,
+    // rather than merely typed as optional and always required in practice.
+    expect(() => load()).not.toThrow();
+  });
+
+  it("two pages built through this helper do not share a loader (each call makes its own cache())", () => {
+    const other = legalPage("/other-loader-example", (contact) => [
+      `Contact: ${contact.contactEmail}.`,
+    ]);
+    const loadA = createLegalPageLoader(page, contentFor);
+    const loadB = createLegalPageLoader(other, (contact) => ({ email: contact.contactEmail }));
+    expect(loadA(filled).page).toBe(page);
+    expect(loadB(filled).page).toBe(other);
+  });
+});
+
 describe("legalReadiness", () => {
   it("is blocked and draft while a variable the page renders is unset", () => {
     const readiness = legalReadiness([cleanPage], unset, SIGNED);
@@ -182,6 +313,27 @@ describe("legalReadiness", () => {
     expect(legalReadiness([cleanPage, storage], onlyEmail, SIGNED).missing).toEqual([
       "LEGAL_STORAGE_PROVIDER",
     ]);
+  });
+
+  it("blockedPaths names only the page a missing variable actually belongs to (ugcportal-qnq9.15 item 1)", () => {
+    // cleanPage renders only the contact address; storage renders only the
+    // storage provider. Unsetting the storage provider alone must block
+    // `storage` without blocking `cleanPage` — a page that never mentions
+    // the storage provider has nothing wrong with it.
+    const storage = legalPage("/storage", (c) => [`Stored by ${c.storageProvider}.`]);
+    const onlyEmail = { ...unset, LEGAL_CONTACT_EMAIL: "kari@example.com" };
+    const readiness = legalReadiness([cleanPage, storage], onlyEmail, SIGNED);
+    expect(readiness.blocked).toBe(true);
+    expect(readiness.paths).toEqual(["/example", "/storage"]);
+    expect(readiness.blockedPaths).toEqual(["/storage"]);
+  });
+
+  it("blockedPaths also names a page with its own stray placeholder, and nothing else", () => {
+    const stray = examplePage("[fill in later] {email}", "/stray");
+    const readiness = legalReadiness([cleanPage, stray], filled, SIGNED);
+    expect(readiness.blocked).toBe(true);
+    expect(readiness.paths).toEqual(["/example", "/stray"]);
+    expect(readiness.blockedPaths).toEqual(["/stray"]);
   });
 
   it("is blocked and draft while stray placeholder text remains", () => {
@@ -263,18 +415,25 @@ describe("legalReadiness", () => {
 });
 
 describe("checkLegalPagesPublishable", () => {
-  it("names the unset variables, the pages, and env.example", () => {
+  it("names the unset variable, env.example, and only the page it actually blocks", () => {
     // /other is the page that renders the controller; /example renders only
-    // the contact. The union of the two is what boot judges.
+    // the contact and never the controller, so an unset controller name
+    // must not block (or be named for) /example at all — ugcportal-qnq9.15
+    // item 1, PR #90 round-6 cap finding: the message used to name EVERY
+    // given page whenever any one of them was blocked. Verified by
+    // mutation: reverting blockerWarning's `paths` back to
+    // `readiness.paths` (every given page) makes the two `.not.toContain`
+    // assertions below fail.
     const other = legalPage("/other", (contact) => [`Run by ${contact.controllerName}.`]);
     const warning = checkLegalPagesPublishable([cleanPage, other], {
       ...filled,
       LEGAL_CONTROLLER_NAME: "",
     });
     expect(warning).toContain("LEGAL_CONTROLLER_NAME is not set");
-    expect(warning).toContain("/example, /other");
+    expect(warning).toContain("/other");
     expect(warning).toContain("env.example");
     expect(warning).not.toContain("LEGAL_CONTACT_EMAIL");
+    expect(warning).not.toContain("/example");
   });
 
   it("names stray placeholder text per page", () => {
@@ -407,9 +566,16 @@ describe("the real legal pages", () => {
       missing: ["LEGAL_HOSTING_PROVIDER", "LEGAL_STORAGE_PROVIDER"],
     });
     // Boot walks both, so the boot warning still names what /privacy lacks.
-    expect(checkLegalPagesPublishable(LEGAL_PAGES, licenceOnly)).toContain(
-      "LEGAL_HOSTING_PROVIDER, LEGAL_STORAGE_PROVIDER are not set",
-    );
+    const warning = checkLegalPagesPublishable(LEGAL_PAGES, licenceOnly);
+    expect(warning).toContain("LEGAL_HOSTING_PROVIDER, LEGAL_STORAGE_PROVIDER are not set");
+    // ugcportal-qnq9.15 item 1 (PR #90 round-6 cap, reproduced with exactly
+    // this env per this bead's notes): /licence is fully configured here
+    // and must not be told production will refuse to serve it, even though
+    // /privacy — which actually needs the two unset variables — is.
+    // Verified by mutation: naming every given page (the pre-fix behaviour)
+    // makes the second assertion fail.
+    expect(warning).toContain(`Production will not serve ${PRIVACY_PATH}`);
+    expect(warning).not.toContain(LICENCE_PATH);
   });
 
   it("are blocked exactly while unconfigured", () => {

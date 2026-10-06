@@ -43,6 +43,7 @@
  */
 import { HeadBucketCommand } from "@aws-sdk/client-s3";
 
+import { suspiciousLegalValueWarning } from "@/lib/legal/contact";
 import { LEGAL_PAGES } from "@/lib/legal/pages";
 import { checkLegalPagesPublishable } from "@/lib/legal/publishable";
 import { checkSiteOriginConfigured } from "@/lib/origin";
@@ -216,17 +217,19 @@ export async function checkS3Reachability({
  * Every boot check that belongs behind the Node-runtime guard. Called once
  * from src/instrumentation.ts's `register()`.
  *
- * The legal-pages and site-origin checks are logged FIRST, before the S3
- * probe is even started, not gathered into one array and logged together
- * (round-2 review finding 1, ugcportal-ze1o): both are synchronous and
- * independent of S3 reachability, so there is no reason for a slow or
- * hanging S3 endpoint to sit in front of either. Under the old ordering a
- * GDPR-relevant warning could be delayed up to `S3_REACHABILITY_TIMEOUT_MS`
- * behind the S3 probe, and lost entirely if the process was killed in that
- * window — the same reasoning applies to `checkSiteOriginConfigured`
- * (ugcportal-qnq9.12), added alongside it for exactly that reason rather
- * than appended after the S3 probe. The S3 probe itself stays awaited here,
- * not fire-and-forget — that part is the bead's own K2 design (`bd show
+ * The legal-pages, operator-value and site-origin checks are logged FIRST,
+ * before the S3 probe is even started, not gathered into one array and
+ * logged together (round-2 review finding 1, ugcportal-ze1o): all three are
+ * synchronous and independent of S3 reachability, so there is no reason for
+ * a slow or hanging S3 endpoint to sit in front of any of them. Under the
+ * old ordering a GDPR-relevant warning could be delayed up to
+ * `S3_REACHABILITY_TIMEOUT_MS` behind the S3 probe, and lost entirely if the
+ * process was killed in that window — the same reasoning applies to
+ * `checkSiteOriginConfigured` (ugcportal-qnq9.12) and to
+ * `suspiciousLegalValueWarning` (ugcportal-qnq9.15 item 2), both added
+ * alongside the legal-pages check for exactly that reason rather than
+ * appended after the S3 probe. The S3 probe itself stays awaited here, not
+ * fire-and-forget — that part is the bead's own K2 design (`bd show
  * ugcportal-ze1o`), not an oversight: `register()` must still resolve only
  * once the probe has settled or timed out.
  */
@@ -239,6 +242,17 @@ export async function registerNodeOnlyChecks(): Promise<void> {
   const legalWarning = checkLegalPagesPublishable(LEGAL_PAGES);
   if (legalWarning) {
     console.error(legalWarning);
+  }
+
+  // ugcportal-qnq9.15 item 2 (PR #90 round-6 cap): a narrower, WARN-ONLY
+  // sanity check over the operator's own LEGAL_* values — never blocks,
+  // never changes `draft`/`blocked` (round 3's decision not to re-litigate
+  // for this file), only flags a likely copy-paste of env.example's own
+  // sample text. Logged right alongside the other legal warning, same
+  // reason as that one: synchronous, independent of the S3 probe.
+  const suspiciousValueWarning = suspiciousLegalValueWarning();
+  if (suspiciousValueWarning) {
+    console.error(suspiciousValueWarning);
   }
 
   // ugcportal-qnq9.12 (review round 1, finding 1): while AUTH_URL is unset

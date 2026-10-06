@@ -33,16 +33,23 @@ import { PUBLIC_MEDIA_SCOPE } from "@/lib/public-media";
  * sample, not a client commission"). Exported so the render layer and its
  * tests both read this string from one place rather than retyping it.
  *
- * RENDERED UNCONDITIONALLY on every piece (round-1 review, K2/K3): there is
- * no field anywhere yet recording "this was a paid or gifted job" —
- * ugcportal-qnq9.1 (the per-item advertising-disclosure record) owns that
- * and has not landed; MediaListing's `sponsoredContent` boolean is a
- * different question entirely (resale-gate input, not a public disclosure —
- * see that bead's own "out of scope" for why overloading it would be
- * wrong). A conditional spec-vs-advertising marker with only one branch
- * ever reachable was dead code with a test suite of its own; K3 (the
- * advertising-label branch) is not implemented until ugcportal-qnq9.1
- * exists to supply the real field, and must be re-added then, not before.
+ * USED TO BE RENDERED UNCONDITIONALLY on every piece (round-1 review,
+ * K2/K3): there was no field anywhere recording "this was a paid or gifted
+ * job" — ugcportal-qnq9.1 (the per-item advertising-disclosure record)
+ * owned that and had not landed; MediaListing's `sponsoredContent` boolean
+ * is a different question entirely (resale-gate input, not a public
+ * disclosure — see that bead's own "out of scope" for why overloading it
+ * would be wrong). A conditional spec-vs-advertising marker with only one
+ * branch ever reachable would have been dead code with a test suite of its
+ * own, so K3 (the advertising-label branch) was deliberately left
+ * unimplemented until ugcportal-qnq9.1's field existed to drive it.
+ *
+ * NOW CONDITIONAL (ugcportal-e0jv): `PortfolioTile`
+ * (src/components/portfolio/portfolio-tile.tsx) renders this marker only
+ * when `piece.advertisingLabel === null`, and renders
+ * `GalleryItemAdvertisingLabel` instead — never both — when it is not. See
+ * that component's own comment for the full reasoning; this string's
+ * CONTENT and export are otherwise unchanged by that bead.
  *
  * K6 (never imply a brand commissioned a self-made sample) is NOT closed by
  * this code alone — nothing here can tell a genuinely self-made sample from

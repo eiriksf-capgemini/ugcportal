@@ -281,6 +281,75 @@ describe("ugcportal-dzz — a VIDEO tile gets a play affordance, an IMAGE tile d
   });
 });
 
+describe("ugcportal-e0jv — the advertising-disclosure label", () => {
+  const ITEMS = toGalleryItems([
+    {
+      id: "labelled",
+      previewId: "pv-labelled",
+      publishedAt: "2026-03-01T00:00:00.000Z",
+      caption: "A gifted camera on a desk",
+      advertisingDisclosure: { label: "Advertisement / Reklame" },
+    },
+    {
+      id: "unlabelled",
+      previewId: "pv-unlabelled",
+      publishedAt: "2026-03-02T00:00:00.000Z",
+      caption: "An ordinary photograph",
+    },
+  ]);
+
+  it("K1: shows the exact canonical label on a labelled tile", () => {
+    const markup = render({ initialItems: ITEMS });
+    expect(markup).toContain('data-gallery-advertising-label="labelled"');
+    expect(markup).toContain("Advertisement / Reklame");
+  });
+
+  it("K1: the label is the first content of the <li>, ahead of the tile button, the caption and the tags", () => {
+    const markup = render({ initialItems: ITEMS });
+    const liStart = markup.indexOf('<li');
+    const labelIndex = markup.indexOf("data-gallery-advertising-label");
+    const buttonIndex = markup.indexOf('data-gallery-tile="labelled"');
+    const captionIndex = markup.indexOf("A gifted camera on a desk");
+    expect(liStart).toBeGreaterThanOrEqual(0);
+    expect(labelIndex).toBeGreaterThan(liStart);
+    expect(labelIndex).toBeLessThan(buttonIndex);
+    expect(labelIndex).toBeLessThan(captionIndex);
+  });
+
+  it("K3/K4: shows nothing at all for an item with no disclosure", () => {
+    const markup = render({ initialItems: ITEMS });
+    const unlabelledTile = tiles(markup).find((tile) =>
+      tile.includes('data-gallery-tile="unlabelled"'),
+    ) as string;
+    const unlabelledIndex = markup.indexOf(unlabelledTile);
+    // The unlabelled item's own slice of markup — from the END of the
+    // labelled item's </li> (so the OTHER item's label cannot leak into this
+    // assertion) to this tile's own button.
+    const sliceStart = markup.indexOf("</li>") + "</li>".length;
+    const ownMarkup = markup.slice(sliceStart, unlabelledIndex + unlabelledTile.length);
+    expect(ownMarkup).not.toContain("data-gallery-advertising-label");
+  });
+
+  it("K4: the label is styled as a filled badge, distinct from the caption's and the tags' muted text classes", () => {
+    const markup = render({ initialItems: ITEMS });
+    const labelTag = /<p[^>]*data-gallery-advertising-label="labelled"[^>]*>/.exec(
+      markup,
+    )?.[0];
+    expect(labelTag).toBeDefined();
+    const labelClass = classAttribute(labelTag as string);
+    // A solid fill, not the muted/quiet treatment GALLERY_CAPTION_CLASS and
+    // GALLERY_TAG_CLASS both use — see GALLERY_ADVERTISING_LABEL_CLASS's own
+    // comment for why that distinction is the point of K4.
+    expect(labelClass).toContain("bg-primary");
+    expect(labelClass).toContain("text-primary-foreground");
+    expect(labelClass).not.toContain("text-muted-foreground");
+    // No motion utility of any kind (K4's "prefers-reduced-motion
+    // unaffected") — nothing here triggers under hover/group-hover/active/
+    // focus, so there is nothing for a motion preference to gate.
+    expect(labelClass).not.toMatch(/\b(?:transition|motion-safe|motion-reduce|animate)-?/);
+  });
+});
+
 describe("the states around the grid", () => {
   it("offers a load-more control only when the feed says there is more", () => {
     const withMore = render({ initialCursor: "cursor-1", initialHasMore: true });

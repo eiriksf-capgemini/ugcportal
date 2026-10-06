@@ -1,12 +1,5 @@
-import { cache } from "react";
-
-import { type LegalContact, readLegalContact } from "@/lib/legal/contact";
-import {
-  type LegalPage,
-  type LegalReadiness,
-  legalPage,
-  legalReadiness,
-} from "@/lib/legal/publishable";
+import { type LegalContact } from "@/lib/legal/contact";
+import { type LegalPage, createLegalPageLoader, legalPage } from "@/lib/legal/publishable";
 import { type LegalProseSection, sectionTexts } from "@/lib/legal/section";
 import { LICENCE_PATH } from "@/lib/routes";
 
@@ -131,14 +124,8 @@ export const LICENCE_PAGE: LegalPage = legalPage(LICENCE_PATH, (contact) =>
 
 /**
  * Content, page and readiness for one request, computed once and cached
- * per request for the same reasons as `loadPrivacy` — see there.
+ * per request through `createLegalPageLoader` (src/lib/legal/publishable.ts;
+ * ugcportal-qnq9.15 item 4) for the same reasons as `loadPrivacy` — see
+ * there.
  */
-export const loadLicence = cache(
-  (
-    env: NodeJS.ProcessEnv = process.env,
-  ): { content: LicenceContent; page: LegalPage; readiness: LegalReadiness } => ({
-    content: licenceContent(readLegalContact(env).contact),
-    page: LICENCE_PAGE,
-    readiness: legalReadiness([LICENCE_PAGE], env),
-  }),
-);
+export const loadLicence = createLegalPageLoader(LICENCE_PAGE, licenceContent);

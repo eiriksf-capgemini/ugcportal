@@ -1,12 +1,5 @@
-import { cache } from "react";
-
-import { type LegalContact, readLegalContact } from "@/lib/legal/contact";
-import {
-  type LegalPage,
-  type LegalReadiness,
-  legalPage,
-  legalReadiness,
-} from "@/lib/legal/publishable";
+import { type LegalContact } from "@/lib/legal/contact";
+import { type LegalPage, createLegalPageLoader, legalPage } from "@/lib/legal/publishable";
 import {
   type LegalListSection,
   type LegalProseSection,
@@ -456,9 +449,15 @@ export const MODEL_COVERAGE: Readonly<
   // to draft until a human has read and approved the new wording. Nobody but
   // the person named in LEGAL_SIGN_OFF can do that, so the sentence and the
   // re-sign-off are a follow-up with a human in it. Until then the mapping
-  // here is the honest answer to "which category covers this table", the
-  // record is not published anywhere (ugcportal-qnq9.1 part B is what makes
-  // the label public), and the page under-describes rather than misdescribes.
+  // here is the honest answer to "which category covers this table", and the
+  // page under-describes rather than misdescribes. UPDATED (ugcportal-e0jv,
+  // part B): the label itself — not this record, and not benefitReceived or
+  // the brand's name — IS now public, rendered on the gallery tile, the
+  // lightbox, the per-item page and the public feed JSON. That changes
+  // nothing about the gap this comment names: the prose below still does not
+  // name MediaAdvertisingDisclosure or BenefitSource, and still needs the
+  // human re-sign-off described above before it can (tracked as
+  // ugcportal-mj50, which this bead unblocks but does not do).
   MediaAdvertisingDisclosure: { category: "uploads" },
   BenefitSource: {
     notPersonalData:
@@ -507,19 +506,12 @@ export const PRIVACY_PAGE: LegalPage = legalPage(PRIVACY_PATH, (contact) =>
  * and its readiness — computed once here, so `generateMetadata`, the
  * component and its guard all read the same result.
  *
- * Wrapped in React's `cache` (the same idiom as `getSession` in
+ * `createLegalPageLoader` (src/lib/legal/publishable.ts; ugcportal-qnq9.15
+ * item 4) wraps this in React's `cache` (the same idiom as `getSession` in
  * src/lib/auth.ts) so `generateMetadata` and the page component, which both
  * call this with no arguments during one request, share one build rather
  * than two. Outside a server-component render — tests, the boot check —
  * `cache` is a pass-through, which is why the tests can change the stubbed
  * environment between calls.
  */
-export const loadPrivacy = cache(
-  (
-    env: NodeJS.ProcessEnv = process.env,
-  ): { content: PrivacyContent; page: LegalPage; readiness: LegalReadiness } => ({
-    content: privacyContent(readLegalContact(env).contact),
-    page: PRIVACY_PAGE,
-    readiness: legalReadiness([PRIVACY_PAGE], env),
-  }),
-);
+export const loadPrivacy = createLegalPageLoader(PRIVACY_PAGE, privacyContent);

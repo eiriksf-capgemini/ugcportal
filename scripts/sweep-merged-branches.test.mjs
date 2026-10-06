@@ -668,7 +668,15 @@ function makeFixtureRepo(prefix) {
   return { root, repoDir };
 }
 
-describe("end-to-end against real temporary git repositories", () => {
+// ugcportal-9faa: every case below runs several real `git` subprocesses
+// against its own fixture repo (init, commits, a real remote, worktree
+// adds/removes) -- there is no shared state to cache, since each case needs
+// its own isolated repository on disk, same reasoning as the explicit
+// per-test timeout already below on the "stateful fake gh" describe's single
+// test. An explicit describe-level timeout, not a bigger global default,
+// keeps real subprocess latency under machine load from being mistaken for
+// a hang.
+describe("end-to-end against real temporary git repositories", { timeout: 20_000 }, () => {
   // `fixtureGit` above isolates every call it makes, but the IMPORTED
   // production functions under test (isWorktreeDirty, isShaPushedToRemote)
   // call `execFileSync` directly with no env override of their own -- by

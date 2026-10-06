@@ -106,7 +106,11 @@ beforeEach(() => {
 // that need it to fail have to run before the ones that warm the cache. Both
 // failing tests leave the cache cleared, which is itself the behaviour under
 // test in the first one.
-describe("assertWatermarkFontAvailable", () => {
+// ugcportal-9faa: assertWatermarkFontAvailable() runs a real libvips font
+// probe (sharp), and the second test below calls it twice end to end —
+// inherent image-processing cost (816ms unloaded), not redundant work.
+// Explicit timeout, not a bigger global default.
+describe("assertWatermarkFontAvailable", { timeout: 15_000 }, () => {
   it("says to install a font when text rasterises to nothing", async () => {
     // The fontless-container case: the probe runs fine and simply produces no
     // glyphs. Here the font advice is the correct advice, and there is no

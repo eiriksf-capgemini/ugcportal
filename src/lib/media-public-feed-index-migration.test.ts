@@ -164,6 +164,17 @@ beforeAll(async () => {
   );
 
   await applyMigration(prisma, PARTIAL_INDEX_MIGRATION);
+  // Anything committed after this migration, so the generated client can
+  // read the database at all — the exact manoeuvre applyMigrations' own
+  // `startAfter` comment describes (ugcportal-qn3). Was a no-op until
+  // ugcportal-e0jv's migration added MediaAdvertisingDisclosure and
+  // BenefitSource: MEDIA_ANONYMOUS_SELECT now joins the former on every
+  // call, so `listPublicMedia` below started failing with "no such table"
+  // against a database stopped here without this line — a defect in a
+  // LATER migration's feed-facing select, not in the index migration this
+  // file actually tests. See this bead's own catch-up line in
+  // src/lib/minors-triage-migration.test.ts for the identical precedent.
+  await applyMigrations(prisma, { startAfter: PARTIAL_INDEX_MIGRATION });
 }, 30_000);
 
 afterAll(async () => {

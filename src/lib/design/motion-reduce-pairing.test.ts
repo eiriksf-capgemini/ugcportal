@@ -577,7 +577,13 @@ export function findUngatedInteractionMotionUtilities(
   return offenders;
 }
 
-describe("K2: every interaction-triggered scale/translate/rotate/skew/animate/transform utility carries motion-safe: somewhere in its chain", () => {
+// ugcportal-9faa: a single real-tree walk + per-file stripComments pass
+// (findUngatedInteractionMotionUtilities, below), already computed once for
+// this describe — real CPU work a busy machine can push past the 5s
+// default on its own. Explicit timeout, not a bigger global default; see
+// analytics-host.grep.test.ts and throttled-log.no-sibling-copy.test.ts for
+// the same shape of fix and the measurements behind it.
+describe("K2: every interaction-triggered scale/translate/rotate/skew/animate/transform utility carries motion-safe: somewhere in its chain", { timeout: 15_000 }, () => {
   const files = walkSourceFiles(SRC_ROOT, isExcluded);
 
   it("finds files to scan", () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { stripComments, stripCssComments } from "./scan-source";
+import { isTestFile, stripComments, stripCssComments } from "./scan-source";
 import {
   legacyStripComments,
   round3StripComments,
@@ -681,5 +681,29 @@ describe("stripComments (ugcportal-ysub: TypeScript's lexer, not a hand-rolled o
   it("does not mistake JSX text that merely looks like a comment for one", () => {
     const code = "export const X = <p>\n  // not a comment, just text with trackerco\n</p>;";
     expect(stripComments(code, "fixture.tsx")).toBe(code);
+  });
+});
+
+describe("isTestFile", () => {
+  it("excludes a *.test.ts(x)/*.spec.ts(x)/*.spec.css file", () => {
+    expect(isTestFile("src/lib/legal/publishable.test.ts")).toBe(true);
+    expect(isTestFile("src/components/gallery/gallery.focus.test.tsx")).toBe(true);
+    expect(isTestFile("src/lib/design/no-raw-hex.spec.css")).toBe(true);
+  });
+
+  it("does NOT exclude src/lib/legal/legal-page.test-support.ts (ugcportal-qnq9.15 item 3)", () => {
+    // Its own doc comment used to claim this file is excluded from this
+    // scanner the same way vitest's own collection glob excludes it; it is
+    // not — "test-support" has no `.test.`/`.spec.` segment for this regex
+    // to match. Pins the comment, fixed in the same PR, to the predicate it
+    // describes: whichever one changes without the other, this fails.
+    expect(isTestFile("src/lib/legal/legal-page.test-support.ts")).toBe(false);
+  });
+
+  it("does NOT exclude the other *.test-support.* files in this repo either", () => {
+    // Same shape, same reason — confirms item 3's finding is about this
+    // regex in general, not a special case of the legal module.
+    expect(isTestFile("src/components/gallery/gallery.test-support.tsx")).toBe(false);
+    expect(isTestFile("src/components/consent/consent-test-support.tsx")).toBe(false);
   });
 });

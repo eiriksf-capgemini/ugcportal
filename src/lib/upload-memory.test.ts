@@ -73,7 +73,18 @@ function uploadFor(mb: number, env: WatermarkConcurrencyEnv = {}) {
   return resolveUploadMemorySettings(watermarkFor(mb, env));
 }
 
-describe("declaredUploadCapBytes", () => {
+// ugcportal-9faa (PR #163 round 1, finding 2): this file imports
+// WATERMARK_* constants and resolveWatermarkConcurrencySettings (a pure
+// arithmetic function) from @/lib/watermark -- it does no real sharp/
+// libvips work of its own, so the tree-walk-timeout-guard's coarse,
+// file-level "imports @/lib/watermark" detector flags it conservatively
+// even though nothing here is actually slow (same documented trade-off as
+// a cheap walkSourceFiles fixture getting asked for a timeout it doesn't
+// need). A real explicit timeout, not a reason comment the guard would
+// have to special-case, since the guard has no way to tell "imports the
+// constants" from "imports the real pipeline" without resolving the
+// import's own exports -- out of scope for a coarse tripwire.
+describe("declaredUploadCapBytes", { timeout: 15_000 }, () => {
   it("returns the same cap validateUpload will apply", () => {
     expect(declaredUploadCapBytes("image/png")).toBe(10 * MiB);
     expect(declaredUploadCapBytes("video/mp4")).toBe(200 * MiB);

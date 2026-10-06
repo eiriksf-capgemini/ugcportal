@@ -196,6 +196,117 @@ describe("mediaItemTitle / mediaItemShortText (K1)", () => {
 });
 
 /**
+ * The advertising-disclosure label (ugcportal-e0jv, part B of
+ * ugcportal-qnq9.1), through a REAL database — same reasoning as every
+ * other describe block in this file: the claim is about which columns a
+ * real query returns and withholds, which a mocked Prisma client cannot
+ * prove. `benefitSource` and `mediaAdvertisingDisclosure` are written
+ * directly rather than through PUT /api/media/[id]/disclosure (that route's
+ * own write-path invariants are src/app/api/media/[id]/disclosure/
+ * route.test.ts's job) — this file only needs a row shaped the way that
+ * route would have left it.
+ */
+describe("the advertising-disclosure label (K1, K2, K3)", () => {
+  it("K1: surfaces the exact canonical label for a published, labelled item", async () => {
+    await seedMedia(prisma, {
+      id: "item-labelled",
+      userId: UPLOADER,
+      createdAt: new Date("2026-03-09T00:00:00.000Z"),
+    });
+    const source = await prisma.benefitSource.create({
+      data: { slug: "acme-cameras", name: "Acme Cameras" },
+    });
+    await prisma.mediaAdvertisingDisclosure.create({
+      data: {
+        mediaId: "item-labelled",
+        benefitReceived: true,
+        benefitKind: "FREE_PRODUCT",
+        benefitSourceId: source.id,
+        marketValueOre: 250000,
+        label: "Advertisement / Reklame",
+      },
+    });
+
+    const item = await getPublicMediaItem("pv-item-labelled");
+    expect(item).not.toBeNull();
+    expect(item?.advertisingLabel).toBe("Advertisement / Reklame");
+  });
+
+  it("K2: never exposes benefitReceived, the benefit kind, the market value, or the brand's name/slug", async () => {
+    await seedMedia(prisma, {
+      id: "item-leak-disclosure",
+      userId: UPLOADER,
+      createdAt: new Date("2026-03-09T00:30:00.000Z"),
+    });
+    const source = await prisma.benefitSource.create({
+      data: { slug: "secret-brand", name: "Secret Brand Ltd" },
+    });
+    await prisma.mediaAdvertisingDisclosure.create({
+      data: {
+        mediaId: "item-leak-disclosure",
+        benefitReceived: true,
+        benefitKind: "PAYMENT",
+        benefitSourceId: source.id,
+        marketValueOre: 999900,
+        label: "Reklame",
+      },
+    });
+
+    const item = await getPublicMediaItem("pv-item-leak-disclosure");
+    expect(item).not.toBeNull();
+    expect(item?.advertisingLabel).toBe("Reklame");
+    // NOT `expect(item).not.toHaveProperty("benefitReceived")` and siblings —
+    // a pre-review mutation check found those cannot fail: Prisma nests a
+    // relation under its own key, so a flat, TOP-LEVEL `benefitReceived`
+    // could never appear on `item` regardless of what the query selects or
+    // how badly a future edit mismapped it. `GalleryItem` has no
+    // `advertisingDisclosure` property at all to check a nested leak
+    // location on either — `toGalleryItem` replaces the whole relation with
+    // the single flat `advertisingLabel` field. The exhaustive key-list
+    // assertion in src/lib/gallery-items.test.ts ("carries no field the
+    // anonymous projection withholds") is what actually pins the mapped
+    // shape; the `JSON.stringify` scan below is what is left to check HERE,
+    // and mutation-tested real: widening MEDIA_ANONYMOUS_SELECT's
+    // `advertisingDisclosure` AND bypassing `toGalleryItem`'s own narrowing
+    // (spreading the raw row onto the result) together made it fail on
+    // "Secret Brand Ltd"; neither mutation alone did, which is exactly what
+    // "the query is narrow, and the mapping is independently narrow" means.
+    const serialised = JSON.stringify(item);
+    expect(serialised).not.toContain("Secret Brand");
+    expect(serialised).not.toContain("secret-brand");
+    expect(serialised).not.toContain("999900");
+    expect(serialised).not.toContain("PAYMENT");
+  });
+
+  it("K3: is null when benefitReceived is false, even though a disclosure row exists", async () => {
+    await seedMedia(prisma, {
+      id: "item-no-benefit",
+      userId: UPLOADER,
+      createdAt: new Date("2026-03-09T01:00:00.000Z"),
+    });
+    await prisma.mediaAdvertisingDisclosure.create({
+      data: { mediaId: "item-no-benefit", benefitReceived: false },
+    });
+
+    const item = await getPublicMediaItem("pv-item-no-benefit");
+    expect(item).not.toBeNull();
+    expect(item?.advertisingLabel).toBeNull();
+  });
+
+  it("K3: is null when there is no disclosure row at all — the ordinary case", async () => {
+    await seedMedia(prisma, {
+      id: "item-no-disclosure-row",
+      userId: UPLOADER,
+      createdAt: new Date("2026-03-09T01:30:00.000Z"),
+    });
+
+    const item = await getPublicMediaItem("pv-item-no-disclosure-row");
+    expect(item).not.toBeNull();
+    expect(item?.advertisingLabel).toBeNull();
+  });
+});
+
+/**
  * K5, at the query layer specifically — not only at the mapped output.
  *
  * Pre-review mutation check (swap `select: MEDIA_ANONYMOUS_SELECT` for

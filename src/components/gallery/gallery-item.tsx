@@ -1,4 +1,5 @@
 import {
+  GALLERY_ADVERTISING_LABEL_CLASS,
   GALLERY_CAPTION_CLASS,
   GALLERY_TAG_CLASS,
   GALLERY_TAG_LIST_CLASS,
@@ -50,6 +51,48 @@ import type { GalleryItem } from "@/lib/gallery-items";
  * same guarantee `GalleryItemTags` already has, for the same reason:
  * nothing on this path uses `dangerouslySetInnerHTML`.
  */
+/**
+ * The advertising-disclosure label (ugcportal-e0jv K1/K3/K4, part B of
+ * ugcportal-qnq9.1): the exact canonical string
+ * (`PERMITTED_ADVERTISING_LABELS` in src/lib/advertising-disclosure.ts) a
+ * labelled, published item carries, rendered FIRST — ahead of
+ * `GalleryItemCaption`/`GalleryItemTags` in every caller's own JSX order
+ * (gallery.tsx's tile, src/components/portfolio/portfolio-tile.tsx,
+ * src/app/media/[previewId]/page.tsx) — because Forbrukertilsynet's rule is
+ * that the label comes first and is visible before anything else about the
+ * item (docs/ugc-research.md §3.2).
+ *
+ * RENDERS NOTHING when `item.advertisingLabel` is `null` (K3: no benefit, or
+ * a benefit declared but not (yet) labelled) — the identical "absence is
+ * silence, not a placeholder" rule `GalleryItemCaption`/`GalleryItemTags`
+ * already follow, for the same reason: an item with no benefit must show NO
+ * label at all, because a label on honest content is itself misleading.
+ *
+ * A SIBLING, deliberately not rendered inside gallery.tsx's own tile
+ * `<button>` (the lightbox-activating control) — see that file's own
+ * comment on `GalleryItemCaption`/`GalleryItemTags` for why: a button's
+ * `aria-label` REPLACES its contents for assistive technology, so content
+ * placed inside it is visible and simultaneously unreadable by a screen
+ * reader. A compliance disclosure is exactly the one piece of text here
+ * that must NOT be silent for a screen-reader user, so it is announced on
+ * its own, as ordinary sibling content, the same as the caption and the
+ * tags are.
+ *
+ * Plain text, nothing else — `item.advertisingLabel` is never arbitrary
+ * input by the time it reaches here (`toAdvertisingLabel`,
+ * src/lib/gallery-items.ts, re-validates it against the closed allowlist on
+ * every read), but React escapes it regardless, the same guarantee every
+ * other text field on this component carries.
+ */
+export function GalleryItemAdvertisingLabel({ item }: { item: GalleryItem }) {
+  if (item.advertisingLabel === null) return null;
+  return (
+    <p className={GALLERY_ADVERTISING_LABEL_CLASS} data-gallery-advertising-label={item.id}>
+      {item.advertisingLabel}
+    </p>
+  );
+}
+
 export function GalleryItemCaption({ item }: { item: GalleryItem }) {
   if (item.caption === "") return null;
   return (

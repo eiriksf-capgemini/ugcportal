@@ -58,12 +58,23 @@ vi.mock("@/lib/prisma", () => ({
   },
 }));
 
-vi.mock("@/lib/s3", () => ({
-  getS3Client: () => ({ send: s3SendMock }),
-  getBucketName: () => "test-bucket",
-}));
+// The client and the bucket are stubbed; everything else in @/lib/s3 is the
+// REAL implementation, deliberately. `sendWithTransportClassification` and
+// `classifyTransportFailure` are the code under test for ugcportal-98rb K1 —
+// stubbing them would leave these tests asserting against a hand-written
+// idea of what counts as a transport failure rather than against the one the
+// route actually runs.
+vi.mock("@/lib/s3", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/s3")>();
+  return {
+    ...actual,
+    getS3Client: () => ({ send: s3SendMock }),
+    getBucketName: () => "test-bucket",
+  };
+});
 
-const { GET } = await import("@/app/api/media/preview/[previewId]/route");
+const { GET, PREVIEW_STORAGE_RETRY_AFTER_SECONDS, resetPreviewStorageUnreachableLogThrottle } =
+  await import("@/app/api/media/preview/[previewId]/route");
 // From @/lib/media, matching the route. Importing them from @/lib/watermark
 // here would work — it re-exports both — but it would also mean this suite
 // stops failing if the route quietly went back to the heavy import, since the
@@ -251,6 +262,10 @@ function getObjectKeys(): string[] {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Module-level throttle state: without this, the second and every later
+  // test that triggers the storage-unreachable line would be asserting
+  // against a line the throttle correctly swallowed.
+  resetPreviewStorageUnreachableLogThrottle();
   authMock.mockResolvedValue(null);
   mediaFindFirstMock.mockImplementation(
     async ({
@@ -728,5 +743,195 @@ describe("storage failures", () => {
     consoleError.mockRestore();
 
     expect(response.status).toBe(500);
+  });
+});
+
+/**
+ * ugcportal-98rb K1: a storage outage is answered 503, and is told apart
+ * from a response the backend actually sent (AccessDenied and friends,
+ * which keep their 500 in the block above).
+ *
+ * The errors below are built as the SDK builds them, and every one of them
+ * is run through the REAL `classifyTransportFailure` (see the vi.mock at the
+ * top of this file, which spreads the actual module). `$metadata.attempts`
+ * is set to 3 — the SDK's own default `maxAttempts` — because that is what
+ * the fallback branch of the classifier keys on to separate a retried
+ * transport failure from a one-shot local one.
+ */
+describe("ugcportal-98rb K1: object storage unreachable", () => {
+  const TRANSPORT_FAILURES: [string, Record<string, unknown>][] = [
+    ["ECONNRESET", { code: "ECONNRESET", $metadata: { attempts: 3 } }],
+    ["ECONNREFUSED", { code: "ECONNREFUSED", $metadata: { attempts: 3 } }],
+    ["ENOTFOUND", { code: "ENOTFOUND", $metadata: { attempts: 3 } }],
+    ["ETIMEDOUT", { code: "ETIMEDOUT", $metadata: { attempts: 3 } }],
+    // The SDK's own name for a request that never got an answer in time; it
+    // carries no Node `code` at all.
+    ["TimeoutError", { name: "TimeoutError", $metadata: { attempts: 3 } }],
+    // The shape with neither a recognised code nor the SDK's name: $metadata
+    // present, no httpStatusCode (so no response was ever received), and
+    // more than one attempt (so the SDK's retry middleware treated it as
+    // transient).
+    ["$metadata without httpStatusCode", { $metadata: { attempts: 3 } }],
+  ];
+
+  function transportError(extra: Record<string, unknown>): Error {
+    return Object.assign(new Error("socket hang up"), extra);
+  }
+
+  it.each(TRANSPORT_FAILURES)(
+    "answers 503 with no-store and a retry hint on %s",
+    async (_label, extra) => {
+      const consoleError = vi
+        .spyOn(console, "error")
+        .mockImplementation(() => {});
+      s3SendMock.mockRejectedValue(transportError(extra));
+
+      const response = await call(PUBLISHED.previewId as string);
+      const observable = await snapshot(response);
+      consoleError.mockRestore();
+
+      expect(response.status).toBe(503);
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(response.headers.get("Retry-After")).toBe(
+        String(PREVIEW_STORAGE_RETRY_AFTER_SECONDS),
+      );
+      expect(JSON.parse(observable.body)).toEqual({
+        error:
+          "Object storage is temporarily unavailable. Please try again shortly.",
+        reason: "object_storage_unavailable",
+      });
+      // Same discipline as the 500: the key and the bucket never travel.
+      const wire = `${observable.headers}\n${observable.body}`;
+      expect(wire).not.toContain(PREVIEW_KEY_PREFIX);
+      expect(wire).not.toContain(OWNER_ID);
+      expect(wire).not.toContain("test-bucket");
+    },
+  );
+
+  it.each(TRANSPORT_FAILURES)(
+    "logs one structured line naming the transport code and the attempt count on %s",
+    async (label, extra) => {
+      const consoleError = vi
+        .spyOn(console, "error")
+        .mockImplementation(() => {});
+      s3SendMock.mockRejectedValue(transportError(extra));
+
+      await call(PUBLISHED.previewId as string);
+      // Copied out BEFORE restoring: vitest's mockRestore also resets the
+      // spy's recorded calls, so asserting after it would be asserting
+      // against an empty history that can never fail.
+      const calls = [...consoleError.mock.calls];
+      consoleError.mockRestore();
+
+      expect(calls).toHaveLength(1);
+      const [message, fields] = calls[0] as [
+        string,
+        Record<string, unknown>,
+      ];
+      expect(message).toBe("[media] object storage unreachable");
+      expect(fields).toMatchObject({
+        operation: "preview-fetch",
+        // `$metadata without httpStatusCode` has no Node code to report, so
+        // the classifier says so in as many words rather than inventing one.
+        code: label === "$metadata without httpStatusCode" ? "unknown" : label,
+        attempts: 3,
+        message: "socket hang up",
+      });
+      // The error object itself, so console.error has something to print a
+      // stack from — an outage with no stack is a harder one to debug.
+      expect(fields.cause).toBeInstanceOf(Error);
+    },
+  );
+
+  it("still answers 500, not 503, when the backend sent a response", async () => {
+    // The pair that makes the two provably distinguishable rather than
+    // merged: AccessDenied is a reachable endpoint refusing the request.
+    // It carries an httpStatusCode, which is exactly what
+    // classifyTransportFailure checks first.
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
+    s3SendMock.mockRejectedValue(
+      Object.assign(new Error("Access Denied"), {
+        name: "AccessDenied",
+        $metadata: { httpStatusCode: 403, attempts: 1 },
+      }),
+    );
+
+    const response = await call(PUBLISHED.previewId as string);
+    const calls = [...consoleError.mock.calls];
+    consoleError.mockRestore();
+
+    expect(response.status).toBe(500);
+    expect(response.headers.get("Retry-After")).toBeNull();
+    expect(calls).toContainEqual([
+      "[media] failed to fetch preview object",
+      expect.any(Error),
+    ]);
+  });
+
+  it("still answers 500 for a reset that arrived after the response did", async () => {
+    // A connection reset while reading an already-received body keeps its
+    // ECONNRESET code AND has httpStatusCode set, because response bytes
+    // did arrive. The backend was plainly reachable, so this is not the
+    // outage case — see classifyTransportFailure's own doc comment.
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
+    s3SendMock.mockRejectedValue(
+      transportError({
+        code: "ECONNRESET",
+        $metadata: { httpStatusCode: 200, attempts: 1 },
+      }),
+    );
+
+    const response = await call(PUBLISHED.previewId as string);
+    consoleError.mockRestore();
+
+    expect(response.status).toBe(500);
+  });
+
+  it("does not answer 503 for an object that is merely missing", async () => {
+    // NoSuchKey must keep reaching the 404 path, which is what makes an
+    // outage distinguishable from a deleted object in BOTH directions.
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
+    s3SendMock.mockRejectedValue(
+      Object.assign(new Error("gone"), {
+        name: "NoSuchKey",
+        $metadata: { httpStatusCode: 404, attempts: 1 },
+      }),
+    );
+
+    const response = await call(PUBLISHED.previewId as string);
+    consoleError.mockRestore();
+
+    expect(response.status).toBe(404);
+  });
+
+  it("throttles the line rather than printing one per failing tile", async () => {
+    // A gallery view is one request per image, so an outage would otherwise
+    // put a line per <img> in the log for the one thing already true of all
+    // of them. Three requests, one detailed line, and the suppressed count
+    // folded into whatever is logged next.
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
+    s3SendMock.mockRejectedValue(
+      transportError({ code: "ECONNREFUSED", $metadata: { attempts: 3 } }),
+    );
+
+    const statuses = [];
+    for (let i = 0; i < 3; i += 1) {
+      statuses.push((await call(PUBLISHED.previewId as string)).status);
+    }
+    const calls = [...consoleError.mock.calls];
+    consoleError.mockRestore();
+
+    // Every request still gets the deliberate 503 — the throttle is about
+    // the log, never about the answer.
+    expect(statuses).toEqual([503, 503, 503]);
+    expect(calls).toHaveLength(1);
   });
 });

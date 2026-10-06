@@ -44,6 +44,10 @@ function item(overrides: Partial<GalleryItem> = {}): GalleryItem {
     altText: "",
     caption: "",
     tags: [],
+    // null by default — no disclosure row, the ordinary case for every
+    // existing fixture here (ugcportal-e0jv). Tests that care about a
+    // labelled benefit pass their own.
+    advertisingLabel: null,
     ...overrides,
   };
 }
@@ -58,6 +62,7 @@ describe("toGalleryItem", () => {
       altText: "",
       caption: "",
       tags: [],
+      advertisingLabel: null,
     });
   });
 
@@ -77,6 +82,7 @@ describe("toGalleryItem", () => {
 
     expect(mapped).not.toBeNull();
     expect(Object.keys(mapped as GalleryItem).sort()).toEqual([
+      "advertisingLabel",
       "altText",
       "caption",
       "id",
@@ -87,6 +93,98 @@ describe("toGalleryItem", () => {
     ]);
     expect(JSON.stringify(mapped)).not.toContain("user-7");
     expect(JSON.stringify(mapped)).not.toContain("previews/");
+  });
+
+  describe("advertisingLabel (ugcportal-e0jv)", () => {
+    it("carries a permitted label through unchanged", () => {
+      expect(
+        toGalleryItem({
+          ...ROW,
+          advertisingDisclosure: { label: "Advertisement / Reklame" },
+        })?.advertisingLabel,
+      ).toBe("Advertisement / Reklame");
+    });
+
+    it.each([
+      "Advertisement / Reklame",
+      "Advertisement / Annonse",
+      "Reklame",
+      "Annonse",
+    ])("carries the permitted label %s through unchanged", (label) => {
+      expect(
+        toGalleryItem({ ...ROW, advertisingDisclosure: { label } })
+          ?.advertisingLabel,
+      ).toBe(label);
+    });
+
+    it("is null when there is no disclosure row at all (K3)", () => {
+      expect(
+        toGalleryItem({ ...ROW, advertisingDisclosure: null })
+          ?.advertisingLabel,
+      ).toBeNull();
+    });
+
+    it("is null when there is no advertisingDisclosure field at all — every row before this bead", () => {
+      expect(toGalleryItem(ROW)?.advertisingLabel).toBeNull();
+    });
+
+    it("is null when the disclosure row's label is null — benefitReceived false (K3)", () => {
+      expect(
+        toGalleryItem({ ...ROW, advertisingDisclosure: { label: null } })
+          ?.advertisingLabel,
+      ).toBeNull();
+    });
+
+    it("is null for a near-miss value that is not exactly a permitted label — never trusts a row the validator did not write (K5 read-path re-check)", () => {
+      expect(
+        toGalleryItem({
+          ...ROW,
+          advertisingDisclosure: { label: "reklame" },
+        })?.advertisingLabel,
+      ).toBeNull();
+      expect(
+        toGalleryItem({
+          ...ROW,
+          advertisingDisclosure: { label: "Sponset" },
+        })?.advertisingLabel,
+      ).toBeNull();
+      expect(
+        toGalleryItem({
+          ...ROW,
+          advertisingDisclosure: { label: "Advertisement" },
+        })?.advertisingLabel,
+      ).toBeNull();
+    });
+
+    it("is null for malformed JSON shapes, rather than throwing", () => {
+      expect(
+        toGalleryItem({ ...ROW, advertisingDisclosure: "Reklame" })
+          ?.advertisingLabel,
+      ).toBeNull();
+      expect(
+        toGalleryItem({ ...ROW, advertisingDisclosure: { label: 42 } })
+          ?.advertisingLabel,
+      ).toBeNull();
+      expect(
+        toGalleryItem({ ...ROW, advertisingDisclosure: {} })
+          ?.advertisingLabel,
+      ).toBeNull();
+    });
+
+    it("never exposes benefitReceived or the brand even if a malformed row carries them alongside a valid label", () => {
+      const mapped = toGalleryItem({
+        ...ROW,
+        advertisingDisclosure: {
+          label: "Reklame",
+          benefitReceived: true,
+          benefitKind: "PAYMENT",
+          benefitSource: { slug: "acme", name: "Acme" },
+        },
+      });
+      expect(mapped?.advertisingLabel).toBe("Reklame");
+      expect(JSON.stringify(mapped)).not.toContain("benefitReceived");
+      expect(JSON.stringify(mapped)).not.toContain("Acme");
+    });
   });
 
   describe("kind (ugcportal-dzz)", () => {

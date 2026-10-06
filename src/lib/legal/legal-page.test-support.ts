@@ -17,9 +17,15 @@ import { type LegalPage, legalReadiness } from "@/lib/legal/publishable";
 /**
  * Shared test support for the legal pages (ugcportal-qnq9.4; one helper
  * rather than two copies, PR #90 round 2). Not collected by vitest (the
- * include glob wants `.test.` or `.spec.`) and not scanned as shipped UI by
- * src/lib/design/scan-source.ts (`isTestFile` wants the same) — it only
- * ever runs when a test imports it.
+ * include glob wants `.test.` or `.spec.`), the same reason
+ * src/components/gallery/gallery.test-support.tsx gives for its own name.
+ *
+ * It IS scanned as shipped UI by src/lib/design/scan-source.ts: `isTestFile`
+ * wants a `.test.`/`.spec.` segment, which "legal-page.test-support.ts" does
+ * not have (ugcportal-qnq9.15 item 3 — an earlier version of this comment
+ * claimed the opposite). That is harmless today — this file contains no raw
+ * hex literal and no dual-meaning token for those scanners to flag — but it
+ * is not exempt, and a future scanner should not be told otherwise.
  *
  * `textContent` and `describeLegalPageContract` need a DOM: put
  * `// @vitest-environment jsdom` at the top of any test file that uses them.
@@ -33,6 +39,23 @@ export const FILLED_LEGAL_ENV: Record<LegalContactVar, string> = {
   LEGAL_CONTACT_EMAIL: "kari@example.com",
   LEGAL_HOSTING_PROVIDER: "Example Hosting AS, Norway",
   LEGAL_STORAGE_PROVIDER: "Example Objects GmbH, Germany",
+};
+
+/**
+ * A fully configured deployment whose values do NOT read like env.example's
+ * own illustrative text (ugcportal-qnq9.15 item 2): FILLED_LEGAL_ENV above
+ * deliberately reuses three of env.example's own sample strings — "Example
+ * Hosting AS, Norway", "Example Objects GmbH, Germany", an
+ * "...@example.com" address — which is exactly what
+ * `suspiciousLegalValueWarning` (src/lib/legal/contact.ts) exists to flag.
+ * Use this one, not FILLED_LEGAL_ENV, wherever a test's point is "nothing
+ * here should warn at all".
+ */
+export const PLAUSIBLE_LEGAL_ENV: Record<LegalContactVar, string> = {
+  LEGAL_CONTROLLER_NAME: "Kari Nordmann",
+  LEGAL_CONTACT_EMAIL: "kari@nordmann-foto.no",
+  LEGAL_HOSTING_PROVIDER: "Nordlys Hosting AS, Norway",
+  LEGAL_STORAGE_PROVIDER: "Nordlys Objects AS, Norway",
 };
 
 /**

@@ -5,7 +5,13 @@ import { validateOriginalName } from "@/lib/media";
 import { requireOwnedMedia, toOwnerMedia } from "@/lib/media-access";
 import { prisma } from "@/lib/prisma";
 import { readJsonBody } from "@/lib/request-body";
-import { getBucketName, getS3Client } from "@/lib/s3";
+import {
+  ObjectStorageUnreachableError,
+  getBucketName,
+  getS3Client,
+  objectStorageUnreachableLogFields,
+  sendWithTransportClassification,
+} from "@/lib/s3";
 
 // App Router hands dynamic segments in as a Promise (Next 16).
 type RouteContext = { params: Promise<{ id: string }> };
@@ -47,7 +53,21 @@ function parseOriginalName(body: unknown): NameResult {
  * getS3Client() and getBucketName() both go through requireEnv() and throw
  * synchronously on a missing variable, so a promise-level catch would let a
  * misconfigured environment turn an already-committed delete into a 500 —
- * and lose the orphan log, the only record of the leaked key.
+ * and lose the orphan log, the only record of the leaked key. That still
+ * holds with `sendWithTransportClassification` in between: it invokes the
+ * callback inside its own try, so a synchronous throw from either helper
+ * arrives here as a rejection and is caught the same way.
+ *
+ * ugcportal-98rb K3 changed the LOG here and deliberately nothing else. The
+ * response stays 204 whatever happens, because the row is already gone
+ * before storage is touched — there is nothing for a 503 to invite the
+ * caller to retry. Pinned by the pair of tests in the
+ * "object storage unreachable (ugcportal-98rb K3)" describe block, which
+ * differ only in the class of error the SDK throws and assert the same 204
+ * across it. What the two branches buy is that an operator reading
+ * these lines during an outage can see that the orphans are orphans because
+ * the bucket was unreachable, not because the keys or the credentials are
+ * wrong.
  */
 async function deleteObjectBestEffort(
   mediaId: string,
@@ -55,10 +75,34 @@ async function deleteObjectBestEffort(
   role: string,
 ): Promise<void> {
   try {
-    await getS3Client().send(
-      new DeleteObjectCommand({ Bucket: getBucketName(), Key: objectKey }),
+    await sendWithTransportClassification("media-delete", () =>
+      getS3Client().send(
+        new DeleteObjectCommand({ Bucket: getBucketName(), Key: objectKey }),
+      ),
     );
   } catch (cause: unknown) {
+    if (cause instanceof ObjectStorageUnreachableError) {
+      // Its own line, same 204 (ugcportal-98rb K3). Deliberately NOT
+      // throttled, unlike the preview route's storage-unreachable line: each
+      // of these names a DIFFERENT orphaned key, and the row that also held
+      // that key was deleted before this ran, so the line is the only
+      // remaining record of it (the same point this function's own doc
+      // comment above makes, and the same reason POST /api/media leaves its
+      // per-key cleanup line unthrottled). A throttle here would trade a
+      // log-volume problem this line does not have — at most two per delete,
+      // driven by one human action — for losing the one piece of information
+      // it exists to preserve.
+      console.error(
+        "[media] object storage unreachable; object left behind after delete",
+        {
+          mediaId,
+          key: objectKey,
+          role,
+          ...objectStorageUnreachableLogFields(cause),
+        },
+      );
+      return;
+    }
     // Logged, not surfaced: the delete the caller asked for did happen.
     console.error("[media] failed to remove object after delete", {
       mediaId,
