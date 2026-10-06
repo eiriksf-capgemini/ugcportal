@@ -754,7 +754,7 @@ describe("readJsonBody — size and idle bounds", () => {
       void pending.then(settled);
 
       await vi.advanceTimersByTimeAsync(JSON_IDLE_MS - 1);
-      // Still waiting one millisecond before the budget: the answer is on the
+      // Unsettled one millisecond before the budget: the answer is on the
       // timeout, not merely eventually.
       expect(settled).not.toHaveBeenCalled();
 
@@ -803,10 +803,10 @@ describe("readJsonBody — size and idle bounds", () => {
   });
 
   it("answers 408 without waiting for the body's own teardown (K1)", async () => {
-    // The teardown bug PR #149 fixed, on this reader: cancelling a live
-    // request body returns a promise that settles when the client
-    // disconnects, so awaiting it would make the 408 wait for exactly the
-    // client that is refusing to go away.
+    // The teardown shape measured on a real socket (ugcportal-dvb):
+    // cancelling a live request body returns a promise that settles when the
+    // client disconnects, so awaiting it would make the 408 wait for exactly
+    // the client that is refusing to go away.
     vi.useFakeTimers();
     try {
       const body = silentAfter(['{"a":'], cancelThatNeverSettles);
@@ -828,8 +828,9 @@ describe("readJsonBody — size and idle bounds", () => {
     // An idle timeout, not a deadline. Each chunk lands one millisecond
     // inside the budget and the body takes four times the budget in total,
     // so a pass here means the timer is genuinely reset per chunk rather
-    // than the whole read finishing inside one window. Virtual time only —
-    // a loaded test machine cannot change the outcome.
+    // than the whole read finishing inside one window. `vi.useFakeTimers`
+    // below means nothing here reads the real clock, so a loaded test
+    // machine cannot change the outcome.
     vi.useFakeTimers();
     try {
       const pieces = ['{"originalNa', 'me":"ph', 'oto.p', 'ng"}'];
@@ -850,7 +851,7 @@ describe("readJsonBody — size and idle bounds", () => {
   });
 
   it("still answers 413 from Content-Length without touching the body", async () => {
-    // A body that would never settle a read, so a result at all proves the
+    // `silentAfter([])` never settles a read, so a result at all proves the
     // early-out answered without one.
     const request = jsonRequest(silentAfter([]), {
       "content-length": String(LIMIT + 1),
@@ -863,8 +864,8 @@ describe("readJsonBody — size and idle bounds", () => {
       status: 413,
       error: "Request body too large",
     });
-    // Still an early-out: the stream was never even locked, so no guard was
-    // armed and nothing was waited for.
+    // The early-out is unchanged: the stream is not even locked, so no guard
+    // was armed and nothing was waited for.
     expect(request.bodyUsed).toBe(false);
     expect(request.body?.locked).toBe(false);
   });
@@ -885,11 +886,12 @@ describe("readJsonBody — size and idle bounds", () => {
   });
 
   it("answers 413 without waiting for the body's own teardown", async () => {
-    // Measured at ~61 ms with the socket held before this change, because
-    // the awaited cancel was on the raw request body. The read now goes
-    // through the guard, whose cancel forwards to that same source — so an
-    // awaited cancel here would newly block on a client that has no reason
-    // to disconnect. Pinned by a source whose teardown never settles.
+    // This answered promptly with the socket held before the guard existed,
+    // because the awaited cancel was on the raw request body (the figure is
+    // on ugcportal-8hsf). The read now goes through the guard, whose cancel
+    // forwards to that same source — so an awaited cancel here would newly
+    // block on a client that has no reason to disconnect. Pinned by a source
+    // whose teardown never settles.
     const cancelled = vi.fn(cancelThatNeverSettles);
     const oversize = silentAfter(["x".repeat(LIMIT + 1)], cancelled);
 
@@ -905,10 +907,14 @@ describe("readJsonBody — size and idle bounds", () => {
     expect(cancelled).toHaveBeenCalledTimes(1);
   });
 
-  it("reports a truncated body as 400, not as a stall", async () => {
+  it("reports a reset connection as 400, not as a stall", async () => {
+    // The payload is valid JSON on purpose: a body that merely ended here
+    // would parse and answer `ok`, so only the stream's error can produce
+    // the 400 below. With an unparseable payload this assertion would hold
+    // whether or not the reset was noticed at all.
     const broken = new ReadableStream<Uint8Array>({
       start(controller) {
-        controller.enqueue(new TextEncoder().encode('{"a":'));
+        controller.enqueue(new TextEncoder().encode('{"a":1}'));
         controller.error(new Error("connection reset"));
       },
     });
@@ -976,13 +982,16 @@ function stripComments(source: string): string {
   return out;
 }
 
-/** Each top-level `function` in the module, keyed by name, as source text. */
-function topLevelFunctions(code: string): Map<string, string> {
-  const blocks = new Map<string, string>();
+/** Each top-level `function` in the module, with the span it occupies. */
+function topLevelFunctions(
+  code: string,
+): Array<{ name: string; start: number; end: number; text: string }> {
+  const blocks = [];
   const heading = /^(?:export )?(?:async )?function ([A-Za-z_$][\w$]*)/gm;
   for (let m = heading.exec(code); m !== null; m = heading.exec(code)) {
-    const end = code.indexOf("\n}\n", m.index);
-    blocks.set(m[1], code.slice(m.index, end < 0 ? code.length : end + 3));
+    const close = code.indexOf("\n}\n", m.index);
+    const end = close < 0 ? code.length : close + 3;
+    blocks.push({ name: m[1], start: m.index, end, text: code.slice(m.index, end) });
   }
   return blocks;
 }
@@ -1009,16 +1018,30 @@ function tracesToStallGuard(block: string, name: string, depth = 0): boolean {
   return via !== null && tracesToStallGuard(block, via[1], depth + 1);
 }
 
-/** Every call in the module that pulls bytes off a body, with its verdict. */
+/**
+ * Every call in the module that pulls bytes off a body, with its verdict.
+ *
+ * Scans the whole file and then asks which function each hit fell inside,
+ * rather than scanning function bodies and ignoring the gaps. A read placed
+ * at module scope, or in an arrow function this does not recognise as a
+ * block, is reported under `module:` and counted as unguarded — the one
+ * thing a guard against omission must not do is quietly skip the code it
+ * cannot classify.
+ */
 function bodyReadSites(source: string): Map<string, boolean> {
   const code = stripComments(source);
+  const blocks = topLevelFunctions(code);
   const sites = new Map<string, boolean>();
-  for (const [fn, block] of topLevelFunctions(code)) {
-    const consumers =
-      /([A-Za-z_$][\w$.]*)\.(getReader|read|formData|json|text|arrayBuffer|bytes|blob)\(/g;
-    for (let m = consumers.exec(block); m !== null; m = consumers.exec(block)) {
-      sites.set(`${fn}:${m[1]}.${m[2]}`, tracesToStallGuard(block, m[1]));
-    }
+  const consumers =
+    /([A-Za-z_$][\w$.]*)\.(getReader|read|formData|json|text|arrayBuffer|bytes|blob)\(/g;
+  for (let m = consumers.exec(code); m !== null; m = consumers.exec(code)) {
+    const owner = blocks.find(
+      (block) => m.index >= block.start && m.index < block.end,
+    );
+    sites.set(
+      `${owner ? owner.name : "module"}:${m[1]}.${m[2]}`,
+      owner !== undefined && tracesToStallGuard(owner.text, m[1]),
+    );
   }
   return sites;
 }

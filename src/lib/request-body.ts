@@ -292,14 +292,16 @@ export async function readJsonBody(
         // REQUESTED, NOT AWAITED, for the reason stallGuarded's own teardown
         // is not awaited (ugcportal-dvb): the promise `cancel()` returns
         // tracks the *source* body's teardown, which for a live socket does
-        // not settle until the client disconnects. Awaiting it here was
-        // measured answering a held-socket 413 in ~61 ms while the reader was
-        // the raw request body, but this reader is now the guard's, whose
-        // cancel forwards to that same source — so awaiting it would make the
-        // 413 wait on a client that has no reason to hang up. Rejections are
-        // dropped rather than caught below: the cap has been decided, and
-        // letting a failed teardown rewrite a correct 413 into a 400 would
-        // report the wrong thing.
+        // not settle until the client disconnects. Awaiting it answered this
+        // 413 promptly while the reader was the raw request body, whose own
+        // cancel does settle (measured on ugcportal-8hsf), but this reader is
+        // now the guard's, whose cancel forwards to that same source — so
+        // awaiting it would make the 413 wait on a client that has no reason
+        // to hang up. Pinned by request-body.test.ts "answers 413 without
+        // waiting for the body's own teardown". Rejections are dropped rather
+        // than caught below: the cap has been decided, and letting a failed
+        // teardown rewrite a correct 413 into a 400 would report the wrong
+        // thing.
         void reader.cancel().catch(() => {});
         return { ok: false, status: 413, error: "Request body too large" };
       }
