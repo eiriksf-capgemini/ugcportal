@@ -342,13 +342,17 @@ describe("K1 — the gallery renders published previews to an anonymous visitor"
    * Gallery-only render cannot see the header's copy at all, which is
    * exactly how round 1's fix shipped a new instance of the round-1 bug
    * with every Gallery-only test still green.
+   *
+   * `<h2>`, not `<h1>` (ugcportal-qqnt.1): the hero now supplies the one
+   * real `<h1>` for the whole page (src/components/home/hero.tsx), so this
+   * heading steps down to a section-level `<h2>`.
    */
   it("gives the gallery its own heading, not site-wide copy", async () => {
     await seedMedia({ id: "a", createdAt: new Date("2026-03-01T00:00:00Z") });
 
     const markup = await renderGallery();
 
-    expect(markup).toMatch(/<h1[^>]*>Gallery<\/h1>/);
+    expect(markup).toMatch(/<h2[^>]*>Gallery<\/h2>/);
   });
 
   it("shows an empty state, not a broken grid, when nothing is published", async () => {

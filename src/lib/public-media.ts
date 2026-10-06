@@ -11,7 +11,10 @@ import {
   publicMediaListingPath,
   type PublicMediaListingParams,
 } from "@/lib/routes";
-import { createThrottledLog } from "@/lib/throttled-log";
+import {
+  DEFAULT_THROTTLE_INTERVAL_MS,
+  createThrottledLog,
+} from "@/lib/throttled-log";
 
 /**
  * The public feed's scope and select, in ONE place (ugcportal-71y).
@@ -65,7 +68,7 @@ export type PublicMediaResult = MediaListingResult<MediaAnonymousListingSelect>;
  * requests at the very end of a burst can go uncounted if nothing in this
  * window logs again.
  */
-export const LISTING_FAILURE_LOG_INTERVAL_MS = 10_000;
+export const LISTING_FAILURE_LOG_INTERVAL_MS = DEFAULT_THROTTLE_INTERVAL_MS;
 
 /**
  * No `flush` (ugcportal-z3lo K2): unlike `watermark.ts`'s shed-upload

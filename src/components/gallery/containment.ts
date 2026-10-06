@@ -198,6 +198,59 @@ export const GALLERY_TILE_IMAGE_CLASS =
   "h-full w-full object-cover transition-transform duration-300 ease-out motion-safe:group-hover:scale-[1.04] motion-reduce:scale-none motion-reduce:transition-none";
 
 /**
+ * The play affordance on a VIDEO tile (ugcportal-dzz K1/K2's "a visible play
+ * affordance on a VIDEO tile in the grid"), and ONLY that — this bead is
+ * about a video being labelled and marked where it is already drawn, not
+ * about playing one (ugcportal-s8w owns the player, and must not be
+ * pre-empted by a decision made here).
+ *
+ * `pointer-events-none`, because the badge sits inside the tile's own
+ * `<button>` (gallery.tsx) — clicking it must open the lightbox exactly like
+ * clicking anywhere else on the tile, not be swallowed by a decorative span.
+ * `absolute inset-0 flex items-center justify-center` centres it over
+ * whatever the tile shows, the same crop-and-cover frame every tile already
+ * has (see this file's own containment-rule comment above).
+ *
+ * NO ANIMATION, on purpose, not merely by omission: this is a static badge,
+ * so there is nothing for `prefers-reduced-motion` to need reducing in the
+ * first place, unlike `GALLERY_TILE_IMAGE_CLASS`'s hover scale two
+ * declarations up, which has to guard an actual transition. Adding a pulse
+ * or any other motion here would be inventing a NEW thing to gate, not
+ * reusing an existing one — out of scope for a bead whose K1/K2 ask only for
+ * a visible affordance and an accessible name.
+ */
+export const GALLERY_TILE_VIDEO_BADGE_WRAPPER_CLASS =
+  "pointer-events-none absolute inset-0 flex items-center justify-center";
+
+/**
+ * The badge itself: a filled circle in the one solid accent colour this
+ * system has (see button.tsx's own comment on `default`: "the only solid
+ * petrol fill in the system, for the one primary action on a surface").
+ *
+ * `bg-primary`/`text-primary-foreground` are REUSED, not a new pairing —
+ * the exact same two tokens, in the exact same roles, that button.tsx's
+ * `default` variant already fills with and already measures against in
+ * src/lib/design/contrast.ts ("Label of the filled primary action button").
+ * The contrast gate's coverage is per TOKEN, not per component, so this
+ * usage rides the same measurement rather than asking for a second one —
+ * and a play glyph is non-text iconography (3:1), a lower bar than the
+ * 4.5:1 that pairing is already measured against for button TEXT, so it
+ * passes with margin to spare.
+ */
+export const GALLERY_TILE_VIDEO_BADGE_CLASS =
+  "flex size-10 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-md";
+
+/**
+ * The glyph's own size inside the badge, and the optical nudge a play
+ * triangle conventionally gets: a centred equilateral triangle visually
+ * reads slightly left-of-centre (its leading edge is a flat side, its
+ * trailing edge a point), so a small rightward shift is what every other
+ * play button in the wild also applies rather than a defect to fix with a
+ * bigger shape.
+ */
+export const GALLERY_TILE_VIDEO_BADGE_ICON_CLASS = "size-5 translate-x-0.5";
+
+/**
  * The caption under one tile (ugcportal-gwr). Quiet body text — unlike the
  * tag chips below it, a caption is a sentence the uploader wrote, not a
  * label, so it is neither small-caps nor muted to the same degree: it needs
