@@ -31,6 +31,17 @@
  * `next` directly, or a future script that boots the server without going
  * through this wrapper all reproduce the original bug with no hint why --
  * there is no mechanism here that makes this apply repo-wide automatically.
+ * `npm run dev:inspect` is one of those: it reaches `next dev` without this
+ * wrapper, so behind the proxy its sign-in fails the way it did before this
+ * file existed. The next paragraph is why that script exists.
+ *
+ * DEBUGGING (ugcportal-ymp4): `NODE_OPTIONS=--inspect npm run dev` does not
+ * attach to Next, and this wrapper cannot make it. A NODE_OPTIONS inspector
+ * flag reaches every Node process in the chain and the first to start wins
+ * the port; that is `npm`'s own CLI, which is a Node process and has the
+ * port before this file loads. The same applies to `--inspect-brk` and
+ * `--inspect-wait`. Use `npm run dev:inspect`, which puts the flag on the
+ * `next` process itself.
  */
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
