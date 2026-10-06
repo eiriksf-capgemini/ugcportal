@@ -131,8 +131,11 @@ describe("ugcportal-qnq9.3: adding the alcohol fact to an existing database", ()
   it("leaves no other triage question unanswered", async () => {
     // The premise every case below rests on: they attribute the block to
     // `depictsAlcohol`, which only holds while it is the one fact with no
-    // answer. A later migration adding a sixth fact would otherwise make
-    // this file pass for its own reason.
+    // answer. A later migration adding a further triage fact would
+    // otherwise make this file pass for its own reason. Written without a
+    // count on purpose: an ordinal here is a number that goes stale the
+    // next time the registry grows, which is exactly when this comment is
+    // read.
     const listing = await prisma.mediaListing.findUniqueOrThrow({
       where: { id: "listing-1" },
     });

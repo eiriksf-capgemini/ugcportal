@@ -5,6 +5,7 @@ import { RightsLayer } from "@/generated/prisma/enums";
 import {
   CURRENT_CHECKLIST_VERSION,
   TRIAGE_FACTS,
+  type TriageFact,
 } from "@/lib/resale-rights";
 import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db";
 
@@ -485,7 +486,7 @@ describe("authorization", () => {
  * it lists ALL of them.
  *
  * Iterated off the generated RightsLayer enum rather than a hand-written
- * hand-written list of sentences, so adding a layer to schema.prisma fails here
+ * list of sentences, so adding a layer to schema.prisma fails here
  * until it is both registered in TRIAGE_FACTS and therefore rendered.
  * A hand-list would have gone on passing while the screen silently told an
  * admin about a subset of what actually blocks.
@@ -555,6 +556,57 @@ describe("the per-upload triage questions (ugcportal-qn3)", () => {
         `${fact.layer}'s question does not say a yes is final`,
       ).toContain(escapeHtml("A “yes” here is final"));
     }
+  });
+
+  it("marks a question whose discriminant it does not recognise", async () => {
+    // The screen's half of the gate's fail-closed reading. `triageBlocker`
+    // refuses a fact whose `settledBy` is neither literal
+    // (resale-rights.test.ts, "blocks a fact whose discriminant it does not
+    // recognise"); a screen reading `=== "nothing"` would quietly stop
+    // marking that question as final while the gate went on blocking it,
+    // which is an admin told to go and record a clearance that settles
+    // nothing.
+    //
+    // Spliced into the registry the page maps over and restored in a
+    // `finally`, the same way the gate's case does, because `tsc` rejects
+    // such an entry in the committed registry and this is the one input the
+    // two readings disagree about.
+    const registry = TRIAGE_FACTS as TriageFact[];
+    const index = registry.findIndex(
+      (candidate) => candidate.layer === RightsLayer.ALCOHOL,
+    );
+    expect(index).toBeGreaterThanOrEqual(0);
+    const original = registry[index];
+
+    try {
+      registry[index] = {
+        ...original,
+        settledBy: "decide-this-later",
+      } as unknown as TriageFact;
+      const unrecognised = await renderPage();
+      const question = escapeHtml(original.question);
+      const row = unrecognised.slice(unrecognised.indexOf(question));
+      expect(row.slice(0, row.indexOf("</li>"))).toContain(
+        escapeHtml("A “yes” here is final"),
+      );
+
+      // The control: a value the screen does recognise as clearable drops
+      // the note, so the assertion above is about the unrecognised value
+      // rather than about the note being unconditional.
+      registry[index] = {
+        ...original,
+        settledBy: "clearance",
+      } as unknown as TriageFact;
+      const clearable = await renderPage();
+      const clearableRow = clearable.slice(clearable.indexOf(question));
+      expect(clearableRow.slice(0, clearableRow.indexOf("</li>"))).not.toContain(
+        escapeHtml("A “yes” here is final"),
+      );
+    } finally {
+      registry[index] = original;
+    }
+
+    expect(TRIAGE_FACTS[index]).toBe(original);
   });
 
   it("says that leaving one unanswered blocks the sale", async () => {

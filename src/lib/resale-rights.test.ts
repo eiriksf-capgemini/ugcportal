@@ -1021,6 +1021,77 @@ describe("ugcportal-qnq9.3: alcohol as a triage fact", () => {
     expect(fact?.blocker).toBe("alcohol_depicted");
   });
 
+  /**
+   * THE FAIL-CLOSED READING OF `settledBy`, which is the whole reason the
+   * gate asks `!== "clearance"` rather than `=== "nothing"`.
+   *
+   * `tsc` rejects an entry with a missing or unrecognised discriminant
+   * (PR #157 measured both), so no input reachable through the committed
+   * registry can tell the two readings apart — which is precisely why the
+   * difference would otherwise go unguarded, and why review round 1 asked
+   * for this case. The two readings diverge on exactly one input: a fact
+   * whose `settledBy` is neither literal. `!== "clearance"` blocks it;
+   * `=== "nothing"` falls through to the clearance path and sells it on an
+   * admin's signature.
+   *
+   * The only way to put such a fact in front of `triageBlocker` is to put
+   * it in the registry the gate iterates — `TRIAGE_FACTS` is `readonly` in
+   * the type and a plain array at runtime — so the entry is spliced in and
+   * restored in a `finally`, which keeps the rest of this file (and the
+   * generated case table above, built at collection time from the real
+   * registry) looking at the real one.
+   */
+  it("blocks a fact whose discriminant it does not recognise", () => {
+    const registry = TRIAGE_FACTS as TriageFact[];
+    const index = registry.findIndex(
+      (candidate) => candidate.layer === RightsLayer.ALCOHOL,
+    );
+    expect(index).toBeGreaterThanOrEqual(0);
+    const original = registry[index];
+
+    // Present, and cleared on its own layer with a reason by a current
+    // admin: the exact input that sells every `settledBy: "clearance"`
+    // fact in the registry.
+    const upload = withListing({
+      depictsAlcohol: true,
+      layerClearances: [alcoholClearance()],
+    });
+
+    try {
+      registry[index] = {
+        ...original,
+        settledBy: "decide-this-later",
+      } as unknown as TriageFact;
+
+      expect(evaluateSellability(upload, NOW)).toEqual({
+        sellable: false,
+        blocker: "alcohol_depicted",
+      });
+
+      // The control, and the half that makes the assertion above about the
+      // discriminant rather than about the fixture: the SAME spliced entry
+      // with a value the gate does recognise reaches the clearance path and
+      // sells. Without it, a gate rewritten to refuse everything would pass
+      // the case above.
+      registry[index] = {
+        ...original,
+        settledBy: "clearance",
+      } as unknown as TriageFact;
+
+      expect(evaluateSellability(upload, NOW)).toEqual({ sellable: true });
+    } finally {
+      registry[index] = original;
+    }
+
+    // Restored, and asserted rather than assumed: a leaked mutation would
+    // otherwise surface as an unrelated failure somewhere later in the run.
+    expect(TRIAGE_FACTS[index]).toBe(original);
+    expect(evaluateSellability(upload, NOW)).toEqual({
+      sellable: false,
+      blocker: "alcohol_depicted",
+    });
+  });
+
   it("asks about the picture rather than about what was in the glass", () => {
     // §3.1a's actual standard, and the reason the question is phrased the
     // way it is. A question an admin could answer "no, it was juice" would
@@ -1067,7 +1138,7 @@ describe("ugcportal-qn3: the triage-fact mechanism", () => {
   // SellabilityBlocker, a closed union of non-empty literals, so every
   // in-type value passes a `typeof`/length check and an out-of-type one
   // fails `tsc` before any test runs. The claim is carried by `has a
-  // sentence for every triage fact's uncleared blocker` in
+  // sentence for every triage fact's blocker` in
   // src/app/admin/settings/rights/outcomes.test.ts, which indexes
   // BLOCKER_MESSAGES by `fact.blocker` and so fails on a blocker with no
   // wording. It lives there because that is where the wording map is.
