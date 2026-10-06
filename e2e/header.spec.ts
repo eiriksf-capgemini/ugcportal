@@ -29,19 +29,16 @@ for (const [name, viewport] of Object.entries(VIEWPORTS)) {
   test.describe(`header at ${name} (${viewport.width}px)`, () => {
     test.use({ viewport });
 
-    test("K1: wordmark, tagline and navigation are visible with no horizontal scroll", async ({
+    test("K1: wordmark and navigation are visible with no horizontal scroll", async ({
       page,
     }) => {
       await page.goto("/");
 
       await expect(page.getByRole("link", { name: "UGC Portal" })).toBeVisible();
-      await expect(
-        page.getByText("Original photography of food, wine accessories, technology and books."),
-      ).toBeVisible();
 
       // Below md (768px), the nav lives behind the mobile menu toggle - see
       // mobile-nav-toggle.tsx's own comment for why it collapsed rather than
-      // staying inline: at 375px, alongside two sign-in buttons and up to
+      // staying inline: at 375px, alongside the sign-in control and up to
       // two nav links, the row no longer fit without a long email also
       // being present (app-shell.tsx's pre-existing narrow-viewport
       // tuning). "Visible" there means what's rendered without
@@ -118,6 +115,61 @@ test.describe("K2: document language", () => {
   test('<html lang="en">', async ({ page }) => {
     await page.goto("/");
     expect(await page.getAttribute("html", "lang")).toBe("en");
+  });
+});
+
+/**
+ * ugcportal-qqnt.3 K1, exactly as the bead names it: "Given a signed-out
+ * visitor at 1440x900, when the header renders, it is one row no taller
+ * than 64px, the wordmark's computed font-size is larger than the nav
+ * links', and exactly one sign-in control is present."
+ */
+test.describe("ugcportal-qqnt.3 K1: header hierarchy at 1440x900", () => {
+  test.use({ viewport: { width: 1440, height: 900 } });
+
+  test("the header is one row no taller than 64px", async ({ page }) => {
+    await page.goto("/");
+
+    const headerBox = await page.locator("header").boundingBox();
+    expect(headerBox, "header has no box").not.toBeNull();
+    expect(headerBox!.height).toBeLessThanOrEqual(64);
+  });
+
+  test("the wordmark's computed font-size is larger than the nav links'", async ({ page }) => {
+    await page.goto("/");
+
+    const wordmarkSize = await page
+      .getByRole("link", { name: "UGC Portal" })
+      .evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
+    const navLinkSize = await page
+      .getByRole("navigation", { name: "Main navigation" })
+      .getByRole("link", { name: "Gallery" })
+      .evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
+
+    expect(wordmarkSize, `wordmark: ${wordmarkSize}px, nav: ${navLinkSize}px`).toBeGreaterThan(
+      navLinkSize,
+    );
+  });
+
+  test("exactly one control's accessible name starts with 'Sign in'", async ({ page }) => {
+    await page.goto("/");
+
+    const signInControls = await page.getByRole("button", { name: /^Sign in/ }).count();
+    expect(signInControls).toBe(1);
+  });
+
+  /**
+   * K2: "Given the one sign-in control, when activated, both providers
+   * remain reachable" - clicked through here, not completed (there is no
+   * reachable Google/Facebook IdP in this test environment).
+   */
+  test("K2: activating Sign in reveals both provider choices", async ({ page }) => {
+    await page.goto("/");
+
+    await page.getByRole("button", { name: "Sign in" }).click();
+
+    await expect(page.getByRole("button", { name: /Google/i })).toBeVisible();
+    await expect(page.getByRole("button", { name: /Facebook/i })).toBeVisible();
   });
 });
 

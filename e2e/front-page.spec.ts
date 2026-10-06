@@ -106,6 +106,11 @@ test("K1/K2: the hero CTA, the empty-state link and the header's sign-in buttons
   const emptyStateLink = page
     .locator("[data-home-empty-state]")
     .getByRole("link", { name: /portfolio/i });
+
+  // ugcportal-qqnt.3: the header's two provider buttons no longer render
+  // until the single "Sign in" control (K1) is activated - see
+  // src/components/sign-in-menu.tsx.
+  await page.getByRole("button", { name: "Sign in" }).click();
   const headerGoogle = page.getByRole("button", { name: /Google/i });
   const headerFacebook = page.getByRole("button", { name: /Facebook/i });
 

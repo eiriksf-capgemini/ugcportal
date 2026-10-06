@@ -10,18 +10,19 @@ import { describe, expect, it, vi } from "vitest";
  * here, by mutating SITE_TAGLINE to Norwegian prose and finding the
  * import-based version of the K2 assertion below still passed, because it
  * was comparing the mutated constant against itself). Pinning the literal
- * copy here means an edit to SITE_NAME/SITE_TAGLINE/ABOUT_PATH that silently
- * drops English content, reintroduces Norwegian, or points "About" at the
- * wrong route is a test failure named in THIS diff rather than a change
- * this suite cannot see.
+ * copy here means an edit to SITE_NAME/ABOUT_PATH that silently drops
+ * English content, reintroduces Norwegian, or points "About" at the wrong
+ * route is a test failure named in THIS diff rather than a change this
+ * suite cannot see. SITE_TAGLINE no longer renders in the header
+ * (ugcportal-qqnt.3 moved it to the footer - see site-footer.test.tsx) so it
+ * is not pinned here any more either.
  */
 const EXPECTED_SITE_NAME = "UGC Portal";
-const EXPECTED_TAGLINE =
-  "Original photography of food, wine accessories, technology and books.";
 const EXPECTED_ABOUT_PATH = "/about";
 
 /**
- * ugcportal-14k9: the header's wordmark, tagline and navigation.
+ * ugcportal-14k9: the header's wordmark and navigation (one row, no tagline,
+ * since ugcportal-qqnt.3).
  *
  * UploadNavLink and AuthStatus are stubbed out, the same way and for the
  * same reason app-shell.nav.test.tsx stubs them when testing AppShell's own
@@ -29,8 +30,8 @@ const EXPECTED_ABOUT_PATH = "/about";
  * `renderToStaticMarkup` cannot resolve one nested, un-awaited, inside a
  * parent tree it is walking synchronously (confirmed empirically there).
  * This file is about the header's own static structure - the nav, the
- * wordmark, the tagline, the mobile toggle - not about either stub's own
- * gating logic, which each already has its own dedicated test file.
+ * wordmark, the mobile toggle - not about either stub's own gating logic,
+ * which each already has its own dedicated test file.
  */
 vi.mock("@/components/upload-nav-link", () => ({
   UploadNavLink: () => (
@@ -58,7 +59,6 @@ describe("SiteHeader (ugcportal-14k9)", () => {
     // silently dropped out of the markup entirely while another changed,
     // as long as nothing else shifted the overall diff shape.
     expect(markup).toContain(`>${EXPECTED_SITE_NAME}<`);
-    expect(markup).toContain(EXPECTED_TAGLINE);
     expect(markup).toContain(">Gallery<");
     expect(markup).toContain(">About<");
 
@@ -160,13 +160,43 @@ describe("SiteHeader (ugcportal-14k9)", () => {
     expect([...markup.matchAll(/<header\b/g)]).toHaveLength(1);
   });
 
-  it("K3: the tagline renders with a muted, non-heading treatment (not louder than body text)", () => {
+  /**
+   * K1 (ugcportal-qqnt.3): the wordmark's own class list carries a bigger,
+   * display-leaning treatment than the nav links - `font-heading`/`text-lg`,
+   * neither of which HEADER_NAV_LINK_CLASS (the nav links' shared base
+   * class) sets. The wordmark's own `<a>` is the FIRST anchor in the whole
+   * markup (it renders before the main nav), so matching the opening tag of
+   * the first `<a>` in document order reaches it without needing a more
+   * complex extraction.
+   */
+  it("K1: the wordmark carries font-heading and a larger text size than the nav links", () => {
     const markup = renderHeader();
-    const taglineMatch = /<p class="([^"]*)">[^<]*Original photography/.exec(
-      markup,
-    );
+    const firstAnchorMatch = /<a\b([^>]*)>/.exec(markup);
 
-    expect(taglineMatch, "tagline <p> not found").not.toBeNull();
-    expect(taglineMatch?.[1]).toContain("text-muted-foreground");
+    expect(firstAnchorMatch, "no <a> found in the header markup").not.toBeNull();
+    const wordmarkAttrs = firstAnchorMatch?.[1] ?? "";
+    expect(wordmarkAttrs).toContain("font-heading");
+    expect(wordmarkAttrs).toContain("text-lg");
+
+    const navMatch = /<nav aria-label="Main navigation"[^>]*>([\s\S]*?)<\/nav>/.exec(markup);
+    const navLinkMatch = /<a([^>]*)>Gallery<\/a>/.exec(navMatch?.[1] ?? "");
+    expect(navLinkMatch, "Gallery nav link not found").not.toBeNull();
+    const navLinkAttrs = navLinkMatch?.[1] ?? "";
+    expect(navLinkAttrs).not.toContain("font-heading");
+    expect(navLinkAttrs).toContain("text-sm");
+  });
+
+  /** K1: the mockup's 28px petrol brand mark (docs/design/forside.html's `.brand-mark`), decorative. */
+  it("K1: a decorative brand mark renders beside the wordmark", () => {
+    const markup = renderHeader();
+
+    expect(markup).toMatch(/<span aria-hidden="true" class="[^"]*\bbg-primary\b[^"]*"/);
+  });
+
+  /** ugcportal-qqnt.3: the tagline row is gone - SITE_TAGLINE moved to the footer. */
+  it("no longer renders the tagline - SITE_TAGLINE moved to the footer", () => {
+    const markup = renderHeader();
+
+    expect(markup).not.toContain("Original photography");
   });
 });

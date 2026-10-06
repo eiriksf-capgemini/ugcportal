@@ -382,9 +382,15 @@ describe("the assembled shell: AuthStatus and UploadNavLink survive a rejected g
     const homeMarkup = renderToStaticMarkup(homeResult.value);
     expect(homeMarkup).toContain("Sign in to upload");
 
+    // ugcportal-qqnt.3: AuthStatus's signed-out branch now renders a single
+    // "Sign in" SignInMenu trigger - the two provider forms it discloses
+    // (still Google and Facebook, unchanged - see auth-status.test.tsx's
+    // own source-scan test) do not mount until it is actually opened, which
+    // a static `renderToStaticMarkup` of the closed state cannot do; see
+    // src/components/auth-status.test.tsx's own top comment for the fuller
+    // account and the interactive test that does open it.
     const authMarkup = renderToStaticMarkup(authResult.value);
-    expect(authMarkup).toContain("Google");
-    expect(authMarkup).toContain("Facebook");
+    expect(authMarkup).toContain(">Sign in<");
     expect(authMarkup).not.toContain("Sign out");
 
     // UploadNavLink() renders `null` (no `<nav>` at all) for a signed-out

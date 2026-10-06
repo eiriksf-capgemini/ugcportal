@@ -11,7 +11,13 @@ export const SITE_DESCRIPTION =
   "Food, wine and drink, technology and books, photographed.";
 
 /**
- * The header's one-sentence tagline (ugcportal-14k9).
+ * The site's one-sentence tagline (ugcportal-14k9). Originally a second,
+ * fixed-height row in the header, directly below the wordmark/nav row;
+ * ugcportal-qqnt.3 removed that row (K1: the header is one row, brand-first,
+ * not a flat stack of equally-weighted lines) and moved this sentence to the
+ * footer's brand column (src/components/site-footer.tsx) instead of deleting
+ * it — a visitor who scrolls all the way down still gets the same one-line
+ * description of the site, just not repeated a few lines below the hero.
  *
  * Deliberately not SITE_DESCRIPTION itself, and deliberately not reusing its
  * wording: SITE_DESCRIPTION still says "wine and drink", which is
