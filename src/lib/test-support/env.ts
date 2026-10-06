@@ -15,14 +15,12 @@ import { afterEach, beforeEach } from "vitest";
  * already, from the other direction: a gate reading the ambient environment
  * a caller believed it had overridden.
  *
- * Most files that mutate `process.env` for the sign-in policy use this; two
- * deliberately do not. src/lib/sign-in-policy.test.ts injects an `env`
- * object into the functions directly for every other test, except one that
- * sets `ADMIN_BOOTSTRAP_EMAILS` ambiently on purpose, to prove the ambient
- * value gets ignored — the opposite of what this helper is for.
- * src/lib/configured-user-link.test.ts mutates `ALLOWED_SIGNIN_EMAILS`
- * ambiently at nine sites with its own inline try/finally, each restoring
- * before the next; left as its own pattern rather than migrated.
+ * Two files do not use pinEnvironment by design: src/lib/sign-in-policy.test.ts,
+ * whose two process.env-default tests (see its header) set
+ * ADMIN_BOOTSTRAP_EMAILS and ALLOWED_SIGNIN_EMAILS ambiently to assert the
+ * ambient value is honoured; and src/lib/configured-user-link.test.ts, which
+ * sets ALLOWED_SIGNIN_EMAILS at nine sites and deletes it in a finally block
+ * each time.
  */
 
 /**
