@@ -6,20 +6,33 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { UploadForm } from "./upload-form";
 
 /**
- * Keyboard focus through the upload queue's "Try again" control
+ * Keyboard focus through the upload queue's self-unmounting controls
  * (ugcportal-ff2a, the same shape ugcportal-jx4 fixed for the gallery's
  * "Load more" — see gallery.focus.test.tsx's own file header for the fuller
  * account of why jsdom can and cannot distinguish the fixed and broken
  * versions here).
  *
- * `{failure.retryable ? <Button/> : null}` inside Failure
- * (upload-queue-list.tsx) unmounts the very button a retry click just
- * activated — `uploadQueueReducer`'s "retried" case sets `failure: null`,
- * which is what makes `Failure` return null for that row until it settles
- * again. jsdom DOES reproduce a real browser's behaviour here: removing the
- * focused element from the DOM moves focus to `<body>` with no help from
- * this file, confirmed directly the same way gallery.focus.test.tsx confirms
- * it for "Load more".
+ * Four controls share the defect: "Try again", "Cancel", "Remove" and
+ * "Clear" each unmounts (or gets replaced) as a direct result of its own
+ * activation — `{failure.retryable ? <Button/> : null}` inside Failure
+ * (upload-queue-list.tsx) for "Try again", a status change away from
+ * `pending`/`uploading` for "Cancel", and `uploadQueueReducer`'s "dismissed"
+ * case filtering the whole row out of `items` for "Remove"/"Clear" — and
+ * jsdom DOES reproduce a real browser's behaviour here: removing the focused
+ * element from the DOM moves focus to `<body>` with no help from this file,
+ * confirmed directly the same way gallery.focus.test.tsx confirms it for
+ * "Load more".
+ *
+ * "Try again" and "Cancel" land on their own row's status line, since the
+ * row survives either click. "Remove" and "Clear" remove the whole row, so
+ * there is nothing on it left to land on; those land on a neighbouring
+ * row's first control, or the file input when the dismissed row was the
+ * only one in the queue — see `dismiss()` in upload-form.tsx.
+ *
+ * A separate describe block below also covers the per-row `Map` keying
+ * itself: with a single row in the queue, a lookup that ignored `id` and
+ * always took the first entry of each map would be indistinguishable from
+ * the real, id-keyed lookup, since with one row they are the same entry.
  *
  * `@vitest-environment jsdom` and the `createRoot`/`act` mounting pattern,
  * and the fake `XMLHttpRequest`, match upload-form.clock.test.tsx — this
@@ -221,6 +234,43 @@ function tryAgainButtonOrNull(): HTMLButtonElement | null {
   );
 }
 
+/**
+ * The row for one file, found by its (unique, per test) filename — needed
+ * once more than one row is on screen, where `container.querySelector(...)`
+ * alone would silently match whichever row comes first in document order.
+ */
+function rowContaining(filename: string): HTMLLIElement {
+  const row = [...container.querySelectorAll("li")].find((candidate) =>
+    candidate.textContent?.includes(filename),
+  );
+  expect(row, `expected a queue row for ${filename}`).not.toBeUndefined();
+  return row as HTMLLIElement;
+}
+
+function buttonWithTextOrNull(
+  root: ParentNode,
+  text: string,
+): HTMLButtonElement | null {
+  return (
+    [...root.querySelectorAll("button")].find(
+      (candidate) => candidate.textContent === text,
+    ) ?? null
+  );
+}
+
+function buttonWithText(root: ParentNode, text: string): HTMLButtonElement {
+  const button = buttonWithTextOrNull(root, text);
+  expect(button, `expected a "${text}" button`).not.toBeNull();
+  return button as HTMLButtonElement;
+}
+
+/** The row's own focus landing spot — see `onStatusLineRef` in upload-queue-list.tsx. */
+function statusLineWithin(row: ParentNode): HTMLParagraphElement {
+  const line = row.querySelector('p[tabindex="-1"]');
+  expect(line, "expected a status line in this row").not.toBeNull();
+  return line as HTMLParagraphElement;
+}
+
 describe("K1 — focus survives a retry that unmounts 'Try again' (ugcportal-ff2a)", () => {
   it("moves focus to the row's status line, never to <body>, once the click retries and the button unmounts", async () => {
     mount();
@@ -342,5 +392,189 @@ describe("K2 guard — a retry the visitor did not have keyboard focus on (ugcpo
     } finally {
       elsewhere.remove();
     }
+  });
+});
+
+describe("Cancel — focus survives unmounting itself on a pending row (ugcportal-ff2a)", () => {
+  it("moves focus to the row's own status line once Cancel turns a pending row into a cancelled failure", async () => {
+    mount();
+    setAltText("A fox crossing a snowy field at dawn");
+    addFile(imageFile("a.png"));
+    addFile(imageFile("b.png"));
+
+    // a.png starts uploading immediately (the drain loop claims it); b.png
+    // stays "pending" behind it — drainQueue is strictly sequential (see
+    // upload-queue.ts) — which is the row this test cancels, so it reaches
+    // the SYNCHRONOUS still-queued branch of cancel(), not the in-flight
+    // abort branch.
+    await waitUntil(
+      () => FakeXhr.instances.length > 0,
+      "a.png's request to start",
+    );
+
+    const rowB = rowContaining("b.png");
+    const cancelButton = buttonWithText(rowB, "Cancel");
+    cancelButton.focus();
+    expect(document.activeElement).toBe(cancelButton);
+
+    await click(cancelButton);
+    await waitUntil(
+      () => buttonWithTextOrNull(rowB, "Cancel") === null,
+      "Cancel to unmount once the row becomes a cancelled failure",
+    );
+
+    // Cancel's own row survives as "failed" (cancelledFailure()) — the same
+    // shape "Try again"/retry already relies on — so its status line is
+    // still there to land on.
+    expect(document.activeElement).not.toBe(document.body);
+    expect(document.activeElement).toBe(statusLineWithin(rowB));
+  });
+});
+
+describe("Remove — focus survives dismissing the whole row (ugcportal-ff2a)", () => {
+  it("moves focus to the next row's first control once Remove dismisses a failed row entirely", async () => {
+    mount();
+    setAltText("A fox crossing a snowy field at dawn");
+    addFile(imageFile("a.png"));
+    addFile(imageFile("b.png"));
+
+    await waitUntil(
+      () => FakeXhr.instances.length > 0,
+      "a.png's request to start",
+    );
+    act(() => {
+      FakeXhr.instances[0].respond(500, { error: "Something broke" });
+    });
+    // a.png now failed; drain() moves straight on to b.png.
+    await waitUntil(
+      () => FakeXhr.instances.length > 1,
+      "b.png's request to start",
+    );
+    act(() => {
+      FakeXhr.instances[1].respond(500, { error: "Something broke" });
+    });
+    await waitUntil(
+      () => buttonWithTextOrNull(rowContaining("b.png"), "Try again") !== null,
+      "b.png's row to fail too",
+    );
+
+    const rowA = rowContaining("a.png");
+    const removeButton = buttonWithText(rowA, "Remove");
+    removeButton.focus();
+    expect(document.activeElement).toBe(removeButton);
+
+    await click(removeButton);
+    await waitUntil(
+      () => container.textContent?.includes("a.png") === false,
+      "a.png's row to be dismissed entirely",
+    );
+
+    // a.png's whole row is gone — there is no "a.png's own status line" to
+    // land on (uploadQueueReducer's "dismissed" case filters the row out of
+    // `items`) — so focus goes to the next row's first control: b.png's own
+    // "Try again".
+    const rowB = rowContaining("b.png");
+    expect(document.activeElement).not.toBe(document.body);
+    expect(document.activeElement).toBe(buttonWithText(rowB, "Try again"));
+  });
+});
+
+describe("Clear — focus survives dismissing the only row in the queue (ugcportal-ff2a)", () => {
+  it("falls back to the file input once Clear dismisses the only row left", async () => {
+    mount();
+    setAltText("A fox crossing a snowy field at dawn");
+    addFile(imageFile());
+
+    await waitUntil(() => FakeXhr.instances.length > 0, "the request to start");
+    act(() => {
+      FakeXhr.instances[0].respond(201, CREATED_BODY);
+    });
+    await waitUntil(
+      () => buttonWithTextOrNull(container, "Clear") !== null,
+      "the succeeded row's Clear button to render",
+    );
+
+    const clearButton = buttonWithText(container, "Clear");
+    clearButton.focus();
+    expect(document.activeElement).toBe(clearButton);
+
+    await click(clearButton);
+    await waitUntil(
+      () => container.textContent?.includes("photo.png") === false,
+      "the row to be dismissed entirely",
+    );
+
+    // The only row in the queue, so there is no neighbouring row's control
+    // to land on either — the file input is the one control this page
+    // always has (see `dismiss()` in upload-form.tsx), named explicitly
+    // here rather than inferred from wherever the DOM happens to place it.
+    const fileInput = container.querySelector('input[type="file"]');
+    expect(fileInput).not.toBeNull();
+    expect(document.activeElement).not.toBe(document.body);
+    expect(document.activeElement).toBe(fileInput);
+  });
+});
+
+describe("per-row keying — focuses the right row's status line, not just the first one (ugcportal-ff2a)", () => {
+  it("focuses the second row's own status line when its 'Try again' is retried, with a first failed row also present", async () => {
+    mount();
+    setAltText("A fox crossing a snowy field at dawn");
+    addFile(imageFile("first.png"));
+    addFile(imageFile("second.png"));
+
+    await waitUntil(
+      () => FakeXhr.instances.length > 0,
+      "first.png's request to start",
+    );
+    act(() => {
+      FakeXhr.instances[0].respond(500, { error: "Something broke" });
+    });
+    await waitUntil(
+      () => FakeXhr.instances.length > 1,
+      "second.png's request to start",
+    );
+    act(() => {
+      FakeXhr.instances[1].respond(500, { error: "Something broke" });
+    });
+    await waitUntil(
+      () =>
+        buttonWithTextOrNull(rowContaining("second.png"), "Try again") !==
+        null,
+      "second.png's row to fail too",
+    );
+
+    const rowFirst = rowContaining("first.png");
+    const rowSecond = rowContaining("second.png");
+    const secondButton = buttonWithText(rowSecond, "Try again");
+
+    secondButton.focus();
+    expect(document.activeElement).toBe(secondButton);
+
+    await click(secondButton);
+    await waitUntil(
+      () => buttonWithTextOrNull(rowSecond, "Try again") === null,
+      "second.png's 'Try again' to unmount",
+    );
+
+    // The load-bearing claim: the SECOND row's own status line, not the
+    // first row's. A lookup that ignored `id` and always took the first
+    // registered element of each map would land here too when only one row
+    // exists — which is exactly why the K1/K2 tests above, each with a
+    // single row, cannot tell the two implementations apart.
+    expect(document.activeElement).not.toBe(document.body);
+    expect(document.activeElement).toBe(statusLineWithin(rowSecond));
+    expect(document.activeElement).not.toBe(statusLineWithin(rowFirst));
+
+    await waitUntil(
+      () => FakeXhr.instances.length > 2,
+      "second.png's retried request to start",
+    );
+    act(() => {
+      FakeXhr.instances[2].respond(201, CREATED_BODY);
+    });
+    await waitUntil(
+      () => rowSecond.textContent?.includes("Uploaded") === true,
+      "second.png's retried upload to succeed",
+    );
   });
 });

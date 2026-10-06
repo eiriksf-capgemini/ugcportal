@@ -33,23 +33,36 @@ export type UploadQueueListProps = {
   onCancel: (id: string) => void;
   onDismiss: (id: string) => void;
   /**
-   * Keyboard focus handoff for "Try again" (ugcportal-ff2a), the same shape
-   * ugcportal-jx4 fixed for the gallery's "Load more": the conditional
-   * `{failure ? <Button/> : null}` inside Failure below unmounts the very
-   * button a retry click just activated, and nothing moves focus when that
-   * happens — it falls to <body>. Both ref callbacks are optional so every
-   * existing caller that renders this list for its markup alone
-   * (renderToStaticMarkup, no real DOM — see upload-flow.test.tsx) keeps
-   * working unchanged; only a caller with a real document, like UploadForm,
-   * needs to supply them and do the handoff itself before the dispatch that
-   * unmounts the button.
+   * Keyboard focus handoff (ugcportal-ff2a), the same shape ugcportal-jx4
+   * fixed for the gallery's "Load more": each of "Try again", "Cancel",
+   * "Remove" and "Clear" unmounts (or gets replaced) as a direct result of
+   * its own activation, and nothing moves focus when that happens — it
+   * falls to <body>. All four ref callbacks are optional so every existing
+   * caller that renders this list for its markup alone (renderToStaticMarkup,
+   * no real DOM — see upload-flow.test.tsx) keeps working unchanged; only a
+   * caller with a real document, like UploadForm, needs to supply them and
+   * do the handoff itself before the dispatch that unmounts the control.
+   *
+   * "Try again" and "Cancel" land on the row's OWN status line below, since
+   * the row survives either click (as `pending` or `failed`). "Remove" and
+   * "Clear" dispatch "dismissed", which filters the whole row out — there is
+   * no surviving status line to land on — so UploadForm lands those on a
+   * neighbouring row or the file input instead; see `dismiss()` there.
    */
   onRetryButtonRef?: (id: string, element: HTMLButtonElement | null) => void;
+  onCancelButtonRef?: (id: string, element: HTMLButtonElement | null) => void;
   /**
-   * The per-row status text below is rendered unconditionally, whatever the
-   * item's status (see its own render call below) — unlike the button, it
-   * never unmounts, which is what makes it a landing spot that is already
-   * there by the time a retry click needs one.
+   * Shared by "Remove" (on a failed row) and "Clear" (on a succeeded row) —
+   * a given row only ever renders one of the two, so one map is enough.
+   */
+  onDismissButtonRef?: (id: string, element: HTMLButtonElement | null) => void;
+  /**
+   * The per-row status text below renders for any row that still exists,
+   * whatever that row's status (see its own render call below) — true on
+   * the "Try again"/"Cancel" path, where the row survives. NOT true once the
+   * row itself is dismissed: the reducer's `dismissed` case filters it out
+   * of `items`, and this component returns `null` entirely at zero items —
+   * which is exactly why "Remove"/"Clear" need a different landing spot.
    */
   onStatusLineRef?: (id: string, element: HTMLParagraphElement | null) => void;
 };
@@ -165,12 +178,14 @@ function Failure({
   onRetry,
   onDismiss,
   onRetryButtonRef,
+  onDismissButtonRef,
 }: {
   now: number;
   item: QueueItem;
   onRetry: (id: string) => void;
   onDismiss: (id: string) => void;
   onRetryButtonRef?: (id: string, element: HTMLButtonElement | null) => void;
+  onDismissButtonRef?: (id: string, element: HTMLButtonElement | null) => void;
 }) {
   const failure = item.failure;
   if (failure === null) return null;
@@ -274,6 +289,7 @@ function Failure({
           </Button>
         ) : null}
         <Button
+          ref={(element) => onDismissButtonRef?.(item.id, element)}
           type="button"
           variant="ghost"
           size="sm"
@@ -327,6 +343,8 @@ export function UploadQueueList({
   onCancel,
   onDismiss,
   onRetryButtonRef,
+  onCancelButtonRef,
+  onDismissButtonRef,
   onStatusLineRef,
 }: UploadQueueListProps) {
   if (items.length === 0) return null;
@@ -388,6 +406,7 @@ export function UploadQueueList({
             {item.status === "uploading" || item.status === "pending" ? (
               <div className="mt-2">
                 <Button
+                  ref={(element) => onCancelButtonRef?.(item.id, element)}
                   type="button"
                   variant="ghost"
                   size="sm"
@@ -402,6 +421,7 @@ export function UploadQueueList({
               <div className="mt-2 flex flex-wrap items-center gap-2">
                 <p className="text-xs text-ink-muted">{successNote(item)}</p>
                 <Button
+                  ref={(element) => onDismissButtonRef?.(item.id, element)}
                   type="button"
                   variant="ghost"
                   size="sm"
@@ -418,6 +438,7 @@ export function UploadQueueList({
               onRetry={onRetry}
               onDismiss={onDismiss}
               onRetryButtonRef={onRetryButtonRef}
+              onDismissButtonRef={onDismissButtonRef}
             />
           </div>
         </li>
