@@ -4,8 +4,10 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { designSystem } from "@/lib/design/usage";
+import { parseColor } from "@/lib/design/color";
 import { isTestFile, stripComments, walkSourceFiles } from "@/lib/design/scan-source";
+import { loadThemeTokens, resolveToken } from "@/lib/design/tokens";
+import { designSystem, discoverColorNamespaces } from "@/lib/design/usage";
 
 import { buttonVariants } from "./button";
 
@@ -39,10 +41,10 @@ function bareColorCandidate(token: string): string | null {
  * either declare an explicit timeout or memoize the walk behind a module-
  * level `cache*` binding - the same `cachedFiles ??= walkSourceFiles(...)`
  * idiom dual-meaning-usage.test.ts and no-raw-hex.test.ts already use, so
- * the (single, small) walk this file's own hand-pasted-pair guard runs
+ * the (single, small) walk this file's own colour-token compile guard runs
  * (ugcportal-z1nh, below) is not repeated once per `it`.
  */
-let cachedPetrolPairFiles: string[] | undefined;
+let cachedColorTokenScanFiles: string[] | undefined;
 
 /**
  * ugcportal-rw9j round 5: e2e/petrol-theme.spec.ts's K1 test checks the
@@ -279,52 +281,77 @@ describe("buttonVariants K1/K3 (ugcportal-ei5c): every bare colour utility a var
  * contrast.test.ts's dedicated disclosure case for it) - fixed here, along
  * with the label itself.
  *
- * What this describe block actually sees, precisely (round 1 review,
- * CONFIRMED medium, narrowed this from an earlier, overbroad "closes that
- * gap in general" claim): it scans real, shipped source (the same file-walk/
- * comment-strip machinery no-raw-hex.test.ts and dual-meaning-usage.test.ts
- * already share via scan-source.ts, not a third hand-rolled copy) for any
- * string OR template literal that bare-names a `bg-petrol-N` fill - the one
- * family of token this repo keeps outside `@theme` on purpose (globals.css's
- * "stopping Tailwind emitting bg-petrol-900 and friends" comment) - and, for
- * every bare `bg-`/`text-`/`border-` candidate found ANYWHERE in that SAME
- * literal's text - including nested inside a `${ condition ? "a" : "b" }`
- * interpolation's own quoted segments, not only when every candidate sits
- * together in one unbroken flat string - compiles it against this repo's own
- * Tailwind design system exactly the way the K1/K3 block above does. A
- * candidate that fails to compile at all is this bug shape, regardless of
- * which file pasted it, whether it ever went near `buttonVariants`, or
- * whether the fill and the label share a flat string or a conditional
- * template literal (this repo's own "conditional className" idiom - no
- * `clsx`/`classnames` helper exists here - see CANDIDATE_TOKEN_DELIMITERS'
- * own comment below for how).
+ * THIS IS ROUND 3 OF THIS DESCRIBE BLOCK, and its shape changed each round
+ * because each previous shape had a real, demonstrated gap:
  *
- * The one limit that remains, genuinely undisclosed before this round and
- * stated rather than solved: a BARE INTERPOLATED IDENTIFIER whose class
- * value is computed elsewhere (`` `bg-petrol-400 ${labelClass}` ``, where
- * `labelClass` is a variable) is invisible to this scan - its text in the
- * source is just the identifier name `labelClass`, not whatever string that
- * variable resolves to at runtime, and no static scan of this file alone can
- * follow it to a definition that might live anywhere. No such indirection
- * exists in any `bg-petrol-N` template literal in src/ today (confirmed:
- * every one either carries its candidates as flat text or as directly
- * inlined quoted segments, never a bare variable standing in for a whole
- * class name) - a real instance would still need a human or a different,
- * data-flow-aware tool to catch.
+ *   - Round 1 shipped a PAIRED guard: find a string naming a bare
+ *     `bg-petrol-N` fill, then compile every bare `bg-`/`text-`/`border-`
+ *     candidate sharing that SAME string. Round 1 review (CONFIRMED medium)
+ *     found it missed the identical pair split across a template-literal
+ *     interpolation's nested quoted segments (``className={`bg-petrol-400
+ *     ${active ? "text-petrol-900" : "text-surface-0"}`}``) - fixed by
+ *     tokenising on quote/template delimiters too (CANDIDATE_TOKEN_DELIMITERS
+ *     below), not only whitespace.
+ *   - Round 2 review (CONFIRMED medium) found the PAIRING requirement
+ *     itself was the deeper bug: this repo's real conditional-className
+ *     idiom is `cn()` (the npm `cn` package, used in 13 files including
+ *     `button.tsx` itself: `cn(buttonVariants({ variant, size, className
+ *     }))`) with SEPARATE STRING ARGUMENTS -
+ *     `cn("bg-petrol-400", active ? "text-petrol-900" : "text-surface-0")`
+ *     - never one shared literal for a pairing check to find, no matter how
+ *     the tokeniser inside one literal was fixed. (Both round-1 and this
+ *     file's own round-1/2 comments wrongly said no `clsx`/`classnames`-
+ *     equivalent helper exists here; it does, under a different name, and
+ *     the reviewer's own round-2 comment flags that as their own miss too,
+ *     not only the PR's.)
+ *
+ * Round 3's fix is architectural, not another tokeniser patch: DROP THE
+ * PAIRING REQUIREMENT ENTIRELY. The bug this whole family is about - "a
+ * colour utility that compiles to nothing" - is a property of ONE candidate
+ * token on its own; it was never actually about two tokens sharing a
+ * string, and requiring that was what let both round-1's split-segment
+ * shape and round-2's separate-cn()-argument shape through. What this
+ * describe block does now: scan every string OR template literal in every
+ * non-excluded file, tokenise each on CANDIDATE_TOKEN_DELIMITERS (as
+ * before), and for every token that matches the SHAPE of a declared colour
+ * token utility - `COLOR_TOKEN_SHAPE` below, built from the real, installed
+ * Tailwind design system (the namespaces) and the real, parsed
+ * globals.css (the token names) rather than a hand-kept list of either -
+ * compile it. A candidate that fails to compile at all is this bug shape,
+ * full stop, regardless of which file pasted it, whether it ever went near
+ * `buttonVariants`, and regardless of whether it ever shares a string, a
+ * template literal, or even a `cn()` CALL with any other candidate - a
+ * `cn()` argument, a ternary branch, and a flat string are all just string
+ * literals to this scan, covered by construction rather than by chasing
+ * one more call shape.
+ *
+ * The one limit that remains, stated rather than solved: a CLASS NAME
+ * COMPUTED AT RUNTIME FROM SOMETHING THAT IS NOT A LITERAL - a bare
+ * interpolated identifier (`` `bg-petrol-400 ${labelClass}` ``, where
+ * `labelClass` is a variable), a function call, string concatenation
+ * resolved outside this one file, or any value this scan cannot read
+ * directly off the page as quoted text - is invisible to it. This is a
+ * STATIC TEXT scan; it has no notion of what a variable's value is at
+ * runtime, and no static scan of one file can follow an identifier to a
+ * definition that might live anywhere in the tree. No such indirection
+ * exists in any colour-token-shaped candidate in src/ today (confirmed: the
+ * production scan below finds only directly-inlined quoted text) - a real
+ * instance would still need a human or a different, data-flow-aware tool to
+ * catch.
  *
  * Comments are stripped before scanning (`stripComments`): several design-
  * system comments, including this file's and button.tsx's own history of
- * this exact bug, discuss `bg-petrol-400`/`text-petrol-900` in backtick-
- * quoted prose, which an unstripped scan would misread as a second string
- * literal shipping the bug. `src/lib/design/**` is also excluded outright
- * (the same exclusion findBareColorUtilities and no-raw-hex.test.ts already
- * use, for the identical reason their own comments give: that code's job is
- * to describe Tailwind classes as DATA, in prose, not to ship them), and so
- * is button.tsx itself - its every variant is already exhaustively checked
- * by the K1/K3 block above, so re-scanning its raw source here would be
+ * this exact bug, discuss these token names in backtick-quoted prose, which
+ * an unstripped scan would misread as a second string literal shipping the
+ * bug. `src/lib/design/**` is also excluded outright (the same exclusion
+ * findBareColorUtilities and no-raw-hex.test.ts already use, for the
+ * identical reason their own comments give: that code's job is to describe
+ * Tailwind classes as DATA, in prose, not to ship them), and so is
+ * button.tsx itself - its every variant is already exhaustively checked by
+ * the K1/K3 block above, so re-scanning its raw source here would be
  * redundant rather than additionally protective.
  */
-describe("hand-pasted bg-petrol-*/text- pairs outside buttonVariants: every candidate compiles (ugcportal-z1nh)", () => {
+describe("colour-token compile guard: every literal class token naming a declared colour family compiles (ugcportal-z1nh)", () => {
   const SRC_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
   const BUTTON_TSX = path.join(SRC_ROOT, "components", "ui", "button.tsx");
   const DESIGN_LIB_DIR = path.join(SRC_ROOT, "lib", "design") + path.sep;
@@ -338,59 +365,173 @@ describe("hand-pasted bg-petrol-*/text- pairs outside buttonVariants: every cand
 
   /**
    * Matches one quoted or backtick-delimited string literal and captures its
-   * inner text, across all three JS/TSX string forms a `className` can use
-   * (`"..."`, `'...'`, `` `...` ``). A template literal's `${...}`
-   * interpolation is not given special handling - its raw characters are
-   * captured as ordinary text along with everything else between the
-   * backticks - but that is harmless here: a BARE interpolated identifier's
-   * own text (e.g. `${HERO_DECORATIVE_SHAPE_CLASS}`) contains none of
-   * `bg-`/`text-`/`border-` followed by a bare token in this codebase, so it
-   * is never mistaken for a colour candidate (confirmed against every
-   * current template-literal `className` in src/, e.g.
-   * src/components/home/hero.tsx's decorative shapes). That is a narrower
-   * claim than "every interpolation is handled", and was never meant to
-   * cover a NESTED QUOTED segment inside one (`${active ? "text-petrol-900"
-   * : "text-surface-0"}`) - CANDIDATE_TOKEN_DELIMITERS below is what
-   * actually reaches in and finds a candidate there.
+   * inner text, across all three JS/TSX string forms a `className` or a
+   * `cn(...)` argument can use (`"..."`, `'...'`, `` `...` ``). A template
+   * literal's `${...}` interpolation is not given special handling - its raw
+   * characters are captured as ordinary text along with everything else
+   * between the backticks - but that is harmless: `CANDIDATE_TOKEN_DELIMITERS`
+   * below splits on `${`/`}` (and on the quote characters a NESTED segment
+   * introduces) regardless, so whatever text sits inside an interpolation is
+   * tokenised the same as anything else in the literal.
    */
   const STRING_LITERAL = /"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|`((?:[^`\\]|\\.)*)`/g;
 
-  /** The one family of token this scan is watching for: `bg-petrol-N`, bare (no alpha modifier). */
-  const BARE_BG_PETROL = /\bbg-petrol-\d+\b/;
-
   /**
-   * Round 1 review, CONFIRMED medium: splitting a matched literal on
-   * whitespace alone (`/\s+/`) is correct for a FLAT hand-pasted string
-   * (`"bg-petrol-400 ... text-petrol-900 ..."`) but silently misses the
-   * other shape this repo's own "conditional className" idiom produces -
-   * this repo has no `clsx`/`classnames` helper, so a conditional class is a
-   * raw template-literal interpolation instead, e.g. ``className={`bg-
-   * petrol-400 ${active ? "text-petrol-900" : "text-surface-0"}`}``.
-   * `STRING_LITERAL` above does capture that whole backtick span as one
-   * literal (confirmed: `BARE_BG_PETROL.test(literal)` is true for it), but
-   * splitting it on whitespace alone leaves the quote characters stuck to
-   * `bareColorCandidate`'s own candidates (`"text-petrol-900"`, with the
-   * leading/trailing `"`), which its `(?:^|:)...$` anchors do not match -
-   * found as a scratch component in review, verified to pass all tests
-   * silently before this fix (0 failures against a shape that should fail).
+   * Splits a matched literal into candidate tokens on whitespace AND every
+   * delimiter this repo's two conditional-className idioms introduce around
+   * one: the three quote characters and `${`/`}` (a template-literal
+   * interpolation's own nested quoted segment, round 1 review), plus
+   * `(`/`)`/`,` (separate arguments to `cn(...)`, round 2 review) and `?`/`:`
+   * (a ternary's own syntax, which can appear in either idiom). Each bare
+   * class name is isolated the same way regardless of which idiom - or
+   * neither - produced it.
    *
-   * The fix: split on whitespace AND every delimiter this idiom's own syntax
-   * introduces around a candidate - the three quote characters, `${`/`}`,
-   * `(`/`)`, `?`, `:`, and `,` - so each bare class name is isolated the same
-   * way regardless of whether it sits in a flat string or inside a ternary's
-   * own quoted branch. Including `:` is safe for the SAME reason it was
-   * already safe to ignore in `bareColorCandidate`'s own `(?:^|:)` anchor:
-   * that anchor only ever looks at what comes AFTER the last `:` in a token
-   * (a Tailwind variant prefix like `hover:`), so pre-splitting on `:` here
-   * and handing `bareColorCandidate` the bare suffix directly produces the
-   * identical match as leaving the prefix attached would.
+   * Including `:` is safe for the same reason `bareColorCandidate` above
+   * ignores a variant prefix via its own `(?:^|:)` anchor: a Tailwind variant
+   * (`hover:`, `aria-expanded:`) sits before the LAST `:` in a token, so
+   * pre-splitting on `:` here and matching the bare suffix directly against
+   * `COLOR_TOKEN_SHAPE` below (itself fully anchored, `^...$`, with no `:`
+   * alternative - there is nothing left to anchor around once `:` has
+   * already split the token) produces the identical result as leaving the
+   * prefix attached would.
    */
   const CANDIDATE_TOKEN_DELIMITERS = /[\s"'`${}()?:,]+/;
 
-  type Candidate = { file: string; token: string; candidate: string };
+  /**
+   * Every Tailwind utility namespace that genuinely accepts a colour, asked
+   * of the real, installed Tailwind design system (`discoverColorNamespaces`,
+   * already exported from usage.ts and used elsewhere in this gate for alpha-
+   * modifier discovery) rather than a second, hand-kept list. Round 2's own
+   * guard hardcoded `bg`/`text`/`border` - correct as far as it went, but
+   * `discoverColorNamespaces` finds 45 real namespaces today (`ring`,
+   * `outline`, `fill`, `stroke`, `accent`, `caret`, `divide`, `shadow`,
+   * `decoration`, every directional `border-*`, every `mask-*`/`scrollbar-*`
+   * variant, and more) - reusing the derived list here is strictly more
+   * complete, for no extra cost, than re-hardcoding a narrower one a second
+   * time in the same file.
+   */
+  const COLOR_TOKEN_PREFIXES = discoverColorNamespaces(designSystem);
 
-  function findHandPastedPetrolCandidates(): Candidate[] {
-    const files = (cachedPetrolPairFiles ??= walkSourceFiles(SRC_ROOT, isExcluded));
+  /**
+   * Every colour TOKEN NAME this design system actually declares - read
+   * straight out of globals.css via tokens.ts's own parser (`loadThemeTokens`),
+   * not hand-copied, so a token renamed or added there is picked up here for
+   * free, the same "derive, don't hardcode" discipline this gate's sibling
+   * functions in usage.ts already hold to.
+   *
+   * A declared custom property counts as a colour NAME if, once resolved
+   * through its `var()` chain (`resolveToken`), it parses as a real CSS
+   * colour (`color.ts`'s `parseColor`: `oklch()` or hex) - the exact
+   * resolve-and-parse this repo's own contrast gate already does to measure
+   * a pairing, reused here to decide "is this a colour family" rather than
+   * guessing from the property's NAME, which would need a hand-kept
+   * exclusion list for `--font-*`/`--radius-*` and go stale the same way
+   * every hand-kept list in usage.ts's own history has gone stale before
+   * (see that file's header). A property that fails to resolve
+   * (`color-mix()`, a genuinely missing reference, a bare `calc()`) or
+   * resolves to something that is not a colour (a font stack, `0.625rem`) is
+   * EXCLUDED, not flagged - the same "exclude, don't guess" precedent
+   * `isBareColorUtility`'s own doc comment argues for.
+   *
+   * Deliberately includes names declared OUTSIDE `@theme` (`--petrol-900`
+   * and its siblings, `--terracotta-*`) as well as inside it: those are
+   * exactly the names this whole guard exists to catch a USE of, and
+   * excluding them from the candidate shape would make the compile check
+   * below unreachable for the one bug family this bead is about. 68 names
+   * resolve this way today (confirmed by running this function standalone
+   * in review) - `petrol-50` through `petrol-950` and `petrol-deep`,
+   * `surface-0` through `surface-4`, `ink`/`ink-muted`, `primary`/
+   * `primary-hover`/`primary-foreground`, `destructive`/`destructive-surface`
+   * (and its `-hover`), `accent`/`accent-foreground`, `chart-1` through
+   * `chart-5`, every `sidebar-*` alias, and more - none hand-typed here.
+   */
+  function discoverColorTokenNames(): string[] {
+    const tokens = loadThemeTokens();
+    const names = new Set<string>();
+    for (const property of tokens.keys()) {
+      let resolved: string;
+      try {
+        resolved = resolveToken(property, tokens);
+      } catch {
+        continue;
+      }
+      try {
+        parseColor(resolved);
+      } catch {
+        continue;
+      }
+      const bare = property.slice(2);
+      names.add(bare.startsWith("color-") ? bare.slice("color-".length) : bare);
+    }
+    // Longest-first: a regex alternation matches the first alternative that
+    // fits at a position, not the longest, so "ink-muted" must be tried
+    // before "ink" or the shorter one wins and leaves "-muted" dangling -
+    // the identical reasoning discoverColorNamespaces's own doc comment
+    // gives for sorting namespaces the same way.
+    return [...names].sort((a, b) => b.length - a.length);
+  }
+
+  const COLOR_TOKEN_NAMES = discoverColorTokenNames();
+
+  function escapeForAlternation(word: string): string {
+    return word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+
+  /**
+   * Matches a token that NAMES a design-token colour utility, full stop - no
+   * requirement that it share a string, a template literal, or a `cn()` call
+   * with any other candidate (round 3, replacing round 1/2's paired
+   * `BARE_BG_PETROL`-gated guard). Fully anchored (`^...$`), not
+   * `(?:^|:)...$`: by the time a token reaches this check it has already
+   * been split on `CANDIDATE_TOKEN_DELIMITERS`, which includes `:` - any
+   * variant prefix is already gone, so there is nothing before the bare name
+   * left to anchor around.
+   *
+   * Arbitrary-value and CSS-variable-shorthand candidates
+   * (`bg-[rgb(0,0,0)]`, `text-[oklch(0.5,0.1,180)]`, `bg-(--foo)`) are not
+   * given special handling and need none: splitting one of those on
+   * `CANDIDATE_TOKEN_DELIMITERS` shreds it into fragments
+   * (`"rounded-[min"`, `"var"`, `"--radius-md"`, `"bg-"`, `"--foo"`, etc.),
+   * and none of those fragments is EQUAL to one of the exact, derived names
+   * above, so this anchored match never fires on them - confirmed both by
+   * direct regex simulation and by a live scratch-component reproduction in
+   * round 2 review, which is also why this shape can never produce a false
+   * positive: Tailwind's `bg-(--anything)` form always compiles to a real
+   * rule (`var(--anything)`) regardless of whether that custom property is
+   * ever declared, so even a real instance of it could never trip the
+   * "compiles to no rule at all" check below in the first place.
+   */
+  const COLOR_TOKEN_SHAPE = new RegExp(
+    `^(?:${COLOR_TOKEN_PREFIXES.map(escapeForAlternation).join("|")})-` +
+      `(?:${COLOR_TOKEN_NAMES.map(escapeForAlternation).join("|")})$`,
+  );
+
+  /** Every colour-token-shaped candidate token in one already-extracted literal's text. */
+  function tokensInLiteral(literal: string): string[] {
+    return literal
+      .split(CANDIDATE_TOKEN_DELIMITERS)
+      .filter((token) => token !== "" && COLOR_TOKEN_SHAPE.test(token));
+  }
+
+  /**
+   * The one compiling step every test in this describe block shares -
+   * pulled out to its own function (round 3) specifically so the required
+   * "remove the compile check and watch detection escape" mutation has a
+   * single place to apply: mutating ONLY this function's body, leaving
+   * every caller untouched, is what proves the compile step - not the
+   * shape-matching regex above - is what actually tells a broken candidate
+   * apart from a fine one (shape-matching alone cannot: `text-petrol-900`
+   * and `text-surface-0` match `COLOR_TOKEN_SHAPE` identically).
+   */
+  function compileCandidate(token: string): string | null {
+    const [css] = designSystem.candidatesToCss([token]);
+    return css;
+  }
+
+  type Candidate = { file: string; token: string };
+
+  function findColorTokenCandidates(): Candidate[] {
+    const files = (cachedColorTokenScanFiles ??= walkSourceFiles(SRC_ROOT, isExcluded));
     const found: Candidate[] = [];
     for (const file of files) {
       const stripped = stripComments(readFileSync(file, "utf8"), file);
@@ -398,127 +539,148 @@ describe("hand-pasted bg-petrol-*/text- pairs outside buttonVariants: every cand
       let match: RegExpExecArray | null;
       while ((match = STRING_LITERAL.exec(stripped)) !== null) {
         const literal = match[1] ?? match[2] ?? match[3] ?? "";
-        if (!BARE_BG_PETROL.test(literal)) continue;
-        for (const token of literal.split(CANDIDATE_TOKEN_DELIMITERS)) {
-          if (token === "") continue;
-          const candidate = bareColorCandidate(token);
-          if (candidate === null) continue;
-          found.push({ file: path.relative(SRC_ROOT, file), token, candidate });
+        for (const token of tokensInLiteral(literal)) {
+          found.push({ file: path.relative(SRC_ROOT, file), token });
         }
       }
     }
     return found;
   }
 
-  it("the scan still finds at least one real bg-petrol-N string to check (a false 0 here would silently stop checking anything)", () => {
-    const candidates = findHandPastedPetrolCandidates();
+  it("the scan still finds at least one real colour-token-shaped candidate to check (a false 0 here would silently stop checking anything)", () => {
+    const candidates = findColorTokenCandidates();
     expect(
       candidates.length,
-      "expected at least one shipped bg-petrol-N string under src/ outside button.tsx/src/lib/design - " +
-        "if this is 0, the file-walk or string-literal extraction regressed, not that every hand-pasted " +
-        "pair disappeared",
+      "expected at least one colour-token-shaped candidate under src/ outside button.tsx/src/lib/design - " +
+        "if this is 0, the file-walk or token-shape match regressed, not that every such candidate disappeared",
     ).toBeGreaterThan(0);
   });
 
-  it("every bg-/text-/border- candidate sharing a string with a bare bg-petrol-N fill compiles to a real Tailwind rule", () => {
-    const candidates = findHandPastedPetrolCandidates();
-    for (const { file, token, candidate } of candidates) {
-      const [css] = designSystem.candidatesToCss([candidate]);
+  it("every colour-token-shaped candidate found anywhere in scanned src/ compiles to a real Tailwind rule", () => {
+    const candidates = findColorTokenCandidates();
+    for (const { file, token } of candidates) {
       expect(
-        css,
-        `${file}: "${token}" names "${candidate}", which compiles to no Tailwind rule at all - ` +
-          `a hand-pasted bg-petrol-*/text-* pair outside buttonVariants shipping the exact ` +
-          `ugcportal-ei5c bug shape (a token declared outside @theme on purpose, e.g. ` +
-          `--color-petrol-900). A contrast.ts pairing for this colour would document a ratio for ` +
-          `a colour the browser never paints.`,
+        compileCandidate(token),
+        `${file}: "${token}" names a declared colour token family but compiles to no Tailwind rule at all - ` +
+          `this is the ugcportal-ei5c/ugcportal-z1nh bug shape (a token declared outside @theme on purpose, ` +
+          `e.g. --color-petrol-900, or a genuine typo). A contrast.ts pairing for this colour would document ` +
+          `a ratio for a colour the browser never paints.`,
       ).not.toBeNull();
     }
   });
 
   /**
-   * Proves the guard above actually bites - the same "mutate and assert it
-   * fails" discipline K1 itself asks for - without mutating real source at
-   * test time (the K1/K3 block's own sibling test uses the identical
-   * discipline, a literal string rather than editing button.tsx): the
-   * upload-form.tsx label's literal PRE-fix class string, checked directly
-   * through the same extraction and compile step the test above runs.
+   * One fixture test per shape this guard's own history (round 1 and round
+   * 2 review) found escaping a narrower version of it, plus the original
+   * flat shape - proving all three are caught BY CONSTRUCTION now, with no
+   * pairing or idiom-specific handling needed for any of them.
    *
    * FIXTURE MUTATION CHECK (performed by hand, not left in the suite):
-   * temporarily restored this exact string as upload-form.tsx's real
-   * `className` (reverting the ugcportal-z1nh fix) and reran both tests in
-   * this describe block - the compile-guard test above failed, naming
-   * upload-form.tsx and "text-petrol-900" in its message exactly as
-   * designed; then reverted.
+   * temporarily made `compileCandidate` return a constant non-null string
+   * regardless of its argument (i.e. "removed the compile check") and
+   * reran this file - the fixture test below for all three shapes failed
+   * (each one's "must compile to NO rule" assertion), proving the compile
+   * step, not the shape-matching regex, is what catches this bug family;
+   * reverted.
    */
-  it("catches the exact pre-fix upload-form.tsx label string as shipping a non-compiling bare utility (flat shape)", () => {
+  it("flat string shape (the original ugcportal-ei5c/ugcportal-z1nh bug shape): a non-compiling candidate sharing a flat string with others is caught", () => {
     const preFixLiteral =
       "cursor-pointer rounded-lg bg-petrol-400 px-3 py-2 text-sm font-medium text-petrol-900 transition-colors hover:brightness-95";
-    expect(BARE_BG_PETROL.test(preFixLiteral)).toBe(true);
+    const candidates = tokensInLiteral(preFixLiteral);
+    // "text-sm" is NOT a colour-token-shaped candidate under this round's
+    // matcher (unlike round 1/2's bareColorCandidate, which matched any
+    // bg-/text-/border- name and relied on a comment to explain "text-sm is
+    // fine, it just shares the namespace") - "sm" is not a declared colour
+    // token name, so COLOR_TOKEN_SHAPE never matches it at all. Likewise
+    // "rounded-lg", "font-medium", "transition-colors" and
+    // "hover:brightness-95" name no colour namespace this scan watches.
+    expect(candidates).toEqual(["bg-petrol-400", "text-petrol-900"]);
 
-    const candidates = preFixLiteral
-      .split(CANDIDATE_TOKEN_DELIMITERS)
-      .filter((token) => token !== "")
-      .map(bareColorCandidate)
-      .filter((candidate): candidate is string => candidate !== null);
-    // Also carries "text-sm" (the label's own font-size utility) - a real,
-    // ordinary Tailwind utility that happens to share the "text-" namespace;
-    // it is expected to compile, and is not the bug.
-    expect(candidates).toEqual(["bg-petrol-400", "text-sm", "text-petrol-900"]);
-
-    const [fillCss] = designSystem.candidatesToCss([candidates[0]]);
-    const [sizeCss] = designSystem.candidatesToCss([candidates[1]]);
-    const [labelCss] = designSystem.candidatesToCss([candidates[2]]);
-    expect(fillCss, "bg-petrol-400 compiles - the fill was never the bug").not.toBeNull();
-    expect(sizeCss, "text-sm compiles - an ordinary non-colour utility sharing the namespace").not.toBeNull();
+    expect(compileCandidate(candidates[0]), "bg-petrol-400 compiles - the fill was never the bug").not.toBeNull();
     expect(
-      labelCss,
+      compileCandidate(candidates[1]),
       "text-petrol-900 must compile to NO rule - that is the exact bug this bead fixes",
     ).toBeNull();
   });
 
-  /**
-   * Round 1 review finding (CONFIRMED medium): the flat-shape test above
-   * passed even while the guard silently missed the SAME non-compiling
-   * candidate split across a template-literal interpolation's own quoted
-   * segments - this repo's "conditional className" idiom, since no
-   * `clsx`/`classnames` helper exists here (`grep -rln 'className={\`'`
-   * finds 6 files using this shape, this one among them). Reproduced live as
-   * a scratch component outside `button.tsx` in review: the pre-fix
-   * tokenizer (`literal.split(/\s+/)`) left the quote characters stuck to
-   * `"text-petrol-900"`, which `bareColorCandidate`'s anchors did not match,
-   * so the guard reported 0 candidates for it and all 34 tests passed.
-   *
-   * FIXTURE MUTATION CHECK (performed by hand, not left in the suite):
-   * temporarily restored `literal.split(/\s+/)` (this file's pre-round-2
-   * tokenizer) in `findHandPastedPetrolCandidates` and reran this file -
-   * this test failed (the nested `text-petrol-900` candidate was not found
-   * at all, so `candidates` did not equal the expected array), proving the
-   * fix above is what catches this shape, not an artefact of the fixture;
-   * then reverted.
-   */
-  it("catches a non-compiling pair split across a template-literal interpolation's nested quoted segments (round 1 review finding)", () => {
+  it("nested-quote template-literal shape (round 1 review finding): a candidate split across a ternary's own quoted segments is caught with no bg-petrol-N fill required nearby", () => {
     const nestedLiteral = 'bg-petrol-400 ${active ? "text-petrol-900" : "text-surface-0"}';
-    expect(BARE_BG_PETROL.test(nestedLiteral)).toBe(true);
-
-    const candidates = nestedLiteral
-      .split(CANDIDATE_TOKEN_DELIMITERS)
-      .filter((token) => token !== "")
-      .map(bareColorCandidate)
-      .filter((candidate): candidate is string => candidate !== null);
-    // "active" (the ternary's own condition) names neither bg-/text-/border-
-    // and is correctly dropped by bareColorCandidate; both quoted branches
-    // of the ternary are found as separate candidates.
+    const candidates = tokensInLiteral(nestedLiteral);
+    // "active" (the ternary's own condition) names no colour namespace and
+    // is correctly absent; both quoted branches are found as separate
+    // candidates, with no pairing step required to find either.
     expect(candidates).toEqual(["bg-petrol-400", "text-petrol-900", "text-surface-0"]);
 
-    const [fillCss] = designSystem.candidatesToCss([candidates[0]]);
-    const [brokenCss] = designSystem.candidatesToCss([candidates[1]]);
-    const [okCss] = designSystem.candidatesToCss([candidates[2]]);
-    expect(fillCss, "bg-petrol-400 compiles").not.toBeNull();
+    expect(compileCandidate(candidates[0]), "bg-petrol-400 compiles").not.toBeNull();
     expect(
-      brokenCss,
-      "text-petrol-900 must compile to NO rule even nested inside a ternary's own quoted segment - " +
-        "the exact shape the pre-round-2 whitespace-only tokenizer silently missed",
+      compileCandidate(candidates[1]),
+      "text-petrol-900 must compile to NO rule even nested inside a ternary's own quoted segment",
     ).toBeNull();
-    expect(okCss, "text-surface-0 compiles").not.toBeNull();
+    expect(compileCandidate(candidates[2]), "text-surface-0 compiles").not.toBeNull();
+  });
+
+  it("separate cn() arguments shape (round 2 review finding): a candidate that never shares ANY string with another candidate is caught", () => {
+    // cn("bg-petrol-400", active ? "text-petrol-900" : "text-surface-0") -
+    // button.tsx's own conditional-className idiom (the `cn` npm package,
+    // used in 13 files including button.tsx itself). Three separate string
+    // ARGUMENTS, no template literal or interpolation at all - unlike the
+    // nested-quote shape above, the fill and each label candidate never
+    // share a single matched literal, which is exactly what let this shape
+    // through round 1 and round 2's PAIRED guards regardless of how well
+    // either tokenised within one literal. Modelled here as three
+    // independently-extracted literals - exactly what STRING_LITERAL would
+    // match from that real source line, one call argument at a time - with
+    // no shared state or ordering between them.
+    const fillLiteral = "bg-petrol-400";
+    const brokenLiteral = "text-petrol-900";
+    const okLiteral = "text-surface-0";
+
+    const fillCandidates = tokensInLiteral(fillLiteral);
+    const brokenCandidates = tokensInLiteral(brokenLiteral);
+    const okCandidates = tokensInLiteral(okLiteral);
+    expect(fillCandidates).toEqual(["bg-petrol-400"]);
+    expect(brokenCandidates).toEqual(["text-petrol-900"]);
+    expect(okCandidates).toEqual(["text-surface-0"]);
+
+    expect(compileCandidate(fillCandidates[0]), "bg-petrol-400 compiles").not.toBeNull();
+    expect(
+      compileCandidate(brokenCandidates[0]),
+      "text-petrol-900 must compile to NO rule - found and checked with zero dependence on " +
+        "bg-petrol-400 (or anything else) appearing in the same string, template literal, or cn() call",
+    ).toBeNull();
+    expect(compileCandidate(okCandidates[0]), "text-surface-0 compiles").not.toBeNull();
+  });
+
+  /**
+   * Round 2 review's own specific ask, answered directly rather than only
+   * by construction: does the broader namespace/name alternation risk a
+   * FALSE positive on a legitimate arbitrary-value or CSS-variable-shorthand
+   * candidate? Confirmed no, for both shapes raised in round 2 review.
+   */
+  it("ignores arbitrary-value candidates and the bg-(--var) shorthand, which compile and are not this bug shape", () => {
+    const arbitraryLiteral =
+      "rounded-[min(var(--radius-md),12px)] bg-petrol-400 bg-[rgb(0,0,0)] text-[oklch(0.5,0.1,180)]";
+    const shorthandLiteral = "bg-petrol-400 text-(--scratch-undeclared-var)";
+
+    // Only the real, declared fill is extracted - every arbitrary-value
+    // fragment and the CSS-variable shorthand are shredded into pieces that
+    // match no declared token name, exactly as this file's own
+    // COLOR_TOKEN_SHAPE comment states.
+    expect(tokensInLiteral(arbitraryLiteral)).toEqual(["bg-petrol-400"]);
+    expect(tokensInLiteral(shorthandLiteral)).toEqual(["bg-petrol-400"]);
+
+    // Confirmed directly, not only by absence from the candidate list: both
+    // forms compile regardless, so even if a future change made this scan
+    // see them, they could never trip the "compiles to no rule" check this
+    // guard runs.
+    expect(
+      compileCandidate("bg-[rgb(0,0,0)]"),
+      "an arbitrary bracket value compiles",
+    ).not.toBeNull();
+    expect(
+      compileCandidate("text-(--scratch-undeclared-var)"),
+      "bg-(--var)/text-(--var) shorthand compiles to var(...) regardless of whether the custom " +
+        "property is ever declared - inert for this guard by construction, not merely unseen",
+    ).not.toBeNull();
   });
 });
