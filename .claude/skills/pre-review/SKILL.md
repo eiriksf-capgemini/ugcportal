@@ -15,6 +15,8 @@ Run git only inside your worktree, never in the main checkout (`bd memories shar
 
 ## 1. Merge current main first, then the mechanical gates — in CI's order
 
+Unset `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE` and `GIT_PREFIX` before this step if your shell already has them set (e.g. from worktree-pinning tooling) — the pre-push hook strips the same four before running these same commands (ugcportal-xxy2). GIT_DIR overrides -C and cwd for repository discovery; the other three redirect the work tree and index or carry hook context, and are stripped so a child git sees none of the four variables that would redirect it.
+
 ```bash
 git fetch origin main
 git merge --no-edit origin/main          # resolve conflicts now, not at review round 4
