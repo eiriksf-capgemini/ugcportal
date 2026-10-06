@@ -16,6 +16,7 @@ import {
 } from "@/lib/live-session";
 import { prisma } from "@/lib/prisma";
 import { AUTH_ERROR_PATH } from "@/lib/routes";
+import { withSchemaMismatchLogging } from "@/lib/schema-mismatch";
 import { isPermittedSignIn } from "@/lib/sign-in-policy";
 import { signInProviders } from "@/lib/sign-in-providers";
 
@@ -79,7 +80,15 @@ export const authConfig = {
   // Order is not significant: the two wrappers override disjoint methods
   // (`createSession` versus `createUser`/`getUserByEmail`) and neither reads
   // the other's. Linking is outermost only because it is the newer layer.
-  adapter: withConfiguredUserLinking(withSessionIdentity(PrismaAdapter(prisma))),
+  //
+  // `withSchemaMismatchLogging` (ugcportal-w7wc) is outermost BECAUSE order
+  // matters for it: it reports and rethrows, so wrapping the other two is
+  // what lets it see an error raised anywhere underneath. Without it a
+  // database behind prisma/migrations shows up only as @auth/core's generic
+  // `SessionTokenError`, on a page that still answers 200.
+  adapter: withSchemaMismatchLogging(
+    withConfiguredUserLinking(withSessionIdentity(PrismaAdapter(prisma))),
+  ),
   session: { strategy: "database" },
   // A first-party Access Denied screen (src/app/auth/error/page.tsx). Without
   // this, a refused sign-in lands on @auth/core's built-in page, which says
