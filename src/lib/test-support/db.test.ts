@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { migrationNames, splitStatements } from "@/lib/test-support/db";
+import {
+  applyMigration,
+  applyMigrations,
+  migrationNames,
+  splitStatements,
+} from "@/lib/test-support/db";
 
 /**
  * The statement splitter decides whether the committed migration SQL is
@@ -137,5 +142,66 @@ describe("migrationNames", () => {
     expect(names.length).toBeGreaterThan(1);
     expect(names).toEqual([...names].sort());
     expect(names[0]).toMatch(/^\d{14}_/);
+  });
+});
+
+/**
+ * `applyMigrations`' window, asserted against a recording stub rather than
+ * a real database: what is under test is WHICH migrations each set of
+ * options applies, and standing up SQLite to find out would mean the
+ * assertion could also fail for reasons that are not that (ugcportal-qn3).
+ */
+describe("applyMigrations", () => {
+  /** A client that records the SQL it is handed, in order. */
+  function recordingClient(): { sql: string[]; $executeRawUnsafe: (s: string) => Promise<number> } {
+    const sql: string[] = [];
+    return {
+      sql,
+      $executeRawUnsafe: async (statement: string) => {
+        sql.push(statement);
+        return 0;
+      },
+    };
+  }
+
+  it("stopBefore and startAfter partition the migrations exactly", async () => {
+    // Every statement applied once, with no gap and no overlap. That is
+    // the property the two-phase migration tests rest on: stop before a
+    // migration, run it on its own, then catch the schema up with
+    // startAfter so the generated client can read the database.
+    const names = migrationNames();
+    const pivot = names[Math.floor(names.length / 2)];
+
+    const whole = recordingClient();
+    await applyMigrations(whole);
+
+    const before = recordingClient();
+    await applyMigrations(before, { stopBefore: pivot });
+
+    const pivotOnly = recordingClient();
+    await applyMigration(pivotOnly, pivot);
+
+    const after = recordingClient();
+    await applyMigrations(after, { startAfter: pivot });
+
+    expect([...before.sql, ...pivotOnly.sql, ...after.sql]).toEqual(whole.sql);
+    // Non-empty on both sides, so a pivot at either end could not make
+    // this pass by one half simply being the whole thing.
+    expect(before.sql.length).toBeGreaterThan(0);
+    expect(after.sql.length).toBeGreaterThan(0);
+  });
+
+  it("refuses a name that is not a committed migration", async () => {
+    // Loudly, on both options: a renamed migration that silently became
+    // "apply everything" (or "apply nothing") would leave the test that
+    // asked for a window asserting against the wrong schema.
+    const client = recordingClient();
+    await expect(
+      applyMigrations(client, { stopBefore: "nope" }),
+    ).rejects.toThrow("No such migration: nope");
+    await expect(
+      applyMigrations(client, { startAfter: "nope" }),
+    ).rejects.toThrow("No such migration: nope");
+    expect(client.sql).toEqual([]);
   });
 });

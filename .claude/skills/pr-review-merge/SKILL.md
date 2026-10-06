@@ -522,33 +522,31 @@ fi
 
 ```bash
 gh repo view --json squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed   # pick an allowed method, prefer squash
-gh pr merge <n> --squash --delete-branch   # fall back to --merge or --rebase if squash isn't allowed
+```
+
+**Do not pass `--delete-branch` here (ugcportal-hvaf).** `--delete-branch` would delete `headRefName` as part of the merge call itself, with no check for an open PR that still lists it as a base — GitHub auto-closes such a PR the instant its base branch disappears, and refuses both reopen and base-change once the base ref is gone, which cost three PRs their comment history in one day (#126, #120, #123). That check, with a test, already lives in `scripts/sweep-merged-branches.mjs` (`classifyBranchRetarget` / `classifyRetargetVerification` / `classifyPreDeleteRecheck`) — an earlier version of this step re-implemented the same logic again here, by hand, in untested prose, which is exactly the two-copies-drift risk `review-standards`' sibling-omission family warns about. So: merge without the flag, then route the actual deletion through that tested script, below.
+
+```bash
+gh pr merge <n> --squash   # fall back to --merge or --rebase if squash isn't allowed; never --delete-branch
 ```
 
 If `gh pr merge` fails for an unrelated reason (the branch stopped being mergeable, or none of squash/merge/rebase is allowed on the repo), the marker is already on the PR from the first command above, so the next run counts this round correctly — report the failure and stop rather than retrying blind.
 
-**`--delete-branch` is a request, not a confirmed result (ugcportal-nvg0).** It is also not this skill's whole merge history: `--delete-branch` was only added to this step at `640799c` (PR #46, 2026-09-28) — a PR merged before that date was never passed the flag at all, not just occasionally missed by it. Either way, verify the branch is actually gone instead of trusting the flag:
-
-```bash
-git ls-remote --heads origin <headRefName>   # headRefName from step 1 -- must print nothing
-```
-
-If it still prints a line, delete it explicitly and re-check:
-
-```bash
-git push origin --delete <headRefName>
-git ls-remote --heads origin <headRefName>   # must print nothing now
-```
-
-If the branch is still there after that, say so plainly in your step 6 report with the exact command and output — do not report the merge as fully clean.
-
-If this merge was driven from inside the implementer's own worktree (the usual case for an agent-run merge), that worktree and its local branch are now eligible for the same script's one-shot sweep, scoped to this one branch rather than the repo-wide form in step 7 below — run it from the main checkout, not from inside the worktree being removed, rather than removing them by hand:
+**Branch and worktree cleanup now both go through one scoped sweep run, not a hand-run `git push origin --delete` plus a separate hand-run `git branch -D` (ugcportal-nvg0, ugcportal-hvaf):**
 
 ```bash
 node scripts/sweep-merged-branches.mjs --branch <headRefName> --execute
 ```
 
-`classifyWorktree` there gates the worktree's `git branch -D` on an executable check (the branch tip reachable from a remote, or equal to this merge's `headRefOid`), not a comment — the guard a hand-run `git branch -D` here would not have.
+Run this from the main checkout, not from inside the worktree it may remove (same reason `--execute` itself chdirs there when it detects it started inside one). With `<headRefName>`'s PR now `MERGED`, this one call: retargets any open PR currently based on `<headRefName>` to that PR's own (merged) base before doing anything else, re-verifies live immediately before the delete that nothing new appeared in the meantime, deletes the remote branch only once that is clear, and — if this merge was driven from inside the implementer's own worktree (the usual case for an agent-run merge) — removes that worktree and its local branch too, gating the worktree's `git branch -D` on an executable check (the branch tip reachable from a remote, or equal to this merge's `headRefOid`), not a comment.
+
+Read its output rather than assuming success: a line reading `removed origin/<headRefName>` means the branch is gone; a line reading `kept origin/<headRefName>: <reason>` means it is not, most likely because an open PR based on it could not be safely retargeted — report that reason plainly in your step 6 report and leave the branch for a human rather than forcing it (a manual `git push origin --delete` here would skip the exact check this script exists to apply). Either way, a final check closes the loop without trusting the log alone:
+
+```bash
+git ls-remote --heads origin <headRefName>   # must print nothing if the script reported it removed
+```
+
+If that still prints a line after the script reported success, say so plainly in your step 6 report with the exact output — do not report the merge as fully clean.
 
 If the PR merges at round 4+ with low findings deferred, say so explicitly in the round-marker comment posted before merge (and in the approval body too, on the rare chain where approval is attempted and succeeds) and list the bead ids from step 5a.
 
@@ -654,7 +652,7 @@ State plainly:
 - Bead ids filed in step 5a, if any.
 - The `tokens_qa` figure recorded in step 4a (or note that it was skipped, and why).
 
-If merged, confirm the merge actually happened (`gh pr view <n> --json state,mergedAt`) and confirm the branch-deletion check above — gone on the first try, gone only after the explicit delete, or still present and reported as such.
+If merged, confirm the merge actually happened (`gh pr view <n> --json state,mergedAt`) and confirm the result of the scoped sweep above — removed and the final `git ls-remote` check confirms it gone, or kept (naming the reason the script printed) and still present.
 
 ## 7. One-shot cleanup sweep (drift, not a single PR)
 
@@ -665,4 +663,4 @@ node scripts/sweep-merged-branches.mjs             # dry run: lists every candid
 node scripts/sweep-merged-branches.mjs --execute   # removes them
 ```
 
-It never touches a branch with an `OPEN` or `CLOSED`-without-merge PR, a branch with no PR at all (a human decision each time — this includes non-PR refs like Dolt's own branch under `refs/heads`), a dirty or locked worktree, a worktree with commits that aren't reachable from any remote branch and don't match the merged PR's own head commit, or the main branch and checkout — `scripts/sweep-merged-branches.test.mjs` asserts each of those against the pure classifier, including against real temporary git repositories for the unpushed-commit and deleted-directory cases. This unscoped, repo-wide form is for drift that already exists — run it on a schedule, or whenever `git worktree list` or `git branch -r` looks longer than expected. The merge step above runs the same script as part of its own per-PR flow, scoped to one branch (`--branch <name>`); only this repo-wide form does not run automatically.
+It never touches a branch with an `OPEN` or `CLOSED`-without-merge PR, a branch with no PR at all (a human decision each time — this includes non-PR refs like Dolt's own branch under `refs/heads`), a dirty or locked worktree, a worktree with commits that aren't reachable from any remote branch and don't match the merged PR's own head commit, or the main branch and checkout — `scripts/sweep-merged-branches.test.mjs` asserts each of those against the pure classifier, including against real temporary git repositories for the unpushed-commit and deleted-directory cases. Nor does it ever delete a `"remove"`-eligible branch while an open PR still lists it as base (ugcportal-hvaf): before each such deletion, `--execute` retargets any open PR currently based on that branch — to the first still-existing base in the chain the branch's own merged PR recorded, walking past any intermediate branch this or an earlier sweep already deleted, rather than a dangling name — and re-checks live, immediately before the delete, that nothing new appeared while retargeting was in flight; either gap keeps the branch with a reported reason instead of deleting it. `--no-retarget-open-prs` switches off the retargeting (not the final live re-check, which guards the delete regardless) in favour of keep-and-report. This unscoped, repo-wide form is for drift that already exists — run it on a schedule, or whenever `git worktree list` or `git branch -r` looks longer than expected. The merge step above runs the same script as part of its own per-PR flow, scoped to one branch (`--branch <name>`); only this repo-wide form does not run automatically.

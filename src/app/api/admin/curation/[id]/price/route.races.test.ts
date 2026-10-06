@@ -39,6 +39,7 @@ const SELLABLE_UPLOAD = {
   },
   listing: {
     depictsPeople: false,
+    depictsMinors: false,
     modelReleaseKey: null,
     containsMusic: false,
     thirdPartyCreator: false,

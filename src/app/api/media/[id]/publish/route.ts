@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { advertisingLabelPublishRefusal } from "@/lib/advertising-disclosure";
 import {
   MEDIA_OWNER_SELECT,
   requireOwnedMedia,
@@ -114,6 +115,45 @@ export async function POST(_request: Request, { params }: RouteContext) {
       },
       { status: 400 },
     );
+  }
+
+  // AN UNLABELLED ADVERTISEMENT MAY NOT BE PUBLISHED (ugcportal-qnq9.1 K2).
+  // Forbrukertilsynet requires a prominent advertising label on any item the
+  // operator was paid or given a benefit for, and holds both the creator and
+  // the brand responsible for one that is missing (docs/ugc-research.md §3.2;
+  // §5.7 confirms posting in English does not change that). So the same
+  // refusal shape alt text gets, a line above: a 400 naming the field,
+  // because the request is well-formed and authorized and what blocks it is
+  // the row's own current state.
+  //
+  // A SEPARATE READ rather than widening `requireOwnedMedia`. That gate is
+  // shared by PATCH, DELETE, tags and both handlers here, and none of the
+  // others has any use for the disclosure — adding it to the gate would make
+  // every one of them pay for a join to answer a question only this branch
+  // asks. Publishing is a rare, deliberate act; one extra round trip on it is
+  // the cheaper side of that trade.
+  //
+  // NOT GATED ON `publishedAt === null`, which is the one place this
+  // deliberately differs from the alt-text check above, so the difference is
+  // worth stating. That check is transition-only because `altText` has no
+  // writer that can clear it, so the only way an already-published row can
+  // have a blank one is a stale pre-backfill insert during a rolling deploy —
+  // a row that is not in breach of anything, which a 400 on an idempotent
+  // re-POST would wrongly punish. This column is the opposite case: there is
+  // no backfill and no pre-existing row that lands in the refused state (an
+  // item with no disclosure row is unanswered, which publishes), and PUT
+  // /api/media/[id]/disclosure will not create the refused pair at all. So a
+  // published row that reaches this check and fails it was written outside
+  // this API and IS in breach — and answering 200 to "publish this undisclosed
+  // advertisement" because it already happens to be public is the wrong
+  // answer to give.
+  const disclosure = await prisma.mediaAdvertisingDisclosure.findUnique({
+    where: { mediaId: id },
+    select: { benefitReceived: true, label: true },
+  });
+  const refusal = advertisingLabelPublishRefusal(disclosure);
+  if (refusal) {
+    return NextResponse.json(refusal, { status: 400 });
   }
 
   // Two different problems hide behind "this row has no usable preview", and
