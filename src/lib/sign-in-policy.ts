@@ -344,10 +344,11 @@ export function bootstrapAdminEmails(
  * year," on the sign-in path rather than a per-request one. Sharing one
  * memoised parse between the two would mean threading pre-parsed entries
  * through `permittedIdentities`'s single combined pass — kept single on
- * purpose, see `reviewConfiguredUsers`'s note on the PR #98 round 2 defect a
- * second pass of the same list reintroduced — which is more surface on an
- * authorisation path than this negligible cost justifies. Recorded here
- * rather than fixed.
+ * purpose (see that function's own "ONE pass that builds everything" comment,
+ * PR #91 review round 3 finding 1 — a DIFFERENT single-pass decision than
+ * `reviewConfiguredUsers`'s, which is about its own, separate loop) — which is
+ * more surface on an authorisation path than this negligible cost justifies.
+ * Recorded here rather than fixed.
  */
 export function isBootstrapAdminSignIn(
   identity: { email: unknown; provider?: unknown },
