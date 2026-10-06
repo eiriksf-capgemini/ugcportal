@@ -159,12 +159,14 @@ describe("K6: the analytics host/script name appears nowhere outside the gated l
 });
 
 /**
- * Review round 4: the scanner's three fail-closed exits hand a file back
- * UNSTRIPPED, which is safe but noisy — a comment that merely discusses
- * the vendor would then trip the scan above, and the obvious reading of
- * that failure is "false positive, allowlist it". So the conservative
- * path must not be reachable by real source, and that is asserted rather
- * than assumed: every JS-family file under src/ parses cleanly today.
+ * Review round 4: the scanner's fail-closed exits (see stripComments in
+ * src/lib/design/scan-source.ts, each with its own test in
+ * scan-source.test.ts) hand a file back UNSTRIPPED, which is safe but noisy
+ * — a comment that merely discusses the vendor would then trip the scan
+ * above, and the obvious reading of that failure is "false positive,
+ * allowlist it". So the conservative path must not be reachable by real
+ * source, and that is asserted rather than assumed: every JS-family file
+ * under src/ parses cleanly today.
  *
  * This lives here because this file already walks the whole tree with the
  * extension list the check needs, and because a regression would show up
