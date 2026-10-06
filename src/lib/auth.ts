@@ -255,11 +255,11 @@ export const handlers = withSignInIdentity(nextAuth.handlers);
  * `"database"` session strategy means every one of those calls shares a
  * single adapter round trip instead of paying for its own.
  *
- * Not yet universal: src/app/upload/page.tsx:24 still calls plain `auth()`
- * (ugcportal-t0y round 2 finding) — migrating it needs coordinating with the
- * concurrently open PR #46, which also touches that file, so it stayed
- * out of scope here and is filed separately as ugcportal-asg. A signed-in
- * visit to /upload therefore still costs two session queries, not one,
- * until that bead lands.
+ * Universal as of ugcportal-asg (CLOSED): src/app/upload/page.tsx now calls
+ * this same getSession() (src/app/upload/page.tsx, "const session = await
+ * getSession()"; fixture proof in page.test.tsx, whose vi.mock exports only
+ * getSession, no auth key — an unmigrated auth() call would throw against
+ * it), so a signed-in visit to /upload shares the one adapter round trip
+ * above rather than paying for a second.
  */
 export const getSession = cache(() => auth());
