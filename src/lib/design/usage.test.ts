@@ -798,18 +798,25 @@ describe("findBareColorUtilities", () => {
     ]);
   });
 
-  it("does not double-count an alpha-modified utility as a bare one", () => {
-    // bg-primary/50 is findAlphaColorUtilities' job, at its own alpha - this
-    // scanner must not also read it as bg-primary at an assumed 100%.
+  it("does not double-count an alpha-modified utility as a bare one, even when the truncated name is itself a real token", () => {
+    // bg-petrol-500/50 is findAlphaColorUtilities' job, at its own alpha -
+    // this scanner must not also read it as a bare bg-petrol-50 at an assumed
+    // 100%. petrol-500/petrol-50 (PR #115 round 3, CONFIRMED medium), not
+    // primary/destructive: the earlier needles' truncations (bg-primar,
+    // text-destructiv) do not compile, so this assertion passed regardless of
+    // whether the trailing lookahead actually fired - it could not fail.
+    // --color-petrol-50 is a real token, so a truncation onto it is the only
+    // needle that exercises the fix rather than the compile check's own
+    // accidental backstop.
     const root = fixture({
-      "a.tsx": `const c = "bg-primary/50 text-destructive/[.5] border-input/(--a)";`,
+      "a.tsx": `const c = "bg-petrol-500/50 text-petrol-500/70 border-input/(--a)";`,
     });
     expect(findBareColorUtilities(root)).toEqual([]);
   });
 
-  it("does not double-count a fractional or interpolated alpha-modified utility either", () => {
+  it("does not double-count a fractional or interpolated alpha-modified utility either, with the same real-token needle", () => {
     const root = fixture({
-      "a.tsx": "const c = `bg-primary/12.5 text-destructive/${a}`;",
+      "a.tsx": "const c = `bg-petrol-500/12.5 text-petrol-500/${a}`;",
     });
     expect(findBareColorUtilities(root)).toEqual([]);
   });

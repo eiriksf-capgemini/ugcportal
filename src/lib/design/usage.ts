@@ -758,16 +758,21 @@ const BARE_COLOR_PREFIX_ALTERNATION = BARE_COLOR_PREFIXES.join("|");
 /**
  * Matches a bare `bg-X`/`text-X`/`border-X`, reusing the alpha scanner's own
  * boundary class (variant prefixes, the legacy leading `!important` spelling,
- * a closing template-literal brace - see BOUNDARY above). The trailing
- * negative lookahead is what keeps this scanner and findAlphaColorUtilities
- * from double-counting the same utility at two different (and contradictory)
- * opacities: `bg-primary/50` is findAlphaColorUtilities' job, at its own
- * alpha, not this scanner's at an assumed 100 - the lookahead excludes
- * exactly the modifier shapes ALPHA_UTILITY recognises (a number, either
- * arbitrary-value spelling, an interpolation).
+ * a closing template-literal brace - see BOUNDARY above). `(?![a-z0-9-])`
+ * forces the bare-word name to be matched in full before either trailing
+ * lookahead runs: without it, `[a-z][a-z0-9-]*` is greedy but not atomic, so
+ * when the alpha-modifier lookahead below failed against the full name the
+ * engine backtracked one character and re-tried it against a TRUNCATED name
+ * - `bg-petrol-500/50` matched as `bg-petrol-50`, a real token, reported as a
+ * usage nobody wrote (PR #115 round 3, CONFIRMED medium). The second
+ * lookahead, `(?!\/(?:\$\{|\[|\(|\d))`, is what keeps this scanner and
+ * findAlphaColorUtilities from double-counting the same utility at two
+ * different (and contradictory) opacities - `bg-primary/50` is
+ * findAlphaColorUtilities' job, at its own alpha, not this scanner's at an
+ * assumed 100 - but only once the name is no longer free to shrink to dodge it.
  */
 const BARE_COLOR_UTILITY = new RegExp(
-  String.raw`${BOUNDARY}(${BARE_COLOR_PREFIX_ALTERNATION})-(\[[^\]]*\]|\([^)]*\)|[a-z][a-z0-9-]*)(?!\/(?:\$\{|\[|\(|\d))`,
+  String.raw`${BOUNDARY}(${BARE_COLOR_PREFIX_ALTERNATION})-(\[[^\]]*\]|\([^)]*\)|[a-z][a-z0-9-]*)(?![a-z0-9-])(?!\/(?:\$\{|\[|\(|\d))`,
   "g",
 );
 
