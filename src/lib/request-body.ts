@@ -10,10 +10,11 @@
  * Both are bounded in time as well as in size: every read in this module
  * goes through {@link stallGuarded}, so "how long may this take between
  * bytes" is not a per-reader decision either. `src/lib/request-body.test.ts`
- * enumerates the module's body reads and fails on one that is neither
- * guarded nor listed as a deliberate exception, because the JSON reader sat
- * outside the guard for as long as it did by omission rather than by
- * decision (ugcportal-8hsf).
+ * enumerates this module's body reads — in the three source shapes its
+ * scanner recognises, which that file names and bounds — and fails on one
+ * that is neither guarded nor listed as a deliberate exception, because the
+ * JSON reader sat outside the guard for as long as it did by omission
+ * rather than by decision (ugcportal-8hsf).
  *
  * In both, the Content-Length check is a cheap early-out and deliberately
  * **not** the enforcement (see ugcportal-i04, where exactly that mistake was
@@ -132,10 +133,14 @@ function isBodyTooLarge(error: unknown): boolean {
  * It applies to {@link readJsonBody} on the same terms (ugcportal-8hsf).
  * Declared above both readers rather than next to the multipart one because
  * it is not a multipart rule: the module's promise is that *every* sanctioned
- * body read is idle-bounded, and the JSON reader spent three authenticated
+ * body read is idle-bounded, and the JSON reader spent four authenticated
  * routes outside it — a short valid prefix under the limit, then silence, got
- * no answer for the whole of `requestTimeout`. No reservation is held there,
- * so, as on the peek, the cost is request slots rather than bytes.
+ * no answer for the whole of `requestTimeout`. Four, not the three the bead
+ * names: `PATCH /api/media/[id]`, `PUT /api/media/[id]/tags`,
+ * `POST /api/admin/curation/[id]/price` and `PUT /api/media/[id]/disclosure`,
+ * the last added by gh-147 after the bead was filed. No reservation is held
+ * on any of them, so, as on the peek, the cost is request slots rather than
+ * bytes.
  */
 export const BODY_STALL_TIMEOUT_MS = 30_000;
 
@@ -289,19 +294,27 @@ export async function readJsonBody(
 
       received += value.byteLength;
       if (received > limit) {
-        // REQUESTED, NOT AWAITED, for the reason stallGuarded's own teardown
-        // is not awaited (ugcportal-dvb): the promise `cancel()` returns
-        // tracks the *source* body's teardown, which for a live socket does
-        // not settle until the client disconnects. Awaiting it answered this
-        // 413 promptly while the reader was the raw request body, whose own
-        // cancel does settle (measured on ugcportal-8hsf), but this reader is
-        // now the guard's, whose cancel forwards to that same source — so
-        // awaiting it would make the 413 wait on a client that has no reason
-        // to hang up. Pinned by request-body.test.ts "answers 413 without
-        // waiting for the body's own teardown". Rejections are dropped rather
-        // than caught below: the cap has been decided, and letting a failed
-        // teardown rewrite a correct 413 into a 400 would report the wrong
-        // thing.
+        // Requested, not awaited — but NOT because awaiting it here would
+        // hang. It would not: gh-158's reviewer restored `await` on this
+        // line and measured the real server still answering 413 in 11-40 ms
+        // with the socket held. What decides whether `cancel()` settles is
+        // whether a read is still outstanding on the source, not whether the
+        // client is still there. In stallGuarded's catch one is — the racing
+        // `reader.read()` the timeout beat — and awaiting there gave no
+        // answer in 60 s (ugcportal-dvb). Here the read has already resolved,
+        // so there is nothing for the teardown to wait on.
+        //
+        // So this is the defensive form, not the load-bearing one: it keeps
+        // every teardown in this module on the same rule rather than on a
+        // case-by-case argument about which reads are pending, and it means
+        // the 413 cannot start depending on the teardown if the code above
+        // it changes. Pinned by request-body.test.ts "answers 413 without
+        // waiting for the body's own teardown", which holds a source whose
+        // teardown never settles — the property, not the millisecond figure.
+        //
+        // Rejections are dropped rather than caught below: the cap has been
+        // decided, and letting a failed teardown rewrite a correct 413 into
+        // a 400 would report the wrong thing.
         void reader.cancel().catch(() => {});
         return { ok: false, status: 413, error: "Request body too large" };
       }

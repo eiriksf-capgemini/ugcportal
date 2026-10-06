@@ -767,8 +767,6 @@ describe("readJsonBody — size and idle bounds", () => {
       // The socket is released here rather than at Node's requestTimeout,
       // which is the entire point of answering early.
       expect(cancelled).toHaveBeenCalledTimes(1);
-      // Nothing left armed to fire after the answer.
-      expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();
     }
@@ -796,7 +794,6 @@ describe("readJsonBody — size and idle bounds", () => {
         error: "Request body stalled",
       });
       expect(cancelled).toHaveBeenCalledTimes(1);
-      expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();
     }
@@ -885,26 +882,38 @@ describe("readJsonBody — size and idle bounds", () => {
     });
   });
 
-  it("answers 413 without waiting for the body's own teardown", async () => {
-    // This answered promptly with the socket held before the guard existed,
-    // because the awaited cancel was on the raw request body (the figure is
-    // on ugcportal-8hsf). The read now goes through the guard, whose cancel
-    // forwards to that same source — so an awaited cancel here would newly
-    // block on a client that has no reason to disconnect. Pinned by a source
-    // whose teardown never settles.
-    const cancelled = vi.fn(cancelThatNeverSettles);
-    const oversize = silentAfter(["x".repeat(LIMIT + 1)], cancelled);
+  it("answers 413 without waiting for the body's own teardown, and arms nothing further", async () => {
+    // Awaiting the teardown on this line would not in fact hang a real
+    // server — see the comment beside it — so what this pins is the
+    // property and not a duration: the answer does not depend on the
+    // source's teardown settling, demonstrated with one that never does.
+    //
+    // It is also the one place the timer-leak check can fail. On the stall
+    // path the guard's timer has already fired by the time the answer
+    // lands, so a count of zero there holds whatever the guard does with
+    // it; here the read resolved while the timer was still armed, and only
+    // `clearTimeout` in stallGuarded's `finally` disarms it. Deleting that
+    // line turns the last assertion red (and the trickle test above, which
+    // is the other place it bites).
+    vi.useFakeTimers();
+    try {
+      const cancelled = vi.fn(cancelThatNeverSettles);
+      const oversize = silentAfter(["x".repeat(LIMIT + 1)], cancelled);
 
-    const result = await read(jsonRequest(oversize));
+      const result = await read(jsonRequest(oversize));
 
-    expect(result).toEqual({
-      ok: false,
-      status: 413,
-      error: "Request body too large",
-    });
-    // Requested, not awaited: the teardown is asked for and the answer does
-    // not wait on it.
-    expect(cancelled).toHaveBeenCalledTimes(1);
+      expect(result).toEqual({
+        ok: false,
+        status: 413,
+        error: "Request body too large",
+      });
+      // Requested, not awaited: the teardown is asked for and the answer
+      // does not wait on it.
+      expect(cancelled).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("reports a reset connection as 400, not as a stall", async () => {
@@ -1019,30 +1028,101 @@ function tracesToStallGuard(block: string, name: string, depth = 0): boolean {
 }
 
 /**
+ * Whether the expression a body was read through is one the guard wrapped.
+ *
+ * Either the guard is applied right there (`cappedBody(stallGuarded(body,
+ * ...))`), or the expression is a plain name whose own initializer traces
+ * back to it. Anything else — a call this does not recognise, a property of
+ * something it cannot follow — counts as unguarded, which is the direction
+ * an omission guard has to fail in.
+ */
+function guardsBody(block: string, expression: string): boolean {
+  const trimmed = expression.trim();
+  if (/\bstallGuarded\(/.test(trimmed)) return true;
+  return (
+    /^[A-Za-z_$][\w$.]*$/.test(trimmed) && tracesToStallGuard(block, trimmed)
+  );
+}
+
+/** The text between a `(` at `open` and its matching `)`, quotes respected. */
+function balancedArgs(code: string, open: number): string {
+  let depth = 0;
+  let quote: string | null = null;
+  for (let i = open; i < code.length; i += 1) {
+    const ch = code[i];
+    if (quote !== null) {
+      if (ch === "\\") i += 1;
+      else if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === "`") quote = ch;
+    else if (ch === "(") depth += 1;
+    else if (ch === ")") {
+      depth -= 1;
+      if (depth === 0) return code.slice(open + 1, i);
+    }
+  }
+  return code.slice(open + 1);
+}
+
+/**
  * Every call in the module that pulls bytes off a body, with its verdict.
  *
  * Scans the whole file and then asks which function each hit fell inside,
  * rather than scanning function bodies and ignoring the gaps. A read placed
  * at module scope, or in an arrow function this does not recognise as a
- * block, is reported under `module:` and counted as unguarded — the one
- * thing a guard against omission must not do is quietly skip the code it
- * cannot classify.
+ * block, is reported under `module:` and counted as unguarded.
+ *
+ * Three shapes are recognised, and that list is the guard's actual reach —
+ * it is pattern-matching over source text, not a type checker, so it can
+ * only promise to catch the ways a body is drained in practice:
+ *
+ *  - a method call that consumes a body — `x.getReader()`, `x.read()`,
+ *    `x.formData()`, `x.json()`, `x.text()`, `x.arrayBuffer()`, `x.bytes()`,
+ *    `x.blob()`;
+ *  - `for await (const chunk of x)`, which drains a stream with no method
+ *    call at all;
+ *  - `new Request(...)` / `new Response(...)`, which hand a stream to the
+ *    platform to drain — the argument text is what gets checked, so an
+ *    inline `new Response(request.body).text()` is caught even though its
+ *    `.text()` hangs off a parenthesis rather than a name.
+ *
+ * All three were added because they were *missed*: gh-158 round 1 found the
+ * first version green against a top-level `for await` over `request.body`
+ * and against `new Response(request.body).text()`.
  */
 function bodyReadSites(source: string): Map<string, boolean> {
   const code = stripComments(source);
   const blocks = topLevelFunctions(code);
   const sites = new Map<string, boolean>();
+  const owner = (index: number) =>
+    blocks.find((block) => index >= block.start && index < block.end);
+  const record = (index: number, label: string, expression: string) => {
+    const block = owner(index);
+    sites.set(
+      `${block ? block.name : "module"}:${label}`,
+      block !== undefined && guardsBody(block.text, expression),
+    );
+  };
+
   const consumers =
     /([A-Za-z_$][\w$.]*)\.(getReader|read|formData|json|text|arrayBuffer|bytes|blob)\(/g;
   for (let m = consumers.exec(code); m !== null; m = consumers.exec(code)) {
-    const owner = blocks.find(
-      (block) => m.index >= block.start && m.index < block.end,
-    );
-    sites.set(
-      `${owner ? owner.name : "module"}:${m[1]}.${m[2]}`,
-      owner !== undefined && tracesToStallGuard(owner.text, m[1]),
-    );
+    record(m.index, `${m[1]}.${m[2]}`, m[1]);
   }
+
+  const forAwait =
+    /for await \(\s*(?:const|let|var)\s+[\w$]+\s+of\s+([A-Za-z_$][\w$.]*)/g;
+  for (let m = forAwait.exec(code); m !== null; m = forAwait.exec(code)) {
+    record(m.index, `for await of ${m[1]}`, m[1]);
+  }
+
+  const constructed = /new (Request|Response)\(/g;
+  for (let m = constructed.exec(code); m !== null; m = constructed.exec(code)) {
+    const args = balancedArgs(code, m.index + m[0].length - 1);
+    record(m.index, `new ${m[1]}`, args);
+  }
+
   return sites;
 }
 
@@ -1069,7 +1149,10 @@ describe("request-body.ts — every body read is stall-guarded", () => {
     "stallGuarded:source.getReader": false,
     "stallGuarded:reader.read": false,
     // The multipart reader: the platform parses a re-framed Request whose
-    // body is capped and guarded (gh-38).
+    // body is capped and guarded (gh-38). Two entries, because handing the
+    // stream to the constructor and reading it back off the result are both
+    // points where an unguarded body could be let through.
+    "readCappedFormDataFrom:new Request": true,
     "readCappedFormDataFrom:reframed.formData": true,
     // The peek, guarded before its first read (ugcportal-dvb).
     "peekDeclaredPartType:guarded.getReader": true,
@@ -1104,6 +1187,56 @@ export async function readSomeOtherBody(request: Request) {
     expect(Object.fromEntries(bodyReadSites(sibling))).toEqual({
       "readSomeOtherBody:request.body.getReader": false,
       "readSomeOtherBody:reader.read": false,
+    });
+  });
+
+  it("catches a body drained without a method call at all", () => {
+    // gh-158 round 1: the first version of this scanner was green against
+    // both of these, because neither reaches the body through a named
+    // method on a named receiver. They are the two realistic ways to drain
+    // a request body in this codebase that the method list cannot see.
+    const sneaky = `
+export async function countBytes(request: Request) {
+  let n = 0;
+  for await (const chunk of request.body as unknown as AsyncIterable<Uint8Array>) {
+    n += chunk.byteLength;
+  }
+  return n;
+}
+
+export async function readAsText(request: Request) {
+  return await new Response(request.body).text();
+}
+`;
+
+    expect(Object.fromEntries(bodyReadSites(sneaky))).toEqual({
+      "countBytes:for await of request.body": false,
+      "readAsText:new Response": false,
+    });
+  });
+
+  it("does not flag those two shapes when they are guarded", () => {
+    // The mirror of the test above: the scanner has to separate the two,
+    // or it would force every such read onto the exception list and stop
+    // meaning anything.
+    const guarded = `
+export async function countBytes(request: Request) {
+  let n = 0;
+  const bounded = stallGuarded(request.body, 1);
+  for await (const chunk of bounded as unknown as AsyncIterable<Uint8Array>) {
+    n += chunk.byteLength;
+  }
+  return n;
+}
+
+export async function readAsText(request: Request) {
+  return await new Response(stallGuarded(request.body, 1)).text();
+}
+`;
+
+    expect(Object.fromEntries(bodyReadSites(guarded))).toEqual({
+      "countBytes:for await of bounded": true,
+      "readAsText:new Response": true,
     });
   });
 
