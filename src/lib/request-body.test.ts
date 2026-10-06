@@ -1093,18 +1093,30 @@ function balancedArgs(code: string, open: number): string {
  * All three are here because the first version — the method call alone —
  * was green against a top-level `for await` over `request.body` and against
  * `new Response(request.body).text()` (ugcportal-8hsf).
+ *
+ * One sorted line per site, verdict included, rather than a map keyed by
+ * site. A map was last-write-wins, and the constructor label carries no
+ * receiver name to tell two of them apart, so a second unguarded
+ * `new Request(...)` in a function that already had a guarded one was
+ * swallowed when it came first in the file and reported when it came
+ * second — the same code, two verdicts, decided by source order. A list
+ * has no key to collide on, so no site can hide behind another; pinned by
+ * "reports two constructor sites in one function separately, in either
+ * order", which fails if this goes back to a keyed collection.
  */
-function bodyReadSites(source: string): Map<string, boolean> {
+function bodyReadSites(source: string): string[] {
   const code = stripComments(source);
   const blocks = topLevelFunctions(code);
-  const sites = new Map<string, boolean>();
+  const sites: string[] = [];
   const owner = (index: number) =>
     blocks.find((block) => index >= block.start && index < block.end);
   const record = (index: number, label: string, expression: string) => {
     const block = owner(index);
-    sites.set(
-      `${block ? block.name : "module"}:${label}`,
-      block !== undefined && guardsBody(block.text, expression),
+    const guarded = block !== undefined && guardsBody(block.text, expression);
+    sites.push(
+      `${block ? block.name : "module"}:${label} -> ${
+        guarded ? "stall-guarded" : "UNGUARDED"
+      }`,
     );
   };
 
@@ -1126,7 +1138,7 @@ function bodyReadSites(source: string): Map<string, boolean> {
     record(m.index, `new ${m[1]}`, args);
   }
 
-  return sites;
+  return sites.sort();
 }
 
 describe("request-body.ts — every body read is stall-guarded", () => {
@@ -1143,28 +1155,28 @@ describe("request-body.ts — every body read is stall-guarded", () => {
    * same function". `false` entries are the exception list, and each one
    * carries why it is allowed to read an unguarded stream.
    */
-  const EXPECTED: Record<string, boolean> = {
-    // The JSON reader (ugcportal-8hsf).
-    "readJsonBody:guarded.getReader": true,
-    "readJsonBody:reader.read": true,
-    // The guard itself: it is what makes the others true, so it necessarily
-    // holds the one unguarded reader in the module.
-    "stallGuarded:source.getReader": false,
-    "stallGuarded:reader.read": false,
+  const EXPECTED = [
+    // The peek, guarded before its first read (ugcportal-dvb).
+    "peekDeclaredPartType:guarded.getReader -> stall-guarded",
+    "peekDeclaredPartType:reader.read -> stall-guarded",
     // The multipart reader: the platform parses a re-framed Request whose
-    // body is capped and guarded (gh-38). Two entries, because handing the
+    // body is capped and guarded (gh-38). Two sites, because handing the
     // stream to the constructor and reading it back off the result are both
     // points where an unguarded body could be let through.
-    "readCappedFormDataFrom:new Request": true,
-    "readCappedFormDataFrom:reframed.formData": true,
-    // The peek, guarded before its first read (ugcportal-dvb).
-    "peekDeclaredPartType:guarded.getReader": true,
-    "peekDeclaredPartType:reader.read": true,
-    // Replays a reader its caller already took off a guarded stream; it has
-    // no stream of its own to guard, and guarding here would double-arm the
-    // same bytes.
-    "replay:reader.read": false,
-  };
+    "readCappedFormDataFrom:new Request -> stall-guarded",
+    "readCappedFormDataFrom:reframed.formData -> stall-guarded",
+    // The JSON reader (ugcportal-8hsf).
+    "readJsonBody:guarded.getReader -> stall-guarded",
+    "readJsonBody:reader.read -> stall-guarded",
+    // EXCEPTION. Replays a reader its caller already took off a guarded
+    // stream; it has no stream of its own to guard, and guarding here would
+    // double-arm the same bytes.
+    "replay:reader.read -> UNGUARDED",
+    // EXCEPTION. The guard itself is what makes the others guarded, so it
+    // necessarily holds the one unguarded reader in the module.
+    "stallGuarded:reader.read -> UNGUARDED",
+    "stallGuarded:source.getReader -> UNGUARDED",
+  ];
 
   it("has no body read that is neither guarded nor on the exception list", () => {
     const source = readFileSync(
@@ -1172,7 +1184,7 @@ describe("request-body.ts — every body read is stall-guarded", () => {
       "utf8",
     );
 
-    expect(Object.fromEntries(bodyReadSites(source))).toEqual(EXPECTED);
+    expect(bodyReadSites(source)).toEqual(EXPECTED);
   });
 
   it("would catch a new unguarded reader", () => {
@@ -1187,10 +1199,10 @@ export async function readSomeOtherBody(request: Request) {
 }
 `;
 
-    expect(Object.fromEntries(bodyReadSites(sibling))).toEqual({
-      "readSomeOtherBody:request.body.getReader": false,
-      "readSomeOtherBody:reader.read": false,
-    });
+    expect(bodyReadSites(sibling)).toEqual([
+      "readSomeOtherBody:reader.read -> UNGUARDED",
+      "readSomeOtherBody:request.body.getReader -> UNGUARDED",
+    ]);
   });
 
   it("catches a body drained without a method call at all", () => {
@@ -1212,10 +1224,10 @@ export async function readAsText(request: Request) {
 }
 `;
 
-    expect(Object.fromEntries(bodyReadSites(sneaky))).toEqual({
-      "countBytes:for await of request.body": false,
-      "readAsText:new Response": false,
-    });
+    expect(bodyReadSites(sneaky)).toEqual([
+      "countBytes:for await of request.body -> UNGUARDED",
+      "readAsText:new Response -> UNGUARDED",
+    ]);
   });
 
   it("does not flag those two shapes when they are guarded", () => {
@@ -1237,10 +1249,44 @@ export async function readAsText(request: Request) {
 }
 `;
 
-    expect(Object.fromEntries(bodyReadSites(guarded))).toEqual({
-      "countBytes:for await of bounded": true,
-      "readAsText:new Response": true,
-    });
+    expect(bodyReadSites(guarded)).toEqual([
+      "countBytes:for await of bounded -> stall-guarded",
+      "readAsText:new Response -> stall-guarded",
+    ]);
+  });
+
+  it("reports two constructor sites in one function separately, in either order", () => {
+    // A constructor hit carries no receiver name to tell two of them
+    // apart, and the scanner used to collect sites into a map keyed on the
+    // label:
+    // an unguarded `new Request(...)` beside a guarded one in the same
+    // function was swallowed when it came first in the file and reported
+    // when it came second. Same code, two verdicts, decided by source
+    // order — and the swallowing direction is the silent one. Both orders
+    // must report both sites.
+    const body = (order: "unguarded-first" | "guarded-first") => {
+      const raw =
+        '  const raw = new Request(request.url, { method: "POST", body, duplex: "half" } as RequestInit);';
+      const safe =
+        '  const safe = new Request(request.url, { method: "POST", body: stallGuarded(body, 1), duplex: "half" } as RequestInit);';
+      const lines =
+        order === "unguarded-first" ? [raw, safe] : [safe, raw];
+      return [
+        "export function reframe(request: Request, body: ReadableStream<Uint8Array>) {",
+        ...lines,
+        "  return [raw, safe];",
+        "}",
+        "",
+      ].join("\n");
+    };
+
+    const expected = [
+      "reframe:new Request -> UNGUARDED",
+      "reframe:new Request -> stall-guarded",
+    ].sort();
+
+    expect(bodyReadSites(body("unguarded-first"))).toEqual(expected);
+    expect(bodyReadSites(body("guarded-first"))).toEqual(expected);
   });
 
   it("does not mistake a comment for a body read", () => {
@@ -1256,9 +1302,9 @@ export async function guardedReader(request: Request) {
 }
 `;
 
-    expect(Object.fromEntries(bodyReadSites(prose))).toEqual({
-      "guardedReader:guarded.getReader": true,
-      "guardedReader:reader.read": true,
-    });
+    expect(bodyReadSites(prose)).toEqual([
+      "guardedReader:guarded.getReader -> stall-guarded",
+      "guardedReader:reader.read -> stall-guarded",
+    ]);
   });
 });

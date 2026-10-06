@@ -296,10 +296,12 @@ export async function readJsonBody(
       if (received > limit) {
         // Requested, not awaited — but NOT because awaiting it here would
         // hang. It would not: with `await` restored on this line a real
-        // server still answers the 413 promptly with the socket held
-        // (measured on ugcportal-8hsf). What decides whether `cancel()`
-        // settles is whether a read is still outstanding on the source, not
-        // whether the client is still there. In stallGuarded's catch one is
+        // server still answers the 413 promptly with the socket held,
+        // measured during review of the change that added this comment and
+        // recorded, with its figures, in that pull request rather than
+        // here. What decides whether `cancel()` settles is whether a read
+        // is still outstanding on the source, not whether the client is
+        // still there. In stallGuarded's catch one is
         // — the racing `reader.read()` the timeout beat — and awaiting there
         // never answers at all (ugcportal-dvb). Here the read has already
         // resolved, so the teardown has nothing to wait on.
@@ -309,8 +311,9 @@ export async function readJsonBody(
         // case-by-case argument about which reads are pending, and it means
         // the 413 cannot start depending on the teardown if the code above
         // it changes. Pinned by request-body.test.ts "answers 413 without
-        // waiting for the body's own teardown", which holds a source whose
-        // teardown never settles — the property, not the millisecond figure.
+        // waiting for the body's own teardown, and arms nothing further",
+        // which holds a source whose teardown never settles — the property,
+        // not the millisecond figure.
         //
         // Rejections are dropped rather than caught below: the cap has been
         // decided, and letting a failed teardown rewrite a correct 413 into
