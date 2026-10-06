@@ -132,10 +132,10 @@ function failureClassName(error: unknown): string {
   // A plain `new Error(...)` -- e.g. `@/lib/s3`'s `requireEnv` throwing
   // because S3_ENDPOINT/S3_ACCESS_KEY_ID/etc. are unset entirely, thrown
   // before any network call is attempted -- has `.name === "Error"`: a code
-  // that reads as meaningful but names nothing, the exact defect
-  // `classifyTransportFailure`'s own fallback already exists to avoid (see
-  // its doc comment in src/lib/s3.ts, round-3 finding 3). Treated the same
-  // way here: generic "Error" reports as "unknown", confirmed by this
+  // that reads as meaningful but names nothing, the same defect
+  // `classifyTransportFailure`'s own fallback in src/lib/s3.ts already
+  // exists to avoid. Treated the same way here: generic "Error" reports as
+  // "unknown", confirmed by this
   // file's "falls back to unknown..." test, which fixture-mutates by
   // reverting to a bare `error.name` and checking that test fails.
   return error.name && error.name !== "Error" ? error.name : "unknown";
