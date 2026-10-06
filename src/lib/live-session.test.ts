@@ -504,13 +504,12 @@ describe("a session row that cannot be identified is refused, not mass-deleted",
 });
 
 /**
- * Post-cap low on PR #91 (ugcportal-0p5s): `recordedIdentity` is the one
- * place that reads a session row's own columns back out, and it ran every
- * field through `normalizeString`, which lowercases. That is right for
- * `email` (judged for permission, case-insensitively, against configured
- * addresses) and wrong for `id` (the primary key `revokeSession` deletes
- * by) — harmless only because Prisma's default `cuid()` ids happen to be
- * lowercase already.
+ * `recordedIdentity` (ugcportal-0p5s) is the one place that reads a session
+ * row's own columns back out, and it ran every field through
+ * `normalizeString`, which lowercases. That is right for `email` (judged for
+ * permission, case-insensitively, against configured addresses) and wrong
+ * for `id` (the primary key `revokeSession` deletes by) — harmless only
+ * because Prisma's default `cuid()` ids happen to be lowercase already.
  */
 describe("the recorded id is not case-folded before the delete (ugcportal-0p5s)", () => {
   const MIXED_CASE_ID = "Session-MixedCASE";

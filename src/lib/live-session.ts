@@ -197,8 +197,8 @@ export function recordedIdentity(session: Session): {
     signInProvider?: unknown;
     signInEmail?: unknown;
   };
-  // ADDRESS AND PROVIDER ARE NORMALISED HERE, ONCE (PR #91 review, round 4,
-  // finding 3), with the policy's own `normalizeString` rather than a local
+  // NORMALISED HERE, ONCE (PR #91 review, round 4, finding 3), with the
+  // policy's own `normalizeString` rather than a local
   // near-copy of it: absent, non-string and blank all become `null`, so
   // every reader below has one thing to check instead of its own idea of
   // "usable".
@@ -213,9 +213,9 @@ export function recordedIdentity(session: Session): {
   // allowed to decide what a provider value means, and it normalises with
   // the same function on the way.
   //
-  // `id` DOES NOT GO THROUGH `normalizeString` (post-cap low on PR #91,
-  // ugcportal-0p5s): it is the primary key `revokeSession` deletes by, not an
-  // identity being matched for permission, and `normalizeString` lowercases.
+  // `id` DOES NOT GO THROUGH `normalizeString` (ugcportal-0p5s): it is the
+  // primary key `revokeSession` deletes by, not an identity being matched
+  // for permission, and `normalizeString` lowercases.
   // Folding it would build a delete key that no longer matches the row's
   // actual id on any case-sensitive comparison — harmless today only because
   // Prisma's default `cuid()` ids happen to be lowercase already (see
