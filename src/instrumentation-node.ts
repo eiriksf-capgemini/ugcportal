@@ -120,25 +120,40 @@ function defaultS3Probe(): Promise<unknown> {
  * recognise (a well-formed S3 error response, a client-side abort, a plain
  * misconfiguration) falls back to the error's own `name` — still never its
  * `message` — or "unknown" if even that is missing.
+ *
+ * `isTransportFailure` is `classifyTransportFailure` actually having
+ * recognised the failure as transport-shaped, not a guess inferred from
+ * `className` after the fact — round-1 review finding 3: the boot warning
+ * used to say "looks unreachable" unconditionally, including for a
+ * reachable endpoint that answered with a well-formed `AccessDenied`, and
+ * for `getBucketName()`/`requireEnv` throwing because `S3_BUCKET_NAME` (or
+ * another S3_* variable) was never set at all — neither is a connectivity
+ * problem, and telling an operator to `docker compose up -d` for either
+ * sends them to fix the wrong thing. `checkS3Reachability` below branches
+ * the warning's wording on this flag so only a genuine transport failure
+ * gets the "unreachable" / `docker compose` wording.
  */
-function failureClassName(error: unknown): string {
+function describeS3Failure(error: unknown): { className: string; isTransportFailure: boolean } {
   if (!(error instanceof Error)) {
-    return "unknown";
+    return { className: "unknown", isTransportFailure: false };
   }
   const info = classifyTransportFailure(error);
   if (info) {
-    return info.code;
+    return { className: info.code, isTransportFailure: true };
   }
   // A plain `new Error(...)` -- e.g. `@/lib/s3`'s `requireEnv` throwing
-  // because S3_ENDPOINT/S3_ACCESS_KEY_ID/etc. are unset entirely, thrown
-  // before any network call is attempted -- has `.name === "Error"`: a code
-  // that reads as meaningful but names nothing, the same defect
-  // `classifyTransportFailure`'s own fallback in src/lib/s3.ts already
-  // exists to avoid. Treated the same way here: generic "Error" reports as
-  // "unknown", confirmed by this
-  // file's "falls back to unknown..." test, which fixture-mutates by
-  // reverting to a bare `error.name` and checking that test fails.
-  return error.name && error.name !== "Error" ? error.name : "unknown";
+  // because S3_ENDPOINT/S3_ACCESS_KEY_ID/S3_BUCKET_NAME/etc. are unset
+  // entirely, thrown before any network call is attempted -- has
+  // `.name === "Error"`: a code that reads as meaningful but names nothing,
+  // the same defect `classifyTransportFailure`'s own fallback in
+  // src/lib/s3.ts already exists to avoid. Treated the same way here:
+  // generic "Error" reports as "unknown", confirmed by this file's "falls
+  // back to unknown..." test, which fixture-mutates by reverting to a bare
+  // `error.name` fallback and checking that test fails. Either way this
+  // branch is not transport-shaped: `classifyTransportFailure` above has
+  // already said so by returning `null`.
+  const className = error.name && error.name !== "Error" ? error.name : "unknown";
+  return { className, isTransportFailure: false };
 }
 
 /**
@@ -167,11 +182,24 @@ export async function checkS3Reachability({
     return null;
   } catch (error) {
     const endpoint = env.S3_ENDPOINT || "(S3_ENDPOINT not set)";
-    return (
-      `[storage] Object storage at ${endpoint} looks unreachable ` +
-      `(${failureClassName(error)}). Uploads will fail until it is reachable ` +
-      "— if this is local development, check `docker compose up -d`. See env.example."
-    );
+    const { className, isTransportFailure } = describeS3Failure(error);
+    // Round-1 review finding 3: a configuration failure (a missing S3_*
+    // environment variable, caught before any network call) or an
+    // authorization/response failure (a reachable endpoint's own
+    // `AccessDenied`) is not "unreachable", and naming it that way sends an
+    // operator to run `docker compose up -d` when the actual fix is
+    // elsewhere. Only a failure `classifyTransportFailure` itself recognised
+    // as transport-shaped gets that wording; everything else gets wording
+    // that names the problem without claiming a connectivity failure it
+    // cannot show, and points at configuration/credentials instead.
+    return isTransportFailure
+      ? `[storage] Object storage at ${endpoint} looks unreachable ` +
+          `(${className}). Uploads will fail until it is reachable ` +
+          "— if this is local development, check `docker compose up -d`. See env.example."
+      : `[storage] Object storage at ${endpoint} rejected the request or is ` +
+          `misconfigured (${className}). This is not a connectivity problem — ` +
+          "uploads will fail until the S3_* environment variables, credentials, " +
+          "and bucket permissions are correct. See env.example.";
   }
 }
 

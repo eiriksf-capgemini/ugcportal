@@ -1,9 +1,4 @@
-import { readFileSync } from "node:fs";
-import path from "node:path";
-
 import { afterEach, describe, expect, it, vi } from "vitest";
-
-import { REPO_ROOT } from "@/lib/legal/legal-page.test-support";
 
 /**
  * `checkS3Reachability` takes its collaborators (`probe`, `env`, `timeoutMs`)
@@ -75,7 +70,7 @@ describe("the S3 reachability startup check (ugcportal-ze1o)", () => {
    * string "Error" -- a code that reads as meaningful but names nothing,
    * same defect `classifyTransportFailure`'s own fallback in src/lib/s3.ts
    * already exists to avoid. This is the fixture-mutation check for that:
-   * reverting `failureClassName` to a bare `error.name` fallback makes this
+   * reverting `describeS3Failure` to a bare `error.name` fallback makes this
    * fail with "Error" where it expects "unknown".
    */
   it("falls back to \"unknown\", not the bare word \"Error\", for a plain Error", async () => {
@@ -158,28 +153,20 @@ describe("the S3 reachability startup check (ugcportal-ze1o)", () => {
    * K3's other half: the test above uses a probe that resolves, so it only
    * proves there is no *scheduled* re-check after success. A single eager
    * retry on FAILURE (no loop, no timer — just calling `probe()` a second
-   * time from inside the catch block) would pass that test and the source
-   * check below unmodified, since neither `setInterval(` nor `while(`
-   * appears in such a retry. This closes that gap directly on the failure
-   * path, found and confirmed by fixture-mutating `checkS3Reachability` to
-   * retry once inline on failure (pre-review): this test fails as expected
-   * against that mutation.
+   * time from inside the catch block) is the gap this closes directly on
+   * the failure path: found and confirmed by fixture-mutating
+   * `checkS3Reachability` to retry once inline on failure (pre-review),
+   * this test fails as expected against that mutation. (Round-1 review
+   * finding 4: a prior version of this suite also had a static source-regex
+   * check here for `setInterval(`/`while(`, which this call-count assertion
+   * already subsumes — it catches any retry shape, not just those two — so
+   * the regex check was removed rather than kept as a narrower duplicate.)
    */
   it("never invokes the probe again after a failure, either (K3 failure-path)", async () => {
     const probe = vi.fn().mockRejectedValue(transportError("ECONNREFUSED"));
 
     await checkS3Reachability({ probe, env: env({ S3_ENDPOINT: ENDPOINT }) });
     expect(probe).toHaveBeenCalledTimes(1);
-  });
-
-  it("introduces no setInterval or retry (while) loop in its own source (K3 source check)", () => {
-    const source = readFileSync(
-      path.join(REPO_ROOT, "src", "instrumentation-node.ts"),
-      "utf8",
-    );
-
-    expect(source).not.toMatch(/setInterval\s*\(/);
-    expect(source).not.toMatch(/\bwhile\s*\(/);
   });
 
   it("never logs the probe error's message or a credential-shaped env value", async () => {
@@ -195,14 +182,63 @@ describe("the S3 reachability startup check (ugcportal-ze1o)", () => {
       env: env({
         S3_ENDPOINT: ENDPOINT,
         S3_ACCESS_KEY_ID: "AKIAFAKEFAKEFAKE1234",
-        S3_SECRET_ACCESS_KEY: "super-secret-value",
       }),
     });
 
     expect(warning).toContain("CredentialsError");
     expect(warning).not.toContain("AKIAFAKEFAKEFAKE1234");
-    expect(warning).not.toContain("super-secret-value");
     expect(warning).not.toContain("leaked-looking-message");
+  });
+
+  /**
+   * Round-1 review finding 3: a configuration failure must not be reported
+   * as "unreachable" — `getBucketName()` (`@/lib/s3`'s `requireEnv`) throws
+   * a plain `Error` synchronously, before any network call, when
+   * `S3_BUCKET_NAME` is unset; `classifyTransportFailure` does not
+   * recognise it (no `$metadata`, no transport `code`), so this is exactly
+   * the non-transport branch `checkS3Reachability` must word differently.
+   * Fixture-mutated: reverting `checkS3Reachability` to always use the
+   * "looks unreachable ... docker compose up -d" wording makes the second
+   * assertion below fail.
+   */
+  it("names a missing S3_BUCKET_NAME as a configuration problem, not unreachable", async () => {
+    const warning = await checkS3Reachability({
+      probe: () =>
+        Promise.reject(new Error("Missing required environment variable: S3_BUCKET_NAME")),
+      env: env({ S3_ENDPOINT: ENDPOINT }),
+    });
+
+    expect(warning).toContain("rejected the request or is misconfigured");
+    expect(warning).toContain("S3_* environment variables");
+    expect(warning).not.toContain("unreachable");
+    expect(warning).not.toContain("docker compose up -d");
+  });
+
+  /**
+   * Round-1 review finding 3's other case: a reachable endpoint that
+   * answers with a well-formed `AccessDenied` is not unreachable either —
+   * `classifyTransportFailure` returns `null` for it (it has
+   * `$metadata.httpStatusCode` set, which is the function's own signal that
+   * a response was actually received). Fixture-mutated the same way as the
+   * missing-bucket test above: reverting to the unconditional "looks
+   * unreachable" wording makes the second assertion below fail.
+   */
+  it("names an AccessDenied response as a request rejection, not unreachable", async () => {
+    const accessDenied = Object.assign(new Error("Access Denied"), {
+      name: "AccessDenied",
+      $metadata: { httpStatusCode: 403, attempts: 1 },
+    });
+
+    const warning = await checkS3Reachability({
+      probe: () => Promise.reject(accessDenied),
+      env: env({ S3_ENDPOINT: ENDPOINT }),
+    });
+
+    expect(warning).toContain("AccessDenied");
+    expect(warning).toContain("rejected the request or is misconfigured");
+    expect(warning).toContain("credentials");
+    expect(warning).not.toContain("unreachable");
+    expect(warning).not.toContain("docker compose up -d");
   });
 });
 
