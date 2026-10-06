@@ -24,6 +24,16 @@ import { describe, expect, it } from "vitest";
  * force, and a list entry that no longer matches anything fails too, so the
  * lists cannot quietly rot into permission for whatever happens to be there.
  *
+ * The third rule is the one that keeps the other two honest, and it is
+ * about ANALYSABILITY rather than correctness: a client, or the factory
+ * that makes one, may only appear where this file can follow it — the
+ * initializer of a tracked binding, the right-hand side of a tracked
+ * assignment, or the receiver of a `.send`. Anywhere else it is reported,
+ * even if the code around it is perfectly correct, because a client handed
+ * to a function parameter or pulled apart by a destructuring pattern leaves
+ * the region these rules can see. "Correct but un-analysable" has to be a
+ * noticed, written-down decision; it must not be a silent pass.
+ *
  * THE ANALYSIS IS A PURE FUNCTION OVER (name, source) PAIRS (`analyze`
  * below), and that is not a style choice: it is what lets the rules be
  * tested against FIXTURES as well as against the repository. A guard is
@@ -201,12 +211,13 @@ type Analysis = {
   /** Files with at least one such call NOT inside `sendWithTransportClassification`. */
   unwrappedSendFiles: string[];
   /**
-   * Files that mention `getS3Client` somewhere other than an import clause,
-   * its own declaration, or the callee position of a call — i.e. that pass
-   * the factory itself around, which would put a client somewhere this
-   * analysis cannot follow.
+   * Files where a client, or the factory that makes one, appears somewhere
+   * this analysis cannot follow it: handed to a function as an argument,
+   * pulled apart by a destructuring pattern, stored in an object literal,
+   * returned, or (for the factory) passed around uncalled. See
+   * `isFollowableClientPosition` for the three positions that are fine.
    */
-  escapedFactoryFiles: string[];
+  escapedClientFiles: string[];
   /** Files constructing `new S3Client(...)` directly. */
   clientConstructorFiles: string[];
   /** Files containing a real `x instanceof ObjectStorageUnreachableError` test. */
@@ -275,6 +286,77 @@ function analyze(
     }
     if (ts.isAsExpression(node) || ts.isNonNullExpression(node)) {
       return isClientExpression(name, node.expression);
+    }
+    return false;
+  }
+
+  /**
+   * The identifier being DECLARED (or imported, or re-exported) rather than
+   * used: `const client = ...`, `function f(client = ...)`, `import
+   * { storage }`, `export { storage }`. Tracking already covers these; they
+   * are not places a client leaks out of.
+   */
+  function isTrackedBindingName(file: string, node: ts.Node): boolean {
+    if (!ts.isIdentifier(node)) return false;
+    if (!clientLocals.get(file)!.has(node.text)) return false;
+    const parent = node.parent;
+    if (ts.isVariableDeclaration(parent) && parent.name === node) return true;
+    if (ts.isParameter(parent) && parent.name === node) return true;
+    if (ts.isBindingElement(parent) && parent.name === node) return true;
+    if (ts.isImportSpecifier(parent) || ts.isImportClause(parent)) return true;
+    if (ts.isExportSpecifier(parent)) return true;
+    return false;
+  }
+
+  /**
+   * The three positions a client may appear in and still be followable:
+   *
+   *  (a) the initializer of a tracked binding (`const c = getS3Client()`,
+   *      `const d = c`, a parameter default) — the alias machinery above
+   *      picks it up from there;
+   *  (b) the right-hand side, or the assigned-to identifier, of a tracked
+   *      assignment (`c = getS3Client()`);
+   *  (c) the receiver of a `.send` property access — the thing these rules
+   *      exist to find.
+   *
+   * Anywhere else, the value has left what this file can reason about.
+   */
+  function isAllowedClientPosition(file: string, node: ts.Node): boolean {
+    const parent = node.parent;
+    if (parent === undefined) return true;
+    // (c)
+    if (
+      ts.isPropertyAccessExpression(parent) &&
+      parent.expression === node &&
+      parent.name.text === "send"
+    ) {
+      return true;
+    }
+    // (a) — only when the thing being declared is itself tracked, so
+    // `const { send } = getS3Client()` and `const [x] = ...` are not.
+    if (ts.isVariableDeclaration(parent) && parent.initializer === node) {
+      return ts.isIdentifier(parent.name) && clientLocals.get(file)!.has(parent.name.text);
+    }
+    if (ts.isParameter(parent) && parent.initializer === node) {
+      return ts.isIdentifier(parent.name) && clientLocals.get(file)!.has(parent.name.text);
+    }
+    // (b)
+    if (
+      ts.isBinaryExpression(parent) &&
+      parent.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+      (parent.right === node || parent.left === node)
+    ) {
+      return ts.isIdentifier(parent.left) && clientLocals.get(file)!.has(parent.left.text);
+    }
+    // Transparent wrappers the client can hide behind without leaving:
+    // `(c)`, `c!`, `c as S3Client`, `await c`.
+    if (
+      ts.isParenthesizedExpression(parent) ||
+      ts.isNonNullExpression(parent) ||
+      ts.isAsExpression(parent) ||
+      ts.isAwaitExpression(parent)
+    ) {
+      return isAllowedClientPosition(file, parent);
     }
     return false;
   }
@@ -349,7 +431,7 @@ function analyze(
 
   const directS3Modules: string[] = [];
   const unwrappedSendFiles: string[] = [];
-  const escapedFactoryFiles: string[] = [];
+  const escapedClientFiles: string[] = [];
   const clientConstructorFiles: string[] = [];
   const transportBranchFiles: string[] = [];
   const logFieldsCallerFiles: string[] = [];
@@ -394,6 +476,29 @@ function analyze(
         if (!isImportName && !isCallee && !isTypeQuery) escaped = true;
       }
 
+      // And the CLIENT used as a value, which is the same hazard one step
+      // on. Tracking a client through bindings is only worth anything while
+      // the client stays in a binding: `fetchIt(getS3Client(), key)` hands
+      // it to a parameter this walk never resolves, and the helper's
+      // `client.send(...)` is then invisible — the file does not even
+      // register as S3-touching, so the route rule skips it too. Unlike the
+      // factory case that spelling is working, shippable code, and
+      // `deleteObjectBestEffort(mediaId, objectKey, role)` is one parameter
+      // away from it.
+      //
+      // Phrased as an allowlist of the three positions the analysis can
+      // actually follow, so a spelling nobody thought of is reported rather
+      // than missed. `const { send } = getS3Client()` falls out of it for
+      // free: an ObjectBindingPattern is not a tracked binding.
+      if (
+        !isAllowedClientPosition(name, node) &&
+        isClientExpression(name, node) &&
+        // The declaration site of a tracked identifier is not a use of it.
+        !isTrackedBindingName(name, node)
+      ) {
+        escaped = true;
+      }
+
       if (
         ts.isNewExpression(node) &&
         ts.isIdentifier(node.expression) &&
@@ -421,7 +526,7 @@ function analyze(
 
     if (sends > 0 && name !== definingModule) directS3Modules.push(name);
     if (unwrapped > 0) unwrappedSendFiles.push(name);
-    if (escaped) escapedFactoryFiles.push(name);
+    if (escaped) escapedClientFiles.push(name);
     if (constructs) clientConstructorFiles.push(name);
     if (branches) transportBranchFiles.push(name);
     if (logs) logFieldsCallerFiles.push(name);
@@ -446,7 +551,7 @@ function analyze(
     names,
     directS3Modules: directS3Modules.sort(),
     unwrappedSendFiles: unwrappedSendFiles.sort(),
-    escapedFactoryFiles: escapedFactoryFiles.sort(),
+    escapedClientFiles: escapedClientFiles.sort(),
     clientConstructorFiles: clientConstructorFiles.sort(),
     transportBranchFiles: transportBranchFiles.sort(),
     logFieldsCallerFiles: logFieldsCallerFiles.sort(),
@@ -526,12 +631,15 @@ describe("ugcportal-98rb K4: every S3 call site is transport-classified", () => 
     expect(offenders).toEqual([]);
   });
 
-  it("never lets the client factory itself escape as a value", () => {
+  it("never lets a client, or its factory, escape where it cannot be followed", () => {
     // The analysis follows a client through assignments, aliases and
-    // re-exports, but it cannot follow `register(getS3Client)` into whatever
-    // calls it later. Nothing does this today; if something starts, it has
-    // to be noticed rather than silently un-analysable.
-    expect(repo.escapedFactoryFiles).toEqual([]);
+    // re-exports. It cannot follow `register(getS3Client)`, and it cannot
+    // follow `fetchIt(getS3Client(), key)` into the parameter that receives
+    // it either — the factory and the client are the same hazard, so they
+    // get the same rule. Nothing does either today; if something starts, it
+    // has to be noticed rather than silently un-analysable, which is the
+    // whole reason the other two rules can be trusted.
+    expect(repo.escapedClientFiles).toEqual([]);
   });
 
   it("keeps no stale entry on the unwrapped-send list", () => {
@@ -728,7 +836,101 @@ describe("ugcportal-98rb K4: spellings that must not bypass the guard", () => {
       import { getS3Client } from "@/lib/s3";
       export const factory = getS3Client;
     `);
-    expect(result.escapedFactoryFiles).toEqual(["app/api/scratch/route.ts"]);
+    expect(result.escapedClientFiles).toEqual(["app/api/scratch/route.ts"]);
+  });
+
+  it("catches a client handed to a helper as a call argument", () => {
+    // Working, idiomatic, shippable code, and the reason the escape rule
+    // covers the client and not only the factory: the helper's parameter is
+    // not a tracked binding, so its `client.send(...)` is invisible, so the
+    // file never enters directS3Modules, so the route rule skips it too.
+    const result = route(`
+      import { GetObjectCommand, type S3Client } from "@aws-sdk/client-s3";
+      import { getBucketName, getS3Client } from "@/lib/s3";
+      async function fetchIt(client: S3Client, key: string): Promise<void> {
+        await client.send(new GetObjectCommand({ Bucket: getBucketName(), Key: key }));
+      }
+      export async function GET(): Promise<Response> {
+        await fetchIt(getS3Client(), "scratch");
+        return new Response(null, { status: 204 });
+      }
+    `);
+    expect(result.escapedClientFiles).toEqual(["app/api/scratch/route.ts"]);
+  });
+
+  it("catches a client taken apart by a destructuring pattern", () => {
+    // The destructuring twin of "the method pulled off the client". It
+    // throws at runtime rather than shipping, but the old rule said one of
+    // the pair was worth reporting and let the other through, which is the
+    // kind of split that makes a guard unreliable to reason about. An
+    // ObjectBindingPattern is not a tracked binding, so this falls out of
+    // the allowlist rather than needing a rule of its own.
+    const result = route(`
+      import { getS3Client } from "@/lib/s3";
+      const { send } = getS3Client();
+      export async function GET() {
+        await send({} as never);
+        return new Response(null);
+      }
+    `);
+    expect(result.escapedClientFiles).toEqual(["app/api/scratch/route.ts"]);
+  });
+
+  it("reports an escape even when the helper that receives the client is correct", () => {
+    // Deliberate, and the reason the rule is phrased as an allowlist of
+    // followable POSITIONS rather than as a hunt for mistakes: this file is
+    // correct — the helper wraps its send — but the analysis cannot prove
+    // it, and "correct but un-analysable" has to be a written-down decision
+    // on the exception list rather than a silent pass. The clean way to
+    // write the same refactor is the next fixture.
+    const result = route(`
+      import { type S3Client } from "@aws-sdk/client-s3";
+      import { getS3Client, sendWithTransportClassification } from "@/lib/s3";
+      async function fetchIt(client: S3Client): Promise<void> {
+        await sendWithTransportClassification("preview-fetch", () => client.send({} as never));
+      }
+      export async function GET() {
+        await fetchIt(getS3Client());
+        return new Response(null);
+      }
+    `);
+    expect(result.escapedClientFiles).toEqual(["app/api/scratch/route.ts"]);
+    // The send inside the helper IS seen and IS wrapped — the escape is the
+    // only thing wrong with this file.
+    expect(result.unwrappedSendFiles).toEqual([]);
+  });
+
+  it("accepts the same refactor done so the client never leaves", () => {
+    // The positive control for the escape rule, and the shape the
+    // repository actually uses (src/lib/rights-evidence.ts): the helper
+    // takes the inputs, not the client, and reaches for the client inside
+    // the wrapper. Nothing escapes, nothing is unwrapped.
+    const result = route(`
+      import {
+        ObjectStorageUnreachableError,
+        getS3Client,
+        sendWithTransportClassification,
+      } from "@/lib/s3";
+      async function fetchIt(key: string): Promise<void> {
+        await sendWithTransportClassification("preview-fetch", () =>
+          getS3Client().send({ key } as never),
+        );
+      }
+      export async function GET() {
+        try {
+          await fetchIt("scratch");
+        } catch (error) {
+          if (error instanceof ObjectStorageUnreachableError) {
+            return new Response(null, { status: 503 });
+          }
+        }
+        return new Response(null);
+      }
+    `);
+    expect(result.escapedClientFiles).toEqual([]);
+    expect(result.unwrappedSendFiles).toEqual([]);
+    expect(result.directS3Modules).toEqual(["app/api/scratch/route.ts"]);
+    expect(result.transportBranchFiles).toEqual(["app/api/scratch/route.ts"]);
   });
 
   it("catches a route whose only mention of the error is a comment", () => {
@@ -775,7 +977,7 @@ describe("ugcportal-98rb K4: spellings that must not bypass the guard", () => {
       }
     `);
     expect(result.unwrappedSendFiles).toEqual([]);
-    expect(result.escapedFactoryFiles).toEqual([]);
+    expect(result.escapedClientFiles).toEqual([]);
     expect(result.transportBranchFiles).toEqual(["app/api/scratch/route.ts"]);
     expect(result.logFieldsCallerFiles).toEqual(["app/api/scratch/route.ts"]);
   });

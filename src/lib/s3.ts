@@ -308,13 +308,12 @@ export class ObjectStorageUnreachableError extends Error {
  *    with no stack at all (ugcportal-1b2c).
  *
  * Deliberately NOT a console call of its own: the log PREFIX differs by
- * subsystem (`[media]`, `[resale-rights]`), only the preview route
- * throttles the line (each of the others explains at its own call site why
- * it must not), and callers add context of their own — the uploader id, the
- * orphaned key and its role, a suppressed count. Returning the fields lets
- * each caller spread them into its own line and keep the half that is
- * genuinely its own. No count is given here on purpose; see above for where
- * the caller list actually lives.
+ * subsystem (`[media]`, `[resale-rights]`), one caller throttles the line
+ * and the rest do not, and callers add context of their own — the uploader
+ * id, the orphaned key and its role, a suppressed count. Returning the
+ * fields lets each caller spread them into its own line and keep the half
+ * that is genuinely its own. No count is given here on purpose; see above
+ * for where the caller list actually lives.
  *
  * POST /api/media's own storage-unreachable line is NOT a caller of this
  * function. It was written first (ugcportal-1b2c) and still builds the same
