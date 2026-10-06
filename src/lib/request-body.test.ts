@@ -800,10 +800,13 @@ describe("readJsonBody — size and idle bounds", () => {
   });
 
   it("answers 408 without waiting for the body's own teardown (K1)", async () => {
-    // The teardown shape measured on a real socket (ugcportal-dvb):
-    // cancelling a live request body returns a promise that settles when the
-    // client disconnects, so awaiting it would make the 408 wait for exactly
-    // the client that is refusing to go away.
+    // The teardown shape measured on a real socket (ugcportal-dvb): with
+    // the guard's own `reader.read()` still outstanding — which is exactly
+    // the state a stall leaves it in — cancelling the source returns a
+    // promise that does not settle, so awaiting it inside the guard gave no
+    // answer at all. The 413 path below is the same call with no read
+    // pending, and there it settles; the outstanding read is what separates
+    // them, not the client being gone.
     vi.useFakeTimers();
     try {
       const body = silentAfter(['{"a":'], cancelThatNeverSettles);
@@ -1087,9 +1090,9 @@ function balancedArgs(code: string, open: number): string {
  *    inline `new Response(request.body).text()` is caught even though its
  *    `.text()` hangs off a parenthesis rather than a name.
  *
- * All three were added because they were *missed*: gh-158 round 1 found the
- * first version green against a top-level `for await` over `request.body`
- * and against `new Response(request.body).text()`.
+ * All three are here because the first version — the method call alone —
+ * was green against a top-level `for await` over `request.body` and against
+ * `new Response(request.body).text()` (ugcportal-8hsf).
  */
 function bodyReadSites(source: string): Map<string, boolean> {
   const code = stripComments(source);
@@ -1191,10 +1194,10 @@ export async function readSomeOtherBody(request: Request) {
   });
 
   it("catches a body drained without a method call at all", () => {
-    // gh-158 round 1: the first version of this scanner was green against
-    // both of these, because neither reaches the body through a named
-    // method on a named receiver. They are the two realistic ways to drain
-    // a request body in this codebase that the method list cannot see.
+    // The first version of this scanner was green against both of these,
+    // because neither reaches the body through a named method on a named
+    // receiver (ugcportal-8hsf). They are the two realistic ways to drain a
+    // request body in this codebase that the method list cannot see.
     const sneaky = `
 export async function countBytes(request: Request) {
   let n = 0;

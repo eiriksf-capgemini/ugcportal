@@ -295,14 +295,14 @@ export async function readJsonBody(
       received += value.byteLength;
       if (received > limit) {
         // Requested, not awaited — but NOT because awaiting it here would
-        // hang. It would not: gh-158's reviewer restored `await` on this
-        // line and measured the real server still answering 413 in 11-40 ms
-        // with the socket held. What decides whether `cancel()` settles is
-        // whether a read is still outstanding on the source, not whether the
-        // client is still there. In stallGuarded's catch one is — the racing
-        // `reader.read()` the timeout beat — and awaiting there gave no
-        // answer in 60 s (ugcportal-dvb). Here the read has already resolved,
-        // so there is nothing for the teardown to wait on.
+        // hang. It would not: with `await` restored on this line a real
+        // server still answers the 413 promptly with the socket held
+        // (measured on ugcportal-8hsf). What decides whether `cancel()`
+        // settles is whether a read is still outstanding on the source, not
+        // whether the client is still there. In stallGuarded's catch one is
+        // — the racing `reader.read()` the timeout beat — and awaiting there
+        // never answers at all (ugcportal-dvb). Here the read has already
+        // resolved, so the teardown has nothing to wait on.
         //
         // So this is the defensive form, not the load-bearing one: it keeps
         // every teardown in this module on the same rule rather than on a
