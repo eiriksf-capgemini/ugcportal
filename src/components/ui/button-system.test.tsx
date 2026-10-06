@@ -263,9 +263,9 @@ describe("K3 — no hand-written button-shaped className outside buttonVariants"
    * of silently skipping a new file — the moment it drifts from disk.
    *
    * FIXTURE MUTATION CHECK (performed by hand, not left in the suite):
-   * temporarily added `src/components/home/dummy-mutation-check.ts` and
-   * confirmed this assertion failed, listing the new file as unaccounted
-   * for; removed it.
+   * temporarily added a throwaway non-test `.ts` file under
+   * src/components/home/ (never committed) and confirmed this assertion
+   * failed, listing the new file as unaccounted for; removed it.
    */
   it("files is exactly every non-test component file under src/components/home/ and every site-* file under src/components/", () => {
     function listNonTestFiles(dirRel: string, nameFilter: RegExp): string[] {
