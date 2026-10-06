@@ -774,6 +774,22 @@ if [ "$1" = "diff" ] && [ "$2" = "-U0" ] && [ "$#" -eq 3 ]; then
       ;;
   esac
 fi
+if [ "$1" = "ls-files" ] && [ -n "$CLAIMS_AUDIT_BREAK_TRACKED_FILES" ]; then
+  has_others=0
+  for arg in "$@"; do
+    if [ "$arg" = "--others" ]; then has_others=1; fi
+  done
+  # listTrackedFiles() (scripts/lib/git-diff.mjs) calls plain \`ls-files
+  # --full-name -- :/\`; listUntrackedFiles() adds \`--others\`. Breaking only
+  # the no-\`--others\` form isolates the tracked-files read (ugcportal-aigs)
+  # from the untracked-files read, which a sibling test already breaks via
+  # CLAIMS_AUDIT_BREAK_LINES_DIFF-independent means and must keep succeeding
+  # here for the fixture to prove the right read failed.
+  if [ "$has_others" = "0" ]; then
+    echo "simulated git ls-files failure (ugcportal-aigs test)" 1>&2
+    exit 128
+  fi
+fi
 exec "$CLAIMS_AUDIT_REAL_GIT" "$@"
 `;
 
@@ -1046,6 +1062,50 @@ describe("working tree and --base (ugcportal-np1i)", { timeout: 30_000 }, () => 
     // literally 0) would also fail this assertion, and so would the
     // sibling.ts-reference regression described above.
     expect(fromSubdir).toBe(fromRoot);
+  });
+
+  it("ugcportal-aigs: a listTrackedFiles() failure refuses too, instead of falsely flagging an existing file as REFERENCE not found", () => {
+    const { repo, env, writeFile, git, commit } = makeFixtureRepo();
+    writeFile("existing.ts", "const e = 1;\n");
+    git(["add", "existing.ts"]);
+    commit("add existing.ts");
+
+    // Untracked, so it is scanned regardless of the diff read, and its only
+    // candidate-worthy content is the path reference below -- no
+    // ABSOLUTE/MEASUREMENT/TEMPORAL/HISTORY keyword, so a REFERENCE not
+    // found here is unambiguous evidence of this bug, not something another
+    // category's candidate line would also have reported.
+    writeFile("feature.ts", "// see existing.ts for the real behavior\nconst a = 1;\n");
+
+    const binParent = fs.mkdtempSync(path.join(os.tmpdir(), "claims-audit-git-wrapper-"));
+    FIXTURE_PARENTS.push(binParent); // outside the repo, same as M3/H1 above
+    fs.writeFileSync(path.join(binParent, "git"), BREAKING_GIT_WRAPPER, { mode: 0o755 });
+
+    const breakingEnv = {
+      ...env,
+      PATH: `${binParent}:${env.PATH}`,
+      CLAIMS_AUDIT_REAL_GIT: REAL_GIT,
+      CLAIMS_AUDIT_BREAK_TRACKED_FILES: "1",
+    };
+
+    let error;
+    try {
+      execFileSync("node", [SCRIPT_PATH], { cwd: repo, env: breakingEnv, encoding: "utf8" });
+    } catch (err) {
+      error = err;
+    }
+
+    // Before the fix: this catch block never set workingTreeReadFailed, so
+    // the K3 guard below never fired -- the script printed "candidates
+    // found" and "REFERENCE not found: existing.ts" (existing.ts is real,
+    // but trackedFiles silently came back [] and existingFiles held only
+    // the untracked list) and exited 0.
+    expect(error).toBeDefined();
+    expect(error.status).not.toBe(0);
+    expect(error.stdout ?? "").not.toMatch(/candidates found/);
+    expect(error.stdout ?? "").not.toMatch(/REFERENCE not found/);
+    expect(error.stderr ?? "").toMatch(/git ls-files failed, reference checks disabled/);
+    expect(error.stderr ?? "").toMatch(/a required git read failed/);
   });
 });
 
