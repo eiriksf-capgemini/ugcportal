@@ -61,15 +61,26 @@ This protocol applies when ending a Beads implementation workflow. It is subordi
    #   - otherwise -> leave a review comment and stop for a human
 
    # Once that PR has merged (by the skill, or by a human doing the same
-   # thing by hand): verify the branch is actually gone rather than trusting
-   # --delete-branch alone, then remove this worktree and its local branch
-   # (ugcportal-nvg0). This is the orchestrator's step, run from its own
-   # (main) checkout, not from inside the worktree being removed.
-   git ls-remote --heads origin <type>/<bead-id>-<slug>   # must print nothing
-   # still there? -> git push origin --delete <type>/<bead-id>-<slug>, then re-check
-   git worktree remove <path-to-this-worktree>   # refuses if dirty or locked -- do not force it
-   git branch -D <type>/<bead-id>-<slug>
-   git worktree prune
+   # thing by hand): remove the origin branch, this worktree, and its local
+   # branch all through the same tested script the merge step itself uses
+   # (ugcportal-nvg0, ugcportal-hvaf) -- not by hand. It retargets any open
+   # PR currently based on this branch before deleting it: deleting a branch
+   # an open PR still lists as base auto-closes that PR, and GitHub refuses
+   # both reopen and base-change once the base ref is gone (observed three
+   # times in one day: #126, #120, #123). Run this from the main checkout,
+   # not from inside the worktree it may remove:
+   node scripts/sweep-merged-branches.mjs --branch <type>/<bead-id>-<slug> --execute
+   # Read its output rather than assuming success: "removed origin/..."
+   # (confirm with git ls-remote --heads origin <type>/<bead-id>-<slug> --
+   # must print nothing), then "removed worktree ..." and
+   # "deleted local branch ..." for this worktree and its branch. A line
+   # reading "kept origin/...: <reason>" instead means the remote branch is
+   # not gone, most likely because an open PR based on it could not be
+   # safely retargeted -- leave it for a human rather than forcing it. The
+   # manual git push origin --delete this replaces is not a fallback to
+   # reach for by hand here -- it is only what the script's own
+   # deleteRemoteBranch runs internally, and only once retargeting is
+   # already verified clear.
    ```
    For drift that built up before this step existed, or from a merge that
    bypassed it, `node scripts/sweep-merged-branches.mjs` lists every stale
@@ -77,7 +88,13 @@ This protocol applies when ending a Beads implementation workflow. It is subordi
    a branch's PR must be `MERGED`, not just open or closed, and a dirty or
    locked worktree is kept either way; see
    `scripts/sweep-merged-branches.test.mjs` for the asserted cases);
-   `--execute` removes what it lists. See
+   `--execute` removes what it lists, retargeting any OPEN PR currently based
+   on a branch it's about to delete — to the first still-existing base in
+   the chain that branch's own merged PR recorded, not a dangling
+   intermediate branch an earlier sweep already deleted — and re-checking
+   live, immediately before the delete, that nothing new appeared while
+   retargeting was in flight; either gap keeps the branch with a reported
+   reason instead of deleting it (ugcportal-hvaf). See
    `.claude/skills/pr-review-merge/SKILL.md` step 7.
 5. **Hand off** - Summarize changes, validation, issue status, PR/merge outcome, and any blocked sync/commit/push/merge step
 

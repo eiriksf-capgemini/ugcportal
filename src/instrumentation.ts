@@ -7,6 +7,7 @@
  */
 import { CONFIGURED_USERS, type ConfiguredUser } from "@/config/users";
 import { CONTACT_EMAIL_PLACEHOLDER, isBareEmailAddress } from "@/lib/contact";
+import { parseEvidenceSSESetting } from "@/lib/evidence-encryption";
 import {
   PERMITTED_EMAILS_VAR,
   PROVIDER_PREFIX_HINT,
@@ -30,6 +31,17 @@ import {
  * correctly-configured deployment offline over an unset variable would be
  * the wrong trade. `S3_EVIDENCE_ENCRYPTED_AT_BUCKET` is how an operator
  * declares that, and silences this.
+ *
+ * The `S3_EVIDENCE_SSE` comparison below goes through `parseEvidenceSSESetting`
+ * (src/lib/evidence-encryption.ts), the same parser `encryptionSetting()`
+ * (src/lib/rights-evidence.ts) uses to decide the header actually sent on
+ * every evidence `PutObject` (ugcportal-gkj). Before that sharing, this used
+ * an exact `=== "AES256"` while `encryptionSetting()` trimmed first, so
+ * `S3_EVIDENCE_SSE="AES256 "` (trailing whitespace) sent the real header
+ * while this still logged the loud warning below at every production boot —
+ * the one message an operator is meant to trust unconditionally, crying
+ * wolf. See src/instrumentation.test.ts's shared-parser describe block for
+ * the table both call sites are checked against.
  */
 export function checkEvidenceEncryption(
   env: NodeJS.ProcessEnv = process.env,
@@ -38,7 +50,7 @@ export function checkEvidenceEncryption(
     return null;
   }
   if (
-    env.S3_EVIDENCE_SSE === "AES256" ||
+    parseEvidenceSSESetting(env.S3_EVIDENCE_SSE) === "AES256" ||
     env.S3_EVIDENCE_ENCRYPTED_AT_BUCKET === "true"
   ) {
     return null;
