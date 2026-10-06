@@ -29,7 +29,6 @@
 
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
-import path from "node:path";
 
 /**
  * `origin/main` when that ref resolves, else `HEAD~1` (no network, or a
@@ -203,5 +202,5 @@ export function getWorkingTreeChangedLineNumbersByFile() {
  * @returns {string}
  */
 export function readFileFromWorkingTree(filePath) {
-  return fs.readFileSync(path.join(process.cwd(), filePath), "utf8");
+  return fs.readFileSync(filePath, "utf8");
 }
