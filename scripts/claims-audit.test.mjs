@@ -4,13 +4,20 @@
  * scripts/sweep-candidates.test.mjs does; the git plumbing in
  * scripts/lib/git-diff.mjs is exercised only through its pure diff parser --
  * except for the "working tree and --base" describe block near the end
- * (ugcportal-np1i), which needs a real git repository because the bug it
- * guards against (a false "candidates found: 0" before the first commit,
- * and a silently-ignored `--base=<ref>`) only exists in the interaction
- * between git plumbing and the filesystem, not in any pure function.
+ * (ugcportal-np1i), which needs a real git repository because the bugs it
+ * guards against only exist in the interaction between git plumbing and the
+ * filesystem, not in any pure function: a false "candidates found: 0" before
+ * the first commit, a silently-ignored `--base=<ref>` (K1/K2), and three
+ * further ways the same false zero could still happen that a round-1 review
+ * of this PR reproduced directly -- an unresolvable `--base` falling through
+ * silently (M1), a committed change plus an uncommitted edit to the same
+ * file producing two line-numbering systems whose union pointed at the
+ * wrong lines (M2), and the working-tree line-range read itself failing
+ * without tripping the K3 guardrail (M3).
  *
  * Each fixture is shaped like a real finding from the v0.5.0 review rounds
- * (docs/process/review-rounds-v0.5.0.md, Part 1), named in the test title.
+ * (docs/process/review-rounds-v0.5.0.md, Part 1) or from this PR's own
+ * round-1 review, named in the test title.
  */
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -26,7 +33,7 @@ import {
   extractComments,
   extractProseLines,
   findPathReferences,
-  parseBaseArg,
+  parseArgs,
   referenceExists,
 } from "./claims-audit.mjs";
 import { parseUnifiedDiffAddedLines } from "./lib/git-diff.mjs";
@@ -211,23 +218,45 @@ describe("parseUnifiedDiffAddedLines", () => {
   });
 });
 
-describe("parseBaseArg", () => {
+describe("parseArgs", () => {
   it("accepts the space form", () => {
-    expect(parseBaseArg(["--base", "origin/main"])).toEqual({ base: "origin/main" });
+    expect(parseArgs(["--base", "origin/main"])).toEqual({ base: "origin/main", allLines: false });
   });
 
   it("accepts the equals form, which used to be silently ignored (ugcportal-np1i K2)", () => {
-    expect(parseBaseArg(["--base=origin/main"])).toEqual({ base: "origin/main" });
+    expect(parseArgs(["--base=origin/main"])).toEqual({ base: "origin/main", allLines: false });
+  });
+
+  it("recognizes --all-lines, with and without an explicit --base", () => {
+    expect(parseArgs(["--all-lines"])).toEqual({ base: undefined, allLines: true });
+    expect(parseArgs(["--base", "origin/main", "--all-lines"])).toEqual({ base: "origin/main", allLines: true });
   });
 
   it("leaves base undefined when --base is not passed, so the caller falls back to resolveDefaultBase", () => {
-    expect(parseBaseArg(["--all-lines"])).toEqual({ base: undefined });
+    expect(parseArgs([])).toEqual({ base: undefined, allLines: false });
   });
 
   it("names the problem instead of silently keeping the default, for every broken --base spelling", () => {
-    expect(parseBaseArg(["--base"]).error).toMatch(/requires a value/);
-    expect(parseBaseArg(["--base="]).error).toMatch(/requires a value/);
-    expect(parseBaseArg(["--base:origin/main"]).error).toMatch(/unsupported --base form/);
+    expect(parseArgs(["--base"]).error).toMatch(/requires a value/);
+    expect(parseArgs(["--base="]).error).toMatch(/requires a value/);
+    expect(parseArgs(["--base:origin/main"]).error).toMatch(/unknown flag/);
+  });
+
+  it("L1: rejects --base followed by another flag instead of swallowing it as the ref (round 1 finding 4)", () => {
+    expect(parseArgs(["--base", "--all-lines"]).error).toMatch(/requires a value/);
+    expect(parseArgs(["--base", "--base=origin/main"]).error).toMatch(/requires a value/);
+  });
+
+  it("L2: rejects an unknown flag by name instead of silently falling back to the default base (round 1 finding 5)", () => {
+    // A one-letter typo of --base -- the PR body originally overclaimed this
+    // was already rejected; it wasn't, because it isn't a --base-prefixed
+    // string at all, just an unrecognized flag.
+    expect(parseArgs(["--bas=foo"]).error).toMatch(/unknown flag: --bas=foo/);
+    expect(parseArgs(["--verbose"]).error).toMatch(/unknown flag: --verbose/);
+  });
+
+  it("rejects a bare positional argument", () => {
+    expect(parseArgs(["origin/main"]).error).toMatch(/unexpected argument: origin\/main/);
   });
 });
 
@@ -256,6 +285,30 @@ describe("parseBaseArg", () => {
 // outlive the single command it was meant for.
 const SCRIPT_PATH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "claims-audit.mjs");
 const FIXTURE_PARENTS = [];
+
+// M3 needs a real git call to fail on command -- not a repo that can be
+// corrupted (which would risk acting on the shared checkout, exactly what
+// ugcportal-xxy2 warns about) but a fake `git` placed earlier on PATH for
+// one subprocess, which delegates to the real binary for everything except
+// the one invocation under test. REAL_GIT is resolved once, outside any
+// fixture repo, and passed into the wrapper by name (never re-resolved via
+// a PATH the wrapper itself might be shadowing) so it cannot recurse into
+// itself.
+const REAL_GIT = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+const BREAKING_GIT_WRAPPER = `#!/bin/sh
+if [ "$1" = "diff" ] && [ "$2" = "-U0" ] && [ "$#" -eq 3 ]; then
+  case "$3" in
+    *...*) ;;
+    *)
+      if [ -n "$CLAIMS_AUDIT_BREAK_LINES_DIFF" ]; then
+        echo "simulated git diff -U0 failure (ugcportal-np1i M3 test)" 1>&2
+        exit 128
+      fi
+      ;;
+  esac
+fi
+exec "$CLAIMS_AUDIT_REAL_GIT" "$@"
+`;
 
 function gitEnv(ceilingParent) {
   const env = { ...process.env };
@@ -360,5 +413,75 @@ describe("working tree and --base (ugcportal-np1i)", () => {
     // explicit-base one, since --base root-ref and the HEAD~1 fallback
     // would otherwise be indistinguishable by file list alone.
     expect(outDefault).not.toContain("filler.ts");
+  });
+
+  it("M1: an unresolvable --base refuses with a non-zero exit, never a 'candidates found' line (round 1 finding 1)", () => {
+    const { runScript } = makeFixtureRepo(); // a clean tree -- no working-tree change to fall back to either
+
+    let error;
+    try {
+      runScript(["--base", "this-ref-does-not-exist-anywhere"]);
+    } catch (err) {
+      error = err;
+    }
+
+    expect(error).toBeDefined();
+    expect(error.status).not.toBe(0);
+    // The old process.exit(0) removed by this PR meant a bad --base still
+    // printed a (misleadingly complete-looking) "candidates found: 0" line
+    // on stdout with exit 0; refusing must mean that line never prints.
+    expect(error.stdout ?? "").not.toMatch(/candidates found/);
+  });
+
+  it("M2: a file changed in a commit AND edited again uncommitted is read in one coordinate system (round 1 finding 2)", () => {
+    const { writeFile, git, commit, runScript } = makeFixtureRepo();
+    writeFile("tracked.ts", "line a\nline b\nline c\n");
+    git(["add", "tracked.ts"]);
+    commit("add tracked.ts, no claim yet");
+    git(["branch", "root-ref"]); // tags the state before the claim exists
+
+    writeFile("tracked.ts", "line a\n// never fails on any path\nline b\nline c\n");
+    git(["add", "tracked.ts"]);
+    commit("commit the claim at line 2");
+
+    // Uncommitted: insert one unrelated line above everything, shifting the
+    // claim (unchanged itself) from line 2 to line 3. The old design's
+    // committedLinesByFile (HEAD-relative: {2}) unioned with
+    // workingTreeLinesByFile (working-tree-relative: {1}, the new line)
+    // never contained 3, so the still-present claim was silently dropped.
+    writeFile("tracked.ts", "// unrelated\nline a\n// never fails on any path\nline b\nline c\n");
+
+    const out = runScript(["--base", "root-ref"]);
+
+    expect(out).not.toMatch(/candidates found: 0\b/);
+    expect(out).toContain("tracked.ts:3 [ABSOLUTE] never fails on any path");
+  });
+
+  it("M3: refuses instead of a false count when the working-tree line-range read itself fails (round 1 finding 3)", () => {
+    const { repo, env, writeFile } = makeFixtureRepo();
+    writeFile("untracked.ts", "// an untracked claim, never checked\nconst a = 1;\n");
+
+    const binParent = fs.mkdtempSync(path.join(os.tmpdir(), "claims-audit-git-wrapper-"));
+    FIXTURE_PARENTS.push(binParent);
+    fs.writeFileSync(path.join(binParent, "git"), BREAKING_GIT_WRAPPER, { mode: 0o755 });
+
+    const breakingEnv = {
+      ...env,
+      PATH: `${binParent}:${env.PATH}`,
+      CLAIMS_AUDIT_REAL_GIT: REAL_GIT,
+      CLAIMS_AUDIT_BREAK_LINES_DIFF: "1",
+    };
+
+    let error;
+    try {
+      execFileSync("node", [SCRIPT_PATH], { cwd: repo, env: breakingEnv, encoding: "utf8" });
+    } catch (err) {
+      error = err;
+    }
+
+    expect(error).toBeDefined();
+    expect(error.status).not.toBe(0);
+    expect(error.stdout ?? "").not.toMatch(/candidates found/);
+    expect(error.stderr ?? "").toMatch(/could not diff line ranges/);
   });
 });

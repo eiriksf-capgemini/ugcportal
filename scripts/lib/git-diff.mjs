@@ -7,28 +7,42 @@
  * copies -- the shape scripts/with-local-ca.mjs and scripts/sweep-candidates.mjs
  * once had with their entry-point check (see scripts/lib/is-main.mjs).
  *
- * KNOWN LIMITATION (ugcportal-lykb): the base-vs-HEAD comparisons here
- * (getChangedFiles, getChangedLineNumbersByFile, readFileAtHead) inspect the
- * currently CHECKED-OUT HEAD, not necessarily the content of whatever is
- * being pushed. scripts/sweep-candidates.mjs only uses those, so it still
- * has this limitation. scripts/claims-audit.mjs (ugcportal-np1i) additionally
- * reads getWorkingTreeChangedFiles/getWorkingTreeChangedLineNumbersByFile/
- * readFileFromWorkingTree below, which compare the working tree (including
- * untracked files) to HEAD, so it no longer reports a false "0 candidates"
- * on uncommitted work -- see its own file header. Neither caller blocks a
- * push or a merge on its own, so the blast radius of inspecting the wrong
- * ref is a missed local hint, not a bypassed gate. See the KNOWN LIMITATION
- * notes in .beads/hooks/pre-push and scripts/sweep-candidates.mjs.
+ * KNOWN LIMITATION (ugcportal-lykb): getChangedFiles, getChangedLineNumbersByFile
+ * and readFileAtHead inspect the currently CHECKED-OUT HEAD, not necessarily
+ * the content of whatever is being pushed. scripts/sweep-candidates.mjs only
+ * uses those, so it still has this limitation (a follow-up bead applying the
+ * working-tree-aware functions below to that caller too is left for
+ * ugcportal-np1i's own follow-up, not this fix). scripts/claims-audit.mjs
+ * instead uses resolveMergeBase/getTrackedFilesChangedSince/
+ * getChangedLineNumbersSince/listUntrackedFiles/readFileFromWorkingTree
+ * below, which diff a merge-base commit directly against the CURRENT WORKING
+ * TREE (index + unstaged + untracked combined) in one coordinate system, so
+ * it no longer reports a false "0 candidates" on uncommitted work and no
+ * longer misaligns line numbers when a file has both a committed and an
+ * uncommitted change (ugcportal-np1i M1/M2) -- see claims-audit.mjs's own
+ * file header. Neither caller blocks a push or a merge on its own, so the
+ * blast radius of inspecting the wrong ref is a missed local hint, not a
+ * bypassed gate. See the KNOWN LIMITATION notes in .beads/hooks/pre-push and
+ * scripts/sweep-candidates.mjs.
  *
  * Not unit-tested directly: it shells out to git. The pure analysis
  * functions in each caller are what the test files exercise, plus
  * scripts/claims-audit.test.mjs's temp-fixture-repo tests for the working-
- * tree functions below (ugcportal-np1i K1/K2), since those have no pure
- * parser to test against a literal string.
+ * tree functions below (ugcportal-np1i K1/K2/M1/M2/M3), since those have no
+ * pure parser to test against a literal string.
  */
 
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+
+// A large uncommitted diff (e.g. a big generated file, or many files edited
+// at once) can exceed execFileSync's 1 MB default maxBuffer before a commit
+// exists to shrink it back down to the usual per-commit size (ugcportal-np1i
+// M3: this is a working-tree diff, not a commit-to-commit one, so it has no
+// such natural ceiling). 64 MB comfortably covers this repo's largest
+// tracked text file with room to spare, without buffering an unbounded
+// amount of memory if something genuinely runs away.
+const LARGE_MAX_BUFFER = 64 * 1024 * 1024;
 
 /**
  * `origin/main` when that ref resolves, else `HEAD~1` (no network, or a
@@ -141,54 +155,76 @@ export function isWorkingTreeDirty() {
 }
 
 /**
- * Paths that differ between the working tree and HEAD: tracked files with a
- * staged or unstaged change (`git diff --name-only HEAD`, which covers both),
- * plus untracked files .gitignore does not exclude. This is the set
- * getChangedFiles cannot see before a commit exists -- a file can be in this
- * list while base...HEAD is empty, which is exactly the "false 0 before the
- * first commit" bug this function exists to close (ugcportal-np1i).
+ * The commit `base` and HEAD share, as a plain ref `base` itself already is
+ * when it is an ancestor of HEAD (the common case for `origin/main` or a
+ * fixture's own earlier commit) -- computed explicitly anyway so that an
+ * unrelated/unresolvable `base` fails here, in one place, rather than
+ * wherever its first use happens to be. Throws if `base` does not resolve or
+ * shares no history with HEAD -- callers decide what that means (claims-
+ * audit.mjs: refuse if `base` was given explicitly; degrade to `HEAD` if it
+ * was only the computed default -- ugcportal-np1i M1).
  *
- * @returns {string[]}
+ * @param {string} base
+ * @returns {string} a commit SHA
  */
-export function getWorkingTreeChangedFiles() {
-  const tracked = execFileSync("git", ["diff", "--name-only", "HEAD"], { encoding: "utf8" })
-    .split("\n")
-    .filter(Boolean);
-  const untracked = execFileSync("git", ["ls-files", "--others", "--exclude-standard"], { encoding: "utf8" })
-    .split("\n")
-    .filter(Boolean);
-  return [...new Set([...tracked, ...untracked])];
+export function resolveMergeBase(base) {
+  return execFileSync("git", ["merge-base", base, "HEAD"], { encoding: "utf8" }).trim();
 }
 
 /**
- * Like getChangedLineNumbersByFile, but for uncommitted work: added/changed
- * line numbers for tracked files with a working-tree diff against HEAD
- * (`git diff -U0 HEAD`, parsed the same way), plus every line of an
- * untracked file, which has no HEAD side to diff against and so counts as
- * entirely new.
+ * Untracked paths .gitignore does not exclude. Exported as its own function,
+ * separate from the two below, so a single call's result can be reused by
+ * both instead of each shelling out to `git ls-files --others` a second time
+ * (ugcportal-np1i M3/L4 -- the previous working-tree functions each ran this
+ * independently).
  *
- * @returns {Map<string, Set<number>>} filePath -> changed line numbers in the working-tree copy
+ * @returns {string[]}
  */
-export function getWorkingTreeChangedLineNumbersByFile() {
-  const out = execFileSync("git", ["diff", "-U0", "HEAD"], { encoding: "utf8" });
-  const result = parseUnifiedDiffAddedLines(out);
-
-  const untracked = execFileSync("git", ["ls-files", "--others", "--exclude-standard"], { encoding: "utf8" })
+export function listUntrackedFiles() {
+  return execFileSync("git", ["ls-files", "--others", "--exclude-standard"], { encoding: "utf8" })
     .split("\n")
     .filter(Boolean);
-  for (const filePath of untracked) {
-    let content;
-    try {
-      content = fs.readFileSync(filePath, "utf8");
-    } catch {
-      continue; // e.g. a broken symlink reported as untracked
-    }
-    const lineCount = content.endsWith("\n") ? content.split("\n").length - 1 : content.split("\n").length;
-    const lines = new Set();
-    for (let i = 1; i <= lineCount; i++) lines.add(i);
-    result.set(filePath, lines);
-  }
-  return result;
+}
+
+/**
+ * Tracked paths that differ between `ref` and the CURRENT WORKING TREE
+ * (index and unstaged edits combined -- the same thing `git status` calls
+ * dirty) -- not HEAD, and not a merge-base-style three-dot diff against
+ * HEAD. `ref` is expected to already be a merge base (see resolveMergeBase),
+ * so there is no unrelated history on `ref`'s own side left to exclude, and
+ * a two-dot diff straight to the working tree is exactly what's wanted: a
+ * file changed in a commit already on this branch and a file with only an
+ * uncommitted edit are indistinguishable here, which is the point -- both
+ * need auditing (ugcportal-np1i M1).
+ *
+ * @param {string} ref usually the output of resolveMergeBase, or HEAD
+ * @returns {string[]}
+ */
+export function getTrackedFilesChangedSince(ref) {
+  const out = execFileSync("git", ["diff", "--name-only", ref], { encoding: "utf8", maxBuffer: LARGE_MAX_BUFFER });
+  return out.split("\n").filter(Boolean);
+}
+
+/**
+ * Added/changed line numbers between `ref` and the CURRENT WORKING TREE, in
+ * ONE coordinate system -- the working tree's own line numbers -- covering a
+ * change already committed between `ref` and HEAD and a further uncommitted
+ * edit on top of it with a single diff. This is the fix for ugcportal-np1i
+ * M2: the previous design unioned a HEAD-coordinate diff (`base...HEAD`)
+ * with a separately-computed working-tree-coordinate diff (`HEAD` vs
+ * worktree), which silently misaligned whenever a file had both kinds of
+ * change -- an uncommitted line inserted above a committed one shifts every
+ * HEAD-relative line number below it, so the union pointed at the wrong
+ * lines in the content actually read (always the working-tree copy for such
+ * a file). Diffing straight from `ref` to the working tree has no second
+ * coordinate system to misalign with.
+ *
+ * @param {string} ref usually the output of resolveMergeBase, or HEAD
+ * @returns {Map<string, Set<number>>}
+ */
+export function getChangedLineNumbersSince(ref) {
+  const out = execFileSync("git", ["diff", "-U0", ref], { encoding: "utf8", maxBuffer: LARGE_MAX_BUFFER });
+  return parseUnifiedDiffAddedLines(out);
 }
 
 /**

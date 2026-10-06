@@ -16,10 +16,14 @@
  * Purely advisory, like scripts/sweep-candidates.mjs: it lists candidate
  * sentences for a human to judge; it never decides a claim is false, and
  * nothing in the build or push path (CI, the pre-push hook) calls it, so its
- * exit code never blocks either. It does exit non-zero on its own -- when it
- * cannot read a dirty working tree and so cannot say the candidate count is
- * complete (ugcportal-np1i K3) -- but that only affects whoever ran it
- * directly. The one thing it does check
+ * exit code never blocks either. It does exit non-zero on its own, in main()
+ * below, in exactly three shapes -- every one of them a refusal to print a
+ * count it cannot stand behind, never a verdict on a claim: an argument it
+ * cannot parse (an unrecognized flag, or `--base` with no usable value);
+ * an explicitly-given `--base` that does not resolve against HEAD; and a
+ * required working-tree read failing while the tree is dirty (K3). All
+ * three only affect whoever ran it directly, same as above. The one thing
+ * it does check
  * mechanically is whether a file a comment points at still exists in the
  * tree, because that is the family-1 shape that is pure fact (PR #98 round
  * 3: "sign-in-policy.ts:125 cites configured-users.ts, which no longer
@@ -69,7 +73,9 @@
  *     --base defaults to `origin/main`, falling back to `HEAD~1`; it accepts
  *       either `--base <ref>` or `--base=<ref>` and diffs the same either way
  *       (ugcportal-np1i K2 -- the `=` form used to be silently ignored,
- *       which meant a given base was never actually applied).
+ *       which meant a given base was never actually applied). Any other
+ *       `--base`-shaped or unrecognized flag is a named error, not a silent
+ *       fallback to the default (ugcportal-np1i L1/L2).
  *     --all-lines audits every comment in every changed file, not only the
  *       added lines -- the sweep for stale SIBLINGS of a sentence a fix
  *       just changed (the Family 4 case: PR #102 found the same corrected
@@ -77,25 +83,42 @@
  *
  * Self-test: npm test -- runs scripts/claims-audit.test.mjs (vitest).
  *
- * In addition to the `base`-vs-HEAD diff, this script separately reads
- * whatever the working tree has that HEAD does not -- staged or unstaged
- * edits to a tracked file, and untracked files -- via
- * getWorkingTreeChangedFiles/getWorkingTreeChangedLineNumbersByFile/
- * readFileFromWorkingTree in scripts/lib/git-diff.mjs, and unions that with
- * the committed diff (ugcportal-np1i). Before this, a run before the first
- * commit diffed an empty `base...HEAD` and printed "candidates found: 0" --
- * true of the diff, false of the tree -- which two implementers independently
- * hit the same day (ugcportal-nvg0, ugcportal-euqi). If something still
- * stops the working-tree read from running at all (e.g. `git status` itself
- * fails), main() below refuses with a non-zero exit instead of printing that
- * same false zero.
+ * Instead of diffing `base` against HEAD and separately against the working
+ * tree (two coordinate systems that can disagree -- see ugcportal-np1i M2
+ * below), this script resolves the merge base of `base` and HEAD once
+ * (resolveMergeBase) and diffs THAT directly against the CURRENT WORKING
+ * TREE (resolveMergeBase/getTrackedFilesChangedSince/
+ * getChangedLineNumbersSince/listUntrackedFiles/readFileFromWorkingTree, all
+ * in scripts/lib/git-diff.mjs). A file changed in a commit already on this
+ * branch and a file with only an uncommitted edit are both just "changed
+ * since the merge base" -- including an untracked file, which has no HEAD
+ * side to diff against at all and so counts as entirely new. Before this,
+ * a run before the first commit diffed an empty `base...HEAD` and printed
+ * "candidates found: 0" -- true of the committed diff, false of the working
+ * tree -- which two implementers independently hit the same day
+ * (ugcportal-nvg0, ugcportal-euqi: M1/the original bug). A later review
+ * round (ugcportal-np1i round 1) reproduced two further ways the same false
+ * zero could still happen after that first fix: an unresolvable `--base`
+ * falling through silently (M1, now closed by resolveMergeBase throwing and
+ * main() refusing when `base` was given explicitly), and a committed change
+ * plus an uncommitted edit to the same file producing two line-numbering
+ * systems whose union pointed at the wrong lines (M2, now closed by this
+ * single merge-base-to-working-tree diff, which has only one coordinate
+ * system). If `base` was only the computed default (not given explicitly)
+ * and it still does not resolve -- the original first-commit case, where
+ * `HEAD~1` does not exist yet -- main() degrades to diffing HEAD itself
+ * against the working tree, rather than refusing: there is no earlier
+ * commit to compare against, but any uncommitted work is still worth
+ * reporting. If a required working-tree read fails for some OTHER reason
+ * (M3), main() refuses with a non-zero exit instead of printing a candidate
+ * count that silently excludes whatever that failed read would have added.
  *
- * KNOWN LIMITATION (ugcportal-lykb), narrowed: the committed half of the
- * comparison (files changed in commits already on this branch, relative to
- * `base`) still reads checked-out HEAD, not necessarily a ref being pushed
- * under a different name -- see scripts/lib/git-diff.mjs. The working-tree
- * half above does not have this limitation; it reads what is actually on
- * disk.
+ * KNOWN LIMITATION (ugcportal-lykb), narrowed: scripts/sweep-candidates.mjs,
+ * which shares this same scripts/lib/git-diff.mjs, still reads checked-out
+ * HEAD rather than the working tree (it was not in this bead's scope --
+ * review round 1 flagged this as a worthwhile follow-up). This script no
+ * longer has that limitation in either half of its comparison: it reads
+ * what is actually on disk.
  */
 
 import path from "node:path";
@@ -103,15 +126,14 @@ import path from "node:path";
 import ts from "typescript";
 
 import {
-  getChangedFiles,
-  getChangedLineNumbersByFile,
-  getWorkingTreeChangedFiles,
-  getWorkingTreeChangedLineNumbersByFile,
+  getChangedLineNumbersSince,
+  getTrackedFilesChangedSince,
   isWorkingTreeDirty,
   listTrackedFiles,
-  readFileAtHead,
+  listUntrackedFiles,
   readFileFromWorkingTree,
   resolveDefaultBase,
+  resolveMergeBase,
 } from "./lib/git-diff.mjs";
 import { isMainModule } from "./lib/is-main.mjs";
 
@@ -339,26 +361,37 @@ export function auditContent(content, filePath, changedLines, { trackedFiles }) 
   return candidates;
 }
 
+const KNOWN_FLAGS_HELP = "recognized: --base <ref>, --base=<ref>, --all-lines";
+
 /**
- * Parses `--base <ref>` and `--base=<ref>` out of argv, both to the same
- * result (ugcportal-np1i K2). Any other `--base...` spelling (`--base:ref`,
- * a bare `--base=` with nothing after it, or `--base` as the last arg with
- * no value) is rejected with a named reason rather than silently falling
- * through to the default, which is the bug this replaces: `--base=<ref>`
- * previously matched nothing in `args.indexOf("--base")` and the script
- * diffed against the default base without saying so.
+ * Parses argv into `{ base, allLines }`, or a single named `error` instead
+ * of any silent fallback. Replaces the narrower parseBaseArg (ugcportal-np1i
+ * round 1 findings L1/L2):
+ *
+ * - `--base <ref>` and `--base=<ref>` both set `base`, the same (K2).
+ * - `--base` followed by nothing, by an empty `=value`, or by a token that
+ *   itself looks like a flag (`--base --all-lines` -- the shape an unset
+ *   shell variable in a wrapper script produces) is a named "requires a
+ *   value" error (L1), not a silent swallow of the next flag as the ref.
+ * - Any other `--`-prefixed token that isn't `--all-lines` -- a genuine typo
+ *   like `--bas=foo`, not just a broken `--base` -- is a named "unknown
+ *   flag" error (L2), not a silent fallback to the default base.
+ * - A bare positional argument (no leading `--`) is also a named error:
+ *   this script takes no positional arguments, so one is almost always a
+ *   mistyped flag.
  *
  * @param {string[]} args
- * @returns {{ base: string | undefined, error: string | undefined }}
+ * @returns {{ base?: string, allLines: boolean, error?: string }}
  */
-export function parseBaseArg(args) {
+export function parseArgs(args) {
   let base;
+  let allLines = false;
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === "--base") {
       const value = args[i + 1];
-      if (value === undefined) {
-        return { error: "--base requires a value, e.g. --base origin/main or --base=origin/main" };
+      if (value === undefined || value.startsWith("--")) {
+        return { allLines, error: "--base requires a value, e.g. --base origin/main or --base=origin/main" };
       }
       base = value;
       i++;
@@ -367,68 +400,97 @@ export function parseBaseArg(args) {
     if (arg.startsWith("--base=")) {
       const value = arg.slice("--base=".length);
       if (value === "") {
-        return { error: "--base= requires a value after the =, e.g. --base=origin/main" };
+        return { allLines, error: "--base= requires a value after the =, e.g. --base=origin/main" };
       }
       base = value;
       continue;
     }
-    if (arg.startsWith("--base")) {
-      return { error: `unsupported --base form: ${arg} (use --base <ref> or --base=<ref>)` };
+    if (arg === "--all-lines") {
+      allLines = true;
+      continue;
     }
+    if (arg.startsWith("--")) {
+      return { allLines, error: `unknown flag: ${arg} (${KNOWN_FLAGS_HELP})` };
+    }
+    return { allLines, error: `unexpected argument: ${arg} (${KNOWN_FLAGS_HELP})` };
   }
-  return { base };
+  return { base, allLines };
+}
+
+function allLineNumbers(content) {
+  const lineCount = content.endsWith("\n") ? content.split("\n").length - 1 : content.split("\n").length;
+  const lines = new Set();
+  for (let i = 1; i <= lineCount; i++) lines.add(i);
+  return lines;
 }
 
 function main() {
   const args = process.argv.slice(2);
-  const { base: explicitBase, error: baseError } = parseBaseArg(args);
-  if (baseError) {
-    console.error(`claims-audit: ${baseError}`);
+  const { base: explicitBase, allLines, error: argError } = parseArgs(args);
+  if (argError) {
+    console.error(`claims-audit: ${argError}`);
     process.exit(1);
   }
   const base = explicitBase ?? resolveDefaultBase();
-  const allLines = args.includes("--all-lines");
+  const baseWasExplicit = explicitBase !== undefined;
 
-  let committedFiles = [];
+  // The merge base of `base` and HEAD is diffed directly against the
+  // CURRENT WORKING TREE below -- one coordinate system, not `base...HEAD`
+  // unioned with a separate HEAD-vs-worktree diff (ugcportal-np1i M2).
+  let mergeBase = null;
   try {
-    committedFiles = getChangedFiles(base);
+    mergeBase = resolveMergeBase(base);
   } catch (err) {
-    console.error(`claims-audit: could not diff against ${base}: ${err.message}`);
-  }
-
-  let committedLinesByFile = new Map();
-  if (!allLines) {
-    try {
-      committedLinesByFile = getChangedLineNumbersByFile(base);
-    } catch (err) {
-      console.error(`claims-audit: could not diff line ranges against ${base}: ${err.message}`);
+    console.error(`claims-audit: could not resolve ${base} against HEAD: ${err.message}`);
+    if (baseWasExplicit) {
+      // An explicitly-given --base that doesn't resolve is the M1 case:
+      // refuse by name rather than silently falling through to a count that
+      // only reflects the working tree, not the diff the caller asked for.
+      console.error(
+        `claims-audit: --base ${base} does not resolve against HEAD -- refusing to report a candidate count computed without it.`,
+      );
+      process.exit(1);
     }
+    // No explicit --base, and the computed default (e.g. HEAD~1 before a
+    // second commit exists) doesn't resolve either: there is no committed
+    // baseline yet, but the working tree may still have something to
+    // report, diffed against HEAD alone below -- this is the original
+    // "before the first commit" case, not a failure to refuse over.
   }
+  const diffRef = mergeBase ?? "HEAD";
 
-  // Uncommitted work (staged, unstaged, or untracked) that `base...HEAD`
-  // cannot see at all -- the "0 candidates before the first commit" bug
-  // (ugcportal-np1i). Tracked independently of the committed diff above so
-  // a failure in one does not hide the other.
-  let workingTreeFiles = [];
+  let untrackedFiles = [];
   let workingTreeReadFailed = false;
   try {
-    workingTreeFiles = getWorkingTreeChangedFiles();
+    untrackedFiles = listUntrackedFiles();
   } catch (err) {
     workingTreeReadFailed = true;
-    console.error(`claims-audit: could not read working-tree changes: ${err.message}`);
+    console.error(`claims-audit: git ls-files --others failed: ${err.message}`);
   }
 
-  let workingTreeLinesByFile = new Map();
+  let trackedChangedFiles = [];
+  try {
+    trackedChangedFiles = getTrackedFilesChangedSince(diffRef);
+  } catch (err) {
+    workingTreeReadFailed = true;
+    console.error(`claims-audit: could not diff ${diffRef} against the working tree: ${err.message}`);
+  }
+
+  // A failure here sets workingTreeReadFailed exactly like the file list's
+  // failure above does, so K3 below covers both reads it depends on
+  // (ugcportal-np1i M3 -- the previous version only watched the file list).
+  let changedLinesByFile = new Map();
   if (!allLines) {
     try {
-      workingTreeLinesByFile = getWorkingTreeChangedLineNumbersByFile();
+      changedLinesByFile = getChangedLineNumbersSince(diffRef);
     } catch (err) {
-      console.error(`claims-audit: could not diff working-tree line ranges: ${err.message}`);
+      workingTreeReadFailed = true;
+      console.error(`claims-audit: could not diff line ranges for ${diffRef} against the working tree: ${err.message}`);
     }
   }
 
-  const dirtyFiles = new Set(workingTreeFiles);
-  const changedFiles = [...new Set([...committedFiles, ...workingTreeFiles])];
+  const untrackedSet = new Set(untrackedFiles);
+  const changedFiles = [...new Set([...trackedChangedFiles, ...untrackedFiles])];
 
   let trackedFiles = [];
   try {
@@ -441,24 +503,26 @@ function main() {
   for (const filePath of changedFiles) {
     let content;
     try {
-      // A file with uncommitted edits (or an untracked file) is read off
-      // disk, because that is what a push would actually carry; anything
-      // else -- changed only in a commit already on this branch -- is read
-      // at HEAD, same as before.
-      content = dirtyFiles.has(filePath) ? readFileFromWorkingTree(filePath) : readFileAtHead(filePath);
+      // Every changed file -- committed-only, uncommitted-only, or both --
+      // is read straight off the working tree, because that is what a push
+      // would actually carry, and because changedLinesByFile's line numbers
+      // (from a single diff of diffRef against the working tree) are
+      // already in that same coordinate system either way.
+      content = readFileFromWorkingTree(filePath);
     } catch {
-      continue; // deleted file (at HEAD, or in the working tree)
+      continue; // deleted in the working tree
     }
-    const changedLines = allLines
-      ? null
-      : new Set([...(committedLinesByFile.get(filePath) ?? []), ...(workingTreeLinesByFile.get(filePath) ?? [])]);
+    // An untracked file has no `diffRef` side to diff against at all, so it
+    // never appears in changedLinesByFile -- every line in it counts as new.
+    const changedLines = allLines ? null : untrackedSet.has(filePath) ? allLineNumbers(content) : (changedLinesByFile.get(filePath) ?? new Set());
     candidates.push(...auditContent(content, filePath, changedLines, { trackedFiles }));
   }
 
   // K3 guardrail: never report the false all-clean this bug used to produce.
-  // If the working-tree read itself failed (so dirtyFiles may be incomplete)
-  // and the tree is in fact dirty, refuse instead of printing a count that
-  // silently excludes whatever that failed read would have added.
+  // If a required working-tree read itself failed (so changedFiles and/or
+  // changedLinesByFile may be incomplete) and the tree is in fact dirty,
+  // refuse instead of printing a count that silently excludes whatever that
+  // failed read would have added.
   if (workingTreeReadFailed) {
     let dirty = false;
     try {
