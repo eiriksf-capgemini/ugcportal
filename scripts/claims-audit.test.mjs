@@ -2,17 +2,46 @@
  * Tests for the comment-claims audit (ugcportal-wzgw). Synthetic fixtures
  * are fed straight to the exported analysis functions, as
  * scripts/sweep-candidates.test.mjs does; the git plumbing in
- * scripts/lib/git-diff.mjs is exercised only through its pure diff parser.
+ * scripts/lib/git-diff.mjs is exercised only through its pure diff parser --
+ * except for the "working tree and --base" describe block near the end
+ * (ugcportal-np1i), which needs a real git repository because the bugs it
+ * guards against only exist in the interaction between git plumbing and the
+ * filesystem, not in any pure function: a false "candidates found: 0" before
+ * the first commit, a silently-ignored `--base=<ref>` (K1/K2), and several
+ * further ways the same false zero could still happen that review rounds
+ * on this PR reproduced directly -- an unresolvable `--base` falling
+ * through silently (M1), a committed change plus an uncommitted edit to the
+ * same file producing two line-numbering systems whose union pointed at
+ * the wrong lines (M2), a required diff read failing without tripping the
+ * K3 guardrail on a dirty tree (round 1 M3) or, the gap that survived that
+ * fix, on a fully-committed CLEAN tree -- the ordinary `/pre-review` case
+ * -- because the guardrail was gated on "is the tree dirty" rather than
+ * "did the read succeed" (round 2 H1).
  *
  * Each fixture is shaped like a real finding from the v0.5.0 review rounds
- * (docs/process/review-rounds-v0.5.0.md, Part 1), named in the test title.
+ * (docs/process/review-rounds-v0.5.0.md, Part 1) or from this PR's own
+ * review rounds, named in the test title.
  */
-import { describe, expect, it } from "vitest";
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-import { auditContent, classifyClaimLine, extractComments, extractProseLines, findPathReferences, referenceExists } from "./claims-audit.mjs";
+import { afterEach, describe, expect, it } from "vitest";
+
+import {
+  auditContent,
+  classifyClaimLine,
+  extractComments,
+  extractProseLines,
+  findPathReferences,
+  parseArgs,
+  referenceExists,
+} from "./claims-audit.mjs";
 import { parseUnifiedDiffAddedLines } from "./lib/git-diff.mjs";
 
-const NO_TRACKED = { trackedFiles: [] };
+const NO_EXISTING_FILES = { existingFiles: [] };
 
 describe("classifyClaimLine", () => {
   it("flags an absolute claim (PR #102 round 1: a dedupe comment that said the opposite of what was measured)", () => {
@@ -128,42 +157,50 @@ describe("extractProseLines", () => {
 describe("auditContent", () => {
   it("reports only comments on changed lines, each line tagged with its categories", () => {
     const content = ["// always true on every path", "const a = 1;", "// 85px tall", "const b = 2;", ""].join("\n");
-    const out = auditContent(content, "a.ts", new Set([3]), NO_TRACKED);
+    const out = auditContent(content, "a.ts", new Set([3]), NO_EXISTING_FILES);
     expect(out).toEqual([{ file: "a.ts", line: 3, categories: ["MEASUREMENT"], text: "85px tall", missingReferences: [] }]);
   });
 
   it("audits every comment when changedLines is null (--all-lines, the stale-sibling sweep)", () => {
     const content = ["// always true", "const a = 1;", "// 85px tall", ""].join("\n");
-    expect(auditContent(content, "a.ts", null, NO_TRACKED)).toHaveLength(2);
+    expect(auditContent(content, "a.ts", null, NO_EXISTING_FILES)).toHaveLength(2);
   });
 
   it("reports a block comment at the line of the offending sentence, not the block's first line", () => {
     const content = ["/**", " * Plain description.", " * It never throws.", " */", "const a = 1;", ""].join("\n");
-    const out = auditContent(content, "a.ts", new Set([1, 2, 3, 4]), NO_TRACKED);
+    const out = auditContent(content, "a.ts", new Set([1, 2, 3, 4]), NO_EXISTING_FILES);
     expect(out).toEqual([{ file: "a.ts", line: 3, categories: ["ABSOLUTE"], text: "It never throws.", missingReferences: [] }]);
   });
 
   it("names a referenced file that is not in the tree, and stays silent for one that is", () => {
     const content = ["// see configured-users.ts and routes.ts", "const a = 1;", ""].join("\n");
-    const out = auditContent(content, "src/lib/a.ts", new Set([1]), { trackedFiles: ["src/lib/routes.ts"] });
+    const out = auditContent(content, "src/lib/a.ts", new Set([1]), { existingFiles: ["src/lib/routes.ts"] });
     expect(out).toEqual([
       { file: "src/lib/a.ts", line: 1, categories: [], text: "see configured-users.ts and routes.ts", missingReferences: ["configured-users.ts"] },
     ]);
   });
 
+  it("stays silent for a reference to an untracked sibling (ugcportal-np1i round 3 L1: an untracked file is a real, existing file)", () => {
+    const content = ["// see untracked-sibling.ts", "const a = 1;", ""].join("\n");
+    const out = auditContent(content, "src/lib/a.ts", new Set([1]), {
+      existingFiles: ["src/lib/routes.ts", "src/lib/untracked-sibling.ts"],
+    });
+    expect(out).toEqual([]);
+  });
+
   it("is silent for a comment with no claim and no reference", () => {
     const content = "// build the href\nconst a = 1;\n";
-    expect(auditContent(content, "a.ts", new Set([1]), NO_TRACKED)).toEqual([]);
+    expect(auditContent(content, "a.ts", new Set([1]), NO_EXISTING_FILES)).toEqual([]);
   });
 
   it("audits Markdown prose line by line", () => {
     const content = "# Notes\n\nThe gate never fails open.\n";
-    const out = auditContent(content, "docs/x.md", new Set([3]), NO_TRACKED);
+    const out = auditContent(content, "docs/x.md", new Set([3]), NO_EXISTING_FILES);
     expect(out.map((c) => c.categories)).toEqual([["ABSOLUTE"]]);
   });
 
   it("ignores a file type it does not know how to read", () => {
-    expect(auditContent("binary-ish", "image.png", null, NO_TRACKED)).toEqual([]);
+    expect(auditContent("binary-ish", "image.png", null, NO_EXISTING_FILES)).toEqual([]);
   });
 });
 
@@ -189,5 +226,353 @@ describe("parseUnifiedDiffAddedLines", () => {
     const out = parseUnifiedDiffAddedLines(diff);
     expect([...out.get("a.ts")]).toEqual([2, 3, 12]);
     expect([...out.get("b.md")]).toEqual([1]);
+  });
+});
+
+describe("parseArgs", () => {
+  it("accepts the space form", () => {
+    expect(parseArgs(["--base", "origin/main"])).toEqual({ base: "origin/main", allLines: false });
+  });
+
+  it("accepts the equals form, which used to be silently ignored (ugcportal-np1i K2)", () => {
+    expect(parseArgs(["--base=origin/main"])).toEqual({ base: "origin/main", allLines: false });
+  });
+
+  it("recognizes --all-lines, with and without an explicit --base", () => {
+    expect(parseArgs(["--all-lines"])).toEqual({ base: undefined, allLines: true });
+    expect(parseArgs(["--base", "origin/main", "--all-lines"])).toEqual({ base: "origin/main", allLines: true });
+  });
+
+  it("leaves base undefined when --base is not passed, so the caller falls back to resolveDefaultBase", () => {
+    expect(parseArgs([])).toEqual({ base: undefined, allLines: false });
+  });
+
+  it("names the problem instead of silently keeping the default, for every broken --base spelling", () => {
+    expect(parseArgs(["--base"]).error).toMatch(/requires a value/);
+    expect(parseArgs(["--base="]).error).toMatch(/requires a value/);
+    expect(parseArgs(["--base:origin/main"]).error).toMatch(/unknown flag/);
+  });
+
+  it("L1: rejects --base followed by another flag instead of swallowing it as the ref (round 1 finding 4)", () => {
+    expect(parseArgs(["--base", "--all-lines"]).error).toMatch(/requires a value/);
+    expect(parseArgs(["--base", "--base=origin/main"]).error).toMatch(/requires a value/);
+  });
+
+  it("L2: rejects an unknown flag by name instead of silently falling back to the default base (round 1 finding 5)", () => {
+    // A one-letter typo of --base -- the PR body originally overclaimed this
+    // was already rejected; it wasn't, because it isn't a --base-prefixed
+    // string at all, just an unrecognized flag.
+    expect(parseArgs(["--bas=foo"]).error).toMatch(/unknown flag: --bas=foo/);
+    expect(parseArgs(["--verbose"]).error).toMatch(/unknown flag: --verbose/);
+  });
+
+  it("rejects a bare positional argument", () => {
+    expect(parseArgs(["origin/main"]).error).toMatch(/unexpected argument: origin\/main/);
+  });
+});
+
+// --- fixture repo: working tree and --base (ugcportal-np1i) --------------
+//
+// Real git repositories in a mkdtemp directory, never the shared checkout
+// (`bd memories shared-checkout-is-not-safe-for-agents`) and never a bare
+// `git stash`. Every git subprocess below passes an explicit `cwd` on the
+// fixture's own temp path and an env object that:
+//   - unsets GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE/GIT_OBJECT_DIRECTORY/
+//     GIT_ALTERNATE_OBJECT_DIRECTORIES/GIT_COMMON_DIR, so a GIT_DIR this
+//     process inherited from somewhere up its own call stack (a fixture
+//     test found, the morning this bead was filed, that the pre-push hook
+//     exports GIT_DIR, and a fixture test that did not clear it
+//     re-initialized the shared repository instead of its own temp one --
+//     ugcportal-xxy2) cannot redirect any git call here into a different
+//     repository;
+//   - sets GIT_CEILING_DIRECTORIES to the temp parent, so git does not
+//     walk up past it looking for a repository to attach to;
+//   - sets GIT_CONFIG_NOSYSTEM=1 and GIT_CONFIG_GLOBAL=/dev/null, so the
+//     machine's own gitconfig (a global excludesfile, a signing key, an
+//     unrelated identity) cannot change what a fixture test observes.
+// Commit identity is passed per command via `-c user.name=... -c
+// user.email=...`, never a persistent `git config user.name` -- a config
+// write is itself a mutation of the fixture repo's state that would
+// outlive the single command it was meant for.
+const SCRIPT_PATH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "claims-audit.mjs");
+const FIXTURE_PARENTS = [];
+
+// M3 needs a real git call to fail on command -- not a repo that can be
+// corrupted (which would risk acting on the shared checkout, exactly what
+// ugcportal-xxy2 warns about) but a fake `git` placed earlier on PATH for
+// one subprocess, which delegates to the real binary for everything except
+// the one invocation under test. REAL_GIT is resolved once, outside any
+// fixture repo, and passed into the wrapper by name (never re-resolved via
+// a PATH the wrapper itself might be shadowing) so it cannot recurse into
+// itself.
+const REAL_GIT = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+const BREAKING_GIT_WRAPPER = `#!/bin/sh
+if [ "$1" = "diff" ] && [ "$2" = "-U0" ] && [ "$#" -eq 3 ]; then
+  case "$3" in
+    *...*) ;;
+    *)
+      if [ -n "$CLAIMS_AUDIT_BREAK_LINES_DIFF" ]; then
+        echo "simulated git diff -U0 failure (ugcportal-np1i M3 test)" 1>&2
+        exit 128
+      fi
+      ;;
+  esac
+fi
+exec "$CLAIMS_AUDIT_REAL_GIT" "$@"
+`;
+
+function gitEnv(ceilingParent) {
+  const env = { ...process.env };
+  delete env.GIT_DIR;
+  delete env.GIT_WORK_TREE;
+  delete env.GIT_INDEX_FILE;
+  delete env.GIT_OBJECT_DIRECTORY;
+  delete env.GIT_ALTERNATE_OBJECT_DIRECTORIES;
+  delete env.GIT_COMMON_DIR;
+  env.GIT_CEILING_DIRECTORIES = ceilingParent;
+  env.GIT_CONFIG_NOSYSTEM = "1";
+  env.GIT_CONFIG_GLOBAL = "/dev/null";
+  return env;
+}
+
+/**
+ * A fresh one-commit git repository in its own mkdtemp directory, with
+ * helpers that always pass this fixture's own `cwd` and `env` explicitly.
+ */
+function makeFixtureRepo() {
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), "claims-audit-fixture-"));
+  FIXTURE_PARENTS.push(parent);
+  const repo = path.join(parent, "repo");
+  fs.mkdirSync(repo);
+  const env = gitEnv(parent);
+
+  const git = (args) => execFileSync("git", args, { cwd: repo, env, encoding: "utf8" });
+  const commit = (message) =>
+    execFileSync(
+      "git",
+      ["-c", "user.name=claims-audit fixture", "-c", "user.email=claims-audit-fixture@example.invalid", "commit", "-m", message],
+      { cwd: repo, env, encoding: "utf8" },
+    );
+  const writeFile = (name, content) => fs.writeFileSync(path.join(repo, name), content);
+  const runScript = (args = []) => execFileSync("node", [SCRIPT_PATH, ...args], { cwd: repo, env, encoding: "utf8" });
+  // Runs the script with cwd set to a subdirectory of the fixture repo,
+  // rather than the repo root every other helper above uses -- the one
+  // case round 3's H1 needs, since every other fixture test's `cwd: repo`
+  // structurally could not have exposed a cwd-relative-path bug.
+  const runScriptFrom = (subdir, args = []) => execFileSync("node", [SCRIPT_PATH, ...args], { cwd: path.join(repo, subdir), env, encoding: "utf8" });
+
+  git(["init", "--quiet", "--initial-branch=main"]);
+  writeFile("README.md", "# fixture\n");
+  git(["add", "README.md"]);
+  commit("initial commit");
+
+  return { repo, env, git, commit, writeFile, runScript, runScriptFrom };
+}
+
+afterEach(() => {
+  // Each fixture gets its own mkdtemp parent, so removing it cannot touch a
+  // sibling test's repo even if tests ran concurrently.
+  while (FIXTURE_PARENTS.length > 0) {
+    fs.rmSync(FIXTURE_PARENTS.pop(), { recursive: true, force: true });
+  }
+});
+
+describe("working tree and --base (ugcportal-np1i)", () => {
+  it("K1: reports a claim in an untracked file before any commit introduces it, instead of a false 'candidates found: 0'", () => {
+    const { writeFile, runScript } = makeFixtureRepo();
+    writeFile("new-file.ts", "// never fails on any path\nconst a = 1;\n");
+
+    const out = runScript();
+
+    expect(out).not.toMatch(/candidates found: 0\b/);
+    expect(out).toContain("new-file.ts:1 [ABSOLUTE] never fails on any path");
+    // L1: the default base (HEAD~1) never resolved here (there's only one
+    // commit) and main() degraded to diffing HEAD -- the banner must say
+    // so, not repeat the unresolvable default it never actually used.
+    expect(out).toContain("(base HEAD)");
+    expect(out).not.toContain("(base HEAD~1)");
+  });
+
+  it("K1: reports a claim added to an already-tracked file's unstaged edit", () => {
+    const { writeFile, git, commit, runScript } = makeFixtureRepo();
+    writeFile("tracked.ts", "const a = 1;\n");
+    git(["add", "tracked.ts"]);
+    commit("add tracked.ts");
+
+    // Uncommitted edit: the line this test cares about is never committed.
+    writeFile("tracked.ts", "const a = 1;\n// guaranteed to run exactly once\n");
+
+    const out = runScript();
+
+    expect(out).not.toMatch(/candidates found: 0\b/);
+    expect(out).toContain("tracked.ts:2 [ABSOLUTE] guaranteed to run exactly once");
+  });
+
+  it("K2: --base <ref> and --base=<ref> diff against the same explicit ref, distinct from the default base", () => {
+    const { writeFile, git, commit, runScript } = makeFixtureRepo();
+    git(["branch", "root-ref"]); // tags the initial commit, two commits behind HEAD below
+
+    writeFile("filler.ts", "// only reachable once\nconst x = 1;\n");
+    git(["add", "filler.ts"]);
+    commit("add filler.ts");
+
+    writeFile("feature.ts", "// always true on every path\nconst a = 1;\n");
+    git(["add", "feature.ts"]);
+    commit("add feature.ts");
+
+    const outSpaceForm = runScript(["--base", "root-ref"]);
+    const outEqualsForm = runScript(["--base=root-ref"]);
+    const outDefault = runScript([]); // no origin/main in this fixture -> falls back to HEAD~1
+
+    expect(outEqualsForm).toBe(outSpaceForm);
+    expect(outSpaceForm).toContain("filler.ts:1 [ABSOLUTE] only reachable once");
+    expect(outSpaceForm).toContain("feature.ts:1 [ABSOLUTE] always true on every path");
+    // HEAD~1 is the "add filler.ts" commit, which already contains
+    // filler.ts -- so the default base cannot see it change. If --base=
+    // were still silently ignored (the bug this guards against), the
+    // equals-form run above would have matched this output instead of the
+    // explicit-base one, since --base root-ref and the HEAD~1 fallback
+    // would otherwise be indistinguishable by file list alone.
+    expect(outDefault).not.toContain("filler.ts");
+  });
+
+  it("M1: an unresolvable --base refuses with a non-zero exit, never a 'candidates found' line (round 1 finding 1)", () => {
+    const { runScript } = makeFixtureRepo(); // a clean tree -- no working-tree change to fall back to either
+
+    let error;
+    try {
+      runScript(["--base", "this-ref-does-not-exist-anywhere"]);
+    } catch (err) {
+      error = err;
+    }
+
+    expect(error).toBeDefined();
+    expect(error.status).not.toBe(0);
+    // The old process.exit(0) removed by this PR meant a bad --base still
+    // printed a (misleadingly complete-looking) "candidates found: 0" line
+    // on stdout with exit 0; refusing must mean that line never prints.
+    expect(error.stdout ?? "").not.toMatch(/candidates found/);
+  });
+
+  it("M2: a file changed in a commit AND edited again uncommitted is read in one coordinate system (round 1 finding 2)", () => {
+    const { writeFile, git, commit, runScript } = makeFixtureRepo();
+    writeFile("tracked.ts", "line a\nline b\nline c\n");
+    git(["add", "tracked.ts"]);
+    commit("add tracked.ts, no claim yet");
+    git(["branch", "root-ref"]); // tags the state before the claim exists
+
+    writeFile("tracked.ts", "line a\n// never fails on any path\nline b\nline c\n");
+    git(["add", "tracked.ts"]);
+    commit("commit the claim at line 2");
+
+    // Uncommitted: insert one unrelated line above everything, shifting the
+    // claim (unchanged itself) from line 2 to line 3. The old design's
+    // committedLinesByFile (HEAD-relative: {2}) unioned with
+    // workingTreeLinesByFile (working-tree-relative: {1}, the new line)
+    // never contained 3, so the still-present claim was silently dropped.
+    writeFile("tracked.ts", "// unrelated\nline a\n// never fails on any path\nline b\nline c\n");
+
+    const out = runScript(["--base", "root-ref"]);
+
+    expect(out).not.toMatch(/candidates found: 0\b/);
+    expect(out).toContain("tracked.ts:3 [ABSOLUTE] never fails on any path");
+  });
+
+  it("M3: refuses instead of a false count when the working-tree line-range read itself fails (round 1 finding 3)", () => {
+    const { repo, env, writeFile } = makeFixtureRepo();
+    writeFile("untracked.ts", "// an untracked claim, never checked\nconst a = 1;\n");
+
+    const binParent = fs.mkdtempSync(path.join(os.tmpdir(), "claims-audit-git-wrapper-"));
+    FIXTURE_PARENTS.push(binParent);
+    fs.writeFileSync(path.join(binParent, "git"), BREAKING_GIT_WRAPPER, { mode: 0o755 });
+
+    const breakingEnv = {
+      ...env,
+      PATH: `${binParent}:${env.PATH}`,
+      CLAIMS_AUDIT_REAL_GIT: REAL_GIT,
+      CLAIMS_AUDIT_BREAK_LINES_DIFF: "1",
+    };
+
+    let error;
+    try {
+      execFileSync("node", [SCRIPT_PATH], { cwd: repo, env: breakingEnv, encoding: "utf8" });
+    } catch (err) {
+      error = err;
+    }
+
+    expect(error).toBeDefined();
+    expect(error.status).not.toBe(0);
+    expect(error.stdout ?? "").not.toMatch(/candidates found/);
+    expect(error.stderr ?? "").toMatch(/could not diff HEAD against the working tree/);
+  });
+
+  it("H1: refuses on a clean, fully-committed tree when the diff read fails -- dirtiness is not the gate (round 2 finding 1)", () => {
+    const { repo, env, writeFile, git, commit } = makeFixtureRepo();
+    git(["branch", "root-ref"]);
+    writeFile("feature.ts", "// never fails on any path\nconst a = 1;\n");
+    git(["add", "feature.ts"]);
+    commit("add feature.ts with a claim");
+    // The working tree is now fully clean: nothing staged, nothing
+    // unstaged, nothing untracked -- isWorkingTreeDirty() would have
+    // returned false here, which is exactly the gap the old K3 guard had
+    // (it never even gets called any more; this proves the replacement
+    // guard fires without it).
+
+    const binParent = fs.mkdtempSync(path.join(os.tmpdir(), "claims-audit-git-wrapper-"));
+    FIXTURE_PARENTS.push(binParent); // outside the repo -- the wrapper's own directory must not itself make `repo` dirty
+    fs.writeFileSync(path.join(binParent, "git"), BREAKING_GIT_WRAPPER, { mode: 0o755 });
+
+    const breakingEnv = {
+      ...env,
+      PATH: `${binParent}:${env.PATH}`,
+      CLAIMS_AUDIT_REAL_GIT: REAL_GIT,
+      CLAIMS_AUDIT_BREAK_LINES_DIFF: "1",
+    };
+
+    let error;
+    try {
+      execFileSync("node", [SCRIPT_PATH, "--base", "root-ref"], { cwd: repo, env: breakingEnv, encoding: "utf8" });
+    } catch (err) {
+      error = err;
+    }
+
+    expect(error).toBeDefined();
+    expect(error.status).not.toBe(0);
+    expect(error.stdout ?? "").not.toMatch(/candidates found/);
+  });
+
+  it("H1 (round 3): reports the same candidates run from a subdirectory as from the repo root", () => {
+    const { repo, writeFile, git, commit, runScript, runScriptFrom } = makeFixtureRepo();
+    // sibling.ts lives OUTSIDE nested/ on purpose: a repo-root-only pathspec
+    // bug in listTrackedFiles/listUntrackedFiles (git ls-files defaults to
+    // "cwd and below", a second, separate cwd-dependency from the path
+    // FORMAT one `--full-name` alone fixes) would make this reference
+    // falsely "not found" only from the subdirectory run, even after
+    // readFileFromWorkingTree itself was fixed -- caught exactly this way
+    // while verifying the fix, before `-- ':/'` was added alongside
+    // `--full-name`.
+    writeFile("sibling.ts", "const s = 1;\n");
+    git(["add", "sibling.ts"]);
+    fs.mkdirSync(path.join(repo, "nested"));
+    writeFile("nested/feature.ts", "// never fails on any path, see sibling.ts\nconst a = 1;\n");
+    git(["add", "nested/feature.ts"]);
+    commit("add nested/feature.ts with a claim and sibling.ts");
+
+    const fromRoot = runScript();
+    const fromSubdir = runScriptFrom("nested");
+
+    expect(fromRoot).not.toMatch(/candidates found: 0\b/);
+    expect(fromRoot).toContain("nested/feature.ts:1 [ABSOLUTE] never fails on any path, see sibling.ts");
+    expect(fromRoot).not.toMatch(/REFERENCE not found:/);
+    // Before the fix, readFileFromWorkingTree resolved "nested/feature.ts"
+    // against process.cwd() (here, .../repo/nested), so the lookup actually
+    // opened .../repo/nested/nested/feature.ts, threw ENOENT, was caught by
+    // the blanket "deleted file" handler, and silently produced
+    // "candidates found: 0" with exit 0 -- reproduced below as plain
+    // inequality with the root run, not just a bare zero check, so a
+    // regression that drops the count to some OTHER wrong number (not
+    // literally 0) would also fail this assertion, and so would the
+    // sibling.ts-reference regression described above.
+    expect(fromSubdir).toBe(fromRoot);
   });
 });
