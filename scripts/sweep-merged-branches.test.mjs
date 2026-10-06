@@ -22,6 +22,7 @@ import {
   buildOpenPrsByBase,
   buildPrInfoByBranch,
   classifyBranchRetarget,
+  classifyGhApiDeleteFailure,
   classifyPreDeleteRecheck,
   classifyRemoteBranch,
   classifyRetargetVerification,
@@ -448,6 +449,55 @@ describe("classifyPreDeleteRecheck (ugcportal-hvaf)", () => {
       action: "keep",
       reason: "open PR(s) appeared based on this branch since the last check, immediately before delete: #999",
     });
+  });
+});
+
+describe("classifyGhApiDeleteFailure (ugcportal-ix0s)", () => {
+  it("is 'unavailable' (fall back to git push --delete) when gh itself could not be spawned", () => {
+    // output is deliberately non-empty junk here -- ghMissing must short-circuit
+    // past it rather than happening to match one of the patterns below.
+    expect(classifyGhApiDeleteFailure({ ghMissing: true, output: "HTTP 404 Not Found" })).toBe("unavailable");
+  });
+
+  it("is 'unavailable' (fall back to git push --delete) for a plain HTTP 404 response body -- ugcportal-ix0s: a 404 from this endpoint was verified live to mean the repository couldn't be resolved, not that the branch is already gone, so it is NOT treated as already-gone and must fall back instead", () => {
+    expect(
+      classifyGhApiDeleteFailure({
+        ghMissing: false,
+        output: '{"message":"Not Found","status":"404"}\ngh: Not Found (HTTP 404)',
+      }),
+    ).toBe("unavailable");
+  });
+
+  it("is 'unavailable' for gh's own 'HTTP 404' stderr line even without a JSON status field -- same ugcportal-ix0s reasoning", () => {
+    expect(classifyGhApiDeleteFailure({ ghMissing: false, output: "gh: Not Found (HTTP 404)" })).toBe("unavailable");
+  });
+
+  it("is 'already-gone' for the real shape this endpoint actually returns for an already-gone ref: HTTP 422 'Reference does not exist' -- verified against the live GitHub API (2026-10-06), not simulated", () => {
+    expect(
+      classifyGhApiDeleteFailure({
+        ghMissing: false,
+        output:
+          '{"message":"Reference does not exist","documentation_url":"https://docs.github.com/rest/git/refs#delete-a-reference","status":"422"}\ngh: Reference does not exist (HTTP 422)',
+      }),
+    ).toBe("already-gone");
+  });
+
+  it("is 'unavailable' for a 422 that is NOT the 'Reference does not exist' shape -- fixture-mutation check against the case above (only the message text differs)", () => {
+    expect(
+      classifyGhApiDeleteFailure({
+        ghMissing: false,
+        output: '{"message":"Validation Failed","status":"422"}\ngh: Validation Failed (HTTP 422)',
+      }),
+    ).toBe("unavailable");
+  });
+
+  it("is 'unavailable' for an unrelated server error, so the caller falls back to git push --delete rather than silently doing nothing", () => {
+    expect(
+      classifyGhApiDeleteFailure({
+        ghMissing: false,
+        output: '{"message":"Internal Server Error","status":"500"}\ngh: Internal Server Error (HTTP 500)',
+      }),
+    ).toBe("unavailable");
   });
 });
 
@@ -934,6 +984,25 @@ const SWEEP_SCRIPT_PATH = fileURLToPath(new URL("./sweep-merged-branches.mjs", i
  * Every invocation's argv is appended, one JSON array per line, to
  * `<dir>/gh-call-log.jsonl`, so a test can assert on what was actually
  * called, not just on the real script's visible side effects.
+ *
+ * Also answers `gh api -X DELETE repos/{owner}/{repo}/git/refs/heads/<branch>`
+ * (ugcportal-ix0s, the primary path `deleteRemoteBranch` now tries before
+ * falling back to `git push origin --delete`): unless `config.apiDeleteFailures[branch]`
+ * says otherwise, it deletes `refs/heads/<branch>` directly on
+ * `config.remoteDir` via `git update-ref -d` -- a direct ref write, not a
+ * push, the same way the real GitHub API's effect on the ref never goes
+ * through git's push/receive machinery either -- so the real `git
+ * ls-remote` check `main()`'s own caller (`deleteRemoteBranch`) runs next
+ * sees a result consistent with what the real API call would leave behind.
+ * `config.apiDeleteFailures[branch]`, when set to one of `"422-reference-gone"`
+ * (the only shape this endpoint is actually observed to return for an
+ * already-gone ref, verified 2026-10-06 -- see `classifyGhApiDeleteFailure`'s
+ * own doc), `"404"` (verified live to mean the REPOSITORY couldn't be
+ * resolved, not that the branch is already gone -- ugcportal-ix0s: must fall
+ * back to `git push origin --delete` like any other unrecognized failure,
+ * not be treated as already-gone) or `"500"`,
+ * fails the call with that real response shape instead, without touching
+ * `remoteDir`.
  */
 function writeFakeGh(dir, config) {
   const configPath = path.join(dir, "gh-config.json");
@@ -943,6 +1012,7 @@ function writeFakeGh(dir, config) {
   const implPath = path.join(dir, "gh-impl.cjs");
   const impl = `
 const fs = require("fs");
+const { execFileSync } = require("child_process");
 const config = JSON.parse(fs.readFileSync(${JSON.stringify(configPath)}, "utf8"));
 const args = process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(logPath)}, JSON.stringify(args) + "\\n");
@@ -954,6 +1024,31 @@ function flagValue(name) {
 function fail(code, message) {
   process.stderr.write(message + "\\n");
   process.exit(code);
+}
+
+// Real response bodies this endpoint is actually observed (ugcportal-ix0s,
+// 2026-10-06 against the real GitHub API) or documented to return.
+const API_DELETE_RESPONSES = {
+  "404": '{"message":"Not Found","status":"404"}\\ngh: Not Found (HTTP 404)',
+  "422-reference-gone":
+    '{"message":"Reference does not exist","documentation_url":"https://docs.github.com/rest/git/refs#delete-a-reference","status":"422"}\\ngh: Reference does not exist (HTTP 422)',
+  "500": '{"message":"Internal Server Error","status":"500"}\\ngh: Internal Server Error (HTTP 500)',
+};
+
+if (args[0] === "api" && args[1] === "-X" && args[2] === "DELETE") {
+  const m = /refs\\/heads\\/(.+)$/.exec(args[3] || "");
+  const branch = m && m[1];
+  if (!branch) fail(2, "fake-gh: could not parse branch from api call: " + JSON.stringify(args));
+
+  const failureKey = config.apiDeleteFailures && config.apiDeleteFailures[branch];
+  if (!failureKey) {
+    if (!config.remoteDir) fail(2, "fake-gh: api delete call with no config.remoteDir to apply it to: " + JSON.stringify(args));
+    execFileSync("git", ["-C", config.remoteDir, "update-ref", "-d", \`refs/heads/\${branch}\`]);
+    process.exit(0);
+  }
+  const body = API_DELETE_RESPONSES[failureKey];
+  if (!body) fail(2, "fake-gh: unrecognized apiDeleteFailures key: " + failureKey);
+  fail(1, body);
 }
 
 if (args[0] === "repo" && args[1] === "view") {
@@ -1007,6 +1102,35 @@ fail(2, "fake-gh: unhandled invocation: " + JSON.stringify(args));
   return { configPath, logPath };
 }
 
+/**
+ * Installs a `pre-receive` hook on the bare repo at `remoteDir` that appends
+ * every incoming ref-update line (`<old> <new> <ref>`, one per line, git's
+ * own pre-receive protocol) to a plain log file, then allows the push
+ * (ugcportal-ix0s). `git init --bare` already creates `hooks/`, so no mkdir
+ * is needed. This is how "no git push runs" is asserted below: `git push`
+ * cannot reach the remote without going through this hook, while the fake
+ * `gh`'s api-delete handler (a direct `git update-ref -d` against the bare
+ * repo, simulating the real GitHub API's effect on the ref) does not trigger
+ * it -- so a log with no entry for a branch is direct evidence no push for
+ * that branch happened, not an inference from the absence of some other
+ * signal.
+ *
+ * @returns {string} path to the log file -- absent (not created at all)
+ *   until the first push actually reaches this hook.
+ */
+function installPushLogger(remoteDir) {
+  const logPath = path.join(remoteDir, "push-log.txt");
+  const hookPath = path.join(remoteDir, "hooks", "pre-receive");
+  fs.writeFileSync(hookPath, `#!/bin/sh\ncat >> ${JSON.stringify(logPath)}\nexit 0\n`);
+  fs.chmodSync(hookPath, 0o755);
+  return logPath;
+}
+
+/** @returns {string} the push log `installPushLogger` wrote, or "" if no push ever reached the hook. */
+function readPushLog(logPath) {
+  return fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf8") : "";
+}
+
 /** Runs the real script as a child process with the isolation `fixtureGitEnv` already applies to plain git calls, plus `dir` prepended to PATH so `gh` resolves to the fake. Never throws on a nonzero exit (the script sets one whenever it keeps a branch) -- callers need both the output AND the status. */
 function runSweepScript({ cwd, fakeGhDir, args }) {
   const env = { ...fixtureGitEnv(), PATH: `${fakeGhDir}${path.delimiter}${process.env.PATH}` };
@@ -1054,10 +1178,20 @@ describe("end-to-end against a real temp git remote and a stateful fake gh (ugcp
         fixtureGit(repoDir, ["push", "-q", "origin", branch]);
       }
 
+      // ugcportal-ix0s: a pre-receive hook on the real bare remote, logging
+      // every incoming ref update -- direct evidence of whether `git push`
+      // ever reached it, not an inference. The fake `gh`'s own api-delete
+      // handler goes around this entirely (a direct `git update-ref -d`
+      // against `remoteDir`, simulating the real API's effect on the ref
+      // without using push at all), so an empty log after this run means no
+      // push happened for any of these deletions.
+      const pushLog = installPushLogger(remoteDir);
+
       fs.mkdirSync(ghBinDir);
       const { logPath } = writeFakeGh(ghBinDir, {
         defaultBranch: "main",
         limitMin: 500, // gh's own un-limited default is 30
+        remoteDir, // ugcportal-ix0s: lets the fake's api-delete handler act on the real ref
         prListAll: [
           { headRefName: "feat/toctou", state: "MERGED", number: 201, headRefOid: "deadbeef", baseRefName: "main" },
           { headRefName: "feat/partial", state: "MERGED", number: 202, headRefOid: "deadbeef", baseRefName: "main" },
@@ -1128,10 +1262,198 @@ describe("end-to-end against a real temp git remote and a stateful fake gh (ugcp
       // #501 really was retargeted (an actual `gh pr edit` call was made for
       // it), not just reported as if it had been.
       expect(calls).toContainEqual(["pr", "edit", "501", "--base", "main"]);
+
+      // ugcportal-ix0s: feat/clean's deletion went through the GitHub API --
+      // and it is the ONLY api-delete call this run made (feat/toctou and
+      // feat/partial were both kept before ever reaching deleteRemoteBranch,
+      // so neither could have made one) -- asserted as an exact array, not
+      // `toContainEqual`, so this is the claim actually checked, not just a
+      // presence check that would also pass if an unexpected extra call snuck in.
+      const apiDeleteCalls = calls.filter((argv) => argv[0] === "api");
+      expect(apiDeleteCalls).toEqual([["api", "-X", "DELETE", "repos/{owner}/{repo}/git/refs/heads/feat/clean"]]);
+      // And no git push ever reached the remote for it (or anything else --
+      // feat/toctou and feat/partial were both kept, so neither was ever a
+      // delete candidate at all): direct evidence from the remote's own
+      // pre-receive hook, not an inference from the output above.
+      expect(readPushLog(pushLog)).toBe("");
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
   }, 20000);
+});
+
+// --- End-to-end: deleteRemoteBranch's own API-vs-fallback branching --------
+//
+// The describe block above exercises the full `main()` orchestration with a
+// stateful fake `gh` that answers `pr list`/`pr edit`/`pr view` (and, since
+// ugcportal-ix0s, `api -X DELETE .../git/refs/heads/<branch>` too, via the
+// same `writeFakeGh`). This block is narrower and newer (ugcportal-ix0s): it
+// calls `deleteRemoteBranch` directly against a real temporary git remote,
+// reusing that same fake `gh`, to prove three things the pure
+// `classifyGhApiDeleteFailure` tests above cannot: that a successful API call
+// never reaches `git push` at all, that an
+// already-gone ref (verified above to come back as HTTP 422 "Reference does
+// not exist" from the real API, not HTTP 404) is accepted the same way, and
+// that a real `git push origin --delete` actually runs -- and still
+// succeeds -- when the API fails for any other reason, including a 404
+// (ugcportal-ix0s: verified live to mean the repository couldn't be
+// resolved, not that the branch is already gone).
+//
+// "Never reaches git push" is proven with a real git mechanism, not an
+// assertion about which function got called: a `pre-receive` hook installed
+// on the bare remote appends one line per incoming ref update to a plain log
+// file. `git push` cannot reach the remote without going through it; `gh api`
+// (faked here to call `git update-ref -d` directly against the bare repo,
+// simulating the real API's effect on the ref without involving push at all)
+// does not trigger it. A log with no entry for a branch is therefore direct
+// evidence no push for that branch happened, not an inference from the
+// absence of some other signal.
+//
+// ugcportal-9faa: each case below spawns several real `git` subprocesses
+// (init, remote add, checkout, push) plus a real `gh`-replacing child
+// process per `deleteRemoteBranch` call, against its own fresh fixture repo
+// -- the same shape as "end-to-end against real temporary git repositories"
+// above, which carries this same explicit describe-level timeout for
+// exactly this reason (there is nothing here to cache; each case needs its
+// own isolated repository on disk).
+describe("deleteRemoteBranch: GitHub API primary path, git push fallback (ugcportal-ix0s)", { timeout: 20_000 }, () => {
+  // Same GIT_* isolation as "end-to-end against real temporary git
+  // repositories" above, and for the same reason: deleteRemoteBranch's own
+  // `execFileSync` calls (both the `gh` one and the `git` ones) carry no env
+  // override of their own, by design, since in real use they run against the
+  // actual target repo -- so this process's own GIT_* must not leak in.
+  let savedGitEnv;
+  beforeAll(() => {
+    savedGitEnv = {};
+    for (const key of Object.keys(process.env)) {
+      if (key.startsWith("GIT_")) {
+        savedGitEnv[key] = process.env[key];
+        delete process.env[key];
+      }
+    }
+  });
+  afterAll(() => {
+    Object.assign(process.env, savedGitEnv);
+  });
+
+  /** Runs `fn` with `fakeGhDir` prepended to this process's own PATH, restoring it afterward -- the real `deleteRemoteBranch`/`deleteRemoteBranchViaApi` under test here call `execFileSync("gh", ...)` with no env override of their own, so resolving to the fake has to happen through this process's actual PATH, the same way the GIT_* isolation above has to happen through this process's actual env. */
+  function withFakeGhOnPath(fakeGhDir, fn) {
+    const originalPath = process.env.PATH;
+    process.env.PATH = `${fakeGhDir}${path.delimiter}${originalPath}`;
+    try {
+      return fn();
+    } finally {
+      process.env.PATH = originalPath;
+    }
+  }
+
+  function setupFixture(prefix) {
+    const { root, repoDir } = makeFixtureRepo(prefix);
+    const remoteDir = path.join(root, "remote.git");
+    const ghBinDir = path.join(root, "bin");
+    fs.mkdirSync(remoteDir);
+    fixtureGit(remoteDir, ["init", "-q", "--bare"]);
+    fixtureGit(repoDir, ["remote", "add", "origin", remoteDir]);
+    fixtureGit(repoDir, ["checkout", "-q", "-b", "feat/ix0s-delete"]);
+    fixtureGit(repoDir, ["push", "-q", "-u", "origin", "feat/ix0s-delete"]);
+    fs.mkdirSync(ghBinDir);
+    return { root, repoDir, remoteDir, ghBinDir };
+  }
+
+  it("deletes through the GitHub API and never reaches git push", () => {
+    const { root, repoDir, remoteDir, ghBinDir } = setupFixture("ix0s-api-success-");
+    try {
+      const pushLog = installPushLogger(remoteDir);
+      const { logPath } = writeFakeGh(ghBinDir, { remoteDir, apiDeleteFailures: {} });
+
+      withFakeGhOnPath(ghBinDir, () => {
+        deleteRemoteBranch("feat/ix0s-delete", repoDir);
+      });
+
+      // The branch is actually gone on origin.
+      expect(fixtureGit(repoDir, ["ls-remote", "--heads", "origin", "feat/ix0s-delete"]).trim()).toBe("");
+
+      // The API call was really made, with the right path.
+      const calls = fs
+        .readFileSync(logPath, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(calls).toContainEqual(["api", "-X", "DELETE", "repos/{owner}/{repo}/git/refs/heads/feat/ix0s-delete"]);
+
+      // Direct evidence, not an inference: no push for this branch -- or any
+      // branch -- ever reached the remote's pre-receive hook.
+      expect(readPushLog(pushLog)).toBe("");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("treats an already-gone ref (HTTP 422 'Reference does not exist', verified as this endpoint's real shape above) as deleted, without falling back to git push", () => {
+    const { root, repoDir, remoteDir, ghBinDir } = setupFixture("ix0s-already-gone-");
+    try {
+      const pushLog = installPushLogger(remoteDir);
+      // Delete the branch out from under the fake -- some other process (an
+      // earlier sweep, a human) already removed it before this call.
+      fixtureGit(remoteDir, ["update-ref", "-d", "refs/heads/feat/ix0s-delete"]);
+      const { logPath } = writeFakeGh(ghBinDir, {
+        remoteDir,
+        apiDeleteFailures: { "feat/ix0s-delete": "422-reference-gone" },
+      });
+
+      expect(() =>
+        withFakeGhOnPath(ghBinDir, () => {
+          deleteRemoteBranch("feat/ix0s-delete", repoDir);
+        }),
+      ).not.toThrow();
+
+      const calls = fs
+        .readFileSync(logPath, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(calls).toContainEqual(["api", "-X", "DELETE", "repos/{owner}/{repo}/git/refs/heads/feat/ix0s-delete"]);
+
+      // Still no push, for the already-gone case either.
+      expect(readPushLog(pushLog)).toBe("");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to a real git push --delete when the API call returns a 404 (ugcportal-ix0s: verified live to mean the repo couldn't be resolved, not that the branch is already gone -- an unmatched 404 must fall back like any other unrecognized failure), and that still removes the branch", () => {
+    const { root, repoDir, remoteDir, ghBinDir } = setupFixture("ix0s-fallback-");
+    try {
+      const pushLog = installPushLogger(remoteDir);
+      const { logPath } = writeFakeGh(ghBinDir, {
+        remoteDir,
+        apiDeleteFailures: { "feat/ix0s-delete": "404" },
+      });
+
+      withFakeGhOnPath(ghBinDir, () => {
+        deleteRemoteBranch("feat/ix0s-delete", repoDir);
+      });
+
+      // The branch is gone -- but this time only the fallback could have done it:
+      // the fake gh never deletes the ref itself on a configured failure.
+      expect(fixtureGit(repoDir, ["ls-remote", "--heads", "origin", "feat/ix0s-delete"]).trim()).toBe("");
+
+      // The API call was attempted and failed, as configured.
+      const calls = fs
+        .readFileSync(logPath, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(calls).toContainEqual(["api", "-X", "DELETE", "repos/{owner}/{repo}/git/refs/heads/feat/ix0s-delete"]);
+
+      // Direct evidence a real git push reached the remote for this branch
+      // this time -- the mirror image of the "never reaches git push" checks
+      // in the two tests above.
+      expect(readPushLog(pushLog)).toContain("refs/heads/feat/ix0s-delete");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("guard: the fixtures above must never reach this repository's own config", () => {
