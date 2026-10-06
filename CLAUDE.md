@@ -209,11 +209,10 @@ Two more metadata fields track the cost of a bead, in tokens, alongside
 
 - `tokens_impl` — cost of building the feature (everything up to opening
   the PR). This is the agent run total reported in the completion notification
-  when the implementation run finishes, accumulated per pass with a
-  `tokens_impl_passes` note describing the passes and a `tokens_impl_note`
-  explaining any revisions. The accumulated total is a best-effort approximation,
-  not a metered figure, since `bd` has no atomic read-then-write for metadata
-  fields.
+  when the implementation run finishes, accumulated across passes with a
+  count in `tokens_impl_passes` and a `tokens_impl_note` tracking revisions.
+  The accumulated total is a best-effort approximation: agent run totals are
+  reported figures from completion notifications, summed by hand.
 - `tokens_qa` — cost of the post-implementation QA/review pass. This is the
   `pr-review-merge` reviewer agent's own token total from its completion
   notification, recorded by the invoking orchestrator after review runs (see
