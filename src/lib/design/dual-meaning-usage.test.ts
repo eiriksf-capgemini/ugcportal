@@ -336,6 +336,13 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
   // margin is sized for sitting under a cropped grid tile, not this page's
   // full-width image).
   "src/app/media/[previewId]/page.tsx": { "text-muted-foreground": 1 },
+  // ugcportal-lju: the share control's status announcement ("Link copied" /
+  // "Shared" / "Could not copy the link"), rendered as a direct sibling of
+  // the Share button on the SAME per-item page canvas (--background) as the
+  // "short text" paragraph audited directly above — the identical
+  // muted-foreground-on-background pairing, just a status region instead of
+  // a caption.
+  "src/components/share/share-control.tsx": { "text-muted-foreground": 1 },
   "src/components/site/page-shell.tsx": { "text-foreground": 1 },
   "src/components/site/section-heading.ts": { "text-foreground": 1 },
   // Round-1 review simplified this component (K2's spec marker rendered
