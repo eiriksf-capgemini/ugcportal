@@ -92,7 +92,21 @@ export async function GET(request: Request) {
    * publish filter structurally — but there is now one copy of the filter
    * rather than one per caller.
    */
-  const result = await listPublicMedia(request.url);
+  let result;
+  try {
+    result = await listPublicMedia(request.url);
+  } catch {
+    // `listPublicMedia` already logged this, throttled (ugcportal-0dh), and
+    // rethrew — see its own comment. This catch exists only so a thrown
+    // listing error answers with the same `cache-control: no-store` header
+    // every other path out of this handler sets (ugcportal-c70s): without
+    // it, the exception reaches Next's own route-handler error handling,
+    // which answers a generic 500 with none of this route's headers.
+    return NextResponse.json(
+      { error: "Internal server error" },
+      { status: 500, headers: NO_STORE },
+    );
+  }
 
   if (!result.ok) {
     // `listPublicMedia` already logged this, throttled (ugcportal-0dh) — see

@@ -156,6 +156,67 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
   );
 
   /**
+   * Keyboard focus handoff (ugcportal-ff2a) — the same shape ugcportal-jx4
+   * fixed for the gallery's "Load more", one level down: that page has a
+   * single button and a single landing spot, so one ref each was enough;
+   * this page has one of each PER ROW, so these are keyed by queue id
+   * instead. `UploadQueueList` stays hook-free (see its own docstring) — it
+   * only forwards the element through the ref callbacks below, never reads
+   * from these maps itself.
+   *
+   * Four controls need this: "Try again", "Cancel", "Remove" and "Clear"
+   * each unmounts — or gets replaced — as a direct result of its own
+   * activation, and jsdom/browsers both drop focus to <body> when the
+   * focused element leaves the DOM. "Remove" and "Clear" share one map
+   * (`dismissButtonRefs`): a given row only ever renders one of the two
+   * (see UploadQueueList), so there is never a collision writing both into
+   * the same key.
+   */
+  const retryButtonRefs = useRef(new Map<string, HTMLButtonElement>());
+  const cancelButtonRefs = useRef(new Map<string, HTMLButtonElement>());
+  const dismissButtonRefs = useRef(new Map<string, HTMLButtonElement>());
+  const statusLineRefs = useRef(new Map<string, HTMLParagraphElement>());
+  /**
+   * The one control this page always has, dismissed row or not — the
+   * landing spot "Remove"/"Clear" fall back to when the row they unmount has
+   * no neighbour to hand focus to instead (see `dismiss()`). The real file
+   * input, not the "Choose files" label standing in for it: a label has no
+   * native keyboard activation of its own (Enter/Space on a focused label
+   * does nothing), where the input already gets a visible ring from the
+   * dropzone's `has-[:focus-visible]` below.
+   */
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const registerRetryButtonRef = useCallback(
+    (id: string, element: HTMLButtonElement | null) => {
+      if (element === null) retryButtonRefs.current.delete(id);
+      else retryButtonRefs.current.set(id, element);
+    },
+    [],
+  );
+  const registerCancelButtonRef = useCallback(
+    (id: string, element: HTMLButtonElement | null) => {
+      if (element === null) cancelButtonRefs.current.delete(id);
+      else cancelButtonRefs.current.set(id, element);
+    },
+    [],
+  );
+  const registerDismissButtonRef = useCallback(
+    (id: string, element: HTMLButtonElement | null) => {
+      if (element === null) dismissButtonRefs.current.delete(id);
+      else dismissButtonRefs.current.set(id, element);
+    },
+    [],
+  );
+  const registerStatusLineRef = useCallback(
+    (id: string, element: HTMLParagraphElement | null) => {
+      if (element === null) statusLineRefs.current.delete(id);
+      else statusLineRefs.current.set(id, element);
+    },
+    [],
+  );
+
+  /**
    * Which rows have reached an outcome, tracked from the ACTIONS rather than
    * from the rendered list.
    *
@@ -382,6 +443,20 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
       */
       if (settledRef.current.has(id)) return;
 
+      /*
+        Keyboard focus handoff (ugcportal-ff2a): "Cancel" is the same
+        shape as "Try again" (see `retry()` below) — the row SURVIVES as
+        `failed` down either branch below, so its own status line is already
+        mounted and is the landing spot. ONE call, hoisted above both
+        branches, not one inside each: nothing between this line and either
+        branch's abort/dispatch can skip it, so a single call covers both
+        rather than needing a duplicate that a future edit could drop from
+        just one of them.
+      */
+      if (document.activeElement === cancelButtonRefs.current.get(id)) {
+        statusLineRefs.current.get(id)?.focus();
+      }
+
       if (inFlightRef.current?.id === id) {
         // The transport rejects with UploadAbortedError, which uploadItem
         // turns into the cancelled failure — one path, not two.
@@ -428,6 +503,30 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
       */
       if (!mayRetry(item.failure, Date.now())) return;
 
+      /*
+        Keyboard focus handoff (ugcportal-ff2a K1), before the dispatch below
+        rather than after it, and for the same reason gallery.tsx's own
+        pre-dispatch check gives: `dispatchQueue` only QUEUES the re-render
+        that unmounts "Try again" (the item's `failure` goes to null on
+        "retried" — see uploadQueueReducer), it does not commit it, so
+        `document.activeElement` here still reflects whatever the visitor's
+        last real action left it as. Checked against THIS row's own button,
+        not against `document.body`: a visitor who is on a different row
+        entirely must not have their focus moved anywhere (K2) — only a
+        visitor who is actually on this button gets handed somewhere else.
+        (Whether a mouse click leaves a visitor "on this button" depends on
+        the browser — gallery.tsx's own pre-dispatch comment has the fuller
+        account of that, and why neither guard tries to tell a mouse click
+        apart from a keyboard one; this one only tells apart "on this
+        button" from "not".) The status line is the landing spot because the
+        row SURVIVES here (as `pending`), so it stays mounted — unlike
+        `dismiss()` below, where "Remove"/"Clear" remove the whole row and
+        therefore need a different landing spot entirely.
+      */
+      if (document.activeElement === retryButtonRefs.current.get(id)) {
+        statusLineRefs.current.get(id)?.focus();
+      }
+
       dispatchQueue({ type: "retried", id });
       // The tags, alt text and caption the FIRST attempt carried, not
       // whatever is ticked or typed now.
@@ -445,6 +544,28 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
 
   const dismiss = useCallback(
     (id: string) => {
+      /*
+        Keyboard focus handoff (ugcportal-ff2a) — unlike `retry()`/
+        `cancel()`, "Remove"/"Clear" dispatch "dismissed", which filters the
+        WHOLE row out of `items` (uploadQueueReducer's `items.filter(...)`),
+        so there is no surviving status line on this row to land on; at zero
+        items `UploadQueueList` returns `null` entirely. Computed from the
+        DOM, before the dispatch below removes the row, because the
+        sibling <li> (if any) is still there to query at this point: the
+        next row's first focusable control, else the previous row's, else
+        the file input — the one control this page always has.
+      */
+      const button = dismissButtonRefs.current.get(id);
+      if (document.activeElement === button) {
+        const row = button?.closest("li") ?? null;
+        const sibling =
+          row?.nextElementSibling ?? row?.previousElementSibling ?? null;
+        const target =
+          sibling?.querySelector<HTMLElement>("button, a[href]") ??
+          fileInputRef.current;
+        target?.focus();
+      }
+
       if (inFlightRef.current?.id === id) {
         inFlightRef.current.controller.abort();
       }
@@ -597,6 +718,7 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
         ].join(" ")}
       >
         <input
+          ref={fileInputRef}
           id={inputId}
           type="file"
           multiple
@@ -653,6 +775,10 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
         onRetry={retry}
         onCancel={cancel}
         onDismiss={dismiss}
+        onRetryButtonRef={registerRetryButtonRef}
+        onCancelButtonRef={registerCancelButtonRef}
+        onDismissButtonRef={registerDismissButtonRef}
+        onStatusLineRef={registerStatusLineRef}
       />
     </div>
   );

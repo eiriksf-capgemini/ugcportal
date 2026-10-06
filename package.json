@@ -3,7 +3,7 @@
   "version": "0.5.0",
   "private": true,
   "scripts": {
-    "dev": "node scripts/with-local-ca.mjs next dev",
+    "dev": "node scripts/check-migrations.mjs && node scripts/with-local-ca.mjs next dev",
     "build": "node scripts/with-local-ca.mjs next build",
     "start": "node scripts/with-local-ca.mjs next start",
     "lint": "eslint",

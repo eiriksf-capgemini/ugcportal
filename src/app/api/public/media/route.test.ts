@@ -1,4 +1,23 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
+// Captured before any test (or `beforeEach`) runs, so it is provably the
+// real `console.error` rather than something a prior spy left behind
+// (ugcportal-f6w3 K1) — every scoped spy below restores itself in a
+// `finally`, but this gives the "untouched outside the two tests that need
+// it" claim something to compare against instead of just trusting that.
+const originalConsoleError = console.error;
+
+// Relative to this file, not the repo root, so the check in the caching
+// describe block below (K2, ugcportal-c70s) reads the handler it is
+// actually testing rather than a stale path.
+const ROUTE_SOURCE_PATH = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "route.ts",
+);
 
 const authMock = vi.fn();
 const mediaFindManyMock = vi.fn();
@@ -208,15 +227,18 @@ beforeEach(() => {
   sequence = 0;
   authMock.mockResolvedValue(null);
   seed([]);
-  // listPublicMedia now logs a malformed cursor's `ok: false` through to
-  // console.error, throttled (ugcportal-0dh) — real behaviour this suite
-  // should not have to opt out of case by case. Several tests below
-  // (caching, the malformed-cursor loop) deliberately exercise that exact
-  // path; without this, their otherwise-green runs print real
-  // "[gallery] public media listing failed" lines to test stderr, which is
-  // noise this file never asked for and that can mask a genuinely
-  // unexpected error in CI output.
-  vi.spyOn(console, "error").mockImplementation(() => {});
+  // No blanket console.error silence here (ugcportal-f6w3): listPublicMedia
+  // logs a failed listing through to console.error, throttled (ugcportal-
+  // 0dh), on exactly two paths — src/lib/public-media.ts's two
+  // logFailedPublicListing call sites: a malformed `?cursor=` and a thrown
+  // listing error. The handful of tests that deliberately exercise those
+  // paths spy on console.error themselves, scoped to just that test and
+  // restored in a `finally`, following the pattern this file already used
+  // in one place (the "reports the end of the list rather than disclosing
+  // a withheld row" test, below). Every other test in this file keeps the
+  // real console.error, so an unrelated bug whose only symptom is an
+  // unexpected console.error is still visible rather than silently
+  // swallowed.
 });
 
 describe("GET /api/public/media — visibility (K1)", () => {
@@ -540,18 +562,27 @@ describe("GET /api/public/media — no original key, no preview-less row (K3)", 
 
 describe("GET /api/public/media — caching", () => {
   it("forbids storing the response, on success and on error alike", async () => {
-    seed([row({ id: "a" })]);
+    // Scoped to this test (ugcportal-f6w3): the bad-cursor call below trips
+    // listPublicMedia's throttled console.error (ugcportal-0dh). Restored in
+    // the `finally` so every other test in this file keeps the real
+    // console.error.
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      seed([row({ id: "a" })]);
 
-    const ok = await GET(request());
-    expect(ok.status).toBe(200);
-    expect(ok.headers.get("cache-control")).toBe("no-store");
+      const ok = await GET(request());
+      expect(ok.status).toBe(200);
+      expect(ok.headers.get("cache-control")).toBe("no-store");
 
-    // The 400 path too: a cached "Invalid cursor" is its own small trap, and
-    // a header that is only set on the happy path is one refactor from not
-    // being set at all.
-    const bad = await GET(request("?cursor=not-a-cursor"));
-    expect(bad.status).toBe(400);
-    expect(bad.headers.get("cache-control")).toBe("no-store");
+      // The 400 path too: a cached "Invalid cursor" is its own small trap, and
+      // a header that is only set on the happy path is one refactor from not
+      // being set at all.
+      const bad = await GET(request("?cursor=not-a-cursor"));
+      expect(bad.status).toBe(400);
+      expect(bad.headers.get("cache-control")).toBe("no-store");
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 
   it("does not let an unpublished row be served from a cached page", async () => {
@@ -572,6 +603,109 @@ describe("GET /api/public/media — caching", () => {
     const after = await GET(request());
     expect((await after.json()).items).toEqual([]);
     expect(after.headers.get("cache-control")).toBe("no-store");
+  });
+});
+
+describe("GET /api/public/media — a thrown listing error still forbids storing (ugcportal-c70s)", () => {
+  it("answers a thrown listing error with a 500, no-store, and a JSON body (K1)", async () => {
+    // Scoped (ugcportal-f6w3): listPublicMedia logs the throw, throttled
+    // (ugcportal-0dh), before rethrowing it.
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      mediaFindManyMock.mockRejectedValueOnce(new Error("connection lost"));
+
+      const response = await GET(request());
+      const body = await response.json();
+
+      expect(response.status).toBe(500);
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(body).toEqual({ error: "Internal server error" });
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("sets cache-control: no-store on every outcome this handler can produce (K2)", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const OUTCOMES: Array<{
+        name: string;
+        status: number;
+        run: () => Promise<Response>;
+      }> = [
+        {
+          name: "success",
+          status: 200,
+          run: () => {
+            seed([row({ id: "a" })]);
+            return GET(request());
+          },
+        },
+        {
+          name: "malformed cursor (ok: false)",
+          status: 400,
+          run: () => {
+            seed([row({ id: "a" })]);
+            return GET(request("?cursor=not-a-cursor"));
+          },
+        },
+        {
+          name: "thrown listing error",
+          status: 500,
+          run: () => {
+            mediaFindManyMock.mockRejectedValueOnce(
+              new Error("connection lost"),
+            );
+            return GET(request());
+          },
+        },
+      ];
+
+      for (const outcome of OUTCOMES) {
+        const response = await outcome.run();
+        expect(response.status, outcome.name).toBe(outcome.status);
+        expect(response.headers.get("cache-control"), outcome.name).toBe(
+          "no-store",
+        );
+      }
+
+      // "Following should never happen: any response path out of this
+      // handler omitting cache-control: no-store" — checked structurally
+      // too, not just by the three rows above: every `NextResponse.json(`
+      // call site in route.ts must both exist here as a table row and set
+      // NO_STORE. Adding a fourth call site to the handler without a fourth
+      // row here changes this count and fails the table.
+      const routeSource = readFileSync(ROUTE_SOURCE_PATH, "utf8");
+      const callSites = routeSource.split("NextResponse.json(").slice(1);
+      expect(callSites).toHaveLength(OUTCOMES.length);
+      for (const callSite of callSites) {
+        expect(callSite.slice(0, 200)).toContain("NO_STORE");
+      }
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+});
+
+describe("GET /api/public/media — console.error is scoped, not silenced globally (ugcportal-f6w3)", () => {
+  it("leaves console.error untouched outside the tests that exercise the throttled log (K1)", () => {
+    expect(console.error).toBe(originalConsoleError);
+  });
+
+  it("still surfaces an unrelated console.error rather than swallowing it (K2)", () => {
+    // Proves the per-test scoping above does not leak into a false sense of
+    // safety: an error that has nothing to do with the throttled
+    // listing-failure log is still observable here, exactly as it would be
+    // in any other test in this file that does not spy on console.error.
+    const errorSpy = vi.spyOn(console, "error");
+    try {
+      console.error("unrelated-error-ugcportal-f6w3-k2");
+      expect(errorSpy).toHaveBeenCalledWith(
+        "unrelated-error-ugcportal-f6w3-k2",
+      );
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 });
 
@@ -727,23 +861,32 @@ describe("GET /api/public/media — pagination contract", () => {
   });
 
   it("rejects a malformed cursor rather than faking an empty page", async () => {
-    seed([row({ id: "a" })]);
+    // Scoped to this test (ugcportal-f6w3): every iteration below trips
+    // listPublicMedia's throttled console.error (ugcportal-0dh). Restored in
+    // the `finally` so every other test in this file keeps the real
+    // console.error.
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      seed([row({ id: "a" })]);
 
-    for (const bad of [
-      "draft",
-      "not-base64!!",
-      Buffer.from("no-separator").toString("base64url"),
-      Buffer.from("2026-09-22T10:00:00.000Z|").toString("base64url"),
-      Buffer.from("2026|a").toString("base64url"),
-      Buffer.from("not-a-date|a").toString("base64url"),
-    ]) {
-      mediaFindManyMock.mockClear();
+      for (const bad of [
+        "draft",
+        "not-base64!!",
+        Buffer.from("no-separator").toString("base64url"),
+        Buffer.from("2026-09-22T10:00:00.000Z|").toString("base64url"),
+        Buffer.from("2026|a").toString("base64url"),
+        Buffer.from("not-a-date|a").toString("base64url"),
+      ]) {
+        mediaFindManyMock.mockClear();
 
-      const response = await GET(request(`?cursor=${bad}`));
+        const response = await GET(request(`?cursor=${bad}`));
 
-      expect(response.status).toBe(400);
-      expect(await response.json()).toEqual({ error: "Invalid cursor" });
-      expect(mediaFindManyMock).not.toHaveBeenCalled();
+        expect(response.status).toBe(400);
+        expect(await response.json()).toEqual({ error: "Invalid cursor" });
+        expect(mediaFindManyMock).not.toHaveBeenCalled();
+      }
+    } finally {
+      errorSpy.mockRestore();
     }
   });
 

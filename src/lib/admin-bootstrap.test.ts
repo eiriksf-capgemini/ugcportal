@@ -1,4 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import { pinEnvironment } from "@/lib/test-support/env";
 
 const roleChangeCountMock = vi.fn();
 const setUserRoleMock = vi.fn();
@@ -17,20 +19,16 @@ const { withSignInIdentity, rememberSignInIdentity } = await import(
   "@/lib/live-session"
 );
 
-const originalEnv = process.env.ADMIN_BOOTSTRAP_EMAILS;
+// Was its own save/set/restore of ADMIN_BOOTSTRAP_EMAILS (ugcportal-0p5s)
+// — the same copy src/lib/test-support/env.ts was extracted to retire (see
+// that module's header).
+pinEnvironment({
+  ADMIN_BOOTSTRAP_EMAILS: "First@Example.com, second@example.com",
+});
 
 beforeEach(() => {
   roleChangeCountMock.mockReset().mockResolvedValue(0);
   setUserRoleMock.mockReset().mockResolvedValue("updated");
-  process.env.ADMIN_BOOTSTRAP_EMAILS = "First@Example.com, second@example.com";
-});
-
-afterEach(() => {
-  if (originalEnv === undefined) {
-    delete process.env.ADMIN_BOOTSTRAP_EMAILS;
-  } else {
-    process.env.ADMIN_BOOTSTRAP_EMAILS = originalEnv;
-  }
 });
 
 describe("bootstrapAdminEmails", () => {

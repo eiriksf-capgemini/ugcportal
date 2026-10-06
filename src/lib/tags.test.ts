@@ -323,6 +323,10 @@ describe("parseTagNames", () => {
   });
 
   it("collapses spellings of one tag and keeps the first", () => {
+    // Distinguishes first-wins from a last-wins regression by PAYLOAD, not
+    // just by slug: all three entries share slug "food" but differ in
+    // `name`, so this fails if a later spelling ever won instead of the
+    // first.
     const result = parseTagNames(["Food", "food", "FOOD"]);
 
     expect(result.ok).toBe(true);

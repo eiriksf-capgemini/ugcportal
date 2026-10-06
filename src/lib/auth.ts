@@ -16,6 +16,7 @@ import {
 } from "@/lib/live-session";
 import { prisma } from "@/lib/prisma";
 import { AUTH_ERROR_PATH } from "@/lib/routes";
+import { withSchemaMismatchLogging } from "@/lib/schema-mismatch";
 import { isPermittedSignIn } from "@/lib/sign-in-policy";
 import { signInProviders } from "@/lib/sign-in-providers";
 
@@ -79,7 +80,15 @@ export const authConfig = {
   // Order is not significant: the two wrappers override disjoint methods
   // (`createSession` versus `createUser`/`getUserByEmail`) and neither reads
   // the other's. Linking is outermost only because it is the newer layer.
-  adapter: withConfiguredUserLinking(withSessionIdentity(PrismaAdapter(prisma))),
+  //
+  // `withSchemaMismatchLogging` (ugcportal-w7wc) is outermost BECAUSE order
+  // matters for it: it reports and rethrows, so wrapping the other two is
+  // what lets it see an error raised anywhere underneath. Without it a
+  // database behind prisma/migrations shows up only as @auth/core's generic
+  // `SessionTokenError`, on a page that still answers 200.
+  adapter: withSchemaMismatchLogging(
+    withConfiguredUserLinking(withSessionIdentity(PrismaAdapter(prisma))),
+  ),
   session: { strategy: "database" },
   // A first-party Access Denied screen (src/app/auth/error/page.tsx). Without
   // this, a refused sign-in lands on @auth/core's built-in page, which says
@@ -255,11 +264,11 @@ export const handlers = withSignInIdentity(nextAuth.handlers);
  * `"database"` session strategy means every one of those calls shares a
  * single adapter round trip instead of paying for its own.
  *
- * Not yet universal: src/app/upload/page.tsx:24 still calls plain `auth()`
- * (ugcportal-t0y round 2 finding) — migrating it needs coordinating with the
- * concurrently open PR #46, which also touches that file, so it stayed
- * out of scope here and is filed separately as ugcportal-asg. A signed-in
- * visit to /upload therefore still costs two session queries, not one,
- * until that bead lands.
+ * Universal as of ugcportal-asg (CLOSED): src/app/upload/page.tsx now calls
+ * this same getSession() (src/app/upload/page.tsx, "const session = await
+ * getSession()"; fixture proof in page.test.tsx, whose vi.mock exports only
+ * getSession, no auth key — an unmigrated auth() call would throw against
+ * it), so a signed-in visit to /upload shares the one adapter round trip
+ * above rather than paying for a second.
  */
 export const getSession = cache(() => auth());

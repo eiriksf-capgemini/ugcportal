@@ -42,6 +42,9 @@ This protocol applies when ending a Beads implementation workflow. It is subordi
    closing a bead whose work is done, set `cc_type`/`cc_scope`/`prs` and a
    best-effort `tokens_impl` estimate (see "Token cost metadata" below);
    `tokens_qa` is recorded separately by `pr-review-merge` once review runs.
+   Once a bead's PR has actually merged, closing it also means cleaning up
+   after it — the origin branch and the implementer's local worktree and
+   branch (ugcportal-nvg0) — not just flipping the bead's status.
 4. **Handle git/sync by active profile**:
    ```bash
    # Conservative/minimal: report status and proposed commands; wait for approval.
@@ -56,7 +59,26 @@ This protocol applies when ending a Beads implementation workflow. It is subordi
    # Then: run the pr-review-merge skill against the new PR.
    #   - clean (CI green, no sensitive paths, no blocking findings) -> squash-merge to main
    #   - otherwise -> leave a review comment and stop for a human
+
+   # Once that PR has merged (by the skill, or by a human doing the same
+   # thing by hand): verify the branch is actually gone rather than trusting
+   # --delete-branch alone, then remove this worktree and its local branch
+   # (ugcportal-nvg0). This is the orchestrator's step, run from its own
+   # (main) checkout, not from inside the worktree being removed.
+   git ls-remote --heads origin <type>/<bead-id>-<slug>   # must print nothing
+   # still there? -> git push origin --delete <type>/<bead-id>-<slug>, then re-check
+   git worktree remove <path-to-this-worktree>   # refuses if dirty or locked -- do not force it
+   git branch -D <type>/<bead-id>-<slug>
+   git worktree prune
    ```
+   For drift that built up before this step existed, or from a merge that
+   bypassed it, `node scripts/sweep-merged-branches.mjs` lists every stale
+   remote branch and worktree across the whole repo (same rule as above —
+   a branch's PR must be `MERGED`, not just open or closed, and a dirty or
+   locked worktree is kept either way; see
+   `scripts/sweep-merged-branches.test.mjs` for the asserted cases);
+   `--execute` removes what it lists. See
+   `.claude/skills/pr-review-merge/SKILL.md` step 7.
 5. **Hand off** - Summarize changes, validation, issue status, PR/merge outcome, and any blocked sync/commit/push/merge step
 
 **Critical rules:**

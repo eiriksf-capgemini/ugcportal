@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
@@ -366,6 +369,44 @@ describe("the states around the grid", () => {
       Number(match[1]),
     );
     expect(levels[0]).toBe(2);
+  });
+});
+
+/**
+ * ugcportal-3wcd: the genuinely-empty decision now comes from the shared
+ * `isGenuinelyEmptyPage` (src/lib/gallery-items.ts) rather than an inline
+ * `items.length === 0 && !hasMore` copy — K1 and K2's behaviour table,
+ * pinned over the four combinations the two inputs can form. The
+ * `items=[]`/`hasMore=false` and `items=[]`/`hasMore=true` rows already
+ * existed above ("renders the empty state instead of an empty grid",
+ * "does not claim the gallery is empty while a further page is offered");
+ * this table adds the two non-empty-items rows so all four are asserted
+ * together, in one place, against the one expression.
+ */
+describe("ugcportal-3wcd — isGenuinelyEmptyPage decides the empty state (K2 behaviour table)", () => {
+  const ONE_ITEM = MIXED_SHAPES.slice(0, 1);
+
+  it.each([
+    { label: "no items, no further page", items: [], cursor: null, hasMore: false, empty: true },
+    { label: "no items, a further page", items: [], cursor: "cursor-1", hasMore: true, empty: false },
+    { label: "one item, no further page", items: ONE_ITEM, cursor: null, hasMore: false, empty: false },
+    { label: "one item, a further page", items: ONE_ITEM, cursor: "cursor-1", hasMore: true, empty: false },
+  ])("renders empty=$empty for $label", ({ items, cursor, hasMore, empty }) => {
+    const markup = render({
+      initialItems: items,
+      initialCursor: cursor,
+      initialHasMore: hasMore,
+    });
+    expect(markup.includes("Nothing is published yet.")).toBe(empty);
+  });
+
+  it("calls the shared helper rather than spelling the check out inline", () => {
+    const source = readFileSync(
+      fileURLToPath(new URL("./gallery.tsx", import.meta.url)),
+      "utf8",
+    );
+    expect(source).not.toContain("items.length === 0 && !hasMore");
+    expect(source).toContain("isGenuinelyEmptyPage(items, hasMore)");
   });
 });
 

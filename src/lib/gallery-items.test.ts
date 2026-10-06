@@ -359,6 +359,29 @@ describe("appendGalleryItems", () => {
     expect(appendGalleryItems(first, [item({ id: "a" })])).toBe(first);
     expect(appendGalleryItems(first, [])).toBe(first);
   });
+
+  it("keeps the on-screen item's own payload for a repeated id, not the incoming one's", () => {
+    // Distinguishes first-wins from a last-wins regression by PAYLOAD, not
+    // just by id: both items below share id "a", so a dedupe that let the
+    // incoming copy win would still pass every id-only assertion above.
+    const first = [item({ id: "a", caption: "original" })];
+    const overlapping = [item({ id: "a", caption: "replaced" }), item({ id: "c" })];
+    const result = appendGalleryItems(first, overlapping);
+
+    expect(result.map((entry) => entry.id)).toEqual(["a", "c"]);
+    expect(result[0].caption).toBe("original");
+  });
+
+  it("keeps the first payload for an id repeated WITHIN the incoming page, not a later one's", () => {
+    const page = [
+      item({ id: "a", caption: "first" }),
+      item({ id: "a", caption: "second" }),
+    ];
+    const result = appendGalleryItems([], page);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].caption).toBe("first");
+  });
 });
 
 describe("galleryItemLabel", () => {
