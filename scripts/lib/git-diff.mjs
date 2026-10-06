@@ -34,6 +34,7 @@
 
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import path from "node:path";
 
 // A large uncommitted diff (e.g. a big generated file, or many files edited
 // at once) can exceed execFileSync's 1 MB default maxBuffer before a commit
@@ -43,6 +44,43 @@ import fs from "node:fs";
 // tracked text file with room to spare, without buffering an unbounded
 // amount of memory if something genuinely runs away.
 const LARGE_MAX_BUFFER = 64 * 1024 * 1024;
+
+// Computed once per process, the first time anything needs it, then cached
+// -- the repo root never changes mid-run. `git rev-parse --show-toplevel`
+// resolves correctly from any cwd inside the repo, any depth down
+// (ugcportal-np1i round 3 H1).
+let cachedRepoRoot = null;
+
+/**
+ * The absolute path of the repository's top-level working directory,
+ * regardless of the current working directory the process was started in.
+ * Every function below that reads a path straight off disk (not through
+ * `git`, which already resolves plain pathspecs against the repo root on
+ * its own for `diff`/`show`) joins its path against this first -- a bare
+ * `fs.readFileSync(filePath)` with a repo-relative `filePath` silently reads
+ * the wrong file (or nothing) unless the process happens to be running from
+ * the repo root already (round 3 H1: `readFileFromWorkingTree` used to do
+ * exactly that, so running claims-audit.mjs from a subdirectory reproduced
+ * the original "candidates found: 0" bug this whole bead exists to fix, via
+ * a third trigger -- cwd -- that no fixture test exercised, since every
+ * fixture always invokes the script with `cwd` set to the fixture's own
+ * root). `git ls-files` has a worse version of the same problem, in two
+ * parts, one level removed: unlike `diff`/`show`, it both prints paths
+ * relative to cwd by default AND scopes its listing to "cwd and below" by
+ * default, so listTrackedFiles/listUntrackedFiles below pass `--full-name`
+ * (fixes the path format) alongside an explicit top-level pathspec, `:/`
+ * (fixes the scope) -- `--full-name` on its own looked sufficient and
+ * wasn't: it silently narrows the list to whatever subtree cwd sits in,
+ * dropping every file elsewhere rather than merely misformatting them.
+ *
+ * @returns {string}
+ */
+export function getRepoRoot() {
+  if (cachedRepoRoot === null) {
+    cachedRepoRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim();
+  }
+  return cachedRepoRoot;
+}
 
 /**
  * `origin/main` when that ref resolves, else `HEAD~1` (no network, or a
@@ -130,13 +168,24 @@ export function readFileAtHead(filePath) {
 }
 
 /**
- * Every tracked path, for "does the file this comment points at exist"
- * checks. One subprocess; callers should cache the result.
+ * Every tracked path, repo-root-relative, for "does the file this comment
+ * points at exist" checks. One subprocess; callers should cache the result.
+ * Unlike `git diff`/`git show`, plain `git ls-files` is scoped to "the
+ * current directory and below" AND prints paths relative to the current
+ * directory, not the repo root -- two separate cwd-dependencies, both
+ * defaults, neither overridden by the other's fix. `--full-name` only fixes
+ * the second (path FORMAT); without the explicit top-level pathspec `:/`
+ * (git's "from the repo root" magic pathspec) as well, this list silently
+ * narrows to files under whatever subdirectory the script happens to run
+ * from, missing everything else entirely rather than just misformatting it
+ * (ugcportal-np1i round 3 H1 -- caught only by comparing this function's
+ * actual output counts from two different cwds, not by `--full-name` alone,
+ * which looked sufficient but wasn't).
  *
  * @returns {string[]}
  */
 export function listTrackedFiles() {
-  const out = execFileSync("git", ["ls-files"], { encoding: "utf8" });
+  const out = execFileSync("git", ["ls-files", "--full-name", "--", ":/"], { encoding: "utf8" });
   return out.split("\n").filter(Boolean);
 }
 
@@ -168,16 +217,21 @@ export function resolveMergeBase(base) {
 }
 
 /**
- * Untracked paths .gitignore does not exclude. Exported as its own function,
- * separate from the two below, so a single call's result can be reused by
- * both instead of each shelling out to `git ls-files --others` a second time
- * (ugcportal-np1i M3/L4 -- the previous working-tree functions each ran this
- * independently).
+ * Untracked, repo-root-relative paths .gitignore does not exclude. Exported
+ * as its own function, separate from the two below, so a single call's
+ * result can be reused by both instead of each shelling out to `git
+ * ls-files --others` a second time (ugcportal-np1i M3/L4 -- the previous
+ * working-tree functions each ran this independently). `--full-name` plus
+ * the explicit `:/` top-level pathspec for the same two-part reason as
+ * listTrackedFiles above: without both, this list is both misformatted
+ * (cwd-relative, not repo-root-relative) AND silently incomplete (scoped to
+ * cwd's own subtree, missing an untracked file anywhere else) the moment
+ * the script runs from a subdirectory (round 3 H1).
  *
  * @returns {string[]}
  */
 export function listUntrackedFiles() {
-  return execFileSync("git", ["ls-files", "--others", "--exclude-standard"], { encoding: "utf8" })
+  return execFileSync("git", ["ls-files", "--others", "--exclude-standard", "--full-name", "--", ":/"], { encoding: "utf8" })
     .split("\n")
     .filter(Boolean);
 }
@@ -215,11 +269,18 @@ export function getChangedLineNumbersSince(ref) {
  * edits and untracked files all read the same way, because all three are
  * about to be committed/pushed and none of them is readable with
  * `git show`. Throws for a path the working tree does not have (deleted,
- * or a directory).
+ * or a directory). `filePath` is resolved against the REPO ROOT
+ * (getRepoRoot), not `process.cwd()` -- a bare `fs.readFileSync(filePath)`
+ * resolves against whatever directory the process happens to be started
+ * from, unlike the `git show HEAD:path` this function replaced, which git
+ * itself always resolves against the repo root. Round 3 H1: running the
+ * unfixed version from any subdirectory made every file lookup throw
+ * ENOENT, each one caught and silently treated as "deleted", reproducing
+ * the exact false "candidates found: 0" this bead exists to eliminate.
  *
  * @param {string} filePath repo-relative
  * @returns {string}
  */
 export function readFileFromWorkingTree(filePath) {
-  return fs.readFileSync(filePath, "utf8");
+  return fs.readFileSync(path.join(getRepoRoot(), filePath), "utf8");
 }

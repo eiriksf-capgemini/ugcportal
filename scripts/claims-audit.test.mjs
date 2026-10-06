@@ -41,7 +41,7 @@ import {
 } from "./claims-audit.mjs";
 import { parseUnifiedDiffAddedLines } from "./lib/git-diff.mjs";
 
-const NO_TRACKED = { trackedFiles: [] };
+const NO_EXISTING_FILES = { existingFiles: [] };
 
 describe("classifyClaimLine", () => {
   it("flags an absolute claim (PR #102 round 1: a dedupe comment that said the opposite of what was measured)", () => {
@@ -157,42 +157,50 @@ describe("extractProseLines", () => {
 describe("auditContent", () => {
   it("reports only comments on changed lines, each line tagged with its categories", () => {
     const content = ["// always true on every path", "const a = 1;", "// 85px tall", "const b = 2;", ""].join("\n");
-    const out = auditContent(content, "a.ts", new Set([3]), NO_TRACKED);
+    const out = auditContent(content, "a.ts", new Set([3]), NO_EXISTING_FILES);
     expect(out).toEqual([{ file: "a.ts", line: 3, categories: ["MEASUREMENT"], text: "85px tall", missingReferences: [] }]);
   });
 
   it("audits every comment when changedLines is null (--all-lines, the stale-sibling sweep)", () => {
     const content = ["// always true", "const a = 1;", "// 85px tall", ""].join("\n");
-    expect(auditContent(content, "a.ts", null, NO_TRACKED)).toHaveLength(2);
+    expect(auditContent(content, "a.ts", null, NO_EXISTING_FILES)).toHaveLength(2);
   });
 
   it("reports a block comment at the line of the offending sentence, not the block's first line", () => {
     const content = ["/**", " * Plain description.", " * It never throws.", " */", "const a = 1;", ""].join("\n");
-    const out = auditContent(content, "a.ts", new Set([1, 2, 3, 4]), NO_TRACKED);
+    const out = auditContent(content, "a.ts", new Set([1, 2, 3, 4]), NO_EXISTING_FILES);
     expect(out).toEqual([{ file: "a.ts", line: 3, categories: ["ABSOLUTE"], text: "It never throws.", missingReferences: [] }]);
   });
 
   it("names a referenced file that is not in the tree, and stays silent for one that is", () => {
     const content = ["// see configured-users.ts and routes.ts", "const a = 1;", ""].join("\n");
-    const out = auditContent(content, "src/lib/a.ts", new Set([1]), { trackedFiles: ["src/lib/routes.ts"] });
+    const out = auditContent(content, "src/lib/a.ts", new Set([1]), { existingFiles: ["src/lib/routes.ts"] });
     expect(out).toEqual([
       { file: "src/lib/a.ts", line: 1, categories: [], text: "see configured-users.ts and routes.ts", missingReferences: ["configured-users.ts"] },
     ]);
   });
 
+  it("stays silent for a reference to an untracked sibling (ugcportal-np1i round 3 L1: an untracked file is a real, existing file)", () => {
+    const content = ["// see untracked-sibling.ts", "const a = 1;", ""].join("\n");
+    const out = auditContent(content, "src/lib/a.ts", new Set([1]), {
+      existingFiles: ["src/lib/routes.ts", "src/lib/untracked-sibling.ts"],
+    });
+    expect(out).toEqual([]);
+  });
+
   it("is silent for a comment with no claim and no reference", () => {
     const content = "// build the href\nconst a = 1;\n";
-    expect(auditContent(content, "a.ts", new Set([1]), NO_TRACKED)).toEqual([]);
+    expect(auditContent(content, "a.ts", new Set([1]), NO_EXISTING_FILES)).toEqual([]);
   });
 
   it("audits Markdown prose line by line", () => {
     const content = "# Notes\n\nThe gate never fails open.\n";
-    const out = auditContent(content, "docs/x.md", new Set([3]), NO_TRACKED);
+    const out = auditContent(content, "docs/x.md", new Set([3]), NO_EXISTING_FILES);
     expect(out.map((c) => c.categories)).toEqual([["ABSOLUTE"]]);
   });
 
   it("ignores a file type it does not know how to read", () => {
-    expect(auditContent("binary-ish", "image.png", null, NO_TRACKED)).toEqual([]);
+    expect(auditContent("binary-ish", "image.png", null, NO_EXISTING_FILES)).toEqual([]);
   });
 });
 
@@ -347,13 +355,18 @@ function makeFixtureRepo() {
     );
   const writeFile = (name, content) => fs.writeFileSync(path.join(repo, name), content);
   const runScript = (args = []) => execFileSync("node", [SCRIPT_PATH, ...args], { cwd: repo, env, encoding: "utf8" });
+  // Runs the script with cwd set to a subdirectory of the fixture repo,
+  // rather than the repo root every other helper above uses -- the one
+  // case round 3's H1 needs, since every other fixture test's `cwd: repo`
+  // structurally could not have exposed a cwd-relative-path bug.
+  const runScriptFrom = (subdir, args = []) => execFileSync("node", [SCRIPT_PATH, ...args], { cwd: path.join(repo, subdir), env, encoding: "utf8" });
 
   git(["init", "--quiet", "--initial-branch=main"]);
   writeFile("README.md", "# fixture\n");
   git(["add", "README.md"]);
   commit("initial commit");
 
-  return { repo, env, git, commit, writeFile, runScript };
+  return { repo, env, git, commit, writeFile, runScript, runScriptFrom };
 }
 
 afterEach(() => {
@@ -526,5 +539,40 @@ describe("working tree and --base (ugcportal-np1i)", () => {
     expect(error).toBeDefined();
     expect(error.status).not.toBe(0);
     expect(error.stdout ?? "").not.toMatch(/candidates found/);
+  });
+
+  it("H1 (round 3): reports the same candidates run from a subdirectory as from the repo root", () => {
+    const { repo, writeFile, git, commit, runScript, runScriptFrom } = makeFixtureRepo();
+    // sibling.ts lives OUTSIDE nested/ on purpose: a repo-root-only pathspec
+    // bug in listTrackedFiles/listUntrackedFiles (git ls-files defaults to
+    // "cwd and below", a second, separate cwd-dependency from the path
+    // FORMAT one `--full-name` alone fixes) would make this reference
+    // falsely "not found" only from the subdirectory run, even after
+    // readFileFromWorkingTree itself was fixed -- caught exactly this way
+    // while verifying the fix, before `-- ':/'` was added alongside
+    // `--full-name`.
+    writeFile("sibling.ts", "const s = 1;\n");
+    git(["add", "sibling.ts"]);
+    fs.mkdirSync(path.join(repo, "nested"));
+    writeFile("nested/feature.ts", "// never fails on any path, see sibling.ts\nconst a = 1;\n");
+    git(["add", "nested/feature.ts"]);
+    commit("add nested/feature.ts with a claim and sibling.ts");
+
+    const fromRoot = runScript();
+    const fromSubdir = runScriptFrom("nested");
+
+    expect(fromRoot).not.toMatch(/candidates found: 0\b/);
+    expect(fromRoot).toContain("nested/feature.ts:1 [ABSOLUTE] never fails on any path, see sibling.ts");
+    expect(fromRoot).not.toMatch(/REFERENCE not found:/);
+    // Before the fix, readFileFromWorkingTree resolved "nested/feature.ts"
+    // against process.cwd() (here, .../repo/nested), so the lookup actually
+    // opened .../repo/nested/nested/feature.ts, threw ENOENT, was caught by
+    // the blanket "deleted file" handler, and silently produced
+    // "candidates found: 0" with exit 0 -- reproduced below as plain
+    // inequality with the root run, not just a bare zero check, so a
+    // regression that drops the count to some OTHER wrong number (not
+    // literally 0) would also fail this assertion, and so would the
+    // sibling.ts-reference regression described above.
+    expect(fromSubdir).toBe(fromRoot);
   });
 });

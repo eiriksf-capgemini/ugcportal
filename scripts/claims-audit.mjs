@@ -32,6 +32,11 @@
  * 3: "sign-in-policy.ts:125 cites configured-users.ts, which no longer
  * exists"; PR #97 round 1: a comment citing a contrast entry that does not
  * exist; PR #96 pre-push: a test header pointing at the wrong e2e path).
+ * That check now also counts an untracked file as existing (ugcportal-np1i
+ * round 3 L1): untracked files are a first-class scanned input since this
+ * bead's own K1 fix, so a reference to one is a real, existing file, not a
+ * stale pointer -- checking only `git ls-files`'s tracked list used to
+ * flag it "not found" regardless.
  *
  * What it reports, for every comment (or prose line) on a line this branch
  * ADDED relative to the base:
@@ -122,6 +127,15 @@
  * while dirty; round 2 H1 found the same gap reachable on a clean,
  * fully-committed branch, which is also the ordinary `/pre-review` case,
  * and removed the dirty-tree precondition from the guard entirely).
+ * Every working-tree path above is resolved against the REPOSITORY ROOT
+ * (scripts/lib/git-diff.mjs's getRepoRoot), not `process.cwd()` (round 3
+ * H1): a bare `fs.readFileSync` -- unlike the `git show HEAD:path` the
+ * round-2 redesign replaced, which git itself always resolves against the
+ * repo root -- resolves against whatever directory the process happens to
+ * be started from, so running this script from a subdirectory used to make
+ * every file lookup throw, each one silently caught as "deleted", again
+ * reproducing the exact false "candidates found: 0" this bead exists to
+ * eliminate.
  *
  * KNOWN LIMITATION (ugcportal-lykb), narrowed: scripts/sweep-candidates.mjs,
  * which shares this same scripts/lib/git-diff.mjs, still reads checked-out
@@ -199,22 +213,28 @@ export function findPathReferences(text) {
 }
 
 /**
- * True when `token` names a tracked file: an exact repo-relative path, a
- * path relative to the commenting file's directory, or a bare filename (or
- * path suffix) that at least one tracked path ends with.
+ * True when `token` names a file that exists in the tree: an exact
+ * repo-relative path, a path relative to the commenting file's directory, or
+ * a bare filename (or path suffix) that at least one known path ends with.
+ * `existingFiles` is expected to be tracked files UNIONED with untracked
+ * ones (ugcportal-np1i round 3 L1): a reference to an untracked sibling --
+ * first auditable at all only since this bead's own K1 fix made untracked
+ * files a scanned input -- used to be flagged "not found" even though the
+ * file is sitting right there on disk, because only `git ls-files`'s
+ * tracked list was ever checked.
  *
  * @param {string} token
  * @param {string} fromFile repo-relative path of the file holding the comment
- * @param {string[]} trackedFiles
+ * @param {string[]} existingFiles tracked and untracked paths, combined
  * @returns {boolean}
  */
-export function referenceExists(token, fromFile, trackedFiles) {
-  const tracked = new Set(trackedFiles);
-  if (tracked.has(token)) return true;
+export function referenceExists(token, fromFile, existingFiles) {
+  const existing = new Set(existingFiles);
+  if (existing.has(token)) return true;
   const relative = path.posix.normalize(path.posix.join(path.posix.dirname(fromFile), token));
-  if (tracked.has(relative)) return true;
+  if (existing.has(relative)) return true;
   const suffix = `/${token}`;
-  return trackedFiles.some((p) => p.endsWith(suffix));
+  return existingFiles.some((p) => p.endsWith(suffix));
 }
 
 // --- comment extraction --------------------------------------------------
@@ -333,10 +353,10 @@ export function extractProseLines(content, filePath) {
  * @param {string} content
  * @param {string} filePath
  * @param {Set<number> | null} changedLines
- * @param {{ trackedFiles: string[] }} options
+ * @param {{ existingFiles: string[] }} options tracked and untracked paths, combined
  * @returns {ClaimCandidate[]}
  */
-export function auditContent(content, filePath, changedLines, { trackedFiles }) {
+export function auditContent(content, filePath, changedLines, { existingFiles }) {
   const blocks = TS_FAMILY_RE.test(filePath)
     ? extractComments(content, filePath)
     : MARKDOWN_RE.test(filePath) || HASH_COMMENT_RE.test(filePath) || SLASH_COMMENT_RE.test(filePath)
@@ -360,7 +380,7 @@ export function auditContent(content, filePath, changedLines, { trackedFiles }) 
       if (text.trim() === "") return;
       const categories = classifyClaimLine(text);
       const missingReferences = findPathReferences(text)
-        .filter((ref) => !referenceExists(ref.token, filePath, trackedFiles))
+        .filter((ref) => !referenceExists(ref.token, filePath, existingFiles))
         .map((ref) => ref.token);
       if (categories.length === 0 && missingReferences.length === 0) return;
       candidates.push({ file: filePath, line: block.line + offset, categories, text: text.trim(), missingReferences });
@@ -507,6 +527,10 @@ function main() {
   } catch (err) {
     console.error(`claims-audit: git ls-files failed, reference checks disabled: ${err.message}`);
   }
+  // A reference check needs both lists: untracked files are a first-class
+  // scanned input since this bead's own K1 fix, so a comment pointing at one
+  // is a real, existing file, not a stale pointer (ugcportal-np1i round 3 L1).
+  const existingFiles = [...trackedFiles, ...untrackedFiles];
 
   const candidates = [];
   for (const filePath of changedFiles) {
@@ -524,7 +548,7 @@ function main() {
     // An untracked file has no `diffRef` side to diff against at all, so it
     // never appears in changedLinesByFile -- every line in it counts as new.
     const changedLines = allLines ? null : untrackedSet.has(filePath) ? allLineNumbers(content) : (changedLinesByFile.get(filePath) ?? new Set());
-    candidates.push(...auditContent(content, filePath, changedLines, { trackedFiles }));
+    candidates.push(...auditContent(content, filePath, changedLines, { existingFiles }));
   }
 
   // K3 guardrail: never report the false all-clean this bug used to produce.
