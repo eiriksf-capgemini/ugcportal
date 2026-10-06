@@ -4,6 +4,7 @@ import { benefitAttachmentRefusal } from "@/lib/alcohol-commerce";
 import { validateBenefitSourceName } from "@/lib/benefit-source";
 import {
   commercialLinkDisclosureRefusal,
+  MAX_COMMERCIAL_LINKS_PER_ITEM,
   validateCommercialLinkNetwork,
   validateCommercialLinkUrl,
 } from "@/lib/commercial-link";
@@ -129,6 +130,12 @@ function notFound() {
  *      the top AND at each link" rule and it is rendered from the disclosure
  *      and from nothing else.
  *
+ * A FOURTH REFUSAL SITS BELOW THOSE THREE AND IS NOT A GATE: the per-item cap
+ * (`MAX_COMMERCIAL_LINKS_PER_ITEM`). It is counted inside the transaction
+ * rather than listed here because it is a fact about the item's current row
+ * count rather than about the request, and it answers 409 rather than 400 for
+ * the same reason. See the comment at the count itself.
+ *
  * THE ALCOHOL GATE RUNS BEFORE THE DISCLOSURE GATE, deliberately. Both refuse
  * with a 400 and either order would be correct for every criterion, so the
  * tie is broken on what the refusal tells the operator to do next: a § 9-2
@@ -170,14 +177,23 @@ export async function POST(request: Request, { params }: RouteContext) {
 
   const { url, network, networkOther, benefitSource } = body.value as Body;
 
+  /*
+   * THE REFUSAL NAMES ITS OWN FIELD rather than the handler choosing a name
+   * per validator, which is what this used to do and got wrong.
+   * `validateCommercialLinkNetwork` covers TWO body fields, and five of its
+   * refusals are about `networkOther`; a fixed `"network"` here answered
+   * every one of them with a `field` that contradicted its own `message`.
+   * The key exists to tell the caller which input to correct, so only the
+   * validator can fill it in.
+   */
   const validatedUrl = validateCommercialLinkUrl(url);
   if (!validatedUrl.ok) {
-    return badRequest(validatedUrl.message, "url");
+    return badRequest(validatedUrl.message, validatedUrl.field);
   }
 
   const validatedNetwork = validateCommercialLinkNetwork(network, networkOther);
   if (!validatedNetwork.ok) {
-    return badRequest(validatedNetwork.message, "network");
+    return badRequest(validatedNetwork.message, validatedNetwork.field);
   }
 
   const source = validateBenefitSourceName(benefitSource);
@@ -249,6 +265,39 @@ export async function POST(request: Request, { params }: RouteContext) {
       );
       if (disclosure) {
         return NextResponse.json(disclosure, { status: 400 });
+      }
+
+      /*
+       * THE PER-ITEM CAP (`MAX_COMMERCIAL_LINKS_PER_ITEM`), counted INSIDE
+       * the transaction and immediately before the insert. Counted rather
+       * than derived from anything the caller sent: the collection grows one
+       * request at a time, so the only honest answer to "is this item full"
+       * is how many rows it has right now, and a count taken outside this
+       * transaction would be a number two concurrent attaches could both read
+       * as one below the cap.
+       *
+       * 409 RATHER THAN 400, the same call the publish route makes for a
+       * missing preview and this handler makes for a duplicate URL: the
+       * request is well-formed and the caller is authorized, and what refuses
+       * it is the row's current state — a state the caller can change, with a
+       * DELETE.
+       *
+       * NO `field`, unlike every refusal above it. The key names the body
+       * field to correct, and there is no edit to this body that would make
+       * this request succeed; saying `url` would send the caller off to change
+       * a destination that is not the problem. The message names the fix
+       * instead.
+       */
+      const attached = await tx.commercialLink.count({
+        where: { mediaId: owned.id },
+      });
+      if (attached >= MAX_COMMERCIAL_LINKS_PER_ITEM) {
+        return NextResponse.json(
+          {
+            error: `This item already carries the most commercial links one item may have (${MAX_COMMERCIAL_LINKS_PER_ITEM}). Detach one with DELETE /api/media/[id]/commercial-links?linkId= before attaching another.`,
+          },
+          { status: 409 },
+        );
       }
 
       /*

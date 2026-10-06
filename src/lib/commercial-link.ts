@@ -64,6 +64,43 @@ export const MAX_COMMERCIAL_LINK_URL_LENGTH = 2048;
 export const MAX_COMMERCIAL_LINK_NETWORK_OTHER_LENGTH = 64;
 
 /**
+ * How many commercial links one item may carry.
+ *
+ * A CAP RATHER THAN NO CAP, for the reason `MAX_TAGS_PER_ITEM`
+ * (src/lib/media-rules.ts) gives for the other per-item collection an owner
+ * writes: every permitted account can write these, so an unbounded list is an
+ * unbounded write. The two collections grow differently, which is why each
+ * needs its own number: a tag list is REPLACED whole by a PUT, so the length
+ * the owner sends is the length they get, while a link list is grown one POST
+ * at a time and only ever goes up until somebody detaches one. Attaching is not free — each
+ * link needs a distinct destination and a brand that somebody has already
+ * recorded a §3.1a answer against — so this is an authenticated owner filling
+ * up their own item rather than an authorization hole. It is still a row
+ * count with no ceiling on a table that is read on every public surface.
+ *
+ * SIX, and the number is about the page rather than about the database. Each
+ * link renders its own per-link advertising marker beside the item
+ * (ugcportal-qnq9.2.2, §3.2's "and at each link" half), and a photograph with
+ * a dozen markers under it is a disclosure nobody reads — the opposite of what
+ * the rule asks for. Six objects is already more than one photograph can
+ * honestly recommend, so this leaves room to be wrong about that without
+ * leaving room to abuse it.
+ *
+ * NOT DERIVED FROM `MAX_TAGS_PER_ITEM`, which is also six. They are two
+ * independent limits on two different things — one is how many chips fit
+ * under a thumbnail, this one is how many advertising markers a reader will
+ * tolerate — and tying them together would make changing either one change
+ * the other for no reason.
+ *
+ * SERVER-ONLY, unlike `MAX_TAGS_PER_ITEM`, which lives in media-rules.ts so
+ * the upload form can stop the operator before a whole video upload is spent
+ * earning a 400. There is no form for this yet (ugcportal-qnq9.2.2 owns the
+ * surface), and the request is a few hundred bytes of JSON, so there is
+ * nothing for a browser-side copy of this number to save.
+ */
+export const MAX_COMMERCIAL_LINKS_PER_ITEM = 6;
+
+/**
  * Every network the schema's `CommercialLinkNetwork` enum admits.
  *
  * The five the research document names (§2 step 5, §5.7 — Adtraction first
@@ -95,9 +132,21 @@ export function isCommercialLinkNetwork(
   );
 }
 
+/**
+ * A validated field, or a refusal that says WHICH field to fix.
+ *
+ * `field` IS CARRIED HERE RATHER THAN SUPPLIED BY THE CALLER, which is the
+ * one thing about this type worth arguing. A validator that covers two body
+ * fields — `validateCommercialLinkNetwork` covers `network` and
+ * `networkOther` — is the only thing that knows which of them a given refusal
+ * is about, and a route that picks one name for all of them answers with a
+ * `field` that contradicts its own `message`. The key exists so a caller can
+ * find the input to correct; one that names the wrong input is worse than
+ * none, because it reads as an answer.
+ */
 export type CommercialLinkFieldValidation<T> =
   | { ok: true; value: T }
-  | { ok: false; message: string };
+  | { ok: false; message: string; field: string };
 
 /**
  * Validates a submitted destination and returns the form that will be stored.
@@ -157,12 +206,12 @@ export function validateCommercialLinkUrl(
   value: unknown,
 ): CommercialLinkFieldValidation<string> {
   if (typeof value !== "string") {
-    return { ok: false, message: "Field 'url' must be a string" };
+    return { ok: false, message: "Field 'url' must be a string", field: "url" };
   }
 
   const submitted = value.trim();
   if (submitted.length === 0) {
-    return { ok: false, message: "Field 'url' must not be empty" };
+    return { ok: false, message: "Field 'url' must not be empty", field: "url" };
   }
 
   if (hasUnsafeText(submitted)) {
@@ -170,6 +219,7 @@ export function validateCommercialLinkUrl(
       ok: false,
       message:
         "Field 'url' must not contain control or text-direction characters",
+      field: "url",
     };
   }
 
@@ -180,6 +230,7 @@ export function validateCommercialLinkUrl(
     return {
       ok: false,
       message: "Field 'url' must be an absolute https:// URL",
+      field: "url",
     };
   }
 
@@ -187,6 +238,7 @@ export function validateCommercialLinkUrl(
     return {
       ok: false,
       message: `Field 'url' must use https, not '${url.protocol}'`,
+      field: "url",
     };
   }
 
@@ -194,6 +246,7 @@ export function validateCommercialLinkUrl(
     return {
       ok: false,
       message: "Field 'url' must not carry a username or password",
+      field: "url",
     };
   }
 
@@ -217,6 +270,7 @@ export function validateCommercialLinkUrl(
     return {
       ok: false,
       message: `Field 'url' must be at most ${MAX_COMMERCIAL_LINK_URL_LENGTH} characters`,
+      field: "url",
     };
   }
 
@@ -250,6 +304,7 @@ export function validateCommercialLinkNetwork(
     return {
       ok: false,
       message: `Field 'network' must be one of: ${COMMERCIAL_LINK_NETWORKS.join(", ")}`,
+      field: "network",
     };
   }
 
@@ -258,6 +313,7 @@ export function validateCommercialLinkNetwork(
       return {
         ok: false,
         message: `Field 'networkOther' may only be set when 'network' is ${COMMERCIAL_LINK_NETWORK_OTHER}`,
+        field: "networkOther",
       };
     }
     return { ok: true, value: { network, networkOther: null } };
@@ -267,6 +323,7 @@ export function validateCommercialLinkNetwork(
     return {
       ok: false,
       message: `Field 'networkOther' must name the network when 'network' is ${COMMERCIAL_LINK_NETWORK_OTHER}`,
+      field: "networkOther",
     };
   }
 
@@ -275,12 +332,14 @@ export function validateCommercialLinkNetwork(
     return {
       ok: false,
       message: `Field 'networkOther' must name the network when 'network' is ${COMMERCIAL_LINK_NETWORK_OTHER}`,
+      field: "networkOther",
     };
   }
   if (Array.from(name).length > MAX_COMMERCIAL_LINK_NETWORK_OTHER_LENGTH) {
     return {
       ok: false,
       message: `Field 'networkOther' must be at most ${MAX_COMMERCIAL_LINK_NETWORK_OTHER_LENGTH} characters`,
+      field: "networkOther",
     };
   }
   if (hasUnsafeText(name)) {
@@ -288,6 +347,7 @@ export function validateCommercialLinkNetwork(
       ok: false,
       message:
         "Field 'networkOther' must not contain control or text-direction characters",
+      field: "networkOther",
     };
   }
 
@@ -314,10 +374,28 @@ export function validateCommercialLinkNetwork(
  * top-of-page label is rendered from `MediaAdvertisingDisclosure.label` and
  * from nothing else (src/lib/gallery-items.ts), so an item with no declared
  * benefit — or one whose label is not a permitted one — is an item on which a
- * commercial link would appear with no label above it. Requiring the
- * disclosure at the ATTACH is what makes the top label's presence a property
- * of the data rather than a hope about the order the operator happens to do
- * things in.
+ * commercial link would appear with no label above it. This refuses to create
+ * that item.
+ *
+ * WHAT THAT GATES, AND WHAT IT DOES NOT, because the next reader of this
+ * module is the renderer (ugcportal-qnq9.2.2) and the difference decides
+ * whether it has to re-check. It gates the ATTACH: at the moment a link is
+ * written, the item carries a declared benefit under a permitted label. It
+ * holds nothing after that moment. PUT /api/media/[id]/disclosure with
+ * `benefitReceived: false` is deliberately never refused ("WITHDRAWING A
+ * BENEFIT IS NEVER REFUSED BY THAT GATE"), it clears `label`, and it names no
+ * commercial link and detaches none — so an item can be left published,
+ * carrying links, with no advertising label above them. Nothing downstream
+ * notices: `commercialPublishRefusal` returns null as soon as
+ * `benefitReceived` is not `true`, and the publish route selects no
+ * `commercialLinks` relation at all, so neither the label check nor the § 9-2
+ * check runs on that state. The counterexample is in this bead's own suite —
+ * commercial-links/route.test.ts, "is never refused by the disclosure
+ * precondition either", which builds exactly that row. So the top label's
+ * presence is a property of THIS WRITE, not an invariant of the data, and a
+ * renderer must not read it as one. Closing the gap — refusing the withdrawal
+ * while links exist, detaching them with it, or re-checking at render — is
+ * ugcportal-jain, not this bead.
  *
  * THE LABEL IS RE-CHECKED AGAINST THE ALLOWLIST rather than checked for being
  * non-blank, which is `isPermittedAdvertisingLabel`'s own stated job: this

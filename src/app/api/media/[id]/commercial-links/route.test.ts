@@ -42,9 +42,8 @@ const { POST, DELETE } = await import(
 // alone. The same pairing disclosure/route.test.ts uses.
 const { POST: PUBLISH } = await import("@/app/api/media/[id]/publish/route");
 const { benefitSourceSlug } = await import("@/lib/benefit-source");
-const { MAX_COMMERCIAL_LINK_URL_LENGTH } = await import(
-  "@/lib/commercial-link"
-);
+const { MAX_COMMERCIAL_LINK_URL_LENGTH, MAX_COMMERCIAL_LINKS_PER_ITEM } =
+  await import("@/lib/commercial-link");
 
 const OWNER_ID = "owner-qnq9-2-1";
 const OTHER_ID = "other-qnq9-2-1";
@@ -684,7 +683,7 @@ describe("the URL and the network, through the route (K4, K5)", () => {
     ]);
   });
 
-  it("refuses OTHER with nothing naming it, and writes nothing", async () => {
+  it("refuses OTHER with nothing naming it, naming networkOther, and writes nothing", async () => {
     await seedAttachableItem();
 
     const response = await POST(
@@ -693,10 +692,16 @@ describe("the URL and the network, through the route (K4, K5)", () => {
     );
 
     expect(response.status).toBe(400);
+    // `networkOther`, not `network`. Both of these refusals come out of a
+    // validator that covers two fields, and the field key is what tells the
+    // caller which of the two to fix — so the handler has to carry the
+    // validator's own answer through rather than naming one field for every
+    // refusal it returns.
+    expect(await response.json()).toMatchObject({ field: "networkOther" });
     expect(await storedLinks()).toEqual([]);
   });
 
-  it("refuses a named network carrying stray free text, and writes nothing", async () => {
+  it("refuses a named network carrying stray free text, naming networkOther, and writes nothing", async () => {
     await seedAttachableItem();
 
     const response = await POST(
@@ -705,6 +710,7 @@ describe("the URL and the network, through the route (K4, K5)", () => {
     );
 
     expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ field: "networkOther" });
     expect(await storedLinks()).toEqual([]);
   });
 
@@ -732,6 +738,124 @@ describe("the URL and the network, through the route (K4, K5)", () => {
 
     expect(response.status).toBe(400);
     expect(await storedLinks()).toEqual([]);
+  });
+});
+
+describe("the per-item cap", () => {
+  /** `index` distinct destinations under one brand, so the only thing that
+   * changes between attaches is how many rows the item already has. */
+  function urlNumber(index: number) {
+    return `https://track.adtraction.com/t/t?a=1234&n=${index}`;
+  }
+
+  async function attachNumber(index: number) {
+    return POST(
+      attachRequest({ ...ATTACH_BODY, url: urlNumber(index) }),
+      context(),
+    );
+  }
+
+  it("fills the item to the cap and refuses the next attach with a 409", async () => {
+    await seedAttachableItem();
+
+    for (let index = 0; index < MAX_COMMERCIAL_LINKS_PER_ITEM; index += 1) {
+      expect(
+        (await attachNumber(index)).status,
+        `attach ${index} should have succeeded`,
+      ).toBe(201);
+    }
+    expect(await storedLinks()).toHaveLength(MAX_COMMERCIAL_LINKS_PER_ITEM);
+
+    const over = await attachNumber(MAX_COMMERCIAL_LINKS_PER_ITEM);
+
+    // 409, not 400: the body is well-formed and the caller owns the item.
+    expect(over.status).toBe(409);
+    const refusal = (await over.json()) as { error: string; field?: string };
+    // The message has to name the way out, because there is no edit to this
+    // request that would make it succeed.
+    expect(refusal.error).toContain(String(MAX_COMMERCIAL_LINKS_PER_ITEM));
+    expect(refusal.error).toContain("DELETE");
+    // And no `field`, for the same reason: naming one would point the caller
+    // at an input that is not the problem.
+    expect(refusal.field).toBeUndefined();
+
+    // Nothing was written: still exactly the cap, and the refused
+    // destination is not among them.
+    const stored = await storedLinks();
+    expect(stored).toHaveLength(MAX_COMMERCIAL_LINKS_PER_ITEM);
+    expect(stored.map((link) => link.url)).not.toContain(
+      urlNumber(MAX_COMMERCIAL_LINKS_PER_ITEM),
+    );
+  });
+
+  it("is not vacuous: the attach that was refused succeeds once one is detached", async () => {
+    /*
+     * Without this, the case above would pass just as well against a route
+     * that refused the seventh attach for some other reason — a duplicate
+     * URL, a brand that went missing, a transaction that failed. Detaching
+     * one row changes exactly the count the cap reads, and the SAME request
+     * that was refused is then accepted.
+     */
+    await seedAttachableItem();
+    for (let index = 0; index < MAX_COMMERCIAL_LINKS_PER_ITEM; index += 1) {
+      expect((await attachNumber(index)).status).toBe(201);
+    }
+    expect((await attachNumber(MAX_COMMERCIAL_LINKS_PER_ITEM)).status).toBe(409);
+
+    const first = await prisma.commercialLink.findFirstOrThrow({
+      where: { mediaId: MEDIA_ID, url: urlNumber(0) },
+      select: { id: true },
+    });
+    expect(
+      (await DELETE(detachRequest(`?linkId=${first.id}`), context())).status,
+    ).toBe(204);
+
+    expect((await attachNumber(MAX_COMMERCIAL_LINKS_PER_ITEM)).status).toBe(201);
+    expect(await storedLinks()).toHaveLength(MAX_COMMERCIAL_LINKS_PER_ITEM);
+  });
+
+  it("counts per item, so a second item of the owner's starts from zero", async () => {
+    // The cap is on the collection under one photograph, which is what makes
+    // it a claim about the rendered page. A full item must not make the
+    // owner's next upload unattachable.
+    await seedAttachableItem();
+    for (let index = 0; index < MAX_COMMERCIAL_LINKS_PER_ITEM; index += 1) {
+      expect((await attachNumber(index)).status).toBe(201);
+    }
+
+    const SECOND_ID = `${MEDIA_ID}-second`;
+    await prisma.media.create({
+      data: {
+        id: SECOND_ID,
+        userId: OWNER_ID,
+        kind: "IMAGE",
+        key: `media/${OWNER_ID}/second.png`,
+        previewKey: `previews/${OWNER_ID}/second.webp`,
+        previewId: "preview-qnq9-2-1-second",
+        mimeType: "image/png",
+        sizeBytes: 2048,
+        originalName: "IMG_0002.HEIC",
+        altText: "A second empty wine glass",
+        createdAt: new Date("2026-01-02T00:00:00.000Z"),
+        advertisingDisclosure: {
+          create: {
+            benefitReceived: true,
+            benefitKind: "FREE_PRODUCT",
+            label: "Advertisement / Reklame",
+          },
+        },
+      },
+    });
+
+    const response = await POST(
+      attachRequest({ ...ATTACH_BODY, url: urlNumber(0) }, SECOND_ID),
+      context(SECOND_ID),
+    );
+
+    expect(response.status).toBe(201);
+    expect(await storedLinks()).toHaveLength(
+      MAX_COMMERCIAL_LINKS_PER_ITEM + 1,
+    );
   });
 });
 

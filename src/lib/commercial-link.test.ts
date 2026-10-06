@@ -196,6 +196,10 @@ describe("validateCommercialLinkUrl: what it refuses (K4)", () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.message).toContain(fragment);
+    // Not a table column, because this validator covers exactly one body
+    // field and the answer is the same for every row. The network table
+    // below does carry one, because that validator covers two.
+    expect(result.field).toBe("url");
   });
 
   it("refuses a destination one character over the cap", () => {
@@ -293,25 +297,34 @@ describe("validateCommercialLinkNetwork (K5)", () => {
     });
   });
 
+  /*
+   * THE THIRD COLUMN IS THE `field`, and it is here because this validator is
+   * the only one in the module that covers two body fields. The message and
+   * the field have to name the SAME one: the field key exists so a caller can
+   * find the input to correct, and five of these refusals are about
+   * `networkOther` while the first six are about `network`. The route used to
+   * report `network` for all eleven, which this column would have caught.
+   */
   it.each([
-    [undefined, undefined, "'network' must be one of"],
-    [null, undefined, "'network' must be one of"],
-    ["", undefined, "'network' must be one of"],
-    ["adtraction", undefined, "'network' must be one of"],
-    ["IMPACT", undefined, "'network' must be one of"],
-    [7, undefined, "'network' must be one of"],
+    [undefined, undefined, "'network' must be one of", "network"],
+    [null, undefined, "'network' must be one of", "network"],
+    ["", undefined, "'network' must be one of", "network"],
+    ["adtraction", undefined, "'network' must be one of", "network"],
+    ["IMPACT", undefined, "'network' must be one of", "network"],
+    [7, undefined, "'network' must be one of", "network"],
     // OTHER with nothing naming it: the marker without the fact is not a
     // recorded network, it is an unanswered question.
-    ["OTHER", undefined, "'networkOther' must name the network"],
-    ["OTHER", null, "'networkOther' must name the network"],
-    ["OTHER", "", "'networkOther' must name the network"],
-    ["OTHER", "   ", "'networkOther' must name the network"],
-    ["OTHER", 7, "'networkOther' must name the network"],
+    ["OTHER", undefined, "'networkOther' must name the network", "networkOther"],
+    ["OTHER", null, "'networkOther' must name the network", "networkOther"],
+    ["OTHER", "", "'networkOther' must name the network", "networkOther"],
+    ["OTHER", "   ", "'networkOther' must name the network", "networkOther"],
+    ["OTHER", 7, "'networkOther' must name the network", "networkOther"],
     // The other half of the contradiction, refused rather than stripped.
     [
       "ADTRACTION",
       "Impact.com",
       "'networkOther' may only be set when 'network' is OTHER",
+      "networkOther",
     ],
     // Free text goes through the same denylist as every other user-typed
     // string in this product.
@@ -319,18 +332,29 @@ describe("validateCommercialLinkNetwork (K5)", () => {
       "OTHER",
       "Impact‮moc.tcapmI",
       "must not contain control or text-direction characters",
+      "networkOther",
     ],
     [
       "OTHER",
       "A".repeat(MAX_COMMERCIAL_LINK_NETWORK_OTHER_LENGTH + 1),
       `must be at most ${MAX_COMMERCIAL_LINK_NETWORK_OTHER_LENGTH} characters`,
+      "networkOther",
     ],
-  ])("refuses network %j with %j", (network, other, fragment) => {
+  ])("refuses network %j with %j", (network, other, fragment, field) => {
     const result = validateCommercialLinkNetwork(network, other);
 
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.message).toContain(fragment);
+    expect(result.field).toBe(field);
+    // A weaker cross-check than the column above, and deliberately kept
+    // beside it: the message must at least quote the field it reports. It
+    // only catches the direction where the message says nothing about the
+    // reported field at all — `'network'` is a substring of the
+    // `'networkOther'` messages too — so the column is what actually pins
+    // the mapping, and this is what would survive the column being edited to
+    // agree with a future bug.
+    expect(result.message).toContain(`'${result.field}'`);
   });
 });
 
