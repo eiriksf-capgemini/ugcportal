@@ -4,7 +4,7 @@ import { PAGE_CONTAINER_CLASS } from "@/components/site/page-shell";
 import { INLINE_LINK_CLASS } from "@/components/ui/inline-link";
 import { requireAdmin } from "@/lib/admin";
 import { prisma } from "@/lib/prisma";
-import { uploaderClearanceBlocker } from "@/lib/resale-rights";
+import { TRIAGE_FACTS, uploaderClearanceBlocker } from "@/lib/resale-rights";
 import {
   ADMIN_USERS_PATH,
   RIGHTS_DECISION_PATH,
@@ -30,6 +30,15 @@ export const metadata = {
  * managed to suppress itself (ugcportal-gkj).
  */
 export const MAX_UPLOADERS = 100;
+
+/**
+ * DOM id of the uploader list. Exported because the page's tests read the
+ * rows out of the rendered markup and have to name WHICH list they mean:
+ * this screen renders a second <ul> above it (the per-upload triage
+ * questions), and a helper that took "the first list on the page" silently
+ * started measuring that one instead (ugcportal-qn3).
+ */
+export const UPLOADER_LIST_ID = "resale-rights-uploaders";
 
 /**
  * Resale rights per uploader (ugcportal-0ss, re-anchored by ugcportal-vsm).
@@ -165,6 +174,55 @@ export default async function ResaleRightsSettingsPage({
         and cleared per upload.
       </p>
       {/*
+        The per-upload half, listed rather than described (ugcportal-qn3).
+        Rendered straight off TRIAGE_FACTS — the same registry the gate
+        iterates — so the questions an admin is told about and the questions
+        that actually block cannot drift apart, and a rights layer added
+        later shows up here without anyone remembering to add it.
+
+        Read-only for now: there is nowhere to answer these yet. The
+        curation screen that asks them per upload is ugcportal-74w, and
+        until it ships nothing is sellable whatever is recorded below, which
+        is the correct default.
+      */}
+      <div className="mt-4 rounded-lg border border-border bg-muted p-3 text-sm">
+        <p className="font-medium">
+          Asked of every upload, separately from the clearance below
+        </p>
+        <ul className="mt-2 list-disc space-y-1 pl-5 text-ink-muted">
+          {TRIAGE_FACTS.map((fact) => (
+            <li key={fact.field}>
+              {fact.question}
+              {/*
+                Which kind of question this is, read off the registry rather
+                than written out here, so a fact no clearance settles is not
+                presented as if an admin could sign it away
+                (ugcportal-qnq9.3). Asserted by "marks a question no
+                clearance can settle as final" in page.test.tsx, which reads
+                the registry and looks for this note inside that question's
+                own <li>.
+
+                The same `!== "clearance"` reading the gate uses in
+                `triageBlocker`, so a discriminant neither side recognises
+                leaves the screen saying what the gate does.
+              */}
+              {fact.settledBy !== "clearance" ? (
+                <span className="block text-xs">
+                  A &ldquo;yes&rdquo; here is final: no clearance lifts it.
+                </span>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+        <p className="mt-2 text-xs text-ink-muted">
+          Unanswered is not &ldquo;no&rdquo;: an upload with any of these
+          left blank cannot be sold, and a &ldquo;yes&rdquo; needs its own
+          clearance on that layer — except where the list above says a
+          &ldquo;yes&rdquo; is final, which no clearance can reopen. No admin
+          screen asks them yet, so no upload is sellable today.
+        </p>
+      </div>
+      {/*
         There is no admin nav, so each admin screen carries its own links to
         the others; without them the area is a set of dead ends reachable
         only by typing a path.
@@ -226,7 +284,10 @@ export default async function ResaleRightsSettingsPage({
           Nobody has uploaded anything yet, so there is nothing to review.
         </p>
       ) : (
-        <ul className="mt-8 divide-y divide-border rounded-lg border border-border">
+        <ul
+          id={UPLOADER_LIST_ID}
+          className="mt-8 divide-y divide-border rounded-lg border border-border"
+        >
           {uploaders.map((uploader) => {
             const review = uploader.resaleRightsReview;
             const blocker = uploaderClearanceBlocker(review ?? null);

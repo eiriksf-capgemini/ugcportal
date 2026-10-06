@@ -61,15 +61,26 @@ This protocol applies when ending a Beads implementation workflow. It is subordi
    #   - otherwise -> leave a review comment and stop for a human
 
    # Once that PR has merged (by the skill, or by a human doing the same
-   # thing by hand): verify the branch is actually gone rather than trusting
-   # --delete-branch alone, then remove this worktree and its local branch
-   # (ugcportal-nvg0). This is the orchestrator's step, run from its own
-   # (main) checkout, not from inside the worktree being removed.
-   git ls-remote --heads origin <type>/<bead-id>-<slug>   # must print nothing
-   # still there? -> git push origin --delete <type>/<bead-id>-<slug>, then re-check
-   git worktree remove <path-to-this-worktree>   # refuses if dirty or locked -- do not force it
-   git branch -D <type>/<bead-id>-<slug>
-   git worktree prune
+   # thing by hand): remove the origin branch, this worktree, and its local
+   # branch all through the same tested script the merge step itself uses
+   # (ugcportal-nvg0, ugcportal-hvaf) -- not by hand. It retargets any open
+   # PR currently based on this branch before deleting it: deleting a branch
+   # an open PR still lists as base auto-closes that PR, and GitHub refuses
+   # both reopen and base-change once the base ref is gone (observed three
+   # times in one day: #126, #120, #123). Run this from the main checkout,
+   # not from inside the worktree it may remove:
+   node scripts/sweep-merged-branches.mjs --branch <type>/<bead-id>-<slug> --execute
+   # Read its output rather than assuming success: "removed origin/..."
+   # (confirm with git ls-remote --heads origin <type>/<bead-id>-<slug> --
+   # must print nothing), then "removed worktree ..." and
+   # "deleted local branch ..." for this worktree and its branch. A line
+   # reading "kept origin/...: <reason>" instead means the remote branch is
+   # not gone, most likely because an open PR based on it could not be
+   # safely retargeted -- leave it for a human rather than forcing it. The
+   # manual git push origin --delete this replaces is not a fallback to
+   # reach for by hand here -- it is only what the script's own
+   # deleteRemoteBranch runs internally, and only once retargeting is
+   # already verified clear.
    ```
    For drift that built up before this step existed, or from a merge that
    bypassed it, `node scripts/sweep-merged-branches.mjs` lists every stale
@@ -77,7 +88,13 @@ This protocol applies when ending a Beads implementation workflow. It is subordi
    a branch's PR must be `MERGED`, not just open or closed, and a dirty or
    locked worktree is kept either way; see
    `scripts/sweep-merged-branches.test.mjs` for the asserted cases);
-   `--execute` removes what it lists. See
+   `--execute` removes what it lists, retargeting any OPEN PR currently based
+   on a branch it's about to delete — to the first still-existing base in
+   the chain that branch's own merged PR recorded, not a dangling
+   intermediate branch an earlier sweep already deleted — and re-checking
+   live, immediately before the delete, that nothing new appeared while
+   retargeting was in flight; either gap keeps the branch with a reported
+   reason instead of deleting it (ugcportal-hvaf). See
    `.claude/skills/pr-review-merge/SKILL.md` step 7.
 5. **Hand off** - Summarize changes, validation, issue status, PR/merge outcome, and any blocked sync/commit/push/merge step
 
@@ -191,25 +208,24 @@ Two more metadata fields track the cost of a bead, in tokens, alongside
 `cc_type`/`cc_scope`/`prs`:
 
 - `tokens_impl` — cost of building the feature (everything up to opening
-  the PR). There's no clean automatic measurement for this today, since it
-  happens inline in the main conversation rather than as a separately
-  measurable agent run. Set it as a best-effort estimate from the session's
-  own token accounting when closing the bead; note in the bead's notes if
-  the number is rough.
-- `tokens_qa` — cost of the post-implementation QA/review pass. Each
-  individual figure is exact: the `pr-review-merge` skill runs the
-  `code-review` skill as a forked subagent, and forked-agent completions
-  report an exact `subagent_tokens` figure, which `pr-review-merge` records
-  as `tokens_qa` on the bead parsed from the PR title automatically — you
-  don't need to set it by hand unless running review manually outside that
-  skill. If review runs more than once for the same bead (e.g. a fix-up
-  pass after findings), the figure accumulates rather than overwrites — but
-  the accumulation itself is a best-effort read-then-write (`bd` has no
-  compare-and-swap for metadata), so treat the running total as an
-  approximation, not a guaranteed-exact ledger, if reviews on the same bead
-  could ever overlap. `pr-review-merge` skips recording entirely (rather
-  than guessing) when there's no real subagent run to measure, e.g. its
-  manual-review fallback path.
+  the PR). This is the agent run total reported in the completion notification
+  when the implementation run finishes, accumulated across passes with a
+  count in `tokens_impl_passes` and a `tokens_impl_note` tracking revisions.
+  The accumulated total is a best-effort approximation: agent run totals are
+  reported figures from completion notifications, summed by hand.
+- `tokens_qa` — cost of the post-implementation QA/review pass. This is the
+  `pr-review-merge` reviewer agent's own token total from its completion
+  notification, recorded by the invoking orchestrator after review runs (see
+  `.claude/skills/pr-review-merge/SKILL.md` step 4a). Each review round
+  accumulates into the bead's `tokens_qa` metadata with per-round keys
+  (`tokens_qa_r1`, `tokens_qa_r2`, etc.) and a `tokens_qa_note` explaining
+  the accumulation. The reviewer run itself never calls `bd update --set-metadata
+  tokens_qa` — it cannot read its own final token total while executing, and
+  would have no completion notification to draw an exact figure from. The
+  accumulated total is a best-effort approximation, not a metered ledger, since
+  `bd` has no compare-and-swap for metadata fields; if multiple review passes
+  land their `tokens_qa` updates around the same time, re-read with `bd show`
+  immediately before writing.
 
 ```bash
 bd update <id> --set-metadata tokens_impl=42000 --set-metadata tokens_qa=107768

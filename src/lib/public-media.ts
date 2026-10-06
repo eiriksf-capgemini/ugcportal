@@ -11,7 +11,10 @@ import {
   publicMediaListingPath,
   type PublicMediaListingParams,
 } from "@/lib/routes";
-import { createThrottledLog } from "@/lib/throttled-log";
+import {
+  DEFAULT_THROTTLE_INTERVAL_MS,
+  createThrottledLog,
+} from "@/lib/throttled-log";
 
 /**
  * The public feed's scope and select, in ONE place (ugcportal-71y).
@@ -65,7 +68,7 @@ export type PublicMediaResult = MediaListingResult<MediaAnonymousListingSelect>;
  * requests at the very end of a burst can go uncounted if nothing in this
  * window logs again.
  */
-export const LISTING_FAILURE_LOG_INTERVAL_MS = 10_000;
+export const LISTING_FAILURE_LOG_INTERVAL_MS = DEFAULT_THROTTLE_INTERVAL_MS;
 
 /**
  * No `flush` (ugcportal-z3lo K2): unlike `watermark.ts`'s shed-upload
@@ -138,14 +141,16 @@ function logFailedPublicListing(
  * with the same `cache-control: no-store` header every other path on that
  * route sets, rather than letting Next's own route-handler error handling
  * answer a generic 500 with none of this route's headers.
- */
-/**
- * Strips any curation-only tag (`stripCurationTags`,
- * src/lib/curation-tags.ts — see that function's own comment for the
- * non-array tolerance it needs, and round-5 review for why it is the
- * same function `src/lib/gallery-items.ts#toGalleryTags` now calls too)
- * from every row's `tags`, before this module's result leaves it in
- * either direction.
+ *
+ * ALSO STRIPS any curation-only tag (`stripCurationTags`,
+ * src/lib/curation-tags.ts — see that function's own comment, and round-5
+ * review for why it is the same function `src/lib/gallery-items.ts#toGalleryTags`
+ * now calls too) from every row's `tags`, before this function's result
+ * leaves it in either direction (merged into this one doc comment,
+ * ugcportal-qnq9.16, item 5 of the lows deferred from PR #93's round-6
+ * review — this used to be a second JSDoc block directly above this one
+ * with no code between them, which only the second block's own IDE
+ * hover/typedoc surfaced).
  *
  * ROUND-4 REVIEW: this is the fix for a real leak, not belt-and-suspenders.
  * `toGalleryTags` already stripped the same tags, but only for callers

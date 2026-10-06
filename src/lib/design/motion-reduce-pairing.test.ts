@@ -231,6 +231,41 @@ const DANGEROUS_UTILITY_SEGMENT =
  *    boundary that already excludes hero.tsx's own mount-time fade-in,
  *    which has no interaction trigger either).
  *
+ *    NOT ADDED EITHER (ugcportal-61pv): eight further real Tailwind
+ *    pseudo-class variants, each confirmed by compiling it that it produces
+ *    an equally ungated rule - so each is a live gap in the same SHAPE as
+ *    every trigger above, closed the same way `enabled`/`disabled` above
+ *    already are: what each one reports is a CAPABILITY or a DATA FACT about
+ *    the element, not a momentary pointer/keyboard event, so there is no
+ *    hover-shaped "this just happened" moment for `prefers-reduced-motion`
+ *    to matter for.
+ *      - `inert` (compiles to `:is([inert], [inert] *)`) - the `inert`
+ *        attribute is set by script or markup, never by a visitor's click,
+ *        hover or keypress on this element.
+ *      - `user-invalid`/`user-valid` (`:user-invalid`/`:user-valid`) - the
+ *        CSS spec requires the control to have been interacted with before
+ *        either can match, but what they REPORT once that is true is the
+ *        value's VALIDITY, which can also flip with no interaction at all
+ *        (a script assigning `.value`) - the same reason `:invalid`/`:valid`
+ *        themselves have never been in this trigger set.
+ *      - `placeholder-shown` (`:placeholder-shown`) - true exactly when the
+ *        field is empty, a fact about its current value rather than about
+ *        anything that just happened to it.
+ *      - `indeterminate` (`:indeterminate`) - set on a checkbox/radio by
+ *        script (`el.indeterminate = true`); no HTML user gesture produces
+ *        it directly.
+ *      - `autofill` (`:autofill`) - the BROWSER filled the field in the
+ *        background; not a click/hover/keypress the visitor aimed at it.
+ *      - `default` (`:default`) - marks whichever option/button a form
+ *        already designates as its default, a markup fact fixed at render
+ *        time, not a response to anything the visitor does.
+ *      - `required` (`:required`) - a capability/constraint of the field,
+ *        the same shape as `disabled`/`enabled` above.
+ *    Each is pinned by its own fixture below (the same `it.each` block
+ *    `enabled`/`disabled`/`target`/`visited`/`starting` already use), so a
+ *    future widening of `BASE_TRIGGER_STEMS` to include one of these without
+ *    revisiting this reasoning fails loudly rather than silently.
+ *
  * 2. STATE-ATTRIBUTE triggers: `aria-*` (`aria-expanded`, `aria-pressed`,
  *    ... and the arbitrary `aria-[...]` form), `data-*` (round 5: both the
  *    bare `data-open`/`data-active`/any `data-<word>` form AND the
@@ -542,7 +577,13 @@ export function findUngatedInteractionMotionUtilities(
   return offenders;
 }
 
-describe("K2: every interaction-triggered scale/translate/rotate/skew/animate/transform utility carries motion-safe: somewhere in its chain", () => {
+// ugcportal-9faa: a single real-tree walk + per-file stripComments pass
+// (findUngatedInteractionMotionUtilities, below), already computed once for
+// this describe — real CPU work a busy machine can push past the 5s
+// default on its own. Explicit timeout, not a bigger global default; see
+// analytics-host.grep.test.ts and throttled-log.no-sibling-copy.test.ts for
+// the same shape of fix and the measurements behind it.
+describe("K2: every interaction-triggered scale/translate/rotate/skew/animate/transform utility carries motion-safe: somewhere in its chain", { timeout: 15_000 }, () => {
   const files = walkSourceFiles(SRC_ROOT, isExcluded);
 
   it("finds files to scan", () => {
@@ -1083,6 +1124,17 @@ describe("findUngatedInteractionMotionUtilities (the real scanner, exercised ove
     ["target:scale-105", "target:scale-105"],
     ["visited:scale-105", "visited:scale-105"],
     ["starting:scale-105", "starting:scale-105"],
+    // ugcportal-61pv: eight further state/capability variants, confirmed by
+    // compiling each that it produces an equally ungated rule - see
+    // BASE_TRIGGER_STEMS's own comment for the per-variant reasoning.
+    ["inert:scale-105", "inert:scale-105"],
+    ["user-invalid:scale-105", "user-invalid:scale-105"],
+    ["user-valid:scale-105", "user-valid:scale-105"],
+    ["placeholder-shown:scale-105", "placeholder-shown:scale-105"],
+    ["indeterminate:scale-105", "indeterminate:scale-105"],
+    ["autofill:scale-105", "autofill:scale-105"],
+    ["default:scale-105", "default:scale-105"],
+    ["required:scale-105", "required:scale-105"],
   ])(
     "does not treat %s as an interaction trigger (deliberately excluded - see BASE_TRIGGER_STEMS's own comment)",
     (_label, classString) => {

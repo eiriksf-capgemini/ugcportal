@@ -3,7 +3,10 @@ import {
   MAX_UPLOAD_BYTES,
   declaredUploadCapBytes,
 } from "@/lib/media";
-import { createThrottledLog } from "@/lib/throttled-log";
+import {
+  DEFAULT_THROTTLE_INTERVAL_MS,
+  createThrottledLog,
+} from "@/lib/throttled-log";
 import {
   PREVIEW_BYTES_PER_OPERATION,
   PREVIEW_PROCESS_BASELINE_BYTES,
@@ -88,7 +91,11 @@ import type { WatermarkConcurrencySettings } from "@/lib/watermark";
  *    small multiple of PART_HEADER_PEEK_BYTES per concurrent request — the
  *    chunks held, which can overshoot the threshold by one chunk since a
  *    chunk cannot be half-read, plus a decoded copy of them for the header
- *    search. Tens of kilobytes against the 205 MB it replaces.
+ *    search. Tens of kilobytes against the 205 MB it replaces. Bounded in
+ *    time even so: the peek reads under BODY_STALL_TIMEOUT_MS as the rest of
+ *    the body does (ugcportal-dvb), so the request slot is not held for
+ *    Node's requestTimeout by a client that goes quiet while those tens of
+ *    kilobytes are the only thing it has sent.
  *  - **The parser's working memory.** The reservation prices the two copies
  *    the handler holds (see UPLOAD_BODY_COPIES), which is the same model
  *    ugcportal-e86 used; whatever undici allocates transiently while parsing
@@ -1038,7 +1045,7 @@ const mib = (bytes: number) => `${Math.round(bytes / (1024 * 1024))} MB`;
  * upload path was invisible: one stalled client holding the budget produced
  * nothing but 503s with no record of why.
  */
-export const SHED_LOG_INTERVAL_MS = 10_000;
+export const SHED_LOG_INTERVAL_MS = DEFAULT_THROTTLE_INTERVAL_MS;
 
 /**
  * Built on `createThrottledLog` (ugcportal-z3lo). This module's own

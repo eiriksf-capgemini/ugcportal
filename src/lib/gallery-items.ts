@@ -1,3 +1,4 @@
+import { isPermittedAdvertisingLabel } from "@/lib/advertising-disclosure";
 import { stripCurationTags } from "@/lib/curation-tags";
 import { dedupeBy } from "@/lib/dedupe";
 import { hasUnsafeText, validateAltText, validateCaption } from "@/lib/media-rules";
@@ -32,6 +33,14 @@ import { mediaPreviewPath } from "@/lib/routes";
  * /api/media/[id]/publish refuses to set `publishedAt` otherwise (K1) — but
  * `toGalleryItem` still does not trust that invariant blindly; see its own
  * comment for the defence-in-depth fallback.
+ *
+ * `kind` (ugcportal-dzz) is here too, now that a published VIDEO can reach
+ * this feed at all (ugcportal-pmb gives it a poster frame, which is what
+ * `previewKey`/`previewId` being non-null requires). Before this, the gallery
+ * never branched on it and a video would have rendered as a static tile named
+ * "Photograph N" — correct only because no VIDEO row could be published yet.
+ * `MEDIA_ANONYMOUS_SELECT` (src/lib/media-access.ts) already projected it;
+ * this type and `toGalleryItem` are what were missing.
  */
 /** One subject label on an item (ugcportal-jsc). */
 export type GalleryTag = {
@@ -41,10 +50,28 @@ export type GalleryTag = {
   name: string;
 };
 
+/**
+ * The two kinds of media this feed can carry (mirrors Prisma's `MediaKind`).
+ * Spelled out as its own union, not re-exported from the generated Prisma
+ * client: this module's whole discipline (see the file's own opening
+ * comment) is carrying only what the grid and the lightbox actually draw,
+ * and the generated enum is a bigger, Prisma-shaped surface than two string
+ * literals need to depend on.
+ */
+export type GalleryItemKind = "IMAGE" | "VIDEO";
+
 export type GalleryItem = {
   id: string;
   /** Delivery URL for the watermarked preview, built from `previewId` alone. */
   previewSrc: string;
+  /**
+   * IMAGE or VIDEO (ugcportal-dzz). Decides the play affordance on the tile
+   * and the "video"/"photograph" word in the fallback placeholder below —
+   * nothing else on this type depends on it today. PLAYBACK is deliberately
+   * not this bead's: see `toGalleryItem`'s own comment on how an unrecognised
+   * value is treated.
+   */
+  kind: GalleryItemKind;
   /** ISO-8601, or null when the feed sent something that was not a date. */
   publishedAt: string | null;
   /**
@@ -76,6 +103,27 @@ export type GalleryItem = {
    * chips under it rather than as a gap or an empty label.
    */
   tags: GalleryTag[];
+  /**
+   * The advertising-disclosure label (ugcportal-e0jv, part B of
+   * ugcportal-qnq9.1), or `null` when this item carries none — no
+   * disclosure row at all, a disclosure with `benefitReceived` false, or
+   * (defensively, see `toAdvertisingLabel` below) a stored value that is
+   * not, exactly, one of `PERMITTED_ADVERTISING_LABELS`.
+   *
+   * `null` MEANS "render nothing" (K3/K4), not "unknown" or "loading" — the
+   * same two-state contract `caption`'s `""` has, just with `null` instead
+   * of `""` because a label is never an empty-string value that happens to
+   * be falsy; it is either one of four exact strings or absent.
+   *
+   * THE ONE FIELD ON THIS TYPE THAT IS NOT MERELY SANITISED BUT RE-VALIDATED
+   * against a closed allowlist on every read (`toAdvertisingLabel`) — unlike
+   * `altText`/`caption`, which are free text and merely cleaned, a label
+   * that is not EXACTLY one of the four permitted strings must never reach
+   * a renderer, because every renderer that receives it treats its mere
+   * presence as "this item is disclosed", and a near-miss string here would
+   * be a label rendered that nobody validated.
+   */
+  advertisingLabel: string | null;
 };
 
 /**
@@ -92,6 +140,14 @@ export type PublicMediaRowish = {
   altText?: unknown;
   caption?: unknown;
   tags?: unknown;
+  kind?: unknown;
+  /**
+   * The disclosure RELATION as MEDIA_ANONYMOUS_SELECT projects it:
+   * `{ label: string | null } | null`, loosely typed like every other field
+   * here because this is a parsed JSON body as much as it is a Prisma row.
+   * See `toAdvertisingLabel` for what is actually trusted out of it.
+   */
+  advertisingDisclosure?: unknown;
 };
 
 /**
@@ -120,6 +176,49 @@ export type PublicMediaRowish = {
 function sanitizedMediaText(value: unknown, allowNewlines = false): string {
   const result = allowNewlines ? validateCaption(value) : validateAltText(value);
   return result.ok ? result.value : "";
+}
+
+/**
+ * The advertising-disclosure label on one row, or `null` (ugcportal-e0jv).
+ *
+ * Reads `row.advertisingDisclosure`, the relation MEDIA_ANONYMOUS_SELECT
+ * projects as `{ label: string | null } | null` — `null` when the item has
+ * no disclosure row at all (the ordinary case for everything published
+ * before this bead, and K3's "no disclosure" state), an object with
+ * `label: null` when it has one but `benefitReceived` is not true (K3's
+ * "benefitReceived false" state, and the write path's own invariant that a
+ * label never survives alongside that — see
+ * src/lib/advertising-disclosure.ts's model comment), and
+ * `{ label: "Advertisement / Reklame" }`
+ * (or one of the other three permitted strings) when it has a declared,
+ * labelled benefit.
+ *
+ * RE-VALIDATES the label against the SAME closed allowlist the write path
+ * and the publish gate use (`isPermittedAdvertisingLabel`,
+ * src/lib/advertising-disclosure.ts) rather than trusting any non-empty
+ * string. This is a read path, and this module's whole discipline (see
+ * `sanitizedMediaText`'s own comment, three functions up) is not trusting
+ * that every row reaching it was written through the one API route that
+ * validates on the way in — a raw statement, a future importer, or a label
+ * that was valid under an allowlist since narrowed would otherwise render
+ * as if it were today's canonical wording. A near-miss or stale value is
+ * treated exactly like "no label" (K3's rule: an unlabelled benefit must
+ * not be implied by rendering nothing, but a value this function cannot
+ * vouch for is not better than nothing — see this function's own type's
+ * doc comment on `GalleryItem.advertisingLabel` for why "null means render
+ * nothing" is the right failure direction here, same as a missing preview
+ * id is for the row as a whole in `toGalleryItem` below).
+ *
+ * Deliberately NOT reading `benefitReceived` anywhere in this module, or
+ * anywhere downstream of it — MEDIA_ANONYMOUS_SELECT never selects it (see
+ * that constant's own comment), so there is nothing here to read even if a
+ * caller wanted to.
+ */
+function toAdvertisingLabel(value: unknown): string | null {
+  if (typeof value !== "object" || value === null) return null;
+  const { label } = value as { label?: unknown };
+  if (typeof label !== "string") return null;
+  return isPermittedAdvertisingLabel(label) ? label : null;
 }
 
 /**
@@ -202,6 +301,24 @@ function toGalleryTags(value: unknown): GalleryTag[] {
   return stripCurationTags(tags);
 }
 
+/**
+ * A row's `kind`, read defensively (ugcportal-dzz).
+ *
+ * `"VIDEO"` only on an exact match; everything else — `"IMAGE"`, a missing
+ * field (every row this module handled before this bead), `undefined`,
+ * garbage from a malformed JSON body — becomes `"IMAGE"`. That default is
+ * deliberate, not an oversight: it is the kind every existing fixture, and
+ * every row this feed has ever actually served before ugcportal-pmb, already
+ * is, so treating an unrecognised value as IMAGE changes nothing for them.
+ * The alternative — treating anything that isn't literally `"IMAGE"` as a
+ * video — would instead invent a play affordance and a "video" label on a
+ * row that is actually a photograph whose `kind` failed to parse, which is
+ * the wrong direction for a defensive default to fail in.
+ */
+function toGalleryItemKind(value: unknown): GalleryItemKind {
+  return value === "VIDEO" ? "VIDEO" : "IMAGE";
+}
+
 function asIsoString(value: unknown): string | null {
   if (value instanceof Date) {
     return Number.isNaN(value.getTime()) ? null : value.toISOString();
@@ -238,6 +355,7 @@ export function toGalleryItem(row: PublicMediaRowish): GalleryItem | null {
   return {
     id,
     previewSrc: mediaPreviewPath(previewId),
+    kind: toGalleryItemKind(row.kind),
     publishedAt: asIsoString(row.publishedAt),
     altText: sanitizedMediaText(row.altText),
     caption: sanitizedMediaText(row.caption, true),
@@ -246,6 +364,7 @@ export function toGalleryItem(row: PublicMediaRowish): GalleryItem | null {
     // and a `tags` that can be `undefined` is a `.map` waiting to throw in a
     // component that has no reason to check.
     tags: toGalleryTags(row.tags),
+    advertisingLabel: toAdvertisingLabel(row.advertisingDisclosure),
   };
 }
 
@@ -389,9 +508,20 @@ const PUBLISHED_ON = new Intl.DateTimeFormat("en-GB", {
  * list, which is also its slide index in the viewer — the same number in both
  * places, so a listener who hears "photograph 12" in the grid hears the same
  * in the lightbox.
+ *
+ * THE SUBJECT WORD ITSELF NOW BRANCHES ON `item.kind` (ugcportal-dzz K2): a
+ * VIDEO gets "video N", not "photograph N" — the whole reason this bead
+ * exists is that a published video rendered with no way to tell it apart
+ * from a photograph, here included. Branching on kind here, rather than
+ * leaving this function alone and only changing the icon/affordance
+ * elsewhere, is also what keeps a same-position, same-instant IMAGE and
+ * VIDEO unique from each other (K2's own requirement) for free: the two
+ * subject words already differ, with no position-based disambiguation
+ * needed between them the way two same-kind items need.
  */
 function fallbackDescription(item: GalleryItem, position: number): string {
-  const subject = `photograph ${position + 1}`;
+  const subjectNoun = item.kind === "VIDEO" ? "video" : "photograph";
+  const subject = `${subjectNoun} ${position + 1}`;
   if (item.publishedAt === null) return subject;
   return `${subject}, published ${PUBLISHED_ON.format(new Date(item.publishedAt))}`;
 }

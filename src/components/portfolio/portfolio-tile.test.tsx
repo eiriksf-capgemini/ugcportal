@@ -8,9 +8,10 @@ import { SPEC_SAMPLE_LABEL } from "@/lib/portfolio";
 
 /**
  * K2 (ugcportal-qnq9.7): the spec/concept marker renders on a portfolio
- * piece. K3 (an advertising-disclosure label instead) is deferred to
- * ugcportal-qnq9.1 (round-1 review) — see SPEC_SAMPLE_LABEL's own comment in
- * src/lib/portfolio.ts for why there is nothing to test here yet.
+ * piece. K3 (an advertising-disclosure label instead, ugcportal-e0jv) is
+ * covered by its own describe block below, which also pins the two
+ * markers' mutual exclusivity — see SPEC_SAMPLE_LABEL's own comment in
+ * src/lib/portfolio.ts for why they never coexist.
  *
  * `@/lib/auth` is mocked for the same reason src/lib/portfolio.test.ts mocks
  * it: `PortfolioTile` imports `SPEC_SAMPLE_LABEL` from `@/lib/portfolio`,
@@ -33,10 +34,17 @@ function piece(overrides: Partial<GalleryItem> = {}): GalleryItem {
   return {
     id: "piece-1",
     previewSrc: "/api/media/preview/pv-1",
+    // The portfolio page is IMAGE-only for v0.5.0 (src/lib/portfolio.ts's own
+    // query filters on it) — see that file's comment for why ugcportal-dzz's
+    // VIDEO handling does not reach this surface yet.
+    kind: "IMAGE",
     publishedAt: "2026-03-04T10:00:00.000Z",
     altText: "A flat-lay of a book, a coffee cup and a reading lamp",
     caption: "Flat-lay photo set, 6 images",
     tags: [{ slug: "books", name: "Books" }],
+    // null by default — no disclosure row, the ordinary case (ugcportal-
+    // e0jv). The describe block below passes its own for a labelled piece.
+    advertisingLabel: null,
     ...overrides,
   };
 }
@@ -105,5 +113,46 @@ describe("PortfolioTile", () => {
       </ul>,
     );
     expect(markup).toContain(`<figure class="${GALLERY_TILE_BASE_CLASS}">`);
+  });
+
+  describe("the advertising-disclosure label (K3, ugcportal-e0jv)", () => {
+    it("renders the exact canonical label, FIRST, for a labelled piece", () => {
+      const markup = renderToStaticMarkup(
+        <ul>
+          <PortfolioTile
+            piece={piece({ advertisingLabel: "Advertisement / Reklame" })}
+            position={0}
+          />
+        </ul>,
+      );
+      expect(markup).toContain('data-gallery-advertising-label="piece-1"');
+      expect(markup).toContain("Advertisement / Reklame");
+      expect(markup.indexOf("data-gallery-advertising-label")).toBeLessThan(
+        markup.indexOf("<figure"),
+      );
+    });
+
+    it("never shows the spec marker alongside the advertising label — the two are opposite claims", () => {
+      const markup = renderToStaticMarkup(
+        <ul>
+          <PortfolioTile
+            piece={piece({ advertisingLabel: "Reklame" })}
+            position={0}
+          />
+        </ul>,
+      );
+      expect(markup).not.toContain('data-portfolio-marker="spec"');
+      expect(markup).not.toContain(SPEC_SAMPLE_LABEL);
+    });
+
+    it("shows the spec marker, not the advertising label, for an ordinary unlabelled piece", () => {
+      const markup = renderToStaticMarkup(
+        <ul>
+          <PortfolioTile piece={piece()} position={0} />
+        </ul>,
+      );
+      expect(markup).toContain('data-portfolio-marker="spec"');
+      expect(markup).not.toContain("data-gallery-advertising-label");
+    });
   });
 });

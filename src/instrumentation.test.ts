@@ -15,6 +15,23 @@ import { afterEach, describe, expect, it, vi } from "vitest";
  */
 vi.mock("@/config/users", () => ({ CONFIGURED_USERS: [] }));
 
+/**
+ * registerNodeOnlyChecks() (src/instrumentation-node.ts) now also probes
+ * object storage at boot (ugcportal-ze1o). Every register()-level test in
+ * THIS file predates that check and is not testing it, so the client is
+ * mocked to answer immediately and successfully by default — real network
+ * I/O in an unrelated unit test would be slow, flaky, and (in an environment
+ * where S3_ENDPOINT happens to be configured) an actual connection attempt.
+ * `checkS3Reachability` itself, with the `probe`/`env` it accepts as
+ * parameters precisely so it does not need this, is tested directly in
+ * src/instrumentation-node.test.ts.
+ */
+vi.mock("@/lib/s3", () => ({
+  getS3Client: vi.fn(() => ({ send: vi.fn().mockResolvedValue({}) })),
+  getBucketName: vi.fn(() => "test-bucket"),
+  classifyTransportFailure: vi.fn(() => null),
+}));
+
 import {
   checkConfiguredUsers,
   checkContactEmailConfiguration,
@@ -23,11 +40,14 @@ import {
   register,
 } from "@/instrumentation";
 import { CONTACT_EMAIL_PLACEHOLDER } from "@/lib/contact";
+import { parseEvidenceSSESetting } from "@/lib/evidence-encryption";
 import {
   FILLED_LEGAL_ENV,
+  PLAUSIBLE_LEGAL_ENV,
   REPO_ROOT,
   stubLegalEnv,
 } from "@/lib/legal/legal-page.test-support";
+import { encryptionSetting } from "@/lib/rights-evidence";
 import { PERMITTED_EMAILS_VAR } from "@/lib/sign-in-policy";
 
 const PROD = { NODE_ENV: "production" } as NodeJS.ProcessEnv;
@@ -74,6 +94,119 @@ describe("the evidence-encryption startup check", () => {
     // to ignore it.
     expect(checkEvidenceEncryption({ NODE_ENV: "development" })).toBeNull();
     expect(checkEvidenceEncryption({ NODE_ENV: "test" })).toBeNull();
+  });
+});
+
+/**
+ * K3 (ugcportal-gkj): "Following should never happen: the startup check and
+ * encryptionSetting() disagreeing about any input, in either direction — a
+ * silent miss is as bad as a false alarm."
+ *
+ * Before this bead, `checkEvidenceEncryption` compared
+ * `env.S3_EVIDENCE_SSE === "AES256"` exactly while `encryptionSetting()`
+ * (src/lib/rights-evidence.ts) trimmed first, so `S3_EVIDENCE_SSE="AES256 "`
+ * sent the real header on every `PutObject` while still logging the loud
+ * "stored WITHOUT server-side encryption" warning at every production boot.
+ * Both now go through one shared parser, `parseEvidenceSSESetting`
+ * (src/lib/evidence-encryption.ts), so this table-driven test asserts all
+ * three agree on every row — not just that each individually returns the
+ * "right" answer, which the describe blocks above and
+ * src/lib/rights-evidence.test.ts already cover.
+ *
+ * The env-state table below enumerates: unset, empty, whitespace-only (space
+ * and tab), surrounding whitespace in each position (valid once trimmed),
+ * wrong case, and an unrecognised algorithm name. There is no legacy name
+ * for `S3_EVIDENCE_SSE` to enumerate — `S3_EVIDENCE_ENCRYPTED_AT_BUCKET` is a
+ * different, orthogonal setting (bucket-level encryption), not a prior name
+ * for this one; grepping the repo for `EVIDENCE_SSE`/`EVIDENCE_ENCRYPT`/
+ * `S3_SSE`/`SSE_ALGORITHM` turns up nothing else.
+ *
+ * Demonstrated (then reverted) while writing this test: reintroducing the
+ * old exact `env.S3_EVIDENCE_SSE === "AES256"` comparison in
+ * `checkEvidenceEncryption` alone — i.e. mutating one side independently of
+ * the shared parser — fails the "agree on every row" assertion below on the
+ * surrounding-whitespace rows, exactly the bug this bead fixes.
+ */
+describe("the shared S3_EVIDENCE_SSE parser (ugcportal-gkj, K1/K2/K3)", () => {
+  const ENV_STATES: Array<{
+    label: string;
+    raw: string | undefined;
+    accepted: boolean;
+  }> = [
+    { label: "unset", raw: undefined, accepted: false },
+    { label: "empty string", raw: "", accepted: false },
+    { label: "whitespace-only (space)", raw: "   ", accepted: false },
+    { label: "whitespace-only (tab)", raw: "\t", accepted: false },
+    { label: "exact match", raw: "AES256", accepted: true },
+    { label: "trailing space", raw: "AES256 ", accepted: true },
+    { label: "leading space", raw: " AES256", accepted: true },
+    { label: "trailing tab", raw: "AES256\t", accepted: true },
+    { label: "wrong case", raw: "aes256", accepted: false },
+    { label: "unrecognised algorithm", raw: "AES128", accepted: false },
+    {
+      label: "malformed: embedded whitespace",
+      raw: "AES 256",
+      accepted: false,
+    },
+  ];
+
+  it.each(ENV_STATES)(
+    "parseEvidenceSSESetting, encryptionSetting() and checkEvidenceEncryption agree: $label",
+    ({ raw, accepted }) => {
+      const parsed = parseEvidenceSSESetting(raw);
+      // NODE_ENV is only required here because `NodeJS.ProcessEnv` demands
+      // it as a non-optional property — encryptionSetting() itself never
+      // reads it, unlike checkEvidenceEncryption() below.
+      const fromRightsEvidence = encryptionSetting({
+        ...PROD,
+        S3_EVIDENCE_SSE: raw,
+      });
+      const bootWarning = checkEvidenceEncryption({
+        ...PROD,
+        S3_EVIDENCE_SSE: raw,
+      });
+
+      // K1/K2: the parser itself accepts exactly the rows this table marks
+      // accepted, and nothing else.
+      expect(parsed).toBe(accepted ? "AES256" : undefined);
+
+      // K3: encryptionSetting() (the request-level header) and
+      // checkEvidenceEncryption() (the boot warning) each go through that
+      // same parser, so neither can answer differently from it...
+      expect(fromRightsEvidence).toBe(parsed);
+      expect(bootWarning === null).toBe(parsed === "AES256");
+
+      // ...which means they cannot disagree with EACH OTHER either: the
+      // header is sent exactly when the boot check stays quiet about
+      // encryption being absent.
+      expect(bootWarning === null).toBe(fromRightsEvidence === "AES256");
+    },
+  );
+
+  it("S3_EVIDENCE_ENCRYPTED_AT_BUCKET silences the boot check without being an input to the shared parser", () => {
+    // S3_EVIDENCE_ENCRYPTED_AT_BUCKET is a second, independent way to
+    // silence the boot warning (checkEvidenceEncryption's own OR), not an
+    // input to parseEvidenceSSESetting — encryptionSetting() must stay
+    // undefined when ONLY the bucket flag is set, same S3_EVIDENCE_SSE as
+    // every other "unset" row above, because it decides a per-request
+    // header that has nothing to do with a bucket-level declaration.
+    // Fixture-mutated: making encryptionSetting() also honour this flag
+    // (`env.S3_EVIDENCE_ENCRYPTED_AT_BUCKET === "true" ? "AES256" : ...`)
+    // fails this assertion, confirming it is not vacuously true.
+    expect(
+      encryptionSetting({
+        ...PROD,
+        S3_EVIDENCE_SSE: undefined,
+        S3_EVIDENCE_ENCRYPTED_AT_BUCKET: "true",
+      }),
+    ).toBeUndefined();
+    expect(
+      checkEvidenceEncryption({
+        ...PROD,
+        S3_EVIDENCE_SSE: undefined,
+        S3_EVIDENCE_ENCRYPTED_AT_BUCKET: "true",
+      }),
+    ).toBeNull();
   });
 });
 
@@ -340,8 +473,35 @@ describe("the legal-pages startup check", () => {
   });
 
   it("is quiet once every variable is set", async () => {
-    stubLegalEnv("production", FILLED_LEGAL_ENV);
+    // PLAUSIBLE_LEGAL_ENV, not FILLED_LEGAL_ENV: the latter's own values
+    // deliberately reuse env.example's illustrative text (see that
+    // constant's doc comment), which is exactly what the warn-only
+    // operator-value sanity check below exists to flag — this test's point
+    // is a deployment with nothing AT ALL for boot to say.
+    stubLegalEnv("production", PLAUSIBLE_LEGAL_ENV);
     expect(await legalLinesFromBoot()).toEqual([]);
+  });
+
+  it("warns, without blocking, when a SET value still reads like env.example's own sample text (ugcportal-qnq9.15 item 2)", async () => {
+    // FILLED_LEGAL_ENV is the control for that: every variable it sets is
+    // non-blank (so the configuration check above is quiet), but three of
+    // its four values are copy-pasted from env.example's own illustrative
+    // text, so the warn-only scan has something to say about this exact
+    // fixture. One console.error call (same one-line-per-finding-joined-
+    // by-\n idiom `blockerWarning` already uses), naming all three.
+    // Verified by mutation: removing the call to `suspiciousLegalValueWarning`
+    // from registerNodeOnlyChecks makes this fail (an empty array instead).
+    stubLegalEnv("production", FILLED_LEGAL_ENV);
+    const legalLines = await legalLinesFromBoot();
+    expect(legalLines).toHaveLength(1);
+    const warning = legalLines[0];
+    expect(warning).toContain("LEGAL_CONTACT_EMAIL");
+    expect(warning).toContain("LEGAL_HOSTING_PROVIDER");
+    expect(warning).toContain("LEGAL_STORAGE_PROVIDER");
+    expect(warning).toContain("still reads like env.example's own sample text");
+    // Never the configuration-blocking wording — this is advisory only.
+    expect(warning).not.toContain("is not set");
+    expect(warning).not.toContain("Production will not serve");
   });
 
   it("does not run this check at all outside the node runtime (ugcportal-177y)", async () => {
@@ -432,6 +592,8 @@ describe("register() under the node runtime (ugcportal-177y, K3)", () => {
  * actually checked — `bd show ugcportal-177y` confirms `@/config/users`,
  * `@/lib/contact`, `@/lib/sign-in-policy`, `@/lib/legal/contact` and
  * `@/lib/email-shape` import nothing from `node:*` — not node_modules.
+ * `@/lib/evidence-encryption` (ugcportal-gkj) joined this list later: it has
+ * no imports of its own at all, by design — see that file's doc comment.
  *
  * The walker uses the TypeScript compiler's own AST (`ts.isImportDeclaration`
  * / `ts.isExportDeclaration`) rather than a regex, specifically so a dynamic
@@ -634,6 +796,11 @@ describe("the edge-safe static import graph (ugcportal-177y, K4)", () => {
         entry,
         path.join(REPO_ROOT, "src", "config", "users.ts"),
         path.join(REPO_ROOT, "src", "lib", "contact.ts"),
+        // ugcportal-gkj: the shared S3_EVIDENCE_SSE parser, imported
+        // statically by checkEvidenceEncryption above. It has no imports of
+        // its own (see that file's doc comment) so it adds a node to this
+        // graph but no new edges.
+        path.join(REPO_ROOT, "src", "lib", "evidence-encryption.ts"),
         path.join(REPO_ROOT, "src", "lib", "sign-in-policy.ts"),
         path.join(REPO_ROOT, "src", "lib", "email-shape.ts"),
       ]),

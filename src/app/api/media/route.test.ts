@@ -9,6 +9,8 @@ import {
   MAX_ORIGINAL_NAME_LENGTH,
   MAX_UPLOAD_BYTES,
 } from "@/lib/media";
+import { BODY_STALL_TIMEOUT_MS } from "@/lib/request-body";
+import { ObjectStorageUnreachableError } from "@/lib/s3";
 import {
   INITIAL_GRANT_BYTES,
   MULTIPART_OVERHEAD_ALLOWANCE_BYTES,
@@ -111,6 +113,7 @@ const {
   generateWatermarkedPreview,
   resetWatermarkConcurrencyGate,
   watermarkConcurrencyStats,
+  WatermarkError,
   WatermarkOverloadedError,
   WatermarkFontUnavailableError,
 } = await import("@/lib/watermark");
@@ -309,7 +312,14 @@ beforeEach(() => {
     .mockImplementation(realGenerateWatermarkedPreview);
 });
 
-describe("POST /api/media", () => {
+// ugcportal-9faa (PR #163 round 1, finding 2): this file imports `sharp`
+// directly (REAL_PNG above is a real libvips-built fixture, not a mock) and
+// exercises the real `generateWatermarkedPreview` pipeline in most tests
+// here -- `@/lib/watermark`'s own gate, not its sharp calls, is what gets
+// mocked per-test below. Real image work, same inherent-cost category as
+// src/lib/watermark.test.ts; explicit timeout rather than a bigger global
+// default.
+describe("POST /api/media", { timeout: 15_000 }, () => {
   it("returns 401 for an unauthenticated request", async () => {
     authMock.mockResolvedValue(null);
     const file = new File([PNG_HEADER], "photo.png", { type: "image/png" });
@@ -635,6 +645,23 @@ describe("POST /api/media", () => {
     // Valid PNG signature, undecodable body: sharp throws.
     const file = new File([PNG_HEADER], "photo.png", { type: "image/png" });
 
+    // Wraps (not replaces) the real implementation, purely to capture the
+    // actual WatermarkError's own `.cause` by reference — ugcportal-qz1u
+    // item 7: `expect.any(Error)` passes for ANY Error, including a
+    // substituted one with an unrelated cause; this still drives the real
+    // sharp failure (nothing about what throws changes) but lets the
+    // assertion below prove the exact object route.ts caught is the exact
+    // object it logged, with nothing swapped in between.
+    let capturedCause: unknown;
+    vi.mocked(generateWatermarkedPreview).mockImplementationOnce(async (...args) => {
+      try {
+        return await realGenerateWatermarkedPreview(...args);
+      } catch (error) {
+        if (error instanceof WatermarkError) capturedCause = error.cause;
+        throw error;
+      }
+    });
+
     const response = await POST(buildRequest(file));
 
     expect(response.status).toBe(422);
@@ -642,14 +669,20 @@ describe("POST /api/media", () => {
     // survive a watermark failure (ugcportal-44q K2).
     expect(s3SendMock).not.toHaveBeenCalled();
     expect(mediaCreateMock).not.toHaveBeenCalled();
+    // The capture above only has something to compare against if the real
+    // failure path actually ran.
+    expect(capturedCause).toBeInstanceOf(Error);
 
     // A 422 alone can't be told apart from "the user uploaded junk"; the
     // underlying sharp failure has to reach the logs so a systemic outage is
-    // visible.
-    expect(errorSpy).toHaveBeenCalledWith(
-      "[media] watermark generation failed",
-      expect.objectContaining({ cause: expect.any(Error) }),
-    );
+    // visible. `toBe`, not `objectContaining({ cause: expect.any(Error) })`
+    // (ugcportal-qz1u item 7): vitest's object/array equality compares two
+    // Error values by message, so a substituted Error with the same message
+    // would still have passed the looser form.
+    const [, logged] = errorSpy.mock.calls.find(
+      ([message]) => message === "[media] watermark generation failed",
+    )!;
+    expect((logged as { cause: unknown }).cause).toBe(capturedCause);
     errorSpy.mockRestore();
   });
 
@@ -825,8 +858,13 @@ describe("POST /api/media", () => {
   it("logs, rather than discards, a failed cleanup of an orphaned object", async () => {
     authMock.mockResolvedValue({ user: { id: "user-1" } });
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    // Named, and reused below (not a fresh `new Error(...)` per call): no
+    // transport-shaped `code`, so `classifyTransportFailure` does not
+    // recognise it and `sendWithTransportClassification` rethrows this exact
+    // instance unwrapped — the reference the assertion below checks against.
+    const deleteError = new Error("delete denied");
     s3SendMock.mockImplementation(async (command) => {
-      if (command instanceof DeleteObjectCommand) throw new Error("delete denied");
+      if (command instanceof DeleteObjectCommand) throw deleteError;
       return {};
     });
     mediaCreateMock.mockRejectedValue(new Error("db down"));
@@ -836,11 +874,15 @@ describe("POST /api/media", () => {
     await expect(POST(buildRequest(file))).rejects.toThrow("db down");
 
     // ...but a compensation that quietly fails every time leaks storage
-    // indefinitely with nothing to notice it by.
-    expect(errorSpy).toHaveBeenCalledWith(
-      "[media] failed to clean up orphaned object",
-      expect.objectContaining({ cause: expect.any(Error) }),
-    );
+    // indefinitely with nothing to notice it by. `toBe`, not
+    // `objectContaining({ cause: expect.any(Error) })` (ugcportal-qz1u item
+    // 7): vitest's equality compares two Errors by message, so a
+    // substituted Error with the same message would still pass the looser
+    // form.
+    const [, logged] = errorSpy.mock.calls.find(
+      ([message]) => message === "[media] failed to clean up orphaned object",
+    )!;
+    expect((logged as { cause: unknown }).cause).toBe(deleteError);
     errorSpy.mockRestore();
   });
 
@@ -974,9 +1016,11 @@ describe("POST /api/media — object storage unreachable (ugcportal-1b2c)", () =
   });
 
   it("answers 503, not a bare 500, when the original PutObject hits a transport error", async () => {
-    s3SendMock.mockRejectedValueOnce(
-      transportError({ code: "ECONNRESET", attempts: 3 }),
-    );
+    // Named, and reused below: the exact instance route.ts's classifier
+    // wraps, so the assertion can check by reference that nothing else got
+    // substituted on the way to the log line.
+    const rawTransportError = transportError({ code: "ECONNRESET", attempts: 3 });
+    s3SendMock.mockRejectedValueOnce(rawTransportError);
     const file = new File([REAL_PNG], "photo.png", { type: "image/png" });
 
     const response = await POST(buildRequest(file));
@@ -1006,9 +1050,24 @@ describe("POST /api/media — object storage unreachable (ugcportal-1b2c)", () =
         code: "ECONNRESET",
         attempts: 3,
         message: "read ECONNRESET",
-        cause: expect.any(Error),
+        cause: expect.any(ObjectStorageUnreachableError),
       }),
     );
+    // `cause` above is the WRAPPER route.ts caught (ObjectStorageUnreachableError),
+    // not the raw SDK error directly — this drills one level further, by
+    // reference (`toBe`, ugcportal-qz1u item 7), to the wrapper's own
+    // `.cause`, which `sendWithTransportClassification` (src/lib/s3.ts) sets
+    // to the exact error it classified. `objectContaining` alone would not
+    // catch a substitution here: vitest compares two Errors by message, so
+    // a different Error instance with the same "read ECONNRESET" message
+    // would still satisfy `cause: expect.any(Error)` AND a naive
+    // `cause: rawTransportError` inside `objectContaining`.
+    const [, logged] = errorSpy.mock.calls.find(
+      ([message]) => message === "[media] object storage unreachable",
+    )!;
+    const wrapper = (logged as { cause: unknown }).cause;
+    expect(wrapper).toBeInstanceOf(ObjectStorageUnreachableError);
+    expect((wrapper as ObjectStorageUnreachableError).cause).toBe(rawTransportError);
 
     // Nothing had landed in the bucket yet, so there is nothing to clean up,
     // and the DB transaction must never have been reached.
@@ -1059,9 +1118,14 @@ describe("POST /api/media — object storage unreachable (ugcportal-1b2c)", () =
 
   it("still answers 503, without masking the original error, when the compensating cleanup delete itself fails", async () => {
     let putCount = 0;
+    // Named (ugcportal-qz1u item 7), distinct from the PutObject failure
+    // below: the DeleteObjectCommand branch always throws this SAME
+    // instance, so the assertion can check by reference which error made it
+    // into the cleanup-failure log.
+    const deleteTransportError = transportError({ code: "ECONNREFUSED" });
     s3SendMock.mockImplementation(async (command) => {
       if (command instanceof DeleteObjectCommand) {
-        throw transportError({ code: "ECONNREFUSED" });
+        throw deleteTransportError;
       }
       if (command instanceof PutObjectCommand) {
         putCount += 1;
@@ -1097,8 +1161,18 @@ describe("POST /api/media — object storage unreachable (ugcportal-1b2c)", () =
     );
     expect(errorSpy).toHaveBeenCalledWith(
       "[media] failed to clean up orphaned object",
-      expect.objectContaining({ cause: expect.any(Error) }),
+      expect.objectContaining({ cause: expect.any(ObjectStorageUnreachableError) }),
     );
+    // By reference, one level past the wrapper `objectContaining` above
+    // already confirmed the type of (ugcportal-qz1u item 7) — `toBe`,
+    // because vitest's own equality would treat any other ECONNREFUSED
+    // transportError as equal to this one by message alone, same as the
+    // sibling assertion above this test.
+    const [, logged] = errorSpy.mock.calls.find(
+      ([message]) => message === "[media] failed to clean up orphaned object",
+    )!;
+    const wrapper = (logged as { cause: unknown }).cause;
+    expect((wrapper as ObjectStorageUnreachableError).cause).toBe(deleteTransportError);
 
     // Mutation check: with the delete mock above changed to resolve `{}`
     // instead of throwing, the second expectation (the cleanup-failure log)
@@ -2018,6 +2092,92 @@ describe("POST /api/media — upload memory (ugcportal-05b)", () => {
     await expect(response.json()).resolves.toEqual({
       error: "Request body too large",
     });
+  });
+
+  /**
+   * A client that sends one form field and then holds the connection open
+   * without another byte — silent while the peek is still looking for the
+   * file part, which is before any reservation exists (ugcportal-dvb).
+   *
+   * `cancel` is recorded rather than ignored because tearing the body down is
+   * half of what the timeout is for: the test asserts the body is cancelled
+   * when the budget expires, not merely that a 408 came back.
+   */
+  function stalledDuringPeek(cancel: (reason: unknown) => void) {
+    const encoder = new TextEncoder();
+    const field = encoder.encode(
+      `--${MULTIPART_BOUNDARY}\r\n` +
+        `Content-Disposition: form-data; name="caption"\r\n\r\n` +
+        `a day at the beach\r\n`,
+    );
+    let sent = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (sent) {
+          // A pull that never settles: the connection is alive and idle.
+          return new Promise<void>(() => {});
+        }
+        sent = true;
+        controller.enqueue(field);
+      },
+      cancel,
+    });
+
+    return {
+      url: "http://localhost/api/media",
+      method: "POST",
+      headers: new Headers({
+        "content-type": `multipart/form-data; boundary=${MULTIPART_BOUNDARY}`,
+      }),
+      body,
+    } as unknown as Request;
+  }
+
+  it("answers 408 on the idle timeout when the client stalls during the peek (ugcportal-dvb)", async () => {
+    configureContainer(1024);
+    // Fake timers for the same reason as the rest of this file's timing
+    // assertions: the budget is BODY_STALL_TIMEOUT_MS, and waiting it out on
+    // the wall clock would be a 30-second test.
+    vi.useFakeTimers();
+    try {
+      const cancelled = vi.fn();
+      const pending = POST(stalledDuringPeek(cancelled));
+      let settled = false;
+      void pending.then(() => {
+        settled = true;
+      });
+
+      // A second short of the budget the request is still open — and holding
+      // nothing but its slot. The byte bounds have no view of this: the peek
+      // runs before reserveUploadMemory, so a stall here costs no held bytes
+      // for the budget to refuse.
+      await vi.advanceTimersByTimeAsync(BODY_STALL_TIMEOUT_MS - 1_000);
+      expect(settled).toBe(false);
+      expect(uploadMemoryStats().heldBytes).toBe(0);
+      expect(cancelled).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      const response = await pending;
+
+      // 408 and not 400: the request was well-formed as far as it got, and
+      // the client may retry (src/app/upload/outcomes.ts maps it to a
+      // retryable "stalled" outcome). Driven on `next dev` against the real
+      // route before this bead, the same request got no response for as long
+      // as the probe held the socket open.
+      expect(response.status).toBe(408);
+      await expect(response.json()).resolves.toEqual({
+        error: "Request body stalled",
+      });
+      // The body is cancelled, so the slot goes back at the timeout rather
+      // than whenever the runtime gets around to the dead connection.
+      expect(cancelled).toHaveBeenCalledTimes(1);
+      // And nothing downstream ran: no preview, no bucket write, no row.
+      expect(s3SendMock).not.toHaveBeenCalled();
+      expect(mediaCreateMock).not.toHaveBeenCalled();
+      expect(uploadMemoryStats().heldBytes).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("warns once, naming the shortfall, when the container is too small", async () => {

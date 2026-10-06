@@ -185,6 +185,35 @@ describe("K5: every review pointer names a file that exists", () => {
 });
 
 /**
+ * The one token stripped out of src/app/robots.ts before this scan sees it
+ * (review round 1, finding 3 — narrowed from a whole-file exclusion).
+ *
+ * Next's `MetadataRoute.Robots` shape names its own field `userAgent` —
+ * which crawler a rule addresses ("*" for all of them), a robots.txt
+ * AUTHORING concept — which otherwise trips this scan's `userAgent` pattern
+ * with nothing behind it: that route takes no `Request` and reads nothing
+ * about any visitor. The ORIGINAL fix excluded the whole file from this
+ * scan, which the round-1 review correctly flagged as the first
+ * CONTENT-level escape hatch in this predicate (previously only file-
+ * CATEGORY exclusions: test files, generated code, test-support files) —
+ * if `robots.ts` ever gained a real `request.headers.get(...)` read, the
+ * whole file, not just the harmless field name, would fall out of scope.
+ *
+ * Stripping only the literal token `userAgent` (case-insensitively, so a
+ * differently-cased future rewrite of the same field is still exempted)
+ * closes that gap: a genuine User-Agent read uses the HYPHENATED HTTP
+ * header name, `"user-agent"`, in a header-lookup string — a different
+ * substring that this replace does not touch — so it is still caught by
+ * the very next line this scan runs. Mutation-verified (review round 1):
+ * adding a real `request.headers.get("user-agent")` read to robots.ts is
+ * still reported.
+ */
+function stripRobotsFieldName(file: string, code: string): string {
+  if (!file.endsWith("/app/robots.ts")) return code;
+  return code.replace(/userAgent/gi, "");
+}
+
+/**
  * The negative claims, checked mechanically. Application source only:
  * tests, test support and the generated Prisma client are excluded.
  */
@@ -195,11 +224,18 @@ function applicationSources(): { file: string; code: string }[] {
       isTestFile(file) || file.includes("/generated/") || file.endsWith(".test-support.ts"),
   ).map((file) => ({
     file: path.relative(REPO_ROOT, file),
-    code: stripComments(readFileSync(file, "utf8"), file),
+    code: stripRobotsFieldName(file, stripComments(readFileSync(file, "utf8"), file)),
   }));
 }
 
-describe("the negative claims hold against the source tree", () => {
+// ugcportal-9faa: applicationSources() above already walks and
+// TypeScript-parses (via stripComments) the whole src/ tree exactly once,
+// shared by every test below — there is nothing redundant left to cache.
+// That single pass is still real CPU work a busy machine can push past the
+// 5s default on its own (see analytics-host.grep.test.ts and
+// throttled-log.no-sibling-copy.test.ts for the measurements behind this
+// fix). Explicit timeout, not a bigger global default.
+describe("the negative claims hold against the source tree", { timeout: 15_000 }, () => {
   const sources = applicationSources();
 
   it("scans the application", () => {

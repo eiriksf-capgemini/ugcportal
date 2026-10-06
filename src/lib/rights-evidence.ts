@@ -2,7 +2,14 @@ import { createHash, randomUUID } from "node:crypto";
 
 import { DeleteObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
 
-import { getBucketName, getS3Client } from "@/lib/s3";
+import { parseEvidenceSSESetting } from "@/lib/evidence-encryption";
+import {
+  ObjectStorageUnreachableError,
+  getBucketName,
+  getS3Client,
+  objectStorageUnreachableLogFields,
+  sendWithTransportClassification,
+} from "@/lib/s3";
 
 /**
  * The rights-evidence store (ugcportal-0ss, checklist Part E.2; re-anchored
@@ -54,11 +61,21 @@ export const RIGHTS_EVIDENCE_PREFIX = "rights-evidence";
  * Documented in env.example, and a production start with neither this nor
  * `S3_EVIDENCE_ENCRYPTED_AT_BUCKET=true` logs a warning at boot (see
  * src/instrumentation.ts).
+ *
+ * The parsing itself — trim, then compare — lives in
+ * `parseEvidenceSSESetting` (src/lib/evidence-encryption.ts), shared with
+ * that boot check, so this function and the warning it can silence cannot
+ * disagree about what counts as configured (ugcportal-gkj) — enforced by
+ * src/instrumentation.test.ts's "the shared S3_EVIDENCE_SSE parser" K3
+ * describe block, which fails if either side stops going through the shared
+ * parser. `env` is a parameter, defaulting to `process.env`, for the same
+ * reason the checks in src/instrumentation.ts take one: so a test can hand
+ * this a fixture instead of mutating the real environment.
  */
-function encryptionSetting(): "AES256" | undefined {
-  return process.env.S3_EVIDENCE_SSE?.trim() === "AES256"
-    ? "AES256"
-    : undefined;
+export function encryptionSetting(
+  env: NodeJS.ProcessEnv = process.env,
+): "AES256" | undefined {
+  return parseEvidenceSSESetting(env.S3_EVIDENCE_SSE);
 }
 
 /** cuid/cuid2-ish: the ids this app generates, and nothing with a slash. */
@@ -108,10 +125,25 @@ export type StoredEvidence = { key: string; sha256: string };
  */
 export async function deleteRightsEvidence(key: string): Promise<void> {
   try {
-    await getS3Client().send(
-      new DeleteObjectCommand({ Bucket: getBucketName(), Key: key }),
+    await sendWithTransportClassification("evidence-cleanup", () =>
+      getS3Client().send(
+        new DeleteObjectCommand({ Bucket: getBucketName(), Key: key }),
+      ),
     );
   } catch (cause) {
+    if (cause instanceof ObjectStorageUnreachableError) {
+      // Still swallowed, still best-effort — only the log line changes
+      // (ugcportal-98rb). It is worth its own line because the two failures
+      // ask for different things from whoever reads it: an AccessDenied on
+      // this key is a bucket-policy problem to go and fix, while an
+      // unreachable endpoint means this object is almost certainly still
+      // there and the cleanup is worth re-running once storage is back.
+      console.error("[resale-rights] object storage unreachable", {
+        key,
+        ...objectStorageUnreachableLogFields(cause),
+      });
+      return;
+    }
     console.error("[resale-rights] failed to remove unused evidence object", {
       key,
       cause,
@@ -137,26 +169,36 @@ export async function putRightsEvidence({
   const key = rightsEvidenceKey(uploaderUserId, filename);
   const sha256 = createHash("sha256").update(body).digest("hex");
 
-  await getS3Client().send(
-    new PutObjectCommand({
-      Bucket: getBucketName(),
-      Key: key,
-      Body: body,
-      ContentType: contentType || "application/octet-stream",
-      ServerSideEncryption: encryptionSetting(),
-      // No ACL header, deliberately. `ACL: "private"` looks like free
-      // defence-in-depth but is not: a bucket with Object Ownership set to
-      // "bucket owner enforced" — the modern default, and the configuration
-      // you *want* for a private evidence store — rejects any ACL header
-      // outright, which would make every evidence-bearing decision
-      // unrecordable. The media upload path sends none either.
-      //
-      // Privacy here is the bucket's job: no public-read policy, no
-      // anonymous access. Nothing in this application serves objects from
-      // this prefix — there is no presign or download route for it — so the
-      // only way one becomes readable is a bucket misconfiguration, which a
-      // per-request header would not have fixed anyway.
-    }),
+  // Through the shared classifier (src/lib/s3.ts), so the caller can tell a
+  // storage outage from a credentials or bucket-policy refusal — see the
+  // catch in src/app/api/admin/rights/decision/route.ts, which answers them
+  // with different `?error=` codes (ugcportal-98rb K2). Classified here,
+  // around the send itself, rather than in that route's catch: that catch
+  // also wraps `file.arrayBuffer()`, and a transport-shaped error from
+  // anything other than S3 must never be reported as object storage being
+  // unreachable.
+  await sendWithTransportClassification("evidence", () =>
+    getS3Client().send(
+      new PutObjectCommand({
+        Bucket: getBucketName(),
+        Key: key,
+        Body: body,
+        ContentType: contentType || "application/octet-stream",
+        ServerSideEncryption: encryptionSetting(),
+        // No ACL header, deliberately. `ACL: "private"` looks like free
+        // defence-in-depth but is not: a bucket with Object Ownership set to
+        // "bucket owner enforced" — the modern default, and the configuration
+        // you *want* for a private evidence store — rejects any ACL header
+        // outright, which would make every evidence-bearing decision
+        // unrecordable. The media upload path sends none either.
+        //
+        // Privacy here is the bucket's job: no public-read policy, no
+        // anonymous access. Nothing in this application serves objects from
+        // this prefix — there is no presign or download route for it — so the
+        // only way one becomes readable is a bucket misconfiguration, which a
+        // per-request header would not have fixed anyway.
+      }),
+    ),
   );
 
   return { key, sha256 };

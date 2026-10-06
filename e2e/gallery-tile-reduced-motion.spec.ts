@@ -4,18 +4,27 @@ import { expect, test } from "@playwright/test";
  * K1 (ugcportal-ig4g): a gallery tile's hover scale must actually stay at
  * `scale: none` under `prefers-reduced-motion: reduce` - the bug this bead
  * fixes was that `motion-reduce:transform-none` (the guard that used to sit
- * next to `group-hover: scale-[1.04]` (space inserted before the utility,
- * here only - round-5 review: this file is a `.spec.ts`, not a `.test.ts`,
- * so globals.css's `@source not` glob does not reach it, and Tailwind's
- * source scanner reads raw file bytes regardless - writing the bare
- * combination UNBROKEN here compiled a second, ungated copy of the exact
- * rule this bead removed straight into the real production stylesheet;
- * see globals.css's own `@source not` comment for the full account) in
+ * next to `group-hover:scale-[1.04]` in
  * src/components/gallery/containment.ts's `GALLERY_TILE_IMAGE_CLASS`)
  * overrides the `transform` property, while Tailwind 4 compiles
  * `scale-[1.04]` to the STANDALONE `scale` property - so the override never
  * touched the property the hover utility actually sets, and the tile still
  * scaled 4% on hover, instantly, under reduce.
+ *
+ * WRITTEN BARE, UNBROKEN, ON PURPOSE (ugcportal-61pv): this file is a
+ * `.spec.ts` under e2e/, not a `.test.ts` under src/, and round-5 review of
+ * PR #101 found that globals.css's `@source not` glob - aimed at src/'s own
+ * test files - did not reach it, so this exact combination used to be
+ * written SPACED (`group-hover: scale-[1.04]`) to keep it from compiling a
+ * second, ungated copy of the removed rule into the real production
+ * stylesheet. That workaround is gone: globals.css now carries a SECOND
+ * `@source not` glob aimed at e2e/ itself, confirmed working against a real
+ * `next build` (see that file's own comment for the measurement and for why
+ * the three earlier attempts at this exact exclusion failed). Written here
+ * bare specifically BECAUSE it is now safe, so a regression in that
+ * exclusion has a real, illustrative string to fail loudly on - see
+ * containment.motion-safe.test.ts's own "does not flag a *.spec.ts fixture
+ * file under e2e/" test, which pins the same claim as a fixture.
  *
  * ROUND-1 REVIEW (PR #101): the previous version of this file seeded its
  * own `Media`/`User` row directly via `@libsql/client` SQL in `beforeAll`/

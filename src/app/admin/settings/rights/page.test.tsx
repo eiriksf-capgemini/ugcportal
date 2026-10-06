@@ -1,7 +1,12 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { CURRENT_CHECKLIST_VERSION } from "@/lib/resale-rights";
+import { RightsLayer } from "@/generated/prisma/enums";
+import {
+  CURRENT_CHECKLIST_VERSION,
+  TRIAGE_FACTS,
+  type TriageFact,
+} from "@/lib/resale-rights";
 import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db";
 
 /**
@@ -42,9 +47,11 @@ vi.mock("next/navigation", () => ({ notFound: notFoundMock }));
 
 const database = createTemporaryDatabase();
 const { prisma } = await import("@/lib/prisma");
-const { default: ResaleRightsSettingsPage, MAX_UPLOADERS } = await import(
-  "@/app/admin/settings/rights/page"
-);
+const {
+  default: ResaleRightsSettingsPage,
+  MAX_UPLOADERS,
+  UPLOADER_LIST_ID,
+} = await import("@/app/admin/settings/rights/page");
 
 const ADMIN = { user: { id: "admin-1", email: "admin@example.com", role: "ADMIN" } };
 
@@ -71,10 +78,37 @@ async function renderPage(
  * test than the one intended.
  */
 function listedEmails(markup: string): string[] {
-  const list = /<ul\b[^>]*>([\s\S]*?)<\/ul>/.exec(markup)?.[1] ?? "";
+  // Matched by id rather than as "the first <ul>": the screen renders a
+  // second list above this one (the per-upload triage questions), and
+  // the positional version quietly measured that instead, reporting
+  // zero uploader rows on a page that had plenty (ugcportal-qn3).
+  const list =
+    new RegExp(`<ul\\b[^>]*id="${UPLOADER_LIST_ID}"[^>]*>([\\s\\S]*?)</ul>`).exec(
+      markup,
+    )?.[1] ?? "";
   return [...list.matchAll(/<li\b[^>]*>([\s\S]*?)<\/li>/g)].map(
     (row) => /([\w.+-]+@example\.com)/.exec(row[1])?.[1] ?? "",
   );
+}
+
+/**
+ * The five characters `react-dom/server` escapes in a text child, so a
+ * question containing an apostrophe or an ampersand can still be matched
+ * against the rendered markup. Measured rather than assumed:
+ * `renderToStaticMarkup(<p>{`a&b<c>d"e'f`}</p>)` returns
+ * `<p>a&amp;b&lt;c&gt;d&quot;e&#x27;f</p>`, which the first case below
+ * pins so this helper cannot quietly stop matching what React emits.
+ *
+ * None of today's questions contains any of them; the helper exists so
+ * that one that does fails for a real reason rather than on escaping.
+ */
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#x27;");
 }
 
 const TRUNCATION_NOTICE = `Showing the first ${MAX_UPLOADERS} uploaders`;
@@ -444,5 +478,141 @@ describe("authorization", () => {
     authMock.mockResolvedValue({ user: { id: "u-1", role: "USER" } });
 
     await expect(renderPage()).rejects.toThrow("NEXT_NOT_FOUND");
+  });
+});
+
+/**
+ * ugcportal-qn3 K2: the screen lists the per-upload triage questions, and
+ * it lists ALL of them.
+ *
+ * Iterated off the generated RightsLayer enum rather than a hand-written
+ * list of sentences, so adding a layer to schema.prisma fails here
+ * until it is both registered in TRIAGE_FACTS and therefore rendered.
+ * A hand-list would have gone on passing while the screen silently told an
+ * admin about a subset of what actually blocks.
+ */
+describe("the per-upload triage questions (ugcportal-qn3)", () => {
+  beforeEach(() => {
+    authMock.mockResolvedValue(ADMIN);
+  });
+
+  it("escapes a question the way React renders one", async () => {
+    // The helper below is only load-bearing if it agrees with
+    // react-dom/server. Asserted against a render rather than against a
+    // hand-written expectation of what React does.
+    const sample = `a&b<c>d"e'f`;
+    expect(renderToStaticMarkup(<p>{sample}</p>)).toBe(
+      `<p>${escapeHtml(sample)}</p>`,
+    );
+  });
+
+  it("asks a question for every rights layer the schema declares", async () => {
+    const markup = await renderPage();
+
+    expect(TRIAGE_FACTS).toHaveLength(Object.values(RightsLayer).length);
+    for (const layer of Object.values(RightsLayer)) {
+      const fact = TRIAGE_FACTS.find((candidate) => candidate.layer === layer);
+      expect(fact, `no triage fact registered for ${layer}`).toBeTruthy();
+      expect(markup).toContain(escapeHtml(fact!.question));
+    }
+  });
+
+  it("names the minors question specifically", async () => {
+    // The fact this bead exists for, asserted by its words rather than
+    // only through the loop above — which would still pass if every
+    // question were replaced by the same placeholder.
+    expect(await renderPage()).toContain("Is anyone shown under 18?");
+  });
+
+  it("names the alcohol question specifically", async () => {
+    // ugcportal-qnq9.3, asserted by its words rather than only through the
+    // loop above, which would still pass if every question were replaced by
+    // the same placeholder. The clause about what the glass actually holds
+    // is the §3.1a standard itself, so it is part of what is pinned: a
+    // question asking only "is there alcohol in it?" would invite the
+    // grape-juice answer the rule explicitly does not accept.
+    const markup = await renderPage();
+    expect(markup).toContain("Is alcohol visible, named or clearly evoked");
+    expect(markup).toContain(escapeHtml("whatever it actually holds?"));
+  });
+
+  it("marks a question no clearance can settle as final", async () => {
+    // The screen's other sentence says a "yes" needs a clearance on that
+    // layer. For ALCOHOL that is not true and an admin acting on it would
+    // go looking for a signature that settles nothing, so the exception is
+    // rendered per question, off `settledBy`.
+    const markup = await renderPage();
+    const unsettleable = TRIAGE_FACTS.filter(
+      (fact) => fact.settledBy === "nothing",
+    );
+    // Guards the loop: with no such fact registered the assertions below
+    // would vacuously pass against a screen that renders no note at all.
+    expect(unsettleable.length).toBeGreaterThan(0);
+    for (const fact of unsettleable) {
+      const question = escapeHtml(fact.question);
+      const after = markup.slice(markup.indexOf(question));
+      expect(
+        after.slice(0, after.indexOf("</li>")),
+        `${fact.layer}'s question does not say a yes is final`,
+      ).toContain(escapeHtml("A “yes” here is final"));
+    }
+  });
+
+  it("marks a question whose discriminant it does not recognise", async () => {
+    // The screen's half of the gate's fail-closed reading. `triageBlocker`
+    // refuses a fact whose `settledBy` is neither literal
+    // (resale-rights.test.ts, "blocks a fact whose discriminant it does not
+    // recognise"); a screen reading `=== "nothing"` would quietly stop
+    // marking that question as final while the gate went on blocking it,
+    // which is an admin told to go and record a clearance that settles
+    // nothing.
+    //
+    // Spliced into the registry the page maps over and restored in a
+    // `finally`, the same way the gate's case does, because `tsc` rejects
+    // such an entry in the committed registry and this is the one input the
+    // two readings disagree about.
+    const registry = TRIAGE_FACTS as TriageFact[];
+    const index = registry.findIndex(
+      (candidate) => candidate.layer === RightsLayer.ALCOHOL,
+    );
+    expect(index).toBeGreaterThanOrEqual(0);
+    const original = registry[index];
+
+    try {
+      registry[index] = {
+        ...original,
+        settledBy: "decide-this-later",
+      } as unknown as TriageFact;
+      const unrecognised = await renderPage();
+      const question = escapeHtml(original.question);
+      const row = unrecognised.slice(unrecognised.indexOf(question));
+      expect(row.slice(0, row.indexOf("</li>"))).toContain(
+        escapeHtml("A “yes” here is final"),
+      );
+
+      // The control: a value the screen does recognise as clearable drops
+      // the note, so the assertion above is about the unrecognised value
+      // rather than about the note being unconditional.
+      registry[index] = {
+        ...original,
+        settledBy: "clearance",
+      } as unknown as TriageFact;
+      const clearable = await renderPage();
+      const clearableRow = clearable.slice(clearable.indexOf(question));
+      expect(clearableRow.slice(0, clearableRow.indexOf("</li>"))).not.toContain(
+        escapeHtml("A “yes” here is final"),
+      );
+    } finally {
+      registry[index] = original;
+    }
+
+    expect(TRIAGE_FACTS[index]).toBe(original);
+  });
+
+  it("says that leaving one unanswered blocks the sale", async () => {
+    // The screen has to carry the mechanism's one surprising rule.
+    // Without it, an admin reads a list of optional-looking questions.
+    const markup = await renderPage();
+    expect(markup).toContain("cannot be sold");
   });
 });

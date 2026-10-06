@@ -1,6 +1,7 @@
 import { PORTFOLIO_TAG_SLUG } from "@/lib/curation-tags";
 import { MEDIA_ANONYMOUS_SELECT } from "@/lib/media-access";
 import { toGalleryItems, type GalleryItem } from "@/lib/gallery-items";
+import { hasCompletePreview } from "@/lib/media-listing";
 import { prisma } from "@/lib/prisma";
 import { PUBLIC_MEDIA_SCOPE } from "@/lib/public-media";
 
@@ -33,16 +34,23 @@ import { PUBLIC_MEDIA_SCOPE } from "@/lib/public-media";
  * sample, not a client commission"). Exported so the render layer and its
  * tests both read this string from one place rather than retyping it.
  *
- * RENDERED UNCONDITIONALLY on every piece (round-1 review, K2/K3): there is
- * no field anywhere yet recording "this was a paid or gifted job" —
- * ugcportal-qnq9.1 (the per-item advertising-disclosure record) owns that
- * and has not landed; MediaListing's `sponsoredContent` boolean is a
- * different question entirely (resale-gate input, not a public disclosure —
- * see that bead's own "out of scope" for why overloading it would be
- * wrong). A conditional spec-vs-advertising marker with only one branch
- * ever reachable was dead code with a test suite of its own; K3 (the
- * advertising-label branch) is not implemented until ugcportal-qnq9.1
- * exists to supply the real field, and must be re-added then, not before.
+ * USED TO BE RENDERED UNCONDITIONALLY on every piece (round-1 review,
+ * K2/K3): there was no field anywhere recording "this was a paid or gifted
+ * job" — ugcportal-qnq9.1 (the per-item advertising-disclosure record)
+ * owned that and had not landed; MediaListing's `sponsoredContent` boolean
+ * is a different question entirely (resale-gate input, not a public
+ * disclosure — see that bead's own "out of scope" for why overloading it
+ * would be wrong). A conditional spec-vs-advertising marker with only one
+ * branch ever reachable would have been dead code with a test suite of its
+ * own, so K3 (the advertising-label branch) was deliberately left
+ * unimplemented until ugcportal-qnq9.1's field existed to drive it.
+ *
+ * NOW CONDITIONAL (ugcportal-e0jv): `PortfolioTile`
+ * (src/components/portfolio/portfolio-tile.tsx) renders this marker only
+ * when `piece.advertisingLabel === null`, and renders
+ * `GalleryItemAdvertisingLabel` instead — never both — when it is not. See
+ * that component's own comment for the full reasoning; this string's
+ * CONTENT and export are otherwise unchanged by that bead.
  *
  * K6 (never imply a brand commissioned a self-made sample) is NOT closed by
  * this code alone — nothing here can tell a genuinely self-made sample from
@@ -126,6 +134,15 @@ export const MAX_PORTFOLIO_PIECES = 24;
  * "one place" was this file, which still left the main gallery feed
  * leaking the tag on any item that happened to be both published and
  * portfolio-tagged.
+ *
+ * APPLIES `hasCompletePreview` (src/lib/media-listing.ts) BEFORE mapping to
+ * `GalleryItem` (ugcportal-qnq9.16, round-6 review of PR #93, item 1): the
+ * same defense-in-depth re-check `listMedia` applies to every row it reads
+ * under this identical anonymous scope, so this direct Prisma query is not
+ * the one anonymous-scope reader relying on the where-clause alone. Not a
+ * live bug today — `PUBLIC_MEDIA_SCOPE` already filters both preview columns
+ * at the query — but the two readers of that scope should not silently part
+ * ways on how defensively they treat it.
  */
 export async function listPortfolioPieces(): Promise<GalleryItem[]> {
   const rows = await prisma.media.findMany({
@@ -139,5 +156,7 @@ export async function listPortfolioPieces(): Promise<GalleryItem[]> {
     take: MAX_PORTFOLIO_PIECES,
   });
 
-  return toGalleryItems(rows);
+  const complete = rows.filter((row) => hasCompletePreview(row, PUBLIC_MEDIA_SCOPE));
+
+  return toGalleryItems(complete);
 }

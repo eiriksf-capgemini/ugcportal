@@ -174,6 +174,25 @@ export function mediaPreviewPath(previewId: string): string {
   return `${MEDIA_PREVIEW_PATH}/${encodeURIComponent(previewId)}`;
 }
 
+/**
+ * The per-item page (ugcportal-qnq9.12): a real, indexable route rather than
+ * a gallery deep link — `/media/[previewId]`, the option the bead's own
+ * notes name and the one a Pinterest pin or a search result can link
+ * straight to. Keyed on `previewId`, the SAME opaque public handle
+ * `mediaPreviewPath` above already hands to every anonymous surface, rather
+ * than the row's own `Media.id` — there is no reason to mint a second public
+ * identifier for the same row, and doing so would be one more value every
+ * anonymous-facing query has to agree is safe to expose.
+ *
+ * Named here, like every other route in this module, so `src/app/sitemap.ts`
+ * and the item page's own metadata cannot spell this path twice and drift.
+ */
+export const MEDIA_ITEM_PATH = "/media";
+
+export function mediaItemPath(previewId: string): string {
+  return `${MEDIA_ITEM_PATH}/${encodeURIComponent(previewId)}`;
+}
+
 /** The listing parameters GET /api/public/media reads out of its query string. */
 export type PublicMediaListingParams = { limit?: number; cursor?: string };
 

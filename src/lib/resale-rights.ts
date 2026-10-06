@@ -25,10 +25,11 @@ import {
  *      when the checklist version it was granted under is retired.
  *   2. PER UPLOAD — MediaListing's triage plus a MediaRightsClearance per
  *      rights layer that is actually present. "What is in this file?" An
- *      identifiable person, licensed music, an uncredited collaborator and
- *      undisclosed sponsorship are properties of the file, not of the
- *      uploader, so a cleared uploader does not get to sell whatever they
- *      upload next.
+ *      identifiable person, a depicted minor, licensed music, an
+ *      uncredited collaborator and undisclosed sponsorship are properties
+ *      of the file, not of the uploader, so a cleared uploader does not
+ *      get to sell whatever they upload next. The layers are not listed
+ *      twice: TRIAGE_FACTS below is the list, and the gate iterates it.
  *
  * WHERE THE REVIEW COMES FROM IS THE SECURITY PROPERTY. The gate starts at
  * a Media row and follows `media.user.resaleRightsReview`. Nobody assembling
@@ -128,6 +129,8 @@ export type SellabilityBlocker =
   | "triage_not_signed_by_admin"
   | "model_release_missing"
   | "model_release_unverified"
+  | "minors_uncleared"
+  | "alcohol_depicted"
   | "third_party_layer_uncleared";
 
 export type SellabilityResult =
@@ -162,10 +165,21 @@ export type GateLayerClearance = {
  */
 export type GateListing = {
   depictsPeople: boolean | null;
+  /**
+   * Is anyone shown under 18 (ugcportal-qn3)? A triage fact of its own, not
+   * a shade of `depictsPeople`: see the MINORS entry in TRIAGE_FACTS below.
+   */
+  depictsMinors: boolean | null;
   modelReleaseKey: string | null;
   containsMusic: boolean | null;
   thirdPartyCreator: boolean | null;
   sponsoredContent: boolean | null;
+  /**
+   * Is alcohol visible, named or clearly evoked (ugcportal-qnq9.3)? The one
+   * fact in the registry that no clearance settles; see the ALCOHOL entry in
+   * TRIAGE_FACTS below.
+   */
+  depictsAlcohol: boolean | null;
   /**
    * Who signed off the triage flags above, with their *current* role. Every
    * one of those flags is an assertion about someone else's rights — "no
@@ -174,7 +188,7 @@ export type GateListing = {
    */
   triagedByUserId: string | null;
   triagedBy: { role: Role } | null;
-  /** One justification per layer; see layerIsSettled. */
+  /** One justification per layer; see layerIsCleared and TRIAGE_FACTS. */
   layerClearances: GateLayerClearance[];
 };
 
@@ -224,11 +238,21 @@ export const MEDIA_GATE_SELECT = {
   user: { select: { resaleRightsReview: { select: REVIEW_GATE_SELECT } } },
   listing: {
     select: {
+      // One key per TRIAGE_FACTS entry, plus the evidence pointer PEOPLE
+      // needs. Written out rather than spread from the registry because
+      // Prisma infers the row type from the literal — but it is not left to
+      // memory either: GateListing requires every fact's column, so a
+      // missing key here fails `tsc` at the call sites that pass this
+      // select's result to the gate, and "routes the review through the
+      // uploader and nowhere else" (resale-rights.test.ts) asserts these
+      // keys are exactly TRIAGE_FACTS' fields plus the four below.
       depictsPeople: true,
+      depictsMinors: true,
       modelReleaseKey: true,
       containsMusic: true,
       thirdPartyCreator: true,
       sponsoredContent: true,
+      depictsAlcohol: true,
       triagedByUserId: true,
       triagedBy: { select: { role: true } },
       layerClearances: {
@@ -302,19 +326,268 @@ function layerIsCleared(listing: GateListing, layer: RightsLayer): boolean {
 }
 
 /**
- * A layer that must be absent, or cleared on its own terms if present.
- * `null` means nobody has triaged it, which is not the same as `false` and
- * never passes.
+ * ---------------------------------------------------------------------------
+ * THE TRIAGE-FACT MECHANISM (ugcportal-qn3)
+ * ---------------------------------------------------------------------------
+ *
+ * One registry entry per rights layer, and the gate iterates it. Three
+ * properties follow from that, and all three are the reason it exists
+ * rather than a hand-written list of `if`s:
+ *
+ *   1. NULL BLOCKS. A fact nobody has answered is `null` on the column, and
+ *      `triageBlocker` refuses before it looks at anything else. "Not
+ *      asked" and "asked, answer no" are different states and only one of
+ *      them sells. Absence is never consent.
+ *   2. PRESENT NEEDS ITS OWN CLEARANCE. `true` is settled only by a
+ *      MediaRightsClearance for *that* layer, signed by someone who is an
+ *      ADMIN at read time. No clearance covers two layers, so no single
+ *      admin-written sentence settles two legal questions. A fact may also
+ *      declare that NOTHING settles it (`settledBy: "nothing"`, today only
+ *      ALCOHOL): there the registry says so once, rather than each call
+ *      site remembering which of the answers is final.
+ *   3. ADDING A FACT DOES NOT FAIL OPEN. The only way to add one is to add
+ *      a RightsLayer and register it here: a layer with no entry fails
+ *      "registers exactly one fact per RightsLayer, no more and no fewer"
+ *      in resale-rights.test.ts, and an entry naming a column GateListing
+ *      does not declare fails `tsc`, because TriageFactField is derived
+ *      from that type. The failure mode this closes is the obvious one — a second
+ *      author copies `depictsPeople Boolean?` onto MediaListing, writes it
+ *      from a form, and nothing ever reads it, so the "fact" is decorative
+ *      and the upload sells regardless (K5).
+ *
+ * What it deliberately does NOT do: decide the law. Whether a particular
+ * depicted child needs guardian consent, and in what form, is
+ * ugcportal-ryd; this makes the fact recordable, attributable and blocking.
  */
-function layerIsSettled(
-  value: boolean,
-  listing: GateListing,
-  layer: RightsLayer,
-): boolean {
-  // `value` is a real boolean by the time this is called (see isTriaged at
-  // the call site), so absent is not a case here — only "not present" and
-  // "present, and therefore needing its own clearance".
-  return value === false || layerIsCleared(listing, layer);
+
+/** The MediaListing triage columns a fact may be stored in. */
+export type TriageFactField = Extract<
+  {
+    [K in keyof GateListing]: GateListing[K] extends boolean | null ? K : never;
+  }[keyof GateListing],
+  string
+>;
+
+/** The part of a triage fact that does not depend on how `true` is settled. */
+type TriageFactBase = {
+  /** The nullable Boolean column on MediaListing holding the answer. */
+  readonly field: TriageFactField;
+  /** The layer this fact is registered against, one per RightsLayer. */
+  readonly layer: RightsLayer;
+  /**
+   * The yes/no question an admin answers, as the curation form will ask it
+   * (ugcportal-74w) and as the rights screen lists it today — the screen
+   * maps over this array, which is what keeps the wording and the
+   * enforcement from drifting apart ("asks a question for every rights
+   * layer the schema declares", src/app/admin/settings/rights/page.test.tsx).
+   */
+  readonly question: string;
+  /**
+   * Returned when the answer is `true` and nothing has settled it. For a
+   * `settledBy: "clearance"` fact that means the layer has no admin-signed
+   * justification; for a `settledBy: "nothing"` fact it is simply what a
+   * `true` answer returns, because there is nothing that could settle it.
+   */
+  readonly blocker: SellabilityBlocker;
+};
+
+/**
+ * One registered fact, discriminated by what a `true` answer is held
+ * against.
+ *
+ * `settledBy` is REQUIRED on every entry rather than an optional
+ * "unclearable" flag, and that is the fail-closed direction: an optional
+ * negative flag left off a new entry would quietly make it clearable, which
+ * is exactly the shape of mistake the rest of this module is built to
+ * refuse. Written as a discriminated union, `tsc` refuses an entry that does
+ * not say which kind it is.
+ */
+export type TriageFact = TriageFactBase &
+  (
+    | {
+        /**
+         * `true` is settled by a MediaRightsClearance for this fact's layer,
+         * signed by someone who is an ADMIN at read time.
+         */
+        readonly settledBy: "clearance";
+        /**
+         * An extra requirement checked *before* the clearance when the
+         * answer is `true` — today only PEOPLE, which needs the release file
+         * itself on top of an admin saying it covers this use. Returns its
+         * own blocker, or null when satisfied.
+         */
+        readonly alsoRequires?: (
+          listing: GateListing,
+        ) => SellabilityBlocker | null;
+      }
+    | {
+        /**
+         * `true` is final: no clearance, and no evidence file, makes this
+         * upload sellable. Today only ALCOHOL (ugcportal-qnq9.3).
+         */
+        readonly settledBy: "nothing";
+        /**
+         * Not available here: `alsoRequires` describes what a clearance
+         * needs alongside it, and there is no clearance to go alongside.
+         * Optional-`never` leaves `undefined` as the only value this
+         * property may hold, so an entry that carries a predicate fails
+         * `tsc` rather than registering one the gate would never call —
+         * verified by mutation (adding `alsoRequires: () => null` to the
+         * ALCOHOL entry fails `npm run typecheck` with "Type '() => null' is
+         * not assignable to type 'undefined'").
+         */
+        readonly alsoRequires?: never;
+      }
+  );
+
+/**
+ * Every rights layer, in the order the gate asks about them.
+ * "registers exactly one fact per RightsLayer, no more and no fewer"
+ * (resale-rights.test.ts) asserts this covers `RightsLayer` exactly —
+ * every member once, nothing else — so neither this list nor the per-fact
+ * case table generated from it can end up covering a subset.
+ */
+export const TRIAGE_FACTS: readonly TriageFact[] = [
+  {
+    field: "depictsPeople",
+    layer: RightsLayer.PEOPLE,
+    question: "Is an identifiable person shown?",
+    settledBy: "clearance",
+    blocker: "model_release_unverified",
+    // The release file, on top of the clearance. A key alone is free text:
+    // it can point at a document licensing something else, or at nothing.
+    alsoRequires: (listing) =>
+      listing.modelReleaseKey?.trim() ? null : "model_release_missing",
+  },
+  {
+    field: "depictsMinors",
+    layer: RightsLayer.MINORS,
+    question: "Is anyone shown under 18?",
+    settledBy: "clearance",
+    blocker: "minors_uncleared",
+    // No `alsoRequires` naming a guardian-consent document, deliberately.
+    // What that document must say — specific, written, naming online
+    // commercial publication, with the child's own view where they are old
+    // enough — is ugcportal-ryd, and a half-specified file check here would
+    // read as the legal threshold having been met. The MINORS clearance
+    // reason carries it in the meantime, and until one exists the upload
+    // does not sell.
+  },
+  {
+    field: "containsMusic",
+    layer: RightsLayer.MUSIC,
+    question: "Is there audible music?",
+    settledBy: "clearance",
+    blocker: "third_party_layer_uncleared",
+  },
+  {
+    field: "thirdPartyCreator",
+    layer: RightsLayer.THIRD_PARTY_CREATOR,
+    question: "Did anyone other than the uploader create or co-create it?",
+    settledBy: "clearance",
+    blocker: "third_party_layer_uncleared",
+  },
+  {
+    field: "sponsoredContent",
+    layer: RightsLayer.SPONSORED_CONTENT,
+    question: "Was it made for a brand, or under a sponsorship?",
+    settledBy: "clearance",
+    blocker: "third_party_layer_uncleared",
+  },
+  {
+    // ugcportal-qnq9.3 / docs/ugc-research.md §3.1a. The site's wine angle
+    // is ACCESSORIES — empty glasses, coolers, tool-type apps — and those
+    // are monetisable. The drink is not: alkoholloven § 9-2 bans alcohol
+    // from appearing in advertising for other products, and
+    // Helsedirektoratet's examples count a picture that gives a clear
+    // association with alcohol *whatever the glass actually contains*.
+    //
+    // So the question is about what the image looks like, not about what
+    // was really in the glass, and the answer is `settledBy: "nothing"`
+    // rather than a layer somebody could clear. A clearance reading "it was
+    // grape juice" would be a true sentence that does not make the picture
+    // lawful to advertise with, and the registry is the only place that can
+    // say so once for every caller. The fix for a `true` here is a different
+    // photograph, not a signature.
+    field: "depictsAlcohol",
+    layer: RightsLayer.ALCOHOL,
+    question:
+      "Is alcohol visible, named or clearly evoked — including a glass that reads as wine or beer, whatever it actually holds?",
+    settledBy: "nothing",
+    blocker: "alcohol_depicted",
+  },
+];
+
+/**
+ * Part C of the checklist, in full: the one helper the gate iterates.
+ * Returns the first blocker, or null when the whole triage holds.
+ *
+ * Three phases, in this order, and the order is the contract:
+ *
+ *   1. Every fact answered. One unanswered question blocks the upload, not
+ *      just its own layer — a half-filled triage is not a triage, and
+ *      answering all but one of them must not sell anything.
+ *   2. The answers attributable to a current ADMIN. Each one is an
+ *      assertion about a third party's rights and the dangerous direction
+ *      is `false` ("no identifiable person here" is what sells the
+ *      photograph), so an unsigned or since-demoted signature voids all of
+ *      them at once rather than per fact.
+ *   3. Each `true` settled on its own terms — or, for a fact the registry
+ *      marks `settledBy: "nothing"`, not settled at all.
+ */
+export function triageBlocker(listing: GateListing): SellabilityBlocker | null {
+  for (const fact of TRIAGE_FACTS) {
+    if (!isTriaged(listing[fact.field])) {
+      return "triage_incomplete";
+    }
+  }
+
+  if (!listing.triagedByUserId || listing.triagedBy?.role !== "ADMIN") {
+    return "triage_not_signed_by_admin";
+  }
+
+  for (const fact of TRIAGE_FACTS) {
+    const answer = listing[fact.field];
+    // `=== false` rather than `!== true`, which is not a style choice.
+    // Phase 1 already guarantees a real boolean here, so the two read the
+    // same today — but `!== true` treats `null` as "skip", which is the
+    // fail-OPEN reading, so weakening or reordering phase 1 later would
+    // turn an unanswered fact into an absent one with nothing to notice.
+    // Written this way the skip needs an explicit `no`, and anything else
+    // falls through to the block below.
+    if (answer === false) {
+      continue;
+    }
+    if (!isTriaged(answer)) {
+      return "triage_incomplete";
+    }
+    // A fact nothing settles is answered here and goes no further: no
+    // clearance is consulted, so none can be written to get past it. This
+    // branch is what makes ALCOHOL a stop rather than a hurdle, and it is
+    // read off the registry so the rule lives beside the fact it governs.
+    //
+    // Written as `!== "clearance"` rather than `=== "nothing"`, for the same
+    // reason phase 3 skips on `=== false` rather than `!== true`. `tsc`
+    // refuses an entry with a missing or unrecognised `settledBy` (verified
+    // by mutation: removing the key from the ALCOHOL entry fails
+    // `npm run typecheck`), but an object that reached here some other way —
+    // a hand-built fixture, a registry assembled at runtime — would then
+    // have an unreadable discriminant, and the readings differ on exactly
+    // that input: this one blocks, `=== "nothing"` would fall through to the
+    // clearance path and sell on an admin's signature.
+    if (fact.settledBy !== "clearance") {
+      return fact.blocker;
+    }
+    const missingEvidence = fact.alsoRequires?.(listing) ?? null;
+    if (missingEvidence) {
+      return missingEvidence;
+    }
+    if (!layerIsCleared(listing, fact.layer)) {
+      return fact.blocker;
+    }
+  }
+
+  return null;
 }
 
 /**
@@ -426,49 +699,14 @@ export function evaluateSellability(
   // (6) Per-upload triage (Part C). The uploader-level clearance covers the
   // owner's own copyright only.
   //
-  // The triage has to be attributable before any of its answers count. Each
-  // flag below is an assertion about a third party's rights, and the
-  // dangerous direction is `false`: "this photograph contains no
-  // identifiable person" sells the photograph. Read-time role check, like
-  // everywhere else here, so a demoted admin's assertions stop counting
-  // rather than persisting because someone else signed the uploader.
-  if (!isTriaged(listing.depictsPeople)) {
-    return { sellable: false, blocker: "triage_incomplete" };
-  }
-  if (!listing.triagedByUserId || listing.triagedBy?.role !== "ADMIN") {
-    return { sellable: false, blocker: "triage_not_signed_by_admin" };
-  }
-
-  // People (Part C.2). The strictest layer, because it is the one with a
-  // named individual behind it: it needs the release *file* and an admin
-  // who says that file covers this use. A key alone is free text — it can
-  // point at a document that licenses something else entirely, or at
-  // nothing.
-  if (listing.depictsPeople) {
-    // Trimmed like the other string checks: a key of spaces is not a
-    // release.
-    if (!listing.modelReleaseKey?.trim()) {
-      return { sellable: false, blocker: "model_release_missing" };
-    }
-    if (!layerIsCleared(listing, RightsLayer.PEOPLE)) {
-      return { sellable: false, blocker: "model_release_unverified" };
-    }
-  }
-  // Each layer answers for itself. Pairing the triage flag with its own
-  // RightsLayer is what keeps one justification from covering three
-  // unrelated questions.
-  const layers: [boolean | null, RightsLayer][] = [
-    [listing.containsMusic, RightsLayer.MUSIC],
-    [listing.thirdPartyCreator, RightsLayer.THIRD_PARTY_CREATOR],
-    [listing.sponsoredContent, RightsLayer.SPONSORED_CONTENT],
-  ];
-  for (const [value, layer] of layers) {
-    if (!isTriaged(value)) {
-      return { sellable: false, blocker: "triage_incomplete" };
-    }
-    if (!layerIsSettled(value, listing, layer)) {
-      return { sellable: false, blocker: "third_party_layer_uncleared" };
-    }
+  // One call, over TRIAGE_FACTS — not a list of per-column checks here.
+  // Pairing each triage column with its own RightsLayer in one registry is
+  // what keeps a single justification from covering unrelated questions,
+  // and what makes a layer added later fail the suite rather than go
+  // unenforced; see the mechanism comment above triageBlocker.
+  const triage = triageBlocker(listing);
+  if (triage) {
+    return { sellable: false, blocker: triage };
   }
 
   // The file sold is the owner-uploaded original (ugcportal-8wa), which is

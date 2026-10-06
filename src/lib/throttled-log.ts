@@ -16,10 +16,13 @@
  *
  * `watermark.ts`'s pre-migration copy had its own hardened history —
  * several review rounds' worth of fixed subtle bugs, including a
- * `shedLogLastAt !== 0` guard (preserved below as `lastAt !== 0`) and a
- * flush-timer race that let a health check restart the window (preserved
- * as `flushNow`'s own window check). Both are this module's job to keep
- * fixed for every caller now, not each caller's own.
+ * `shedLogLastAt !== 0` guard (the same idea survives below as `log()`'s own
+ * `everLogged` flag — ugcportal-qz1u item 1 replaced the `!== 0` sentinel
+ * itself once the clock measuring the window stopped being `Date.now()`,
+ * see that flag's own doc comment) and a flush-timer race that let a health
+ * check restart the window (preserved as `flushNow`'s own window check).
+ * Both are this module's job to keep fixed for every caller now, not each
+ * caller's own.
  *
  * THE FLUSH PATH IS PAYLOAD-FREE, AND THAT IS NOT A STYLE CHOICE. An earlier
  * version of this module let `log()`'s caller-supplied `emit` closure double
@@ -43,6 +46,21 @@
  * design (a bounded buffer of pending payloads, flushed as a batch) — this
  * module deliberately does not attempt that; it only ever reports a count.
  */
+
+/**
+ * Shared default "shortest interval between real log lines" (ugcportal-qz1u
+ * item 6). Every current caller — `watermark.ts`'s shed-log,
+ * `upload-memory.ts`'s shed-log, `public-media.ts`'s listing-failure log and
+ * `src/app/api/media/route.ts`'s storage-unreachable log — independently
+ * declared the identical `10_000` under its own name. Not a constraint
+ * `createThrottledLog` itself imposes (any caller may still pass its own
+ * `intervalMs`); just the one value every caller today happens to agree on,
+ * so there is one place to change it rather than four to keep in sync. Each
+ * caller still exports its own named constant (e.g. `SHED_LOG_INTERVAL_MS`)
+ * for its own tests and doc comments to reference — those now alias this
+ * value rather than repeating the literal.
+ */
+export const DEFAULT_THROTTLE_INTERVAL_MS = 10_000;
 
 export type ThrottledLogOptions = {
   /** Shortest interval between two "real" (non-suppressed) log lines. */
@@ -115,6 +133,7 @@ export function createThrottledLog({
   onFlush,
 }: ThrottledLogOptions): ThrottledLog {
   let lastAt = 0;
+  let everLogged = false;
   let suppressed = 0;
   let flushTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -127,7 +146,7 @@ export function createThrottledLog({
 
   function scheduleFlush(): void {
     if (flushTimer) return;
-    const delay = Math.max(0, intervalMs - (Date.now() - lastAt));
+    const delay = Math.max(0, intervalMs - (performance.now() - lastAt));
     flushTimer = setTimeout(() => {
       flushTimer = undefined;
       flushNow();
@@ -142,7 +161,7 @@ export function createThrottledLog({
       clearFlushTimer();
       return;
     }
-    if (Date.now() - lastAt < intervalMs) {
+    if (performance.now() - lastAt < intervalMs) {
       scheduleFlush();
       return;
     }
@@ -167,14 +186,26 @@ export function createThrottledLog({
 
   return {
     log(emit) {
-      const now = Date.now();
-      // `lastAt !== 0`, not just "the window has elapsed" — matching
-      // watermark.ts's identical guard on its own `shedLogLastAt`. Without
-      // it, the FIRST occurrence after process start computes `now - 0`,
-      // which only reads as "outside the window" because wall-clock time is
-      // nowhere near the epoch — true by the accident of what year it is,
-      // not by anything this function asserts.
-      if (lastAt !== 0 && now - lastAt < intervalMs) {
+      const now = performance.now();
+      // `everLogged`, a separate boolean — not `lastAt !== 0` (ugcportal-qz1u
+      // item 1/K2). The original guard (matching watermark.ts's own
+      // `shedLogLastAt !== 0`) relied on a REAL timestamp never legitimately
+      // being `0`, which held for `Date.now()` by the accident of what year
+      // it is, but does not hold for `performance.now()`: it is relative to
+      // process start, genuinely reads as (or extremely close to) `0` early
+      // in a real process's life, and reads as EXACTLY `0` on every call
+      // under a test's fake timers before they are ever advanced — proven by
+      // this module's own "does not log the very first occurrence" test
+      // below, which seeds exactly that. With the old sentinel, a SECOND
+      // call at `performance.now() === 0` would have read `lastAt` (also
+      // `0`, from the first call) as "never logged", treated itself as a
+      // fresh first occurrence, and emitted — forever, for as long as the
+      // clock kept reading `0`, which is precisely "the throttle suppressing
+      // a genuinely new occurrence" NOT happening when it should, the mirror
+      // image of the bug this item exists to prevent. A dedicated boolean
+      // has no such collidable value: it is `true` only once `log()` has
+      // actually emitted, regardless of what either clock reads.
+      if (everLogged && now - lastAt < intervalMs) {
         suppressed += 1;
         if (flushEnabled) scheduleFlush();
         return;
@@ -189,11 +220,13 @@ export function createThrottledLog({
       const count = suppressed;
       suppressed = 0;
       lastAt = now;
+      everLogged = true;
       emit(count);
     },
     flushNow,
     reset() {
       lastAt = 0;
+      everLogged = false;
       suppressed = 0;
       clearFlushTimer();
     },

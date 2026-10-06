@@ -93,9 +93,15 @@ export const GALLERY_TILE_BASE_CLASS = `relative block w-full overflow-hidden ro
 /**
  * One INTERACTIVE tile (gallery.tsx's own `<button>`, which opens the
  * lightbox): the shared base above, plus `group` (so `GALLERY_TILE_IMAGE_
- * CLASS`'s `group-hover:scale-[…]` has an ancestor to key off), the
- * zoom-in cursor, and a focus-visible ring for keyboard navigation — none
- * of which belong on a tile nothing happens when you activate.
+ * CLASS`'s `group-hover: scale-[…]` (space inserted before the utility,
+ * same reason as every other bare mention in this file - ugcportal-61pv:
+ * this exact spot, with the real value elided to an ellipsis rather than
+ * written out, was found compiling a second, ungated `scale: …` rule
+ * straight into the real production stylesheet, because this scan's own
+ * "space inserted" convention had never been applied here) has an ancestor
+ * to key off), the zoom-in cursor, and a focus-visible ring for keyboard
+ * navigation — none of which belong on a tile nothing happens when you
+ * activate.
  */
 export const GALLERY_TILE_CLASS = `group ${GALLERY_TILE_BASE_CLASS} cursor-zoom-in focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring`;
 
@@ -206,6 +212,59 @@ export const GALLERY_TILE_IMAGE_CLASS =
   "h-full w-full object-cover transition-transform duration-300 ease-out motion-safe:group-hover:scale-[1.04] motion-reduce:scale-none motion-reduce:transition-none";
 
 /**
+ * The play affordance on a VIDEO tile (ugcportal-dzz K1/K2's "a visible play
+ * affordance on a VIDEO tile in the grid"), and ONLY that — this bead is
+ * about a video being labelled and marked where it is already drawn, not
+ * about playing one (ugcportal-s8w owns the player, and must not be
+ * pre-empted by a decision made here).
+ *
+ * `pointer-events-none`, because the badge sits inside the tile's own
+ * `<button>` (gallery.tsx) — clicking it must open the lightbox exactly like
+ * clicking anywhere else on the tile, not be swallowed by a decorative span.
+ * `absolute inset-0 flex items-center justify-center` centres it over
+ * whatever the tile shows, the same crop-and-cover frame every tile already
+ * has (see this file's own containment-rule comment above).
+ *
+ * NO ANIMATION, on purpose, not merely by omission: this is a static badge,
+ * so there is nothing for `prefers-reduced-motion` to need reducing in the
+ * first place, unlike `GALLERY_TILE_IMAGE_CLASS`'s hover scale two
+ * declarations up, which has to guard an actual transition. Adding a pulse
+ * or any other motion here would be inventing a NEW thing to gate, not
+ * reusing an existing one — out of scope for a bead whose K1/K2 ask only for
+ * a visible affordance and an accessible name.
+ */
+export const GALLERY_TILE_VIDEO_BADGE_WRAPPER_CLASS =
+  "pointer-events-none absolute inset-0 flex items-center justify-center";
+
+/**
+ * The badge itself: a filled circle in the one solid accent colour this
+ * system has (see button.tsx's own comment on `default`: "the only solid
+ * petrol fill in the system, for the one primary action on a surface").
+ *
+ * `bg-primary`/`text-primary-foreground` are REUSED, not a new pairing —
+ * the exact same two tokens, in the exact same roles, that button.tsx's
+ * `default` variant already fills with and already measures against in
+ * src/lib/design/contrast.ts ("Label of the filled primary action button").
+ * The contrast gate's coverage is per TOKEN, not per component, so this
+ * usage rides the same measurement rather than asking for a second one —
+ * and a play glyph is non-text iconography (3:1), a lower bar than the
+ * 4.5:1 that pairing is already measured against for button TEXT, so it
+ * passes with margin to spare.
+ */
+export const GALLERY_TILE_VIDEO_BADGE_CLASS =
+  "flex size-10 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-md";
+
+/**
+ * The glyph's own size inside the badge, and the optical nudge a play
+ * triangle conventionally gets: a centred equilateral triangle visually
+ * reads slightly left-of-centre (its leading edge is a flat side, its
+ * trailing edge a point), so a small rightward shift is what every other
+ * play button in the wild also applies rather than a defect to fix with a
+ * bigger shape.
+ */
+export const GALLERY_TILE_VIDEO_BADGE_ICON_CLASS = "size-5 translate-x-0.5";
+
+/**
  * The caption under one tile (ugcportal-gwr). Quiet body text — unlike the
  * tag chips below it, a caption is a sentence the uploader wrote, not a
  * label, so it is neither small-caps nor muted to the same degree: it needs
@@ -230,6 +289,58 @@ export const GALLERY_TILE_IMAGE_CLASS =
  */
 export const GALLERY_CAPTION_CLASS =
   "mt-1.5 text-sm whitespace-pre-line text-muted-foreground";
+
+/**
+ * The advertising-disclosure label (ugcportal-e0jv K1/K4, part B of
+ * ugcportal-qnq9.1): "Advertisement / Reklame" or one of the other three
+ * permitted forms (src/lib/advertising-disclosure.ts), rendered first on a
+ * tile that carries one — see `GalleryItemAdvertisingLabel`
+ * (src/components/gallery/gallery-item.tsx), which places it ahead of
+ * `GALLERY_CAPTION_CLASS`/`GALLERY_TAG_CLASS` in both the gallery grid and
+ * the per-item page.
+ *
+ * MUST NOT READ AS A TAG OR A CAPTION (K4), which is a real constraint on
+ * this string, not a style preference: `GALLERY_TAG_CLASS` just above is
+ * quiet, muted, no fill, no border — "a caption, not a label" by its own
+ * comment's own words — and `GALLERY_CAPTION_CLASS` is quiet body text.
+ * Both are correct for what THEY are (an optional chip, an optional
+ * sentence); a compliance disclosure is neither; a visitor must be able to
+ * tell at a glance that this line is doing something different from either.
+ * So this is a solid, filled badge — the opposite treatment from both of
+ * its neighbours — rather than a third shade of muted, quiet text.
+ *
+ * `bg-primary`/`text-primary-foreground`, REUSED, not a new colour pairing
+ * invented for this one badge: the same two tokens, in the same roles,
+ * src/components/ui/button.tsx's `default` variant already fills with (the
+ * comment there: "the only solid petrol fill in the system, for the one
+ * primary action on a surface") and this same file's own
+ * `GALLERY_TILE_VIDEO_BADGE_CLASS` (the VIDEO play affordance, ugcportal-dzz,
+ * PR #146) already reused for the identical reason — riding the contrast
+ * gate's existing `primary-label-on-primary` measurement
+ * (src/lib/design/contrast.ts, 4.5:1 body-text threshold) rather than
+ * asking it to learn a second pairing. No alpha modifier on either utility,
+ * so `src/lib/design/usage.ts`'s alpha-coverage scan has nothing new to
+ * resolve either.
+ *
+ * NO TRANSITION, NO HOVER, NO MOTION UTILITY of any kind (K4's "prefers-
+ * reduced-motion unaffected"): this is a static badge of static text, same
+ * as the video-play badge's own "nothing here animates" reasoning, so there
+ * is nothing for `prefers-reduced-motion` to need reducing in the first
+ * place — motion-reduce-pairing.test.ts's project-wide scan has nothing new
+ * to flag because nothing here triggers under `hover:`/`group-hover:`/
+ * `active:`/`focus:` at all.
+ *
+ * `rounded-md`, matching this file's own tile radius (`GALLERY_TILE_ASPECT_
+ * CLASS`'s sibling, `GALLERY_TILE_BASE_CLASS`) rather than a pill
+ * (`rounded-full`): a pill reads as a filter/category chip in this design
+ * system's own vocabulary (see docs/design — tag chips elsewhere are
+ * rounded-full-free already), and a disclosure label is not a category.
+ * `w-fit` so the fill hugs the text rather than stretching to the tile's
+ * own width, the same reason an inline badge anywhere else in this app
+ * never spans its container.
+ */
+export const GALLERY_ADVERTISING_LABEL_CLASS =
+  "mb-1.5 inline-flex w-fit items-center rounded-md bg-primary px-2 py-0.5 text-xs font-semibold tracking-wide text-primary-foreground uppercase";
 
 /**
  * SUBJECT TAGS (ugcportal-jsc), and the three decisions behind where they sit.

@@ -210,6 +210,30 @@ type TagProjection<TSelect> = "tags" extends keyof TSelect
   : unknown;
 
 /**
+ * The advertising-disclosure relation (ugcportal-e0jv), when — and only
+ * when — the projection asked for it. The exact same shape as
+ * `TagProjection` above, and for the identical reason: `MEDIA_ANONYMOUS_
+ * SELECT`'s `advertisingDisclosure` entry is a relation (`{ select: {
+ * label: true } }`), not a column, so `extends true` in `SelectedColumnKeys`
+ * excludes it, and the row type has to gain it back here or a caller of
+ * `listPublicMedia`/`listMedia` would receive it at runtime with no type
+ * saying so — see `TagProjection`'s own comment for the "type lie" this
+ * closes.
+ *
+ * `string | null`, not `string`, because an item can be published with no
+ * disclosure row at all (K3) — the relation itself is then `null` — and
+ * because the row's own `label` column is nullable even when the relation
+ * exists (an item with `benefitReceived: false` has a row with `label:
+ * null`, by the write path's own invariant; see
+ * src/lib/advertising-disclosure.ts). Neither state is an error here: both
+ * mean "render nothing", which is `toGalleryItem`'s job, not this type's.
+ */
+type AdvertisingDisclosureProjection<TSelect> =
+  "advertisingDisclosure" extends keyof TSelect
+    ? { advertisingDisclosure: { label: string | null } | null }
+    : unknown;
+
+/**
  * A row exactly as the query returns it — `previewId` still nullable, because
  * the column is.
  *
@@ -224,7 +248,8 @@ type MediaListingRow<TSelect extends MediaListingSelect> = Pick<
   SelectedColumnKeys<TSelect>
 > &
   Pick<MediaModel, "id" | "createdAt" | "previewId"> &
-  TagProjection<TSelect>;
+  TagProjection<TSelect> &
+  AdvertisingDisclosureProjection<TSelect>;
 
 /**
  * The preview column this arm guarantees, narrowed to non-null.
@@ -378,8 +403,19 @@ function decodeMediaCursor(raw: string): MediaCursor | null {
  * the conflation is what made earlier versions silently vacuous: the anonymous
  * projection has no `previewKey` at all, so reading it yields `undefined`, and
  * `undefined !== null` passes everything.
+ *
+ * EXPORTED (ugcportal-qnq9.16, item 1 of the lows deferred from PR #93's
+ * round-6 review) so src/lib/portfolio.ts's `listPortfolioPieces` — a direct
+ * Prisma query against this same anonymous scope, not a `listMedia` caller —
+ * can apply the identical post-query re-check rather than trusting the
+ * where-clause alone. That review finding named the risk precisely: today
+ * `PUBLIC_MEDIA_SCOPE` already filters both columns at the query, so this is
+ * defense-in-depth, not a live bug — but it is the exact same defense-in-depth
+ * this function already gives every `listMedia` caller, and a future schema
+ * or query change should not have one anonymous-scope reader covered and the
+ * other not.
  */
-function hasCompletePreview(
+export function hasCompletePreview(
   row: { previewId?: string | null; previewKey?: string | null },
   scope: MediaListingScope,
 ): boolean {

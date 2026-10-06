@@ -2,17 +2,65 @@
  * Tests for the comment-claims audit (ugcportal-wzgw). Synthetic fixtures
  * are fed straight to the exported analysis functions, as
  * scripts/sweep-candidates.test.mjs does; the git plumbing in
- * scripts/lib/git-diff.mjs is exercised only through its pure diff parser.
+ * scripts/lib/git-diff.mjs is exercised only through its pure diff parser --
+ * except for the "working tree and --base" describe block near the end
+ * (ugcportal-np1i), which needs a real git repository because the bugs it
+ * guards against only exist in the interaction between git plumbing and the
+ * filesystem, not in any pure function: a false "candidates found: 0" before
+ * the first commit, a silently-ignored `--base=<ref>` (K1/K2), and several
+ * further ways the same false zero could still happen that review rounds
+ * on this PR reproduced directly -- an unresolvable `--base` falling
+ * through silently (M1), a committed change plus an uncommitted edit to the
+ * same file producing two line-numbering systems whose union pointed at
+ * the wrong lines (M2), a required diff read failing without tripping the
+ * K3 guardrail on a dirty tree (round 1 M3) or, the gap that survived that
+ * fix, on a fully-committed CLEAN tree -- the ordinary `/pre-review` case
+ * -- because the guardrail was gated on "is the tree dirty" rather than
+ * "did the read succeed" (round 2 H1).
  *
  * Each fixture is shaped like a real finding from the v0.5.0 review rounds
- * (docs/process/review-rounds-v0.5.0.md, Part 1), named in the test title.
+ * (docs/process/review-rounds-v0.5.0.md, Part 1) or from this PR's own
+ * review rounds, named in the test title.
+ *
+ * PR body mode (ugcportal-bn94) gets its own describe blocks below: pure
+ * fixtures for auditBodyText/findQuotedSpans/tokenStillInDiff/
+ * extractBodyLines against literal body/diff strings (no `gh` involved --
+ * the same "pure function, literal fixture" shape
+ * scripts/sweep-merged-branches.test.mjs uses for its own `gh`-adjacent
+ * parsing), and one real-git-repo describe block proving `--body` reads
+ * stdin and diffs the local working tree, and that its printed counts are
+ * never summed with file mode's (K2).
  */
-import { describe, expect, it } from "vitest";
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-import { auditContent, classifyClaimLine, extractComments, extractProseLines, findPathReferences, referenceExists } from "./claims-audit.mjs";
+import { afterEach, describe, expect, it } from "vitest";
+
+import {
+  auditBodyText,
+  auditContent,
+  classifyClaimLine,
+  classifyDoneVerb,
+  extractBodyLines,
+  extractComments,
+  extractProseLines,
+  findBacktickRanges,
+  findDoneVerbClassForSpan,
+  findDoneVerbOccurrences,
+  findPathReferences,
+  findQuotedSpans,
+  findSentenceContaining,
+  parseArgs,
+  referenceExists,
+  splitIntoSentences,
+  tokenStillInDiff,
+} from "./claims-audit.mjs";
 import { parseUnifiedDiffAddedLines } from "./lib/git-diff.mjs";
 
-const NO_TRACKED = { trackedFiles: [] };
+const NO_EXISTING_FILES = { existingFiles: [] };
 
 describe("classifyClaimLine", () => {
   it("flags an absolute claim (PR #102 round 1: a dedupe comment that said the opposite of what was measured)", () => {
@@ -128,42 +176,50 @@ describe("extractProseLines", () => {
 describe("auditContent", () => {
   it("reports only comments on changed lines, each line tagged with its categories", () => {
     const content = ["// always true on every path", "const a = 1;", "// 85px tall", "const b = 2;", ""].join("\n");
-    const out = auditContent(content, "a.ts", new Set([3]), NO_TRACKED);
+    const out = auditContent(content, "a.ts", new Set([3]), NO_EXISTING_FILES);
     expect(out).toEqual([{ file: "a.ts", line: 3, categories: ["MEASUREMENT"], text: "85px tall", missingReferences: [] }]);
   });
 
   it("audits every comment when changedLines is null (--all-lines, the stale-sibling sweep)", () => {
     const content = ["// always true", "const a = 1;", "// 85px tall", ""].join("\n");
-    expect(auditContent(content, "a.ts", null, NO_TRACKED)).toHaveLength(2);
+    expect(auditContent(content, "a.ts", null, NO_EXISTING_FILES)).toHaveLength(2);
   });
 
   it("reports a block comment at the line of the offending sentence, not the block's first line", () => {
     const content = ["/**", " * Plain description.", " * It never throws.", " */", "const a = 1;", ""].join("\n");
-    const out = auditContent(content, "a.ts", new Set([1, 2, 3, 4]), NO_TRACKED);
+    const out = auditContent(content, "a.ts", new Set([1, 2, 3, 4]), NO_EXISTING_FILES);
     expect(out).toEqual([{ file: "a.ts", line: 3, categories: ["ABSOLUTE"], text: "It never throws.", missingReferences: [] }]);
   });
 
   it("names a referenced file that is not in the tree, and stays silent for one that is", () => {
     const content = ["// see configured-users.ts and routes.ts", "const a = 1;", ""].join("\n");
-    const out = auditContent(content, "src/lib/a.ts", new Set([1]), { trackedFiles: ["src/lib/routes.ts"] });
+    const out = auditContent(content, "src/lib/a.ts", new Set([1]), { existingFiles: ["src/lib/routes.ts"] });
     expect(out).toEqual([
       { file: "src/lib/a.ts", line: 1, categories: [], text: "see configured-users.ts and routes.ts", missingReferences: ["configured-users.ts"] },
     ]);
   });
 
+  it("stays silent for a reference to an untracked sibling (ugcportal-np1i round 3 L1: an untracked file is a real, existing file)", () => {
+    const content = ["// see untracked-sibling.ts", "const a = 1;", ""].join("\n");
+    const out = auditContent(content, "src/lib/a.ts", new Set([1]), {
+      existingFiles: ["src/lib/routes.ts", "src/lib/untracked-sibling.ts"],
+    });
+    expect(out).toEqual([]);
+  });
+
   it("is silent for a comment with no claim and no reference", () => {
     const content = "// build the href\nconst a = 1;\n";
-    expect(auditContent(content, "a.ts", new Set([1]), NO_TRACKED)).toEqual([]);
+    expect(auditContent(content, "a.ts", new Set([1]), NO_EXISTING_FILES)).toEqual([]);
   });
 
   it("audits Markdown prose line by line", () => {
     const content = "# Notes\n\nThe gate never fails open.\n";
-    const out = auditContent(content, "docs/x.md", new Set([3]), NO_TRACKED);
+    const out = auditContent(content, "docs/x.md", new Set([3]), NO_EXISTING_FILES);
     expect(out.map((c) => c.categories)).toEqual([["ABSOLUTE"]]);
   });
 
   it("ignores a file type it does not know how to read", () => {
-    expect(auditContent("binary-ish", "image.png", null, NO_TRACKED)).toEqual([]);
+    expect(auditContent("binary-ish", "image.png", null, NO_EXISTING_FILES)).toEqual([]);
   });
 });
 
@@ -189,5 +245,915 @@ describe("parseUnifiedDiffAddedLines", () => {
     const out = parseUnifiedDiffAddedLines(diff);
     expect([...out.get("a.ts")]).toEqual([2, 3, 12]);
     expect([...out.get("b.md")]).toEqual([1]);
+  });
+});
+
+describe("parseArgs", () => {
+  it("accepts the space form", () => {
+    expect(parseArgs(["--base", "origin/main"])).toEqual({ base: "origin/main", allLines: false });
+  });
+
+  it("accepts the equals form, which used to be silently ignored (ugcportal-np1i K2)", () => {
+    expect(parseArgs(["--base=origin/main"])).toEqual({ base: "origin/main", allLines: false });
+  });
+
+  it("recognizes --all-lines, with and without an explicit --base", () => {
+    expect(parseArgs(["--all-lines"])).toEqual({ base: undefined, allLines: true });
+    expect(parseArgs(["--base", "origin/main", "--all-lines"])).toEqual({ base: "origin/main", allLines: true });
+  });
+
+  it("leaves base undefined when --base is not passed, so the caller falls back to resolveDefaultBase", () => {
+    expect(parseArgs([])).toEqual({ base: undefined, allLines: false });
+  });
+
+  it("names the problem instead of silently keeping the default, for every broken --base spelling", () => {
+    expect(parseArgs(["--base"]).error).toMatch(/requires a value/);
+    expect(parseArgs(["--base="]).error).toMatch(/requires a value/);
+    expect(parseArgs(["--base:origin/main"]).error).toMatch(/unknown flag/);
+  });
+
+  it("L1: rejects --base followed by another flag instead of swallowing it as the ref (round 1 finding 4)", () => {
+    expect(parseArgs(["--base", "--all-lines"]).error).toMatch(/requires a value/);
+    expect(parseArgs(["--base", "--base=origin/main"]).error).toMatch(/requires a value/);
+  });
+
+  it("L2: rejects an unknown flag by name instead of silently falling back to the default base (round 1 finding 5)", () => {
+    // A one-letter typo of --base -- the PR body originally overclaimed this
+    // was already rejected; it wasn't, because it isn't a --base-prefixed
+    // string at all, just an unrecognized flag.
+    expect(parseArgs(["--bas=foo"]).error).toMatch(/unknown flag: --bas=foo/);
+    expect(parseArgs(["--verbose"]).error).toMatch(/unknown flag: --verbose/);
+  });
+
+  it("rejects a bare positional argument", () => {
+    expect(parseArgs(["origin/main"]).error).toMatch(/unexpected argument: origin\/main/);
+  });
+});
+
+describe("parseArgs: PR body mode (ugcportal-bn94)", () => {
+  it("recognizes --pr <n> and --pr=<n> the same way", () => {
+    expect(parseArgs(["--pr", "147"])).toEqual({ base: undefined, allLines: false, prNumber: 147 });
+    expect(parseArgs(["--pr=147"])).toEqual({ base: undefined, allLines: false, prNumber: 147 });
+  });
+
+  it("recognizes --body, reading the body from stdin", () => {
+    expect(parseArgs(["--body"])).toEqual({ base: undefined, allLines: false, bodyFromStdin: true });
+  });
+
+  it("names the problem for a missing or non-numeric --pr value, instead of silently falling back to file mode", () => {
+    expect(parseArgs(["--pr"]).error).toMatch(/requires a PR number/);
+    expect(parseArgs(["--pr", "abc"]).error).toMatch(/requires a PR number/);
+    expect(parseArgs(["--pr="]).error).toMatch(/requires a PR number/);
+    expect(parseArgs(["--pr=abc"]).error).toMatch(/requires a PR number/);
+  });
+
+  it("rejects --pr and --body combined -- two body sources is not a silent choice this script makes for you", () => {
+    expect(parseArgs(["--pr", "147", "--body"]).error).toMatch(/mutually exclusive/);
+  });
+
+  it("rejects --all-lines combined with either PR-body source -- a body has no added-lines concept", () => {
+    expect(parseArgs(["--pr", "147", "--all-lines"]).error).toMatch(/does not apply to PR-body mode/);
+    expect(parseArgs(["--body", "--all-lines"]).error).toMatch(/does not apply to PR-body mode/);
+  });
+
+  it("rejects --base combined with --pr -- that PR's diff comes from `gh pr diff`, not a local ref", () => {
+    expect(parseArgs(["--pr", "147", "--base", "origin/main"]).error).toMatch(/does not apply to --pr/);
+  });
+
+  it("allows --base combined with --body -- stdin mode diffs the local working tree against it", () => {
+    expect(parseArgs(["--body", "--base", "origin/main"])).toEqual({ base: "origin/main", allLines: false, bodyFromStdin: true });
+  });
+});
+
+describe("extractBodyLines", () => {
+  it("takes every non-blank line of a PR body, 1-indexed, same granularity as a Markdown file's prose", () => {
+    expect(extractBodyLines("## Summary\n\nFixed the bug.\n")).toEqual([
+      { line: 1, text: "## Summary" },
+      { line: 3, text: "Fixed the bug." },
+    ]);
+  });
+});
+
+describe("findQuotedSpans", () => {
+  it("extracts a double-quoted span and a backtick code span, each once", () => {
+    const text = 'the wrong "24 characters" vs `[ -n "$me" ]`';
+    expect(findQuotedSpans(text)).toEqual(["24 characters", '[ -n "$me" ]']);
+  });
+
+  it("does not pair an ordinary contraction's apostrophes into a false span (no single-quote pattern at all)", () => {
+    expect(findQuotedSpans("isn't related to won't happen")).toEqual([]);
+  });
+
+  it("ignores a lone punctuation mark too short to be a real referenced token", () => {
+    expect(findQuotedSpans('a quoted "-" here')).toEqual([]);
+  });
+});
+
+describe("tokenStillInDiff", () => {
+  const diff = [
+    "diff --git a/a.ts b/a.ts",
+    "--- a/a.ts",
+    "+++ b/a.ts",
+    "@@ -1,2 +1,3 @@",
+    "-const old = 1;",
+    "+const kept = 1; // 24 characters max",
+    " const unchanged = 2;",
+  ].join("\n");
+
+  it("finds a token on an ADDED line (PR #147, 2026-10-06: a 'deleted' number that was not)", () => {
+    expect(tokenStillInDiff("24 characters", diff)).toBe(true);
+  });
+
+  it("finds a token on an unchanged CONTEXT line", () => {
+    expect(tokenStillInDiff("unchanged", diff)).toBe(true);
+  });
+
+  it("does not count a token that only ever appeared on a REMOVED line as still present", () => {
+    expect(tokenStillInDiff("const old", diff)).toBe(false);
+  });
+
+  it("ignores a match against a file-header line (+++ b/path / --- a/path), not real file content", () => {
+    expect(tokenStillInDiff("a.ts", diff)).toBe(false);
+  });
+
+  it("returns false for an empty token rather than matching every line", () => {
+    expect(tokenStillInDiff("", diff)).toBe(false);
+  });
+});
+
+describe("classifyDoneVerb (ugcportal-bn94 round 1 F1/F2) -- first DONE verb BY POSITION, a whole-line summary only", () => {
+  it("classifies every REMOVAL verb, including the three F2 named as missing", () => {
+    expect(classifyDoneVerb("the stale line was deleted")).toBe("removal");
+    expect(classifyDoneVerb("the stale line was removed")).toBe("removal");
+    expect(classifyDoneVerb("the stale line was dropped")).toBe("removal");
+    expect(classifyDoneVerb("struck from the file")).toBe("removal");
+    // F2's own three reproductions, verbatim:
+    expect(classifyDoneVerb("The stale comment is no longer present.")).toBe("removal");
+    expect(classifyDoneVerb("That line is gone now.")).toBe("removal");
+    expect(classifyDoneVerb("The bug was eliminated in this commit.")).toBe("removal");
+  });
+
+  it("classifies every RESTORATION verb", () => {
+    expect(classifyDoneVerb("the guard was restored")).toBe("restoration");
+    expect(classifyDoneVerb("the check was re-added")).toBe("restoration");
+    expect(classifyDoneVerb("the guard was added back")).toBe("restoration");
+    expect(classifyDoneVerb("the guard was kept")).toBe("restoration");
+  });
+
+  it("classifies every NEUTRAL verb -- implies no direction either way", () => {
+    expect(classifyDoneVerb("the bug was fixed")).toBe("neutral");
+    expect(classifyDoneVerb("the figure was corrected")).toBe("neutral");
+  });
+
+  it("returns null for a line with no DONE verb at all", () => {
+    expect(classifyDoneVerb("this PR adds a button")).toBeNull();
+  });
+
+  it("returns whichever verb occurs FIRST, not a fixed category order -- a line with more than one verb is exactly why this whole-line summary is not what decides a span's direction", () => {
+    expect(classifyDoneVerb("Removed, then restored the guard.")).toBe("removal");
+    expect(classifyDoneVerb("Restored, then removed the guard.")).toBe("restoration");
+    expect(classifyDoneVerb("Fixed by removing the guard.")).toBe("neutral");
+    expect(classifyDoneVerb("Removed and fixed the stale check.")).toBe("removal");
+  });
+
+  it("F1's real reproduction: this whole-line summary alone gets PR #142's sentence WRONG ('removal', from 'dropped') -- which is exactly why auditBodyText assigns direction per span, not from this function", () => {
+    // 'dropped' (REMOVAL) occurs before 'Fixed' (NEUTRAL) in this real
+    // sentence, so classifyDoneVerb's first-by-position answer is
+    // "removal" -- if auditBodyText used THIS as the whole line's
+    // direction, $me/$pr_author would be flagged contradicted again,
+    // reproducing F1 exactly. See the auditBodyText fixture below (and
+    // findDoneVerbClassForSpan's own tests) for the per-span mechanism
+    // that gets this sentence's actual spans right regardless.
+    const sentence =
+      '2. **LOW, confirmed — "copied verbatim" was false.** The PR body claimed the new `$me`/`$pr_author` check was copied verbatim from step 4b, but it had dropped the two `[ -n ... ]` empty-string guards. Fixed by restoring both guards (`[ -n "$me" ] || ...` and `[ -n "$pr_author" ] || ...`), so the claim is now true rather than edited to stop making it.';
+    expect(classifyDoneVerb(sentence)).toBe("removal");
+  });
+});
+
+describe("findDoneVerbOccurrences / findDoneVerbClassForSpan (ugcportal-bn94 round 1 F1)", () => {
+  it("finds every verb occurrence across all three classes, sorted by position", () => {
+    const occurrences = findDoneVerbOccurrences("Removed the guard, then restored it, then fixed the caller.");
+    expect(occurrences.map((o) => o.cls)).toEqual(["removal", "restoration", "neutral"]);
+    expect(occurrences[0].index).toBeLessThan(occurrences[1].index);
+    expect(occurrences[1].index).toBeLessThan(occurrences[2].index);
+  });
+
+  it("assigns a span to whichever occurrence is nearest it, not simply the first in the line", () => {
+    const text = "Removed the old guard. Much later, restored a different one.";
+    const occurrences = findDoneVerbOccurrences(text);
+    const earlySpanIndex = text.indexOf("old guard"); // near "Removed"
+    const lateSpanIndex = text.indexOf("different one"); // near "restored"
+    expect(findDoneVerbClassForSpan(occurrences, earlySpanIndex)).toBe("removal");
+    expect(findDoneVerbClassForSpan(occurrences, lateSpanIndex)).toBe("restoration");
+  });
+
+  it("breaks an exact-distance tie toward the earlier occurrence", () => {
+    // Synthetic occurrences, not derived from a real sentence, so the two
+    // distances are exactly equal by construction (|5-0| === |5-10|) rather
+    // than relying on a real string's indexOf arithmetic to land exactly on
+    // a tie.
+    const occurrences = [
+      { index: 0, cls: "removal" },
+      { index: 10, cls: "restoration" },
+    ];
+    expect(findDoneVerbClassForSpan(occurrences, 5)).toBe("removal");
+  });
+
+  it("returns null for no occurrences", () => {
+    expect(findDoneVerbClassForSpan([], 5)).toBeNull();
+  });
+});
+
+describe("splitIntoSentences / findBacktickRanges / findSentenceContaining (ugcportal-bn94 round 2)", () => {
+  it("splits on period/semicolon/question/exclamation + space + uppercase, backtick or quote", () => {
+    const sentences = splitIntoSentences("First sentence. Second one! Third? `Fourth` one; \"Fifth\" one.");
+    expect(sentences.map((s) => s.text.trim())).toEqual(["First sentence.", "Second one!", "Third?", "`Fourth` one;", '"Fifth" one.']);
+  });
+
+  it("does not split a numbered-list marker followed by markdown bold ('2. **LOW')", () => {
+    // "*" is in none of the three lookahead categories (uppercase letter,
+    // backtick, quote) -- a bare numbered-list marker must not be read as
+    // two sentences.
+    const sentences = splitIntoSentences("2. **LOW, confirmed** — true. The next part.");
+    expect(sentences).toHaveLength(2);
+    expect(sentences[0].text).toBe("2. **LOW, confirmed** — true. ");
+    expect(sentences[1].text).toBe("The next part.");
+  });
+
+  it("reassembles the original string exactly via start/end offsets", () => {
+    const text = 'First. `code.Here` is fine. "Quoted." Last one';
+    const sentences = splitIntoSentences(text);
+    expect(sentences.map((s) => text.slice(s.start, s.end)).join("")).toBe(text);
+  });
+
+  it("returns one sentence spanning the whole input when no boundary is found", () => {
+    expect(splitIntoSentences("no sentence boundary here at all")).toEqual([
+      { start: 0, end: 32, text: "no sentence boundary here at all" },
+    ]);
+  });
+
+  it("findBacktickRanges pairs backticks and ignores an unpaired trailing one", () => {
+    expect(findBacktickRanges("a `b` c `d` e")).toEqual([
+      [2, 4],
+      [8, 10],
+    ]);
+    expect(findBacktickRanges("a `unpaired")).toEqual([]);
+  });
+
+  it("does NOT split on a sentence-boundary-shaped period INSIDE a backtick span (round 2's own requirement)", () => {
+    // "a. B" inside the backticks looks exactly like a real boundary (period,
+    // space, uppercase) -- it must not split there; the genuine boundary
+    // after "same." (outside any backtick span) must still split.
+    const text = "The constant `a. B` stays the same. It was not touched.";
+    const sentences = splitIntoSentences(text);
+    expect(sentences).toHaveLength(2);
+    expect(sentences[0].text).toBe("The constant `a. B` stays the same. ");
+    expect(sentences[1].text).toBe("It was not touched.");
+  });
+
+  it("findSentenceContaining maps an index back to the sentence it falls in", () => {
+    const text = "First one. Second one.";
+    const sentences = splitIntoSentences(text);
+    expect(findSentenceContaining(sentences, text.indexOf("First"))).toBe(sentences[0]);
+    expect(findSentenceContaining(sentences, text.indexOf("Second"))).toBe(sentences[1]);
+  });
+});
+
+describe("auditBodyText (ugcportal-bn94)", () => {
+  const NO_DONE = { doneClaimStillPresent: [], doneClaimStillAbsent: [], doneClaimToVerify: [] };
+
+  it("K1: reports a PR body's test count as a MEASUREMENT candidate with its line", () => {
+    const body = "## Pre-review\n\n1. Gates: vitest 165 files / 3520 tests, all green.\n";
+    expect(auditBodyText(body)).toEqual([
+      {
+        line: 3,
+        text: "1. Gates: vitest 165 files / 3520 tests, all green.",
+        categories: ["MEASUREMENT"],
+        missingReferences: [],
+        ...NO_DONE,
+      },
+    ]);
+  });
+
+  it("REMOVAL: flags a DONE claim and confirms it against the diff (PR #147, 2026-10-06: a 'deleted' number that was still on an added line)", () => {
+    const body = 'Eight fixed: one MEASUREMENT deleted (the wrong "24 characters"); five ABSOLUTEs weakened.\n';
+    const diffText = ["diff --git a/x.ts b/x.ts", "--- a/x.ts", "+++ b/x.ts", "@@ -1 +1 @@", "+ * a label of at most 24 characters."].join("\n");
+    expect(auditBodyText(body, { diffText })).toEqual([
+      {
+        line: 1,
+        text: 'Eight fixed: one MEASUREMENT deleted (the wrong "24 characters"); five ABSOLUTEs weakened.',
+        categories: ["DONE"],
+        missingReferences: [],
+        doneClaimStillPresent: ["24 characters"],
+        doneClaimStillAbsent: [],
+        doneClaimToVerify: [],
+      },
+    ]);
+  });
+
+  it("RESTORATION: a span ABSENT from the diff contradicts a 'restored' claim (the opposite direction from REMOVAL)", () => {
+    const body = 'Restored the guard, which is now `[ -n "$me" ]` again.\n';
+    const diffTextMissing = ["diff --git a/x.sh b/x.sh", "--- a/x.sh", "+++ b/x.sh", "@@ -1 +1 @@", "+something else entirely"].join("\n");
+    const out = auditBodyText(body, { diffText: diffTextMissing });
+    expect(out).toEqual([
+      {
+        line: 1,
+        text: 'Restored the guard, which is now `[ -n "$me" ]` again.',
+        categories: ["DONE"],
+        missingReferences: [],
+        doneClaimStillPresent: [],
+        doneClaimStillAbsent: ['[ -n "$me" ]'],
+        doneClaimToVerify: [],
+      },
+    ]);
+  });
+
+  it("RESTORATION: the same claim is NOT contradicted when the span really is back in the diff", () => {
+    const body = 'Restored the guard, which is now `[ -n "$me" ]` again.\n';
+    const diffTextPresent = ["diff --git a/x.sh b/x.sh", "--- a/x.sh", "+++ b/x.sh", "@@ -1 +1 @@", '+[ -n "$me" ] || exit 1'].join("\n");
+    const out = auditBodyText(body, { diffText: diffTextPresent });
+    expect(out[0].doneClaimStillAbsent).toEqual([]);
+    expect(out[0].categories).toEqual(["DONE"]);
+  });
+
+  it("NEUTRAL (simplified fixture): 'fixed'/'corrected' spans are listed to verify, never scored as contradicted in either direction", () => {
+    const body = "Fixed by restoring both guards (`$me`/`$pr_author` empty-string guards).\n";
+    // No diffText at all -- NEUTRAL doesn't need one, unlike REMOVAL/RESTORATION.
+    const out = auditBodyText(body);
+    expect(out).toEqual([
+      {
+        line: 1,
+        text: "Fixed by restoring both guards (`$me`/`$pr_author` empty-string guards).",
+        categories: ["DONE"],
+        missingReferences: [],
+        doneClaimStillPresent: [],
+        doneClaimStillAbsent: [],
+        doneClaimToVerify: ["$me", "$pr_author"],
+      },
+    ]);
+  });
+
+  it("NEUTRAL: still never scored even when diffText IS available and would otherwise 'contradict' it", () => {
+    // Same sentence as above, but now with a diff that does NOT contain
+    // $me/$pr_author at all -- a REMOVAL or RESTORATION read would call
+    // this a contradiction one way or the other; NEUTRAL must not.
+    const body = "Fixed by restoring both guards (`$me`/`$pr_author` empty-string guards).\n";
+    const diffText = ["diff --git a/x.sh b/x.sh", "--- a/x.sh", "+++ b/x.sh", "@@ -1 +1 @@", "+unrelated line"].join("\n");
+    const out = auditBodyText(body, { diffText });
+    expect(out[0].doneClaimStillPresent).toEqual([]);
+    expect(out[0].doneClaimStillAbsent).toEqual([]);
+    expect(out[0].doneClaimToVerify).toEqual(["$me", "$pr_author"]);
+  });
+
+  it("F1 reproduction, PR #142's own body sentence verbatim: the spans next to 'Fixed by restoring' are never flagged contradicted, even though the line also contains 'dropped' (REMOVAL)", () => {
+    // This exact sentence, with this exact diff shape (the guards present
+    // on an added line, i.e. correctly restored), is what round 1's F1
+    // reproduced: the old design reported `DONE contradicted, still in
+    // diff: "$me"` and `"$pr_author"` -- backwards, since restoring them
+    // was the whole point of the sentence. It no longer does, because each
+    // span is now assigned to its NEAREST verb occurrence rather than one
+    // verdict for the whole line (see findDoneVerbClassForSpan): the two
+    // short `$me`/`$pr_author` mentions and the two long bracket-expression
+    // spans all sit nearest "Fixed" (NEUTRAL, at the end of the line), so
+    // none of the four is scored -- while "copied verbatim" and the
+    // generic `[ -n ... ]` placeholder, both nearest "dropped" (REMOVAL),
+    // are checked in that direction and happen not to appear in this
+    // diffText either way, so they produce no output at all.
+    const sentence =
+      '2. **LOW, confirmed — "copied verbatim" was false.** The PR body claimed the new `$me`/`$pr_author` check was copied verbatim from step 4b, but it had dropped the two `[ -n ... ]` empty-string guards. Fixed by restoring both guards (`[ -n "$me" ] || ...` and `[ -n "$pr_author" ] || ...`), so the claim is now true rather than edited to stop making it.\n';
+    const diffText = [
+      "diff --git a/skill.sh b/skill.sh",
+      "--- a/skill.sh",
+      "+++ b/skill.sh",
+      "@@ -1,2 +1,2 @@",
+      '+[ -n "$me" ] || { echo "missing me"; exit 1; }',
+      '+[ -n "$pr_author" ] || { echo "missing pr_author"; exit 1; }',
+    ].join("\n");
+    const out = auditBodyText(sentence, { diffText });
+    expect(out).toHaveLength(1);
+    expect(out[0].categories).toEqual(["DONE"]);
+    expect(out[0].doneClaimStillPresent).toEqual([]);
+    expect(out[0].doneClaimStillAbsent).toEqual([]);
+    expect(out[0].doneClaimToVerify).toEqual(["$me", "$pr_author", '[ -n "$me" ] || ...', '[ -n "$pr_author" ] || ...']);
+  });
+
+  it("REMOVAL/RESTORATION: no contradiction check when no diff is available at all -- still flagged DONE for a human", () => {
+    expect(auditBodyText("The check was removed.\n")).toEqual([
+      { line: 1, text: "The check was removed.", categories: ["DONE"], missingReferences: [], ...NO_DONE },
+    ]);
+    expect(auditBodyText("The check was restored.\n")).toEqual([
+      { line: 1, text: "The check was restored.", categories: ["DONE"], missingReferences: [], ...NO_DONE },
+    ]);
+  });
+
+  it("REMOVAL/RESTORATION with a quoted span but STILL no diffText: the span itself is not scored OR listed (unlike NEUTRAL, which lists regardless)", () => {
+    // Deliberately exercises the `else if (diffText)` branch with a real
+    // span present -- the two fixtures just above have no quoted span at
+    // all, so they could not have caught a mutation that scored a span
+    // without a diff to check it against.
+    expect(auditBodyText('The check `[ -n "$me" ]` was removed.\n')).toEqual([
+      { line: 1, text: 'The check `[ -n "$me" ]` was removed.', categories: ["DONE"], missingReferences: [], ...NO_DONE },
+    ]);
+    expect(auditBodyText('The check `[ -n "$me" ]` was restored.\n')).toEqual([
+      { line: 1, text: 'The check `[ -n "$me" ]` was restored.', categories: ["DONE"], missingReferences: [], ...NO_DONE },
+    ]);
+  });
+
+  it("flags 'both X corrected' and 'all N corrected' as DONE -- the verb alone matches, no separate aggregate pattern needed", () => {
+    expect(auditBodyText("Both issues corrected.\n").map((c) => c.categories)).toEqual([["DONE"]]);
+    expect(auditBodyText("All three findings corrected.\n").map((c) => c.categories)).toEqual([["DONE"]]);
+  });
+
+  it("is silent for an ordinary sentence with no claim, no reference and no done verb", () => {
+    expect(auditBodyText("This PR adds a button to the gallery footer.\n")).toEqual([]);
+  });
+
+  it("names a file the body points at that does not exist in the tree, same REFERENCE semantics as a comment", () => {
+    const out = auditBodyText("See configured-users.ts for details.\n", { existingFiles: ["src/lib/routes.ts"] });
+    expect(out).toEqual([
+      {
+        line: 1,
+        text: "See configured-users.ts for details.",
+        categories: [],
+        missingReferences: ["configured-users.ts"],
+        ...NO_DONE,
+      },
+    ]);
+  });
+
+  it("K2: body-mode candidates are a wholly separate list from file-mode's, never unioned (a clean diff, a dirty body)", () => {
+    const fileModeCandidates = auditContent("const a = 1;\n", "a.ts", new Set([1]), { existingFiles: [] });
+    const bodyModeCandidates = auditBodyText("This never fails on any path.\n");
+    // auditBodyText's signature takes no file-mode candidates as input, and
+    // auditContent's takes no body text -- there is no shared accumulator
+    // either could write into, so the two counts below cannot be summed by
+    // accident; main()'s two printed banners (see the --body end-to-end
+    // test below) keep that same separation all the way to stdout.
+    expect(fileModeCandidates).toEqual([]);
+    expect(bodyModeCandidates).toHaveLength(1);
+  });
+
+  it("round 2 finding, reproduced verbatim against PR #147's own body: a multi-sentence paragraph's two unrelated earlier spans are not misattributed to a late 'restored' in a different sentence", () => {
+    // This exact paragraph is PR #147 round 2's own body text (one physical
+    // Markdown line, three sentences). Its only DONE verb ("restored") is
+    // in sentence 3, about `expect(result.ok).toBe(false)`; sentences 1 and
+    // 2 have no DONE verb at all, so `validateAdvertisingLabel(...)` and
+    // "only the term match does" -- both in sentence 2 -- must not be
+    // scored in any direction. Before this fix, whole-line nearest-by-
+    // position assigned both to "restored" (nothing closer to compare
+    // against in the whole paragraph) and reported them `DONE contradicted,
+    // absent from diff` -- neither sentence was making a restoration claim.
+    const paragraph =
+      'The round-2 finding was right, including that the sentence argued against the assertion it was attached to. Measured at the previous head: `validateAdvertisingLabel("Reklame (foo)")` is `ok === false` with the **generic** message and **no** forbidden marker, so the allowlist does refuse the padded form, and "only the term match does" was false. The claim also contradicted the helper header 20 lines above and would have justified reverting the 13 padded rows to `expect(result.ok).toBe(false)` — the round-1 defect, restored on the authority of a comment added to fix it.';
+    // The diff genuinely contains the one span sentence 3 actually governs
+    // (restored, so present is correct) -- this fixture's point is the two
+    // EARLIER spans, not this one, so it is given a diff that resolves
+    // cleanly rather than one engineered to also test the RESTORATION
+    // direction again (that's covered by the dedicated fixture above).
+    const diffText = [
+      "diff --git a/x.test.ts b/x.test.ts",
+      "--- a/x.test.ts",
+      "+++ b/x.test.ts",
+      "@@ -1 +1 @@",
+      "+  expect(result.ok).toBe(false);",
+    ].join("\n");
+    const out = auditBodyText(paragraph, { diffText });
+    expect(out).toHaveLength(1);
+    expect(out[0].categories).toContain("DONE");
+    // The requirement, verbatim: zero contradicted hits.
+    expect(out[0].doneClaimStillPresent).toEqual([]);
+    expect(out[0].doneClaimStillAbsent).toEqual([]);
+    expect(out[0].doneClaimToVerify).toEqual([]);
+  });
+});
+
+// --- fixture repo: working tree and --base (ugcportal-np1i) --------------
+//
+// Real git repositories in a mkdtemp directory, never the shared checkout
+// (`bd memories shared-checkout-is-not-safe-for-agents`) and never a bare
+// `git stash`. Every git subprocess below passes an explicit `cwd` on the
+// fixture's own temp path and an env object that:
+//   - unsets GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE/GIT_OBJECT_DIRECTORY/
+//     GIT_ALTERNATE_OBJECT_DIRECTORIES/GIT_COMMON_DIR, so a GIT_DIR this
+//     process inherited from somewhere up its own call stack (a fixture
+//     test found, the morning this bead was filed, that the pre-push hook
+//     exports GIT_DIR, and a fixture test that did not clear it
+//     re-initialized the shared repository instead of its own temp one --
+//     ugcportal-xxy2) cannot redirect any git call here into a different
+//     repository;
+//   - sets GIT_CEILING_DIRECTORIES to the temp parent, so git does not
+//     walk up past it looking for a repository to attach to;
+//   - sets GIT_CONFIG_NOSYSTEM=1 and GIT_CONFIG_GLOBAL=/dev/null, so the
+//     machine's own gitconfig (a global excludesfile, a signing key, an
+//     unrelated identity) cannot change what a fixture test observes.
+// Commit identity is passed per command via `-c user.name=... -c
+// user.email=...`, never a persistent `git config user.name` -- a config
+// write is itself a mutation of the fixture repo's state that would
+// outlive the single command it was meant for.
+const SCRIPT_PATH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "claims-audit.mjs");
+const FIXTURE_PARENTS = [];
+
+// M3 needs a real git call to fail on command -- not a repo that can be
+// corrupted (which would risk acting on the shared checkout, exactly what
+// ugcportal-xxy2 warns about) but a fake `git` placed earlier on PATH for
+// one subprocess, which delegates to the real binary for everything except
+// the one invocation under test. REAL_GIT is resolved once, outside any
+// fixture repo, and passed into the wrapper by name (never re-resolved via
+// a PATH the wrapper itself might be shadowing) so it cannot recurse into
+// itself.
+const REAL_GIT = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+const BREAKING_GIT_WRAPPER = `#!/bin/sh
+if [ "$1" = "diff" ] && [ "$2" = "-U0" ] && [ "$#" -eq 3 ]; then
+  case "$3" in
+    *...*) ;;
+    *)
+      if [ -n "$CLAIMS_AUDIT_BREAK_LINES_DIFF" ]; then
+        echo "simulated git diff -U0 failure (ugcportal-np1i M3 test)" 1>&2
+        exit 128
+      fi
+      ;;
+  esac
+fi
+if [ "$1" = "ls-files" ] && [ -n "$CLAIMS_AUDIT_BREAK_TRACKED_FILES" ]; then
+  has_others=0
+  for arg in "$@"; do
+    if [ "$arg" = "--others" ]; then has_others=1; fi
+  done
+  # listTrackedFiles() (scripts/lib/git-diff.mjs) calls plain \`ls-files
+  # --full-name -- :/\`; listUntrackedFiles() adds \`--others\`. Breaking only
+  # the no-\`--others\` form isolates the tracked-files read (ugcportal-aigs)
+  # from the untracked-files read, which a sibling test already breaks via
+  # CLAIMS_AUDIT_BREAK_LINES_DIFF-independent means and must keep succeeding
+  # here for the fixture to prove the right read failed.
+  if [ "$has_others" = "0" ]; then
+    echo "simulated git ls-files failure (ugcportal-aigs test)" 1>&2
+    exit 128
+  fi
+fi
+exec "$CLAIMS_AUDIT_REAL_GIT" "$@"
+`;
+
+function gitEnv(ceilingParent) {
+  const env = { ...process.env };
+  delete env.GIT_DIR;
+  delete env.GIT_WORK_TREE;
+  delete env.GIT_INDEX_FILE;
+  delete env.GIT_OBJECT_DIRECTORY;
+  delete env.GIT_ALTERNATE_OBJECT_DIRECTORIES;
+  delete env.GIT_COMMON_DIR;
+  env.GIT_CEILING_DIRECTORIES = ceilingParent;
+  env.GIT_CONFIG_NOSYSTEM = "1";
+  env.GIT_CONFIG_GLOBAL = "/dev/null";
+  return env;
+}
+
+/**
+ * A fresh one-commit git repository in its own mkdtemp directory, with
+ * helpers that always pass this fixture's own `cwd` and `env` explicitly.
+ */
+function makeFixtureRepo() {
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), "claims-audit-fixture-"));
+  FIXTURE_PARENTS.push(parent);
+  const repo = path.join(parent, "repo");
+  fs.mkdirSync(repo);
+  const env = gitEnv(parent);
+
+  const git = (args) => execFileSync("git", args, { cwd: repo, env, encoding: "utf8" });
+  const commit = (message) =>
+    execFileSync(
+      "git",
+      ["-c", "user.name=claims-audit fixture", "-c", "user.email=claims-audit-fixture@example.invalid", "commit", "-m", message],
+      { cwd: repo, env, encoding: "utf8" },
+    );
+  const writeFile = (name, content) => fs.writeFileSync(path.join(repo, name), content);
+  const runScript = (args = []) => execFileSync("node", [SCRIPT_PATH, ...args], { cwd: repo, env, encoding: "utf8" });
+  // Runs the script with cwd set to a subdirectory of the fixture repo,
+  // rather than the repo root every other helper above uses -- the one
+  // case round 3's H1 needs, since every other fixture test's `cwd: repo`
+  // structurally could not have exposed a cwd-relative-path bug.
+  const runScriptFrom = (subdir, args = []) => execFileSync("node", [SCRIPT_PATH, ...args], { cwd: path.join(repo, subdir), env, encoding: "utf8" });
+  // PR body mode's `--body` source (ugcportal-bn94): pipes `stdin` in as the
+  // PR body text, the same way the pre-review skill feeds a draft body in
+  // before `gh pr create` has even run.
+  const runScriptStdin = (args, stdin) => execFileSync("node", [SCRIPT_PATH, ...args], { cwd: repo, env, encoding: "utf8", input: stdin });
+
+  git(["init", "--quiet", "--initial-branch=main"]);
+  writeFile("README.md", "# fixture\n");
+  git(["add", "README.md"]);
+  commit("initial commit");
+
+  return { repo, env, git, commit, writeFile, runScript, runScriptFrom, runScriptStdin };
+}
+
+afterEach(() => {
+  // Each fixture gets its own mkdtemp parent, so removing it cannot touch a
+  // sibling test's repo even if tests ran concurrently.
+  while (FIXTURE_PARENTS.length > 0) {
+    fs.rmSync(FIXTURE_PARENTS.pop(), { recursive: true, force: true });
+  }
+});
+
+// ugcportal-9faa: each case here spins up a fresh git repository (several
+// real `git` subprocesses apiece: init, add, commit, branch, and the script
+// itself, which shells out to git again internally) and then runs
+// claims-audit.mjs as its own child process on top. Measured unloaded,
+// K2 alone -- the slowest case, three full script invocations -- took
+// 3.17s; at load average 190 the same suite blew the 5s default outright
+// (this bead's own report: three timeouts here on one commit at that load,
+// 0 at load 25). None of that cost is redundant work this file could cache
+// away: every case needs its OWN isolated repository, so there is nothing
+// to memoize, only real subprocess latency that multiplies under
+// contention. An explicit timeout, not a bigger default, keeps that
+// correctly slow instead of wrongly flaky.
+describe("working tree and --base (ugcportal-np1i)", { timeout: 30_000 }, () => {
+  it("K1: reports a claim in an untracked file before any commit introduces it, instead of a false 'candidates found: 0'", () => {
+    const { writeFile, runScript } = makeFixtureRepo();
+    writeFile("new-file.ts", "// never fails on any path\nconst a = 1;\n");
+
+    const out = runScript();
+
+    expect(out).not.toMatch(/candidates found: 0\b/);
+    expect(out).toContain("new-file.ts:1 [ABSOLUTE] never fails on any path");
+    // L1: the default base (HEAD~1) never resolved here (there's only one
+    // commit) and main() degraded to diffing HEAD -- the banner must say
+    // so, not repeat the unresolvable default it never actually used.
+    expect(out).toContain("(base HEAD)");
+    expect(out).not.toContain("(base HEAD~1)");
+  });
+
+  it("K1: reports a claim added to an already-tracked file's unstaged edit", () => {
+    const { writeFile, git, commit, runScript } = makeFixtureRepo();
+    writeFile("tracked.ts", "const a = 1;\n");
+    git(["add", "tracked.ts"]);
+    commit("add tracked.ts");
+
+    // Uncommitted edit: the line this test cares about is never committed.
+    writeFile("tracked.ts", "const a = 1;\n// guaranteed to run exactly once\n");
+
+    const out = runScript();
+
+    expect(out).not.toMatch(/candidates found: 0\b/);
+    expect(out).toContain("tracked.ts:2 [ABSOLUTE] guaranteed to run exactly once");
+  });
+
+  it("K2: --base <ref> and --base=<ref> diff against the same explicit ref, distinct from the default base", () => {
+    const { writeFile, git, commit, runScript } = makeFixtureRepo();
+    git(["branch", "root-ref"]); // tags the initial commit, two commits behind HEAD below
+
+    writeFile("filler.ts", "// only reachable once\nconst x = 1;\n");
+    git(["add", "filler.ts"]);
+    commit("add filler.ts");
+
+    writeFile("feature.ts", "// always true on every path\nconst a = 1;\n");
+    git(["add", "feature.ts"]);
+    commit("add feature.ts");
+
+    const outSpaceForm = runScript(["--base", "root-ref"]);
+    const outEqualsForm = runScript(["--base=root-ref"]);
+    const outDefault = runScript([]); // no origin/main in this fixture -> falls back to HEAD~1
+
+    expect(outEqualsForm).toBe(outSpaceForm);
+    expect(outSpaceForm).toContain("filler.ts:1 [ABSOLUTE] only reachable once");
+    expect(outSpaceForm).toContain("feature.ts:1 [ABSOLUTE] always true on every path");
+    // HEAD~1 is the "add filler.ts" commit, which already contains
+    // filler.ts -- so the default base cannot see it change. If --base=
+    // were still silently ignored (the bug this guards against), the
+    // equals-form run above would have matched this output instead of the
+    // explicit-base one, since --base root-ref and the HEAD~1 fallback
+    // would otherwise be indistinguishable by file list alone.
+    expect(outDefault).not.toContain("filler.ts");
+  });
+
+  it("M1: an unresolvable --base refuses with a non-zero exit, never a 'candidates found' line (round 1 finding 1)", () => {
+    const { runScript } = makeFixtureRepo(); // a clean tree -- no working-tree change to fall back to either
+
+    let error;
+    try {
+      runScript(["--base", "this-ref-does-not-exist-anywhere"]);
+    } catch (err) {
+      error = err;
+    }
+
+    expect(error).toBeDefined();
+    expect(error.status).not.toBe(0);
+    // The old process.exit(0) removed by this PR meant a bad --base still
+    // printed a (misleadingly complete-looking) "candidates found: 0" line
+    // on stdout with exit 0; refusing must mean that line never prints.
+    expect(error.stdout ?? "").not.toMatch(/candidates found/);
+  });
+
+  it("M2: a file changed in a commit AND edited again uncommitted is read in one coordinate system (round 1 finding 2)", () => {
+    const { writeFile, git, commit, runScript } = makeFixtureRepo();
+    writeFile("tracked.ts", "line a\nline b\nline c\n");
+    git(["add", "tracked.ts"]);
+    commit("add tracked.ts, no claim yet");
+    git(["branch", "root-ref"]); // tags the state before the claim exists
+
+    writeFile("tracked.ts", "line a\n// never fails on any path\nline b\nline c\n");
+    git(["add", "tracked.ts"]);
+    commit("commit the claim at line 2");
+
+    // Uncommitted: insert one unrelated line above everything, shifting the
+    // claim (unchanged itself) from line 2 to line 3. The old design's
+    // committedLinesByFile (HEAD-relative: {2}) unioned with
+    // workingTreeLinesByFile (working-tree-relative: {1}, the new line)
+    // never contained 3, so the still-present claim was silently dropped.
+    writeFile("tracked.ts", "// unrelated\nline a\n// never fails on any path\nline b\nline c\n");
+
+    const out = runScript(["--base", "root-ref"]);
+
+    expect(out).not.toMatch(/candidates found: 0\b/);
+    expect(out).toContain("tracked.ts:3 [ABSOLUTE] never fails on any path");
+  });
+
+  it("M3: refuses instead of a false count when the working-tree line-range read itself fails (round 1 finding 3)", () => {
+    const { repo, env, writeFile } = makeFixtureRepo();
+    writeFile("untracked.ts", "// an untracked claim, never checked\nconst a = 1;\n");
+
+    const binParent = fs.mkdtempSync(path.join(os.tmpdir(), "claims-audit-git-wrapper-"));
+    FIXTURE_PARENTS.push(binParent);
+    fs.writeFileSync(path.join(binParent, "git"), BREAKING_GIT_WRAPPER, { mode: 0o755 });
+
+    const breakingEnv = {
+      ...env,
+      PATH: `${binParent}:${env.PATH}`,
+      CLAIMS_AUDIT_REAL_GIT: REAL_GIT,
+      CLAIMS_AUDIT_BREAK_LINES_DIFF: "1",
+    };
+
+    let error;
+    try {
+      execFileSync("node", [SCRIPT_PATH], { cwd: repo, env: breakingEnv, encoding: "utf8" });
+    } catch (err) {
+      error = err;
+    }
+
+    expect(error).toBeDefined();
+    expect(error.status).not.toBe(0);
+    expect(error.stdout ?? "").not.toMatch(/candidates found/);
+    expect(error.stderr ?? "").toMatch(/could not diff HEAD against the working tree/);
+  });
+
+  it("H1: refuses on a clean, fully-committed tree when the diff read fails -- dirtiness is not the gate (round 2 finding 1)", () => {
+    const { repo, env, writeFile, git, commit } = makeFixtureRepo();
+    git(["branch", "root-ref"]);
+    writeFile("feature.ts", "// never fails on any path\nconst a = 1;\n");
+    git(["add", "feature.ts"]);
+    commit("add feature.ts with a claim");
+    // The working tree is now fully clean: nothing staged, nothing
+    // unstaged, nothing untracked -- isWorkingTreeDirty() would have
+    // returned false here, which is exactly the gap the old K3 guard had
+    // (it never even gets called any more; this proves the replacement
+    // guard fires without it).
+
+    const binParent = fs.mkdtempSync(path.join(os.tmpdir(), "claims-audit-git-wrapper-"));
+    FIXTURE_PARENTS.push(binParent); // outside the repo -- the wrapper's own directory must not itself make `repo` dirty
+    fs.writeFileSync(path.join(binParent, "git"), BREAKING_GIT_WRAPPER, { mode: 0o755 });
+
+    const breakingEnv = {
+      ...env,
+      PATH: `${binParent}:${env.PATH}`,
+      CLAIMS_AUDIT_REAL_GIT: REAL_GIT,
+      CLAIMS_AUDIT_BREAK_LINES_DIFF: "1",
+    };
+
+    let error;
+    try {
+      execFileSync("node", [SCRIPT_PATH, "--base", "root-ref"], { cwd: repo, env: breakingEnv, encoding: "utf8" });
+    } catch (err) {
+      error = err;
+    }
+
+    expect(error).toBeDefined();
+    expect(error.status).not.toBe(0);
+    expect(error.stdout ?? "").not.toMatch(/candidates found/);
+  });
+
+  it("H1 (round 3): reports the same candidates run from a subdirectory as from the repo root", () => {
+    const { repo, writeFile, git, commit, runScript, runScriptFrom } = makeFixtureRepo();
+    // sibling.ts lives OUTSIDE nested/ on purpose: a repo-root-only pathspec
+    // bug in listTrackedFiles/listUntrackedFiles (git ls-files defaults to
+    // "cwd and below", a second, separate cwd-dependency from the path
+    // FORMAT one `--full-name` alone fixes) would make this reference
+    // falsely "not found" only from the subdirectory run, even after
+    // readFileFromWorkingTree itself was fixed -- caught exactly this way
+    // while verifying the fix, before `-- ':/'` was added alongside
+    // `--full-name`.
+    writeFile("sibling.ts", "const s = 1;\n");
+    git(["add", "sibling.ts"]);
+    fs.mkdirSync(path.join(repo, "nested"));
+    writeFile("nested/feature.ts", "// never fails on any path, see sibling.ts\nconst a = 1;\n");
+    git(["add", "nested/feature.ts"]);
+    commit("add nested/feature.ts with a claim and sibling.ts");
+
+    const fromRoot = runScript();
+    const fromSubdir = runScriptFrom("nested");
+
+    expect(fromRoot).not.toMatch(/candidates found: 0\b/);
+    expect(fromRoot).toContain("nested/feature.ts:1 [ABSOLUTE] never fails on any path, see sibling.ts");
+    expect(fromRoot).not.toMatch(/REFERENCE not found:/);
+    // Before the fix, readFileFromWorkingTree resolved "nested/feature.ts"
+    // against process.cwd() (here, .../repo/nested), so the lookup actually
+    // opened .../repo/nested/nested/feature.ts, threw ENOENT, was caught by
+    // the blanket "deleted file" handler, and silently produced
+    // "candidates found: 0" with exit 0 -- reproduced below as plain
+    // inequality with the root run, not just a bare zero check, so a
+    // regression that drops the count to some OTHER wrong number (not
+    // literally 0) would also fail this assertion, and so would the
+    // sibling.ts-reference regression described above.
+    expect(fromSubdir).toBe(fromRoot);
+  });
+
+  it("ugcportal-aigs: a listTrackedFiles() failure refuses too, instead of falsely flagging an existing file as REFERENCE not found", () => {
+    const { repo, env, writeFile, git, commit } = makeFixtureRepo();
+    writeFile("existing.ts", "const e = 1;\n");
+    git(["add", "existing.ts"]);
+    commit("add existing.ts");
+
+    // Untracked, so it is scanned regardless of the diff read, and its only
+    // candidate-worthy content is the path reference below -- no
+    // ABSOLUTE/MEASUREMENT/TEMPORAL/HISTORY keyword, so a REFERENCE not
+    // found here is unambiguous evidence of this bug, not something another
+    // category's candidate line would also have reported.
+    writeFile("feature.ts", "// see existing.ts for the real behavior\nconst a = 1;\n");
+
+    const binParent = fs.mkdtempSync(path.join(os.tmpdir(), "claims-audit-git-wrapper-"));
+    FIXTURE_PARENTS.push(binParent); // outside the repo, same as M3/H1 above
+    fs.writeFileSync(path.join(binParent, "git"), BREAKING_GIT_WRAPPER, { mode: 0o755 });
+
+    const breakingEnv = {
+      ...env,
+      PATH: `${binParent}:${env.PATH}`,
+      CLAIMS_AUDIT_REAL_GIT: REAL_GIT,
+      CLAIMS_AUDIT_BREAK_TRACKED_FILES: "1",
+    };
+
+    let error;
+    try {
+      execFileSync("node", [SCRIPT_PATH], { cwd: repo, env: breakingEnv, encoding: "utf8" });
+    } catch (err) {
+      error = err;
+    }
+
+    // Before the fix: this catch block never set workingTreeReadFailed, so
+    // the K3 guard below never fired -- the script printed "candidates
+    // found" and "REFERENCE not found: existing.ts" (existing.ts is real,
+    // but trackedFiles silently came back [] and existingFiles held only
+    // the untracked list) and exited 0.
+    expect(error).toBeDefined();
+    expect(error.status).not.toBe(0);
+    expect(error.stdout ?? "").not.toMatch(/candidates found/);
+    expect(error.stdout ?? "").not.toMatch(/REFERENCE not found/);
+    expect(error.stderr ?? "").toMatch(/git ls-files failed, reference checks disabled/);
+    expect(error.stderr ?? "").toMatch(/a required git read failed/);
+  });
+});
+
+describe("--body end-to-end, real git repo (ugcportal-bn94)", () => {
+  it("audits a body piped on stdin against the local working tree's diff, confirming a DONE claim", () => {
+    const { writeFile, git, commit, runScriptStdin } = makeFixtureRepo();
+    writeFile("x.ts", "const a = 1;\n");
+    git(["add", "x.ts"]);
+    commit("add x.ts");
+    writeFile("x.ts", 'const a = 1;\n// a label of at most 24 characters\nconst b = 2;\n');
+
+    const body = 'Fixed: the stale comment with "24 characters" was deleted.\n';
+    const out = runScriptStdin(["--body"], body);
+
+    expect(out).toContain("--- claims-audit: PR BODY claims (source: stdin)");
+    expect(out).toContain("body candidates found: 1");
+    expect(out).toContain('DONE contradicted, still in diff: "24 characters"');
+  });
+
+  it("K2: --body's counts are printed in their own block, never summed with a separate file-mode run's", () => {
+    const { writeFile, git, commit, runScriptStdin, runScript } = makeFixtureRepo();
+    writeFile("clean.ts", "const a = 1;\n");
+    git(["add", "clean.ts"]);
+    commit("add clean.ts, nothing claim-shaped");
+
+    const fileModeOut = runScript();
+    const bodyModeOut = runScriptStdin(["--body"], "This never fails on any path.\n");
+
+    expect(fileModeOut).toContain("candidates found: 0");
+    expect(bodyModeOut).toContain("body candidates found: 1");
+    // Neither run's output names the other's count: a clean file-mode run
+    // and a dirty body-mode run over the SAME tree produce two independent
+    // banners/numbers, not one run whose single total a dirty body could
+    // hide behind a clean diff (or vice versa).
+    expect(fileModeOut).not.toContain("body candidates found");
+    expect(bodyModeOut).not.toMatch(/^candidates found:/m);
+  });
+
+  it("flags an empty body as an error rather than a silent zero", () => {
+    const { runScriptStdin } = makeFixtureRepo();
+    let error;
+    try {
+      runScriptStdin(["--body"], "\n\n");
+    } catch (err) {
+      error = err;
+    }
+    expect(error).toBeDefined();
+    expect(error.status).not.toBe(0);
+    expect(error.stderr ?? "").toMatch(/empty -- nothing to audit/);
   });
 });

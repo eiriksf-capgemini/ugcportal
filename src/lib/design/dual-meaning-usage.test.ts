@@ -217,25 +217,30 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
   "src/app/admin/settings/users/page.tsx": { "text-muted-foreground": 4 },
   "src/app/admin/settings/instagram/page.tsx": { "text-muted-foreground": 3 },
   "src/app/upload/page.tsx": { "text-muted-foreground": 1 },
-  // text-ink: 2 (low finding 5) - the alt-text and caption labels, on the
-  // upload form's own plain canvas (ugcportal-gwr). The two inputs that
-  // used to make this 4 now take their class from the shared
-  // text-input.ts constant (ugcportal-qnq9.7 round 3), audited below.
+  // text-ink used to be 2 here (low finding 5): the alt-text and caption
+  // labels, on the upload form's own plain canvas (ugcportal-gwr). The two
+  // inputs that used to make this 4 already took their class from the
+  // shared text-input.ts constant (ugcportal-qnq9.7 round 3); the two
+  // labels now do too (ugcportal-qnq9.16, item 4 of the lows deferred from
+  // PR #93's round-6 review — TEXT_LABEL_CLASS, audited below), so this
+  // file carries no literal "text-ink" of its own left to pin.
   "src/app/upload/upload-form.tsx": {
     "text-foreground": 2,
     "text-muted-foreground": 5,
-    "text-ink": 2,
   },
   // text-ink: 1 (low finding 5) - the queued file's name, on the upload
   // page's own plain canvas (ugcportal-n3c).
   "src/app/upload/upload-queue-list.tsx": { "text-ink": 1 },
-  // Merge of ugcportal-qnq9.7 (PR #93) with this bead's text-ink audit: the
-  // shared input class (one text-ink, on the input's own bg-surface-1 fill,
-  // the same well-interior case as decision-form.tsx's bg-surface-3 fields)
-  // and the About/Portfolio contact form's two field labels, on the page
-  // canvas exactly like upload-form.tsx's labels above.
-  "src/components/ui/text-input.ts": { "text-ink": 1 },
-  "src/components/site/contact-mailto-form.tsx": { "text-ink": 2 },
+  // text-ink: 2 (ugcportal-qnq9.16, item 4 of the lows deferred from PR
+  // #93's round-6 review): TEXT_INPUT_CLASS's one usage (on the input's
+  // own bg-surface-1 fill, the same well-interior case as
+  // decision-form.tsx's bg-surface-3 fields) plus TEXT_LABEL_CLASS's one
+  // (on the page canvas, the same case upload-form.tsx's and the
+  // About/Portfolio contact form's labels were each pinned under before
+  // both were extracted to this one shared constant). Both shared by
+  // upload-form.tsx and contact-mailto-form.tsx, neither of which has a
+  // literal "text-ink" of its own left to pin as a result.
+  "src/components/ui/text-input.ts": { "text-ink": 2 },
   // text-ink: 2 (low finding 5) - button.tsx's OWN two usages
   // (NEUTRAL_OUTLINE_STYLE and the `ghost` variant), each documented there
   // as measured and safe only inside one of the old near-black wells. Pinned
@@ -317,11 +322,25 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
    * shared constant.
    */
   "src/app/portfolio/page.tsx": { "text-muted-foreground": 1 },
+  // ugcportal-qnq9.12: the per-item page's "short text" paragraph, directly
+  // on the page canvas (--background) like every other entry in this
+  // group — the same muted-foreground-on-background pairing
+  // GALLERY_CAPTION_CLASS and /portfolio's own empty-state paragraph use,
+  // just not reused verbatim (see that file's own comment for why: its
+  // margin is sized for sitting under a cropped grid tile, not this page's
+  // full-width image).
+  "src/app/media/[previewId]/page.tsx": { "text-muted-foreground": 1 },
   "src/components/site/page-shell.tsx": { "text-foreground": 1 },
   "src/components/site/section-heading.ts": { "text-foreground": 1 },
-  // Round-1 review simplified this component (K2's spec marker renders
-  // unconditionally, the K3 advertising-label branch is gone until
-  // ugcportal-qnq9.1 lands) — one text-foreground usage now, not two.
+  // Round-1 review simplified this component (K2's spec marker rendered
+  // unconditionally, since nothing yet recorded a real paid/gifted job to
+  // branch on) — one text-foreground usage, not two. UPDATED
+  // (ugcportal-e0jv, part B of ugcportal-qnq9.1): the K3 advertising-label
+  // branch exists now, conditional on the spec marker's own absence — but
+  // its badge is GALLERY_ADVERTISING_LABEL_CLASS (bg-primary/text-primary-
+  // foreground, src/components/gallery/containment.ts), a DIFFERENT pair
+  // this file does not track, so the spec marker's own text-foreground
+  // count is unaffected and stays at exactly one.
   "src/components/portfolio/portfolio-tile.tsx": { "text-foreground": 1 },
   // Round 2 extracted INLINE_LINK_CLASS as a LOCAL constant for the two
   // identically-styled links in this file; round 5 moved that constant out
@@ -409,7 +428,14 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
   "src/components/home/hero.tsx": { "text-ink": 2 },
 };
 
-describe("dual-meaning token usage is audited, not just found", () => {
+// ugcportal-9faa: scannedFiles() above already memoizes the real-tree walk
+// (`cachedFiles ??=`), so there is nothing redundant left to cache here —
+// the remaining cost is the TypeScript parse itself (stripComments, inside
+// scanDualMeaningUsage), real CPU work a busy machine can push past the 5s
+// default on its own. Explicit timeout, not a bigger global default; see
+// analytics-host.grep.test.ts and throttled-log.no-sibling-copy.test.ts for
+// the same shape of fix and the measurements behind it.
+describe("dual-meaning token usage is audited, not just found", { timeout: 15_000 }, () => {
   it("finds files to scan", () => {
     expect(scannedFiles().length).toBeGreaterThan(10);
   });

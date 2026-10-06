@@ -10,6 +10,7 @@ import {
   GALLERY_TILE_ASPECT_CLASS,
   GALLERY_TILE_CLASS,
   GALLERY_TILE_IMAGE_CLASS,
+  GALLERY_TILE_VIDEO_BADGE_WRAPPER_CLASS,
 } from "@/components/gallery/containment";
 import { toGalleryItems } from "@/lib/gallery-items";
 
@@ -224,6 +225,128 @@ describe("K7 — differently shaped previews form one consistent arrangement", (
     expect(imageClasses.size).toBe(1);
     expect([...tileClasses][0]).toBe(GALLERY_TILE_CLASS);
     expect([...imageClasses][0]).toBe(GALLERY_TILE_IMAGE_CLASS);
+  });
+});
+
+describe("ugcportal-dzz — a VIDEO tile gets a play affordance, an IMAGE tile does not", () => {
+  const MIXED_KINDS = toGalleryItems([
+    { id: "a-photo", previewId: "pv-photo", publishedAt: "2026-03-01T00:00:00.000Z", kind: "IMAGE" },
+    { id: "a-video", previewId: "pv-video", publishedAt: "2026-03-02T00:00:00.000Z", kind: "VIDEO" },
+  ]);
+
+  it("renders the play badge only on the VIDEO tile's markup", () => {
+    const markup = render({ initialItems: MIXED_KINDS });
+    const photoTile = tiles(markup).find((tile) => tile.includes('data-gallery-tile="a-photo"'));
+    const videoTile = tiles(markup).find((tile) => tile.includes('data-gallery-tile="a-video"'));
+    expect(photoTile).toBeDefined();
+    expect(videoTile).toBeDefined();
+
+    // tiles() only captures the opening <button> tag, so pull each tile's
+    // full markup (button through its matching </button>) to look inside it.
+    const photoIndex = markup.indexOf(photoTile as string);
+    const videoIndex = markup.indexOf(videoTile as string);
+    const photoMarkup = markup.slice(photoIndex, markup.indexOf("</button>", photoIndex));
+    const videoMarkup = markup.slice(videoIndex, markup.indexOf("</button>", videoIndex));
+
+    expect(videoMarkup).toContain("svg");
+    expect(photoMarkup).not.toContain("svg");
+  });
+
+  it("marks the play badge's own wrapper aria-hidden, so the tile announces one accessible name", () => {
+    const markup = render({ initialItems: MIXED_KINDS });
+    const videoTile = tiles(markup).find((tile) => tile.includes('data-gallery-tile="a-video"')) as string;
+    const videoIndex = markup.indexOf(videoTile);
+    const videoMarkup = markup.slice(videoIndex, markup.indexOf("</button>", videoIndex));
+
+    // Pinned to the WRAPPER's own opening tag, not merely "two or more
+    // aria-hidden="true" somewhere in the tile" — lucide's <svg> carries its
+    // own aria-hidden default regardless of this wrapper's, so a looser count
+    // check would stay green even if the wrapper span's own attribute were
+    // removed (verified: deleting just that attribute still left the <img>'s
+    // and the <svg>'s own aria-hidden, so a `>= 2` count never dropped).
+    expect(videoMarkup).toContain(
+      `<span aria-hidden="true" class="${GALLERY_TILE_VIDEO_BADGE_WRAPPER_CLASS}">`,
+    );
+    // Nothing inside the button carries its own aria-label — the button's is
+    // the only accessible name anything here announces.
+    expect(videoMarkup.match(/aria-label="/g)?.length).toBe(1);
+  });
+
+  it("names the VIDEO tile's accessible name with 'video', not 'photograph'", () => {
+    const markup = render({ initialItems: MIXED_KINDS });
+    // "photograph" / "video" is a position-counted placeholder — the photo is
+    // first in MIXED_KINDS (position 1), the video second (position 2).
+    expect(markup).toContain('aria-label="Open photograph 1, published 1 March 2026"');
+    expect(markup).toContain('aria-label="Open video 2, published 2 March 2026"');
+  });
+});
+
+describe("ugcportal-e0jv — the advertising-disclosure label", () => {
+  const ITEMS = toGalleryItems([
+    {
+      id: "labelled",
+      previewId: "pv-labelled",
+      publishedAt: "2026-03-01T00:00:00.000Z",
+      caption: "A gifted camera on a desk",
+      advertisingDisclosure: { label: "Advertisement / Reklame" },
+    },
+    {
+      id: "unlabelled",
+      previewId: "pv-unlabelled",
+      publishedAt: "2026-03-02T00:00:00.000Z",
+      caption: "An ordinary photograph",
+    },
+  ]);
+
+  it("K1: shows the exact canonical label on a labelled tile", () => {
+    const markup = render({ initialItems: ITEMS });
+    expect(markup).toContain('data-gallery-advertising-label="labelled"');
+    expect(markup).toContain("Advertisement / Reklame");
+  });
+
+  it("K1: the label is the first content of the <li>, ahead of the tile button, the caption and the tags", () => {
+    const markup = render({ initialItems: ITEMS });
+    const liStart = markup.indexOf('<li');
+    const labelIndex = markup.indexOf("data-gallery-advertising-label");
+    const buttonIndex = markup.indexOf('data-gallery-tile="labelled"');
+    const captionIndex = markup.indexOf("A gifted camera on a desk");
+    expect(liStart).toBeGreaterThanOrEqual(0);
+    expect(labelIndex).toBeGreaterThan(liStart);
+    expect(labelIndex).toBeLessThan(buttonIndex);
+    expect(labelIndex).toBeLessThan(captionIndex);
+  });
+
+  it("K3/K4: shows nothing at all for an item with no disclosure", () => {
+    const markup = render({ initialItems: ITEMS });
+    const unlabelledTile = tiles(markup).find((tile) =>
+      tile.includes('data-gallery-tile="unlabelled"'),
+    ) as string;
+    const unlabelledIndex = markup.indexOf(unlabelledTile);
+    // The unlabelled item's own slice of markup — from the END of the
+    // labelled item's </li> (so the OTHER item's label cannot leak into this
+    // assertion) to this tile's own button.
+    const sliceStart = markup.indexOf("</li>") + "</li>".length;
+    const ownMarkup = markup.slice(sliceStart, unlabelledIndex + unlabelledTile.length);
+    expect(ownMarkup).not.toContain("data-gallery-advertising-label");
+  });
+
+  it("K4: the label is styled as a filled badge, distinct from the caption's and the tags' muted text classes", () => {
+    const markup = render({ initialItems: ITEMS });
+    const labelTag = /<p[^>]*data-gallery-advertising-label="labelled"[^>]*>/.exec(
+      markup,
+    )?.[0];
+    expect(labelTag).toBeDefined();
+    const labelClass = classAttribute(labelTag as string);
+    // A solid fill, not the muted/quiet treatment GALLERY_CAPTION_CLASS and
+    // GALLERY_TAG_CLASS both use — see GALLERY_ADVERTISING_LABEL_CLASS's own
+    // comment for why that distinction is the point of K4.
+    expect(labelClass).toContain("bg-primary");
+    expect(labelClass).toContain("text-primary-foreground");
+    expect(labelClass).not.toContain("text-muted-foreground");
+    // No motion utility of any kind (K4's "prefers-reduced-motion
+    // unaffected") — nothing here triggers under hover/group-hover/active/
+    // focus, so there is nothing for a motion preference to gate.
+    expect(labelClass).not.toMatch(/\b(?:transition|motion-safe|motion-reduce|animate)-?/);
   });
 });
 

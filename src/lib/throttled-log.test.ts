@@ -48,13 +48,16 @@ describe("createThrottledLog", () => {
   });
 
   it("does not log the very first occurrence as though it were suppressed, even right after process start", () => {
-    // Regression guard for the `lastAt !== 0` subtlety documented in the
-    // module: without it, `Date.now() - 0` at real wall-clock time is far
-    // larger than any realistic intervalMs, so this case passes trivially
-    // UNLESS lastAt is compared to 0 explicitly. Pin it anyway so a future
-    // change to the guard (e.g. swapping in a elapsed-only check) is caught
-    // if it ever regresses under fake timers seeded at the epoch.
-    vi.setSystemTime(0);
+    // Regression guard for the `everLogged` subtlety documented in the
+    // module (ugcportal-qz1u item 1): `performance.now()` is relative to
+    // process start, not the Unix epoch, so it genuinely reads as (or very
+    // near) `0` early in a real process's life — unlike `Date.now()`, which
+    // this module used before item 1 and which is never near `0` by the
+    // accident of what year it is. `vi.useFakeTimers()` (the default for
+    // this whole file) freezes `performance.now()` at exactly `0` until
+    // timers are advanced, which is the fake-timer equivalent of that real
+    // early-process-life case — no `vi.setSystemTime` needed to seed it, since
+    // that only ever moved `Date.now()`, a clock this module no longer reads.
     const throttle = createThrottledLog({ intervalMs: 10_000 });
     const emit = vi.fn();
 
@@ -62,6 +65,25 @@ describe("createThrottledLog", () => {
 
     expect(emit).toHaveBeenCalledTimes(1);
     expect(emit).toHaveBeenCalledWith(0);
+  });
+
+  /**
+   * ugcportal-qz1u item 1/K2: a SECOND call, still at the frozen `0` the
+   * first call also saw (no timer advance in between), must be suppressed —
+   * not read as "never logged" again just because the clock has not moved.
+   * This is the actual collision the old `lastAt !== 0` sentinel was
+   * vulnerable to: with it, `lastAt` set to exactly `0` by the first call
+   * is indistinguishable from "nothing has ever logged", so this second
+   * call would wrongly take the not-suppressed branch and emit again.
+   */
+  it("still suppresses a second occurrence at the same frozen instant as the first", () => {
+    const throttle = createThrottledLog({ intervalMs: 10_000 });
+    const emit = vi.fn();
+
+    throttle.log(emit); // logs immediately, at performance.now() === 0
+    throttle.log(emit); // same instant: must be suppressed, not a fresh "first"
+
+    expect(emit).toHaveBeenCalledTimes(1);
   });
 
   describe("flush: true", () => {
@@ -239,6 +261,40 @@ describe("createThrottledLog", () => {
 
     throttle.reset();
     throttle.log(emit);
+
+    expect(emit).toHaveBeenCalledTimes(2);
+    expect(emit).toHaveBeenNthCalledWith(2, 0);
+  });
+
+  /**
+   * ugcportal-qz1u item 1/K2: "the throttle suppressing a genuinely new
+   * occurrence for longer than the configured interval after a clock
+   * adjustment" must never happen. `Date.now()` is wall-clock time: an NTP
+   * correction, a container migrating hosts, or anything else that steps it
+   * backward would, with the OLD `Date.now()`-based window check, make a
+   * later occurrence's `now - lastAt` read as a large NEGATIVE number —
+   * comfortably "inside the window" forever, since the window check never
+   * closes until enough real time passes to overcome however far back the
+   * clock jumped. `performance.now()` cannot step backward: it is monotonic
+   * by specification, unaffected by wall-clock adjustments, so the window
+   * closes after `intervalMs` of real elapsed time regardless of what
+   * `Date.now()` claims.
+   */
+  it("still logs the next occurrence after intervalMs even though Date.now() stepped backward in between (ugcportal-qz1u K2)", () => {
+    const throttle = createThrottledLog({ intervalMs: 10_000 });
+    const emit = vi.fn();
+
+    throttle.log(emit); // logs immediately
+
+    // A backward wall-clock step — `vi.setSystemTime` only ever moves
+    // `Date.now()`; it does not move `performance.now()`, which is exactly
+    // the independence this fix relies on.
+    vi.setSystemTime(Date.now() - 60_000);
+
+    // Real (monotonic) elapsed time: exactly one full interval.
+    vi.advanceTimersByTime(10_000);
+
+    throttle.log(emit); // must log its own line, not be suppressed
 
     expect(emit).toHaveBeenCalledTimes(2);
     expect(emit).toHaveBeenNthCalledWith(2, 0);

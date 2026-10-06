@@ -14,6 +14,13 @@ const OUTCOME_MESSAGES: Record<string, string> = {
     "That evidence file is too large (20 MB maximum). Upload the signed instrument itself rather than a scan of the whole folder.",
   rights_evidence_failed:
     "The evidence file couldn't be stored, so nothing was recorded. Check the server logs and try again.",
+  // Distinct from rights_evidence_failed above, and the distinction is the
+  // point (ugcportal-98rb K2): that one is "something is wrong, go and look
+  // at it", this one is "the storage service could not be reached, so
+  // waiting is the right thing to do". Collapsing them would send an admin
+  // hunting a configuration bug during a transient outage.
+  rights_storage_unavailable:
+    "Object storage couldn't be reached, so nothing was recorded. This is usually temporary — wait a moment and submit the decision again.",
   rights_uploader_not_found:
     "That uploader no longer has an account, so there is nothing to clear. The list has been refreshed.",
   rights_actor_not_admin:
@@ -64,7 +71,11 @@ export const BLOCKER_MESSAGES: Record<SellabilityBlocker, string> = {
   model_release_missing:
     "This upload shows people and has no model release on file.",
   model_release_unverified:
-    "A model release is on file, but no admin has confirmed it covers this use. Of the four rights layers this is the one with a named individual behind it.",
+    "A model release is on file, but no admin has confirmed it covers this use. This is the layer with a named individual behind it.",
+  minors_uncleared:
+    "Someone under 18 is shown, and no admin has recorded a MINORS clearance. A release signed by a child is not a release: the guardian has to have consented, specifically and in writing, to online commercial publication. Clearing the people layer does not answer this.",
+  alcohol_depicted:
+    "Alcohol is visible or clearly evoked in this upload, so it cannot be sold or carry a price. Norwegian law bans alcohol from appearing in advertising for other products, and the test is what the picture looks like — a glass that reads as wine is caught whatever it actually held. Nothing clears this one: an empty glass or a cooler shown empty is an accessory, and that is a different answer to the same question.",
   third_party_layer_uncleared:
     "Music, a third-party creator or a sponsorship is involved and has not been cleared for this upload.",
 };

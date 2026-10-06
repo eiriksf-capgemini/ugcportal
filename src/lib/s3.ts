@@ -168,14 +168,20 @@ export function classifyTransportFailure(
   // cannot drift out of agreement with it or with each other.
   if (err.$metadata?.httpStatusCode !== undefined) return null;
 
+  // Computed once (ugcportal-qz1u item 5) rather than re-read in each of the
+  // three branches below — `err.$metadata?.attempts` already reads as
+  // `undefined` whenever `$metadata` itself is absent, so a branch testing
+  // `attempts !== undefined` is testing both at once; it does not need its
+  // own separate `err.$metadata !== undefined` guard in front of it.
+  const attempts = err.$metadata?.attempts;
+
   if (err.name === "TimeoutError") {
-    return { code: err.code ?? err.name, attempts: err.$metadata?.attempts };
+    return { code: err.code ?? err.name, attempts };
   }
   if (err.code !== undefined && TRANSPORT_ERROR_CODES.has(err.code)) {
-    return { code: err.code, attempts: err.$metadata?.attempts };
+    return { code: err.code, attempts };
   }
   if (
-    err.$metadata !== undefined &&
     // Round-5 review finding: without this, a permanent, non-retryable
     // local failure (bad credentials failing to sign the request, a TLS
     // validation error) was indistinguishable from a genuine transport
@@ -187,8 +193,8 @@ export function classifyTransportFailure(
     // match. See this function's own top doc comment for the accepted
     // trade-off (a client configured with `maxAttempts: 1` loses this
     // branch entirely).
-    err.$metadata.attempts !== undefined &&
-    err.$metadata.attempts > 1
+    attempts !== undefined &&
+    attempts > 1
   ) {
     // `?? err.name` used to fall back here, and for a plain `new Error(...)`
     // that is the literal string `"Error"` — a code that reads as
@@ -197,22 +203,41 @@ export function classifyTransportFailure(
     // the structured log in src/app/api/media/route.ts, which includes this
     // whole error as `cause`) are where the actual detail lives for this
     // branch regardless.
-    return { code: err.code ?? "unknown", attempts: err.$metadata.attempts };
+    return { code: err.code ?? "unknown", attempts };
   }
   return null;
 }
 
 /**
  * Which S3 call failed. A closed union rather than a plain `string`
- * (round-2 finding 3) — the three call sites that exist today
- * (src/app/api/media/route.ts's original PutObject, preview PutObject, and
- * the compensating cleanup DeleteObject) are enumerable, so the type should
- * say so rather than accept anything a future call site happens to type.
- * Widen it when a sibling route (ugcportal-98rb) adds a genuinely new
- * operation — e.g. the preview GET route's `GetObjectCommand` — rather than
+ * (ugcportal-1b2c): the call sites are enumerable, so the type should say
+ * so rather than accept anything a future one happens to type. Widen it
+ * when a new one appears — as ugcportal-98rb did below — rather than
  * loosening it back to `string`.
+ *
+ * One member per CALL SITE, not per command type, and that is the whole
+ * reason the label exists: a log line has to say which call failed, and two
+ * different routes both issuing a `DeleteObjectCommand` (`cleanup` and
+ * `media-delete` below) are exactly the pair that needs telling apart.
+ *
+ * The set below is the complete list of sites as of ugcportal-98rb, and it
+ * is checked rather than asserted here: src/lib/s3-call-sites.test.ts walks
+ * the AST of every source file and fails if a `getS3Client().send(...)`
+ * exists outside `sendWithTransportClassification` (and so outside this
+ * union) without a commented exception.
  */
-export type ObjectStorageOperation = "original" | "preview" | "cleanup";
+export type ObjectStorageOperation =
+  // POST /api/media (ugcportal-1b2c).
+  | "original"
+  | "preview"
+  | "cleanup"
+  // GET /api/media/preview/[previewId] — the preview bytes (ugcportal-98rb).
+  | "preview-fetch"
+  // POST /api/admin/rights/decision, via src/lib/rights-evidence.ts.
+  | "evidence"
+  | "evidence-cleanup"
+  // DELETE /api/media/[id]'s best-effort object removal.
+  | "media-delete";
 
 /**
  * Thrown by `sendWithTransportClassification` in place of whatever the SDK
@@ -252,6 +277,71 @@ export class ObjectStorageUnreachableError extends Error {
     this.attempts = info.attempts;
     this.cause = cause;
   }
+}
+
+/**
+ * The fields every caller's "object storage unreachable" log line reports,
+ * built in one place so they cannot drift apart in what they say about the
+ * same failure (ugcportal-98rb K1/K2: "the SAME structured line is logged").
+ *
+ * WHO THE CALLERS ARE IS NOT WRITTEN DOWN HERE. An earlier version of this
+ * comment named them in prose and said "three" when there were four — it
+ * had missed src/app/api/admin/rights/decision/route.ts. The list lives in
+ * src/lib/s3-call-sites.test.ts instead, in its "lists every caller of
+ * objectStorageUnreachableLogFields" assertion, which is computed from the
+ * AST and fails when a caller is added or removed — so it cannot be out by
+ * one the way a sentence can. Not every such line in the codebase is a
+ * caller: see the note at the end about POST /api/media's.
+ *
+ * What each field is for:
+ *  - `operation` — which call site failed, since a route can make more than
+ *    one S3 call inside the same try/catch;
+ *  - `code` — the transport code `classifyTransportFailure` recognised
+ *    (`ECONNREFUSED`, `ETIMEDOUT`, ...), which is what distinguishes this
+ *    from a credentials or bucket-policy failure at a glance;
+ *  - `attempts` — how many tries the SDK's own retry middleware made before
+ *    giving up. `undefined` when the error carried no `$metadata` at all;
+ *  - `message` — the underlying SDK error's message, for a quick scan;
+ *  - `cause` — the `ObjectStorageUnreachableError` itself, so `console.error`
+ *    has an Error object to print a stack from and Node unfolds the original
+ *    SDK error through its own `cause` chain. Dropping it leaves an outage
+ *    with no stack at all (ugcportal-1b2c).
+ *
+ * Deliberately NOT a console call of its own: the log PREFIX differs by
+ * subsystem (`[media]`, `[resale-rights]`), one caller throttles the line
+ * and the rest do not, and callers add context of their own — the uploader
+ * id, the orphaned key and its role, a suppressed count. Returning the
+ * fields lets each caller spread them into its own line and keep the half
+ * that is genuinely its own. No count is given here on purpose; see above
+ * for where the caller list actually lives.
+ *
+ * POST /api/media's own storage-unreachable line is NOT a caller of this
+ * function. It was written first (ugcportal-1b2c) and still builds the same
+ * object inline, at the `console.error("[media] object storage unreachable"`
+ * in src/app/api/media/route.ts's catch; ugcportal-98rb's scope freeze kept
+ * this branch out of that file. The five field names are the same in both —
+ * compare that call with the type below — but "the same" there means two
+ * copies that agree, not one shared implementation, and nothing fails if
+ * they stop agreeing. Migrating it is a follow-up, named in this PR body.
+ */
+export type ObjectStorageUnreachableLogFields = {
+  operation: ObjectStorageOperation;
+  code: string;
+  attempts: number | undefined;
+  message: string;
+  cause: ObjectStorageUnreachableError;
+};
+
+export function objectStorageUnreachableLogFields(
+  error: ObjectStorageUnreachableError,
+): ObjectStorageUnreachableLogFields {
+  return {
+    operation: error.operation,
+    code: error.code,
+    attempts: error.attempts,
+    message: error.message,
+    cause: error,
+  };
 }
 
 /**

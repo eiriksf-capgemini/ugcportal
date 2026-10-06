@@ -28,10 +28,19 @@ vi.mock("@/lib/prisma", () => ({
 // Indirected through mocks rather than fixed values so a test can make the
 // real functions' failure mode — requireEnv() throwing on a missing
 // variable — happen at the same point in the handler.
-vi.mock("@/lib/s3", () => ({
-  getS3Client: () => getS3ClientMock(),
-  getBucketName: () => getBucketNameMock(),
-}));
+// Only the client and the bucket name are stubbed. The rest of @/lib/s3 —
+// `sendWithTransportClassification` and the `classifyTransportFailure` it
+// calls — is the real implementation, because ugcportal-98rb K3 is a claim
+// about what that classification does to this route's log, and stubbing it
+// would make these tests assert against a hand-written idea of it instead.
+vi.mock("@/lib/s3", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/s3")>();
+  return {
+    ...actual,
+    getS3Client: () => getS3ClientMock(),
+    getBucketName: () => getBucketNameMock(),
+  };
+});
 
 const { DELETE, PATCH } = await import("@/app/api/media/[id]/route");
 // Imported dynamically, after the vi.mock calls above: media-access pulls in
@@ -87,6 +96,13 @@ const ownedVideo: OwnedMediaRow = {
 // The log every best-effort storage failure goes through, so the orphaned
 // key is always recoverable from the logs.
 const ORPHAN_LOG = "[media] failed to remove object after delete";
+
+// Its transport-classified sibling (ugcportal-98rb K3). Two different lines
+// for two different failures, so an operator can tell "the bucket was
+// unreachable" from "the key or the credentials are wrong" — while the
+// response stays 204 either way.
+const UNREACHABLE_LOG =
+  "[media] object storage unreachable; object left behind after delete";
 
 function context(id: string = MEDIA_ID) {
   return { params: Promise.resolve({ id }) };
@@ -719,3 +735,92 @@ describe("DELETE /api/media/[id] as the owner", () => {
     expect(s3SendMock).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * ugcportal-98rb K3: a storage outage during the best-effort object cleanup
+ * is logged distinguishably, and changes NOTHING about the response.
+ *
+ * The 204 is the contract: the row is already gone by the time storage is
+ * touched, so there is nothing a 503 could invite the caller to retry. The
+ * pair of tests below is the fixture mutation the criterion asks for — the
+ * only difference between them is the shape of the error the SDK throws,
+ * and the status must be identical across it while the log line must not
+ * be.
+ */
+describe("DELETE /api/media/[id]: object storage unreachable (ugcportal-98rb K3)", () => {
+  beforeEach(() => {
+    authMock.mockResolvedValue({ user: { id: OWNER_ID } });
+    seedMedia(ownedMedia);
+    mediaDeleteManyMock.mockResolvedValue({ count: 1 });
+  });
+
+  /** As @smithy's retry middleware leaves one it gave up on. */
+  function transportError(): Error {
+    return Object.assign(new Error("socket hang up"), {
+      code: "ECONNREFUSED",
+      $metadata: { attempts: 3 },
+    });
+  }
+
+  /** A reachable endpoint answering with a refusal of its own. */
+  function serviceError(): Error {
+    return Object.assign(new Error("Access Denied"), {
+      name: "AccessDenied",
+      $metadata: { httpStatusCode: 403, attempts: 1 },
+    });
+  }
+
+  it("still answers 204, with the transport line, when storage is unreachable", async () => {
+    s3SendMock.mockRejectedValue(transportError());
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const response = await DELETE(deleteRequest(), context());
+    const calls = [...consoleError.mock.calls];
+    consoleError.mockRestore();
+
+    expect(response.status).toBe(204);
+    expect(await response.text()).toBe("");
+    // One per key, unthrottled: each names a different orphan, and that key
+    // is the only record of what has to be cleaned up by hand.
+    expect(calls).toHaveLength(2);
+    for (const key of [ownedMedia.key, ownedMedia.previewKey]) {
+      expect(calls).toContainEqual([
+        UNREACHABLE_LOG,
+        expect.objectContaining({
+          mediaId: MEDIA_ID,
+          key,
+          operation: "media-delete",
+          code: "ECONNREFUSED",
+          attempts: 3,
+        }),
+      ]);
+    }
+  });
+
+  it("still answers 204, with the other line, when the endpoint refused the request", async () => {
+    s3SendMock.mockRejectedValue(serviceError());
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const response = await DELETE(deleteRequest(), context());
+    const calls = [...consoleError.mock.calls];
+    consoleError.mockRestore();
+
+    // The status is unchanged by flipping the error class — that is the
+    // half of K3 that must NOT move.
+    expect(response.status).toBe(204);
+    expect(await response.text()).toBe("");
+    expect(calls).toHaveLength(2);
+    // Exhaustive rather than `not.toContain(UNREACHABLE_LOG)`: this says
+    // which two lines were logged, so it fails if the transport branch
+    // swallowed one as well as if it claimed one.
+    expect(calls.map(([message]) => message)).toEqual([ORPHAN_LOG, ORPHAN_LOG]);
+  });
+
+  it("uses two different log lines for the two failures", () => {
+    // Stated as its own assertion rather than left implicit in the two
+    // tests above: if these ever became the same string, both of those
+    // would still pass while the distinction K3 asks for was gone.
+    expect(UNREACHABLE_LOG).not.toBe(ORPHAN_LOG);
+  });
+});
+

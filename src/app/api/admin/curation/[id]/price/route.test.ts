@@ -102,9 +102,11 @@ beforeAll(async () => {
       id: "listing-1",
       mediaId: "media-1",
       depictsPeople: false,
+      depictsMinors: false,
       containsMusic: false,
       thirdPartyCreator: false,
       sponsoredContent: false,
+      depictsAlcohol: false,
       // The triage is an assertion about third-party rights, so the gate
       // requires a current admin behind it.
       triagedByUserId: "admin-1",
@@ -677,6 +679,8 @@ describe("the shapes ugcportal-74w and ugcportal-p3v need", () => {
         priceCents: 500,
         // Same cleared uploader, but this one was never triaged.
         depictsPeople: null,
+        depictsMinors: null,
+        depictsAlcohol: null,
         triagedByUserId: "admin-1",
         triagedAt: new Date(),
       },

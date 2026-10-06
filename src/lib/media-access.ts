@@ -71,7 +71,7 @@ export type MediaTagLabel = TagLabel;
  * `SelectedScalars`, and the resulting type would simply not carry the field
  * the author thought they had added.
  */
-type MediaProjectionKey = keyof MediaModel | "tags";
+type MediaProjectionKey = keyof MediaModel | "tags" | "advertisingDisclosure";
 
 /**
  * Owner-facing: everything about the row its own uploader may see.
@@ -122,6 +122,27 @@ export const MEDIA_OWNER_SELECT = {
   // projection is the shared MEDIA_TAGS_SELECT above, so the two audiences
   // cannot come to disagree about which tag fields exist.
   tags: MEDIA_TAGS_SELECT,
+  // The advertising-disclosure label (ugcportal-e0jv, part B of
+  // ugcportal-qnq9.1). NARROWED TO `label` ALONE, deliberately, even here on
+  // the OWNER select: `benefitReceived`, `benefitKind`, `marketValueOre` and
+  // the brand (`benefitSource`) are a compliance record the owner already
+  // manages in full through its own dedicated route
+  // (PUT /api/media/[id]/disclosure, DISCLOSURE_SELECT in that route file),
+  // and this select is consumed directly by POST /api/media (201) and
+  // GET /api/media (the owner's own listing) — see this file's own opening
+  // comment on why a select is spelled out in full rather than grown by
+  // one person remembering to narrow a new column. Projecting the full
+  // record here would duplicate, and could drift from, that route's own
+  // shape for no reader that needs it.
+  //
+  // THIS ENTRY EXISTS SO THE ANONYMOUS SELECT BELOW CAN HAVE THE SAME ONE,
+  // narrower still: `satisfies Partial<typeof MEDIA_OWNER_SELECT>` on that
+  // select means a key absent here cannot appear there AT ALL (excess-
+  // property checking — see this file's own note on `key`/`userId` and
+  // MEDIA_PREVIEW_DELIVERY_SELECT for the mechanism), so the public label
+  // could not be added below without first existing, at least this
+  // narrowly, here.
+  advertisingDisclosure: { select: { label: true } },
   // `userId` and `key` are absent from both selects and must stay that way.
   // `key` is the ungated paid original (ugcportal-5d6). `userId` would be
   // redundant on the owner's own view, and on the anonymous feed it would let
@@ -221,6 +242,27 @@ export const MEDIA_ANONYMOUS_SELECT = {
   // anything else, which is what MAX_TAG_NAME_LENGTH and the character
   // denylist in src/lib/tags.ts are for.
   tags: MEDIA_TAGS_SELECT,
+  // The advertising label (ugcportal-e0jv, part B of ugcportal-qnq9.1),
+  // and ONLY the label — `{ select: { label: true } }`, not a spread of the
+  // owner entry above, so a future column added to THAT entry (say,
+  // `marketValueOre`) does not reach this feed just because it reached the
+  // owner's. Forbrukertilsynet's labelling rule (docs/ugc-research.md §3.2,
+  // §5.7) requires this exact string to be visible to every viewer of a
+  // labelled item; the rest of the disclosure — whether a benefit was
+  // received at all, what kind, its market value, and which brand it came
+  // from — is a compliance record about a commercial relationship, not a
+  // fact this feed exists to publish, and is deliberately absent:
+  // `benefitReceived`, `benefitKind`, `marketValueOre`, `benefitSourceId`
+  // and the `benefitSource` relation (the brand's own name) are none of
+  // them selected here, so none of them is ever read for an anonymous
+  // caller, let alone serialised. See src/lib/gallery-items.ts#toGalleryItem
+  // for the read-path re-check that only an exact PERMITTED label is ever
+  // actually rendered from whatever this projects (the same "don't trust a
+  // row was written through the validator" reasoning
+  // src/lib/advertising-disclosure.ts's own `isPermittedAdvertisingLabel`
+  // states), and src/app/api/public/media/route.test.ts for the leak test
+  // proving the serialised feed carries nothing else from this relation.
+  advertisingDisclosure: { select: { label: true } },
 } as const satisfies Partial<typeof MEDIA_OWNER_SELECT>;
 
 /**
@@ -275,7 +317,8 @@ export const MEDIA_PREVIEW_DELIVERY_SELECT = {
  * had added. That is why both selects carry
  * `satisfies Partial<Record<MediaProjectionKey, unknown>>` (directly, or via
  * `Partial<typeof MEDIA_OWNER_SELECT>`) — the typo is rejected there, so by
- * the time it reaches here there is nothing left to drop but `tags`.
+ * the time it reaches here there is nothing left to drop but a relation:
+ * `tags`, and now `advertisingDisclosure`.
  */
 type SelectedScalars<TSelect> = Pick<
   MediaModel,
@@ -293,8 +336,24 @@ type SelectedScalars<TSelect> = Pick<
 export type OwnerMedia = SelectedScalars<typeof MEDIA_OWNER_SELECT> & {
   tags: MediaTagLabel[];
 };
+/**
+ * `advertisingDisclosure` is added HERE and not on `OwnerMedia` above, even
+ * though `MEDIA_OWNER_SELECT` now carries the same relation. Not an
+ * oversight: `OwnerMedia` is the return type of `toOwnerMedia` below, which
+ * builds its result field-by-field from `OwnedMediaRow` (the ownership
+ * gate's own full-row read, `include: { tags }`, not `MEDIA_OWNER_SELECT`)
+ * — adding a required field here would demand `toOwnerMedia` supply it from
+ * a row that never carries it, for a type nothing in the codebase
+ * currently consumes (`OwnerMedia` has no reader of `advertisingDisclosure`
+ * to be honest for). `AnonymousMedia` is different: `toGalleryItem`
+ * (src/lib/gallery-items.ts) is a REAL reader of a row shaped like this one,
+ * and leaving the relation off this type while the select actually returns
+ * it is exactly the "type lie" src/lib/media-listing.ts's own
+ * `TagProjection` comment warns about for the identical reason `tags` was.
+ */
 export type AnonymousMedia = SelectedScalars<typeof MEDIA_ANONYMOUS_SELECT> & {
   tags: MediaTagLabel[];
+  advertisingDisclosure: { label: string | null } | null;
 };
 
 /**
