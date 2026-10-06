@@ -15,6 +15,8 @@ Run git only inside your worktree, never in the main checkout (`bd memories shar
 
 ## 1. Merge current main first, then the mechanical gates — in CI's order
 
+Unset `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE` and `GIT_PREFIX` before this step if your shell already has them set (e.g. from worktree-pinning tooling) — the pre-push hook strips the same four before running these same commands (ugcportal-xxy2). GIT_DIR overrides -C and cwd for repository discovery; the other three redirect the work tree and index or carry hook context, and are stripped so a child git sees none of the four variables that would redirect it.
+
 ```bash
 git fetch origin main
 git merge --no-edit origin/main          # resolve conflicts now, not at review round 4
@@ -23,8 +25,6 @@ npx vitest run                           # record files/tests counts for the che
 npm run build                            # build BEFORE typecheck: tsconfig includes .next/types
 npm run typecheck
 ```
-
-Unset `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE` and `GIT_PREFIX` before this step if your shell already has them set (e.g. from worktree-pinning tooling) — the pre-push hook strips the same four before running these same commands (ugcportal-xxy2), since a test that shells out to git without pinning its own cwd would otherwise operate on whatever repo those variables point at instead of its own fixture.
 
 Why against merged main and not the branch alone: the v0.5.0 cut broke `main` for 65 minutes on 2026-10-05 when #95, #97 and #98 merged within six minutes of each other, each green on its own branch and each red on `main` — #94 had just landed a test asserting exactly one `h-14` in `site-header.tsx`, and #97 had added a `text-ink` use that the dual-meaning audit did not know about (`gh run list --branch main`, runs 37274930436, 37274982787, 37275420480; all failed in the `Test` step). #94 itself spent its round 4 largely on a conflict with #92 that had merged under it. The pre-push hook (`.beads/hooks/pre-push`) runs the same four commands, but on whatever your branch happens to be based on; this step runs them on what `main` will actually become.
 

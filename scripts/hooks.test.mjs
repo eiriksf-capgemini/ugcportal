@@ -4,17 +4,23 @@
  * Incident, reproduced below before writing the fix: GIT_DIR, GIT_WORK_TREE,
  * GIT_INDEX_FILE and GIT_PREFIX were present in the hook's environment (this
  * repo observed them inherited from whatever invoked `git push`, e.g. an
- * agent harness pinning git operations to a worktree), and those four
- * variables override `-C`/cwd for git's OWN repository discovery. A test
- * spawned by `npm test` that shells out to git without pinning its own `-C`
- * or cwd then silently operates on whichever repo GIT_DIR points at instead
- * of its own fixture. Confirmed 2026-10-06, with GIT_DIR pointed at a
- * throwaway fixture repo and no -C/cwd override on the call:
- *   - `git config user.name Test` rewrites that fixture's identity in place;
- *   - `git init -q --bare` (no path argument) flips that fixture's
- *     core.bare to true in place.
- * That is exactly the shape that hit the real shared repo on 2026-10-06
- * (`core.bare=true` and a `Test` identity, repaired by hand).
+ * agent harness pinning git operations to a worktree). GIT_DIR overrides -C
+ * and cwd for repository discovery; the other three redirect the work tree
+ * and index or carry hook context, and are stripped so a child git sees none
+ * of the four variables that would redirect it. A test spawned by `npm
+ * test` that shells out to git without pinning its own `-C` or cwd then
+ * silently operates on
+ * whichever repo GIT_DIR points at instead of its own fixture. Confirmed
+ * 2026-10-06, with GIT_DIR (and
+ * GIT_WORK_TREE/GIT_INDEX_FILE/GIT_PREFIX) pointed at a throwaway fixture
+ * repo and no -C/cwd override on the call: `git config user.name Test`
+ * rewrites that fixture's identity in place -- the K2 reproduction below.
+ * (`git init -q --bare` with no path argument does the same to core.bare,
+ * matching the real incident's `core.bare=true`, but errors instead when
+ * GIT_WORK_TREE is *also* set alongside GIT_DIR -- `fatal: GIT_WORK_TREE
+ * ... not allowed without specifying GIT_DIR` -- a real git restriction,
+ * unrelated to this hook's strip, so K2 below reproduces the identity
+ * rewrite only.)
  *
  * These tests extract `.beads/hooks/pre-push`'s `_ugcportal_run` helper (the
  * one place every mechanical check — lint/test/build/typecheck — is run)
@@ -57,6 +63,8 @@ function extractFunction(source, name) {
   throw new Error(`${name}(): no closing brace found`);
 }
 
+const STRIP = " env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX";
+
 /**
  * The mutation this K1/K2 guard exists to catch: the pre-fix hook, with the
  * `env -u ...` strip removed from every branch of `_ugcportal_run` but
@@ -66,11 +74,36 @@ function extractFunction(source, name) {
  * rather than silently returning the unmodified source.
  */
 function withoutTheStrip(runFnSource) {
-  const broken = runFnSource.replaceAll(" env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX", "");
+  const broken = runFnSource.replaceAll(STRIP, "");
   if (broken === runFnSource) {
     throw new Error("withoutTheStrip: no occurrences removed -- regex or hook source drifted");
   }
   return broken;
+}
+
+/**
+ * Same mutation as `withoutTheStrip`, localised to the one `_ugcportal_run`
+ * branch whose line starts with `firstWord` (`timeout`, `gtimeout`, `perl`,
+ * or `env` for the plain fallback) -- so a regression that drops the strip
+ * from only one branch is caught by that branch's own test, rather than
+ * requiring all four to break at once before anything notices.
+ */
+function withoutTheStripOnBranch(runFnSource, firstWord) {
+  let hits = 0;
+  const mutated = runFnSource
+    .split("\n")
+    .map((line) => {
+      if (line.trim().split(/\s+/)[0] === firstWord && line.includes(STRIP)) {
+        hits += 1;
+        return line.replace(STRIP, "");
+      }
+      return line;
+    })
+    .join("\n");
+  if (hits !== 1) {
+    throw new Error(`withoutTheStripOnBranch(${firstWord}): expected exactly 1 matching line, found ${hits}`);
+  }
+  return mutated;
 }
 
 /**
@@ -81,7 +114,7 @@ function withoutTheStrip(runFnSource) {
  */
 function runViaHelper(runFnSource, argv, { env, cwd }) {
   const script = `${runFnSource}\n_ugcportal_timeout=5\n_ugcportal_run "$@"\n`;
-  return spawnSync("sh", ["-c", script, "sh", ...argv], { env, cwd, encoding: "utf8" });
+  return spawnSync(SH_PATH, ["-c", script, "sh", ...argv], { env, cwd, encoding: "utf8" });
 }
 
 const CLEAN_ENV_BASE = { ...process.env };
@@ -90,12 +123,93 @@ delete CLEAN_ENV_BASE.GIT_WORK_TREE;
 delete CLEAN_ENV_BASE.GIT_INDEX_FILE;
 delete CLEAN_ENV_BASE.GIT_PREFIX;
 
+/**
+ * Resolves `name` on the REAL host PATH (the parent process's own
+ * environment, not any restricted one built below) via the shell's own
+ * `command -v`, so the branch-forcing tests use the genuine binary rather
+ * than assuming a fixed install location. Never throws: if the `sh` used to
+ * run `command -v` is itself missing, `spawnSync` leaves `stdout` undefined
+ * (or `null` on some versions) rather than a string, which `?? ""` absorbs
+ * either way -- the caller sees a plain "not found" (`null`) in every
+ * missing-host-binary case, the same as if `command -v` itself had reported
+ * nothing.
+ */
+function resolveOnHostPath(name) {
+  const result = spawnSync("sh", ["-c", `command -v ${name}`], { encoding: "utf8" });
+  const resolved = (result.stdout ?? "").trim();
+  return resolved === "" ? null : resolved;
+}
+
+/**
+ * A PATH containing exactly one real binary (`env`, needed by every branch)
+ * plus, optionally, a real `perl` -- nothing else. `command -v` for
+ * `timeout`/`gtimeout` always fails against this PATH regardless of what the
+ * host actually has installed, so which `_ugcportal_run` branch runs is
+ * controlled entirely by this PATH plus the shell functions defined in
+ * `shellPrelude` below, never by whatever happens to be on the test host.
+ * Callers gate on `hostSkipReason` before calling this, so `ENV_PATH`/
+ * `PERL_PATH` being unresolved here means that gate was skipped incorrectly
+ * -- a thrown error surfaces that loudly rather than this function silently
+ * building a PATH with a binary missing from it.
+ */
+function buildMinimalBinDir({ includeRealPerl }) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ugcportal-hooks-bin-"));
+  if (!ENV_PATH) {
+    throw new Error("`env` not found via `command -v env` on this host -- hostSkipReason() should have skipped this");
+  }
+  fs.symlinkSync(ENV_PATH, path.join(dir, "env"));
+  if (includeRealPerl) {
+    if (!PERL_PATH) {
+      throw new Error("`perl` not found via `command -v perl` on this host -- hostSkipReason() should have skipped this");
+    }
+    fs.symlinkSync(PERL_PATH, path.join(dir, "perl"));
+  }
+  return dir;
+}
+
+// Resolved once, at collection time, so every test can decide `it` vs
+// `it.skip` before any test body runs: a check made only inside a running
+// test body passes vacuously with no assertions -- invisible in the summary
+// -- while a throw from a module-level constant evaluated at collection
+// time crashes the whole file before a skip can even register.
+const SH_PATH = resolveOnHostPath("sh");
+const ENV_PATH = resolveOnHostPath("env");
+const PERL_PATH = resolveOnHostPath("perl");
+
+/** Null when `branch` can run on this host; otherwise the reason to skip it, visibly, in the test name. */
+function hostSkipReason(branch) {
+  if (!SH_PATH) return "no `sh` on this host";
+  if (!ENV_PATH) return "no `env` on this host";
+  if (branch?.includeRealPerl && !PERL_PATH) return "no `perl` on this host";
+  return null;
+}
+
+/**
+ * One entry per `_ugcportal_run` branch: `firstWord` identifies the branch's
+ * line for `withoutTheStripOnBranch`; `shellPrelude` is shell source
+ * `runOnThisBranch` below prepends to make `command -v` resolve that branch
+ * (and no earlier one) without depending on what the host happens to have
+ * installed; `includeRealPerl` adds a real `perl` to the minimal PATH so the
+ * perl branch's actual `perl -e '...'` one-liner runs for real rather than
+ * being stubbed.
+ */
+const BRANCHES = [
+  { name: "timeout", firstWord: "timeout", shellPrelude: 'timeout() { shift; exec "$@"; }\n', includeRealPerl: false },
+  {
+    name: "gtimeout",
+    firstWord: "gtimeout",
+    shellPrelude: 'gtimeout() { shift; exec "$@"; }\n',
+    includeRealPerl: false,
+  },
+  { name: "perl", firstWord: "perl", shellPrelude: "", includeRealPerl: true },
+  { name: "none (plain fallback)", firstWord: "env", shellPrelude: "", includeRealPerl: false },
+];
+
 describe("pre-push hook: _ugcportal_run strips git's hook-injected repo env (K1)", () => {
   const hookSource = fs.readFileSync(HOOK_PATH, "utf8");
   const runFnSource = extractFunction(hookSource, "_ugcportal_run");
 
   const pollutedEnv = {
-    ...CLEAN_ENV_BASE,
     GIT_DIR: "/tmp/ugcportal-hooks-test-should-not-leak/.git",
     GIT_WORK_TREE: "/tmp/ugcportal-hooks-test-should-not-leak",
     GIT_INDEX_FILE: "/tmp/ugcportal-hooks-test-should-not-leak/.git/index",
@@ -113,32 +227,67 @@ describe("pre-push hook: _ugcportal_run strips git's hook-injected repo env (K1)
       "}))",
   ];
 
-  it("a command run through _ugcportal_run does not see GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE/GIT_PREFIX", () => {
-    const result = runViaHelper(runFnSource, PROBE_ARGV, { env: pollutedEnv, cwd: os.tmpdir() });
-    expect(result.status).toBe(0);
-    expect(JSON.parse(result.stdout)).toEqual({
-      gitDir: false,
-      gitWorkTree: false,
-      gitIndexFile: false,
-      gitPrefix: false,
-    });
-  });
+  for (const branch of BRANCHES) {
+    describe(`branch: ${branch.name}`, () => {
+      const skipReason = hostSkipReason(branch);
+      const test = skipReason ? it.skip : it;
 
-  it("mutation: without the strip, the same command DOES see GIT_DIR (proves the above is not decoration)", () => {
-    const broken = withoutTheStrip(runFnSource);
-    const result = runViaHelper(broken, PROBE_ARGV, { env: pollutedEnv, cwd: os.tmpdir() });
-    expect(result.status).toBe(0);
-    const seen = JSON.parse(result.stdout);
-    expect(seen.gitDir).toBe(true);
-    expect(seen.gitWorkTree).toBe(true);
-    expect(seen.gitIndexFile).toBe(true);
-    expect(seen.gitPrefix).toBe(true);
-  });
+      function runOnThisBranch(fnSource) {
+        const binDir = buildMinimalBinDir({ includeRealPerl: branch.includeRealPerl });
+        try {
+          const env = { ...CLEAN_ENV_BASE, ...pollutedEnv, PATH: binDir };
+          const script = `${branch.shellPrelude}${fnSource}\n_ugcportal_timeout=5\n_ugcportal_run "$@"\n`;
+          // An absolute path for the shell itself: the restricted PATH above
+          // (built to control what `_ugcportal_run` can find) would otherwise
+          // also hide `sh` from this spawn's own lookup.
+          return spawnSync(SH_PATH, ["-c", script, "sh", ...PROBE_ARGV], { env, cwd: os.tmpdir(), encoding: "utf8" });
+        } finally {
+          fs.rmSync(binDir, { recursive: true, force: true });
+        }
+      }
+
+      test(
+        skipReason
+          ? `does not see GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE/GIT_PREFIX on this branch (skipped: ${skipReason})`
+          : "does not see GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE/GIT_PREFIX on this branch",
+        () => {
+          const result = runOnThisBranch(runFnSource);
+          expect(result.status).toBe(0);
+          expect(JSON.parse(result.stdout)).toEqual({
+            gitDir: false,
+            gitWorkTree: false,
+            gitIndexFile: false,
+            gitPrefix: false,
+          });
+        },
+      );
+
+      test(
+        skipReason
+          ? `mutation: without the strip on just this branch, the same command DOES see GIT_DIR (skipped: ${skipReason})`
+          : "mutation: without the strip on just this branch, the same command DOES see GIT_DIR (localises a single-branch regression)",
+        () => {
+          const broken = withoutTheStripOnBranch(runFnSource, branch.firstWord);
+          const result = runOnThisBranch(broken);
+          expect(result.status).toBe(0);
+          const seen = JSON.parse(result.stdout);
+          expect(seen.gitDir).toBe(true);
+          expect(seen.gitWorkTree).toBe(true);
+          expect(seen.gitIndexFile).toBe(true);
+          expect(seen.gitPrefix).toBe(true);
+        },
+      );
+    });
+  }
 });
 
 describe("pre-push hook: a test run under it cannot mutate the real repo (K2)", () => {
   if (process.platform === "win32") {
     it.skip("POSIX-sh fixture, skipped on win32", () => {});
+    return;
+  }
+  if (!SH_PATH) {
+    it.skip("no `sh` on this host", () => {});
     return;
   }
 

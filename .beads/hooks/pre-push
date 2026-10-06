@@ -74,16 +74,25 @@ cd "$_ugcportal_repo_root" || exit 0
 _ugcportal_timeout=${UGCPORTAL_HOOK_TIMEOUT:-300}
 # ugcportal-xxy2: GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE and GIT_PREFIX can be
 # set in this hook's environment (inherited from whatever invoked `git push`,
-# e.g. an agent harness pinning git operations to a worktree) and, when set,
-# override -C/cwd for git's OWN repository discovery. A test spawned by `npm
-# test` below that shells out to git without pinning -C or its own cwd would
-# then silently operate on whatever repo GIT_DIR points at instead of its own
-# fixture -- reproduced 2026-10-06 with a plain `git config user.name Test`
-# and a path-less `git init -q --bare`, each of which flipped a real repo's
-# config (core.bare=true, identity overwritten) purely from inheriting these
-# four variables, with no -C and no cwd override in the call itself. `env -u
-# VAR` is a no-op when VAR is already unset, so stripping unconditionally is
-# safe whether or not the hook happens to be running with them set.
+# e.g. an agent harness pinning git operations to a worktree). GIT_DIR
+# overrides -C and cwd for repository discovery; the other three redirect the
+# work tree and index or carry hook context, and are stripped so a child git
+# sees none of the four variables that would redirect it. A test spawned by
+# `npm test` below that shells out to git without pinning -C or its own cwd
+# would then silently operate on whatever repo GIT_DIR points at instead of its own
+# fixture -- reproduced 2026-10-06 with GIT_DIR pointed at a throwaway repo
+# and no -C/cwd override on the call: a plain `git config user.name Test`
+# rewrote that repo's identity in place purely from inheriting GIT_DIR, with
+# no -C and no cwd override in the call itself (a path-less `git init -q
+# --bare` does the same to core.bare -- matching the real incident's
+# core.bare=true -- but only when GIT_WORK_TREE is not simultaneously set
+# alongside GIT_DIR; with both set it errors instead, a real git restriction
+# unrelated to this fix). `env -u VAR` is a no-op when VAR is already unset,
+# so stripping unconditionally is safe whether or not the hook happens to be
+# running with them set. The plain fallback depends on env -u (GNU, BSD,
+# BusyBox and toybox all support it); if env is ever missing the hook fails
+# closed rather than running the suite with the hook environment, which is
+# the incident this guards against.
 _ugcportal_run() {
   if command -v timeout >/dev/null 2>&1; then
     timeout "$_ugcportal_timeout" env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX "$@"
