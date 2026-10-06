@@ -14,7 +14,10 @@ import {
   PREVIEW_CONTENT_TYPE,
   PREVIEW_FILE_EXTENSION,
 } from "@/lib/media";
-import { createThrottledLog } from "@/lib/throttled-log";
+import {
+  DEFAULT_THROTTLE_INTERVAL_MS,
+  createThrottledLog,
+} from "@/lib/throttled-log";
 
 // Longest-edge cap for a generated preview.
 //
@@ -1346,7 +1349,7 @@ export async function generateWatermarkedPreview(
  * quiet period is always logged, so the transition into shedding — the part
  * worth alerting on — is never delayed.
  */
-export const SHED_LOG_INTERVAL_MS = 10_000;
+export const SHED_LOG_INTERVAL_MS = DEFAULT_THROTTLE_INTERVAL_MS;
 
 /**
  * Built on `createThrottledLog` (ugcportal-z3lo), which is also what

@@ -168,14 +168,20 @@ export function classifyTransportFailure(
   // cannot drift out of agreement with it or with each other.
   if (err.$metadata?.httpStatusCode !== undefined) return null;
 
+  // Computed once (ugcportal-qz1u item 5) rather than re-read in each of the
+  // three branches below — `err.$metadata?.attempts` already reads as
+  // `undefined` whenever `$metadata` itself is absent, so a branch testing
+  // `attempts !== undefined` is testing both at once; it does not need its
+  // own separate `err.$metadata !== undefined` guard in front of it.
+  const attempts = err.$metadata?.attempts;
+
   if (err.name === "TimeoutError") {
-    return { code: err.code ?? err.name, attempts: err.$metadata?.attempts };
+    return { code: err.code ?? err.name, attempts };
   }
   if (err.code !== undefined && TRANSPORT_ERROR_CODES.has(err.code)) {
-    return { code: err.code, attempts: err.$metadata?.attempts };
+    return { code: err.code, attempts };
   }
   if (
-    err.$metadata !== undefined &&
     // Round-5 review finding: without this, a permanent, non-retryable
     // local failure (bad credentials failing to sign the request, a TLS
     // validation error) was indistinguishable from a genuine transport
@@ -187,8 +193,8 @@ export function classifyTransportFailure(
     // match. See this function's own top doc comment for the accepted
     // trade-off (a client configured with `maxAttempts: 1` loses this
     // branch entirely).
-    err.$metadata.attempts !== undefined &&
-    err.$metadata.attempts > 1
+    attempts !== undefined &&
+    attempts > 1
   ) {
     // `?? err.name` used to fall back here, and for a plain `new Error(...)`
     // that is the literal string `"Error"` — a code that reads as
@@ -197,7 +203,7 @@ export function classifyTransportFailure(
     // the structured log in src/app/api/media/route.ts, which includes this
     // whole error as `cause`) are where the actual detail lives for this
     // branch regardless.
-    return { code: err.code ?? "unknown", attempts: err.$metadata.attempts };
+    return { code: err.code ?? "unknown", attempts };
   }
   return null;
 }
