@@ -44,7 +44,7 @@ Bail out immediately (no review, no approval, no merge — just report why) if:
 
 ## 1a. Take the per-PR review lock
 
-Reading the round chain (step 4b) and stamping the next number (step 5) are separate steps with a full `code-review` in between. Two runs that both read `N` both stamp `N + 1`; step 4b's duplicate check turns that into a permanently `broken` chain, and recovery then needs a human with a chain-reset comment. This is not an exotic interleaving: `CLAUDE.md` tells agents to run this skill immediately after opening a PR and a `/loop` babysitter runs it on a timer, so a manual invocation and a scheduled one overlap by ordinary accident (`ugcportal-5xj`).
+Reading the round chain (step 4b) and stamping the next number (step 5) are separate steps with a full review (step 4's six finder angles) in between. Two runs that both read `N` both stamp `N + 1`; step 4b's duplicate check turns that into a permanently `broken` chain, and recovery then needs a human with a chain-reset comment. This is not an exotic interleaving: `CLAUDE.md` tells agents to run this skill immediately after opening a PR and a `/loop` babysitter runs it on a timer, so a manual invocation and a scheduled one overlap by ordinary accident (`ugcportal-5xj`).
 
 So serialise the whole run on a lock scoped to the PR number. The lock is **a git ref created through the API**, because `POST /git/refs` is a real server-side test-and-set: `201` if the ref did not exist, `422 Reference already exists` if it did, so two simultaneous callers cannot both win. Measured on this repo: the first call printed `refs/review-locks/test-pr-0`; the byte-identical second call exited 1 with `Reference already exists (HTTP 422)`; `DELETE` released it.
 
@@ -66,7 +66,7 @@ gh api -X POST repos/:owner/:repo/git/refs \
 gh api repos/:owner/:repo/git/ref/review-locks/pr-<n> --jq .object.sha
 ```
 
-**If step 2 returned 422, or step 3 shows a sha that is not the tag you just minted, another run holds this PR.** Then: **stand down.** Post nothing, stamp nothing — not even a non-counting stop marker — do not run `code-review`, and report "another `pr-review-merge` run holds the lock on PR #`<n>`; no round was consumed". A run that stands down has reviewed nothing and must leave no trace, exactly like the CI-red stop except that it does not even comment.
+**If step 2 returned 422, or step 3 shows a sha that is not the tag you just minted, another run holds this PR.** Then: **stand down.** Post nothing, stamp nothing — not even a non-counting stop marker — do not run step 4's review, and report "another `pr-review-merge` run holds the lock on PR #`<n>`; no round was consumed". A run that stands down has reviewed nothing and must leave no trace, exactly like the CI-red stop except that it does not even comment.
 
 Before standing down, check whether the holder is a leaked lock from a run that died:
 
@@ -82,7 +82,7 @@ gh api -X DELETE repos/:owner/:repo/git/refs/review-locks/pr-<n> --silent
 
 **Release the lock with that same `DELETE` on every path out of this skill** — after step 6 on a normal finish, and on each bail-out: the step-1 base-branch and mergeability bails (which happen *before* the acquire, so there is nothing to release), the step-3 CI stop, the step-2 sensitive-path stop, a `broken`-chain stop, the "treat as 6" fallback, and the "escalation still outstanding" stop. A lock you forget to release costs the next run 60 minutes; say in your step 6 report that you released it.
 
-**Two limits, stated rather than discovered.** Breaking a stale lock is not itself atomic: two runs can both judge the same lock stale, both delete, and both create, after which the loser's `DELETE` may remove the winner's fresh lock. That is why step 3 above re-reads the ref, and why **step 5 re-reads it once more immediately before stamping** — the stamp is the operation that corrupts state, so that is where the check has to be. What remains is two runs whose pre-stamp re-reads interleave inside a single API round-trip, which is orders of magnitude narrower than the unprotected window this replaces (a whole `code-review`, minutes wide). And a run that takes longer than 60 minutes can have its own lock broken under it; the pre-stamp re-read catches that too, and the answer is to stand down rather than to raise the threshold.
+**Two limits, stated rather than discovered.** Breaking a stale lock is not itself atomic: two runs can both judge the same lock stale, both delete, and both create, after which the loser's `DELETE` may remove the winner's fresh lock. That is why step 3 above re-reads the ref, and why **step 5 re-reads it once more immediately before stamping** — the stamp is the operation that corrupts state, so that is where the check has to be. What remains is two runs whose pre-stamp re-reads interleave inside a single API round-trip, which is orders of magnitude narrower than the unprotected window this replaces (a whole review pass through step 4, minutes wide). And a run that takes longer than 60 minutes can have its own lock broken under it; the pre-stamp re-read catches that too, and the answer is to stand down rather than to raise the threshold.
 
 This mechanism deliberately touches no comment: it only creates and deletes a ref under `refs/review-locks/`, which is outside `refs/heads/*` and `refs/tags/*` and so invisible to an ordinary `git fetch`. It never edits or deletes a posted marker — an edit would trip step 4b's edit check and make the chain `broken`, i.e. the cure would be the disease.
 
@@ -131,20 +131,20 @@ None of this produces a severity field on its own — assigning severity is stil
 
 ### 4.1 Required recurring-family sweep
 
-`code-review` is a general reviewer. This repo has four defect families that produced most of its historical review churn, and sweeping for the **class** costs one round while repeatedly replacing several. So after step 4, and on **every** round, run the sweep from the repo's `review-standards` skill:
+This repo has four defect families that produced most of its historical review churn, and sweeping for the **class** costs one round while repeatedly replacing several. This section defines the four families; it is not a separate pass that runs after step 4 — step 4 already requires every one of its six finder angles to check against all four and name them in its report ("named per angle" in step 4's own text). Load the definitions once, before starting step 4:
 
 ```
 Skill(skill: "review-standards")
 ```
 
-Read section 2 of that skill and apply all four families to this diff:
+Read section 2 of that skill. The four families, applied within each of step 4's angles rather than as a seventh pass of their own:
 
 1. **A comment claims a guarantee the code does not make** — a guard that cannot fire, a type constraint that does not constrain, a measured figure covering one code path of four, a doc line contradicting the table below it.
 2. **A check compares the wrong two things** — a request-derived value against configuration, two columns written by the same author, or the NaN variant where a comparison returns `false` for unparseable input and so fails open.
 3. **An assertion that cannot fail** — the test is: *for each assertion, what weaker implementation would still pass it, and could the needle ever actually be absent?*
 4. **Sibling-omission** — a fix applied to only one of several parallel structures (two audience-specific projections, two directions of a check, two response paths, two fields that must move together), leaving the untouched sibling with the exact bug just removed from its pair. The check: for every field, guard, or response path touched, ask whether the same shape exists elsewhere in the diff or the codebase, and confirm both were checked.
 
-This sweep is **required, not advisory**, and it is not a substitute for step 4 — it is an addition. Anything it finds is a finding like any other and feeds step 5 at its own severity.
+This sweep is **required, not advisory**, on every round, and it is not a substitute for step 4's angles — it runs inside each of them. Anything it finds is a finding like any other and feeds step 5 at its own severity.
 
 **Report having checked each family, by name, in your step 6 report and in any PR comment you post** — including when a family turned up nothing ("Family 3 (assertion that cannot fail): checked, nothing found"). A silent skip is what this requirement exists to make visible: a report that does not name all four did not do the sweep.
 
@@ -344,7 +344,7 @@ Note the `--arg` is on the downstream `jq`, never on `gh api --jq`, which takes 
 
 Every filter in it fixes a way a naive probe lies, and each was a real bug:
 
-- **The `run_started` cutoff.** This step runs *after* step 4, and `code-review --comment` turns every inline comment into a `COMMENTED` review object the moment it posts, accumulating over every round. A probe that counts those reports "prior activity" on a PR that has none, so the "genuinely fresh" branch never fires and a clean chain gets stamped `approx` forever. This is the *same* "step 4 has already run" error that this step deleted the timestamp-clustering fallback over — removing the fallback removed the symptom, and the replacement reintroduced the cause.
+- **The `run_started` cutoff.** This step runs *after* step 4, and — under the step 4 that existed before `ugcportal-cr2h` removed its `code-review` fork, which is the step 4 that produced this PR's pre-rule history — `code-review --comment` turned every inline comment into a `COMMENTED` review object the moment it posted, accumulating over every round. A probe that counts those reports "prior activity" on a PR that has none, so the "genuinely fresh" branch never fires and a clean chain gets stamped `approx` forever. This is the *same* "step 4 has already run" error that this step deleted the timestamp-clustering fallback over — removing the fallback removed the symptom, and the replacement reintroduced the cause.
 - **The identity and bot filters.** The probe must measure *"has this PR been reviewed"*, not *"has anyone said anything here"*. Without them, one `dependabot` note, one human "LGTM", or one drive-by `gh pr review --comment` on a brand-new PR routes it into the bootstrap, where sources 1 and 2 can pin it to `approx` — and an `approx` chain can never auto-merge at the cap. One unrelated comment should not decide that. The residual limitation is worth knowing: in this repo the reviewer and the PR author are the same account, so this filter separates *other* accounts out, not the author.
 - **Dropping empty-bodied reviews.** That is exactly what `code-review`'s inline comments create, and what a human's inline-comment-only review creates. A review with no body is not a review round.
 - **Excluding `ugcportal-review-stop` comments.** Step 5 deliberately does not count those as rounds; a probe that counts them contradicts the step that writes them. A PR whose only history is "this skill ran twice and CI was red" *is* genuinely fresh.
@@ -388,7 +388,7 @@ Later runs read a bootstrap stamp like any other marker, and the command above r
 
 An earlier draft added a fallback that counted rounds by clustering review submissions on a 10-minute gap, on the theory that each `code-review --comment` pass posts its comments in one burst. It was removed, not patched. The marker is a fact this skill writes; the cluster count is a guess about someone else's behaviour, and the guess was wrong in four ways at once:
 
-- **It over-counted by exactly one on every live run.** Step 4 runs `code-review --comment` *before* this step, and those inline comments create `COMMENTED` review objects immediately. On `gh-43`, round 1's eight inline comments produced eight review submissions between `07:02:39Z` and `07:03:18Z` — a single cluster — so that same run's step 4b would have read "1 completed round, current round 2" while it was *in* round 1. The numbers that appeared to validate the fallback were all measured on finished PRs, where the in-flight cluster does not exist.
+- **It over-counted by exactly one on every live run.** Under the pre-`ugcportal-cr2h` step 4, which ran `code-review --comment` before this step, those inline comments created `COMMENTED` review objects immediately. On `gh-43`, round 1's eight inline comments produced eight review submissions between `07:02:39Z` and `07:03:18Z` — a single cluster — so that same run's step 4b would have read "1 completed round, current round 2" while it was *in* round 1. The numbers that appeared to validate the fallback were all measured on finished PRs, where the in-flight cluster does not exist.
 - **It laundered its own guess into the authoritative source.** Step 5 stamps the round it computed, including a fallback-derived one, so the next run read that guess back as a marker. The "don't auto-merge on an unconfirmed count of 6" safeguard therefore disabled itself after exactly one use.
 - **One of its error modes biased *down*.** It filtered out `APPROVED` submissions, so the approve-succeeded-merge-failed round above was invisible to it — contradicting the "biased high, which is the safe direction" argument the cap rested on.
 - **"Biased high is safe" was false anyway.** Over-counting does not only defer *lows* earlier; it moves the PR into the round-4+ regime early, which is precisely where the gate is lenient.
@@ -420,7 +420,7 @@ Exactly one row matches any given round.
 
 Two conditions override the row you landed on, both because the *number* is in doubt rather than the findings. **Only an `exact` chain unlocks anything in this table beyond the `1-3` row** (step 4b):
 
-- **A `broken` chain does not merge at all.** Apply the strict `1-3` rules, and then, whatever they say, **do not approve and do not merge** — not even on zero findings. Name the failed check in your comment and stamp the non-counting `chain-broken` marker (step 5). A chain that fails its integrity checks is a PR whose review history cannot be read; approving on it would be approving on an unknown number of prior rounds, and a zero-findings round is exactly when an agent would be most tempted to. A human resolves it with a chain reset.
+- **A `broken` chain does not merge at all.** Apply the strict `1-3` rules, and then, whatever they say, **do not approve and do not merge** — not even on zero findings. Name the failed check in your comment and stamp the non-counting `chain-broken` marker (step 5, through the "before any stamp" checkpoint below like every other stamp). A chain that fails its integrity checks is a PR whose review history cannot be read; approving on it would be approving on an unknown number of prior rounds, and a zero-findings round is exactly when an agent would be most tempted to. A human resolves it with a chain reset.
 - **An `approx` chain uses the `1-3` rules at every round.** Whatever number it carries, any finding blocks and it merges only with zero findings; at the cap it escalates to a human rather than merging, and it can never enter `7+`. An asserted count brings the cap — and the human — closer; it never loosens the gate. A chain is `approx` if it contains a bootstrap or a reset, **or if its markers were written by the PR's own author** (step 4b), which in this repo is every chain until review runs under a separate identity. The reasoning is in step 4b.
 
 **The `7+` row requires three things, all of them, and none of them is arithmetic.** It is the one row in which almost nothing can block a merge, so it gets the strictest entry conditions in this file.
@@ -470,13 +470,13 @@ Two conditions override the row you landed on, both because the *number* is in d
 If any of the three fails, the `7+` row does not apply however high the count is — but the two failure modes do not have the same answer, and an earlier draft gave them the same one:
 
 - **Condition 1 or 2 fails** (the chain is not `exact`, or there is no stop comment at or above 6 to anchor to): the count is above 6 with nothing behind it, so **treat the round as 6, the cap** — which on an `exact` chain merges with its lows filed, and on an `approx` chain escalates to a human, because an `approx` chain runs the `1-3` rules at every round and may not auto-merge at the cap.
-- **Condition 3 fails** (there *is* an anchor at or above 6, and nothing has happened since it): **do not merge and do not re-hunt.** The escalated blocker is by definition still outstanding — nobody has pushed a commit or said a word since the escalation — so say exactly that, stamp the non-counting `<!-- ugcportal-review-stop: escalation-outstanding -->` marker, and stop. This is the rule stated under condition 3 above, and it is not the same as "treat as 6": treating it as 6 would re-run the cap's *merge* branch against a PR whose open blocker nobody has touched. The marker is non-counting because nothing was decided: a counting stamp would grow the chain by one on every idle re-run of an untouched PR — 7, 8, 9, … — moving the anchor forward each time while no review verdict and no human action ever happened, which is the "effort spent is not rounds counted" invariant in step 4b read backwards. (Its own stamp is not mistaken for *evidence*: the condition-3 probe drops every comment whose body starts with `<!-- ugcportal-review`. The harm is the inflation, not a false positive.)
+- **Condition 3 fails** (there *is* an anchor at or above 6, and nothing has happened since it): **do not merge and do not re-hunt.** The escalated blocker is by definition still outstanding — nobody has pushed a commit or said a word since the escalation — so say exactly that, stamp the non-counting `<!-- ugcportal-review-stop: escalation-outstanding -->` marker (through the "before any stamp" checkpoint below), and stop. This is the rule stated under condition 3 above, and it is not the same as "treat as 6": treating it as 6 would re-run the cap's *merge* branch against a PR whose open blocker nobody has touched. The marker is non-counting because nothing was decided: a counting stamp would grow the chain by one on every idle re-run of an untouched PR — 7, 8, 9, … — moving the anchor forward each time while no review verdict and no human action ever happened, which is the "effort spent is not rounds counted" invariant in step 4b read backwards. (Its own stamp is not mistaken for *evidence*: the condition-3 probe drops every comment whose body starts with `<!-- ugcportal-review`. The harm is the inflation, not a false positive.)
 
 If all three hold, link the anchor comment and the evidence in your step 5b comment as the things being verified.
 
 Record the head SHA in every blocking comment (the template in step 5 does, from the `headRefOid` step 1 fetched). That is what condition 3 compares against, and it is what makes the anchor self-contained: each stop comment carries both the round it ended and the state of the branch when it ended.
 
-**When you fall back to "treat as 6" — on any chain, `approx` or `exact` — do not stamp `6`.** That is the trap: the counting marker means "round N completed", the chain already contains a `6`, and stamping a second one trips the duplicate check and turns the chain permanently `broken` — after which the only recovery, a chain reset, yields `approx`, which lands back on this same line and loops. Measured: `[6 approx]` → `6 approx`; `[6 approx, 6]` → `6 broken`; plus a reset → `6 approx` again. A fallback that corrupts the state it is reading is worse than no fallback. So this path stamps the **non-counting** `<!-- ugcportal-review-stop: approx-cap -->` (step 5) and the chain stops growing.
+**When you fall back to "treat as 6" — on any chain, `approx` or `exact` — do not stamp `6`.** That is the trap: the counting marker means "round N completed", the chain already contains a `6`, and stamping a second one trips the duplicate check and turns the chain permanently `broken` — after which the only recovery, a chain reset, yields `approx`, which lands back on this same line and loops. Measured: `[6 approx]` → `6 approx`; `[6 approx, 6]` → `6 broken`; plus a reset → `6 approx` again. A fallback that corrupts the state it is reading is worse than no fallback. So this path stamps the **non-counting** `<!-- ugcportal-review-stop: approx-cap -->` (step 5, through the "before any stamp" checkpoint below) and the chain stops growing.
 
 ### What an `approx` chain's ending looks like
 
@@ -492,13 +492,54 @@ Three things this table must not be misread as:
 - **Nothing above low is ever closed by the cap.** Only lows are ever deferred by this gate. If round 6 ends with *any* outstanding medium-or-above, confirmed or unsettled, the PR does **not** merge — comment and escalate. The cap bounds the number of hunting rounds, not the severity that may ship.
 - **This is not licence to review less carefully in rounds 1-3.** The gate changes what happens *to* findings from round 4 on; it changes nothing about how hard they are looked for, and it does not apply to rounds 1-3 at all. Real defects were found at round 7 and round 9 on this repo. If per-bead first-round finding counts drop after adopting this rule, the rule is being misused — say so in your report rather than quietly benefiting from it.
 
-**Before any stamp — approving or blocking — re-confirm you still hold the step 1a lock:**
+**Before any stamp — approving, blocking, or any of the non-counting stops below (`chain-broken`, `approx-cap`, `escalation-outstanding`) — do two checks, in that order, before this run posts anything at all for this round:**
 
-```bash
-gh api repos/:owner/:repo/git/ref/review-locks/pr-<n> --jq .object.sha
-```
+1. **Re-confirm you still hold the step 1a lock:**
 
-If that is not the tag sha you minted in step 1a (or the ref is gone), another run owns this PR now: **stamp nothing**, post nothing, and report that you stood down at the stamp. The stamp is the write that can corrupt the chain, so this is the one place the lock has to be checked rather than assumed.
+   ```bash
+   gh api repos/:owner/:repo/git/ref/review-locks/pr-<n> --jq .object.sha
+   ```
+
+   If that is not the tag sha you minted in step 1a (or the ref is gone), another run owns this PR now: **stamp nothing**, post nothing, and report that you stood down at the stamp. The stamp is the write that can corrupt the chain, so this is the one place the lock has to be checked rather than assumed.
+
+2. **Run this round's post-round integrity check.** Step 4 posts nothing while it runs (its own rule: no comment, no review, no write-access probe of any kind until a verdict is reached), so at this point in an honest run this round has written *nothing* to the PR yet — not the marker, not anything. List everything the reviewing account has authored since this round's lock was acquired, and confirm that list is empty before this run writes its own first byte:
+
+   ```bash
+   run_started='<paste the literal timestamp printed in step 1>'
+   [ -n "$run_started" ] || { echo "run_started not captured — re-run from step 1" >&2; exit 1; }
+   me=$(gh api user --jq .login) || { echo "cannot resolve reviewer identity — fix auth first" >&2; exit 1; }
+   [ -n "$me" ] || { echo "empty reviewer identity — fix auth first" >&2; exit 1; }
+   window_end=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+   { gh api repos/:owner/:repo/issues/<n>/comments --paginate \
+       --jq '.[] | [.html_url, .created_at, .user.login] | @tsv'
+     gh api repos/:owner/:repo/pulls/<n>/reviews --paginate \
+       --jq '.[] | [.html_url, (.submitted_at // ""), .user.login] | @tsv'
+     gh api repos/:owner/:repo/pulls/<n>/comments --paginate \
+       --jq '.[] | [.html_url, .created_at, .user.login] | @tsv'
+   } | jq -Rrn --arg me "$me" --arg start "$run_started" --arg end "$window_end" '
+     [ inputs | split("\t")
+       | {url: .[0], at: .[1], login: .[2]}
+       | select(.login == $me)
+       | select(.at != "" and .at >= $start and .at <= $end)
+     ]'
+   ```
+
+   Because this check runs *before* this round's own marker exists, there is no "except the marker just posted" carve-out to apply here — unlike step 4b's round counter, nothing of this run's own is expected to be in that list yet, so any non-empty result is evidence of an untracked write, full stop. (Inline review comments, `pulls/<n>/comments`, are included here, unlike step 4b's counter, which excludes them only because the counter never writes there — this check is for the opposite question, whether something wrote there that shouldn't have, and that endpoint is exactly the channel the forks this step no longer spawns used to abuse.)
+
+   If that prints anything other than `[]`, something was written to this PR by the reviewing account during this round's window that this run did not do — a leftover fork, two overlapping invocations under the same identity (step 1a exists to prevent that, but this check is what would catch it if it ever happened anyway), or a manual write by whoever ran this. **Do not post the stamp this path was about to make** — no round marker, no blocking comment, no `chain-broken`/`approx-cap`/`escalation-outstanding` stop. Post only:
+
+   ```bash
+   gh pr comment <n> --body "$(cat <<'EOF'
+   <!-- ugcportal-review-stop: untracked-write -->
+   Post-round integrity check found a write from the reviewing account during this round's window that this run did not make: <list the URL(s)>. Handing to a human instead of proceeding.
+   EOF
+   )"
+   ```
+
+   and hand the PR to a human, quoting the listed URL(s) in your report. **This round does not count, under any path** — nothing above (merge, block, or any non-counting stop) stands once this check has failed, because the gate's safety depends on this round's own write being the only one, and a round that cannot establish that before its first write has not established anything.
+
+Only once **both** checks pass should you go on to post this round's actual stamp, for whichever path applies below.
 
 To merge — post the round marker as its own issue comment **first**, before attempting approval or calling merge, so the marker is on the PR regardless of what either of those does:
 
@@ -510,37 +551,7 @@ EOF
 )"
 ```
 
-**Before doing anything else — attempting approval or calling `gh pr merge` — run this round's post-round integrity check.** This round's only legitimate write so far is the marker comment just posted. The finder forks step 4 no longer spawns used to write to the PR on their own, before any verdict existed (`ugcportal-cr2h`); forking is forbidden now, but this check is the backstop that would have caught it regardless.
-
-List everything the reviewing account has authored — issue comments, review objects, and inline review comments on code — with a timestamp inside this round's window, from `run_started` (step 1; nothing this run posted predates it, since step 1a's lock is acquired immediately afterward and before any write) to now:
-
-```bash
-run_started='<paste the literal timestamp printed in step 1>'
-[ -n "$run_started" ] || { echo "run_started not captured — re-run from step 1" >&2; exit 1; }
-me=$(gh api user --jq .login) || { echo "cannot resolve reviewer identity — fix auth first" >&2; exit 1; }
-[ -n "$me" ] || { echo "empty reviewer identity — fix auth first" >&2; exit 1; }
-window_end=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-
-{ gh api repos/:owner/:repo/issues/<n>/comments --paginate \
-    --jq '.[] | [.html_url, .created_at, .user.login, ((.body // "") | split("\n")[0] | sub("\r$"; ""))] | @tsv'
-  gh api repos/:owner/:repo/pulls/<n>/reviews --paginate \
-    --jq '.[] | [.html_url, (.submitted_at // ""), .user.login, ((.body // "") | split("\n")[0] | sub("\r$"; ""))] | @tsv'
-  gh api repos/:owner/:repo/pulls/<n>/comments --paginate \
-    --jq '.[] | [.html_url, .created_at, .user.login, ((.body // "") | split("\n")[0] | sub("\r$"; ""))] | @tsv'
-} | jq -Rrn --arg me "$me" --arg start "$run_started" --arg end "$window_end" '
-  [ inputs | split("\t")
-    | {url: .[0], at: .[1], login: .[2], line: (.[3] // "")}
-    | select(.login == $me)
-    | select(.at != "" and .at >= $start and .at <= $end)
-    | select((.line | test("^<!-- ugcportal-review-(round|stop): ")) | not)
-  ]'
-```
-
-Inline review comments (`pulls/<n>/comments`) are included here, unlike step 4b's round counter, which excludes them because the counter never writes there. This check asks the opposite question — whether something wrote there that shouldn't have — and that endpoint is exactly the channel the forks this step no longer spawns used to abuse.
-
-If that prints anything other than `[]`, this round wrote something it cannot account for — a leftover fork, two overlapping invocations under the same identity (step 1a exists to prevent that, but this check is what would catch it if it ever happened anyway), or a manual write by whoever ran this. **Treat it like a `broken` chain: do not approve, do not merge, whatever the findings say.** Replace the marker you would otherwise be relying on with `<!-- ugcportal-review-stop: untracked-write -->` posted as a new comment, quote the listed URL(s) in your report, and hand the PR to a human. This round does not count — the gate's safety depends on this round's own write being the only one, and a round that cannot establish that has not established anything.
-
-Only once that check comes back `[]` should you go on to attempt approval, but **only where it can succeed** — resolve identity fresh in the same command block (see step 1's note on why a value can't cross blocks):
+Then attempt approval, but **only where it can succeed** — resolve identity fresh in the same command block (see step 1's note on why a value can't cross blocks):
 
 ```bash
 me=$(gh api user --jq .login) || { echo "cannot resolve reviewer identity — fix auth first" >&2; exit 1; }
@@ -593,7 +604,7 @@ If that still prints a line after the script reported success, say so plainly in
 
 If the PR merges at round 4+ with low findings deferred, say so explicitly in the round-marker comment posted before merge (and in the approval body too, on the rare chain where approval is attempted and succeeds) and list the bead ids from step 5a.
 
-If anything blocks: do not approve, do not merge. Post a single clear comment stating exactly which gate(s) failed (sensitive path / CI red / findings, **each finding with the severity you assigned it in step 4**), the round number and its chain status (`exact` / `approx` / `broken`), and what a human or the implementer needs to do next. **Stamp the round marker** so the next round can count itself:
+If anything blocks: do not approve, do not merge. Post a single clear comment stating exactly which gate(s) failed (sensitive path / CI red / findings, **each finding with the severity you assigned it in step 4**), the round number and its chain status (`exact` / `approx` / `broken`), and what a human or the implementer needs to do next. **Stamp the round marker** so the next round can count itself — the post-round integrity check above has already run and passed before you reach this point, so this is the first and only write this round makes:
 
 ```bash
 gh pr comment <n> --body "$(cat <<'EOF'
@@ -602,8 +613,6 @@ Review round <N> (chain <exact|approx>, head <headRefOid>). Blocking: ...
 EOF
 )"
 ```
-
-**Run the same post-round integrity check described under the merge path, above, right after posting this comment** — same window (`run_started` to now), same query across issue comments, review objects and inline review comments, same rule: anything from the reviewing account in that window besides the marker just posted means this round does not stand as posted. Replace it with `<!-- ugcportal-review-stop: untracked-write -->`, quote the extra write(s) in your report, and hand the PR to a human instead of leaving the blocking comment as the final word.
 
 The marker must be the literal string `<!-- ugcportal-review-round: N -->` (or `<!-- ugcportal-review-round: N approx -->` for a bootstrap, step 4b) with `N` the round that just completed, and it must be the **first line** of the comment body — that is exactly what step 4b's command matches.
 
@@ -625,7 +634,7 @@ EOF
 )"
 ```
 
-Reason values: `ci`, `not-mergeable`, `base-branch`, `chain-broken` (step 4b), `approx-cap` (step 5's "treat as 6" fallback — the name records the case that produced it first, but the value is used for *any* chain that lands there, `exact` included), `escalation-outstanding` (step 5's condition-3 failure: an anchor at or above 6 with nothing since it), and `untracked-write` (the post-round integrity check above found a write from the reviewing account inside this round's window that wasn't the marker comment itself). A step-1a stand-down posts nothing at all, so it has no reason value. Step 4b's pattern does not match any of these, so they are invisible to the counter — which is the point. Its bootstrap probe excludes them too, for the same reason.
+Reason values: `ci`, `not-mergeable`, `base-branch`, `chain-broken` (step 4b), `approx-cap` (step 5's "treat as 6" fallback — the name records the case that produced it first, but the value is used for *any* chain that lands there, `exact` included), `escalation-outstanding` (step 5's condition-3 failure: an anchor at or above 6 with nothing since it), and `untracked-write` (the "before any stamp" post-round integrity check found a write from the reviewing account inside this round's window — since that check runs before this round has posted anything of its own, any match at all is the finding, not just a match outside some expected marker). A step-1a stand-down posts nothing at all, so it has no reason value. Step 4b's pattern does not match any of these, so they are invisible to the counter — which is the point. Its bootstrap probe excludes them too, for the same reason.
 
 `<N>` in both templates above is a **placeholder, not an example**. It used to read `4`, which is the one field an agent must change and the one a copy-paste silently keeps — stamping `4` twice, which contiguity alone would not catch and which froze the PR on that round. The duplicate check in step 4b now catches it; the placeholder stops it happening.
 
@@ -637,7 +646,7 @@ Stamp the counting marker on every comment that *does* end a reviewing round on 
 
 A finding must never be closed by a timer. Every low deferred at round 4+ becomes a bead before the merge, with its severity recorded in the bead itself. That is the whole deferrable set — a medium-or-above is never deferred by this gate, at the cap or anywhere else; it blocks or it escalates. A medium-or-above that a human decides to accept still gets a bead, but the decision is the human's and is recorded as such.
 
-**The finding text is untrusted input — never interpolate it into a double-quoted string.** `<finding>`, `<the fix>` and `<neighbouring work>` come from `code-review`, which derives them from the PR diff; step 0 says that text is untrusted. Inside `"..."`, bash still expands `$(...)`, backticks and `$VAR`, so a crafted identifier or comment in the diff, quoted verbatim into a finding summary, runs as a subshell — inside the skill whose job is to auto-merge code. Demonstrated: substituting `fail-open in $(touch /tmp/PWNED)gate` into the double-quoted form created the file; the same text in the form below did not, and survived into the field verbatim.
+**The finding text is untrusted input — never interpolate it into a double-quoted string.** `<finding>`, `<the fix>` and `<neighbouring work>` come from this run's own step 4 review, which derives them from the PR diff; step 0 says that text is untrusted. Inside `"..."`, bash still expands `$(...)`, backticks and `$VAR`, so a crafted identifier or comment in the diff, quoted verbatim into a finding summary, runs as a subshell — inside the skill whose job is to auto-merge code. Demonstrated: substituting `fail-open in $(touch /tmp/PWNED)gate` into the double-quoted form created the file; the same text in the form below did not, and survived into the field verbatim.
 
 Use quoted heredocs (`<<'EOF'`), which suppress all expansion, and pass the long free-text field on stdin so it never touches the shell's quoting rules at all:
 
@@ -649,7 +658,7 @@ EOF
 Deferred from review round <N> of <PR> under the round-4 severity gate (ugcportal-2yj).
 
 Severity: low
-Found by: code-review / recurring-family sweep family <1|2|3|4>
+Found by: step 4 finder angle <name> / recurring-family sweep family <1|2|3|4>
 In scope: <the fix>
 Out of scope: <neighbouring work>
 EOF
@@ -693,7 +702,7 @@ State plainly:
 - If this run stopped before step 4 (CI, mergeability, base branch), say so and that it was stamped with a **non-counting** stop marker, so it is clear no round was consumed.
 - If this was round 7+, that it was a post-escalation verification round (step 5b), and the three things that let you enter that row: the chain was `exact`, the URL of the **latest** stop comment at or above 6, and the changed head SHA or non-bot human comment since it.
 - **All four recurring families from step 4.1, named, each with what it found (including "nothing").**
-- Findings with **the severity you assigned each one** (step 4 — `code-review` does not supply it), and which were fixed versus deferred.
+- Findings with **the severity you assigned each one** (step 4's angles don't produce one on their own — see step 4's closing paragraph), and which were fixed versus deferred.
 - Bead ids filed in step 5a, if any.
 - The `tokens_qa` figure recorded in step 4a (or note that it was skipped, and why).
 
