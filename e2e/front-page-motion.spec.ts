@@ -185,9 +185,9 @@ test.describe("positive controls: the motion-safe effects are real under ordinar
    * applies the keyframe at all under ordinary motion: deleting it from
    * hero.tsx left every one of this suite's other checks (and all 2584
    * unit tests) green, while under `no-preference` the three shapes would
-   * stay at `opacity: 0` forever (their own base, no-motion-preference-
-   * expressed value — see `HeroDecoration`'s own comment) with nothing
-   * ever animating them to `opacity: 1`.
+   * stay at `opacity: 0` forever (`motion-safe:opacity-0` from
+   * hero.tsx:52-53, not their opacity-100 base — see the opacity: 1
+   * assertion below) with nothing ever animating them to `opacity: 1`.
    */
   test("the hero's decorative shapes actually fade in when motion is not reduced", async ({
     page,
