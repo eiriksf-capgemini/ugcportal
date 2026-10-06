@@ -360,7 +360,7 @@ describe("appendGalleryItems", () => {
     expect(appendGalleryItems(first, [])).toBe(first);
   });
 
-  it("keeps the on-screen item's own payload for a repeated id, not the incoming one's (ugcportal-oejb round-1 review)", () => {
+  it("keeps the on-screen item's own payload for a repeated id, not the incoming one's", () => {
     // Distinguishes first-wins from a last-wins regression by PAYLOAD, not
     // just by id: both items below share id "a", so a dedupe that let the
     // incoming copy win would still pass every id-only assertion above.
