@@ -13,6 +13,7 @@ import type { Adapter } from "next-auth/adapters";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  SCHEMA_MISMATCH_LOG_INTERVAL_MS,
   describeSchemaMismatch,
   migrationIntroducing,
   reportSchemaMismatch,
@@ -320,14 +321,20 @@ describe("withSchemaMismatchLogging", () => {
   it("counts what the throttle swallowed into the next line", () => {
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     const error = { message: "no such column: main.Session.signInProvider" };
+    // Fake timers for the whole test (ugcportal-qz1u item 1 ripple): the
+    // underlying throttle (src/lib/throttled-log.ts) now measures its window
+    // with `performance.now()`, not `Date.now()`, so advancing the window
+    // with `vi.setSystemTime` alone (which moves `Date`, not
+    // `performance.now()`) no longer does anything — see
+    // watermark.concurrency.test.ts's own comment on the same fix.
+    // `vi.advanceTimersByTime` moves both together.
     vi.useFakeTimers();
     try {
-      vi.setSystemTime(new Date("2026-10-06T10:00:00Z"));
       expect(reportSchemaMismatch(error, "getSessionAndUser")).toBe(true);
       expect(reportSchemaMismatch(error, "getSessionAndUser")).toBe(true);
       expect(reportSchemaMismatch(error, "getSessionAndUser")).toBe(true);
       expect(errors).toHaveBeenCalledTimes(1);
-      vi.setSystemTime(new Date("2026-10-06T10:00:30Z"));
+      vi.advanceTimersByTime(SCHEMA_MISMATCH_LOG_INTERVAL_MS + 1);
       expect(reportSchemaMismatch(error, "getSessionAndUser")).toBe(true);
       expect(errors).toHaveBeenCalledTimes(2);
       expect(errors.mock.calls[1][0]).toContain("2 further failure(s) on this column");
@@ -366,15 +373,17 @@ describe("withSchemaMismatchLogging", () => {
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     const session = { message: "no such column: main.Session.signInProvider" };
     const user = { message: "no such column: main.User.configuredHandle" };
+    // See the previous test's comment: the window advances with
+    // `vi.advanceTimersByTime`, not `vi.setSystemTime`, now that the
+    // underlying throttle reads `performance.now()`.
     vi.useFakeTimers();
     try {
-      vi.setSystemTime(new Date("2026-10-06T10:00:00Z"));
       reportSchemaMismatch(session, "getSessionAndUser");
       reportSchemaMismatch(session, "getSessionAndUser");
       reportSchemaMismatch(session, "getSessionAndUser");
       reportSchemaMismatch(user, "getUserByAccount");
       expect(errors).toHaveBeenCalledTimes(2);
-      vi.setSystemTime(new Date("2026-10-06T10:00:30Z"));
+      vi.advanceTimersByTime(SCHEMA_MISMATCH_LOG_INTERVAL_MS + 1);
       reportSchemaMismatch(user, "getUserByAccount");
       expect(errors).toHaveBeenCalledTimes(3);
       // The user column was suppressed no times; the two swallowed calls
