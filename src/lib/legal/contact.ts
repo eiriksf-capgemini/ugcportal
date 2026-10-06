@@ -128,8 +128,9 @@ export const LEGAL_SIGN_OFF: LegalSignOff | null = {
   // Eirik approved the uploads category's new fourth `what` paragraph (the
   // advertising-disclosure record: benefit received, its source, the label)
   // and the matching `legalBasis`/`recipients` wording on 2026-10-06
-  // (ugcportal-mj50); only /privacy's digest changed, so /licence's is
-  // unchanged from the sign-off above.
+  // (ugcportal-mj50); only /privacy's digest below changed — the /licence
+  // value is byte-identical to the one it replaces, since this PR touched
+  // no licence text.
   by: "Eirik Sander-Fjeld",
   date: "2026-10-06",
   bead: "ugcportal-mj50",
