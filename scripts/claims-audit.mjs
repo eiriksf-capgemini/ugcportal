@@ -20,10 +20,13 @@
  * below, in exactly three shapes -- every one of them a refusal to print a
  * count it cannot stand behind, never a verdict on a claim: an argument it
  * cannot parse (an unrecognized flag, or `--base` with no usable value);
- * an explicitly-given `--base` that does not resolve against HEAD; and a
- * required working-tree read failing while the tree is dirty (K3). All
- * three only affect whoever ran it directly, same as above. The one thing
- * it does check
+ * an explicitly-given `--base` that does not resolve against HEAD; and any
+ * required git read failing, unconditionally -- not only while the working
+ * tree happens to be dirty (K3; ugcportal-np1i round 2 H1 narrowed this from
+ * "while dirty" to "always", because a fully-committed clean branch can
+ * still have a real diff to report, and a failed read there is exactly as
+ * untrustworthy as one on a dirty tree). All three only affect whoever ran
+ * it directly, same as above. The one thing it does check
  * mechanically is whether a file a comment points at still exists in the
  * tree, because that is the family-1 shape that is pure fact (PR #98 round
  * 3: "sign-in-policy.ts:125 cites configured-users.ts, which no longer
@@ -87,9 +90,10 @@
  * tree (two coordinate systems that can disagree -- see ugcportal-np1i M2
  * below), this script resolves the merge base of `base` and HEAD once
  * (resolveMergeBase) and diffs THAT directly against the CURRENT WORKING
- * TREE (resolveMergeBase/getTrackedFilesChangedSince/
- * getChangedLineNumbersSince/listUntrackedFiles/readFileFromWorkingTree, all
- * in scripts/lib/git-diff.mjs). A file changed in a commit already on this
+ * TREE (resolveMergeBase/getChangedLineNumbersSince/listUntrackedFiles/
+ * readFileFromWorkingTree, all in scripts/lib/git-diff.mjs -- one `git diff
+ * -U0` provides both the changed-file list and the changed line numbers,
+ * ugcportal-np1i round 2 L3). A file changed in a commit already on this
  * branch and a file with only an uncommitted edit are both just "changed
  * since the merge base" -- including an untracked file, which has no HEAD
  * side to diff against at all and so counts as entirely new. Before this,
@@ -109,9 +113,15 @@
  * `HEAD~1` does not exist yet -- main() degrades to diffing HEAD itself
  * against the working tree, rather than refusing: there is no earlier
  * commit to compare against, but any uncommitted work is still worth
- * reporting. If a required working-tree read fails for some OTHER reason
- * (M3), main() refuses with a non-zero exit instead of printing a candidate
- * count that silently excludes whatever that failed read would have added.
+ * reporting; the printed banner then names `HEAD`, the ref actually used,
+ * rather than the unresolvable default (round 2 L1). If a required git read
+ * fails for any other reason, main() refuses with a non-zero exit instead
+ * of printing a candidate count that silently excludes whatever that failed
+ * read would have added -- unconditionally, not only when the working tree
+ * is dirty (M3's original fix only covered the line-range read failing
+ * while dirty; round 2 H1 found the same gap reachable on a clean,
+ * fully-committed branch, which is also the ordinary `/pre-review` case,
+ * and removed the dirty-tree precondition from the guard entirely).
  *
  * KNOWN LIMITATION (ugcportal-lykb), narrowed: scripts/sweep-candidates.mjs,
  * which shares this same scripts/lib/git-diff.mjs, still reads checked-out
@@ -127,8 +137,6 @@ import ts from "typescript";
 
 import {
   getChangedLineNumbersSince,
-  getTrackedFilesChangedSince,
-  isWorkingTreeDirty,
   listTrackedFiles,
   listUntrackedFiles,
   readFileFromWorkingTree,
@@ -458,6 +466,12 @@ function main() {
     // "before the first commit" case, not a failure to refuse over.
   }
   const diffRef = mergeBase ?? "HEAD";
+  // The banner printed below reports diffRef, not base, whenever they
+  // differ (the degrade above): base itself (e.g. HEAD~1) was never
+  // actually diffed against anything once that happens, and printing it
+  // anyway would be a stale claim the next reader has no way to check
+  // against what the script actually did (ugcportal-np1i round 2 L1).
+  const reportedBase = mergeBase === null ? diffRef : base;
 
   let untrackedFiles = [];
   let workingTreeReadFailed = false;
@@ -468,29 +482,24 @@ function main() {
     console.error(`claims-audit: git ls-files --others failed: ${err.message}`);
   }
 
-  let trackedChangedFiles = [];
+  // One diff covers both the file list and the line numbers (ugcportal-np1i
+  // round 2 L3 -- a separate `git diff --name-only` call used to recompute
+  // the same diff a second time just for the file list). Run unconditionally,
+  // even under --all-lines: the file list is still needed there, only the
+  // per-file line numbers go unused (auditContent gets changedLines=null
+  // instead, below). A failure here sets workingTreeReadFailed exactly like
+  // the untracked-file read's failure above does, so the guardrail below
+  // covers every required read (ugcportal-np1i M3).
+  let changedLinesByFile = new Map();
   try {
-    trackedChangedFiles = getTrackedFilesChangedSince(diffRef);
+    changedLinesByFile = getChangedLineNumbersSince(diffRef);
   } catch (err) {
     workingTreeReadFailed = true;
     console.error(`claims-audit: could not diff ${diffRef} against the working tree: ${err.message}`);
   }
 
-  // A failure here sets workingTreeReadFailed exactly like the file list's
-  // failure above does, so K3 below covers both reads it depends on
-  // (ugcportal-np1i M3 -- the previous version only watched the file list).
-  let changedLinesByFile = new Map();
-  if (!allLines) {
-    try {
-      changedLinesByFile = getChangedLineNumbersSince(diffRef);
-    } catch (err) {
-      workingTreeReadFailed = true;
-      console.error(`claims-audit: could not diff line ranges for ${diffRef} against the working tree: ${err.message}`);
-    }
-  }
-
   const untrackedSet = new Set(untrackedFiles);
-  const changedFiles = [...new Set([...trackedChangedFiles, ...untrackedFiles])];
+  const changedFiles = [...new Set([...changedLinesByFile.keys(), ...untrackedFiles])];
 
   let trackedFiles = [];
   try {
@@ -519,27 +528,23 @@ function main() {
   }
 
   // K3 guardrail: never report the false all-clean this bug used to produce.
-  // If a required working-tree read itself failed (so changedFiles and/or
-  // changedLinesByFile may be incomplete) and the tree is in fact dirty,
-  // refuse instead of printing a count that silently excludes whatever that
-  // failed read would have added.
+  // Refuses on ANY required-read failure, unconditionally -- not gated on
+  // whether the working tree happens to be dirty. Dirtiness ("is there
+  // uncommitted work") and "did the read succeed" are different questions:
+  // a fully-committed, clean branch -- the normal /pre-review case -- can
+  // still have a real committed-since-base diff to report, and a failed
+  // read there is just as untrustworthy as one on a dirty tree (ugcportal-
+  // np1i round 2 H1 -- the previous isWorkingTreeDirty() gate answered the
+  // wrong question and so missed exactly that clean-tree case).
   if (workingTreeReadFailed) {
-    let dirty = false;
-    try {
-      dirty = isWorkingTreeDirty();
-    } catch {
-      dirty = true; // can't tell; assume the worse case rather than report 0
-    }
-    if (dirty) {
-      console.error(
-        "claims-audit: the working tree has uncommitted changes but they could not be read (see the error above) -- refusing to report a possibly-false candidate count. Commit your changes, or fix the git error, and re-run.",
-      );
-      process.exit(1);
-    }
+    console.error(
+      "claims-audit: a required git read failed (see the error above) -- refusing to report a possibly-false candidate count. Fix the git error and re-run.",
+    );
+    process.exit(1);
   }
 
   const counts = { ABSOLUTE: 0, MEASUREMENT: 0, TEMPORAL: 0, HISTORY: 0, "REFERENCE not found": 0 };
-  console.log(`--- claims-audit: comment and prose claims on ${allLines ? "every" : "added"} lines (base ${base}) ---`);
+  console.log(`--- claims-audit: comment and prose claims on ${allLines ? "every" : "added"} lines (base ${reportedBase}) ---`);
   console.log(`candidates found: ${candidates.length}`);
   for (const c of candidates) {
     for (const cat of c.categories) counts[cat]++;

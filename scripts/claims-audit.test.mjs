@@ -7,17 +7,20 @@
  * (ugcportal-np1i), which needs a real git repository because the bugs it
  * guards against only exist in the interaction between git plumbing and the
  * filesystem, not in any pure function: a false "candidates found: 0" before
- * the first commit, a silently-ignored `--base=<ref>` (K1/K2), and three
- * further ways the same false zero could still happen that a round-1 review
- * of this PR reproduced directly -- an unresolvable `--base` falling through
- * silently (M1), a committed change plus an uncommitted edit to the same
- * file producing two line-numbering systems whose union pointed at the
- * wrong lines (M2), and the working-tree line-range read itself failing
- * without tripping the K3 guardrail (M3).
+ * the first commit, a silently-ignored `--base=<ref>` (K1/K2), and several
+ * further ways the same false zero could still happen that review rounds
+ * on this PR reproduced directly -- an unresolvable `--base` falling
+ * through silently (M1), a committed change plus an uncommitted edit to the
+ * same file producing two line-numbering systems whose union pointed at
+ * the wrong lines (M2), a required diff read failing without tripping the
+ * K3 guardrail on a dirty tree (round 1 M3) or, the gap that survived that
+ * fix, on a fully-committed CLEAN tree -- the ordinary `/pre-review` case
+ * -- because the guardrail was gated on "is the tree dirty" rather than
+ * "did the read succeed" (round 2 H1).
  *
  * Each fixture is shaped like a real finding from the v0.5.0 review rounds
  * (docs/process/review-rounds-v0.5.0.md, Part 1) or from this PR's own
- * round-1 review, named in the test title.
+ * review rounds, named in the test title.
  */
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -370,6 +373,11 @@ describe("working tree and --base (ugcportal-np1i)", () => {
 
     expect(out).not.toMatch(/candidates found: 0\b/);
     expect(out).toContain("new-file.ts:1 [ABSOLUTE] never fails on any path");
+    // L1: the default base (HEAD~1) never resolved here (there's only one
+    // commit) and main() degraded to diffing HEAD -- the banner must say
+    // so, not repeat the unresolvable default it never actually used.
+    expect(out).toContain("(base HEAD)");
+    expect(out).not.toContain("(base HEAD~1)");
   });
 
   it("K1: reports a claim added to an already-tracked file's unstaged edit", () => {
@@ -482,6 +490,41 @@ describe("working tree and --base (ugcportal-np1i)", () => {
     expect(error).toBeDefined();
     expect(error.status).not.toBe(0);
     expect(error.stdout ?? "").not.toMatch(/candidates found/);
-    expect(error.stderr ?? "").toMatch(/could not diff line ranges/);
+    expect(error.stderr ?? "").toMatch(/could not diff HEAD against the working tree/);
+  });
+
+  it("H1: refuses on a clean, fully-committed tree when the diff read fails -- dirtiness is not the gate (round 2 finding 1)", () => {
+    const { repo, env, writeFile, git, commit } = makeFixtureRepo();
+    git(["branch", "root-ref"]);
+    writeFile("feature.ts", "// never fails on any path\nconst a = 1;\n");
+    git(["add", "feature.ts"]);
+    commit("add feature.ts with a claim");
+    // The working tree is now fully clean: nothing staged, nothing
+    // unstaged, nothing untracked -- isWorkingTreeDirty() would have
+    // returned false here, which is exactly the gap the old K3 guard had
+    // (it never even gets called any more; this proves the replacement
+    // guard fires without it).
+
+    const binParent = fs.mkdtempSync(path.join(os.tmpdir(), "claims-audit-git-wrapper-"));
+    FIXTURE_PARENTS.push(binParent); // outside the repo -- the wrapper's own directory must not itself make `repo` dirty
+    fs.writeFileSync(path.join(binParent, "git"), BREAKING_GIT_WRAPPER, { mode: 0o755 });
+
+    const breakingEnv = {
+      ...env,
+      PATH: `${binParent}:${env.PATH}`,
+      CLAIMS_AUDIT_REAL_GIT: REAL_GIT,
+      CLAIMS_AUDIT_BREAK_LINES_DIFF: "1",
+    };
+
+    let error;
+    try {
+      execFileSync("node", [SCRIPT_PATH, "--base", "root-ref"], { cwd: repo, env: breakingEnv, encoding: "utf8" });
+    } catch (err) {
+      error = err;
+    }
+
+    expect(error).toBeDefined();
+    expect(error.status).not.toBe(0);
+    expect(error.stdout ?? "").not.toMatch(/candidates found/);
   });
 });
