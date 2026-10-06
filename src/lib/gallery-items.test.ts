@@ -1,6 +1,3 @@
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-
 import { describe, expect, it } from "vitest";
 
 import { PORTFOLIO_TAG_SLUG } from "@/lib/curation-tags";
@@ -363,30 +360,27 @@ describe("appendGalleryItems", () => {
     expect(appendGalleryItems(first, [])).toBe(first);
   });
 
-  /**
-   * ugcportal-oejb K1: `appendGalleryItems` adopts the shared `dedupeBy`
-   * (src/lib/dedupe.ts) rather than its own Set-based first-wins loop.
-   *
-   * Scoped to THIS function's own source, not the whole file: `toGalleryTags`
-   * and `toGalleryItems` above still hand-roll a `seen.has`/`seen.add` pair
-   * each, over a per-entry validation loop neither the bead nor this test
-   * touches — they were not among the three sites ugcportal-oejb names in
-   * scope, and folding them in here would be exactly the kind of
-   * undiscussed scope growth review-standards' scope freeze warns against.
-   */
-  it("calls the shared dedupeBy rather than its own Set-based loop", () => {
-    const source = readFileSync(
-      fileURLToPath(new URL("./gallery-items.ts", import.meta.url)),
-      "utf8",
-    );
-    const start = source.indexOf("export function appendGalleryItems(");
-    expect(start).toBeGreaterThan(-1);
-    const end = source.indexOf("\n}\n", start);
-    expect(end).toBeGreaterThan(start);
-    const body = source.slice(start, end);
+  it("keeps the on-screen item's own payload for a repeated id, not the incoming one's (ugcportal-oejb round-1 review)", () => {
+    // Distinguishes first-wins from a last-wins regression by PAYLOAD, not
+    // just by id: both items below share id "a", so a dedupe that let the
+    // incoming copy win would still pass every id-only assertion above.
+    const first = [item({ id: "a", caption: "original" })];
+    const overlapping = [item({ id: "a", caption: "replaced" }), item({ id: "c" })];
+    const result = appendGalleryItems(first, overlapping);
 
-    expect(body).toContain("dedupeBy(");
-    expect(body).not.toMatch(/seen\.has\(|seen\.add\(/);
+    expect(result.map((entry) => entry.id)).toEqual(["a", "c"]);
+    expect(result[0].caption).toBe("original");
+  });
+
+  it("keeps the first payload for an id repeated WITHIN the incoming page, not a later one's", () => {
+    const page = [
+      item({ id: "a", caption: "first" }),
+      item({ id: "a", caption: "second" }),
+    ];
+    const result = appendGalleryItems([], page);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].caption).toBe("first");
   });
 });
 

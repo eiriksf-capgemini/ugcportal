@@ -329,27 +329,30 @@ export function isGenuinelyEmptyPage(
  * an id within one page both survived, and the comment here claimed a net that
  * was not under that half of the fall. The failure it claimed to catch —
  * duplicate React keys — was therefore exactly the failure it let through.
- * Running `dedupeBy` (src/lib/dedupe.ts, ugcportal-oejb) over the ONE
- * combined array keeps that guarantee for both halves at once: by the time
- * it runs, "already on screen" and "already earlier in the incoming page"
- * are no longer two cases, only two reasons a key can have been seen before.
+ * `dedupeBy` (src/lib/dedupe.ts, ugcportal-oejb) now keeps both halves of
+ * that guarantee: `existing`'s own ids are its seed, so `incoming` is deduped
+ * against them AND against itself in the same pass, without copying
+ * `existing` into a combined array first — this runs on every "load more"
+ * fetch of what can be a long-scrolled gallery, so that copy is an
+ * allocation worth not paying for.
  *
  * Still a display safety net rather than a proof: it keeps the keys unique if
  * the cursor contract is ever broken, and says nothing about whether it is.
  *
  * It returns the existing array unchanged when there is nothing new (by
  * `===`, not just by value), so a repeated final page does not re-render the
- * grid. `existing` itself is assumed to carry no internal duplicate id —
- * true by induction, since this function is the only way the gallery ever
- * grows that array and it never lets one through — so `combined.length`
- * can only exceed `existing.length` by the count of genuinely fresh items.
+ * grid.
  */
 export function appendGalleryItems(
   existing: GalleryItem[],
   incoming: GalleryItem[],
 ): GalleryItem[] {
-  const combined = dedupeBy([...existing, ...incoming], (item) => item.id);
-  return combined.length === existing.length ? existing : combined;
+  const fresh = dedupeBy(
+    incoming,
+    (item) => item.id,
+    existing.map((item) => item.id),
+  );
+  return fresh.length === 0 ? existing : [...existing, ...fresh];
 }
 
 /**

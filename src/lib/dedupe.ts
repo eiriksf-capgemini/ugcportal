@@ -22,11 +22,21 @@
  * normalised string — so any case- or whitespace-folding a caller needs
  * (e.g. `tagSlug`'s lower-casing) belongs in the function it passes here,
  * not in this one. This function does no normalisation of its own: two keys
- * are the same only if they are `===`-equal (`Set`'s own equality), nothing
- * looser and nothing stricter.
+ * are the same under Set equality (SameValueZero: `===` except that `NaN`
+ * equals `NaN`), nothing looser and nothing stricter.
+ *
+ * `seedKeys`, when given, counts as already seen — keys it contains are
+ * never returned, without their items ever being copied into `items` first.
+ * `appendGalleryItems` (src/lib/gallery-items.ts) uses this to dedupe only
+ * `incoming` against `existing`'s ids, rather than concatenating both arrays
+ * on every call.
  */
-export function dedupeBy<T, K>(items: readonly T[], keyOf: (item: T) => K): T[] {
-  const seen = new Set<K>();
+export function dedupeBy<T, K>(
+  items: readonly T[],
+  keyOf: (item: T) => K,
+  seedKeys?: Iterable<K>,
+): T[] {
+  const seen = new Set<K>(seedKeys);
   const result: T[] = [];
   for (const item of items) {
     const key = keyOf(item);

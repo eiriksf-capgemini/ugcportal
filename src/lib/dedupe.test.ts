@@ -48,6 +48,12 @@ describe("dedupeBy", () => {
     expect(dedupeBy(items, (item) => item.key)).toEqual(items);
   });
 
+  it("treats two NaN keys as the same, per Set's SameValueZero equality", () => {
+    expect(dedupeBy([{ key: NaN }, { key: NaN }], (item) => item.key)).toEqual([
+      { key: NaN },
+    ]);
+  });
+
   it("dedupes by a derived, non-string key just as well", () => {
     const items = [
       { bucket: 1, value: "a" },

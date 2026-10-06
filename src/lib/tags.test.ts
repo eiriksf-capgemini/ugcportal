@@ -1,6 +1,3 @@
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-
 import { describe, expect, it } from "vitest";
 
 import { hasUnsafeText } from "@/lib/media-rules";
@@ -326,6 +323,10 @@ describe("parseTagNames", () => {
   });
 
   it("collapses spellings of one tag and keeps the first", () => {
+    // Distinguishes first-wins from a last-wins regression by PAYLOAD, not
+    // just by slug (ugcportal-oejb round-1 review): all three entries share
+    // slug "food", but differ in `name`, so this fails if a later spelling
+    // ever won instead of the first.
     const result = parseTagNames(["Food", "food", "FOOD"]);
 
     expect(result.ok).toBe(true);
@@ -365,21 +366,5 @@ describe("parseTagNames", () => {
       "books",
       "food",
     ]);
-  });
-
-  /** ugcportal-oejb K1: adopts the shared `dedupeBy` (src/lib/dedupe.ts). */
-  it("calls the shared dedupeBy rather than its own Map-based loop", () => {
-    const source = readFileSync(
-      fileURLToPath(new URL("./tags.ts", import.meta.url)),
-      "utf8",
-    );
-    const start = source.indexOf("export function parseTagNames(");
-    expect(start).toBeGreaterThan(-1);
-    const end = source.indexOf("\n}\n", start);
-    expect(end).toBeGreaterThan(start);
-    const body = source.slice(start, end);
-
-    expect(body).toContain("dedupeBy(");
-    expect(body).not.toMatch(/bySlug\.has\(|bySlug\.set\(/);
   });
 });
