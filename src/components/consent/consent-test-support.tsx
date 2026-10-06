@@ -9,11 +9,12 @@ import { afterEach, beforeEach } from "vitest";
  * 3, finding 8 — reuse): each independently hand-rolled the identical
  * createRoot/act container setup and teardown. Modeled directly on
  * src/components/gallery/gallery.test-support.tsx's `setupGalleryTestRoot`,
- * the one other place in this repo with the same shape — same accessor-
- * function return (`ctx.container()`/`ctx.root()`, not plain mutable
- * properties, so a test can't accidentally read a stale pre-`beforeEach`
- * snapshot), same `IS_REACT_ACT_ENVIRONMENT` setup, same unmount-then-remove
- * teardown.
+ * the one other place in this repo with the same shape — same anti-
+ * staleness accessors (`ctx.container()`/`ctx.root()` here, not plain
+ * mutable properties, so a test can't accidentally read a stale
+ * pre-`beforeEach` snapshot; the gallery version reads as `ctx.container`/
+ * `ctx.root` getters instead, ugcportal-dj4i item 5, same purpose), same
+ * `IS_REACT_ACT_ENVIRONMENT` setup, same unmount-then-remove teardown.
  *
  * Deliberately NOT itself a `*.test.*` file, for the same reason
  * gallery.test-support.tsx isn't: vitest's default test-file glob would

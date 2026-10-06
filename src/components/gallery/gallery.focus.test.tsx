@@ -74,7 +74,7 @@ afterEach(() => {
 });
 
 async function mount(): Promise<void> {
-  await renderGallery(ctx.root(), {
+  await renderGallery(ctx.root, {
     initialItems: ITEMS,
     initialCursor: "cursor-1",
     initialHasMore: true,
@@ -83,14 +83,12 @@ async function mount(): Promise<void> {
 
 /**
  * The paging control, distinguished from a gallery TILE — both are
- * `<button>` elements, and `ctx.container().querySelector("button")` alone
+ * `<button>` elements, and `ctx.container.querySelector("button")` alone
  * would silently match whichever comes first in document order.
  */
 function loadMoreButtonOrNull(): HTMLButtonElement | null {
-  return (
-    [...ctx.container().querySelectorAll("button")].find(
-      (candidate) => !candidate.hasAttribute("data-gallery-tile"),
-    ) ?? null
+  return ctx.container.querySelector<HTMLButtonElement>(
+    "button:not([data-gallery-tile])",
   );
 }
 
@@ -102,9 +100,38 @@ function loadMoreButton(): HTMLButtonElement {
 
 /** The polite paging status line — the K2 focus target. */
 function pagingStatus(): HTMLParagraphElement {
-  const status = ctx.container().querySelector('p[aria-live="polite"]');
+  const status = ctx.container.querySelector('p[aria-live="polite"]');
   expect(status).not.toBeNull();
   return status as HTMLParagraphElement;
+}
+
+/**
+ * Resolves a held-open `stubDeferredFetch` response with `FINAL_PAGE` and
+ * waits for the Load more button to be removed — the fake-timer block
+ * (`useFakeTimers`, the resolve, a concurrent `advanceTimersByTimeAsync`,
+ * `useRealTimers`) all three K2 tests below need, extracted once
+ * (ugcportal-dj4i item 2). `waitUntil`'s own polling now runs on fake
+ * timers too, so it is raced against `advanceTimersByTimeAsync` rather than
+ * awaited after it — nothing else fires the poll's timers otherwise.
+ * `useRealTimers()` runs in `finally` so a failed assertion inside
+ * `waitUntil` still restores the real clock for whatever runs next.
+ */
+async function resolveFinalPage(
+  resolveWith: (payload: unknown) => Promise<void>,
+): Promise<void> {
+  vi.useFakeTimers();
+  try {
+    await resolveWith(FINAL_PAGE);
+    await Promise.all([
+      waitUntil(
+        () => loadMoreButtonOrNull() === null,
+        "the Load more button to be removed after the last page",
+      ),
+      vi.advanceTimersByTimeAsync(3000),
+    ]);
+  } finally {
+    vi.useRealTimers();
+  }
 }
 
 describe("K1/K3 — focus survives activating Load more", () => {
@@ -168,32 +195,12 @@ describe("K2 — focus at the end of the list", () => {
     await click(button);
     expect(fetchMock).toHaveBeenCalledTimes(1);
 
-    // Fake timers for the poll below (round-5 review finding), matching
-    // this repo's established convention (e.g. upload-transport.test.ts)
-    // rather than real wall-clock 10ms ticks. Scoped to this test alone,
-    // not a describe-level hook: the sibling test just below polls for a
-    // DIFFERENT condition (`aria-busy`) on the real clock, and a
-    // describe-level `vi.useFakeTimers()` would starve it of the real
-    // timer its own poll relies on. `useRealTimers()` in `finally` so a
-    // failed assertion above still restores the real clock for whatever
-    // runs next.
-    vi.useFakeTimers();
-    try {
-      await resolveWith(FINAL_PAGE);
-
-      // Run concurrently, not sequentially: `waitUntil`'s own 10ms
-      // `setTimeout` polls are now fake timers too, and nothing fires them
-      // without `advanceTimersByTimeAsync` running at the same time.
-      await Promise.all([
-        waitUntil(
-          () => loadMoreButtonOrNull() === null,
-          "the Load more button to be removed after the last page",
-        ),
-        vi.advanceTimersByTimeAsync(3000),
-      ]);
-    } finally {
-      vi.useRealTimers();
-    }
+    // Fake timers (upload-transport.test.ts's convention), scoped to this
+    // test alone, not a describe-level hook: the sibling test just below
+    // polls for a DIFFERENT condition (`aria-busy`) on the real clock, and a
+    // describe-level `vi.useFakeTimers()` would starve it of the real timer
+    // its own poll relies on. See `resolveFinalPage` above.
+    await resolveFinalPage(resolveWith);
 
     expect(document.activeElement).not.toBe(document.body);
     expect(document.activeElement).toBe(pagingStatus());
@@ -266,24 +273,13 @@ describe("K2 guard — a visitor who tabbed elsewhere while the request was pend
 
     const elsewhere = document.createElement("input");
     document.body.append(elsewhere);
-    // Fake timers for the poll below (round-5 review finding), scoped to
-    // this test and released in the same `finally` as `elsewhere` — see
-    // the first K2 test's comment for why this is per-test, not a
-    // describe-level hook.
-    vi.useFakeTimers();
     try {
       elsewhere.focus();
       expect(document.activeElement).toBe(elsewhere);
 
-      await resolveWith(FINAL_PAGE);
-
-      await Promise.all([
-        waitUntil(
-          () => loadMoreButtonOrNull() === null,
-          "the Load more button to be removed after the last page",
-        ),
-        vi.advanceTimersByTimeAsync(3000),
-      ]);
+      // See `resolveFinalPage` above for why this is per-test, not a
+      // describe-level hook.
+      await resolveFinalPage(resolveWith);
 
       // Left exactly where the visitor put it — not pulled to the paging
       // status, and not dropped to <body> either.
@@ -291,7 +287,6 @@ describe("K2 guard — a visitor who tabbed elsewhere while the request was pend
       expect(document.activeElement).not.toBe(pagingStatus());
       expect(document.activeElement).not.toBe(document.body);
     } finally {
-      vi.useRealTimers();
       elsewhere.remove();
     }
   });
@@ -323,23 +318,9 @@ describe("K2 guard — a mouse click that never focused the button", () => {
     await click(button);
     expect(fetchMock).toHaveBeenCalledTimes(1);
 
-    // Fake timers for the poll below (round-5 review finding) — see the
-    // first K2 test's comment for why this is per-test, not a
+    // See `resolveFinalPage` above for why this is per-test, not a
     // describe-level hook.
-    vi.useFakeTimers();
-    try {
-      await resolveWith(FINAL_PAGE);
-
-      await Promise.all([
-        waitUntil(
-          () => loadMoreButtonOrNull() === null,
-          "the Load more button to be removed after the last page",
-        ),
-        vi.advanceTimersByTimeAsync(3000),
-      ]);
-    } finally {
-      vi.useRealTimers();
-    }
+    await resolveFinalPage(resolveWith);
 
     // Exactly where it was before the click — not pulled to the paging
     // status, which is what an unrequested focus ring would look like.
