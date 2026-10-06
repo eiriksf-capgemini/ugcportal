@@ -2,12 +2,7 @@ import Link from "next/link";
 
 import { CookieSettingsLink } from "@/components/consent/cookie-settings-link";
 import { FOOTER_LINK_CLASS } from "@/components/ui/footer-link";
-import { LEGAL_PAGES } from "@/lib/legal/pages";
-import {
-  type LegalPage,
-  legalReadiness,
-  linkBlockedInProduction,
-} from "@/lib/legal/publishable";
+import { legalLinkBlocked } from "@/lib/legal/pages";
 import {
   ABOUT_CONTACT_PATH,
   ABOUT_PATH,
@@ -57,45 +52,6 @@ import { SITE_NAME } from "@/lib/site";
  */
 
 const FOOTER_HEADING_CLASS = "text-sm font-medium text-foreground";
-
-/**
- * The registered LegalPage for a route this footer links to (round-1
- * review: previously went through each page's own `loadPrivacy`/
- * `loadLicence` loader instead, which builds the full rendered prose from
- * the live LEGAL_* contact once per request — round-6 review: the
- * rejected design's real cost is ONE avoidable prose-build on /privacy
- * and on /licence each (the footer still calls the OTHER page's loader
- * there — /privacy's own render only makes loadPrivacy() a cache hit, not
- * loadLicence()), and TWO avoidable prose-builds, just to read one
- * boolean each, on every other page, where neither call is a cache hit —
- * see src/lib/legal/pages.ts's own comment for why LEGAL_PAGES is the
- * right thing to read instead). Throws rather than silently treating an
- * unregistered path as safe: a footer link to a legal page that isn't in
- * LEGAL_PAGES is a bug in this file, not a page that happens to be fine to
- * link.
- */
-function legalPageFor(path: string): LegalPage {
-  const page = LEGAL_PAGES.find((candidate) => candidate.path === path);
-  if (!page) {
-    throw new Error(
-      `${path} is not registered in LEGAL_PAGES (src/lib/legal/pages.ts) — the footer cannot judge whether it is safe to link.`,
-    );
-  }
-  return page;
-}
-
-/**
- * K3's real guard: whether a link to the given legal page may render at
- * all. Reads the SAME readiness the page itself guards rendering with
- * (`legalReadiness`/`assertPublishable`, src/lib/legal/publishable.ts) via
- * `LEGAL_PAGES` above, and applies `linkBlockedInProduction` — the same
- * helper `ugcportal-nf9l` reuses for the About page's own outbound link —
- * on top of it, so the footer and the pages cannot disagree about which
- * pages are safe to serve or to link to.
- */
-function legalLinkBlocked(path: string): boolean {
-  return linkBlockedInProduction(legalReadiness([legalPageFor(path)]));
-}
 
 /** The visible, assistive-tech-readable suffix on a blocked legal link — see FooterNavLink. */
 const COMING_SOON_SUFFIX = " (coming soon)";

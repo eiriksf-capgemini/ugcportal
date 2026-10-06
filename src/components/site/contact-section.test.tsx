@@ -2,7 +2,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ContactSection } from "@/components/site/contact-section";
-import { ABOUT_CONTACT_PATH, pathFragment } from "@/lib/routes";
+import { stubLegalEnv } from "@/lib/legal/legal-page.test-support";
+import { ABOUT_CONTACT_PATH, PRIVACY_PATH, pathFragment } from "@/lib/routes";
 
 /**
  * Round-5 review: when `CONTACT_EMAIL` fails
@@ -58,5 +59,26 @@ describe("ContactSection — the direct-email link label", () => {
     );
     expect(markup).toContain('data-contact-direct-link=""');
     expect(markup).toMatch(/href="mailto:[^"]+"/);
+  });
+});
+
+describe("ContactSection — the privacy link (ugcportal-nf9l K1)", () => {
+  // Same reasoning as site-footer.test.tsx's own "SiteFooter wiring"
+  // block: UNSET_LEGAL_ENV (via stubLegalEnv) forces `blocked`/`draft`
+  // true regardless of today's real LEGAL_SIGN_OFF, so these two cases
+  // depend only on NODE_ENV, the one axis they mean to exercise.
+  it("K1: renders no anchor to /privacy in production while the statement is still a draft, with the label still present", () => {
+    stubLegalEnv("production");
+    const markup = renderToStaticMarkup(<ContactSection defaultSubject="Hello" />);
+    expect(markup).not.toContain(`href="${PRIVACY_PATH}"`);
+    expect(markup).toContain("Read our privacy statement");
+    expect(markup).toContain(`data-contact-privacy-draft="${PRIVACY_PATH}"`);
+  });
+
+  it("MUTATION CHECK: links /privacy normally outside production, with the SAME draft configuration", () => {
+    stubLegalEnv("development");
+    const markup = renderToStaticMarkup(<ContactSection defaultSubject="Hello" />);
+    expect(markup).toContain(`href="${PRIVACY_PATH}"`);
+    expect(markup).not.toContain("data-contact-privacy-draft");
   });
 });

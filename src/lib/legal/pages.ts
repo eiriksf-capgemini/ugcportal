@@ -1,6 +1,6 @@
 import { LICENCE_PAGE } from "@/app/licence/content";
 import { PRIVACY_PAGE } from "@/app/privacy/content";
-import type { LegalPage } from "@/lib/legal/publishable";
+import { type LegalPage, legalReadiness, linkBlockedInProduction } from "@/lib/legal/publishable";
 
 /**
  * The legal pages this app knows about (ugcportal-qnq9.4). One list, so
@@ -29,3 +29,38 @@ import type { LegalPage } from "@/lib/legal/publishable";
  * safe to serve or link, without rendering its text at all.
  */
 export const LEGAL_PAGES: readonly LegalPage[] = [PRIVACY_PAGE, LICENCE_PAGE];
+
+/**
+ * The registered LegalPage for a route a caller wants to link to (moved
+ * here from src/components/site-footer.tsx by ugcportal-nf9l, which gave
+ * the About page's contact notice the same reason to need it: one function
+ * that reads LEGAL_PAGES, rather than each caller re-deriving its own
+ * lookup, so a route typo or an unregistered page is caught the same way
+ * everywhere). Throws rather than silently treating an unregistered path as
+ * safe to link — a link to a legal page that isn't in LEGAL_PAGES is a bug
+ * in the caller, not a page that happens to be fine to link.
+ */
+export function legalPageFor(path: string): LegalPage {
+  const page = LEGAL_PAGES.find((candidate) => candidate.path === path);
+  if (!page) {
+    throw new Error(
+      `${path} is not registered in LEGAL_PAGES (src/lib/legal/pages.ts) — a caller cannot judge whether it is safe to link.`,
+    );
+  }
+  return page;
+}
+
+/**
+ * Whether a link to the given legal page must not render at all, once
+ * NODE_ENV is production (ugcportal-akv6 K3). The ONE place this decision
+ * is made — read by the footer (src/components/site-footer.tsx) and by the
+ * About page's contact notice (src/components/site/contact-section.tsx,
+ * ugcportal-nf9l) — so the two cannot disagree about the same route (K2):
+ * each reads the SAME `LegalPage` record (via `legalPageFor` above) through
+ * the SAME `legalReadiness`/`linkBlockedInProduction` pair
+ * (src/lib/legal/publishable.ts), rather than each computing its own
+ * opinion that could drift from the other's.
+ */
+export function legalLinkBlocked(path: string, env: NodeJS.ProcessEnv = process.env): boolean {
+  return linkBlockedInProduction(legalReadiness([legalPageFor(path)]), env);
+}
