@@ -7,7 +7,7 @@
  * nothing at all.
  */
 import PhotoSwipeLightbox from "photoswipe/lightbox";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
   MEASURE_CONCURRENCY,
@@ -909,5 +909,88 @@ describe("galleryLightboxOptions", () => {
       expect(slide.src).toMatch(/^\/api\/media\/preview\//);
       expect(slide.src).not.toContain("previews/");
     }
+  });
+
+  /**
+   * ugcportal-i72n: the fade is a JS-driven PhotoSwipe option, not CSS, so
+   * `prefers-reduced-motion` has to be read explicitly rather than falling
+   * out of a Tailwind variant — `galleryLightboxOptions` used to set
+   * `showHideAnimationType: "fade"` unconditionally.
+   *
+   * Each test stubs `window.matchMedia` for itself and restores whatever was
+   * there before (the module's own `beforeAll` stub, which matches every
+   * query — see that stub's own comment above) — this describe block is last
+   * in the file, but restoring per-test rather than relying on that keeps
+   * these tests independent of file order.
+   */
+  describe("honours prefers-reduced-motion (ugcportal-i72n)", () => {
+    let original: typeof window.matchMedia;
+
+    beforeEach(() => {
+      original = window.matchMedia;
+    });
+
+    afterEach(() => {
+      window.matchMedia = original;
+    });
+
+    function stubMatchMedia(matches: boolean): void {
+      window.matchMedia = ((query: string) => ({
+        matches,
+        media: query,
+        onchange: null,
+        addEventListener() {},
+        removeEventListener() {},
+        addListener() {},
+        removeListener() {},
+        dispatchEvent: () => false,
+      })) as unknown as typeof window.matchMedia;
+    }
+
+    it("K1: collapses the fade to instant when the query matches", () => {
+      stubMatchMedia(true);
+
+      const options = galleryLightboxOptions(ITEMS, SIZES);
+
+      expect(options.showHideAnimationType).toBe("none");
+      expect(options.showAnimationDuration).toBe(0);
+      expect(options.hideAnimationDuration).toBe(0);
+      expect(options.zoomAnimationDuration).toBe(0);
+    });
+
+    /**
+     * K2: following should never happen — the fade removed for a visitor
+     * who has NOT asked for reduced motion. Asserted against an
+     * implementation that hardcodes "none" (the vacuous-pass this guards
+     * against): that implementation fails every assertion here, because it
+     * never reads `matches` at all. See containment.ts's own
+     * GALLERY_TILE_IMAGE_CLASS comment for the CSS-side sibling of this same
+     * "the fix must not just remove the effect" shape.
+     */
+    it("K2: keeps the fade and PhotoSwipe's own durations when the query does not match", () => {
+      stubMatchMedia(false);
+
+      const options = galleryLightboxOptions(ITEMS, SIZES);
+
+      expect(options.showHideAnimationType).toBe("fade");
+      // Omitted, not `undefined`-valued — see galleryLightboxOptions's own
+      // comment for why the distinction matters to PhotoSwipe's own option
+      // merge.
+      expect("showAnimationDuration" in options).toBe(false);
+      expect("hideAnimationDuration" in options).toBe(false);
+      expect("zoomAnimationDuration" in options).toBe(false);
+    });
+
+    it("K3: falls back to the unreduced defaults, rather than throwing, when window.matchMedia is unavailable", () => {
+      delete (window as unknown as { matchMedia?: unknown }).matchMedia;
+
+      let options: ReturnType<typeof galleryLightboxOptions> | undefined;
+      expect(() => {
+        options = galleryLightboxOptions(ITEMS, SIZES);
+      }).not.toThrow();
+
+      expect(options?.showHideAnimationType).toBe("fade");
+      expect("showAnimationDuration" in (options ?? {})).toBe(false);
+    });
   });
 });
