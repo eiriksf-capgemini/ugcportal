@@ -3,6 +3,7 @@ import {
   MAX_UPLOAD_BYTES,
   declaredUploadCapBytes,
 } from "@/lib/media";
+import { createThrottledLog } from "@/lib/throttled-log";
 import {
   PREVIEW_BYTES_PER_OPERATION,
   PREVIEW_PROCESS_BASELINE_BYTES,
@@ -1039,70 +1040,38 @@ const mib = (bytes: number) => `${Math.round(bytes / (1024 * 1024))} MB`;
  */
 export const SHED_LOG_INTERVAL_MS = 10_000;
 
-let shedLogLastAt = 0;
-let shedLogSuppressed = 0;
-let shedLogFlushTimer: ReturnType<typeof setTimeout> | undefined;
+/**
+ * Built on `createThrottledLog` (ugcportal-z3lo). This module's own
+ * pre-migration copy said it plainly: "the first version of this logger
+ * copied watermark.ts's *shape* and not its fix" — a third hand-rolled
+ * instance of the exact same throttle, found while migrating the two this
+ * bead already knew about. `flush: true` for the same reason
+ * `watermark.ts`'s shed log needs it: env.example keys a saturation alert
+ * on this line, so losing the tail of an isolated burst to a throttle with
+ * no flush would under-report by exactly the amount this fix exists to
+ * stop losing.
+ */
+const shedLog = createThrottledLog({
+  intervalMs: SHED_LOG_INTERVAL_MS,
+  flush: true,
+  onFlush: (suppressed) => {
+    console.warn(
+      `[media] upload shed ${suppressed} more since the last line. Throttled ` +
+        `to at most one flush per ${SHED_LOG_INTERVAL_MS}ms (this summary line ` +
+        `plus the detailed line); see ugcportal-05b.`,
+    );
+  },
+});
 
 /**
  * Emit the tail of a burst: the sheds that were counted but never printed.
- *
- * The first version of this logger copied watermark.ts's *shape* and not its
- * fix. Without a flush the throttle silently eats the tail: a burst sheds,
- * the first one logs "1 shed since start", the rest increment a counter, and
- * if nothing sheds again that counter is never printed — because the only
- * thing that flushed it was the *next* logged shed, possibly hours later,
- * which then attributes 59 old rejections to that moment. env.example tells
- * operators to key a saturation alert on this line, so a line that is wrong
- * by a factor of 60 is worse than no line at all. ugcportal-u7g fixed exactly
- * this in the watermark logger two beads ago.
  *
  * Called from a timer (so it happens without anyone asking) and from
  * {@link uploadMemoryStats} (so it is observable synchronously, and so a
  * process shutting down before the timer fires still gets a chance).
  */
 function flushShedLog(): void {
-  if (shedLogSuppressed === 0) {
-    if (shedLogFlushTimer) {
-      clearTimeout(shedLogFlushTimer);
-      shedLogFlushTimer = undefined;
-    }
-    return;
-  }
-
-  // Respect the interval even when asked directly: callers get to *ask*, they
-  // do not get to reset the clock, or a health check polling every second
-  // during sustained shedding would emit a line per second while the line
-  // itself claimed one per 10000ms. The pending timer is left alone so the
-  // tail is still reported once the window does elapse.
-  if (Date.now() - shedLogLastAt < SHED_LOG_INTERVAL_MS) {
-    scheduleShedLogFlush();
-    return;
-  }
-
-  if (shedLogFlushTimer) {
-    clearTimeout(shedLogFlushTimer);
-    shedLogFlushTimer = undefined;
-  }
-
-  const suppressed = shedLogSuppressed;
-  shedLogSuppressed = 0;
-  shedLogLastAt = Date.now();
-
-  console.warn(
-    `[media] upload shed ${suppressed} more since the last line. Throttled ` +
-      `to one line per ${SHED_LOG_INTERVAL_MS}ms; see ugcportal-05b.`,
-  );
-}
-
-function scheduleShedLogFlush(): void {
-  if (shedLogFlushTimer) return;
-  const delay = Math.max(0, SHED_LOG_INTERVAL_MS - (Date.now() - shedLogLastAt));
-  shedLogFlushTimer = setTimeout(() => {
-    shedLogFlushTimer = undefined;
-    flushShedLog();
-  }, delay);
-  // Never hold the event loop open just to report a count.
-  shedLogFlushTimer.unref?.();
+  shedLog.flushNow();
 }
 
 function logShedUpload(detail: {
@@ -1111,25 +1080,14 @@ function logShedUpload(detail: {
   budgetBytes: number;
   shed: number;
 }): void {
-  const now = Date.now();
-  if (shedLogLastAt !== 0 && now - shedLogLastAt < SHED_LOG_INTERVAL_MS) {
-    shedLogSuppressed += 1;
-    scheduleShedLogFlush();
-    return;
-  }
-  const suppressed = shedLogSuppressed;
-  shedLogLastAt = now;
-  shedLogSuppressed = 0;
-  if (shedLogFlushTimer) {
-    clearTimeout(shedLogFlushTimer);
-    shedLogFlushTimer = undefined;
-  }
-  console.warn(
-    `[media] upload shed: wanted ${mib(detail.wanted)}, holding ${mib(
-      detail.heldBytes,
-    )} of ${mib(detail.budgetBytes)}; ${detail.shed} shed since start` +
-      (suppressed > 0 ? ` (+${suppressed} more since the last line)` : ""),
-  );
+  shedLog.log((suppressed) => {
+    console.warn(
+      `[media] upload shed: wanted ${mib(detail.wanted)}, holding ${mib(
+        detail.heldBytes,
+      )} of ${mib(detail.budgetBytes)}; ${detail.shed} shed since start` +
+        (suppressed > 0 ? ` (+${suppressed} more since the last line)` : ""),
+    );
+  });
 }
 
 /** One line describing the budget, and where each number came from. */
@@ -1202,10 +1160,5 @@ export function uploadMemoryStats() {
 export function resetUploadMemoryBudget(): void {
   budget = undefined;
   budgetSettings = undefined;
-  shedLogLastAt = 0;
-  shedLogSuppressed = 0;
-  if (shedLogFlushTimer) {
-    clearTimeout(shedLogFlushTimer);
-    shedLogFlushTimer = undefined;
-  }
+  shedLog.reset();
 }
