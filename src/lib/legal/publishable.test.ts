@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   LEGAL_CONTACT_VARS,
@@ -244,6 +244,10 @@ describe("createLegalPageLoader (ugcportal-qnq9.15 item 4)", () => {
     controllerName: contact.controllerName,
   });
 
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("returns the given page record and content built from the configured contact", () => {
     const load = createLegalPageLoader(page, contentFor);
     const result = load(filled);
@@ -251,10 +255,24 @@ describe("createLegalPageLoader (ugcportal-qnq9.15 item 4)", () => {
     expect(result.content).toEqual({ controllerName: FILLED_LEGAL_ENV.LEGAL_CONTROLLER_NAME });
   });
 
-  it("returns the SAME readiness legalReadiness([page], env) would compute", () => {
+  it("returns the SAME readiness legalReadiness([page], env) would compute, from the ARGUMENT, not process.env", () => {
+    // process.env and the explicit argument deliberately disagree (same
+    // technique as pages.test.ts's "follows the explicit env argument's
+    // configuration, not process.env's"): process.env stubbed fully
+    // configured (so dropping `env` internally would read it as NOT
+    // blocked), the explicit argument unconfigured (blocked). Verified by
+    // mutation: calling `legalReadiness([page])` without `env` inside
+    // createLegalPageLoader makes this fail — readiness.blocked flips to
+    // false because it would be computed from the stubbed process.env
+    // instead of the unconfigured argument.
+    for (const name of Object.values(LEGAL_CONTACT_VARS)) {
+      vi.stubEnv(name, FILLED_LEGAL_ENV[name]);
+    }
     const load = createLegalPageLoader(page, contentFor);
     const env = { ...unset, LEGAL_CONTROLLER_NAME: "" };
-    expect(load(env).readiness).toEqual(legalReadiness([page], env));
+    const readiness = load(env).readiness;
+    expect(readiness).toEqual(legalReadiness([page], env));
+    expect(readiness.blocked).toBe(true);
   });
 
   it("defaults to process.env, same convention as every other reader in this module", () => {
