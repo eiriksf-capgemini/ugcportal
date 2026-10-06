@@ -45,6 +45,24 @@ export type PixelSize = { width: number; height: number };
 export const UNKNOWN_PREVIEW_SIZE: PixelSize = { width: 1280, height: 1280 };
 
 /**
+ * Whether the visitor has asked for reduced motion (ugcportal-i72n).
+ *
+ * `typeof window.matchMedia !== "function"` rather than a bare call: jsdom
+ * omits `matchMedia` entirely unless a test stubs it, and a browser old
+ * enough to lack the API has no reduced-motion signal to read at all — the
+ * safe answer for "unknown" is "assume motion is fine", not a thrown
+ * exception from calling a function that is not there. See
+ * lightbox.test.ts's own K3 for the case this guards (the stub deleted
+ * outright, not merely returning a non-matching result).
+ */
+function prefersReducedMotion(): boolean {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+    return false;
+  }
+  return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
+/**
  * The viewer's options, as a pure function of the items and their sizes.
  *
  * `sizes` is positional — `sizes[n]` belongs to `items[n]` — and the caller
@@ -55,7 +73,17 @@ export const UNKNOWN_PREVIEW_SIZE: PixelSize = { width: 1280, height: 1280 };
 export function galleryLightboxOptions(
   items: GalleryItem[],
   sizes: PixelSize[],
-) {
+): {
+  dataSource: ({ src: string; alt: string } & PixelSize)[];
+  showHideAnimationType: "fade" | "none";
+  showAnimationDuration?: number;
+  hideAnimationDuration?: number;
+  zoomAnimationDuration?: number;
+  maxZoomLevel: number;
+  bgClickAction: "close";
+} {
+  const reducedMotion = prefersReducedMotion();
+
   return {
     dataSource: items.map((item, position) => ({
       src: item.previewSrc,
@@ -63,7 +91,7 @@ export function galleryLightboxOptions(
       ...(sizes[position] ?? UNKNOWN_PREVIEW_SIZE),
     })),
     /*
-     * Fade, not zoom-from-thumbnail.
+     * Fade, not zoom-from-thumbnail — UNDER ORDINARY MOTION.
      *
      * PhotoSwipe's zoom transition animates from the thumbnail's rectangle to
      * the full frame, and it is the better effect — but it assumes the
@@ -74,14 +102,28 @@ export function galleryLightboxOptions(
      * `innerRect` per slide, which needs the intrinsic size *and* the laid-out
      * size of every tile at animation time. Not worth it for a transition;
      * fade is honest about what it knows.
+     *
+     * UNDER REDUCED MOTION, there is no transition at all: `showHideAnimationType`
+     * drops to `"none"`, the show/hide/zoom durations collapse to zero, and the
+     * three duration keys below are omitted rather than set to `undefined` when
+     * motion is not reduced — PhotoSwipe's own `_prepareOptions` merges a
+     * caller's options over its defaults with a plain object spread
+     * (`{ ...defaultOptions, ...options }`), so a key present on `options` with
+     * value `undefined` would overwrite PhotoSwipe's own default with
+     * `undefined`, instead of leaving the key absent and the default in place.
+     * See lightbox.test.ts's own K1/K2 for both directions, and K3 for the case
+     * where `matchMedia` cannot be read at all.
      */
-    showHideAnimationType: "fade" as const,
+    showHideAnimationType: reducedMotion ? "none" : "fade",
+    ...(reducedMotion
+      ? { showAnimationDuration: 0, hideAnimationDuration: 0, zoomAnimationDuration: 0 }
+      : {}),
     // The preview is at most 1280px on its longest edge (ugcportal-44q), so
     // there is nothing to gain from zooming past its own resolution.
     maxZoomLevel: 1,
     // The whole overlay is the backdrop; closing by clicking outside the image
     // is what everybody already expects from a lightbox.
-    bgClickAction: "close" as const,
+    bgClickAction: "close",
   };
 }
 
