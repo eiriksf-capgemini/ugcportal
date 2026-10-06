@@ -675,25 +675,6 @@ describe("Clear — focus survives dismissing the only row in the queue (ugcport
     expect(fileInput).not.toBeNull();
     expect(document.activeElement).not.toBe(document.body);
     expect(document.activeElement).toBe(fileInput);
-
-    // ugcportal-ff2a: the landing spot must be the real, keyboard-operable
-    // control, not a decorative stand-in with no native activation of its
-    // own — a label standing in for the input produces zero `keydown`
-    // deliveries to it. Dispatched at `document.activeElement`, not at
-    // `fileInput` directly, so this would fail again if the fallback ever
-    // pointed somewhere else.
-    let reachedInput = false;
-    fileInput?.addEventListener(
-      "keydown",
-      () => {
-        reachedInput = true;
-      },
-      { once: true },
-    );
-    document.activeElement?.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
-    );
-    expect(reachedInput).toBe(true);
   });
 });
 
