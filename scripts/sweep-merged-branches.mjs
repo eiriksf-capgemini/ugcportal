@@ -66,8 +66,9 @@
  *   2. If so, each open PR is retargeted with `gh pr edit <n> --base
  *      <newBase>` and the result is read back with `gh pr view` --
  *      `gh pr edit`'s own exit code is not trusted, the same "verify, don't
- *      trust" rule `deleteRemoteBranch` already applies to `git push origin
- *      --delete`. `newBase` is not simply this branch's own merged PR's
+ *      trust" rule `deleteRemoteBranch` already applies to its own delete
+ *      call (the GitHub API, or `git push origin --delete` as its fallback
+ *      -- ugcportal-ix0s). `newBase` is not simply this branch's own merged PR's
  *      recorded `baseRefName` (that value is frozen GitHub history, and can
  *      point at an intermediate branch this same sweep -- or an earlier one
  *      -- already deleted): `resolveNewBase` walks that chain up to the
@@ -96,7 +97,9 @@
  *   node scripts/sweep-merged-branches.mjs --execute --no-retarget-open-prs   # keep-and-report instead of retargeting
  *
  * In `--execute` mode, a remote-branch removal is verified rather than
- * trusted: after `git push origin --delete <branch>`, `git ls-remote --heads
+ * trusted: after the delete (via the GitHub API, or `git push origin
+ * --delete <branch>` as its fallback -- see `deleteRemoteBranch` and
+ * `classifyGhApiDeleteFailure`, ugcportal-ix0s), `git ls-remote --heads
  * origin <branch>` must print nothing, matching ugcportal-nvg0's K1 (the same
  * verification `pr-review-merge/SKILL.md`'s merge step now requires for a
  * single just-merged PR). A worktree removal uses plain `git worktree remove
@@ -219,7 +222,8 @@ export function classifyBranchRetarget({ openPrsBasedOnBranch, retarget }) {
 /**
  * Classifies the read-back of one `gh pr edit --base <newBase>` call (K2) --
  * `gh pr edit`'s own exit code is not trusted, the same "verify, don't trust"
- * rule `deleteRemoteBranch` already applies to `git push origin --delete`.
+ * rule `deleteRemoteBranch` already applies to its own delete call (the
+ * GitHub API, or `git push origin --delete` as its fallback -- ugcportal-ix0s).
  * Any mismatch here is what makes the caller keep the branch, with a reason,
  * instead of deleting it while a stacked PR might still be unsafe.
  *
@@ -291,6 +295,46 @@ export function resolveNewBase({ baseRefName, remoteBranchNames, prInfoByBranch,
     candidate = next;
   }
   return mainBranch; // maxHops exceeded -- fail safe
+}
+
+/**
+ * Classifies the outcome of a failed `gh api -X DELETE
+ * repos/{owner}/{repo}/git/refs/heads/<branch>` call (ugcportal-ix0s) --
+ * decides whether `deleteRemoteBranch` should treat the branch as already
+ * gone (no further action needed) or fall back to `git push origin
+ * --delete`. `git push origin --delete` runs `.beads/hooks/pre-push`'s full
+ * lint/test/build/typecheck suite for a push that carries no code, and under
+ * agent load a tree-walking test (bead 9faa) flakes and wrongly refuses the
+ * deletion -- observed four times in one day against PRs #151, #153, #154,
+ * #155, each time after the worktree and local branch were already gone.
+ * Deleting through the API instead is a single HTTPS ref-delete call with no
+ * git hook in the path at all.
+ *
+ * Verified directly against the real GitHub API (2026-10-06, this repo):
+ * deleting an ALREADY-GONE ref through this specific endpoint returns HTTP
+ * 422 `{"message":"Reference does not exist", ...}`, not the HTTP 404 most
+ * other GitHub REST deletes return for a missing resource -- both shapes are
+ * treated the same way here (the bead's own text names only 404; this
+ * widens that to match what the API actually does for this endpoint, not a
+ * speculative guess).
+ *
+ * @param {object} params
+ * @param {boolean} params.ghMissing true when `gh` itself could not be
+ *   spawned at all (ENOENT) -- no API call was attempted, so `output` is not
+ *   consulted
+ * @param {string} params.output combined stdout+stderr text from the failed
+ *   `gh api` invocation; ignored when `ghMissing` is true
+ * @returns {"already-gone"|"unavailable"} "already-gone" when the ref was
+ *   already gone and nothing further needs to happen; "unavailable" when
+ *   `gh` could not be used at all (missing, or the API failed for some
+ *   other reason) and the caller must fall back to `git push origin
+ *   --delete`
+ */
+export function classifyGhApiDeleteFailure({ ghMissing, output }) {
+  if (ghMissing) return "unavailable";
+  if (/"status"\s*:\s*"404"/.test(output) || /HTTP 404/.test(output)) return "already-gone";
+  if (/"status"\s*:\s*"422"/.test(output) && /Reference does not exist/i.test(output)) return "already-gone";
+  return "unavailable";
 }
 
 /**
@@ -564,8 +608,54 @@ export function pruneRemoteTrackingRefs(cwd = ".") {
   }
 }
 
+/**
+ * Attempts the primary deletion path (ugcportal-ix0s): `gh api -X DELETE
+ * repos/{owner}/{repo}/git/refs/heads/<name>` -- a single HTTPS ref-delete
+ * call with no git hook in the path at all, unlike `git push origin
+ * --delete` (see `classifyGhApiDeleteFailure`'s doc for why that matters).
+ * `{owner}` and `{repo}` are `gh`'s own placeholder syntax, resolved from
+ * `cwd`'s git remote -- no separate `gh repo view` round trip needed here.
+ *
+ * @returns {"deleted"|"already-gone"|"unavailable"} see
+ *   `classifyGhApiDeleteFailure` for the latter two; "deleted" is this
+ *   function's own success case, not something that classifier decides.
+ */
+function deleteRemoteBranchViaApi(name, cwd) {
+  try {
+    execFileSync("gh", ["api", "-X", "DELETE", `repos/{owner}/{repo}/git/refs/heads/${name}`], {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    return "deleted";
+  } catch (err) {
+    if (err.code === "ENOENT") return classifyGhApiDeleteFailure({ ghMissing: true, output: "" });
+    const output = `${err.stdout ?? ""}\n${err.stderr ?? ""}`;
+    return classifyGhApiDeleteFailure({ ghMissing: false, output });
+  }
+}
+
+/**
+ * Deletes a remote branch, verified rather than trusted either way
+ * (ugcportal-nvg0's K1). Primary path (ugcportal-ix0s): the GitHub API's ref
+ * delete, via `deleteRemoteBranchViaApi` -- a plain ref deletion that
+ * triggers no git hook, unlike `git push origin --delete`, which runs
+ * `.beads/hooks/pre-push`'s full lint/test/build/typecheck suite for a push
+ * that carries no code and, under agent load, can be wrongly refused by an
+ * unrelated flake (bead 9faa). Falls back to `git push origin --delete`
+ * only when `gh` itself is unavailable, or the API call failed for a reason
+ * other than the branch already being gone -- see
+ * `classifyGhApiDeleteFailure` for exactly which responses count as
+ * "already gone". Every other safety check this function already made
+ * before `ugcportal-ix0s` -- the post-delete `ls-remote` verification, the
+ * tracking-ref prune -- is unchanged and runs the same way regardless of
+ * which path actually removed the ref.
+ */
 export function deleteRemoteBranch(name, cwd = ".") {
-  execFileSync("git", ["-C", cwd, "push", "origin", "--delete", name], { stdio: ["ignore", "pipe", "pipe"] });
+  const apiResult = deleteRemoteBranchViaApi(name, cwd);
+  if (apiResult === "unavailable") {
+    execFileSync("git", ["-C", cwd, "push", "origin", "--delete", name], { stdio: ["ignore", "pipe", "pipe"] });
+  }
   const remaining = execFileSync("git", ["-C", cwd, "ls-remote", "--heads", "origin", name], { encoding: "utf8" });
   if (remaining.trim().length > 0) {
     throw new Error(`origin/${name} still present after delete (git ls-remote still lists it)`);
