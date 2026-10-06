@@ -1,5 +1,6 @@
 "use client";
 
+import { Play } from "lucide-react";
 import type PhotoSwipeLightbox from "photoswipe/lightbox";
 import {
   type MouseEvent as ReactMouseEvent,
@@ -11,11 +12,16 @@ import {
   useState,
 } from "react";
 
+import { cn } from "cn";
+
 import {
   GALLERY_GRID_CLASS,
   GALLERY_STATE_CONTAINER_CLASS,
   GALLERY_TILE_CLASS,
   GALLERY_TILE_IMAGE_CLASS,
+  GALLERY_TILE_VIDEO_BADGE_CLASS,
+  GALLERY_TILE_VIDEO_BADGE_ICON_CLASS,
+  GALLERY_TILE_VIDEO_BADGE_WRAPPER_CLASS,
 } from "@/components/gallery/containment";
 import {
   GalleryItemCaption,
@@ -29,6 +35,7 @@ import {
   type PixelSize,
 } from "@/components/gallery/lightbox";
 import { Button } from "@/components/ui/button";
+import { SECTION_TITLE_CLASS } from "@/components/type-scale";
 import {
   appendGalleryItems,
   galleryItemAlt,
@@ -443,14 +450,19 @@ export function Gallery({
   return (
     <div className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6">
       {/*
-        The page's heading, and the reason it is here rather than assumed.
+        A section heading, and the reason it is here rather than assumed.
 
-        app-shell.tsx's skip link moves focus to <main> and its comment reasons
-        about landing "past the <h1> on both admin screens" — i.e. the shell
-        takes for granted that a page HAS one. The gallery shipped without:
-        every heading level below h1 was absent too, so the document outline
-        began at the grid, and the empty state was the only branch that kept a
-        heading at all.
+        An <h2>, not an <h1> (ugcportal-qqnt.1): src/components/home/
+        hero.tsx's title is now the page's one real <h1> on every branch
+        Home() renders, so this and GalleryEmpty's own copy below step down
+        to SECTION_TITLE_CLASS (src/components/type-scale.ts) instead of
+        each supplying a page-level heading. Before that bead, the hero
+        rendered no heading element at all, and app-shell.tsx's skip-link
+        comment reasons about landing "past the <h1> on both admin
+        screens" — the shell takes for granted that a page HAS one; this
+        heading was that one `<h1>` for the home page, back when the gallery
+        shipped without one at all and the document outline began at the
+        grid.
 
         "Gallery", not a repeated description (ugcportal-14k9 PR #94 review,
         two rounds of the same mistake worth recording both of): round 1
@@ -472,9 +484,9 @@ export function Gallery({
         exactly this reason - a heading-text change here is not something a
         component-only test would have caught either time.
       */}
-      <h1 className="max-w-2xl text-xl leading-tight font-medium tracking-tight text-balance text-foreground sm:text-2xl">
+      <h2 className={cn("max-w-2xl text-foreground", SECTION_TITLE_CLASS)}>
         Gallery
-      </h1>
+      </h2>
 
       <ul className={`mt-6 ${GALLERY_GRID_CLASS}`}>
         {items.map((item, index) => (
@@ -528,6 +540,33 @@ export function Gallery({
                 draggable={false}
                 onLoad={(event) => remember(item.previewSrc, event.currentTarget)}
               />
+              {/*
+                The play affordance (ugcportal-dzz K1): a VIDEO tile gets a
+                visible marker that it opens something other than a static
+                photograph, on top of the watermarked preview it shares with
+                every other tile. `aria-hidden` on the wrapper, same reason as
+                the `<img>` above — the button's own accessible name
+                (`galleryItemLabel`, which already says "video" for this item,
+                see gallery-items.ts) is the one thing announced, so a second,
+                decorative "play" glyph must not add a second one.
+                PLAYBACK ITSELF IS NOT THIS BEAD'S (ugcportal-s8w): this is a
+                static badge over a static poster-frame preview, nothing
+                autoplays, and nothing here decides what opening the lightbox
+                on a VIDEO slide eventually does.
+              */}
+              {item.kind === "VIDEO" ? (
+                <span
+                  aria-hidden="true"
+                  className={GALLERY_TILE_VIDEO_BADGE_WRAPPER_CLASS}
+                >
+                  <span className={GALLERY_TILE_VIDEO_BADGE_CLASS}>
+                    <Play
+                      className={GALLERY_TILE_VIDEO_BADGE_ICON_CLASS}
+                      fill="currentColor"
+                    />
+                  </span>
+                </span>
+              ) : null}
             </button>
             <GalleryItemCaption item={item} />
             <GalleryItemTags item={item} />
@@ -570,13 +609,22 @@ export function Gallery({
  * below) but is not true of `GalleryUnavailable`, which is never rendered by
  * `Gallery` at all. See that module's docstring for why it stays out of this
  * one's client bundle.
+ *
+ * An <h2>, at SECTION_TITLE_CLASS, the same reason the main heading above it
+ * is (ugcportal-qqnt.1): this branch is reachable in production too — see
+ * src/app/page.tsx's own comment on `isGenuinelyEmpty` for the case where
+ * `<Gallery>` renders with a non-empty `initialItems` prop that nonetheless
+ * maps to zero usable items — and the hero's own `<h1>` is composed above
+ * `<Gallery>` on every one of its branches, so a second `<h1>` here would be
+ * the exact sibling this bead's own main-heading fix would otherwise have
+ * missed.
  */
 function GalleryEmpty() {
   return (
     <div className={GALLERY_STATE_CONTAINER_CLASS} data-gallery-state="empty">
-      <h1 className="max-w-2xl text-2xl leading-tight font-medium tracking-tight text-balance text-foreground sm:text-3xl">
+      <h2 className={cn("max-w-2xl text-foreground", SECTION_TITLE_CLASS)}>
         Nothing is published yet.
-      </h1>
+      </h2>
       <p className="mt-4 max-w-prose text-sm text-muted-foreground">
         Photographs appear here as soon as they are published. Nothing is
         hidden from you — the gallery is genuinely empty.

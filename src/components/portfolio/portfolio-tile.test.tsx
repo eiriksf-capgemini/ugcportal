@@ -33,6 +33,10 @@ function piece(overrides: Partial<GalleryItem> = {}): GalleryItem {
   return {
     id: "piece-1",
     previewSrc: "/api/media/preview/pv-1",
+    // The portfolio page is IMAGE-only for v0.5.0 (src/lib/portfolio.ts's own
+    // query filters on it) — see that file's comment for why ugcportal-dzz's
+    // VIDEO handling does not reach this surface yet.
+    kind: "IMAGE",
     publishedAt: "2026-03-04T10:00:00.000Z",
     altText: "A flat-lay of a book, a coffee cup and a reading lamp",
     caption: "Flat-lay photo set, 6 images",

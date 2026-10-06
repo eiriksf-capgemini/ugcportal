@@ -32,6 +32,14 @@ import { mediaPreviewPath } from "@/lib/routes";
  * /api/media/[id]/publish refuses to set `publishedAt` otherwise (K1) — but
  * `toGalleryItem` still does not trust that invariant blindly; see its own
  * comment for the defence-in-depth fallback.
+ *
+ * `kind` (ugcportal-dzz) is here too, now that a published VIDEO can reach
+ * this feed at all (ugcportal-pmb gives it a poster frame, which is what
+ * `previewKey`/`previewId` being non-null requires). Before this, the gallery
+ * never branched on it and a video would have rendered as a static tile named
+ * "Photograph N" — correct only because no VIDEO row could be published yet.
+ * `MEDIA_ANONYMOUS_SELECT` (src/lib/media-access.ts) already projected it;
+ * this type and `toGalleryItem` are what were missing.
  */
 /** One subject label on an item (ugcportal-jsc). */
 export type GalleryTag = {
@@ -41,10 +49,28 @@ export type GalleryTag = {
   name: string;
 };
 
+/**
+ * The two kinds of media this feed can carry (mirrors Prisma's `MediaKind`).
+ * Spelled out as its own union, not re-exported from the generated Prisma
+ * client: this module's whole discipline (see the file's own opening
+ * comment) is carrying only what the grid and the lightbox actually draw,
+ * and the generated enum is a bigger, Prisma-shaped surface than two string
+ * literals need to depend on.
+ */
+export type GalleryItemKind = "IMAGE" | "VIDEO";
+
 export type GalleryItem = {
   id: string;
   /** Delivery URL for the watermarked preview, built from `previewId` alone. */
   previewSrc: string;
+  /**
+   * IMAGE or VIDEO (ugcportal-dzz). Decides the play affordance on the tile
+   * and the "video"/"photograph" word in the fallback placeholder below —
+   * nothing else on this type depends on it today. PLAYBACK is deliberately
+   * not this bead's: see `toGalleryItem`'s own comment on how an unrecognised
+   * value is treated.
+   */
+  kind: GalleryItemKind;
   /** ISO-8601, or null when the feed sent something that was not a date. */
   publishedAt: string | null;
   /**
@@ -92,6 +118,7 @@ export type PublicMediaRowish = {
   altText?: unknown;
   caption?: unknown;
   tags?: unknown;
+  kind?: unknown;
 };
 
 /**
@@ -202,6 +229,24 @@ function toGalleryTags(value: unknown): GalleryTag[] {
   return stripCurationTags(tags);
 }
 
+/**
+ * A row's `kind`, read defensively (ugcportal-dzz).
+ *
+ * `"VIDEO"` only on an exact match; everything else — `"IMAGE"`, a missing
+ * field (every row this module handled before this bead), `undefined`,
+ * garbage from a malformed JSON body — becomes `"IMAGE"`. That default is
+ * deliberate, not an oversight: it is the kind every existing fixture, and
+ * every row this feed has ever actually served before ugcportal-pmb, already
+ * is, so treating an unrecognised value as IMAGE changes nothing for them.
+ * The alternative — treating anything that isn't literally `"IMAGE"` as a
+ * video — would instead invent a play affordance and a "video" label on a
+ * row that is actually a photograph whose `kind` failed to parse, which is
+ * the wrong direction for a defensive default to fail in.
+ */
+function toGalleryItemKind(value: unknown): GalleryItemKind {
+  return value === "VIDEO" ? "VIDEO" : "IMAGE";
+}
+
 function asIsoString(value: unknown): string | null {
   if (value instanceof Date) {
     return Number.isNaN(value.getTime()) ? null : value.toISOString();
@@ -238,6 +283,7 @@ export function toGalleryItem(row: PublicMediaRowish): GalleryItem | null {
   return {
     id,
     previewSrc: mediaPreviewPath(previewId),
+    kind: toGalleryItemKind(row.kind),
     publishedAt: asIsoString(row.publishedAt),
     altText: sanitizedMediaText(row.altText),
     caption: sanitizedMediaText(row.caption, true),
@@ -389,9 +435,20 @@ const PUBLISHED_ON = new Intl.DateTimeFormat("en-GB", {
  * list, which is also its slide index in the viewer — the same number in both
  * places, so a listener who hears "photograph 12" in the grid hears the same
  * in the lightbox.
+ *
+ * THE SUBJECT WORD ITSELF NOW BRANCHES ON `item.kind` (ugcportal-dzz K2): a
+ * VIDEO gets "video N", not "photograph N" — the whole reason this bead
+ * exists is that a published video rendered with no way to tell it apart
+ * from a photograph, here included. Branching on kind here, rather than
+ * leaving this function alone and only changing the icon/affordance
+ * elsewhere, is also what keeps a same-position, same-instant IMAGE and
+ * VIDEO unique from each other (K2's own requirement) for free: the two
+ * subject words already differ, with no position-based disambiguation
+ * needed between them the way two same-kind items need.
  */
 function fallbackDescription(item: GalleryItem, position: number): string {
-  const subject = `photograph ${position + 1}`;
+  const subjectNoun = item.kind === "VIDEO" ? "video" : "photograph";
+  const subject = `${subjectNoun} ${position + 1}`;
   if (item.publishedAt === null) return subject;
   return `${subject}, published ${PUBLISHED_ON.format(new Date(item.publishedAt))}`;
 }
