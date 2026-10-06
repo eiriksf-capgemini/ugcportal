@@ -1,5 +1,6 @@
 "use client";
 
+import { Play } from "lucide-react";
 import type PhotoSwipeLightbox from "photoswipe/lightbox";
 import {
   type MouseEvent as ReactMouseEvent,
@@ -18,6 +19,9 @@ import {
   GALLERY_STATE_CONTAINER_CLASS,
   GALLERY_TILE_CLASS,
   GALLERY_TILE_IMAGE_CLASS,
+  GALLERY_TILE_VIDEO_BADGE_CLASS,
+  GALLERY_TILE_VIDEO_BADGE_ICON_CLASS,
+  GALLERY_TILE_VIDEO_BADGE_WRAPPER_CLASS,
 } from "@/components/gallery/containment";
 import {
   GalleryItemCaption,
@@ -536,6 +540,33 @@ export function Gallery({
                 draggable={false}
                 onLoad={(event) => remember(item.previewSrc, event.currentTarget)}
               />
+              {/*
+                The play affordance (ugcportal-dzz K1): a VIDEO tile gets a
+                visible marker that it opens something other than a static
+                photograph, on top of the watermarked preview it shares with
+                every other tile. `aria-hidden` on the wrapper, same reason as
+                the `<img>` above — the button's own accessible name
+                (`galleryItemLabel`, which already says "video" for this item,
+                see gallery-items.ts) is the one thing announced, so a second,
+                decorative "play" glyph must not add a second one.
+                PLAYBACK ITSELF IS NOT THIS BEAD'S (ugcportal-s8w): this is a
+                static badge over a static poster-frame preview, nothing
+                autoplays, and nothing here decides what opening the lightbox
+                on a VIDEO slide eventually does.
+              */}
+              {item.kind === "VIDEO" ? (
+                <span
+                  aria-hidden="true"
+                  className={GALLERY_TILE_VIDEO_BADGE_WRAPPER_CLASS}
+                >
+                  <span className={GALLERY_TILE_VIDEO_BADGE_CLASS}>
+                    <Play
+                      className={GALLERY_TILE_VIDEO_BADGE_ICON_CLASS}
+                      fill="currentColor"
+                    />
+                  </span>
+                </span>
+              ) : null}
             </button>
             <GalleryItemCaption item={item} />
             <GalleryItemTags item={item} />
