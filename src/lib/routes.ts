@@ -18,7 +18,8 @@ export const RIGHTS_DECISION_PATH = "/api/admin/rights/decision";
 // "yes". A sibling of the uploader list above, not a tab on it — a brand and
 // an uploader are different vocabularies with different actions.
 export const RIGHTS_BRANDS_PATH = "/admin/settings/rights/brands";
-// The only route that may write BenefitSource.alcoholLinked = true.
+// The only route that may write BenefitSource.alcoholLinked = true — see
+// that route's own docstring for the grep that backs this claim.
 export const RIGHTS_BRAND_ALCOHOL_PATH = "/api/admin/rights/brands/alcohol";
 
 // Manual upload (ugcportal-n3c). Since the Instagram integration was

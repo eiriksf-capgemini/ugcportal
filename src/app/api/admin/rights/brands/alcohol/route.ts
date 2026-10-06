@@ -11,7 +11,15 @@ import { RIGHTS_BRANDS_PATH } from "@/lib/routes";
  * Record a brand as alcohol-linked (ugcportal-mqh8). The one and only route
  * that may write `BenefitSource.alcoholLinked = true` — see
  * `recordBrandAlcoholLinked` (src/lib/benefit-source.ts) for why PUT
- * /api/media/[id]/disclosure cannot be that route.
+ * /api/media/[id]/disclosure cannot be that route. Checked rather than
+ * assumed: `grep -rn "alcoholLinked: true" src` outside this route, its own
+ * writer and the generated client reaches no other write — the disclosure
+ * route only ever writes the `effective` value computed by
+ * `effectiveBrandAlcoholAnswer`, which is provably `false` by the point it
+ * writes (a `true` answer is refused earlier in that same handler, before
+ * any write) — pinned by `src/lib/alcohol-commerce.write-paths.test.ts`,
+ * which enumerates every file that can attach a benefit source to an item
+ * at all.
  *
  * A SINGLE MONOTONE ACTION, and the form this posts for has no field for
  * the opposite one. There is no "value" in the request body this route
