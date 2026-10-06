@@ -1,4 +1,11 @@
-import { GALLERY_TILE_BASE_CLASS } from "@/components/gallery/containment";
+import Link from "next/link";
+
+import { cn } from "cn";
+
+import {
+  GALLERY_TILE_BASE_CLASS,
+  GALLERY_TILE_IMAGE_CLASS,
+} from "@/components/gallery/containment";
 import {
   GalleryItemAdvertisingLabel,
   GalleryItemCaption,
@@ -45,13 +52,33 @@ const PORTFOLIO_TILE_IMAGE_CLASS = "h-full w-full object-cover";
  * and the PhotoSwipe activation/measuring machinery around it, for the
  * reason `PORTFOLIO_TILE_IMAGE_CLASS` above gives — nothing on this page
  * opens a viewer yet. A `<figure>`, not a button, is the honest element.
+ *
+ * `href` (ugcportal-qqnt.5): optional, and used only by the front page's
+ * living empty state (src/components/home/empty-state.tsx), which shows a
+ * row of these same tiles as its one way to reach /portfolio. When supplied,
+ * the image itself becomes the activation target — a `<Link>` carrying
+ * `GALLERY_TILE_BASE_CLASS` (the identical shape/mat the plain `<figure>`
+ * below has) plus the `group`/focus-ring/hover treatment `gallery.tsx`'s own
+ * `<button>` tile uses, and `GALLERY_TILE_IMAGE_CLASS` (not
+ * `PORTFOLIO_TILE_IMAGE_CLASS`) on the image, so the hover-scale affordance
+ * and its `prefers-reduced-motion` guard are the SAME declarations the main
+ * gallery already relies on, not a second copy. The accessible name goes on
+ * the `<Link>` (`galleryItemAlt`, the same string the `<img alt>` would
+ * otherwise carry) with the image itself `aria-hidden`, mirroring
+ * gallery.tsx's own button/image split exactly, for the same reason: a
+ * link's accessible name and an unhidden image inside it would otherwise
+ * announce the same photograph twice. /portfolio's own call (no `href`)
+ * is completely unchanged by any of this — the two branches below render
+ * identically to before whenever `href` is omitted.
  */
 export function PortfolioTile({
   piece,
   position,
+  href,
 }: {
   piece: GalleryItem;
   position: number;
+  href?: string;
 }) {
   return (
     <li data-portfolio-piece={piece.id}>
@@ -66,17 +93,39 @@ export function PortfolioTile({
         former comment, which pointed at this exact bead to fix it).
       */}
       <GalleryItemAdvertisingLabel item={piece} />
-      <figure className={GALLERY_TILE_BASE_CLASS}>
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src={piece.previewSrc}
-          alt={galleryItemAlt(piece, position)}
-          className={PORTFOLIO_TILE_IMAGE_CLASS}
-          loading="lazy"
-          decoding="async"
-          draggable={false}
-        />
-      </figure>
+      {href ? (
+        <Link
+          href={href}
+          aria-label={galleryItemAlt(piece, position)}
+          className={cn(
+            GALLERY_TILE_BASE_CLASS,
+            "group cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
+          )}
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={piece.previewSrc}
+            alt=""
+            aria-hidden="true"
+            className={GALLERY_TILE_IMAGE_CLASS}
+            loading="lazy"
+            decoding="async"
+            draggable={false}
+          />
+        </Link>
+      ) : (
+        <figure className={GALLERY_TILE_BASE_CLASS}>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={piece.previewSrc}
+            alt={galleryItemAlt(piece, position)}
+            className={PORTFOLIO_TILE_IMAGE_CLASS}
+            loading="lazy"
+            decoding="async"
+            draggable={false}
+          />
+        </figure>
+      )}
       <GalleryItemCaption item={piece} />
       {/*
         MUTUALLY EXCLUSIVE with the advertising label above, never both

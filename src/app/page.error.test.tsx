@@ -128,6 +128,21 @@ vi.mock("@/lib/public-media", () => ({
   publicMediaListingUrl: () => "http://listing.internal/api/public/media",
 }));
 
+/**
+ * `@/lib/portfolio` (ugcportal-qqnt.5): `Home()`'s genuinely-empty branch
+ * now also awaits `listPortfolioPieces()`, which queries Prisma directly —
+ * this file has no database at all (see its own header comment: every
+ * branch here is forced by mocking `@/lib/public-media`, not by seeding
+ * real rows), so the real function would throw. The empty state's own
+ * portfolio-tile rendering is covered by src/components/home/
+ * empty-state.test.tsx and src/app/page.test.tsx, both against real
+ * `pieces`; this file's own K3 test below only needs `Home()` to reach the
+ * genuinely-empty branch without crashing, which an empty array satisfies.
+ */
+vi.mock("@/lib/portfolio", () => ({
+  listPortfolioPieces: async () => [],
+}));
+
 const { default: Home } = await import("@/app/page");
 // Only for the "assembled shell" describe block further down this file —
 // both independently call the same mocked `@/lib/auth` module above.

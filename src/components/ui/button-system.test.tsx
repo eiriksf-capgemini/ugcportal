@@ -2,7 +2,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { cn } from "cn";
 
@@ -16,6 +16,19 @@ import { EmptyState } from "@/components/home/empty-state";
 import { Hero } from "@/components/home/hero";
 
 import { buttonVariants } from "./button";
+
+/**
+ * `EmptyState` now renders `PortfolioTile` (ugcportal-qqnt.5), whose module
+ * graph reaches `@/lib/portfolio` -> `@/lib/media-access` -> `@/lib/auth` at
+ * import time — the same reason src/components/portfolio/portfolio-tile.test.tsx
+ * mocks this. This file never signs anyone in or out; the stub only exists
+ * so importing `EmptyState` does not pull in next-auth's own module graph.
+ */
+vi.mock("@/lib/auth", () => ({
+  auth: () => {
+    throw new Error("rendering these components must not consult the session");
+  },
+}));
 
 /**
  * ugcportal-qqnt.2: one button system on the public pages — a primary, a
@@ -114,7 +127,7 @@ describe("K1 — the hero and empty-state links resolve to buttonVariants, not a
   });
 
   it("the empty state's portfolio link carries every class outline/lg produces, except its own documented wrap override", () => {
-    const markup = renderToStaticMarkup(<EmptyState />);
+    const markup = renderToStaticMarkup(<EmptyState pieces={[]} />);
     const classAttr = classAttrOf(markup, "See what is already finished, in the portfolio");
     /*
      * Through cn(), not the raw `buttonVariants()` string (round-1 review,

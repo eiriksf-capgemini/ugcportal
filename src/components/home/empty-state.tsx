@@ -2,16 +2,30 @@ import Link from "next/link";
 
 import { cn } from "cn";
 
-import { GALLERY_STATE_CONTAINER_CLASS } from "@/components/gallery/containment";
+import {
+  GALLERY_GRID_CLASS,
+  GALLERY_STATE_CONTAINER_CLASS,
+} from "@/components/gallery/containment";
+import { PortfolioTile } from "@/components/portfolio/portfolio-tile";
 import { SECTION_TITLE_CLASS } from "@/components/type-scale";
 import { buttonVariants } from "@/components/ui/button";
+import type { GalleryItem } from "@/lib/gallery-items";
 import { PORTFOLIO_PATH } from "@/lib/routes";
 
 /**
- * The front page's "living empty state" (ugcportal-6dvg K1/K2): what
- * src/app/page.tsx renders INSTEAD of `<Gallery>` the moment it already
- * knows, server-side, that the gallery is genuinely empty — the SAME
- * EXPRESSION `<Gallery>`'s own internal `GalleryEmpty`
+ * Up to this many portfolio pieces show in the empty state's tile row
+ * (ugcportal-qqnt.5 K1) — a sample, not the whole portfolio: the full,
+ * captioned set is one click away at /portfolio, and a row this wide
+ * already fills the first viewport at 1440x900 without scrolling (this
+ * bead's own K1).
+ */
+const MAX_EMPTY_STATE_PORTFOLIO_TILES = 6;
+
+/**
+ * The front page's "living empty state" (ugcportal-6dvg K1/K2, reworked by
+ * ugcportal-qqnt.5): what src/app/page.tsx renders INSTEAD of `<Gallery>`
+ * the moment it already knows, server-side, that the gallery is genuinely
+ * empty — the SAME EXPRESSION `<Gallery>`'s own internal `GalleryEmpty`
  * (src/components/gallery/gallery.tsx) uses, both now via the shared
  * `isGenuinelyEmptyPage` (src/lib/gallery-items.ts; ugcportal-3wcd
  * consolidated gallery.tsx's own inline copy onto it), computed once in
@@ -31,8 +45,31 @@ import { PORTFOLIO_PATH } from "@/lib/routes";
  * ALTERNATIVE to `<Gallery>` entirely — the two are never both on screen —
  * so it ships zero client bytes. `GalleryEmpty` itself is untouched and
  * stays reachable on its own terms (gallery.test.tsx renders `<Gallery>` in
- * isolation with no items, a real, still-tested case — this bead was told
- * not to change grid logic, and does not).
+ * isolation with no items, a real, still-tested case). `GalleryUnavailable`
+ * is untouched too (ugcportal-qqnt.5's own out-of-scope note): the listing
+ * FAILING is a different state from the listing succeeding with nothing in
+ * it, and only the latter is this component's.
+ *
+ * `pieces` (ugcportal-qqnt.5): the curated portfolio sample
+ * (src/lib/portfolio.ts's `listPortfolioPieces`, the same IMAGE-only,
+ * public-preview-guarded query /portfolio itself reads), resolved by
+ * src/app/page.tsx and passed in already-settled — the SAME pattern that
+ * page's own `signedIn` prop to `<Hero>` uses, and for the identical
+ * reason: `renderToStaticMarkup` cannot await a nested async Server
+ * Component reached mid-render (src/components/upload-nav-link.tsx's own
+ * comment, point 2), and every test of this component (this file's own,
+ * and front-page-strings.test.tsx's) renders it synchronously. Keeping
+ * `EmptyState` a plain, synchronous function — not an `async` Server
+ * Component of its own — is what keeps that possible, and is also why the
+ * query for `pieces` is NOT made here: Home() only pays for it on the one
+ * branch that can use it.
+ *
+ * THE SAME COMPONENT, not a new one (ugcportal-qqnt.5's own instruction):
+ * every tile is a `<PortfolioTile>` (src/components/portfolio/
+ * portfolio-tile.tsx), the identical component /portfolio renders its own
+ * samples with, given an `href` so the image itself becomes the one way
+ * this row reaches /portfolio (see that component's own comment on the
+ * `href` prop for the accessible-name and motion-reduction reasoning).
  *
  * The heading and body copy are GalleryEmpty's own, byte-for-byte: both
  * describe the identical, true state ("the listing was read successfully
@@ -41,28 +78,29 @@ import { PORTFOLIO_PATH } from "@/lib/routes";
  * src/app/page.test.tsx's existing K1 assertions
  * (`toContain("Nothing is published yet.")`,
  * `toContain('data-gallery-state="empty"')`) keep passing unchanged even
- * though they now exercise this component rather than GalleryEmpty.
+ * though they now exercise this component rather than GalleryEmpty. The
+ * SUPPORTING line below it is new (ugcportal-qqnt.5 K2): one short
+ * sentence, no em-dash, replacing the previous two-sentence paragraph —
+ * the portfolio tile row below is now the thing that fills the page, not a
+ * second sentence of copy.
  *
  * An `<h2>`, not an `<h1>` (ugcportal-qqnt.1): src/components/home/hero.tsx's
  * title is now the page's one real `<h1>` on every branch Home() can render,
  * so this heading — and GalleryEmpty's own copy of it, and
  * GalleryUnavailable's — step down to SECTION_TITLE_CLASS
  * (src/components/type-scale.ts) instead of each supplying its own `<h1>`.
- * Before this bead the hero rendered no heading element at all, which is why
- * an earlier version of this comment required THIS to be the real `<h1>`;
- * axe's `page-has-heading-one` rule (e2e/petrol-theme.spec.ts) still passes,
- * because something on the page still supplies a real `<h1>` — now the hero,
- * not this component.
- *
- * What is actually NEW here, the "living" half of the bead: an action. A
- * gallery with nothing in it yet is not a dead end — the portfolio
- * (src/app/portfolio/page.tsx, ugcportal-qnq9.7) already has finished,
- * curated work to look at while the first uploads arrive.
+ * The tile row's own "From the portfolio" title (ugcportal-qqnt.5 K1) is a
+ * SECOND `<h2>`, not a skipped level — axe's `heading-order` rule
+ * (e2e/front-page.spec.ts) still passes, and `page.tags.test.tsx`'s own
+ * total-heading-count assertion is about the PUBLISHED-gallery branch, which
+ * this component never renders alongside.
  */
-export function EmptyState() {
+export function EmptyState({ pieces }: { pieces: GalleryItem[] }) {
+  const featured = pieces.slice(0, MAX_EMPTY_STATE_PORTFOLIO_TILES);
+
   return (
     <div
-      className={GALLERY_STATE_CONTAINER_CLASS}
+      className={cn(GALLERY_STATE_CONTAINER_CLASS, "justify-start py-12 sm:py-16")}
       data-gallery-state="empty"
       data-home-empty-state
     >
@@ -70,34 +108,8 @@ export function EmptyState() {
         Nothing is published yet.
       </h2>
       <p className="mt-4 max-w-prose text-sm text-muted-foreground">
-        Photographs appear here as soon as they are published. Nothing is
-        hidden from you — the gallery is genuinely empty.
+        Photographs appear here as soon as they are published.
       </p>
-      {/*
-        `motion-reduce:translate-none`, not `-transform-none` (round-3
-        review finding, caught while verifying a related low finding):
-        Tailwind v4's `translate-y-*` utilities (including `hover:
-        -translate-y-0.5` below) compile to the standalone CSS `translate`
-        property, not `transform` — confirmed empirically by compiling
-        globals.css and reading the generated rule
-        (`.hover\:-translate-y-0\.5:hover { translate: ...; }`). An earlier
-        `motion-reduce:transform-none` here was accordingly a no-op: it set
-        a property nothing else on this element ever touches, so it
-        provided no actual belt-and-braces protection — `motion-safe:`
-        gating the hover utility in the first place was doing all the real
-        work.
-
-        `translate-none` STILL never wins anything (round-4 review, low
-        finding — the previous sentence here overclaimed that it does):
-        `motion-safe:hover:-translate-y-0.5` and `motion-reduce:
-        translate-none` compile into two MUTUALLY EXCLUSIVE media queries
-        (`no-preference` vs `reduce`), so the hover rule this override would
-        need to beat never coexists with it in the first place — whichever
-        one applies, the other's rule does not exist at all. Kept anyway as
-        a documented, deliberately inert belt-and-braces entry (matching
-        the correct CSS property this time, unlike the `-transform-none` it
-        replaced), not because it changes what is rendered.
-      */}
       {/*
         buttonVariants, not a hand-rolled className (ugcportal-qqnt.2):
         `outline` — not `outline-neutral` — because this component renders
@@ -106,6 +118,16 @@ export function EmptyState() {
         src/components/auth-status.tsx's own `variant="outline"` sign-in
         controls render on. The hover-lift stays layered on top via `cn()`:
         it is this call site's own polish, not part of the shared system.
+
+        THE ONE CALL TO ACTION ON `buttonVariants` (ugcportal-qqnt.5): this
+        link is the single button-styled control in this component, on
+        every branch — the portfolio tile row below is a second, non-button
+        way to reach the same place (the photographs themselves are the
+        affordance), not a second button competing with this one. No
+        call-site override of the focus-visible outline is needed any more
+        (ugcportal-oavb): `buttonVariants`' own base now draws a real
+        outline on `focus-visible` under `forced-colors: active`, for every
+        caller, not only this one.
 
         `whitespace-normal h-auto min-h-9 py-2`, overriding `buttonVariants`'
         own `whitespace-nowrap h-9` (CONFIRMED medium, found by the e2e
@@ -122,20 +144,6 @@ export function EmptyState() {
         still picks the single-line width where it fits (390px and up, see
         the PR's own screenshots), and only clamps at the viewport's own
         width where it does not.
-
-        Horizontal padding changes too (round-2 review, LOW, CONFIRMED):
-        `size="lg"` gives `px-2.5`, not the `px-3` the hand-rolled className
-        this replaces used — the same value every other `size="lg"` caller
-        gets, not something specific to this call site.
-
-        Focus-visible outline under forced colors: no override needed here
-        any more (ugcportal-oavb) — `buttonVariants`' own base now draws a
-        real outline on `focus-visible` under `forced-colors: active`, for
-        every caller, not only this one. A round-4, PR-#122-only version of
-        this fix once lived here as a scoped `FORCED_COLORS_FOCUS_OUTLINE`
-        override; see button.tsx's own comment on its base class for the
-        current, systemic version and why a bare `outline-none` plus this
-        app's `outline-hidden` idiom were both the wrong fix.
       */}
       <Link
         href={PORTFOLIO_PATH}
@@ -146,6 +154,30 @@ export function EmptyState() {
       >
         See what is already finished, in the portfolio
       </Link>
+
+      {/*
+        K2: zero portfolio pieces falls back to the copy and the one
+        secondary link above, with no empty tile row — nothing below this
+        point renders at all rather than an empty "From the portfolio"
+        heading over an empty `<ul>`.
+      */}
+      {featured.length > 0 ? (
+        <>
+          <h2 className={cn("mt-10 text-foreground", SECTION_TITLE_CLASS)}>
+            From the portfolio
+          </h2>
+          <ul className={cn("mt-4", GALLERY_GRID_CLASS)}>
+            {featured.map((piece, index) => (
+              <PortfolioTile
+                key={piece.id}
+                piece={piece}
+                position={index}
+                href={PORTFOLIO_PATH}
+              />
+            ))}
+          </ul>
+        </>
+      ) : null}
     </div>
   );
 }

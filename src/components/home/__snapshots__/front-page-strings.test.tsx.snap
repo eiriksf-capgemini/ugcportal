@@ -2,7 +2,7 @@
 
 exports[`front page strings (ugcportal-6dvg K4) > snapshot: every string the hero and empty state render, for review 1`] = `
 {
-  "emptyState": "Nothing is published yet. Photographs appear here as soon as they are published. Nothing is hidden from you — the gallery is genuinely empty. See what is already finished, in the portfolio",
+  "emptyState": "Nothing is published yet. Photographs appear here as soon as they are published. See what is already finished, in the portfolio",
   "heroSignedIn": "Real photos of the things you actually use. This is a small, growing gallery of food, books, home technology and wine accessories — think glasses, coolers and the apps that go with them — photographed by real people, not studios. Every picture here was taken by someone who actually owns the thing in frame. Browse what is already up, or add your own. Upload",
   "heroSignedOut": "Real photos of the things you actually use. This is a small, growing gallery of food, books, home technology and wine accessories — think glasses, coolers and the apps that go with them — photographed by real people, not studios. Every picture here was taken by someone who actually owns the thing in frame. Browse what is already up, or sign in to add your own. Sign in to upload",
 }

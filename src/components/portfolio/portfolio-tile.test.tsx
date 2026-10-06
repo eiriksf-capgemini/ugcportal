@@ -1,10 +1,14 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
-import { GALLERY_TILE_BASE_CLASS } from "@/components/gallery/containment";
+import {
+  GALLERY_TILE_BASE_CLASS,
+  GALLERY_TILE_IMAGE_CLASS,
+} from "@/components/gallery/containment";
 import { PortfolioTile } from "@/components/portfolio/portfolio-tile";
-import type { GalleryItem } from "@/lib/gallery-items";
+import { galleryItemAlt, type GalleryItem } from "@/lib/gallery-items";
 import { SPEC_SAMPLE_LABEL } from "@/lib/portfolio";
+import { PORTFOLIO_PATH } from "@/lib/routes";
 
 /**
  * K2 (ugcportal-qnq9.7): the spec/concept marker renders on a portfolio
@@ -113,6 +117,63 @@ describe("PortfolioTile", () => {
       </ul>,
     );
     expect(markup).toContain(`<figure class="${GALLERY_TILE_BASE_CLASS}">`);
+  });
+
+  describe("the optional `href` (ugcportal-qqnt.5): the empty state's linked row", () => {
+    it("with no href, renders a plain <figure>, unchanged from before this bead", () => {
+      const markup = renderToStaticMarkup(
+        <ul>
+          <PortfolioTile piece={piece()} position={0} />
+        </ul>,
+      );
+      expect(markup).toContain(`<figure class="${GALLERY_TILE_BASE_CLASS}">`);
+      expect(markup).not.toContain("<a ");
+    });
+
+    it("with an href, wraps the image in a link to it instead of a <figure>", () => {
+      const markup = renderToStaticMarkup(
+        <ul>
+          <PortfolioTile piece={piece()} position={0} href={PORTFOLIO_PATH} />
+        </ul>,
+      );
+      expect(markup).not.toContain("<figure");
+      expect(markup).toContain(`href="${PORTFOLIO_PATH}"`);
+    });
+
+    it("gives the link the photo's own accessible name, and hides the image from assistive tech, so the two never both announce it", () => {
+      const markup = renderToStaticMarkup(
+        <ul>
+          <PortfolioTile piece={piece()} position={0} href={PORTFOLIO_PATH} />
+        </ul>,
+      );
+      const expectedName = galleryItemAlt(piece(), 0);
+      expect(markup).toContain(`aria-label="${expectedName}"`);
+      expect(markup).toMatch(/<img[^>]*alt=""/);
+      expect(markup).toMatch(/<img[^>]*aria-hidden="true"/);
+    });
+
+    it("reuses GALLERY_TILE_IMAGE_CLASS (the hover-scale, prefers-reduced-motion-guarded class) only when linked", () => {
+      const linked = renderToStaticMarkup(
+        <ul>
+          <PortfolioTile piece={piece()} position={0} href={PORTFOLIO_PATH} />
+        </ul>,
+      );
+      const unlinked = renderToStaticMarkup(
+        <ul>
+          <PortfolioTile piece={piece()} position={0} />
+        </ul>,
+      );
+      expect(linked).toContain(GALLERY_TILE_IMAGE_CLASS);
+      expect(unlinked).not.toContain("motion-reduce:scale-none");
+    });
+
+    /*
+     * FIXTURE MUTATION CHECK (performed by hand, not left in the suite):
+     * temporarily removed the `href ? ... : ...` branch's `<Link>` arm,
+     * rendering the plain `<figure>` unconditionally; confirmed the
+     * "wraps the image in a link" test above failed (no `<a>` in the
+     * markup), then restored it.
+     */
   });
 
   describe("the advertising-disclosure label (K3, ugcportal-e0jv)", () => {
