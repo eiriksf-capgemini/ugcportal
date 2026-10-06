@@ -2,14 +2,33 @@
  * Tests for the comment-claims audit (ugcportal-wzgw). Synthetic fixtures
  * are fed straight to the exported analysis functions, as
  * scripts/sweep-candidates.test.mjs does; the git plumbing in
- * scripts/lib/git-diff.mjs is exercised only through its pure diff parser.
+ * scripts/lib/git-diff.mjs is exercised only through its pure diff parser --
+ * except for the "working tree and --base" describe block near the end
+ * (ugcportal-np1i), which needs a real git repository because the bug it
+ * guards against (a false "candidates found: 0" before the first commit,
+ * and a silently-ignored `--base=<ref>`) only exists in the interaction
+ * between git plumbing and the filesystem, not in any pure function.
  *
  * Each fixture is shaped like a real finding from the v0.5.0 review rounds
  * (docs/process/review-rounds-v0.5.0.md, Part 1), named in the test title.
  */
-import { describe, expect, it } from "vitest";
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-import { auditContent, classifyClaimLine, extractComments, extractProseLines, findPathReferences, referenceExists } from "./claims-audit.mjs";
+import { afterEach, describe, expect, it } from "vitest";
+
+import {
+  auditContent,
+  classifyClaimLine,
+  extractComments,
+  extractProseLines,
+  findPathReferences,
+  parseBaseArg,
+  referenceExists,
+} from "./claims-audit.mjs";
 import { parseUnifiedDiffAddedLines } from "./lib/git-diff.mjs";
 
 const NO_TRACKED = { trackedFiles: [] };
@@ -189,5 +208,157 @@ describe("parseUnifiedDiffAddedLines", () => {
     const out = parseUnifiedDiffAddedLines(diff);
     expect([...out.get("a.ts")]).toEqual([2, 3, 12]);
     expect([...out.get("b.md")]).toEqual([1]);
+  });
+});
+
+describe("parseBaseArg", () => {
+  it("accepts the space form", () => {
+    expect(parseBaseArg(["--base", "origin/main"])).toEqual({ base: "origin/main" });
+  });
+
+  it("accepts the equals form, which used to be silently ignored (ugcportal-np1i K2)", () => {
+    expect(parseBaseArg(["--base=origin/main"])).toEqual({ base: "origin/main" });
+  });
+
+  it("leaves base undefined when --base is not passed, so the caller falls back to resolveDefaultBase", () => {
+    expect(parseBaseArg(["--all-lines"])).toEqual({ base: undefined });
+  });
+
+  it("names the problem instead of silently keeping the default, for every broken --base spelling", () => {
+    expect(parseBaseArg(["--base"]).error).toMatch(/requires a value/);
+    expect(parseBaseArg(["--base="]).error).toMatch(/requires a value/);
+    expect(parseBaseArg(["--base:origin/main"]).error).toMatch(/unsupported --base form/);
+  });
+});
+
+// --- fixture repo: working tree and --base (ugcportal-np1i) --------------
+//
+// Real git repositories in a mkdtemp directory, never the shared checkout
+// (`bd memories shared-checkout-is-not-safe-for-agents`) and never a bare
+// `git stash`. Every git subprocess below passes an explicit `cwd` on the
+// fixture's own temp path and an env object that:
+//   - unsets GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE/GIT_OBJECT_DIRECTORY/
+//     GIT_ALTERNATE_OBJECT_DIRECTORIES/GIT_COMMON_DIR, so a GIT_DIR this
+//     process inherited from somewhere up its own call stack (a fixture
+//     test found, the morning this bead was filed, that the pre-push hook
+//     exports GIT_DIR, and a fixture test that did not clear it
+//     re-initialized the shared repository instead of its own temp one --
+//     ugcportal-xxy2) cannot redirect any git call here into a different
+//     repository;
+//   - sets GIT_CEILING_DIRECTORIES to the temp parent, so git does not
+//     walk up past it looking for a repository to attach to;
+//   - sets GIT_CONFIG_NOSYSTEM=1 and GIT_CONFIG_GLOBAL=/dev/null, so the
+//     machine's own gitconfig (a global excludesfile, a signing key, an
+//     unrelated identity) cannot change what a fixture test observes.
+// Commit identity is passed per command via `-c user.name=... -c
+// user.email=...`, never a persistent `git config user.name` -- a config
+// write is itself a mutation of the fixture repo's state that would
+// outlive the single command it was meant for.
+const SCRIPT_PATH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "claims-audit.mjs");
+const FIXTURE_PARENTS = [];
+
+function gitEnv(ceilingParent) {
+  const env = { ...process.env };
+  delete env.GIT_DIR;
+  delete env.GIT_WORK_TREE;
+  delete env.GIT_INDEX_FILE;
+  delete env.GIT_OBJECT_DIRECTORY;
+  delete env.GIT_ALTERNATE_OBJECT_DIRECTORIES;
+  delete env.GIT_COMMON_DIR;
+  env.GIT_CEILING_DIRECTORIES = ceilingParent;
+  env.GIT_CONFIG_NOSYSTEM = "1";
+  env.GIT_CONFIG_GLOBAL = "/dev/null";
+  return env;
+}
+
+/**
+ * A fresh one-commit git repository in its own mkdtemp directory, with
+ * helpers that always pass this fixture's own `cwd` and `env` explicitly.
+ */
+function makeFixtureRepo() {
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), "claims-audit-fixture-"));
+  FIXTURE_PARENTS.push(parent);
+  const repo = path.join(parent, "repo");
+  fs.mkdirSync(repo);
+  const env = gitEnv(parent);
+
+  const git = (args) => execFileSync("git", args, { cwd: repo, env, encoding: "utf8" });
+  const commit = (message) =>
+    execFileSync(
+      "git",
+      ["-c", "user.name=claims-audit fixture", "-c", "user.email=claims-audit-fixture@example.invalid", "commit", "-m", message],
+      { cwd: repo, env, encoding: "utf8" },
+    );
+  const writeFile = (name, content) => fs.writeFileSync(path.join(repo, name), content);
+  const runScript = (args = []) => execFileSync("node", [SCRIPT_PATH, ...args], { cwd: repo, env, encoding: "utf8" });
+
+  git(["init", "--quiet", "--initial-branch=main"]);
+  writeFile("README.md", "# fixture\n");
+  git(["add", "README.md"]);
+  commit("initial commit");
+
+  return { repo, env, git, commit, writeFile, runScript };
+}
+
+afterEach(() => {
+  // Each fixture gets its own mkdtemp parent, so removing it cannot touch a
+  // sibling test's repo even if tests ran concurrently.
+  while (FIXTURE_PARENTS.length > 0) {
+    fs.rmSync(FIXTURE_PARENTS.pop(), { recursive: true, force: true });
+  }
+});
+
+describe("working tree and --base (ugcportal-np1i)", () => {
+  it("K1: reports a claim in an untracked file before any commit introduces it, instead of a false 'candidates found: 0'", () => {
+    const { writeFile, runScript } = makeFixtureRepo();
+    writeFile("new-file.ts", "// never fails on any path\nconst a = 1;\n");
+
+    const out = runScript();
+
+    expect(out).not.toMatch(/candidates found: 0\b/);
+    expect(out).toContain("new-file.ts:1 [ABSOLUTE] never fails on any path");
+  });
+
+  it("K1: reports a claim added to an already-tracked file's unstaged edit", () => {
+    const { writeFile, git, commit, runScript } = makeFixtureRepo();
+    writeFile("tracked.ts", "const a = 1;\n");
+    git(["add", "tracked.ts"]);
+    commit("add tracked.ts");
+
+    // Uncommitted edit: the line this test cares about is never committed.
+    writeFile("tracked.ts", "const a = 1;\n// guaranteed to run exactly once\n");
+
+    const out = runScript();
+
+    expect(out).not.toMatch(/candidates found: 0\b/);
+    expect(out).toContain("tracked.ts:2 [ABSOLUTE] guaranteed to run exactly once");
+  });
+
+  it("K2: --base <ref> and --base=<ref> diff against the same explicit ref, distinct from the default base", () => {
+    const { writeFile, git, commit, runScript } = makeFixtureRepo();
+    git(["branch", "root-ref"]); // tags the initial commit, two commits behind HEAD below
+
+    writeFile("filler.ts", "// only reachable once\nconst x = 1;\n");
+    git(["add", "filler.ts"]);
+    commit("add filler.ts");
+
+    writeFile("feature.ts", "// always true on every path\nconst a = 1;\n");
+    git(["add", "feature.ts"]);
+    commit("add feature.ts");
+
+    const outSpaceForm = runScript(["--base", "root-ref"]);
+    const outEqualsForm = runScript(["--base=root-ref"]);
+    const outDefault = runScript([]); // no origin/main in this fixture -> falls back to HEAD~1
+
+    expect(outEqualsForm).toBe(outSpaceForm);
+    expect(outSpaceForm).toContain("filler.ts:1 [ABSOLUTE] only reachable once");
+    expect(outSpaceForm).toContain("feature.ts:1 [ABSOLUTE] always true on every path");
+    // HEAD~1 is the "add filler.ts" commit, which already contains
+    // filler.ts -- so the default base cannot see it change. If --base=
+    // were still silently ignored (the bug this guards against), the
+    // equals-form run above would have matched this output instead of the
+    // explicit-base one, since --base root-ref and the HEAD~1 fallback
+    // would otherwise be indistinguishable by file list alone.
+    expect(outDefault).not.toContain("filler.ts");
   });
 });
