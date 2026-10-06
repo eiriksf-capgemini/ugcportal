@@ -2,12 +2,7 @@ import Link from "next/link";
 
 import { CookieSettingsLink } from "@/components/consent/cookie-settings-link";
 import { FOOTER_LINK_CLASS } from "@/components/ui/footer-link";
-import { LEGAL_PAGES } from "@/lib/legal/pages";
-import {
-  type LegalPage,
-  legalReadiness,
-  linkBlockedInProduction,
-} from "@/lib/legal/publishable";
+import { legalLinkBlocked } from "@/lib/legal/pages";
 import {
   ABOUT_CONTACT_PATH,
   ABOUT_PATH,
@@ -58,47 +53,46 @@ import { SITE_NAME } from "@/lib/site";
 
 const FOOTER_HEADING_CLASS = "text-sm font-medium text-foreground";
 
-/**
- * The registered LegalPage for a route this footer links to (round-1
- * review: previously went through each page's own `loadPrivacy`/
- * `loadLicence` loader instead, which builds the full rendered prose from
- * the live LEGAL_* contact once per request — round-6 review: the
- * rejected design's real cost is ONE avoidable prose-build on /privacy
- * and on /licence each (the footer still calls the OTHER page's loader
- * there — /privacy's own render only makes loadPrivacy() a cache hit, not
- * loadLicence()), and TWO avoidable prose-builds, just to read one
- * boolean each, on every other page, where neither call is a cache hit —
- * see src/lib/legal/pages.ts's own comment for why LEGAL_PAGES is the
- * right thing to read instead). Throws rather than silently treating an
- * unregistered path as safe: a footer link to a legal page that isn't in
- * LEGAL_PAGES is a bug in this file, not a page that happens to be fine to
- * link.
- */
-function legalPageFor(path: string): LegalPage {
-  const page = LEGAL_PAGES.find((candidate) => candidate.path === path);
-  if (!page) {
-    throw new Error(
-      `${path} is not registered in LEGAL_PAGES (src/lib/legal/pages.ts) — the footer cannot judge whether it is safe to link.`,
-    );
-  }
-  return page;
-}
-
-/**
- * K3's real guard: whether a link to the given legal page may render at
- * all. Reads the SAME readiness the page itself guards rendering with
- * (`legalReadiness`/`assertPublishable`, src/lib/legal/publishable.ts) via
- * `LEGAL_PAGES` above, and applies `linkBlockedInProduction` — the same
- * helper `ugcportal-nf9l` reuses for the About page's own outbound link —
- * on top of it, so the footer and the pages cannot disagree about which
- * pages are safe to serve or to link to.
- */
-function legalLinkBlocked(path: string): boolean {
-  return linkBlockedInProduction(legalReadiness([legalPageFor(path)]));
-}
-
-/** The visible, assistive-tech-readable suffix on a blocked legal link — see FooterNavLink. */
+/** The visible, assistive-tech-readable suffix on a blocked legal link — see DraftLegalLabel. */
 const COMING_SOON_SUFFIX = " (coming soon)";
+
+/**
+ * The inert markup for a legal link once K3 blocks it from linking at all:
+ * plain, non-navigating text, muted and italic, with a visible
+ * "(coming soon)" suffix so a visitor (sighted or using assistive tech —
+ * this is ordinary text content, not an aria-hidden decoration) learns the
+ * page exists and is on its way, rather than wondering why it's simply
+ * missing. Exported and shared — not only by FooterNavLink's own `blocked`
+ * branch below, but also by the About page's contact notice
+ * (src/components/site/contact-section.tsx, ugcportal-nf9l) — because a
+ * round-1 review finding on that PR was exactly this: the notice's own
+ * inert span CLAIMED "the same treatment FooterNavLink gives" without
+ * actually sharing the rendering, so it silently had neither the colour
+ * nor the suffix. Rendering through the one function makes that claim
+ * true by construction instead of by two authors remembering to agree.
+ *
+ * `dataAttr` is the attribute NAME, not its value — each caller's own test
+ * asserts a different attribute (`data-footer-draft-link` here,
+ * `data-contact-privacy-draft` in contact-section.tsx), so this takes the
+ * name as a prop rather than picking one, which would have forced a test
+ * update in whichever caller didn't own that choice.
+ */
+export function DraftLegalLabel({
+  label,
+  path,
+  dataAttr,
+}: {
+  label: string;
+  path: string;
+  dataAttr: string;
+}) {
+  return (
+    <span className="text-muted-foreground italic" {...{ [dataAttr]: path }}>
+      {label}
+      {COMING_SOON_SUFFIX}
+    </span>
+  );
+}
 
 /**
  * Exported (round-1 review follow-up, PR #96) so its rendering rule — given
@@ -125,20 +119,8 @@ export function FooterNavLink({
   if (blocked) {
     // K3: never an <a href> to a page carrying the draft marker once
     // NODE_ENV is production — rendered as inert, non-navigating text
-    // instead of omitted outright, with a plain-text "(coming soon)"
-    // suffix so a visitor (sighted or using assistive tech — this is
-    // ordinary text content, not an aria-hidden decoration) learns the
-    // page exists and is on its way, rather than wondering why "Privacy"
-    // or "Licence and rights" is simply missing.
-    return (
-      <span
-        className="text-muted-foreground italic"
-        data-footer-draft-link={href}
-      >
-        {label}
-        {COMING_SOON_SUFFIX}
-      </span>
-    );
+    // instead of omitted outright, via the shared DraftLegalLabel above.
+    return <DraftLegalLabel label={label} path={href} dataAttr="data-footer-draft-link" />;
   }
   return (
     <Link href={href} className={FOOTER_LINK_CLASS}>

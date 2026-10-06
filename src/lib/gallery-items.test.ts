@@ -33,6 +33,10 @@ function item(overrides: Partial<GalleryItem> = {}): GalleryItem {
   return {
     id: "media-1",
     previewSrc: `${MEDIA_PREVIEW_PATH}/pv-1`,
+    // IMAGE by default — every existing fixture here predates kind (ugcportal-
+    // dzz) and exercises the photograph path. Tests that care about VIDEO
+    // pass their own.
+    kind: "IMAGE",
     publishedAt: "2026-03-04T10:00:00.000Z",
     // Empty by default, so every existing fixture here exercises the SAME
     // path it always did — the placeholder fallback in `galleryItemAlt`.
@@ -49,6 +53,7 @@ describe("toGalleryItem", () => {
     expect(toGalleryItem(ROW)).toEqual({
       id: "media-1",
       previewSrc: `${MEDIA_PREVIEW_PATH}/pv-1`,
+      kind: "IMAGE",
       publishedAt: "2026-03-04T10:00:00.000Z",
       altText: "",
       caption: "",
@@ -75,12 +80,35 @@ describe("toGalleryItem", () => {
       "altText",
       "caption",
       "id",
+      "kind",
       "previewSrc",
       "publishedAt",
       "tags",
     ]);
     expect(JSON.stringify(mapped)).not.toContain("user-7");
     expect(JSON.stringify(mapped)).not.toContain("previews/");
+  });
+
+  describe("kind (ugcportal-dzz)", () => {
+    it("carries VIDEO through on an exact match", () => {
+      expect(toGalleryItem({ ...ROW, kind: "VIDEO" })?.kind).toBe("VIDEO");
+    });
+
+    it("defaults to IMAGE for the ordinary case — a row with no kind at all", () => {
+      expect(toGalleryItem(ROW)?.kind).toBe("IMAGE");
+    });
+
+    it.each([
+      { label: "a lowercase video", kind: "video" },
+      { label: "null", kind: null },
+      { label: "a number", kind: 1 },
+      { label: "garbage", kind: "FILM" },
+    ])("defaults to IMAGE rather than VIDEO for $label", ({ kind }) => {
+      // A defensive default has to fail in the SAFE direction: an
+      // unrecognised value must not invent a play affordance and a "video"
+      // label on what the rest of the row says is a photograph.
+      expect(toGalleryItem({ ...ROW, kind })?.kind).toBe("IMAGE");
+    });
   });
 
   it("escapes a previewId that would otherwise climb out of the route", () => {
@@ -459,6 +487,79 @@ describe("galleryItemAlt", () => {
       galleryItemAlt(item({ publishedAt: "2026-03-04T10:00:00.000Z" }), position),
     );
     expect(new Set(batch).size).toBe(batch.length);
+  });
+});
+
+/**
+ * K2 (ugcportal-dzz, replacing the original K2) — "a VIDEO is not called a
+ * photograph". ugcportal-gwr already made `galleryItemLabel`/`galleryItemAlt`
+ * return uploader alt text verbatim, so the hardcoded word "photograph" now
+ * lives only in `fallbackDescription`'s placeholder — which is exactly the
+ * branch these tests exercise.
+ */
+describe("K2 — a VIDEO is not called a photograph", () => {
+  const PUBLISHED_SAME_DAY = "2026-03-04T10:00:00.000Z";
+  const image = item({ kind: "IMAGE", publishedAt: PUBLISHED_SAME_DAY });
+  const video = item({ kind: "VIDEO", publishedAt: PUBLISHED_SAME_DAY });
+
+  it("names the VIDEO tile's placeholder 'video' and the IMAGE tile's 'photograph'", () => {
+    expect(galleryItemLabel(image, 0)).toBe(
+      "Open photograph 1, published 4 March 2026",
+    );
+    expect(galleryItemLabel(video, 1)).toBe(
+      "Open video 2, published 4 March 2026",
+    );
+  });
+
+  it("names the VIDEO lightbox slide's alt 'video' and the IMAGE slide's 'photograph'", () => {
+    expect(galleryItemAlt(image, 0)).toBe("Photograph 1, published 4 March 2026");
+    expect(galleryItemAlt(video, 1)).toBe("Video 2, published 4 March 2026");
+  });
+
+  it("gives a same-day, same-position IMAGE and VIDEO different placeholder names from each other", () => {
+    // The fixture that actually rules out the collision K2 is worried about:
+    // not two items of the same kind (the existing "same instant" tests
+    // above already cover that), but one of each, published at the exact
+    // same instant — the shape a batch upload containing both a photo and a
+    // video produces.
+    const samePosition = 0;
+    const labelImage = galleryItemLabel(
+      item({ kind: "IMAGE", publishedAt: PUBLISHED_SAME_DAY }),
+      samePosition,
+    );
+    const labelVideo = galleryItemLabel(
+      item({ kind: "VIDEO", publishedAt: PUBLISHED_SAME_DAY }),
+      samePosition,
+    );
+    expect(labelImage).not.toBe(labelVideo);
+
+    const altImage = galleryItemAlt(
+      item({ kind: "IMAGE", publishedAt: PUBLISHED_SAME_DAY }),
+      samePosition,
+    );
+    const altVideo = galleryItemAlt(
+      item({ kind: "VIDEO", publishedAt: PUBLISHED_SAME_DAY }),
+      samePosition,
+    );
+    expect(altImage).not.toBe(altVideo);
+  });
+
+  it("still returns the uploader's own alt text verbatim for a VIDEO, same as an IMAGE (this bead must not reword it)", () => {
+    // src/lib/gallery-items.ts:415-425's own docstring: real alt text is a
+    // sentence someone wrote on purpose, and rewriting it is not this
+    // function's place — true of a VIDEO's alt text exactly as much as an
+    // IMAGE's. Nothing about "video" should be injected when real text exists.
+    const withAlt = item({ kind: "VIDEO", altText: "A heron taking off from the lake" });
+    expect(galleryItemAlt(withAlt, 0)).toBe("A heron taking off from the lake");
+    expect(galleryItemLabel(withAlt, 0)).toBe(
+      "Open A heron taking off from the lake",
+    );
+  });
+
+  it("still returns the uploader's own alt text verbatim for an IMAGE, for the same reason (control case)", () => {
+    const withAlt = item({ kind: "IMAGE", altText: "A fox crossing a snowy field" });
+    expect(galleryItemAlt(withAlt, 0)).toBe("A fox crossing a snowy field");
+    expect(galleryItemLabel(withAlt, 0)).toBe("Open A fox crossing a snowy field");
   });
 });
 

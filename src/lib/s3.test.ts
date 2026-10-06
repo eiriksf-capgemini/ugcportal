@@ -1,3 +1,5 @@
+import { createRequire } from "node:module";
+
 import { isTransientError } from "@smithy/core/retry";
 import { describe, expect, it } from "vitest";
 
@@ -42,4 +44,49 @@ describe("TRANSPORT_ERROR_CODES stays aligned with the installed SDK (round-3 fi
       expect(isTransientError(syntheticError)).toBe(true);
     },
   );
+});
+
+/**
+ * ugcportal-qz1u item 2: the test above only pins ONE direction — every code
+ * TRANSPORT_ERROR_CODES claims is accepted by the installed SDK's own
+ * classifier. It says nothing about the other direction: a code the SDK's
+ * own `NODEJS_TIMEOUT_ERROR_CODES`/`NODEJS_NETWORK_ERROR_CODES` lists add in
+ * a future release, which this module's hand-kept mirror would then be
+ * missing, with nothing here to catch it.
+ *
+ * That reverse assertion needs the real lists to compare against, and they
+ * are not part of `@smithy/core`'s public surface: `@smithy/core/retry`'s
+ * own index (node_modules/@smithy/core/dist-types/submodules/retry/index.d.ts)
+ * re-exports the classification FUNCTIONS (`isTransientError` and friends)
+ * but never the underlying constant arrays, and the package's own `exports`
+ * map (node_modules/@smithy/core/package.json) has no entry for the
+ * `service-error-classification/constants` module they live in — so even a
+ * deep import of it is rejected by Node's own package-exports enforcement,
+ * not merely undocumented. Confirmed directly against the installed
+ * `@smithy/core@3.34.1` below, rather than asserted from reading the
+ * `package.json` alone: if a future `@smithy/core` release ever does expose
+ * these constants, the assertion below starts failing (the import stops
+ * throwing), which is the prompt to replace it with the real reverse
+ * comparison this item asks for.
+ */
+describe("the reverse direction (every @smithy/core transport code is in TRANSPORT_ERROR_CODES) is not checkable today", () => {
+  it("the installed @smithy/core does not expose NODEJS_TIMEOUT_ERROR_CODES/NODEJS_NETWORK_ERROR_CODES for import", () => {
+    // A real `require(...)` to a real Node module-resolution error, not a
+    // Vite-bundler-time one: a literal `import("@smithy/core/dist-cjs/...")`
+    // here gets rejected by Vite's OWN static import analysis before the
+    // test ever runs (it fails the whole file, un-catchably, the moment
+    // this file is transformed) — a different failure from the one this
+    // test exists to prove, which is specifically Node's package-exports
+    // enforcement. Built from concatenated parts and resolved through
+    // Node's real `createRequire`, which this repo's runtime (and the real
+    // app) also goes through, so Vite has no static specifier to analyse.
+    const require = createRequire(import.meta.url);
+    const subpath =
+      "@smithy/core/" +
+      "dist-cjs/submodules/retry/service-error-classification/constants.js";
+
+    expect(() => require(subpath)).toThrowError(
+      expect.objectContaining({ code: "ERR_PACKAGE_PATH_NOT_EXPORTED" }),
+    );
+  });
 });
