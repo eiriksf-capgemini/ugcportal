@@ -33,12 +33,12 @@ export const SITE_DESCRIPTION =
  * The header's one-sentence tagline (ugcportal-14k9).
  *
  * Deliberately not SITE_DESCRIPTION itself, and deliberately not reusing its
- * wording — the gallery heading would otherwise repeat the header's own
- * sentence, which is the duplication ugcportal-14k9 round 2 found. When this
- * was written SITE_DESCRIPTION still said "wine and drink"; qnq9.3 K5 has
- * since reworded it, so the two now agree on the SUBJECT while remaining two
- * different sentences. This string is written fresh, naming the same four
- * subjects, under ugcportal-qnq9.3 K5's framing
+ * wording: the gallery heading would otherwise repeat the header's own
+ * sentence in different words, which src/lib/design/dual-meaning-usage.test.ts
+ * and src/app/page.test.tsx between them keep it from doing. The two now agree
+ * on the SUBJECT — ugcportal-qnq9.3 K5 reworded SITE_DESCRIPTION to the
+ * accessory — while remaining two different sentences. This string names the
+ * same four subjects, under ugcportal-qnq9.3 K5's framing
  * for the wine angle this site has actually chosen — empty glasses, coolers,
  * wine-tool apps — which is an ACCESSORY, not the drink alkoholloven § 9-2
  * bans from appearing in anything commercial. "Wine accessories", not "wine"
@@ -96,9 +96,10 @@ export const CONTACT_INTRO =
 
 /**
  * K5: states what is collected and why BEFORE submission, and links to the
- * privacy statement (PRIVACY_PATH, src/lib/routes.ts). ugcportal-qnq9.4 has
- * not merged at the time this bead was written, so that link 404s until it
- * does; flagged in the PR description rather than hidden.
+ * privacy statement (PRIVACY_PATH, src/lib/routes.ts). That link resolved
+ * nowhere when this was written; ugcportal-qnq9.4 has since published the page
+ * (src/app/privacy/page.tsx), so it no longer 404s. Corrected here by
+ * ugcportal-qnq9.3's `claims-audit --all-lines` pass over this file.
  */
 export const CONTACT_NOTICE =
   "Submitting this form opens your own email client with your message pre-filled, and sends it to our inbox directly — this site never receives or stores anything you type here. We only ever see what your email provider shows us: your name, your email address, and your message.";

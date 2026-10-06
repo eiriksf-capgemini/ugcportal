@@ -108,8 +108,8 @@ export function scanWriteSites(root: string): string[] {
  *
  * Required by scripts/tree-walk-timeout-guard.test.mjs, and for its reason
  * (ugcportal-9faa): a per-test whole-tree walk is what pushes a suite past
- * vitest's 5s default under load, and the failure then looks like a defect in
- * the thing being tested. The fixture cases at the bottom pass their own root
+ * vitest's default per-test timeout under load, and the failure then looks
+ * like a defect in the thing being tested rather than like load. The fixture cases at the bottom pass their own root
  * and deliberately do NOT come through here — each of those walks four files
  * in a temp directory, and caching by root would make a per-case fixture
  * invisible to the next case.

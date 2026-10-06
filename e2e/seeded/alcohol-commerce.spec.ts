@@ -28,9 +28,10 @@ import { loadDevEnvFiles } from "../../scripts/lib/env-files.mjs";
  *
  * SEEDED THROUGH RAW SQL over @libsql/client rather than through the generated
  * Prisma client, and not by choice: Playwright loads spec files through its own
- * CJS transform, and `src/generated/prisma/client.ts` uses `import.meta`, which
- * fails there with "Cannot use 'import.meta' outside a module" before any test
- * is collected. @libsql/client is the driver the application itself runs on
+ * CJS transform, and the generated Prisma client — written to
+ * src/generated/prisma/ by `prisma generate`, so not a committed file — uses
+ * `import.meta`, which fails there with "Cannot use 'import.meta' outside a
+ * module" before any test is collected. @libsql/client is the driver the application itself runs on
  * (via @prisma/adapter-libsql), and src/lib/media.test.ts already reaches for
  * it directly for its own version of this problem.
  *

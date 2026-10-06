@@ -427,25 +427,33 @@ async function upsertDisclosure(
          * that every future attempt is refused by name, needs a surface of
          * its own and is deliberately not this route — see the PR.)
          *
-         * `where: { alcoholLinked: null }` rather than an unconditional
-         * update, so this is race-safe without a lock: two first-time writers
-         * of the same brand both see `null`, both compute `false`, and the
-         * second one's update matches nothing if the first has already
-         * answered. More to the point, a brand answered `true` out of band
-         * between the read above and this write keeps its answer rather than
-         * being quietly overwritten with the `false` this request computed
-         * from a staler read.
+         * `where: { alcoholLinked: null }` IS THE WHOLE GUARD, and it is the
+         * only one — there is deliberately no second `recorded === null`
+         * condition in front of it, although an earlier draft had one. Two
+         * predicates for one rule is this repo's family-2 shape, and the
+         * outer one made the inner one unreachable by any test: with both in
+         * place, deleting the `where` clause changed no observable behaviour
+         * at all, which is exactly a check nothing exercises.
+         *
+         * As the single guard it is both tested and strictly stronger. A
+         * brand that already carries an answer matches nothing, so its answer
+         * and its date survive untouched ("does not ask again once the brand
+         * carries an answer", route.test.ts, which fails if this clause is
+         * dropped). And it is race-safe without a lock, which the outer
+         * condition could not be: two first-time writers of the same brand
+         * both read `null`, and whichever arrives second matches nothing —
+         * and a brand answered `true` out of band between the read above and
+         * this write keeps that answer rather than being overwritten with the
+         * `false` this request computed from a staler read.
          */
-        if (recorded === null) {
-          await tx.benefitSource.updateMany({
-            where: { id: benefitSourceId, alcoholLinked: null },
-            data: {
-              alcoholLinked: effective,
-              alcoholAnsweredAt: new Date(),
-              alcoholAnsweredByUserId: userId,
-            },
-          });
-        }
+        await tx.benefitSource.updateMany({
+          where: { id: benefitSourceId, alcoholLinked: null },
+          data: {
+            alcoholLinked: effective,
+            alcoholAnsweredAt: new Date(),
+            alcoholAnsweredByUserId: userId,
+          },
+        });
       }
 
       const data = {

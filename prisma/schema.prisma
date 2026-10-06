@@ -951,8 +951,10 @@ model BenefitSource {
   /// pass as a `no`, which is why this is `Boolean?` with no `@default(false)`
   /// and why the migration that adds it backfills NULL. Only an explicit
   /// `false` lets a benefit through. The predicate that reads all three is
-  /// `alcoholLinkedBrandRefusal` in src/lib/alcohol-commerce.ts; it is the
-  /// only interpreter of this column.
+  /// `alcoholLinkedBrandRefusal` in src/lib/alcohol-commerce.ts — nothing
+  /// else decides what a value of this column means; every other reader
+  /// passes it straight to that function, which
+  /// src/lib/alcohol-commerce.write-paths.test.ts enumerates.
   ///
   /// §3.1a's wine-app sub-case folds in here rather than getting a column of
   /// its own: an app that sells wine, prices it, pushes specific products or
@@ -991,9 +993,12 @@ model BenefitSource {
 /// idiom MediaListing's triage booleans use, one level up: the row's absence
 /// and `benefitReceived = NULL` both mean unanswered, and one function
 /// collapses the two — `advertisingLabelPublishRefusal` in
-/// src/lib/advertising-disclosure.ts, which is the only interpreter of this
-/// column outside the route that writes it (see its docstring for the grep).
-/// Do not add a second reader that checks only one of them.
+/// src/lib/advertising-disclosure.ts. It is no longer the ONLY reader
+/// (ugcportal-qnq9.3 added `commercialPublishRefusal` in
+/// src/lib/alcohol-commerce.ts, which asks a different question of the same
+/// column), but both read it as `!== true`; see that function's docstring for
+/// the grep and for why the two readings must stay identical.
+/// Do not add a reader that checks only one of the two unanswered states.
 ///
 /// WHAT UNANSWERED DOES TODAY: nothing. An item with no row publishes exactly
 /// as it did before this bead, because every row that existed when this
