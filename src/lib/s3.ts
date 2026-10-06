@@ -280,13 +280,19 @@ export class ObjectStorageUnreachableError extends Error {
 }
 
 /**
- * The fields the three sibling "object storage unreachable" log lines
- * ugcportal-98rb added — in GET /api/media/preview/[previewId], DELETE
- * /api/media/[id] and src/lib/rights-evidence.ts — all report, built in one
- * place so they cannot drift apart in what they say about the same failure
- * (ugcportal-98rb K1/K2: "the SAME structured line is logged"). Not every
- * such line in the codebase: see the note at the end about POST
- * /api/media's, which is not one of this function's callers.
+ * The fields every caller's "object storage unreachable" log line reports,
+ * built in one place so they cannot drift apart in what they say about the
+ * same failure (ugcportal-98rb K1/K2: "the SAME structured line is logged").
+ *
+ * WHO THE CALLERS ARE IS NOT WRITTEN DOWN HERE. An earlier version of this
+ * comment named them in prose and said "three" when there were four
+ * (round-1 review finding 2 on this PR — it had missed
+ * src/app/api/admin/rights/decision/route.ts). The list lives in
+ * src/lib/s3-call-sites.test.ts instead, in its "lists every caller of
+ * objectStorageUnreachableLogFields" assertion, which is computed from the
+ * AST and fails when a caller is added or removed — so it cannot be out by
+ * one the way a sentence can. Not every such line in the codebase is a
+ * caller: see the note at the end about POST /api/media's.
  *
  * What each field is for:
  *  - `operation` — which call site failed, since a route can make more than
@@ -303,11 +309,13 @@ export class ObjectStorageUnreachableError extends Error {
  *    with no stack at all (ugcportal-1b2c).
  *
  * Deliberately NOT a console call of its own: the log PREFIX differs by
- * subsystem (`[media]`, `[resale-rights]`), one caller throttles the line
- * and the others must not, and two callers add their own context (the
- * uploader id, the orphaned key). Returning the fields lets each caller
- * spread them into its own line and keep the half that is genuinely its
- * own.
+ * subsystem (`[media]`, `[resale-rights]`), only the preview route
+ * throttles the line (each of the others explains at its own call site why
+ * it must not), and callers add context of their own — the uploader id, the
+ * orphaned key and its role, a suppressed count. Returning the fields lets
+ * each caller spread them into its own line and keep the half that is
+ * genuinely its own. No count is given here on purpose; see above for where
+ * the caller list actually lives.
  *
  * POST /api/media's own storage-unreachable line is NOT a caller of this
  * function. It was written first (ugcportal-1b2c) and still builds the same
