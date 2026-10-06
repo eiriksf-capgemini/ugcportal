@@ -10,13 +10,12 @@
  * Accepts a release title (`chore(release): vX.Y.Z`, no bead id) or
  * `<type>(<scope>): <description> (<bead-id>)`. The bead-id group accepts
  * a top-level id (`ugcportal-qnq9`) and any depth of dot-numeric child
- * suffix: `bd prime`'s own text for `--parent` is "task under epic, subtask
- * under task", i.e. at least two levels (`ugcportal-qnq9.14`, then
- * `ugcportal-qnq9.14.1` for a subtask of that task), and nothing caps how
- * many times `--parent` can be applied again after that. Each dot segment
- * must be non-empty and numeric at any depth -- a trailing dot, an empty
- * segment (`..`) or a non-numeric segment (`.a`) are rejected regardless of
- * how deep they appear; see
+ * suffix: `bd prime` documents `--parent` for epic > task > subtask
+ * (`ugcportal-qnq9.14`, then `ugcportal-qnq9.14.1` for a subtask of that
+ * task) and does not state a depth limit, so the pattern accepts any
+ * depth. Each dot segment must be non-empty and numeric at any depth -- a
+ * trailing dot, an empty segment (`..`) or a non-numeric segment (`.a`)
+ * are rejected regardless of how deep they appear; see
  * check-pr-title.test.mjs's dotted-nesting and non-numeric-suffix cases for
  * where each of those is asserted.
  */

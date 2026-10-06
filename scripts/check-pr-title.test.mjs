@@ -5,12 +5,10 @@
  * "docs(research): ... (ugcportal-qnq9.14)" failed
  * guard-conventional-commit-title because the old PATTERN's bead-id group,
  * ([a-zA-Z0-9]+-[a-zA-Z0-9]+)$, has no room for the dot-separated child
- * suffix bd creates with `--parent=<id>`. The `isValidPrTitle` table below is
- * what runs through `npm test` (vitest collects this file directly); the
- * separate `main() via the CLI` describe block further down is what actually
- * runs in CI, by spawning scripts/check-pr-title.mjs as `guard-conventional-
- * commit-title` does, with PR_TITLE set the same way. So a later regex edit
- * has something to fail, per the bead's K1 "Verified by" clause.
+ * suffix bd creates with `--parent=<id>`. The `main() via the CLI` describe
+ * block further down exercises main(), isMainModule, the empty PR_TITLE
+ * default and process.exitCode. So a later regex edit has something to
+ * fail, per the bead's K1 "Verified by" clause.
  */
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -60,12 +58,12 @@ describe("isValidPrTitle", () => {
     expect(isValidPrTitle("feat(auth)!: require verified email (ugcportal-abc1)")).toBe(true);
   });
 
-  // bd prime documents --parent as "task under epic, subtask under task" --
-  // two levels -- with nothing capping further nesting after that, so a
-  // subtask of a child task (ugcportal-qnq9.14.1) is a real id `bd` can
-  // mint, and so is a subtask of *that* in principle. These three accept
-  // tests are the depth boundary; the four reject tests below them are what
-  // no depth makes valid.
+  // bd prime documents --parent for epic > task > subtask and does not
+  // state a depth limit, so the pattern accepts any depth: a subtask of a
+  // child task (ugcportal-qnq9.14.1) is a real id `bd` can mint, and so is
+  // a subtask of *that* in principle. The accept tests below are the depth
+  // boundary; the four reject tests below them are what no depth makes
+  // valid.
   it("accepts a two-level (subtask-of-a-child-task) bead id", () => {
     expect(isValidPrTitle("docs(research): x (ugcportal-qnq9.14.1)")).toBe(true);
   });
@@ -141,9 +139,8 @@ describe("isValidPrTitle", () => {
 
 // The table above exercises `isValidPrTitle` directly; this block covers
 // `main()`, `isMainModule(...)`, the `PR_TITLE ?? ""` default and the
-// `process.exitCode = 1` path -- the parts CI actually runs -- by spawning
-// the real CLI with PR_TITLE set (or deliberately unset) and reading its
-// real exit code.
+// `process.exitCode = 1` path by spawning the real CLI with PR_TITLE set
+// (or deliberately unset) and reading its real exit code.
 describe("main() via the CLI", () => {
   it("exits 0 for a valid title", () => {
     expect(runCli("docs(research): x (ugcportal-qnq9.14)")).toBe(0);
