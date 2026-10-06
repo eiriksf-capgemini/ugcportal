@@ -254,15 +254,19 @@ export async function POST(request: Request) {
         // until someone looks at the logs". Each has its own sentence in
         // src/app/admin/settings/rights/outcomes.ts.
         //
-        // Nothing is written either way: `setResaleRightsStatus` is below
-        // this block and is never reached, so no ResaleRightsReview row
-        // changes and no clearance ends up naming evidence that was never
-        // stored.
+        // Nothing is written either way: `setResaleRightsStatus` — the only
+        // writer of ResaleRightsReview, which
+        // src/lib/resale-rights-writers.test.ts pins — sits below this
+        // block and is not reached, so no review row changes and no
+        // clearance ends up naming evidence that was never stored. Asserted
+        // by the "changes no ResaleRightsReview row" test in this route's
+        // own suite.
         //
         // Not throttled, unlike the preview route's line: this is an
-        // admin-only form submission, so the volume ceiling is however fast
-        // one human can resubmit a form, and each line names the uploader
-        // the attempt was about.
+        // admin-only, same-origin form submission (both checked at the top
+        // of this handler), so one line per attempt is one line per decision
+        // an admin actually retypes and resubmits — and each names the
+        // uploader it was about.
         console.error("[resale-rights] object storage unreachable", {
           uploaderUserId,
           ...objectStorageUnreachableLogFields(cause),

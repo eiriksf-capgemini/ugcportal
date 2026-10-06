@@ -61,7 +61,10 @@ function parseOriginalName(body: unknown): NameResult {
  * ugcportal-98rb K3 changed the LOG here and deliberately nothing else. The
  * response stays 204 whatever happens, because the row is already gone
  * before storage is touched — there is nothing for a 503 to invite the
- * caller to retry. What the two branches buy is that an operator reading
+ * caller to retry. Pinned by the pair of tests in the
+ * "object storage unreachable (ugcportal-98rb K3)" describe block, which
+ * differ only in the class of error the SDK throws and assert the same 204
+ * across it. What the two branches buy is that an operator reading
  * these lines during an outage can see that the orphans are orphans because
  * the bucket was unreachable, not because the keys or the credentials are
  * wrong.
@@ -81,12 +84,14 @@ async function deleteObjectBestEffort(
     if (cause instanceof ObjectStorageUnreachableError) {
       // Its own line, same 204 (ugcportal-98rb K3). Deliberately NOT
       // throttled, unlike the preview route's storage-unreachable line: each
-      // of these names a DIFFERENT orphaned key, and that key is the only
-      // record of what needs cleaning up by hand — the same reason POST
-      // /api/media leaves its own per-key cleanup line unthrottled. A
-      // throttle here would trade a log-volume problem this line does not
-      // have (two per delete, driven by one human action) for losing the one
-      // piece of information it exists to preserve.
+      // of these names a DIFFERENT orphaned key, and the row that also held
+      // that key was deleted before this ran, so the line is the only
+      // remaining record of it (the same point this function's own doc
+      // comment above makes, and the same reason POST /api/media leaves its
+      // per-key cleanup line unthrottled). A throttle here would trade a
+      // log-volume problem this line does not have — at most two per delete,
+      // driven by one human action — for losing the one piece of information
+      // it exists to preserve.
       console.error(
         "[media] object storage unreachable; object left behind after delete",
         {

@@ -210,20 +210,21 @@ export function classifyTransportFailure(
 
 /**
  * Which S3 call failed. A closed union rather than a plain `string`
- * (round-2 finding 3) — the three call sites that exist today
- * (src/app/api/media/route.ts's original PutObject, preview PutObject, and
- * the compensating cleanup DeleteObject) are enumerable, so the type should
- * say so rather than accept anything a future call site happens to type.
- * Widen it when a sibling route (ugcportal-98rb) adds a genuinely new
- * operation — e.g. the preview GET route's `GetObjectCommand` — rather than
+ * (ugcportal-1b2c): the call sites are enumerable, so the type should say
+ * so rather than accept anything a future one happens to type. Widen it
+ * when a new one appears — as ugcportal-98rb did below — rather than
  * loosening it back to `string`.
  *
- * ugcportal-98rb widened it exactly that way: the first three members are
- * POST /api/media's own, the last four are the sibling S3 calls that now
- * route through `sendWithTransportClassification` too. One member per CALL
- * SITE rather than per command type, because the label exists so a log line
- * says which call failed, and two different routes both issuing a
- * `DeleteObjectCommand` are the case that needs telling apart.
+ * One member per CALL SITE, not per command type, and that is the whole
+ * reason the label exists: a log line has to say which call failed, and two
+ * different routes both issuing a `DeleteObjectCommand` (`cleanup` and
+ * `media-delete` below) are exactly the pair that needs telling apart.
+ *
+ * The set below is the complete list of sites as of ugcportal-98rb, and it
+ * is checked rather than asserted here: src/lib/s3-call-sites.test.ts walks
+ * the AST of every source file and fails if a `getS3Client().send(...)`
+ * exists outside `sendWithTransportClassification` (and so outside this
+ * union) without a commented exception.
  */
 export type ObjectStorageOperation =
   // POST /api/media (ugcportal-1b2c).
@@ -279,10 +280,13 @@ export class ObjectStorageUnreachableError extends Error {
 }
 
 /**
- * The fields every "object storage unreachable" log line in this codebase
- * reports, built in one place so the siblings cannot drift apart in what
- * they say about the same failure (ugcportal-98rb K1/K2: "the SAME
- * structured line is logged").
+ * The fields the three sibling "object storage unreachable" log lines
+ * ugcportal-98rb added — in GET /api/media/preview/[previewId], DELETE
+ * /api/media/[id] and src/lib/rights-evidence.ts — all report, built in one
+ * place so they cannot drift apart in what they say about the same failure
+ * (ugcportal-98rb K1/K2: "the SAME structured line is logged"). Not every
+ * such line in the codebase: see the note at the end about POST
+ * /api/media's, which is not one of this function's callers.
  *
  * What each field is for:
  *  - `operation` — which call site failed, since a route can make more than
@@ -296,7 +300,7 @@ export class ObjectStorageUnreachableError extends Error {
  *  - `cause` — the `ObjectStorageUnreachableError` itself, so `console.error`
  *    has an Error object to print a stack from and Node unfolds the original
  *    SDK error through its own `cause` chain. Dropping it leaves an outage
- *    with no stack at all (round-2 finding 2 on ugcportal-1b2c).
+ *    with no stack at all (ugcportal-1b2c).
  *
  * Deliberately NOT a console call of its own: the log PREFIX differs by
  * subsystem (`[media]`, `[resale-rights]`), one caller throttles the line
@@ -305,12 +309,14 @@ export class ObjectStorageUnreachableError extends Error {
  * spread them into its own line and keep the half that is genuinely its
  * own.
  *
- * POST /api/media's own storage-unreachable line (src/app/api/media/route.ts)
- * still builds this object inline rather than calling this function — it was
- * written first, and ugcportal-98rb's scope freeze kept this branch out of
- * that file (PR #149 is in flight against it). The field names here mirror
- * that line exactly; the duplication is deliberate for now and noted in the
- * PR as a follow-up, not claimed to be already shared.
+ * POST /api/media's own storage-unreachable line is NOT a caller of this
+ * function. It was written first (ugcportal-1b2c) and still builds the same
+ * object inline, at the `console.error("[media] object storage unreachable"`
+ * in src/app/api/media/route.ts's catch; ugcportal-98rb's scope freeze kept
+ * this branch out of that file. The five field names are the same in both —
+ * compare that call with the type below — but "the same" there means two
+ * copies that agree, not one shared implementation, and nothing fails if
+ * they stop agreeing. Migrating it is a follow-up, named in this PR body.
  */
 export type ObjectStorageUnreachableLogFields = {
   operation: ObjectStorageOperation;

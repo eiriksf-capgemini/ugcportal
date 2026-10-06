@@ -96,11 +96,12 @@ describe("the reverse direction (every @smithy/core transport code is in TRANSPO
 });
 
 describe("objectStorageUnreachableLogFields (ugcportal-98rb)", () => {
-  // The three sibling routes each log their own prefix and their own extra
-  // context, so the only thing holding their lines in agreement about the
-  // FAILURE is that they all spread this one object. If a field is dropped
-  // here it is dropped from all of them at once, which is the point — and
-  // is why the field set is pinned rather than spot-checked.
+  // The three ugcportal-98rb log lines (preview GET, media DELETE, evidence
+  // cleanup) each add their own prefix and their own extra context, so the
+  // only thing holding them in agreement about the FAILURE itself is that
+  // all three spread this one object. If a field is dropped here it is
+  // dropped from all three at once, which is the point — and is why the
+  // field set is pinned exactly rather than spot-checked.
   const cause = Object.assign(new Error("socket hang up"), {
     code: "ECONNREFUSED",
   });

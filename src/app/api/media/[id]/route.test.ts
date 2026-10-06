@@ -795,7 +795,6 @@ describe("DELETE /api/media/[id]: object storage unreachable (ugcportal-98rb K3)
         }),
       ]);
     }
-    expect(calls.map(([message]) => message)).not.toContain(ORPHAN_LOG);
   });
 
   it("still answers 204, with the other line, when the endpoint refused the request", async () => {
@@ -811,8 +810,10 @@ describe("DELETE /api/media/[id]: object storage unreachable (ugcportal-98rb K3)
     expect(response.status).toBe(204);
     expect(await response.text()).toBe("");
     expect(calls).toHaveLength(2);
+    // Exhaustive rather than `not.toContain(UNREACHABLE_LOG)`: this says
+    // which two lines were logged, so it fails if the transport branch
+    // swallowed one as well as if it claimed one.
     expect(calls.map(([message]) => message)).toEqual([ORPHAN_LOG, ORPHAN_LOG]);
-    expect(calls.map(([message]) => message)).not.toContain(UNREACHABLE_LOG);
   });
 
   it("uses two different log lines for the two failures", () => {

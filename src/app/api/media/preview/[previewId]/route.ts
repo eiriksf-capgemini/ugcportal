@@ -95,7 +95,10 @@ function previewNotFound(): NextResponse {
 }
 
 /**
- * Something is wrong on this side, not with the request.
+ * Something is wrong on this side, not with the request — and specifically
+ * NOT "storage could not be reached", which is `previewStorageUnavailable`
+ * below and answers 503. This one covers a backend that answered: an
+ * AccessDenied, a NoSuchBucket, a response with no body.
  *
  * The body is a fixed string on purpose. Whatever the S3 client threw almost
  * certainly names the bucket and the key in its message, and the key is the
@@ -135,11 +138,14 @@ export const PREVIEW_STORAGE_RETRY_AFTER_SECONDS = 5;
  * Same fixed-string discipline as `previewUnavailable`: the SDK error names
  * the bucket and the key, and the key is the one value this route exists to
  * keep out of responses, so nothing from the cause is interpolated. The
- * `reason` field is the same stable machine code POST /api/media's own
- * storage-unreachable 503 sends (`object_storage_unavailable`, read by
- * src/app/upload/outcomes.ts), so a client that already knows how to tell
- * that 503 from the "too many uploads" shed 503 needs no second vocabulary
- * for this one.
+ * The `reason` field repeats, verbatim, the machine code POST /api/media's
+ * own storage-unreachable 503 sends — `"object_storage_unavailable"`, the
+ * string src/app/upload/outcomes.ts matches on to tell that 503 from the
+ * "too many uploads" shed 503 (ugcportal-u7g/e86), which carries no
+ * `reason` at all. Nothing reads it from THIS route today: previews are
+ * fetched by the browser as <img> bytes, not by that uploader code. It is
+ * the same string so a future client needs one vocabulary rather than two,
+ * not because a current one depends on it.
  *
  * `no-store`, not the `private, no-cache` of the success path: this body is
  * a transient fault, and a cached copy of it — even one a browser would
@@ -170,19 +176,24 @@ function previewStorageUnavailable(): NextResponse {
  *
  * Throttled where DELETE /api/media/[id]'s sibling line deliberately is not,
  * and the difference is volume: this route serves one request per image per
- * gallery view, so a storage outage with a single visitor scrolling a
- * thirty-tile gallery produces thirty identical lines a second, saying the
- * one thing already true of all of them. POST /api/media's own
- * storage-unreachable line is throttled for exactly this reason
- * (ugcportal-1b2c round-3 finding 5) and this is the higher-volume route of
- * the two.
+ * gallery view, so a storage outage while a single visitor scrolls a
+ * thirty-tile gallery produces thirty identical lines, saying the one thing
+ * already true of all of them. A delete, by contrast, produces at most two,
+ * and each names a different key. POST /api/media's own storage-unreachable
+ * line is throttled on the same argument (ugcportal-1b2c); no measurement is
+ * claimed for which of these routes is busier in practice.
  *
  * Nothing per-request is lost to the throttle: unlike the orphaned-key lines
  * in the delete paths, every suppressed occurrence here would carry the same
- * operation and the same transport code, and the flush reports how many
+ * operation and the same transport code (this route makes exactly one S3
+ * call, always labelled `preview-fetch`), and the flush reports how many
  * there were. `flush: true` for the same reason the upload path sets it —
  * the tail of an outage burst (how many preview requests actually failed) is
  * the part worth keeping.
+ *
+ * Pinned by the "throttles the line rather than printing one per failing
+ * tile" test, which drives three failing requests and asserts three 503s
+ * and exactly one log line.
  */
 const PREVIEW_STORAGE_UNREACHABLE_LOG_INTERVAL_MS = DEFAULT_THROTTLE_INTERVAL_MS;
 
@@ -547,8 +558,8 @@ export async function GET(
     // `send`, so a connection this route never got an answer to is told
     // apart from an answer it did get — ugcportal-98rb K1. Classifying at
     // the source, around the S3 call alone, is what makes the `instanceof`
-    // in the catch below safe: nothing else inside this try can produce an
-    // `ObjectStorageUnreachableError`.
+    // in the catch below safe: this `try` body is that single call and
+    // nothing else, so no other failure can arrive as that type.
     object = await sendWithTransportClassification("preview-fetch", () =>
       getS3Client().send(
         new GetObjectCommand({ Bucket: getBucketName(), Key: previewKey }),

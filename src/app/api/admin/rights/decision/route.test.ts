@@ -74,6 +74,12 @@ function outcomeOf(response: Response): {
   edit: string | null;
 } {
   expect(response.status).toBe(303);
+  // Checked on every redirect this suite reads, not in one place: the
+  // Location encodes a one-shot outcome (?error=, ?rights=recorded,
+  // ?edit=<uploader>), and a stored copy replayed onto a later POST would
+  // report a decision that is not the one the admin just made. A 303 is not
+  // cacheable by default, so this is for the caches that do not conform.
+  expect(response.headers.get("cache-control")).toBe("no-store");
   const params = new URL(response.headers.get("location")!).searchParams;
   return {
     error: params.get("error"),

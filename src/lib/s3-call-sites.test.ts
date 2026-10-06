@@ -25,7 +25,7 @@ import { describe, expect, it } from "vitest";
  * lists cannot quietly rot into permission for whatever happens to be there.
  *
  * WHY THIS IS A TEST AND NOT @aws-sdk MIDDLEWARE. The alternative the bead
- * asks to be considered (and PR #85's round-3 review suggested) is to
+ * asks to be considered (`bd show ugcportal-98rb`, notes) is to
  * install `classifyTransportFailure` once as client middleware inside
  * `getS3Client()`, so every `send()` is classified whether or not its caller
  * opted in — which would satisfy K4 by construction rather than by this
@@ -85,10 +85,12 @@ const UNWRAPPED_SEND_ALLOWED = new Map<string, string>([
  * Route handlers allowed to reach object storage without naming
  * `ObjectStorageUnreachableError`, with why.
  *
- * Empty today, and that is the intended steady state: every one of the four
- * S3-touching routes handles the type. The list exists so that a future route
- * with a genuine reason not to has somewhere to say so in writing, rather
- * than being added by deleting an assertion.
+ * Empty, and intended to stay that way: every route the
+ * "gives every route that can reach object storage a transport branch" test
+ * below enumerates handles the type, which is why that test's offender list
+ * is empty with this map empty. The map exists so a future route with a
+ * genuine reason not to has somewhere to say so in writing, rather than
+ * being added by deleting an assertion.
  */
 const ROUTE_WITHOUT_BRANCH_ALLOWED = new Map<string, string>([]);
 
@@ -224,7 +226,7 @@ const directS3Modules = files
   .filter((file) => s3SendCalls(ast(file.name)).length > 0)
   .map((file) => file.name);
 
-/** `a.ts` -> the files it imports, for the transitive walk below. */
+/** Each file mapped to the files it imports, for the transitive walk below. */
 const importGraph = new Map(
   files.map((file) => [file.name, importedFiles(file, ast(file.name))]),
 );
