@@ -24,6 +24,7 @@ import {
   GALLERY_TILE_VIDEO_BADGE_WRAPPER_CLASS,
 } from "@/components/gallery/containment";
 import {
+  GalleryItemAdvertisingLabel,
   GalleryItemCaption,
   GalleryItemTags,
 } from "@/components/gallery/gallery-item";
@@ -491,6 +492,15 @@ export function Gallery({
       <ul className={`mt-6 ${GALLERY_GRID_CLASS}`}>
         {items.map((item, index) => (
           <li key={item.id}>
+            {/*
+              The advertising-disclosure label (ugcportal-e0jv K1), FIRST in
+              this list item's own DOM order — ahead of the tile's own
+              `<button>`, so it is announced to a screen reader, and painted
+              on screen, before anything else about the item. See
+              GalleryItemAdvertisingLabel's own comment (gallery-item.tsx)
+              for why it is a sibling rather than content inside the button.
+            */}
+            <GalleryItemAdvertisingLabel item={item} />
             <button
               type="button"
               className={GALLERY_TILE_CLASS}

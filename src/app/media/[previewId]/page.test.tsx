@@ -222,3 +222,96 @@ describe("K5: the rendered page never leaks Media.key, previewKey, or userId", (
     expect(html).toContain("/api/media/preview/pv-page-item-k5");
   });
 });
+
+/**
+ * The advertising-disclosure label (ugcportal-e0jv K1/K3/K4, part B of
+ * ugcportal-qnq9.1), through the real page component and a real database —
+ * same reasoning as every other describe block here.
+ */
+describe("the advertising-disclosure label (K1, K3, K4)", () => {
+  it("K1: shows the exact canonical label, before the photograph, for a labelled item", async () => {
+    await seedMedia(prisma, {
+      id: "page-item-labelled",
+      userId: UPLOADER,
+      createdAt: new Date("2026-03-10T00:00:00.000Z"),
+    });
+    const source = await prisma.benefitSource.create({
+      data: { slug: "page-item-brand", name: "Page Item Brand" },
+    });
+    await prisma.mediaAdvertisingDisclosure.create({
+      data: {
+        mediaId: "page-item-labelled",
+        benefitReceived: true,
+        benefitKind: "FREE_PRODUCT",
+        benefitSourceId: source.id,
+        label: "Advertisement / Reklame",
+      },
+    });
+
+    const element = await MediaItemPage(params("pv-page-item-labelled"));
+    const html = renderToStaticMarkup(element);
+
+    expect(html).toContain('data-gallery-advertising-label="page-item-labelled"');
+    expect(html).toContain("Advertisement / Reklame");
+    expect(html.indexOf("data-gallery-advertising-label")).toBeLessThan(
+      html.indexOf("<figure"),
+    );
+  });
+
+  it("K4: never exposes benefitReceived or the brand's name/slug in the rendered markup", async () => {
+    await seedMedia(prisma, {
+      id: "page-item-labelled-leak",
+      userId: UPLOADER,
+      createdAt: new Date("2026-03-10T00:30:00.000Z"),
+    });
+    const source = await prisma.benefitSource.create({
+      data: { slug: "leaky-brand", name: "Leaky Brand Name" },
+    });
+    await prisma.mediaAdvertisingDisclosure.create({
+      data: {
+        mediaId: "page-item-labelled-leak",
+        benefitReceived: true,
+        benefitKind: "PAYMENT",
+        benefitSourceId: source.id,
+        label: "Reklame",
+      },
+    });
+
+    const element = await MediaItemPage(params("pv-page-item-labelled-leak"));
+    const html = renderToStaticMarkup(element);
+
+    expect(html).toContain("Reklame");
+    expect(html).not.toContain("benefitReceived");
+    expect(html).not.toContain("Leaky Brand");
+    expect(html).not.toContain("leaky-brand");
+  });
+
+  it("K3: shows no label for an item with benefitReceived false", async () => {
+    await seedMedia(prisma, {
+      id: "page-item-no-benefit",
+      userId: UPLOADER,
+      createdAt: new Date("2026-03-10T01:00:00.000Z"),
+    });
+    await prisma.mediaAdvertisingDisclosure.create({
+      data: { mediaId: "page-item-no-benefit", benefitReceived: false },
+    });
+
+    const element = await MediaItemPage(params("pv-page-item-no-benefit"));
+    const html = renderToStaticMarkup(element);
+
+    expect(html).not.toContain("data-gallery-advertising-label");
+  });
+
+  it("K3: shows no label for an item with no disclosure row at all — the ordinary case", async () => {
+    await seedMedia(prisma, {
+      id: "page-item-no-disclosure",
+      userId: UPLOADER,
+      createdAt: new Date("2026-03-10T01:30:00.000Z"),
+    });
+
+    const element = await MediaItemPage(params("pv-page-item-no-disclosure"));
+    const html = renderToStaticMarkup(element);
+
+    expect(html).not.toContain("data-gallery-advertising-label");
+  });
+});

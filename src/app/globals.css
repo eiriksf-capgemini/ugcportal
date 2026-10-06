@@ -812,3 +812,75 @@
   line-height: 1.25rem;
   white-space: pre-line;
 }
+
+/*
+ * The advertising-disclosure label (ugcportal-e0jv K1/K4, part B of
+ * ugcportal-qnq9.1): anchored to the TOP of the slide, in the identical
+ * slot `.pswp__media-caption` used to occupy alone — see
+ * `registerAdvertisingLabel` in src/components/gallery/lightbox.ts, built
+ * the same "textContent, never innerHTML" way the other two bars above
+ * are, and registered ahead of the caption so it is announced and painted
+ * first (Forbrukertilsynet's own rule: the label comes before anything
+ * else about the item).
+ *
+ * DELIBERATELY NOT folded into the shared `.pswp__gallery-tags,
+ * .pswp__media-caption` rule above: that shared `color:
+ * var(--color-ink-muted)` on a transparent background is exactly the
+ * quiet "not a label" treatment K4 forbids here — a compliance disclosure
+ * must read as a label, not a caption or a tag, so this gets a SOLID FILL
+ * instead of joining that group.
+ *
+ * `background-color: var(--primary)` / `color: var(--primary-foreground)`,
+ * the SAME pairing, not a new one: `src/components/ui/button.tsx`'s
+ * `default` variant and `GALLERY_ADVERTISING_LABEL_CLASS` (src/components/
+ * gallery/containment.ts — the tile's own equivalent of this exact label)
+ * already fill with these two tokens in these two roles, and the contrast
+ * gate's own `primary-label-on-primary` entry (src/lib/design/contrast.ts,
+ * 4.5:1 body-text threshold) already measures it. Riding that measurement
+ * rather than asking the gate to learn a second one for a bar built by
+ * hand outside React is the same reasoning `ink-muted-on-scrim`'s own
+ * comment two rules up gives for its pairing.
+ */
+.pswp__advertising-label {
+  position: absolute;
+  top: 60px;
+  left: 0;
+  right: 0;
+  z-index: 10;
+  margin: 0;
+  background-color: var(--primary);
+  color: var(--primary-foreground);
+  text-align: center;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 600;
+  font-size: 0.75rem;
+  line-height: 1rem;
+  padding: 0.625rem 1.25rem;
+  pointer-events: none;
+}
+
+.pswp__advertising-label[hidden] {
+  display: none;
+}
+
+/*
+ * Pushes the photograph's caption DOWN when a label is also present, so the
+ * two bars never overlap and the label stays readable rather than painted
+ * over — the same non-overlap guarantee the tags/caption pair already has
+ * by anchoring to opposite edges. `:has()`, not a fixed, always-applied
+ * offset: most items carry no label at all (K3/K4's ordinary case, and
+ * every item before this bead), and permanently reserving the label's own
+ * height under every caption would misalign the overwhelming majority of
+ * slides to make room for the rare labelled one. `104px` is `60px`'s own
+ * anchor plus this label's own one-line height at this font-size/padding
+ * plus a small gap, so the caption clears the label rather than merely not
+ * touching it pixel-for-pixel — measured against a real Chromium render
+ * (`getBoundingClientRect()` on both elements, a labelled slide open): the
+ * label's own box is `{top: 60, bottom: 96}`, the caption's `{top: 104,
+ * bottom: 152}`, no overlap, at both 1440x900 and 390x844 (this bar's own
+ * height does not depend on viewport width).
+ */
+.pswp:has(.pswp__advertising-label:not([hidden])) .pswp__media-caption {
+  top: 104px;
+}

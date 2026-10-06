@@ -544,6 +544,36 @@ describe("GET /api/public/media — no original key, no preview-less row (K3)", 
     }
   });
 
+  /**
+   * K2 (ugcportal-e0jv, part B of ugcportal-qnq9.1): the advertising-
+   * disclosure relation is projected AT MOST as `{ label: true }` — never
+   * `benefitReceived`, `benefitKind`, `marketValueOre`, `benefitSourceId`
+   * or the `benefitSource` relation (the brand's own name/slug). An
+   * end-to-end version of this same claim, against a real database and the
+   * real route, lives in src/app/page.test.tsx's own "K2 — the advertising
+   * label crosses to the feed" describe block; this is the static version
+   * that fails the instant someone widens the select itself, before any
+   * row ever has to flow through it.
+   */
+  it("projects the advertising-disclosure relation as exactly { label: true } — nothing else from it", async () => {
+    const { MEDIA_ANONYMOUS_SELECT } = await import("@/lib/media-access");
+
+    expect(MEDIA_ANONYMOUS_SELECT).toHaveProperty("advertisingDisclosure", {
+      select: { label: true },
+    });
+    const disclosureSelect = (
+      MEDIA_ANONYMOUS_SELECT as {
+        advertisingDisclosure: { select: Record<string, unknown> };
+      }
+    ).advertisingDisclosure.select;
+    expect(Object.keys(disclosureSelect)).toEqual(["label"]);
+    expect(disclosureSelect).not.toHaveProperty("benefitReceived");
+    expect(disclosureSelect).not.toHaveProperty("benefitKind");
+    expect(disclosureSelect).not.toHaveProperty("marketValueOre");
+    expect(disclosureSelect).not.toHaveProperty("benefitSourceId");
+    expect(disclosureSelect).not.toHaveProperty("benefitSource");
+  });
+
   it("never selects the original key at the database layer either", async () => {
     seed([row({ id: "a" })]);
 

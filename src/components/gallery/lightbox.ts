@@ -261,6 +261,70 @@ export function registerTagCaption(
 }
 
 /**
+ * The class the advertising-disclosure label carries in the viewer
+ * (ugcportal-e0jv K1, part B of ugcportal-qnq9.1), and the hook its CSS is
+ * written against (src/app/globals.css). Exported for the same reason
+ * LIGHTBOX_TAG_CAPTION_CLASS is: a test asserts the string the viewer
+ * actually renders.
+ */
+export const LIGHTBOX_ADVERTISING_LABEL_CLASS = "pswp__advertising-label";
+
+/**
+ * The advertising label on each slide, positionally — same arrangement as
+ * `galleryTagCaptions`: `labels[n]` belongs to `items[n]`.
+ *
+ * `null` becomes `""`, which `registerSlideTextElement`'s `hideWhenEmpty`
+ * then hides entirely — the same "absence is silence" rule the label's
+ * other two renderers (`GalleryItemAdvertisingLabel`, src/components/
+ * gallery/gallery-item.tsx, and this page's own markup) already follow
+ * (K3/K4).
+ */
+function galleryAdvertisingLabels(items: GalleryItem[]): string[] {
+  return items.map((item) => item.advertisingLabel ?? "");
+}
+
+/**
+ * Puts the advertising-disclosure label on the open slide (ugcportal-e0jv
+ * K1, part B of ugcportal-qnq9.1).
+ *
+ * REGISTERED, AND CALLED, BEFORE `registerMediaCaption` (see
+ * `openGalleryViewer`): Forbrukertilsynet's rule is that the label comes
+ * first, before anything else about the item — the same ordering
+ * `GalleryItemAdvertisingLabel` holds in the gallery grid and on the
+ * per-item page. `src/app/globals.css`'s own `.pswp__advertising-label`
+ * rule is what actually places it above `.pswp__media-caption` on screen;
+ * registration order here only decides which element PhotoSwipe's
+ * `change` listeners update first, which has no visible effect (see
+ * `registerSlideTextElement`'s own note on `order` being moot for the
+ * identical reason).
+ *
+ * NOT folded into `registerMediaCaption`'s own two calls to
+ * `registerSlideTextElement`, even though it is the same shape (a single
+ * `hideWhenEmpty` text element): the label and the caption are independent
+ * facts about an item — a caption can be present or absent regardless of
+ * whether the item is labelled — so this is its own function with its own
+ * class and its own `uiRegister` registration, the same separation
+ * `registerTagCaption` already has from the caption/title pair.
+ */
+export function registerAdvertisingLabel(
+  lightbox: PhotoSwipeLightbox,
+  items: GalleryItem[],
+): void {
+  registerSlideTextElement(lightbox, galleryAdvertisingLabels(items), {
+    name: "gallery-advertising-label",
+    className: LIGHTBOX_ADVERTISING_LABEL_CLASS,
+    // 5 — ahead of the sr-only media title's own 6 (registerMediaCaption,
+    // below) in registration order. Moot visually either way, same as every
+    // other `order` value in this file (see registerSlideTextElement's own
+    // note): CSS positions each element, this only orders PhotoSwipe's
+    // internal registry.
+    order: 5,
+    tagName: "p",
+    hideWhenEmpty: true,
+  });
+}
+
+/**
  * The class the visible media caption carries (ugcportal-gwr), and the hook
  * its CSS is written against. Exported for the same reason
  * LIGHTBOX_TAG_CAPTION_CLASS is: a test asserts the string the viewer
@@ -603,6 +667,12 @@ export async function openGalleryViewer(
   // Also before `loadAndOpen`: `uiRegister` is dispatched while PhotoSwipe
   // assembles its controls, which happens inside the open.
   registerTagCaption(lightbox, galleryTagCaptions(items));
+  // The advertising-disclosure label (ugcportal-e0jv K1), registered before
+  // the media caption below so the label is visible first — see that
+  // function's own comment for why registration order itself is moot and
+  // globals.css's `.pswp__advertising-label` rule is what actually places
+  // it first on screen.
+  registerAdvertisingLabel(lightbox, items);
   // The photograph's description and caption, plus the dialog's
   // aria-labelledby/aria-describedby wiring (ugcportal-gwr).
   registerMediaCaption(lightbox, items);
