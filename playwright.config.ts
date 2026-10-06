@@ -38,7 +38,21 @@ export default defineConfig({
   webServer: {
     command: "npm run dev",
     url: "http://localhost:3000",
-    reuseExistingServer: true,
+    /**
+     * ugcportal-6uxr K3: `true` unconditionally (as this shipped originally)
+     * means Playwright never checks whose server is already answering at
+     * `url` before reusing it — on a machine where several agents run e2e
+     * concurrently against the same port, that is attaching to a FOREIGN dev
+     * server (a different worktree's checkout, a different branch) rather
+     * than this suite's own, which produces spurious mass failures with no
+     * indication the server under test was ever the wrong one. Gated behind
+     * `UGCPORTAL_E2E_REUSE_SERVER` so the default is the safe one (always
+     * start this config's own server, on this config's own command) and
+     * reuse is an explicit opt-in (`UGCPORTAL_E2E_REUSE_SERVER=1`) for a
+     * solo developer who already has `npm run dev` running and wants a
+     * faster local rerun. playwright.config.test.ts asserts both states.
+     */
+    reuseExistingServer: process.env["UGCPORTAL_E2E_REUSE_SERVER"] === "1",
     timeout: 60_000,
   },
   projects: [

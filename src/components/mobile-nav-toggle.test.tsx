@@ -258,6 +258,138 @@ describe("MobileNavToggle (ugcportal-14k9)", () => {
   });
 
   /**
+   * ugcportal-0sdf K2: `isPlainLeftClick` (src/components/primary-nav-
+   * link.tsx) checks five things - `!event.defaultPrevented`,
+   * `event.button === 0`, and the three modifier keys - but only the
+   * `metaKey` clause had a test above it (the Cmd-click case). The other
+   * four clauses could each be deleted from the real guard and every test
+   * in this file would still pass. One test per remaining clause below,
+   * each structured exactly like the Cmd-click case above (open the panel,
+   * click the same link with one clause tripped and confirm it stays open,
+   * then a plain click on the same link and confirm it closes) so each is
+   * provably tied to its own `isPlainLeftClick` condition and not to some
+   * other path that happens to also leave the panel open.
+   *
+   * MUTATION (performed once per clause, verified, and reverted - not left
+   * in the tree): removed the matching `!event.<x>` conjunct from
+   * `isPlainLeftClick` in primary-nav-link.tsx and reran this file.
+   *   - `!event.ctrlKey` removed: "a Ctrl-click leaves the panel open..."
+   *     failed - `expect(panel(), "a Ctrl-click closed the panel").not.toBeNull()`
+   *     got `null` (the panel closed on the Ctrl-click once the clause
+   *     guarding it was gone).
+   *   - `!event.shiftKey` removed: "a Shift-click leaves the panel open..."
+   *     failed the same way for the Shift-click assertion.
+   *   - `!event.altKey` removed: "an Alt-click leaves the panel open..."
+   *     failed the same way for the Alt-click assertion.
+   *   - `event.button === 0 &&` removed entirely (the three modifier-key
+   *     conjuncts are each already 0 by default on every MouseEvent these
+   *     tests construct without setting `button`, so removing only this
+   *     clause isolates it from the others): "a middle-click (non-primary
+   *     button)..." failed the same way for the middle-click assertion.
+   * Each mutation left the rest of this file's tests, and the other three
+   * new tests below, green - confirming each new test is tied to its own
+   * clause, not to one shared failure mode.
+   */
+  it("a Ctrl-click leaves the panel open; a plain click on the same link still closes it", () => {
+    act(() => {
+      root.render(<MobileNavToggle items={ITEMS} />);
+    });
+
+    act(() => {
+      toggleButton().click();
+    });
+    const link = panel()?.querySelector("a");
+    expect(link, "no link found in the open panel").not.toBeNull();
+
+    act(() => {
+      link?.dispatchEvent(
+        new MouseEvent("click", { bubbles: true, cancelable: true, ctrlKey: true }),
+      );
+    });
+    expect(panel(), "a Ctrl-click closed the panel").not.toBeNull();
+
+    act(() => {
+      link?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+    expect(panel(), "a plain click did not close the panel").toBeNull();
+  });
+
+  it("a Shift-click leaves the panel open; a plain click on the same link still closes it", () => {
+    act(() => {
+      root.render(<MobileNavToggle items={ITEMS} />);
+    });
+
+    act(() => {
+      toggleButton().click();
+    });
+    const link = panel()?.querySelector("a");
+    expect(link, "no link found in the open panel").not.toBeNull();
+
+    act(() => {
+      link?.dispatchEvent(
+        new MouseEvent("click", { bubbles: true, cancelable: true, shiftKey: true }),
+      );
+    });
+    expect(panel(), "a Shift-click closed the panel").not.toBeNull();
+
+    act(() => {
+      link?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+    expect(panel(), "a plain click did not close the panel").toBeNull();
+  });
+
+  it("an Alt-click leaves the panel open; a plain click on the same link still closes it", () => {
+    act(() => {
+      root.render(<MobileNavToggle items={ITEMS} />);
+    });
+
+    act(() => {
+      toggleButton().click();
+    });
+    const link = panel()?.querySelector("a");
+    expect(link, "no link found in the open panel").not.toBeNull();
+
+    act(() => {
+      link?.dispatchEvent(
+        new MouseEvent("click", { bubbles: true, cancelable: true, altKey: true }),
+      );
+    });
+    expect(panel(), "an Alt-click closed the panel").not.toBeNull();
+
+    act(() => {
+      link?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+    expect(panel(), "a plain click did not close the panel").toBeNull();
+  });
+
+  it("a middle-click (non-primary button) leaves the panel open; a plain click on the same link still closes it", () => {
+    act(() => {
+      root.render(<MobileNavToggle items={ITEMS} />);
+    });
+
+    act(() => {
+      toggleButton().click();
+    });
+    const link = panel()?.querySelector("a");
+    expect(link, "no link found in the open panel").not.toBeNull();
+
+    act(() => {
+      // `button: 1` is the middle mouse button - the one real-browser click
+      // that (like Cmd/Ctrl/Shift/Alt) does not navigate in this tab, which
+      // is what `event.button === 0` in isPlainLeftClick excludes.
+      link?.dispatchEvent(
+        new MouseEvent("click", { bubbles: true, cancelable: true, button: 1 }),
+      );
+    });
+    expect(panel(), "a middle-click closed the panel").not.toBeNull();
+
+    act(() => {
+      link?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+    expect(panel(), "a plain click did not close the panel").toBeNull();
+  });
+
+  /**
    * ugcportal-14k9 PR #94 review round 3 medium finding: the hand-rolled
    * `{open && <nav>...}` toggle this shipped with closed only on a second
    * click of the toggle button or on selecting a nav item - nothing
