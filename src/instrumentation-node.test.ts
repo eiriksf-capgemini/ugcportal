@@ -322,13 +322,16 @@ describe("registerNodeOnlyChecks() wiring the S3 check through @/lib/s3 (ugcport
     vi.doMock("@/lib/legal/publishable", () => ({
       checkLegalPagesPublishable: () => "[legal] test warning, independent of S3",
     }));
-    // ugcportal-qnq9.12: this test's own claim is about the legal-vs-S3
-    // ordering, not about the site-origin check added alongside it (same
-    // synchronous, logged-before-S3 slot) — mocked quiet here so the array
-    // equality below stays scoped to what this test actually asserts,
-    // rather than coupling it to whatever AUTH_URL happens to be in this
-    // process.
-    vi.doMock("@/lib/origin", () => ({ checkSiteOriginConfigured: () => null }));
+    // ugcportal-qnq9.12 (round 2 review, non-blocking note): a real warning
+    // here, not a quiet `null`, is what lets this test RACE the site-origin
+    // check against the S3 probe the same way it already races the legal
+    // check — mocking it quiet would only prove the legal line isn't
+    // delayed, leaving a future regression that moved
+    // `checkSiteOriginConfigured()` to *after* the `await
+    // checkS3Reachability()` line uncaught by this test.
+    vi.doMock("@/lib/origin", () => ({
+      checkSiteOriginConfigured: () => "[origin] test warning, independent of S3",
+    }));
 
     const { registerNodeOnlyChecks, S3_REACHABILITY_TIMEOUT_MS: timeoutMs } = await import(
       "@/instrumentation-node"
@@ -338,10 +341,13 @@ describe("registerNodeOnlyChecks() wiring the S3 check through @/lib/s3 (ugcport
     const resultPromise = registerNodeOnlyChecks();
 
     // Synchronous, immediately after calling -- no await, no microtask
-    // flush -- because the legal check must already be logged by now, well
-    // before the S3 probe's own timeout is even advanced below.
+    // flush -- because BOTH the legal and site-origin checks must already be
+    // logged by now, well before the S3 probe's own timeout is even advanced
+    // below. Order matters here too: legal first, matching
+    // `registerNodeOnlyChecks`'s own doc comment and source order.
     expect(errors.mock.calls.map((call) => String(call[0]))).toEqual([
       "[legal] test warning, independent of S3",
+      "[origin] test warning, independent of S3",
     ]);
 
     await vi.advanceTimersByTimeAsync(timeoutMs);
