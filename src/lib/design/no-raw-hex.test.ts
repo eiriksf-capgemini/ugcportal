@@ -215,7 +215,14 @@ function scannedFiles(): string[] {
   return (cachedFiles ??= walkSourceFiles(SRC_ROOT, isExcluded, SCANNED_EXTENSIONS));
 }
 
-describe("no raw hex colour literals outside the tokens file", () => {
+// ugcportal-9faa: scannedFiles() above already memoizes the real-tree walk
+// (`cachedFiles ??=`), so there is nothing redundant left to cache here —
+// the remaining cost is reading and scanning every file's content for a raw
+// hex literal, real work a busy machine can push past the 5s default on
+// its own. Explicit timeout, not a bigger global default; see
+// analytics-host.grep.test.ts and throttled-log.no-sibling-copy.test.ts for
+// the same shape of fix and the measurements behind it.
+describe("no raw hex colour literals outside the tokens file", { timeout: 15_000 }, () => {
   it("finds files to scan", () => {
     expect(scannedFiles().length).toBeGreaterThan(10);
   });

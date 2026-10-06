@@ -139,15 +139,65 @@ export function findAnalyticsMarkerOffenders(
   return offenders;
 }
 
-describe("K6: the analytics host/script name appears nowhere outside the gated loader", () => {
-  const files = walkSourceFiles(SRC_ROOT, INCLUDE_EVERYTHING, K6_SCANNED_EXTENSIONS);
+// ugcportal-9faa: the real-tree file list, walked exactly once for the
+// whole file (previously the K6 describe and the fail-closed-path describe
+// below each walked it separately).
+const REAL_TREE_FILES = walkSourceFiles(SRC_ROOT, INCLUDE_EVERYTHING, K6_SCANNED_EXTENSIONS);
 
+/**
+ * ugcportal-9faa: the K6 marker scan and the "no file under src/ takes the
+ * scanner's fail-closed path" check below each used to TypeScript-parse
+ * (via stripComments, inside findAnalyticsMarkerOffenders) every file under
+ * src/ independently — the same couple-hundred-file parse pass twice per
+ * run, which is exactly the kind of tree-wide suite that timed out against
+ * vitest's 5s default under load (ugcportal-9faa's own report: this file
+ * among them). Computed once, lazily, and cached for whichever describe
+ * asks first; findAnalyticsMarkerOffenders itself is still the one function
+ * deciding what counts as an offender (round 1 finding 3's protection is
+ * unchanged), so a regression there is still caught here. It skips
+ * `stripComments` entirely for the handful of allowed paths (it never needs
+ * their content) — but the fail-closed-path check cares about EVERY file,
+ * allowed or not, so those few are topped up separately below; negligible
+ * next to the full-tree pass just done.
+ */
+let cachedRealTreeScan: { offenders: string[]; warnings: string[] } | null = null;
+
+function scanRealTreeOnce(): { offenders: string[]; warnings: string[] } {
+  if (cachedRealTreeScan) return cachedRealTreeScan;
+  const warnings: string[] = [];
+  const warnSpy = vi.spyOn(console, "warn").mockImplementation((...args) => {
+    warnings.push(args.map(String).join(" "));
+  });
+  try {
+    const offenders = findAnalyticsMarkerOffenders(REAL_TREE_FILES, SRC_ROOT, ALLOWED_RELATIVE_PATHS);
+    for (const absolutePath of REAL_TREE_FILES) {
+      const relative = path.relative(SRC_ROOT, absolutePath).split(path.sep).join("/");
+      if (ALLOWED_RELATIVE_PATHS.has(relative)) {
+        stripComments(readFileSync(absolutePath, "utf8"), absolutePath);
+      }
+    }
+    cachedRealTreeScan = { offenders, warnings };
+    return cachedRealTreeScan;
+  } finally {
+    warnSpy.mockRestore();
+  }
+}
+
+// ugcportal-9faa: explicit timeout, not a bigger global default. A full-tree
+// TypeScript parse (see scanRealTreeOnce above) is real CPU work with
+// nothing left to cache away once it has already been reduced to one pass;
+// measured under machine load (vitest --no-file-parallelism at load
+// average ~150-165), the combined K6 + fail-closed-path real-tree scan
+// below took up to ~2s, close enough to the 5s default that it would have
+// blown through it outright at the load average 190 this bead was filed
+// against.
+describe("K6: the analytics host/script name appears nowhere outside the gated loader", { timeout: 15_000 }, () => {
   it("finds files to scan (sanity check on the walker itself)", () => {
-    expect(files.length).toBeGreaterThan(50);
+    expect(REAL_TREE_FILES.length).toBeGreaterThan(50);
   });
 
   it("greps every file under src/ for 'umami' and allows it only in the gated loader and its own tests", () => {
-    const offenders = findAnalyticsMarkerOffenders(files, SRC_ROOT, ALLOWED_RELATIVE_PATHS);
+    const { offenders } = scanRealTreeOnce();
 
     expect(
       offenders,
@@ -171,22 +221,22 @@ describe("K6: the analytics host/script name appears nowhere outside the gated l
  * This lives here because this file already walks the whole tree with the
  * extension list the check needs, and because a regression would show up
  * first as a mystery failure of the scan above.
+ *
+ * ugcportal-9faa: reads its warnings from scanRealTreeOnce() above rather
+ * than re-walking and re-parsing the whole tree a second time — see that
+ * function's own comment for why this is a real reduction in work, not a
+ * relocated one. Explicit timeout for the same reason as the K6 describe
+ * above: a full-tree TypeScript parse is real CPU work a busy machine can
+ * push past the 5s default on its own.
  */
-describe("no file under src/ takes the scanner's fail-closed path", () => {
+describe("no file under src/ takes the scanner's fail-closed path", { timeout: 15_000 }, () => {
   it("strips every JS-family file under src/ without one warning", () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    try {
-      for (const file of walkSourceFiles(SRC_ROOT, INCLUDE_EVERYTHING, K6_SCANNED_EXTENSIONS)) {
-        stripComments(readFileSync(file, "utf8"), file);
-      }
-      expect(
-        warn.mock.calls.map((call) => String(call[0])),
-        "a file under src/ no longer parses cleanly, so it is being scanned " +
-          "unstripped — the K6 and K2 gates are reading its comments as live code",
-      ).toEqual([]);
-    } finally {
-      warn.mockRestore();
-    }
+    const { warnings } = scanRealTreeOnce();
+    expect(
+      warnings,
+      "a file under src/ no longer parses cleanly, so it is being scanned " +
+        "unstripped — the K6 and K2 gates are reading its comments as live code",
+    ).toEqual([]);
   });
 
   it("MUTATION CHECK: a file that does NOT parse cleanly is reported by that same check", () => {

@@ -228,7 +228,14 @@ function applicationSources(): { file: string; code: string }[] {
   }));
 }
 
-describe("the negative claims hold against the source tree", () => {
+// ugcportal-9faa: applicationSources() above already walks and
+// TypeScript-parses (via stripComments) the whole src/ tree exactly once,
+// shared by every test below — there is nothing redundant left to cache.
+// That single pass is still real CPU work a busy machine can push past the
+// 5s default on its own (see analytics-host.grep.test.ts and
+// throttled-log.no-sibling-copy.test.ts for the measurements behind this
+// fix). Explicit timeout, not a bigger global default.
+describe("the negative claims hold against the source tree", { timeout: 15_000 }, () => {
   const sources = applicationSources();
 
   it("scans the application", () => {

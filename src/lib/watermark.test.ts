@@ -172,7 +172,15 @@ afterEach(() => {
   delete process.env.WATERMARK_TEXT;
 });
 
-describe("generateWatermarkedPreview", () => {
+// ugcportal-9faa: real libvips image processing (sharp) throughout —
+// several cases build and compare multiple full-size source/preview images
+// (burning in a watermark, comparing pixels, re-encoding). Measured
+// unloaded, individual cases here already ran 1-2.1s; under machine load,
+// sharp directly competes with everything else for the same CPU threads, so
+// this is inherent cost (the "image processing" category that bead names),
+// not redundant work there is anything to cache. Explicit timeout, not a
+// bigger global default.
+describe("generateWatermarkedPreview", { timeout: 15_000 }, () => {
   it("produces a downscaled WebP that differs from the original bytes", async () => {
     const source = await buildSourcePng();
 
