@@ -205,6 +205,12 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
   // so their own "text-primary" counts drop; rights/page.tsx keeps one
   // differently-styled link of its own.
   "src/app/admin/settings/rights/page.tsx": { "text-muted-foreground": 5, "text-primary": 1 },
+  // ugcportal-mqh8: the brand list renders on the same plain page canvas as
+  // its sibling above - the body copy and the brand slug both sit outside
+  // any bg-muted/bg-destructive-surface well (those wells use text-ink/
+  // text-ink-muted instead, per contrast.ts), so the page-canvas token is
+  // the correct one here too.
+  "src/app/admin/settings/rights/brands/page.tsx": { "text-muted-foreground": 5 },
   // text-ink counts (ugcportal-14k9 PR #94 review round 1, low finding 5):
   // every field in this form - five identically-styled inputs/textareas -
   // renders on the resale-rights decision screen's plain page canvas, not

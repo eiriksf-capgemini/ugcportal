@@ -55,3 +55,41 @@ export async function requireAdmin(): Promise<AdminSession | null> {
   // to say so.
   return { ...session, user };
 }
+
+export type AdminAccessResult =
+  | { ok: true; session: AdminSession }
+  | { ok: false; status: 401 | 403; error: string };
+
+/**
+ * `requireAdmin` by another shape: 401 for nobody signed in, 403 for a
+ * signed-in caller who is not an admin (ugcportal-mqh8 K4).
+ *
+ * `requireAdmin` COLLAPSES those two into one `null`, and that collapse is
+ * the right call for the existing admin surfaces — see this file's own
+ * `requireAdmin` docstring and `requireOwnedMedia`'s note on 403-vs-404: "the
+ * existence of the route itself is the secret" for an admin/moderation
+ * route, so telling an anonymous caller apart from a signed-in non-admin
+ * would leak that the route exists to the first of the two. This function
+ * exists because ugcportal-mqh8's brand list is explicitly specified the
+ * other way — 401 then 403, matching docs/access-control.md's general rule
+ * for a surface that is reached by more than one audience (401 is "you have
+ * not told me who you are", 403 is "I know who you are, and the answer is
+ * no") — not a general replacement for `requireAdmin`. Most admin routes
+ * should keep calling `requireAdmin` and answering 403 to both; introduce
+ * this split only where an acceptance criterion asks for it by name.
+ *
+ * Mirrors `MediaAccessResult` (src/lib/media-access.ts) in shape, for the
+ * same reason that one gives: answering "may this caller do this" and
+ * leaving the response to build to the route.
+ */
+export async function requireAdminAccess(): Promise<AdminAccessResult> {
+  const session = await getSession();
+  const user = session?.user;
+  if (!session || !user?.id) {
+    return { ok: false, status: 401, error: "Unauthorized" };
+  }
+  if (user.role !== "ADMIN") {
+    return { ok: false, status: 403, error: "Forbidden" };
+  }
+  return { ok: true, session: { ...session, user } };
+}

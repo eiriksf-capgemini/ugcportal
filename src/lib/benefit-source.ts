@@ -159,3 +159,65 @@ export async function resolveBenefitSource(
     return row.id;
   }
 }
+
+/** What {@link recordBrandAlcoholLinked} did, so a caller can report it
+ * honestly rather than treating every outcome as the one it hoped for. */
+export type RecordBrandAlcoholLinkedOutcome =
+  | "recorded"
+  | "already-recorded"
+  | "not-found";
+
+/**
+ * The admin-only, monotone second half of the brand-alcohol answer
+ * (ugcportal-mqh8). PUT /api/media/[id]/disclosure can only ever write
+ * `null -> false` — see that route's own long comment on why a `yes` is
+ * deliberately not reachable through it — so this is the one and only place
+ * in the product that may record a brand as alcohol-linked.
+ *
+ * MONOTONE TOWARDS `true`, THE SAME RULE `effectiveBrandAlcoholAnswer` STATES
+ * (src/lib/alcohol-commerce.ts), by construction rather than by a branch that
+ * could be got wrong: the `data` below never contains anything but
+ * `alcoholLinked: true`, so there is no code path in this function that could
+ * write `false` even if a caller tried to pass one in — there is no such
+ * parameter to pass. The `where` clause is what makes it idempotent rather
+ * than clobbering: a brand already answered (`true` OR `false`) matches
+ * nothing, so a brand already marked alcohol-linked keeps the date and the
+ * name of whoever first recorded it, and a brand already answered `false` by
+ * the disclosure route is left for this admin screen to flip rather than
+ * being silently re-stamped by a no-op retry.
+ *
+ * `OR: [{ alcoholLinked: null }, { alcoholLinked: false }]` rather than
+ * `{ not: true }`: SQL's three-valued logic makes `<> true` evaluate to NULL
+ * (neither true nor false) for a NULL row, which several SQL engines then
+ * exclude from the match entirely — exactly the "still unanswered" case this
+ * function most needs to reach. Spelling out both values is slower to write
+ * and impossible to get wrong this way.
+ *
+ * `client` is the transaction to write through, same convention as
+ * `resolveBenefitSource` next door, defaulted to the global client so a
+ * caller with nothing else to be atomic with is not forced to invent one.
+ */
+export async function recordBrandAlcoholLinked(
+  benefitSourceId: string,
+  actorUserId: string,
+  client: Pick<typeof prisma, "benefitSource"> = prisma,
+): Promise<RecordBrandAlcoholLinkedOutcome> {
+  const { count } = await client.benefitSource.updateMany({
+    where: {
+      id: benefitSourceId,
+      OR: [{ alcoholLinked: null }, { alcoholLinked: false }],
+    },
+    data: {
+      alcoholLinked: true,
+      alcoholAnsweredAt: new Date(),
+      alcoholAnsweredByUserId: actorUserId,
+    },
+  });
+  if (count > 0) return "recorded";
+
+  const exists = await client.benefitSource.findUnique({
+    where: { id: benefitSourceId },
+    select: { id: true },
+  });
+  return exists ? "already-recorded" : "not-found";
+}
