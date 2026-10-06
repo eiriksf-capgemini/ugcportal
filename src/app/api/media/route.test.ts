@@ -9,6 +9,7 @@ import {
   MAX_ORIGINAL_NAME_LENGTH,
   MAX_UPLOAD_BYTES,
 } from "@/lib/media";
+import { BODY_STALL_TIMEOUT_MS } from "@/lib/request-body";
 import { ObjectStorageUnreachableError } from "@/lib/s3";
 import {
   INITIAL_GRANT_BYTES,
@@ -2084,6 +2085,92 @@ describe("POST /api/media — upload memory (ugcportal-05b)", () => {
     await expect(response.json()).resolves.toEqual({
       error: "Request body too large",
     });
+  });
+
+  /**
+   * A client that sends one form field and then holds the connection open
+   * without another byte — silent while the peek is still looking for the
+   * file part, which is before any reservation exists (ugcportal-dvb).
+   *
+   * `cancel` is recorded rather than ignored because tearing the body down is
+   * half of what the timeout is for: the test asserts the body is cancelled
+   * when the budget expires, not merely that a 408 came back.
+   */
+  function stalledDuringPeek(cancel: (reason: unknown) => void) {
+    const encoder = new TextEncoder();
+    const field = encoder.encode(
+      `--${MULTIPART_BOUNDARY}\r\n` +
+        `Content-Disposition: form-data; name="caption"\r\n\r\n` +
+        `a day at the beach\r\n`,
+    );
+    let sent = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (sent) {
+          // A pull that never settles: the connection is alive and idle.
+          return new Promise<void>(() => {});
+        }
+        sent = true;
+        controller.enqueue(field);
+      },
+      cancel,
+    });
+
+    return {
+      url: "http://localhost/api/media",
+      method: "POST",
+      headers: new Headers({
+        "content-type": `multipart/form-data; boundary=${MULTIPART_BOUNDARY}`,
+      }),
+      body,
+    } as unknown as Request;
+  }
+
+  it("answers 408 on the idle timeout when the client stalls during the peek (ugcportal-dvb)", async () => {
+    configureContainer(1024);
+    // Fake timers for the same reason as the rest of this file's timing
+    // assertions: the budget is BODY_STALL_TIMEOUT_MS, and waiting it out on
+    // the wall clock would be a 30-second test.
+    vi.useFakeTimers();
+    try {
+      const cancelled = vi.fn();
+      const pending = POST(stalledDuringPeek(cancelled));
+      let settled = false;
+      void pending.then(() => {
+        settled = true;
+      });
+
+      // A second short of the budget the request is still open — and holding
+      // nothing but its slot. The byte bounds have no view of this: the peek
+      // runs before reserveUploadMemory, so a stall here costs no held bytes
+      // for the budget to refuse.
+      await vi.advanceTimersByTimeAsync(BODY_STALL_TIMEOUT_MS - 1_000);
+      expect(settled).toBe(false);
+      expect(uploadMemoryStats().heldBytes).toBe(0);
+      expect(cancelled).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      const response = await pending;
+
+      // 408 and not 400: the request was well-formed as far as it got, and
+      // the client may retry (src/app/upload/outcomes.ts maps it to a
+      // retryable "stalled" outcome). Driven on `next dev` against the real
+      // route before this bead, the same request got no response for as long
+      // as the probe held the socket open.
+      expect(response.status).toBe(408);
+      await expect(response.json()).resolves.toEqual({
+        error: "Request body stalled",
+      });
+      // The body is cancelled, so the slot goes back at the timeout rather
+      // than whenever the runtime gets around to the dead connection.
+      expect(cancelled).toHaveBeenCalledTimes(1);
+      // And nothing downstream ran: no preview, no bucket write, no row.
+      expect(s3SendMock).not.toHaveBeenCalled();
+      expect(mediaCreateMock).not.toHaveBeenCalled();
+      expect(uploadMemoryStats().heldBytes).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("warns once, naming the shortfall, when the container is too small", async () => {

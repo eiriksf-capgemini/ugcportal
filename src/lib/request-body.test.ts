@@ -48,6 +48,73 @@ function textField(name: string, value: string) {
   return partHeader({ name, filename: null, contentType: null }) + value + "\r\n";
 }
 
+/**
+ * Sends these pieces, then holds the connection open without another byte.
+ *
+ * Shared by the peek's tests and the read's: a stall before any reservation
+ * exists and a stall in the middle of the body are the same client behaviour
+ * seen at two points on the path (ugcportal-dvb), and writing it twice is how
+ * one of them ends up subtly easier to survive than the other.
+ */
+function silentAfter(
+  pieces: string[],
+  cancel?: (reason: unknown) => void | Promise<void>,
+): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  let index = 0;
+  return new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (index >= pieces.length) {
+        // The shape that matters: a pull that never settles, which is what a
+        // client holding a connection open without sending looks like.
+        return new Promise<void>(() => {});
+      }
+      controller.enqueue(encoder.encode(pieces[index++]));
+    },
+    cancel,
+  });
+}
+
+/**
+ * What a real request body's `cancel()` does while the client is still there.
+ *
+ * Measured on `next dev` (ugcportal-dvb): cancelling the body of a live
+ * request returns a promise that does not settle until the client actually
+ * disconnects, which is the one thing a stalled client is not doing. A test
+ * stream's cancel resolves immediately, so this shape is the difference
+ * between the guard working in a test and working on a socket.
+ */
+const cancelThatNeverSettles = () => new Promise<void>(() => {});
+
+/** A body that delivers one piece every `gapMs`, and ends. */
+function trickle(pieces: string[], gapMs: number): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  let index = 0;
+  return new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (index >= pieces.length) {
+        controller.close();
+        return;
+      }
+      return new Promise<void>((resolve) => {
+        setTimeout(() => {
+          controller.enqueue(encoder.encode(pieces[index++]));
+          resolve();
+        }, gapMs);
+      });
+    },
+  });
+}
+
+/** The headers the upload route reads a multipart body under. */
+const multipartRequest = {
+  url: "http://localhost/api/media",
+  method: "POST",
+  headers: new Headers({
+    "content-type": `multipart/form-data; boundary=${BOUNDARY}`,
+  }),
+};
+
 async function drain(body: ReadableStream<Uint8Array>): Promise<string> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
@@ -199,8 +266,13 @@ describe("peekDeclaredPartType", () => {
     const peeked = await peek([partHeader(), "PAYLOAD"], { boundary: null });
 
     expect(peeked.declaredContentType).toBeNull();
-    // The stream is handed straight back undisturbed — not even locked — so a
-    // request whose Content-Type has no boundary is parsed exactly as before.
+    // Nothing is consumed: the whole body still comes back out, in order, so
+    // a request whose Content-Type has no boundary is parsed exactly as it
+    // was before the peek existed. What comes back is the stall-guard wrapper
+    // rather than the identical object (ugcportal-dvb), which is why this
+    // asserts on the bytes and not on the stream — the guard on this branch
+    // is pinned by "guards the body it hands back even with no boundary"
+    // below.
     await expect(drain(peeked.body)).resolves.toBe(partHeader() + "PAYLOAD");
   });
 
@@ -264,35 +336,240 @@ describe("peekDeclaredPartType", () => {
   });
 });
 
-describe("readCappedFormDataFrom — stalls and metered reads", () => {
-  const request = {
-    url: "http://localhost/api/media",
-    method: "POST",
-    headers: new Headers({
-      "content-type": `multipart/form-data; boundary=${BOUNDARY}`,
-    }),
-  };
+/*
+ * ugcportal-dvb. The peek is the first read of the body and it happens before
+ * the caller has reserved anything, so a client that stalled here cost no
+ * bytes and tripped no byte bound — it held the request slot until Node's
+ * `requestTimeout`, because the only stall guard on the path was installed
+ * after the peek had already awaited the client.
+ *
+ * Every timing fact below is on fake timers: the budgets are tens of
+ * milliseconds apart and a loaded machine would otherwise decide the
+ * outcome. Where a stall is read back through readCappedFormDataFrom, that
+ * read is given an idle budget three orders of magnitude longer than the
+ * peek's and the clock never advances near it, so a 408 can only have come
+ * from the guard the peek installed.
+ */
+describe("peekDeclaredPartType — idle timeout", () => {
+  const PEEK_IDLE_MS = 25;
+  /** Long enough that the read's own guard cannot be what fired. */
+  const READ_IDLE_MS = 25_000;
+  /** A field ahead of the file part, so the peek is still looking. */
+  const LEADING_FIELD = textField("caption", "a day at the beach");
 
-  /** Sends the part headers, then never another byte. */
-  function stalledBody(): ReadableStream<Uint8Array> {
-    let sent = false;
-    return new ReadableStream<Uint8Array>({
-      pull(controller) {
-        if (sent) {
-          // The shape that matters: a pull that never settles, which is what
-          // a client holding a connection open without sending looks like.
-          return new Promise<void>(() => {});
-        }
-        sent = true;
-        controller.enqueue(new TextEncoder().encode(partHeader()));
-      },
+  const stalledPeek = (cancel?: (reason: unknown) => void) =>
+    peekDeclaredPartType(silentAfter([LEADING_FIELD], cancel), {
+      fieldName: "file",
+      boundary: BOUNDARY,
+      stallTimeoutMs: PEEK_IDLE_MS,
     });
-  }
+
+  it("stops looking on the idle timeout instead of awaiting a silent client (K1)", async () => {
+    vi.useFakeTimers();
+    try {
+      const cancelled = vi.fn();
+      const pending = stalledPeek(cancelled);
+      let settled = false;
+      void pending.then(() => {
+        settled = true;
+      });
+
+      // Still waiting one millisecond short of the budget — the guard is the
+      // configured idle timeout, not "gives up on the second read".
+      await vi.advanceTimersByTimeAsync(PEEK_IDLE_MS - 1);
+      expect(settled).toBe(false);
+      expect(cancelled).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      const peeked = await pending;
+
+      // The request body is torn down at the timeout, not left outstanding
+      // for the response to collect later: that is the request slot being
+      // released, which is the entire cost this bead is about.
+      expect(cancelled).toHaveBeenCalledTimes(1);
+      expect(peeked.declaredContentType).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("returns on the timeout even when the body's teardown never finishes (K1)", async () => {
+    vi.useFakeTimers();
+    try {
+      const pending = peekDeclaredPartType(
+        silentAfter([LEADING_FIELD], cancelThatNeverSettles),
+        {
+          fieldName: "file",
+          boundary: BOUNDARY,
+          stallTimeoutMs: PEEK_IDLE_MS,
+        },
+      );
+      await vi.advanceTimersByTimeAsync(PEEK_IDLE_MS);
+
+      // The peek is the first await on the request. If it waited for the
+      // source's cancel to complete, a stalled client would hold this frame
+      // — and with it the request slot — for as long as it stayed connected,
+      // which is the whole failure, just moved one line down.
+      await expect(pending).resolves.toMatchObject({
+        declaredContentType: null,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("replays what did arrive and then raises the stall, rather than looking truncated", async () => {
+    vi.useFakeTimers();
+    try {
+      const pending = stalledPeek();
+      await vi.advanceTimersByTimeAsync(PEEK_IDLE_MS);
+      const peeked = await pending;
+
+      const reader = peeked.body.getReader();
+      // The bytes the client really sent still come out first — the error is
+      // about the body stopping, not about those bytes.
+      await expect(reader.read()).resolves.toEqual({
+        done: false,
+        value: new TextEncoder().encode(LEADING_FIELD),
+      });
+      // And then the stall, instead of `done: true`. A clean close here would
+      // be parsed as malformed multipart and answered 400, which says the
+      // client sent something wrong rather than that it sent nothing.
+      await expect(reader.read()).rejects.toThrow("Request body stalled");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reaches the 408 the route already answers, from the peek's own guard (K1)", async () => {
+    vi.useFakeTimers();
+    try {
+      const pending = stalledPeek();
+      await vi.advanceTimersByTimeAsync(PEEK_IDLE_MS);
+      const peeked = await pending;
+
+      const result = await readCappedFormDataFrom(
+        multipartRequest,
+        peeked.body,
+        10 * 1024 * 1024,
+        { stallTimeoutMs: READ_IDLE_MS },
+      );
+
+      expect(result).toEqual({
+        ok: false,
+        status: 408,
+        error: "Request body stalled",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("guards the rest of the body too, not only the bytes it read", async () => {
+    vi.useFakeTimers();
+    try {
+      // The file part arrives in the first chunk, so the peek answers
+      // immediately and the silence falls in the bytes the parser reads. The
+      // guard has to travel with the replayed stream for that to be caught
+      // within the peek's budget rather than the read's.
+      const peeked = await peekDeclaredPartType(silentAfter([partHeader()]), {
+        fieldName: "file",
+        boundary: BOUNDARY,
+        stallTimeoutMs: PEEK_IDLE_MS,
+      });
+      expect(peeked.declaredContentType).toBe("image/png");
+
+      const pending = readCappedFormDataFrom(
+        multipartRequest,
+        peeked.body,
+        10 * 1024 * 1024,
+        { stallTimeoutMs: READ_IDLE_MS },
+      );
+      await vi.advanceTimersByTimeAsync(PEEK_IDLE_MS);
+
+      await expect(pending).resolves.toEqual({
+        ok: false,
+        status: 408,
+        error: "Request body stalled",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("guards the body it hands back even with no boundary to peek at", async () => {
+    vi.useFakeTimers();
+    try {
+      // The branch that reads nothing at all. It returns before the loop, so
+      // it is the one path where a guard installed inside the loop would
+      // leave the body unguarded — and a request whose Content-Type carries
+      // no boundary is both the easiest thing for a client to send and the
+      // one the parser will reject anyway, which makes it the cheapest slot
+      // to hold.
+      const peeked = await peekDeclaredPartType(silentAfter([LEADING_FIELD]), {
+        fieldName: "file",
+        boundary: null,
+        stallTimeoutMs: PEEK_IDLE_MS,
+      });
+
+      const pending = readCappedFormDataFrom(
+        multipartRequest,
+        peeked.body,
+        10 * 1024 * 1024,
+        { stallTimeoutMs: READ_IDLE_MS },
+      );
+      await vi.advanceTimersByTimeAsync(PEEK_IDLE_MS);
+
+      await expect(pending).resolves.toEqual({
+        ok: false,
+        status: 408,
+        error: "Request body stalled",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not cut off a peek that is merely slow", async () => {
+    vi.useFakeTimers();
+    try {
+      // An idle timeout, not a deadline, on this read as much as on the one
+      // after it: three fields ahead of the file part, one piece every 15 ms,
+      // so the peek spends 60 ms looking — past the 40 ms budget — with no
+      // single gap near it.
+      const pieces = [
+        textField("caption", "a"),
+        textField("tags", "b"),
+        textField("altText", "c"),
+        partHeader(),
+        "PAYLOAD",
+      ];
+      const pending = peekDeclaredPartType(trickle(pieces, 15), {
+        fieldName: "file",
+        boundary: BOUNDARY,
+        stallTimeoutMs: 40,
+      });
+
+      for (let piece = 0; piece < pieces.length; piece += 1) {
+        await vi.advanceTimersByTimeAsync(15);
+      }
+
+      await expect(pending).resolves.toMatchObject({
+        declaredContentType: "image/png",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("readCappedFormDataFrom — stalls and metered reads", () => {
+  const request = multipartRequest;
 
   it("answers 408 instead of holding the read open", async () => {
     const result = await readCappedFormDataFrom(
       request,
-      stalledBody(),
+      silentAfter([partHeader()]),
       10 * 1024 * 1024,
       { stallTimeoutMs: 25 },
     );
@@ -336,21 +613,7 @@ describe("readCappedFormDataFrom — stalls and metered reads", () => {
     try {
       const boundaryTail = `\r\n--${BOUNDARY}--\r\n`;
       const pieces = [partHeader(), "AA", "BB", "CC", "DD", boundaryTail];
-      let index = 0;
-      const slow = new ReadableStream<Uint8Array>({
-        pull(controller) {
-          if (index >= pieces.length) {
-            controller.close();
-            return;
-          }
-          return new Promise<void>((resolve) => {
-            setTimeout(() => {
-              controller.enqueue(new TextEncoder().encode(pieces[index++]));
-              resolve();
-            }, 15);
-          });
-        },
-      });
+      const slow = trickle(pieces, 15);
 
       const resultPromise = readCappedFormDataFrom(
         request,
@@ -380,15 +643,7 @@ describe("readCappedFormDataFrom — stalls and metered reads", () => {
     // was left locked with a read outstanding after the 408, which is half
     // the point of not waiting for requestTimeout.
     const cancelled = vi.fn();
-    let sent = false;
-    const source = new ReadableStream<Uint8Array>({
-      pull(controller) {
-        if (sent) return new Promise<void>(() => {});
-        sent = true;
-        controller.enqueue(new TextEncoder().encode(partHeader()));
-      },
-      cancel: cancelled,
-    });
+    const source = silentAfter([partHeader()], cancelled);
 
     const result = await readCappedFormDataFrom(request, source, 10 * 1024 * 1024, {
       stallTimeoutMs: 25,
@@ -396,6 +651,26 @@ describe("readCappedFormDataFrom — stalls and metered reads", () => {
 
     expect(result).toMatchObject({ ok: false, status: 408 });
     expect(cancelled).toHaveBeenCalledTimes(1);
+  });
+
+  it("answers without waiting for the source's own teardown", async () => {
+    // The guard asks the source to tear down and does NOT wait for it. On a
+    // real socket that promise settles when the client disconnects, so
+    // awaiting it made the 408 wait for the client to go away — exactly what
+    // the idle timeout exists to stop waiting for, and invisible to every
+    // test whose stream cancels instantly.
+    const result = await readCappedFormDataFrom(
+      request,
+      silentAfter([partHeader()], cancelThatNeverSettles),
+      10 * 1024 * 1024,
+      { stallTimeoutMs: 25 },
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      status: 408,
+      error: "Request body stalled",
+    });
   });
 
   it("answers 503 when the caller cannot commit to the rest of the body", async () => {
