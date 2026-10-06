@@ -251,25 +251,31 @@ export const PAIRINGS: Pairing[] = [
    * is the whole point" comment), declared outside `@theme`, so
    * `text-petrol-900` never compiled to a Tailwind utility at all:
    * button.tsx's default-neutral variant painted this label in whatever
-   * colour it happened to inherit, never petrol-900, and this entry
-   * documented a ratio for a colour nothing painted (ugcportal-ei5c).
-   * `--color-surface-0` is the fix: the same fill-light/label-dark shape,
-   * a genuine near-black, and - unlike `--petrol-900` - actually declared
-   * in `@theme`, so `text-surface-0` is a real, compiling utility. The
-   * upload dropzone's "Choose files" label (src/app/upload/upload-form.tsx)
-   * is NOT a caller of this variant - it pastes `bg-petrol-400
-   * text-petrol-900` directly - so it still has the original, never-fixed
-   * bug this pairing used to (wrongly) claim covered it; see that file's
-   * own comment. Out of this bead's scope: it is not button.tsx's
-   * default-neutral variant, and ei5c's bead text names only that variant
-   * and its one real caller.
+   * colour it happened to inherit from the page's ambient
+   * `--foreground` - confirmed by rendering both colour schemes
+   * (ugcportal-ei5c): `rgb(11, 46, 51)` in light mode, which happens to
+   * equal `--petrol-900`'s own value only because light mode's
+   * `--foreground` IS `--petrol-900` (coincidence, not the utility
+   * painting it), but `rgb(250, 247, 242)` (`--paper`, near-white) in dark
+   * mode - nothing like petrol-900 there. This entry documented a ratio
+   * for a colour nothing reliably painted. `--color-surface-0` is the
+   * fix: the same fill-light/label-dark shape, a genuine near-black, and
+   * - unlike `--petrol-900` - actually declared in `@theme`, so
+   * `text-surface-0` is a real, compiling utility that paints the same
+   * colour in both schemes, not an inherited one that happens to match in
+   * one and not the other. The upload dropzone's "Choose files" label
+   * (src/app/upload/upload-form.tsx) is NOT a caller of this variant - it
+   * pastes `bg-petrol-400 text-petrol-900` directly - so it still has the
+   * original, never-fixed bug this pairing used to (wrongly) claim
+   * covered it; see that file's own comment. Out of this bead's scope: it
+   * is not button.tsx's default-neutral variant.
    */
   {
     id: "surface-0-on-petrol-400",
     foreground: "--color-surface-0",
     background: ["--color-petrol-400"],
     requirement: "body",
-    usage: "Label on default-neutral's fill (button.tsx), e.g. the upload queue's \"Try again\" button.",
+    usage: "Label on default-neutral's fill (button.tsx), e.g. the upload queue's \"Sign in\" link shown on a failed upload that needs re-authentication.",
   },
   ...onEverySurface(
     "divider",

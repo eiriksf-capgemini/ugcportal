@@ -794,8 +794,9 @@ describe("the gate cannot be routed around", () => {
      * refuses to generate.
      *
      * ugcportal-ei5c closed this gap for button.tsx's default-neutral
-     * variant - its one real caller (the upload queue's "Try again" button)
-     * now renders `text-surface-0`, a label `surface-0-on-petrol-400` above
+     * variant - its one real caller (the upload queue's "Sign in" link,
+     * shown on a failed upload that needs re-authentication) now renders
+     * `text-surface-0`, a label `surface-0-on-petrol-400` above
      * actually measures - but NOT for src/app/upload/upload-form.tsx's
      * "Choose files" label, which pastes `bg-petrol-400 text-petrol-900`
      * directly rather than going through the Button component and is out of

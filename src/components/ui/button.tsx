@@ -194,15 +194,15 @@ const buttonVariants = cva(
          * --color-petrol-400 (the pre-rw9j --ring/--sidebar-primary value)
          * paired with --petrol-900 as the label (the same fill-light/label-
          * dark pairing dark mode's own --primary already uses) measures
-         * 4.8-7.75:1 against every old surface and (originally, with
+         * 4.8-7.75:1 against every old surface and, at the time (with
          * `--petrol-900` as the label - see this variant's own comment
          * below for why that token changed to `--color-surface-0` under
-         * ugcportal-ei5c) 6.02:1 for the label on its own fill - a NEW
+         * ugcportal-ei5c), 6.02:1 for the label on its own fill - a NEW
          * measurement this round (contrast.ts's
          * petrol-400-fill-on-old-surface-* and, at the time,
          * petrol-900-on-petrol-400), not one focus-ring-on-old-surface
-         * already covered: that pairing
-         * only ever checked this same token at RING_ALPHA_MODIFIER alpha,
+         * already covered: that pairing only ever checked this same token
+         * at RING_ALPHA_MODIFIER alpha,
          * a different, weaker ratio than the full-opacity fill this variant
          * paints. `hover:brightness-95` rather than a second new token: this
          * is a contrast fix for an untouched-surface caller, not a second
@@ -216,17 +216,25 @@ const buttonVariants = cva(
          * Tailwind emitting bg-petrol-900 and friends" comment) - confirmed
          * empirically by compiling globals.css and checking the generated
          * utilities. The label therefore rendered in whatever colour the
-         * caller happened to inherit, never petrol-900, while contrast.ts
-         * documented a ratio (`petrol-900-on-petrol-400`) for a colour
-         * nothing painted - a false claim of coverage for the one real
-         * caller (the upload queue's "Try again" button). `text-surface-0`
-         * is the fix: the same fill-light/label-dark shape, but with the
-         * token `default-tint` below already uses for the identical reason
-         * - genuinely declared in `@theme`, so the utility compiles, and a
-         * real near-black, so nothing about the look changes. Its own
-         * contrast.ts pairing (`surface-0-on-petrol-400`, replacing the
-         * dead one) measures 7.75:1 in both colour schemes (neither token
-         * is overridden per mode) - not reused from `default-tint`'s own
+         * caller happened to inherit from the page's ambient
+         * `--foreground`, confirmed by rendering both colour schemes:
+         * `rgb(11, 46, 51)` in light mode - which happens to equal
+         * `--petrol-900`'s own value only because light mode's
+         * `--foreground` IS `--petrol-900`, not because the utility
+         * painted it - but `rgb(250, 247, 242)` (`--paper`, near-white) in
+         * dark mode, nothing like petrol-900. contrast.ts documented a
+         * ratio (`petrol-900-on-petrol-400`) for a colour that was never
+         * reliably painted - a false claim of coverage for the one real
+         * caller (the upload queue's "Sign in" link, shown on a failed
+         * upload that needs re-authentication). `text-surface-0` is the
+         * fix: the same fill-light/label-dark shape, but with the token
+         * `default-tint` below already uses for the identical reason -
+         * genuinely declared in `@theme`, so the utility compiles, and a
+         * real near-black that paints identically in both colour schemes,
+         * unlike the inherited value it replaces. Its own contrast.ts
+         * pairing (`surface-0-on-petrol-400`, replacing the dead one)
+         * measures 7.75:1 in both colour schemes (neither token is
+         * overridden per mode) - not reused from `default-tint`'s own
          * `surface-0-on-petrol-100` pairing, because that fill is
          * `--color-petrol-100` (L 0.95), lighter than this variant's
          * `--color-petrol-400` (L 0.72), so the ratio does not carry over.

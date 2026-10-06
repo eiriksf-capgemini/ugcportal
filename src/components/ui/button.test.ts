@@ -127,11 +127,16 @@ describe("buttonVariants base: no bare outline-none without a forced-colors-visi
  * outside `@theme`, specifically so Tailwind does not emit `bg-`/`text-`
  * utilities for it (see that block's own "stopping Tailwind emitting
  * bg-petrol-900 and friends" comment). The label therefore rendered in
- * whatever colour it happened to inherit, never petrol-900, while
- * contrast.ts's `petrol-900-on-petrol-400` pairing (now `surface-0-on-
- * petrol-400`, retargeted at the token the variant actually paints today)
- * documented a measured ratio for a colour nothing painted - a false claim
- * of coverage. Nothing in this repo's existing scanners would have caught
+ * whatever colour it happened to inherit from the page's ambient
+ * `--foreground` - confirmed by rendering both colour schemes: `rgb(11,
+ * 46, 51)` in light mode, which happens to equal `--petrol-900`'s own
+ * value only because light mode's `--foreground` IS `--petrol-900`, not
+ * because the utility painted it, but `rgb(250, 247, 242)` (`--paper`,
+ * near-white) in dark mode - while contrast.ts's `petrol-900-on-petrol-400`
+ * pairing (now `surface-0-on-petrol-400`, retargeted at the token the
+ * variant actually paints today) documented a measured ratio for a colour
+ * that was never reliably painted - a false claim of coverage. Nothing in
+ * this repo's existing scanners would have caught
  * it: findBareColorUtilities (src/lib/design/usage.ts) deliberately EXCLUDES
  * a non-compiling bare candidate rather than flagging it (a candidate that
  * fails to compile might be a `border-style`/`background-size` keyword
