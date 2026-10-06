@@ -547,8 +547,25 @@ enum ResaleRightsRoute {
 // behind it the *loosest* of the four, settled by a free-text key and a
 // boolean with no author. A release now needs both — the file, and an admin
 // who says it covers this use (åndsverkloven § 104, GDPR art 9).
+//
+// MINORS is a layer of its own rather than a stronger PEOPLE reason
+// (ugcportal-qn3, docs/legal/manual-upload-rights-review.md § 3.5). A
+// release signed by a child is not a release: guardians decide, the consent
+// has to be specific, written, and name online commercial publication, and
+// an older child has a say of their own. Folding that into the PEOPLE
+// clearance would mean one admin-written sentence settling two different
+// legal questions — exactly the failure the per-layer split exists to
+// prevent — and it would leave "is a minor shown" unanswerable by anything
+// but reading free text.
+//
+// EVERY MEMBER OF THIS ENUM MUST HAVE A TriageFact REGISTERED AGAINST IT in
+// src/lib/resale-rights.ts. The gate iterates that registry rather than a
+// hand-written list, and a test fails the suite for a layer with no entry,
+// so adding a value here cannot leave the gate, the admin screen or the
+// test table silently covering a subset.
 enum RightsLayer {
   PEOPLE
+  MINORS
   MUSIC
   THIRD_PARTY_CREATOR
   SPONSORED_CONTENT
@@ -715,7 +732,22 @@ model MediaListing {
 
   // Per-upload triage (checklist Part C / Part E.1). `null` means "not
   // triaged", which is not sellable - absence is never consent.
+  //
+  // Each of these columns is a TRIAGE FACT, and every one of them is paired
+  // with a RightsLayer in TRIAGE_FACTS (src/lib/resale-rights.ts). That
+  // pairing is the mechanism, not a convention: the gate never reads a
+  // triage column by name, so a column added here without an entry there is
+  // read by nothing rather than quietly defaulting to "not blocking". Add
+  // the fact, not just the column (ugcportal-qn3 K5).
   depictsPeople     Boolean?
+  // Is anyone shown under 18 (ugcportal-qn3,
+  // docs/legal/manual-upload-rights-review.md § 3.5)? Nullable and
+  // untriaged by default like the rest, which means every listing that
+  // existed before this column was added is blocked until someone answers
+  // it - the intended blast radius, because nobody has ever been asked.
+  // `true` needs its own MINORS clearance; a PEOPLE clearance does not
+  // settle it.
+  depictsMinors     Boolean?
   modelReleaseKey   String?
   containsMusic     Boolean?
   thirdPartyCreator Boolean?

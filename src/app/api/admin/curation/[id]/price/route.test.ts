@@ -102,6 +102,7 @@ beforeAll(async () => {
       id: "listing-1",
       mediaId: "media-1",
       depictsPeople: false,
+      depictsMinors: false,
       containsMusic: false,
       thirdPartyCreator: false,
       sponsoredContent: false,
@@ -677,6 +678,7 @@ describe("the shapes ugcportal-74w and ugcportal-p3v need", () => {
         priceCents: 500,
         // Same cleared uploader, but this one was never triaged.
         depictsPeople: null,
+        depictsMinors: null,
         triagedByUserId: "admin-1",
         triagedAt: new Date(),
       },

@@ -64,7 +64,9 @@ export const BLOCKER_MESSAGES: Record<SellabilityBlocker, string> = {
   model_release_missing:
     "This upload shows people and has no model release on file.",
   model_release_unverified:
-    "A model release is on file, but no admin has confirmed it covers this use. Of the four rights layers this is the one with a named individual behind it.",
+    "A model release is on file, but no admin has confirmed it covers this use. This is the layer with a named individual behind it.",
+  minors_uncleared:
+    "Someone under 18 is shown, and no admin has recorded a MINORS clearance. A release signed by a child is not a release: the guardian has to have consented, specifically and in writing, to online commercial publication. Clearing the people layer does not answer this.",
   third_party_layer_uncleared:
     "Music, a third-party creator or a sponsorship is involved and has not been cleared for this upload.",
 };

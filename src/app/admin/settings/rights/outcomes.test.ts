@@ -4,6 +4,7 @@ import {
   BLOCKER_MESSAGES,
   outcomeMessage,
 } from "@/app/admin/settings/rights/outcomes";
+import { TRIAGE_FACTS } from "@/lib/resale-rights";
 
 describe("outcomeMessage", () => {
   it("resolves every code the decision handler can redirect with", () => {
@@ -42,6 +43,17 @@ describe("BLOCKER_MESSAGES", () => {
     // values are real sentences rather than empty strings.
     for (const message of Object.values(BLOCKER_MESSAGES)) {
       expect(message.length).toBeGreaterThan(10);
+    }
+  });
+
+  it("has a sentence for every triage fact's uncleared blocker", () => {
+    // The Record type makes BLOCKER_MESSAGES total over SellabilityBlocker,
+    // which is not quite the same claim: this one is that the blocker each
+    // registered fact names is a member of that closed set, so a layer
+    // added later arrives with words an admin can read rather than with an
+    // undefined lookup (ugcportal-qn3).
+    for (const fact of TRIAGE_FACTS) {
+      expect(BLOCKER_MESSAGES[fact.uncleared].length).toBeGreaterThan(10);
     }
   });
 

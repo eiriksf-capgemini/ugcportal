@@ -43,6 +43,27 @@ const REANCHOR_MIGRATION = migrationNames().find((name) =>
 const database = createTemporaryDatabase();
 const { prisma } = await import("@/lib/prisma");
 
+/** The four tables the re-anchoring rewrites, counted by raw SQL. */
+const RIGHTS_TABLES = [
+  "ResaleRightsReview",
+  "ResaleRightsEvent",
+  "MediaListing",
+  "MediaRightsClearance",
+] as const;
+
+async function rightsRowCounts(): Promise<Record<string, number>> {
+  const counts: Record<string, number> = {};
+  for (const table of RIGHTS_TABLES) {
+    const [row] = await prisma.$queryRawUnsafe<{ n: bigint | number }[]>(
+      `SELECT count(*) AS n FROM "${table}"`,
+    );
+    counts[table] = Number(row.n);
+  }
+  return counts;
+}
+
+let rightsRowCountsAfterReanchor: Record<string, number>;
+
 /**
  * The pre-change audit row is dated EARLY ON THE SAME UTC DAY the migration
  * runs, and that is load-bearing rather than incidental.
@@ -107,6 +128,20 @@ beforeAll(async () => {
   }
 
   await applyMigration(prisma, REANCHOR_MIGRATION!);
+
+  /**
+   * What the migration under test left behind, counted through raw SQL
+   * while the database is still at exactly that migration — before the
+   * catch-up below, and without the generated client, which is the only
+   * way to look at this state at all (see applyMigrations' `startAfter`).
+   */
+  rightsRowCountsAfterReanchor = await rightsRowCounts();
+
+  // Catch the schema up to the current migrations, so the assertions below
+  // can read through Prisma. They are still about what the re-anchoring
+  // did: `leaves the rights tables exactly as the re-anchoring left them`
+  // checks that for itself rather than asserting it in a comment.
+  await applyMigrations(prisma, { startAfter: REANCHOR_MIGRATION! });
 });
 
 afterAll(async () => {
@@ -115,6 +150,20 @@ afterAll(async () => {
 });
 
 describe("ugcportal-vsm K2: nothing becomes sellable", () => {
+  /**
+   * The harness assumption, asserted rather than assumed (ugcportal-qn3).
+   *
+   * Every assertion in this file now runs against a database that has had
+   * the migrations AFTER the re-anchoring applied to it too, because the
+   * generated client cannot read one that has not. That is only sound
+   * while none of those later migrations touches the rights tables — and
+   * one that did (a backfill, a cleanup) would otherwise make this file
+   * quietly measure its effect and attribute it to ugcportal-vsm.
+   */
+  it("leaves the rights tables exactly as the re-anchoring left them", async () => {
+    expect(await rightsRowCounts()).toEqual(rightsRowCountsAfterReanchor);
+  });
+
   it("carries no review row forward, so every uploader is UNREVIEWED", async () => {
     expect(await prisma.resaleRightsReview.count()).toBe(0);
   });
