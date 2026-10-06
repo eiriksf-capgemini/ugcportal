@@ -4,7 +4,19 @@ import { cn } from "cn";
 
 import { GALLERY_STATE_CONTAINER_CLASS } from "@/components/gallery/containment";
 import { SECTION_TITLE_CLASS } from "@/components/type-scale";
+import { buttonVariants } from "@/components/ui/button";
 import { PORTFOLIO_PATH } from "@/lib/routes";
+
+/**
+ * Scoped forced-colors focus-outline override (round-4 fix, ugcportal-qqnt.2)
+ * — same fix, and the same reasoning for `outline-solid` over bare `outline`,
+ * as src/components/home/hero.tsx's own `FORCED_COLORS_FOCUS_OUTLINE`
+ * (see that file's comment for the full derivation and the Playwright
+ * `forcedColors: "active"` verification). `buttonVariants`' shared base is
+ * unfixed on purpose: see ugcportal-oavb.
+ */
+const FORCED_COLORS_FOCUS_OUTLINE =
+  "focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-transparent";
 
 /**
  * The front page's "living empty state" (ugcportal-6dvg K1/K2): what
@@ -97,9 +109,50 @@ export function EmptyState() {
         the correct CSS property this time, unlike the `-transform-none` it
         replaced), not because it changes what is rendered.
       */}
+      {/*
+        buttonVariants, not a hand-rolled className (ugcportal-qqnt.2):
+        `outline` — not `outline-neutral` — because this component renders
+        on --background (the paper canvas: GALLERY_STATE_CONTAINER_CLASS
+        sets no background of its own), the same surface
+        src/components/auth-status.tsx's own `variant="outline"` sign-in
+        controls render on. The hover-lift stays layered on top via `cn()`:
+        it is this call site's own polish, not part of the shared system.
+
+        `whitespace-normal h-auto min-h-9 py-2`, overriding `buttonVariants`'
+        own `whitespace-nowrap h-9` (CONFIRMED medium, found by the e2e
+        horizontal-scroll check at 320px, not by any class-name comparison):
+        every other buttonVariants caller on this page is a short label
+        ("Sign in to upload", "Sign in with Google"), so a fixed single-line
+        height never mattered before. This link's own sentence-length copy
+        ("See what is already finished, in the portfolio") does not fit one
+        line at 320px, and `buttonVariants`' base class forces
+        `whitespace-nowrap` — which does not clip text, it makes the
+        CONTAINER grow past the viewport instead, exactly the overflow
+        e2e/header.spec.ts's own `hasHorizontalScroll` check (2px tolerance)
+        exists to catch. `max-w-full` alongside `w-fit`: fit-content sizing
+        still picks the single-line width where it fits (390px and up, see
+        the PR's own screenshots), and only clamps at the viewport's own
+        width where it does not.
+
+        Horizontal padding changes too (round-2 review, LOW, CONFIRMED):
+        `size="lg"` gives `px-2.5`, not the `px-3` the hand-rolled className
+        this replaces used — the same value every other `size="lg"` caller
+        gets, not something specific to this call site.
+
+        Focus-visible outline under forced colors (round-4 fix,
+        ugcportal-qqnt.2): `FORCED_COLORS_FOCUS_OUTLINE` restores a real
+        outline on THIS control only — buttonVariants' shared
+        `outline-none`-plus-ring base still drops focus under forced-colors
+        for every other caller; that systemic fix is ugcportal-oavb, not
+        this bead.
+      */}
       <Link
         href={PORTFOLIO_PATH}
-        className="mt-6 inline-flex w-fit items-center gap-1.5 rounded-md border border-input px-3 py-2 text-sm font-medium text-foreground motion-safe:transition-transform motion-safe:duration-200 motion-safe:ease-out motion-safe:hover:-translate-y-0.5 motion-reduce:transition-none motion-reduce:translate-none"
+        className={cn(
+          buttonVariants({ variant: "outline", size: "lg" }),
+          "mt-6 h-auto min-h-9 w-fit max-w-full py-2 whitespace-normal motion-safe:transition-transform motion-safe:duration-200 motion-safe:ease-out motion-safe:hover:-translate-y-0.5 motion-reduce:transition-none motion-reduce:translate-none",
+          FORCED_COLORS_FOCUS_OUTLINE,
+        )}
       >
         See what is already finished, in the portfolio
       </Link>

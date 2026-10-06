@@ -90,4 +90,34 @@ describe("Hero (ugcportal-6dvg)", () => {
    * above failed with the real assertion message, then reverted. See the PR
    * description for the full list of these checks across this bead.
    */
+
+  /*
+   * Round-4 fix, ugcportal-qqnt.2: a cheap guard for the scoped forced-colors
+   * focus-outline override (this file's own `FORCED_COLORS_FOCUS_OUTLINE`,
+   * see its comment) — this is a unit-level backstop for a property real e2e
+   * coverage lives for in e2e/front-page.spec.ts ("the CTA keeps a visible
+   * outline under forced colors, on focus"), not a replacement for it; this
+   * level can only see the CLASS NAME survived onto the rendered element, not
+   * what it actually paints. `outline-solid`, specifically, not a bare
+   * `outline` — see the override's own comment for why the latter silently
+   * does nothing on this element.
+   *
+   * FIXTURE MUTATION CHECK: temporarily removed `FORCED_COLORS_FOCUS_OUTLINE`
+   * from the `cn(...)` call below, confirmed this test fails (none of the
+   * four classes appear), then restored it.
+   */
+  it("K-forced-colors: the call to action carries the forced-colors focus-outline override", () => {
+    const markup = render(false);
+    const link = markup.match(/<a[^>]*>Sign in to upload<\/a>/)?.[0] ?? "";
+
+    expect(link).not.toBe("");
+    for (const cls of [
+      "focus-visible:outline-solid",
+      "focus-visible:outline-2",
+      "focus-visible:outline-offset-2",
+      "focus-visible:outline-transparent",
+    ]) {
+      expect(link, `expected the CTA's class list to contain ${cls}`).toContain(cls);
+    }
+  });
 });

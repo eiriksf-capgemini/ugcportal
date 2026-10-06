@@ -1,5 +1,5 @@
 import AxeBuilder from "@axe-core/playwright";
-import { expect, test } from "@playwright/test";
+import { expect, type Locator, test } from "@playwright/test";
 
 /**
  * ugcportal-6dvg K1: the front page's hero and living empty state, against a
@@ -89,6 +89,47 @@ test("K3: no heading level is skipped on the home page", async ({ page }) => {
 });
 
 /**
+ * ugcportal-qqnt.2 K1/K2: one button system — the hero's CTA, the empty
+ * state's portfolio link and the header's sign-in controls all resolve to
+ * buttonVariants (checked at the vitest level,
+ * src/components/ui/button-system.test.tsx), and here, at the pixel level a
+ * class-name check cannot reach: the same computed radius on all three, and
+ * at most two distinct computed background colours among them (the one
+ * filled treatment, and the shared transparent/outline one).
+ */
+test("K1/K2: the hero CTA, the empty-state link and the header's sign-in buttons share one radius and at most two fill colours", async ({
+  page,
+}) => {
+  await page.goto("/");
+
+  const heroCta = page.getByRole("link", { name: "Sign in to upload" });
+  const emptyStateLink = page
+    .locator("[data-home-empty-state]")
+    .getByRole("link", { name: /portfolio/i });
+  const headerGoogle = page.getByRole("button", { name: /Google/i });
+  const headerFacebook = page.getByRole("button", { name: /Facebook/i });
+
+  const readStyle = (locator: Locator) =>
+    locator.evaluate((el) => {
+      const style = getComputedStyle(el);
+      return { borderRadius: style.borderRadius, backgroundColor: style.backgroundColor };
+    });
+
+  const [hero, emptyState, google, facebook] = await Promise.all([
+    readStyle(heroCta),
+    readStyle(emptyStateLink),
+    readStyle(headerGoogle),
+    readStyle(headerFacebook),
+  ]);
+
+  const radii = [hero.borderRadius, emptyState.borderRadius, google.borderRadius, facebook.borderRadius];
+  expect(new Set(radii).size, JSON.stringify(radii)).toBe(1);
+
+  const fills = [hero.backgroundColor, emptyState.backgroundColor, google.backgroundColor, facebook.backgroundColor];
+  expect(new Set(fills).size, JSON.stringify(fills)).toBeLessThanOrEqual(2);
+});
+
+/**
  * Round-1 review, CONFIRMED medium: an earlier hero layout positioned the
  * three decorative shapes `absolute`, spanning the WHOLE hero, which put the
  * near-white `bg-petrol-100` circle directly behind the `text-ink` lead
@@ -149,3 +190,62 @@ for (const width of [360, 768, 1024]) {
     }
   });
 }
+
+/**
+ * Round-4 fix, ugcportal-qqnt.2 (round-3 review's one outstanding medium,
+ * https://github.com/eiriksf-capgemini/ugcportal/pull/122#issuecomment-6019905606):
+ * moving the hero CTA and the empty-state link onto `buttonVariants` gave
+ * them the shared `outline-none`-plus-box-shadow-ring focus treatment, which
+ * `forced-colors: active` (Windows High Contrast and similar UA modes) drops
+ * entirely, so keyboard focus became invisible on exactly these two controls
+ * — the only two that had a real CSS outline before this bead touched them.
+ * The fix is the scoped `FORCED_COLORS_FOCUS_OUTLINE` override at each call
+ * site (hero.tsx, empty-state.tsx), not a change to the shared base — see
+ * ugcportal-oavb for that systemic gap, which this override does not close
+ * for any other caller.
+ *
+ * `outlineStyle` is the right thing to assert, not `outlineColor` alone:
+ * this repo's own compile-and-render check (this bead's own verification,
+ * not asserted here since it needs `@tailwindcss/node`, not Playwright) found
+ * that a bare `focus-visible:outline` utility on top of `outline-none`
+ * silently stays `outlineStyle: "none"` — only `outline-solid` actually wins,
+ * because `outline`/`outline-2` only READ the shared `--tw-outline-style`
+ * custom property, they do not SET it. A test that only checked
+ * `outlineColor` would have passed on the broken `outline`-only variant too
+ * (forced-colors still substitutes a colour for `outline-color: transparent`
+ * even while `outline-style` stays `none`, and a `none`-style outline paints
+ * nothing regardless of its colour).
+ */
+test.describe("forced colors: focus stays visible on the hero CTA and the empty-state link", () => {
+  test.use({ forcedColors: "active" });
+
+  test("the hero CTA keeps a non-none outline style when focused under forced colors", async ({
+    page,
+  }) => {
+    await page.goto("/");
+
+    const cta = page.getByRole("link", { name: "Sign in to upload" });
+    const beforeFocus = await cta.evaluate((el) => getComputedStyle(el).outlineStyle);
+    expect(beforeFocus, "unfocused — should stay invisible, not permanently ringed").toBe("none");
+
+    await cta.focus();
+    const afterFocus = await cta.evaluate((el) => getComputedStyle(el).outlineStyle);
+    expect(afterFocus, "focused under forced-colors — must not be 'none'").not.toBe("none");
+  });
+
+  test("the empty-state portfolio link keeps a non-none outline style when focused under forced colors", async ({
+    page,
+  }) => {
+    await page.goto("/");
+
+    const link = page
+      .locator("[data-home-empty-state]")
+      .getByRole("link", { name: /portfolio/i });
+    const beforeFocus = await link.evaluate((el) => getComputedStyle(el).outlineStyle);
+    expect(beforeFocus, "unfocused — should stay invisible, not permanently ringed").toBe("none");
+
+    await link.focus();
+    const afterFocus = await link.evaluate((el) => getComputedStyle(el).outlineStyle);
+    expect(afterFocus, "focused under forced-colors — must not be 'none'").not.toBe("none");
+  });
+});
