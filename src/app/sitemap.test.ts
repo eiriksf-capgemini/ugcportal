@@ -83,6 +83,43 @@ describe("sitemap() (K3)", () => {
     expect(itemPreviewIds(entries)).not.toContain("pv-sm-no-preview");
   });
 
+  // Pre-review mutation check: replacing `where: PUBLIC_MEDIA_SCOPE` with
+  // `where: {}` in sitemap.ts did NOT fail the test above, because
+  // `itemEntries`'s own row-shape narrow (`previewId !== null && publishedAt
+  // !== null`) already excludes "sm-unpublished" and "sm-no-preview" on its
+  // own — seedMedia's `withPreview: false` clears BOTH preview columns
+  // together, so a preview-less row has no `previewId` either, and that
+  // narrow alone was enough to hide the dropped where-clause. It does NOT
+  // check `previewKey` at all (by design — see the row-shape comment in
+  // sitemap.ts), so it is blind to exactly the shape PUBLIC_MEDIA_SCOPE's
+  // own `previewKey: { not: null }` exists to catch: a row with a public
+  // handle and a publish timestamp but no actual watermarked object behind
+  // it. Written directly rather than through `seedMedia` (which keeps the
+  // two preview columns in lock-step on purpose), because this is
+  // specifically the inconsistent state that pairing is meant to prevent
+  // ever reaching a query in the first place.
+  it("excludes a row with previewId/publishedAt set but previewKey null (DB-level scope, not just the row-shape narrow)", async () => {
+    await prisma.media.create({
+      data: {
+        id: "sm-previewkey-null",
+        userId: UPLOADER,
+        kind: "IMAGE",
+        key: `media/${UPLOADER}/sm-previewkey-null-original.jpg`,
+        previewKey: null,
+        previewId: "pv-sm-previewkey-null",
+        mimeType: "image/jpeg",
+        sizeBytes: 4096,
+        originalName: "sm-previewkey-null.jpg",
+        altText: "Alt text for sm-previewkey-null",
+        createdAt: new Date("2026-03-01T12:00:00.000Z"),
+        publishedAt: new Date("2026-03-01T12:00:00.000Z"),
+      },
+    });
+
+    const entries = await sitemap();
+    expect(itemPreviewIds(entries)).not.toContain("pv-sm-previewkey-null");
+  });
+
   it("is absent an item once it is unpublished again", async () => {
     await seedMedia(prisma, {
       id: "sm-republished",
@@ -142,6 +179,45 @@ describe("sitemap() (K3)", () => {
     expect(urls.some((url) => url.endsWith("/"))).toBe(true);
     expect(urls.some((url) => url.endsWith("/about"))).toBe(true);
     expect(urls.some((url) => url.endsWith("/portfolio"))).toBe(true);
+  });
+
+  /**
+   * The footer's own rule (`legalLinkBlocked`, src/components/site-footer.tsx)
+   * applied here instead of a second copy: a legal page in draft (an unset
+   * LEGAL_* variable, or unsigned-off prose) is never LINKED once
+   * `NODE_ENV === "production"` — see `linkBlockedInProduction`, src/lib/
+   * legal/publishable.ts, which this test exercises through the real
+   * `legalReadiness(LEGAL_PAGES)` rather than a stub.
+   *
+   * `process.env.NODE_ENV` is mutated and restored rather than passed as a
+   * parameter: `sitemap()` has no `env` parameter (unlike `legalReadiness`/
+   * `assertPublishable` themselves) because Next's own sitemap file
+   * convention takes no arguments this app controls — so the real global is
+   * what this integration point actually reads, and is what the test has to
+   * drive. LEGAL_CONTROLLER_NAME and its three siblings are already unset in
+   * this process (vitest.setup.ts does not set them), so toggling
+   * `NODE_ENV` to `"production"` is sufficient to put both legal pages into
+   * the blocked state without also managing four more variables.
+   *
+   * `vi.stubEnv`/`vi.unstubAllEnvs`, not a direct `process.env.NODE_ENV =`
+   * assignment — same convention as src/instrumentation.test.ts. `NODE_ENV`
+   * is typed read-only on `ProcessEnv` (`tsc` rejects a bare assignment to
+   * it), and `vi.stubEnv` is the vitest-provided way around that which also
+   * restores the original value reliably.
+   */
+  it("excludes /privacy and /licence once NODE_ENV is production and they are still a draft", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    try {
+      const entries = await sitemap();
+      const urls = entries.map((entry) => entry.url);
+      expect(urls.some((url) => url.endsWith("/privacy"))).toBe(false);
+      expect(urls.some((url) => url.endsWith("/licence"))).toBe(false);
+      // The rest of the sitemap is unaffected by the same toggle.
+      expect(urls.some((url) => url.endsWith("/"))).toBe(true);
+      expect(urls.some((url) => url.endsWith("/about"))).toBe(true);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });
 

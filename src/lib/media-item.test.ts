@@ -194,3 +194,33 @@ describe("mediaItemTitle / mediaItemShortText (K1)", () => {
     expect(mediaItemShortText(item!)).toBe("A laptop open on a kitchen table");
   });
 });
+
+/**
+ * K5, at the query layer specifically — not only at the mapped output.
+ *
+ * Pre-review mutation check (swap `select: MEDIA_ANONYMOUS_SELECT` for
+ * `MEDIA_OWNER_SELECT` in src/lib/media-item.ts) found that the "never
+ * exposes Media.key/previewKey/userId" test above did NOT fail: it passed
+ * unchanged, because `toGalleryItem` only ever copies the handful of fields
+ * `GalleryItem` declares, whatever columns the underlying row happens to
+ * carry. That test genuinely holds today, but it is testing `toGalleryItem`
+ * (already proven elsewhere), not this module's own choice of select — a
+ * test that cannot fail for the risk it names, per `review-standards`
+ * family 3. This source check is the one that actually catches that swap:
+ * it reads the committed file and asserts the literal select this function
+ * queries with, so a future edit that widens it (even one that still
+ * happens to map down to the same safe output today) is caught here rather
+ * than resting on `toGalleryItem` never changing either.
+ */
+describe("src/lib/media-item.ts source (K5)", () => {
+  it("queries with MEDIA_ANONYMOUS_SELECT and never imports MEDIA_OWNER_SELECT", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { fileURLToPath } = await import("node:url");
+    const { stripComments } = await import("@/lib/design/scan-source");
+    const path = fileURLToPath(new URL("./media-item.ts", import.meta.url));
+    const live = stripComments(readFileSync(path, "utf8"), path);
+
+    expect(live).toMatch(/select:\s*MEDIA_ANONYMOUS_SELECT\s*,/);
+    expect(live).not.toContain("MEDIA_OWNER_SELECT");
+  });
+});

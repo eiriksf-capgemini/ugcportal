@@ -27,10 +27,18 @@ import { PUBLIC_MEDIA_SCOPE } from "@/lib/public-media";
  * Projected through `MEDIA_ANONYMOUS_SELECT` — never the owner's wider
  * select — so `Media.key` (the unwatermarked original), `previewKey` (the
  * storage path that embeds the uploader's id) and `userId` itself are never
- * even read, let alone serialised (K5). `toGalleryItem` is the same mapping
- * boundary the gallery feed and the portfolio page already cross, so this
- * page sanitises alt text/caption and strips the curation-only tag exactly
- * as every other public surface does, rather than trusting the row raw.
+ * even read, let alone serialised (K5). Pinned by this file's own source
+ * check in media-item.test.ts ("queries with MEDIA_ANONYMOUS_SELECT and
+ * never imports MEDIA_OWNER_SELECT") rather than resting on this prose alone
+ * — a pre-review mutation check found that swapping the select here did NOT
+ * fail the behavioural tests below, because `toGalleryItem` only ever copies
+ * the handful of fields `GalleryItem` declares regardless of what the row
+ * actually carries; that source check is what closes the gap.
+ *
+ * `toGalleryItem` is the same mapping boundary the gallery feed and the
+ * portfolio page already cross, so this page sanitises alt text/caption and
+ * strips the curation-only tag exactly as every other public surface does,
+ * rather than trusting the row raw.
  *
  * `cache()`d (review precedent: src/lib/session-or-anonymous.ts) because
  * both `generateMetadata` and the page component below read the SAME row for
