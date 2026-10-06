@@ -561,7 +561,14 @@ describe("resolveSharpThreads", () => {
  * generateWatermarkedPreview actually goes through the gate. These drive the
  * real function with real sharp.
  */
-describe("generateWatermarkedPreview under concurrency", () => {
+// ugcportal-9faa: every test below runs real libvips image processing
+// (sharp) under real concurrency and, in one case, a 1ms queue timeout —
+// there is nothing to cache here, this is inherent CPU and scheduling cost,
+// not redundant work. A loaded machine directly competes with these tests
+// for the same CPU threads sharp itself uses, so this is exactly the kind
+// of suite named in that bead's "image processing" category for an
+// explicit timeout rather than a cache.
+describe("generateWatermarkedPreview under concurrency", { timeout: 15_000 }, () => {
   const env = { ...process.env };
   // Every gate build logs a line. Captured rather than printed, both to keep
   // the suite's output readable and so the two logging tests below can assert

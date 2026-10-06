@@ -67,7 +67,15 @@ export function findThrottleSiblingCopies(
   return offenders;
 }
 
-describe("K4: no module outside throttled-log.ts hand-rolls a suppressed-count/last-at throttle pair", () => {
+// ugcportal-9faa: this describe's single real-tree pass already walks and
+// TypeScript-parses (via stripComments, inside findThrottleSiblingCopies)
+// every file under src/ exactly once -- there is nothing redundant left to
+// cache away here. The parse itself is real CPU work: measured under
+// machine load (vitest --no-file-parallelism at load average ~150-165),
+// this describe's real-tree test took up to ~2.3s, close enough to the 5s
+// default that it timed out outright at the load average 190 this bead was
+// filed against. Explicit timeout, not a bigger global default.
+describe("K4: no module outside throttled-log.ts hand-rolls a suppressed-count/last-at throttle pair", { timeout: 15_000 }, () => {
   const files = walkSourceFiles(SRC_ROOT, () => false);
 
   it("finds files to scan (sanity check on the walker itself)", () => {

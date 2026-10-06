@@ -853,7 +853,19 @@ afterEach(() => {
   }
 });
 
-describe("working tree and --base (ugcportal-np1i)", () => {
+// ugcportal-9faa: each case here spins up a fresh git repository (several
+// real `git` subprocesses apiece: init, add, commit, branch, and the script
+// itself, which shells out to git again internally) and then runs
+// claims-audit.mjs as its own child process on top. Measured unloaded,
+// K2 alone -- the slowest case, three full script invocations -- took
+// 3.17s; at load average 190 the same suite blew the 5s default outright
+// (this bead's own report: three timeouts here on one commit at that load,
+// 0 at load 25). None of that cost is redundant work this file could cache
+// away: every case needs its OWN isolated repository, so there is nothing
+// to memoize, only real subprocess latency that multiplies under
+// contention. An explicit timeout, not a bigger default, keeps that
+// correctly slow instead of wrongly flaky.
+describe("working tree and --base (ugcportal-np1i)", { timeout: 30_000 }, () => {
   it("K1: reports a claim in an untracked file before any commit introduces it, instead of a false 'candidates found: 0'", () => {
     const { writeFile, runScript } = makeFixtureRepo();
     writeFile("new-file.ts", "// never fails on any path\nconst a = 1;\n");

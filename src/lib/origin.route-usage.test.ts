@@ -69,7 +69,13 @@ export function findRouteModulesMissingForceDynamic(
   return offenders;
 }
 
-describe("every route module that calls siteOrigin() exports dynamic = \"force-dynamic\" (review round 2)", () => {
+// ugcportal-9faa: walks and TypeScript-parses (via stripComments) every
+// file under src/app/ — smaller than the full src/ tree the siblings named
+// in that bead scan, and measured well under the 5s default even at load
+// average ~150-165, but still real tree-wide work; an explicit timeout
+// keeps it that way rather than silently inheriting the default as the
+// tree grows.
+describe("every route module that calls siteOrigin() exports dynamic = \"force-dynamic\" (review round 2)", { timeout: 15_000 }, () => {
   const files = walkSourceFiles(APP_ROOT, isTestFile);
 
   it("finds files to scan (sanity check on the walker itself)", () => {
