@@ -10,6 +10,7 @@ import {
   GALLERY_TILE_ASPECT_CLASS,
   GALLERY_TILE_CLASS,
   GALLERY_TILE_IMAGE_CLASS,
+  GALLERY_TILE_VIDEO_BADGE_WRAPPER_CLASS,
 } from "@/components/gallery/containment";
 import { toGalleryItems } from "@/lib/gallery-items";
 
@@ -251,17 +252,23 @@ describe("ugcportal-dzz — a VIDEO tile gets a play affordance, an IMAGE tile d
     expect(photoMarkup).not.toContain("svg");
   });
 
-  it("marks the play badge aria-hidden, so the tile announces one accessible name", () => {
+  it("marks the play badge's own wrapper aria-hidden, so the tile announces one accessible name", () => {
     const markup = render({ initialItems: MIXED_KINDS });
     const videoTile = tiles(markup).find((tile) => tile.includes('data-gallery-tile="a-video"')) as string;
     const videoIndex = markup.indexOf(videoTile);
     const videoMarkup = markup.slice(videoIndex, markup.indexOf("</button>", videoIndex));
 
-    // The badge's own wrapper is aria-hidden (so is the <img> beside it, and
-    // lucide's <svg> carries its own aria-hidden default too) — none of
-    // which is a SECOND accessible name, since nothing inside the button
-    // carries its own aria-label: the button's is the only one.
-    expect(videoMarkup.match(/aria-hidden="true"/g)?.length).toBeGreaterThanOrEqual(2);
+    // Pinned to the WRAPPER's own opening tag, not merely "two or more
+    // aria-hidden="true" somewhere in the tile" — lucide's <svg> carries its
+    // own aria-hidden default regardless of this wrapper's, so a looser count
+    // check would stay green even if the wrapper span's own attribute were
+    // removed (verified: deleting just that attribute still left the <img>'s
+    // and the <svg>'s own aria-hidden, so a `>= 2` count never dropped).
+    expect(videoMarkup).toContain(
+      `<span aria-hidden="true" class="${GALLERY_TILE_VIDEO_BADGE_WRAPPER_CLASS}">`,
+    );
+    // Nothing inside the button carries its own aria-label — the button's is
+    // the only accessible name anything here announces.
     expect(videoMarkup.match(/aria-label="/g)?.length).toBe(1);
   });
 
