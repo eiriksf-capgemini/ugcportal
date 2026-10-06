@@ -15,6 +15,23 @@ import { afterEach, describe, expect, it, vi } from "vitest";
  */
 vi.mock("@/config/users", () => ({ CONFIGURED_USERS: [] }));
 
+/**
+ * registerNodeOnlyChecks() (src/instrumentation-node.ts) now also probes
+ * object storage at boot (ugcportal-ze1o). Every register()-level test in
+ * THIS file predates that check and is not testing it, so the client is
+ * mocked to answer immediately and successfully by default — real network
+ * I/O in an unrelated unit test would be slow, flaky, and (in an environment
+ * where S3_ENDPOINT happens to be configured) an actual connection attempt.
+ * `checkS3Reachability` itself, with the `probe`/`env` it accepts as
+ * parameters precisely so it does not need this, is tested directly in
+ * src/instrumentation-node.test.ts.
+ */
+vi.mock("@/lib/s3", () => ({
+  getS3Client: vi.fn(() => ({ send: vi.fn().mockResolvedValue({}) })),
+  getBucketName: vi.fn(() => "test-bucket"),
+  classifyTransportFailure: vi.fn(() => null),
+}));
+
 import {
   checkConfiguredUsers,
   checkContactEmailConfiguration,
