@@ -227,6 +227,53 @@ describe("K7 — differently shaped previews form one consistent arrangement", (
   });
 });
 
+describe("ugcportal-dzz — a VIDEO tile gets a play affordance, an IMAGE tile does not", () => {
+  const MIXED_KINDS = toGalleryItems([
+    { id: "a-photo", previewId: "pv-photo", publishedAt: "2026-03-01T00:00:00.000Z", kind: "IMAGE" },
+    { id: "a-video", previewId: "pv-video", publishedAt: "2026-03-02T00:00:00.000Z", kind: "VIDEO" },
+  ]);
+
+  it("renders the play badge only on the VIDEO tile's markup", () => {
+    const markup = render({ initialItems: MIXED_KINDS });
+    const photoTile = tiles(markup).find((tile) => tile.includes('data-gallery-tile="a-photo"'));
+    const videoTile = tiles(markup).find((tile) => tile.includes('data-gallery-tile="a-video"'));
+    expect(photoTile).toBeDefined();
+    expect(videoTile).toBeDefined();
+
+    // tiles() only captures the opening <button> tag, so pull each tile's
+    // full markup (button through its matching </button>) to look inside it.
+    const photoIndex = markup.indexOf(photoTile as string);
+    const videoIndex = markup.indexOf(videoTile as string);
+    const photoMarkup = markup.slice(photoIndex, markup.indexOf("</button>", photoIndex));
+    const videoMarkup = markup.slice(videoIndex, markup.indexOf("</button>", videoIndex));
+
+    expect(videoMarkup).toContain("svg");
+    expect(photoMarkup).not.toContain("svg");
+  });
+
+  it("marks the play badge aria-hidden, so the tile announces one accessible name", () => {
+    const markup = render({ initialItems: MIXED_KINDS });
+    const videoTile = tiles(markup).find((tile) => tile.includes('data-gallery-tile="a-video"')) as string;
+    const videoIndex = markup.indexOf(videoTile);
+    const videoMarkup = markup.slice(videoIndex, markup.indexOf("</button>", videoIndex));
+
+    // The badge's own wrapper is aria-hidden (so is the <img> beside it, and
+    // lucide's <svg> carries its own aria-hidden default too) — none of
+    // which is a SECOND accessible name, since nothing inside the button
+    // carries its own aria-label: the button's is the only one.
+    expect(videoMarkup.match(/aria-hidden="true"/g)?.length).toBeGreaterThanOrEqual(2);
+    expect(videoMarkup.match(/aria-label="/g)?.length).toBe(1);
+  });
+
+  it("names the VIDEO tile's accessible name with 'video', not 'photograph'", () => {
+    const markup = render({ initialItems: MIXED_KINDS });
+    // "photograph" / "video" is a position-counted placeholder — the photo is
+    // first in MIXED_KINDS (position 1), the video second (position 2).
+    expect(markup).toContain('aria-label="Open photograph 1, published 1 March 2026"');
+    expect(markup).toContain('aria-label="Open video 2, published 2 March 2026"');
+  });
+});
+
 describe("the states around the grid", () => {
   it("offers a load-more control only when the feed says there is more", () => {
     const withMore = render({ initialCursor: "cursor-1", initialHasMore: true });
