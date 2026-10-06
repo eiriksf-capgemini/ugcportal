@@ -27,8 +27,12 @@ test("the hero renders for an anonymous visitor, above whatever the gallery show
   const hero = page.locator("[data-home-hero]");
   await expect(hero).toBeVisible();
   await expect(hero).toContainText("Real photos of the things you actually use.");
-  // Anonymous (no sign-in cookie in this browser context): K1's signed-out case.
-  await expect(hero.getByRole("link", { name: "Sign in to upload" })).toBeVisible();
+  // Anonymous (no sign-in cookie in this browser context): ugcportal-qqnt.4
+  // K2's signed-out case — the hero's one CTA goes straight to the
+  // portfolio, not to sign-in (that control lives in the header only).
+  const heroCta = hero.getByRole("link", { name: "See the portfolio" });
+  await expect(heroCta).toBeVisible();
+  await expect(heroCta).toHaveAttribute("href", "/portfolio");
 });
 
 test("K1: the living empty state offers an action, on a genuinely empty gallery", async ({
@@ -102,7 +106,7 @@ test("K1/K2: the hero CTA, the empty-state link and the header's sign-in buttons
 }) => {
   await page.goto("/");
 
-  const heroCta = page.getByRole("link", { name: "Sign in to upload" });
+  const heroCta = page.getByRole("link", { name: "See the portfolio" });
   const emptyStateLink = page
     .locator("[data-home-empty-state]")
     .getByRole("link", { name: /portfolio/i });
@@ -234,7 +238,7 @@ test.describe("forced colors: focus stays visible on the hero CTA and the empty-
   }) => {
     await page.goto("/");
 
-    const cta = page.getByRole("link", { name: "Sign in to upload" });
+    const cta = page.getByRole("link", { name: "See the portfolio" });
     const beforeFocus = await cta.evaluate((el) => getComputedStyle(el).outlineStyle);
     expect(beforeFocus, "unfocused — should stay invisible, not permanently ringed").toBe("none");
 

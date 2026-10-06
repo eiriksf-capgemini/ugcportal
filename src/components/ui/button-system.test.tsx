@@ -101,7 +101,7 @@ describe("classAttrOf escapes regex metacharacters in its needle (round-2 review
 describe("K1 — the hero and empty-state links resolve to buttonVariants, not a hand-written class string", () => {
   it("the hero's CTA carries every class default-tint/lg produces", () => {
     const markup = renderToStaticMarkup(<Hero signedIn={false} />);
-    const classAttr = classAttrOf(markup, "Sign in to upload");
+    const classAttr = classAttrOf(markup, "See the portfolio");
     // Through cn(), the same tailwind-merge pass the real caller's own
     // className applies (hero.tsx calls buttonVariants bare, with no
     // conflicting classes of its own, so this changes nothing there) — see

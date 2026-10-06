@@ -217,11 +217,11 @@ describe("K3 — this harness can also produce the genuinely-empty branch", () =
 
 /**
  * ugcportal-6dvg, round-1 review, CONFIRMED medium: a `getSession()`
- * rejection must degrade to the anonymous case (the hero's "Sign in to
- * upload"), never crash `Home()`'s OWN render — on BOTH of this file's
- * branches, since `resolveSessionOrAnonymous()` (src/lib/session-or-
- * anonymous.ts) is called from inside the `catch` that exists for a failed
- * LISTING too, not only from the success path.
+ * rejection must degrade to the anonymous case (the hero's "See the
+ * portfolio" CTA, ugcportal-qqnt.4), never crash `Home()`'s OWN render — on
+ * BOTH of this file's branches, since `resolveSessionOrAnonymous()`
+ * (src/lib/session-or-anonymous.ts) is called from inside the `catch` that
+ * exists for a failed LISTING too, not only from the success path.
  *
  * "Home() in isolation" (round-2 review, low finding — an earlier version
  * of this describe block's own title claimed "the page", which overclaims
@@ -240,7 +240,7 @@ describe("Home() in isolation: a failed session read never crashes its render", 
 
     const markup = await renderHome();
 
-    expect(markup).toContain("Sign in to upload");
+    expect(markup).toContain("See the portfolio");
     expect(markup).toContain('data-gallery-state="error"');
     // Round-2 review, low finding: the logged line was created but never
     // actually asserted before this — a silent failure mode (the fallback
@@ -262,7 +262,7 @@ describe("Home() in isolation: a failed session read never crashes its render", 
 
     const markup = await renderHome();
 
-    expect(markup).toContain("Sign in to upload");
+    expect(markup).toContain("See the portfolio");
     expect(markup).toContain('data-gallery-state="empty"');
     expect(consoleError).toHaveBeenCalledOnce();
     expect(consoleError.mock.calls[0][0]).toContain(
@@ -380,7 +380,7 @@ describe("the assembled shell: AuthStatus and UploadNavLink survive a rejected g
     if (navResult.status !== "fulfilled") throw navResult.reason;
 
     const homeMarkup = renderToStaticMarkup(homeResult.value);
-    expect(homeMarkup).toContain("Sign in to upload");
+    expect(homeMarkup).toContain("See the portfolio");
 
     // ugcportal-qqnt.3: AuthStatus's signed-out branch now renders a single
     // "Sign in" SignInMenu trigger - the two provider forms it discloses

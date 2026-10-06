@@ -235,17 +235,18 @@ beforeEach(async () => {
 });
 
 /**
- * ugcportal-6dvg K1: the hero's call to action tracks session state, on the
- * real assembled Home() page (src/components/home/hero.test.tsx covers the
- * same claim against `<Hero>` in isolation — this is the "wired as well as
- * written" half, the same reasoning src/lib/auth.ts's own comment on
- * `authConfig` gives for testing the sign-in gate as wired).
+ * ugcportal-6dvg K1 (CTA target revised by ugcportal-qqnt.4 K2): the hero's
+ * call to action tracks session state, on the real assembled Home() page
+ * (src/components/home/hero.test.tsx covers the same claim against `<Hero>`
+ * in isolation — this is the "wired as well as written" half, the same
+ * reasoning src/lib/auth.ts's own comment on `authConfig` gives for testing
+ * the sign-in gate as wired).
  */
 describe("K1 — the front page hero's call to action tracks session state", () => {
-  it("signed out (the default for every test in this file), the call to action leads to sign-in", async () => {
+  it("signed out (the default for every test in this file), the call to action leads to the portfolio", async () => {
     const markup = await renderGallery();
 
-    expect(markup).toContain("Sign in to upload");
+    expect(markup).toContain("See the portfolio");
     expect(markup).not.toContain('href="/upload"');
   });
 
@@ -257,7 +258,7 @@ describe("K1 — the front page hero's call to action tracks session state", () 
     const markup = await renderGallery();
 
     expect(markup).toContain('href="/upload"');
-    expect(markup).not.toContain("Sign in to upload");
+    expect(markup).not.toContain("See the portfolio");
   });
 });
 

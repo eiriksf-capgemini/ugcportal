@@ -1,13 +1,17 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { UPLOAD_PATH, signInPath } from "@/lib/routes";
+import { PORTFOLIO_PATH, UPLOAD_PATH } from "@/lib/routes";
 
 import { Hero } from "./hero";
 
 /**
- * ugcportal-6dvg K1: the hero's one call to action tracks the CURRENT
- * visitor's session state, nothing else.
+ * ugcportal-qqnt.4 K2: the hero's one call to action tracks the CURRENT
+ * visitor's session state, nothing else — signed out, straight to the
+ * portfolio (PORTFOLIO_PATH); signed in, straight to /upload. There is no
+ * sign-in link in the hero any more (that control lives in the header only,
+ * ugcportal-qqnt.3), so unlike the version this replaces there is no third
+ * href to distinguish.
  *
  * `Hero` is a plain, synchronous component taking `signedIn` as a prop (see
  * its own comment for why), so this is a trivial, un-mocked render — no
@@ -20,23 +24,28 @@ function render(signedIn: boolean): string {
   return renderToStaticMarkup(<Hero signedIn={signedIn} />);
 }
 
-const SIGN_IN_HREF = signInPath(UPLOAD_PATH);
+/** Every `href="..."` value in a markup string, in order of appearance. */
+function hrefsOf(markup: string): string[] {
+  return [...markup.matchAll(/href="([^"]*)"/g)].map((match) => match[1]);
+}
 
-describe("Hero (ugcportal-6dvg)", () => {
-  it("K1: signed out, the call to action leads to sign-in (with an upload callback)", () => {
+describe("Hero (ugcportal-qqnt.4)", () => {
+  it("K2: signed out, the only link in the hero points to the portfolio", () => {
     const markup = render(false);
 
-    expect(markup).toContain(`href="${SIGN_IN_HREF}"`);
-    expect(markup).toContain("Sign in to upload");
+    expect(hrefsOf(markup)).toEqual([PORTFOLIO_PATH]);
+    expect(markup).toContain("See the portfolio");
     expect(markup).not.toContain(`href="${UPLOAD_PATH}"`);
+    expect(markup).not.toMatch(/sign in/i);
   });
 
-  it("K1: signed in, the call to action leads straight to /upload", () => {
+  it("K2: signed in, the only link in the hero points to /upload", () => {
     const markup = render(true);
 
-    expect(markup).toContain(`href="${UPLOAD_PATH}"`);
-    expect(markup).not.toContain(SIGN_IN_HREF);
-    expect(markup).not.toContain("Sign in to upload");
+    expect(hrefsOf(markup)).toEqual([UPLOAD_PATH]);
+    expect(markup).toContain("Upload");
+    expect(markup).not.toContain(`href="${PORTFOLIO_PATH}"`);
+    expect(markup).not.toMatch(/sign in/i);
   });
 
   it("renders a title and a lead paragraph", () => {
@@ -47,17 +56,24 @@ describe("Hero (ugcportal-6dvg)", () => {
   });
 
   /*
-   * Round-3 review, low finding: an earlier, static version of the lead's
-   * closing sentence always said "...or sign in to add your own" — true
-   * beside the signed-out CTA, but wrong beside the signed-in one ("Upload"),
-   * which does not ask a visitor who is already signed in to sign in again.
+   * K2: "at most 25 words" and "no em-dash" — checked against the lead
+   * paragraph's own visible text, stripped of markup, not the whole page
+   * (which also carries the title and the CTA label).
    */
-  it("K1: the lead's closing sentence names sign-in only when signed out", () => {
-    expect(render(false)).toContain(
-      "Browse what is already up, or sign in to add your own.",
-    );
-    expect(render(true)).toContain("Browse what is already up, or add your own.");
-    expect(render(true)).not.toContain("sign in to add your own");
+  function leadText(markup: string): string {
+    const match = /<p[^>]*>([^<]*)<\/p>/.exec(markup);
+    if (!match) throw new Error(`no <p> lead paragraph found in: ${markup}`);
+    return match[1].replace(/\s+/g, " ").trim();
+  }
+
+  it("K2: the lead has at most 25 words and contains no em-dash, for both session states", () => {
+    for (const signedIn of [false, true]) {
+      const lead = leadText(render(signedIn));
+      const wordCount = lead.split(" ").filter(Boolean).length;
+      expect(wordCount, `lead ("${lead}") has ${wordCount} words`).toBeLessThanOrEqual(25);
+      expect(lead).not.toContain("—");
+      expect(lead).not.toContain("--");
+    }
   });
 
   /*

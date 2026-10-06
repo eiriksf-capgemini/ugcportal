@@ -4,7 +4,7 @@ import { cn } from "cn";
 
 import { buttonVariants } from "@/components/ui/button";
 import { DISPLAY_TITLE_CLASS } from "@/components/type-scale";
-import { signInPath, UPLOAD_PATH } from "@/lib/routes";
+import { PORTFOLIO_PATH, UPLOAD_PATH } from "@/lib/routes";
 
 export type HeroProps = {
   /**
@@ -94,9 +94,12 @@ function HeroDecoration() {
 }
 
 /**
- * The front page's hero (ugcportal-6dvg): a title, a lead paragraph on what
- * this site is, and one primary call to action — K1's "signed out leads to
- * sign-in; signed in, to upload."
+ * The front page's hero (ugcportal-6dvg, copy and CTA revised by
+ * ugcportal-qqnt.4): a title, a lead paragraph on what this site is, and one
+ * primary call to action — signed out, "See the portfolio" (PORTFOLIO_PATH);
+ * signed in, "Upload" (UPLOAD_PATH). The sign-in control itself lives in the
+ * header only (ugcportal-qqnt.3) — a signed-out visitor is never offered a
+ * second, duplicate sign-in affordance from this hero.
  *
  * Rendered by src/app/page.tsx ABOVE whichever of <Gallery>, the new
  * EmptyState or <GalleryUnavailable> applies (K2) — never conditionally
@@ -125,22 +128,16 @@ function HeroDecoration() {
  * above is the only other visual element, and carries no information.
  */
 export function Hero({ signedIn }: HeroProps) {
+  /*
+   * ugcportal-qqnt.4 K2: a visitor's only hero action is "See the
+   * portfolio" (PORTFOLIO_PATH) — never a sign-in prompt, which now lives in
+   * the header only (ugcportal-qqnt.3) and would otherwise duplicate it, as
+   * the bead's own premise notes found happening here before. A signed-in
+   * user keeps the pre-existing "Upload" CTA straight to UPLOAD_PATH.
+   */
   const cta = signedIn
     ? { href: UPLOAD_PATH, label: "Upload" }
-    : { href: signInPath(UPLOAD_PATH), label: "Sign in to upload" };
-
-  /*
-   * Session-aware (round-3 review, low finding): an earlier, static version
-   * of this sentence always said "...or sign in to add your own" — true
-   * beside the signed-out CTA above, but a visitor who is ALREADY signed in
-   * (CTA: "Upload") was being told to sign in a second time, right next to
-   * a button that does not ask them to. The rest of the lead paragraph is
-   * identical either way; only this closing clause names the action that
-   * matches the CTA actually on screen.
-   */
-  const closingSentence = signedIn
-    ? "Browse what is already up, or add your own."
-    : "Browse what is already up, or sign in to add your own.";
+    : { href: PORTFOLIO_PATH, label: "See the portfolio" };
 
   return (
     <section data-home-hero className="home-hero-surface relative isolate overflow-hidden">
@@ -172,13 +169,17 @@ export function Hero({ signedIn }: HeroProps) {
             L 0.185-0.345), which this gradient's lighter stop (petrol-700,
             L ~0.42) is not. The title and lead read at the same weight of
             emphasis here rather than the usual primary/secondary split.
+
+            ugcportal-qqnt.4 K2: at most 25 words, no em-dash, one sentence
+            naming what is photographed and by whom — this is 20 words. The
+            longer, two-em-dash version this replaces (hero.tsx's own git
+            history; also the bead's own premise notes) also tried to narrate
+            the "browse, or sign in" choice inline; that is gone now that the
+            hero offers exactly one action (see `cta` above), not two.
           */}
           <p className="max-w-prose text-sm text-ink sm:text-base">
-            This is a small, growing gallery of food, books, home technology
-            and wine accessories — think glasses, coolers and the apps that
-            go with them — photographed by real people, not studios. Every
-            picture here was taken by someone who actually owns the thing in
-            frame. {closingSentence}
+            A small, growing gallery of food, books, home technology and wine
+            accessories, photographed by the people who actually own them.
           </p>
           {/*
             buttonVariants, not a hand-rolled className (ugcportal-qqnt.2):
