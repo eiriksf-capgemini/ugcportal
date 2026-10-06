@@ -312,11 +312,23 @@ export function resolveNewBase({ baseRefName, remoteBranchNames, prInfoByBranch,
  *
  * Verified directly against the real GitHub API (2026-10-06, this repo):
  * deleting an ALREADY-GONE ref through this specific endpoint returns HTTP
- * 422 `{"message":"Reference does not exist", ...}`, not the HTTP 404 most
- * other GitHub REST deletes return for a missing resource -- both shapes are
- * treated the same way here (the bead's own text names only 404; this
- * widens that to match what the API actually does for this endpoint, not a
- * speculative guess).
+ * 422 `{"message":"Reference does not exist",...,"status":"422"}` /
+ * `gh: Reference does not exist (HTTP 422)` on stdout/stderr respectively --
+ * that is the only already-gone shape this classifies. A 404 is
+ * deliberately NOT treated as already-gone (round 1 finding, CONFIRMED,
+ * ugcportal-ix0s): verified live that this endpoint also returns
+ * `{"message":"Not Found","status":"404"}` / `gh: Not Found (HTTP 404)` when
+ * the REPOSITORY itself cannot be resolved (e.g. `{owner}/{repo}` doesn't
+ * expand because `origin` isn't a GitHub remote), which is a materially
+ * different and more concerning failure than "the branch is already gone" --
+ * an unmatched 404 here falls through to `"unavailable"` and the caller
+ * falls back to `git push origin --delete`, same as any other unrecognized
+ * failure. This is not a safety gap: `deleteRemoteBranch`'s unconditional
+ * post-delete `git ls-remote --heads origin <name>` check (unchanged by this
+ * function, ugcportal-nvg0's K1) is the actual backstop regardless of which
+ * path fired -- it throws if the branch is still there, so a wrongly
+ * "already-gone"-classified failure could never have produced a false
+ * "removed" either way.
  *
  * @param {object} params
  * @param {boolean} params.ghMissing true when `gh` itself could not be
@@ -324,15 +336,13 @@ export function resolveNewBase({ baseRefName, remoteBranchNames, prInfoByBranch,
  *   consulted
  * @param {string} params.output combined stdout+stderr text from the failed
  *   `gh api` invocation; ignored when `ghMissing` is true
- * @returns {"already-gone"|"unavailable"} "already-gone" when the ref was
- *   already gone and nothing further needs to happen; "unavailable" when
- *   `gh` could not be used at all (missing, or the API failed for some
- *   other reason) and the caller must fall back to `git push origin
- *   --delete`
+ * @returns {"already-gone"|"unavailable"} "already-gone" only for the
+ *   verified 422 "Reference does not exist" shape; "unavailable" for
+ *   everything else (gh missing, a 404, or any other API failure), which
+ *   makes the caller fall back to `git push origin --delete`
  */
 export function classifyGhApiDeleteFailure({ ghMissing, output }) {
   if (ghMissing) return "unavailable";
-  if (/"status"\s*:\s*"404"/.test(output) || /HTTP 404/.test(output)) return "already-gone";
   if (/"status"\s*:\s*"422"/.test(output) && /Reference does not exist/i.test(output)) return "already-gone";
   return "unavailable";
 }
@@ -647,7 +657,9 @@ function deleteRemoteBranchViaApi(name, cwd) {
  * other than the branch already being gone -- see
  * `classifyGhApiDeleteFailure` for exactly which responses count as
  * "already gone". Every other safety check this function already made
- * before `ugcportal-ix0s` -- the post-delete `ls-remote` verification, the
+ * before `ugcportal-ix0s` -- the post-delete `ls-remote` verification (the
+ * actual backstop against a wrongly-classified API failure: it throws if
+ * the branch is still there, regardless of which path fired), the
  * tracking-ref prune -- is unchanged and runs the same way regardless of
  * which path actually removed the ref.
  */
