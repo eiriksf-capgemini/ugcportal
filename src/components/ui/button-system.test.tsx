@@ -11,6 +11,7 @@ import {
   COOKIE_BANNER_DECLINE_LABEL,
   CookieBanner,
 } from "@/components/consent/cookie-banner";
+import { GALLERY_TILE_BASE_CLASS } from "@/components/gallery/containment";
 import { EmptyState } from "@/components/home/empty-state";
 import { Hero } from "@/components/home/hero";
 
@@ -204,8 +205,18 @@ describe("K2 — one radius token for every interactive shape", () => {
     // rounded-lg once; this is the claim that the tile shares exactly that
     // utility, not a same-looking one of its own.
     expect(buttonVariants({ variant: "default" })).toContain("rounded-lg");
-    expect(containment).toMatch(/GALLERY_TILE_BASE_CLASS\s*=\s*`[^`]*\brounded-lg\b/);
-    expect(containment).not.toMatch(/GALLERY_TILE_BASE_CLASS\s*=\s*`[^`]*\brounded-md\b/);
+    // ugcportal-o312: GALLERY_TILE_BASE_CLASS's radius was factored out to
+    // a shared GALLERY_RADIUS_CLASS constant (so the advertising-disclosure
+    // label beside it, containment.radius-parity.test.ts's own subject,
+    // could not drift onto its own literal again), so the source text no
+    // longer carries a literal "rounded-lg" inside the template string
+    // itself — this now checks the RESOLVED class value the tile actually
+    // renders with, which is the claim this test cares about either way.
+    expect(GALLERY_TILE_BASE_CLASS).toContain("rounded-lg");
+    expect(GALLERY_TILE_BASE_CLASS).not.toContain("rounded-md");
+    expect(containment).toMatch(
+      /GALLERY_TILE_BASE_CLASS\s*=\s*`[^`]*\$\{GALLERY_RADIUS_CLASS\}/,
+    );
   });
 });
 
