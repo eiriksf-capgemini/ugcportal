@@ -17,10 +17,9 @@ import { afterEach, beforeEach } from "vitest";
  *
  * Two files do not use pinEnvironment by design: src/lib/sign-in-policy.test.ts,
  * whose two process.env-default tests (see its header) set
- * ADMIN_BOOTSTRAP_EMAILS and ALLOWED_SIGNIN_EMAILS ambiently to assert the
- * ambient value is honoured; and src/lib/configured-user-link.test.ts, which
- * sets ALLOWED_SIGNIN_EMAILS at nine sites and deletes it in a finally block
- * each time.
+ * ADMIN_BOOTSTRAP_EMAILS and ALLOWED_SIGNIN_EMAILS ambiently on purpose;
+ * and src/lib/configured-user-link.test.ts, which sets ALLOWED_SIGNIN_EMAILS
+ * at nine sites and deletes it in a finally block each time.
  */
 
 /**
