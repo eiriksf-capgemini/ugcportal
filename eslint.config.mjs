@@ -102,10 +102,10 @@ export const HEX_COLOR_SELECTORS = [
  *   specifier are right there in the source, and selectors for them are
  *   writable. They are left out because enumerating them means a fresh
  *   selector per (method x indirection x argument position x literal
- *   form), and that matrix is where this ruleset has already shipped two
- *   confirmed holes — the cost of the next one is higher than the cost of
- *   not reaching for `.call` to mount a tracking script. If one ever
- *   appears, add it.
+ *   form), and that matrix is where this ruleset has already shipped
+ *   confirmed holes, each pinned by a case in eslint-gated-script.test.ts
+ *   — the cost of the next one is higher than the cost of not reaching for
+ *   `.call` to mount a tracking script. If one ever appears, add it.
  *
  *   The K6 grep test (analytics-host.grep.test.ts) is the backstop for
  *   both lists: it does not care how a vendor's host string reached the

@@ -11,6 +11,7 @@ import {
   publicMediaListingPath,
   type PublicMediaListingParams,
 } from "@/lib/routes";
+import { createThrottledLog } from "@/lib/throttled-log";
 
 /**
  * The public feed's scope and select, in ONE place (ugcportal-71y).
@@ -66,8 +67,15 @@ export type PublicMediaResult = MediaListingResult<MediaAnonymousListingSelect>;
  */
 export const LISTING_FAILURE_LOG_INTERVAL_MS = 10_000;
 
-let listingFailureLogLastAt = 0;
-let listingFailureLogSuppressed = 0;
+/**
+ * No `flush` (ugcportal-z3lo K2): unlike `watermark.ts`'s shed-upload
+ * throttle, this one deliberately has no proactive timer for a quiet
+ * burst's tail — see the doc comment above for why a malformed cursor does
+ * not warrant that machinery.
+ */
+const listingFailureLog = createThrottledLog({
+  intervalMs: LISTING_FAILURE_LOG_INTERVAL_MS,
+});
 
 /**
  * The real `ok: false` shape `listMedia` can return, reused rather than
@@ -91,32 +99,14 @@ type PublicMediaFailure = Extract<PublicMediaResult, { ok: false }>;
 function logFailedPublicListing(
   detail: PublicMediaFailure | { threw: true; error: string },
 ): void {
-  const now = Date.now();
-  // `listingFailureLogLastAt !== 0`, matching `logShedUpload`'s own
-  // `shedLogLastAt !== 0` guard (watermark.ts) — without it, the FIRST
-  // failure after process start computes `now - 0`, which is only large
-  // enough to clear the window because wall-clock time is nowhere near the
-  // epoch. That holds by the accident of what year it is, not by anything
-  // this function asserts; a clock near zero (fake timers seeded at the
-  // epoch, or a real clock before NTP sync at container boot) would read as
-  // "still inside the window" and silently suppress the one failure this
-  // throttle most needs to let through.
-  if (
-    listingFailureLogLastAt !== 0 &&
-    now - listingFailureLogLastAt < LISTING_FAILURE_LOG_INTERVAL_MS
-  ) {
-    listingFailureLogSuppressed += 1;
-    return;
-  }
-  const suppressed = listingFailureLogSuppressed;
-  listingFailureLogLastAt = now;
-  listingFailureLogSuppressed = 0;
-  console.error("[gallery] public media listing failed", {
-    ...detail,
-    // Present only when this line's own window actually swallowed others —
-    // an absent field reads as "nothing was suppressed" without a `0` that
-    // looks the same as a count nobody bothered to track.
-    ...(suppressed > 0 ? { suppressed } : {}),
+  listingFailureLog.log((suppressed) => {
+    console.error("[gallery] public media listing failed", {
+      ...detail,
+      // Present only when this line's own window actually swallowed others —
+      // an absent field reads as "nothing was suppressed" without a `0` that
+      // looks the same as a count nobody bothered to track.
+      ...(suppressed > 0 ? { suppressed } : {}),
+    });
   });
 }
 
