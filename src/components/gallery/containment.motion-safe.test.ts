@@ -183,9 +183,23 @@ describe("GALLERY_TILE_IMAGE_CLASS's hover-scale rule is actually gated by prefe
  * has no notion of a comment either, which is the entire bug this test
  * exists to catch.
  */
-/** Matches globals.css's own `@source not` exclusion exactly - *.test.ts/*.test.tsx under src/, which legitimately ship these strings as fixtures. Deliberately NOT *.spec.ts: e2e/'s specs are NOT excluded from Tailwind's scan (see globals.css's own comment), so this test has to see them too. */
+/**
+ * Matches globals.css's own `@source not` exclusions exactly:
+ * *.test.ts/*.test.tsx anywhere under src/, and (ugcportal-61pv)
+ * e2e/**\/*.spec.ts/*.spec.tsx - the glob that previously could not be made
+ * to exclude anything, now confirmed working against a real `next build`
+ * (see globals.css's own comment for the measurement and for why earlier
+ * attempts failed).
+ *
+ * A *.spec.ts(x) file OUTSIDE e2e/ is deliberately NOT covered - the real
+ * `@source not` glob is anchored to e2e/ specifically, not to the extension
+ * alone, and this predicate mirrors that scope exactly rather than widening
+ * it to "any spec file anywhere" - see the fixture tests below for both
+ * directions.
+ */
 function isExcludedFromTailwindScan(file: string): boolean {
-  return /\.test\.tsx?$/.test(file);
+  if (/\.test\.tsx?$/.test(file)) return true;
+  return /\.spec\.tsx?$/.test(file) && file.split(path.sep).includes("e2e");
 }
 
 /**
@@ -194,10 +208,19 @@ function isExcludedFromTailwindScan(file: string): boolean {
  * utility (`motion-safe:group-hover:scale-[1.04]`, `motion-safe:active:
  * not-aria-[haspopup]:translate-y-px`) must keep passing; only the bare,
  * ungated form is the regression this guards.
+ *
+ * The `group-hover:scale-` pattern matches ANY bracketed value, not only
+ * the literal `1.04` (ugcportal-61pv): containment.ts's own doc comment was
+ * found shipping `group-hover:scale-[…]` - the real value elided to an
+ * ellipsis for illustration - which this gate's previous, value-pinned
+ * regex could not see, and which compiled a second, ungated `scale: …` rule
+ * into the real production stylesheet exactly like the pinned `1.04` shape
+ * does. Widened to close that gap rather than adding a second, equally
+ * pinnable pattern for one more literal value.
  */
 const DANGEROUS_BARE_PATTERNS: readonly RegExp[] = [
   /(?<!motion-safe:)active:not-aria-\[haspopup\]:translate-y-px/,
-  /(?<!motion-safe:)group-hover:scale-\[1\.04\]/,
+  /(?<!motion-safe:)group-hover:scale-\[[^\]]*\]/,
 ];
 
 /**
@@ -317,7 +340,7 @@ describe("findBareUngatedMentions (the real scanner, exercised over a real fixtu
     expect(result).toEqual([]);
   });
 
-  it("STILL flags a *.spec.ts fixture file - e2e/ specs are not excluded from Tailwind's scan", () => {
+  it("STILL flags a *.spec.ts fixture file OUTSIDE e2e/ - only e2e/'s own specs are excluded", () => {
     const root = fixture({
       "something.spec.ts": 'export const X = "group-hover:scale-[1.04]";',
     });
@@ -328,6 +351,91 @@ describe("findBareUngatedMentions (the real scanner, exercised over a real fixtu
     );
 
     expect(result).toEqual(["something.spec.ts"]);
+  });
+
+  /**
+   * ugcportal-61pv: the real fix. globals.css's `@source not
+   * "../../e2e/**\/*.spec.ts"` now genuinely excludes e2e/ from the real
+   * `next build` (confirmed by planting this exact string in a real e2e
+   * spec, building, and measuring the output - see globals.css's own
+   * comment for the before/after sizes) - so a fixture nested under an
+   * `e2e/` directory must no longer be flagged, the same as a *.test.ts
+   * fixture under src/ already isn't.
+   */
+  it("does not flag a *.spec.ts fixture file under e2e/ - globals.css's own @source not now excludes it for real", () => {
+    const root = fixture({
+      "e2e/something.spec.ts": 'export const X = "group-hover:scale-[1.04]";',
+    });
+
+    const result = findBareUngatedMentions(
+      walkSourceFiles(root, isExcludedFromTailwindScan),
+      root,
+    );
+
+    expect(result).toEqual([]);
+  });
+
+  /**
+   * A *.spec.ts file nested under a DIFFERENT directory that merely
+   * contains the four letters "e2e" as part of a longer name (not the
+   * literal path segment) must not be caught by the exclusion either -
+   * proves the check is a path-SEGMENT match, not a substring search.
+   */
+  it("STILL flags a *.spec.ts fixture under a directory whose name merely contains \"e2e\" as a substring", () => {
+    const root = fixture({
+      "not-e2e-really/something.spec.ts": 'export const X = "group-hover:scale-[1.04]";',
+    });
+
+    const result = findBareUngatedMentions(
+      walkSourceFiles(root, isExcludedFromTailwindScan),
+      root,
+    );
+
+    expect(result).toEqual([path.join("not-e2e-really", "something.spec.ts")]);
+  });
+
+  /**
+   * MUTATION CHECK (ugcportal-61pv): the shape that actually shipped -
+   * containment.ts's own doc comment elided the real arbitrary value to an
+   * ellipsis rather than writing out `1.04`, which the pre-widening,
+   * value-pinned pattern could not see at all.
+   */
+  it("MUTATION CHECK: catches the ellipsis-elided shape the previous, value-pinned pattern missed", () => {
+    const root = fixture({
+      "containment-like.ts": [
+        "/**",
+        " * `GALLERY_TILE_IMAGE_CLASS`'s `group-hover:scale-[…]` has an ancestor",
+        " * to key off.",
+        " */",
+        'export const X = "motion-safe:group-hover:scale-[1.04]";',
+      ].join("\n"),
+    });
+
+    const result = findBareUngatedMentions(
+      walkSourceFiles(root, isExcludedFromTailwindScan),
+      root,
+    );
+
+    expect(result).toEqual(["containment-like.ts"]);
+  });
+
+  it("MUTATION: breaking the ellipsis-elided shape with a space makes the scan report nothing", () => {
+    const root = fixture({
+      "containment-like.ts": [
+        "/**",
+        " * `GALLERY_TILE_IMAGE_CLASS`'s `group-hover: scale-[…]` has an ancestor",
+        " * to key off.",
+        " */",
+        'export const X = "motion-safe:group-hover:scale-[1.04]";',
+      ].join("\n"),
+    });
+
+    const result = findBareUngatedMentions(
+      walkSourceFiles(root, isExcludedFromTailwindScan),
+      root,
+    );
+
+    expect(result).toEqual([]);
   });
 
   it("does not flag the correctly-gated active:not-aria-[haspopup] shape", () => {
