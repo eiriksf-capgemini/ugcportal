@@ -676,7 +676,11 @@ export function findAlphaColorUtilities(
  * A bare candidate that does not compile AT ALL (`--color-petrol-900` is the
  * real example: declared in globals.css but deliberately kept outside
  * `@theme`, so `text-petrol-900` is not a Tailwind utility at all - see
- * ugcportal-ei5c, which owns that compile gap) is excluded here too, not
+ * ugcportal-ei5c, which found button.tsx's default-neutral variant shipping
+ * exactly this candidate and moved its label to a token that compiles,
+ * though src/app/upload/upload-form.tsx's hand-styled "Choose files" label
+ * still ships the same uncompiled candidate directly, out of that bead's
+ * scope) is excluded here too, not
  * flagged as an attempted colour the way isNonColorOverload treats its own
  * null case. The two cases are not the same: isNonColorOverload's candidates
  * are drawn from a namespace already proven to accept colour+alpha, so a

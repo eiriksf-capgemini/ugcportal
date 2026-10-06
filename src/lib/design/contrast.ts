@@ -244,16 +244,32 @@ export const PAIRINGS: Pairing[] = [
   })),
   /*
    * ugcportal-rw9j review round 5 (code-review): the label on top of that
-   * same fill - default-neutral's text-petrol-900 (button.tsx) and the
-   * upload dropzone's "Choose files" label use this exact pairing, chosen
-   * to mirror dark mode's own --primary (a light fill with a dark label).
+   * same fill, chosen to mirror dark mode's own --primary (a light fill
+   * with a dark label). Originally written as `--petrol-900` (this entry
+   * was called `petrol-900-on-petrol-400`) - but `--petrol-900` is the hex
+   * reference-palette token (see globals.css's "two blocks, and the split
+   * is the whole point" comment), declared outside `@theme`, so
+   * `text-petrol-900` never compiled to a Tailwind utility at all:
+   * button.tsx's default-neutral variant painted this label in whatever
+   * colour it happened to inherit, never petrol-900, and this entry
+   * documented a ratio for a colour nothing painted (ugcportal-ei5c).
+   * `--color-surface-0` is the fix: the same fill-light/label-dark shape,
+   * a genuine near-black, and - unlike `--petrol-900` - actually declared
+   * in `@theme`, so `text-surface-0` is a real, compiling utility. The
+   * upload dropzone's "Choose files" label (src/app/upload/upload-form.tsx)
+   * is NOT a caller of this variant - it pastes `bg-petrol-400
+   * text-petrol-900` directly - so it still has the original, never-fixed
+   * bug this pairing used to (wrongly) claim covered it; see that file's
+   * own comment. Out of this bead's scope: it is not button.tsx's
+   * default-neutral variant, and ei5c's bead text names only that variant
+   * and its one real caller.
    */
   {
-    id: "petrol-900-on-petrol-400",
-    foreground: "--petrol-900",
+    id: "surface-0-on-petrol-400",
+    foreground: "--color-surface-0",
     background: ["--color-petrol-400"],
     requirement: "body",
-    usage: "Label on default-neutral's fill and the upload dropzone's \"Choose files\" button.",
+    usage: "Label on default-neutral's fill (button.tsx), e.g. the upload queue's \"Try again\" button.",
   },
   ...onEverySurface(
     "divider",
@@ -601,20 +617,23 @@ export const PAIRINGS: Pairing[] = [
   /*
    * The hero's own call-to-action: a light petrol-tint fill with a dark
    * label, mirroring the fill-light/label-dark pairing already established
-   * for default-neutral / the upload dropzone (see petrol-900-on-petrol-400
-   * above) — but spelled with a LABEL token that actually compiles to a
-   * Tailwind utility. `--color-petrol-900` (that pairing's label token) has
-   * no `bg-`/`text-petrol-900` utility: it is declared in the OKLCH
-   * near-black `:root` block, not `@theme` (see that block's own "stopping
-   * Tailwind emitting bg-petrol-900 and friends" comment), so
-   * `text-petrol-900` compiles to no rule at all — confirmed empirically by
+   * for default-neutral / the upload dropzone — but spelled, from the
+   * start, with a LABEL token that actually compiles to a Tailwind utility.
+   * At the time this was written, default-neutral's own label was
+   * `text-petrol-900`, which has no `bg-`/`text-petrol-900` utility at all:
+   * `--color-petrol-900` is declared in the OKLCH near-black `:root` block,
+   * not `@theme` (see that block's own "stopping Tailwind emitting
+   * bg-petrol-900 and friends" comment) — confirmed empirically by
    * compiling globals.css and checking the generated utilities, not
-   * assumed. Filed as a pre-existing issue (not this bead's file) rather
-   * than silently reused: see the PR description. `--color-surface-0` IS in
-   * `@theme` (so `text-surface-0` is real), is a genuine near-black, and is
-   * not one of this file's existing surface entries' FOREGROUND uses — only
-   * its background ones — so this is a new foreground use of an existing
-   * token, not a new token.
+   * assumed. Filed as a pre-existing issue rather than silently reused: see
+   * the PR description. (ugcportal-ei5c later fixed default-neutral's own
+   * label to this same `text-surface-0` token, for the identical reason —
+   * see button.tsx's and `surface-0-on-petrol-400`'s own comments — so the
+   * two variants now share a label token, just against two different
+   * fills.) `--color-surface-0` IS in `@theme` (so `text-surface-0` is
+   * real), is a genuine near-black, and is not one of this file's existing
+   * surface entries' FOREGROUND uses — only its background ones — so this
+   * is a new foreground use of an existing token, not a new token.
    *
    * `--color-petrol-100`, NOT `--petrol-100` (round-3 review, CONFIRMED
    * medium — an earlier version of this entry checked the wrong one): this

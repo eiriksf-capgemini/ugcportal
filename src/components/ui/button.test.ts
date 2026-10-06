@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { designSystem } from "@/lib/design/usage";
+
 import { buttonVariants } from "./button";
 
 /**
@@ -116,4 +118,124 @@ describe("buttonVariants base: no bare outline-none without a forced-colors-visi
    * focus-visible outline that actually SETS outline-style" assertion still
    * failed, since `outline-solid` was absent; reverted.
    */
+});
+
+/**
+ * ugcportal-ei5c K1/K3: default-neutral used to name `text-petrol-900` - a
+ * class that compiles to NO Tailwind rule at all, because `--color-petrol-900`
+ * is declared in globals.css's near-black `:root` block, deliberately
+ * outside `@theme`, specifically so Tailwind does not emit `bg-`/`text-`
+ * utilities for it (see that block's own "stopping Tailwind emitting
+ * bg-petrol-900 and friends" comment). The label therefore rendered in
+ * whatever colour it happened to inherit, never petrol-900, while
+ * contrast.ts's `petrol-900-on-petrol-400` pairing (now `surface-0-on-
+ * petrol-400`, retargeted at the token the variant actually paints today)
+ * documented a measured ratio for a colour nothing painted - a false claim
+ * of coverage. Nothing in this repo's existing scanners would have caught
+ * it: findBareColorUtilities (src/lib/design/usage.ts) deliberately EXCLUDES
+ * a non-compiling bare candidate rather than flagging it (a candidate that
+ * fails to compile might be a `border-style`/`background-size` keyword
+ * utility sharing the namespace, not an undeclared colour - see that
+ * function's own doc comment), so this family of bug is invisible to the
+ * contrast gate's normal coverage sweep. This describe block is the
+ * dedicated guard K1/K3 ask for instead.
+ *
+ * Compiles every bare (non-alpha-modified) `bg-`/`text-`/`border-` utility
+ * each variant's REAL `buttonVariants` output names against `designSystem` -
+ * the real Tailwind design system loaded from this repo's own globals.css
+ * (src/lib/design/usage.ts's `__unstable__loadDesignSystem` call) - the same
+ * mechanism `isBareColorUtility`/`findBareColorUtilities` already use to ask
+ * "does this candidate compile to a real rule", and the same one the bead's
+ * own premise used by hand ("compiling globals.css through
+ * @tailwindcss/postcss with @source inline(...) appended") to first confirm
+ * the bug empirically. Run over every variant (K3's sibling sweep), not only
+ * `default-neutral` - the one variant this bead actually fixes - so a
+ * sibling shipping the identical mistake in the future cannot hide behind
+ * only one variant being checked.
+ */
+describe("buttonVariants K1/K3 (ugcportal-ei5c): every bare colour utility a variant names actually compiles", () => {
+  const ALL_VARIANTS = [
+    "default",
+    "default-neutral",
+    "default-tint",
+    "outline",
+    "secondary",
+    "outline-neutral",
+    "ghost",
+    "destructive",
+    "link",
+  ] as const;
+
+  /**
+   * `token` is one whitespace-separated class from a variant's compiled
+   * class string, possibly with a chain of leading `variant:` prefixes
+   * (`hover:bg-primary-hover`, `aria-expanded:bg-accent`) - Tailwind compiles
+   * the base utility identically regardless of which variant triggers it,
+   * the same simplification findBareColorUtilities's own BOUNDARY regex
+   * relies on. Returns the bare `bg-`/`text-`/`border-` candidate at the end
+   * of that chain, with NO alpha modifier (a trailing `/NN` breaks the
+   * match, same as findBareColorUtilities's own bare-vs-alpha split - an
+   * alpha-modified utility like destructive's `border-destructive/75` is
+   * findAlphaColorUtilities's question, not this one), or null if `token`
+   * names neither of the three bare colour namespaces this bug shape can
+   * occur in.
+   */
+  function bareColorCandidate(token: string): string | null {
+    const match = /(?:^|:)((?:bg|text|border)-(?:\[[^\]]+\]|\([^)]+\)|[a-zA-Z][\w-]*))$/.exec(
+      token,
+    );
+    return match ? match[1] : null;
+  }
+
+  it.each(ALL_VARIANTS)(
+    "%s variant: every bare bg-/text-/border- utility compiles to a real Tailwind rule",
+    (variant) => {
+      const classes = buttonVariants({ variant }).split(/\s+/);
+      for (const token of classes) {
+        const candidate = bareColorCandidate(token);
+        if (candidate === null) continue;
+        const [css] = designSystem.candidatesToCss([candidate]);
+        expect(
+          css,
+          `"${variant}" variant's "${token}" names "${candidate}", which compiles to no Tailwind ` +
+            `rule at all - the exact ugcportal-ei5c bug shape (a token declared outside @theme on ` +
+            `purpose, e.g. --color-petrol-900). A contrast.ts pairing for this colour would document ` +
+            `a ratio for a colour the browser never paints.`,
+        ).not.toBeNull();
+      }
+    },
+  );
+
+  /**
+   * Proves the guard above actually bites, the same "mutate and assert it
+   * fails" discipline K1 itself asks for - without mutating the real
+   * button.tsx (contrast.test.ts's own tmpdir-based mutation checks use the
+   * identical discipline, a synthetic fixture rather than editing real
+   * source at test time): default-neutral's literal PRE-ei5c class string,
+   * checked directly through the same bare-candidate extraction and
+   * compile step the `it.each` above runs.
+   */
+  it("catches the exact pre-fix default-neutral string (bg-petrol-400 text-petrol-900 hover:brightness-95) as shipping a non-compiling bare utility", () => {
+    const preFixClasses = "bg-petrol-400 text-petrol-900 hover:brightness-95".split(/\s+/);
+    const candidates = preFixClasses
+      .map(bareColorCandidate)
+      .filter((candidate): candidate is string => candidate !== null);
+    expect(candidates).toEqual(["bg-petrol-400", "text-petrol-900"]);
+
+    const [fillCss] = designSystem.candidatesToCss([candidates[0]]);
+    const [labelCss] = designSystem.candidatesToCss([candidates[1]]);
+    expect(fillCss, "bg-petrol-400 compiles - the fill was never the bug").not.toBeNull();
+    expect(
+      labelCss,
+      "text-petrol-900 must compile to NO rule - that is the exact bug this bead fixes",
+    ).toBeNull();
+  });
+
+  it("the real, current default-neutral variant no longer ships that non-compiling candidate", () => {
+    const classes = buttonVariants({ variant: "default-neutral" }).split(/\s+/);
+    expect(classes).not.toContain("text-petrol-900");
+    expect(classes).toContain("text-surface-0");
+    const [css] = designSystem.candidatesToCss(["text-surface-0"]);
+    expect(css, "text-surface-0 must compile to a real rule").not.toBeNull();
+  });
 });
