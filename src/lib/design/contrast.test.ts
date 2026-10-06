@@ -477,22 +477,26 @@ describe("the gate cannot be routed around", () => {
    * token, count)` for exactly this reason; this carries the same count
    * field forward rather than only claiming parity with it.
    *
-   * The one entry today: hero.tsx's `HeroDecoration` renders three
-   * `aria-hidden`, childless `<span>` shapes, confined to their own
-   * `overflow-hidden` box and confirmed (not assumed) geometrically isolated
-   * from the hero's text column by e2e/front-page.spec.ts's "no decorative
-   * shape intersects hero text" - see that component's own comment. Two of
-   * its three bare fills need no entry here, for unrelated reasons: the CTA
-   * pill's `surface-0-on-petrol-100` already measures `bg-petrol-100` as a
-   * background, and `surface-0-on-petrol-400` already measures
-   * `bg-petrol-400` the same way (NOT `petrol-400-fill-on-old-surface-*`,
-   * which measures `--color-petrol-400` as a FOREGROUND against the old
-   * surface scale, the opposite role - PR #115 round 1 finding 4). Only
-   * `bg-petrol-300` shares no background reference with any existing
-   * pairing, which is what surfaced this gap in the first place.
+   * The one entry today: hero.tsx's `HeroVisual` (ugcportal-qqnt.4 K1;
+   * `HeroDecoration`'s replacement — this entry originally audited THAT
+   * component's three `bg-petrol-300` circles, which are gone now) renders
+   * a neutral `aria-hidden`, childless `<div>` fallback tile, confined to
+   * the same `overflow-hidden` box and confirmed (not assumed) geometrically
+   * isolated from the hero's text column by e2e/front-page.spec.ts's "no
+   * hero visual tile intersects hero text" check - see that component's own
+   * comment. `bg-petrol-200` shares no background reference with any
+   * existing pairing (the CTA pill's hover fill is the alpha-free MODIFIED
+   * utility `hover:bg-petrol-200`, a different usage the alpha scanner,
+   * not this bare one, already accounts for), which is what surfaces this
+   * gap. `HeroDecoration`'s other two bare fills (`bg-petrol-100`,
+   * `bg-petrol-400`) needed no entry here for the same, now-moot reason
+   * #175 renamed one of their covering pairings over (`surface-0-on-
+   * petrol-400`, not `petrol-900-on-petrol-400`) — both literals are simply
+   * gone from hero.tsx along with the rest of `HeroDecoration`, so there is
+   * nothing left here for either pairing id to explain away.
    */
   const AUDITED_DECORATIVE_BACKGROUND_USAGES: Readonly<Record<string, number>> = {
-    "src/components/home/hero.tsx:bg-petrol-300": 1,
+    "src/components/home/hero.tsx:bg-petrol-200": 1,
   };
 
   /**
@@ -529,7 +533,7 @@ describe("the gate cannot be routed around", () => {
     // Pinned so a silent addition is a visible diff, the same reason
     // PAIRINGS' own decorative-id list is frozen above.
     expect(Object.keys(AUDITED_DECORATIVE_BACKGROUND_USAGES).sort()).toEqual(
-      ["src/components/home/hero.tsx:bg-petrol-300"].sort(),
+      ["src/components/home/hero.tsx:bg-petrol-200"].sort(),
     );
     for (const [key, count] of Object.entries(AUDITED_DECORATIVE_BACKGROUND_USAGES)) {
       expect(bareBackgroundOccurrences.get(key), `${key} occurrence count`).toBe(count);
@@ -538,7 +542,7 @@ describe("the gate cannot be routed around", () => {
 
   it("a second, non-decorative occurrence of an audited decorative background does not ride the existing entry", () => {
     // Reproduces PR #115 round 1 finding 3 without touching the real
-    // hero.tsx: two bare bg-petrol-300 occurrences in the SAME audited file
+    // hero.tsx: two bare bg-petrol-200 occurrences in the SAME audited file
     // change the count the allowlist pins, so the second one - which could be
     // real, non-decorative content - can no longer hide behind the one entry
     // audited for a single, confirmed-decorative shape.
@@ -546,7 +550,7 @@ describe("the gate cannot be routed around", () => {
     try {
       const file = path.join(root, "src", "components", "home", "hero.tsx");
       mkdirSync(path.dirname(file), { recursive: true });
-      writeFileSync(file, `const a = "bg-petrol-300"; const b = "bg-petrol-300";`);
+      writeFileSync(file, `const a = "bg-petrol-200"; const b = "bg-petrol-200";`);
       const found = findBareColorUtilities(path.join(root, "src"));
 
       const occurrences = new Map<string, number>();
@@ -556,11 +560,11 @@ describe("the gate cannot be routed around", () => {
         occurrences.set(key, (occurrences.get(key) ?? 0) + 1);
       }
 
-      const petrol300 = found.find((usage) => usage.utility === "bg-petrol-300");
-      expect(petrol300, "fixture ships bg-petrol-300").toBeDefined();
-      expect(occurrences.get(`${petrol300!.file}:${petrol300!.utility}`)).toBe(2);
+      const petrol200 = found.find((usage) => usage.utility === "bg-petrol-200");
+      expect(petrol200, "fixture ships bg-petrol-200").toBeDefined();
+      expect(occurrences.get(`${petrol200!.file}:${petrol200!.utility}`)).toBe(2);
       expect(
-        isAuditedDecorativeBackground(petrol300!, occurrences),
+        isAuditedDecorativeBackground(petrol200!, occurrences),
         "two occurrences must not match the audited count of one",
       ).toBe(false);
     } finally {

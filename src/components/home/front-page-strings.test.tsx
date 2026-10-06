@@ -37,8 +37,19 @@ function visibleText(markup: string): string {
     .trim();
 }
 
-const HERO_SIGNED_OUT = visibleText(renderToStaticMarkup(<Hero signedIn={false} />));
-const HERO_SIGNED_IN = visibleText(renderToStaticMarkup(<Hero signedIn={true} />));
+/*
+ * `portfolioPieces={[]}` on the hero (ugcportal-qqnt.4): the same reasoning
+ * as `pieces={[]}` on the empty state below — zero curated pieces still
+ * renders every string the component can ever show except the tile
+ * row/images themselves, which carry no visible copy of their own (the
+ * hero's are `<img>`s with an `alt`, not on-screen text; see hero.test.tsx).
+ */
+const HERO_SIGNED_OUT = visibleText(
+  renderToStaticMarkup(<Hero signedIn={false} portfolioPieces={[]} />),
+);
+const HERO_SIGNED_IN = visibleText(
+  renderToStaticMarkup(<Hero signedIn={true} portfolioPieces={[]} />),
+);
 /*
  * `pieces={[]}` (ugcportal-qqnt.5): this guardrail is about the component's
  * OWN authored copy — the heading, the one-line fallback, the portfolio

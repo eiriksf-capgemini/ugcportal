@@ -21,9 +21,20 @@ import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db"
  * That combination (a genuinely empty gallery feed, at least one portfolio
  * piece) is therefore unreachable through the real listing pipeline today;
  * mocking `listPortfolioPieces` is what lets this file exercise `Home()`'s
- * own wiring — that it calls the function at all, only on the branch that
- * needs it, and threads the result into the component unchanged — without
- * asserting something the current schema cannot produce.
+ * own wiring — that it calls the function, and threads the result into the
+ * component unchanged — without asserting something the current schema
+ * cannot produce.
+ *
+ * CALLED EXACTLY ONCE PER RENDER (K2's own assertion below), not "only on
+ * the branch that needs it" any more (ugcportal-qqnt.4): the hero's own
+ * photographic visual now reads this same function on EVERY branch, so
+ * `Home()` calls it unconditionally and shares the one resolved array with
+ * both the hero and, on this file's own genuinely-empty branch, `<EmptyState
+ * pieces={...}>` — see src/app/page.tsx's own comment on `portfolioPieces`.
+ * This file's own hero markup is not asserted on (src/components/home/
+ * hero.test.tsx and e2e/seeded/front-page-hero-portfolio.spec.ts cover
+ * that); what this file still proves is that the SAME array this mock
+ * resolves is the one `<EmptyState>` receives.
  *
  * `listPublicMedia` ITSELF IS NOT MOCKED: a real, empty database (via
  * `createTemporaryDatabase`) is what puts `Home()` on the genuinely-empty

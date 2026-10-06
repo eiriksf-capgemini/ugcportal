@@ -129,18 +129,31 @@ vi.mock("@/lib/public-media", () => ({
 }));
 
 /**
- * `@/lib/portfolio` (ugcportal-qqnt.5): `Home()`'s genuinely-empty branch
- * now also awaits `listPortfolioPieces()`, which queries Prisma directly —
- * this file has no database at all (see its own header comment: every
- * branch here is forced by mocking `@/lib/public-media`, not by seeding
- * real rows), so the real function would throw. The empty state's own
- * portfolio-tile rendering is covered by src/components/home/
- * empty-state.test.tsx and src/app/page.test.tsx, both against real
- * `pieces`; this file's own K3 test below only needs `Home()` to reach the
- * genuinely-empty branch without crashing, which an empty array satisfies.
+ * `@/lib/portfolio`, mocked wholesale: `Home()` now reads
+ * `listPortfolioPieces()` unconditionally, ONCE, feeding both the hero's
+ * photographic visual (ugcportal-qqnt.4 K1, on every branch this file
+ * exercises) and the living empty state's own portfolio sample
+ * (ugcportal-qqnt.5, on the genuinely-empty branch) from that one result —
+ * see src/app/page.tsx's own comment on `portfolioPieces` for why this is a
+ * single shared read rather than two. This file has no database at all
+ * (see its own header comment: every branch here is forced by mocking
+ * `@/lib/public-media`, not by seeding real rows), and the real function's
+ * own module graph reaches `@/lib/public-media` for `PUBLIC_MEDIA_SCOPE` —
+ * a NAMED export this file's own mock of that module above does not
+ * provide (it mocks only `listPublicMedia`/`publicMediaListingUrl`, the two
+ * names this file's OWN claims are about) — so the real function would
+ * either throw outright or log a second, unrelated error and break this
+ * file's own "logs exactly once"/"logs nothing" assertions on the
+ * UNRELATED session-read fail-safe. This file's claims are about
+ * session-read resilience and the failed-listing branch, not the portfolio
+ * read itself — the hero's and the empty state's own rendering of real
+ * `pieces` are covered by hero.test.tsx, empty-state.test.tsx and
+ * page.test.tsx — so an empty array, the same "nothing curated yet" shape
+ * a real, freshly seeded database would answer with, is the right fixture
+ * here, not a real Prisma round trip.
  */
 vi.mock("@/lib/portfolio", () => ({
-  listPortfolioPieces: async () => [],
+  listPortfolioPieces: vi.fn(async () => []),
 }));
 
 const { default: Home } = await import("@/app/page");
@@ -232,11 +245,11 @@ describe("K3 — this harness can also produce the genuinely-empty branch", () =
 
 /**
  * ugcportal-6dvg, round-1 review, CONFIRMED medium: a `getSession()`
- * rejection must degrade to the anonymous case (the hero's "Sign in to
- * upload"), never crash `Home()`'s OWN render — on BOTH of this file's
- * branches, since `resolveSessionOrAnonymous()` (src/lib/session-or-
- * anonymous.ts) is called from inside the `catch` that exists for a failed
- * LISTING too, not only from the success path.
+ * rejection must degrade to the anonymous case (the hero's "See the
+ * portfolio" CTA, ugcportal-qqnt.4), never crash `Home()`'s OWN render — on
+ * BOTH of this file's branches, since `resolveSessionOrAnonymous()`
+ * (src/lib/session-or-anonymous.ts) is called from inside the `catch` that
+ * exists for a failed LISTING too, not only from the success path.
  *
  * "Home() in isolation" (round-2 review, low finding — an earlier version
  * of this describe block's own title claimed "the page", which overclaims
@@ -255,7 +268,7 @@ describe("Home() in isolation: a failed session read never crashes its render", 
 
     const markup = await renderHome();
 
-    expect(markup).toContain("Sign in to upload");
+    expect(markup).toContain("See the portfolio");
     expect(markup).toContain('data-gallery-state="error"');
     // Round-2 review, low finding: the logged line was created but never
     // actually asserted before this — a silent failure mode (the fallback
@@ -277,7 +290,7 @@ describe("Home() in isolation: a failed session read never crashes its render", 
 
     const markup = await renderHome();
 
-    expect(markup).toContain("Sign in to upload");
+    expect(markup).toContain("See the portfolio");
     expect(markup).toContain('data-gallery-state="empty"');
     expect(consoleError).toHaveBeenCalledOnce();
     expect(consoleError.mock.calls[0][0]).toContain(
@@ -395,7 +408,7 @@ describe("the assembled shell: AuthStatus and UploadNavLink survive a rejected g
     if (navResult.status !== "fulfilled") throw navResult.reason;
 
     const homeMarkup = renderToStaticMarkup(homeResult.value);
-    expect(homeMarkup).toContain("Sign in to upload");
+    expect(homeMarkup).toContain("See the portfolio");
 
     // ugcportal-qqnt.3: AuthStatus's signed-out branch now renders a single
     // "Sign in" SignInMenu trigger - the two provider forms it discloses

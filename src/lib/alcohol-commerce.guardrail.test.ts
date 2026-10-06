@@ -16,8 +16,9 @@ import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db"
  * test chose not to insert anything bad.
  *
  * So the database here is built by DRIVING THE REAL WRITE PATHS: the
- * disclosure route, the publish route and the curation price route, each
- * called the way an operator would call it, once per item. Every item in the
+ * disclosure route, the commercial-links attach route, the curation price
+ * route and the publish route, each called the way an operator would call it,
+ * once per item. Every item in the
  * plan below has something attached that the law cares about, and the
  * enumeration in the second describe reads whatever the product actually let
  * through. If a refusal is ever weakened, the offending row appears in the
@@ -25,13 +26,18 @@ import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db"
  * it is evidence of anything.
  *
  * WHAT "COMMERCIAL AFFORDANCE" MEANS HERE, concretely, because the bead names
- * six and the schema can express three today: a price
+ * six and the schema can now express four: a price
  * (`MediaListing.priceCents`), an offered listing (the sellability gate,
- * which the price route evaluates), and a recorded benefit with its
- * advertising label (`MediaAdvertisingDisclosure`). A commercial outbound link
- * has no column yet — that is ugcportal-qnq9.2 — so the sweep is written as
- * "any affordance implies a clean record" rather than as a list of forbidden
- * rows, which is the direction a new affordance has to satisfy too.
+ * which the price route evaluates), a recorded benefit with its advertising
+ * label (`MediaAdvertisingDisclosure`), and — since ugcportal-qnq9.2.1 — a
+ * commercial outbound link (`CommercialLink`). The sweep is written as "any
+ * affordance implies a clean record" rather than as a list of forbidden rows
+ * precisely so that a new affordance has to satisfy it, and the fourth is
+ * what tested whether that worked: adding it meant one more request per item
+ * in the loop below and two more reads in the sweep, and no rewrite of either
+ * assertion. What is NOT here is the per-link marker and the all-surfaces
+ * render sweep — that is ugcportal-qnq9.2.2, which owns what a page looks
+ * like rather than what the table holds.
  */
 
 const database = createTemporaryDatabase();
@@ -46,6 +52,9 @@ const { PUT: DISCLOSE } = await import(
 const { POST: PUBLISH } = await import("@/app/api/media/[id]/publish/route");
 const { POST: SET_PRICE } = await import(
   "@/app/api/admin/curation/[id]/price/route"
+);
+const { POST: ATTACH_LINK } = await import(
+  "@/app/api/media/[id]/commercial-links/route"
 );
 const { CURRENT_CHECKLIST_VERSION } = await import("@/lib/resale-rights");
 
@@ -158,13 +167,35 @@ function priceRequest(listingId: string) {
   );
 }
 
+/**
+ * The attach request for one item (ugcportal-qnq9.2.1), which is the fourth
+ * commercial affordance this sweep has to cover.
+ *
+ * ONE DESTINATION PER ITEM, carrying the item's id in the `m=` parameter, so
+ * that a row the sweep below finds can be traced back to the request that
+ * made it instead of being one of six identical URLs. The brand is the SAME
+ * brand the item's disclosure names, so a refusal here is about the item's own
+ * facts rather than about a brand this test invented separately.
+ */
+function commercialLinkRequest(id: string, brand: string) {
+  return new Request(`http://localhost/api/media/${id}/commercial-links`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      url: `https://track.adtraction.com/t/t?a=1234&m=${id}`,
+      network: "ADTRACTION",
+      benefitSource: brand,
+    }),
+  });
+}
+
 const context = (id: string) => ({ params: Promise.resolve({ id }) });
 
-/** What each item's three requests answered, so the cases below can assert on
+/** What each item's four requests answered, so the cases below can assert on
  * the refusals as well as on the rows. */
 const outcomes = new Map<
   string,
-  { disclosure: number; price: number; publish: number }
+  { disclosure: number; price: number; link: number; publish: number }
 >();
 
 beforeAll(async () => {
@@ -263,11 +294,25 @@ beforeAll(async () => {
         : (await SET_PRICE(priceRequest(`listing-${item.id}`), context(`listing-${item.id}`)))
             .status;
 
+    // AFTER the disclosure and BEFORE the publish, which is the only order
+    // that says anything: the attach route requires a declared benefit under
+    // a permitted label, so running it first would refuse every item for that
+    // reason and tell us nothing about alcohol. Run here, it refuses for the
+    // reason each item is in the plan for.
+    const link = await ATTACH_LINK(
+      commercialLinkRequest(
+        item.id,
+        item.brand === "none" ? "Brand Nobody Checked" : item.brand.name,
+      ),
+      context(item.id),
+    );
+
     const publish = await PUBLISH(publishRequest(item.id), context(item.id));
 
     outcomes.set(item.id, {
       disclosure: disclosure.status,
       price,
+      link: link.status,
       publish: publish.status,
     });
   }
@@ -286,6 +331,7 @@ describe("ugcportal-qnq9.3 K6: what the real write paths let through", () => {
     expect(outcomes.get("accessory")).toEqual({
       disclosure: 200,
       price: 200,
+      link: 201,
       publish: 200,
     });
   });
@@ -299,6 +345,13 @@ describe("ugcportal-qnq9.3 K6: what the real write paths let through", () => {
     // 422 from the price route: well-formed, authorized, refused by the row's
     // own state — the shape that endpoint already uses for a blocked gate.
     expect(outcome?.price).toBe(422);
+    // And the commercial link. A STATUS ONLY, so this does not distinguish
+    // which of the attach route's two gates produced it — § 9-2 refuses this
+    // item, and so does the missing disclosure the refusal above left behind.
+    // That discrimination is commercial-links/route.test.ts's job, where each
+    // refusal is asserted by `field` against a seeded disclosure; what this
+    // file adds is that the refusal held in a database built by real requests.
+    expect(outcome?.link).toBe(400);
   });
 
   it.each([
@@ -311,6 +364,10 @@ describe("ugcportal-qnq9.3 K6: what the real write paths let through", () => {
     // brand, or a published advertising label.
     expect(outcomes.get(id)?.disclosure).toBe(status);
     expect(outcomes.get(id)?.price).toBe(200);
+    // The link is refused too. Again a status only, for the reason given in
+    // the case above: both of the attach route's gates refuse these two
+    // items, and the per-gate discrimination lives in that route's own test.
+    expect(outcomes.get(id)?.link).toBe(400);
   });
 
   it("records the untriaged item's benefit but will not publish it", () => {
@@ -320,6 +377,13 @@ describe("ugcportal-qnq9.3 K6: what the real write paths let through", () => {
     expect(outcomes.get("untriaged")).toEqual({
       disclosure: 200,
       price: 404,
+      // The link is attached, and by the same asymmetry: the attach gate
+      // reads the alcohol question permissively, and the publish gate is what
+      // refuses. An untriaged item can therefore hold a commercial link and
+      // cannot show it to anybody — which is what the `publish: 400` on the
+      // next line is, and what keeps this row out of the published sweep
+      // below.
+      link: 201,
       publish: 400,
     });
   });
@@ -347,6 +411,18 @@ describe("ugcportal-qnq9.3 K6: every published row in the database", () => {
             benefitSource: { select: { name: true, alcoholLinked: true } },
           },
         },
+        // The fourth affordance (ugcportal-qnq9.2.1). Each link's own brand is
+        // read rather than the disclosure's: CommercialLink carries its own
+        // `benefitSourceId` precisely because the two can differ — the glass
+        // was gifted by its maker and the link may point at a retailer — so
+        // checking the disclosure's brand twice would leave the link's
+        // unchecked.
+        commercialLinks: {
+          select: {
+            url: true,
+            benefitSource: { select: { name: true, alcoholLinked: true } },
+          },
+        },
       },
     });
   }
@@ -369,6 +445,7 @@ describe("ugcportal-qnq9.3 K6: every published row in the database", () => {
         row.listing?.priceCents != null && "a price",
         disclosure?.benefitReceived === true && "a recorded benefit",
         disclosure?.label != null && "an advertising label",
+        row.commercialLinks.length > 0 && "a commercial link",
       ].filter((value): value is string => typeof value === "string");
 
       if (affordances.length === 0) continue;
@@ -384,10 +461,17 @@ describe("ugcportal-qnq9.3 K6: every published row in the database", () => {
           `published ${row.id} carries a benefit from ${disclosure.benefitSource?.name ?? "an unnamed brand"}, whose alcohol answer is ${JSON.stringify(disclosure.benefitSource?.alcoholLinked ?? null)}`,
         ).toBe(false);
       }
+
+      for (const link of row.commercialLinks) {
+        expect(
+          link.benefitSource.alcoholLinked,
+          `published ${row.id} links ${link.url}, whose brand ${link.benefitSource.name} has the alcohol answer ${JSON.stringify(link.benefitSource.alcoholLinked)}`,
+        ).toBe(false);
+      }
     }
   });
 
-  it("leaves no price or benefit anywhere on an item recorded as showing alcohol", async () => {
+  it("leaves no price, benefit or link anywhere on an item recorded as showing alcohol", async () => {
     // The same claim asked the other way round, and over EVERY row rather
     // than only the published ones — "it is only a draft" is not a reason for
     // a price to sit beside a glass of wine, and a draft is one request away
@@ -408,6 +492,7 @@ describe("ugcportal-qnq9.3 K6: every published row in the database", () => {
         OR: [
           { listing: { priceCents: { not: null } } },
           { advertisingDisclosure: { benefitReceived: true } },
+          { commercialLinks: { some: {} } },
         ],
         listing: { depictsAlcohol: true },
       },
@@ -433,6 +518,7 @@ describe("ugcportal-qnq9.3 K6: every published row in the database", () => {
         publishedAt: true,
         listing: { select: { priceCents: true } },
         advertisingDisclosure: { select: { benefitReceived: true } },
+        commercialLinks: { select: { url: true } },
       },
     });
 
@@ -446,6 +532,10 @@ describe("ugcportal-qnq9.3 K6: every published row in the database", () => {
         row.advertisingDisclosure,
         `${row.id} has a disclosure row`,
       ).toBeNull();
+      expect(
+        row.commercialLinks,
+        `${row.id} has a commercial link`,
+      ).toEqual([]);
     }
   });
 });

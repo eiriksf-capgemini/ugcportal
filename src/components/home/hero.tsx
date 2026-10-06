@@ -2,9 +2,11 @@ import Link from "next/link";
 
 import { cn } from "cn";
 
+import { GALLERY_RADIUS_CLASS } from "@/components/gallery/containment";
 import { buttonVariants } from "@/components/ui/button";
 import { DISPLAY_TITLE_CLASS } from "@/components/type-scale";
-import { signInPath, UPLOAD_PATH } from "@/lib/routes";
+import { galleryItemAlt, type GalleryItem } from "@/lib/gallery-items";
+import { PORTFOLIO_PATH, UPLOAD_PATH } from "@/lib/routes";
 
 export type HeroProps = {
   /**
@@ -25,78 +27,176 @@ export type HeroProps = {
    * this component trivial to unit test with no session mocking at all.
    */
   signedIn: boolean;
+  /**
+   * The hero's photographic visual (ugcportal-qqnt.4 K1), already resolved
+   * by src/app/page.tsx the same way `signedIn` is — `listPortfolioPieces()`
+   * (src/lib/portfolio.ts), fetched once there and handed down, never
+   * re-queried here. The SAME reason as `signedIn` above applies doubly:
+   * this is a Prisma read, and a plain, synchronous `Hero` can be driven with
+   * a hand-built array in hero.test.tsx with no Prisma or request context at
+   * all, for every count (three, one, zero) K1 needs covered.
+   */
+  portfolioPieces: GalleryItem[];
 };
 
 /**
- * The decorative shapes' shared classes (round-1 review, low finding):
- * hoisted so the three `<span>`s below don't each spell out the same long
- * string with only position/size/colour/delay differing.
- *
- * Fully opaque, not alpha-blended — the same choice docs/design/forside.html's
- * own `.hero-art span` reference sketch makes for its shapes (this layout now
- * also matches that sketch's STRUCTURE, not only its opacity choice — see
- * the comment on `HeroDecoration` below for why that is now load-bearing,
- * not merely a style echo) — and it sidesteps src/lib/design/contrast.ts's
- * alpha-utility coverage gate entirely: an alpha-modified background utility
- * (an "/NN" opacity suffix) needs its own documented pairing there, and
- * these three carry no text, so there is nothing a contrast ratio would be
- * checking.
- *
- * `opacity-100` is the no-motion-preference-expressed baseline (so a browser
- * with no media-feature support at all still shows them); `motion-safe:
- * opacity-0` plus the keyframe animation (src/app/globals.css) take over only
- * under `prefers-reduced-motion: no-preference`, and `motion-reduce:
- * animate-none` is the explicit, redundant-by-design belt-and-braces half —
- * see that file's own comment on `@keyframes home-fade-in` for why both exist
- * rather than only the `motion-safe:` gate.
+ * Three overlapping offsets inside `HeroVisual`'s own box, in rendering
+ * order — the same geometry docs/design/forside.html's `.hero-art
+ * span:nth-child(n)` reference sketch draws (56% × 55% tiles at left
+ * 0/26%/44%, top 15%/0/40%), as Tailwind percentage-of-container arbitrary
+ * values rather than fixed pixels, so the one set of classes reads
+ * correctly at both of the box's own breakpoints (h-28/w-28 below `sm`,
+ * h-40/w-40 at and above it) without a second set of numbers for each.
  */
-const HERO_DECORATIVE_SHAPE_CLASS =
-  "absolute rounded-full opacity-100 motion-safe:opacity-0 motion-safe:animate-[home-fade-in_700ms_ease-out_both] motion-reduce:animate-none";
+const HERO_VISUAL_TILE_POSITION_CLASS = [
+  "left-0 top-[15%]",
+  "left-[26%] top-0",
+  "left-[44%] top-[40%]",
+];
+
+/** Every hero visual tile's size, real photograph or fallback alike. */
+const HERO_VISUAL_TILE_SIZE_CLASS = "absolute h-[55%] w-[56%]";
 
 /**
- * The hero's purely decorative shapes (K3's "fade-in on tiles"), confined to
- * their OWN box — a flex sibling of the text column in `Hero` below, never an
- * absolutely-positioned overlay behind it.
- *
- * NOT a style choice (round-1 review, CONFIRMED medium): an earlier version
- * positioned these three `absolute`, spanning the entire hero, which put the
- * near-white `bg-petrol-100` circle directly behind the `text-ink` lead
- * paragraph at 360/768/1024px viewport widths — contrast collapsing to
- * roughly 1:1 wherever the two actually overlapped, undetected by
- * src/lib/design/contrast.ts (which checks DECLARED token pairs, not what
- * two elements happen to composite to at a given breakpoint) and only found
- * by measuring real client rects in a browser. This box's own `overflow-
- * hidden` clips every shape to ITS bounds, and flexbox (see `Hero`'s own
- * `sm:flex-row`) keeps those bounds a sibling of the text column at every
- * width rather than a sibling of the whole hero — so a shape cannot reach
- * the text column's rectangle regardless of its own size or offset.
- * e2e/front-page.spec.ts's "no decorative shape intersects hero text" check
- * asserts this geometrically rather than trusting the structure to hold.
+ * The fade-in every hero visual tile carries, real photograph or fallback
+ * alike (K3) — unchanged in mechanism from the decorative circles this
+ * replaces (see this file's own git history for `HERO_DECORATIVE_SHAPE_
+ * CLASS`, the prior name of this same string): `opacity-100` is the
+ * no-media-feature-support baseline (so a browser with neither value of
+ * `prefers-reduced-motion` expressed still shows the tiles); `motion-safe:
+ * opacity-0` plus the keyframe animation (src/app/globals.css) take over
+ * only under `prefers-reduced-motion: no-preference`; `motion-reduce:
+ * animate-none` is the explicit, redundant-by-design belt-and-braces half —
+ * see that file's own comment on `@keyframes home-fade-in` for why both
+ * exist rather than only the `motion-safe:` gate. Opaque, not
+ * alpha-blended, for the same reason as before: these carry no text, so
+ * there is nothing for src/lib/design/contrast.ts's alpha-utility coverage
+ * gate to check.
  */
-function HeroDecoration() {
+const HERO_VISUAL_TILE_MOTION_CLASS =
+  "opacity-100 motion-safe:opacity-0 motion-safe:animate-[home-fade-in_700ms_ease-out_both] motion-reduce:animate-none";
+
+/**
+ * One neutral tone for every fallback tile (K1). The bead's own wording is
+ * "a neutral petrol tile" — singular — one shade reused for whichever
+ * slot(s) have no curated preview to show, not the three different shades
+ * the decorative circles this replaces used to tell each other apart: there
+ * is nothing to tell apart here, every fallback tile means the identical
+ * thing ("no photograph in this slot yet").
+ */
+const HERO_VISUAL_FALLBACK_CLASS = "bg-petrol-200";
+
+/**
+ * The intrinsic `<img>` width/height HTML attributes every hero tile
+ * carries (K3's "a hero image loads without width and height" guard) —
+ * a fixed 1:1 figure, not a per-breakpoint one: the CSS classes above
+ * already size and crop the rendered box at every breakpoint
+ * (`object-cover` on a `h-full`-equivalent absolute box), so these
+ * attributes exist only to give the browser an aspect ratio to reserve
+ * layout space with BEFORE either the stylesheet or the image bytes have
+ * arrived, not to describe the final on-screen size themselves.
+ */
+const HERO_VISUAL_TILE_INTRINSIC_PX = 160;
+
+/**
+ * The hero's photographic visual (ugcportal-qqnt.4 K1): up to three
+ * overlapping radius-card tiles, each a real preview image of a curated
+ * portfolio piece — `pieces` is `listPortfolioPieces()`'s own result
+ * (src/lib/portfolio.ts), the SAME data and the SAME preview bytes
+ * /portfolio itself renders, fetched once by src/app/page.tsx and handed
+ * down rather than re-queried here. Replaces the three hand-rolled
+ * decorative circles this bead's own premise found standing in for a real
+ * photograph.
+ *
+ * FEWER THAN THREE PREVIEWS: the remaining slot(s) render as a plain
+ * neutral petrol tile instead of a photograph (the bead's own words) —
+ * never fewer than three TILES, so the three position classes above never
+ * have to change shape depending on how much curated content exists; only
+ * WHAT fills a given slot does. Zero pieces therefore renders three
+ * fallback tiles and no `<img>` at all — a tested shape
+ * (hero.test.tsx's own "zero pieces" case), not a missing one.
+ *
+ * Confined to its OWN box — a flex sibling of the text column in `Hero`
+ * below, never an absolutely-positioned overlay behind it — for the exact
+ * reason `HeroDecoration` (the component this one replaces) was: an earlier
+ * version of THAT component positioned its three shapes `absolute` across
+ * the whole hero, which put a near-white circle directly behind the
+ * `text-ink` lead paragraph at several viewport widths (round-1 review,
+ * CONFIRMED medium, on the original PR). This box's own `overflow-hidden`
+ * still clips every tile to ITS bounds, and flexbox (`Hero`'s own
+ * `sm:flex-row`) still keeps those bounds a sibling of the text column at
+ * every width — so a tile cannot reach the text column's rectangle
+ * regardless of its own size or offset, the same geometric guarantee
+ * e2e/front-page.spec.ts's "no hero visual tile intersects hero text or
+ * CTA" check still asserts, now against this component's own markup.
+ *
+ * `data-home-hero-decoration` IS GONE (K1's own "no element with
+ * data-home-hero-decoration remains") — `data-home-hero-visual` below is a
+ * new, differently-named marker, so a stale selector targeting the old
+ * attribute fails loudly (matches nothing) rather than silently matching
+ * whatever this element happens to be now.
+ */
+function HeroVisual({ pieces }: { pieces: GalleryItem[] }) {
+  const shown = pieces.slice(0, 3);
+  const fallbackCount = 3 - shown.length;
+
   return (
     <div
-      aria-hidden="true"
-      data-home-hero-decoration
+      data-home-hero-visual
       className="relative h-28 w-28 shrink-0 self-center overflow-hidden sm:h-40 sm:w-40"
     >
-      <span
-        className={`${HERO_DECORATIVE_SHAPE_CLASS} -top-4 -right-4 h-20 w-20 bg-petrol-400`}
-      />
-      <span
-        className={`${HERO_DECORATIVE_SHAPE_CLASS} bottom-0 left-0 h-16 w-16 bg-petrol-300 motion-safe:[animation-delay:150ms]`}
-      />
-      <span
-        className={`${HERO_DECORATIVE_SHAPE_CLASS} top-10 left-10 h-8 w-8 bg-petrol-100 motion-safe:[animation-delay:300ms]`}
-      />
+      {shown.map((piece, index) => (
+        // Same reasoning as src/components/portfolio/portfolio-tile.tsx: the
+        // preview is served by GET /api/media/preview/[previewId], which
+        // next/image's optimizer cannot reach through (it proxies bytes
+        // from object storage, not a static asset).
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          key={piece.id}
+          src={piece.previewSrc}
+          alt={galleryItemAlt(piece, index)}
+          width={HERO_VISUAL_TILE_INTRINSIC_PX}
+          height={HERO_VISUAL_TILE_INTRINSIC_PX}
+          loading="eager"
+          decoding="async"
+          draggable={false}
+          className={cn(
+            HERO_VISUAL_TILE_SIZE_CLASS,
+            HERO_VISUAL_TILE_POSITION_CLASS[index],
+            GALLERY_RADIUS_CLASS,
+            "object-cover",
+            HERO_VISUAL_TILE_MOTION_CLASS,
+          )}
+        />
+      ))}
+      {Array.from({ length: fallbackCount }, (_, fallbackIndex) => {
+        const position = shown.length + fallbackIndex;
+        return (
+          <div
+            key={`fallback-${position}`}
+            aria-hidden="true"
+            data-home-hero-visual-fallback
+            className={cn(
+              HERO_VISUAL_TILE_SIZE_CLASS,
+              HERO_VISUAL_TILE_POSITION_CLASS[position],
+              GALLERY_RADIUS_CLASS,
+              HERO_VISUAL_FALLBACK_CLASS,
+              HERO_VISUAL_TILE_MOTION_CLASS,
+            )}
+          />
+        );
+      })}
     </div>
   );
 }
 
 /**
- * The front page's hero (ugcportal-6dvg): a title, a lead paragraph on what
- * this site is, and one primary call to action — K1's "signed out leads to
- * sign-in; signed in, to upload."
+ * The front page's hero (ugcportal-6dvg, copy and CTA revised by
+ * ugcportal-qqnt.4): a title, a lead paragraph on what this site is, and one
+ * primary call to action — signed out, "See the portfolio" (PORTFOLIO_PATH);
+ * signed in, "Upload" (UPLOAD_PATH). The sign-in control itself lives in the
+ * header only (ugcportal-qqnt.3) — a signed-out visitor is never offered a
+ * second, duplicate sign-in affordance from this hero.
  *
  * Rendered by src/app/page.tsx ABOVE whichever of <Gallery>, the new
  * EmptyState or <GalleryUnavailable> applies (K2) — never conditionally
@@ -119,32 +219,37 @@ function HeroDecoration() {
  * src/lib/design/contrast.ts's `ink-on-hero-petrol` /
  * `surface-0-on-petrol-100` entries for the measured contrast this relies on.
  *
- * NO IMAGE (K4): the surface below is `.home-hero-surface`
+ * NO STOCK PHOTOGRAPH, NO THIRD-PARTY ASSET (K4, unchanged by
+ * ugcportal-qqnt.4's own K1): the well itself is still `.home-hero-surface`
  * (src/app/globals.css), a `linear-gradient()` between two existing petrol
- * tokens — never a stock photograph or any third-party asset. `HeroDecoration`
- * above is the only other visual element, and carries no information.
+ * tokens. `HeroVisual` below DOES now render real `<img>`s — K4 was always
+ * "no stock photo", never "no photo" — but every one is a genuine, already-
+ * published portfolio piece's own preview, served from this app's own
+ * origin (`GalleryItem.previewSrc`, the SAME `/api/media/preview/...` path
+ * /portfolio itself uses), never an external URL.
  */
-export function Hero({ signedIn }: HeroProps) {
+export function Hero({ signedIn, portfolioPieces }: HeroProps) {
+  /*
+   * ugcportal-qqnt.4 K2: a visitor's only hero action is "See the
+   * portfolio" (PORTFOLIO_PATH) — never a sign-in prompt, which now lives in
+   * the header only (ugcportal-qqnt.3) and would otherwise duplicate it, as
+   * the bead's own premise notes found happening here before. A signed-in
+   * user keeps the pre-existing "Upload" CTA straight to UPLOAD_PATH.
+   */
   const cta = signedIn
     ? { href: UPLOAD_PATH, label: "Upload" }
-    : { href: signInPath(UPLOAD_PATH), label: "Sign in to upload" };
-
-  /*
-   * Session-aware (round-3 review, low finding): an earlier, static version
-   * of this sentence always said "...or sign in to add your own" — true
-   * beside the signed-out CTA above, but a visitor who is ALREADY signed in
-   * (CTA: "Upload") was being told to sign in a second time, right next to
-   * a button that does not ask them to. The rest of the lead paragraph is
-   * identical either way; only this closing clause names the action that
-   * matches the CTA actually on screen.
-   */
-  const closingSentence = signedIn
-    ? "Browse what is already up, or add your own."
-    : "Browse what is already up, or sign in to add your own.";
+    : { href: PORTFOLIO_PATH, label: "See the portfolio" };
 
   return (
     <section data-home-hero className="home-hero-surface relative isolate overflow-hidden">
-      <div className="relative mx-auto flex w-full max-w-6xl flex-col gap-8 px-4 py-16 sm:flex-row sm:items-center sm:px-6 sm:py-20">
+      {/*
+        ugcportal-qqnt.4's own in-scope item 4: vertical padding reduced
+        from py-16/sm:py-20 to py-10/sm:py-16, so the section below starts
+        inside a 900px-tall viewport (K3's "hero plus header stay at or
+        under 620px at 1440x900" — e2e/front-page.spec.ts measures this for
+        real rather than trusting the arithmetic alone).
+      */}
+      <div className="relative mx-auto flex w-full max-w-6xl flex-col gap-8 px-4 py-10 sm:flex-row sm:items-center sm:px-6 sm:py-16">
         <div className="flex min-w-0 flex-1 flex-col gap-4">
           {/*
             The page's one real <h1> (ugcportal-qqnt.1). Earlier, this was
@@ -172,13 +277,17 @@ export function Hero({ signedIn }: HeroProps) {
             L 0.185-0.345), which this gradient's lighter stop (petrol-700,
             L ~0.42) is not. The title and lead read at the same weight of
             emphasis here rather than the usual primary/secondary split.
+
+            ugcportal-qqnt.4 K2: at most 25 words, no em-dash, one sentence
+            naming what is photographed and by whom — this is 20 words. The
+            longer, two-em-dash version this replaces (hero.tsx's own git
+            history; also the bead's own premise notes) also tried to narrate
+            the "browse, or sign in" choice inline; that is gone now that the
+            hero offers exactly one action (see `cta` above), not two.
           */}
           <p className="max-w-prose text-sm text-ink sm:text-base">
-            This is a small, growing gallery of food, books, home technology
-            and wine accessories — think glasses, coolers and the apps that
-            go with them — photographed by real people, not studios. Every
-            picture here was taken by someone who actually owns the thing in
-            frame. {closingSentence}
+            A small, growing gallery of food, books, home technology and wine
+            accessories, photographed by the people who actually own them.
           </p>
           {/*
             buttonVariants, not a hand-rolled className (ugcportal-qqnt.2):
@@ -215,7 +324,7 @@ export function Hero({ signedIn }: HeroProps) {
             </Link>
           </div>
         </div>
-        <HeroDecoration />
+        <HeroVisual pieces={portfolioPieces} />
       </div>
     </section>
   );

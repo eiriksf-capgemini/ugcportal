@@ -22,19 +22,32 @@ const REPO_ROOT = path.resolve(__dirname, "..", "..");
  * ignores `**!/production/**`.
  *
  * `fullyParallel: false`, unlike the root config: every spec in this directory
- * reads the one public gallery that the one `beforeAll` seeded, and two
- * workers interleaving their seeds and cleanups over a single SQLite file is
- * not a race worth having for four assertions.
+ * reads the one public gallery that the one `beforeAll` (per FILE) seeded,
+ * and two workers interleaving their seeds and cleanups over a single SQLite
+ * file is not a race worth having for a handful of assertions.
+ *
+ * `workers: 1` (ugcportal-qqnt.4): `fullyParallel: false` alone only
+ * serialises the tests WITHIN one spec file — Playwright still schedules
+ * separate FILES onto separate workers by default, and this directory now
+ * holds two (alcohol-commerce.spec.ts, front-page-hero-portfolio.spec.ts),
+ * each with its own `beforeAll`/`afterAll` writing to the identical SQLite
+ * file this one dev server reads. Two files' seed/cleanup hooks racing each
+ * other over that one file is exactly the `SQLITE_BUSY` shape
+ * review-standards names as a real, reproduced failure elsewhere in this
+ * repo's e2e suites (ugcportal-2yj's own citation, PR #101 round 1) — not a
+ * hypothetical worth risking for the sake of a little parallelism.
  *
  * ITS OWN PORT (3200), so this can run while a `npm run dev` is already
- * serving the root suite on 3000 — but NOT its own database: the spec writes
+ * serving the root suite on 3000 — but NOT its own database: a spec writes
  * through Prisma to whatever DATABASE_URL resolves to, which is the same file
  * this server reads. That sharing is the point (it is how the seeded rows
  * reach the page) and also the caveat: this suite adds rows to a developer's
  * working database and removes them again in `afterAll`, including an
- * up-front cleanup so a crashed run does not poison the next one. It does not
- * touch any row it did not create — every id it writes is prefixed
- * `e2e-qnq9-3-`.
+ * up-front cleanup so a crashed run does not poison the next one. Each spec
+ * file here does not touch any row it did not create — every id a given file
+ * writes carries that file's own prefix (`e2e-qnq9-3-` for
+ * alcohol-commerce.spec.ts, `e2e-qqnt4-` for
+ * front-page-hero-portfolio.spec.ts).
  *
  * `npm run dev` rather than a production build, unlike e2e/production: nothing
  * here depends on NODE_ENV, and `next dev` keeps the run to seconds. It also
@@ -45,6 +58,7 @@ const REPO_ROOT = path.resolve(__dirname, "..", "..");
 export default defineConfig({
   testDir: ".",
   fullyParallel: false,
+  workers: 1,
   retries: 0,
   reporter: [["list"]],
   timeout: 60_000,

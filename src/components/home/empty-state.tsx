@@ -61,8 +61,9 @@ const MAX_EMPTY_STATE_PORTFOLIO_TILES = 6;
  * and front-page-strings.test.tsx's) renders it synchronously. Keeping
  * `EmptyState` a plain, synchronous function — not an `async` Server
  * Component of its own — is what keeps that possible, and is also why the
- * query for `pieces` is NOT made here: Home() only pays for it on the one
- * branch that can use it.
+ * query for `pieces` is NOT made here: Home() runs `listPortfolioPieces()`
+ * once per render (the hero needs the same pieces on every branch,
+ * ugcportal-qqnt.4) and hands this component the already-resolved array.
  *
  * THE SAME COMPONENT, not a new one (ugcportal-qqnt.5's own instruction):
  * every tile is a `<PortfolioTile>` (src/components/portfolio/

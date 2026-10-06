@@ -86,7 +86,7 @@ describe("K1/K3 — exactly one display title and one section title per branch",
   }
 
   it("the hero carries exactly one display title and no section title", () => {
-    const markup = renderToStaticMarkup(<Hero signedIn={false} />);
+    const markup = renderToStaticMarkup(<Hero signedIn={false} portfolioPieces={[]} />);
     expect(occurrences(markup, DISPLAY_MARKER), markup).toBe(1);
     expect(occurrences(markup, SECTION_MARKER), markup).toBe(0);
   });
@@ -99,7 +99,7 @@ describe("K1/K3 — exactly one display title and one section title per branch",
   for (const [label, renderBranch] of Object.entries(branches)) {
     it(`hero + ${label}: exactly one display title on the whole page`, () => {
       const markup =
-        renderToStaticMarkup(<Hero signedIn={false} />) + renderBranch();
+        renderToStaticMarkup(<Hero signedIn={false} portfolioPieces={[]} />) + renderBranch();
       expect(occurrences(markup, DISPLAY_MARKER), markup).toBe(1);
     });
   }
