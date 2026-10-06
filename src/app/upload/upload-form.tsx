@@ -734,31 +734,49 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
         <label
           htmlFor={inputId}
           /*
-            bg-petrol-400/text-petrol-900, not bg-primary/text-primary-
+            bg-petrol-400/text-surface-0, not bg-primary/text-primary-
             foreground (ugcportal-rw9j review round 5, code-review): this
             label sits inside the dropzone panel above (bg-surface-1
             resting, bg-surface-2 dragging), the untouched near-black
             surface scale - --primary measured 2.03:1 / 1.81:1 there in
-            light mode. --color-petrol-400/--petrol-900 was the same
-            old-surface-safe fill/label pair button.tsx's default-neutral
-            variant used at the time (6.02:1); this is a plain label, not a
-            Button, so the tokens are applied directly rather than
-            importing the component for one call site.
+            light mode. --color-petrol-400 is the same old-surface-safe fill
+            button.tsx's default-neutral variant uses; this is a plain
+            label, not a Button, and does not carry buttonVariants'
+            `default-neutral` class list wholesale (ugcportal-z1nh) - this
+            label's box model (`rounded-lg px-3 py-2 text-sm font-medium`)
+            does not match any of button.tsx's `size` keys (all fixed-height,
+            `px-2.5`/`px-2`, no `py-*`), so adopting buttonVariants here would
+            silently change this control's padding/height, not only its
+            colour - a second, unrelated visual change this bead does not
+            make. The real focus target is the visually-hidden
+            `<input type="file">` above, not this label (labels are not
+            focusable), and the dropzone div's own
+            `has-[:focus-visible]:border-ring` already paints the focus
+            indicator when that input is focused - so buttonVariants' own
+            `focus-visible:*`/forced-colors base classes (ugcportal-oavb)
+            would be inert here regardless, not a capability this label is
+            missing.
 
-            KNOWN GAP, NOT FIXED HERE (ugcportal-ei5c): `--color-petrol-900`
-            is declared outside `@theme` on purpose (see globals.css's
-            "stopping Tailwind emitting bg-petrol-900 and friends" comment),
-            so `text-petrol-900` compiles to no Tailwind rule at all - this
-            label renders in whatever colour it happens to inherit, not
-            petrol-900, and the 6.02:1 above was never actually painted.
-            ugcportal-ei5c fixed the identical bug in button.tsx's
-            default-neutral variant (now `text-surface-0`, a token that
-            compiles) but did not touch this hand-styled label, which is not
-            a call site of that variant and was out of that bead's stated
-            scope - see src/lib/design/contrast.test.ts's disclosure test
-            for this exact gap.
+            FIXED (ugcportal-z1nh, closing the gap ugcportal-ei5c disclosed
+            but left out of scope): this used to read `text-petrol-900`,
+            which compiles to no Tailwind rule at all -
+            `--color-petrol-900` is declared outside `@theme` on purpose
+            (see globals.css's "stopping Tailwind emitting bg-petrol-900 and
+            friends" comment), so the label rendered in whatever colour it
+            happened to inherit, not petrol-900 - the exact bug ugcportal-
+            ei5c fixed on button.tsx's default-neutral variant (now
+            `text-surface-0`), confirmed empirically there by rendering both
+            colour schemes. `text-surface-0` is the same fix here: a real,
+            compiling utility, and contrast.ts's `surface-0-on-petrol-400`
+            pairing (7.75:1 in both colour schemes) already measures this
+            exact fill/label pair - the same pairing default-neutral's label
+            uses, so no new PAIRINGS entry is needed, only its `usage` note
+            naming this as a second real caller. button.test.ts's hand-
+            pasted-pair guard (ugcportal-z1nh) now scans this file (and any
+            other) for the same `bg-petrol-N`/bare-candidate shape and fails
+            if a future edit reintroduces a non-compiling one.
           */
-          className="cursor-pointer rounded-lg bg-petrol-400 px-3 py-2 text-sm font-medium text-petrol-900 transition-colors hover:brightness-95"
+          className="cursor-pointer rounded-lg bg-petrol-400 px-3 py-2 text-sm font-medium text-surface-0 transition-colors hover:brightness-95"
         >
           Choose files
         </label>

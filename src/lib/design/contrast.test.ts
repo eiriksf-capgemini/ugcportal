@@ -789,57 +789,72 @@ describe("the gate cannot be routed around", () => {
 
     /**
      * The remaining half of the original gap this describe block's header
-     * names: text-petrol-900 as a foreground on the fill, at body's 4.5:1.
+     * names: text-petrol-900 as a foreground on the fill, at body's 4.5:1 -
+     * NOW FIXED (ugcportal-z1nh). This used to be a synthetic usage, because
      * `--color-petrol-900` is declared outside `@theme`, so `text-petrol-900`
-     * compiles to no Tailwind utility at all and findBareColorUtilities
-     * correctly never reports it as a shipped usage (see that function's own
+     * compiled to no Tailwind utility at all and findBareColorUtilities
+     * correctly never reported it as a shipped usage (see that function's own
      * doc comment on why a non-compiling bare candidate is excluded, not
-     * flagged) - a synthetic usage stands in for the one Tailwind itself
-     * refuses to generate.
+     * flagged) - Tailwind itself refused to generate the one thing a
+     * synthetic usage had to stand in for.
      *
      * ugcportal-ei5c closed this gap for button.tsx's default-neutral
      * variant - its one real caller (the upload queue's "Sign in" link,
-     * shown on a failed upload that needs re-authentication) now renders
-     * `text-surface-0`, a label `surface-0-on-petrol-400` above
-     * actually measures - but NOT for src/app/upload/upload-form.tsx's
-     * "Choose files" label, which pastes `bg-petrol-400 text-petrol-900`
-     * directly rather than going through the Button component and is out of
-     * that bead's stated scope. So unlike the PAIRINGS id this describe
-     * block used to filter out here (gone now - the id itself was renamed,
-     * not merely deleted, so there is nothing left to subtract), this
-     * synthetic usage is checked directly against the real, current
-     * PAIRINGS: the gate still reports this key as "covered", but only by
-     * accident, via an unrelated reference that happens to resolve to the
-     * same literal - not via any entry that actually measures
-     * text-petrol-900 on bg-petrol-400 the way surface-0-on-petrol-400 once
-     * did. Disclosed, not fixed: light mode via foreground-on-background
-     * (`--foreground: var(--petrol-900)` only in light; `var(--paper)` in
-     * dark) and selection-text-on-selection; dark mode via
-     * primary-label-on-primary/-hover
-     * (`--primary-foreground: var(--petrol-900)` only in dark; `#fff` in
-     * light) and selection-text-on-selection, which is mode-invariant.
+     * shown on a failed upload that needs re-authentication) renders
+     * `text-surface-0`, a label `surface-0-on-petrol-400` above actually
+     * measures - but left src/app/upload/upload-form.tsx's "Choose files"
+     * label out of scope, still pasting `bg-petrol-400 text-petrol-900`
+     * directly rather than going through the Button component. ugcportal-
+     * z1nh fixed that label onto the identical `text-surface-0` token
+     * (staying a hand-styled label rather than adopting buttonVariants
+     * wholesale - see that file's own comment on why), so this is no longer
+     * a synthetic stand-in: `text-surface-0` really is shipped there today,
+     * and findBareColorUtilities' real, repo-wide scan picks it up like any
+     * other usage.
+     *
+     * Two things this asserts, not one: that the real scan actually finds
+     * this usage (a 0-results scan here would mean the fix regressed, or the
+     * label's class string moved/changed shape, silently), and that it is
+     * verified GENUINELY by surface-0-on-petrol-400 - not merely via some
+     * unrelated reference that happens to resolve to the same literal, the
+     * exact "only accidentally covered" shape this test used to document for
+     * the pre-fix bug. Filtering PAIRINGS down to ONLY that one entry and
+     * confirming it alone still reaches body's threshold is what tells the
+     * two apart: an accidental shadow could not survive that filter, because
+     * the unrelated reference supplying it would be gone.
      */
     it.each(THEME_MODES)(
-      "text-petrol-900 (upload-form.tsx's \"Choose files\" label) still compiles to no utility, and is only accidentally 'covered', per mode (%s)",
+      "text-surface-0 (upload-form.tsx's \"Choose files\" label, after ugcportal-z1nh) is a real, shipped usage, genuinely verified by surface-0-on-petrol-400, per mode (%s)",
       (mode) => {
         const modeTokens = tokensByMode[mode];
-        const syntheticLabelUsage: AlphaUtilityUsage = {
-          file: "synthetic - src/app/upload/upload-form.tsx's \"Choose files\" label: text-petrol-900 compiles to no Tailwind utility",
-          utility: "text-petrol-900",
-          property: "--petrol-900",
-          alphaPercent: 100,
-          role: "foreground",
-          prefix: "text",
-        };
-        const usageKey = `${resolveToken(syntheticLabelUsage.property, modeTokens)}@${syntheticLabelUsage.alphaPercent}`;
+        const labelUsage = usedBareUtilities.find(
+          (usage) =>
+            usage.file.includes("upload-form.tsx") && usage.utility === "text-surface-0",
+        );
+        expect(
+          labelUsage,
+          "expected a real text-surface-0 usage from upload-form.tsx's \"Choose files\" label - " +
+            "if this is undefined, either the fix regressed back to text-petrol-900/something else, " +
+            "or the label's class string changed shape and this scan needs updating, not relaxing",
+        ).toBeDefined();
 
-        const shadowedBy =
-          mode === "light"
-            ? "foreground-on-background / selection-text-on-selection"
-            : "primary-label-on-primary / primary-label-on-primary-hover / selection-text-on-selection";
+        const usageKey = `${resolveToken(labelUsage!.property, modeTokens)}@${labelUsage!.alphaPercent}`;
+
         expect(
           buildForegroundVerifiedThreshold(PAIRINGS, modeTokens).get(usageKey),
-          `[${mode}] reads as body-verified only via ${shadowedBy} - a known, disclosed shadow on this axis, not a real measurement of this usage, and not fixed by ugcportal-ei5c`,
+          `[${mode}] real PAIRINGS`,
+        ).toBe(THRESHOLDS.body);
+
+        // Not an accidental shadow: surface-0-on-petrol-400 ALONE already
+        // reaches body's threshold for this key, with every other PAIRINGS
+        // entry removed.
+        const onlyThisPairing = PAIRINGS.filter((p) => p.id === "surface-0-on-petrol-400");
+        expect(onlyThisPairing.length, "surface-0-on-petrol-400 present").toBe(1);
+        expect(
+          buildForegroundVerifiedThreshold(onlyThisPairing, modeTokens).get(usageKey),
+          `[${mode}] surface-0-on-petrol-400 alone - a weaker result here would mean this key only ` +
+            "reads as covered via some OTHER, unrelated reference, the same accidental-shadow shape " +
+            "this test used to document for the pre-fix bug",
         ).toBe(THRESHOLDS.body);
       },
     );

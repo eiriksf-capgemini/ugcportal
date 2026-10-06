@@ -263,19 +263,26 @@ export const PAIRINGS: Pairing[] = [
    * - unlike `--petrol-900` - actually declared in `@theme`, so
    * `text-surface-0` is a real, compiling utility that paints the same
    * colour in both schemes, not an inherited one that happens to match in
-   * one and not the other. The upload dropzone's "Choose files" label
-   * (src/app/upload/upload-form.tsx) is NOT a caller of this variant - it
-   * pastes `bg-petrol-400 text-petrol-900` directly - so it still has the
-   * original, never-fixed bug this pairing used to (wrongly) claim
-   * covered it; see that file's own comment. Out of this bead's scope: it
-   * is not button.tsx's default-neutral variant.
+   * one and not the other.
+   *
+   * UPDATE (ugcportal-z1nh): the upload dropzone's "Choose files" label
+   * (src/app/upload/upload-form.tsx) was NOT a caller of this variant - it
+   * pasted `bg-petrol-400 text-petrol-900` directly, the identical
+   * never-compiles bug, disclosed but left out of ugcportal-ei5c's stated
+   * scope. Fixed now, onto this same `text-surface-0`/`--color-petrol-400`
+   * pair rather than through buttonVariants (see that file's own comment on
+   * why it stays a hand-styled label) - so this entry's `usage` below now
+   * names both real callers, and button.test.ts's hand-pasted-pair guard
+   * (ugcportal-z1nh) scans upload-form.tsx (and the rest of src/, button.tsx
+   * and src/lib/design/ excepted) for a future reintroduction of the same
+   * non-compiling candidate.
    */
   {
     id: "surface-0-on-petrol-400",
     foreground: "--color-surface-0",
     background: ["--color-petrol-400"],
     requirement: "body",
-    usage: "Label on default-neutral's fill (button.tsx), e.g. the upload queue's \"Sign in\" link shown on a failed upload that needs re-authentication.",
+    usage: "Label on default-neutral's fill (button.tsx) - the upload queue's \"Sign in\" link shown on a failed upload that needs re-authentication - and, directly (not through buttonVariants), the upload dropzone's \"Choose files\" label (src/app/upload/upload-form.tsx).",
   },
   ...onEverySurface(
     "divider",

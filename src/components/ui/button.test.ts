@@ -1,8 +1,48 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { describe, expect, it } from "vitest";
 
 import { designSystem } from "@/lib/design/usage";
+import { isTestFile, stripComments, walkSourceFiles } from "@/lib/design/scan-source";
 
 import { buttonVariants } from "./button";
+
+/**
+ * `token` is one whitespace-separated class from a compiled class string,
+ * possibly with a chain of leading `variant:` prefixes (`hover:bg-primary-
+ * hover`, `aria-expanded:bg-accent`) - Tailwind compiles the base utility
+ * identically regardless of which variant triggers it, the same
+ * simplification findBareColorUtilities's own BOUNDARY regex relies on.
+ * Returns the bare `bg-`/`text-`/`border-` candidate at the end of that
+ * chain, with NO alpha modifier (a trailing `/NN` breaks the match, same as
+ * findBareColorUtilities's own bare-vs-alpha split), or null if `token`
+ * names neither of the three bare colour namespaces this bug shape can
+ * occur in.
+ *
+ * Hoisted out of the `buttonVariants K1/K3` describe block below (it used
+ * to live only there) so the hand-pasted-pair guard further down (ugcportal-
+ * z1nh) can reuse the exact same extraction rather than a second, possibly
+ * drifting copy.
+ */
+function bareColorCandidate(token: string): string | null {
+  const match = /(?:^|:)((?:bg|text|border)-(?:\[[^\]]+\]|\([^)]+\)|[a-zA-Z][\w-]*))$/.exec(
+    token,
+  );
+  return match ? match[1] : null;
+}
+
+/**
+ * scripts/tree-walk-timeout-guard.test.mjs (ugcportal-9faa) requires every
+ * test file calling scan-source.ts's shared `walkSourceFiles` walker to
+ * either declare an explicit timeout or memoize the walk behind a module-
+ * level `cache*` binding - the same `cachedFiles ??= walkSourceFiles(...)`
+ * idiom dual-meaning-usage.test.ts and no-raw-hex.test.ts already use, so
+ * the (single, small) walk this file's own hand-pasted-pair guard runs
+ * (ugcportal-z1nh, below) is not repeated once per `it`.
+ */
+let cachedPetrolPairFiles: string[] | undefined;
 
 /**
  * ugcportal-rw9j round 5: e2e/petrol-theme.spec.ts's K1 test checks the
@@ -171,26 +211,9 @@ describe("buttonVariants K1/K3 (ugcportal-ei5c): every bare colour utility a var
     "link",
   ] as const;
 
-  /**
-   * `token` is one whitespace-separated class from a variant's compiled
-   * class string, possibly with a chain of leading `variant:` prefixes
-   * (`hover:bg-primary-hover`, `aria-expanded:bg-accent`) - Tailwind compiles
-   * the base utility identically regardless of which variant triggers it,
-   * the same simplification findBareColorUtilities's own BOUNDARY regex
-   * relies on. Returns the bare `bg-`/`text-`/`border-` candidate at the end
-   * of that chain, with NO alpha modifier (a trailing `/NN` breaks the
-   * match, same as findBareColorUtilities's own bare-vs-alpha split - an
-   * alpha-modified utility like destructive's `border-destructive/75` is
-   * findAlphaColorUtilities's question, not this one), or null if `token`
-   * names neither of the three bare colour namespaces this bug shape can
-   * occur in.
-   */
-  function bareColorCandidate(token: string): string | null {
-    const match = /(?:^|:)((?:bg|text|border)-(?:\[[^\]]+\]|\([^)]+\)|[a-zA-Z][\w-]*))$/.exec(
-      token,
-    );
-    return match ? match[1] : null;
-  }
+  // `bareColorCandidate` is now hoisted to module scope, above - see its own
+  // doc comment for why, and ugcportal-z1nh's describe block below for its
+  // second caller.
 
   it.each(ALL_VARIANTS)(
     "%s variant: every bare bg-/text-/border- utility compiles to a real Tailwind rule",
@@ -242,5 +265,159 @@ describe("buttonVariants K1/K3 (ugcportal-ei5c): every bare colour utility a var
     expect(classes).toContain("text-surface-0");
     const [css] = designSystem.candidatesToCss(["text-surface-0"]);
     expect(css, "text-surface-0 must compile to a real rule").not.toBeNull();
+  });
+});
+
+/**
+ * ugcportal-z1nh: the K1/K3 describe block above only ever compiled
+ * `buttonVariants`' OWN generated class strings - it could not have caught
+ * src/app/upload/upload-form.tsx's "Choose files" label, which paints the
+ * identical `bg-petrol-400`/`text-petrol-900` pair by pasting the classes
+ * directly into a hand-written `className` string, never calling
+ * `buttonVariants` at all. That was ugcportal-ei5c's own stated scope
+ * boundary (see this file's and button.tsx's comments on the gap, and
+ * contrast.test.ts's dedicated disclosure case for it) - fixed here, along
+ * with the label itself.
+ *
+ * This describe block closes that gap in general, not just for this one
+ * call site: it scans real, shipped source (the same file-walk/comment-strip
+ * machinery no-raw-hex.test.ts and dual-meaning-usage.test.ts already share
+ * via scan-source.ts, not a third hand-rolled copy) for any string literal
+ * that bare-names a `bg-petrol-N` fill - the one family of token this repo
+ * keeps outside `@theme` on purpose (globals.css's "stopping Tailwind
+ * emitting bg-petrol-900 and friends" comment) - and, for every bare
+ * `bg-`/`text-`/`border-` candidate sharing that SAME string, compiles it
+ * against this repo's own Tailwind design system exactly the way the K1/K3
+ * block above does. A candidate that fails to compile at all is this bug
+ * shape, regardless of which file pasted it or whether it ever went near
+ * `buttonVariants`.
+ *
+ * Comments are stripped before scanning (`stripComments`): several design-
+ * system comments, including this file's and button.tsx's own history of
+ * this exact bug, discuss `bg-petrol-400`/`text-petrol-900` in backtick-
+ * quoted prose, which an unstripped scan would misread as a second string
+ * literal shipping the bug. `src/lib/design/**` is also excluded outright
+ * (the same exclusion findBareColorUtilities and no-raw-hex.test.ts already
+ * use, for the identical reason their own comments give: that code's job is
+ * to describe Tailwind classes as DATA, in prose, not to ship them), and so
+ * is button.tsx itself - its every variant is already exhaustively checked
+ * by the K1/K3 block above, so re-scanning its raw source here would be
+ * redundant rather than additionally protective.
+ */
+describe("hand-pasted bg-petrol-*/text- pairs outside buttonVariants: every candidate compiles (ugcportal-z1nh)", () => {
+  const SRC_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+  const BUTTON_TSX = path.join(SRC_ROOT, "components", "ui", "button.tsx");
+  const DESIGN_LIB_DIR = path.join(SRC_ROOT, "lib", "design") + path.sep;
+
+  function isExcluded(file: string): boolean {
+    if (file === BUTTON_TSX) return true;
+    if (file.startsWith(DESIGN_LIB_DIR)) return true;
+    if (isTestFile(file)) return true;
+    return false;
+  }
+
+  /**
+   * Matches one quoted or backtick-delimited string literal and captures its
+   * inner text, across all three JS/TSX string forms a `className` can use
+   * (`"..."`, `'...'`, `` `...` ``). A template literal's `${...}`
+   * interpolation is not given special handling - its raw characters are
+   * captured as ordinary text along with everything else between the
+   * backticks - but that is harmless here: an interpolated expression's own
+   * identifier text (e.g. `${HERO_DECORATIVE_SHAPE_CLASS}`) contains none of
+   * `bg-`/`text-`/`border-` followed by a bare token in this codebase, so it
+   * is never mistaken for a colour candidate (confirmed against every
+   * current template-literal `className` in src/, e.g.
+   * src/components/home/hero.tsx's decorative shapes).
+   */
+  const STRING_LITERAL = /"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|`((?:[^`\\]|\\.)*)`/g;
+
+  /** The one family of token this scan is watching for: `bg-petrol-N`, bare (no alpha modifier). */
+  const BARE_BG_PETROL = /\bbg-petrol-\d+\b/;
+
+  type Candidate = { file: string; token: string; candidate: string };
+
+  function findHandPastedPetrolCandidates(): Candidate[] {
+    const files = (cachedPetrolPairFiles ??= walkSourceFiles(SRC_ROOT, isExcluded));
+    const found: Candidate[] = [];
+    for (const file of files) {
+      const stripped = stripComments(readFileSync(file, "utf8"), file);
+      STRING_LITERAL.lastIndex = 0;
+      let match: RegExpExecArray | null;
+      while ((match = STRING_LITERAL.exec(stripped)) !== null) {
+        const literal = match[1] ?? match[2] ?? match[3] ?? "";
+        if (!BARE_BG_PETROL.test(literal)) continue;
+        for (const token of literal.split(/\s+/)) {
+          const candidate = bareColorCandidate(token);
+          if (candidate === null) continue;
+          found.push({ file: path.relative(SRC_ROOT, file), token, candidate });
+        }
+      }
+    }
+    return found;
+  }
+
+  it("the scan still finds at least one real bg-petrol-N string to check (a false 0 here would silently stop checking anything)", () => {
+    const candidates = findHandPastedPetrolCandidates();
+    expect(
+      candidates.length,
+      "expected at least one shipped bg-petrol-N string under src/ outside button.tsx/src/lib/design - " +
+        "if this is 0, the file-walk or string-literal extraction regressed, not that every hand-pasted " +
+        "pair disappeared",
+    ).toBeGreaterThan(0);
+  });
+
+  it("every bg-/text-/border- candidate sharing a string with a bare bg-petrol-N fill compiles to a real Tailwind rule", () => {
+    const candidates = findHandPastedPetrolCandidates();
+    for (const { file, token, candidate } of candidates) {
+      const [css] = designSystem.candidatesToCss([candidate]);
+      expect(
+        css,
+        `${file}: "${token}" names "${candidate}", which compiles to no Tailwind rule at all - ` +
+          `a hand-pasted bg-petrol-*/text-* pair outside buttonVariants shipping the exact ` +
+          `ugcportal-ei5c bug shape (a token declared outside @theme on purpose, e.g. ` +
+          `--color-petrol-900). A contrast.ts pairing for this colour would document a ratio for ` +
+          `a colour the browser never paints.`,
+      ).not.toBeNull();
+    }
+  });
+
+  /**
+   * Proves the guard above actually bites - the same "mutate and assert it
+   * fails" discipline K1 itself asks for - without mutating real source at
+   * test time (the K1/K3 block's own sibling test uses the identical
+   * discipline, a literal string rather than editing button.tsx): the
+   * upload-form.tsx label's literal PRE-fix class string, checked directly
+   * through the same extraction and compile step the test above runs.
+   *
+   * FIXTURE MUTATION CHECK (performed by hand, not left in the suite):
+   * temporarily restored this exact string as upload-form.tsx's real
+   * `className` (reverting the ugcportal-z1nh fix) and reran both tests in
+   * this describe block - the compile-guard test above failed, naming
+   * upload-form.tsx and "text-petrol-900" in its message exactly as
+   * designed; then reverted.
+   */
+  it("catches the exact pre-fix upload-form.tsx label string as shipping a non-compiling bare utility", () => {
+    const preFixLiteral =
+      "cursor-pointer rounded-lg bg-petrol-400 px-3 py-2 text-sm font-medium text-petrol-900 transition-colors hover:brightness-95";
+    expect(BARE_BG_PETROL.test(preFixLiteral)).toBe(true);
+
+    const candidates = preFixLiteral
+      .split(/\s+/)
+      .map(bareColorCandidate)
+      .filter((candidate): candidate is string => candidate !== null);
+    // Also carries "text-sm" (the label's own font-size utility) - a real,
+    // ordinary Tailwind utility that happens to share the "text-" namespace;
+    // it is expected to compile, and is not the bug.
+    expect(candidates).toEqual(["bg-petrol-400", "text-sm", "text-petrol-900"]);
+
+    const [fillCss] = designSystem.candidatesToCss([candidates[0]]);
+    const [sizeCss] = designSystem.candidatesToCss([candidates[1]]);
+    const [labelCss] = designSystem.candidatesToCss([candidates[2]]);
+    expect(fillCss, "bg-petrol-400 compiles - the fill was never the bug").not.toBeNull();
+    expect(sizeCss, "text-sm compiles - an ordinary non-colour utility sharing the namespace").not.toBeNull();
+    expect(
+      labelCss,
+      "text-petrol-900 must compile to NO rule - that is the exact bug this bead fixes",
+    ).toBeNull();
   });
 });
