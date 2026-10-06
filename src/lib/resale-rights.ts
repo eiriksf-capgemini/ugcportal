@@ -25,10 +25,11 @@ import {
  *      when the checklist version it was granted under is retired.
  *   2. PER UPLOAD — MediaListing's triage plus a MediaRightsClearance per
  *      rights layer that is actually present. "What is in this file?" An
- *      identifiable person, licensed music, an uncredited collaborator and
- *      undisclosed sponsorship are properties of the file, not of the
- *      uploader, so a cleared uploader does not get to sell whatever they
- *      upload next.
+ *      identifiable person, a depicted minor, licensed music, an
+ *      uncredited collaborator and undisclosed sponsorship are properties
+ *      of the file, not of the uploader, so a cleared uploader does not
+ *      get to sell whatever they upload next. The layers are not listed
+ *      twice: TRIAGE_FACTS below is the list, and the gate iterates it.
  *
  * WHERE THE REVIEW COMES FROM IS THE SECURITY PROPERTY. The gate starts at
  * a Media row and follows `media.user.resaleRightsReview`. Nobody assembling
@@ -180,7 +181,7 @@ export type GateListing = {
    */
   triagedByUserId: string | null;
   triagedBy: { role: Role } | null;
-  /** One justification per layer; see layerIsSettled. */
+  /** One justification per layer; see layerIsCleared and TRIAGE_FACTS. */
   layerClearances: GateLayerClearance[];
 };
 
@@ -235,8 +236,9 @@ export const MEDIA_GATE_SELECT = {
       // Prisma infers the row type from the literal — but it is not left to
       // memory either: GateListing requires every fact's column, so a
       // missing key here fails `tsc` at the call sites that pass this
-      // select's result to the gate, and a test asserts the two sets match
-      // exactly (ugcportal-qn3).
+      // select's result to the gate, and "routes the review through the
+      // uploader and nowhere else" (resale-rights.test.ts) asserts these
+      // keys are exactly TRIAGE_FACTS' fields plus the four below.
       depictsPeople: true,
       depictsMinors: true,
       modelReleaseKey: true,
@@ -332,10 +334,12 @@ function layerIsCleared(listing: GateListing, layer: RightsLayer): boolean {
  *      MediaRightsClearance for *that* layer, signed by someone who is an
  *      ADMIN at read time. No clearance covers two layers, so no single
  *      admin-written sentence settles two legal questions.
- *   3. ADDING A FACT CANNOT FAIL OPEN. The only way to add one is to add a
- *      RightsLayer and register it here; a layer with no entry fails the
- *      suite (see resale-rights.test.ts), and an entry with no column fails
- *      `tsc`. The failure mode this closes is the obvious one — a second
+ *   3. ADDING A FACT DOES NOT FAIL OPEN. The only way to add one is to add
+ *      a RightsLayer and register it here: a layer with no entry fails
+ *      "registers exactly one fact per RightsLayer, no more and no fewer"
+ *      in resale-rights.test.ts, and an entry naming a column GateListing
+ *      does not declare fails `tsc`, because TriageFactField is derived
+ *      from that type. The failure mode this closes is the obvious one — a second
  *      author copies `depictsPeople Boolean?` onto MediaListing, writes it
  *      from a form, and nothing ever reads it, so the "fact" is decorative
  *      and the upload sells regardless (K5).
@@ -360,8 +364,10 @@ export type TriageFact = {
   readonly layer: RightsLayer;
   /**
    * The yes/no question an admin answers, as the curation form will ask it
-   * (ugcportal-74w) and as the rights screen lists it today. Lives here so
-   * the wording and the enforcement cannot drift apart.
+   * (ugcportal-74w) and as the rights screen lists it today — the screen
+   * maps over this array, which is what keeps the wording and the
+   * enforcement from drifting apart ("asks a question for every rights
+   * layer the schema declares", src/app/admin/settings/rights/page.test.tsx).
    */
   readonly question: string;
   /** Returned when the answer is `true` and the layer is not cleared. */
@@ -376,9 +382,11 @@ export type TriageFact = {
 };
 
 /**
- * Every rights layer, in the order the gate asks about them. A test asserts
- * this covers `RightsLayer` exactly — every member once, nothing else — so
- * neither this list nor the test table can end up covering a subset.
+ * Every rights layer, in the order the gate asks about them.
+ * "registers exactly one fact per RightsLayer, no more and no fewer"
+ * (resale-rights.test.ts) asserts this covers `RightsLayer` exactly —
+ * every member once, nothing else — so neither this list nor the per-fact
+ * case table generated from it can end up covering a subset.
  */
 export const TRIAGE_FACTS: readonly TriageFact[] = [
   {
@@ -452,12 +460,19 @@ export function triageBlocker(listing: GateListing): SellabilityBlocker | null {
   }
 
   for (const fact of TRIAGE_FACTS) {
-    // `!== true` rather than `=== false`: every value is a real boolean by
-    // now (phase 1), so this is "the fact is not present" — and if phase 1
-    // were ever weakened, an unanswered fact would land on the blocked side
-    // of phase 3 too rather than being skipped as absent.
-    if (listing[fact.field] !== true) {
+    const answer = listing[fact.field];
+    // `=== false` rather than `!== true`, which is not a style choice.
+    // Phase 1 already guarantees a real boolean here, so the two read the
+    // same today — but `!== true` treats `null` as "skip", which is the
+    // fail-OPEN reading, so weakening or reordering phase 1 later would
+    // turn an unanswered fact into an absent one with nothing to notice.
+    // Written this way the skip needs an explicit `no`, and anything else
+    // falls through to the block below.
+    if (answer === false) {
       continue;
+    }
+    if (!isTriaged(answer)) {
+      return "triage_incomplete";
     }
     const missingEvidence = fact.alsoRequires?.(listing) ?? null;
     if (missingEvidence) {
@@ -583,8 +598,8 @@ export function evaluateSellability(
   // One call, over TRIAGE_FACTS — not a list of per-column checks here.
   // Pairing each triage column with its own RightsLayer in one registry is
   // what keeps a single justification from covering unrelated questions,
-  // and what makes a layer added later impossible to leave unenforced; see
-  // the mechanism comment above triageBlocker.
+  // and what makes a layer added later fail the suite rather than go
+  // unenforced; see the mechanism comment above triageBlocker.
   const triage = triageBlocker(listing);
   if (triage) {
     return { sellable: false, blocker: triage };

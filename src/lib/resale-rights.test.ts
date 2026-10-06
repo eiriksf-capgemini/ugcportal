@@ -423,7 +423,7 @@ describe("per-upload triage (checklist Part C)", () => {
   });
 
   /**
-   * People is the strictest of the four layers, not the loosest. An earlier
+   * People is the strictest of the layers, not the loosest. An earlier
    * revision settled it with a free-text key and a boolean — no author, no
    * role re-check — while the three commercial layers each required an
    * admin-signed clearance. That had it exactly backwards: this is the one

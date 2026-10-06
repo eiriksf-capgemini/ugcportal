@@ -91,17 +91,23 @@ function listedEmails(markup: string): string[] {
 }
 
 /**
- * React escapes text content when it renders, so a question containing an
- * apostrophe or an ampersand does not appear in the markup verbatim. Only
- * the three characters React escapes in a text child are handled; matching
- * on an unescaped string would fail for a reason that has nothing to do
- * with the assertion being made.
+ * The five characters `react-dom/server` escapes in a text child, so a
+ * question containing an apostrophe or an ampersand can still be matched
+ * against the rendered markup. Measured rather than assumed:
+ * `renderToStaticMarkup(<p>{`a&b<c>d"e'f`}</p>)` returns
+ * `<p>a&amp;b&lt;c&gt;d&quot;e&#x27;f</p>`, which the first case below
+ * pins so this helper cannot quietly stop matching what React emits.
+ *
+ * None of today's questions contains any of them; the helper exists so
+ * that one that does fails for a real reason rather than on escaping.
  */
 function escapeHtml(text: string): string {
   return text
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#x27;");
 }
 
 const TRUNCATION_NOTICE = `Showing the first ${MAX_UPLOADERS} uploaders`;
@@ -487,6 +493,16 @@ describe("authorization", () => {
 describe("the per-upload triage questions (ugcportal-qn3)", () => {
   beforeEach(() => {
     authMock.mockResolvedValue(ADMIN);
+  });
+
+  it("escapes a question the way React renders one", async () => {
+    // The helper below is only load-bearing if it agrees with
+    // react-dom/server. Asserted against a render rather than against a
+    // hand-written expectation of what React does.
+    const sample = `a&b<c>d"e'f`;
+    expect(renderToStaticMarkup(<p>{sample}</p>)).toBe(
+      `<p>${escapeHtml(sample)}</p>`,
+    );
   });
 
   it("asks a question for every rights layer the schema declares", async () => {

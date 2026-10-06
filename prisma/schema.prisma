@@ -560,9 +560,11 @@ enum ResaleRightsRoute {
 //
 // EVERY MEMBER OF THIS ENUM MUST HAVE A TriageFact REGISTERED AGAINST IT in
 // src/lib/resale-rights.ts. The gate iterates that registry rather than a
-// hand-written list, and a test fails the suite for a layer with no entry,
-// so adding a value here cannot leave the gate, the admin screen or the
-// test table silently covering a subset.
+// hand-written list, so adding a value here without an entry there leaves
+// the gate, the admin screen and the test table covering a subset - which
+// is why "registers exactly one fact per RightsLayer, no more and no
+// fewer" (src/lib/resale-rights.test.ts) fails the suite for a layer with
+// no entry.
 enum RightsLayer {
   PEOPLE
   MINORS
@@ -735,10 +737,10 @@ model MediaListing {
   //
   // Each of these columns is a TRIAGE FACT, and every one of them is paired
   // with a RightsLayer in TRIAGE_FACTS (src/lib/resale-rights.ts). That
-  // pairing is the mechanism, not a convention: the gate never reads a
-  // triage column by name, so a column added here without an entry there is
-  // read by nothing rather than quietly defaulting to "not blocking". Add
-  // the fact, not just the column (ugcportal-qn3 K5).
+  // pairing is the mechanism, not a convention: `triageBlocker` reads these
+  // columns only as `listing[fact.field]`, so a column added here with no
+  // entry there is read by nothing rather than quietly defaulting to "not
+  // blocking". Add the fact, not just the column (ugcportal-qn3 K5).
   depictsPeople     Boolean?
   // Is anyone shown under 18 (ugcportal-qn3,
   // docs/legal/manual-upload-rights-review.md § 3.5)? Nullable and
