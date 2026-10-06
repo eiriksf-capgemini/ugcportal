@@ -794,13 +794,15 @@ describe("the gate cannot be routed around", () => {
      *
      * Disclosed, not fixed, the same way as the previous test: deleting
      * petrol-900-on-petrol-400 leaves this key at exactly body's 4.5:1
-     * regardless, because `--foreground` (light mode: `var(--petrol-900)`)
-     * and `--selection-foreground` both resolve to the identical hex literal
-     * and are themselves checked at `body` via `foreground-on-background`/
-     * `selection-text-on-selection`.
+     * regardless, but not via the same entries in both modes - light via
+     * foreground-on-background (`--foreground: var(--petrol-900)` only in
+     * light; `var(--paper)` in dark) and selection-text-on-selection; dark via
+     * primary-label-on-primary/-hover (`--primary-foreground: var(--petrol-900)`
+     * only in dark; `#fff` in light) and selection-text-on-selection, which is
+     * mode-invariant.
      */
     it.each(THEME_MODES)(
-      "petrol-900-on-petrol-400 measures text-petrol-900 as a foreground on the fill, shadowed by --foreground/--selection-foreground on this axis (%s)",
+      "petrol-900-on-petrol-400 measures text-petrol-900 as a foreground on the fill, shadowed per mode on this axis (%s)",
       (mode) => {
         const modeTokens = tokensByMode[mode];
         const syntheticLabelUsage: AlphaUtilityUsage = {
@@ -820,9 +822,13 @@ describe("the gate cannot be routed around", () => {
           PAIRINGS.filter((pairing) => pairing.id !== "petrol-900-on-petrol-400"),
           modeTokens,
         );
+        const shadowedBy =
+          mode === "light"
+            ? "foreground-on-background / selection-text-on-selection"
+            : "primary-label-on-primary / primary-label-on-primary-hover / selection-text-on-selection";
         expect(
           withoutEntry.get(usageKey),
-          `[${mode}] still reads as body-verified via foreground-on-background / selection-text-on-selection - a known, disclosed shadow on this axis, not fixed by this PR`,
+          `[${mode}] still reads as body-verified via ${shadowedBy} - a known, disclosed shadow on this axis, not fixed by this PR`,
         ).toBe(THRESHOLDS.body);
       },
     );
