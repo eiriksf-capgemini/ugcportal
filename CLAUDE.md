@@ -208,25 +208,24 @@ Two more metadata fields track the cost of a bead, in tokens, alongside
 `cc_type`/`cc_scope`/`prs`:
 
 - `tokens_impl` — cost of building the feature (everything up to opening
-  the PR). There's no clean automatic measurement for this today, since it
-  happens inline in the main conversation rather than as a separately
-  measurable agent run. Set it as a best-effort estimate from the session's
-  own token accounting when closing the bead; note in the bead's notes if
-  the number is rough.
-- `tokens_qa` — cost of the post-implementation QA/review pass. Each
-  individual figure is exact: the `pr-review-merge` skill runs the
-  `code-review` skill as a forked subagent, and forked-agent completions
-  report an exact `subagent_tokens` figure, which `pr-review-merge` records
-  as `tokens_qa` on the bead parsed from the PR title automatically — you
-  don't need to set it by hand unless running review manually outside that
-  skill. If review runs more than once for the same bead (e.g. a fix-up
-  pass after findings), the figure accumulates rather than overwrites — but
-  the accumulation itself is a best-effort read-then-write (`bd` has no
-  compare-and-swap for metadata), so treat the running total as an
-  approximation, not a guaranteed-exact ledger, if reviews on the same bead
-  could ever overlap. `pr-review-merge` skips recording entirely (rather
-  than guessing) when there's no real subagent run to measure, e.g. its
-  manual-review fallback path.
+  the PR). This is the agent run total reported in the completion notification
+  when the implementation run finishes, accumulated across passes with a
+  count in `tokens_impl_passes` and a `tokens_impl_note` tracking revisions.
+  The accumulated total is a best-effort approximation: agent run totals are
+  reported figures from completion notifications, summed by hand.
+- `tokens_qa` — cost of the post-implementation QA/review pass. This is the
+  `pr-review-merge` reviewer agent's own token total from its completion
+  notification, recorded by the invoking orchestrator after review runs (see
+  `.claude/skills/pr-review-merge/SKILL.md` step 4a). Each review round
+  accumulates into the bead's `tokens_qa` metadata with per-round keys
+  (`tokens_qa_r1`, `tokens_qa_r2`, etc.) and a `tokens_qa_note` explaining
+  the accumulation. The reviewer run itself never calls `bd update --set-metadata
+  tokens_qa` — it cannot read its own final token total while executing, and
+  would have no completion notification to draw an exact figure from. The
+  accumulated total is a best-effort approximation, not a metered ledger, since
+  `bd` has no compare-and-swap for metadata fields; if multiple review passes
+  land their `tokens_qa` updates around the same time, re-read with `bd show`
+  immediately before writing.
 
 ```bash
 bd update <id> --set-metadata tokens_impl=42000 --set-metadata tokens_qa=107768
