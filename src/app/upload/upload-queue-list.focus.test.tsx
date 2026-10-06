@@ -201,9 +201,9 @@ async function waitUntil(
  * The retry control, distinguished from "Sign in", "Cancel", "Remove" and
  * "Clear" — all of which are also `<button>`/`<a>` elements somewhere in the
  * queue — by its exact accessible text. Deliberately exact, not
- * `.includes("Try again")`: a throttled row renders "Try again in 12s",
- * which this must NOT match, or a test could pass against a button that is
- * actually still held shut.
+ * `.includes("Try again")`: a throttled row renders "Try again in Ns" (see
+ * upload-flow.test.tsx's own throttle suite), which this must NOT match, or
+ * a test could pass against a button that is held shut rather than enabled.
  */
 function tryAgainButton(): HTMLButtonElement {
   const button = [...container.querySelectorAll("button")].find(
