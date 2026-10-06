@@ -105,32 +105,31 @@ async function createUploaderWithMedia(id: string, email: string) {
  * That stayed under vitest's default timeout on an unloaded machine but not
  * on a loaded CI runner, because each round trip's overhead — not the row
  * count — is what scales with runner contention (see the bead for the CI
- * run and timings that motivated this). `createMany` issues one statement
- * per table regardless of `count`, so the cost no longer scales with
- * contention the same way.
+ * run and timings that motivated this). `createMany` issues the seed in a
+ * handful of statements (Prisma chunks at SQLite's bind-variable limit), so
+ * the cost no longer scales with contention the same way.
  */
 async function createUploaders(count: number, prefix = "u") {
-  const ids = Array.from({ length: count }, (_, index) =>
-    `${prefix}-${String(index).padStart(4, "0")}`,
-  );
-  await prisma.user.createMany({
-    data: ids.map((id, index) => ({
-      id,
-      email: `${prefix}${String(index).padStart(4, "0")}@example.com`,
-      role: "USER" as const,
-    })),
+  const rows = Array.from({ length: count }, (_, index) => {
+    const padded = String(index).padStart(4, "0");
+    return { id: `${prefix}-${padded}`, email: `${prefix}${padded}@example.com` };
   });
-  await prisma.media.createMany({
-    data: ids.map((id) => ({
-      id: `media-${id}`,
-      userId: id,
-      kind: "IMAGE" as const,
-      key: `uploads/${id}/a.jpg`,
-      mimeType: "image/jpeg",
-      sizeBytes: 10,
-      originalName: "a.jpg",
-    })),
-  });
+  await prisma.$transaction([
+    prisma.user.createMany({
+      data: rows.map(({ id, email }) => ({ id, email, role: "USER" as const })),
+    }),
+    prisma.media.createMany({
+      data: rows.map(({ id }) => ({
+        id: `media-${id}`,
+        userId: id,
+        kind: "IMAGE" as const,
+        key: `uploads/${id}/a.jpg`,
+        mimeType: "image/jpeg",
+        sizeBytes: 10,
+        originalName: "a.jpg",
+      })),
+    }),
+  ]);
 }
 
 beforeAll(async () => {
