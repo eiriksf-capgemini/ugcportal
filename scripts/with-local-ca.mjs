@@ -31,10 +31,25 @@
  * `next` directly, or a future script that boots the server without going
  * through this wrapper all reproduce the original bug with no hint why --
  * there is no mechanism here that makes this apply repo-wide automatically.
+ * `npm run dev:inspect` is one of those: it reaches `next dev` without this
+ * wrapper, so behind the proxy its sign-in fails the way it did before this
+ * file existed. See `releaseInspectorToChild` below for why that script
+ * exists.
+ *
+ * DEBUGGING, AND WHAT THIS WRAPPER CANNOT DO ABOUT IT (ugcportal-ymp4): a
+ * NODE_OPTIONS inspector flag reaches every Node process in the chain, and
+ * the first one to start wins the port. `releaseInspectorToChild` below
+ * closes this process's inspector before spawning, so the child gets the
+ * port -- but when the chain starts with `npm`, npm's own CLI is already a
+ * Node process and takes the port before this file is even loaded. So
+ * `NODE_OPTIONS=--inspect npm run dev` cannot be made to work from here.
+ * `npm run dev:inspect` is the script that does work; it puts `--inspect`
+ * on the Next process itself.
  */
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import inspector from "node:inspector";
 import os from "node:os";
 import path from "node:path";
 
@@ -222,6 +237,79 @@ export function resolveLocalCa({ certsDir, env, cwd }) {
   };
 }
 
+/**
+ * One token of NODE_OPTIONS that makes Node open an inspector at startup.
+ *
+ * `--inspect-port` is deliberately absent: it sets the port a later
+ * `--inspect` would use and opens nothing on its own, so treating it as a
+ * debug request would make this wrapper close an inspector that the child
+ * is not going to reopen.
+ */
+const INSPECTOR_FLAG = /^--inspect(-brk|-wait)?(=.*)?$/;
+
+/**
+ * Whether NODE_OPTIONS asks for an inspector — i.e. whether the child this
+ * wrapper is about to spawn will try to open one, since it inherits the
+ * same variable.
+ *
+ * @param {string | undefined} nodeOptions
+ * @returns {boolean}
+ */
+export function nodeOptionsOpenInspector(nodeOptions) {
+  return String(nodeOptions ?? "")
+    .split(/\s+/)
+    .some((token) => INSPECTOR_FLAG.test(token));
+}
+
+/**
+ * Hand the inspector port to the child (ugcportal-ymp4).
+ *
+ * Node reads NODE_OPTIONS at process start, so a `NODE_OPTIONS=--inspect`
+ * aimed at `next dev` opens an inspector on THIS process first — before any
+ * line of this file runs — and the child then fails with "Starting inspector
+ * on 127.0.0.1:9229 failed: address already in use", leaving the process the
+ * developer actually wanted to debug unreachable. Closing it here frees the
+ * port in time for the child, which opens it from the same variable.
+ *
+ * Only when the request came from NODE_OPTIONS. `node --inspect
+ * scripts/with-local-ca.mjs ...` is a deliberate request to debug the
+ * WRAPPER, and a command-line flag is not inherited by the child, so closing
+ * it there would leave nobody with an inspector at all.
+ *
+ * Two things this does not fix, both of which `npm run dev:inspect` avoids
+ * by putting `--inspect` on the `next` process itself, so no npm and no
+ * wrapper is ever holding the port. (Next runs its dev server in a child of
+ * that process, on the next port up, and prints which as `- Debugger port:`
+ * — that is the one to attach to.) The two:
+ *
+ *   - `NODE_OPTIONS=--inspect npm run dev` — npm's own CLI is a Node process
+ *     and starts before this one, so npm takes the port and neither this
+ *     wrapper nor the child ever gets it. Nothing inside this repo can
+ *     change that.
+ *   - `--inspect-brk` halts this process at its first line, which is before
+ *     this function, so the wrapper has to be attached to and resumed before
+ *     the child starts (and then breaks again on its own).
+ *
+ * @param {string} command the child, for the log line only
+ * @returns {boolean} whether an inspector was closed
+ */
+function releaseInspectorToChild(command) {
+  if (!nodeOptionsOpenInspector(process.env.NODE_OPTIONS)) {
+    return false;
+  }
+  if (inspector.url() === undefined) {
+    return false;
+  }
+  // Documented to block until no debugger is connected -- see the
+  // `--inspect-brk` note above, which is the way to be connected here.
+  inspector.close();
+  console.log(
+    `[local-ca] released the inspector port from this wrapper so ${command} can open it ` +
+      "(NODE_OPTIONS asked for one, and this process gets it first).",
+  );
+  return true;
+}
+
 // Windows' child_process shell:true is documented by Node itself as unsafe
 // for an argument containing shell metacharacters, because cmd.exe's own
 // parsing can reinterpret them regardless of how spawn() quotes argv. This
@@ -299,6 +387,8 @@ function main() {
     childEnv = { ...process.env };
     delete childEnv.NODE_EXTRA_CA_CERTS;
   }
+
+  releaseInspectorToChild(command);
 
   const child = spawn(command, args, {
     stdio: "inherit",

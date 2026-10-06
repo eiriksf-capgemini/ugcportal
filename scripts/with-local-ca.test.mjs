@@ -7,15 +7,16 @@
  * a mock would let the resolver pass while the real thing failed.
  */
 import { createHash } from "node:crypto";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { resolveLocalCa } from "./with-local-ca.mjs";
+import { nodeOptionsOpenInspector, resolveLocalCa } from "./with-local-ca.mjs";
 
 const WRAPPER = fileURLToPath(new URL("./with-local-ca.mjs", import.meta.url));
 
@@ -330,5 +331,160 @@ describe("main() child process env (ugcportal-5g9t)", () => {
     // resolved through that symlink, which a plain string comparison against
     // `root` would then spuriously fail on.
     expect(fs.realpathSync(output.trim())).toBe(fs.realpathSync(chosen));
+  });
+});
+
+/**
+ * The debug-flag handoff (ugcportal-ymp4).
+ *
+ * These spawn the real wrapper around a real child, because what is under
+ * test is which OS process ends up holding the inspector port — a thing no
+ * unit test of a decision function can observe.
+ */
+const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
+
+/** A port nothing is listening on, taken by binding :0 and letting go. */
+function freePort() {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.on("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const { port } = server.address();
+      server.close(() => resolve(port));
+    });
+  });
+}
+
+/**
+ * A child that reports whether IT got an inspector, and whether anything is
+ * still answering on `port` (which, for a child with no inspector of its
+ * own, means the wrapper above it kept one).
+ */
+function writeProbe(port) {
+  return write(
+    "probe.mjs",
+    `import inspector from "node:inspector";
+let portAnswers = false;
+try {
+  const response = await fetch("http://127.0.0.1:${port}/json/version", {
+    signal: AbortSignal.timeout(3000),
+  });
+  portAnswers = response.ok;
+} catch {}
+process.stdout.write(JSON.stringify({ url: inspector.url() ?? null, portAnswers }));
+`,
+  );
+}
+
+/** @param {string[]} nodeArgs args for the OUTER node, before the wrapper */
+function runWrapper(probe, { nodeArgs = [], env = {} } = {}) {
+  const result = spawnSync(
+    process.execPath,
+    [...nodeArgs, WRAPPER, process.execPath, probe],
+    {
+      cwd: root,
+      // NODE_OPTIONS is deleted first so an ambient one on the machine
+      // running the suite cannot open an inspector these tests did not ask
+      // for and then be read as the behaviour under test.
+      env: { ...process.env, NODE_OPTIONS: undefined, ...env },
+      encoding: "utf8",
+    },
+  );
+  return {
+    ...result,
+    reported: JSON.parse(result.stdout.trim().split("\n").pop()),
+    debuggerLines: (result.stderr.match(/Debugger listening/g) ?? []).length,
+  };
+}
+
+describe("nodeOptionsOpenInspector", () => {
+  it("recognises every NODE_OPTIONS form that opens an inspector", () => {
+    for (const value of [
+      "--inspect",
+      "--inspect=9229",
+      "--inspect=0.0.0.0:9229",
+      "--inspect-brk",
+      "--inspect-brk=9229",
+      "--inspect-wait",
+      "--max-old-space-size=4096 --inspect",
+      "  --inspect   --enable-source-maps  ",
+    ]) {
+      expect(nodeOptionsOpenInspector(value), value).toBe(true);
+    }
+  });
+
+  it("leaves alone a NODE_OPTIONS that opens none", () => {
+    for (const value of [
+      undefined,
+      "",
+      "   ",
+      // Sets the port a later --inspect would use; opens nothing itself, so
+      // treating it as a debug request would close an inspector the child is
+      // not going to reopen.
+      "--inspect-port=9229",
+      "--enable-source-maps",
+      "--require ./inspect.js",
+      "--inspector-is-not-a-flag",
+    ]) {
+      expect(nodeOptionsOpenInspector(value), String(value)).toBe(false);
+    }
+  });
+});
+
+describe("main() inspector handoff (ugcportal-ymp4)", () => {
+  it("gives the port to the child when NODE_OPTIONS asks for an inspector", async () => {
+    const port = await freePort();
+    const run = runWrapper(writeProbe(port), {
+      env: { NODE_OPTIONS: `--inspect=${port}` },
+    });
+    // The child is the one listening: before this fix it reported null and
+    // the wrapper kept the port.
+    expect(run.reported.url).toMatch(new RegExp(`^ws://127\\.0\\.0\\.1:${port}/`));
+    expect(run.stderr).not.toContain("address already in use");
+    // One line for the wrapper's own inspector — Node prints it at startup,
+    // before any line of the wrapper runs, so it cannot be suppressed from
+    // inside the process — and one for the child's.
+    expect(run.debuggerLines).toBe(2);
+    expect(run.stdout).toContain("released the inspector port");
+  }, 60_000);
+
+  it("opens nothing, and says nothing, when NODE_OPTIONS asks for no inspector", async () => {
+    const port = await freePort();
+    const run = runWrapper(writeProbe(port));
+    expect(run.reported.url).toBeNull();
+    expect(run.reported.portAnswers).toBe(false);
+    expect(run.debuggerLines).toBe(0);
+    expect(run.stdout).not.toContain("released the inspector port");
+  }, 60_000);
+
+  it("keeps its own inspector when the flag is on its command line, not NODE_OPTIONS", async () => {
+    const port = await freePort();
+    // `node --inspect=<port> with-local-ca.mjs ...` is a request to debug
+    // the WRAPPER, and a command-line flag is not inherited by the child —
+    // so closing it here would leave nobody with an inspector at all.
+    const run = runWrapper(writeProbe(port), { nodeArgs: [`--inspect=${port}`] });
+    expect(run.reported.url).toBeNull();
+    expect(run.reported.portAnswers).toBe(true);
+    expect(run.stdout).not.toContain("released the inspector port");
+  }, 60_000);
+});
+
+describe("K2: a dev script that reaches Next without this wrapper", () => {
+  const scripts = JSON.parse(
+    fs.readFileSync(path.join(REPO_ROOT, "package.json"), "utf8"),
+  ).scripts;
+
+  it("exists, carries --inspect, and does not go through the wrapper", () => {
+    expect(scripts["dev:inspect"]).toBeDefined();
+    expect(scripts["dev:inspect"]).toContain("--inspect");
+    expect(scripts["dev:inspect"]).not.toContain("with-local-ca");
+  });
+
+  it("still runs the migration check, so it is not a way around ugcportal-w7wc", () => {
+    expect(scripts["dev:inspect"]).toContain("scripts/check-migrations.mjs");
+  });
+
+  it("leaves `dev` itself going through the wrapper", () => {
+    expect(scripts.dev).toContain("scripts/with-local-ca.mjs");
   });
 });
