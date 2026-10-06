@@ -143,10 +143,11 @@ function logFailedPublicListing(
  * failing feed as a malformed cursor, and it is the more serious of the two.
  * Rethrowing rather than swallowing is deliberate: this function reports what
  * happened, it does not decide how a caller recovers. `src/app/page.tsx`
- * catches it and renders `GalleryUnavailable`, the same as `ok: false`; the
- * route handler does not catch it, and Next's own route-handler error
- * handling still answers a 500 — unchanged from before this function logged
- * anything, except that now the attempt is on record.
+ * catches it and renders `GalleryUnavailable`, the same as `ok: false`;
+ * GET /api/public/media catches it too (ugcportal-c70s) and answers a 500
+ * with the same `cache-control: no-store` header every other path on that
+ * route sets, rather than letting Next's own route-handler error handling
+ * answer a generic 500 with none of this route's headers.
  */
 /**
  * Strips any curation-only tag (`stripCurationTags`,
