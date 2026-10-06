@@ -181,8 +181,13 @@ function suppressedNote(suppressed: Map<string, number>): string {
  * @auth/core/lib/actions/session.js, over @auth/prisma-adapter's
  * `getSessionAndUser`), but next-auth's `Session` type declares none of the
  * row's own columns.
+ *
+ * Exported for live-session.test.ts to assert the three fields directly:
+ * `id` survives verbatim while `email` is folded, which is the shape a
+ * sibling-field regression (review-standards family 4) could otherwise
+ * re-introduce unnoticed.
  */
-function recordedIdentity(session: Session): {
+export function recordedIdentity(session: Session): {
   id: string | null;
   provider: unknown;
   email: string | null;
@@ -192,10 +197,11 @@ function recordedIdentity(session: Session): {
     signInProvider?: unknown;
     signInEmail?: unknown;
   };
-  // NORMALISED HERE, ONCE (PR #91 review, round 4, finding 3), with the
-  // policy's own `normalizeString` rather than a local near-copy of it:
-  // absent, non-string and blank all become `null`, so every reader below
-  // has one thing to check instead of its own idea of "usable".
+  // ADDRESS AND PROVIDER ARE NORMALISED HERE, ONCE (PR #91 review, round 4,
+  // finding 3), with the policy's own `normalizeString` rather than a local
+  // near-copy of it: absent, non-string and blank all become `null`, so
+  // every reader below has one thing to check instead of its own idea of
+  // "usable".
   //
   // Blank mattering is not hypothetical bookkeeping. Nothing this app
   // writes can produce `""` — `authorisedEmail` collapses blanks to `null`
@@ -206,8 +212,19 @@ function recordedIdentity(session: Session): {
   // `provider` stays raw: `providerId` inside the policy is the one place
   // allowed to decide what a provider value means, and it normalises with
   // the same function on the way.
+  //
+  // `id` DOES NOT GO THROUGH `normalizeString` (post-cap low on PR #91,
+  // ugcportal-0p5s): it is the primary key `revokeSession` deletes by, not an
+  // identity being matched for permission, and `normalizeString` lowercases.
+  // Folding it would build a delete key that no longer matches the row's
+  // actual id on any case-sensitive comparison — harmless today only because
+  // Prisma's default `cuid()` ids happen to be lowercase already (see
+  // live-session.test.ts, "the recorded id is not case-folded before the
+  // delete", which seeds a mixed-case id and fails this exact way without
+  // the guard below). Absent or non-string still becomes `null`, which is
+  // what `revokeSession` already treats as "no usable id, delete nothing".
   return {
-    id: normalizeString(row.id),
+    id: typeof row.id === "string" && row.id.trim().length > 0 ? row.id : null,
     provider: row.signInProvider,
     email: normalizeString(row.signInEmail),
   };

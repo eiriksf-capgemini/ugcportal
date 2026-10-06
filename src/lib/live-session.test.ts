@@ -39,6 +39,7 @@ const database = createTemporaryDatabase();
 const { prisma } = await import("@/lib/prisma");
 const {
   enforceLiveSessionPolicy,
+  recordedIdentity,
   rememberSignInIdentity,
   settleRevocations,
   withSessionIdentity,
@@ -499,6 +500,70 @@ describe("a session row that cannot be identified is refused, not mass-deleted",
     expect(result.user).toBeUndefined();
     expect(await liveSessionIds()).toEqual(["session-1"]);
     expect(error).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Post-cap low on PR #91 (ugcportal-0p5s): `recordedIdentity` is the one
+ * place that reads a session row's own columns back out, and it ran every
+ * field through `normalizeString`, which lowercases. That is right for
+ * `email` (judged for permission, case-insensitively, against configured
+ * addresses) and wrong for `id` (the primary key `revokeSession` deletes
+ * by) — harmless only because Prisma's default `cuid()` ids happen to be
+ * lowercase already.
+ */
+describe("the recorded id is not case-folded before the delete (ugcportal-0p5s)", () => {
+  const MIXED_CASE_ID = "Session-MixedCASE";
+
+  it("recordedIdentity keeps a mixed-case id verbatim while still folding the address", () => {
+    const identity = recordedIdentity(
+      sessionFor({
+        id: MIXED_CASE_ID,
+        signInProvider: "google",
+        signInEmail: " Owner@Example.COM ",
+      }),
+    );
+
+    // The needle this test would miss if the fold were still applied to
+    // every field: toLowerCase() of MIXED_CASE_ID is a different string.
+    expect(MIXED_CASE_ID.toLowerCase()).not.toBe(MIXED_CASE_ID);
+    expect(identity.id).toBe(MIXED_CASE_ID);
+    expect(identity.email).toBe("owner@example.com");
+  });
+
+  it("enforceLiveSessionPolicy's revocation deletes the exact mixed-case row, not a lower-cased lookup", async () => {
+    // K3: demonstrated to fail against the pre-fix code, which folds `id`
+    // through `normalizeString` before handing it to `revokeSession` — a
+    // `deleteMany` keyed on the lower-cased string matches zero rows against
+    // this mixed-case id on SQLite's case-sensitive default TEXT comparison,
+    // so the row would survive and this assertion would see it.
+    process.env[PERMITTED_EMAILS_VAR] = "someone-else@example.com";
+    await prisma.user.create({ data: { id: USER_ID, email: LISTED } });
+    await prisma.session.create({
+      data: {
+        id: MIXED_CASE_ID,
+        sessionToken: "token-mixed-case",
+        userId: USER_ID,
+        expires: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+        signInProvider: "google",
+        signInEmail: LISTED,
+      },
+    });
+
+    const result = await enforceLiveSessionPolicy(
+      sessionFor({
+        id: MIXED_CASE_ID,
+        signInProvider: "google",
+        signInEmail: LISTED,
+      }),
+      { id: USER_ID, email: LISTED },
+    );
+    await settleRevocations();
+
+    expect(result.user).toBeUndefined();
+    expect(
+      await prisma.session.findUnique({ where: { id: MIXED_CASE_ID } }),
+    ).toBeNull();
   });
 });
 
