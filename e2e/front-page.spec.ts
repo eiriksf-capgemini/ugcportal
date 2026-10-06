@@ -106,6 +106,11 @@ test("K1/K2: the hero CTA, the empty-state link and the header's sign-in buttons
   const emptyStateLink = page
     .locator("[data-home-empty-state]")
     .getByRole("link", { name: /portfolio/i });
+
+  // ugcportal-qqnt.3: the header's two provider buttons no longer render
+  // until the single "Sign in" control (K1) is activated - see
+  // src/components/sign-in-menu.tsx.
+  await page.getByRole("button", { name: "Sign in" }).click();
   const headerGoogle = page.getByRole("button", { name: /Google/i });
   const headerFacebook = page.getByRole("button", { name: /Facebook/i });
 
@@ -265,6 +270,22 @@ test.describe("forced colors: focus stays visible on the hero CTA and the empty-
  * outside src/components/home/, the same real, unauthenticated "Sign in
  * with Google" button e2e/front-page.spec.ts's own K1/K2 test above already
  * exercises for radius/fill parity.
+ *
+ * ugcportal-qqnt.3 round 1 review: the Google button no longer renders until
+ * the single "Sign in" control (K1) is activated
+ * (src/components/sign-in-menu.tsx) - reaching it needs opening that disclosure first, which this
+ * test previously did not do at all (timed out waiting for an element that
+ * never appeared). Opened via the KEYBOARD here (`.focus()` + Enter on the
+ * trigger), not a `.click()`: confirmed empirically that a mouse-click open
+ * auto-focuses Google (Base UI's Popover moves focus to the first tabbable
+ * element inside the panel on any non-touch open - see mobile-nav-toggle.tsx's
+ * own comment) WITHOUT satisfying `:focus-visible` - Chromium does not apply
+ * it to an element a pointer interaction just auto-focused, and an explicit
+ * `.focus()` call on that same, already-focused element afterward is a
+ * same-element no-op that changes nothing. A real keyboard user never hits
+ * that gap: Tab/Enter to the trigger is itself the keyboard interaction that
+ * both opens the panel and satisfies `:focus-visible` on the element it
+ * lands on, which is exactly what this test now drives and asserts.
  */
 test.describe("forced colors: focus stays visible on a header button", () => {
   test.use({ forcedColors: "active" });
@@ -274,13 +295,14 @@ test.describe("forced colors: focus stays visible on a header button", () => {
   }) => {
     await page.goto("/");
 
-    const googleButton = page.getByRole("button", { name: /Google/i });
-    const beforeFocus = await googleButton.evaluate((el) => getComputedStyle(el).outlineStyle);
-    expect(beforeFocus, "unfocused — should stay invisible, not permanently ringed").toBe("none");
+    await page.getByRole("button", { name: "Sign in" }).focus();
+    await page.keyboard.press("Enter");
 
-    await googleButton.focus();
-    const afterFocus = await googleButton.evaluate((el) => getComputedStyle(el).outlineStyle);
-    expect(afterFocus, "focused under forced-colors — must not be 'none'").not.toBe("none");
+    const googleButton = page.getByRole("button", { name: /Google/i });
+    await expect(googleButton).toBeFocused();
+
+    const outlineStyle = await googleButton.evaluate((el) => getComputedStyle(el).outlineStyle);
+    expect(outlineStyle, "focused under forced-colors — must not be 'none'").not.toBe("none");
   });
 });
 

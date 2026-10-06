@@ -739,11 +739,24 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
             label sits inside the dropzone panel above (bg-surface-1
             resting, bg-surface-2 dragging), the untouched near-black
             surface scale - --primary measured 2.03:1 / 1.81:1 there in
-            light mode. --color-petrol-400/--petrol-900 is the same
+            light mode. --color-petrol-400/--petrol-900 was the same
             old-surface-safe fill/label pair button.tsx's default-neutral
-            variant uses (6.02:1); this is a plain label, not a Button, so
-            the tokens are applied directly rather than importing the
-            component for one call site.
+            variant used at the time (6.02:1); this is a plain label, not a
+            Button, so the tokens are applied directly rather than
+            importing the component for one call site.
+
+            KNOWN GAP, NOT FIXED HERE (ugcportal-ei5c): `--color-petrol-900`
+            is declared outside `@theme` on purpose (see globals.css's
+            "stopping Tailwind emitting bg-petrol-900 and friends" comment),
+            so `text-petrol-900` compiles to no Tailwind rule at all - this
+            label renders in whatever colour it happens to inherit, not
+            petrol-900, and the 6.02:1 above was never actually painted.
+            ugcportal-ei5c fixed the identical bug in button.tsx's
+            default-neutral variant (now `text-surface-0`, a token that
+            compiles) but did not touch this hand-styled label, which is not
+            a call site of that variant and was out of that bead's stated
+            scope - see src/lib/design/contrast.test.ts's disclosure test
+            for this exact gap.
           */
           className="cursor-pointer rounded-lg bg-petrol-400 px-3 py-2 text-sm font-medium text-petrol-900 transition-colors hover:brightness-95"
         >

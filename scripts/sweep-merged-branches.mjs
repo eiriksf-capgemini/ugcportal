@@ -656,7 +656,11 @@ function deleteRemoteBranchViaApi(name, cwd) {
  * only when `gh` itself is unavailable, or the API call failed for a reason
  * other than the branch already being gone -- see
  * `classifyGhApiDeleteFailure` for exactly which responses count as
- * "already gone". Every other safety check this function already made
+ * "already gone". That fallback sets `UGCPORTAL_PREPUSH=skip` on its own
+ * spawn explicitly (ugcportal-cky9), rather than depending on whatever the
+ * invoking shell happens to carry -- it still runs through whichever
+ * pre-push hook `core.hooksPath` actually resolves to for this `cwd`, which
+ * may or may not honour the variable yet. Every other safety check this function already made
  * before `ugcportal-ix0s` -- the post-delete `ls-remote` verification (the
  * actual backstop against a wrongly-classified API failure: it throws if
  * the branch is still there, regardless of which path fired), the
@@ -666,7 +670,16 @@ function deleteRemoteBranchViaApi(name, cwd) {
 export function deleteRemoteBranch(name, cwd = ".") {
   const apiResult = deleteRemoteBranchViaApi(name, cwd);
   if (apiResult === "unavailable") {
-    execFileSync("git", ["-C", cwd, "push", "origin", "--delete", name], { stdio: ["ignore", "pipe", "pipe"] });
+    // ugcportal-cky9: UGCPORTAL_PREPUSH=skip set explicitly
+    // here, not left to whatever the invoking shell happens to carry -- this
+    // fallback is itself a `git push`, which still runs
+    // `.beads/hooks/pre-push`'s full suite whenever the hook that's actually
+    // installed (core.hooksPath, shared across every worktree, points at the
+    // MAIN checkout's copy) doesn't yet honour the variable.
+    execFileSync("git", ["-C", cwd, "push", "origin", "--delete", name], {
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, UGCPORTAL_PREPUSH: "skip" },
+    });
   }
   const remaining = execFileSync("git", ["-C", cwd, "ls-remote", "--heads", "origin", name], { encoding: "utf8" });
   if (remaining.trim().length > 0) {

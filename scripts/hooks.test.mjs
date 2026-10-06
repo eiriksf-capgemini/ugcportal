@@ -175,6 +175,7 @@ function buildMinimalBinDir({ includeRealPerl }) {
 const SH_PATH = resolveOnHostPath("sh");
 const ENV_PATH = resolveOnHostPath("env");
 const PERL_PATH = resolveOnHostPath("perl");
+const GIT_PATH = resolveOnHostPath("git");
 
 /** Null when `branch` can run on this host; otherwise the reason to skip it, visibly, in the test name. */
 function hostSkipReason(branch) {
@@ -405,4 +406,151 @@ describe("pre-push hook: a test run under it cannot mutate the real repo (K2)", 
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
+});
+
+// ugcportal-cky9: agent pushes set UGCPORTAL_PREPUSH=skip so the hook exits
+// before paying for lint/test/build/typecheck -- CI is authoritative and
+// re-verifies every push regardless. Unlike K1/K2 above (which extract one
+// helper function), these run the WHOLE hook file, because the behaviour
+// under test is the hook's own top-level control flow: does it reach the
+// npm commands at all. A minimal PATH shim (real `env`/`git`, a fake `npm`
+// that just logs its argv and exits 0 instead of actually linting/testing/
+// building/typechecking) plus a real fixture git repo -- same hygiene as
+// K1/K2's fixtures -- lets the hook run to completion in well under a
+// second either way.
+describe("pre-push hook: UGCPORTAL_PREPUSH=skip", { timeout: 20_000 }, () => {
+  const hookSource = fs.readFileSync(HOOK_PATH, "utf8");
+
+  /**
+   * A real, empty git repo plus the one file the hook unconditionally
+   * sources once it reaches the mechanical section
+   * (scripts/ci-placeholder-env.sh) -- its actual fallback-env contents are
+   * irrelevant here, only its presence is. Returns the hook script (a
+   * standalone copy, not run
+   * from inside the fixture repo's own .beads/hooks/ -- the hook resolves
+   * its repo root from cwd via `git rev-parse --show-toplevel`, not from
+   * its own file location, so it doesn't need to live inside the fixture)
+   * plus a minimal bin dir and the log file the fake npm appends to.
+   */
+  function buildFixture() {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "ugcportal-hooks-prepush-"));
+    const repoDir = path.join(root, "repo");
+    fs.mkdirSync(repoDir, { recursive: true });
+
+    const gitEnv = {
+      ...CLEAN_ENV_BASE,
+      GIT_CONFIG_NOSYSTEM: "1",
+      GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_CEILING_DIRECTORIES: root,
+    };
+    execFileSync("git", ["init", "-q"], { cwd: repoDir, env: gitEnv });
+
+    fs.mkdirSync(path.join(repoDir, "scripts"), { recursive: true });
+    fs.writeFileSync(path.join(repoDir, "scripts", "ci-placeholder-env.sh"), "");
+
+    const hookScript = path.join(root, "pre-push");
+    fs.writeFileSync(hookScript, hookSource);
+
+    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "ugcportal-hooks-prepush-bin-"));
+    if (!ENV_PATH) throw new Error("`env` not found via `command -v env` -- hostSkipReason() should have skipped this");
+    if (!GIT_PATH) throw new Error("`git` not found via `command -v git` -- hostSkipReason() should have skipped this");
+    fs.symlinkSync(ENV_PATH, path.join(binDir, "env"));
+    fs.symlinkSync(GIT_PATH, path.join(binDir, "git"));
+    // Deliberately no `timeout`/`gtimeout`/`perl`/`python3`/`node` in this
+    // PATH: `_ugcportal_run` falls through to its plain `env -u ...`
+    // fallback (already covered on its own by the K1 "none" branch above),
+    // and the advisory harness-cost-controls/sweep-candidates checks further
+    // down the hook short-circuit on `command -v python3`/`node` failing,
+    // so neither needs a real repo history or real scripts to succeed.
+
+    const npmLog = path.join(root, "npm-calls.log");
+    const npmShim = path.join(binDir, "npm");
+    fs.writeFileSync(npmShim, ['#!/bin/sh', 'printf \'%s\\n\' "npm $*" >> "$UGCPORTAL_TEST_NPM_LOG"', "exit 0", ""].join("\n"));
+    fs.chmodSync(npmShim, 0o755);
+
+    return { root, repoDir, hookScript, binDir, npmLog };
+  }
+
+  function runHook(fixture, extraEnv) {
+    const env = {
+      ...CLEAN_ENV_BASE,
+      GIT_CONFIG_NOSYSTEM: "1",
+      GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_CEILING_DIRECTORIES: path.dirname(fixture.repoDir),
+      PATH: fixture.binDir,
+      UGCPORTAL_TEST_NPM_LOG: fixture.npmLog,
+    };
+    // CLEAN_ENV_BASE inherits the REAL process.env -- harmless for K1/K2 above,
+    // but this describe block is the one place a leaked UGCPORTAL_PREPUSH
+    // actually changes the outcome under test. If this very test suite is
+    // ever run nested inside a real `git push` that itself set
+    // UGCPORTAL_PREPUSH=skip (exactly the scenario ugcportal-cky9 adds, and
+    // reproduced while authoring this test: `UGCPORTAL_PREPUSH=skip git
+    // push` runs the OLD committed hook from whatever `core.hooksPath`
+    // points at, which can still shell out to `npm test` against this
+    // worktree before the new hook is the one installed), the "unset"
+    // case below would silently inherit "skip" instead of truly being
+    // unset, and wrongly pass. Deleting here, then applying extraEnv,
+    // means the "undefined" case always runs with it genuinely absent.
+    delete env.UGCPORTAL_PREPUSH;
+    Object.assign(env, extraEnv);
+    return spawnSync(SH_PATH, [fixture.hookScript], { cwd: fixture.repoDir, env, encoding: "utf8" });
+  }
+
+  function readNpmLog(fixture) {
+    return fs.existsSync(fixture.npmLog) ? fs.readFileSync(fixture.npmLog, "utf8") : "";
+  }
+
+  function cleanup(fixture) {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+    fs.rmSync(fixture.binDir, { recursive: true, force: true });
+  }
+
+  const skipReason = hostSkipReason() ?? (GIT_PATH ? null : "no `git` on this host");
+  const test = skipReason ? it.skip : it;
+
+  test(
+    skipReason
+      ? `UGCPORTAL_PREPUSH=skip prints exactly one line, exits 0, and never invokes npm (skipped: ${skipReason})`
+      : "UGCPORTAL_PREPUSH=skip prints exactly one line, exits 0, and never invokes npm",
+    () => {
+      const fixture = buildFixture();
+      try {
+        const result = runHook(fixture, { UGCPORTAL_PREPUSH: "skip" });
+        expect(result.status).toBe(0);
+        expect(result.stdout).toBe("ugcportal: pre-push suite skipped by UGCPORTAL_PREPUSH=skip; CI is authoritative\n");
+        expect(readNpmLog(fixture)).toBe("");
+      } finally {
+        cleanup(fixture);
+      }
+    },
+  );
+
+  // Default behaviour for a human push is unchanged: unset, or set to
+  // anything other than the exact string "skip", still runs the full
+  // mechanical suite (here: the fake npm, so this stays fast and doesn't
+  // actually lint/test/build/typecheck this repo).
+  for (const value of [undefined, "", "1", "true", "SKIP", "Skip", "no"]) {
+    test(
+      skipReason
+        ? `UGCPORTAL_PREPUSH=${JSON.stringify(value)} still runs the mechanical suite (skipped: ${skipReason})`
+        : `UGCPORTAL_PREPUSH=${JSON.stringify(value)} still runs the mechanical suite (default behaviour unchanged)`,
+      () => {
+        const fixture = buildFixture();
+        try {
+          const result = runHook(fixture, value === undefined ? {} : { UGCPORTAL_PREPUSH: value });
+          expect(result.status).toBe(0);
+          expect(result.stdout).not.toContain("ugcportal: pre-push suite skipped by UGCPORTAL_PREPUSH=skip");
+          expect(result.stdout).toContain("running local mechanical checks");
+          const npmLog = readNpmLog(fixture);
+          expect(npmLog).toContain("npm run lint");
+          expect(npmLog).toContain("npm test");
+          expect(npmLog).toContain("npm run build");
+          expect(npmLog).toContain("npm run typecheck");
+        } finally {
+          cleanup(fixture);
+        }
+      },
+    );
+  }
 });
