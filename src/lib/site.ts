@@ -7,8 +7,27 @@
  */
 export const SITE_NAME = "UGC Portal";
 
+/**
+ * The public meta description (src/app/layout.tsx), and the one string on
+ * this site that a search engine quotes verbatim (also src/app/llms.txt).
+ *
+ * REWORDED FROM "Food, wine and drink, technology and books, photographed."
+ * under ugcportal-qnq9.3 K5. That sentence promoted the DRINK on a site that
+ * will take money, which is what alkoholloven § 9-2 forbids: alcohol must not
+ * appear in advertising for other products, and a meta description is the
+ * site's own advertisement for itself. The subject this site actually chose
+ * is the ACCESSORY — empty glasses, coolers, wine-tool apps
+ * (docs/ugc-research.md Decisions table, §3.1a) — so the copy now names that
+ * instead.
+ *
+ * "wine accessories", NOT "wine", and the two words are not interchangeable
+ * here: the shorter one reads as the drink in exactly the context the ban is
+ * about. SITE_TAGLINE below already made this choice and says so; this string
+ * is the one that had not caught up. src/lib/site.alcohol-copy.test.ts holds
+ * both of them, and the about copy, to the same denylist.
+ */
 export const SITE_DESCRIPTION =
-  "Food, wine and drink, technology and books, photographed.";
+  "Food, wine accessories, technology and books, photographed.";
 
 /**
  * The site's one-sentence tagline (ugcportal-14k9). Originally a second,
@@ -20,10 +39,12 @@ export const SITE_DESCRIPTION =
  * description of the site, just not repeated a few lines below the hero.
  *
  * Deliberately not SITE_DESCRIPTION itself, and deliberately not reusing its
- * wording: SITE_DESCRIPTION still says "wine and drink", which is
- * ugcportal-qnq9.3's reword to make (that bead owns the public meta
- * description, landing concurrently with this one). This string is written
- * fresh, naming the same four subjects, under ugcportal-qnq9.3 K5's framing
+ * wording: the gallery heading would otherwise repeat the header's own
+ * sentence in different words, which src/lib/design/dual-meaning-usage.test.ts
+ * and src/app/page.test.tsx between them keep it from doing. The two now agree
+ * on the SUBJECT — ugcportal-qnq9.3 K5 reworded SITE_DESCRIPTION to the
+ * accessory — while remaining two different sentences. This string names the
+ * same four subjects, under ugcportal-qnq9.3 K5's framing
  * for the wine angle this site has actually chosen — empty glasses, coolers,
  * wine-tool apps — which is an ACCESSORY, not the drink alkoholloven § 9-2
  * bans from appearing in anything commercial. "Wine accessories", not "wine"
@@ -81,9 +102,9 @@ export const CONTACT_INTRO =
 
 /**
  * K5: states what is collected and why BEFORE submission, and links to the
- * privacy statement (PRIVACY_PATH, src/lib/routes.ts). ugcportal-qnq9.4 has
- * not merged at the time this bead was written, so that link 404s until it
- * does; flagged in the PR description rather than hidden.
+ * privacy statement (PRIVACY_PATH, src/lib/routes.ts). That link resolved
+ * nowhere when this was written; ugcportal-qnq9.4 has since published the page
+ * (src/app/privacy/page.tsx), so it now resolves.
  */
 export const CONTACT_NOTICE =
   "Submitting this form opens your own email client with your message pre-filled, and sends it to our inbox directly — this site never receives or stores anything you type here. We only ever see what your email provider shows us: your name, your email address, and your message.";

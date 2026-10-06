@@ -107,6 +107,9 @@ beforeAll(async () => {
       thirdPartyCreator: false,
       sponsoredContent: false,
       depictsAlcohol: false,
+      // Answered, not left blank: `null` on any triage column blocks, and
+      // this fixture is the file's one sellable upload (ugcportal-qnq9.3).
+      wineAccessory: false,
       // The triage is an assertion about third-party rights, so the gate
       // requires a current admin behind it.
       triagedByUserId: "admin-1",

@@ -204,10 +204,15 @@ for (const width of [360, 768, 1024]) {
  * `forced-colors: active` (Windows High Contrast and similar UA modes) drops
  * entirely, so keyboard focus became invisible on exactly these two controls
  * — the only two that had a real CSS outline before this bead touched them.
- * The fix is the scoped `FORCED_COLORS_FOCUS_OUTLINE` override at each call
- * site (hero.tsx, empty-state.tsx), not a change to the shared base — see
- * ugcportal-oavb for that systemic gap, which this override does not close
- * for any other caller.
+ *
+ * ugcportal-oavb moved the fix from a scoped `FORCED_COLORS_FOCUS_OUTLINE`
+ * override at each of those two call sites (hero.tsx, empty-state.tsx,
+ * both now gone) into `buttonVariants`' own shared base
+ * (src/components/ui/button.tsx) — so this suite now passes THROUGH the
+ * base for the hero/empty-state controls below, rather than through a
+ * per-component override, and the same base fix also reaches every OTHER
+ * `buttonVariants` caller the two describe blocks after this one check: a
+ * header sign-in button, and an admin-surface button.
  *
  * `outlineStyle` is the right thing to assert, not `outlineColor` alone:
  * this repo's own compile-and-render check (this bead's own verification,
@@ -251,6 +256,90 @@ test.describe("forced colors: focus stays visible on the hero CTA and the empty-
 
     await link.focus();
     const afterFocus = await link.evaluate((el) => getComputedStyle(el).outlineStyle);
+    expect(afterFocus, "focused under forced-colors — must not be 'none'").not.toBe("none");
+  });
+});
+
+/**
+ * ugcportal-oavb: the base fix in src/components/ui/button.tsx applies to
+ * every `buttonVariants` caller, not only the hero CTA and empty-state link
+ * PR #122 happened to touch — the header's own sign-in controls
+ * (src/components/auth-status.tsx) had exactly the same pre-existing gap,
+ * since they predate PR #122 and were never patched with a scoped override
+ * at all. One header control is enough to prove the base reaches a caller
+ * outside src/components/home/, the same real, unauthenticated "Sign in
+ * with Google" button e2e/front-page.spec.ts's own K1/K2 test above already
+ * exercises for radius/fill parity.
+ */
+test.describe("forced colors: focus stays visible on a header button", () => {
+  test.use({ forcedColors: "active" });
+
+  test("the header's Google sign-in button keeps a non-none outline style when focused under forced colors", async ({
+    page,
+  }) => {
+    await page.goto("/");
+
+    const googleButton = page.getByRole("button", { name: /Google/i });
+    const beforeFocus = await googleButton.evaluate((el) => getComputedStyle(el).outlineStyle);
+    expect(beforeFocus, "unfocused — should stay invisible, not permanently ringed").toBe("none");
+
+    await googleButton.focus();
+    const afterFocus = await googleButton.evaluate((el) => getComputedStyle(el).outlineStyle);
+    expect(afterFocus, "focused under forced-colors — must not be 'none'").not.toBe("none");
+  });
+});
+
+/**
+ * ugcportal-oavb: the admin surface's own button, checked the same way, for
+ * the same reason — src/app/admin/settings/rights/decision-form.tsx's
+ * submit button (`<Button type="submit" size="sm">`, the `default` variant
+ * at `size="sm"`) is a real, shipped caller of this exact base class, with
+ * the identical pre-existing gap.
+ *
+ * Injected into the already-loaded home page rather than navigated to via
+ * `/admin/...` directly: `requireAdmin()` 404s an unauthenticated request
+ * (src/app/admin/settings/users/page.tsx), and this e2e suite has no
+ * database-seeding or session infrastructure to reach an authenticated admin
+ * route (see this file's own header comment on why the K1 empty-state test
+ * above relies on a seed-free dev database instead of fixtures). Tailwind
+ * v4 scans every SOURCE file for utility classes, not the routes an e2e run
+ * actually visits, so `buttonVariants({variant: "default", size: "sm"})`'s
+ * classes are already compiled into the one global stylesheet every page
+ * loads (including "/") whether or not the admin page that uses them was
+ * ever navigated to — the literal class string below is that real,
+ * already-shipped admin button's own computed output (captured by rendering
+ * `buttonVariants({variant: "default", size: "sm"})` directly, the same way
+ * src/components/ui/button-system.test.tsx's own regression-guard snapshot
+ * was captured), not a hand-written lookalike, so this test exercises the
+ * genuine CSS the admin page ships rather than a class string that merely
+ * resembles it.
+ */
+test.describe("forced colors: focus stays visible on an admin-surface button", () => {
+  test.use({ forcedColors: "active" });
+
+  const ADMIN_DEFAULT_SM_BUTTON_CLASS =
+    "group/button inline-flex shrink-0 items-center justify-center border border-transparent bg-clip-padding font-medium whitespace-nowrap transition-all select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/80 focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-transparent motion-safe:active:not-aria-[haspopup]:translate-y-px disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 aria-invalid:border-destructive/75 aria-invalid:ring-3 aria-invalid:ring-destructive/80 [&_svg]:pointer-events-none [&_svg]:shrink-0 bg-primary text-primary-foreground hover:bg-primary-hover h-7 gap-1 rounded-[min(var(--radius-md),12px)] px-2.5 text-[0.8rem] in-data-[slot=button-group]:rounded-lg has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-3.5";
+
+  test("the admin settings save button's own class list keeps a non-none outline style when focused under forced colors", async ({
+    page,
+  }) => {
+    await page.goto("/");
+
+    await page.evaluate((className) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = className;
+      button.textContent = "Save";
+      button.setAttribute("data-e2e-admin-button-probe", "true");
+      document.body.appendChild(button);
+    }, ADMIN_DEFAULT_SM_BUTTON_CLASS);
+
+    const adminButton = page.locator("[data-e2e-admin-button-probe]");
+    const beforeFocus = await adminButton.evaluate((el) => getComputedStyle(el).outlineStyle);
+    expect(beforeFocus, "unfocused — should stay invisible, not permanently ringed").toBe("none");
+
+    await adminButton.focus();
+    const afterFocus = await adminButton.evaluate((el) => getComputedStyle(el).outlineStyle);
     expect(afterFocus, "focused under forced-colors — must not be 'none'").not.toBe("none");
   });
 });

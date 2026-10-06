@@ -86,12 +86,31 @@ beforeAll(async () => {
 
   await applyMigration(prisma, ALCOHOL_MIGRATION!);
   // Anything committed after this migration, so the generated client can
-  // read the database at all. A no-op while this is the newest migration;
-  // it is here so the next one does not break this file in a way that looks
-  // like a defect in the migration under test. The case below named "leaves
-  // no other triage question unanswered" is what keeps that catch-up
-  // honest.
+  // read the database at all. No longer a no-op, which is the case this
+  // comment used to anticipate: 20261006170000 adds `wineAccessory`, and it
+  // arrives NULL on this fixture for exactly the reason `depictsAlcohol`
+  // does.
   await applyMigrations(prisma, { startAfter: ALCOHOL_MIGRATION! });
+
+  // So every OTHER registered fact is answered `no` here, leaving
+  // `depictsAlcohol` the only unanswered question in the row. Without this,
+  // `triage_incomplete` below would be true whether or not the migration
+  // under test had added anything — overdetermined, and passing for the
+  // wrong reason, which is how it actually failed when qnq9.3's second half
+  // landed. Answered here rather than in the seed because the later columns
+  // do not exist until the catch-up above runs; derived from TRIAGE_FACTS
+  // rather than listed, the same way minors-triage-migration.test.ts does
+  // it, so the fact after this one needs no edit either. The case named
+  // "leaves no other triage question unanswered" checks it rather than
+  // taking this comment's word for it.
+  await prisma.mediaListing.update({
+    where: { id: "listing-1" },
+    data: Object.fromEntries(
+      TRIAGE_FACTS.filter((fact) => fact.field !== "depictsAlcohol").map(
+        (fact) => [fact.field, false],
+      ),
+    ),
+  });
 });
 
 afterAll(async () => {

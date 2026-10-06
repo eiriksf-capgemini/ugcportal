@@ -181,6 +181,12 @@ export type GateListing = {
    */
   depictsAlcohol: boolean | null;
   /**
+   * Is the subject a wine accessory (ugcportal-qnq9.3)? The one fact in the
+   * registry where NEITHER answer blocks; see the WINE_ACCESSORY entry in
+   * TRIAGE_FACTS below.
+   */
+  wineAccessory: boolean | null;
+  /**
    * Who signed off the triage flags above, with their *current* role. Every
    * one of those flags is an assertion about someone else's rights — "no
    * identifiable people", "no music" — and an unattributed assertion is not
@@ -253,6 +259,7 @@ export const MEDIA_GATE_SELECT = {
       thirdPartyCreator: true,
       sponsoredContent: true,
       depictsAlcohol: true,
+      wineAccessory: true,
       triagedByUserId: true,
       triagedBy: { select: { role: true } },
       layerClearances: {
@@ -344,7 +351,10 @@ function layerIsCleared(listing: GateListing, layer: RightsLayer): boolean {
  *      admin-written sentence settles two legal questions. A fact may also
  *      declare that NOTHING settles it (`settledBy: "nothing"`, today only
  *      ALCOHOL): there the registry says so once, rather than each call
- *      site remembering which of the answers is final.
+ *      site remembering which of the answers is final. A third kind,
+ *      `settledBy: "recorded"`, says the opposite — that NEITHER answer
+ *      encumbers the item (today only WINE_ACCESSORY) — so for that one
+ *      rule 2 does not apply at all and only rule 1 does.
  *   3. ADDING A FACT DOES NOT FAIL OPEN. The only way to add one is to add
  *      a RightsLayer and register it here: a layer with no entry fails
  *      "registers exactly one fact per RightsLayer, no more and no fewer"
@@ -382,14 +392,21 @@ type TriageFactBase = {
    * layer the schema declares", src/app/admin/settings/rights/page.test.tsx).
    */
   readonly question: string;
-  /**
-   * Returned when the answer is `true` and nothing has settled it. For a
-   * `settledBy: "clearance"` fact that means the layer has no admin-signed
-   * justification; for a `settledBy: "nothing"` fact it is simply what a
-   * `true` answer returns, because there is nothing that could settle it.
-   */
-  readonly blocker: SellabilityBlocker;
 };
+
+/**
+ * What a `true` answer returns when nothing has settled it.
+ *
+ * NOT ON TriageFactBase, deliberately, and that placement is load-bearing
+ * rather than tidy. It belongs only to the two kinds of fact that CAN block:
+ * a `settledBy: "recorded"` fact has nothing to return, so it declares
+ * `blocker?: never` and `tsc` refuses one that names a blocker — a blocker no
+ * code path can reach would otherwise sit in the registry reading as
+ * enforcement. The reverse direction is closed too: a blocking entry that
+ * omits it fails `tsc`, so neither kind can be written with the wrong set of
+ * properties.
+ */
+type TriageFactBlocker = { readonly blocker: SellabilityBlocker };
 
 /**
  * One registered fact, discriminated by what a `true` answer is held
@@ -404,7 +421,7 @@ type TriageFactBase = {
  */
 export type TriageFact = TriageFactBase &
   (
-    | {
+    | (TriageFactBlocker & {
         /**
          * `true` is settled by a MediaRightsClearance for this fact's layer,
          * signed by someone who is an ADMIN at read time.
@@ -419,8 +436,8 @@ export type TriageFact = TriageFactBase &
         readonly alsoRequires?: (
           listing: GateListing,
         ) => SellabilityBlocker | null;
-      }
-    | {
+      })
+    | (TriageFactBlocker & {
         /**
          * `true` is final: no clearance, and no evidence file, makes this
          * upload sellable. Today only ALCOHOL (ugcportal-qnq9.3).
@@ -435,6 +452,43 @@ export type TriageFact = TriageFactBase &
          * verified by mutation (adding `alsoRequires: () => null` to the
          * ALCOHOL entry fails `npm run typecheck` with "Type '() => null' is
          * not assignable to type 'undefined'").
+         */
+        readonly alsoRequires?: never;
+      })
+    | {
+        /**
+         * NEITHER ANSWER ENCUMBERS THE ITEM. The question is asked, recorded
+         * and attributed, and that is all it does: `true` and `false` both
+         * pass, and only leaving it unanswered blocks — which it does in
+         * phase 1, like every other fact, because an item nobody has
+         * classified is an item nobody has looked at.
+         *
+         * Today only WINE_ACCESSORY (ugcportal-qnq9.3,
+         * docs/ugc-research.md §3.1a). The site's wine angle IS the
+         * accessory — an empty glass, a cooler, a tool-type wine app — and
+         * §3.1a settles that accessories are monetisable. A fact whose `true`
+         * blocked would therefore refuse the chosen business angle outright,
+         * which is the mistake the bead was rewritten to undo.
+         *
+         * WHY A THIRD DISCRIMINANT RATHER THAN LEAVING IT OUT OF THE REGISTRY.
+         * A column with no entry here is read by nothing (ugcportal-qn3 K5) —
+         * the whole mechanism rests on that — so a fact kept outside it would
+         * be decorative: nobody would have to answer it, and the layout
+         * separation in ugcportal-qnq9.11 would be reading a column that is
+         * NULL on every row. Registered, it is asked on the admin screen and
+         * its absence blocks the sale.
+         */
+        readonly settledBy: "recorded";
+        /**
+         * Not available: see TriageFactBlocker. There is no state this fact
+         * can be in that stops a sale except being unanswered, which phase 1
+         * reports as `triage_incomplete` for every fact alike.
+         */
+        readonly blocker?: never;
+        /**
+         * Not available either, for the same reason the `"nothing"` variant
+         * says: `alsoRequires` describes what a clearance needs alongside it,
+         * and there is no clearance here to go alongside.
          */
         readonly alsoRequires?: never;
       }
@@ -516,6 +570,33 @@ export const TRIAGE_FACTS: readonly TriageFact[] = [
     settledBy: "nothing",
     blocker: "alcohol_depicted",
   },
+  {
+    // ugcportal-qnq9.3 / docs/ugc-research.md §3.1a, and the other half of
+    // the same rule as the entry above. §3.1a's Decisions table settles the
+    // site's wine angle as ACCESSORIES AND TOOLS — empty glasses, coolers,
+    // wine apps — and says in terms that those are monetisable, because the
+    // § 9-2 ban is on the drink appearing in advertising, not on the gear
+    // around it.
+    //
+    // So this entry's whole content is `settledBy: "recorded"`: a `yes` here
+    // is not a problem to be cleared, it is the subject of the site. The
+    // question exists so that the accessory and the drink are distinguishable
+    // ON THE RECORD rather than by someone's memory of a photograph — which
+    // is what the item beside a price has to rest on if a regulator ever
+    // asks — and so that ugcportal-qnq9.11 can lay commercial and personal
+    // wine content out apart from each other.
+    //
+    // INDEPENDENT OF ALCOHOL, with no rule relating the two. A `true` here
+    // does not soften `depictsAlcohol`: a cooler with labelled bottles on the
+    // shelf is an accessory and shows alcohol, and the ALCOHOL entry above
+    // stops it whatever this one says ("an accessory answer does not rescue
+    // an item that shows the drink", resale-rights.test.ts).
+    field: "wineAccessory",
+    layer: RightsLayer.WINE_ACCESSORY,
+    question:
+      "Is the subject a wine accessory — an empty glass, a cooler, or a tool-type wine app?",
+    settledBy: "recorded",
+  },
 ];
 
 /**
@@ -533,7 +614,9 @@ export const TRIAGE_FACTS: readonly TriageFact[] = [
  *      photograph), so an unsigned or since-demoted signature voids all of
  *      them at once rather than per fact.
  *   3. Each `true` settled on its own terms — or, for a fact the registry
- *      marks `settledBy: "nothing"`, not settled at all.
+ *      marks `settledBy: "nothing"`, not settled at all; or, for one marked
+ *      `settledBy: "recorded"`, nothing to settle, because neither answer
+ *      encumbers the item.
  */
 export function triageBlocker(listing: GateListing): SellabilityBlocker | null {
   for (const fact of TRIAGE_FACTS) {
@@ -560,6 +643,27 @@ export function triageBlocker(listing: GateListing): SellabilityBlocker | null {
     }
     if (!isTriaged(answer)) {
       return "triage_incomplete";
+    }
+    // A fact the registry records for its own sake is answered here and goes
+    // no further in the permitting direction: neither answer encumbers the
+    // item, so there is nothing to settle and nothing to block on
+    // (WINE_ACCESSORY — §3.1a's accessories are monetisable).
+    //
+    // THIS BRANCH IS FIRST, AND `tsc` KEEPS IT FIRST. Below it, `fact` is
+    // narrowed to the two variants that carry a `blocker`; move this test
+    // after them and `fact.blocker` is `SellabilityBlocker | undefined`,
+    // which does not typecheck as a return value. So the one ordering in
+    // which a non-encumbering fact could fall through to a blocker that does
+    // not exist is not expressible.
+    //
+    // Written as `=== "recorded"` rather than a negation, which is the
+    // opposite choice from the line below it and for the same underlying
+    // reason: this is the branch that PERMITS, so only the exact discriminant
+    // may reach it. An object whose `settledBy` is unreadable — a
+    // hand-built fixture, a registry assembled at runtime — falls past this
+    // test and is blocked by the next one.
+    if (fact.settledBy === "recorded") {
+      continue;
     }
     // A fact nothing settles is answered here and goes no further: no
     // clearance is consulted, so none can be written to get past it. This

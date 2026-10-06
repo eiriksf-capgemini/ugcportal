@@ -20,7 +20,14 @@ export default defineConfig({
   // server, which is a different NODE_ENV and would make a production-only
   // assertion fail for the wrong reason. Run that suite explicitly with
   // `npm run test:e2e:footer-draft-guard` instead.
-  testIgnore: ["**/production/**"],
+  //
+  // e2e/seeded/* is a THIRD suite, ignored here for a different reason
+  // (ugcportal-qnq9.3 K6): those specs seed PUBLISHED media, and
+  // e2e/front-page.spec.ts below asserts a genuinely empty gallery. With
+  // `fullyParallel` on, leaving them in this suite would make the two fail
+  // each other depending on worker order. Run that one explicitly with
+  // `npm run test:e2e:alcohol-commerce`.
+  testIgnore: ["**/production/**", "**/seeded/**"],
   fullyParallel: true,
   retries: 0,
   reporter: [["list"]],

@@ -11,6 +11,7 @@ import {
   COOKIE_BANNER_DECLINE_LABEL,
   CookieBanner,
 } from "@/components/consent/cookie-banner";
+import { GALLERY_TILE_BASE_CLASS } from "@/components/gallery/containment";
 import { EmptyState } from "@/components/home/empty-state";
 import { Hero } from "@/components/home/hero";
 
@@ -171,9 +172,18 @@ describe("regression guard (round-1 review, CONFIRMED medium, finding 2) — an 
    * than guessed by hand, so a real drift in any token this button composes
    * from — not only the radius — fails this test, not only a radius-shaped
    * one.
+   *
+   * Updated for ugcportal-oavb: `outline-none` is gone and the four
+   * `focus-visible:outline-*` utilities are present — the intended effect of
+   * that bead's base-class fix for forced-colors focus visibility, which
+   * applies to every `buttonVariants` caller including this one, not a
+   * regression this guard is meant to catch. Recomputed the same way as
+   * before (`cn(buttonVariants({variant: "outline", size: "sm"}))` against
+   * the post-oavb button.tsx), so every OTHER token — sizing, radius,
+   * colour — still has to match byte for byte.
    */
   const MAIN_COOKIE_BANNER_BUTTON_CLASS =
-    "group/button inline-flex shrink-0 items-center justify-center border bg-clip-padding font-medium whitespace-nowrap transition-all outline-none select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/80 motion-safe:active:not-aria-[haspopup]:translate-y-px disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 aria-invalid:border-destructive/75 aria-invalid:ring-3 aria-invalid:ring-destructive/80 [&_svg]:pointer-events-none [&_svg]:shrink-0 border-primary bg-transparent text-primary hover:border-primary-hover hover:underline aria-expanded:border-primary-hover aria-expanded:underline h-7 gap-1 rounded-[min(var(--radius-md),12px)] px-2.5 text-[0.8rem] in-data-[slot=button-group]:rounded-lg has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-3.5";
+    "group/button inline-flex shrink-0 items-center justify-center border bg-clip-padding font-medium whitespace-nowrap transition-all select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/80 focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-transparent motion-safe:active:not-aria-[haspopup]:translate-y-px disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 aria-invalid:border-destructive/75 aria-invalid:ring-3 aria-invalid:ring-destructive/80 [&_svg]:pointer-events-none [&_svg]:shrink-0 border-primary bg-transparent text-primary hover:border-primary-hover hover:underline aria-expanded:border-primary-hover aria-expanded:underline h-7 gap-1 rounded-[min(var(--radius-md),12px)] px-2.5 text-[0.8rem] in-data-[slot=button-group]:rounded-lg has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-3.5";
 
   it("CookieBanner's decline button carries exactly the classes it did on main, byte for byte", () => {
     const markup = renderToStaticMarkup(
@@ -204,8 +214,18 @@ describe("K2 — one radius token for every interactive shape", () => {
     // rounded-lg once; this is the claim that the tile shares exactly that
     // utility, not a same-looking one of its own.
     expect(buttonVariants({ variant: "default" })).toContain("rounded-lg");
-    expect(containment).toMatch(/GALLERY_TILE_BASE_CLASS\s*=\s*`[^`]*\brounded-lg\b/);
-    expect(containment).not.toMatch(/GALLERY_TILE_BASE_CLASS\s*=\s*`[^`]*\brounded-md\b/);
+    // ugcportal-o312: GALLERY_TILE_BASE_CLASS's radius was factored out to
+    // a shared GALLERY_RADIUS_CLASS constant (so the advertising-disclosure
+    // label beside it, containment.radius-parity.test.ts's own subject,
+    // could not drift onto its own literal again), so the source text no
+    // longer carries a literal "rounded-lg" inside the template string
+    // itself — this now checks the RESOLVED class value the tile actually
+    // renders with, which is the claim this test cares about either way.
+    expect(GALLERY_TILE_BASE_CLASS).toContain("rounded-lg");
+    expect(GALLERY_TILE_BASE_CLASS).not.toContain("rounded-md");
+    expect(containment).toMatch(
+      /GALLERY_TILE_BASE_CLASS\s*=\s*`[^`]*\$\{GALLERY_RADIUS_CLASS\}/,
+    );
   });
 });
 

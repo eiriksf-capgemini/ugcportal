@@ -364,8 +364,8 @@ export type AdvertisingLabelRefusal = { error: string; field: string };
 /**
  * Whether this item's disclosure forbids publishing it, and why.
  *
- * THE ONE PLACE the three states of a disclosure are collapsed (K2, and the
- * storage half of K5):
+ * THE THREE STATES OF A DISCLOSURE, collapsed (K2, and the storage half of
+ * K5):
  *
  *   no row at all        unanswered — publishes, see below
  *   benefitReceived null unanswered — publishes, see below
@@ -375,11 +375,30 @@ export type AdvertisingLabelRefusal = { error: string; field: string };
  * The first two are the same state said two ways, and collapsing them here
  * rather than at each call site is what stops a later reader from checking one
  * and missing the other — a bug that would read as correct and fail open.
- * This really is the only place today: `grep -rn benefitReceived src` outside
- * the generated client and the tests reaches this function, the write path in
- * PUT /api/media/[id]/disclosure, and the two-column select in POST
- * /api/media/[id]/publish that feeds this function — no second reader
- * interprets the column.
+ *
+ * NO LONGER THE ONLY READER, and the correction matters because this sentence
+ * used to claim it was (ugcportal-qnq9.3). The code that READS the column is
+ * this function, the write path in PUT /api/media/[id]/disclosure, the select
+ * in POST /api/media/[id]/publish that feeds both readers, and
+ * `commercialPublishRefusal` in src/lib/alcohol-commerce.ts, which asks a
+ * question this function has no opinion on: whether a declared benefit may
+ * exist at all on this picture, from this brand (alkoholloven § 9-2).
+ *
+ * "READS" IS THE QUALIFIER, and it is doing work rather than hedging. The
+ * obvious way to check the list — `grep -rn benefitReceived src` — prints
+ * more than it: outside the generated client and the tests it also reaches
+ * comment-only mentions in src/lib/gallery-items.ts (which states in terms
+ * that it deliberately does not read the column), src/lib/media-access.ts,
+ * src/lib/media-listing.ts and src/app/privacy/content.ts. None of those
+ * interprets the value. The grep is how the list is found; it is not the
+ * list, and an earlier wording of this paragraph promised otherwise.
+ *
+ * THE TWO READINGS ARE THE SAME READING, deliberately, and that is the part
+ * worth holding: both are `!== true`, so an item is "declaring a benefit" for
+ * both or for neither. Two gates disagreeing about what a declared benefit is
+ * would be a row that needs a label and is exempt from § 9-2, or the reverse.
+ * Pinned by "reads `benefitReceived` the way the label gate reads it" in
+ * src/lib/alcohol-commerce.test.ts.
  *
  * UNANSWERED IS PERMISSIVE, TODAY. Every item that existed when this bead's
  * migration ran is in that state, there is no honest backfill for it, and no
@@ -387,8 +406,9 @@ export type AdvertisingLabelRefusal = { error: string; field: string };
  * 20261001150000_add_media_alt_text_caption needed a backfill to escape. If
  * ugcportal-qn3's "an unanswered question blocks publishing" mechanism lands,
  * `benefitReceived` is shaped to move onto it (nullable, no default, so
- * "nobody has said" is still distinguishable from "somebody said no") and this
- * function is the one place that would change.
+ * "nobody has said" is still distinguishable from "somebody said no"). Two
+ * functions would then have to change together, not one: this reading and
+ * `commercialPublishRefusal`'s, per the paragraph above.
  *
  * THE LABEL IS RE-CHECKED AGAINST THE ALLOWLIST, not merely checked for being
  * non-blank. PUT /api/media/[id]/disclosure will not store a benefit of true

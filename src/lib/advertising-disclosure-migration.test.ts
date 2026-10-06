@@ -56,6 +56,17 @@ beforeAll(async () => {
   );
 
   await applyMigration(prisma, MIGRATION_NAME);
+  // Anything committed after this migration, so the generated client can read
+  // the database at all — it selects every column the schema declares, and
+  // 20261006170000 adds three to BenefitSource. A no-op for the three claims
+  // this file makes: none of them is about a column a later migration adds,
+  // and the one later migration that touches a table here REDEFINES
+  // BenefitSource rather than MediaAdvertisingDisclosure, so the ON DELETE
+  // RESTRICT asserted below is declared on a table nothing after this has
+  // altered. That the redefine carries pre-existing brands across intact is
+  // asserted where it belongs, in
+  // src/lib/wine-accessory-brand-check-migration.test.ts.
+  await applyMigrations(prisma, { startAfter: MIGRATION_NAME });
 });
 
 afterAll(async () => {
