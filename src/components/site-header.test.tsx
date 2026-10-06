@@ -136,18 +136,53 @@ describe("SiteHeader (ugcportal-14k9)", () => {
    * added). That file no longer asserts anything about header-internal
    * ordering at all; this is the one place it is checked now, for every
    * landmark in the row, not just two of them.
+   *
+   * ugcportal-0sdf K1: the description above has named "the mobile toggle"
+   * since PR #94 review round 6, but nothing below actually located it in
+   * the markup — the toggle could move anywhere in the row (including after
+   * AuthStatus) without this test noticing. The toggle itself carries no
+   * `data-testid`; its accessible, sr-only "Open menu" label (see
+   * mobile-nav-toggle.tsx) is the one static-markup marker that is already
+   * part of this component's real contract (e2e/header.spec.ts's
+   * `getByRole("button", { name: "Open menu" })` depends on the same text),
+   * so it is used here the same way the wordmark and auth stub already are.
+   *
+   * MUTATION (performed once, verified, and reverted — not left in the
+   * tree): moved `<MobileNavToggle items={NAV_ITEMS} />` in site-header.tsx
+   * to just before `<AuthStatus />` (after `<UploadNavLink />`, inside the
+   * `ml-auto` wrapper) — i.e. "moving MobileNavToggle after AuthStatus" per
+   * ugcportal-0sdf's own premise note. Confirmed this `toggle`/`nav`
+   * assertion is the one that catches it: with the toggle relocated,
+   * `expect(nav).toBeGreaterThan(toggle)` failed with
+   * "expected 541 to be greater than 2765" (the nav landmark now renders at
+   * markup index 541, before the relocated toggle at 2765), while the rest
+   * of the suite (8/9 tests, none referencing the toggle's own position)
+   * stayed green. Separately, the `toggle` lookup's own "not found" guard
+   * was checked by renaming mobile-nav-toggle.tsx's closed-state label from
+   * "Open menu" to "Open navigation menu": this test failed with
+   * `mobile toggle (sr-only "Open menu" label) not found`, as expected for
+   * an indexOf-based marker whose text changed. Both mutations reverted
+   * immediately after.
    */
-  it("places the main nav, the mobile toggle, and the upload link between the wordmark and the auth widget", () => {
+  it("places the mobile toggle (right after the wordmark), the main nav, and the upload link between the wordmark and the auth widget", () => {
     const markup = renderHeader();
     const wordmark = markup.indexOf(`>${EXPECTED_SITE_NAME}<`);
+    const toggle = markup.indexOf(">Open menu<");
     const nav = markup.indexOf('aria-label="Main navigation"');
     const uploadNav = markup.indexOf('data-testid="upload-nav-stub"');
     const auth = markup.indexOf('data-testid="auth-stub"');
 
     expect(wordmark, "wordmark not found").toBeGreaterThan(-1);
+    expect(toggle, "mobile toggle (sr-only \"Open menu\" label) not found").toBeGreaterThan(-1);
     expect(nav, "main nav not found").toBeGreaterThan(-1);
     expect(uploadNav, "upload nav stub not found").toBeGreaterThan(-1);
     expect(auth, "auth stub not found").toBeGreaterThan(-1);
+
+    // ugcportal-0sdf K1: the toggle's own position, relative to the brand
+    // mark (wordmark) and the nav it stands in for below `md` — not just
+    // the landmarks on either side of the whole cluster.
+    expect(toggle).toBeGreaterThan(wordmark);
+    expect(nav).toBeGreaterThan(toggle);
 
     expect(nav).toBeGreaterThan(wordmark);
     expect(uploadNav).toBeGreaterThan(nav);

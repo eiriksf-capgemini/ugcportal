@@ -34,7 +34,11 @@ for (const [name, viewport] of Object.entries(VIEWPORTS)) {
     }) => {
       await page.goto("/");
 
-      await expect(page.getByRole("link", { name: "UGC Portal" })).toBeVisible();
+      // ugcportal-6uxr K2: scoped to the header's own banner landmark, not
+      // the whole page — see this file's header comment for why an
+      // unscoped `getByRole("link", { name: "UGC Portal" })` is unsafe.
+      const banner = page.getByRole("banner");
+      await expect(banner.getByRole("link", { name: "UGC Portal" })).toBeVisible();
 
       // Below md (768px), the nav lives behind the mobile menu toggle - see
       // mobile-nav-toggle.tsx's own comment for why it collapsed rather than
@@ -138,7 +142,9 @@ test.describe("ugcportal-qqnt.3 K1: header hierarchy at 1440x900", () => {
   test("the wordmark's computed font-size is larger than the nav links'", async ({ page }) => {
     await page.goto("/");
 
+    // ugcportal-6uxr K2: scoped to the banner landmark — see K1 test above.
     const wordmarkSize = await page
+      .getByRole("banner")
       .getByRole("link", { name: "UGC Portal" })
       .evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
     const navLinkSize = await page
