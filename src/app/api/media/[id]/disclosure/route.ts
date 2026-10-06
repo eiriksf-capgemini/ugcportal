@@ -47,14 +47,14 @@ type RouteContext = { params: Promise<{ id: string }> };
  * that enforces each, and a second copy of either number in this comment is
  * a number that can go stale without anything failing.
  *
- * 2048 is NOT derived from those caps and does not claim to bound their
- * worst case — a 256-code-unit label of astral characters JSON-escapes to
- * more than 2048 bytes on its own. It is sized for a real body: the longest
- * value the label allowlist can ever store is a couple of dozen characters,
- * and a brand name is a few words. A body larger than this is refused with a
- * 413 before it is buffered, which is the right answer for a request that is
- * not the shape this route accepts, and no body a legitimate client sends
- * comes near it.
+ * 2048 is NOT derived from those caps, and no arithmetic relating it to them
+ * is asserted here — a byte count in a comment is a number that goes stale
+ * the moment either cap moves, with nothing failing. It is simply far above
+ * any body this route can legitimately be sent (the longest value the label
+ * allowlist can ever store is a couple of dozen characters, and a brand name
+ * is a few words) and far below anything that is not a short flat object.
+ * A larger body is refused with a 413 before it is buffered, which is the
+ * right answer for a request that is not the shape this route accepts.
  *
  * App Router puts no default cap on a request body, so without this the
  * length checks below would only run after the server had buffered whatever
