@@ -1,0 +1,759 @@
+/**
+ * Tests for the merged-branch/worktree sweep (ugcportal-nvg0).
+ *
+ * K2/K3 ask for a test over the pure classification logic, following the
+ * scripts/sweep-candidates.mjs convention of exercising the exported
+ * functions directly against fixtures rather than a real git remote. A
+ * `.map()` over hand-built fixture objects cannot reproduce "git status is
+ * clean but the commit was never pushed", or "git itself reports this
+ * directory as gone", so the `describe("end-to-end ...")` block below
+ * builds real temporary git repositories for exactly those two cases,
+ * alongside the pure-fixture tests for everything else.
+ */
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+
+import {
+  buildPrInfoByBranch,
+  classifyRemoteBranch,
+  classifyWorktree,
+  deleteLocalBranch,
+  deleteRemoteBranch,
+  isShaPushedToRemote,
+  isWorktreeDirty,
+  needsPushedCheck,
+  parseBranchFlag,
+  parseRemoteHeads,
+  parseWorktreeList,
+  prListCapWarning,
+  pruneRemoteTrackingRefs,
+  recheckBeforeDeletingBranch,
+  removeWorktree,
+  resolveChdirTarget,
+} from "./sweep-merged-branches.mjs";
+
+describe("classifyRemoteBranch", () => {
+  it("removes a branch whose PR merged", () => {
+    expect(classifyRemoteBranch({ name: "fix/foo", isMainBranch: false, prState: "MERGED" })).toEqual({
+      action: "remove",
+      reason: "PR merged",
+    });
+  });
+
+  it("keeps a branch whose PR is still open (K3)", () => {
+    expect(classifyRemoteBranch({ name: "fix/foo", isMainBranch: false, prState: "OPEN" })).toEqual({
+      action: "keep",
+      reason: "PR open",
+    });
+  });
+
+  it("keeps a branch whose PR was closed without merging (K3)", () => {
+    expect(classifyRemoteBranch({ name: "docs/ugcportal-cbtk-ca-env-claim", isMainBranch: false, prState: "CLOSED" })).toEqual({
+      action: "keep",
+      reason: "PR closed without merge",
+    });
+  });
+
+  it("keeps a branch with no PR at all, e.g. a non-PR ref like Dolt's (K3, out of scope)", () => {
+    expect(classifyRemoteBranch({ name: "__dolt_remote_info__", isMainBranch: false, prState: null })).toEqual({
+      action: "keep",
+      reason: "no PR found for this branch",
+    });
+  });
+
+  it("keeps the main branch even if something put a MERGED state behind its name (K3)", () => {
+    expect(classifyRemoteBranch({ name: "main", isMainBranch: true, prState: "MERGED" })).toEqual({
+      action: "keep",
+      reason: "main branch",
+    });
+  });
+});
+
+describe("classifyWorktree", () => {
+  const base = {
+    path: "/tmp/wt",
+    branch: "fix/foo",
+    isMainWorktree: false,
+    isLocked: false,
+    isPrunable: false,
+    statusUnknown: false,
+    isDirty: false,
+    isPushed: true,
+    prState: "MERGED",
+  };
+
+  it("removes a clean, unlocked, pushed worktree whose branch's PR merged", () => {
+    expect(classifyWorktree(base)).toEqual({ action: "remove", reason: "branch's PR merged" });
+  });
+
+  it("keeps an unpushed worktree even though its branch's PR merged and it is otherwise clean", () => {
+    // Fixture-mutation check: isPushed is the only field that differs from
+    // the "removes ..." case above -- flipping it, and nothing else, must
+    // flip the verdict.
+    expect(classifyWorktree({ ...base, isPushed: false })).toEqual({ action: "keep", reason: "unpushed commits" });
+  });
+
+  it("keeps a dirty worktree even though its branch's PR merged (K3)", () => {
+    expect(classifyWorktree({ ...base, isDirty: true })).toEqual({
+      action: "keep",
+      reason: "worktree has uncommitted changes",
+    });
+  });
+
+  it("keeps a locked worktree even though its branch's PR merged (K3)", () => {
+    expect(classifyWorktree({ ...base, isLocked: true })).toEqual({
+      action: "keep",
+      reason: "worktree is locked",
+    });
+  });
+
+  it("prunes a worktree git itself reports as prunable, instead of trying (and crashing) a status check", () => {
+    expect(classifyWorktree({ ...base, isPrunable: true })).toEqual({
+      action: "prune",
+      reason: "worktree directory is gone -- git worktree prune will clear it",
+    });
+  });
+
+  it("keeps a locked-AND-prunable worktree for the lock reason, since git worktree prune will not touch a locked one anyway", () => {
+    // Fixture-mutation check: if isLocked were not checked before isPrunable,
+    // this would instead report "prune".
+    expect(classifyWorktree({ ...base, isLocked: true, isPrunable: true })).toEqual({
+      action: "keep",
+      reason: "worktree is locked",
+    });
+  });
+
+  it("keeps a worktree whose dirty/clean status could not be determined, rather than guessing", () => {
+    expect(classifyWorktree({ ...base, statusUnknown: true })).toEqual({
+      action: "keep",
+      reason: "could not determine whether the worktree is dirty",
+    });
+  });
+
+  it("keeps the main checkout even though it is clean, unlocked and flagged MERGED (K3)", () => {
+    expect(classifyWorktree({ ...base, isMainWorktree: true })).toEqual({
+      action: "keep",
+      reason: "main checkout",
+    });
+  });
+
+  it("checks main-ness before lock state -- a locked worktree is still reported as the main checkout when isMainWorktree is true", () => {
+    // Fixture-mutation check: isMainWorktree is checked FIRST in
+    // classifyWorktree, before isLocked -- so a worktree that is both main
+    // and locked reports "main checkout", not "worktree is locked".
+    expect(classifyWorktree({ ...base, isMainWorktree: true, isLocked: true })).toEqual({
+      action: "keep",
+      reason: "main checkout",
+    });
+  });
+
+  it("keeps a worktree whose branch's PR is open", () => {
+    expect(classifyWorktree({ ...base, prState: "OPEN" })).toEqual({ action: "keep", reason: "PR open" });
+  });
+
+  it("keeps a worktree whose branch's PR closed without merging", () => {
+    expect(classifyWorktree({ ...base, prState: "CLOSED" })).toEqual({
+      action: "keep",
+      reason: "PR closed without merge",
+    });
+  });
+
+  it("keeps a worktree with no PR for its branch, e.g. an in-progress agent branch", () => {
+    expect(classifyWorktree({ ...base, prState: null })).toEqual({
+      action: "keep",
+      reason: "no PR found for this branch",
+    });
+  });
+
+  it("keeps a detached-HEAD worktree, which has no branch to look a PR up by", () => {
+    expect(classifyWorktree({ ...base, branch: null, prState: null })).toEqual({
+      action: "keep",
+      reason: "detached HEAD, no branch to check",
+    });
+  });
+});
+
+describe("parseRemoteHeads", () => {
+  it("extracts branch names from git ls-remote --heads output", () => {
+    const output = [
+      "f1cc7e855d569b0c33f80057f935b685356d1ca1\trefs/heads/__dolt_remote_info__",
+      "63bd36f51ddbe41435d48c0225506b6f868ff201\trefs/heads/docs/ugcportal-cbtk-ca-env-claim",
+      "",
+    ].join("\n");
+    expect(parseRemoteHeads(output)).toEqual(["__dolt_remote_info__", "docs/ugcportal-cbtk-ca-env-claim"]);
+  });
+
+  it("returns an empty list for empty output rather than throwing", () => {
+    expect(parseRemoteHeads("")).toEqual([]);
+  });
+});
+
+describe("parseWorktreeList", () => {
+  it("parses the main worktree, a locked agent worktree, the HEAD sha, and strips refs/heads/ from the branch", () => {
+    const output = [
+      "worktree /Users/eiriksf/code/ugcportal",
+      "HEAD 1c022bc52515173474438836845def98ab459575",
+      "branch refs/heads/main",
+      "",
+      "worktree /Users/eiriksf/code/ugcportal/.claude/worktrees/agent-af2371f1a739b2b30",
+      "HEAD ab04563ba23516cddb5b47afe88dae26d053786e",
+      "branch refs/heads/worktree-agent-af2371f1a739b2b30",
+      "locked claude agent agent-af2371f1a739b2b30 (pid 7786 start Tue Oct  6 05:05:06 2026)",
+      "",
+    ].join("\n");
+    expect(parseWorktreeList(output)).toEqual([
+      {
+        path: "/Users/eiriksf/code/ugcportal",
+        branch: "main",
+        headSha: "1c022bc52515173474438836845def98ab459575",
+        locked: false,
+        lockReason: null,
+        prunable: false,
+      },
+      {
+        path: "/Users/eiriksf/code/ugcportal/.claude/worktrees/agent-af2371f1a739b2b30",
+        branch: "worktree-agent-af2371f1a739b2b30",
+        headSha: "ab04563ba23516cddb5b47afe88dae26d053786e",
+        locked: true,
+        lockReason: "claude agent agent-af2371f1a739b2b30 (pid 7786 start Tue Oct  6 05:05:06 2026)",
+        prunable: false,
+      },
+    ]);
+  });
+
+  it("parses a prunable worktree (directory gone, e.g. deleted by hand)", () => {
+    const output = [
+      "worktree /tmp/gone",
+      "HEAD 7b241927efd42ad7f6317669156cf718b16d780c",
+      "branch refs/heads/feat/y",
+      "prunable gitdir file points to non-existent location",
+      "",
+    ].join("\n");
+    expect(parseWorktreeList(output)).toEqual([
+      {
+        path: "/tmp/gone",
+        branch: "feat/y",
+        headSha: "7b241927efd42ad7f6317669156cf718b16d780c",
+        locked: false,
+        lockReason: null,
+        prunable: true,
+      },
+    ]);
+  });
+
+  it("parses a locked worktree with no reason text as locked with a null reason", () => {
+    const output = ["worktree /tmp/wt", "HEAD abc123", "branch refs/heads/some-branch", "locked", ""].join("\n");
+    expect(parseWorktreeList(output)).toEqual([
+      { path: "/tmp/wt", branch: "some-branch", headSha: "abc123", locked: true, lockReason: null, prunable: false },
+    ]);
+  });
+
+  it("parses a detached-HEAD worktree as branch: null", () => {
+    const output = ["worktree /tmp/wt", "HEAD abc123", "detached", ""].join("\n");
+    expect(parseWorktreeList(output)).toEqual([
+      { path: "/tmp/wt", branch: null, headSha: "abc123", locked: false, lockReason: null, prunable: false },
+    ]);
+  });
+
+  it("returns an empty list for empty output rather than throwing", () => {
+    expect(parseWorktreeList("")).toEqual([]);
+  });
+});
+
+describe("buildPrInfoByBranch", () => {
+  it("maps a branch to its PR's state and head commit", () => {
+    const prs = [{ headRefName: "fix/foo", state: "MERGED", headRefOid: "abc123", number: 1 }];
+    expect(buildPrInfoByBranch(prs)).toEqual(new Map([["fix/foo", { state: "MERGED", headRefOid: "abc123" }]]));
+  });
+
+  it("keeps the first (newest) PR's info when a branch name was reused", () => {
+    // gh pr list --state all sorts by creation descending, so entry order
+    // in the fixture mirrors "newest PR first" -- the case this guards.
+    const prs = [
+      { headRefName: "fix/foo", state: "OPEN", headRefOid: "new111", number: 2 },
+      { headRefName: "fix/foo", state: "MERGED", headRefOid: "old000", number: 1 },
+    ];
+    expect(buildPrInfoByBranch(prs).get("fix/foo")).toEqual({ state: "OPEN", headRefOid: "new111" });
+  });
+
+  it("returns an empty map for no PRs rather than throwing", () => {
+    expect(buildPrInfoByBranch([])).toEqual(new Map());
+  });
+});
+
+describe("needsPushedCheck", () => {
+  it("is true for an ordinary merged, non-prunable worktree with a head sha -- the case that makes the whole isPushed guard reachable", () => {
+    expect(needsPushedCheck({ prState: "MERGED", headSha: "abc123", isPrunable: false })).toBe(true);
+  });
+
+  it("is false for a prunable worktree, even with a merged PR and a headSha -- its directory is gone, so nothing should -C into it", () => {
+    expect(needsPushedCheck({ prState: "MERGED", headSha: "abc123", isPrunable: true })).toBe(false);
+  });
+
+  it("is false when the PR isn't MERGED, all else equal", () => {
+    expect(needsPushedCheck({ prState: "OPEN", headSha: "abc123", isPrunable: false })).toBe(false);
+  });
+
+  it("is false with no headSha, all else equal", () => {
+    expect(needsPushedCheck({ prState: "MERGED", headSha: null, isPrunable: false })).toBe(false);
+  });
+});
+
+describe("prListCapWarning", () => {
+  it("warns, naming both numbers, once the count reaches the limit", () => {
+    expect(prListCapWarning(1000, 1000)).toBe(
+      "gh pr list returned 1000 PRs, at or above the --limit 1000 cap -- the oldest merged PRs may be missing from this sweep.",
+    );
+  });
+
+  it("is null well under the limit", () => {
+    expect(prListCapWarning(5, 1000)).toBeNull();
+  });
+});
+
+describe("parseBranchFlag", () => {
+  it("returns the value when --branch is given one", () => {
+    expect(parseBranchFlag(["--branch", "feat/x", "--execute"])).toEqual({ branch: "feat/x" });
+  });
+
+  it("returns the value for the --branch=<name> form", () => {
+    expect(parseBranchFlag(["--branch=feat/x", "--execute"])).toEqual({ branch: "feat/x" });
+  });
+
+  it("is a usage error for an empty value", () => {
+    expect(parseBranchFlag(["--branch", "", "--execute"])).toEqual({ error: "--branch requires a non-empty value" });
+  });
+
+  it("is a usage error for an empty --branch=<name> value", () => {
+    expect(parseBranchFlag(["--branch=", "--execute"])).toEqual({ error: "--branch requires a non-empty value" });
+  });
+
+  it("is a usage error when --branch is the last argument", () => {
+    expect(parseBranchFlag(["--execute", "--branch"])).toEqual({ error: "--branch requires a non-empty value" });
+  });
+
+  it("is a usage error when --branch is immediately followed by another flag, not a name", () => {
+    expect(parseBranchFlag(["--branch", "--execute"])).toEqual({ error: "--branch requires a non-empty value" });
+  });
+
+  it("is a usage error for a misspelling that still starts with --branch", () => {
+    expect(parseBranchFlag(["--branches", "feat/x", "--execute"])).toEqual({ error: "unrecognized form of --branch: --branches" });
+  });
+
+  it("is no filter (repo-wide) when --branch is absent entirely", () => {
+    expect(parseBranchFlag(["--execute"])).toEqual({ branch: null });
+  });
+
+  it("--branch=<name> scopes main()'s own filter to exactly that branch, leaving an unnamed merged branch out", () => {
+    const branchFlag = parseBranchFlag(["--branch=feat/alpha", "--execute"]);
+    expect(branchFlag).toEqual({ branch: "feat/alpha" });
+
+    // main()'s own filter expression: branchCandidates.filter((c) => c.name === onlyBranch).
+    const branchCandidates = ["feat/alpha", "feat/beta"]
+      .map((name) => ({ name, ...classifyRemoteBranch({ name, isMainBranch: false, prState: "MERGED" }) }))
+      .filter((c) => c.name === branchFlag.branch);
+
+    expect(branchCandidates).toEqual([{ name: "feat/alpha", action: "remove", reason: "PR merged" }]);
+  });
+});
+
+describe("resolveChdirTarget", () => {
+  const worktrees = [
+    { path: "/repo/main" },
+    { path: "/repo/.claude/worktrees/agent-1" },
+  ];
+
+  it("targets the main worktree when cwd is inside a non-main worktree", () => {
+    expect(resolveChdirTarget(worktrees, "/repo/.claude/worktrees/agent-1")).toBe("/repo/main");
+  });
+
+  it("targets the main worktree when cwd is a subdirectory of a non-main worktree", () => {
+    expect(resolveChdirTarget(worktrees, "/repo/.claude/worktrees/agent-1/src")).toBe("/repo/main");
+  });
+
+  it("returns null when cwd is already the main worktree", () => {
+    expect(resolveChdirTarget(worktrees, "/repo/main")).toBeNull();
+  });
+
+  it("returns null when cwd is outside every known worktree", () => {
+    expect(resolveChdirTarget(worktrees, "/somewhere/else")).toBeNull();
+  });
+});
+
+// --- End-to-end: real temporary git repositories --------------------------
+//
+// The unpushed-commit and deleted-directory cases below only show up against
+// real git state: a worktree with an unpushed commit still reports a clean
+// `git status`, and a worktree whose directory is gone makes `git status`
+// exit non-zero rather than returning a result to assert on -- neither is
+// constructible by hand-building a fixture object. These tests rebuild that
+// state inside a disposable temp directory via plain git commands, and
+// exercise the real (non-pure) git-shelling helpers against it.
+
+// Every fixture git call below is isolated on THREE independent axes, not
+// just one, after a real incident: a prior version of this file used `-C
+// <tmpdir>` alone (plus the GIT_* stripping in beforeAll below) and still
+// corrupted the SHARED repository config that every worktree of this repo
+// reads (core.bare flipped true, user.name/user.email overwritten with this
+// file's own test identity) during a run where the pre-push hook had
+// GIT_DIR/GIT_WORK_TREE set in the environment -- those two variables
+// override git's own repository discovery for a call that has neither `-C`
+// nor an explicit directory argument of its own, so `-C <tmpdir>` alone is
+// not a boundary git itself enforces. The prime suspect, identified after
+// the fact: a path-less `git init --bare` (no directory argument at all) or
+// a bare `git config` call (no `-C`) is what GIT_DIR actually overrides --
+// a call that already names a directory, like `git init -q --bare <path>`,
+// is not. The three independent layers now in force:
+//
+//   1. `cwd` (a real OS working-directory change, Node's guarantee, not
+//      git's) on every single invocation -- never a bare positional path.
+//   2. GIT_CEILING_DIRECTORIES pinned to `os.tmpdir()` so that even if
+//      discovery ever runs, it cannot walk upward past the temp root into
+//      a real repository; GIT_CONFIG_NOSYSTEM and GIT_CONFIG_GLOBAL=/dev/null
+//      so no system- or user-level config (which a stray write could also
+//      reach) is ever read or considered.
+//   3. Identity passed per-invocation as `-c user.name=... -c
+//      user.email=...` rather than a persistent `git config` write -- so
+//      even a misdirected call has no persistent config file to write the
+//      fixture's identity into, anywhere.
+//
+// None of these three is assumed sufficient alone; together they mean no
+// single git behaviour this suite doesn't control has to be trusted.
+
+const FIXTURE_TMP_ROOT = os.tmpdir();
+const FIXTURE_IDENTITY_ARGS = ["-c", "user.name=Test", "-c", "user.email=test@example.com"];
+
+function fixtureGitEnv() {
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) {
+    if (key.startsWith("GIT_")) delete env[key];
+  }
+  env.GIT_CONFIG_NOSYSTEM = "1";
+  env.GIT_CONFIG_GLOBAL = "/dev/null";
+  env.GIT_CEILING_DIRECTORIES = FIXTURE_TMP_ROOT;
+  return env;
+}
+
+/** Runs `git <args>` with `cwd` as the real process working directory (never a positional path argument) and the isolation above. */
+function fixtureGit(cwd, args, options = {}) {
+  return execFileSync("git", [...FIXTURE_IDENTITY_ARGS, ...args], { cwd, env: fixtureGitEnv(), encoding: "utf8", ...options });
+}
+
+function makeFixtureRepo(prefix) {
+  const root = fs.mkdtempSync(path.join(FIXTURE_TMP_ROOT, prefix));
+  const repoDir = path.join(root, "repo");
+  fs.mkdirSync(repoDir);
+  fixtureGit(repoDir, ["init", "-q"]);
+  fixtureGit(repoDir, ["commit", "--allow-empty", "-q", "-m", "init"]);
+  return { root, repoDir };
+}
+
+describe("end-to-end against real temporary git repositories", () => {
+  // `fixtureGit` above isolates every call it makes, but the IMPORTED
+  // production functions under test (isWorktreeDirty, isShaPushedToRemote)
+  // call `execFileSync` directly with no env override of their own -- by
+  // design, since in real use they run against the actual target repo, not
+  // an isolated fixture. Under this repo's own pre-push hook (which sets
+  // GIT_DIR/GIT_WORK_TREE), those calls would otherwise read the wrong
+  // repository for the same reason `fixtureGit` needs isolation at all:
+  // reproduced directly -- `isShaPushedToRemote` returned false for a commit
+  // this test had just pushed, because it was reading this worktree's
+  // branches, not the fixture's. Stripping GIT_* for the lifetime of this
+  // describe block (read-only queries only touch the wrong repo here, never
+  // write to it) covers those two calls the same way `fixtureGit` covers its
+  // own.
+  let savedGitEnv;
+  beforeAll(() => {
+    savedGitEnv = {};
+    for (const key of Object.keys(process.env)) {
+      if (key.startsWith("GIT_")) {
+        savedGitEnv[key] = process.env[key];
+        delete process.env[key];
+      }
+    }
+  });
+  afterAll(() => {
+    Object.assign(process.env, savedGitEnv);
+  });
+
+  it("keeps a clean worktree with one committed-but-unpushed commit, instead of handing it to git branch -D", () => {
+    const { root, repoDir } = makeFixtureRepo("unpushed-commit-");
+    const wtDir = path.join(root, "wt");
+    try {
+      fixtureGit(repoDir, ["worktree", "add", "-q", wtDir, "-b", "feat/x"]);
+      fixtureGit(wtDir, ["commit", "--allow-empty", "-q", "-m", "unpushed follow-up"]);
+      const headSha = fixtureGit(wtDir, ["rev-parse", "HEAD"]).trim();
+
+      // Reproduces the bug exactly: working tree is clean...
+      expect(isWorktreeDirty(wtDir)).toBe(false);
+      // ...but the commit is unreachable from any remote branch -- there is
+      // no remote at all in this fixture, which is the realistic case for a
+      // squash-merge repo: a branch's own commits are never reachable from
+      // `main` even once its PR has merged.
+      expect(isShaPushedToRemote(headSha, wtDir)).toBe(false);
+
+      // Fed into the real classifier with the PR already reported MERGED --
+      // the worktree must be kept, never force-branch-deleted.
+      expect(
+        classifyWorktree({
+          path: wtDir,
+          branch: "feat/x",
+          isMainWorktree: false,
+          isLocked: false,
+          isPrunable: false,
+          statusUnknown: false,
+          isDirty: isWorktreeDirty(wtDir),
+          isPushed: isShaPushedToRemote(headSha, wtDir),
+          prState: "MERGED",
+        }),
+      ).toEqual({ action: "keep", reason: "unpushed commits" });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fixture-mutation check: pushing the SAME commit to a real remote flips isShaPushedToRemote, and the worktree becomes removable", () => {
+    const { root, repoDir } = makeFixtureRepo("pushed-commit-");
+    const wtDir = path.join(root, "wt");
+    const remoteDir = path.join(root, "remote.git");
+    try {
+      fs.mkdirSync(remoteDir);
+      fixtureGit(remoteDir, ["init", "-q", "--bare"]); // no positional path -- `cwd` is the only thing naming the target
+      fixtureGit(repoDir, ["remote", "add", "origin", remoteDir]);
+      fixtureGit(repoDir, ["worktree", "add", "-q", wtDir, "-b", "feat/x"]);
+      fixtureGit(wtDir, ["commit", "--allow-empty", "-q", "-m", "now pushed"]);
+      const headSha = fixtureGit(wtDir, ["rev-parse", "HEAD"]).trim();
+
+      // Before the push: same unpushed shape as the test above, this time
+      // with a real (but not-yet-used) remote configured.
+      expect(isShaPushedToRemote(headSha, wtDir)).toBe(false);
+
+      fixtureGit(wtDir, ["push", "-q", "origin", "feat/x"]);
+
+      // The mutation: nothing but the push happened. The exact same sha, on
+      // the exact same worktree, now reads as pushed.
+      expect(isShaPushedToRemote(headSha, wtDir)).toBe(true);
+
+      expect(
+        classifyWorktree({
+          path: wtDir,
+          branch: "feat/x",
+          isMainWorktree: false,
+          isLocked: false,
+          isPrunable: false,
+          statusUnknown: false,
+          isDirty: isWorktreeDirty(wtDir),
+          isPushed: isShaPushedToRemote(headSha, wtDir),
+          prState: "MERGED",
+        }),
+      ).toEqual({ action: "remove", reason: "branch's PR merged" });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("parses a worktree whose directory was deleted by hand as prunable, and classifies it 'prune' without crashing on git status", () => {
+    const { root, repoDir } = makeFixtureRepo("prunable-worktree-");
+    const wtDir = path.join(root, "wt");
+    try {
+      fixtureGit(repoDir, ["worktree", "add", "-q", wtDir, "-b", "feat/y"]);
+      fs.rmSync(wtDir, { recursive: true, force: true }); // simulate a hand-deleted worktree directory, not `git worktree remove`
+
+      const listing = parseWorktreeList(fixtureGit(repoDir, ["worktree", "list", "--porcelain"]));
+      const deleted = listing.find((w) => w.branch === "feat/y");
+      expect(deleted.prunable).toBe(true); // reproduces the exact porcelain line this bug depended on
+
+      // The real isWorktreeDirty call on a gone directory still throws (exit
+      // 128). A caller must never call it for a prunable entry; main() now
+      // skips it via this same parsed flag.
+      expect(() => isWorktreeDirty(deleted.path)).toThrow();
+
+      expect(
+        classifyWorktree({
+          path: deleted.path,
+          branch: deleted.branch,
+          isMainWorktree: false,
+          isLocked: deleted.locked,
+          isPrunable: deleted.prunable,
+          statusUnknown: false,
+          isDirty: false,
+          isPushed: true,
+          prState: "MERGED",
+        }),
+      ).toEqual({ action: "prune", reason: "worktree directory is gone -- git worktree prune will clear it" });
+    } finally {
+      try {
+        fixtureGit(repoDir, ["worktree", "prune"], { stdio: "ignore" });
+      } catch {
+        // best-effort cleanup -- the assertions above are what the test is for
+      }
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("pruneRemoteTrackingRefs refreshes a tracking ref left stale by a branch deletion this clone never fetched", () => {
+    const { root, repoDir } = makeFixtureRepo("stale-remote-branch-");
+    const remoteDir = path.join(root, "remote.git");
+    try {
+      fs.mkdirSync(remoteDir);
+      fixtureGit(remoteDir, ["init", "-q", "--bare"]);
+      fixtureGit(repoDir, ["remote", "add", "origin", remoteDir]);
+      fixtureGit(repoDir, ["checkout", "-q", "-b", "feat/s"]);
+      fixtureGit(repoDir, ["commit", "--allow-empty", "-q", "-m", "only reachable via feat/s"]);
+      const headSha = fixtureGit(repoDir, ["rev-parse", "HEAD"]).trim();
+      fixtureGit(repoDir, ["push", "-q", "origin", "feat/s"]);
+
+      expect(isShaPushedToRemote(headSha, repoDir)).toBe(true);
+
+      // An external deletion this clone doesn't know about yet: removed
+      // directly on the bare remote, not via `git push origin --delete`
+      // from repoDir, so repoDir's own tracking ref is left stale.
+      fixtureGit(remoteDir, ["branch", "-D", "feat/s"]);
+
+      // Stale and wrong: the remote branch is gone, but the cached
+      // tracking ref has not caught up.
+      expect(isShaPushedToRemote(headSha, repoDir)).toBe(true);
+
+      pruneRemoteTrackingRefs(repoDir);
+
+      // Fixture-mutation check: nothing but the prune ran. The same sha,
+      // on the same repo, now correctly reads as not pushed.
+      expect(isShaPushedToRemote(headSha, repoDir)).toBe(false);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("deleteRemoteBranch prunes its own tracking ref immediately, so a same-run re-check sees the deletion", () => {
+    const { root, repoDir } = makeFixtureRepo("same-run-delete-");
+    const wtDir = path.join(root, "wt");
+    const remoteDir = path.join(root, "remote.git");
+    try {
+      fs.mkdirSync(remoteDir);
+      fixtureGit(remoteDir, ["init", "-q", "--bare"]);
+      fixtureGit(repoDir, ["remote", "add", "origin", remoteDir]);
+      fixtureGit(repoDir, ["worktree", "add", "-q", wtDir, "-b", "feat/z"]);
+      fixtureGit(wtDir, ["push", "-q", "-u", "origin", "feat/z"]);
+      fixtureGit(wtDir, ["commit", "--allow-empty", "-q", "-m", "a pushed follow-up"]);
+      fixtureGit(wtDir, ["push", "-q", "origin", "feat/z"]);
+      const headSha = fixtureGit(wtDir, ["rev-parse", "HEAD"]).trim();
+
+      // Before any deletion: correctly reachable via origin/feat/z.
+      expect(isShaPushedToRemote(headSha, wtDir)).toBe(true);
+
+      // main()'s remote-branch loop runs before its worktree loop --
+      // reproduce that ordering directly.
+      deleteRemoteBranch("feat/z", repoDir);
+
+      // Fixture-mutation check: nothing but that one deletion ran. The
+      // exact same sha, on the exact same worktree, now correctly reads as
+      // not pushed -- deleteRemoteBranch's own immediate ref-prune is what
+      // makes a same-run re-check see this instead of the value computed
+      // before the delete.
+      expect(isShaPushedToRemote(headSha, wtDir)).toBe(false);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("recheckBeforeDeletingBranch keeps the local branch when the only containing ref was the remote branch this same run just deleted", () => {
+    const { root, repoDir } = makeFixtureRepo("recheck-keeps-");
+    const wtDir = path.join(root, "wt");
+    const remoteDir = path.join(root, "remote.git");
+    try {
+      fs.mkdirSync(remoteDir);
+      fixtureGit(remoteDir, ["init", "-q", "--bare"]);
+      fixtureGit(repoDir, ["remote", "add", "origin", remoteDir]);
+      fixtureGit(repoDir, ["worktree", "add", "-q", wtDir, "-b", "feat/post"]);
+      fixtureGit(wtDir, ["push", "-q", "-u", "origin", "feat/post"]);
+      fixtureGit(wtDir, ["commit", "--allow-empty", "-q", "-m", "a pushed follow-up"]);
+      fixtureGit(wtDir, ["push", "-q", "origin", "feat/post"]);
+      const headSha = fixtureGit(wtDir, ["rev-parse", "HEAD"]).trim();
+
+      deleteRemoteBranch("feat/post", repoDir);
+
+      // Fixture-mutation check: removing this re-check (always returning
+      // {action: "delete"}) makes this assertion fail, with nothing else in
+      // the suite catching the regression -- the gap this test closes.
+      expect(recheckBeforeDeletingBranch({ headSha, prHeadRefOid: "0".repeat(40), cwd: repoDir })).toEqual({
+        action: "keep",
+        reason: "only ref was the deleted remote branch",
+      });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("the worktree removal breaks default-cwd git calls when run from inside the worktree being removed", () => {
+    const { root, repoDir } = makeFixtureRepo("cwd-breaks-");
+    const wtDir = path.join(root, "wt");
+    const originalCwd = process.cwd();
+    try {
+      fixtureGit(repoDir, ["worktree", "add", "-q", wtDir, "-b", "feat/broken"]);
+      process.chdir(wtDir);
+      removeWorktree(wtDir); // deletes the directory that is now process.cwd()
+      expect(() => deleteLocalBranch("feat/broken")).toThrow();
+    } finally {
+      process.chdir(originalCwd);
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("completes and removes the local branch when the pivot to the main checkout runs first", () => {
+    const { root, repoDir } = makeFixtureRepo("cwd-is-doomed-");
+    const wtDir = path.join(root, "wt");
+    const originalCwd = process.cwd();
+    try {
+      fixtureGit(repoDir, ["worktree", "add", "-q", wtDir, "-b", "feat/self"]);
+
+      // process.chdir resolves symlinks (e.g. macOS's /var -> /private/var),
+      // same as the real process.cwd() main() reads -- compare against that
+      // resolved form, not the pre-chdir path, so this matches production.
+      process.chdir(wtDir);
+      const worktrees = parseWorktreeList(fixtureGit(repoDir, ["worktree", "list", "--porcelain"]));
+      const chdirTarget = resolveChdirTarget(worktrees, process.cwd());
+      expect(chdirTarget).not.toBeNull();
+
+      process.chdir(chdirTarget);
+      removeWorktree(wtDir);
+      deleteLocalBranch("feat/self");
+
+      expect(fixtureGit(repoDir, ["branch", "--list", "feat/self"]).trim()).toBe("");
+    } finally {
+      process.chdir(originalCwd);
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("guard: the fixtures above must never reach this repository's own config", () => {
+  // Real incident, not a hypothetical: an earlier version of the suite
+  // above, lacking the isolation layers documented there, flipped THIS
+  // repository's shared `core.bare` to true and overwrote its
+  // `user.name`/`user.email` with the fixtures' own "Test"/"test@example.com"
+  // identity -- found by inspecting the common `.git/config` every worktree
+  // of this repository shares (this one included) and repaired by hand.
+  // This guard reads that same shared config, through plain `git config
+  // --get` with no `-C` or `cwd` override at all, so it resolves exactly the
+  // way an accidentally-misdirected fixture command would have reached it.
+  function readSharedConfig(key) {
+    try {
+      return execFileSync("git", ["config", "--get", key], { encoding: "utf8" }).trim();
+    } catch {
+      return null; // key not set -- a normal, non-bare repo with its identity set some other way
+    }
+  }
+
+  it("leaves core.bare false (or unset) after every fixture test above has run", () => {
+    expect(readSharedConfig("core.bare")).not.toBe("true");
+  });
+
+  it("leaves user.name and user.email as whatever they were, not the fixtures' Test/test@example.com", () => {
+    expect(readSharedConfig("user.name")).not.toBe("Test");
+    expect(readSharedConfig("user.email")).not.toBe("test@example.com");
+  });
+});
