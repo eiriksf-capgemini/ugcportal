@@ -124,11 +124,17 @@ export const LEGAL_SIGN_OFF: LegalSignOff | null = {
   // ones legalReadiness(LEGAL_PAGES).digests reported for that text; any
   // later edit to either page's authored prose changes its digest and puts
   // that page back in draft until it is approved again.
+  //
+  // Eirik approved the uploads category's new fourth `what` paragraph (the
+  // advertising-disclosure record: benefit received, its source, the label)
+  // and the matching `legalBasis`/`recipients` wording on 2026-10-06
+  // (ugcportal-mj50); only /privacy's digest changed, so /licence's is
+  // unchanged from the sign-off above.
   by: "Eirik Sander-Fjeld",
-  date: "2026-10-05",
-  bead: "ugcportal-alg",
+  date: "2026-10-06",
+  bead: "ugcportal-mj50",
   authoredSha256: {
-    "/privacy": "e83caf1a47335e8c3303721ee6186f495c680270313364305f524dad83a89c48",
+    "/privacy": "28aec31b8f15d05f9cd69c6687b47fa6c37adf8f63081ae9397068dd266d55fd",
     "/licence": "ae6a4a484a0bc2c571121a5f2e02c2bc9db46dd5d14eb6915abafe1b5fd8f901",
   },
 };
