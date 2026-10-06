@@ -5,13 +5,25 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendMock = vi.fn();
 
-vi.mock("@/lib/s3", () => ({
-  getS3Client: () => ({ send: sendMock }),
-  getBucketName: () => "ugcportal-test",
-}));
+// Only the client and the bucket are stubbed; `sendWithTransportClassification`
+// and `classifyTransportFailure` stay real, because the classification is
+// what ugcportal-98rb's tests below are about.
+vi.mock("@/lib/s3", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/s3")>();
+  return {
+    ...actual,
+    getS3Client: () => ({ send: sendMock }),
+    getBucketName: () => "ugcportal-test",
+  };
+});
 
-const { RIGHTS_EVIDENCE_PREFIX, putRightsEvidence, rightsEvidenceKey } =
-  await import("@/lib/rights-evidence");
+const {
+  RIGHTS_EVIDENCE_PREFIX,
+  deleteRightsEvidence,
+  putRightsEvidence,
+  rightsEvidenceKey,
+} = await import("@/lib/rights-evidence");
+const { ObjectStorageUnreachableError } = await import("@/lib/s3");
 
 function lastPutInput() {
   const command = sendMock.mock.calls.at(-1)?.[0];
@@ -156,3 +168,105 @@ describe("putRightsEvidence", () => {
     expect(sendMock).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * ugcportal-98rb: both halves of this module classify a transport failure,
+ * so the route above can tell a storage outage from a refusal — and so the
+ * best-effort cleanup says which of the two left the object behind.
+ */
+describe("object storage unreachable (ugcportal-98rb)", () => {
+  const body = new Uint8Array([1, 2, 3]);
+
+  /** As @smithy's retry middleware leaves one it gave up on. */
+  function transportError(): Error {
+    return Object.assign(new Error("socket hang up"), {
+      code: "ECONNREFUSED",
+      $metadata: { attempts: 3 },
+    });
+  }
+
+  /** A reachable endpoint refusing the request itself. */
+  function serviceError(): Error {
+    return Object.assign(new Error("Access Denied"), {
+      name: "AccessDenied",
+      $metadata: { httpStatusCode: 403, attempts: 1 },
+    });
+  }
+
+  it("rethrows an unreachable endpoint as ObjectStorageUnreachableError", async () => {
+    sendMock.mockRejectedValue(transportError());
+
+    const thrown = await putRightsEvidence({
+      uploaderUserId: "uploader-1",
+      filename: "a.pdf",
+      body,
+    }).catch((error: unknown) => error);
+
+    expect(thrown).toBeInstanceOf(ObjectStorageUnreachableError);
+    expect(thrown).toMatchObject({
+      operation: "evidence",
+      code: "ECONNREFUSED",
+      attempts: 3,
+    });
+    // The SDK error is kept, not swallowed, so a log line that dumps this
+    // object still has a stack to print.
+    expect((thrown as Error).cause).toBeInstanceOf(Error);
+  });
+
+  it("passes a refusal from the endpoint through unchanged", async () => {
+    // The other half of the distinction: an AccessDenied must NOT become
+    // an ObjectStorageUnreachableError, or the route answers "try again
+    // shortly" to a problem retrying can never fix.
+    const refusal = serviceError();
+    sendMock.mockRejectedValue(refusal);
+
+    const thrown = await putRightsEvidence({
+      uploaderUserId: "uploader-1",
+      filename: "a.pdf",
+      body,
+    }).catch((error: unknown) => error);
+
+    expect(thrown).not.toBeInstanceOf(ObjectStorageUnreachableError);
+    expect(thrown).toBe(refusal);
+  });
+
+  it("logs the cleanup failure distinguishably, and still never throws", async () => {
+    sendMock.mockRejectedValue(transportError());
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await expect(
+      deleteRightsEvidence("rights-evidence/uploader-1/x.pdf"),
+    ).resolves.toBeUndefined();
+    const transportCalls = [...consoleError.mock.calls];
+    // mockClear, not mockReset: in vitest a spy's `mockReset` also puts the
+    // original `console.error` back, which would let the second half of
+    // this test print to stderr.
+    consoleError.mockClear();
+
+    sendMock.mockRejectedValue(serviceError());
+    await expect(
+      deleteRightsEvidence("rights-evidence/uploader-1/x.pdf"),
+    ).resolves.toBeUndefined();
+    const refusalCalls = [...consoleError.mock.calls];
+    consoleError.mockRestore();
+
+    expect(transportCalls).toEqual([
+      [
+        "[resale-rights] object storage unreachable",
+        expect.objectContaining({
+          key: "rights-evidence/uploader-1/x.pdf",
+          operation: "evidence-cleanup",
+          code: "ECONNREFUSED",
+          attempts: 3,
+        }),
+      ],
+    ]);
+    expect(refusalCalls).toEqual([
+      [
+        "[resale-rights] failed to remove unused evidence object",
+        expect.objectContaining({ key: "rights-evidence/uploader-1/x.pdf" }),
+      ],
+    ]);
+  });
+});
+

@@ -14,6 +14,13 @@ const OUTCOME_MESSAGES: Record<string, string> = {
     "That evidence file is too large (20 MB maximum). Upload the signed instrument itself rather than a scan of the whole folder.",
   rights_evidence_failed:
     "The evidence file couldn't be stored, so nothing was recorded. Check the server logs and try again.",
+  // Distinct from rights_evidence_failed above, and the distinction is the
+  // point (ugcportal-98rb K2): that one is "something is wrong, go and look
+  // at it", this one is "the storage service could not be reached, so
+  // waiting is the right thing to do". Collapsing them would send an admin
+  // hunting a configuration bug during a transient outage.
+  rights_storage_unavailable:
+    "Object storage couldn't be reached, so nothing was recorded. This is usually temporary — wait a moment and submit the decision again.",
   rights_uploader_not_found:
     "That uploader no longer has an account, so there is nothing to clear. The list has been refreshed.",
   rights_actor_not_admin:
