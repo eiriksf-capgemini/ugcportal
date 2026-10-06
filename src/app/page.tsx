@@ -150,11 +150,10 @@ export default async function Home() {
    * The front page's own "living empty state" (ugcportal-6dvg K1/K2),
    * src/components/home/empty-state.tsx, rendered INSTEAD of `<Gallery>`
    * under the SAME EXPRESSION `<Gallery>`'s own internal `GalleryEmpty`
-   * (src/components/gallery/gallery.tsx) uses, via the shared
-   * `isGenuinelyEmptyPage` (src/lib/gallery-items.ts) rather than a second
-   * hand-copied boolean expression — see that function's own comment for
-   * the one place gallery.tsx's own copy could not also be swapped onto it
-   * without exceeding this bead's scope.
+   * (src/components/gallery/gallery.tsx) uses — both calls now go through
+   * the shared `isGenuinelyEmptyPage` (src/lib/gallery-items.ts;
+   * ugcportal-3wcd consolidated gallery.tsx's own inline copy onto it too)
+   * rather than either site hand-copying the boolean expression.
    *
    * NOT a guarantee the two decisions "cannot disagree" (round-2 review,
    * low finding — an earlier version of this comment overclaimed exactly
@@ -169,8 +168,7 @@ export default async function Home() {
    * inputs that happen to agree whenever the feed's own data is healthy —
    * a listing that reported `hasMore: true` with a `null` cursor, or a
    * page of rows that were all individually unusable, is exactly the case
-   * where they would not. Recorded on ugcportal-3wcd rather than left as
-   * an assumption only this comment stated.
+   * where they would not.
    */
   const isGenuinelyEmpty = isGenuinelyEmptyPage(
     result.page.items,

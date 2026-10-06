@@ -31,6 +31,7 @@ import {
   appendGalleryItems,
   galleryItemAlt,
   galleryItemLabel,
+  isGenuinelyEmptyPage,
   toGalleryItems,
   type GalleryItem,
 } from "@/lib/gallery-items";
@@ -393,17 +394,18 @@ export function Gallery({
   }, [cursor, loadState]);
 
   /*
-   * `&& !hasMore`, not `items.length === 0` alone.
-   *
-   * The two are the same thing today: `listMedia` only ever builds a cursor
-   * from a row it emitted, so a first page with no items always comes back
-   * with `hasMore: false`. But they are not the same *claim* — "there is
-   * nothing published" and "this page happened to be empty" are different
-   * statements, and the early return says the first out loud. If the feed ever
-   * did answer with an empty page and a cursor, returning here would strand
-   * the visitor on "nothing is published yet" with no way to ask for the rest.
+   * Decided by the shared `isGenuinelyEmptyPage` (src/lib/gallery-items.ts;
+   * ugcportal-3wcd consolidated this from an inline copy of the same
+   * expression), not `items.length === 0` alone — see that function's own
+   * comment for why: "there is nothing published" and "this page happened
+   * to be empty" are different claims, and conflating them would strand a
+   * visitor on the first with no way to ask for the rest. `items` here is
+   * already `toGalleryItems(...)`-filtered and `hasMore` already folds in
+   * the cursor check above (see its own `useState` initializer) — the same
+   * two inputs this component always evaluated the expression over; only
+   * the implementation moved.
    */
-  if (items.length === 0 && !hasMore) {
+  if (isGenuinelyEmptyPage(items, hasMore)) {
     return <GalleryEmpty />;
   }
 
