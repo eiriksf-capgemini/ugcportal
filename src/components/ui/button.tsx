@@ -217,7 +217,8 @@ const buttonVariants = cva(
        * changed the COMPUTED radius of every `size="sm"`/`"xs"` caller this
        * bead neither touches nor verifies -
        * src/app/admin/settings/instagram/page.tsx,
-       * .../rights/decision-form.tsx, .../users/page.tsx,
+       * src/app/admin/settings/rights/decision-form.tsx,
+       * src/app/admin/settings/users/page.tsx,
        * src/app/upload/upload-queue-list.tsx, src/app/auth/error/page.tsx
        * and src/components/consent/cookie-banner.tsx all render a
        * `size="sm"` button today, none of them in this bead's stated scope
@@ -237,8 +238,9 @@ const buttonVariants = cva(
        * through to the base class's `rounded-lg` the same way hero's and
        * empty state's uncapped `lg` controls do. Whether the all-sizes-10px
        * radius is the right design for every OTHER `sm`/`xs` caller too is
-       * an open question this bead does not decide here - follow-up filed
-       * on the parent epic (ugcportal-qqnt), not settled by this change.
+       * an open question this bead does not decide here - noted in the
+       * PR body as a follow-up for the parent epic (ugcportal-qqnt), not
+       * settled by this change.
        */
       size: {
         default:
