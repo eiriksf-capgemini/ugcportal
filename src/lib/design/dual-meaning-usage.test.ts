@@ -184,6 +184,12 @@ function scanDualMeaningUsage(): Map<string, Partial<Record<DualMeaningToken, nu
  * (ugcportal-gwr) landed on a diverging branch and merged into this one only
  * after round 4, so round 4's own audit never saw it. Switched to
  * text-muted-foreground, the same token its sibling already uses.
+ *
+ * ugcportal-qnq9.2.2 added a third instance, GALLERY_COMMERCIAL_LINK_MARKER_
+ * CLASS: the per-link bilingual marker renders as a sibling of the gallery
+ * tile's own `<button>`, directly on --background - the identical placement
+ * GALLERY_CAPTION_CLASS and GALLERY_TAG_CLASS already use the same token
+ * for, not a new context this file needs to re-audit from scratch.
  */
 const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> = {
   // The page h1 moved out of auth/error, upload and the legal frame into
@@ -290,7 +296,7 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
     "text-foreground": 1,
     "text-muted-foreground": 1,
   },
-  "src/components/gallery/containment.ts": { "text-muted-foreground": 2 },
+  "src/components/gallery/containment.ts": { "text-muted-foreground": 3 },
   "src/components/auth-status.tsx": { "text-muted-foreground": 1 },
   // cookie-settings-link.tsx carried its own literal class string here
   // until PR #96 round-1 review (ugcportal-akv6): it now imports

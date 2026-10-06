@@ -1,3 +1,4 @@
+import { isPermittedAdvertisingLabel } from "@/lib/advertising-disclosure";
 import { stripCurationTags } from "@/lib/curation-tags";
 import { MEDIA_ANONYMOUS_SELECT } from "@/lib/media-access";
 import {
@@ -191,6 +192,26 @@ export async function listPublicMedia(
       items: result.page.items.map((row) => ({
         ...row,
         tags: stripCurationTags(row.tags),
+        // ugcportal-qnq9.2.2, and the IDENTICAL shape of fix the comment
+        // above this function describes for `tags`: `toGalleryItem`
+        // (src/lib/gallery-items.ts) already empties `commercialLinks`
+        // whenever an item's label is absent — but that conversion only
+        // runs for a caller that converts THROUGH it, and the raw JSON
+        // GET /api/public/media serves `listPublicMedia`'s own result with
+        // no such conversion. Without this, a disclosure withdrawn AFTER a
+        // link was attached (ugcportal-jain: `PUT .../disclosure` with
+        // `benefitReceived: false` clears the label but detaches no link)
+        // would leave the link sitting in this raw response even though
+        // every rendered page already hides it — a leak to a direct API
+        // consumer, not a page visitor, the same audience round 4's `tags`
+        // fix names. RE-VALIDATED against the closed allowlist
+        // (`isPermittedAdvertisingLabel`), not merely checked for
+        // non-null, for the same "do not trust a row was written through
+        // the validator" reason `toAdvertisingLabel` gives for doing the
+        // identical check on the render side.
+        commercialLinks: isPermittedAdvertisingLabel(row.advertisingDisclosure?.label ?? null)
+          ? row.commercialLinks
+          : [],
       })),
     },
   };

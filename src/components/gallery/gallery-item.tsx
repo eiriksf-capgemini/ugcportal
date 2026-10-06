@@ -1,9 +1,17 @@
 import {
   GALLERY_ADVERTISING_LABEL_CLASS,
   GALLERY_CAPTION_CLASS,
+  GALLERY_COMMERCIAL_LINK_CLASS,
+  GALLERY_COMMERCIAL_LINK_ITEM_CLASS,
+  GALLERY_COMMERCIAL_LINK_MARKER_CLASS,
+  GALLERY_COMMERCIAL_LINKS_LIST_CLASS,
   GALLERY_TAG_CLASS,
   GALLERY_TAG_LIST_CLASS,
 } from "@/components/gallery/containment";
+import {
+  commercialLinkRel,
+  COMMERCIAL_LINK_MARKER_TEXT,
+} from "@/lib/commercial-link-render";
 import type { GalleryItem } from "@/lib/gallery-items";
 
 /**
@@ -139,6 +147,63 @@ export function GalleryItemTags({ item }: { item: GalleryItem }) {
       {item.tags.map((tag) => (
         <li key={tag.slug} className={GALLERY_TAG_CLASS} data-gallery-tag={tag.slug}>
           {tag.name}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/**
+ * The commercial outbound links under one item (ugcportal-qnq9.2.2 K1), the
+ * LAST of the four optional elements this component renders — after the
+ * advertising label, the caption and the tags, since this is the one thing
+ * on an item's own card that actually leaves the site.
+ *
+ * RENDERS NOTHING when `item.commercialLinks` is empty — the same "absence
+ * is silence" rule every other optional element here follows, and the ONE
+ * place that emptiness is actually decided is `toGalleryItem`
+ * (src/lib/gallery-items.ts#toGalleryCommercialLinks): an item whose
+ * advertising label is `null` always reaches this component with an empty
+ * array, whatever rows the database still holds (ugcportal-jain) — this
+ * component has no second opinion to offer and asks none.
+ *
+ * EACH LINK IS AN `<a>` FOLLOWED BY A `<span>` MARKER, in that DOM order —
+ * K1's "the link text is immediately followed by the bilingual marker" — and
+ * the marker is a SIBLING of the anchor, never content inside it: an
+ * anchor's accessible name is its own text content, and folding
+ * "Advertisement link / Annonselenke" into that name would have the link
+ * announce its own disclosure instead of its destination, the same "a
+ * compliance string placed where it alters what gets announced" problem
+ * `GalleryItemAdvertisingLabel`'s own comment names for the tile's button.
+ * As an ordinary sibling, a screen reader announces the link, then the
+ * marker, in the order they sit on the page.
+ *
+ * `rel={commercialLinkRel()}` and `target="_blank"` on every link, from the
+ * one function in src/lib/commercial-link-render.ts every surface calls —
+ * see that module's own comment for what each `rel` token is for. NO
+ * `onClick`, no script, nothing that fires before the visitor actually
+ * activates the anchor (K3): this is a bare `<a href>`, the shape a browser
+ * sends no request for and sets no cookie or storage for merely by being on
+ * the page.
+ */
+export function GalleryItemCommercialLinks({ item }: { item: GalleryItem }) {
+  if (item.commercialLinks.length === 0) return null;
+  return (
+    <ul className={GALLERY_COMMERCIAL_LINKS_LIST_CLASS}>
+      {item.commercialLinks.map((link) => (
+        <li key={link.id} className={GALLERY_COMMERCIAL_LINK_ITEM_CLASS}>
+          <a
+            href={link.url}
+            target="_blank"
+            rel={commercialLinkRel()}
+            className={GALLERY_COMMERCIAL_LINK_CLASS}
+            data-commercial-link={link.id}
+          >
+            {link.text}
+          </a>
+          <span className={GALLERY_COMMERCIAL_LINK_MARKER_CLASS}>
+            {COMMERCIAL_LINK_MARKER_TEXT}
+          </span>
         </li>
       ))}
     </ul>

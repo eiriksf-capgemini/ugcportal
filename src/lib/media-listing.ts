@@ -1,3 +1,4 @@
+import type { CommercialLinkNetwork } from "@/generated/prisma/enums";
 import type { MediaModel } from "@/generated/prisma/models";
 import {
   MEDIA_ANONYMOUS_SELECT,
@@ -234,6 +235,30 @@ type AdvertisingDisclosureProjection<TSelect> =
     : unknown;
 
 /**
+ * The commercial-link relation (ugcportal-qnq9.2.2), when — and only when —
+ * the projection asked for it. The identical shape, for the identical
+ * reason, as `AdvertisingDisclosureProjection` just above: `MEDIA_ANONYMOUS_
+ * SELECT`'s `commercialLinks` entry is a relation, not a column, so
+ * `extends true` in `SelectedColumnKeys` excludes it, and the row type has
+ * to gain it back here or a caller of `listPublicMedia`/`listMedia` would
+ * receive it at runtime with no type saying so.
+ *
+ * An array, never `null` — a row with no commercial links has `[]`, the same
+ * way Prisma answers a to-many relation with no matches, unlike the
+ * to-one `advertisingDisclosure` relation above which can be `null`.
+ */
+type CommercialLinksProjection<TSelect> = "commercialLinks" extends keyof TSelect
+  ? {
+      commercialLinks: {
+        id: string;
+        url: string;
+        network: CommercialLinkNetwork;
+        networkOther: string | null;
+      }[];
+    }
+  : unknown;
+
+/**
  * A row exactly as the query returns it — `previewId` still nullable, because
  * the column is.
  *
@@ -248,6 +273,7 @@ type MediaListingRow<TSelect extends MediaListingSelect> = Pick<
   SelectedColumnKeys<TSelect>
 > &
   Pick<MediaModel, "id" | "createdAt" | "previewId"> &
+  CommercialLinksProjection<TSelect> &
   TagProjection<TSelect> &
   AdvertisingDisclosureProjection<TSelect>;
 

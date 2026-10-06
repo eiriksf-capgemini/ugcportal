@@ -1,5 +1,9 @@
 import type PhotoSwipeLightbox from "photoswipe/lightbox";
 
+import {
+  commercialLinkRel,
+  COMMERCIAL_LINK_MARKER_TEXT,
+} from "@/lib/commercial-link-render";
 import { galleryItemAlt, type GalleryItem } from "@/lib/gallery-items";
 
 /**
@@ -321,6 +325,99 @@ export function registerAdvertisingLabel(
     order: 5,
     tagName: "p",
     hideWhenEmpty: true,
+  });
+}
+
+/**
+ * The classes the commercial-links bar and its children carry
+ * (ugcportal-qnq9.2.2), and the hooks their CSS is written against
+ * (src/app/globals.css). Exported for the same reason every other lightbox
+ * class constant is: a test asserts the string the viewer actually renders.
+ */
+export const LIGHTBOX_COMMERCIAL_LINKS_CLASS = "pswp__commercial-links";
+export const LIGHTBOX_COMMERCIAL_LINK_CLASS = "pswp__commercial-link";
+export const LIGHTBOX_COMMERCIAL_LINK_MARKER_CLASS = "pswp__commercial-link-marker";
+
+/**
+ * Puts this item's commercial outbound links on the open slide
+ * (ugcportal-qnq9.2.2 K1), the one element in this file `registerSlideText
+ * Element` cannot build: that helper only ever sets `textContent`, and a
+ * commercial link needs real `<a href rel>` elements plus a visible sibling
+ * marker, not a string.
+ *
+ * `item.commercialLinks` ARRIVES ALREADY GATED. `toGalleryItem`
+ * (src/lib/gallery-items.ts) is the one chokepoint that empties this array
+ * whenever the item's advertising label is absent (ugcportal-jain) — this
+ * function draws exactly what it is handed and makes no second decision
+ * about whether a link may render.
+ *
+ * BUILT WITH `document.createElement`/`textContent`, never `innerHTML`, the
+ * same rule `registerTagCaption` states for its own hand-built element: a
+ * link's own visible text (`commercialLinkText`) and the marker are both
+ * values this product computed, not raw user input, but the discipline is
+ * "textContent always" rather than "innerHTML when nothing is user-supplied
+ * today" — the one rule that cannot quietly stop holding when that changes.
+ *
+ * `rel`/`target` come from `commercialLinkRel()` (src/lib/commercial-link-
+ * render.ts), the SAME function every other surface calls — see that
+ * module's own comment for what each token does. A bare `<a href>` with no
+ * listener attached: nothing here fires before the visitor actually
+ * activates the anchor (K3).
+ *
+ * REBUILT ON EVERY `change`, not merely shown/hidden the way `register
+ * SlideTextElement`'s single text node is: the NUMBER of links differs per
+ * slide, so the element tree itself — not just its text — has to be rebuilt
+ * each time the open slide changes. `replaceChildren()` with no arguments
+ * clears it before every rebuild, including down to zero elements for a
+ * slide with no links, which is also what triggers `hidden`.
+ */
+export function registerCommercialLinks(
+  lightbox: PhotoSwipeLightbox,
+  items: GalleryItem[],
+): void {
+  lightbox.on("uiRegister", () => {
+    lightbox.pswp?.ui?.registerElement({
+      name: "gallery-commercial-links",
+      className: LIGHTBOX_COMMERCIAL_LINKS_CLASS,
+      appendTo: "root",
+      // Moot visually, same as every other `order` in this file — see
+      // registerSlideTextElement's own note.
+      order: 9,
+      isButton: false,
+      tagName: "ul",
+      onInit: (element, pswp) => {
+        const show = () => {
+          const links = items[pswp.currIndex]?.commercialLinks ?? [];
+          element.replaceChildren(
+            ...links.map((link) => {
+              const li = document.createElement("li");
+
+              const anchor = document.createElement("a");
+              anchor.href = link.url;
+              anchor.target = "_blank";
+              anchor.rel = commercialLinkRel();
+              anchor.className = LIGHTBOX_COMMERCIAL_LINK_CLASS;
+              anchor.textContent = link.text;
+
+              const marker = document.createElement("span");
+              marker.className = LIGHTBOX_COMMERCIAL_LINK_MARKER_CLASS;
+              marker.textContent = COMMERCIAL_LINK_MARKER_TEXT;
+
+              // The marker is a SIBLING of the anchor (K1), never content
+              // inside it — same reasoning `GalleryItemCommercialLinks`
+              // (gallery-item.tsx) states for the grid/page components: an
+              // anchor's accessible name is its own text content, and
+              // folding the marker into it would have the link announce its
+              // disclosure instead of its destination.
+              li.append(anchor, marker);
+              return li;
+            }),
+          );
+          element.hidden = links.length === 0;
+        };
+        pswp.on("change", show);
+      },
+    });
   });
 }
 
@@ -676,6 +773,8 @@ export async function openGalleryViewer(
   // The photograph's description and caption, plus the dialog's
   // aria-labelledby/aria-describedby wiring (ugcportal-gwr).
   registerMediaCaption(lightbox, items);
+  // The commercial outbound links (ugcportal-qnq9.2.2).
+  registerCommercialLinks(lightbox, items);
 
   // Registered before `loadAndOpen`, because `afterInit` is dispatched from a
   // microtask continuation that a later `.on()` would already have missed.

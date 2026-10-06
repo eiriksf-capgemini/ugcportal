@@ -49,6 +49,9 @@ function piece(overrides: Partial<GalleryItem> = {}): GalleryItem {
     // null by default — no disclosure row, the ordinary case (ugcportal-
     // e0jv). The describe block below passes its own for a labelled piece.
     advertisingLabel: null,
+    // Empty by default (ugcportal-qnq9.2.2) — the describe block below
+    // passes its own for a piece carrying a commercial link.
+    commercialLinks: [],
     ...overrides,
   };
 }
@@ -214,6 +217,36 @@ describe("PortfolioTile", () => {
       );
       expect(markup).toContain('data-portfolio-marker="spec"');
       expect(markup).not.toContain("data-gallery-advertising-label");
+    });
+  });
+
+  describe("the commercial outbound links (ugcportal-qnq9.2.2)", () => {
+    it("renders a link, with its marker, on a curated piece that carries one", () => {
+      const markup = renderToStaticMarkup(
+        <ul>
+          <PortfolioTile
+            piece={piece({
+              advertisingLabel: "Advertisement / Reklame",
+              commercialLinks: [
+                { id: "l1", url: "https://track.adtraction.com/t/t?a=1", text: "Adtraction" },
+              ],
+            })}
+            position={0}
+          />
+        </ul>,
+      );
+      expect(markup).toContain('data-commercial-link="l1"');
+      expect(markup).toContain('rel="sponsored nofollow noopener noreferrer"');
+      expect(markup).toContain("Advertisement link / Annonselenke");
+    });
+
+    it("renders nothing for an ordinary piece with no commercial links", () => {
+      const markup = renderToStaticMarkup(
+        <ul>
+          <PortfolioTile piece={piece()} position={0} />
+        </ul>,
+      );
+      expect(markup).not.toContain("data-commercial-link");
     });
   });
 });

@@ -52,6 +52,7 @@ function piece(overrides: Partial<GalleryItem> = {}): GalleryItem {
     caption: "",
     tags: [],
     advertisingLabel: null,
+    commercialLinks: [],
     ...overrides,
   };
 }

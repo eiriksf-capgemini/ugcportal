@@ -597,6 +597,104 @@ describe("K2 — the advertising label crosses to the feed, and nothing else fro
   });
 });
 
+describe("commercial outbound links cross to the feed, only on a labelled item (ugcportal-qnq9.2.2)", () => {
+  const BRAND_NAME_MARKER = "RiedelGlasswareMarker";
+  const LINK_URL = "https://track.adtraction.com/t/t?a=marker-9981";
+
+  async function seedLabelledLink(mediaId: string) {
+    const source = await prisma.benefitSource.upsert({
+      where: { slug: "riedel-marker" },
+      create: { slug: "riedel-marker", name: BRAND_NAME_MARKER, alcoholLinked: false },
+      update: {},
+    });
+    await prisma.mediaAdvertisingDisclosure.create({
+      data: {
+        mediaId,
+        benefitReceived: true,
+        benefitKind: "FREE_PRODUCT",
+        benefitSourceId: source.id,
+        marketValueOre: 90000,
+        label: "Advertisement / Reklame",
+      },
+    });
+    await prisma.commercialLink.create({
+      data: {
+        mediaId,
+        url: LINK_URL,
+        network: "ADTRACTION",
+        benefitSourceId: source.id,
+      },
+    });
+  }
+
+  it("the rendered home page shows the link, the bilingual marker, and sponsored rel — never the brand", async () => {
+    await seedMedia({ id: "linked", createdAt: new Date("2026-03-05T00:00:00Z") });
+    await seedLabelledLink("linked");
+
+    const markup = await renderGallery();
+
+    expect(markup).toContain(`href="${LINK_URL}"`);
+    expect(markup).toContain("Advertisement link / Annonselenke");
+    expect(markup).toContain('rel="sponsored nofollow noopener noreferrer"');
+    expect(markup).not.toContain(BRAND_NAME_MARKER);
+  });
+
+  it("the real GET /api/public/media JSON carries only { id, url, network, networkOther }", async () => {
+    await seedMedia({ id: "linked", createdAt: new Date("2026-03-05T00:00:00Z") });
+    await seedLabelledLink("linked");
+
+    const response = await GET(
+      new Request(new URL(publicMediaListingPath({}), "http://gallery.test")),
+    );
+    const body = (await response.json()) as {
+      items: Array<{ id: string; commercialLinks: Array<Record<string, unknown>> }>;
+    };
+    const item = body.items.find((entry) => entry.id === "linked");
+    const link = item?.commercialLinks[0];
+    expect(link).toBeDefined();
+    expect(Object.keys(link ?? {}).sort()).toEqual([
+      "id",
+      "network",
+      "networkOther",
+      "url",
+    ]);
+    expect(JSON.stringify(body)).not.toContain(BRAND_NAME_MARKER);
+  });
+
+  it("ugcportal-jain: renders nothing, and the JSON carries no link, once the disclosure is withdrawn", async () => {
+    // Drives the exact sequence ugcportal-jain was discovered through:
+    // attach a link under a valid disclosure, then withdraw the disclosure
+    // WITHOUT detaching the link — the write path's own known gap. The link
+    // row is still in the database; it must not reach either surface.
+    await seedMedia({ id: "withdrawn", createdAt: new Date("2026-03-06T00:00:00Z") });
+    await seedLabelledLink("withdrawn");
+    await prisma.mediaAdvertisingDisclosure.update({
+      where: { mediaId: "withdrawn" },
+      data: { benefitReceived: false, label: null },
+    });
+
+    const linkStillExists = await prisma.commercialLink.findFirst({
+      where: { mediaId: "withdrawn" },
+    });
+    expect(linkStillExists, "the fixture must leave the link attached").not.toBeNull();
+
+    const markup = await renderGallery();
+    expect(renderedIds(markup)).toContain("withdrawn");
+    expect(markup).not.toContain(LINK_URL);
+    expect(markup).not.toContain("Advertisement link / Annonselenke");
+
+    const response = await GET(
+      new Request(new URL(publicMediaListingPath({}), "http://gallery.test")),
+    );
+    const body = (await response.json()) as {
+      items: Array<{ id: string; commercialLinks: unknown[] }>;
+    };
+    expect(body.items.find((entry) => entry.id === "withdrawn")?.commercialLinks).toEqual(
+      [],
+    );
+  });
+});
+
 describe("K3 — unpublished and preview-less rows never appear", () => {
   it("excludes an unpublished row and a published VIDEO with no preview", async () => {
     await seedMedia({ id: "shown", createdAt: new Date("2026-03-03T00:00:00Z") });

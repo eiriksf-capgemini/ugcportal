@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 
 import {
   GalleryItemAdvertisingLabel,
+  GalleryItemCommercialLinks,
   GalleryItemTags,
 } from "@/components/gallery/gallery-item";
 import { PageShell } from "@/components/site/page-shell";
@@ -202,6 +203,13 @@ export default async function MediaItemPage({ params }: RouteContext) {
       </p>
 
       <GalleryItemTags item={item} />
+      {/*
+        The commercial outbound links (ugcportal-qnq9.2.2 K1) — same "LAST,
+        after caption and tags" ordering every surface uses, and the same
+        "nothing for an item whose label is absent" gate (see
+        GalleryItemCommercialLinks' own comment, gallery-item.tsx).
+      */}
+      <GalleryItemCommercialLinks item={item} />
 
       {/*
         The share affordance (ugcportal-lju K2): native `navigator.share`

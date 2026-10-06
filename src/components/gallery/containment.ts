@@ -1,3 +1,5 @@
+import { INLINE_LINK_CLASS } from "@/components/ui/inline-link";
+
 /**
  * The gallery's containment rule (ugcportal-71y, K6 and K7), in one place so a
  * test can assert the rule rather than a screenshot of it.
@@ -416,6 +418,65 @@ export const GALLERY_TAG_LIST_CLASS =
  */
 export const GALLERY_TAG_CLASS =
   "text-[0.6875rem] leading-4 font-medium tracking-wide text-muted-foreground uppercase";
+
+/**
+ * The commercial outbound links under a tile (ugcportal-qnq9.2.2), rendered
+ * last — after the caption and the tags, which are the uploader's own words
+ * about the photograph, while a commercial link is the one thing on this
+ * list that leaves the site. `mt-1.5`, the same rhythm `GALLERY_TAG_LIST_
+ * CLASS` uses for the identical reason: stacked under whatever ran before it,
+ * without assuming which of caption/tags was actually rendered.
+ *
+ * A `<ul>`, same reasoning `GalleryItemTags` gives for its own list: this is
+ * a set of distinct destinations, and "list, N items" is the useful thing to
+ * hear. `flex-col`, not `flex-wrap` the way the tag chips run: each entry
+ * pairs a link with its own marker right after it, and running several such
+ * pairs together on one line would make it ambiguous which marker belongs to
+ * which link.
+ */
+export const GALLERY_COMMERCIAL_LINKS_LIST_CLASS = "mt-1.5 flex flex-col gap-0.5";
+
+/**
+ * One link's own list item: the anchor and its marker read as one line of
+ * text, wrapping together rather than the marker starting a line of its own.
+ */
+export const GALLERY_COMMERCIAL_LINK_ITEM_CLASS = "text-xs leading-4";
+
+/**
+ * The anchor itself: `INLINE_LINK_CLASS` (src/components/ui/inline-link.ts),
+ * REUSED rather than a new pairing invented for this one caller. Two reasons,
+ * not one. First, contrast: this renders directly on the page canvas
+ * (`--background`), the identical slot `GALLERY_CAPTION_CLASS`'s own comment
+ * names as where `text-ink` measured 1.10:1 and had to be replaced
+ * (ugcportal-rw9j round 5) — `link-on-background` in src/lib/design/
+ * contrast.ts is the pairing already measured for exactly this placement
+ * (`--primary` text on `--background`), and `INLINE_LINK_CLASS` is what rides
+ * it rather than a fourth hand-typed `text-primary underline` in this file.
+ * Second, semantics: `text-muted-foreground` is the right read for "a label
+ * about this item" (`GALLERY_TAG_CLASS`, `GALLERY_CAPTION_CLASS`) and the
+ * wrong one for "an active control that leaves the site" — a commercial link
+ * should look MORE like the other real links on this page, not less, which
+ * `INLINE_LINK_CLASS` already is.
+ */
+export const GALLERY_COMMERCIAL_LINK_CLASS = INLINE_LINK_CLASS;
+
+/**
+ * The bilingual marker, as a visible sibling of the anchor immediately after
+ * it (K1) — never inside the `<a>` (so it is not part of the link's own
+ * accessible name, which should announce the destination, not the
+ * disclosure, the same "a compliance string is not the thing it decorates"
+ * reasoning `GalleryItemAdvertisingLabel`'s own comment gives for being a
+ * sibling of the tile's button rather than content inside it), never a
+ * `title` attribute (invisible until hover) and never styled as a tag or a
+ * hashtag (K4's "must not read as a tag or a caption", the same rule
+ * `GALLERY_ADVERTISING_LABEL_CLASS` states for the page-level label).
+ *
+ * Muted, small-caps text — quieter than the link itself, because the marker
+ * is a label ABOUT the link rather than the destination the visitor would
+ * act on.
+ */
+export const GALLERY_COMMERCIAL_LINK_MARKER_CLASS =
+  "ml-1 text-[0.6875rem] font-medium tracking-wide text-muted-foreground uppercase";
 
 /**
  * The centred, single-column layout shared by the gallery's two whole-page

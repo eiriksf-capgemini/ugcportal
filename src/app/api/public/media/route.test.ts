@@ -61,6 +61,23 @@ type Row = {
   // non-array value for exactly this mock. Modeling the relation properly,
   // defaulting to `[]` below, is what let that tolerance come out.
   tags: { slug: string; name: string }[];
+  // ugcportal-qnq9.2.2: modeled the SAME way `tags` is, for the SAME
+  // reason — `listPublicMedia`'s own gate on `commercialLinks` (see its own
+  // comment) reads `row.commercialLinks` unconditionally, so leaving this
+  // undefined on every fixture would make every test in this file exercise
+  // only the "no disclosure" branch of that gate, never the "labelled, so
+  // show it" branch.
+  commercialLinks?: {
+    id: string;
+    url: string;
+    network: string;
+    networkOther: string | null;
+  }[];
+  // Undefined by default (every fixture here predates ugcportal-e0jv) —
+  // deliberately NOT given a default in `row()` below, the identical
+  // "ordinary case for every existing fixture" default `advertisingLabel`
+  // has in src/lib/gallery-items.test.ts.
+  advertisingDisclosure?: { label: string | null } | null;
 };
 
 /**
@@ -200,6 +217,10 @@ function row(overrides: Partial<Row> = {}): Row {
     // fixtures elsewhere in this codebase use the same default (see
     // src/lib/test-support/media-fixtures.ts).
     tags: [],
+    // No commercial links by default — the ordinary case for every item in
+    // this file (ugcportal-qnq9.2.2). `advertisingDisclosure` is left
+    // undefined by default (see the `Row` type's own comment on why).
+    commercialLinks: [],
     ...overrides,
   };
 }
@@ -216,10 +237,19 @@ function row(overrides: Partial<Row> = {}): Row {
  * serialisation, so it belongs in this list. `altText` and `caption`
  * (ugcportal-gwr) are plain columns, same shape as everything else this list
  * already names.
+ *
+ * `commercialLinks` (ugcportal-qnq9.2.2) belongs here for a different reason
+ * than `tags` does, worth stating because it looks the same from outside:
+ * `listPublicMedia`'s own ugcportal-jain gate (see that function's own
+ * comment) does not merely copy `row.commercialLinks` through — it ALWAYS
+ * assigns either that array or a literal `[]`, never `undefined`, so the key
+ * survives serialisation on every row in this file regardless of whether any
+ * given test ever sets it.
  */
 const ANONYMOUS_FIELDS = [
   "altText",
   "caption",
+  "commercialLinks",
   "createdAt",
   "id",
   "kind",
@@ -587,6 +617,100 @@ describe("GET /api/public/media — no original key, no preview-less row (K3)", 
     expect(disclosureSelect).not.toHaveProperty("marketValueOre");
     expect(disclosureSelect).not.toHaveProperty("benefitSourceId");
     expect(disclosureSelect).not.toHaveProperty("benefitSource");
+  });
+
+  /**
+   * K4 (ugcportal-qnq9.2.2): the commercial-link relation is projected as
+   * exactly `{ id, url, network, networkOther }` — never `benefitSourceId`,
+   * the `benefitSource` relation (the brand's real name and its
+   * `alcoholLinked` answer), or the row's own `createdAt`/`updatedAt`. The
+   * static version of the same claim the disclosure's own K2 test above
+   * makes, for the identical reason: this fails the instant someone widens
+   * the select itself, before any row ever has to flow through it.
+   */
+  it("projects the commercialLinks relation as exactly { id, url, network, networkOther } — nothing else from it", async () => {
+    const { MEDIA_ANONYMOUS_SELECT } = await import("@/lib/media-access");
+
+    expect(MEDIA_ANONYMOUS_SELECT).toHaveProperty("commercialLinks", {
+      select: { id: true, url: true, network: true, networkOther: true },
+      orderBy: { createdAt: "asc" },
+    });
+    const linksSelect = (
+      MEDIA_ANONYMOUS_SELECT as {
+        commercialLinks: { select: Record<string, unknown> };
+      }
+    ).commercialLinks.select;
+    expect(Object.keys(linksSelect).sort()).toEqual([
+      "id",
+      "network",
+      "networkOther",
+      "url",
+    ]);
+    expect(linksSelect).not.toHaveProperty("benefitSourceId");
+    expect(linksSelect).not.toHaveProperty("benefitSource");
+    expect(linksSelect).not.toHaveProperty("mediaId");
+    expect(linksSelect).not.toHaveProperty("createdAt");
+    expect(linksSelect).not.toHaveProperty("updatedAt");
+  });
+
+  /**
+   * ugcportal-jain, at the raw JSON layer: `listPublicMedia`'s own gate
+   * (src/lib/public-media.ts) is what actually closes this, not the select
+   * above — the select has no way to condition on a sibling column, so a
+   * row whose disclosure was withdrawn after a link was attached still has
+   * that link selected. This exercises the REAL route end to end, so a
+   * regression here is a regression a direct API consumer could observe,
+   * not merely a unit asserting the gate function in isolation.
+   */
+  describe("the ugcportal-jain gate on the raw feed", () => {
+    const LINK = {
+      id: "link-1",
+      url: "https://track.adtraction.com/t/t?a=1",
+      network: "ADTRACTION",
+      networkOther: null,
+    };
+
+    it("includes a link when the disclosure carries a permitted label", async () => {
+      seed([
+        row({
+          id: "labelled",
+          advertisingDisclosure: { label: "Advertisement / Reklame" },
+          commercialLinks: [LINK],
+        }),
+      ]);
+
+      const body = (await (await GET(request())).json()) as {
+        items: Array<{ id: string; commercialLinks: unknown[] }>;
+      };
+
+      expect(body.items[0].commercialLinks).toEqual([LINK]);
+    });
+
+    it("hides the link when the disclosure's label is null (a withdrawn benefit)", async () => {
+      seed([
+        row({
+          id: "withdrawn",
+          advertisingDisclosure: { label: null },
+          commercialLinks: [LINK],
+        }),
+      ]);
+
+      const body = (await (await GET(request())).json()) as {
+        items: Array<{ id: string; commercialLinks: unknown[] }>;
+      };
+
+      expect(body.items[0].commercialLinks).toEqual([]);
+    });
+
+    it("hides the link when there is no disclosure row at all", async () => {
+      seed([row({ id: "no-disclosure", commercialLinks: [LINK] })]);
+
+      const body = (await (await GET(request())).json()) as {
+        items: Array<{ id: string; commercialLinks: unknown[] }>;
+      };
+
+      expect(body.items[0].commercialLinks).toEqual([]);
+    });
   });
 
   it("never selects the original key at the database layer either", async () => {

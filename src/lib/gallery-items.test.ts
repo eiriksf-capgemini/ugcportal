@@ -48,6 +48,10 @@ function item(overrides: Partial<GalleryItem> = {}): GalleryItem {
     // existing fixture here (ugcportal-e0jv). Tests that care about a
     // labelled benefit pass their own.
     advertisingLabel: null,
+    // Empty by default — an unlabelled item renders none, and most of the
+    // library predates commercial links entirely (ugcportal-qnq9.2.2). Tests
+    // that care about a rendered link pass their own.
+    commercialLinks: [],
     ...overrides,
   };
 }
@@ -63,6 +67,7 @@ describe("toGalleryItem", () => {
       caption: "",
       tags: [],
       advertisingLabel: null,
+      commercialLinks: [],
     });
   });
 
@@ -85,6 +90,7 @@ describe("toGalleryItem", () => {
       "advertisingLabel",
       "altText",
       "caption",
+      "commercialLinks",
       "id",
       "kind",
       "previewSrc",
@@ -184,6 +190,117 @@ describe("toGalleryItem", () => {
       expect(mapped?.advertisingLabel).toBe("Reklame");
       expect(JSON.stringify(mapped)).not.toContain("benefitReceived");
       expect(JSON.stringify(mapped)).not.toContain("Acme");
+    });
+  });
+
+  describe("commercialLinks (ugcportal-qnq9.2.2)", () => {
+    const LINK_ROW = {
+      id: "link-1",
+      url: "https://track.adtraction.com/t/t?a=1",
+      network: "ADTRACTION",
+      networkOther: null,
+    };
+
+    it("K1: carries a link through, with the network's display name as its text", () => {
+      const mapped = toGalleryItem({
+        ...ROW,
+        advertisingDisclosure: { label: "Advertisement / Reklame" },
+        commercialLinks: [LINK_ROW],
+      });
+      expect(mapped?.commercialLinks).toEqual([
+        { id: "link-1", url: "https://track.adtraction.com/t/t?a=1", text: "Adtraction" },
+      ]);
+    });
+
+    it("renders OTHER's own free-text network name", () => {
+      const mapped = toGalleryItem({
+        ...ROW,
+        advertisingDisclosure: { label: "Advertisement / Reklame" },
+        commercialLinks: [
+          { id: "l1", url: "https://example.test/shop", network: "OTHER", networkOther: "Lokalbutikken" },
+        ],
+      });
+      expect(mapped?.commercialLinks[0]?.text).toBe("Lokalbutikken");
+    });
+
+    it("ugcportal-jain K5: is empty when the label is null, however many links the raw row carries", () => {
+      const mapped = toGalleryItem({
+        ...ROW,
+        // label null: no disclosure, benefitReceived false, or a stored
+        // value outside the allowlist — all three collapse to null in
+        // `toAdvertisingLabel`, and this gate must hold for all three.
+        advertisingDisclosure: { label: null },
+        commercialLinks: [LINK_ROW],
+      });
+      expect(mapped?.commercialLinks).toEqual([]);
+    });
+
+    it("ugcportal-jain K5: is empty when there is no disclosure row at all", () => {
+      const mapped = toGalleryItem({ ...ROW, commercialLinks: [LINK_ROW] });
+      expect(mapped?.commercialLinks).toEqual([]);
+    });
+
+    it("is empty when commercialLinks is absent — every row before this bead", () => {
+      expect(
+        toGalleryItem({
+          ...ROW,
+          advertisingDisclosure: { label: "Advertisement / Reklame" },
+        })?.commercialLinks,
+      ).toEqual([]);
+    });
+
+    it("drops an entry whose url fails re-validation, rather than trusting the stored row", () => {
+      const mapped = toGalleryItem({
+        ...ROW,
+        advertisingDisclosure: { label: "Advertisement / Reklame" },
+        commercialLinks: [
+          { ...LINK_ROW, id: "bad", url: "javascript:alert(1)" },
+          LINK_ROW,
+        ],
+      });
+      expect(mapped?.commercialLinks).toEqual([
+        { id: "link-1", url: "https://track.adtraction.com/t/t?a=1", text: "Adtraction" },
+      ]);
+    });
+
+    it("drops an entry with a missing or empty id", () => {
+      const mapped = toGalleryItem({
+        ...ROW,
+        advertisingDisclosure: { label: "Advertisement / Reklame" },
+        commercialLinks: [{ ...LINK_ROW, id: "" }],
+      });
+      expect(mapped?.commercialLinks).toEqual([]);
+    });
+
+    it("caps the rendered list at MAX_COMMERCIAL_LINKS_PER_ITEM even if the row somehow carries more", () => {
+      const many = Array.from({ length: 9 }, (_, i) => ({
+        ...LINK_ROW,
+        id: `link-${i}`,
+        url: `https://track.adtraction.com/t/t?a=${i}`,
+      }));
+      const mapped = toGalleryItem({
+        ...ROW,
+        advertisingDisclosure: { label: "Advertisement / Reklame" },
+        commercialLinks: many,
+      });
+      expect(mapped?.commercialLinks).toHaveLength(6);
+    });
+
+    it("never exposes benefitSourceId or the brand even if a malformed row carries them alongside a valid link", () => {
+      const mapped = toGalleryItem({
+        ...ROW,
+        advertisingDisclosure: { label: "Advertisement / Reklame" },
+        commercialLinks: [
+          {
+            ...LINK_ROW,
+            benefitSourceId: "brand-1",
+            benefitSource: { name: "Acme", alcoholLinked: false },
+          },
+        ],
+      });
+      expect(JSON.stringify(mapped)).not.toContain("benefitSourceId");
+      expect(JSON.stringify(mapped)).not.toContain("Acme");
+      expect(JSON.stringify(mapped)).not.toContain("alcoholLinked");
     });
   });
 

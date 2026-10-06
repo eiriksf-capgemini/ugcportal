@@ -884,3 +884,84 @@
 .pswp:has(.pswp__advertising-label:not([hidden])) .pswp__media-caption {
   top: 104px;
 }
+
+/*
+ * The commercial outbound links (ugcportal-qnq9.2.2): anchored to the
+ * BOTTOM, stacked ABOVE the subject-tags bar so the two never overlap —
+ * built as a real `<ul>` of `<a>`/marker pairs by hand
+ * (registerCommercialLinks, src/components/gallery/lightbox.ts), unlike
+ * every other bar on this page, which is a single text node.
+ *
+ * `pointer-events: none` on the list itself, the same rule every other bar
+ * here follows so a click on the empty part of the strip still reaches the
+ * backdrop and closes the viewer (`bgClickAction: "close"`) — but each
+ * individual `.pswp__commercial-link` anchor gets `pointer-events: auto`
+ * back below, because this is the one bar on this page whose whole purpose
+ * is to BE clicked.
+ *
+ * `color: var(--color-ink-muted)` on both the link and its marker, the SAME
+ * `ink-muted-on-scrim` pairing (src/lib/design/contrast.ts) the tag caption
+ * and media caption above already ride, rather than a new colour this file
+ * would need its own measurement for — the underline is what marks the link
+ * text as interactive, not a colour difference from its neighbours.
+ */
+.pswp__commercial-links {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 40px;
+  z-index: 10;
+  margin: 0;
+  padding: 0 1.25rem;
+  list-style: none;
+  text-align: center;
+  pointer-events: none;
+}
+
+.pswp__commercial-links[hidden] {
+  display: none;
+}
+
+.pswp__commercial-links li {
+  margin: 0 0 0.25rem;
+}
+
+.pswp__commercial-link {
+  pointer-events: auto;
+  color: var(--color-ink-muted);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.pswp__commercial-link-marker {
+  margin-left: 0.375rem;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-ink-muted);
+}
+
+/*
+ * Pushes the tags bar UP when commercial links are present, so the two never
+ * overlap for the ordinary case — mirroring the advertising-label/caption
+ * pair's own `:has()` technique above. `76px` reserves one line of link
+ * text plus this bar's own `bottom: 40px` anchor, MEASURED against a real
+ * Chromium render (`getBoundingClientRect()` on both elements at 1280x720 —
+ * the same one-off verification method the label/caption pair's own `104px`
+ * above was measured with; neither pairing has a pixel-level automated
+ * test): with ONE link open, the links bar is `{top: 652, bottom: 680}` and
+ * the shifted tags bar is `{top: 596, bottom: 644}` — clear by 8px. With
+ * TWO links (wrapping the bar to a second line), the links bar grows to
+ * `{top: 624, bottom: 680}` and overlaps the tags bar by 20px, which is an
+ * accepted, documented trade rather than a gap this file tries to close
+ * further: `MAX_COMMERCIAL_LINKS_PER_ITEM`'s own comment ("six is already
+ * more than one photograph can honestly recommend") already treats more
+ * than a link or two as the rare case, and this bar is not reserved for the
+ * worst case at the cost of a visible gap under every slide that has
+ * exactly the ordinary one.
+ */
+.pswp:has(.pswp__commercial-links:not([hidden])) .pswp__gallery-tags {
+  bottom: 76px;
+}
