@@ -11,7 +11,11 @@ on:
 # Pushes to main are never cancelled, so every merge commit is verified
 # (ugcportal-ugcportal-0an4).
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.ref }}
+  # Edited events (title or body) skip the quality job, so they must not
+  # share a group with code events: otherwise a body edit right after a push
+  # cancels the run that carries the head's only quality result
+  # (ugcportal-ugcportal-sxwb).
+  group: ci-${{ github.event.pull_request.number || github.ref }}-${{ github.event.action == 'edited' && 'edited' || 'code' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:

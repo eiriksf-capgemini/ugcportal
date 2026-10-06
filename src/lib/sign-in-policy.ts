@@ -987,12 +987,19 @@ export function permittedIdentities(
   // ONE pass that builds everything (PR #91 review, round 3, finding 1).
   //
   // `seen` is the de-duplication: first occurrence wins, keyed by the
-  // (provider, address) tuple — the same Set/Map idiom as appendGalleryItems
-  // (gallery-items.ts) and parseTagNames (tags.ts), so "unique by what" is
-  // stated by the key rather than by a comparison. The key is the JSON of
-  // the pair, not a hand-joined string, so it needs no separator argument:
-  // `null` and every address serialise distinctly whatever characters they
-  // contain (PR #81 round 4).
+  // (provider, address) tuple — the same first-wins idiom appendGalleryItems
+  // (gallery-items.ts) and parseTagNames (tags.ts) now share as `dedupeBy`
+  // (src/lib/dedupe.ts, ugcportal-oejb). NOT adopted here (K3 of that bead):
+  // this loop builds `byEmail` — grouping every surviving entry by address,
+  // not just keeping one per key — and collects `malformed` in the same
+  // pass, over the SAME entries `seen` is deduping; `dedupeBy` only ever
+  // returns a deduped array, so using it here would mean a second pass over
+  // its result (to group by email and refind which entries never parsed) or
+  // handing it a callback it does not take, either of which is more
+  // machinery on an authorisation path than the one loop below. The key is
+  // the JSON of the pair, not a hand-joined string, so it needs no separator
+  // argument: `null` and every address serialise distinctly whatever
+  // characters they contain (PR #81 round 4).
   //
   // `byEmail` is the index every decision looks entries up by, and it is
   // also where the distinct addresses come from: a Map iterates in insertion
