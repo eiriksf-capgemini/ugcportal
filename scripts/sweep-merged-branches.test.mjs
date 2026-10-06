@@ -14,12 +14,15 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
+  buildOpenPrsByBase,
   buildPrInfoByBranch,
   classifyBranchRetarget,
+  classifyPreDeleteRecheck,
   classifyRemoteBranch,
   classifyRetargetVerification,
   classifyWorktree,
@@ -37,6 +40,7 @@ import {
   recheckBeforeDeletingBranch,
   removeWorktree,
   resolveChdirTarget,
+  resolveNewBase,
 } from "./sweep-merged-branches.mjs";
 
 describe("classifyRemoteBranch", () => {
@@ -273,14 +277,25 @@ describe("buildPrInfoByBranch", () => {
     expect(buildPrInfoByBranch(prs)).toEqual(new Map([["fix/foo", { state: "MERGED", headRefOid: "abc123", baseRefName: "main" }]]));
   });
 
-  it("keeps the first (newest) PR's info when a branch name was reused", () => {
+  it("keeps the first (newest) PR's info when a branch name was reused -- baseRefName included (round 2 finding 4, ugcportal-hvaf)", () => {
     // gh pr list --state all sorts by creation descending, so entry order
     // in the fixture mirrors "newest PR first" -- the case this guards.
+    //
+    // baseRefName deliberately differs between the two entries (as
+    // headRefOid already did) -- round 1 found that both fixture entries
+    // shared baseRefName: "main", so this test could not have caught a
+    // regression that picked state/headRefOid from the newest entry but
+    // baseRefName from the oldest. baseRefName is the field that decides
+    // where a stacked PR gets retargeted (ugcportal-hvaf) -- safety-critical
+    // input, not an incidental one. Mutation-checked: temporarily reading
+    // `prs[prs.length - 1].baseRefName` (the OLDEST entry's value) instead
+    // of the newest's made this assertion fail as expected, confirmed before
+    // restoring the real implementation.
     const prs = [
-      { headRefName: "fix/foo", state: "OPEN", headRefOid: "new111", baseRefName: "main", number: 2 },
-      { headRefName: "fix/foo", state: "MERGED", headRefOid: "old000", baseRefName: "main", number: 1 },
+      { headRefName: "fix/foo", state: "OPEN", headRefOid: "new111", baseRefName: "feat/new-base", number: 2 },
+      { headRefName: "fix/foo", state: "MERGED", headRefOid: "old000", baseRefName: "feat/old-base", number: 1 },
     ];
-    expect(buildPrInfoByBranch(prs).get("fix/foo")).toEqual({ state: "OPEN", headRefOid: "new111", baseRefName: "main" });
+    expect(buildPrInfoByBranch(prs).get("fix/foo")).toEqual({ state: "OPEN", headRefOid: "new111", baseRefName: "feat/new-base" });
   });
 
   it("returns an empty map for no PRs rather than throwing", () => {
@@ -346,6 +361,93 @@ describe("parseRetargetFlag", () => {
 
   it("is false when --no-retarget-open-prs is passed", () => {
     expect(parseRetargetFlag(["--execute", "--no-retarget-open-prs"])).toBe(false);
+  });
+});
+
+describe("buildOpenPrsByBase (round 2 finding 7, ugcportal-hvaf)", () => {
+  it("groups open PRs by base branch, one upfront snapshot answering every branch's question at once", () => {
+    const prs = [
+      { number: 128, baseRefName: "fix/foo" },
+      { number: 139, baseRefName: "fix/foo" },
+      { number: 7, baseRefName: "fix/bar" },
+    ];
+    expect(buildOpenPrsByBase(prs)).toEqual(
+      new Map([
+        ["fix/foo", [{ number: 128 }, { number: 139 }]],
+        ["fix/bar", [{ number: 7 }]],
+      ]),
+    );
+  });
+
+  it("returns an empty map for no open PRs rather than throwing", () => {
+    expect(buildOpenPrsByBase([])).toEqual(new Map());
+  });
+});
+
+describe("resolveNewBase (round 2 finding 2, ugcportal-hvaf)", () => {
+  const prInfoByBranch = new Map([
+    // B's own merged PR had base "main" -- the two-level stack's resolution target.
+    ["B", { state: "MERGED", headRefOid: "b1", baseRefName: "main" }],
+  ]);
+
+  it("returns the recorded base directly when that branch still exists on origin", () => {
+    expect(
+      resolveNewBase({ baseRefName: "main", remoteBranchNames: new Set(["main", "B"]), prInfoByBranch, mainBranch: "main" }),
+    ).toBe("main");
+  });
+
+  it("two-level stack: walks up to B's own base when B (the recorded, intermediate base) no longer exists on origin", () => {
+    // Reproduces round 1's concrete scenario: branch A's merged PR recorded
+    // base "B"; B's merged PR recorded base "main"; B has since been
+    // deleted (this run or an earlier one), so it is no longer in
+    // remoteBranchNames. A PR stacked on A must resolve to "main", not to
+    // the now-dangling "B".
+    expect(
+      resolveNewBase({ baseRefName: "B", remoteBranchNames: new Set(["main"]), prInfoByBranch, mainBranch: "main" }),
+    ).toBe("main");
+  });
+
+  it("falls back to main when the recorded base is gone and has no PR info of its own to walk further", () => {
+    expect(
+      resolveNewBase({ baseRefName: "ghost", remoteBranchNames: new Set(["main"]), prInfoByBranch: new Map(), mainBranch: "main" }),
+    ).toBe("main");
+  });
+
+  it("falls back to main rather than looping forever on a cyclic chain", () => {
+    const cyclic = new Map([
+      ["X", { state: "MERGED", headRefOid: "x1", baseRefName: "Y" }],
+      ["Y", { state: "MERGED", headRefOid: "y1", baseRefName: "X" }],
+    ]);
+    expect(
+      resolveNewBase({ baseRefName: "X", remoteBranchNames: new Set(["main"]), prInfoByBranch: cyclic, mainBranch: "main" }),
+    ).toBe("main");
+  });
+
+  it("fixture-mutation check: a THREE-level stack still resolves, proving this isn't special-cased to exactly two hops", () => {
+    // C -> B -> main, with only "main" left on origin (both B and C already
+    // swept this run or an earlier one).
+    const threeLevel = new Map([
+      ["B", { state: "MERGED", headRefOid: "b1", baseRefName: "main" }],
+      ["C", { state: "MERGED", headRefOid: "c1", baseRefName: "B" }],
+    ]);
+    expect(
+      resolveNewBase({ baseRefName: "C", remoteBranchNames: new Set(["main"]), prInfoByBranch: threeLevel, mainBranch: "main" }),
+    ).toBe("main");
+  });
+});
+
+describe("classifyPreDeleteRecheck (round 2 finding 3, ugcportal-hvaf)", () => {
+  it("allows the delete when nothing is based on this branch right now", () => {
+    expect(classifyPreDeleteRecheck({ openPrsBasedOnBranch: [] })).toEqual({ action: "delete" });
+  });
+
+  it("keeps the branch, naming the PR(s), when something is based on it at this live, final check", () => {
+    // Fixture-mutation check: openPrsBasedOnBranch is the only field that
+    // differs from the "allows the delete ..." case above.
+    expect(classifyPreDeleteRecheck({ openPrsBasedOnBranch: [{ number: 999 }] })).toEqual({
+      action: "keep",
+      reason: "open PR(s) appeared based on this branch since the last check, immediately before delete: #999",
+    });
   });
 });
 
@@ -792,6 +894,236 @@ describe("end-to-end against real temporary git repositories", () => {
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
+});
+
+// --- End-to-end: real temp git repo + a stateful fake `gh` on PATH --------
+//
+// The real (non-pure) orchestration in main() -- the upfront batch snapshot,
+// the live retarget-then-verify dance, and the final pre-delete recheck --
+// is not exercised by the pure-fixture tests above, which feed each
+// classifier its inputs directly. Round 2 of this bead (ugcportal-hvaf)
+// found gaps specifically in that WIRING (a TOCTOU window between the batch
+// snapshot and the delete call, a `--limit`-less `gh pr list`), so this
+// section drives the actual script, as a child process, against a real
+// temporary git remote, with a small stateful fake `gh` standing in for the
+// real CLI -- proving the wiring, not just the classifiers it calls.
+
+const SWEEP_SCRIPT_PATH = fileURLToPath(new URL("./sweep-merged-branches.mjs", import.meta.url));
+
+/**
+ * Writes a fake `gh` executable into `dir` (a plain `/bin/sh` wrapper around
+ * an explicit `.cjs` implementation file, so there is no ambiguity about
+ * which module system an extensionless, shebang-executed script should use)
+ * that answers every `gh` subcommand `scripts/sweep-merged-branches.mjs`
+ * makes, from `config`, and refuses (nonzero exit, a message naming the
+ * unrecognized args) anything it doesn't recognize -- so a wiring mistake in
+ * the real script surfaces as a loud, specific failure here rather than a
+ * silent empty response. Also enforces `--limit` is present on every `gh pr
+ * list` call, at or above `config.limitMin` (round 2 finding 1): drop
+ * `--limit` from the real script and every test using this fake starts
+ * failing, instead of a regression going unnoticed.
+ *
+ * Every invocation's argv is appended, one JSON array per line, to
+ * `<dir>/gh-call-log.jsonl`, so a test can assert on what was actually
+ * called, not just on the real script's visible side effects.
+ */
+function writeFakeGh(dir, config) {
+  const configPath = path.join(dir, "gh-config.json");
+  const logPath = path.join(dir, "gh-call-log.jsonl");
+  fs.writeFileSync(configPath, JSON.stringify(config));
+
+  const implPath = path.join(dir, "gh-impl.cjs");
+  const impl = `
+const fs = require("fs");
+const config = JSON.parse(fs.readFileSync(${JSON.stringify(configPath)}, "utf8"));
+const args = process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(logPath)}, JSON.stringify(args) + "\\n");
+
+function flagValue(name) {
+  const i = args.indexOf(name);
+  return i === -1 ? undefined : args[i + 1];
+}
+function fail(code, message) {
+  process.stderr.write(message + "\\n");
+  process.exit(code);
+}
+
+if (args[0] === "repo" && args[1] === "view") {
+  process.stdout.write((config.defaultBranch || "main") + "\\n");
+  process.exit(0);
+}
+
+if (args[0] === "pr" && args[1] === "list") {
+  const limit = flagValue("--limit");
+  if (!limit || Number(limit) < (config.limitMin || 0)) {
+    fail(2, "fake-gh: missing or too-low --limit (round 2 finding 1 regression): " + JSON.stringify(args));
+  }
+  const base = flagValue("--base");
+  const json = flagValue("--json");
+  let result;
+  if (base) {
+    result = (config.prListOpenByBase && config.prListOpenByBase[base]) || [];
+  } else if (json === "headRefName,state,number,headRefOid,baseRefName") {
+    result = config.prListAll || [];
+  } else if (json === "number,baseRefName") {
+    result = config.prListOpenBatch || [];
+  } else {
+    fail(2, "fake-gh: unrecognized pr list shape: " + JSON.stringify(args));
+  }
+  process.stdout.write(JSON.stringify(result) + "\\n");
+  process.exit(0);
+}
+
+if (args[0] === "pr" && args[1] === "edit") {
+  const prNumber = args[2];
+  const failure = config.editFailures && config.editFailures[prNumber];
+  if (failure) fail(1, failure);
+  process.exit(0);
+}
+
+if (args[0] === "pr" && args[1] === "view") {
+  const prNumber = args[2];
+  const resp = (config.viewResponses && config.viewResponses[prNumber]) || { baseRefName: "main", state: "OPEN" };
+  process.stdout.write(JSON.stringify(resp) + "\\n");
+  process.exit(0);
+}
+
+fail(2, "fake-gh: unhandled invocation: " + JSON.stringify(args));
+`;
+  fs.writeFileSync(implPath, impl);
+
+  const ghPath = path.join(dir, "gh");
+  fs.writeFileSync(ghPath, `#!/bin/sh\nexec node ${JSON.stringify(implPath)} "$@"\n`);
+  fs.chmodSync(ghPath, 0o755);
+
+  return { configPath, logPath };
+}
+
+/** Runs the real script as a child process with the isolation `fixtureGitEnv` already applies to plain git calls, plus `dir` prepended to PATH so `gh` resolves to the fake. Never throws on a nonzero exit (the script sets one whenever it keeps a branch) -- callers need both the output AND the status. */
+function runSweepScript({ cwd, fakeGhDir, args }) {
+  const env = { ...fixtureGitEnv(), PATH: `${fakeGhDir}${path.delimiter}${process.env.PATH}` };
+  try {
+    const stdout = execFileSync(process.execPath, [SWEEP_SCRIPT_PATH, ...args], { cwd, env, encoding: "utf8" });
+    return { status: 0, output: stdout };
+  } catch (err) {
+    return { status: err.status ?? 1, output: (err.stdout ?? "") + (err.stderr ?? "") };
+  }
+}
+
+describe("end-to-end against a real temp git remote and a stateful fake gh (round 2, ugcportal-hvaf)", () => {
+  it("TOCTOU recheck keeps a branch the batch snapshot said was clear, once something appears live right before delete; partial-retarget failure is reported PR-by-PR and also keeps; a branch with nothing ever stacked on it still deletes cleanly -- and every gh pr list call carries --limit", () => {
+    // Explicit, generous timeout (vitest's default is 5000ms): this test
+    // spawns the real script as its own child process, which itself shells
+    // out to git and the fake gh several times over -- real subprocess
+    // overhead that the in-process pure-fixture tests above don't carry, and
+    // which a busy machine can push past the default on its own, independent
+    // of anything this test is actually checking.
+    const { root, repoDir } = makeFixtureRepo("hvaf-round2-");
+    const remoteDir = path.join(root, "remote.git");
+    const ghBinDir = path.join(root, "bin");
+    try {
+      fixtureGit(repoDir, ["branch", "-m", "main"]); // name the clone's own branch deterministically, regardless of this git install's init.defaultBranch
+      fs.mkdirSync(remoteDir);
+      fixtureGit(remoteDir, ["init", "-q", "--bare"]);
+      fixtureGit(repoDir, ["remote", "add", "origin", remoteDir]);
+      fixtureGit(repoDir, ["push", "-q", "-u", "origin", "main"]);
+
+      // Three merged-PR branches, each pushed to origin, clone left checked
+      // out on main throughout (git worktree list reports exactly one
+      // worktree either way, so these never need their own checkout):
+      //   feat/toctou  -- nothing stacked per the upfront batch, but a new
+      //                   PR appears at the live, immediately-before-delete
+      //                   recheck (finding 3) -- must be KEPT.
+      //   feat/partial -- two PRs stacked per the batch; the first
+      //                   retargets and verifies fine, the second's `gh pr
+      //                   edit` fails (finding 5) -- must be KEPT, with the
+      //                   successfully-retargeted PR named separately from
+      //                   the failure.
+      //   feat/clean   -- nothing stacked, ever -- must still be DELETED
+      //                   (the baseline path has to keep working).
+      for (const branch of ["feat/toctou", "feat/partial", "feat/clean"]) {
+        fixtureGit(repoDir, ["branch", branch]);
+        fixtureGit(repoDir, ["push", "-q", "origin", branch]);
+      }
+
+      fs.mkdirSync(ghBinDir);
+      const { logPath } = writeFakeGh(ghBinDir, {
+        defaultBranch: "main",
+        limitMin: 500, // round 1's finding: gh's own un-limited default is 30
+        prListAll: [
+          { headRefName: "feat/toctou", state: "MERGED", number: 201, headRefOid: "deadbeef", baseRefName: "main" },
+          { headRefName: "feat/partial", state: "MERGED", number: 202, headRefOid: "deadbeef", baseRefName: "main" },
+          { headRefName: "feat/clean", state: "MERGED", number: 203, headRefOid: "deadbeef", baseRefName: "main" },
+        ],
+        // The upfront batch snapshot: feat/toctou shows nothing stacked on
+        // it here -- the whole point of the TOCTOU scenario below.
+        prListOpenBatch: [
+          { number: 501, baseRefName: "feat/partial" },
+          { number: 502, baseRefName: "feat/partial" },
+        ],
+        // The LIVE, per-branch, immediately-before-delete recheck -- only
+        // feat/toctou has something here, simulating a PR opened in the gap
+        // between the batch snapshot above and the moment of deletion.
+        prListOpenByBase: {
+          "feat/toctou": [{ number: 999 }],
+          "feat/clean": [],
+        },
+        editFailures: {
+          "502": "fake-gh: simulated gh pr edit failure for PR #502",
+        },
+        viewResponses: {
+          "501": { baseRefName: "main", state: "OPEN" },
+        },
+      });
+
+      const result = runSweepScript({ cwd: repoDir, fakeGhDir: ghBinDir, args: ["--execute"] });
+
+      // feat/toctou: batch said clear, live recheck found #999 -- kept.
+      expect(result.output).toContain(
+        "kept origin/feat/toctou: open PR(s) appeared based on this branch since the last check, immediately before delete: #999",
+      );
+
+      // feat/partial: PR #501 retargeted and verified fine; #502's edit
+      // failed -- kept, and the reason names #502 while #501's success is
+      // reported separately rather than silently folded into one message.
+      expect(result.output).toContain("kept origin/feat/partial:");
+      expect(result.output).toContain("#502");
+      expect(result.output).toContain("already retargeted before the failure: #501");
+
+      // feat/clean: nothing ever stacked on it -- the baseline path still
+      // deletes normally.
+      expect(result.output).toContain("removed origin/feat/clean");
+
+      expect(result.status).not.toBe(0); // two branches kept -- main() sets a nonzero exit
+
+      const remaining = fixtureGit(repoDir, ["ls-remote", "--heads", "origin"]);
+      expect(remaining).toContain("refs/heads/feat/toctou");
+      expect(remaining).toContain("refs/heads/feat/partial");
+      expect(remaining).not.toContain("refs/heads/feat/clean");
+      expect(remaining).toContain("refs/heads/main");
+
+      // Round 2 finding 1, directly: every `gh pr list` invocation this run
+      // made carried --limit (the fake would otherwise have refused it,
+      // which would already have failed the assertions above, but this
+      // checks the actual call log rather than relying on that alone).
+      const calls = fs
+        .readFileSync(logPath, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      const listCalls = calls.filter((argv) => argv[0] === "pr" && argv[1] === "list");
+      expect(listCalls.length).toBeGreaterThan(0);
+      for (const argv of listCalls) {
+        expect(argv).toContain("--limit");
+      }
+
+      // #501 really was retargeted (an actual `gh pr edit` call was made for
+      // it), not just reported as if it had been.
+      expect(calls).toContainEqual(["pr", "edit", "501", "--base", "main"]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }, 20000);
 });
 
 describe("guard: the fixtures above must never reach this repository's own config", () => {

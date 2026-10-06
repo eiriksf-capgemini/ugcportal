@@ -50,24 +50,44 @@
  * the branch disappears, and GitHub refuses both reopen and base-change once
  * the base ref is gone -- observed three times in one day (#126, #120,
  * #123), each needing a brand-new PR number and losing its comment history.
- * So immediately before deleting a `"remove"`-classified remote branch,
- * `--execute` queries `gh pr list --base <branch> --state open` for that
- * exact branch (a fresh, targeted query -- the repo-wide `gh pr list
- * --state all` snapshot fetched once at the top of `main()` is keyed by
- * *head* branch and says nothing about who currently targets this branch as
- * a *base*). If that turns up any open PRs, each is retargeted with `gh pr
- * edit <n> --base <newBase>` (`newBase` is this branch's own merged PR's
- * base, read from the same snapshot -- "the merged PR's base", not a
- * hardcoded `main`, so a multi-level stack retargets to where the merging
- * branch itself pointed) and the result is read back with `gh pr view` --
- * `gh pr edit`'s own exit code is not trusted, the same "verify, don't
- * trust" rule `deleteRemoteBranch` already applies to `git push origin
- * --delete`. Any failure anywhere in that sequence -- the lookup, an edit, a
- * verify read-back that doesn't match -- keeps the branch instead of risking
- * the delete; `classifyBranchRetarget` / `classifyRetargetVerification`
- * below are the pure decisions this makes, and `--no-retarget-open-prs`
- * switches the whole thing off in favour of keep-and-report (so the operator
- * handles the stacked PR by hand instead of this script touching it).
+ * `--execute` guards every `"remove"`-classified remote branch against this
+ * in three stages, round 2 of this bead having found gaps in the original
+ * single-stage version (a 30-item silent cap on an un-`--limit`ed query, no
+ * re-check once retargeting itself had taken real time, and a frozen
+ * recorded base that can point at a branch this same run already deleted):
+ *
+ *   1. One repo-wide `gh pr list --state open --json number,baseRefName
+ *      --limit 1000` snapshot, fetched once near the top of `main()`
+ *      (`fetchOpenPrsByBase`/`buildOpenPrsByBase`) -- not one `gh pr list
+ *      --base <branch>` round trip per candidate, which is wasted work on
+ *      every branch that (almost always) has nothing stacked on it.
+ *      `classifyBranchRetarget` decides, from this snapshot, whether
+ *      anything needs retargeting at all.
+ *   2. If so, each open PR is retargeted with `gh pr edit <n> --base
+ *      <newBase>` and the result is read back with `gh pr view` --
+ *      `gh pr edit`'s own exit code is not trusted, the same "verify, don't
+ *      trust" rule `deleteRemoteBranch` already applies to `git push origin
+ *      --delete`. `newBase` is not simply this branch's own merged PR's
+ *      recorded `baseRefName` (that value is frozen GitHub history, and can
+ *      point at an intermediate branch this same sweep -- or an earlier one
+ *      -- already deleted): `resolveNewBase` walks that chain up to the
+ *      first base still present on `origin`, or `main`, so a multi-level
+ *      stack resolves correctly instead of wedging on a dangling name.
+ *   3. Immediately before the actual, irreversible `deleteRemoteBranch` call
+ *      -- not before, not "close enough" -- one LIVE `gh pr list --base
+ *      <branch> --state open --limit 1000` re-check (`fetchOpenPrsBasedOn`
+ *      / `classifyPreDeleteRecheck`): the batch snapshot in step 1 is stale
+ *      by however long steps 1-2 took, so this is the only point that can
+ *      rule out a PR opened in that window.
+ *
+ * Any failure anywhere in this sequence -- a lookup, an edit, a verify
+ * read-back that doesn't match, or something new appearing at step 3 --
+ * keeps the branch instead of risking the delete, reporting which PRs (if
+ * any) were already safely retargeted before the failure. `--no-retarget-
+ * open-prs` switches off the retargeting in step 2 in favour of keep-and-
+ * report (so the operator handles the stacked PR by hand instead of this
+ * script touching it) -- step 3's safety recheck still runs regardless of
+ * that flag, since it protects against a PR the flag was never about.
  *
  * Usage:
  *   node scripts/sweep-merged-branches.mjs                       # dry run: lists candidates only
@@ -228,6 +248,80 @@ export function parseRetargetFlag(argv) {
   return !argv.includes("--no-retarget-open-prs");
 }
 
+/**
+ * Resolves where an open PR stacked on a branch about to be deleted should
+ * actually be retargeted to (round 2 finding 2, ugcportal-hvaf): not always
+ * the deleted branch's own recorded `baseRefName` directly, because that
+ * value is a merged PR's frozen GitHub history -- it is never updated after
+ * the branch IT pointed to is itself deleted. Concretely: branch A's merged
+ * PR has base B; B's merged PR has base `main`; B is swept (this run or an
+ * earlier one). A PR stacked on A should land on `main`, not on a `B` that
+ * no longer exists -- `gh pr edit <n> --base B` would simply fail forever,
+ * wedging A in "kept" indefinitely even though the stack trivially resolves.
+ *
+ * Walks up the base chain while the current candidate is neither `main` nor
+ * still present on `origin`, following each intermediate branch's own
+ * recorded `baseRefName` from `prInfoByBranch` -- the same snapshot
+ * `classifyRemoteBranch` and the caller already use, so this costs no extra
+ * `gh` or `git` call. Falls back to `mainBranch` the moment the chain runs
+ * out of information (no PR recorded for the current candidate) or exceeds
+ * `maxHops`, which also defends a cyclic or otherwise malformed chain from
+ * looping forever -- GitHub's own UI prevents a PR from being its own
+ * ancestor, but nothing here assumes that holds for every possible `prs`
+ * snapshot fed to this function in a test.
+ *
+ * @param {object} params
+ * @param {string} params.baseRefName the branch's own (merged) PR's recorded base -- the starting candidate
+ * @param {Set<string>} params.remoteBranchNames branches currently on `origin`, kept in sync by the caller as THIS run's own deletions land
+ * @param {Map<string, {state: string, headRefOid: string, baseRefName: string}>} params.prInfoByBranch same snapshot classifyRemoteBranch uses
+ * @param {string} params.mainBranch
+ * @param {number} [params.maxHops] safety cap on chain length; default well above any realistic stack depth
+ * @returns {string}
+ */
+export function resolveNewBase({ baseRefName, remoteBranchNames, prInfoByBranch, mainBranch, maxHops = 50 }) {
+  let candidate = baseRefName;
+  const seen = new Set();
+  for (let hops = 0; hops < maxHops; hops++) {
+    if (candidate === mainBranch) return candidate;
+    if (remoteBranchNames.has(candidate)) return candidate;
+    if (seen.has(candidate)) return mainBranch; // cycle -- fail safe rather than loop forever
+    seen.add(candidate);
+    const next = prInfoByBranch.get(candidate)?.baseRefName;
+    if (!next) return mainBranch; // chain runs out of recorded information
+    candidate = next;
+  }
+  return mainBranch; // maxHops exceeded -- fail safe
+}
+
+/**
+ * The final check immediately before the irreversible `deleteRemoteBranch`
+ * call (round 2 finding 3, ugcportal-hvaf) -- a TOCTOU window the earlier,
+ * batch-derived retarget decision (`classifyBranchRetarget`, fed from the
+ * single upfront `gh pr list --state open` snapshot `fetchOpenPrsByBase`
+ * takes) cannot close on its own: that snapshot is read once, before this
+ * loop starts, and retargeting itself takes real wall-clock time (one `gh pr
+ * edit` plus one `gh pr view` per stacked PR) -- time in which a brand new
+ * PR could be opened with this branch as its base. `main()` re-queries live,
+ * right here, and this is the pure decision over that live result: keep
+ * (never delete) the moment anything -- new or missed -- still lists this
+ * branch as its base, exactly the same "never deletes while a PR still
+ * lists it as base" guarantee `classifyBranchRetarget` makes for the
+ * earlier, batch-derived check, now re-asserted against current reality
+ * rather than a stale snapshot.
+ *
+ * @param {object} params
+ * @param {{number: number}[]} params.openPrsBasedOnBranch a FRESH, live query result, not the batch snapshot
+ * @returns {{action: "delete"}|{action: "keep", reason: string}}
+ */
+export function classifyPreDeleteRecheck({ openPrsBasedOnBranch }) {
+  if (openPrsBasedOnBranch.length === 0) return { action: "delete" };
+  const prNumbers = openPrsBasedOnBranch.map((pr) => pr.number);
+  return {
+    action: "keep",
+    reason: `open PR(s) appeared based on this branch since the last check, immediately before delete: #${prNumbers.join(", #")}`,
+  };
+}
+
 // --- Pure parsers ---------------------------------------------------------
 
 /**
@@ -293,10 +387,12 @@ export function parseWorktreeList(output) {
  * per branch name. `gh pr list` without `--search` sorts by creation
  * descending, so the first entry seen per branch is its newest PR -- the one
  * a re-used branch name should be judged by. `baseRefName` is this branch's
- * own PR's base -- what an open PR stacked on this branch gets retargeted to
- * once this branch's PR is MERGED and the branch is about to be deleted
- * (ugcportal-hvaf): "the merged PR's base", not a hardcoded `main`, so a
- * multi-level stack retargets to wherever the merging branch itself pointed.
+ * own PR's base -- the starting point for what an open PR stacked on this
+ * branch gets retargeted to once this branch's PR is MERGED and the branch
+ * is about to be deleted (ugcportal-hvaf): `resolveNewBase` walks it further
+ * when that recorded base branch is itself already gone from `origin`, so a
+ * multi-level stack still resolves correctly rather than wedging on a
+ * dangling intermediate name.
  *
  * @param {{headRefName: string, state: string, headRefOid: string, baseRefName: string}[]} prs
  * @returns {Map<string, {state: string, headRefOid: string, baseRefName: string}>}
@@ -305,6 +401,35 @@ export function buildPrInfoByBranch(prs) {
   const map = new Map();
   for (const pr of prs) {
     if (!map.has(pr.headRefName)) map.set(pr.headRefName, { state: pr.state, headRefOid: pr.headRefOid, baseRefName: pr.baseRefName });
+  }
+  return map;
+}
+
+/**
+ * `gh pr list --state open --json number,baseRefName` output -> every
+ * currently OPEN PR, grouped by its base branch (round 2 finding 7,
+ * ugcportal-hvaf). One repo-wide snapshot, fetched once near the top of
+ * `main()` alongside `fetchPrInfoByBranch`'s own `--state all` snapshot,
+ * answers "does anything currently depend on this branch as a base" for
+ * EVERY `"remove"`-candidate branch at once -- the same N-calls-to-one-call
+ * pattern `fetchPrInfoByBranch` already applies, now applied to the
+ * question `classifyBranchRetarget`'s initial decision needs answered,
+ * instead of a separate `gh pr list --base <branch>` round trip per
+ * candidate. This snapshot is intentionally NOT what the final,
+ * immediately-before-delete safety check (`classifyPreDeleteRecheck`) reads
+ * -- that check needs a live, per-branch query taken at the moment of
+ * deletion, which this upfront batch is taken too early to serve; see the
+ * comment above `fetchOpenPrsBasedOn`.
+ *
+ * @param {{number: number, baseRefName: string}[]} prs
+ * @returns {Map<string, {number: number}[]>}
+ */
+export function buildOpenPrsByBase(prs) {
+  const map = new Map();
+  for (const pr of prs) {
+    const list = map.get(pr.baseRefName) ?? [];
+    list.push({ number: pr.number });
+    map.set(pr.baseRefName, list);
   }
   return map;
 }
@@ -379,6 +504,17 @@ function fetchPrInfoByBranch() {
   return buildPrInfoByBranch(prs);
 }
 
+/** One repo-wide `gh pr list --state open` snapshot (round 2 finding 7, ugcportal-hvaf) -- see buildOpenPrsByBase's own doc for why this exists instead of one `gh pr list --base <branch>` call per candidate. Same `--limit`/cap-warning discipline as fetchPrInfoByBranch, for the same silent-truncation reason (round 2 finding 1). */
+function fetchOpenPrsByBase() {
+  const out = execFileSync("gh", ["pr", "list", "--state", "open", "--json", "number,baseRefName", "--limit", String(PR_LIST_LIMIT)], {
+    encoding: "utf8",
+  });
+  const prs = JSON.parse(out);
+  const warning = prListCapWarning(prs.length, PR_LIST_LIMIT);
+  if (warning) throw new Error(warning);
+  return buildOpenPrsByBase(prs);
+}
+
 function fetchRemoteBranches() {
   const out = execFileSync("git", ["ls-remote", "--heads", "origin"], { encoding: "utf8" });
   return parseRemoteHeads(out);
@@ -447,10 +583,32 @@ export function deleteRemoteBranch(name, cwd = ".") {
   }
 }
 
-/** @returns {{number: number}[]} every currently OPEN PR whose base is `branch` -- queried fresh, immediately before a delete, never read off the repo-wide `gh pr list --state all` snapshot `fetchPrInfoByBranch` fetched once at the top of `main()`, which is keyed by HEAD branch and says nothing about who targets this branch as a BASE. Not unit-tested directly, same convention as the other `gh`-calling functions in this section (see the section comment above). */
+/**
+ * Every currently OPEN PR whose base is `branch`, queried fresh. This is the
+ * ONLY live, per-branch open-PR query left in this file (round 2 finding 7
+ * moved the earlier, batch-derived existence check to `fetchOpenPrsByBase`)
+ * -- `main()` calls this exactly once per `"remove"` candidate, immediately
+ * before that candidate's `deleteRemoteBranch` call, as the final
+ * TOCTOU-closing safety check (`classifyPreDeleteRecheck`, round 2 finding
+ * 3): the batch snapshot is read once before the loop starts and retargeting
+ * itself takes real time, so only a live query taken at the moment of
+ * deletion can rule out a PR opened in between. Same `--limit`/cap-warning
+ * discipline as the other two `gh pr list` call sites in this file (round 2
+ * finding 1). Not unit-tested directly, same convention as the other `gh`-
+ * calling functions in this section (see the section comment above).
+ *
+ * @returns {{number: number}[]}
+ */
 function fetchOpenPrsBasedOn(branch) {
-  const out = execFileSync("gh", ["pr", "list", "--base", branch, "--state", "open", "--json", "number"], { encoding: "utf8" });
-  return JSON.parse(out);
+  const out = execFileSync(
+    "gh",
+    ["pr", "list", "--base", branch, "--state", "open", "--json", "number", "--limit", String(PR_LIST_LIMIT)],
+    { encoding: "utf8" },
+  );
+  const prs = JSON.parse(out);
+  const warning = prListCapWarning(prs.length, PR_LIST_LIMIT);
+  if (warning) throw new Error(warning);
+  return prs;
 }
 
 function retargetPr(prNumber, newBase) {
@@ -464,42 +622,48 @@ function fetchPrBaseState(prNumber) {
 }
 
 /**
- * Runs immediately before a remote branch is deleted (ugcportal-hvaf): finds
- * every OPEN PR based on it, retargets each to `newBase` -- or, if `retarget`
- * is false, keeps the branch and reports instead of touching anything -- and
- * verifies every retarget actually landed before giving the caller the
- * go-ahead to delete. Fails closed: any error (the lookup, an edit, a verify
+ * Runs for every `"remove"`-classified branch, before `main()`'s final
+ * pre-delete recheck (ugcportal-hvaf): retargets every OPEN PR in
+ * `openPrsBasedOnBranch` (the upfront batch snapshot, `fetchOpenPrsByBase` --
+ * round 2 finding 7, not a fresh call of its own) to `newBase` -- or, if
+ * `retarget` is false, keeps the branch and reports instead of touching
+ * anything -- and verifies every retarget actually landed before giving the
+ * caller the go-ahead to delete. Fails closed: any error (an edit, a verify
  * read-back that doesn't match) keeps the branch rather than risking GitHub
  * auto-closing a PR whose base just vanished out from under it.
  *
- * @param {string} branch branch about to be deleted
- * @param {string} newBase where to retarget any open PR based on `branch` -- this branch's own (merged) PR's base
+ * Not atomic across multiple stacked PRs, by design, not by oversight
+ * (round 2 finding 5): if PR N's retarget+verify succeeds but PR N+1's then
+ * fails, N is NOT rolled back -- it is already safely rebased onto
+ * `newBase`, which is strictly safer than leaving it on a branch about to be
+ * deleted. What this function guarantees instead is that the caller always
+ * learns which PRs are in which state: the `"keep"` result's `retargeted`
+ * field lists every PR that succeeded before the failure, distinct from the
+ * one named in `reason`, so an operator reading the log is never left
+ * guessing whether an already-moved PR quietly changed base.
+ *
+ * @param {{number: number}[]} openPrsBasedOnBranch every currently OPEN PR whose base is the branch about to be deleted, from the upfront batch snapshot
+ * @param {string} newBase where to retarget any open PR based on this branch -- resolved by `resolveNewBase`
  * @param {boolean} retarget false when --no-retarget-open-prs was passed
- * @returns {{action: "none"}|{action: "retargeted", prNumbers: number[]}|{action: "keep", reason: string}}
+ * @returns {{action: "none"}|{action: "retargeted", prNumbers: number[]}|{action: "keep", reason: string, retargeted: number[]}}
  */
-function retargetOpenPrsBeforeDelete(branch, newBase, retarget) {
-  let openPrs;
-  try {
-    openPrs = fetchOpenPrsBasedOn(branch);
-  } catch (err) {
-    return { action: "keep", reason: `could not check for open PRs based on this branch: ${err.message}` };
-  }
-
-  const decision = classifyBranchRetarget({ openPrsBasedOnBranch: openPrs, retarget });
+function retargetOpenPrsBeforeDelete(openPrsBasedOnBranch, newBase, retarget) {
+  const decision = classifyBranchRetarget({ openPrsBasedOnBranch, retarget });
   if (decision.action !== "retarget") return decision;
 
+  const retargeted = [];
   for (const prNumber of decision.prNumbers) {
     try {
       retargetPr(prNumber, newBase);
     } catch (err) {
-      return { action: "keep", reason: `failed to retarget PR #${prNumber} to ${newBase}: ${err.message}` };
+      return { action: "keep", reason: `failed to retarget PR #${prNumber} to ${newBase}: ${err.message}`, retargeted };
     }
 
     let info;
     try {
       info = fetchPrBaseState(prNumber);
     } catch (err) {
-      return { action: "keep", reason: `could not verify PR #${prNumber} after retargeting: ${err.message}` };
+      return { action: "keep", reason: `could not verify PR #${prNumber} after retargeting: ${err.message}`, retargeted };
     }
 
     const verdict = classifyRetargetVerification({
@@ -508,10 +672,11 @@ function retargetOpenPrsBeforeDelete(branch, newBase, retarget) {
       expectedBaseRefName: newBase,
       state: info.state,
     });
-    if (verdict.action === "failed") return { action: "keep", reason: verdict.reason };
+    if (verdict.action === "failed") return { action: "keep", reason: verdict.reason, retargeted };
+    retargeted.push(prNumber);
   }
 
-  return { action: "retargeted", prNumbers: decision.prNumbers };
+  return { action: "retargeted", prNumbers: retargeted };
 }
 
 export function removeWorktree(path) {
@@ -550,8 +715,16 @@ function main() {
   }
   const mainBranch = resolveMainBranch();
   const prInfoByBranch = fetchPrInfoByBranch();
+  const openPrsByBase = fetchOpenPrsByBase(); // round 2 finding 7: one batch call, not one per candidate
 
-  let branchCandidates = fetchRemoteBranches().map((name) => ({
+  const remoteBranchList = fetchRemoteBranches();
+  // Mutable, and kept in sync as THIS run's own deletions land below --
+  // resolveNewBase needs to see a branch this run already deleted as gone,
+  // not as it stood in the snapshot taken before the removal loop started
+  // (round 2 finding 2).
+  const remoteBranchNames = new Set(remoteBranchList);
+
+  let branchCandidates = remoteBranchList.map((name) => ({
     name,
     ...classifyRemoteBranch({ name, isMainBranch: name === mainBranch, prState: prInfoByBranch.get(name)?.state ?? null }),
   }));
@@ -619,18 +792,45 @@ function main() {
   let failures = 0;
 
   for (const c of branchCandidates.filter((x) => x.action === "remove")) {
-    const newBase = prInfoByBranch.get(c.name)?.baseRefName ?? mainBranch;
-    const retargetResult = retargetOpenPrsBeforeDelete(c.name, newBase, retargetOpenPrs);
+    const recordedBase = prInfoByBranch.get(c.name)?.baseRefName ?? mainBranch;
+    const newBase = resolveNewBase({ baseRefName: recordedBase, remoteBranchNames, prInfoByBranch, mainBranch });
+
+    const openPrsBasedOnBranch = openPrsByBase.get(c.name) ?? [];
+    const retargetResult = retargetOpenPrsBeforeDelete(openPrsBasedOnBranch, newBase, retargetOpenPrs);
     if (retargetResult.action === "keep") {
       failures++;
-      console.error(`kept origin/${c.name}: ${retargetResult.reason}`);
+      const partial = retargetResult.retargeted?.length
+        ? ` (already retargeted before the failure: #${retargetResult.retargeted.join(", #")})`
+        : "";
+      console.error(`kept origin/${c.name}: ${retargetResult.reason}${partial}`);
       continue;
     }
     if (retargetResult.action === "retargeted") {
       console.log(`retargeted open PR(s) based on origin/${c.name} to ${newBase}: #${retargetResult.prNumbers.join(", #")}`);
     }
+
+    // Final TOCTOU-closing recheck, live, immediately before the irreversible
+    // delete (round 2 finding 3) -- not the batch snapshot above, which was
+    // read before this loop started and is now stale by however long the
+    // retargeting above took.
+    let freshOpenPrs;
+    try {
+      freshOpenPrs = fetchOpenPrsBasedOn(c.name);
+    } catch (err) {
+      failures++;
+      console.error(`kept origin/${c.name}: could not verify no new PR appeared since the last check: ${err.message}`);
+      continue;
+    }
+    const recheck = classifyPreDeleteRecheck({ openPrsBasedOnBranch: freshOpenPrs });
+    if (recheck.action === "keep") {
+      failures++;
+      console.error(`kept origin/${c.name}: ${recheck.reason}`);
+      continue;
+    }
+
     try {
       deleteRemoteBranch(c.name);
+      remoteBranchNames.delete(c.name); // keep resolveNewBase's view in sync for the rest of this run
       console.log(`removed origin/${c.name}`);
     } catch (err) {
       failures++;
