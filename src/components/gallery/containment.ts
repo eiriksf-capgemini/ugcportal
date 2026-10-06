@@ -85,9 +85,15 @@ export const GALLERY_TILE_BASE_CLASS = `relative block w-full overflow-hidden ro
 /**
  * One INTERACTIVE tile (gallery.tsx's own `<button>`, which opens the
  * lightbox): the shared base above, plus `group` (so `GALLERY_TILE_IMAGE_
- * CLASS`'s `group-hover:scale-[…]` has an ancestor to key off), the
- * zoom-in cursor, and a focus-visible ring for keyboard navigation — none
- * of which belong on a tile nothing happens when you activate.
+ * CLASS`'s `group-hover: scale-[…]` (space inserted before the utility,
+ * same reason as every other bare mention in this file - ugcportal-61pv:
+ * this exact spot, with the real value elided to an ellipsis rather than
+ * written out, was found compiling a second, ungated `scale: …` rule
+ * straight into the real production stylesheet, because this scan's own
+ * "space inserted" convention had never been applied here) has an ancestor
+ * to key off), the zoom-in cursor, and a focus-visible ring for keyboard
+ * navigation — none of which belong on a tile nothing happens when you
+ * activate.
  */
 export const GALLERY_TILE_CLASS = `group ${GALLERY_TILE_BASE_CLASS} cursor-zoom-in focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring`;
 
