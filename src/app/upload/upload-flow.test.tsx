@@ -677,8 +677,24 @@ describe("the 503's Retry-After actually throttles the retry (round 3, 4)", () =
     return match[1];
   }
 
+  /**
+   * `aria-disabled="true"`, not a native `disabled` attribute (ugcportal-ff2a):
+   * the button now renders with `focusableWhenDisabled`, the same base-ui
+   * escape hatch ugcportal-jx4 uses on the gallery's "Load more", so a
+   * visitor tabbing through a throttled row still lands on it instead of a
+   * native `disabled` silently pulling it out of the Tab order. Asserting
+   * the ABSENCE of the native attribute alongside the presence of the ARIA
+   * one is what tells "held shut but reachable" apart from "gone".
+   */
   function isDisabled(markup: string): boolean {
-    return /\sdisabled(=|\s|$)/.test(tryAgainAttributes(markup));
+    const attrs = tryAgainAttributes(markup);
+    const ariaDisabled = /\saria-disabled="true"/.test(attrs);
+    const nativeDisabled = /\sdisabled(=|\s|$)/.test(attrs);
+    // A regression that brought back the native attribute would make this
+    // read "disabled" either way, which is exactly the thing this guards:
+    // fail loudly rather than silently agree with the old behaviour.
+    expect(nativeDisabled, "Try again must stay focusable, never natively disabled").toBe(false);
+    return ariaDisabled;
   }
 
   async function shedRow(retryAfter: string) {

@@ -156,6 +156,34 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
   );
 
   /**
+   * Keyboard focus handoff for "Try again" (ugcportal-ff2a) — the same shape
+   * ugcportal-jx4 fixed for the gallery's "Load more", one level down: that
+   * page has a single button and a single landing spot, so one ref each was
+   * enough; this page has one of each PER ROW, so these are keyed by queue
+   * id instead. `UploadQueueList` stays hook-free (see its own docstring) —
+   * it only forwards the element through the ref callbacks below, never
+   * reads from these maps itself.
+   */
+  const retryButtonRefs = useRef(new Map<string, HTMLButtonElement>());
+  const statusLineRefs = useRef(new Map<string, HTMLParagraphElement>());
+
+  const registerRetryButtonRef = useCallback(
+    (id: string, element: HTMLButtonElement | null) => {
+      if (element === null) retryButtonRefs.current.delete(id);
+      else retryButtonRefs.current.set(id, element);
+    },
+    [],
+  );
+
+  const registerStatusLineRef = useCallback(
+    (id: string, element: HTMLParagraphElement | null) => {
+      if (element === null) statusLineRefs.current.delete(id);
+      else statusLineRefs.current.set(id, element);
+    },
+    [],
+  );
+
+  /**
    * Which rows have reached an outcome, tracked from the ACTIONS rather than
    * from the rendered list.
    *
@@ -428,6 +456,26 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
       */
       if (!mayRetry(item.failure, Date.now())) return;
 
+      /*
+        Keyboard focus handoff (ugcportal-ff2a K1), before the dispatch below
+        rather than after it, and for the same reason gallery.tsx's own
+        pre-dispatch check gives: `dispatchQueue` only QUEUES the re-render
+        that unmounts "Try again" (the item's `failure` goes to null on
+        "retried" — see uploadQueueReducer), it does not commit it, so
+        `document.activeElement` here still reflects whatever the visitor's
+        last real action left it as. Checked against THIS row's own button,
+        not against `document.body`: a visitor who activated this with a
+        mouse, or who is on a different row entirely, must not have their
+        focus moved anywhere (K2) — only a visitor who was actually on this
+        button gets handed somewhere else. The status line is the landing
+        spot because, like the gallery's paging status, it is never
+        conditionally rendered (see UploadQueueList), so it already exists
+        for `.focus()` to find.
+      */
+      if (document.activeElement === retryButtonRefs.current.get(id)) {
+        statusLineRefs.current.get(id)?.focus();
+      }
+
       dispatchQueue({ type: "retried", id });
       // The tags, alt text and caption the FIRST attempt carried, not
       // whatever is ticked or typed now.
@@ -653,6 +701,8 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
         onRetry={retry}
         onCancel={cancel}
         onDismiss={dismiss}
+        onRetryButtonRef={registerRetryButtonRef}
+        onStatusLineRef={registerStatusLineRef}
       />
     </div>
   );

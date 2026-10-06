@@ -32,6 +32,26 @@ export type UploadQueueListProps = {
   onRetry: (id: string) => void;
   onCancel: (id: string) => void;
   onDismiss: (id: string) => void;
+  /**
+   * Keyboard focus handoff for "Try again" (ugcportal-ff2a), the same shape
+   * ugcportal-jx4 fixed for the gallery's "Load more": the conditional
+   * `{failure ? <Button/> : null}` inside Failure below unmounts the very
+   * button a retry click just activated, and nothing moves focus when that
+   * happens — it falls to <body>. Both ref callbacks are optional so every
+   * existing caller that renders this list for its markup alone
+   * (renderToStaticMarkup, no real DOM — see upload-flow.test.tsx) keeps
+   * working unchanged; only a caller with a real document, like UploadForm,
+   * needs to supply them and do the handoff itself before the dispatch that
+   * unmounts the button.
+   */
+  onRetryButtonRef?: (id: string, element: HTMLButtonElement | null) => void;
+  /**
+   * The per-row status text below is rendered unconditionally, whatever the
+   * item's status (see its own render call below) — unlike the button, it
+   * never unmounts, which is what makes it a landing spot that is already
+   * there by the time a retry click needs one.
+   */
+  onStatusLineRef?: (id: string, element: HTMLParagraphElement | null) => void;
 };
 
 /**
@@ -144,11 +164,13 @@ function Failure({
   item,
   onRetry,
   onDismiss,
+  onRetryButtonRef,
 }: {
   now: number;
   item: QueueItem;
   onRetry: (id: string) => void;
   onDismiss: (id: string) => void;
+  onRetryButtonRef?: (id: string, element: HTMLButtonElement | null) => void;
 }) {
   const failure = item.failure;
   if (failure === null) return null;
@@ -213,8 +235,17 @@ function Failure({
             a shed window and handed them a control that walked straight back
             into it. `mayRetry` is the same predicate the handler uses, so a
             disabled button and a refused click cannot disagree.
+
+            `disabled` + `focusableWhenDisabled` (ugcportal-ff2a), not
+            `disabled` alone — the same pair ugcportal-jx4 uses on the
+            gallery's "Load more" (see gallery.tsx's own comment on it).
+            base-ui renders `aria-disabled="true"` instead of the native
+            attribute while this is held shut, which keeps it a legitimate
+            `.focus()` target rather than one a browser's own disabled-form-
+            control handling could silently drop.
           */
           <Button
+            ref={(element) => onRetryButtonRef?.(item.id, element)}
             type="button"
             /*
               ugcportal-rw9j review round 4: `outline-neutral`, not `outline`
@@ -234,6 +265,7 @@ function Failure({
             variant="outline-neutral"
             size="sm"
             disabled={!mayRetry(failure, now)}
+            focusableWhenDisabled
             onClick={() => onRetry(item.id)}
           >
             {secondsUntilRetry(failure, now) === 0
@@ -294,6 +326,8 @@ export function UploadQueueList({
   onRetry,
   onCancel,
   onDismiss,
+  onRetryButtonRef,
+  onStatusLineRef,
 }: UploadQueueListProps) {
   if (items.length === 0) return null;
 
@@ -314,7 +348,23 @@ export function UploadQueueList({
               <p className="min-w-0 flex-1 truncate text-sm text-ink">
                 {item.name}
               </p>
-              <p className="shrink-0 text-xs text-ink-muted">
+              <p
+                ref={(element) => onStatusLineRef?.(item.id, element)}
+                tabIndex={-1}
+                /*
+                  `tabIndex={-1}` (ugcportal-ff2a, the same device
+                  ugcportal-jx4 uses on the gallery's paging status): not in
+                  the Tab order, but a valid `.focus()` target, so a retry
+                  that is about to unmount "Try again" below has somewhere
+                  inside this row to hand focus to instead of letting it fall
+                  to <body>. `outline-hidden` + `focus:` (not
+                  `focus-visible:`) for the same reason as the gallery's own
+                  version: the ring has to paint on a programmatic focus call
+                  that follows a click, which `:focus-visible`'s
+                  last-input-modality heuristic does not reliably do.
+                */
+                className="shrink-0 rounded-sm text-xs text-ink-muted outline-hidden focus:ring-3 focus:ring-ring/80"
+              >
                 {statusLabel(item)}
               </p>
             </div>
@@ -367,6 +417,7 @@ export function UploadQueueList({
               item={item}
               onRetry={onRetry}
               onDismiss={onDismiss}
+              onRetryButtonRef={onRetryButtonRef}
             />
           </div>
         </li>
