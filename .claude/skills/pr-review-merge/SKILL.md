@@ -107,17 +107,27 @@ From `gh pr checks <n>`: every check must be passing. If anything is failing, pe
 
 ## 4. Review
 
-Run the repo's existing `code-review` skill against this PR so review logic stays in one place rather than being reimplemented here:
+The reviewer this step used to call, `code-review`, is bundled with the Claude Code application — there is no repo or `~/.claude` copy, so its prompt (including the per-angle finder sub-agents it spawns) cannot be edited from this repo. This step used to invoke it as `Skill(skill: "code-review", args: "<n> --comment")`. **Do not do that — do not invoke `code-review`, forked or otherwise, from this step.** Its finder forks did not stay read-only or scoped to their own resources: they posted inline PR comments — including a stray "write access test" comment — before this skill had reached a verdict; they reported their results to the orchestrator that had spawned the reviewer instead of to the reviewer itself, leaving reviewers idling for hours; they ran redundant builds of their own in a shared scratch worktree, with one wiping that worktree mid-run; one force-removed a worktree it had not created; and one ran `pkill -9 -f "next build"` machine-wide to clear a lock, which can kill another agent's build. The fork tokens this burned ran to the hundreds of thousands against reviewer totals an order of magnitude smaller. All of that is one root cause — forking the reviewer at all — tracked as `ugcportal-cr2h`, `ugcportal-p4jw` and `ugcportal-lasi`; this change subsumes all three.
 
-```
-Skill(skill: "code-review", args: "<n> --comment")
-```
+Review the diff **yourself, in this same agent, inline.** Work through these six finder angles, **in this order, and no others — this list is fixed here, not something to extend per PR:**
 
-This posts inline findings as PR comments itself. Note whether it reported zero findings or at least one CONFIRMED/PLAUSIBLE finding — that is an input to step 5.
+1. **Line-by-line diff scan** — read every added, changed and removed line against what it claims to do.
+2. **Removed-behaviour audit** — for everything the diff deletes, stops calling, or stops exporting, confirm nothing else still depended on it.
+3. **Cross-file tracer** — follow every touched symbol, type, config value and env var to its other definitions and call sites outside the diff.
+4. **Reuse / simplification / efficiency** — the `/simplify` angle: duplicated logic, needless complexity, avoidable work.
+5. **Altitude** — does each change sit at the right layer, or does a lower-level concern leak upward (or a policy decision leak down)?
+6. **Conventions** — does it match this repo's established patterns for naming, error handling, test shape and file placement?
 
-**`code-review` does not report severity, and assigning it is your job.** Its per-finding output is `category`, `verdict` (CONFIRMED / PLAUSIBLE), `summary` and `failure_scenario` — there is no severity field, and there is no repo-local copy of that skill to add one to. So for **every** finding, you classify it yourself against `review-standards` section 3 (medium-or-above = wrong behaviour a user or the data can reach; low = the correctness of the code's *description* rather than of the code), and you **state the severity explicitly** in the comment you post and in your step 6 report. The entire round-4+ gate keys on that value. A finding whose severity nobody wrote down is the gate not running — if you cannot classify one, it counts as medium-or-above until someone does.
+Finish one angle completely — generate its candidates, then **verify every one of them against the actual code before moving to the next angle**, discarding anything you cannot substantiate. **Post nothing to the PR while any angle is still open.** No comment, no review, no write-access probe of any kind goes to GitHub until all six angles are done and you have reached step 5's verdict.
 
-If for some reason that skill isn't available in this session, review the diff yourself for correctness bugs and security issues (not style nits) and post equivalent PR comments via `gh pr comment <n> --body "..."`.
+Within every angle, check against `review-standards` section 2's four defect families, and name all four for that angle in your eventual report — this is the same required sweep as before, now run per angle instead of as a separate pass: (1) a comment claims a guarantee the code doesn't make, (2) a check compares the wrong two things, (3) an assertion that cannot fail, (4) sibling-omission. An angle report that doesn't name all four did not do the sweep for that angle.
+
+**Three more rules, taken directly from the incidents above:**
+- Never spawn a sub-agent — forked or otherwise — for any part of finding. This agent is the only one that looks at the diff.
+- Never kill a process you did not start, for any reason, including clearing a lock.
+- Never run a build, or any other write step, inside a worktree you did not create for this run.
+
+None of this produces a severity field on its own — assigning severity is still your job. For **every** finding, classify it against `review-standards` section 3 (medium-or-above = wrong behaviour a user or the data can reach; low = the correctness of the code's *description* rather than of the code), and **state the severity explicitly** in the comment you post and in your step 6 report. The entire round-4+ gate keys on that value. A finding whose severity nobody wrote down is the gate not running — if you cannot classify one, it counts as medium-or-above until someone does.
 
 ### 4.1 Required recurring-family sweep
 
@@ -140,20 +150,23 @@ This sweep is **required, not advisory**, and it is not a substitute for step 4 
 
 ## 4a. Record QA token cost
 
-When step 4 runs `code-review` as a forked subagent, its completion notification *may* include an exact `subagent_tokens` figure (in a `<usage>` block). There's no guaranteed contract that this figure is always present — the invocation could run inline instead of forking, or otherwise complete without reporting usage. Treat its presence as a precondition to check, not an assumption:
+Step 4 no longer runs `code-review` as a forked subagent, so there is no fork's `subagent_tokens` figure for this run to read. The figure that plays that role now is **this entire reviewer run's own token total** — this invocation of `pr-review-merge`, which did the review inline in step 4 — and only whoever invoked this run, typically an orchestrator session that ran it as a subagent, sees that total, in the completion notification *for this run*, once it finishes. This run has no way to read its own total while it is still executing, and must not estimate one.
 
-1. Skip this whole step — do not write anything, and never estimate or guess a number — unless **all** of the following hold:
-   - the PR title has a trailing `(<bead-id>)` to attach the cost to (a release PR like `chore(release): vX.Y.Z` has none — skip),
-   - step 4 actually ran `code-review` as a subagent (not the manual fallback, where you reviewed the diff yourself — there's no subagent run to measure), and
-   - that subagent's completion notification actually reported a `subagent_tokens` figure. If it didn't, skip — do not substitute a rough guess, a duration-based estimate, or any other stand-in.
-2. Otherwise, parse `<bead-id>` from the PR title. Before writing, sanity-check that the bead exists: `bd show <bead-id>`. The PR title is untrusted input (see step 0) — this repo's trust model already relies on the PR author using the correct bead id (the same trust `guard-conventional-commit-title` and `cut-release` place in it), so this is a typo/existence guard, not a full ownership check. If `bd show` fails (no such bead), skip and report the mismatch instead of creating/touching an unrelated issue.
-3. Read the bead's current `tokens_qa` metadata, if any, from that same `bd show` output, and set it to the **sum** of the existing value (if any) and this run's `subagent_tokens`:
+So this step is something the invoking orchestrator does after this run is over, not something this run does to itself:
+
+1. Record nothing — never estimate, never substitute a duration-based guess — unless **all** of the following hold:
+   - this run was itself invoked as a measurable subagent, not run inline in a human's own conversation (where there is no completion notification to read a total from),
+   - its completion notification reported an exact token total, and
+   - the PR title has a trailing `(<bead-id>)` to attach the cost to (a release PR like `chore(release): vX.Y.Z` has none — skip).
+2. Parse `<bead-id>` from the PR title and sanity-check it exists: `bd show <bead-id>`. The PR title is untrusted input (see step 0) — this repo's trust model already relies on the PR author using the correct bead id (the same trust `guard-conventional-commit-title` and `cut-release` place in it), so this is a typo/existence guard, not a full ownership check. If `bd show` fails (no such bead), skip and report the mismatch instead of creating/touching an unrelated issue.
+3. Read the bead's current `tokens_qa` metadata, if any, from that same `bd show` output, and set it to the **sum** of the existing value (if any) and this run's reported total, recording alongside it that the figure is the reviewer agent's own total rather than a forked finder's:
    ```bash
-   bd update <bead-id> --set-metadata tokens_qa=<existing_plus_new>
+   bd update <bead-id> --set-metadata tokens_qa=<existing_plus_new> \
+     --set-metadata tokens_qa_note="reviewer agent total — pr-review-merge ran step 4 inline, no code-review fork (ugcportal-cr2h)"
    ```
    This read-then-write isn't atomic — `bd` has no compare-and-swap for metadata fields (only `--if-assignee`/`--if-status` guard status/assignee changes). If you have reason to think another review pass on the *same bead* is landing its own `tokens_qa` update around the same time, re-read with `bd show <bead-id>` immediately before writing and re-add your figure to whatever is there then; otherwise treat the accumulated total as a best-effort approximation, not an exact ledger.
 
-This applies regardless of whether the PR ends up merged or left for a human — the QA cost was incurred either way.
+**The reviewer run itself never calls `bd update --set-metadata tokens_qa` or `tokens_qa_note`.** It cannot see its own final token total before it has finished running, and guessing one here would be exactly the duration-based estimate this step has always forbidden. This applies regardless of whether the PR ends up merged or left for a human — the QA cost was incurred either way, and recording it is the invoking orchestrator's job once the total is known, not this run's.
 
 ## 4b. Which review round is this?
 
@@ -497,7 +510,35 @@ EOF
 )"
 ```
 
-Then attempt approval, but **only where it can succeed** — resolve identity fresh in the same command block (see step 1's note on why a value can't cross blocks):
+**Before doing anything else — attempting approval or calling `gh pr merge` — run this round's post-round integrity check.** This round's only legitimate write so far is the marker comment just posted. The finder forks step 4 no longer spawns used to write to the PR on their own, before any verdict existed (`ugcportal-cr2h`); forking is forbidden now, but this check is the backstop that would have caught it regardless.
+
+List everything the reviewing account has authored — issue comments, review objects, and inline review comments on code — with a timestamp inside this round's window, from `run_started` (step 1; nothing this run posted predates it, since step 1a's lock is acquired immediately afterward and before any write) to now:
+
+```bash
+me=$(gh api user --jq .login) || { echo "cannot resolve reviewer identity — fix auth first" >&2; exit 1; }
+[ -n "$me" ] || { echo "empty reviewer identity — fix auth first" >&2; exit 1; }
+window_end=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+{ gh api repos/:owner/:repo/issues/<n>/comments --paginate \
+    --jq '.[] | [.html_url, .created_at, .user.login, ((.body // "") | split("\n")[0] | sub("\r$"; ""))] | @tsv'
+  gh api repos/:owner/:repo/pulls/<n>/reviews --paginate \
+    --jq '.[] | [.html_url, (.submitted_at // ""), .user.login, ((.body // "") | split("\n")[0] | sub("\r$"; ""))] | @tsv'
+  gh api repos/:owner/:repo/pulls/<n>/comments --paginate \
+    --jq '.[] | [.html_url, .created_at, .user.login, ((.body // "") | split("\n")[0] | sub("\r$"; ""))] | @tsv'
+} | jq -Rrn --arg me "$me" --arg start "$run_started" --arg end "$window_end" '
+  [ inputs | split("\t")
+    | {url: .[0], at: .[1], login: .[2], line: (.[3] // "")}
+    | select(.login == $me)
+    | select(.at != "" and .at >= $start and .at <= $end)
+    | select((.line | test("^<!-- ugcportal-review-(round|stop): ")) | not)
+  ]'
+```
+
+Inline review comments (`pulls/<n>/comments`) are included here, unlike step 4b's round counter, which excludes them because the counter never writes there. This check asks the opposite question — whether something wrote there that shouldn't have — and that endpoint is exactly the channel the forks this step no longer spawns used to abuse.
+
+If that prints anything other than `[]`, this round wrote something it cannot account for — a leftover fork, two overlapping invocations under the same identity (step 1a exists to prevent that, but this check is what would catch it if it ever happened anyway), or a manual write by whoever ran this. **Treat it like a `broken` chain: do not approve, do not merge, whatever the findings say.** Replace the marker you would otherwise be relying on with `<!-- ugcportal-review-stop: untracked-write -->` posted as a new comment, quote the listed URL(s) in your report, and hand the PR to a human. This round does not count — the gate's safety depends on this round's own write being the only one, and a round that cannot establish that has not established anything.
+
+Only once that check comes back `[]` should you go on to attempt approval, but **only where it can succeed** — resolve identity fresh in the same command block (see step 1's note on why a value can't cross blocks):
 
 ```bash
 me=$(gh api user --jq .login) || { echo "cannot resolve reviewer identity — fix auth first" >&2; exit 1; }
@@ -560,6 +601,8 @@ EOF
 )"
 ```
 
+**Run the same post-round integrity check described under the merge path, above, right after posting this comment** — same window (`run_started` to now), same query across issue comments, review objects and inline review comments, same rule: anything from the reviewing account in that window besides the marker just posted means this round does not stand as posted. Replace it with `<!-- ugcportal-review-stop: untracked-write -->`, quote the extra write(s) in your report, and hand the PR to a human instead of leaving the blocking comment as the final word.
+
 The marker must be the literal string `<!-- ugcportal-review-round: N -->` (or `<!-- ugcportal-review-round: N approx -->` for a bootstrap, step 4b) with `N` the round that just completed, and it must be the **first line** of the comment body — that is exactly what step 4b's command matches.
 
 `<headRefOid>` in that template is the head SHA **step 1 fetched and you wrote down**, not something to look up here. Every blocking comment records it, because condition 3 of the `7+` row compares the live head against the SHA in the anchor comment — and an anchor with no SHA in it silently disarms that half of the check, leaving the return path resting on the human-comment probe alone.
@@ -580,13 +623,13 @@ EOF
 )"
 ```
 
-Reason values: `ci`, `not-mergeable`, `base-branch`, `chain-broken` (step 4b), `approx-cap` (step 5's "treat as 6" fallback — the name records the case that produced it first, but the value is used for *any* chain that lands there, `exact` included), and `escalation-outstanding` (step 5's condition-3 failure: an anchor at or above 6 with nothing since it). A step-1a stand-down posts nothing at all, so it has no reason value. Step 4b's pattern does not match any of these, so they are invisible to the counter — which is the point. Its bootstrap probe excludes them too, for the same reason.
+Reason values: `ci`, `not-mergeable`, `base-branch`, `chain-broken` (step 4b), `approx-cap` (step 5's "treat as 6" fallback — the name records the case that produced it first, but the value is used for *any* chain that lands there, `exact` included), `escalation-outstanding` (step 5's condition-3 failure: an anchor at or above 6 with nothing since it), and `untracked-write` (the post-round integrity check above found a write from the reviewing account inside this round's window that wasn't the marker comment itself). A step-1a stand-down posts nothing at all, so it has no reason value. Step 4b's pattern does not match any of these, so they are invisible to the counter — which is the point. Its bootstrap probe excludes them too, for the same reason.
 
 `<N>` in both templates above is a **placeholder, not an example**. It used to read `4`, which is the one field an agent must change and the one a copy-paste silently keeps — stamping `4` twice, which contiguity alone would not catch and which froze the PR on that round. The duplicate check in step 4b now catches it; the placeholder stops it happening.
 
 Why this matters more than it looks: `CLAUDE.md` tells agents to run this skill immediately after opening a PR, when CI is usually still queued. Three such runs against pending checks would, if they stamped counting markers, put the *first* run that actually reviews anything at round 4 — where lows are filed rather than fixed. Three more and the PR is at the cap and escalating to a human, having never been reviewed once. That is the same over-count-into-the-lenient-regime failure this step deleted the timestamp fallback over, and it would falsify both "exact for every round that reached a verdict" above and "the cap bounds how many rounds may *hunt* for findings" at the top of this file. A CI-red run hunts for nothing, so it is not a round.
 
-Stamp the counting marker on every comment that *does* end a reviewing round on a usable chain, while holding the lock — blocking, whatever the blocker, and every approval. **Except** the carve-outs above: a `broken` chain stamps `<!-- ugcportal-review-stop: chain-broken -->`, the "treat as 6" fallback stamps `<!-- ugcportal-review-stop: approx-cap -->` on any chain it fires on, and a condition-3 failure stamps `<!-- ugcportal-review-stop: escalation-outstanding -->`. None of them is a round, and none may grow the chain.
+Stamp the counting marker on every comment that *does* end a reviewing round on a usable chain, while holding the lock — blocking, whatever the blocker, and every approval. **Except** the carve-outs above: a `broken` chain stamps `<!-- ugcportal-review-stop: chain-broken -->`, the "treat as 6" fallback stamps `<!-- ugcportal-review-stop: approx-cap -->` on any chain it fires on, a condition-3 failure stamps `<!-- ugcportal-review-stop: escalation-outstanding -->`, and a failed post-round integrity check stamps `<!-- ugcportal-review-stop: untracked-write -->`. None of them is a round, and none may grow the chain.
 
 ## 5a. File every deferred finding as a bead
 
@@ -628,9 +671,9 @@ Worse, and this is the case that forced the `exact` requirement: the escalation 
 
 So step 5's three entry conditions all apply, and the first one is what closes it: the chain must be **`exact`**, not merely non-`broken`. An `approx` chain can never enter this row, so a bootstrap cannot reach it however the arithmetic lands. The stop-comment probe and the evidence-of-action check are the two independent backstops.
 
-**What is bounded at round 7+ is the *decision*, not the looking.** An earlier draft said this round is "scoped to the blocker" — but step 4's only interface is `Skill(code-review, "<n> --comment")`, which takes a PR number, an effort level, `--comment` and `--fix`, and has no argument that restricts it to part of a diff. There is no repo-local copy to add one to, and deliberately narrowing the reviewer is the depth regression `ugcportal-2yj` rules out anyway. So the instruction was unenforceable, and an agent following it literally ran a full seventh hunt while the text claimed otherwise. The honest rule:
+**What is bounded at round 7+ is the *decision*, not the looking.** An earlier draft said this round is "scoped to the blocker". That was wrong when step 4 ran through `Skill(skill: "code-review", ...)`, whose only interface took a PR number and an effort level with no argument to restrict it to part of a diff, and it is still wrong now that step 4 is this agent running all six finder angles itself: nothing stops narrowing the scope technically, but doing so is exactly the depth regression `ugcportal-2yj` rules out. So the rule was never a tool limitation, it is a policy rule, and an agent that tried to scope the reviewer anyway ran a full seventh hunt while the text claimed otherwise. The honest rule:
 
-- **Run steps 1-4.1 in full**, `code-review` included, at its normal depth. Do not try to scope the reviewer.
+- **Run step 4 in full** — all six finder angles, each verified, plus the 4.1 family sweep — at its normal depth. Do not try to scope the reviewer to the blocker.
 - **What changes is what may block: severity, never age.** The PR stays open if the escalated blocker is unresolved, **or if any medium-or-above is outstanding, whenever it was first raised**. Lows are filed under 5a rather than fixed here, and that is the only relaxation. An earlier draft said "the escalated blocker, or a *new* medium-or-above", which left a medium first raised at round 7 in neither bucket — so at round 8 the text permitted merging past an open medium, contradicting both "nothing above low is ever closed by the cap" and "a medium-or-above blocks at every round including the last". Age was never the right axis.
 - **This round cannot start another, and cannot be re-entered for free.** It ends in exactly one of two states: merge on step 5's always-applies gates (saying in the round-marker comment that this is a post-escalation verification round, and linking the anchor comment it answers), or hand it back to the same human. Either way it stamps a counting marker, which becomes the new anchor — so a subsequent round 8 has to show fresh evidence against *that* comment, not against the original round-6 one. Without that, rounds 8, 9, 10 … all re-qualified off the same stale artifacts and the post-escalation band was unbounded. (If the escalated blocker was a *sensitive path*, step 2 still stands and the PR goes to a human regardless.)
 
