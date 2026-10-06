@@ -190,13 +190,14 @@ export function privacyContent(contact: LegalContact): PrivacyContent {
           "Only account holders can upload. For each upload the site keeps the original file exactly as it arrived, a smaller watermarked preview made from it, the original filename, the file type and size, the alt text and caption the uploader wrote, the subject tags they chose, and when it was uploaded and published.",
           "The original file is kept as uploaded. Any information the camera or phone embedded in it — such as location, device details and capture time — stays in that original. The watermarked preview is generated without that embedded information. The original is never shown to the public; the gallery and every image link only ever reach the preview.",
           `The files themselves live in object storage run by ${contact.storageProvider}. The records about them live in the site's database.`,
+          "If an item was made in exchange for a benefit — payment, a free or loaned product, a discount or discount code, a trip, or an event invitation — the site also records that a benefit was received, the brand or other source it came from, and the advertising label shown on the item, because Norwegian marketing law requires that kind of post to be clearly labelled as advertising. This record is kept for as long as the item is and is deleted with it; the label is shown publicly on the item, but the brand or other source behind the benefit is not.",
         ],
         purpose:
           "To run the gallery and portfolio, and later to offer originals for sale.",
         legalBasis:
-          "The site's legitimate interest in publishing its own work (GDPR Art. 6(1)(f)). For people who appear in an image, see the next section.",
+          "The site's legitimate interest in publishing its own work (GDPR Art. 6(1)(f)). For people who appear in an image, see the next section. The advertising-disclosure record rests on the same legitimate interest, in meeting Norway's advertising-labelling rules and being able to show that it has (GDPR Art. 6(1)(f)).",
         recipients:
-          "The storage provider named above holds the files. Everyone can see the watermarked preview, alt text, caption, tags, and upload and publication dates of a published item — and nothing else: not the original, not the filename, not who uploaded it.",
+          "The storage provider named above holds the files. Everyone can see the watermarked preview, alt text, caption, tags, and upload and publication dates of a published item — and, on an item that carries one, its advertising label — and nothing else: not the original, not the filename, not who uploaded it, and not the brand or other source behind a benefit.",
         retention: {
           kind: "stated",
           text: "An item is kept until its uploader deletes it. Deleting removes the database record and then the original and the preview from storage; if storage cannot be reached, the failure is logged and the file is removed by hand. Unpublishing an item hides it but keeps it. There is no automatic expiry.",
@@ -442,22 +443,17 @@ export const MODEL_COVERAGE: Readonly<
   // is the uploader's own declaration about their own item, deleted with the
   // item (ugcportal-qnq9.1).
   //
-  // THE CATEGORY'S PROSE DOES NOT YET NAME THIS RECORD, and that is a known,
-  // deliberate gap rather than an oversight. The `what` paragraphs above are
-  // what LEGAL_SIGN_OFF certifies by digest (src/lib/legal/publishable.ts):
-  // adding a sentence changes the digest, which correctly drops /privacy back
-  // to draft until a human has read and approved the new wording. Nobody but
-  // the person named in LEGAL_SIGN_OFF can do that, so the sentence and the
-  // re-sign-off are a follow-up with a human in it. Until then the mapping
-  // here is the honest answer to "which category covers this table", and the
-  // page under-describes rather than misdescribes. UPDATED (ugcportal-e0jv,
-  // part B): the label itself — not this record, and not benefitReceived or
-  // the brand's name — IS now public, rendered on the gallery tile, the
-  // lightbox, the per-item page and the public feed JSON. That changes
-  // nothing about the gap this comment names: the prose below still does not
-  // name MediaAdvertisingDisclosure or BenefitSource, and still needs the
-  // human re-sign-off described above before it can (tracked as
-  // ugcportal-mj50, which this bead unblocks but does not do).
+  // The category's prose now names this record: the uploads category's
+  // fourth `what` paragraph says what is recorded (that a benefit was
+  // received, its source, and the advertising label) and why, its
+  // `legalBasis` carries the matching sentence, and its `recipients` says
+  // the label is public but the benefit's source is not (ugcportal-mj50).
+  // That sentence changed the uploads category's authored text, so
+  // LEGAL_SIGN_OFF (src/lib/legal/contact.ts) was re-recorded against the
+  // new digest in the same change. The label itself — not this record, and
+  // not benefitReceived or the brand's name — is public, rendered on the
+  // gallery tile, the lightbox, the per-item page and the public feed JSON
+  // (ugcportal-e0jv, part B).
   MediaAdvertisingDisclosure: { category: "uploads" },
   BenefitSource: {
     notPersonalData:
