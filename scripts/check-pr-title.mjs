@@ -9,16 +9,19 @@
  *
  * Accepts a release title (`chore(release): vX.Y.Z`, no bead id) or
  * `<type>(<scope>): <description> (<bead-id>)`. The bead-id group accepts
- * both a top-level id (`ugcportal-qnq9`) and a single dot-separated child
- * suffix (`ugcportal-qnq9.14`, how `bd create --parent=<id>` numbers a
- * child) -- but not a second level of nesting (`ugcportal-qnq9.14.3`) and
- * not a non-numeric or empty suffix (`ugcportal-qnq9.`, `ugcportal-qnq9.a`);
- * see check-pr-title.test.mjs's "rejects a second level of dotted nesting"
- * and its two non-numeric-suffix cases for where that's asserted.
+ * a top-level id (`ugcportal-qnq9`) and any depth of dot-numeric child
+ * suffix: `bd prime`'s own text for `--parent` is "task under epic, subtask
+ * under task", i.e. at least two levels (`ugcportal-qnq9.14`, then
+ * `ugcportal-qnq9.14.1` for a subtask of that task), and nothing caps how
+ * many times `--parent` can be applied again after that. Each dot segment
+ * must still be non-empty and numeric -- a trailing dot, an empty segment
+ * (`..`) or a non-numeric segment (`.a`) are rejected at any depth; see
+ * check-pr-title.test.mjs's dotted-nesting and non-numeric-suffix cases for
+ * where each of those is asserted.
  */
 import { isMainModule } from "./lib/is-main.mjs";
 
-const BEAD_ID = "[a-zA-Z0-9]+-[a-zA-Z0-9]+(?:\\.[0-9]+)?";
+const BEAD_ID = "[a-zA-Z0-9]+-[a-zA-Z0-9]+(?:\\.[0-9]+)*";
 const TYPES = "feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert";
 
 export const PATTERN = new RegExp(
