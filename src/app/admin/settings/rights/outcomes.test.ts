@@ -56,16 +56,12 @@ describe("BLOCKER_MESSAGES", () => {
    * `tsc` covers the static half: BLOCKER_MESSAGES is a total `Record`
    * over SellabilityBlocker, and `uncleared` is typed to that union. What
    * is left for runtime is the half a type cannot see — a key present but
-   * empty, a key reachable only through the prototype, or the Record
-   * widened to a Partial by a later hand. Each of those lands on a layer
-   * added later arriving with an undefined lookup in front of an admin
-   * instead of a sentence.
+   * empty, or the Record widened to a Partial by a later hand. Each of
+   * those lands on a layer added later arriving with an undefined lookup
+   * in front of an admin instead of a sentence.
    */
   it("has a sentence for every triage fact's uncleared blocker", () => {
     for (const fact of TRIAGE_FACTS) {
-      // `hasOwn`, not truthiness: `?error=toString` is the same mistake
-      // outcomeMessage guards against one function up, and an inherited
-      // member would otherwise pass the length check below.
       expect(
         Object.hasOwn(BLOCKER_MESSAGES, fact.uncleared),
         `${fact.layer} names the blocker ${fact.uncleared}, which has no wording`,
