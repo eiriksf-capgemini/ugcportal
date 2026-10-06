@@ -423,9 +423,10 @@ describe("pre-push hook: UGCPORTAL_PREPUSH=skip", { timeout: 20_000 }, () => {
 
   /**
    * A real, empty git repo plus the one file the hook unconditionally
-   * sources once it reaches the mechanical section (scripts/ci-placeholder-
-   * env.sh) -- its actual fallback-env contents are irrelevant here, only
-   * its presence is. Returns the hook script (a standalone copy, not run
+   * sources once it reaches the mechanical section
+   * (scripts/ci-placeholder-env.sh) -- its actual fallback-env contents are
+   * irrelevant here, only its presence is. Returns the hook script (a
+   * standalone copy, not run
    * from inside the fixture repo's own .beads/hooks/ -- the hook resolves
    * its repo root from cwd via `git rev-parse --show-toplevel`, not from
    * its own file location, so it doesn't need to live inside the fixture)
