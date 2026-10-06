@@ -332,3 +332,23 @@ describe("main() child process env (ugcportal-5g9t)", () => {
     expect(fs.realpathSync(output.trim())).toBe(fs.realpathSync(chosen));
   });
 });
+
+/**
+ * The debug recipe (ugcportal-ymp4).
+ *
+ * A package.json shape assertion and nothing more: what `npm run
+ * dev:inspect` has to get right is which process the inspector flag lands
+ * on, and that is decided entirely by the text of the script.
+ */
+describe("K2: npm run dev:inspect", () => {
+  it("runs the migration check, then next dev with the inspector flag, without this wrapper", () => {
+    const script = JSON.parse(
+      fs.readFileSync(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8"),
+    ).scripts["dev:inspect"];
+    expect(script).toBeDefined();
+    // Ordered, not merely both present: a migration check after the server
+    // has already started is ugcportal-w7wc's bug one script over.
+    expect(script).toMatch(/scripts\/check-migrations\.mjs.*--inspect.*next.*dev/);
+    expect(script).not.toContain("with-local-ca");
+  });
+});
