@@ -1260,8 +1260,13 @@ describe("end-to-end against a real temp git remote and a stateful fake gh (ugcp
       expect(calls).toContainEqual(["pr", "edit", "501", "--base", "main"]);
 
       // ugcportal-ix0s: feat/clean's deletion went through the GitHub API --
-      // the only api-delete call this run made was the real one for it.
-      expect(calls).toContainEqual(["api", "-X", "DELETE", "repos/{owner}/{repo}/git/refs/heads/feat/clean"]);
+      // and it is the ONLY api-delete call this run made (feat/toctou and
+      // feat/partial were both kept before ever reaching deleteRemoteBranch,
+      // so neither could have made one) -- asserted as an exact array, not
+      // `toContainEqual`, so this is the claim actually checked, not just a
+      // presence check that would also pass if an unexpected extra call snuck in.
+      const apiDeleteCalls = calls.filter((argv) => argv[0] === "api");
+      expect(apiDeleteCalls).toEqual([["api", "-X", "DELETE", "repos/{owner}/{repo}/git/refs/heads/feat/clean"]]);
       // And no git push ever reached the remote for it (or anything else --
       // feat/toctou and feat/partial were both kept, so neither was ever a
       // delete candidate at all): direct evidence from the remote's own
@@ -1297,7 +1302,15 @@ describe("end-to-end against a real temp git remote and a stateful fake gh (ugcp
 // does not trigger it. A log with no entry for a branch is therefore direct
 // evidence no push for that branch happened, not an inference from the
 // absence of some other signal.
-describe("deleteRemoteBranch: GitHub API primary path, git push fallback (ugcportal-ix0s)", () => {
+//
+// ugcportal-9faa: each case below spawns several real `git` subprocesses
+// (init, remote add, checkout, push) plus a real `gh`-replacing child
+// process per `deleteRemoteBranch` call, against its own fresh fixture repo
+// -- the same shape as "end-to-end against real temporary git repositories"
+// above, which carries this same explicit describe-level timeout for
+// exactly this reason (there is nothing here to cache; each case needs its
+// own isolated repository on disk).
+describe("deleteRemoteBranch: GitHub API primary path, git push fallback (ugcportal-ix0s)", { timeout: 20_000 }, () => {
   // Same GIT_* isolation as "end-to-end against real temporary git
   // repositories" above, and for the same reason: deleteRemoteBranch's own
   // `execFileSync` calls (both the `gh` one and the `git` ones) carry no env
