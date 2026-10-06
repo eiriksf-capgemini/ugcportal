@@ -236,12 +236,14 @@ export function Gallery({
   }, []);
 
   /**
-   * The K2 handoff's "act" half (ugcportal-dj4i item 3) — keyed on `hasMore`
-   * so it runs once, exactly when "Load more" actually turns into the
-   * end-of-list state, rather than on every render. `shouldFocusStatusRef`
-   * defaults to `false`, so a mount where `hasMore` already starts `false`
-   * (a gallery with no further page from the first render) runs this once
-   * and does nothing — there is no click to have set the ref yet.
+   * The K2 handoff's "act" half (ugcportal-dj4i item 3) — keyed on `hasMore`,
+   * so it re-runs only on mount and whenever `hasMore` actually changes value
+   * (the dependency array means React skips it on every OTHER render, not
+   * that it runs only once: it still runs once at mount in addition to each
+   * later change). `shouldFocusStatusRef` defaults to `false`, so a mount
+   * where `hasMore` already starts `false` (a gallery with no further page
+   * from the first render) runs this at mount and does nothing — there is
+   * no click yet to have set the ref.
    *
    * A layout effect, not an ordinary one: it runs synchronously after React
    * commits the re-render that unmounts the button, before the browser
