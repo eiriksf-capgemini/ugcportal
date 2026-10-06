@@ -15,10 +15,14 @@ import { afterEach, beforeEach } from "vitest";
  * already, from the other direction: a gate reading the ambient environment
  * a caller believed it had overridden.
  *
- * Every file that mutates `process.env` for the sign-in policy uses this;
- * src/lib/sign-in-policy.test.ts does not, because it injects an `env`
- * object into the functions directly and never touches the ambient one,
- * which is better still where the code under test allows it.
+ * Most files that mutate `process.env` for the sign-in policy use this; two
+ * deliberately do not. src/lib/sign-in-policy.test.ts injects an `env`
+ * object into the functions directly for every other test, except one that
+ * sets `ADMIN_BOOTSTRAP_EMAILS` ambiently on purpose, to prove the ambient
+ * value gets ignored — the opposite of what this helper is for.
+ * src/lib/configured-user-link.test.ts mutates `ALLOWED_SIGNIN_EMAILS`
+ * ambiently at nine sites with its own inline try/finally, each restoring
+ * before the next; left as its own pattern rather than migrated.
  */
 
 /**

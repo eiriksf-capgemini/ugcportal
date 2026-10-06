@@ -182,7 +182,7 @@ function suppressedNote(suppressed: Map<string, number>): string {
  * `getSessionAndUser`), but next-auth's `Session` type declares none of the
  * row's own columns.
  *
- * Exported for live-session.test.ts to assert the three fields directly:
+ * Exported for live-session.test.ts to assert `id` and `email` directly:
  * `id` survives verbatim while `email` is folded, which is the shape a
  * sibling-field regression (review-standards family 4) could otherwise
  * re-introduce unnoticed.
@@ -329,8 +329,8 @@ export function settleRevocations(): Promise<unknown> {
  * stops spreading the row — would turn this into `DELETE FROM Session` for
  * every user on the instance. It fails closed instead: no id, no delete, and
  * the request is still refused by the caller either way. The id arrives
- * already normalised (`recordedIdentity`), so `null` is the only shape of
- * "no usable id" this has to know about.
+ * verbatim, only checked for blankness (`recordedIdentity`), so `null` is
+ * the only shape of "no usable id" this has to know about.
  *
  * Never rejects. The caller does not await it, and an unhandled rejection
  * would take the process down over a failed delete.
