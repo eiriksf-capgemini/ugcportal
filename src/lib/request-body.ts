@@ -7,6 +7,14 @@
  * that "how big may this be" is a number at the call site rather than an
  * omission.
  *
+ * Both are bounded in time as well as in size: every read in this module
+ * goes through {@link stallGuarded}, so "how long may this take between
+ * bytes" is not a per-reader decision either. `src/lib/request-body.test.ts`
+ * enumerates the module's body reads and fails on one that is neither
+ * guarded nor listed as a deliberate exception, because the JSON reader sat
+ * outside the guard for as long as it did by omission rather than by
+ * decision (ugcportal-8hsf).
+ *
  * In both, the Content-Length check is a cheap early-out and deliberately
  * **not** the enforcement (see ugcportal-i04, where exactly that mistake was
  * shipped): the header is absent on a chunked request — `Number(null)` is 0 —
@@ -101,89 +109,6 @@ function isBodyTooLarge(error: unknown): boolean {
   return false;
 }
 
-export type JsonBodyResult =
-  | { ok: true; value: unknown }
-  | { ok: false; status: 400 | 413; error: string };
-
-/** Reads and JSON-parses a request body, holding at most `limit` bytes. */
-export async function readJsonBody(
-  request: Request,
-  limit: number,
-): Promise<JsonBodyResult> {
-  const declared = Number(request.headers.get("content-length"));
-  if (Number.isFinite(declared) && declared > limit) {
-    return { ok: false, status: 413, error: "Request body too large" };
-  }
-
-  if (!request.body) {
-    return { ok: false, status: 400, error: "Invalid JSON body" };
-  }
-
-  const reader = request.body.getReader();
-  const decoder = new TextDecoder();
-  let received = 0;
-  let text = "";
-
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-
-      received += value.byteLength;
-      if (received > limit) {
-        // Swallowed deliberately: cancel() can reject when the connection is
-        // already gone, and the shared catch below answers 400. The cap has
-        // been decided by this point, so letting a failed teardown rewrite a
-        // correct 413 would report the wrong thing.
-        await reader.cancel().catch(() => {});
-        return { ok: false, status: 413, error: "Request body too large" };
-      }
-
-      text += decoder.decode(value, { stream: true });
-    }
-    text += decoder.decode();
-  } catch {
-    // A truncated or reset connection is the client's problem, not a 500.
-    return { ok: false, status: 400, error: "Invalid JSON body" };
-  }
-
-  try {
-    return { ok: true, value: JSON.parse(text) };
-  } catch {
-    return { ok: false, status: 400, error: "Invalid JSON body" };
-  }
-}
-
-export type FormDataResult =
-  | { ok: true; value: FormData }
-  | { ok: false; status: 400 | 408 | 413 | 503; error: string };
-
-/**
- * Reads a multipart body, never letting more than `limit` bytes through.
- *
- * The body is re-framed onto a new Request so the platform still does the
- * multipart parsing — this bounds what the parser is fed, it does not
- * reimplement it. Content-Length is dropped from the copied headers because
- * it describes the original framing, not this one.
- */
-export async function readCappedFormData(
-  request: Request,
-  limit: number,
-): Promise<FormDataResult> {
-  const declared = Number(request.headers.get("content-length"));
-  if (Number.isFinite(declared) && declared > limit) {
-    return { ok: false, status: 413, error: "Request body too large" };
-  }
-
-  if (!request.body) {
-    return { ok: false, status: 400, error: "Expected a multipart form body" };
-  }
-
-  return readCappedFormDataFrom(request, request.body, limit);
-}
-
 /**
  * Longest a request body may go without delivering a single byte.
  *
@@ -203,6 +128,14 @@ export async function readCappedFormData(
  * slot for the whole of `requestTimeout`, and N connections sending a valid
  * multipart Content-Type plus a few bytes held N slots. The byte bounds above
  * said nothing about that, because nothing had been reserved to bound.
+ *
+ * It applies to {@link readJsonBody} on the same terms (ugcportal-8hsf).
+ * Declared above both readers rather than next to the multipart one because
+ * it is not a multipart rule: the module's promise is that *every* sanctioned
+ * body read is idle-bounded, and the JSON reader spent three authenticated
+ * routes outside it — a short valid prefix under the limit, then silence, got
+ * no answer for the whole of `requestTimeout`. No reservation is held there,
+ * so, as on the peek, the cost is request slots rather than bytes.
  */
 export const BODY_STALL_TIMEOUT_MS = 30_000;
 
@@ -302,6 +235,123 @@ function stallGuarded(
     // pulls off the request body.
     { highWaterMark: 0 },
   );
+}
+
+export type JsonBodyResult =
+  | { ok: true; value: unknown }
+  | { ok: false; status: 400 | 408 | 413; error: string };
+
+export interface JsonReadOptions {
+  /** Overrides {@link BODY_STALL_TIMEOUT_MS}; exposed for tests. */
+  stallTimeoutMs?: number;
+}
+
+/**
+ * Reads and JSON-parses a request body, holding at most `limit` bytes.
+ *
+ * Bounded in time as well as in size (ugcportal-8hsf): the read runs through
+ * {@link stallGuarded}, so a client that sends a short valid prefix *under*
+ * the limit and then goes quiet is answered 408 on
+ * {@link BODY_STALL_TIMEOUT_MS} instead of holding the handler — and with it
+ * a request slot — until Node's 300-second `requestTimeout`. The size cap
+ * alone never saw that client, because it only ever acts on bytes that
+ * arrive, and the whole point of the attack is that none do.
+ */
+export async function readJsonBody(
+  request: Request,
+  limit: number,
+  options: JsonReadOptions = {},
+): Promise<JsonBodyResult> {
+  const declared = Number(request.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > limit) {
+    return { ok: false, status: 413, error: "Request body too large" };
+  }
+
+  if (!request.body) {
+    return { ok: false, status: 400, error: "Invalid JSON body" };
+  }
+
+  const guarded = stallGuarded(
+    request.body,
+    options.stallTimeoutMs ?? BODY_STALL_TIMEOUT_MS,
+  );
+  const reader = guarded.getReader();
+  const decoder = new TextDecoder();
+  let received = 0;
+  let text = "";
+
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+
+      received += value.byteLength;
+      if (received > limit) {
+        // REQUESTED, NOT AWAITED, for the reason stallGuarded's own teardown
+        // is not awaited (ugcportal-dvb): the promise `cancel()` returns
+        // tracks the *source* body's teardown, which for a live socket does
+        // not settle until the client disconnects. Awaiting it here was
+        // measured answering a held-socket 413 in ~61 ms while the reader was
+        // the raw request body, but this reader is now the guard's, whose
+        // cancel forwards to that same source — so awaiting it would make the
+        // 413 wait on a client that has no reason to hang up. Rejections are
+        // dropped rather than caught below: the cap has been decided, and
+        // letting a failed teardown rewrite a correct 413 into a 400 would
+        // report the wrong thing.
+        void reader.cancel().catch(() => {});
+        return { ok: false, status: 413, error: "Request body too large" };
+      }
+
+      text += decoder.decode(value, { stream: true });
+    }
+    text += decoder.decode();
+  } catch (error) {
+    if (isBodyStalled(error)) {
+      // 408, not 400: what arrived was well-formed as far as it got and the
+      // client may retry, exactly as on the multipart path. The guard has
+      // already requested the source's teardown, so the socket is released
+      // here rather than at `requestTimeout`.
+      return { ok: false, status: 408, error: "Request body stalled" };
+    }
+    // A truncated or reset connection is the client's problem, not a 500.
+    return { ok: false, status: 400, error: "Invalid JSON body" };
+  }
+
+  try {
+    return { ok: true, value: JSON.parse(text) };
+  } catch {
+    return { ok: false, status: 400, error: "Invalid JSON body" };
+  }
+}
+
+export type FormDataResult =
+  | { ok: true; value: FormData }
+  | { ok: false; status: 400 | 408 | 413 | 503; error: string };
+
+/**
+ * Reads a multipart body, never letting more than `limit` bytes through.
+ *
+ * The body is re-framed onto a new Request so the platform still does the
+ * multipart parsing — this bounds what the parser is fed, it does not
+ * reimplement it. Content-Length is dropped from the copied headers because
+ * it describes the original framing, not this one.
+ */
+export async function readCappedFormData(
+  request: Request,
+  limit: number,
+): Promise<FormDataResult> {
+  const declared = Number(request.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > limit) {
+    return { ok: false, status: 413, error: "Request body too large" };
+  }
+
+  if (!request.body) {
+    return { ok: false, status: 400, error: "Expected a multipart form body" };
+  }
+
+  return readCappedFormDataFrom(request, request.body, limit);
 }
 
 /**

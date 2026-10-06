@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -6,6 +9,7 @@ import {
   multipartBoundary,
   peekDeclaredPartType,
   readCappedFormDataFrom,
+  readJsonBody,
 } from "@/lib/request-body";
 
 const BOUNDARY = "----ugcportalpeektest";
@@ -714,5 +718,388 @@ describe("readCappedFormDataFrom — stalls and metered reads", () => {
 
   it("defaults to an idle budget far longer than any real pause", () => {
     expect(BODY_STALL_TIMEOUT_MS).toBe(30_000);
+  });
+});
+
+describe("readJsonBody — size and idle bounds", () => {
+  const LIMIT = 4096;
+  const JSON_IDLE_MS = 25;
+
+  /**
+   * A real `Request`, not a stand-in: `readJsonBody` reads `request.body`,
+   * and whether a streaming body survives the platform's own wrapping is
+   * part of what these tests are for.
+   */
+  function jsonRequest(
+    body: ReadableStream<Uint8Array> | null,
+    headers: Record<string, string> = {},
+  ): Request {
+    return new Request("http://localhost/api/media/abc", {
+      method: "PATCH",
+      headers: new Headers({ "content-type": "application/json", ...headers }),
+      body,
+      duplex: "half",
+    } as RequestInit & { duplex: "half" });
+  }
+
+  const read = (request: Request, limit = LIMIT) =>
+    readJsonBody(request, limit, { stallTimeoutMs: JSON_IDLE_MS });
+
+  it("answers 408 when the client sends nothing at all (K1)", async () => {
+    vi.useFakeTimers();
+    try {
+      const cancelled = vi.fn();
+      const pending = read(jsonRequest(silentAfter([], cancelled)));
+      const settled = vi.fn();
+      void pending.then(settled);
+
+      await vi.advanceTimersByTimeAsync(JSON_IDLE_MS - 1);
+      // Still waiting one millisecond before the budget: the answer is on the
+      // timeout, not merely eventually.
+      expect(settled).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await pending).toEqual({
+        ok: false,
+        status: 408,
+        error: "Request body stalled",
+      });
+      // The socket is released here rather than at Node's requestTimeout,
+      // which is the entire point of answering early.
+      expect(cancelled).toHaveBeenCalledTimes(1);
+      // Nothing left armed to fire after the answer.
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("answers 408 when the client goes quiet mid-body, under the limit (K1)", async () => {
+    // The measured shape (ugcportal-8hsf): a short, valid JSON prefix well
+    // under the cap, then a held socket. The size cap never sees this client
+    // because it only acts on bytes that arrive, and none do.
+    vi.useFakeTimers();
+    try {
+      const cancelled = vi.fn();
+      const body = silentAfter(['{"originalName":"ab'], cancelled);
+      const pending = read(jsonRequest(body));
+      const settled = vi.fn();
+      void pending.then(settled);
+
+      await vi.advanceTimersByTimeAsync(JSON_IDLE_MS - 1);
+      expect(settled).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await pending).toEqual({
+        ok: false,
+        status: 408,
+        error: "Request body stalled",
+      });
+      expect(cancelled).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("answers 408 without waiting for the body's own teardown (K1)", async () => {
+    // The teardown bug PR #149 fixed, on this reader: cancelling a live
+    // request body returns a promise that settles when the client
+    // disconnects, so awaiting it would make the 408 wait for exactly the
+    // client that is refusing to go away.
+    vi.useFakeTimers();
+    try {
+      const body = silentAfter(['{"a":'], cancelThatNeverSettles);
+      const pending = read(jsonRequest(body));
+
+      await vi.advanceTimersByTimeAsync(JSON_IDLE_MS);
+
+      expect(await pending).toEqual({
+        ok: false,
+        status: 408,
+        error: "Request body stalled",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not cut off a body that is merely slow (K1)", async () => {
+    // An idle timeout, not a deadline. Each chunk lands one millisecond
+    // inside the budget and the body takes four times the budget in total,
+    // so a pass here means the timer is genuinely reset per chunk rather
+    // than the whole read finishing inside one window. Virtual time only —
+    // a loaded test machine cannot change the outcome.
+    vi.useFakeTimers();
+    try {
+      const pieces = ['{"originalNa', 'me":"ph', 'oto.p', 'ng"}'];
+      const pending = read(jsonRequest(trickle(pieces, JSON_IDLE_MS - 1)));
+
+      for (let chunk = 0; chunk <= pieces.length; chunk += 1) {
+        await vi.advanceTimersByTimeAsync(JSON_IDLE_MS - 1);
+      }
+
+      expect(await pending).toEqual({
+        ok: true,
+        value: { originalName: "photo.png" },
+      });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("still answers 413 from Content-Length without touching the body", async () => {
+    // A body that would never settle a read, so a result at all proves the
+    // early-out answered without one.
+    const request = jsonRequest(silentAfter([]), {
+      "content-length": String(LIMIT + 1),
+    });
+
+    const result = await read(request);
+
+    expect(result).toEqual({
+      ok: false,
+      status: 413,
+      error: "Request body too large",
+    });
+    // Still an early-out: the stream was never even locked, so no guard was
+    // armed and nothing was waited for.
+    expect(request.bodyUsed).toBe(false);
+    expect(request.body?.locked).toBe(false);
+  });
+
+  it("still answers 413 from the stream when Content-Length is absent", async () => {
+    // Chunked requests carry no Content-Length, so `Number(null)` is 0 and
+    // the early-out above cannot fire. The stream cap is what holds the line
+    // (ugcportal-i04).
+    const result = await read(
+      jsonRequest(streamOf([`{"originalName":"${"a".repeat(LIMIT)}"}`])),
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      status: 413,
+      error: "Request body too large",
+    });
+  });
+
+  it("answers 413 without waiting for the body's own teardown", async () => {
+    // Measured at ~61 ms with the socket held before this change, because
+    // the awaited cancel was on the raw request body. The read now goes
+    // through the guard, whose cancel forwards to that same source — so an
+    // awaited cancel here would newly block on a client that has no reason
+    // to disconnect. Pinned by a source whose teardown never settles.
+    const cancelled = vi.fn(cancelThatNeverSettles);
+    const oversize = silentAfter(["x".repeat(LIMIT + 1)], cancelled);
+
+    const result = await read(jsonRequest(oversize));
+
+    expect(result).toEqual({
+      ok: false,
+      status: 413,
+      error: "Request body too large",
+    });
+    // Requested, not awaited: the teardown is asked for and the answer does
+    // not wait on it.
+    expect(cancelled).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports a truncated body as 400, not as a stall", async () => {
+    const broken = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('{"a":'));
+        controller.error(new Error("connection reset"));
+      },
+    });
+
+    expect(await read(jsonRequest(broken))).toEqual({
+      ok: false,
+      status: 400,
+      error: "Invalid JSON body",
+    });
+  });
+
+  it("reports unparseable JSON as 400", async () => {
+    expect(await read(jsonRequest(streamOf(["not json"])))).toEqual({
+      ok: false,
+      status: 400,
+      error: "Invalid JSON body",
+    });
+  });
+});
+
+/**
+ * Strips comments so the scan below reads code rather than prose.
+ *
+ * Necessary, not cosmetic: this module's own docstring contains the words
+ * `request.json()` and `request.formData()`, which the scan would otherwise
+ * count as unguarded body reads.
+ */
+function stripComments(source: string): string {
+  let out = "";
+  let quote: string | null = null;
+  for (let i = 0; i < source.length; ) {
+    const ch = source[i];
+    if (quote !== null) {
+      if (ch === "\\") {
+        out += source.slice(i, i + 2);
+        i += 2;
+        continue;
+      }
+      if (ch === quote) quote = null;
+      out += ch;
+      i += 1;
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === "`") {
+      quote = ch;
+      out += ch;
+      i += 1;
+      continue;
+    }
+    if (ch === "/" && source[i + 1] === "/") {
+      while (i < source.length && source[i] !== "\n") i += 1;
+      continue;
+    }
+    if (ch === "/" && source[i + 1] === "*") {
+      i += 2;
+      while (i < source.length && !(source[i] === "*" && source[i + 1] === "/")) {
+        i += 1;
+      }
+      i += 2;
+      continue;
+    }
+    out += ch;
+    i += 1;
+  }
+  return out;
+}
+
+/** Each top-level `function` in the module, keyed by name, as source text. */
+function topLevelFunctions(code: string): Map<string, string> {
+  const blocks = new Map<string, string>();
+  const heading = /^(?:export )?(?:async )?function ([A-Za-z_$][\w$]*)/gm;
+  for (let m = heading.exec(code); m !== null; m = heading.exec(code)) {
+    const end = code.indexOf("\n}\n", m.index);
+    blocks.set(m[1], code.slice(m.index, end < 0 ? code.length : end + 3));
+  }
+  return blocks;
+}
+
+/** The `const <name> = ...` initializer inside one function block. */
+function initializerOf(block: string, name: string): string | null {
+  const declaration = new RegExp(
+    `\\bconst ${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} = `,
+  );
+  const at = block.search(declaration);
+  if (at < 0) return null;
+  const rest = block.slice(at);
+  const next = rest.search(/\n {2}(?:const |let |return |try )/);
+  return next < 0 ? rest : rest.slice(0, next);
+}
+
+/** Whether `name`'s stream came, directly or via a reader, from the guard. */
+function tracesToStallGuard(block: string, name: string, depth = 0): boolean {
+  if (depth > 4) return false;
+  const initializer = initializerOf(block, name);
+  if (initializer === null) return false;
+  if (/\bstallGuarded\(/.test(initializer)) return true;
+  const via = /\b([A-Za-z_$][\w$.]*)\.getReader\(\)/.exec(initializer);
+  return via !== null && tracesToStallGuard(block, via[1], depth + 1);
+}
+
+/** Every call in the module that pulls bytes off a body, with its verdict. */
+function bodyReadSites(source: string): Map<string, boolean> {
+  const code = stripComments(source);
+  const sites = new Map<string, boolean>();
+  for (const [fn, block] of topLevelFunctions(code)) {
+    const consumers =
+      /([A-Za-z_$][\w$.]*)\.(getReader|read|formData|json|text|arrayBuffer|bytes|blob)\(/g;
+    for (let m = consumers.exec(block); m !== null; m = consumers.exec(block)) {
+      sites.set(`${fn}:${m[1]}.${m[2]}`, tracesToStallGuard(block, m[1]));
+    }
+  }
+  return sites;
+}
+
+describe("request-body.ts — every body read is stall-guarded", () => {
+  /**
+   * The sibling-omission guard.
+   *
+   * `readJsonBody` went unguarded through two beads and five review rounds on
+   * its sibling precisely because nothing enumerated the module's body reads:
+   * the multipart path got an idle timeout, the JSON path was simply not
+   * looked at. This fails when a read is added that is neither guarded nor
+   * deliberately excepted, rather than waiting for someone to notice.
+   *
+   * `true` means "the stream being read traces back to stallGuarded in the
+   * same function". `false` entries are the exception list, and each one
+   * carries why it is allowed to read an unguarded stream.
+   */
+  const EXPECTED: Record<string, boolean> = {
+    // The JSON reader (ugcportal-8hsf).
+    "readJsonBody:guarded.getReader": true,
+    "readJsonBody:reader.read": true,
+    // The guard itself: it is what makes the others true, so it necessarily
+    // holds the one unguarded reader in the module.
+    "stallGuarded:source.getReader": false,
+    "stallGuarded:reader.read": false,
+    // The multipart reader: the platform parses a re-framed Request whose
+    // body is capped and guarded (gh-38).
+    "readCappedFormDataFrom:reframed.formData": true,
+    // The peek, guarded before its first read (ugcportal-dvb).
+    "peekDeclaredPartType:guarded.getReader": true,
+    "peekDeclaredPartType:reader.read": true,
+    // Replays a reader its caller already took off a guarded stream; it has
+    // no stream of its own to guard, and guarding here would double-arm the
+    // same bytes.
+    "replay:reader.read": false,
+  };
+
+  it("has no body read that is neither guarded nor on the exception list", () => {
+    const source = readFileSync(
+      fileURLToPath(new URL("./request-body.ts", import.meta.url)),
+      "utf8",
+    );
+
+    expect(Object.fromEntries(bodyReadSites(source))).toEqual(EXPECTED);
+  });
+
+  it("would catch a new unguarded reader", () => {
+    // The guard above is only worth its line count if it actually fails on
+    // the thing it is watching for, so run the same scanner over a sibling
+    // shaped like the one this bead fixed.
+    const sibling = `
+/** Reads a body the way readJsonBody used to. */
+export async function readSomeOtherBody(request: Request) {
+  const reader = request.body.getReader();
+  return reader.read();
+}
+`;
+
+    expect(Object.fromEntries(bodyReadSites(sibling))).toEqual({
+      "readSomeOtherBody:request.body.getReader": false,
+      "readSomeOtherBody:reader.read": false,
+    });
+  });
+
+  it("does not mistake a comment for a body read", () => {
+    // What stripComments is for: this module's docstring names
+    // request.json() and request.formData() as the thing it exists to
+    // replace.
+    const prose = `
+/** Replaces request.json() and request.formData(). */
+export async function guardedReader(request: Request) {
+  const guarded = stallGuarded(request.body, 1);
+  const reader = guarded.getReader();
+  return reader.read();
+}
+`;
+
+    expect(Object.fromEntries(bodyReadSites(prose))).toEqual({
+      "guardedReader:guarded.getReader": true,
+      "guardedReader:reader.read": true,
+    });
   });
 });
