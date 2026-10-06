@@ -844,10 +844,11 @@ model BenefitSource {
 /// 1:1 with Media and optional, so an item that nobody has answered the
 /// question for has NO ROW. That is the same "absence means not yet decided"
 /// idiom MediaListing's triage booleans use, one level up: the row's absence
-/// and `benefitReceived = NULL` both mean unanswered, and exactly one function
+/// and `benefitReceived = NULL` both mean unanswered, and one function
 /// collapses the two — `advertisingLabelPublishRefusal` in
-/// src/lib/advertising-disclosure.ts. Do not add a second reader that checks
-/// only one of them.
+/// src/lib/advertising-disclosure.ts, which is the only interpreter of this
+/// column outside the route that writes it (see its docstring for the grep).
+/// Do not add a second reader that checks only one of them.
 ///
 /// WHAT UNANSWERED DOES TODAY: nothing. An item with no row publishes exactly
 /// as it did before this bead, because every row that existed when this

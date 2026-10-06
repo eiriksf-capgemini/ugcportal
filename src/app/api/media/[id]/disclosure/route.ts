@@ -31,8 +31,11 @@ type RouteContext = { params: Promise<{ id: string }> };
  * sellability gate (src/lib/resale-rights.ts), and this answers "must this be
  * LABELLED as advertising for the public". An item can be perfectly sellable
  * and still need a label. Writing here touches no price, no licence state and
- * no `publishedAt`: recording a benefit never publishes an item, and never
- * unpublishes one either (see the note on the publish interaction below).
+ * no `publishedAt`: recording a benefit neither publishes nor unpublishes an
+ * item — the upsert below writes the disclosure's own columns and nothing
+ * else, asserted by "does not touch publishedAt when a disclosure is
+ * recorded" in route.test.ts (see also the note on the publish interaction
+ * below).
  */
 
 /**
@@ -94,9 +97,13 @@ function badRequest(message: string, field?: string) {
  * Enforced only at publish, an operator could publish an honest item and then
  * record "actually this was gifted" with no label, leaving a public,
  * undisclosed advertisement that no further request would ever notice. Refused
- * here, that state is unreachable through this API at all, and the publish
- * gate (src/lib/advertising-disclosure.ts, read by POST
- * /api/media/[id]/publish) is the backstop for rows written any other way.
+ * here, that state is unreachable through this API: the upsert below is the
+ * only writer of MediaAdvertisingDisclosure in the application (`grep -rn
+ * mediaAdvertisingDisclosure src` finds it and the publish gate's read, and
+ * nothing else), and it is never reached with a benefit of true and an
+ * unpermitted label. The publish gate (src/lib/advertising-disclosure.ts,
+ * read by POST /api/media/[id]/publish) is the backstop for rows written any
+ * other way — a raw statement, or a future importer.
  *
  * WHAT THIS DOES NOT DO: it does not unpublish. An item that is already public
  * and gains a benefit declaration WITH a valid label stays public, correctly —

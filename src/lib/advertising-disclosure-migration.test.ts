@@ -17,9 +17,10 @@ import {
  *   1. It touches NO EXISTING ROW. A Media row that existed before it ran has
  *      no disclosure afterwards, is unchanged, and still publishes — the
  *      permissive-unanswered promise the publish gate depends on. The
- *      alt-text migration next door needed a backfill to escape exactly the
- *      trap this one avoids by not adding a column at all, so "it changes
- *      nothing" is the claim most worth checking.
+ *      alt-text migration next door hit the mirror-image trap (a new gate
+ *      blocking every pre-existing row) and had to add a backfill to escape
+ *      it; this one escapes it by scoping the gate to the answered-yes case,
+ *      so "it changes nothing" is the claim most worth checking.
  *   2. `benefitReceived` is genuinely NULLABLE with no default, which is what
  *      keeps "nobody has said" distinguishable from "somebody said no" and
  *      what would let ugcportal-qn3's null-blocks mechanism adopt it later.

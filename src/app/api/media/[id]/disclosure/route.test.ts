@@ -281,11 +281,13 @@ describe("refusing to store an unlabelled benefit (the storage half of K5)", () 
   });
 
   it("refuses a declared benefit with no label field at all", async () => {
-    // Spelled out rather than as an override row above, because `...{}` does
-    // not REMOVE a key — a spread-based "missing field" case silently tests
-    // the valid body instead, and passes.
+    // `label: undefined` and not `...{}`: a spread of an empty object does
+    // not REMOVE a key, so a "missing field" row written that way silently
+    // sends the valid body and passes without testing anything. An explicit
+    // `undefined` is dropped by JSON.stringify, so the key really is absent
+    // from the request — the same mechanism the undefined rows below rely on.
     await seedMedia();
-    const { label: _omitted, ...withoutLabel } = GIFTED_GLASS;
+    const withoutLabel = { ...GIFTED_GLASS, label: undefined };
 
     const response = await PUT(disclosureRequest(withoutLabel), context());
 

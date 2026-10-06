@@ -30,7 +30,9 @@ import { PRISMA_UNIQUE_VIOLATION, prismaErrorCode } from "@/lib/prisma-errors";
  */
 
 /** Longest brand name, in CODE POINTS — the same counting MAX_TAG_NAME_LENGTH
- * and MAX_ALT_TEXT_LENGTH use, so a count can never split a surrogate pair.
+ * and MAX_ALT_TEXT_LENGTH use, so an astral character counts as the one
+ * character it is rather than as the two UTF-16 units it occupies (pinned by
+ * "counts the cap in code points, not UTF-16 units" in benefit-source.test.ts).
  *
  * 64 rather than tag's 32: a brand's legal name ("Norsk Vin og Brennevin AS")
  * runs longer than a subject label, and this string is not rendered as a chip
@@ -40,7 +42,8 @@ export const MAX_BENEFIT_SOURCE_NAME_LENGTH = 64;
 
 /** Everything that is not a letter or a digit, for the slug below. Unicode
  * aware (`\p{L}`), so "Rémy" and "Hågen" slug to something that still
- * distinguishes them rather than collapsing to hyphens. */
+ * distinguishes them rather than collapsing to hyphens — the "Hågen & Co" ->
+ * "hågen-co" row in benefit-source.test.ts is that case. */
 const NON_ALPHANUMERIC = /[^\p{L}\p{N}]+/gu;
 
 /**
@@ -121,9 +124,9 @@ export function validateBenefitSourceName(
  * has named it. Returns its id.
  *
  * `client` is the transaction to write through, for the reason
- * `resolveTagRows` states at length: this is always followed by a write that
- * points at the row, the two statements can fail independently, and nothing
- * in this product deletes a BenefitSource — so a brand minted for a
+ * `resolveTagRows` states at length: its one caller follows it with a write
+ * that points at the row, the two statements can fail independently, and
+ * nothing in this product deletes a BenefitSource — so a brand minted for a
  * disclosure that then failed to save is permanent debris. Defaulted to the
  * global client only so a caller with nothing to be atomic with is not forced
  * to invent a transaction.

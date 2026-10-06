@@ -685,9 +685,10 @@ describe("publishing an item with a benefit but no advertising label (ugcportal-
   });
 
   it("does not block unpublishing an unlabelled item", async () => {
-    // DELETE /publish cannot fail: retracting an undisclosed advertisement is
-    // the remedy, so the gate must never stand in its way. The disclosure is
-    // not even read.
+    // Retracting an undisclosed advertisement is the remedy, so the
+    // disclosure gate must never stand in DELETE's way. (DELETE can still
+    // answer 401/403/404 — the claim is only that this gate does not block
+    // it.) The disclosure is not even read.
     signedInAs(OWNER_ID);
     mediaFindUniqueMock.mockResolvedValue(publishedMedia);
     disclosureFindUniqueMock.mockResolvedValue({

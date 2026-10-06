@@ -107,8 +107,9 @@ export const ENGLISH_ONLY_ADVERTISING_LABELS = Object.freeze([
 /**
  * Longest string this will even look at, in UTF-16 code units.
  *
- * Not a product rule — the allowlist already bounds a stored label to 24
- * characters. It is a bound on the WORK done before the allowlist decides:
+ * Not a product rule — the allowlist below already bounds a STORED label to
+ * the longest value on it. It is a bound on the WORK done before the
+ * allowlist decides:
  * `labelWords` below runs a global Unicode regex over whatever arrives, and a
  * route handler must not do that to a megabyte because the caller felt like
  * sending one. 256 is far above anything that could ever be a near-miss of a
@@ -217,10 +218,13 @@ function canonicalAdvertisingLabel(
  *
  * NOT run through `hasUnsafeText` (src/lib/media-rules.ts), and that absence
  * is deliberate rather than an omission: every value this function can return
- * is one of four literals in this file, so a control character or a bidi
- * override cannot survive into storage by any path. Adding the check would be
- * a defence that nothing can exercise — which this codebase's own comments
- * warn against elsewhere.
+ * is one of the four literals above, so no caller's input string is ever
+ * stored — only a literal chosen here — and a control character or a bidi
+ * override cannot reach the column through this validator. (A raw write
+ * straight to the table bypasses it, which is why the publish gate re-checks
+ * the stored value against the same allowlist rather than trusting it.)
+ * Adding the check here would be a defence that nothing can exercise — which
+ * this codebase's own comments warn against elsewhere.
  */
 export function validateAdvertisingLabel(
   value: unknown,
@@ -349,6 +353,11 @@ export type AdvertisingLabelRefusal = { error: string; field: string };
  * The first two are the same state said two ways, and collapsing them here
  * rather than at each call site is what stops a later reader from checking one
  * and missing the other — a bug that would read as correct and fail open.
+ * This really is the only place today: `grep -rn benefitReceived src` outside
+ * the generated client and the tests reaches this function, the write path in
+ * PUT /api/media/[id]/disclosure, and the two-column select in POST
+ * /api/media/[id]/publish that feeds this function — no second reader
+ * interprets the column.
  *
  * UNANSWERED IS PERMISSIVE, TODAY. Every item that existed when this bead's
  * migration ran is in that state, there is no honest backfill for it, and no
