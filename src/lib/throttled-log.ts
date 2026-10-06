@@ -4,35 +4,31 @@
  * folded into the next line" pattern this codebase uses more than once to
  * keep a noisy, repeating failure from becoming a log storm.
  *
- * Extracted here as the THIRD independent copy of this exact algorithm.
- * `src/lib/watermark.ts`'s `logShedUpload`/`flushShedLog` (ugcportal-e86)
- * and `src/lib/public-media.ts`'s `logFailedPublicListing` (ugcportal-0dh)
- * each hand-wrote it — a duplication already tracked as ugcportal-z3lo,
- * whose own text names a shared `createThrottledLog(intervalMs, { flush })`
- * utility as the fix once a third caller needed it (round-3 review finding
- * 5 on ugcportal-1b2c, src/app/api/media/route.ts's storage-unreachable log
- * lines, is that third caller).
+ * The canonical implementation (ugcportal-z3lo): `src/lib/watermark.ts`'s
+ * `logShedUpload` (flush-enabled) and `src/lib/public-media.ts`'s
+ * `logFailedPublicListing` (flush disabled, deliberately — see that
+ * module's own comment) both build their throttle on this, rather than
+ * hand-rolling the pattern a third time the way they each originally did.
+ * `src/app/api/media/route.ts`'s storage-unreachable log was the first
+ * caller to use this module directly, before the other two migrated onto
+ * it; `watermark.concurrency.test.ts` is the regression baseline for the
+ * flush-enabled shape, unchanged by the migration.
  *
- * Deliberately NOT a retrofit of the two existing copies — this module adds
- * the shared implementation and a new caller uses it; `watermark.ts` and
- * `public-media.ts` are left exactly as they are. `watermark.ts`'s copy in
- * particular carries its own hardened history (several review rounds' worth
- * of fixed subtle bugs — a `shedLogLastAt !== 0` guard, a flush-timer race
- * that let a health check restart the window), and ugcportal-z3lo's own
- * investigation found migrating it a real regression risk for no benefit to
- * whichever bead happens to add the third caller. That migration, if ever
- * done, is its own piece of work with `watermark.concurrency.test.ts` as its
- * regression baseline — not a drive-by part of this one.
+ * `watermark.ts`'s pre-migration copy had its own hardened history —
+ * several review rounds' worth of fixed subtle bugs, including a
+ * `shedLogLastAt !== 0` guard (preserved below as `lastAt !== 0`) and a
+ * flush-timer race that let a health check restart the window (preserved
+ * as `flushNow`'s own window check). Both are this module's job to keep
+ * fixed for every caller now, not each caller's own.
  *
- * THE FLUSH PATH IS PAYLOAD-FREE, AND THAT IS NOT A STYLE CHOICE (round-4
- * review finding, MEDIUM). An earlier version of this module let `log()`'s
- * caller-supplied `emit` closure double as the flush callback too: whichever
- * call happened to be the one that scheduled the pending timer had ITS
- * closure invoked later, by the timer, with the final suppressed count.
- * That is silently wrong the moment two different calls in the same window
- * close over different per-occurrence data (a key name, a cause) rather than
- * reading from shared outer state the way `watermark.ts`'s `gate?.stats()` or
- * `public-media.ts`'s per-process counters do — `src/app/api/media/route.ts`'s
+ * THE FLUSH PATH IS PAYLOAD-FREE, AND THAT IS NOT A STYLE CHOICE. An earlier
+ * version of this module let `log()`'s caller-supplied `emit` closure double
+ * as the flush callback too: whichever call happened to be the one that
+ * scheduled the pending timer had ITS closure invoked later, by the timer,
+ * with the final suppressed count. That is silently wrong the moment two
+ * different calls in the same window close over different per-occurrence
+ * data (a key name, a cause) rather than reading from shared outer state the
+ * way `watermark.ts`'s `gate?.stats()` does — `src/app/api/media/route.ts`'s
  * cleanup-failure line did exactly that, closing over `storedKey` and
  * `cleanupError` per call, and lost the second of two distinct orphaned
  * keys' name and cause when both landed in the same throttle window: the
@@ -153,7 +149,19 @@ export function createThrottledLog({
     clearFlushTimer();
     const count = suppressed;
     suppressed = 0;
-    lastAt = Date.now();
+    // NOT `lastAt = Date.now()` (ugcportal-z3lo K3). A flush reports a
+    // COUNT, never a detailed occurrence (see this module's top-of-file
+    // doc comment) — treating it as a real logged line restarted the
+    // window from the flush's own timestamp, so an occurrence arriving
+    // right after the flush landed inside that new window and was folded
+    // into yet another suppressed count instead of getting its own
+    // detailed line. Leaving `lastAt` where it was means the window the
+    // flush just proved elapsed STAYS elapsed: the very next `log()` call,
+    // whenever it comes, takes the not-suppressed branch below and emits
+    // its own line — which itself re-seeds `lastAt` from that point, so
+    // normal throttling resumes immediately after. See
+    // throttled-log.test.ts's "flush-then-occurrence" test, which fails
+    // against `lastAt = Date.now()` here and passes without it.
     onFlush?.(count);
   }
 
@@ -171,6 +179,13 @@ export function createThrottledLog({
         if (flushEnabled) scheduleFlush();
         return;
       }
+      // Clears any flush timer still pending from a PRIOR suppressed run.
+      // `flushNow` already returns early when `suppressed === 0`, so a
+      // stale timer firing after this branch emits nothing regardless —
+      // not what this line is for. It preserves the stricter of the two
+      // pre-migration behaviours being merged: `upload-memory.ts`'s
+      // `logShedUpload` cleared its timer here; `watermark.ts`'s did not.
+      clearFlushTimer();
       const count = suppressed;
       suppressed = 0;
       lastAt = now;

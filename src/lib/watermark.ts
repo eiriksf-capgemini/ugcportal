@@ -14,6 +14,7 @@ import {
   PREVIEW_CONTENT_TYPE,
   PREVIEW_FILE_EXTENSION,
 } from "@/lib/media";
+import { createThrottledLog } from "@/lib/throttled-log";
 
 // Longest-edge cap for a generated preview.
 //
@@ -870,12 +871,7 @@ export function watermarkConcurrencyStats() {
 export function resetWatermarkConcurrencyGate(): void {
   gate = undefined;
   gateSettings = undefined;
-  shedLogLastAt = 0;
-  shedLogSuppressed = 0;
-  if (shedLogFlushTimer) {
-    clearTimeout(shedLogFlushTimer);
-    shedLogFlushTimer = undefined;
-  }
+  shedLog.reset();
 }
 
 // Fallback when WATERMARK_TEXT is unset. Documented in env.example.
@@ -1352,9 +1348,28 @@ export async function generateWatermarkedPreview(
  */
 export const SHED_LOG_INTERVAL_MS = 10_000;
 
-let shedLogLastAt = 0;
-let shedLogSuppressed = 0;
-let shedLogFlushTimer: ReturnType<typeof setTimeout> | undefined;
+/**
+ * Built on `createThrottledLog` (ugcportal-z3lo), which is also what
+ * {@link flushShedLog} and {@link logShedUpload} below now delegate to —
+ * this module no longer hand-rolls the throttle itself. `flush: true`
+ * because a shed is a capacity signal worth paging on: losing the tail of
+ * an isolated burst to a throttle that only flushes on the next event is a
+ * real cost (see `onFlush` below), unlike `public-media.ts`'s throttle,
+ * which deliberately has no flush timer for a lower-stakes signal.
+ */
+const shedLog = createThrottledLog({
+  intervalMs: SHED_LOG_INTERVAL_MS,
+  flush: true,
+  onFlush: (suppressed) => {
+    const stats = gate?.stats();
+    console.warn(
+      `[watermark] shed ${suppressed} more upload(s) since the last line ` +
+        `(shedTotal=${stats?.shed ?? "?"}). Throttled to at most one flush ` +
+        `per ${SHED_LOG_INTERVAL_MS}ms (this summary line plus the detailed ` +
+        `line); see ugcportal-e86.`,
+    );
+  },
+});
 
 /**
  * Emit the tail of a burst: the sheds that were counted but never printed.
@@ -1371,53 +1386,12 @@ let shedLogFlushTimer: ReturnType<typeof setTimeout> | undefined;
  * Called from a timer (so it happens without anyone asking) and from
  * {@link watermarkConcurrencyStats} (so it is observable synchronously, and
  * so a process shutting down before the timer fires still gets a chance).
+ * Respects the interval even when asked directly — `shedLog.flushNow()`'s
+ * own guard, so a health check polling faster than `SHED_LOG_INTERVAL_MS`
+ * cannot become the clock the throttle resets on.
  */
 function flushShedLog(): void {
-  if (shedLogSuppressed === 0) {
-    if (shedLogFlushTimer) {
-      clearTimeout(shedLogFlushTimer);
-      shedLogFlushTimer = undefined;
-    }
-    return;
-  }
-
-  // Respect the interval even when asked directly. Without this the stats
-  // read becomes the throttle: a health check polling every second during
-  // sustained shedding emitted a line per second, while the line itself
-  // claimed one per 10000ms. Callers get to *ask*; they do not get to reset
-  // the clock. The pending timer is left alone so the tail is still
-  // guaranteed to be reported once the window does elapse.
-  if (Date.now() - shedLogLastAt < SHED_LOG_INTERVAL_MS) {
-    scheduleShedLogFlush();
-    return;
-  }
-
-  if (shedLogFlushTimer) {
-    clearTimeout(shedLogFlushTimer);
-    shedLogFlushTimer = undefined;
-  }
-
-  const suppressed = shedLogSuppressed;
-  shedLogSuppressed = 0;
-  shedLogLastAt = Date.now();
-
-  const stats = gate?.stats();
-  console.warn(
-    `[watermark] shed ${suppressed} more upload(s) since the last line ` +
-      `(shedTotal=${stats?.shed ?? "?"}). Throttled to one line per ` +
-      `${SHED_LOG_INTERVAL_MS}ms; see ugcportal-e86.`,
-  );
-}
-
-function scheduleShedLogFlush(): void {
-  if (shedLogFlushTimer) return;
-  const delay = Math.max(0, SHED_LOG_INTERVAL_MS - (Date.now() - shedLogLastAt));
-  shedLogFlushTimer = setTimeout(() => {
-    shedLogFlushTimer = undefined;
-    flushShedLog();
-  }, delay);
-  // Never hold the event loop open just to report a count.
-  shedLogFlushTimer.unref?.();
+  shedLog.flushNow();
 }
 
 /**
@@ -1444,31 +1418,20 @@ function scheduleShedLogFlush(): void {
  * here (plus a flushed tail count), not 52 anywhere.
  */
 function logShedUpload(error: ConcurrencyLimitError): void {
-  const now = Date.now();
-  if (shedLogLastAt !== 0 && now - shedLogLastAt < SHED_LOG_INTERVAL_MS) {
-    shedLogSuppressed += 1;
-    // Make sure the tail of this burst is reported even if it is the last
-    // thing that happens.
-    scheduleShedLogFlush();
-    return;
-  }
-
-  const suppressed = shedLogSuppressed;
-  shedLogSuppressed = 0;
-  shedLogLastAt = now;
-
-  const stats = gate?.stats();
-  console.warn(
-    `[watermark] shed an upload (${error.reason}): the preview gate is at capacity, ` +
-      `limit=${stats?.limit ?? "?"} queue=${stats?.queueLimit ?? "?"} ` +
-      `shedTotal=${stats?.shed ?? "?"}` +
-      (suppressed > 0 ? ` (+${suppressed} more since the last line)` : "") +
-      ". This is the gate working, not a broken runtime — see ugcportal-e86. " +
-      "The route maps this to a 503 with Retry-After and logs nothing " +
-      "further for it (ugcportal-u7g) — this is the only *place* a shed is " +
-      "logged, throttled to one line per " +
-      `${SHED_LOG_INTERVAL_MS}ms, not one line per shed.`,
-  );
+  shedLog.log((suppressed) => {
+    const stats = gate?.stats();
+    console.warn(
+      `[watermark] shed an upload (${error.reason}): the preview gate is at capacity, ` +
+        `limit=${stats?.limit ?? "?"} queue=${stats?.queueLimit ?? "?"} ` +
+        `shedTotal=${stats?.shed ?? "?"}` +
+        (suppressed > 0 ? ` (+${suppressed} more since the last line)` : "") +
+        ". This is the gate working, not a broken runtime — see ugcportal-e86. " +
+        "The route maps this to a 503 with Retry-After and logs nothing " +
+        "further for it (ugcportal-u7g) — this is the only *place* a shed is " +
+        "logged, throttled to at most one flush per " +
+        `${SHED_LOG_INTERVAL_MS}ms (a summary line plus this detailed line), not one line per shed.`,
+    );
+  });
 }
 
 /** The part of preview generation that actually costs memory. */

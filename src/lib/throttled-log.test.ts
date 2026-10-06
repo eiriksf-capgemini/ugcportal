@@ -168,6 +168,36 @@ describe("createThrottledLog", () => {
       expect(seen).toEqual(["first"]);
       expect(onFlush).toHaveBeenCalledWith(2);
     });
+
+    /**
+     * ugcportal-z3lo K3: a scheduled flush firing must not restart the
+     * window as though it were a real logged line. Before the fix,
+     * `flushNow`'s success path set `lastAt = Date.now()`, so an
+     * occurrence arriving immediately after a flush fell right back
+     * inside the "new" window the flush had just opened and was only
+     * counted, not logged on its own.
+     */
+    it("logs its own detailed line for an occurrence arriving right after a scheduled flush fires, rather than folding it into the next count", () => {
+      const onFlush = vi.fn();
+      const throttle = createThrottledLog({
+        intervalMs: 10_000,
+        flush: true,
+        onFlush,
+      });
+      const emit = vi.fn();
+
+      throttle.log(emit); // logs immediately
+      throttle.log(emit); // suppressed, schedules a flush
+
+      vi.advanceTimersByTime(10_000); // the scheduled flush fires here
+      expect(onFlush).toHaveBeenCalledTimes(1);
+      expect(onFlush).toHaveBeenCalledWith(1);
+
+      throttle.log(emit); // arrives right after the flush — must log, not suppress
+
+      expect(emit).toHaveBeenCalledTimes(2);
+      expect(emit).toHaveBeenNthCalledWith(2, 0);
+    });
   });
 
   describe("flush: false (the default)", () => {
