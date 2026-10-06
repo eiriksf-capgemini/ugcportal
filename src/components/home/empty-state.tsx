@@ -8,17 +8,6 @@ import { buttonVariants } from "@/components/ui/button";
 import { PORTFOLIO_PATH } from "@/lib/routes";
 
 /**
- * Scoped forced-colors focus-outline override (round-4 fix, ugcportal-qqnt.2)
- * — same fix, and the same reasoning for `outline-solid` over bare `outline`,
- * as src/components/home/hero.tsx's own `FORCED_COLORS_FOCUS_OUTLINE`
- * (see that file's comment for the full derivation and the Playwright
- * `forcedColors: "active"` verification). `buttonVariants`' shared base is
- * unfixed on purpose: see ugcportal-oavb.
- */
-const FORCED_COLORS_FOCUS_OUTLINE =
-  "focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-transparent";
-
-/**
  * The front page's "living empty state" (ugcportal-6dvg K1/K2): what
  * src/app/page.tsx renders INSTEAD of `<Gallery>` the moment it already
  * knows, server-side, that the gallery is genuinely empty — the SAME
@@ -139,19 +128,20 @@ export function EmptyState() {
         this replaces used — the same value every other `size="lg"` caller
         gets, not something specific to this call site.
 
-        Focus-visible outline under forced colors (round-4 fix,
-        ugcportal-qqnt.2): `FORCED_COLORS_FOCUS_OUTLINE` restores a real
-        outline on THIS control only — buttonVariants' shared
-        `outline-none`-plus-ring base still drops focus under forced-colors
-        for every other caller; that systemic fix is ugcportal-oavb, not
-        this bead.
+        Focus-visible outline under forced colors: no override needed here
+        any more (ugcportal-oavb) — `buttonVariants`' own base now draws a
+        real outline on `focus-visible` under `forced-colors: active`, for
+        every caller, not only this one. A round-4, PR-#122-only version of
+        this fix once lived here as a scoped `FORCED_COLORS_FOCUS_OUTLINE`
+        override; see button.tsx's own comment on its base class for the
+        current, systemic version and why a bare `outline-none` plus this
+        app's `outline-hidden` idiom were both the wrong fix.
       */}
       <Link
         href={PORTFOLIO_PATH}
         className={cn(
           buttonVariants({ variant: "outline", size: "lg" }),
           "mt-6 h-auto min-h-9 w-fit max-w-full py-2 whitespace-normal motion-safe:transition-transform motion-safe:duration-200 motion-safe:ease-out motion-safe:hover:-translate-y-0.5 motion-reduce:transition-none motion-reduce:translate-none",
-          FORCED_COLORS_FOCUS_OUTLINE,
         )}
       >
         See what is already finished, in the portfolio

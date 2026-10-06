@@ -6,31 +6,6 @@ import { buttonVariants } from "@/components/ui/button";
 import { DISPLAY_TITLE_CLASS } from "@/components/type-scale";
 import { signInPath, UPLOAD_PATH } from "@/lib/routes";
 
-/**
- * Scoped forced-colors focus-outline override (round-4 fix, ugcportal-qqnt.2):
- * `buttonVariants`' shared base sets `outline-none` plus a box-shadow ring
- * for `focus-visible`, which `forced-colors: active` (Windows High Contrast)
- * drops entirely — this control used to draw a real CSS outline on focus,
- * before it moved onto `buttonVariants`. `outline-solid` is load-bearing
- * here, not `outline` alone: Tailwind's `outline`/`outline-2` utilities only
- * read the shared `--tw-outline-style` custom property, they do not SET it,
- * so with `outline-none` already pinning that property to `none` on this
- * element, adding a bare `focus-visible:outline` on top still resolves to
- * `none` — confirmed by compiling both candidates with
- * `@tailwindcss/node`'s design system and rendering under Playwright's
- * `forcedColors: "active"` emulation. `outline-solid` sets the custom
- * property itself, at `:focus-visible`'s higher specificity, so it wins.
- * `outline-transparent` keeps the override invisible outside forced-colors
- * mode (verified: `outlineColor: "rgba(0, 0, 0, 0)"` there, ring unchanged),
- * while forced-colors mode substitutes its own system highlight colour for
- * that `transparent` the moment this control is actually focused (verified:
- * `outlineStyle: "solid"` only once focused, `"none"` before). The shared
- * base itself is unfixed on purpose — every other pre-existing `<Button>`
- * keeps the same gap — see ugcportal-oavb.
- */
-const FORCED_COLORS_FOCUS_OUTLINE =
-  "focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-transparent";
-
 export type HeroProps = {
   /**
    * Whether the CURRENT visitor is signed in (ugcportal-6dvg K1), already
@@ -221,20 +196,20 @@ export function Hero({ signedIn }: HeroProps) {
             `size="lg"` caller gets, not a regression specific to this call
             site.
 
-            Focus-visible outline under forced colors (round-4 fix,
-            ugcportal-qqnt.2): `FORCED_COLORS_FOCUS_OUTLINE` restores a real
-            outline on THIS control only — buttonVariants' shared
-            `outline-none`-plus-ring base still drops focus under
-            forced-colors for every other caller; that systemic fix is
-            ugcportal-oavb, not this bead.
+            Focus-visible outline under forced colors: no override needed
+            here any more (ugcportal-oavb) — `buttonVariants`' own base now
+            draws a real outline on `focus-visible` under `forced-colors:
+            active`, for every caller, not only this one. A round-4,
+            PR-#122-only version of this fix once lived here as a scoped
+            `FORCED_COLORS_FOCUS_OUTLINE` override; see button.tsx's own
+            comment on its base class for the current, systemic version and
+            why a bare `outline-none` plus this app's `outline-hidden` idiom
+            were both the wrong fix.
           */}
           <div className="mt-2">
             <Link
               href={cta.href}
-              className={cn(
-                buttonVariants({ variant: "default-tint", size: "lg" }),
-                FORCED_COLORS_FOCUS_OUTLINE,
-              )}
+              className={buttonVariants({ variant: "default-tint", size: "lg" })}
             >
               {cta.label}
             </Link>

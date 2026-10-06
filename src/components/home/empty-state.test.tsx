@@ -42,29 +42,14 @@ describe("EmptyState (ugcportal-6dvg)", () => {
    */
 
   /*
-   * Round-4 fix, ugcportal-qqnt.2: a cheap guard for the scoped forced-colors
-   * focus-outline override (this file's own `FORCED_COLORS_FOCUS_OUTLINE`,
-   * see its comment, and hero.tsx's matching one for the full derivation) —
-   * a unit-level backstop for a property real e2e coverage lives for in
-   * e2e/front-page.spec.ts ("the portfolio link keeps a visible outline
-   * under forced colors, on focus"), not a replacement for it.
-   *
-   * FIXTURE MUTATION CHECK: temporarily removed `FORCED_COLORS_FOCUS_OUTLINE`
-   * from the `cn(...)` call below, confirmed this test fails (none of the
-   * four classes appear), then restored it.
+   * ugcportal-oavb: the forced-colors focus-outline fix moved from a scoped
+   * `FORCED_COLORS_FOCUS_OUTLINE` override on this component to
+   * `buttonVariants`' own shared base (src/components/ui/button.tsx), so
+   * there is no longer anything link-specific to assert here — the
+   * base-level guard (src/components/ui/button.test.ts's "no bare
+   * outline-none without a forced-colors-visible outline") and the real e2e
+   * coverage (e2e/front-page.spec.ts's "forced colors: focus stays
+   * visible..." suite) are what actually prove this now, for every
+   * button-like control, including this one.
    */
-  it("K-forced-colors: the portfolio link carries the forced-colors focus-outline override", () => {
-    const markup = render();
-    const link = markup.match(/<a[^>]*>See what is already finished, in the portfolio<\/a>/)?.[0] ?? "";
-
-    expect(link).not.toBe("");
-    for (const cls of [
-      "focus-visible:outline-solid",
-      "focus-visible:outline-2",
-      "focus-visible:outline-offset-2",
-      "focus-visible:outline-transparent",
-    ]) {
-      expect(link, `expected the portfolio link's class list to contain ${cls}`).toContain(cls);
-    }
-  });
 });

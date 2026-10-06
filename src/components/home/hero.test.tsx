@@ -92,32 +92,16 @@ describe("Hero (ugcportal-6dvg)", () => {
    */
 
   /*
-   * Round-4 fix, ugcportal-qqnt.2: a cheap guard for the scoped forced-colors
-   * focus-outline override (this file's own `FORCED_COLORS_FOCUS_OUTLINE`,
-   * see its comment) — this is a unit-level backstop for a property real e2e
-   * coverage lives for in e2e/front-page.spec.ts ("the CTA keeps a visible
-   * outline under forced colors, on focus"), not a replacement for it; this
-   * level can only see the CLASS NAME survived onto the rendered element, not
-   * what it actually paints. `outline-solid`, specifically, not a bare
-   * `outline` — see the override's own comment for why the latter silently
-   * does nothing on this element.
-   *
-   * FIXTURE MUTATION CHECK: temporarily removed `FORCED_COLORS_FOCUS_OUTLINE`
-   * from the `cn(...)` call below, confirmed this test fails (none of the
-   * four classes appear), then restored it.
+   * ugcportal-oavb: the forced-colors focus-outline fix moved from a scoped
+   * `FORCED_COLORS_FOCUS_OUTLINE` override on this component to
+   * `buttonVariants`' own shared base (src/components/ui/button.tsx), so
+   * there is no longer anything CTA-specific to assert here — the base-level
+   * guard (src/components/ui/button.test.ts's "no bare outline-none without
+   * a forced-colors-visible outline") and the real e2e coverage
+   * (e2e/front-page.spec.ts's "forced colors: focus stays visible..." suite)
+   * are what actually prove this now, for every button-like control,
+   * including this one. A per-component unit test duplicating that same
+   * base-level fact would just be testing `buttonVariants` a second time
+   * through an extra layer, not this component.
    */
-  it("K-forced-colors: the call to action carries the forced-colors focus-outline override", () => {
-    const markup = render(false);
-    const link = markup.match(/<a[^>]*>Sign in to upload<\/a>/)?.[0] ?? "";
-
-    expect(link).not.toBe("");
-    for (const cls of [
-      "focus-visible:outline-solid",
-      "focus-visible:outline-2",
-      "focus-visible:outline-offset-2",
-      "focus-visible:outline-transparent",
-    ]) {
-      expect(link, `expected the CTA's class list to contain ${cls}`).toContain(cls);
-    }
-  });
 });
