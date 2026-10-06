@@ -51,15 +51,26 @@
  * star segment and the file pattern, resolving to the non-existent
  * `src/e2e/**`) left the leak in place, byte-for-byte identical to no
  * exclusion at all; the TWO-level glob below removed it completely.
- * Measured 2026-10-06, continuing the series this
- * comment already carries (75,351 B pre-fix, 59,285 B after the test-file
- * exclusion, ugcportal-ig4g): 59,344 B with the leak present (the two-level
- * glob absent, everything else as shipped today) and 59,276 B with it
- * removed - identical to the size with the string deleted entirely, which is
- * what confirms the exclusion is real rather than merely plausible-looking.
- * The three sizes are not directly comparable to each other (the codebase
- * has changed between each measurement), but each pair taken on its own day
- * is a real before/after.
+ * Measured 2026-10-06: with the two-level glob absent (everything else as
+ * shipped today) the compiled production CSS carried the bare rule; with it
+ * present, the output was byte-identical to a build where the planted
+ * string was deleted entirely - which is what confirms the exclusion is
+ * real rather than merely plausible-looking.
+ *
+ * That measurement was a ONE-TIME manual build, and a one-time manual build
+ * is not re-verified by anything on its own (ugcportal-61pv round 2) - so
+ * none of its own byte counts are recorded here as prose for the same
+ * reason review-standards section 5 gives for any other hard-coded number
+ * nothing re-runs: a figure in a comment is a measurement nobody checks
+ * again. Two things DO re-run on every push instead:
+ * containment.motion-safe.test.ts's "globals.css declares exactly the four
+ * @source not globs this repo relies on" (fails the instant these four
+ * lines drift back to a one-level form) and its "predicate and glob agree"
+ * fixture suite (fails the instant isExcludedFromTailwindScan and these
+ * globs stop agreeing on which files are excluded). For whoever wants the
+ * original compiled-output measurement repeated against a real `next
+ * build` rather than taken on faith, scripts/check-reduced-motion-css-
+ * exclusions.mjs re-runs exactly that.
  *
  * THE WORKAROUND THIS REPLACED IS REMOVED: e2e/gallery-tile-reduced-
  * motion.spec.ts's top comment now writes the combination bare again (see
