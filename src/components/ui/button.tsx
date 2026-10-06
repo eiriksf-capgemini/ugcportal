@@ -194,31 +194,59 @@ const buttonVariants = cva(
          * --color-petrol-400 (the pre-rw9j --ring/--sidebar-primary value)
          * paired with --petrol-900 as the label (the same fill-light/label-
          * dark pairing dark mode's own --primary already uses) measures
-         * 4.8-7.75:1 against every old surface and 6.02:1 for the label on
-         * its own fill - a NEW measurement this round (contrast.ts's
-         * petrol-400-fill-on-old-surface-* and petrol-900-on-petrol-400),
-         * not one focus-ring-on-old-surface already covered: that pairing
-         * only ever checked this same token at RING_ALPHA_MODIFIER alpha,
+         * 4.8-7.75:1 against every old surface and, at the time (with
+         * `--petrol-900` as the label - see this variant's own comment
+         * below for why that token changed to `--color-surface-0` under
+         * ugcportal-ei5c), 6.02:1 for the label on its own fill - a NEW
+         * measurement this round (contrast.ts's
+         * petrol-400-fill-on-old-surface-* and, at the time,
+         * petrol-900-on-petrol-400), not one focus-ring-on-old-surface
+         * already covered: that pairing only ever checked this same token
+         * at RING_ALPHA_MODIFIER alpha,
          * a different, weaker ratio than the full-opacity fill this variant
          * paints. `hover:brightness-95` rather than a second new token: this
          * is a contrast fix for an untouched-surface caller, not a second
          * filled-button treatment to design and verify.
          *
-         * KNOWN GAP, NOT FIXED HERE (ugcportal-ei5c): `text-petrol-900` does
-         * not compile to any rule at all - `--color-petrol-900` (the OKLCH
-         * near-black scale's version of this token) is declared in :root,
-         * not @theme, specifically so Tailwind does NOT emit a `text-`/`bg-`
-         * utility for it (see globals.css's own "stopping Tailwind emitting
-         * bg-petrol-900 and friends" comment) - confirmed empirically by
-         * compiling globals.css and checking the generated utilities. This
-         * variant's label therefore renders in whatever colour the caller
-         * otherwise inherits, not petrol-900. Filed as its own bead rather
-         * than fixed as a side effect of ugcportal-qqnt.2's button-system
-         * consolidation, which does not otherwise touch this variant's
-         * colours or its one caller (the upload queue's "Try again"
-         * button, out of scope per that bead's own description).
+         * FIXED (ugcportal-ei5c): this used to read `text-petrol-900`, which
+         * does not compile to any rule at all - `--color-petrol-900` (the
+         * OKLCH near-black scale's version of this token) is declared in
+         * :root, not @theme, specifically so Tailwind does NOT emit a
+         * `text-`/`bg-` utility for it (see globals.css's own "stopping
+         * Tailwind emitting bg-petrol-900 and friends" comment) - confirmed
+         * empirically by compiling globals.css and checking the generated
+         * utilities. The label therefore rendered in whatever colour the
+         * caller happened to inherit from the page's ambient
+         * `--foreground`, confirmed by rendering both colour schemes:
+         * `rgb(11, 46, 51)` in light mode - which happens to equal
+         * `--petrol-900`'s own value only because light mode's
+         * `--foreground` IS `--petrol-900`, not because the utility
+         * painted it - but `rgb(250, 247, 242)` (`--paper`, near-white) in
+         * dark mode, nothing like petrol-900. contrast.ts documented a
+         * ratio (`petrol-900-on-petrol-400`) for a colour that was never
+         * reliably painted - a false claim of coverage for the one real
+         * caller (the upload queue's "Sign in" link, shown on a failed
+         * upload that needs re-authentication). `text-surface-0` is the
+         * fix: the same fill-light/label-dark shape, but with the token
+         * `default-tint` below already uses for the identical reason -
+         * genuinely declared in `@theme`, so the utility compiles, and a
+         * real near-black that paints identically in both colour schemes,
+         * unlike the inherited value it replaces. Its own contrast.ts
+         * pairing (`surface-0-on-petrol-400`, replacing the dead one)
+         * measures 7.75:1 in both colour schemes (neither token is
+         * overridden per mode) - not reused from `default-tint`'s own
+         * `surface-0-on-petrol-100` pairing, because that fill is
+         * `--color-petrol-100` (L 0.95), lighter than this variant's
+         * `--color-petrol-400` (L 0.72), so the ratio does not carry over.
+         * The upload dropzone's "Choose files" label
+         * (src/app/upload/upload-form.tsx) pastes the same
+         * `bg-petrol-400`/`text-petrol-900` pair directly rather than
+         * going through this variant, so it keeps the identical
+         * never-compiles bug - disclosed, not fixed, in contrast.ts and in
+         * that file's own comment, since it is not a call site of this
+         * variant and is out of this bead's stated scope.
          */
-        "default-neutral": "bg-petrol-400 text-petrol-900 hover:brightness-95",
+        "default-neutral": "bg-petrol-400 text-surface-0 hover:brightness-95",
         /*
          * ugcportal-qqnt.2: the primary action on the front page's petrol-
          * GRADIENT well (`.home-hero-surface`, src/components/home/
@@ -227,13 +255,12 @@ const buttonVariants = cva(
          * reusing that one (a near-black-tuned fill is not verified against
          * this gradient, and vice versa). Light petrol-tint fill, dark
          * label - the same fill-light/label-dark shape `default-neutral`
-         * uses, but with `text-surface-0` rather than `text-petrol-900`:
-         * `--color-surface-0` IS declared in `@theme`, so this is a working
-         * label where `default-neutral`'s is not (see that variant's own
-         * "KNOWN GAP" comment) - this is not a second attempt at fixing
-         * that gap, only a variant that never had it. Colours and hover
-         * step are exactly what the hero's own hand-styled CTA already
-         * used, moved here unchanged: `surface-0-on-petrol-100` and
+         * uses, and (since ugcportal-ei5c) the same `text-surface-0` label
+         * token too - but a different, lighter fill (`petrol-100` here vs
+         * `petrol-400` there), so its own contrast.ts pairing rather than
+         * assuming the ratio carries over. Colours and hover step are
+         * exactly what the hero's own hand-styled CTA already used, moved
+         * here unchanged: `surface-0-on-petrol-100` and
          * `surface-0-on-petrol-100-hover` in contrast.ts measure this exact
          * fill/label/hover-fill combination already, so adopting the shared
          * Button here needed no new contrast pairing.
