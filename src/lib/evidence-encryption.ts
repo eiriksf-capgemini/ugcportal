@@ -17,9 +17,11 @@
  * the loud "stored WITHOUT server-side encryption" warning at every
  * production boot, which is exactly backwards: the one message operators are
  * meant to trust unconditionally cried wolf. A single parser, imported by
- * both, is the only way the two cannot drift apart again — see this
- * function's own test file for the table both call sites are checked
- * against.
+ * both, is the design that keeps the two from drifting apart again —
+ * enforced, not just hoped for, by src/instrumentation.test.ts's "the shared
+ * S3_EVIDENCE_SSE parser" describe block, a table-driven test that calls
+ * this function and both call sites over every env state and fails if any
+ * of the three stops agreeing with the others.
  *
  * This module has no imports of its own and must stay that way:
  * `src/instrumentation.ts` imports it statically, and that file is compiled

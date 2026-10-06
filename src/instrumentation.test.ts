@@ -182,13 +182,22 @@ describe("the shared S3_EVIDENCE_SSE parser (ugcportal-gkj, K1/K2/K3)", () => {
     },
   );
 
-  it("still warns when only the bucket-level flag silences it, even for an accepted header value (orthogonal, not a parser case)", () => {
+  it("S3_EVIDENCE_ENCRYPTED_AT_BUCKET silences the boot check without being an input to the shared parser", () => {
     // S3_EVIDENCE_ENCRYPTED_AT_BUCKET is a second, independent way to
-    // silence the boot warning, not an input to the shared parser — this
-    // guards against the agreement property above being satisfied by
-    // accident if that flag ever leaked into the parser's own logic.
+    // silence the boot warning (checkEvidenceEncryption's own OR), not an
+    // input to parseEvidenceSSESetting — encryptionSetting() must stay
+    // undefined when ONLY the bucket flag is set, same S3_EVIDENCE_SSE as
+    // every other "unset" row above, because it decides a per-request
+    // header that has nothing to do with a bucket-level declaration.
+    // Fixture-mutated: making encryptionSetting() also honour this flag
+    // (`env.S3_EVIDENCE_ENCRYPTED_AT_BUCKET === "true" ? "AES256" : ...`)
+    // fails this assertion, confirming it is not vacuously true.
     expect(
-      encryptionSetting({ ...PROD, S3_EVIDENCE_SSE: undefined }),
+      encryptionSetting({
+        ...PROD,
+        S3_EVIDENCE_SSE: undefined,
+        S3_EVIDENCE_ENCRYPTED_AT_BUCKET: "true",
+      }),
     ).toBeUndefined();
     expect(
       checkEvidenceEncryption({

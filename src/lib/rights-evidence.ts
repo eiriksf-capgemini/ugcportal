@@ -59,10 +59,12 @@ export const RIGHTS_EVIDENCE_PREFIX = "rights-evidence";
  * The parsing itself — trim, then compare — lives in
  * `parseEvidenceSSESetting` (src/lib/evidence-encryption.ts), shared with
  * that boot check, so this function and the warning it can silence cannot
- * disagree about what counts as configured (ugcportal-gkj). `env` is a
- * parameter, defaulting to `process.env`, for the same reason the checks in
- * src/instrumentation.ts take one: so a test can hand this a fixture instead
- * of mutating the real environment.
+ * disagree about what counts as configured (ugcportal-gkj) — enforced by
+ * src/instrumentation.test.ts's "the shared S3_EVIDENCE_SSE parser" K3
+ * describe block, which fails if either side stops going through the shared
+ * parser. `env` is a parameter, defaulting to `process.env`, for the same
+ * reason the checks in src/instrumentation.ts take one: so a test can hand
+ * this a fixture instead of mutating the real environment.
  */
 export function encryptionSetting(
   env: NodeJS.ProcessEnv = process.env,
