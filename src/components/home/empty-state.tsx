@@ -1,6 +1,9 @@
 import Link from "next/link";
 
+import { cn } from "cn";
+
 import { GALLERY_STATE_CONTAINER_CLASS } from "@/components/gallery/containment";
+import { SECTION_TITLE_CLASS } from "@/components/type-scale";
 import { PORTFOLIO_PATH } from "@/lib/routes";
 
 /**
@@ -34,15 +37,18 @@ import { PORTFOLIO_PATH } from "@/lib/routes";
  * src/app/page.test.tsx's existing K1 assertions
  * (`toContain("Nothing is published yet.")`,
  * `toContain('data-gallery-state="empty"')`) keep passing unchanged even
- * though they now exercise this component rather than GalleryEmpty. The
- * SAME `<h1>` level too, not `<h2>`: src/components/home/hero.tsx's title
- * deliberately renders no heading element of its own (see that file's
- * comment), so on this branch — gallery genuinely empty — this is the
- * page's only heading, and has to be the real `<h1>` or the page has none
- * at all. Confirmed the hard way: an `<h2>` here tripped axe's
- * `page-has-heading-one` rule in e2e/petrol-theme.spec.ts's own "no
- * automatically detectable axe violations" checks against a freshly
- * migrated (so genuinely empty) dev database.
+ * though they now exercise this component rather than GalleryEmpty.
+ *
+ * An `<h2>`, not an `<h1>` (ugcportal-qqnt.1): src/components/home/hero.tsx's
+ * title is now the page's one real `<h1>` on every branch Home() can render,
+ * so this heading — and GalleryEmpty's own copy of it, and
+ * GalleryUnavailable's — step down to SECTION_TITLE_CLASS
+ * (src/components/type-scale.ts) instead of each supplying its own `<h1>`.
+ * Before this bead the hero rendered no heading element at all, which is why
+ * an earlier version of this comment required THIS to be the real `<h1>`;
+ * axe's `page-has-heading-one` rule (e2e/petrol-theme.spec.ts) still passes,
+ * because something on the page still supplies a real `<h1>` — now the hero,
+ * not this component.
  *
  * What is actually NEW here, the "living" half of the bead: an action. A
  * gallery with nothing in it yet is not a dead end — the portfolio
@@ -56,9 +62,9 @@ export function EmptyState() {
       data-gallery-state="empty"
       data-home-empty-state
     >
-      <h1 className="max-w-2xl text-2xl leading-tight font-medium tracking-tight text-balance text-foreground sm:text-3xl">
+      <h2 className={cn("max-w-2xl text-foreground", SECTION_TITLE_CLASS)}>
         Nothing is published yet.
-      </h1>
+      </h2>
       <p className="mt-4 max-w-prose text-sm text-muted-foreground">
         Photographs appear here as soon as they are published. Nothing is
         hidden from you — the gallery is genuinely empty.

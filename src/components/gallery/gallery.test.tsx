@@ -339,26 +339,33 @@ describe("the states around the grid", () => {
    * reasons about landing "past the <h1>" — the shell documents the assumption
    * that a page has one. The gallery shipped without: the empty state kept a
    * heading and the populated state, the one people actually see, had none.
+   *
+   * <h2>, not <h1> (ugcportal-qqnt.1): `<Gallery>` renders standalone here,
+   * without the hero that now supplies the real page-level `<h1>` on every
+   * real page it composes with (src/app/page.tsx). Its own heading — "Gallery"
+   * with photographs, GalleryEmpty's "Nothing is published yet." when empty —
+   * steps down to SECTION_TITLE_CLASS instead.
    */
   it.each([
     { label: "with photographs", props: {} },
     { label: "when empty", props: { initialItems: [] } },
-  ])("has exactly one <h1> $label", ({ props }) => {
+  ])("has exactly one <h2> $label", ({ props }) => {
     const headings = [
-      ...render(props).matchAll(/<h1\b[^>]*>([\s\S]*?)<\/h1>/g),
+      ...render(props).matchAll(/<h2\b[^>]*>([\s\S]*?)<\/h2>/g),
     ].map((match) => match[1]);
 
     expect(headings).toHaveLength(1);
     expect(headings[0].replace(/<[^>]*>/g, "").trim().length).toBeGreaterThan(0);
   });
 
-  it("starts the document outline at h1, not further down", () => {
-    // A page whose first heading is an h2 is a broken outline even when an h1
-    // exists elsewhere, so check the order rather than only the presence.
+  it("starts its own outline at h2 — the page's h1 is composed above it by the hero", () => {
+    // A page whose first heading skips from h1 to h3 is a broken outline;
+    // rendered standalone, this component's own first heading is h2, since
+    // the h1 it used to render here now lives in the hero composed above it.
     const levels = [...render().matchAll(/<h([1-6])\b/g)].map((match) =>
       Number(match[1]),
     );
-    expect(levels[0]).toBe(1);
+    expect(levels[0]).toBe(2);
   });
 });
 
