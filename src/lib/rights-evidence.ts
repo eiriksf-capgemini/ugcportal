@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 
 import { DeleteObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
 
+import { parseEvidenceSSESetting } from "@/lib/evidence-encryption";
 import { getBucketName, getS3Client } from "@/lib/s3";
 
 /**
@@ -54,11 +55,21 @@ export const RIGHTS_EVIDENCE_PREFIX = "rights-evidence";
  * Documented in env.example, and a production start with neither this nor
  * `S3_EVIDENCE_ENCRYPTED_AT_BUCKET=true` logs a warning at boot (see
  * src/instrumentation.ts).
+ *
+ * The parsing itself — trim, then compare — lives in
+ * `parseEvidenceSSESetting` (src/lib/evidence-encryption.ts), shared with
+ * that boot check, so this function and the warning it can silence cannot
+ * disagree about what counts as configured (ugcportal-gkj) — enforced by
+ * src/instrumentation.test.ts's "the shared S3_EVIDENCE_SSE parser" K3
+ * describe block, which fails if either side stops going through the shared
+ * parser. `env` is a parameter, defaulting to `process.env`, for the same
+ * reason the checks in src/instrumentation.ts take one: so a test can hand
+ * this a fixture instead of mutating the real environment.
  */
-function encryptionSetting(): "AES256" | undefined {
-  return process.env.S3_EVIDENCE_SSE?.trim() === "AES256"
-    ? "AES256"
-    : undefined;
+export function encryptionSetting(
+  env: NodeJS.ProcessEnv = process.env,
+): "AES256" | undefined {
+  return parseEvidenceSSESetting(env.S3_EVIDENCE_SSE);
 }
 
 /** cuid/cuid2-ish: the ids this app generates, and nothing with a slash. */
