@@ -2,6 +2,7 @@ import Link from "next/link";
 
 import { cn } from "cn";
 
+import { buttonVariants } from "@/components/ui/button";
 import { DISPLAY_TITLE_CLASS } from "@/components/type-scale";
 import { signInPath, UPLOAD_PATH } from "@/lib/routes";
 
@@ -179,11 +180,18 @@ export function Hero({ signedIn }: HeroProps) {
             picture here was taken by someone who actually owns the thing in
             frame. {closingSentence}
           </p>
+          {/*
+            buttonVariants, not a hand-rolled className (ugcportal-qqnt.2):
+            `default-tint` is this well's one primary — see
+            src/components/ui/button.tsx's own comment, point 6, for why
+            that variant rather than `default-neutral`. The colours are
+            unchanged from the className this replaces (bg-petrol-100 /
+            text-surface-0 / hover:bg-petrol-200), so the contrast pairings
+            already measuring them (surface-0-on-petrol-100 and its own
+            -hover entry in src/lib/design/contrast.ts) still apply.
+          */}
           <div className="mt-2">
-            <Link
-              href={cta.href}
-              className="inline-flex w-fit items-center gap-1.5 rounded-lg bg-petrol-100 px-4 py-2 text-sm font-medium text-surface-0 transition-colors hover:bg-petrol-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-            >
+            <Link href={cta.href} className={buttonVariants({ variant: "default-tint", size: "lg" })}>
               {cta.label}
             </Link>
           </div>

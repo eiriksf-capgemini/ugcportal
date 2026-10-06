@@ -1,5 +1,5 @@
 import AxeBuilder from "@axe-core/playwright";
-import { expect, test } from "@playwright/test";
+import { expect, type Locator, test } from "@playwright/test";
 
 /**
  * ugcportal-6dvg K1: the front page's hero and living empty state, against a
@@ -86,6 +86,47 @@ test("K3: no heading level is skipped on the home page", async ({ page }) => {
     .withRules(["heading-order"])
     .analyze();
   expect(results.violations, JSON.stringify(results.violations, null, 2)).toEqual([]);
+});
+
+/**
+ * ugcportal-qqnt.2 K1/K2: one button system — the hero's CTA, the empty
+ * state's portfolio link and the header's sign-in controls all resolve to
+ * buttonVariants (checked at the vitest level,
+ * src/components/ui/button-system.test.tsx), and here, at the pixel level a
+ * class-name check cannot reach: the same computed radius on all three, and
+ * at most two distinct computed background colours among them (the one
+ * filled treatment, and the shared transparent/outline one).
+ */
+test("K1/K2: the hero CTA, the empty-state link and the header's sign-in buttons share one radius and at most two fill colours", async ({
+  page,
+}) => {
+  await page.goto("/");
+
+  const heroCta = page.getByRole("link", { name: "Sign in to upload" });
+  const emptyStateLink = page
+    .locator("[data-home-empty-state]")
+    .getByRole("link", { name: /portfolio/i });
+  const headerGoogle = page.getByRole("button", { name: /Google/i });
+  const headerFacebook = page.getByRole("button", { name: /Facebook/i });
+
+  const readStyle = (locator: Locator) =>
+    locator.evaluate((el) => {
+      const style = getComputedStyle(el);
+      return { borderRadius: style.borderRadius, backgroundColor: style.backgroundColor };
+    });
+
+  const [hero, emptyState, google, facebook] = await Promise.all([
+    readStyle(heroCta),
+    readStyle(emptyStateLink),
+    readStyle(headerGoogle),
+    readStyle(headerFacebook),
+  ]);
+
+  const radii = [hero.borderRadius, emptyState.borderRadius, google.borderRadius, facebook.borderRadius];
+  expect(new Set(radii).size, JSON.stringify(radii)).toBe(1);
+
+  const fills = [hero.backgroundColor, emptyState.backgroundColor, google.backgroundColor, facebook.backgroundColor];
+  expect(new Set(fills).size, JSON.stringify(fills)).toBeLessThanOrEqual(2);
 });
 
 /**

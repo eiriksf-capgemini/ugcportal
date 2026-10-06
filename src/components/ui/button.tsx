@@ -48,6 +48,29 @@ import { cn } from "cn"
  *    --color-line-strong, already measured at 3:1+ against every near-black
  *    surface including this one (control-edge-on-destructive-surface in
  *    contrast.ts).
+ * 6. THE RULE (ugcportal-qqnt.2): every button-like control on the public
+ *    pages (header, hero, empty state) resolves to one of this file's own
+ *    `buttonVariants` class sets - never a hand-written `inline-flex ...
+ *    rounded-*` string at the call site (src/components/type-scale.test.tsx
+ *    and a dedicated source-scan test enforce the second half of that).
+ *    Which variant is primary depends on the SURFACE, not on taste:
+ *      - on --background (the paper canvas): `default` is primary, `outline`
+ *        is secondary - this is what src/components/auth-status.tsx's
+ *        sign-in controls and the empty state's portfolio link both use.
+ *      - on the hero's petrol-GRADIENT well (`.home-hero-surface`):
+ *        `default-tint` is primary - see that variant's own comment for why
+ *        it is not `default-neutral`.
+ *      - on the untouched near-black surface scale (bg-surface-0..4 /
+ *        bg-destructive-surface - fase 2's job, not this bead's):
+ *        `default-neutral` is primary, `outline-neutral` is secondary.
+ *    Every one of them shares this file's one `rounded-lg` radius
+ *    (`--radius-lg`, 10px) - the same figure docs/design/tokens.css's
+ *    `--radius-card` names for a tile, which is why
+ *    src/components/gallery/containment.ts's `GALLERY_TILE_BASE_CLASS`
+ *    was moved onto `rounded-lg` too rather than its own, smaller
+ *    `rounded-md` (8px): one radius for every interactive shape on the
+ *    public pages, not one for controls and a different one for the
+ *    photographs they sit beside.
  */
 const PETROL_OUTLINE_STYLE =
   "border-primary bg-transparent text-primary hover:border-primary-hover hover:underline aria-expanded:border-primary-hover aria-expanded:underline"
@@ -116,8 +139,42 @@ const buttonVariants = cva(
          * paints. `hover:brightness-95` rather than a second new token: this
          * is a contrast fix for an untouched-surface caller, not a second
          * filled-button treatment to design and verify.
+         *
+         * KNOWN GAP, NOT FIXED HERE (ugcportal-ei5c): `text-petrol-900` does
+         * not compile to any rule at all - `--color-petrol-900` (the OKLCH
+         * near-black scale's version of this token) is declared in :root,
+         * not @theme, specifically so Tailwind does NOT emit a `text-`/`bg-`
+         * utility for it (see globals.css's own "stopping Tailwind emitting
+         * bg-petrol-900 and friends" comment) - confirmed empirically by
+         * compiling globals.css and checking the generated utilities. This
+         * variant's label therefore renders in whatever colour the caller
+         * otherwise inherits, not petrol-900. Filed as its own bead rather
+         * than fixed as a side effect of ugcportal-qqnt.2's button-system
+         * consolidation, which does not otherwise touch this variant's
+         * colours or its one caller (the upload queue's "Try again"
+         * button, out of scope per that bead's own description).
          */
         "default-neutral": "bg-petrol-400 text-petrol-900 hover:brightness-95",
+        /*
+         * ugcportal-qqnt.2: the primary action on the front page's petrol-
+         * GRADIENT well (`.home-hero-surface`, src/components/home/
+         * hero.tsx) - a DIFFERENT surface from `default-neutral`'s untouched
+         * near-black surface scale, so it needs its own fill rather than
+         * reusing that one (a near-black-tuned fill is not verified against
+         * this gradient, and vice versa). Light petrol-tint fill, dark
+         * label - the same fill-light/label-dark shape `default-neutral`
+         * uses, but with `text-surface-0` rather than `text-petrol-900`:
+         * `--color-surface-0` IS declared in `@theme`, so this is a working
+         * label where `default-neutral`'s is not (see that variant's own
+         * "KNOWN GAP" comment) - this is not a second attempt at fixing
+         * that gap, only a variant that never had it. Colours and hover
+         * step are exactly what the hero's own hand-styled CTA already
+         * used, moved here unchanged: `surface-0-on-petrol-100` and
+         * `surface-0-on-petrol-100-hover` in contrast.ts measure this exact
+         * fill/label/hover-fill combination already, so adopting the shared
+         * Button here needed no new contrast pairing.
+         */
+        "default-tint": "bg-petrol-100 text-surface-0 hover:bg-petrol-200",
         outline: PETROL_OUTLINE_STYLE,
         secondary: PETROL_OUTLINE_STYLE,
         "outline-neutral": NEUTRAL_OUTLINE_STYLE,
@@ -138,17 +195,30 @@ const buttonVariants = cva(
           "border-destructive/75 bg-destructive-surface text-destructive hover:bg-destructive-surface-hover focus-visible:border-destructive focus-visible:ring-destructive/80",
         link: "text-primary underline-offset-4 hover:underline",
       },
+      /*
+       * ugcportal-qqnt.2: every size used to round its own way — `xs`/`sm`/
+       * `icon-xs`/`icon-sm` each capped at a smaller `rounded-[min(var(
+       * --radius-md),Npx)]` than the base class's own `rounded-lg`, with an
+       * `in-data-[slot=button-group]:rounded-lg` override standing by for
+       * the one context (a `ButtonGroup`) that needed the base radius back.
+       * "One radius token for all interactive elements" (this bead's own
+       * description) means that smaller-size exception goes: every size
+       * now keeps the shared `rounded-lg` the base class already applies,
+       * so the `in-data-[slot=button-group]:` override has nothing left to
+       * override and is removed with it rather than kept as a dead no-op.
+       * This is the change that makes src/components/auth-status.tsx's own
+       * `size="sm"` sign-in buttons compute the identical radius the hero
+       * and empty-state's `size="lg"` controls do (e2e/front-page.spec.ts).
+       */
       size: {
         default:
           "h-8 gap-1.5 px-2.5 has-data-[icon=inline-end]:pr-2 has-data-[icon=inline-start]:pl-2",
-        xs: "h-6 gap-1 rounded-[min(var(--radius-md),10px)] px-2 text-xs in-data-[slot=button-group]:rounded-lg has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-3",
-        sm: "h-7 gap-1 rounded-[min(var(--radius-md),12px)] px-2.5 text-[0.8rem] in-data-[slot=button-group]:rounded-lg has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-3.5",
+        xs: "h-6 gap-1 px-2 text-xs has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-3",
+        sm: "h-7 gap-1 px-2.5 text-[0.8rem] has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-3.5",
         lg: "h-9 gap-1.5 px-2.5 has-data-[icon=inline-end]:pr-2 has-data-[icon=inline-start]:pl-2",
         icon: "size-8",
-        "icon-xs":
-          "size-6 rounded-[min(var(--radius-md),10px)] in-data-[slot=button-group]:rounded-lg [&_svg:not([class*='size-'])]:size-3",
-        "icon-sm":
-          "size-7 rounded-[min(var(--radius-md),12px)] in-data-[slot=button-group]:rounded-lg",
+        "icon-xs": "size-6 [&_svg:not([class*='size-'])]:size-3",
+        "icon-sm": "size-7",
         "icon-lg": "size-9",
       },
     },

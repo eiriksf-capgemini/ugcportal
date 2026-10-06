@@ -375,12 +375,17 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
    * src/app/page.tsx directly on --background inside the app shell's
    * <main>, the exact same placement as GalleryEmpty/GalleryUnavailable it
    * replaces when the gallery is genuinely empty (not inside any well), so
-   * the page-canvas pair is the correct one here too. Two text-foreground:
-   * the heading and the "see the portfolio" link; one text-muted-foreground:
-   * the supporting paragraph.
+   * the page-canvas pair is the correct one here too. One text-foreground:
+   * the heading (ugcportal-qqnt.1's SECTION_TITLE_CLASS caller); one
+   * text-muted-foreground: the supporting paragraph. The "see the
+   * portfolio" link's own text-foreground is gone (ugcportal-qqnt.2): it
+   * now renders through buttonVariants({variant: "outline"}), which reads
+   * text-primary — a literal that lives in src/components/ui/button.tsx's
+   * own PETROL_OUTLINE_STYLE, not in this file's source text, so it is that
+   * file's count which carries it, not this one's.
    */
   "src/components/home/empty-state.tsx": {
-    "text-foreground": 2,
+    "text-foreground": 1,
     "text-muted-foreground": 1,
   },
   /*
