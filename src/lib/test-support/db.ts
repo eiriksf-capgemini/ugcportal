@@ -187,10 +187,19 @@ export async function applyMigration(
  * `stopBefore` applies only the migrations that come before the named one,
  * which is how a test can stand up the schema as it was *before* a change
  * and then watch that change run against real rows (ugcportal-vsm K2).
+ *
+ * `startAfter` is the other half of that manoeuvre, and it is not optional
+ * polish: the generated Prisma client selects every column the CURRENT
+ * schema declares, so once the migration under test has run, any read
+ * through the client fails on the columns later migrations add — with
+ * `no such column`, which looks like a bug in the migration under test
+ * rather than in the harness. So a test that stops partway catches the
+ * database up before it reads, and asserts for itself that the catch-up
+ * changed nothing it is about to measure (ugcportal-qn3).
  */
 export async function applyMigrations(
   client: RawExecutor,
-  options: { stopBefore?: string } = {},
+  options: { stopBefore?: string; startAfter?: string } = {},
 ): Promise<void> {
   const names = migrationNames();
   const stopAt = options.stopBefore
@@ -201,7 +210,15 @@ export async function applyMigrations(
     // all of them and making the test assert nothing.
     throw new Error(`No such migration: ${options.stopBefore}`);
   }
-  for (const name of names.slice(0, stopAt)) {
+  const startFrom = options.startAfter
+    ? names.indexOf(options.startAfter) + 1
+    : 0;
+  // Same reason: a renamed migration must not silently become "start at
+  // index 0" and re-apply everything.
+  if (options.startAfter && startFrom === 0) {
+    throw new Error(`No such migration: ${options.startAfter}`);
+  }
+  for (const name of names.slice(startFrom, stopAt)) {
     await applyMigration(client, name);
   }
 }
