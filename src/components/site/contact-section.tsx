@@ -1,6 +1,9 @@
 import { DraftLegalLabel } from "@/components/site-footer";
 import { ContactMailtoForm } from "@/components/site/contact-mailto-form";
-import { SECTION_HEADING_CLASS } from "@/components/site/section-heading";
+import {
+  SECTION_HEADING_CLASS,
+  SECTION_WRAPPER_CLASS,
+} from "@/components/site/section-heading";
 import { INLINE_LINK_CLASS } from "@/components/ui/inline-link";
 import {
   contactMailtoHref,
@@ -106,7 +109,7 @@ export function ContactSection({ defaultSubject }: { defaultSubject: string }) {
     // and 0 is the wrong number to fall back to.
     <section
       id={pathFragment(ABOUT_CONTACT_PATH)}
-      className="mt-10 scroll-mt-[var(--header-height,3.5rem)]"
+      className={`${SECTION_WRAPPER_CLASS} scroll-mt-[var(--header-height,3.5rem)]`}
       data-page-section="contact"
     >
       <h2 className={SECTION_HEADING_CLASS}>Get in touch</h2>

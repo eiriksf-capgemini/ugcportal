@@ -9,7 +9,7 @@ import {
   useState,
 } from "react";
 
-import { TEXT_INPUT_CLASS } from "@/components/ui/text-input";
+import { TEXT_INPUT_CLASS, TEXT_LABEL_CLASS } from "@/components/ui/text-input";
 import { ACCEPTED_MIME_TYPES } from "@/lib/media-rules";
 
 import { altTextFieldError, captionFieldError } from "./alt-text";
@@ -829,7 +829,7 @@ function AltTextFields({
 
   return (
     <div className="mt-6" data-upload-alt-text-fields="">
-      <label htmlFor={altTextId} className="block text-sm font-medium text-ink">
+      <label htmlFor={altTextId} className={TEXT_LABEL_CLASS}>
         Alt text
         {/* Visual asterisk plus a spoken word, so the requirement survives
             whether the label is seen or heard. */}
@@ -872,10 +872,7 @@ function AltTextFields({
         {altTextError ?? ""}
       </p>
 
-      <label
-        htmlFor={captionId}
-        className="mt-4 block text-sm font-medium text-ink"
-      >
+      <label htmlFor={captionId} className={`mt-4 ${TEXT_LABEL_CLASS}`}>
         Caption <span className="text-ink-muted">(optional)</span>
       </label>
       <textarea

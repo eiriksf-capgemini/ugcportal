@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 
 import { buttonVariants } from "@/components/ui/button";
-import { TEXT_INPUT_CLASS } from "@/components/ui/text-input";
+import { TEXT_INPUT_CLASS, TEXT_LABEL_CLASS } from "@/components/ui/text-input";
 import { contactMailtoHref } from "@/lib/contact";
 
 /**
@@ -64,7 +64,7 @@ export function ContactMailtoForm({
       data-contact-form=""
       onSubmit={(event) => event.preventDefault()}
     >
-      <label htmlFor="contact-subject" className="block text-sm font-medium text-ink">
+      <label htmlFor="contact-subject" className={TEXT_LABEL_CLASS}>
         Subject
       </label>
       <input
@@ -75,10 +75,7 @@ export function ContactMailtoForm({
         className={TEXT_INPUT_CLASS}
       />
 
-      <label
-        htmlFor="contact-message"
-        className="mt-4 block text-sm font-medium text-ink"
-      >
+      <label htmlFor="contact-message" className={`mt-4 ${TEXT_LABEL_CLASS}`}>
         Message
       </label>
       <textarea

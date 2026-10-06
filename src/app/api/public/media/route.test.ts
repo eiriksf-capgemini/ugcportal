@@ -53,6 +53,14 @@ type Row = {
   caption: string | null;
   createdAt: Date;
   publishedAt: Date | null;
+  // ugcportal-qnq9.16 (item 3 of the lows deferred from PR #93's round-6
+  // review): this fixture used to have no `tags` field at all, which meant
+  // `project()` below handed `listPublicMedia` a row with `tags: undefined`
+  // on every test in this file — tolerated only because
+  // src/lib/curation-tags.ts#stripCurationTags used to special-case a
+  // non-array value for exactly this mock. Modeling the relation properly,
+  // defaulting to `[]` below, is what let that tolerance come out.
+  tags: { slug: string; name: string }[];
 };
 
 /**
@@ -188,6 +196,10 @@ function row(overrides: Partial<Row> = {}): Row {
       `2026-09-${String((sequence % 28) + 1).padStart(2, "0")}T10:00:00Z`,
     ),
     publishedAt: new Date("2026-09-24T12:00:00Z"),
+    // No tags by default, like an untagged upload — ugcportal-jsc's own
+    // fixtures elsewhere in this codebase use the same default (see
+    // src/lib/test-support/media-fixtures.ts).
+    tags: [],
     ...overrides,
   };
 }
@@ -195,13 +207,15 @@ function row(overrides: Partial<Row> = {}): Row {
 /**
  * Exactly the fields an anonymous caller may see.
  *
- * NOT exhaustive against `MEDIA_ANONYMOUS_SELECT` — `tags` is a relation, and
- * this file's `Row`/`project` fixture pre-dates it (ugcportal-jsc) without
- * being extended to model one; that gap is pre-existing and out of this
- * bead's scope. `altText` and `caption` (ugcportal-gwr) are plain columns,
- * same shape as everything else this list already names, so they are added
- * here rather than left to silently vanish the way an `undefined` fixture
- * value does through `NextResponse.json`'s serialisation.
+ * NOT exhaustive against `MEDIA_ANONYMOUS_SELECT` — `advertisingDisclosure`
+ * is a relation this file's `Row`/`project` fixture still does not model, so
+ * it is `undefined` on every row here and silently vanishes through
+ * `NextResponse.json`'s serialisation rather than appearing as a key. `tags`
+ * used to be the identical gap (ugcportal-jsc) but is modeled now
+ * (ugcportal-qnq9.16): `row()` defaults it to `[]`, which DOES survive
+ * serialisation, so it belongs in this list. `altText` and `caption`
+ * (ugcportal-gwr) are plain columns, same shape as everything else this list
+ * already names.
  */
 const ANONYMOUS_FIELDS = [
   "altText",
@@ -211,6 +225,7 @@ const ANONYMOUS_FIELDS = [
   "kind",
   "previewId",
   "publishedAt",
+  "tags",
 ];
 
 function request(query = "") {
@@ -973,11 +988,13 @@ describe("GET /api/public/media — pagination contract", () => {
           id: "withheld-1",
           previewId: null,
           createdAt: new Date("2026-09-24T10:00:00Z"),
+          tags: [],
         },
         {
           id: "withheld-2",
           previewId: null,
           createdAt: new Date("2026-09-23T10:00:00Z"),
+          tags: [],
         },
       ])
       .mockResolvedValueOnce([
@@ -985,6 +1002,7 @@ describe("GET /api/public/media — pagination contract", () => {
           id: "real",
           previewId: "preview-real",
           createdAt: new Date("2026-09-22T10:00:00Z"),
+          tags: [],
         },
       ]);
 
@@ -1021,11 +1039,13 @@ describe("GET /api/public/media — pagination contract", () => {
         id: "withheld-1",
         previewId: null,
         createdAt: new Date("2026-09-24T10:00:00Z"),
+        tags: [],
       },
       {
         id: "withheld-2",
         previewId: null,
         createdAt: new Date("2026-09-23T10:00:00Z"),
+        tags: [],
       },
     ]);
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -1058,6 +1078,7 @@ describe("GET /api/public/media — pagination contract", () => {
         id: "a",
         previewId: null,
         createdAt: new Date("2026-09-24T10:00:00Z"),
+        tags: [],
       },
     ]);
 
@@ -1091,16 +1112,19 @@ describe("GET /api/public/media — pagination contract", () => {
         id: "a",
         previewId: "preview-a",
         createdAt: new Date("2026-09-24T10:00:00Z"),
+        tags: [],
       },
       {
         id: "b",
         previewId: null,
         createdAt: new Date("2026-09-23T10:00:00Z"),
+        tags: [],
       },
       {
         id: "c",
         previewId: "preview-c",
         createdAt: new Date("2026-09-22T10:00:00Z"),
+        tags: [],
       },
     ]);
 

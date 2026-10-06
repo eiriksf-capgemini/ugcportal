@@ -3,7 +3,10 @@ import { PortfolioTile } from "@/components/portfolio/portfolio-tile";
 import { ContactSection } from "@/components/site/contact-section";
 import { IntroSection } from "@/components/site/intro-section";
 import { PageShell } from "@/components/site/page-shell";
-import { SECTION_HEADING_CLASS } from "@/components/site/section-heading";
+import {
+  SECTION_HEADING_CLASS,
+  SECTION_WRAPPER_CLASS,
+} from "@/components/site/section-heading";
 import { WhatWeOfferSection } from "@/components/site/what-we-offer-section";
 import { listPortfolioPieces } from "@/lib/portfolio";
 
@@ -47,7 +50,7 @@ export default async function PortfolioPage() {
     <PageShell title="Portfolio" wide>
       <IntroSection />
 
-      <section className="mt-10" data-page-section="samples">
+      <section className={SECTION_WRAPPER_CLASS} data-page-section="samples">
         <h2 className={SECTION_HEADING_CLASS}>Samples</h2>
         {pieces.length === 0 ? (
           // No sample has been curated yet (or none is a photo — v0.5.0's
