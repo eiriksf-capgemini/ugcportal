@@ -21,9 +21,11 @@
  *
  * Sensitive paths are matched exactly (not as a substring) against each
  * changed file, mirroring the original step's `grep -Ex`: a changed file
- * must match one of these patterns in its entirety to count as sensitive.
- * Which paths count as sensitive, and pr-review-merge's own sensitive-path
- * list, are both out of scope for this script -- see the bead.
+ * must match one of these patterns in its entirety to count as sensitive --
+ * see check-sensitive-files.test.mjs's "matches sensitive paths exactly, not
+ * as a substring" case, which asserts a file like `docs/CLAUDE.md.bak` does
+ * not count. Which paths count as sensitive, and pr-review-merge's own
+ * sensitive-path list, are both out of scope for this script -- see the bead.
  */
 import { isMainModule } from "./lib/is-main.mjs";
 
