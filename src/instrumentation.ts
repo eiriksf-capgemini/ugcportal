@@ -226,9 +226,11 @@ export async function register(): Promise<void> {
   // which needs node:crypto) live in src/instrumentation-node.ts and are
   // reached only through this dynamic import, gated on the runtime Next
   // itself reports — the pattern Next's docs recommend for this — so the
-  // edge compile never asks for that module at all (ugcportal-177y; see
-  // that module's own doc comment for why the check couldn't simply move to
-  // Web Crypto instead).
+  // edge compile never asks for that module at all. See
+  // src/instrumentation.test.ts's K4 describe block for the guardrail that
+  // fails if a node: built-in becomes statically reachable again, and
+  // src/instrumentation-node.ts's own doc comment for why the check
+  // couldn't simply move to Web Crypto instead (ugcportal-177y).
   if (process.env.NEXT_RUNTIME === "nodejs") {
     const { registerNodeOnlyChecks } = await import("./instrumentation-node");
     await registerNodeOnlyChecks();
