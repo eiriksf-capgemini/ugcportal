@@ -83,7 +83,7 @@ export function globsFor(extensions) {
   return extensions.map((extension) => `**/*.${extension}`);
 }
 
-/** `/\.(ts|tsx|js|jsx|mjs|cjs)$/` — the file-walker form. */
+/** `/\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/` — the file-walker form. */
 export function filenamePatternFor(extensions) {
   return new RegExp(`\\.(${extensions.join("|")})$`);
 }

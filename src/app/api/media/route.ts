@@ -64,6 +64,8 @@ function sanitizeFilename(name: string): string {
  * PER REQUEST (round-3 review finding 5, the same volume problem
  * `watermark.ts`'s `SHED_LOG_INTERVAL_MS` exists to solve for the busy-503
  * path, ugcportal-e86 — this is the storage-unreachable 503's sibling case).
+ * At most one flush per interval alongside the detailed line below, not one
+ * line in total — see `createThrottledLog`'s own doc comment.
  *
  * `flush: true`: an outage is exactly the kind of capacity/service signal
  * `createThrottledLog`'s doc comment says that option is for — losing the
@@ -531,8 +533,9 @@ async function handleUpload(
         // Not a fault, and not this route's fault to report as one. The gate
         // (ugcportal-e86) is working as designed, and watermark.ts already
         // emits a throttled console.warn per shed (logShedUpload) — at most
-        // one line per SHED_LOG_INTERVAL_MS *in total*, off a single global
-        // timestamp rather than one throttle per reason. The line that fires
+        // one flush per SHED_LOG_INTERVAL_MS (a summary line plus the
+        // detailed line), off a single global timestamp rather than one
+        // throttle per reason. The line that fires
         // does carry that shed's own reason/limit/queue/shedTotal, but a shed
         // suppressed by the throttle is only ever counted in the next line's
         // "+N more" tally (or the flush line, which reports a count with no
