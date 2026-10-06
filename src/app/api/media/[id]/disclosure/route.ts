@@ -6,6 +6,10 @@ import {
   validateAdvertisingLabel,
   BENEFIT_KINDS,
 } from "@/lib/advertising-disclosure";
+import {
+  benefitAttachmentRefusal,
+  effectiveBrandAlcoholAnswer,
+} from "@/lib/alcohol-commerce";
 import { resolveBenefitSource, validateBenefitSourceName } from "@/lib/benefit-source";
 import { requireOwnedMedia } from "@/lib/media-access";
 import { prisma } from "@/lib/prisma";
@@ -72,6 +76,11 @@ type Body = {
   benefitReceived?: unknown;
   benefitKind?: unknown;
   benefitSource?: unknown;
+  /** The brand's answer to §3.1a's "who's behind the brand" question
+   * (ugcportal-qnq9.3 K4). Accepted here, on the request that first names a
+   * brand, because this is the only surface in the product where a brand is
+   * ever named — see `upsertDisclosure` for what is done with it. */
+  benefitSourceAlcoholLinked?: unknown;
   marketValueOre?: unknown;
   label?: unknown;
 };
@@ -86,7 +95,13 @@ const DISCLOSURE_SELECT = {
   label: true,
   createdAt: true,
   updatedAt: true,
-  benefitSource: { select: { slug: true, name: true } },
+  // `alcoholLinked` is echoed so the caller can see which answer is now on
+  // record against the brand — the one piece of this response that a second
+  // request's outcome depends on, since an answered brand needs no answer
+  // submitted next time (ugcportal-qnq9.3 K4).
+  benefitSource: {
+    select: { slug: true, name: true, alcoholLinked: true },
+  },
 } as const;
 
 function badRequest(message: string, field?: string) {
@@ -120,6 +135,21 @@ function badRequest(message: string, field?: string) {
  * read by POST /api/media/[id]/publish) is the backstop for rows written any
  * other way — a raw statement, or a future importer.
  *
+ * AND A SECOND INVARIANT, FROM A DIFFERENT STATUTE (ugcportal-qnq9.3 K2/K4):
+ * a benefit may not be attached to an item recorded as showing alcohol, nor
+ * to one from a brand that produces, imports or sells alcohol — nor to one
+ * from a brand nobody has checked, because §3.1a says to check before the
+ * deal and an unasked question is not a `no`. Enforced in `upsertDisclosure`
+ * below, before anything at all is written; the refusal is the same 400
+ * shape as the ones above.
+ *
+ * WITHDRAWING A BENEFIT IS NEVER REFUSED BY THAT GATE, which is why it sits
+ * on the declaring branch only. `{"benefitReceived": false}` is how a
+ * mistaken declaration is taken back, and refusing to let an operator
+ * withdraw a benefit from an alcohol photograph would point the rule
+ * backwards — the same argument the curation price route makes for leaving
+ * un-pricing ungated.
+ *
  * WHAT THIS DOES NOT DO: it does not unpublish. An item that is already public
  * and gains a benefit declaration WITH a valid label stays public, correctly —
  * it now carries the label. An item that is already public cannot gain a
@@ -151,6 +181,7 @@ export async function PUT(request: Request, { params }: RouteContext) {
     benefitReceived,
     benefitKind,
     benefitSource,
+    benefitSourceAlcoholLinked,
     marketValueOre,
     label,
   } = body.value as Body;
@@ -190,6 +221,7 @@ export async function PUT(request: Request, { params }: RouteContext) {
       [
         ["benefitKind", benefitKind],
         ["benefitSource", benefitSource],
+        ["benefitSourceAlcoholLinked", benefitSourceAlcoholLinked],
         ["marketValueOre", marketValueOre],
         ["label", label],
       ] as const
@@ -205,6 +237,7 @@ export async function PUT(request: Request, { params }: RouteContext) {
       benefitReceived,
       benefitKind: null,
       benefitSource: null,
+      benefitSourceAlcoholLinked: undefined,
       marketValueOre: null,
       label: null,
     });
@@ -223,6 +256,30 @@ export async function PUT(request: Request, { params }: RouteContext) {
   const source = validateBenefitSourceName(benefitSource);
   if (!source.ok) {
     return badRequest(source.message, "benefitSource");
+  }
+
+  /*
+   * §3.1a practical rule 1's answer, about the company rather than about this
+   * photograph (ugcportal-qnq9.3 K4). OPTIONAL in the body and required in
+   * effect: a brand that already carries an answer does not need one, and a
+   * brand that does not carry one is refused by the gate below unless this
+   * request supplies it. That is the shape rather than `required: true`
+   * because re-answering a question already on record is what would let a
+   * later request talk a `yes` back down to a `no`.
+   *
+   * `null` IS REFUSED, unlike `benefitReceived` where it means "withdraw the
+   * answer". There is no withdrawing this one: the brand either has been
+   * checked or has not, and a request that could reset it to unchecked would
+   * be a request that could erase a `yes`.
+   */
+  if (
+    benefitSourceAlcoholLinked !== undefined &&
+    typeof benefitSourceAlcoholLinked !== "boolean"
+  ) {
+    return badRequest(
+      "Field 'benefitSourceAlcoholLinked' must be true or false: does this company produce, import or sell alcohol, or share a brand or trademark with an alcoholic drink?",
+      "benefitSourceAlcoholLinked",
+    );
   }
 
   /*
@@ -255,6 +312,7 @@ export async function PUT(request: Request, { params }: RouteContext) {
     benefitReceived: true,
     benefitKind,
     benefitSource: source.value,
+    benefitSourceAlcoholLinked,
     marketValueOre: marketValueOre ?? null,
     label: validatedLabel.value,
   });
@@ -277,6 +335,11 @@ type DisclosureWrite = {
    * rather than an id, because the id does not exist until the transaction
    * below mints it. */
   benefitSource: { slug: string; name: string } | null;
+  /** The brand's alcohol answer as this request supplied it, or undefined
+   * when it did not supply one. Never `null`: the validator above refuses
+   * that, because unchecked is not a state a request may put a brand back
+   * into. */
+  benefitSourceAlcoholLinked: boolean | undefined;
 };
 
 /**
@@ -306,13 +369,84 @@ async function upsertDisclosure(
     return await prisma.$transaction(async (tx) => {
       const owned = await tx.media.findFirst({
         where: { id: mediaId, userId },
-        select: { id: true },
+        // The alcohol triage answer comes along for the gate below. A listing
+        // that does not exist is `null` here, which `alcoholDepiction` reads
+        // as unanswered — and an item nobody has put forward for sale is
+        // exactly an item nobody has triaged.
+        select: { id: true, listing: { select: { depictsAlcohol: true } } },
       });
       if (!owned) return null;
 
-      const benefitSourceId = write.benefitSource
-        ? await resolveBenefitSource(write.benefitSource, tx)
-        : null;
+      let benefitSourceId: string | null = null;
+      if (write.benefitSource) {
+        /*
+         * ugcportal-qnq9.3 K2 AND K4, BEFORE ANYTHING IS WRITTEN — including
+         * before the brand row is minted. `resolveBenefitSource`'s own
+         * docstring is the reason for that order: nothing in this product
+         * deletes a BenefitSource, so a brand minted for a declaration that
+         * is then refused is permanent debris. Reading the brand first and
+         * minting it only past the gate means a refused request writes
+         * nothing at all, which is also what makes "the row is unchanged"
+         * true of the brand table and not just of the disclosure.
+         */
+        const recordedBrand = await tx.benefitSource.findUnique({
+          where: { slug: write.benefitSource.slug },
+          select: { alcoholLinked: true },
+        });
+        const recorded = recordedBrand?.alcoholLinked ?? null;
+        const effective = effectiveBrandAlcoholAnswer(
+          recorded,
+          write.benefitSourceAlcoholLinked,
+        );
+
+        const refusal = benefitAttachmentRefusal({
+          listing: owned.listing,
+          benefitSource: { alcoholLinked: effective },
+        });
+        if (refusal) {
+          // Returned from inside the transaction, which commits — and commits
+          // nothing, because the two statements above are both reads. A
+          // throw-to-roll-back would be the same outcome by a louder route.
+          return NextResponse.json(refusal, { status: 400 });
+        }
+
+        benefitSourceId = await resolveBenefitSource(write.benefitSource, tx);
+
+        /*
+         * THE ONLY BRAND ANSWER THIS ROUTE EVER WRITES IS `null` -> `false`,
+         * and that is not a limitation to work around later — it is the whole
+         * monotonicity rule, enforced by the two conditions below rather than
+         * by remembering it.
+         *
+         * A `yes` cannot be recorded here because a `yes` is a refusal: the
+         * gate above has already returned, so control only reaches this line
+         * with `effective === false`. The operator's recourse to an
+         * alcohol-linked brand is to decline the deal, which is what §3.1a
+         * practical rule 1 actually asks of them; filing the answer is not
+         * what makes them compliant. (Recording a `yes` against a brand, so
+         * that every future attempt is refused by name, needs a surface of
+         * its own and is deliberately not this route — see the PR.)
+         *
+         * `where: { alcoholLinked: null }` rather than an unconditional
+         * update, so this is race-safe without a lock: two first-time writers
+         * of the same brand both see `null`, both compute `false`, and the
+         * second one's update matches nothing if the first has already
+         * answered. More to the point, a brand answered `true` out of band
+         * between the read above and this write keeps its answer rather than
+         * being quietly overwritten with the `false` this request computed
+         * from a staler read.
+         */
+        if (recorded === null) {
+          await tx.benefitSource.updateMany({
+            where: { id: benefitSourceId, alcoholLinked: null },
+            data: {
+              alcoholLinked: effective,
+              alcoholAnsweredAt: new Date(),
+              alcoholAnsweredByUserId: userId,
+            },
+          });
+        }
+      }
 
       const data = {
         benefitReceived: write.benefitReceived,

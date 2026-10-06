@@ -25,6 +25,13 @@ const mediaDeleteManyMock = vi.fn();
 // for the same reason Media's are — a publish that reached for one would show
 // up rather than sliding past a test that only inspects the call it expected.
 const disclosureFindUniqueMock = vi.fn();
+const listingFindUniqueMock = vi.fn();
+const listingUpdateManyMock = vi.fn();
+const listingUpdateMock = vi.fn();
+const listingCreateMock = vi.fn();
+const listingUpsertMock = vi.fn();
+const listingDeleteMock = vi.fn();
+const listingDeleteManyMock = vi.fn();
 const disclosureUpdateManyMock = vi.fn();
 const disclosureUpdateMock = vi.fn();
 const disclosureCreateMock = vi.fn();
@@ -36,6 +43,12 @@ const queryRawMock = vi.fn();
 const transactionMock = vi.fn();
 
 const WRITE_MOCKS = [
+  listingUpdateManyMock,
+  listingUpdateMock,
+  listingCreateMock,
+  listingUpsertMock,
+  listingDeleteMock,
+  listingDeleteManyMock,
   disclosureUpdateManyMock,
   disclosureUpdateMock,
   disclosureCreateMock,
@@ -71,6 +84,19 @@ vi.mock("@/lib/prisma", () => ({
       delete: mediaDeleteMock,
       deleteMany: mediaDeleteManyMock,
     },
+    // The listing is read for its alcohol triage answer (ugcportal-qnq9.3
+    // K6) and never written by this route; every writer on it is mocked and
+    // in WRITE_MOCKS above, so "publishing writes only publishedAt" keeps
+    // covering the table this route now reads.
+    mediaListing: {
+      findUnique: listingFindUniqueMock,
+      updateMany: listingUpdateManyMock,
+      update: listingUpdateMock,
+      create: listingCreateMock,
+      upsert: listingUpsertMock,
+      delete: listingDeleteMock,
+      deleteMany: listingDeleteManyMock,
+    },
     mediaAdvertisingDisclosure: {
       findUnique: disclosureFindUniqueMock,
       updateMany: disclosureUpdateManyMock,
@@ -93,6 +119,33 @@ const OTHER_ID = "user-b";
 const MEDIA_ID = "media-1";
 
 const PUBLISHED_AT = new Date("2026-03-01T09:00:00.000Z");
+
+/**
+ * A brand somebody has checked and found clean (ugcportal-qnq9.3 K4).
+ *
+ * Spread into every disclosure fixture that declares a benefit, because
+ * `commercialPublishRefusal` refuses an UNCHECKED brand exactly as it refuses
+ * an alcohol-linked one — so a fixture that simply omitted the brand would
+ * make each of the advertising-label cases above fail for this bead's reason
+ * instead of their own. The alcohol describe at the bottom of this file is
+ * where the other two answers are the subject.
+ */
+const CHECKED_BRAND = {
+  benefitSource: { alcoholLinked: false as boolean | null },
+} as const;
+
+/**
+ * A listing whose alcohol question has been answered `no` — the empty-glass
+ * answer (ugcportal-qnq9.3 K1).
+ *
+ * Needed by the "publishes normally" cases for the same reason CHECKED_BRAND
+ * is: from this bead on, an item that DECLARES A BENEFIT may not go public
+ * until somebody has said there is no alcohol in it, so an unanswered listing
+ * (the default in this file) refuses. That precondition is new, it only
+ * applies to an item carrying a benefit, and it is the subject of the alcohol
+ * describe below rather than of these cases.
+ */
+const TRIAGED_ALCOHOL_FREE = { depictsAlcohol: false as boolean | null };
 
 const unpublishedMedia: OwnedMediaRow = {
   id: MEDIA_ID,
@@ -219,6 +272,10 @@ beforeEach(() => {
   // ugcportal-qnq9.1 is in, and the state every existing test in this file
   // means to exercise. The tests that are ABOUT the gate override it.
   disclosureFindUniqueMock.mockResolvedValue(null);
+  // No listing row: an item nobody has put forward for sale, which is every
+  // item in this file except where a case says otherwise. With no benefit
+  // declared the alcohol gate answers null whatever this holds.
+  listingFindUniqueMock.mockResolvedValue(null);
 });
 
 describe("ownership gate on publish/unpublish (K2)", () => {
@@ -584,6 +641,7 @@ describe("publishing an item with a benefit but no advertising label (ugcportal-
       disclosureFindUniqueMock.mockResolvedValue({
         benefitReceived: true,
         label,
+        ...CHECKED_BRAND,
       });
 
       const response = await POST(publishRequest("POST"), context());
@@ -607,6 +665,7 @@ describe("publishing an item with a benefit but no advertising label (ugcportal-
     disclosureFindUniqueMock.mockResolvedValue({
       benefitReceived: true,
       label: "Sponsored",
+      ...CHECKED_BRAND,
     });
 
     const response = await POST(publishRequest("POST"), context());
@@ -623,7 +682,9 @@ describe("publishing an item with a benefit but no advertising label (ugcportal-
       disclosureFindUniqueMock.mockResolvedValue({
         benefitReceived: true,
         label,
+        ...CHECKED_BRAND,
       });
+      listingFindUniqueMock.mockResolvedValue(TRIAGED_ALCOHOL_FREE);
 
       const response = await POST(publishRequest("POST"), context());
 
@@ -643,6 +704,7 @@ describe("publishing an item with a benefit but no advertising label (ugcportal-
       disclosureFindUniqueMock.mockResolvedValue({
         benefitReceived,
         label: null,
+        ...CHECKED_BRAND,
       });
 
       const response = await POST(publishRequest("POST"), context());
@@ -664,7 +726,11 @@ describe("publishing an item with a benefit but no advertising label (ugcportal-
     expect(response.status).toBe(200);
     expect(disclosureFindUniqueMock).toHaveBeenCalledWith({
       where: { mediaId: MEDIA_ID },
-      select: { benefitReceived: true, label: true },
+      select: {
+        benefitReceived: true,
+        label: true,
+        benefitSource: { select: { alcoholLinked: true } },
+      },
     });
   });
 
@@ -676,6 +742,7 @@ describe("publishing an item with a benefit but no advertising label (ugcportal-
     disclosureFindUniqueMock.mockResolvedValue({
       benefitReceived: true,
       label: null,
+      ...CHECKED_BRAND,
     });
 
     const response = await POST(publishRequest("POST"), context());
@@ -694,6 +761,7 @@ describe("publishing an item with a benefit but no advertising label (ugcportal-
     disclosureFindUniqueMock.mockResolvedValue({
       benefitReceived: true,
       label: null,
+      ...CHECKED_BRAND,
     });
 
     const response = await DELETE(publishRequest("DELETE"), context());
@@ -719,6 +787,7 @@ describe("publishing an item with a benefit but no advertising label (ugcportal-
     disclosureFindUniqueMock.mockResolvedValue({
       benefitReceived: true,
       label: null,
+      ...CHECKED_BRAND,
     });
 
     const response = await POST(publishRequest("POST"), context());
@@ -738,12 +807,165 @@ describe("publishing an item with a benefit but no advertising label (ugcportal-
     disclosureFindUniqueMock.mockResolvedValue({
       benefitReceived: true,
       label: null,
+      ...CHECKED_BRAND,
     });
 
     const response = await POST(publishRequest("POST"), context());
 
     expect((await response.json()).field).toBe("altText");
     expect(disclosureFindUniqueMock).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * ugcportal-qnq9.3 K6: no commercial affordance is ever served on an image
+ * that shows alcohol, or from a brand that also sells it.
+ *
+ * Publishing is where that is enforced, because every public surface — the
+ * gallery tile, the lightbox, the item page, the public feed, and the
+ * advertising label all four of them render (ugcportal-e0jv) — is downstream
+ * of `publishedAt`. alkoholloven § 9-2, administratively finable since 13
+ * September 2024.
+ *
+ * Every case here declares a benefit, which is the whole scope of the rule:
+ * an honest photograph of a glass of wine is personal content and publishes
+ * normally (the last two cases).
+ */
+describe("publishing an advertisement that shows alcohol (ugcportal-qnq9.3 K6)", () => {
+  function declaresBenefit(brand: { alcoholLinked: boolean | null } | null) {
+    disclosureFindUniqueMock.mockResolvedValue({
+      benefitReceived: true,
+      label: "Advertisement / Reklame",
+      benefitSource: brand,
+    });
+  }
+
+  it.each([
+    ["recorded as showing alcohol", true],
+    ["never triaged for alcohol at all", null],
+  ])("refuses an advertisement %s", async (_name, depictsAlcohol) => {
+    // BOTH refusing states, and the `null` one is the half a `=== true` gate
+    // would miss: §3.1a's standard is what the picture looks like, and
+    // "nobody asked" is not an answer to that.
+    signedInAs(OWNER_ID);
+    mediaFindUniqueMock.mockResolvedValue(unpublishedMedia);
+    declaresBenefit({ alcoholLinked: false });
+    listingFindUniqueMock.mockResolvedValue(
+      depictsAlcohol === null ? null : { depictsAlcohol },
+    );
+
+    const response = await POST(publishRequest("POST"), context());
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body.field).toBe("depictsAlcohol");
+    expect(body.error).toMatch(/alkoholloven/);
+    // Nothing was written, so the item is still private.
+    expect(mediaUpdateManyMock).not.toHaveBeenCalled();
+    expectNoOtherWrites();
+  });
+
+  it("refuses an advertisement from a brand that sells alcohol", async () => {
+    // K4 at the publish gate: a refusal about the COMPANY, with the picture
+    // itself answered clean, so this case cannot pass for the previous one's
+    // reason.
+    signedInAs(OWNER_ID);
+    mediaFindUniqueMock.mockResolvedValue(unpublishedMedia);
+    declaresBenefit({ alcoholLinked: true });
+    listingFindUniqueMock.mockResolvedValue(TRIAGED_ALCOHOL_FREE);
+
+    const response = await POST(publishRequest("POST"), context());
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body.field).toBe("benefitSource");
+    expect(body.error).toMatch(/produces, imports or sells alcohol/);
+    expect(mediaUpdateManyMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["answered by nobody", { alcoholLinked: null }],
+    ["absent from the row entirely", null],
+  ])("refuses an advertisement from a brand %s", async (_name, brand) => {
+    // "An unasked question never passes as a no" (K4), at the publish gate
+    // and in both of the shapes "unasked" actually arrives in: a brand row
+    // with a null answer, and a disclosure whose brand pointer is null.
+    signedInAs(OWNER_ID);
+    mediaFindUniqueMock.mockResolvedValue(unpublishedMedia);
+    declaresBenefit(brand);
+    listingFindUniqueMock.mockResolvedValue(TRIAGED_ALCOHOL_FREE);
+
+    const response = await POST(publishRequest("POST"), context());
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body.field).toBe("benefitSource");
+    expect(body.error).toMatch(/Nobody has recorded/);
+    expect(mediaUpdateManyMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses even an ALREADY-published advertisement", async () => {
+    // The same choice the advertising-label gate makes and the alt-text gate
+    // does not: a published row in this state was written outside this API
+    // and IS the breach, so answering 200 because it already happens to be
+    // public is the wrong answer.
+    signedInAs(OWNER_ID);
+    mediaFindUniqueMock.mockResolvedValue(publishedMedia);
+    mediaFindFirstMock.mockResolvedValue(toOwnerShape(publishedMedia));
+    declaresBenefit({ alcoholLinked: false });
+    listingFindUniqueMock.mockResolvedValue({ depictsAlcohol: true });
+
+    const response = await POST(publishRequest("POST"), context());
+
+    expect(response.status).toBe(400);
+    expect((await response.json()).field).toBe("depictsAlcohol");
+    expect(mediaUpdateManyMock).not.toHaveBeenCalled();
+  });
+
+  it("does not block unpublishing one", async () => {
+    // Taking an unlawful advertisement down is the remedy, so this gate must
+    // never stand in DELETE's way — the same rule the label gate follows.
+    signedInAs(OWNER_ID);
+    mediaFindUniqueMock.mockResolvedValue(publishedMedia);
+    declaresBenefit({ alcoholLinked: true });
+    listingFindUniqueMock.mockResolvedValue({ depictsAlcohol: true });
+
+    const response = await DELETE(publishRequest("DELETE"), context());
+
+    expect(response.status).toBe(200);
+    expect((await response.json()).publishedAt).toBeNull();
+    expect(listingFindUniqueMock).not.toHaveBeenCalled();
+  });
+
+  it("publishes the empty glass, which is K1", async () => {
+    // The accessory: a wine accessory answered `yes`, the drink answered
+    // `no`, a checked brand, a permitted label — and it goes public. This is
+    // the case the bead was rewritten to make true, and without it every
+    // refusal above would also hold for a gate wired to refuse everything.
+    signedInAs(OWNER_ID);
+    mediaFindUniqueMock.mockResolvedValue(unpublishedMedia);
+    declaresBenefit({ alcoholLinked: false });
+    listingFindUniqueMock.mockResolvedValue(TRIAGED_ALCOHOL_FREE);
+
+    const response = await POST(publishRequest("POST"), context());
+
+    expect(response.status).toBe(200);
+    expect(writtenPayloads()).toEqual([{ publishedAt: expect.any(Date) }]);
+  });
+
+  it("publishes an untriaged photograph that declares no benefit", async () => {
+    // The scope limit, stated as its own case: § 9-2 is about ADVERTISING.
+    // Personal content showing a glass of wine is publishable, and an item
+    // nobody has triaged is publishable, as long as no benefit is recorded —
+    // which is also every item that existed before this bead.
+    signedInAs(OWNER_ID);
+    mediaFindUniqueMock.mockResolvedValue(unpublishedMedia);
+    disclosureFindUniqueMock.mockResolvedValue(null);
+    listingFindUniqueMock.mockResolvedValue({ depictsAlcohol: true });
+
+    const response = await POST(publishRequest("POST"), context());
+
+    expect(response.status).toBe(200);
   });
 });
 

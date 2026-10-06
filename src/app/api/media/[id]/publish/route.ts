@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { advertisingLabelPublishRefusal } from "@/lib/advertising-disclosure";
+import { commercialPublishRefusal } from "@/lib/alcohol-commerce";
 import {
   MEDIA_OWNER_SELECT,
   requireOwnedMedia,
@@ -149,11 +150,67 @@ export async function POST(_request: Request, { params }: RouteContext) {
   // answer to give.
   const disclosure = await prisma.mediaAdvertisingDisclosure.findUnique({
     where: { mediaId: id },
-    select: { benefitReceived: true, label: true },
+    select: {
+      benefitReceived: true,
+      label: true,
+      // The brand's alcohol answer, for the second refusal below. Nested on
+      // the same read rather than fetched separately: it is one join on a
+      // query this branch already makes, and the alternative is a second
+      // round trip on the same rare, deliberate act.
+      benefitSource: { select: { alcoholLinked: true } },
+    },
   });
   const refusal = advertisingLabelPublishRefusal(disclosure);
   if (refusal) {
     return NextResponse.json(refusal, { status: 400 });
+  }
+
+  // AND NO ADVERTISEMENT MAY SHOW ALCOHOL, OR COME FROM A BRAND THAT SELLS IT
+  // (ugcportal-qnq9.3 K6). alkoholloven § 9-2 bans alcohol from appearing in
+  // advertising for other products, and §3.1a reads the ban as covering
+  // products that share a brand or trademark with an alcoholic drink; the
+  // breach has been administratively finable since 13 September 2024.
+  //
+  // A SECOND REFUSAL RATHER THAN A WIDER FIRST ONE. The two gates answer
+  // different questions about the same row — "is this advertisement
+  // labelled" and "may this advertisement exist at all" — and they come from
+  // different beads, different regulators and different statutes. Folding
+  // them together would produce one function whose message had to cover both,
+  // on a page where the message is the only instruction the operator gets.
+  //
+  // PUBLISHING IS THE CHOKEPOINT, which is why this lives here and not on the
+  // price route. Every public surface — the gallery tile, the lightbox, the
+  // item page, the public feed, and the advertising label all four of them
+  // render (ugcportal-e0jv) — is downstream of `publishedAt`, so an item
+  // refused here reaches none of them. A price on an unpublished row is not
+  // an offer to anybody.
+  //
+  // NOT GATED ON `publishedAt === null`, for the reason the paragraph above
+  // the alt-text check gives at length: a published row that fails this was
+  // written outside this API and IS in breach, and answering 200 to "publish
+  // this alcohol advertisement" because it already happens to be public is
+  // the wrong answer to give.
+  //
+  // THE LISTING IS READ HERE AND NOT THROUGH `requireOwnedMedia`, the same
+  // trade the disclosure read above makes: the triage answer is of no use to
+  // PATCH, DELETE or tags, and a join on the shared gate would make all of
+  // them pay for it.
+  //
+  // READ UNCONDITIONALLY, although `commercialPublishRefusal` answers null
+  // for every item that records no benefit and the lookup is then wasted. The
+  // version that skipped it behind `disclosure?.benefitReceived === true` was
+  // a second reading of the field the gate itself reads, in a module that
+  // could not see it — and the direction that mistake fails in is the gate
+  // never running at all. One indexed lookup by a unique key, on a rare and
+  // deliberate act, is the cheaper side of that trade; the predicate lives in
+  // exactly one place.
+  const listing = await prisma.mediaListing.findUnique({
+    where: { mediaId: id },
+    select: { depictsAlcohol: true },
+  });
+  const alcoholRefusal = commercialPublishRefusal({ disclosure, listing });
+  if (alcoholRefusal) {
+    return NextResponse.json(alcoholRefusal, { status: 400 });
   }
 
   // Two different problems hide behind "this row has no usable preview", and

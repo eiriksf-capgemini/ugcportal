@@ -7,17 +7,38 @@
  */
 export const SITE_NAME = "UGC Portal";
 
+/**
+ * The public meta description (src/app/layout.tsx), and the one string on
+ * this site that a search engine quotes verbatim (also src/app/llms.txt).
+ *
+ * REWORDED FROM "Food, wine and drink, technology and books, photographed."
+ * under ugcportal-qnq9.3 K5. That sentence promoted the DRINK on a site that
+ * will take money, which is what alkoholloven § 9-2 forbids: alcohol must not
+ * appear in advertising for other products, and a meta description is the
+ * site's own advertisement for itself. The subject this site actually chose
+ * is the ACCESSORY — empty glasses, coolers, wine-tool apps
+ * (docs/ugc-research.md Decisions table, §3.1a) — so the copy now names that
+ * instead.
+ *
+ * "wine accessories", NOT "wine", and the two words are not interchangeable
+ * here: the shorter one reads as the drink in exactly the context the ban is
+ * about. SITE_TAGLINE below already made this choice and says so; this string
+ * is the one that had not caught up. src/lib/site.alcohol-copy.test.ts holds
+ * both of them, and the about copy, to the same denylist.
+ */
 export const SITE_DESCRIPTION =
-  "Food, wine and drink, technology and books, photographed.";
+  "Food, wine accessories, technology and books, photographed.";
 
 /**
  * The header's one-sentence tagline (ugcportal-14k9).
  *
  * Deliberately not SITE_DESCRIPTION itself, and deliberately not reusing its
- * wording: SITE_DESCRIPTION still says "wine and drink", which is
- * ugcportal-qnq9.3's reword to make (that bead owns the public meta
- * description, landing concurrently with this one). This string is written
- * fresh, naming the same four subjects, under ugcportal-qnq9.3 K5's framing
+ * wording — the gallery heading would otherwise repeat the header's own
+ * sentence, which is the duplication ugcportal-14k9 round 2 found. When this
+ * was written SITE_DESCRIPTION still said "wine and drink"; qnq9.3 K5 has
+ * since reworded it, so the two now agree on the SUBJECT while remaining two
+ * different sentences. This string is written fresh, naming the same four
+ * subjects, under ugcportal-qnq9.3 K5's framing
  * for the wine angle this site has actually chosen — empty glasses, coolers,
  * wine-tool apps — which is an ACCESSORY, not the drink alkoholloven § 9-2
  * bans from appearing in anything commercial. "Wine accessories", not "wine"
