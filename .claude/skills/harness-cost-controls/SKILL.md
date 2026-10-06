@@ -282,7 +282,11 @@ current result, not a replacement for it.
 globally, 2026-09-29) **through 2026-10-06** (the day this was run) — the
 same two commands as above, self-test run first per § 5 (`python3 -m
 unittest test_usage_indicators -v` from the `scripts/` directory: 35 tests,
-all passing):
+all passing); this starts one day later than `ugcportal-0xw`'s own K1 and
+notes ("a measurement window starting 2026-09-29") to exclude the partial
+pre-fix day `2tc` landed on, and a one-off re-run with `--since 2026-09-29`
+(all-projects) gives an Opus request share of 13.6% against the 13.4% the
+09-30 window reports below — not materially different:
 
 ```bash
 python3 .claude/skills/harness-cost-controls/scripts/usage_indicators.py --since 2026-09-30
@@ -300,9 +304,13 @@ this section reports, because it never received the fix.
 Anomalies ledger (both runs, banner printed in full, no key hidden):
 `files_unreadable` 0, `lines_json_error` 0, `lines_not_assistant_with_usage`
 0, `lines_usage_not_dict` 0, `lines_missing_id` 0, `lines_missing_timestamp`
-0, `unpriced_models` `{}` on the filtered rows on both runs. Three keys are
-non-zero, and each is expected given what it counts (per the banner's own
-"whole matched glob, not limited to `--since`/`--project`" caveat):
+0, `unpriced_models` `{}` on the filtered rows on both runs. The filter
+counters plus three whole-glob keys are non-zero: `rows_since_filtered`
+18,934 (both runs) and `rows_project_filtered` 2,621 (project-scoped run
+only) are exactly what `--since`/`--project` filtered out, and the
+following three whole-glob keys are each expected given what it counts (per
+the banner's own "whole matched glob, not limited to `--since`/`--project`"
+caveat):
 `lines_no_usage_substring` (233,288 all-projects / 233,350 project-scoped —
 non-assistant lines with no usage field, not dropped priceable data);
 `lines_dedup_superseded` (30,489 / 30,493 — the max-output-tokens dedup from
