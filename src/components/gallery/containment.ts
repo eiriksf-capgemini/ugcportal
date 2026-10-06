@@ -64,6 +64,27 @@ export const GALLERY_GRID_CLASS =
 export const GALLERY_TILE_ASPECT_CLASS = "aspect-square";
 
 /**
+ * The one radius token every rounded shape anchored to a gallery tile
+ * shares — `rounded-lg` (`--radius-lg`, 10px, the same figure
+ * docs/design/tokens.css names for `--radius-card`), named once so
+ * `GALLERY_TILE_BASE_CLASS` below and `GALLERY_ADVERTISING_LABEL_CLASS`
+ * (the disclosure badge rendered as the tile's own sibling, immediately
+ * before it) derive from the SAME token rather than two independently
+ * hand-typed `rounded-lg` literals.
+ *
+ * THIS IS THE BUG ugcportal-o312 FIXES: before this constant existed,
+ * `GALLERY_ADVERTISING_LABEL_CLASS` hand-typed its own `rounded-md`
+ * literal, with a comment claiming it matched the tile's radius. PR #122
+ * (ugcportal-qqnt.2) moved the tile from `rounded-md` to `rounded-lg` and
+ * updated only the one literal it touched, leaving the label's copy — and
+ * its now-false comment — behind. containment.radius-parity.test.ts
+ * asserts both constants below resolve to this exact token so that kind of
+ * silent drift fails a test instead of shipping a labelled tile with two
+ * different corner radii on adjacent elements.
+ */
+export const GALLERY_RADIUS_CLASS = "rounded-lg";
+
+/**
  * The shape and mat every tile shares, whether or not it is interactive.
  * The aspect class above fixes the shape, `overflow-hidden` is what makes
  * the crop a crop, and `bg-surface-1` is the mat visible while the image
@@ -80,15 +101,14 @@ export const GALLERY_TILE_ASPECT_CLASS = "aspect-square";
  * none of `GALLERY_TILE_CLASS`'s `group`/`cursor-zoom-in`/focus-ring
  * classes below).
  *
- * `rounded-lg`, not `rounded-md` (ugcportal-qqnt.2): the one radius token
- * the button system now shares (src/components/ui/button.tsx's own header
- * comment, point 6) is `--radius-lg` at 10px, the same figure
- * docs/design/tokens.css names for `--radius-card` — so a tile and a
- * button on the same public page now round by the same amount, rather than
- * the tile's own smaller `rounded-md` (8px) reading as a third, unrelated
- * shape beside them.
+ * `GALLERY_RADIUS_CLASS` (`rounded-lg`), not `rounded-md` (ugcportal-qqnt.2):
+ * the one radius token the button system now shares
+ * (src/components/ui/button.tsx's own header comment, point 6) is
+ * `--radius-lg` at 10px — so a tile and a button on the same public page
+ * now round by the same amount, rather than the tile's own smaller
+ * `rounded-md` (8px) reading as a third, unrelated shape beside them.
  */
-export const GALLERY_TILE_BASE_CLASS = `relative block w-full overflow-hidden rounded-lg bg-surface-1 ${GALLERY_TILE_ASPECT_CLASS}`;
+export const GALLERY_TILE_BASE_CLASS = `relative block w-full overflow-hidden ${GALLERY_RADIUS_CLASS} bg-surface-1 ${GALLERY_TILE_ASPECT_CLASS}`;
 
 /**
  * One INTERACTIVE tile (gallery.tsx's own `<button>`, which opens the
@@ -330,17 +350,20 @@ export const GALLERY_CAPTION_CLASS =
  * to flag because nothing here triggers under `hover:`/`group-hover:`/
  * `active:`/`focus:` at all.
  *
- * `rounded-md`, matching this file's own tile radius (`GALLERY_TILE_ASPECT_
- * CLASS`'s sibling, `GALLERY_TILE_BASE_CLASS`) rather than a pill
- * (`rounded-full`): a pill reads as a filter/category chip in this design
- * system's own vocabulary (see docs/design — tag chips elsewhere are
- * rounded-full-free already), and a disclosure label is not a category.
+ * `GALLERY_RADIUS_CLASS` (`rounded-lg`), matching this file's own tile
+ * radius (`GALLERY_TILE_BASE_CLASS`, both deriving from that one shared
+ * constant above so they cannot drift apart again the way this exact pair
+ * did under ugcportal-qqnt.2 — see `GALLERY_RADIUS_CLASS`'s own comment)
+ * rather than a pill (`rounded-full`): a pill reads as a filter/category
+ * chip in this design system's own vocabulary (see docs/design — tag chips
+ * elsewhere are rounded-full-free already), and a disclosure label is not
+ * a category.
  * `w-fit` so the fill hugs the text rather than stretching to the tile's
  * own width, the same reason an inline badge anywhere else in this app
  * never spans its container.
  */
 export const GALLERY_ADVERTISING_LABEL_CLASS =
-  "mb-1.5 inline-flex w-fit items-center rounded-md bg-primary px-2 py-0.5 text-xs font-semibold tracking-wide text-primary-foreground uppercase";
+  `mb-1.5 inline-flex w-fit items-center ${GALLERY_RADIUS_CLASS} bg-primary px-2 py-0.5 text-xs font-semibold tracking-wide text-primary-foreground uppercase`;
 
 /**
  * SUBJECT TAGS (ugcportal-jsc), and the three decisions behind where they sit.
