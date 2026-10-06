@@ -21,6 +21,15 @@
  * Each fixture is shaped like a real finding from the v0.5.0 review rounds
  * (docs/process/review-rounds-v0.5.0.md, Part 1) or from this PR's own
  * review rounds, named in the test title.
+ *
+ * PR body mode (ugcportal-bn94) gets its own describe blocks below: pure
+ * fixtures for auditBodyText/findQuotedSpans/tokenStillInDiff/
+ * extractBodyLines against literal body/diff strings (no `gh` involved --
+ * the same "pure function, literal fixture" shape
+ * scripts/sweep-merged-branches.test.mjs uses for its own `gh`-adjacent
+ * parsing), and one real-git-repo describe block proving `--body` reads
+ * stdin and diffs the local working tree, and that its printed counts are
+ * never summed with file mode's (K2).
  */
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -31,13 +40,23 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  auditBodyText,
   auditContent,
   classifyClaimLine,
+  classifyDoneVerb,
+  extractBodyLines,
   extractComments,
   extractProseLines,
+  findBacktickRanges,
+  findDoneVerbClassForSpan,
+  findDoneVerbOccurrences,
   findPathReferences,
+  findQuotedSpans,
+  findSentenceContaining,
   parseArgs,
   referenceExists,
+  splitIntoSentences,
+  tokenStillInDiff,
 } from "./claims-audit.mjs";
 import { parseUnifiedDiffAddedLines } from "./lib/git-diff.mjs";
 
@@ -271,6 +290,443 @@ describe("parseArgs", () => {
   });
 });
 
+describe("parseArgs: PR body mode (ugcportal-bn94)", () => {
+  it("recognizes --pr <n> and --pr=<n> the same way", () => {
+    expect(parseArgs(["--pr", "147"])).toEqual({ base: undefined, allLines: false, prNumber: 147 });
+    expect(parseArgs(["--pr=147"])).toEqual({ base: undefined, allLines: false, prNumber: 147 });
+  });
+
+  it("recognizes --body, reading the body from stdin", () => {
+    expect(parseArgs(["--body"])).toEqual({ base: undefined, allLines: false, bodyFromStdin: true });
+  });
+
+  it("names the problem for a missing or non-numeric --pr value, instead of silently falling back to file mode", () => {
+    expect(parseArgs(["--pr"]).error).toMatch(/requires a PR number/);
+    expect(parseArgs(["--pr", "abc"]).error).toMatch(/requires a PR number/);
+    expect(parseArgs(["--pr="]).error).toMatch(/requires a PR number/);
+    expect(parseArgs(["--pr=abc"]).error).toMatch(/requires a PR number/);
+  });
+
+  it("rejects --pr and --body combined -- two body sources is not a silent choice this script makes for you", () => {
+    expect(parseArgs(["--pr", "147", "--body"]).error).toMatch(/mutually exclusive/);
+  });
+
+  it("rejects --all-lines combined with either PR-body source -- a body has no added-lines concept", () => {
+    expect(parseArgs(["--pr", "147", "--all-lines"]).error).toMatch(/does not apply to PR-body mode/);
+    expect(parseArgs(["--body", "--all-lines"]).error).toMatch(/does not apply to PR-body mode/);
+  });
+
+  it("rejects --base combined with --pr -- that PR's diff comes from `gh pr diff`, not a local ref", () => {
+    expect(parseArgs(["--pr", "147", "--base", "origin/main"]).error).toMatch(/does not apply to --pr/);
+  });
+
+  it("allows --base combined with --body -- stdin mode diffs the local working tree against it", () => {
+    expect(parseArgs(["--body", "--base", "origin/main"])).toEqual({ base: "origin/main", allLines: false, bodyFromStdin: true });
+  });
+});
+
+describe("extractBodyLines", () => {
+  it("takes every non-blank line of a PR body, 1-indexed, same granularity as a Markdown file's prose", () => {
+    expect(extractBodyLines("## Summary\n\nFixed the bug.\n")).toEqual([
+      { line: 1, text: "## Summary" },
+      { line: 3, text: "Fixed the bug." },
+    ]);
+  });
+});
+
+describe("findQuotedSpans", () => {
+  it("extracts a double-quoted span and a backtick code span, each once", () => {
+    const text = 'the wrong "24 characters" vs `[ -n "$me" ]`';
+    expect(findQuotedSpans(text)).toEqual(["24 characters", '[ -n "$me" ]']);
+  });
+
+  it("does not pair an ordinary contraction's apostrophes into a false span (no single-quote pattern at all)", () => {
+    expect(findQuotedSpans("isn't related to won't happen")).toEqual([]);
+  });
+
+  it("ignores a lone punctuation mark too short to be a real referenced token", () => {
+    expect(findQuotedSpans('a quoted "-" here')).toEqual([]);
+  });
+});
+
+describe("tokenStillInDiff", () => {
+  const diff = [
+    "diff --git a/a.ts b/a.ts",
+    "--- a/a.ts",
+    "+++ b/a.ts",
+    "@@ -1,2 +1,3 @@",
+    "-const old = 1;",
+    "+const kept = 1; // 24 characters max",
+    " const unchanged = 2;",
+  ].join("\n");
+
+  it("finds a token on an ADDED line (PR #147, 2026-10-06: a 'deleted' number that was not)", () => {
+    expect(tokenStillInDiff("24 characters", diff)).toBe(true);
+  });
+
+  it("finds a token on an unchanged CONTEXT line", () => {
+    expect(tokenStillInDiff("unchanged", diff)).toBe(true);
+  });
+
+  it("does not count a token that only ever appeared on a REMOVED line as still present", () => {
+    expect(tokenStillInDiff("const old", diff)).toBe(false);
+  });
+
+  it("ignores a match against a file-header line (+++ b/path / --- a/path), not real file content", () => {
+    expect(tokenStillInDiff("a.ts", diff)).toBe(false);
+  });
+
+  it("returns false for an empty token rather than matching every line", () => {
+    expect(tokenStillInDiff("", diff)).toBe(false);
+  });
+});
+
+describe("classifyDoneVerb (ugcportal-bn94 round 1 F1/F2) -- first DONE verb BY POSITION, a whole-line summary only", () => {
+  it("classifies every REMOVAL verb, including the three F2 named as missing", () => {
+    expect(classifyDoneVerb("the stale line was deleted")).toBe("removal");
+    expect(classifyDoneVerb("the stale line was removed")).toBe("removal");
+    expect(classifyDoneVerb("the stale line was dropped")).toBe("removal");
+    expect(classifyDoneVerb("struck from the file")).toBe("removal");
+    // F2's own three reproductions, verbatim:
+    expect(classifyDoneVerb("The stale comment is no longer present.")).toBe("removal");
+    expect(classifyDoneVerb("That line is gone now.")).toBe("removal");
+    expect(classifyDoneVerb("The bug was eliminated in this commit.")).toBe("removal");
+  });
+
+  it("classifies every RESTORATION verb", () => {
+    expect(classifyDoneVerb("the guard was restored")).toBe("restoration");
+    expect(classifyDoneVerb("the check was re-added")).toBe("restoration");
+    expect(classifyDoneVerb("the guard was added back")).toBe("restoration");
+    expect(classifyDoneVerb("the guard was kept")).toBe("restoration");
+  });
+
+  it("classifies every NEUTRAL verb -- implies no direction either way", () => {
+    expect(classifyDoneVerb("the bug was fixed")).toBe("neutral");
+    expect(classifyDoneVerb("the figure was corrected")).toBe("neutral");
+  });
+
+  it("returns null for a line with no DONE verb at all", () => {
+    expect(classifyDoneVerb("this PR adds a button")).toBeNull();
+  });
+
+  it("returns whichever verb occurs FIRST, not a fixed category order -- a line with more than one verb is exactly why this whole-line summary is not what decides a span's direction", () => {
+    expect(classifyDoneVerb("Removed, then restored the guard.")).toBe("removal");
+    expect(classifyDoneVerb("Restored, then removed the guard.")).toBe("restoration");
+    expect(classifyDoneVerb("Fixed by removing the guard.")).toBe("neutral");
+    expect(classifyDoneVerb("Removed and fixed the stale check.")).toBe("removal");
+  });
+
+  it("F1's real reproduction: this whole-line summary alone gets PR #142's sentence WRONG ('removal', from 'dropped') -- which is exactly why auditBodyText assigns direction per span, not from this function", () => {
+    // 'dropped' (REMOVAL) occurs before 'Fixed' (NEUTRAL) in this real
+    // sentence, so classifyDoneVerb's first-by-position answer is
+    // "removal" -- if auditBodyText used THIS as the whole line's
+    // direction, $me/$pr_author would be flagged contradicted again,
+    // reproducing F1 exactly. See the auditBodyText fixture below (and
+    // findDoneVerbClassForSpan's own tests) for the per-span mechanism
+    // that gets this sentence's actual spans right regardless.
+    const sentence =
+      '2. **LOW, confirmed — "copied verbatim" was false.** The PR body claimed the new `$me`/`$pr_author` check was copied verbatim from step 4b, but it had dropped the two `[ -n ... ]` empty-string guards. Fixed by restoring both guards (`[ -n "$me" ] || ...` and `[ -n "$pr_author" ] || ...`), so the claim is now true rather than edited to stop making it.';
+    expect(classifyDoneVerb(sentence)).toBe("removal");
+  });
+});
+
+describe("findDoneVerbOccurrences / findDoneVerbClassForSpan (ugcportal-bn94 round 1 F1)", () => {
+  it("finds every verb occurrence across all three classes, sorted by position", () => {
+    const occurrences = findDoneVerbOccurrences("Removed the guard, then restored it, then fixed the caller.");
+    expect(occurrences.map((o) => o.cls)).toEqual(["removal", "restoration", "neutral"]);
+    expect(occurrences[0].index).toBeLessThan(occurrences[1].index);
+    expect(occurrences[1].index).toBeLessThan(occurrences[2].index);
+  });
+
+  it("assigns a span to whichever occurrence is nearest it, not simply the first in the line", () => {
+    const text = "Removed the old guard. Much later, restored a different one.";
+    const occurrences = findDoneVerbOccurrences(text);
+    const earlySpanIndex = text.indexOf("old guard"); // near "Removed"
+    const lateSpanIndex = text.indexOf("different one"); // near "restored"
+    expect(findDoneVerbClassForSpan(occurrences, earlySpanIndex)).toBe("removal");
+    expect(findDoneVerbClassForSpan(occurrences, lateSpanIndex)).toBe("restoration");
+  });
+
+  it("breaks an exact-distance tie toward the earlier occurrence", () => {
+    // Synthetic occurrences, not derived from a real sentence, so the two
+    // distances are exactly equal by construction (|5-0| === |5-10|) rather
+    // than relying on a real string's indexOf arithmetic to land exactly on
+    // a tie.
+    const occurrences = [
+      { index: 0, cls: "removal" },
+      { index: 10, cls: "restoration" },
+    ];
+    expect(findDoneVerbClassForSpan(occurrences, 5)).toBe("removal");
+  });
+
+  it("returns null for no occurrences", () => {
+    expect(findDoneVerbClassForSpan([], 5)).toBeNull();
+  });
+});
+
+describe("splitIntoSentences / findBacktickRanges / findSentenceContaining (ugcportal-bn94 round 2)", () => {
+  it("splits on period/semicolon/question/exclamation + space + uppercase, backtick or quote", () => {
+    const sentences = splitIntoSentences("First sentence. Second one! Third? `Fourth` one; \"Fifth\" one.");
+    expect(sentences.map((s) => s.text.trim())).toEqual(["First sentence.", "Second one!", "Third?", "`Fourth` one;", '"Fifth" one.']);
+  });
+
+  it("does not split a numbered-list marker followed by markdown bold ('2. **LOW')", () => {
+    // "*" is in none of the three lookahead categories (uppercase letter,
+    // backtick, quote) -- a bare numbered-list marker must not be read as
+    // two sentences.
+    const sentences = splitIntoSentences("2. **LOW, confirmed** — true. The next part.");
+    expect(sentences).toHaveLength(2);
+    expect(sentences[0].text).toBe("2. **LOW, confirmed** — true. ");
+    expect(sentences[1].text).toBe("The next part.");
+  });
+
+  it("reassembles the original string exactly via start/end offsets", () => {
+    const text = 'First. `code.Here` is fine. "Quoted." Last one';
+    const sentences = splitIntoSentences(text);
+    expect(sentences.map((s) => text.slice(s.start, s.end)).join("")).toBe(text);
+  });
+
+  it("returns one sentence spanning the whole input when no boundary is found", () => {
+    expect(splitIntoSentences("no sentence boundary here at all")).toEqual([
+      { start: 0, end: 32, text: "no sentence boundary here at all" },
+    ]);
+  });
+
+  it("findBacktickRanges pairs backticks and ignores an unpaired trailing one", () => {
+    expect(findBacktickRanges("a `b` c `d` e")).toEqual([
+      [2, 4],
+      [8, 10],
+    ]);
+    expect(findBacktickRanges("a `unpaired")).toEqual([]);
+  });
+
+  it("does NOT split on a sentence-boundary-shaped period INSIDE a backtick span (round 2's own requirement)", () => {
+    // "a. B" inside the backticks looks exactly like a real boundary (period,
+    // space, uppercase) -- it must not split there; the genuine boundary
+    // after "same." (outside any backtick span) must still split.
+    const text = "The constant `a. B` stays the same. It was not touched.";
+    const sentences = splitIntoSentences(text);
+    expect(sentences).toHaveLength(2);
+    expect(sentences[0].text).toBe("The constant `a. B` stays the same. ");
+    expect(sentences[1].text).toBe("It was not touched.");
+  });
+
+  it("findSentenceContaining maps an index back to the sentence it falls in", () => {
+    const text = "First one. Second one.";
+    const sentences = splitIntoSentences(text);
+    expect(findSentenceContaining(sentences, text.indexOf("First"))).toBe(sentences[0]);
+    expect(findSentenceContaining(sentences, text.indexOf("Second"))).toBe(sentences[1]);
+  });
+});
+
+describe("auditBodyText (ugcportal-bn94)", () => {
+  const NO_DONE = { doneClaimStillPresent: [], doneClaimStillAbsent: [], doneClaimToVerify: [] };
+
+  it("K1: reports a PR body's test count as a MEASUREMENT candidate with its line", () => {
+    const body = "## Pre-review\n\n1. Gates: vitest 165 files / 3520 tests, all green.\n";
+    expect(auditBodyText(body)).toEqual([
+      {
+        line: 3,
+        text: "1. Gates: vitest 165 files / 3520 tests, all green.",
+        categories: ["MEASUREMENT"],
+        missingReferences: [],
+        ...NO_DONE,
+      },
+    ]);
+  });
+
+  it("REMOVAL: flags a DONE claim and confirms it against the diff (PR #147, 2026-10-06: a 'deleted' number that was still on an added line)", () => {
+    const body = 'Eight fixed: one MEASUREMENT deleted (the wrong "24 characters"); five ABSOLUTEs weakened.\n';
+    const diffText = ["diff --git a/x.ts b/x.ts", "--- a/x.ts", "+++ b/x.ts", "@@ -1 +1 @@", "+ * a label of at most 24 characters."].join("\n");
+    expect(auditBodyText(body, { diffText })).toEqual([
+      {
+        line: 1,
+        text: 'Eight fixed: one MEASUREMENT deleted (the wrong "24 characters"); five ABSOLUTEs weakened.',
+        categories: ["DONE"],
+        missingReferences: [],
+        doneClaimStillPresent: ["24 characters"],
+        doneClaimStillAbsent: [],
+        doneClaimToVerify: [],
+      },
+    ]);
+  });
+
+  it("RESTORATION: a span ABSENT from the diff contradicts a 'restored' claim (the opposite direction from REMOVAL)", () => {
+    const body = 'Restored the guard, which is now `[ -n "$me" ]` again.\n';
+    const diffTextMissing = ["diff --git a/x.sh b/x.sh", "--- a/x.sh", "+++ b/x.sh", "@@ -1 +1 @@", "+something else entirely"].join("\n");
+    const out = auditBodyText(body, { diffText: diffTextMissing });
+    expect(out).toEqual([
+      {
+        line: 1,
+        text: 'Restored the guard, which is now `[ -n "$me" ]` again.',
+        categories: ["DONE"],
+        missingReferences: [],
+        doneClaimStillPresent: [],
+        doneClaimStillAbsent: ['[ -n "$me" ]'],
+        doneClaimToVerify: [],
+      },
+    ]);
+  });
+
+  it("RESTORATION: the same claim is NOT contradicted when the span really is back in the diff", () => {
+    const body = 'Restored the guard, which is now `[ -n "$me" ]` again.\n';
+    const diffTextPresent = ["diff --git a/x.sh b/x.sh", "--- a/x.sh", "+++ b/x.sh", "@@ -1 +1 @@", '+[ -n "$me" ] || exit 1'].join("\n");
+    const out = auditBodyText(body, { diffText: diffTextPresent });
+    expect(out[0].doneClaimStillAbsent).toEqual([]);
+    expect(out[0].categories).toEqual(["DONE"]);
+  });
+
+  it("NEUTRAL (simplified fixture): 'fixed'/'corrected' spans are listed to verify, never scored as contradicted in either direction", () => {
+    const body = "Fixed by restoring both guards (`$me`/`$pr_author` empty-string guards).\n";
+    // No diffText at all -- NEUTRAL doesn't need one, unlike REMOVAL/RESTORATION.
+    const out = auditBodyText(body);
+    expect(out).toEqual([
+      {
+        line: 1,
+        text: "Fixed by restoring both guards (`$me`/`$pr_author` empty-string guards).",
+        categories: ["DONE"],
+        missingReferences: [],
+        doneClaimStillPresent: [],
+        doneClaimStillAbsent: [],
+        doneClaimToVerify: ["$me", "$pr_author"],
+      },
+    ]);
+  });
+
+  it("NEUTRAL: still never scored even when diffText IS available and would otherwise 'contradict' it", () => {
+    // Same sentence as above, but now with a diff that does NOT contain
+    // $me/$pr_author at all -- a REMOVAL or RESTORATION read would call
+    // this a contradiction one way or the other; NEUTRAL must not.
+    const body = "Fixed by restoring both guards (`$me`/`$pr_author` empty-string guards).\n";
+    const diffText = ["diff --git a/x.sh b/x.sh", "--- a/x.sh", "+++ b/x.sh", "@@ -1 +1 @@", "+unrelated line"].join("\n");
+    const out = auditBodyText(body, { diffText });
+    expect(out[0].doneClaimStillPresent).toEqual([]);
+    expect(out[0].doneClaimStillAbsent).toEqual([]);
+    expect(out[0].doneClaimToVerify).toEqual(["$me", "$pr_author"]);
+  });
+
+  it("F1 reproduction, PR #142's own body sentence verbatim: the spans next to 'Fixed by restoring' are never flagged contradicted, even though the line also contains 'dropped' (REMOVAL)", () => {
+    // This exact sentence, with this exact diff shape (the guards present
+    // on an added line, i.e. correctly restored), is what round 1's F1
+    // reproduced: the old design reported `DONE contradicted, still in
+    // diff: "$me"` and `"$pr_author"` -- backwards, since restoring them
+    // was the whole point of the sentence. It no longer does, because each
+    // span is now assigned to its NEAREST verb occurrence rather than one
+    // verdict for the whole line (see findDoneVerbClassForSpan): the two
+    // short `$me`/`$pr_author` mentions and the two long bracket-expression
+    // spans all sit nearest "Fixed" (NEUTRAL, at the end of the line), so
+    // none of the four is scored -- while "copied verbatim" and the
+    // generic `[ -n ... ]` placeholder, both nearest "dropped" (REMOVAL),
+    // are checked in that direction and happen not to appear in this
+    // diffText either way, so they produce no output at all.
+    const sentence =
+      '2. **LOW, confirmed — "copied verbatim" was false.** The PR body claimed the new `$me`/`$pr_author` check was copied verbatim from step 4b, but it had dropped the two `[ -n ... ]` empty-string guards. Fixed by restoring both guards (`[ -n "$me" ] || ...` and `[ -n "$pr_author" ] || ...`), so the claim is now true rather than edited to stop making it.\n';
+    const diffText = [
+      "diff --git a/skill.sh b/skill.sh",
+      "--- a/skill.sh",
+      "+++ b/skill.sh",
+      "@@ -1,2 +1,2 @@",
+      '+[ -n "$me" ] || { echo "missing me"; exit 1; }',
+      '+[ -n "$pr_author" ] || { echo "missing pr_author"; exit 1; }',
+    ].join("\n");
+    const out = auditBodyText(sentence, { diffText });
+    expect(out).toHaveLength(1);
+    expect(out[0].categories).toEqual(["DONE"]);
+    expect(out[0].doneClaimStillPresent).toEqual([]);
+    expect(out[0].doneClaimStillAbsent).toEqual([]);
+    expect(out[0].doneClaimToVerify).toEqual(["$me", "$pr_author", '[ -n "$me" ] || ...', '[ -n "$pr_author" ] || ...']);
+  });
+
+  it("REMOVAL/RESTORATION: no contradiction check when no diff is available at all -- still flagged DONE for a human", () => {
+    expect(auditBodyText("The check was removed.\n")).toEqual([
+      { line: 1, text: "The check was removed.", categories: ["DONE"], missingReferences: [], ...NO_DONE },
+    ]);
+    expect(auditBodyText("The check was restored.\n")).toEqual([
+      { line: 1, text: "The check was restored.", categories: ["DONE"], missingReferences: [], ...NO_DONE },
+    ]);
+  });
+
+  it("REMOVAL/RESTORATION with a quoted span but STILL no diffText: the span itself is not scored OR listed (unlike NEUTRAL, which lists regardless)", () => {
+    // Deliberately exercises the `else if (diffText)` branch with a real
+    // span present -- the two fixtures just above have no quoted span at
+    // all, so they could not have caught a mutation that scored a span
+    // without a diff to check it against.
+    expect(auditBodyText('The check `[ -n "$me" ]` was removed.\n')).toEqual([
+      { line: 1, text: 'The check `[ -n "$me" ]` was removed.', categories: ["DONE"], missingReferences: [], ...NO_DONE },
+    ]);
+    expect(auditBodyText('The check `[ -n "$me" ]` was restored.\n')).toEqual([
+      { line: 1, text: 'The check `[ -n "$me" ]` was restored.', categories: ["DONE"], missingReferences: [], ...NO_DONE },
+    ]);
+  });
+
+  it("flags 'both X corrected' and 'all N corrected' as DONE -- the verb alone matches, no separate aggregate pattern needed", () => {
+    expect(auditBodyText("Both issues corrected.\n").map((c) => c.categories)).toEqual([["DONE"]]);
+    expect(auditBodyText("All three findings corrected.\n").map((c) => c.categories)).toEqual([["DONE"]]);
+  });
+
+  it("is silent for an ordinary sentence with no claim, no reference and no done verb", () => {
+    expect(auditBodyText("This PR adds a button to the gallery footer.\n")).toEqual([]);
+  });
+
+  it("names a file the body points at that does not exist in the tree, same REFERENCE semantics as a comment", () => {
+    const out = auditBodyText("See configured-users.ts for details.\n", { existingFiles: ["src/lib/routes.ts"] });
+    expect(out).toEqual([
+      {
+        line: 1,
+        text: "See configured-users.ts for details.",
+        categories: [],
+        missingReferences: ["configured-users.ts"],
+        ...NO_DONE,
+      },
+    ]);
+  });
+
+  it("K2: body-mode candidates are a wholly separate list from file-mode's, never unioned (a clean diff, a dirty body)", () => {
+    const fileModeCandidates = auditContent("const a = 1;\n", "a.ts", new Set([1]), { existingFiles: [] });
+    const bodyModeCandidates = auditBodyText("This never fails on any path.\n");
+    // auditBodyText's signature takes no file-mode candidates as input, and
+    // auditContent's takes no body text -- there is no shared accumulator
+    // either could write into, so the two counts below cannot be summed by
+    // accident; main()'s two printed banners (see the --body end-to-end
+    // test below) keep that same separation all the way to stdout.
+    expect(fileModeCandidates).toEqual([]);
+    expect(bodyModeCandidates).toHaveLength(1);
+  });
+
+  it("round 2 finding, reproduced verbatim against PR #147's own body: a multi-sentence paragraph's two unrelated earlier spans are not misattributed to a late 'restored' in a different sentence", () => {
+    // This exact paragraph is PR #147 round 2's own body text (one physical
+    // Markdown line, three sentences). Its only DONE verb ("restored") is
+    // in sentence 3, about `expect(result.ok).toBe(false)`; sentences 1 and
+    // 2 have no DONE verb at all, so `validateAdvertisingLabel(...)` and
+    // "only the term match does" -- both in sentence 2 -- must not be
+    // scored in any direction. Before this fix, whole-line nearest-by-
+    // position assigned both to "restored" (nothing closer to compare
+    // against in the whole paragraph) and reported them `DONE contradicted,
+    // absent from diff` -- neither sentence was making a restoration claim.
+    const paragraph =
+      'The round-2 finding was right, including that the sentence argued against the assertion it was attached to. Measured at the previous head: `validateAdvertisingLabel("Reklame (foo)")` is `ok === false` with the **generic** message and **no** forbidden marker, so the allowlist does refuse the padded form, and "only the term match does" was false. The claim also contradicted the helper header 20 lines above and would have justified reverting the 13 padded rows to `expect(result.ok).toBe(false)` — the round-1 defect, restored on the authority of a comment added to fix it.';
+    // The diff genuinely contains the one span sentence 3 actually governs
+    // (restored, so present is correct) -- this fixture's point is the two
+    // EARLIER spans, not this one, so it is given a diff that resolves
+    // cleanly rather than one engineered to also test the RESTORATION
+    // direction again (that's covered by the dedicated fixture above).
+    const diffText = [
+      "diff --git a/x.test.ts b/x.test.ts",
+      "--- a/x.test.ts",
+      "+++ b/x.test.ts",
+      "@@ -1 +1 @@",
+      "+  expect(result.ok).toBe(false);",
+    ].join("\n");
+    const out = auditBodyText(paragraph, { diffText });
+    expect(out).toHaveLength(1);
+    expect(out[0].categories).toContain("DONE");
+    // The requirement, verbatim: zero contradicted hits.
+    expect(out[0].doneClaimStillPresent).toEqual([]);
+    expect(out[0].doneClaimStillAbsent).toEqual([]);
+    expect(out[0].doneClaimToVerify).toEqual([]);
+  });
+});
+
 // --- fixture repo: working tree and --base (ugcportal-np1i) --------------
 //
 // Real git repositories in a mkdtemp directory, never the shared checkout
@@ -360,13 +816,17 @@ function makeFixtureRepo() {
   // case round 3's H1 needs, since every other fixture test's `cwd: repo`
   // structurally could not have exposed a cwd-relative-path bug.
   const runScriptFrom = (subdir, args = []) => execFileSync("node", [SCRIPT_PATH, ...args], { cwd: path.join(repo, subdir), env, encoding: "utf8" });
+  // PR body mode's `--body` source (ugcportal-bn94): pipes `stdin` in as the
+  // PR body text, the same way the pre-review skill feeds a draft body in
+  // before `gh pr create` has even run.
+  const runScriptStdin = (args, stdin) => execFileSync("node", [SCRIPT_PATH, ...args], { cwd: repo, env, encoding: "utf8", input: stdin });
 
   git(["init", "--quiet", "--initial-branch=main"]);
   writeFile("README.md", "# fixture\n");
   git(["add", "README.md"]);
   commit("initial commit");
 
-  return { repo, env, git, commit, writeFile, runScript, runScriptFrom };
+  return { repo, env, git, commit, writeFile, runScript, runScriptFrom, runScriptStdin };
 }
 
 afterEach(() => {
@@ -586,5 +1046,54 @@ describe("working tree and --base (ugcportal-np1i)", { timeout: 30_000 }, () => 
     // literally 0) would also fail this assertion, and so would the
     // sibling.ts-reference regression described above.
     expect(fromSubdir).toBe(fromRoot);
+  });
+});
+
+describe("--body end-to-end, real git repo (ugcportal-bn94)", () => {
+  it("audits a body piped on stdin against the local working tree's diff, confirming a DONE claim", () => {
+    const { writeFile, git, commit, runScriptStdin } = makeFixtureRepo();
+    writeFile("x.ts", "const a = 1;\n");
+    git(["add", "x.ts"]);
+    commit("add x.ts");
+    writeFile("x.ts", 'const a = 1;\n// a label of at most 24 characters\nconst b = 2;\n');
+
+    const body = 'Fixed: the stale comment with "24 characters" was deleted.\n';
+    const out = runScriptStdin(["--body"], body);
+
+    expect(out).toContain("--- claims-audit: PR BODY claims (source: stdin)");
+    expect(out).toContain("body candidates found: 1");
+    expect(out).toContain('DONE contradicted, still in diff: "24 characters"');
+  });
+
+  it("K2: --body's counts are printed in their own block, never summed with a separate file-mode run's", () => {
+    const { writeFile, git, commit, runScriptStdin, runScript } = makeFixtureRepo();
+    writeFile("clean.ts", "const a = 1;\n");
+    git(["add", "clean.ts"]);
+    commit("add clean.ts, nothing claim-shaped");
+
+    const fileModeOut = runScript();
+    const bodyModeOut = runScriptStdin(["--body"], "This never fails on any path.\n");
+
+    expect(fileModeOut).toContain("candidates found: 0");
+    expect(bodyModeOut).toContain("body candidates found: 1");
+    // Neither run's output names the other's count: a clean file-mode run
+    // and a dirty body-mode run over the SAME tree produce two independent
+    // banners/numbers, not one run whose single total a dirty body could
+    // hide behind a clean diff (or vice versa).
+    expect(fileModeOut).not.toContain("body candidates found");
+    expect(bodyModeOut).not.toMatch(/^candidates found:/m);
+  });
+
+  it("flags an empty body as an error rather than a silent zero", () => {
+    const { runScriptStdin } = makeFixtureRepo();
+    let error;
+    try {
+      runScriptStdin(["--body"], "\n\n");
+    } catch (err) {
+      error = err;
+    }
+    expect(error).toBeDefined();
+    expect(error.status).not.toBe(0);
+    expect(error.stderr ?? "").toMatch(/empty -- nothing to audit/);
   });
 });
