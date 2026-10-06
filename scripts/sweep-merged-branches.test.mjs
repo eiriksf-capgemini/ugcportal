@@ -1131,6 +1131,36 @@ function readPushLog(logPath) {
   return fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf8") : "";
 }
 
+/**
+ * Same as `installPushLogger` (captures every ref-update line to `logPath`,
+ * same protocol, same "no entry means no push reached this hook" reasoning),
+ * but the pre-receive hook ALSO appends the named env var's value, as seen
+ * by the server-side hook process itself, to a second log file -- direct
+ * evidence of what `deleteRemoteBranch`'s `git push origin --delete`
+ * fallback actually handed its child process via `execFileSync`'s `env`
+ * option (ugcportal-cky9), not an inference from the
+ * parent test process's own env. This only works because a local
+ * filesystem-transport `git push` spawns `git receive-pack` as a plain
+ * child process that inherits the pusher's environment like any other
+ * subprocess -- verified directly (not assumed) while writing this test: a
+ * `pre-receive` hook under `env -i ... MY_TEST_VAR=hello git push` captured
+ * `MY_TEST_VAR=hello`.
+ *
+ * @returns {{logPath: string, envLogPath: string}} `envLogPath` is likewise
+ *   absent until a push reaches the hook.
+ */
+function installPushLoggerCapturingEnv(remoteDir, varName) {
+  const logPath = path.join(remoteDir, "push-log.txt");
+  const envLogPath = path.join(remoteDir, "push-env-log.txt");
+  const hookPath = path.join(remoteDir, "hooks", "pre-receive");
+  fs.writeFileSync(
+    hookPath,
+    `#!/bin/sh\ncat >> ${JSON.stringify(logPath)}\nprintf '%s\\n' "\$${varName}" >> ${JSON.stringify(envLogPath)}\nexit 0\n`,
+  );
+  fs.chmodSync(hookPath, 0o755);
+  return { logPath, envLogPath };
+}
+
 /** Runs the real script as a child process with the isolation `fixtureGitEnv` already applies to plain git calls, plus `dir` prepended to PATH so `gh` resolves to the fake. Never throws on a nonzero exit (the script sets one whenever it keeps a branch) -- callers need both the output AND the status. */
 function runSweepScript({ cwd, fakeGhDir, args }) {
   const env = { ...fixtureGitEnv(), PATH: `${fakeGhDir}${path.delimiter}${process.env.PATH}` };
@@ -1421,10 +1451,20 @@ describe("deleteRemoteBranch: GitHub API primary path, git push fallback (ugcpor
     }
   });
 
-  it("falls back to a real git push --delete when the API call returns a 404 (ugcportal-ix0s: verified live to mean the repo couldn't be resolved, not that the branch is already gone -- an unmatched 404 must fall back like any other unrecognized failure), and that still removes the branch", () => {
+  it("falls back to a real git push --delete when the API call returns a 404 (ugcportal-ix0s: verified live to mean the repo couldn't be resolved, not that the branch is already gone -- an unmatched 404 must fall back like any other unrecognized failure), and that still removes the branch, with UGCPORTAL_PREPUSH=skip set explicitly on that fallback's own spawn (ugcportal-cky9)", () => {
     const { root, repoDir, remoteDir, ghBinDir } = setupFixture("ix0s-fallback-");
+    // Ambient isolation, not just a happy accident: delete this var from the
+    // test process's own env for the duration of the call below, so the
+    // "skip" the pre-receive hook captures further down can only have come
+    // from deleteRemoteBranch's own explicit `env` option on its
+    // `execFileSync` call (execFileSync with no `env` override inherits
+    // THIS process's env) -- not leaked ambient state, which would make the
+    // assertion pass whether or not that explicit option still exists.
+    const hadAmbient = Object.prototype.hasOwnProperty.call(process.env, "UGCPORTAL_PREPUSH");
+    const savedAmbient = process.env.UGCPORTAL_PREPUSH;
+    delete process.env.UGCPORTAL_PREPUSH;
     try {
-      const pushLog = installPushLogger(remoteDir);
+      const { logPath: pushLog, envLogPath } = installPushLoggerCapturingEnv(remoteDir, "UGCPORTAL_PREPUSH");
       const { logPath } = writeFakeGh(ghBinDir, {
         remoteDir,
         apiDeleteFailures: { "feat/ix0s-delete": "404" },
@@ -1450,7 +1490,13 @@ describe("deleteRemoteBranch: GitHub API primary path, git push fallback (ugcpor
       // this time -- the mirror image of the "never reaches git push" checks
       // in the two tests above.
       expect(readPushLog(pushLog)).toContain("refs/heads/feat/ix0s-delete");
+
+      // Direct evidence of what the fallback's own `execFileSync` env
+      // option actually handed its child process -- not an inference from
+      // source code, and not reachable by ambient leakage (deleted above).
+      expect(fs.readFileSync(envLogPath, "utf8").trim()).toBe("skip");
     } finally {
+      if (hadAmbient) process.env.UGCPORTAL_PREPUSH = savedAmbient;
       fs.rmSync(root, { recursive: true, force: true });
     }
   });

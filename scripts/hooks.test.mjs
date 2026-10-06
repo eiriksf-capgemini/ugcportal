@@ -518,7 +518,7 @@ describe("pre-push hook: UGCPORTAL_PREPUSH=skip", { timeout: 20_000 }, () => {
       try {
         const result = runHook(fixture, { UGCPORTAL_PREPUSH: "skip" });
         expect(result.status).toBe(0);
-        expect(result.stdout).toBe("pre-push suite skipped by UGCPORTAL_PREPUSH=skip; CI is authoritative\n");
+        expect(result.stdout).toBe("ugcportal: pre-push suite skipped by UGCPORTAL_PREPUSH=skip; CI is authoritative\n");
         expect(readNpmLog(fixture)).toBe("");
       } finally {
         cleanup(fixture);
@@ -540,7 +540,7 @@ describe("pre-push hook: UGCPORTAL_PREPUSH=skip", { timeout: 20_000 }, () => {
         try {
           const result = runHook(fixture, value === undefined ? {} : { UGCPORTAL_PREPUSH: value });
           expect(result.status).toBe(0);
-          expect(result.stdout).not.toContain("pre-push suite skipped by UGCPORTAL_PREPUSH=skip");
+          expect(result.stdout).not.toContain("ugcportal: pre-push suite skipped by UGCPORTAL_PREPUSH=skip");
           expect(result.stdout).toContain("running local mechanical checks");
           const npmLog = readNpmLog(fixture);
           expect(npmLog).toContain("npm run lint");
