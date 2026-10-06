@@ -496,6 +496,24 @@ Auto-approved (review round <N>, chain <exact|approx>): CI green, no sensitive p
 EOF
 )"
 gh repo view --json squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed   # pick an allowed method, prefer squash
+```
+
+**Before merging with `--delete-branch`, retarget any open PR stacked on this one (ugcportal-hvaf).** `--delete-branch` deletes `headRefName` as part of this same call. GitHub auto-closes any other open PR the instant its base branch disappears, and refuses both reopen and base-change once the base ref is gone — observed three times in one day (#126, #120, #123), each losing its comment history to a brand-new PR number. So this has to run *before* the merge call, never after:
+
+```bash
+gh pr list --base <headRefName> --state open --json number
+```
+
+For every PR number that returns, retarget it to this PR's own base (`main` — step 1's bail-out already means every PR this skill merges targets `main`) and verify the edit actually landed rather than trusting its exit code:
+
+```bash
+gh pr edit <stacked-pr-number> --base main
+gh pr view <stacked-pr-number> --json baseRefName,state --jq '[.baseRefName, .state] | @tsv'   # must read "main\tOPEN"
+```
+
+If that verify line doesn't read back `main` / `OPEN`, do **not** pass `--delete-branch` below — merge without it (`gh pr merge <n> --squash`, no `--delete-branch`), name the stacked PR number and the failure in your step 6 report, and leave the branch for a human (or a later `--branch <name> --execute` sweep run, once the stacked PR is sorted out by hand) rather than risk deleting a branch an open PR still lists as its base. `scripts/sweep-merged-branches.mjs`'s `--execute` runs the same check (`classifyBranchRetarget` / `classifyRetargetVerification`) before its own remote-branch deletions — this is the inline, single-PR version of that same logic.
+
+```bash
 gh pr merge <n> --squash --delete-branch   # fall back to --merge or --rebase if squash isn't allowed
 ```
 
@@ -639,4 +657,4 @@ node scripts/sweep-merged-branches.mjs             # dry run: lists every candid
 node scripts/sweep-merged-branches.mjs --execute   # removes them
 ```
 
-It never touches a branch with an `OPEN` or `CLOSED`-without-merge PR, a branch with no PR at all (a human decision each time — this includes non-PR refs like Dolt's own branch under `refs/heads`), a dirty or locked worktree, a worktree with commits that aren't reachable from any remote branch and don't match the merged PR's own head commit, or the main branch and checkout — `scripts/sweep-merged-branches.test.mjs` asserts each of those against the pure classifier, including against real temporary git repositories for the unpushed-commit and deleted-directory cases. This unscoped, repo-wide form is for drift that already exists — run it on a schedule, or whenever `git worktree list` or `git branch -r` looks longer than expected. The merge step above runs the same script as part of its own per-PR flow, scoped to one branch (`--branch <name>`); only this repo-wide form does not run automatically.
+It never touches a branch with an `OPEN` or `CLOSED`-without-merge PR, a branch with no PR at all (a human decision each time — this includes non-PR refs like Dolt's own branch under `refs/heads`), a dirty or locked worktree, a worktree with commits that aren't reachable from any remote branch and don't match the merged PR's own head commit, or the main branch and checkout — `scripts/sweep-merged-branches.test.mjs` asserts each of those against the pure classifier, including against real temporary git repositories for the unpushed-commit and deleted-directory cases. Nor does it ever delete a `"remove"`-eligible branch while an open PR still lists it as base (ugcportal-hvaf): immediately before each such deletion, `--execute` retargets any open PR based on that branch to the branch's own (merged) PR's base and verifies the retarget landed, keeping the branch with a reported reason instead if that fails — `--no-retarget-open-prs` switches this off in favour of keep-and-report. This unscoped, repo-wide form is for drift that already exists — run it on a schedule, or whenever `git worktree list` or `git branch -r` looks longer than expected. The merge step above runs the same script as part of its own per-PR flow, scoped to one branch (`--branch <name>`); only this repo-wide form does not run automatically.

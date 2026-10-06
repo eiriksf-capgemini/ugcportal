@@ -45,10 +45,35 @@
  *   - the main worktree and the default branch are always kept, checked
  *     before anything else.
  *
+ * Retarget-before-delete (ugcportal-hvaf): deleting a remote branch that an
+ * OPEN pull request still lists as its *base* auto-closes that PR the moment
+ * the branch disappears, and GitHub refuses both reopen and base-change once
+ * the base ref is gone -- observed three times in one day (#126, #120,
+ * #123), each needing a brand-new PR number and losing its comment history.
+ * So immediately before deleting a `"remove"`-classified remote branch,
+ * `--execute` queries `gh pr list --base <branch> --state open` for that
+ * exact branch (a fresh, targeted query -- the repo-wide `gh pr list
+ * --state all` snapshot fetched once at the top of `main()` is keyed by
+ * *head* branch and says nothing about who currently targets this branch as
+ * a *base*). If that turns up any open PRs, each is retargeted with `gh pr
+ * edit <n> --base <newBase>` (`newBase` is this branch's own merged PR's
+ * base, read from the same snapshot -- "the merged PR's base", not a
+ * hardcoded `main`, so a multi-level stack retargets to where the merging
+ * branch itself pointed) and the result is read back with `gh pr view` --
+ * `gh pr edit`'s own exit code is not trusted, the same "verify, don't
+ * trust" rule `deleteRemoteBranch` already applies to `git push origin
+ * --delete`. Any failure anywhere in that sequence -- the lookup, an edit, a
+ * verify read-back that doesn't match -- keeps the branch instead of risking
+ * the delete; `classifyBranchRetarget` / `classifyRetargetVerification`
+ * below are the pure decisions this makes, and `--no-retarget-open-prs`
+ * switches the whole thing off in favour of keep-and-report (so the operator
+ * handles the stacked PR by hand instead of this script touching it).
+ *
  * Usage:
  *   node scripts/sweep-merged-branches.mjs                       # dry run: lists candidates only
  *   node scripts/sweep-merged-branches.mjs --execute              # also removes them, repo-wide
  *   node scripts/sweep-merged-branches.mjs --branch <name> --execute   # scoped to one branch/worktree
+ *   node scripts/sweep-merged-branches.mjs --execute --no-retarget-open-prs   # keep-and-report instead of retargeting
  *
  * In `--execute` mode, a remote-branch removal is verified rather than
  * trusted: after `git push origin --delete <branch>`, `git ls-remote --heads
@@ -146,6 +171,63 @@ export function classifyWorktree({ path, branch, isMainWorktree, isLocked, isPru
   return { action: "keep", reason: "no PR found for this branch" };
 }
 
+/**
+ * Decides what to do, for one branch about to be deleted, about any currently
+ * OPEN pull requests that use it as their *base* (ugcportal-hvaf) -- a
+ * distinct question from the branch's own PR state that classifyRemoteBranch
+ * above answers. Deliberately takes the already-fetched PR list rather than
+ * querying inside this function, so the decision stays a pure, fixture-driven
+ * test (K1) with no `gh` call of its own.
+ *
+ * @param {object} params
+ * @param {{number: number}[]} params.openPrsBasedOnBranch every currently OPEN PR whose base is the branch about to be deleted
+ * @param {boolean} params.retarget true unless --no-retarget-open-prs was passed
+ * @returns {{action: "none"}|{action: "retarget", prNumbers: number[]}|{action: "keep", reason: string}}
+ */
+export function classifyBranchRetarget({ openPrsBasedOnBranch, retarget }) {
+  if (openPrsBasedOnBranch.length === 0) return { action: "none" };
+  const prNumbers = openPrsBasedOnBranch.map((pr) => pr.number);
+  if (!retarget) {
+    return {
+      action: "keep",
+      reason: `open PR(s) based on this branch, retargeting disabled by --no-retarget-open-prs: #${prNumbers.join(", #")}`,
+    };
+  }
+  return { action: "retarget", prNumbers };
+}
+
+/**
+ * Classifies the read-back of one `gh pr edit --base <newBase>` call (K2) --
+ * `gh pr edit`'s own exit code is not trusted, the same "verify, don't trust"
+ * rule `deleteRemoteBranch` already applies to `git push origin --delete`.
+ * Any mismatch here is what makes the caller keep the branch, with a reason,
+ * instead of deleting it while a stacked PR might still be unsafe.
+ *
+ * @param {object} params
+ * @param {number} params.prNumber
+ * @param {string} params.actualBaseRefName base read back from `gh pr view` after the edit
+ * @param {string} params.expectedBaseRefName the base the edit was supposed to set
+ * @param {string} params.state PR state read back after the edit -- must still be OPEN
+ * @returns {{action: "ok"}|{action: "failed", reason: string}}
+ */
+export function classifyRetargetVerification({ prNumber, actualBaseRefName, expectedBaseRefName, state }) {
+  if (state !== "OPEN") {
+    return { action: "failed", reason: `PR #${prNumber} is no longer open after retargeting (state ${state})` };
+  }
+  if (actualBaseRefName !== expectedBaseRefName) {
+    return {
+      action: "failed",
+      reason: `PR #${prNumber} base reads back as ${actualBaseRefName}, expected ${expectedBaseRefName}`,
+    };
+  }
+  return { action: "ok" };
+}
+
+/** @returns {boolean} true unless --no-retarget-open-prs was passed -- the opt-out from classifyBranchRetarget's default (retarget automatically) behaviour, in favour of keep-and-report. */
+export function parseRetargetFlag(argv) {
+  return !argv.includes("--no-retarget-open-prs");
+}
+
 // --- Pure parsers ---------------------------------------------------------
 
 /**
@@ -206,19 +288,23 @@ export function parseWorktreeList(output) {
 }
 
 /**
- * `gh pr list --state all --json headRefName,state,number,headRefOid` output
- * -> the most recently listed PR's state and head commit per branch name.
- * `gh pr list` without `--search` sorts by creation descending, so the first
- * entry seen per branch is its newest PR -- the one a re-used branch name
- * should be judged by.
+ * `gh pr list --state all --json headRefName,state,number,headRefOid,baseRefName`
+ * output -> the most recently listed PR's state, head commit and base branch
+ * per branch name. `gh pr list` without `--search` sorts by creation
+ * descending, so the first entry seen per branch is its newest PR -- the one
+ * a re-used branch name should be judged by. `baseRefName` is this branch's
+ * own PR's base -- what an open PR stacked on this branch gets retargeted to
+ * once this branch's PR is MERGED and the branch is about to be deleted
+ * (ugcportal-hvaf): "the merged PR's base", not a hardcoded `main`, so a
+ * multi-level stack retargets to wherever the merging branch itself pointed.
  *
- * @param {{headRefName: string, state: string, headRefOid: string}[]} prs
- * @returns {Map<string, {state: string, headRefOid: string}>}
+ * @param {{headRefName: string, state: string, headRefOid: string, baseRefName: string}[]} prs
+ * @returns {Map<string, {state: string, headRefOid: string, baseRefName: string}>}
  */
 export function buildPrInfoByBranch(prs) {
   const map = new Map();
   for (const pr of prs) {
-    if (!map.has(pr.headRefName)) map.set(pr.headRefName, { state: pr.state, headRefOid: pr.headRefOid });
+    if (!map.has(pr.headRefName)) map.set(pr.headRefName, { state: pr.state, headRefOid: pr.headRefOid, baseRefName: pr.baseRefName });
   }
   return map;
 }
@@ -284,7 +370,7 @@ const PR_LIST_LIMIT = 1000;
 function fetchPrInfoByBranch() {
   const out = execFileSync(
     "gh",
-    ["pr", "list", "--state", "all", "--json", "headRefName,state,number,headRefOid", "--limit", String(PR_LIST_LIMIT)],
+    ["pr", "list", "--state", "all", "--json", "headRefName,state,number,headRefOid,baseRefName", "--limit", String(PR_LIST_LIMIT)],
     { encoding: "utf8" },
   );
   const prs = JSON.parse(out);
@@ -361,6 +447,73 @@ export function deleteRemoteBranch(name, cwd = ".") {
   }
 }
 
+/** @returns {{number: number}[]} every currently OPEN PR whose base is `branch` -- queried fresh, immediately before a delete, never read off the repo-wide `gh pr list --state all` snapshot `fetchPrInfoByBranch` fetched once at the top of `main()`, which is keyed by HEAD branch and says nothing about who targets this branch as a BASE. Not unit-tested directly, same convention as the other `gh`-calling functions in this section (see the section comment above). */
+function fetchOpenPrsBasedOn(branch) {
+  const out = execFileSync("gh", ["pr", "list", "--base", branch, "--state", "open", "--json", "number"], { encoding: "utf8" });
+  return JSON.parse(out);
+}
+
+function retargetPr(prNumber, newBase) {
+  execFileSync("gh", ["pr", "edit", String(prNumber), "--base", newBase], { stdio: ["ignore", "pipe", "pipe"] });
+}
+
+/** @returns {{baseRefName: string, state: string}} read back after a retarget attempt, so the edit is verified rather than trusted (classifyRetargetVerification). */
+function fetchPrBaseState(prNumber) {
+  const out = execFileSync("gh", ["pr", "view", String(prNumber), "--json", "baseRefName,state"], { encoding: "utf8" });
+  return JSON.parse(out);
+}
+
+/**
+ * Runs immediately before a remote branch is deleted (ugcportal-hvaf): finds
+ * every OPEN PR based on it, retargets each to `newBase` -- or, if `retarget`
+ * is false, keeps the branch and reports instead of touching anything -- and
+ * verifies every retarget actually landed before giving the caller the
+ * go-ahead to delete. Fails closed: any error (the lookup, an edit, a verify
+ * read-back that doesn't match) keeps the branch rather than risking GitHub
+ * auto-closing a PR whose base just vanished out from under it.
+ *
+ * @param {string} branch branch about to be deleted
+ * @param {string} newBase where to retarget any open PR based on `branch` -- this branch's own (merged) PR's base
+ * @param {boolean} retarget false when --no-retarget-open-prs was passed
+ * @returns {{action: "none"}|{action: "retargeted", prNumbers: number[]}|{action: "keep", reason: string}}
+ */
+function retargetOpenPrsBeforeDelete(branch, newBase, retarget) {
+  let openPrs;
+  try {
+    openPrs = fetchOpenPrsBasedOn(branch);
+  } catch (err) {
+    return { action: "keep", reason: `could not check for open PRs based on this branch: ${err.message}` };
+  }
+
+  const decision = classifyBranchRetarget({ openPrsBasedOnBranch: openPrs, retarget });
+  if (decision.action !== "retarget") return decision;
+
+  for (const prNumber of decision.prNumbers) {
+    try {
+      retargetPr(prNumber, newBase);
+    } catch (err) {
+      return { action: "keep", reason: `failed to retarget PR #${prNumber} to ${newBase}: ${err.message}` };
+    }
+
+    let info;
+    try {
+      info = fetchPrBaseState(prNumber);
+    } catch (err) {
+      return { action: "keep", reason: `could not verify PR #${prNumber} after retargeting: ${err.message}` };
+    }
+
+    const verdict = classifyRetargetVerification({
+      prNumber,
+      actualBaseRefName: info.baseRefName,
+      expectedBaseRefName: newBase,
+      state: info.state,
+    });
+    if (verdict.action === "failed") return { action: "keep", reason: verdict.reason };
+  }
+
+  return { action: "retargeted", prNumbers: decision.prNumbers };
+}
+
 export function removeWorktree(path) {
   // No --force: a dirty or locked worktree is refused by git itself here.
   execFileSync("git", ["worktree", "remove", path], { stdio: ["ignore", "pipe", "pipe"] });
@@ -375,6 +528,7 @@ export function deleteLocalBranch(branch) {
 
 function main() {
   const execute = process.argv.includes("--execute");
+  const retargetOpenPrs = parseRetargetFlag(process.argv);
 
   const branchFlag = parseBranchFlag(process.argv);
   if ("error" in branchFlag) {
@@ -465,6 +619,16 @@ function main() {
   let failures = 0;
 
   for (const c of branchCandidates.filter((x) => x.action === "remove")) {
+    const newBase = prInfoByBranch.get(c.name)?.baseRefName ?? mainBranch;
+    const retargetResult = retargetOpenPrsBeforeDelete(c.name, newBase, retargetOpenPrs);
+    if (retargetResult.action === "keep") {
+      failures++;
+      console.error(`kept origin/${c.name}: ${retargetResult.reason}`);
+      continue;
+    }
+    if (retargetResult.action === "retargeted") {
+      console.log(`retargeted open PR(s) based on origin/${c.name} to ${newBase}: #${retargetResult.prNumbers.join(", #")}`);
+    }
     try {
       deleteRemoteBranch(c.name);
       console.log(`removed origin/${c.name}`);

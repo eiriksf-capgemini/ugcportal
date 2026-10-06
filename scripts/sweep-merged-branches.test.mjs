@@ -19,7 +19,9 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
   buildPrInfoByBranch,
+  classifyBranchRetarget,
   classifyRemoteBranch,
+  classifyRetargetVerification,
   classifyWorktree,
   deleteLocalBranch,
   deleteRemoteBranch,
@@ -28,6 +30,7 @@ import {
   needsPushedCheck,
   parseBranchFlag,
   parseRemoteHeads,
+  parseRetargetFlag,
   parseWorktreeList,
   prListCapWarning,
   pruneRemoteTrackingRefs,
@@ -265,23 +268,84 @@ describe("parseWorktreeList", () => {
 });
 
 describe("buildPrInfoByBranch", () => {
-  it("maps a branch to its PR's state and head commit", () => {
-    const prs = [{ headRefName: "fix/foo", state: "MERGED", headRefOid: "abc123", number: 1 }];
-    expect(buildPrInfoByBranch(prs)).toEqual(new Map([["fix/foo", { state: "MERGED", headRefOid: "abc123" }]]));
+  it("maps a branch to its PR's state, head commit and base branch", () => {
+    const prs = [{ headRefName: "fix/foo", state: "MERGED", headRefOid: "abc123", baseRefName: "main", number: 1 }];
+    expect(buildPrInfoByBranch(prs)).toEqual(new Map([["fix/foo", { state: "MERGED", headRefOid: "abc123", baseRefName: "main" }]]));
   });
 
   it("keeps the first (newest) PR's info when a branch name was reused", () => {
     // gh pr list --state all sorts by creation descending, so entry order
     // in the fixture mirrors "newest PR first" -- the case this guards.
     const prs = [
-      { headRefName: "fix/foo", state: "OPEN", headRefOid: "new111", number: 2 },
-      { headRefName: "fix/foo", state: "MERGED", headRefOid: "old000", number: 1 },
+      { headRefName: "fix/foo", state: "OPEN", headRefOid: "new111", baseRefName: "main", number: 2 },
+      { headRefName: "fix/foo", state: "MERGED", headRefOid: "old000", baseRefName: "main", number: 1 },
     ];
-    expect(buildPrInfoByBranch(prs).get("fix/foo")).toEqual({ state: "OPEN", headRefOid: "new111" });
+    expect(buildPrInfoByBranch(prs).get("fix/foo")).toEqual({ state: "OPEN", headRefOid: "new111", baseRefName: "main" });
   });
 
   it("returns an empty map for no PRs rather than throwing", () => {
     expect(buildPrInfoByBranch([])).toEqual(new Map());
+  });
+});
+
+describe("classifyBranchRetarget (ugcportal-hvaf, K1/K2)", () => {
+  it("is a no-op when no open PR is based on this branch", () => {
+    expect(classifyBranchRetarget({ openPrsBasedOnBranch: [], retarget: true })).toEqual({ action: "none" });
+  });
+
+  it("retargets every open PR based on this branch when retargeting is enabled (K1)", () => {
+    expect(classifyBranchRetarget({ openPrsBasedOnBranch: [{ number: 128 }, { number: 139 }], retarget: true })).toEqual({
+      action: "retarget",
+      prNumbers: [128, 139],
+    });
+  });
+
+  it("keeps the branch and reports, naming the PR numbers, when retargeting is disabled", () => {
+    // Fixture-mutation check: retarget is the only field that differs from
+    // the "retargets ..." case above -- flipping it, and nothing else, must
+    // flip the verdict from "retarget" to "keep".
+    expect(classifyBranchRetarget({ openPrsBasedOnBranch: [{ number: 128 }, { number: 139 }], retarget: false })).toEqual({
+      action: "keep",
+      reason: "open PR(s) based on this branch, retargeting disabled by --no-retarget-open-prs: #128, #139",
+    });
+  });
+
+  it("is a no-op even with retargeting disabled, when there is nothing to retarget", () => {
+    expect(classifyBranchRetarget({ openPrsBasedOnBranch: [], retarget: false })).toEqual({ action: "none" });
+  });
+});
+
+describe("classifyRetargetVerification (ugcportal-hvaf, K2)", () => {
+  const base = { prNumber: 128, actualBaseRefName: "main", expectedBaseRefName: "main", state: "OPEN" };
+
+  it("is ok when the PR reads back open, with the expected base", () => {
+    expect(classifyRetargetVerification(base)).toEqual({ action: "ok" });
+  });
+
+  it("fails, naming the PR, when the base did not actually change", () => {
+    // Fixture-mutation check: actualBaseRefName is the only field that
+    // differs from the "is ok ..." case above.
+    expect(classifyRetargetVerification({ ...base, actualBaseRefName: "fix/old-stacked-branch" })).toEqual({
+      action: "failed",
+      reason: "PR #128 base reads back as fix/old-stacked-branch, expected main",
+    });
+  });
+
+  it("fails, naming the PR, when the PR is no longer open after the edit (K2: classifies keep-with-reason when retargeting fails)", () => {
+    expect(classifyRetargetVerification({ ...base, state: "CLOSED" })).toEqual({
+      action: "failed",
+      reason: "PR #128 is no longer open after retargeting (state CLOSED)",
+    });
+  });
+});
+
+describe("parseRetargetFlag", () => {
+  it("is true (retarget enabled) by default", () => {
+    expect(parseRetargetFlag(["--execute"])).toBe(true);
+  });
+
+  it("is false when --no-retarget-open-prs is passed", () => {
+    expect(parseRetargetFlag(["--execute", "--no-retarget-open-prs"])).toBe(false);
   });
 });
 
