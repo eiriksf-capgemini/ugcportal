@@ -27,6 +27,7 @@ import {
   designSystem,
   discoverColorNamespaces,
   findAlphaColorUtilities,
+  findBareColorUtilities,
   type AlphaUtilityUsage,
 } from "./usage";
 
@@ -362,12 +363,56 @@ describe("the gate cannot be routed around", () => {
   // have had to find the exact same answer or something else is broken.
   const usedAlphaUtilities = findAlphaColorUtilities();
 
+  /**
+   * ugcportal-5gca: the same "never just skip" discipline, for the utility
+   * shape the alpha scanner was never built to see - a bare `bg-X`/`text-X`/
+   * `border-X` with no modifier at all. Hoisted beside usedAlphaUtilities for
+   * the same reason: a fact about the source tree, not about which theme mode
+   * is active.
+   */
+  const usedBareUtilities = findBareColorUtilities();
+
+  /**
+   * ugcportal-5gca K2's "excluded with a derived reason" half, for a bare
+   * background-role usage with no PAIRINGS entry - which is not automatically
+   * an oversight the way an uncovered foreground is: a purely decorative
+   * surface with nothing ever painted on top of it has no contrast ratio to
+   * measure at all, and PAIRINGS has no entry shape for "nothing sits here"
+   * (its decorative bucket is for a foreground WCAG 1.4.11 does not cover,
+   * not for a background with no foreground). Audited one (file, utility)
+   * pair at a time, the same discipline dual-meaning-usage.test.ts holds its
+   * own audited allowlist to: a genuinely new, unreviewed usage still fails
+   * loudly here until someone looks at it and adds the entry.
+   *
+   * The one entry today: hero.tsx's `HeroDecoration` renders three
+   * `aria-hidden`, childless `<span>` shapes, confined to their own
+   * `overflow-hidden` box and confirmed (not assumed) geometrically isolated
+   * from the hero's text column by e2e/front-page.spec.ts's "no decorative
+   * shape intersects hero text" - see that component's own comment. Two of
+   * its three bare fills (`bg-petrol-400`, `bg-petrol-100`) already appear as
+   * a PAIRINGS background for unrelated reasons (the old-surface fill and the
+   * CTA pill respectively) and need no entry here; `bg-petrol-300` does not
+   * share a literal with any existing pairing, which is what surfaced this
+   * gap in the first place.
+   */
+  const AUDITED_DECORATIVE_BACKGROUND_USAGES = new Set<string>([
+    "src/components/home/hero.tsx:bg-petrol-300",
+  ]);
+
+  it("has exactly this audited decorative-background allowlist, and no others", () => {
+    // Pinned so a silent addition is a visible diff, the same reason
+    // PAIRINGS' own decorative-id list is frozen above.
+    expect([...AUDITED_DECORATIVE_BACKGROUND_USAGES].sort()).toEqual(
+      ["src/components/home/hero.tsx:bg-petrol-300"].sort(),
+    );
+  });
+
   it.each(THEME_MODES)(
-    "measures every alpha-modified colour utility the components ship (%s)",
+    "measures every colour utility the components ship, alpha-modified or bare (%s)",
     (mode) => {
       const modeTokens = tokensByMode[mode];
       const { foregroundVerified, measuredBackground } = COVERAGE_BY_MODE[mode];
-      const used = usedAlphaUtilities;
+      const used = [...usedAlphaUtilities, ...usedBareUtilities];
       expect(used.length).toBeGreaterThan(0);
 
       for (const usage of used) {
@@ -384,12 +429,17 @@ describe("the gate cannot be routed around", () => {
         const usageKey = `${resolveToken(usage.property, modeTokens)}@${usage.alphaPercent}`;
 
         if (usage.role === "background") {
+          if (AUDITED_DECORATIVE_BACKGROUND_USAGES.has(`${usage.file}:${usage.utility}`)) {
+            continue;
+          }
           expect(
             measuredBackground.has(usageKey),
             `[${mode}] ${usage.file} uses "${usage.utility}", but no pairing in PAIRINGS ` +
               `measures ${usage.property} at ${usage.alphaPercent}% alpha as a ` +
               `background. Add that pairing - a colour measured as a foreground ` +
-              `does not cover it, because the two sit against different things.`,
+              `does not cover it, because the two sit against different things - ` +
+              `or, if nothing is ever painted on top of it, add it to ` +
+              `AUDITED_DECORATIVE_BACKGROUND_USAGES with why.`,
           ).toBe(true);
           continue;
         }
@@ -415,6 +465,155 @@ describe("the gate cannot be routed around", () => {
       }
     },
   );
+
+  /**
+   * ugcportal-5gca K3: "a PAIRINGS entry deleted while the usage it measures
+   * is still in the source, with no test failing" was the exact mutation
+   * round 5 of PR #79 let through - bg-petrol-400 and text-petrol-900 shipped
+   * on button.tsx's default-neutral and the upload dropzone's "Choose files"
+   * label with no coverage check able to see either. This proves the two
+   * round-5 entries (petrol-400-fill-on-old-surface-*, petrol-900-on-petrol-400)
+   * are each load-bearing for the coverage they were added to provide,
+   * directly, rather than only recording the mutation as a one-off manual
+   * note.
+   *
+   * Each sub-test below builds its OWN isolated coverage map from a single
+   * entry (or none), rather than mutating the real, full PAIRINGS array the
+   * way "measures every colour utility..." above does its real check. That
+   * isolation is load-bearing, not a style choice: `--sidebar-primary` and
+   * `--sidebar-ring` alias to the identical `--color-petrol-400` literal and
+   * already supply an UNRELATED background entry of their own
+   * (sidebar-primary-foreground-on-sidebar-primary) - confirmed by running
+   * this exact mutation against the full PAIRINGS array first, which stayed
+   * green for the wrong reason. That is the same "two different tokens
+   * resolve to the same literal" collision K2's own synthetic tests below
+   * exist to prove, encountered here with a real pair instead of a
+   * synthetic one, and isolating each entry sidesteps it the same way those
+   * tests do: by not depending on what the rest of PAIRINGS happens to
+   * contain today.
+   */
+  describe("K3: the round-5 PAIRINGS entries this bead's premise depends on are load-bearing", () => {
+    const petrol900OnPetrol400 = PAIRINGS.find((p) => p.id === "petrol-900-on-petrol-400");
+    const petrol400FillOnOldSurface = PAIRINGS.filter((p) =>
+      p.id.startsWith("petrol-400-fill-on-old-surface-"),
+    );
+
+    it("both round-5 entries this bead's premise names are still in PAIRINGS to mutate", () => {
+      expect(petrol900OnPetrol400, "petrol-900-on-petrol-400").toBeDefined();
+      expect(petrol400FillOnOldSurface.length, "petrol-400-fill-on-old-surface-*").toBeGreaterThan(0);
+    });
+
+    /**
+     * petrol-900-on-petrol-400's OWN background reference (`--color-petrol-400`)
+     * is what a real, shipped `bg-petrol-400` usage's coverage (this bare
+     * scanner's "background role" check) actually depends on - NOT
+     * petrol-400-fill-on-old-surface-*, which measures petrol-400 the other
+     * way around (as a foreground UI-boundary mark against the surfaces
+     * behind it - see the next test). This bare scanner classifies every
+     * `bg-*` utility as background role unconditionally (isBackgroundRole),
+     * so a real `bg-petrol-400` usage is never checked against
+     * petrol-400-fill-on-old-surface-* at all.
+     */
+    it.each(THEME_MODES)(
+      "petrol-900-on-petrol-400's background reference covers a real bg-petrol-400 usage, in isolation (%s)",
+      (mode) => {
+        const modeTokens = tokensByMode[mode];
+        const petrol400Fill = usedBareUtilities.find(
+          (usage) => usage.property === "--color-petrol-400" && usage.role === "background",
+        );
+        expect(
+          petrol400Fill,
+          "bg-petrol-400 is still shipped as a background somewhere in src",
+        ).toBeDefined();
+        const usageKey = `${resolveToken(petrol400Fill!.property, modeTokens)}@${petrol400Fill!.alphaPercent}`;
+
+        const withEntry = new Set(
+          [petrol900OnPetrol400!].flatMap((pairing) =>
+            pairing.background.map((reference) => tokenAlphaKey(reference, modeTokens)),
+          ),
+        );
+        expect(withEntry.has(usageKey), `[${mode}] covered with the entry present`).toBe(true);
+
+        const withoutEntry = new Set<string>();
+        expect(withoutEntry.has(usageKey), `[${mode}] uncovered once the entry is removed`).toBe(
+          false,
+        );
+      },
+    );
+
+    /**
+     * petrol-400-fill-on-old-surface-*'s own half: petrol-400 as a FOREGROUND
+     * UI-boundary mark (the button fill / progress-bar fill's own visibility)
+     * against the old near-black surface scale as background. This bare
+     * scanner's role convention never generates a usage on this axis for a
+     * `bg-*` utility (see above), so a synthetic usage stands in for the real
+     * shape (`AlphaUtilityUsage`'s own type, not a scanner result).
+     */
+    it.each(THEME_MODES)(
+      "petrol-400-fill-on-old-surface-* covers petrol-400 as a UI-boundary foreground, in isolation (%s)",
+      (mode) => {
+        const modeTokens = tokensByMode[mode];
+        const syntheticFillUsage: AlphaUtilityUsage = {
+          file: "synthetic - this bare scanner's bg=background-role convention never classifies a fill this way",
+          utility: "bg-petrol-400",
+          property: "--color-petrol-400",
+          alphaPercent: 100,
+          role: "foreground",
+          prefix: "bg",
+        };
+        const usageKey = `${resolveToken(syntheticFillUsage.property, modeTokens)}@${syntheticFillUsage.alphaPercent}`;
+
+        const withEntries = buildForegroundVerifiedThreshold(petrol400FillOnOldSurface, modeTokens);
+        expect(withEntries.get(usageKey), `[${mode}] covered with the entries present`).toBe(
+          THRESHOLDS.ui,
+        );
+
+        const withoutEntries = buildForegroundVerifiedThreshold([], modeTokens);
+        expect(
+          withoutEntries.get(usageKey) ?? -Infinity,
+          `[${mode}] uncovered once removed`,
+        ).toBeLessThan(THRESHOLDS.ui);
+      },
+    );
+
+    /**
+     * petrol-900-on-petrol-400's other half: text-petrol-900 as a foreground
+     * on the fill, at body's 4.5:1. ugcportal-ei5c: `--color-petrol-900` is
+     * declared outside `@theme`, so `text-petrol-900` compiles to no
+     * Tailwind utility at all and findBareColorUtilities correctly never
+     * reports it as a shipped usage (see that function's own doc comment on
+     * why a non-compiling bare candidate is excluded, not flagged) - a
+     * synthetic usage stands in for the one Tailwind itself refuses to
+     * generate. Closing that compile gap is ugcportal-ei5c's job, not this
+     * bead's.
+     */
+    it.each(THEME_MODES)(
+      "petrol-900-on-petrol-400 covers text-petrol-900 as a foreground on the fill, in isolation (%s)",
+      (mode) => {
+        const modeTokens = tokensByMode[mode];
+        const syntheticLabelUsage: AlphaUtilityUsage = {
+          file: "synthetic - ugcportal-ei5c: text-petrol-900 compiles to no Tailwind utility",
+          utility: "text-petrol-900",
+          property: "--petrol-900",
+          alphaPercent: 100,
+          role: "foreground",
+          prefix: "text",
+        };
+        const usageKey = `${resolveToken(syntheticLabelUsage.property, modeTokens)}@${syntheticLabelUsage.alphaPercent}`;
+
+        const withEntry = buildForegroundVerifiedThreshold([petrol900OnPetrol400!], modeTokens);
+        expect(withEntry.get(usageKey), `[${mode}] covered with the entry present`).toBe(
+          THRESHOLDS.body,
+        );
+
+        const withoutEntry = buildForegroundVerifiedThreshold([], modeTokens);
+        expect(
+          withoutEntry.get(usageKey) ?? -Infinity,
+          `[${mode}] uncovered once removed`,
+        ).toBeLessThan(THRESHOLDS.body);
+      },
+    );
+  });
 
   /**
    * K2 (ugcportal-j4j finding 2), reproduced directly: --ring and --primary

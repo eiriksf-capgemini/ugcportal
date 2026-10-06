@@ -8,7 +8,9 @@ import {
   designSystem,
   discoverColorNamespaces,
   findAlphaColorUtilities,
+  findBareColorUtilities,
   isBackgroundRole,
+  isBareColorUtility,
   isNonColorOverload,
 } from "./usage";
 
@@ -732,4 +734,238 @@ describe("findAlphaColorUtilities", () => {
       expect(() => findAlphaColorUtilities(root)).toThrow(/arbitrary colour/);
     },
   );
+});
+
+// ugcportal-5gca: findAlphaColorUtilities above only ever sees a utility
+// carrying a Tailwind alpha modifier. A bare bg-X/text-X/border-X is
+// invisible to it - and to the coverage check built on it - which is
+// exactly how four real WCAG regressions shipped through five review rounds
+// of PR #79 before a human caught them by hand.
+
+describe("findBareColorUtilities", () => {
+  it("finds a bare bg/text/border colour utility", () => {
+    const root = fixture({
+      "a.tsx": `const c = "bg-primary text-destructive border-input";`,
+    });
+    expect(
+      findBareColorUtilities(root).map((u) => [u.utility, u.property, u.role]),
+    ).toEqual([
+      ["bg-primary", "--color-primary", "background"],
+      ["text-destructive", "--color-destructive", "foreground"],
+      ["border-input", "--color-input", "foreground"],
+    ]);
+  });
+
+  it("finds two adjacent bare utilities, not just the first", () => {
+    // Same rewind concern as findAlphaColorUtilities: the boundary character
+    // is consumed by the match.
+    const root = fixture({
+      "a.tsx": `const c = "bg-primary text-ink border-line";`,
+    });
+    expect(findBareColorUtilities(root).map((u) => u.utility)).toEqual([
+      "bg-primary",
+      "text-ink",
+      "border-line",
+    ]);
+  });
+
+  it("finds utilities behind any number of variants, and the legacy !important spelling", () => {
+    const root = fixture({
+      "a.tsx": `const c = "hover:bg-primary focus-visible:!text-destructive";`,
+    });
+    expect(findBareColorUtilities(root).map((u) => u.utility)).toEqual([
+      "bg-primary",
+      "text-destructive",
+    ]);
+  });
+
+  it("finds utilities in CSS as well as TSX", () => {
+    const root = fixture({
+      "globals.css": `@layer base { * { @apply bg-background text-foreground; } }`,
+    });
+    expect(findBareColorUtilities(root).map((u) => u.utility)).toEqual([
+      "bg-background",
+      "text-foreground",
+    ]);
+  });
+
+  it("ignores prose about a utility in comments", () => {
+    const root = fixture({
+      "a.tsx": `// bg-primary is the old fill\nconst c = "bg-destructive";`,
+    });
+    expect(findBareColorUtilities(root).map((u) => u.utility)).toEqual([
+      "bg-destructive",
+    ]);
+  });
+
+  it("does not double-count an alpha-modified utility as a bare one", () => {
+    // bg-primary/50 is findAlphaColorUtilities' job, at its own alpha - this
+    // scanner must not also read it as bg-primary at an assumed 100%.
+    const root = fixture({
+      "a.tsx": `const c = "bg-primary/50 text-destructive/[.5] border-input/(--a)";`,
+    });
+    expect(findBareColorUtilities(root)).toEqual([]);
+  });
+
+  it("does not double-count a fractional or interpolated alpha-modified utility either", () => {
+    const root = fixture({
+      "a.tsx": "const c = `bg-primary/12.5 text-destructive/${a}`;",
+    });
+    expect(findBareColorUtilities(root)).toEqual([]);
+  });
+
+  it("ignores ordinary non-colour utilities sharing these three namespaces", () => {
+    // Confirmed against the installed Tailwind: every one of these compiles,
+    // just not to the property this scanner looks for (border-style,
+    // background-size/position/repeat, text-align/size).
+    const root = fixture({
+      "a.tsx":
+        `const c = "border-solid border-dashed border-2 border-t bg-cover ` +
+        `bg-center bg-no-repeat bg-clip-text text-left text-center text-sm ` +
+        `text-xs text-ellipsis text-nowrap";`,
+    });
+    expect(findBareColorUtilities(root)).toEqual([]);
+  });
+
+  it("ignores a colourless CSS keyword - nothing is painted for a pairing to measure", () => {
+    // button.tsx ships bg-transparent and border-transparent today,
+    // deliberately: a see-through fill, not a colour anyone forgot to
+    // measure.
+    const root = fixture({
+      "a.tsx": `const c = "bg-transparent border-transparent text-current";`,
+    });
+    expect(findBareColorUtilities(root)).toEqual([]);
+  });
+
+  it("does not flag an undeclared bare token that fails to compile at all", () => {
+    // Deliberately conservative, and distinct from isNonColorOverload's own
+    // null-compile default (see this scanner's own doc comment): a bare
+    // candidate under bg/text/border can fail to compile either because the
+    // name is a genuine typo OR because it names a real custom property kept
+    // outside @theme on purpose (ugcportal-ei5c's text-petrol-900) - this
+    // scanner cannot tell the two apart from the compile result alone, and
+    // treating every non-compiling bare word as an attempted colour would
+    // false-alarm on nothing (every ordinary non-colour keyword here DOES
+    // compile, just to a different property - see the test above). Catching
+    // an undeclared colour token is out of this gate's bare-scanner scope.
+    const root = fixture({ "a.tsx": `const c = "bg-not-a-real-token";` });
+    expect(findBareColorUtilities(root)).toEqual([]);
+  });
+
+  it("refuses a bare arbitrary colour value, the same as the alpha scanner's arbitrary-value refusal", () => {
+    const root = fixture({ "a.tsx": `const c = "bg-[#fff]";` });
+    expect(() => findBareColorUtilities(root)).toThrow(/arbitrary value/);
+  });
+
+  it("refuses the parenthesised CSS-variable shorthand as a bare arbitrary colour too", () => {
+    const root = fixture({ "a.tsx": `const c = "bg-(--primary)";` });
+    expect(() => findBareColorUtilities(root)).toThrow(/arbitrary value/);
+  });
+
+  it("does not refuse a non-colour arbitrary value under these namespaces", () => {
+    const root = fixture({ "a.tsx": `const c = "bg-[cover]";` });
+    expect(findBareColorUtilities(root)).toEqual([]);
+  });
+
+  it("resolves the longest matching name, not a prefix of it", () => {
+    const root = fixture({
+      "a.tsx": `const c = "bg-primary bg-primary-hover text-primary-foreground";`,
+    });
+    expect(
+      findBareColorUtilities(root).map((u) => [u.utility, u.property]),
+    ).toEqual([
+      ["bg-primary", "--color-primary"],
+      ["bg-primary-hover", "--color-primary-hover"],
+      ["text-primary-foreground", "--color-primary-foreground"],
+    ]);
+  });
+
+  it("excludes a qualified border form rather than mis-keying it to a token that does not exist", () => {
+    // border-t-primary compiles to border-top-color, not the bare
+    // border-color this scanner looks for, so it is excluded on its own
+    // merits - out of this bead's declared scope (see this scanner's doc
+    // comment), not silently mis-resolved to a nonexistent --color-t-primary.
+    const root = fixture({ "a.tsx": `const c = "border-t-primary";` });
+    expect(findBareColorUtilities(root)).toEqual([]);
+  });
+
+  it("tags backgrounds and foregrounds apart", () => {
+    const root = fixture({
+      "a.tsx": `const c = "bg-primary text-destructive border-input";`,
+    });
+    expect(findBareColorUtilities(root).map((u) => u.role)).toEqual([
+      "background",
+      "foreground",
+      "foreground",
+    ]);
+  });
+
+  it("skips test files and generated output", () => {
+    const root = fixture({
+      "a.test.tsx": `const c = "bg-primary";`,
+      "generated/prisma/index.tsx": `const c = "bg-primary";`,
+      "real.tsx": `const c = "bg-destructive";`,
+    });
+    expect(findBareColorUtilities(root).map((u) => u.utility)).toEqual([
+      "bg-destructive",
+    ]);
+  });
+
+  it("throws rather than returning nothing when pointed at an empty tree", () => {
+    const root = fixture({});
+    expect(() => findBareColorUtilities(root)).toThrow(/no source files/);
+  });
+
+  it("excludes design-lib internals from the real tree, where PAIRINGS usage strings read as Tailwind classes without being any", () => {
+    // contrast.ts's own surface-0-on-petrol-100-hover pairing names
+    // "hover:bg-petrol-200" inside a usage: string - data about the gate,
+    // not rendered UI. Run against the real source tree (no root override),
+    // since the exclusion is keyed to this repo's own src/lib/design path,
+    // not a fixture's.
+    const found = findBareColorUtilities();
+    expect(found.length).toBeGreaterThan(0);
+    for (const usage of found) {
+      expect(usage.file.startsWith("src/lib/design/"), usage.file).toBe(false);
+    }
+  });
+
+  it("finds at least as many bare colour utilities in the real tree as a known-good floor, so a collapsed match set fails loudly", () => {
+    // ugcportal-5gca K4: the same "a scanner that silently finds nothing is
+    // worse than no scanner" discipline this module holds findAlphaColorUtilities
+    // to. 195 at the time this was written; floored below that to tolerate
+    // ordinary component churn without this test itself needing an edit on
+    // every unrelated PR.
+    expect(findBareColorUtilities().length).toBeGreaterThanOrEqual(190);
+  });
+});
+
+describe("isBareColorUtility", () => {
+  it("resolves a real token under each of the three namespaces", () => {
+    expect(isBareColorUtility(designSystem, "bg", "primary")).toBe(true);
+    expect(isBareColorUtility(designSystem, "text", "destructive")).toBe(true);
+    expect(isBareColorUtility(designSystem, "border", "input")).toBe(true);
+  });
+
+  it("excludes every non-colour utility sharing these namespaces, confirmed by compiling each", () => {
+    expect(isBareColorUtility(designSystem, "border", "solid")).toBe(false);
+    expect(isBareColorUtility(designSystem, "bg", "cover")).toBe(false);
+    expect(isBareColorUtility(designSystem, "text", "left")).toBe(false);
+    expect(isBareColorUtility(designSystem, "text", "sm")).toBe(false);
+  });
+
+  it("excludes a colourless CSS keyword", () => {
+    expect(isBareColorUtility(designSystem, "bg", "transparent")).toBe(false);
+    expect(isBareColorUtility(designSystem, "border", "transparent")).toBe(false);
+    expect(isBareColorUtility(designSystem, "text", "current")).toBe(false);
+  });
+
+  it("excludes a candidate that does not compile at all", () => {
+    expect(isBareColorUtility(designSystem, "bg", "not-a-real-token")).toBe(false);
+  });
+
+  it("treats a qualified border side as excluded, not mis-keyed", () => {
+    // border-t-primary compiles to border-top-color, which is not the exact
+    // border-color property this function looks for.
+    expect(isBareColorUtility(designSystem, "border", "t-primary")).toBe(false);
+  });
 });
