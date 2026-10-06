@@ -114,6 +114,31 @@ describe("throttles repeated failures (ugcportal-0dh round 2: unauthenticated, u
     expect(errorSpy.mock.calls[1][1]).toMatchObject({ suppressed: 2 });
   });
 
+  /**
+   * ugcportal-z3lo K2: unlike `watermark.ts`'s shed-upload throttle, this
+   * call site must schedule NO flush timer — a malformed cursor is a
+   * nuisance-input signal, not a capacity one (see this module's own
+   * comment on `LISTING_FAILURE_LOG_INTERVAL_MS`), and losing a handful of
+   * occurrences at the very tail of a quiet burst is the accepted,
+   * smaller cost of that choice. Fake timers make a scheduled-but-absent
+   * timer observable directly, rather than inferring it from log output.
+   */
+  it("schedules no flush timer for a suppressed occurrence", async () => {
+    vi.useFakeTimers();
+    try {
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const { listPublicMedia } = await freshListPublicMedia();
+
+      await listPublicMedia(BAD_CURSOR_URL); // logs immediately
+      await listPublicMedia(BAD_CURSOR_URL); // suppressed
+
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("omits `suppressed` entirely when nothing was swallowed", async () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const { listPublicMedia } = await freshListPublicMedia();
