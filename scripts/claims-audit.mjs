@@ -1209,6 +1209,11 @@ function main() {
   try {
     trackedFiles = listTrackedFiles();
   } catch (err) {
+    // Same guard as the two reads above: without it, referenceExists()
+    // below would see an empty tracked-file list and flag a REFERENCE not
+    // found against every existing tracked file this read would otherwise
+    // have returned, instead of refusing like the other two required reads.
+    workingTreeReadFailed = true;
     console.error(`claims-audit: git ls-files failed, reference checks disabled: ${err.message}`);
   }
   // A reference check needs both lists: untracked files are a first-class
