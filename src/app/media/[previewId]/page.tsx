@@ -83,7 +83,8 @@ export const dynamic = "force-dynamic";
  * `http://localhost:3000` the way `alternates.canonical` deliberately
  * refuses to outside this one case too, the whole `openGraph`/`twitter`
  * block is omitted when `origin` is `null` — a page with no preview tags at
- * all degrades to a bare link when shared, which is no worse than today;
+ * all degrades to a bare link when shared, which is no worse than before
+ * this change (this page had no Open Graph tags at all until now);
  * shipping `og:image` pointing at an address no sharer's recipient can ever
  * reach would be actively wrong, the same argument `alternates.canonical`'s
  * own comment makes.

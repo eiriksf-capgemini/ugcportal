@@ -159,7 +159,8 @@ describe("K1: a published item's page", () => {
     expect(metadata.openGraph?.url).toBe(expectedUrl);
     expect(metadata.openGraph?.images).toEqual([expectedImage]);
     // `openGraph`/`twitter` are each a discriminated union keyed on
-    // `type`/`card` (next/dist/lib/metadata/types/{opengraph,twitter}-types.d.ts)
+    // `type`/`card`, declared in next's own vendored (node_modules, not a
+    // file this repo tracks) opengraph-types.d.ts/twitter-types.d.ts,
     // with one bare, discriminant-less member in the union (a caller that set
     // neither) — so TS refuses a bare `.type`/`.card` read on the union as a
     // whole without first narrowing to a member that actually declares it.
