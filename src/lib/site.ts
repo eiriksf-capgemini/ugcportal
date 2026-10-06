@@ -98,8 +98,7 @@ export const CONTACT_INTRO =
  * K5: states what is collected and why BEFORE submission, and links to the
  * privacy statement (PRIVACY_PATH, src/lib/routes.ts). That link resolved
  * nowhere when this was written; ugcportal-qnq9.4 has since published the page
- * (src/app/privacy/page.tsx), so it no longer 404s. Corrected here by
- * ugcportal-qnq9.3's `claims-audit --all-lines` pass over this file.
+ * (src/app/privacy/page.tsx), so it now resolves.
  */
 export const CONTACT_NOTICE =
   "Submitting this form opens your own email client with your message pre-filled, and sends it to our inbox directly — this site never receives or stores anything you type here. We only ever see what your email provider shows us: your name, your email address, and your message.";

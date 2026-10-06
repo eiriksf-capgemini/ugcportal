@@ -377,13 +377,21 @@ export type AdvertisingLabelRefusal = { error: string; field: string };
  * and missing the other — a bug that would read as correct and fail open.
  *
  * NO LONGER THE ONLY READER, and the correction matters because this sentence
- * used to claim it was (ugcportal-qnq9.3). `grep -rn benefitReceived src`
- * outside the generated client and the tests now reaches this function, the
- * write path in PUT /api/media/[id]/disclosure, the select in POST
- * /api/media/[id]/publish that feeds both readers, and
+ * used to claim it was (ugcportal-qnq9.3). The code that READS the column is
+ * this function, the write path in PUT /api/media/[id]/disclosure, the select
+ * in POST /api/media/[id]/publish that feeds both readers, and
  * `commercialPublishRefusal` in src/lib/alcohol-commerce.ts, which asks a
  * question this function has no opinion on: whether a declared benefit may
  * exist at all on this picture, from this brand (alkoholloven § 9-2).
+ *
+ * "READS" IS THE QUALIFIER, and it is doing work rather than hedging. The
+ * obvious way to check the list — `grep -rn benefitReceived src` — prints
+ * more than it: outside the generated client and the tests it also reaches
+ * comment-only mentions in src/lib/gallery-items.ts (which states in terms
+ * that it deliberately does not read the column), src/lib/media-access.ts,
+ * src/lib/media-listing.ts and src/app/privacy/content.ts. None of those
+ * interprets the value. The grep is how the list is found; it is not the
+ * list, and an earlier wording of this paragraph promised otherwise.
  *
  * THE TWO READINGS ARE THE SAME READING, deliberately, and that is the part
  * worth holding: both are `!== true`, so an item is "declaring a benefit" for
