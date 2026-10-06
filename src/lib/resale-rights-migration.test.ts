@@ -117,6 +117,15 @@ let rightsAfterReanchor: RightsSnapshot;
  */
 const CLEARED_AT = `${new Date().toISOString().slice(0, 10)}T00:00:00.000Z`;
 
+// ugcportal-9faa (PR #163 round 1, finding 2, flagged during review): a
+// real temporary SQLite database with every committed migration up to
+// REANCHOR_MIGRATION applied, seeded via raw SQL, migrated again, then
+// caught up to HEAD -- real disk I/O against a real database file, not
+// sharp/libvips, so outside this bead's three named categories and this
+// PR's new guard's detection surface, but the same "grows slower as the
+// repo grows" shape (more migrations committed over time means more work
+// here specifically) with zero existing timeout. Explicit hook timeout,
+// not a bigger global default.
 beforeAll(async () => {
   // Derived rather than hard-coded, but still asserted: if the migration is
   // ever renamed, this test must fail loudly instead of silently migrating
@@ -176,7 +185,7 @@ beforeAll(async () => {
   // did: `leaves every rights row exactly as the re-anchoring left it`
   // checks that for itself rather than asserting it in a comment.
   await applyMigrations(prisma, { startAfter: REANCHOR_MIGRATION! });
-});
+}, 15_000);
 
 afterAll(async () => {
   await prisma.$disconnect();

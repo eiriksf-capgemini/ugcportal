@@ -312,7 +312,14 @@ beforeEach(() => {
     .mockImplementation(realGenerateWatermarkedPreview);
 });
 
-describe("POST /api/media", () => {
+// ugcportal-9faa (PR #163 round 1, finding 2): this file imports `sharp`
+// directly (REAL_PNG above is a real libvips-built fixture, not a mock) and
+// exercises the real `generateWatermarkedPreview` pipeline in most tests
+// here -- `@/lib/watermark`'s own gate, not its sharp calls, is what gets
+// mocked per-test below. Real image work, same inherent-cost category as
+// src/lib/watermark.test.ts; explicit timeout rather than a bigger global
+// default.
+describe("POST /api/media", { timeout: 15_000 }, () => {
   it("returns 401 for an unauthenticated request", async () => {
     authMock.mockResolvedValue(null);
     const file = new File([PNG_HEADER], "photo.png", { type: "image/png" });
