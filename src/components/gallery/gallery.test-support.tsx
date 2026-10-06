@@ -32,16 +32,18 @@ import { Gallery } from "@/components/gallery/gallery";
 
 /**
  * The live container + client root a suite mounts `<Gallery>` into, read
- * via accessor calls (`ctx.container()`/`ctx.root()`) rather than plain
- * properties (ugcportal-jx4 round-5 review finding): a property would hand
- * back a snapshot that goes stale across `beforeEach`'s swap to a fresh
- * container/root for the next test, so every call site would need its own
- * reminder to re-read at point of use instead of destructuring once. An
- * accessor FUNCTION makes that the only way to read it at all.
+ * via accessors (`ctx.container`/`ctx.root`) rather than plain properties
+ * (ugcportal-jx4 round-5 review finding, getters per ugcportal-dj4i item 5):
+ * a plain property would hand back a snapshot that goes stale across
+ * `beforeEach`'s swap to a fresh container/root for the next test, so every
+ * call site would need its own reminder to re-read at point of use instead
+ * of destructuring once. A getter re-reads the closed-over variable on every
+ * access, the same as the function form this replaced, without the `()` at
+ * each call site.
  */
 export interface GalleryTestRoot {
-  container(): HTMLElement;
-  root(): Root;
+  readonly container: HTMLElement;
+  readonly root: Root;
 }
 
 /**
@@ -76,7 +78,7 @@ export function setupGalleryTestRoot(): GalleryTestRoot {
   });
 
   return {
-    container() {
+    get container() {
       if (!container) {
         throw new Error(
           "setupGalleryTestRoot: container accessed before beforeEach ran",
@@ -84,7 +86,7 @@ export function setupGalleryTestRoot(): GalleryTestRoot {
       }
       return container;
     },
-    root() {
+    get root() {
       if (!root) {
         throw new Error("setupGalleryTestRoot: root accessed before beforeEach ran");
       }
