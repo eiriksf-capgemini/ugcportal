@@ -1,4 +1,6 @@
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 
 import postcss from "postcss";
 import { describe, expect, it } from "vitest";
@@ -54,6 +56,95 @@ function tokenAlphaKey(
 ): string {
   const { property, alphaPercent } = parseTokenReference(reference);
   return `${resolveToken(property, mode)}@${alphaPercent}`;
+}
+
+/**
+ * Canonical identity for BACKGROUND coverage specifically (PR #115 round 1,
+ * findings 1+2) - deliberately NOT `tokenAlphaKey`'s full `resolveToken`
+ * walk, which follows every `var(...)` hop down to a final literal colour
+ * value. That full walk is correct, deliberate, and tested for FOREGROUND
+ * ("does not let a UI-boundary pairing cover a text usage of the same
+ * literal and alpha" below): a verified contrast RATIO is a fact about the
+ * rendered colour, so two differently-named references that happen to
+ * resolve to the same value really do share the guarantee, and K2's own fix
+ * exists to let a stronger reference's proof survive exactly that collision.
+ *
+ * It is not correct for BACKGROUND. "Some pairing recorded a foreground
+ * against this literal" says nothing about a DIFFERENT foreground painted on
+ * a DIFFERENT component that happens to share the literal by coincidence of
+ * this theme's current values, not by being the same semantic concept -
+ * confirmed for real, not hypothetically: `--sidebar-primary` and
+ * `--color-petrol-400` currently resolve to the identical literal, so
+ * `sidebar-primary-foreground-on-sidebar-primary` (`background:
+ * ["--sidebar-primary"]`) used to "cover" every `bg-petrol-400` usage
+ * (button.tsx's default-neutral fill, the upload queue's progress-bar fill -
+ * one of the four PR #79 regressions this bead exists because of) even with
+ * `petrol-900-on-petrol-400` - the entry that actually measures what's
+ * painted on top of that fill - deleted entirely. `contrast.test.ts`'s own
+ * K3 block proves this both ways below.
+ *
+ * The fix is narrower than abandoning cross-reference sharing for
+ * backgrounds generally: this app's `@theme inline` block aliases EVERY
+ * semantic token as `--color-X: var(--X)`, with no exceptions (read in full
+ * at review time) - a NAMING convention this file's scanners already depend
+ * on (it is why a scanned utility's token is always reported as
+ * `--color-<name>`). Unwrapping exactly that one hop - `--color-X` to `--X`,
+ * only when the stylesheet actually declares that precise alias - keeps
+ * `bg-primary` (`--color-primary`) matching a PAIRING written as `--primary`
+ * (needed: `primary-label-on-primary` writes it that way), without
+ * continuing on to whatever `--X` itself happens to equal. `--sidebar-primary`
+ * has no `--color-sidebar-primary`-shaped counterpart pointing at it from a
+ * usage's side (a scanned usage's property is always the `--color-<name>`
+ * form, never a bare semantic name), and `--color-petrol-400` has no bare
+ * `--petrol-400` alias to unwrap to (the petrol scale's OKLCH values live
+ * directly under `--color-*`, never behind a semantic alias - confirmed:
+ * `globals.css` declares no bare `--petrol-400`) - so neither collapses into
+ * the other under this narrower rule, and the two stay distinct keys.
+ */
+function backgroundTokenIdentity(
+  property: string,
+  mode: Map<string, Declaration>,
+): string {
+  const match = /^--color-([\w-]+)$/.exec(property);
+  if (!match) return property;
+  const bareName = `--${match[1]}`;
+  return mode.get(property)?.value === `var(${bareName})` ? bareName : property;
+}
+
+/** `--ring/70` (or a bare `--ring`) to `<background identity>@<alpha percent>` - see `backgroundTokenIdentity`. Background coverage only; foreground keeps `tokenAlphaKey`. */
+function backgroundCoverageKey(
+  reference: string,
+  mode: Map<string, Declaration>,
+): string {
+  const { property, alphaPercent } = parseTokenReference(reference);
+  return `${backgroundTokenIdentity(property, mode)}@${alphaPercent}`;
+}
+
+/**
+ * Which PAIRINGS ids provide background coverage for each key - a provenance
+ * map, not just a boolean Set, so a passing coverage check can say WHICH
+ * entry is doing the covering (PR #115 round 1 finding 2: "the gate must
+ * report which entry covered a usage, so shadowing by an alias is visible").
+ * Built as its own function, not inlined where `COVERAGE_BY_MODE` needs it,
+ * so the K3 mutation tests below run this EXACT construction over a
+ * (deliberately mutated) pairings list rather than a hand-duplicated copy
+ * that could drift from it - round 1's finding 1 was precisely a K3 block
+ * that had drifted into asserting against an empty Set instead of this.
+ */
+function buildMeasuredBackground(
+  pairings: readonly Pairing[],
+  mode: Map<string, Declaration>,
+): Map<string, Set<string>> {
+  const result = new Map<string, Set<string>>();
+  for (const pairing of pairings) {
+    for (const reference of pairing.background) {
+      const key = backgroundCoverageKey(reference, mode);
+      const ids = result.get(key) ?? new Set<string>();
+      ids.add(pairing.id);
+      result.set(key, ids);
+    }
+  }
+  return result;
 }
 
 /**
@@ -131,7 +222,7 @@ const FOREGROUND_VERIFIED_THRESHOLD = buildForegroundVerifiedThreshold(PAIRINGS)
  */
 const COVERAGE_BY_MODE: Record<
   ThemeMode,
-  { foregroundVerified: Map<string, number>; measuredBackground: Set<string> }
+  { foregroundVerified: Map<string, number>; measuredBackground: Map<string, Set<string>> }
 > = Object.fromEntries(
   THEME_MODES.map((mode) => {
     const modeTokens = tokensByMode[mode];
@@ -139,15 +230,11 @@ const COVERAGE_BY_MODE: Record<
       mode,
       {
         foregroundVerified: buildForegroundVerifiedThreshold(PAIRINGS, modeTokens),
-        measuredBackground: new Set(
-          PAIRINGS.flatMap((pairing) =>
-            pairing.background.map((reference) => tokenAlphaKey(reference, modeTokens)),
-          ),
-        ),
+        measuredBackground: buildMeasuredBackground(PAIRINGS, modeTokens),
       },
     ];
   }),
-) as Record<ThemeMode, { foregroundVerified: Map<string, number>; measuredBackground: Set<string> }>;
+) as Record<ThemeMode, { foregroundVerified: Map<string, number>; measuredBackground: Map<string, Set<string>> }>;
 
 /**
  * What a *usage* (as opposed to a PAIRING) needs to clear, inferred from its
@@ -379,32 +466,106 @@ describe("the gate cannot be routed around", () => {
    * surface with nothing ever painted on top of it has no contrast ratio to
    * measure at all, and PAIRINGS has no entry shape for "nothing sits here"
    * (its decorative bucket is for a foreground WCAG 1.4.11 does not cover,
-   * not for a background with no foreground). Audited one (file, utility)
-   * pair at a time, the same discipline dual-meaning-usage.test.ts holds its
-   * own audited allowlist to: a genuinely new, unreviewed usage still fails
-   * loudly here until someone looks at it and adds the entry.
+   * not for a background with no foreground).
+   *
+   * Keyed `${file}:${utility}` -> occurrence COUNT, not just a Set of keys
+   * present (PR #115 round 1 finding 3): a Set membership check alone would
+   * let a SECOND, genuinely non-decorative `bg-petrol-300` usage landing in
+   * the same audited file ride this entry silently - reproduced: adding one
+   * left every test here green with no PAIRINGS entry and no audit asked
+   * for. `dual-meaning-usage.test.ts`'s own allowlist already pins `(file,
+   * token, count)` for exactly this reason; this carries the same count
+   * field forward rather than only claiming parity with it.
    *
    * The one entry today: hero.tsx's `HeroDecoration` renders three
    * `aria-hidden`, childless `<span>` shapes, confined to their own
    * `overflow-hidden` box and confirmed (not assumed) geometrically isolated
    * from the hero's text column by e2e/front-page.spec.ts's "no decorative
    * shape intersects hero text" - see that component's own comment. Two of
-   * its three bare fills (`bg-petrol-400`, `bg-petrol-100`) already appear as
-   * a PAIRINGS background for unrelated reasons (the old-surface fill and the
-   * CTA pill respectively) and need no entry here; `bg-petrol-300` does not
-   * share a literal with any existing pairing, which is what surfaced this
-   * gap in the first place.
+   * its three bare fills need no entry here, for unrelated reasons: the CTA
+   * pill's `surface-0-on-petrol-100` already measures `bg-petrol-100` as a
+   * background, and `petrol-900-on-petrol-400` already measures
+   * `bg-petrol-400` the same way (NOT `petrol-400-fill-on-old-surface-*`,
+   * which measures `--color-petrol-400` as a FOREGROUND against the old
+   * surface scale, the opposite role - PR #115 round 1 finding 4). Only
+   * `bg-petrol-300` shares no background reference with any existing
+   * pairing, which is what surfaced this gap in the first place.
    */
-  const AUDITED_DECORATIVE_BACKGROUND_USAGES = new Set<string>([
-    "src/components/home/hero.tsx:bg-petrol-300",
-  ]);
+  const AUDITED_DECORATIVE_BACKGROUND_USAGES: Readonly<Record<string, number>> = {
+    "src/components/home/hero.tsx:bg-petrol-300": 1,
+  };
 
-  it("has exactly this audited decorative-background allowlist, and no others", () => {
+  /**
+   * Occurrence counts behind the allowlist above, computed once (a fact
+   * about the source tree, not the theme mode) from the same `usedBareUtilities`
+   * the real coverage check below iterates - not a second, independent scan
+   * that could drift from what the gate actually sees.
+   */
+  const bareBackgroundOccurrences = new Map<string, number>();
+  for (const usage of usedBareUtilities) {
+    if (usage.role !== "background") continue;
+    const key = `${usage.file}:${usage.utility}`;
+    bareBackgroundOccurrences.set(key, (bareBackgroundOccurrences.get(key) ?? 0) + 1);
+  }
+
+  /**
+   * True only for the EXACT audited (file, utility, count) - not merely a
+   * (file, utility) pair the allowlist happens to mention. See the allowlist's
+   * own doc comment (PR #115 round 1 finding 3) for the regression this
+   * closes; the dedicated test below ("a second ... does not ride") proves
+   * the count check actually bites, in isolation, without touching the real
+   * hero.tsx.
+   */
+  function isAuditedDecorativeBackground(
+    usage: Pick<AlphaUtilityUsage, "file" | "utility">,
+    occurrences: ReadonlyMap<string, number>,
+  ): boolean {
+    const key = `${usage.file}:${usage.utility}`;
+    const auditedCount = AUDITED_DECORATIVE_BACKGROUND_USAGES[key];
+    return auditedCount !== undefined && occurrences.get(key) === auditedCount;
+  }
+
+  it("has exactly this audited decorative-background allowlist, at exactly its audited count, and no others", () => {
     // Pinned so a silent addition is a visible diff, the same reason
     // PAIRINGS' own decorative-id list is frozen above.
-    expect([...AUDITED_DECORATIVE_BACKGROUND_USAGES].sort()).toEqual(
+    expect(Object.keys(AUDITED_DECORATIVE_BACKGROUND_USAGES).sort()).toEqual(
       ["src/components/home/hero.tsx:bg-petrol-300"].sort(),
     );
+    for (const [key, count] of Object.entries(AUDITED_DECORATIVE_BACKGROUND_USAGES)) {
+      expect(bareBackgroundOccurrences.get(key), `${key} occurrence count`).toBe(count);
+    }
+  });
+
+  it("a second, non-decorative occurrence of an audited decorative background does not ride the existing entry", () => {
+    // Reproduces PR #115 round 1 finding 3 without touching the real
+    // hero.tsx: two bare bg-petrol-300 occurrences in the SAME audited file
+    // change the count the allowlist pins, so the second one - which could be
+    // real, non-decorative content - can no longer hide behind the one entry
+    // audited for a single, confirmed-decorative shape.
+    const root = mkdtempSync(path.join(tmpdir(), "axu-contrast-"));
+    try {
+      const file = path.join(root, "src", "components", "home", "hero.tsx");
+      mkdirSync(path.dirname(file), { recursive: true });
+      writeFileSync(file, `const a = "bg-petrol-300"; const b = "bg-petrol-300";`);
+      const found = findBareColorUtilities(path.join(root, "src"));
+
+      const occurrences = new Map<string, number>();
+      for (const usage of found) {
+        if (usage.role !== "background") continue;
+        const key = `${usage.file}:${usage.utility}`;
+        occurrences.set(key, (occurrences.get(key) ?? 0) + 1);
+      }
+
+      const petrol300 = found.find((usage) => usage.utility === "bg-petrol-300");
+      expect(petrol300, "fixture ships bg-petrol-300").toBeDefined();
+      expect(occurrences.get(`${petrol300!.file}:${petrol300!.utility}`)).toBe(2);
+      expect(
+        isAuditedDecorativeBackground(petrol300!, occurrences),
+        "two occurrences must not match the audited count of one",
+      ).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it.each(THEME_MODES)(
@@ -426,23 +587,25 @@ describe("the gate cannot be routed around", () => {
             `surface/ink/petrol scales so the gate can measure it.`,
         ).toBe(true);
 
-        const usageKey = `${resolveToken(usage.property, modeTokens)}@${usage.alphaPercent}`;
-
         if (usage.role === "background") {
-          if (AUDITED_DECORATIVE_BACKGROUND_USAGES.has(`${usage.file}:${usage.utility}`)) {
+          if (isAuditedDecorativeBackground(usage, bareBackgroundOccurrences)) {
             continue;
           }
+          const backgroundKey = `${backgroundTokenIdentity(usage.property, modeTokens)}@${usage.alphaPercent}`;
+          const coveringEntries = measuredBackground.get(backgroundKey);
           expect(
-            measuredBackground.has(usageKey),
+            coveringEntries !== undefined && coveringEntries.size > 0,
             `[${mode}] ${usage.file} uses "${usage.utility}", but no pairing in PAIRINGS ` +
               `measures ${usage.property} at ${usage.alphaPercent}% alpha as a ` +
               `background. Add that pairing - a colour measured as a foreground ` +
               `does not cover it, because the two sit against different things - ` +
               `or, if nothing is ever painted on top of it, add it to ` +
-              `AUDITED_DECORATIVE_BACKGROUND_USAGES with why.`,
+              `AUDITED_DECORATIVE_BACKGROUND_USAGES with its occurrence count and why.`,
           ).toBe(true);
           continue;
         }
+
+        const usageKey = `${resolveToken(usage.property, modeTokens)}@${usage.alphaPercent}`;
 
         // Foreground: presence is not enough for text (K2). The pairing that
         // measures this (literal, alpha) has to have checked it at or above
@@ -471,28 +634,45 @@ describe("the gate cannot be routed around", () => {
    * is still in the source, with no test failing" was the exact mutation
    * round 5 of PR #79 let through - bg-petrol-400 and text-petrol-900 shipped
    * on button.tsx's default-neutral and the upload dropzone's "Choose files"
-   * label with no coverage check able to see either. This proves the two
-   * round-5 entries (petrol-400-fill-on-old-surface-*, petrol-900-on-petrol-400)
-   * are each load-bearing for the coverage they were added to provide,
-   * directly, rather than only recording the mutation as a one-off manual
-   * note.
+   * label with no coverage check able to see either.
    *
-   * Each sub-test below builds its OWN isolated coverage map from a single
-   * entry (or none), rather than mutating the real, full PAIRINGS array the
-   * way "measures every colour utility..." above does its real check. That
-   * isolation is load-bearing, not a style choice: `--sidebar-primary` and
-   * `--sidebar-ring` alias to the identical `--color-petrol-400` literal and
-   * already supply an UNRELATED background entry of their own
-   * (sidebar-primary-foreground-on-sidebar-primary) - confirmed by running
-   * this exact mutation against the full PAIRINGS array first, which stayed
-   * green for the wrong reason. That is the same "two different tokens
-   * resolve to the same literal" collision K2's own synthetic tests below
-   * exist to prove, encountered here with a real pair instead of a
-   * synthetic one, and isolating each entry sidesteps it the same way those
-   * tests do: by not depending on what the rest of PAIRINGS happens to
-   * contain today.
+   * PR #115 round 1, finding 1 (CONFIRMED medium): the first version of this
+   * block asserted against an EMPTY Set and an empty PAIRINGS array for each
+   * "without the entry" half - `new Set<string>().has(x)` and
+   * `buildForegroundVerifiedThreshold([], ...).get(x) ?? -Infinity` can never
+   * be anything but "uncovered", under any mutation, so none of the six
+   * assertions could ever fail, and the block's own title ("...are
+   * load-bearing") was not actually true of the real PAIRINGS. Every
+   * sub-test below now runs the REAL PAIRINGS array minus exactly the one
+   * entry its own name describes, through the same `buildMeasuredBackground`/
+   * `buildForegroundVerifiedThreshold` the real gate above uses.
+   *
+   * Doing that honestly surfaced round 1 finding 2: `bg-petrol-400`'s
+   * background coverage was NOT in fact load-bearing on `petrol-900-on-
+   * petrol-400` before this PR's fix, because `--sidebar-primary` (aliased to
+   * the identical `--color-petrol-400` literal) already supplied an
+   * unrelated background entry of its own
+   * (`sidebar-primary-foreground-on-sidebar-primary`) that `tokenAlphaKey`'s
+   * full literal resolution could not tell apart from the real one. Fixed by
+   * `backgroundTokenIdentity`/`backgroundCoverageKey`/`buildMeasuredBackground`
+   * above - a narrower, one-hop `--color-X`/`--X` unwrap, not a
+   * general abandonment of cross-reference sharing (see those functions' own
+   * doc comments for why, and for why the general case is left alone).
+   *
+   * The two FOREGROUND sub-tests below (petrol-400 as a UI-boundary mark,
+   * petrol-900 as the label on the fill) are NOT fixed the same way, and are
+   * not claimed to be: `buildForegroundVerifiedThreshold`'s cross-reference
+   * sharing is deliberate and tested (see "does not let a UI-boundary
+   * pairing cover a text usage of the same literal and alpha" below) - a
+   * verified RATIO is a fact about the rendered colour, so letting a
+   * different reference's proof survive a collision is correct there, not a
+   * bug to narrow. Both axes remain genuinely shadowed by an unrelated
+   * reference today (`chart-3-on-surface-*` for petrol-400 as foreground;
+   * `foreground-on-background`/`selection-text-on-selection` for petrol-900
+   * as foreground), and the sub-tests assert that reality rather than a
+   * false "reds".
    */
-  describe("K3: the round-5 PAIRINGS entries this bead's premise depends on are load-bearing", () => {
+  describe("K3: the round-5 PAIRINGS entries, against the real, mutated PAIRINGS array", () => {
     const petrol900OnPetrol400 = PAIRINGS.find((p) => p.id === "petrol-900-on-petrol-400");
     const petrol400FillOnOldSurface = PAIRINGS.filter((p) =>
       p.id.startsWith("petrol-400-fill-on-old-surface-"),
@@ -513,9 +693,16 @@ describe("the gate cannot be routed around", () => {
      * `bg-*` utility as background role unconditionally (isBackgroundRole),
      * so a real `bg-petrol-400` usage is never checked against
      * petrol-400-fill-on-old-surface-* at all.
+     *
+     * This is the one sub-test that now genuinely reds on its own mutation
+     * (PR #115 round 1 findings 1+2, fixed together): with the real
+     * `backgroundTokenIdentity` fix in place, deleting only
+     * `petrol-900-on-petrol-400` from the real PAIRINGS array removes
+     * `bg-petrol-400`'s only covering entry - `sidebar-primary-foreground-
+     * on-sidebar-primary` no longer substitutes for it.
      */
     it.each(THEME_MODES)(
-      "petrol-900-on-petrol-400's background reference covers a real bg-petrol-400 usage, in isolation (%s)",
+      "petrol-900-on-petrol-400 is bg-petrol-400's only covering entry, and deleting it reds the real gate (%s)",
       (mode) => {
         const modeTokens = tokensByMode[mode];
         const petrol400Fill = usedBareUtilities.find(
@@ -525,19 +712,26 @@ describe("the gate cannot be routed around", () => {
           petrol400Fill,
           "bg-petrol-400 is still shipped as a background somewhere in src",
         ).toBeDefined();
-        const usageKey = `${resolveToken(petrol400Fill!.property, modeTokens)}@${petrol400Fill!.alphaPercent}`;
+        const backgroundKey = `${backgroundTokenIdentity(petrol400Fill!.property, modeTokens)}@${petrol400Fill!.alphaPercent}`;
 
-        const withEntry = new Set(
-          [petrol900OnPetrol400!].flatMap((pairing) =>
-            pairing.background.map((reference) => tokenAlphaKey(reference, modeTokens)),
-          ),
-        );
-        expect(withEntry.has(usageKey), `[${mode}] covered with the entry present`).toBe(true);
+        // With PAIRINGS intact: covered, and the gate can now say BY WHAT
+        // (PR #115 round 1 finding 2's "report which entry covered a
+        // usage") - exactly petrol-900-on-petrol-400, not an alias.
+        const coveredToday = buildMeasuredBackground(PAIRINGS, modeTokens).get(backgroundKey);
+        expect(
+          [...(coveredToday ?? [])],
+          `[${mode}] covering entries for bg-petrol-400`,
+        ).toEqual(["petrol-900-on-petrol-400"]);
 
-        const withoutEntry = new Set<string>();
-        expect(withoutEntry.has(usageKey), `[${mode}] uncovered once the entry is removed`).toBe(
-          false,
+        // The real PAIRINGS array, minus exactly that one entry.
+        const withoutEntry = buildMeasuredBackground(
+          PAIRINGS.filter((pairing) => pairing.id !== "petrol-900-on-petrol-400"),
+          modeTokens,
         );
+        expect(
+          withoutEntry.get(backgroundKey)?.size ?? 0,
+          `[${mode}] bg-petrol-400 must be uncovered once petrol-900-on-petrol-400 is removed`,
+        ).toBe(0);
       },
     );
 
@@ -548,9 +742,19 @@ describe("the gate cannot be routed around", () => {
      * scanner's role convention never generates a usage on this axis for a
      * `bg-*` utility (see above), so a synthetic usage stands in for the real
      * shape (`AlphaUtilityUsage`'s own type, not a scanner result).
+     *
+     * Disclosed, not fixed (see this describe block's own header): deleting
+     * petrol-400-fill-on-old-surface-* from the real PAIRINGS array leaves
+     * this key at exactly ui's 3:1 regardless, because chart-3-on-surface-0/1
+     * (`foreground: "--chart-3"`, and `--chart-3: var(--color-petrol-400)`
+     * in globals.css) resolves to the identical literal and is itself
+     * checked at `ui`. Narrowing `buildForegroundVerifiedThreshold`'s
+     * cross-reference sharing to fix this would also narrow it for the
+     * `--ring`/`--primary` case that sharing exists to protect - out of this
+     * gate's scope, and asserted as what it is rather than claimed fixed.
      */
     it.each(THEME_MODES)(
-      "petrol-400-fill-on-old-surface-* covers petrol-400 as a UI-boundary foreground, in isolation (%s)",
+      "petrol-400-fill-on-old-surface-* measures petrol-400 as a UI-boundary foreground, shadowed by chart-3-on-surface-* on this axis (%s)",
       (mode) => {
         const modeTokens = tokensByMode[mode];
         const syntheticFillUsage: AlphaUtilityUsage = {
@@ -563,16 +767,17 @@ describe("the gate cannot be routed around", () => {
         };
         const usageKey = `${resolveToken(syntheticFillUsage.property, modeTokens)}@${syntheticFillUsage.alphaPercent}`;
 
-        const withEntries = buildForegroundVerifiedThreshold(petrol400FillOnOldSurface, modeTokens);
-        expect(withEntries.get(usageKey), `[${mode}] covered with the entries present`).toBe(
-          THRESHOLDS.ui,
-        );
+        const withEntries = buildForegroundVerifiedThreshold(PAIRINGS, modeTokens);
+        expect(withEntries.get(usageKey), `[${mode}] covered today`).toBe(THRESHOLDS.ui);
 
-        const withoutEntries = buildForegroundVerifiedThreshold([], modeTokens);
+        const withoutEntries = buildForegroundVerifiedThreshold(
+          PAIRINGS.filter((pairing) => !pairing.id.startsWith("petrol-400-fill-on-old-surface-")),
+          modeTokens,
+        );
         expect(
-          withoutEntries.get(usageKey) ?? -Infinity,
-          `[${mode}] uncovered once removed`,
-        ).toBeLessThan(THRESHOLDS.ui);
+          withoutEntries.get(usageKey),
+          `[${mode}] still reads as ui-verified via chart-3-on-surface-* - a known, disclosed shadow on this axis, not fixed by this PR`,
+        ).toBe(THRESHOLDS.ui);
       },
     );
 
@@ -586,9 +791,16 @@ describe("the gate cannot be routed around", () => {
      * synthetic usage stands in for the one Tailwind itself refuses to
      * generate. Closing that compile gap is ugcportal-ei5c's job, not this
      * bead's.
+     *
+     * Disclosed, not fixed, the same way as the previous test: deleting
+     * petrol-900-on-petrol-400 leaves this key at exactly body's 4.5:1
+     * regardless, because `--foreground` (light mode: `var(--petrol-900)`)
+     * and `--selection-foreground` both resolve to the identical hex literal
+     * and are themselves checked at `body` via `foreground-on-background`/
+     * `selection-text-on-selection`.
      */
     it.each(THEME_MODES)(
-      "petrol-900-on-petrol-400 covers text-petrol-900 as a foreground on the fill, in isolation (%s)",
+      "petrol-900-on-petrol-400 measures text-petrol-900 as a foreground on the fill, shadowed by --foreground/--selection-foreground on this axis (%s)",
       (mode) => {
         const modeTokens = tokensByMode[mode];
         const syntheticLabelUsage: AlphaUtilityUsage = {
@@ -601,16 +813,17 @@ describe("the gate cannot be routed around", () => {
         };
         const usageKey = `${resolveToken(syntheticLabelUsage.property, modeTokens)}@${syntheticLabelUsage.alphaPercent}`;
 
-        const withEntry = buildForegroundVerifiedThreshold([petrol900OnPetrol400!], modeTokens);
-        expect(withEntry.get(usageKey), `[${mode}] covered with the entry present`).toBe(
-          THRESHOLDS.body,
-        );
+        const withEntry = buildForegroundVerifiedThreshold(PAIRINGS, modeTokens);
+        expect(withEntry.get(usageKey), `[${mode}] covered today`).toBe(THRESHOLDS.body);
 
-        const withoutEntry = buildForegroundVerifiedThreshold([], modeTokens);
+        const withoutEntry = buildForegroundVerifiedThreshold(
+          PAIRINGS.filter((pairing) => pairing.id !== "petrol-900-on-petrol-400"),
+          modeTokens,
+        );
         expect(
-          withoutEntry.get(usageKey) ?? -Infinity,
-          `[${mode}] uncovered once removed`,
-        ).toBeLessThan(THRESHOLDS.body);
+          withoutEntry.get(usageKey),
+          `[${mode}] still reads as body-verified via foreground-on-background / selection-text-on-selection - a known, disclosed shadow on this axis, not fixed by this PR`,
+        ).toBe(THRESHOLDS.body);
       },
     );
   });
