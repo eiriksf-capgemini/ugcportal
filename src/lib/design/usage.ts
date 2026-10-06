@@ -630,3 +630,209 @@ export function findAlphaColorUtilities(
   }
   return found;
 }
+
+/**
+ * Bare (no alpha modifier) `bg-X`/`text-X`/`border-X` colour utilities
+ * (ugcportal-5gca).
+ *
+ * findAlphaColorUtilities above only ever sees a utility carrying a Tailwind
+ * alpha modifier (`ring-ring/80`). A plain `bg-X`/`text-X`/`border-X` is
+ * invisible to it - and to the coverage check built on top of it in
+ * contrast.test.ts - whether or not PAIRINGS has an entry for the colour it
+ * paints. That gap is this bead's whole premise; contrast.test.ts's own
+ * mutation test proves it directly against the PAIRINGS entries it let ship
+ * unguarded.
+ *
+ * Deliberately narrower than findAlphaColorUtilities, and not a second
+ * attempt at its completeness: this bead's own scope is exactly these three
+ * bare namespaces, not a derived sweep of every colour-capable Tailwind
+ * namespace the way COLOR_UTILITY_PREFIXES above is. A bare `ring-X`,
+ * `outline-X`, `fill-X`, `divide-X`, ... or a side-qualified `border-t-X` is
+ * out of scope here, the same way JSX-ancestor-aware analysis and a redesign
+ * of PAIRINGS are - see the bead. A qualified form such as `border-t-primary`
+ * is not silently misread as plain `border` either: compiling it resolves to
+ * `border-top-color`, not the `border-color` this scanner looks for, so it is
+ * excluded on its own merits rather than matched and mis-keyed.
+ *
+ * Classification compiles the actual candidate, the same discipline
+ * findAlphaColorUtilities and isNonColorOverload hold to, rather than
+ * guessing from Tailwind's naming by eye - but it cannot reuse
+ * isNonColorOverload's own `${name}/50` probe. That probe exists to
+ * disambiguate a genuine colour from a same-namespace PRESET's own opacity
+ * modifier (`text-shadow-lg/50`), and every namespace it is ever asked about
+ * is pre-confirmed (by discoverColorNamespaces) to accept a colour+alpha
+ * combination somewhere in it - so a candidate that fails to compile there is
+ * good evidence of a typo, not of a namespace that rejects modifiers
+ * outright. `bg`/`text`/`border` carry no such guarantee: appending `/50` to
+ * `border-solid`, `bg-cover` or `text-left` - ordinary, frequently-shipped
+ * non-colour utilities under these three namespaces - does not compile at
+ * all (confirmed against the installed Tailwind), which would read every one
+ * of them as an attempted colour under isNonColorOverload's own documented
+ * default. Compiling the BARE candidate instead sidesteps it: each of those
+ * compiles cleanly on its own, to the property this scanner is not looking
+ * for (`border-style`, `background-size`, `text-align`), so they are
+ * excluded on their own merits.
+ *
+ * A bare candidate that does not compile AT ALL (`--color-petrol-900` is the
+ * real example: declared in globals.css but deliberately kept outside
+ * `@theme`, so `text-petrol-900` is not a Tailwind utility at all - see
+ * ugcportal-ei5c, which owns that compile gap) is excluded here too, not
+ * flagged as an attempted colour the way isNonColorOverload treats its own
+ * null case. The two cases are not the same: isNonColorOverload's candidates
+ * are drawn from a namespace already proven to accept colour+alpha, so a
+ * failure to compile there is unlikely to be anything but an undeclared
+ * token. Here it is not - `border-solid` and a genuinely undeclared
+ * `bg-not-a-real-token` both fail to compile for reasons this scanner cannot
+ * tell apart from the compile result alone, and treating the first as a
+ * colour would be a false alarm on ordinary Tailwind this scanner ships
+ * tests against. The residual this leaves - a bare utility whose name really
+ * is an undeclared colour token, rather than a non-colour keyword - is
+ * stated rather than solved, the same as this module's other documented
+ * residuals: it is not this coverage gate's job to catch a typo that ships
+ * no utility at all, only a real one that ships unmeasured.
+ */
+const BARE_COLOR_PREFIXES = ["bg", "text", "border"] as const;
+type BareColorPrefix = (typeof BARE_COLOR_PREFIXES)[number];
+
+/** The CSS property each bare namespace paints, when it paints a colour at all. */
+const BARE_COLOR_PROPERTY: Readonly<Record<BareColorPrefix, string>> = {
+  bg: "background-color",
+  text: "color",
+  border: "border-color",
+};
+
+/**
+ * CSS-wide and Tailwind keyword values that paint no colour of their own.
+ * Confirmed against the installed Tailwind: `bg-transparent`/
+ * `border-transparent` (both shipped today, deliberately, in button.tsx)
+ * compile to this literal keyword directly, never a `var(...)` token
+ * reference, so there is nothing here for a contrast pairing to measure.
+ */
+const COLORLESS_KEYWORDS = new Set([
+  "transparent",
+  "currentcolor",
+  "inherit",
+  "initial",
+  "unset",
+  "revert",
+  "revert-layer",
+]);
+
+const bareColorCache = new Map<string, boolean>();
+
+/**
+ * True if the bare (no alpha modifier) candidate `${prefix}-${name}` compiles
+ * to a real assignment of the colour this namespace paints - a design token
+ * (`var(...)`) or an arbitrary literal value, either of which this gate can
+ * (or, for an arbitrary value, deliberately refuses to) measure - as opposed
+ * to an unrelated utility merely sharing the namespace, a keyword that paints
+ * no colour at all, or a candidate that does not compile. Exported for
+ * usage.test.ts.
+ */
+export function isBareColorUtility(
+  designSystem: TailwindDesignSystem,
+  prefix: BareColorPrefix,
+  name: string,
+): boolean {
+  const key = `${prefix}-${name}`;
+  const cached = bareColorCache.get(key);
+  if (cached !== undefined) return cached;
+
+  const [css] = designSystem.candidatesToCss([key]);
+  let result = false;
+  if (css !== null) {
+    const expectedProperty = BARE_COLOR_PROPERTY[prefix];
+    postcss.parse(css).walkDecls((decl) => {
+      if (result) return;
+      if (decl.prop !== expectedProperty) return;
+      if (COLORLESS_KEYWORDS.has(decl.value.trim().toLowerCase())) return;
+      result = true;
+    });
+  }
+  bareColorCache.set(key, result);
+  return result;
+}
+
+const BARE_COLOR_PREFIX_ALTERNATION = BARE_COLOR_PREFIXES.join("|");
+
+/**
+ * Matches a bare `bg-X`/`text-X`/`border-X`, reusing the alpha scanner's own
+ * boundary class (variant prefixes, the legacy leading `!important` spelling,
+ * a closing template-literal brace - see BOUNDARY above). `(?![a-z0-9-])`
+ * forces the bare-word name to be matched in full before either trailing
+ * lookahead runs: without it, `[a-z][a-z0-9-]*` is greedy but not atomic, so
+ * when the alpha-modifier lookahead below failed against the full name the
+ * engine backtracked one character and re-tried it against a TRUNCATED name
+ * - `bg-petrol-500/50` matched as `bg-petrol-50`, a real token, reported as a
+ * usage nobody wrote (PR #115 round 3, CONFIRMED medium). The second
+ * lookahead, `(?!\/(?:\$\{|\[|\(|\d))`, is what keeps this scanner and
+ * findAlphaColorUtilities from double-counting the same utility at two
+ * different (and contradictory) opacities - `bg-primary/50` is
+ * findAlphaColorUtilities' job, at its own alpha, not this scanner's at an
+ * assumed 100 - but only once the name is no longer free to shrink to dodge it.
+ */
+const BARE_COLOR_UTILITY = new RegExp(
+  String.raw`${BOUNDARY}(${BARE_COLOR_PREFIX_ALTERNATION})-(\[[^\]]*\]|\([^)]*\)|[a-z][a-z0-9-]*)(?![a-z0-9-])(?!\/(?:\$\{|\[|\(|\d))`,
+  "g",
+);
+
+/**
+ * Design-system internals (contrast.ts, tokens.ts, color.ts, this file)
+ * describe what a pairing covers in PROSE that reads as Tailwind classes
+ * without being any - contrast.ts's own `surface-0-on-petrol-100-hover`
+ * pairing names `hover:bg-petrol-200` inside its `usage:` string, which is
+ * data about the gate, not rendered UI. findAlphaColorUtilities above has
+ * never needed this exclusion (no alpha-modified phrase has turned up in
+ * that prose), but this scanner's bare bg/text/border surface is far more
+ * likely to collide with it, and the collision above is a real one, not a
+ * hypothetical. dual-meaning-usage.test.ts and no-raw-hex.test.ts already
+ * draw this same line, for the same reason - see scan-source.ts's callers.
+ */
+const DESIGN_LIB_DIR = path.join(SRC_ROOT, "lib", "design") + path.sep;
+
+/** Every bare (non-alpha) bg-/text-/border- colour utility in the shipped source. */
+export function findBareColorUtilities(root: string = SRC_ROOT): AlphaUtilityUsage[] {
+  const files: string[] = [];
+  walk(root, files);
+  if (files.length === 0) fail(`no source files found under ${root}`);
+
+  const scannable = files.filter((file) => !file.startsWith(DESIGN_LIB_DIR));
+
+  const found: AlphaUtilityUsage[] = [];
+  for (const file of scannable) {
+    const relative = path.relative(path.dirname(root), file);
+    const source = stripComments(readFileSync(file, "utf8"));
+
+    BARE_COLOR_UTILITY.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = BARE_COLOR_UTILITY.exec(source)) !== null) {
+      // Same rewind as findAlphaColorUtilities: the boundary character is
+      // consumed by the match, so two adjacent utilities would otherwise
+      // hide each other.
+      BARE_COLOR_UTILITY.lastIndex -= 1;
+
+      const prefix = match[1] as BareColorPrefix;
+      const name = match[2];
+      const written = `${prefix}-${name}`;
+
+      if (!isBareColorUtility(designSystem, prefix, name)) continue;
+
+      if (name.startsWith("[") || name.startsWith("(")) {
+        fail(
+          `${relative}: "${written}" applies a bare colour utility to an arbitrary value. ` +
+            `Use a design token so the gate can resolve and measure it.`,
+        );
+      }
+
+      found.push({
+        file: relative,
+        utility: written,
+        property: `--color-${name}`,
+        alphaPercent: 100,
+        role: isBackgroundRole(prefix) ? "background" : "foreground",
+        prefix,
+      });
+    }
+  }
+  return found;
+}
