@@ -126,7 +126,9 @@ for (const width of [360, 768, 1024]) {
       };
       return {
         textRects: [
-          ...document.querySelectorAll("[data-home-hero] p, [data-home-hero] a"),
+          ...document.querySelectorAll(
+            "[data-home-hero] h1, [data-home-hero] p, [data-home-hero] a",
+          ),
         ].map(toRect),
         shapeRects: [
           ...document.querySelectorAll("[data-home-hero-decoration] span"),
