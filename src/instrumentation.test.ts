@@ -421,11 +421,9 @@ describe("register() under the node runtime (ugcportal-177y, K3)", () => {
  * This is a CONSERVATIVE over-approximation of what Next actually bundles
  * for the edge compile, not an exact match: it walks every module reachable
  * through an ordinary static VALUE import or re-export, which can visit a
- * module Next's own tree-shaking would otherwise drop, but it does not skip
- * anything Next's edge compiler would include through that same ordinary
- * static chain. `import type` / `export type` declarations are the one
- * shape excluded — the compiler erases them before Next ever bundles
- * anything, so counting them would only inflate false
+ * module Next's own tree-shaking would otherwise drop. `import type` /
+ * `export type` declarations are excluded — the compiler erases them before
+ * Next ever bundles anything, so counting them would only inflate false
  * positives (the repo's own `import type { LegalPage } from
  * "@/lib/legal/publishable"` at src/lib/legal/pages.ts:3 is exactly this
  * shape) without protecting against a real one. A bare package specifier
