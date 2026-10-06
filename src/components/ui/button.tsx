@@ -139,8 +139,44 @@ const buttonVariants = cva(
    * for the same reason: it removes the rule from the stylesheet entirely
    * under `reduce`, rather than relying on it losing a specificity contest
    * it might not win.
+   *
+   * No bare `outline-none` here (ugcportal-oavb, fixing a gap `outline-none`
+   * plus a box-shadow-only `focus-visible` ring left on EVERY caller of this
+   * base, not only the two PR #122 patched locally): `forced-colors: active`
+   * (Windows High Contrast and similar UA modes) ignores `box-shadow`
+   * entirely, so `focus-visible:ring-3 focus-visible:ring-ring/80` alone paints
+   * nothing there, and a bare `outline-none` does not merely fail to help —
+   * Tailwind v4's `outline-none` compiles to `outline-style: none`, which
+   * stays `none` under forced colors same as anywhere else, so focus became
+   * fully invisible to a forced-colors user on every shared-system button.
+   * Reaching instead for this repo's own `outline-hidden` idiom (the
+   * transparent-but-forced-colors-visible outline most of this app's other
+   * focusable elements use) is not an option UNCONDITIONALLY at the base:
+   * `outline-hidden` is not gated to `:focus-visible`, so painting it on
+   * every button at rest would show a permanent, always-on box under forced
+   * colors, not only while focused. `focus-visible:outline-solid` +
+   * `focus-visible:outline-2` + `focus-visible:outline-offset-2` +
+   * `focus-visible:outline-transparent` is the combination that actually
+   * works, confirmed by compiling this file with `@tailwindcss/node` and
+   * rendering under Playwright's `forcedColors: "active"` emulation: a bare
+   * `focus-visible:outline`/`outline-2` only READS the shared
+   * `--tw-outline-style` custom property, it does not SET it, so stacked on
+   * top of no outline-style at all it still resolves to nothing —
+   * `outline-solid` is the utility that actually sets `outline-style: solid`
+   * at `:focus-visible`'s specificity. `outline-transparent` keeps this
+   * invisible outside forced-colors mode (verified: `outlineColor: "rgba(0,
+   * 0, 0, 0)"` there, the existing box-shadow ring design unchanged), while
+   * forced-colors mode substitutes its own system highlight colour for that
+   * `transparent` the instant the control is actually focused (verified:
+   * `outlineStyle: "solid"` only once focused, `"none"` before and after
+   * blur). This was first proven out as a scoped override at exactly two
+   * call sites (src/components/home/hero.tsx, src/components/home/
+   * empty-state.tsx, PR #122 round 4) before landing here in the shared
+   * base, which is why both of those files' own overrides and comments are
+   * gone now — every caller gets this for free instead of two having it and
+   * the rest (the header's sign-in controls among them) silently not.
    */
-  "group/button inline-flex shrink-0 items-center justify-center rounded-lg border border-transparent bg-clip-padding text-sm font-medium whitespace-nowrap transition-all outline-none select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/80 motion-safe:active:not-aria-[haspopup]:translate-y-px disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 aria-invalid:border-destructive/75 aria-invalid:ring-3 aria-invalid:ring-destructive/80 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+  "group/button inline-flex shrink-0 items-center justify-center rounded-lg border border-transparent bg-clip-padding text-sm font-medium whitespace-nowrap transition-all select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/80 focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-transparent motion-safe:active:not-aria-[haspopup]:translate-y-px disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 aria-invalid:border-destructive/75 aria-invalid:ring-3 aria-invalid:ring-destructive/80 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
   {
     variants: {
       variant: {
