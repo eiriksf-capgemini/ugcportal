@@ -1,5 +1,6 @@
 import { signIn, signOut } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
+import { SignInMenu } from "@/components/sign-in-menu";
 import { resolveSessionOrAnonymous } from "@/lib/session-or-anonymous";
 import { hasSignedInUser } from "@/lib/session";
 
@@ -38,55 +39,41 @@ export async function AuthStatus() {
   const session = await resolveSessionOrAnonymous();
 
   if (!hasSignedInUser(session)) {
+    /*
+     * One "Sign in" control, not two always-visible outline buttons
+     * (ugcportal-qqnt.3; was ugcportal-axu's "outline rather than the
+     * filled primary variant" reasoning for why these are outline at all —
+     * two petrol slabs in the header was the loudest instance of the old
+     * petrol-dominant treatment, and signing in is not the primary action
+     * of a page whose job is to show photographs). Sign-in here is a closed
+     * operator allowlist (src/config/users.ts) - a visitor saw two controls
+     * they could never use, and the old visible label also rendered with a
+     * double space ("Sign in with  Google") from a `&nbsp;` immediately
+     * before an adjacent JSX text node on the next line (JSX collapses that
+     * newline-plus-indentation into a second, plain space). `SignInMenu`
+     * (src/components/sign-in-menu.tsx - see its own comment for the full
+     * account) fixes both: ONE trigger, labelled "Sign in" alone, discloses
+     * both provider choices without a second always-visible control, and
+     * neither provider button's own label carries a "Sign in with" prefix
+     * any more, so there is no longer a seam for the two spaces to meet at.
+     *
+     * Neither `signIn("google")` nor `signIn("facebook")` moved: both
+     * Server Actions are still defined, and called, right here - only
+     * handed to `SignInMenu` as props instead of placed directly inside a
+     * `<form action={...}>` in this file (K3: relocated, not removed - see
+     * auth-status.test.tsx's own source-scan assertion).
+     */
     return (
-      <div className="flex items-center gap-2">
-        {/*
-          Outline rather than the filled primary variant (ugcportal-axu): two
-          petrol slabs in the header was the single loudest instance of the
-          old petrol-dominant treatment, and signing in is not the primary
-          action of a page whose job is to show photographs.
-
-          "Sign in with" is visually hidden below 640px and the provider name
-          carries the button on its own. Two full labels plus the wordmark
-          came to roughly 330-340px of content that could not shrink - the
-          labels must not truncate, and the buttons are shrink-0 - so at 320px
-          the document grew a horizontal scrollbar.
-
-          Hidden with sr-only rather than removed, so the accessible name
-          stays "Sign in with Google" at every width. The visible text remains
-          a substring of it, which is what WCAG 2.5.3 asks of a visible label.
-
-          size="header-sm", not "sm" (ugcportal-qqnt.2, round-1 review): same
-          compact h-7/px-2.5 footprint as "sm" - still the same width budget
-          the 320px note above depends on - but without "sm"'s own smaller
-          radius cap, so this control computes the same rounded-lg radius
-          (K2) as the hero's and empty state's size="lg" controls. See
-          button.tsx's own `size` comment for why that is a distinct size
-          rather than a change to "sm" itself.
-        */}
-        <form
-          action={async () => {
-            "use server";
-            await signIn("google");
-          }}
-        >
-          <Button type="submit" variant="outline" size="header-sm">
-            <span className="sr-only sm:not-sr-only">Sign in with&nbsp;</span>
-            Google
-          </Button>
-        </form>
-        <form
-          action={async () => {
-            "use server";
-            await signIn("facebook");
-          }}
-        >
-          <Button type="submit" variant="outline" size="header-sm">
-            <span className="sr-only sm:not-sr-only">Sign in with&nbsp;</span>
-            Facebook
-          </Button>
-        </form>
-      </div>
+      <SignInMenu
+        googleAction={async () => {
+          "use server";
+          await signIn("google");
+        }}
+        facebookAction={async () => {
+          "use server";
+          await signIn("facebook");
+        }}
+      />
     );
   }
 

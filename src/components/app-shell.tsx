@@ -16,10 +16,10 @@ import { SiteFooter } from "@/components/site-footer";
  * page's single main landmark.
  *
  * Frame budget:
- *   header   variable, sticky, opaque (ugcportal-14k9: a wordmark/nav row
- *            plus a fixed-height tagline row; see src/components/site-
- *            header.tsx's HEADER_HEIGHT_PX and the `--header-height` note
- *            on the root div below for the number this grew to)
+ *   header   fixed, sticky, opaque, one row (ugcportal-14k9, one row since
+ *            ugcportal-qqnt.3 dropped the header's second, tagline row; see
+ *            src/components/site-header.tsx's HEADER_HEIGHT_PX and the
+ *            `--header-height` note on the root div below for the number)
  *   content  flex-1, page decides its own max width and padding
  *   footer   auto, hairline above
  *
@@ -33,8 +33,8 @@ import { SiteFooter } from "@/components/site-footer";
  * so it is exactly the thing the contrast gate in src/lib/design cannot check
  * and a reader cannot rely on.
  *
- * The header's own markup (wordmark, tagline, nav, mobile menu, the auth and
- * upload-link slots) lives in src/components/site-header.tsx, not here
+ * The header's own markup (brand mark, wordmark, nav, mobile menu, the auth
+ * and upload-link slots) lives in src/components/site-header.tsx, not here
  * (ugcportal-14k9) — this file keeps owning the frame itself: the skip link,
  * the single <main> landmark, and the footer.
  *
@@ -124,7 +124,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         stacking context should introduce one rather than everyone picking
         their own bigger number.
 
-        The header's own content (wordmark, tagline, nav, the mobile menu,
+        The header's own content (brand mark, wordmark, nav, the mobile menu,
         and the UploadNavLink/AuthStatus slots this file used to render
         inline) moved to src/components/site-header.tsx wholesale, including
         the `<header>` element itself, for ugcportal-14k9 — see that file's

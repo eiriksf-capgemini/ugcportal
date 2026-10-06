@@ -16,7 +16,7 @@ import {
   PORTFOLIO_PATH,
   PRIVACY_PATH,
 } from "@/lib/routes";
-import { SITE_NAME } from "@/lib/site";
+import { SITE_NAME, SITE_TAGLINE } from "@/lib/site";
 
 import { FooterNavLink, SiteFooter } from "./site-footer";
 
@@ -124,6 +124,8 @@ describe("K2: every visible string, for review", () => {
     const text = textContent(renderWithConsent(false));
     for (const needle of [
       SITE_NAME,
+      // ugcportal-qqnt.3: relocated here from the header's own second row.
+      SITE_TAGLINE,
       "Pages",
       "About",
       "Portfolio",
