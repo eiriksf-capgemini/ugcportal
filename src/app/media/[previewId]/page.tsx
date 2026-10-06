@@ -6,6 +6,7 @@ import {
   GalleryItemTags,
 } from "@/components/gallery/gallery-item";
 import { PageShell } from "@/components/site/page-shell";
+import { ShareControl } from "@/components/share/share-control";
 import {
   getPublicMediaItem,
   mediaItemShortText,
@@ -71,6 +72,34 @@ export const dynamic = "force-dynamic";
  * describe the item, not its own URL, so they have nothing to omit.
  * `checkSiteOriginConfigured` (src/lib/origin.ts, wired into
  * src/instrumentation-node.ts) is what reports the actual cause.
+ *
+ * The Open Graph and Twitter-card tags (ugcportal-lju K1) follow the SAME
+ * rule as `alternates.canonical`, for the same reason: `og:url` and
+ * `og:image` are both required to be absolute by the crawlers that read
+ * them (unlike a share link, which the browser resolves live — see
+ * src/components/share/share-control.tsx's own comment — a crawler has no
+ * "current page" to resolve a relative URL against), so a `null` origin
+ * leaves nothing valid to put in either field. Rather than guess at
+ * `http://localhost:3000` the way `alternates.canonical` deliberately
+ * refuses to outside this one case too, the whole `openGraph`/`twitter`
+ * block is omitted when `origin` is `null` — a page with no preview tags at
+ * all degrades to a bare link when shared, which is no worse than today;
+ * shipping `og:image` pointing at an address no sharer's recipient can ever
+ * reach would be actively wrong, the same argument `alternates.canonical`'s
+ * own comment makes.
+ *
+ * `images`/`og:image` is built from `item.previewSrc` — which
+ * `toGalleryItem` (src/lib/gallery-items.ts) already built from
+ * `mediaPreviewPath(previewId)`, the only media URL any surface may build
+ * (see that function's own comment) — never from `Media.key` or
+ * `previewKey` (K3): `MEDIA_ANONYMOUS_SELECT` never reads either column, so
+ * there is nothing here to leak by mistake even if a future edit tried.
+ *
+ * `type: "website"`, not `"article"`: the Open Graph protocol's `article`
+ * type carries its own expected fields (`article:published_time`,
+ * `article:author`, …) that this page has no real value for, and a photo
+ * post is not an article. `website` needs nothing beyond what every og:*
+ * tag here already sets.
  */
 export async function generateMetadata({
   params,
@@ -80,13 +109,32 @@ export async function generateMetadata({
   if (!item) notFound();
 
   const title = mediaItemTitle(item);
+  const description = mediaItemShortText(item);
   const origin = siteOrigin();
+  if (origin === null) {
+    return { title, description };
+  }
+
+  const pageUrl = `${origin}${mediaItemPath(previewId)}`;
+  const imageUrl = `${origin}${item.previewSrc}`;
+
   return {
     title,
-    description: mediaItemShortText(item),
-    ...(origin !== null
-      ? { alternates: { canonical: `${origin}${mediaItemPath(previewId)}` } }
-      : {}),
+    description,
+    alternates: { canonical: pageUrl },
+    openGraph: {
+      title,
+      description,
+      url: pageUrl,
+      images: [imageUrl],
+      type: "website",
+    },
+    twitter: {
+      card: "summary_large_image",
+      title,
+      description,
+      images: [imageUrl],
+    },
   };
 }
 
@@ -153,6 +201,16 @@ export default async function MediaItemPage({ params }: RouteContext) {
       </p>
 
       <GalleryItemTags item={item} />
+
+      {/*
+        The share affordance (ugcportal-lju K2): native `navigator.share`
+        where supported, a clipboard-copy fallback otherwise. See
+        ShareControl's own comment for why this loads no third-party script
+        and writes no non-essential storage — the two reasons it needs no
+        consent gate (ugcportal-3wgp) and nothing else on this page does
+        either.
+      */}
+      <ShareControl title={title} text={mediaItemShortText(item)} />
     </PageShell>
   );
 }

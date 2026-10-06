@@ -3,6 +3,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 
 import { seedMedia } from "@/lib/test-support/media-fixtures";
 import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db";
+import { siteOrigin } from "@/lib/origin";
+import { mediaItemPath, mediaPreviewPath } from "@/lib/routes";
 
 /**
  * /media/[previewId] (ugcportal-qnq9.12, K1/K2), against a real database.
@@ -128,6 +130,157 @@ describe("K1: a published item's page", () => {
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+
+  /**
+   * K1 (ugcportal-lju): og:title, og:description, og:image, og:url and
+   * twitter:card, with og:title/og:description derived from the item's own
+   * alt text/caption. Compared against `siteOrigin()`/`mediaItemPath`/
+   * `mediaPreviewPath` themselves, not a hardcoded "http://localhost:3000"
+   * literal, so a future change to any of those three still gets the right
+   * expectation rather than a test that silently stopped checking anything.
+   */
+  it("carries og:title, og:description, og:url, og:image and twitter:card built from the item", async () => {
+    const origin = siteOrigin();
+    expect(origin).not.toBeNull();
+    const previewId = "pv-page-item-ok";
+
+    const metadata = await generateMetadata(params(previewId));
+
+    const expectedUrl = `${origin}${mediaItemPath(previewId)}`;
+    const expectedImage = `${origin}${mediaPreviewPath(previewId)}`;
+
+    expect(metadata.openGraph?.title).toBe(
+      "A bowl of mushroom risotto on a wooden table",
+    );
+    expect(metadata.openGraph?.description).toBe(
+      "Simple mushroom risotto for weeknights.",
+    );
+    expect(metadata.openGraph?.url).toBe(expectedUrl);
+    expect(metadata.openGraph?.images).toEqual([expectedImage]);
+    // `openGraph`/`twitter` are each a discriminated union keyed on
+    // `type`/`card` (next/dist/lib/metadata/types/{opengraph,twitter}-types.d.ts)
+    // with one bare, discriminant-less member in the union (a caller that set
+    // neither) — so TS refuses a bare `.type`/`.card` read on the union as a
+    // whole without first narrowing to a member that actually declares it.
+    // This repo's own code never constructs that bare member (the `return`
+    // above always sets `type`/`card` or omits the block entirely), so the
+    // narrowing here is a type-level technicality, not a live branch.
+    expect((metadata.openGraph as { type?: string } | undefined)?.type).toBe(
+      "website",
+    );
+
+    expect(
+      (metadata.twitter as { card?: string } | undefined)?.card,
+    ).toBe("summary_large_image");
+    expect(metadata.twitter?.title).toBe(
+      "A bowl of mushroom risotto on a wooden table",
+    );
+    expect(metadata.twitter?.description).toBe(
+      "Simple mushroom risotto for weeknights.",
+    );
+    expect(metadata.twitter?.images).toEqual([expectedImage]);
+  });
+
+  /**
+   * The mutation K1 itself asks for: a second row with a DIFFERENT caption,
+   * asserting og:description/twitter:description follow it. Without this,
+   * the test above could pass against a version of `generateMetadata` that
+   * hardcoded the first row's caption string instead of reading
+   * `item.caption` at all.
+   */
+  it("og:description and twitter:description follow the caption, not a fixed string", async () => {
+    await seedMedia(prisma, {
+      id: "page-item-og-mutation",
+      userId: UPLOADER,
+      createdAt: new Date("2026-03-01T01:00:00.000Z"),
+      altText: "A plate of pan-fried dumplings",
+      caption: "Dumplings, pan-fried until the bottoms crisp.",
+    });
+
+    const metadata = await generateMetadata(params("pv-page-item-og-mutation"));
+
+    expect(metadata.openGraph?.description).toBe(
+      "Dumplings, pan-fried until the bottoms crisp.",
+    );
+    expect(metadata.openGraph?.description).not.toBe(
+      "Simple mushroom risotto for weeknights.",
+    );
+    expect(metadata.twitter?.description).toBe(
+      "Dumplings, pan-fried until the bottoms crisp.",
+    );
+  });
+
+  /**
+   * Same reasoning as "omits alternates.canonical in production when
+   * AUTH_URL is unset" above: `openGraph`/`twitter` both require an absolute
+   * URL, and this page refuses to guess one. See generateMetadata's own
+   * comment for why the whole block is omitted rather than built around a
+   * localhost placeholder.
+   */
+  it("omits openGraph and twitter metadata in production when AUTH_URL is unset", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("AUTH_URL", "");
+    try {
+      const metadata = await generateMetadata(params("pv-page-item-ok"));
+      expect(metadata.openGraph).toBeUndefined();
+      expect(metadata.twitter).toBeUndefined();
+      expect(metadata.title).toBe("A bowl of mushroom risotto on a wooden table");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+});
+
+// K3 (ugcportal-lju): none of the tags this bead adds may leak Media.key,
+// previewKey or the uploader's id, and every media URL the head carries must
+// equal `mediaPreviewPath(previewId)` — compared against that function
+// itself, not a literal, so a change to the path shape still gets caught.
+describe("K3 (ugcportal-lju): og/twitter tags never leak Media.key, previewKey, or userId", () => {
+  const previewId = "pv-page-item-k3";
+
+  beforeEach(async () => {
+    await seedMedia(prisma, {
+      id: "page-item-k3",
+      userId: UPLOADER,
+      createdAt: new Date("2026-03-06T00:00:00.000Z"),
+    });
+  });
+
+  it("every image URL equals mediaPreviewPath(previewId), and no tag value contains the key, previewKey, or uploader id", async () => {
+    const metadata = await generateMetadata(params(previewId));
+    const origin = siteOrigin();
+    expect(origin).not.toBeNull();
+
+    const expectedImage = `${origin}${mediaPreviewPath(previewId)}`;
+    expect(metadata.openGraph?.images).toEqual([expectedImage]);
+    expect(metadata.twitter?.images).toEqual([expectedImage]);
+
+    // Media.key, previewKey (src/lib/test-support/media-fixtures.ts builds
+    // both from the uploader id — "media/{userId}/..." /
+    // "previews/{userId}/...") and the bare uploader id itself must appear
+    // NOWHERE in the serialised metadata object.
+    const serialised = JSON.stringify(metadata);
+    expect(serialised).not.toContain(`media/${UPLOADER}/`);
+    expect(serialised).not.toContain(`previews/${UPLOADER}/`);
+    expect(serialised).not.toContain(UPLOADER);
+  });
+
+  /**
+   * The mutation this K3 test needs: a fixture that embeds the uploader id
+   * somewhere `generateMetadata` does NOT currently read (previewKey/key are
+   * never selected — see MEDIA_ANONYMOUS_SELECT) would otherwise let the
+   * assertions above pass vacuously against an empty string. Asserting the
+   * uploader id string genuinely appears in the fixture's own previewKey
+   * closes that gap: if `media-fixtures.ts` ever stopped encoding the
+   * uploader id into previewKey, this would fail and say so.
+   */
+  it("the fixture's own previewKey really does encode the uploader id (sanity check for the assertion above)", async () => {
+    const row = await prisma.media.findUniqueOrThrow({
+      where: { id: "page-item-k3" },
+      select: { previewKey: true },
+    });
+    expect(row.previewKey).toContain(UPLOADER);
   });
 });
 
