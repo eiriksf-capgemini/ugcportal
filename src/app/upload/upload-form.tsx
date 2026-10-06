@@ -180,8 +180,18 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
    * The one control this page always has, dismissed row or not — the
    * landing spot "Remove"/"Clear" fall back to when the row they unmount has
    * no neighbour to hand focus to instead (see `dismiss()`).
+   *
+   * The "Choose files" label, not the file input itself: the input is
+   * `sr-only` (invisibly positioned, not merely dim), so a ring painted on
+   * it would never be seen, and the dropzone's existing visible indicator
+   * for it is `has-[:focus-visible]` — the same heuristic this file's own
+   * status line deliberately avoids (see its own comment in
+   * upload-queue-list.tsx) because it does not reliably paint on a
+   * programmatic `.focus()` call. `tabIndex={-1}` plus a direct `focus:`
+   * ring on the label (below) sidesteps that question entirely rather than
+   * leaving it open for this landing spot too.
    */
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const addFilesLabelRef = useRef<HTMLLabelElement>(null);
 
   const registerRetryButtonRef = useCallback(
     (id: string, element: HTMLButtonElement | null) => {
@@ -442,24 +452,23 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
       /*
         Keyboard focus handoff (ugcportal-ff2a): "Cancel" is the same
         shape as "Try again" (see `retry()` below) — the row SURVIVES as
-        `failed` down either branch here, so its own status line is already
-        mounted and is the landing spot. Checked once, before whichever of
-        the two branches below actually runs, for the same reason retry()'s
-        own check runs before its dispatch: calling `.focus()` here moves
-        focus immediately, before either branch's abort/dispatch has a
-        chance to unmount the button out from under it.
+        `failed` down either branch below, so its own status line is already
+        mounted and is the landing spot. ONE call, hoisted above both
+        branches, not one inside each: nothing between this line and either
+        branch's abort/dispatch can skip it, so a single call covers both
+        rather than needing a duplicate that a future edit could drop from
+        just one of them.
       */
-      const onThisButton =
-        document.activeElement === cancelButtonRefs.current.get(id);
+      if (document.activeElement === cancelButtonRefs.current.get(id)) {
+        statusLineRefs.current.get(id)?.focus();
+      }
 
       if (inFlightRef.current?.id === id) {
-        if (onThisButton) statusLineRefs.current.get(id)?.focus();
         // The transport rejects with UploadAbortedError, which uploadItem
         // turns into the cancelled failure — one path, not two.
         inFlightRef.current.controller.abort();
         return;
       }
-      if (onThisButton) statusLineRefs.current.get(id)?.focus();
       // Still waiting its turn: take it out of the queue before it is ever
       // sent. This branch is what the Cancel control on a pending row
       // reaches.
@@ -508,13 +517,17 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
         "retried" — see uploadQueueReducer), it does not commit it, so
         `document.activeElement` here still reflects whatever the visitor's
         last real action left it as. Checked against THIS row's own button,
-        not against `document.body`: a visitor who activated this with a
-        mouse, or who is on a different row entirely, must not have their
-        focus moved anywhere (K2) — only a visitor who was actually on this
-        button gets handed somewhere else. The status line is the landing
-        spot because the row SURVIVES here (as `pending`), so it stays
-        mounted — unlike `dismiss()` below, where "Remove"/"Clear" remove the
-        whole row and therefore need a different landing spot entirely.
+        not against `document.body`: a visitor who is on a different row
+        entirely must not have their focus moved anywhere (K2) — only a
+        visitor who is actually on this button gets handed somewhere else.
+        (Whether a mouse click leaves a visitor "on this button" depends on
+        the browser — gallery.tsx's own pre-dispatch comment has the fuller
+        account of that, and why neither guard tries to tell a mouse click
+        apart from a keyboard one; this one only tells apart "on this
+        button" from "not".) The status line is the landing spot because the
+        row SURVIVES here (as `pending`), so it stays mounted — unlike
+        `dismiss()` below, where "Remove"/"Clear" remove the whole row and
+        therefore need a different landing spot entirely.
       */
       if (document.activeElement === retryButtonRefs.current.get(id)) {
         statusLineRefs.current.get(id)?.focus();
@@ -546,7 +559,7 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
         DOM, before the dispatch below removes the row, because the
         sibling <li> (if any) is still there to query at this point: the
         next row's first focusable control, else the previous row's, else
-        the file input — the one control this page always has.
+        the "Choose files" label — the one control this page always has.
       */
       const button = dismissButtonRefs.current.get(id);
       if (document.activeElement === button) {
@@ -555,7 +568,7 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
           row?.nextElementSibling ?? row?.previousElementSibling ?? null;
         const target =
           sibling?.querySelector<HTMLElement>("button, a[href]") ??
-          fileInputRef.current;
+          addFilesLabelRef.current;
         target?.focus();
       }
 
@@ -711,7 +724,6 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
         ].join(" ")}
       >
         <input
-          ref={fileInputRef}
           id={inputId}
           type="file"
           multiple
@@ -725,7 +737,14 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
           }}
         />
         <label
+          ref={addFilesLabelRef}
           htmlFor={inputId}
+          /*
+            `tabIndex={-1}` (ugcportal-ff2a, the same device the status line
+            uses — see upload-queue-list.tsx): not in the Tab order, but a
+            valid `.focus()` target for `dismiss()`'s fallback landing spot.
+          */
+          tabIndex={-1}
           /*
             bg-petrol-400/text-petrol-900, not bg-primary/text-primary-
             foreground (ugcportal-rw9j review round 5, code-review): this
@@ -737,8 +756,14 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
             variant uses (6.02:1); this is a plain label, not a Button, so
             the tokens are applied directly rather than importing the
             component for one call site.
+
+            `outline-hidden focus:ring-3 focus:ring-ring/80` (ugcportal-ff2a)
+            on top of that: the same `focus:`, not `:focus-visible`, device
+            the status line uses, and for the same reason — this is reached
+            by a programmatic `.focus()` call, not by Tab, so the ring has to
+            paint unconditionally rather than depend on a heuristic.
           */
-          className="cursor-pointer rounded-lg bg-petrol-400 px-3 py-2 text-sm font-medium text-petrol-900 transition-colors hover:brightness-95"
+          className="cursor-pointer rounded-lg bg-petrol-400 px-3 py-2 text-sm font-medium text-petrol-900 outline-hidden transition-colors hover:brightness-95 focus:ring-3 focus:ring-ring/80"
         >
           Choose files
         </label>

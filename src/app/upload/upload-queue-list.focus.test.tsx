@@ -271,6 +271,18 @@ function statusLineWithin(row: ParentNode): HTMLParagraphElement {
   return line as HTMLParagraphElement;
 }
 
+/**
+ * The queue's always-present fallback landing spot — see `addFilesLabelRef`
+ * in upload-form.tsx.
+ */
+function addFilesLabelOrNull(): HTMLLabelElement | null {
+  return (
+    [...container.querySelectorAll("label")].find(
+      (candidate) => candidate.textContent === "Choose files",
+    ) ?? null
+  );
+}
+
 describe("K1 — focus survives a retry that unmounts 'Try again' (ugcportal-ff2a)", () => {
   it("moves focus to the row's status line, never to <body>, once the click retries and the button unmounts", async () => {
     mount();
@@ -308,8 +320,9 @@ describe("K1 — focus survives a retry that unmounts 'Try again' (ugcportal-ff2
     // The load-bearing claim: not <body>, and specifically the row's own
     // status line — the element `onStatusLineRef` registers in
     // upload-queue-list.tsx, found here the same way the gallery suite finds
-    // its paging status: a `tabIndex="-1"` landing spot that is never
-    // conditionally rendered.
+    // its paging status: a `tabIndex="-1"` landing spot. It renders for any
+    // row that exists, whatever that row's status — true here, since retry
+    // leaves the row in place (see upload-queue-list.tsx's own prop doc).
     const statusLine = container.querySelector('p[tabindex="-1"]');
     expect(statusLine).not.toBeNull();
     expect(document.activeElement).not.toBe(document.body);
@@ -329,8 +342,8 @@ describe("K1 — focus survives a retry that unmounts 'Try again' (ugcportal-ff2
   });
 });
 
-describe("K2 guard — a retry the visitor did not have keyboard focus on (ugcportal-ff2a)", () => {
-  it("leaves focus exactly where it was, through the whole retry, when the click did not come from the button itself", async () => {
+describe("K2 guard — focus parked elsewhere is left alone through a retry (ugcportal-ff2a)", () => {
+  it("leaves focus exactly where it was, through the whole retry, when the visitor's focus was never on the button", async () => {
     mount();
     setAltText("A fox crossing a snowy field at dawn");
     addFile(imageFile());
@@ -345,12 +358,14 @@ describe("K2 guard — a retry the visitor did not have keyboard focus on (ugcpo
     );
     const button = tryAgainButton();
 
-    // Stands in for a mouse activation: the synthetic click below is
-    // deliberately NOT preceded by `button.focus()`, unlike the K1 test
-    // above — matching gallery.focus.test.tsx's own "a mouse click that
-    // never focused the button" guard. Focus is parked on an unrelated
-    // element instead, the way a visitor tabbing through the page, not this
-    // button, would leave it.
+    // What this tests: focus parked elsewhere when the control is
+    // activated — not "a mouse click", which in most browsers DOES focus a
+    // button on click (gallery.tsx's own pre-dispatch comment has the
+    // fuller account; Safari is the exception). The synthetic click below
+    // is deliberately NOT preceded by `button.focus()`, unlike the K1 test
+    // above, so this is simply the jsdom shape for "this visitor's focus is
+    // somewhere else" — the way tabbing to a different control would also
+    // leave it.
     const elsewhere = document.createElement("input");
     document.body.append(elsewhere);
     elsewhere.focus();
@@ -395,7 +410,7 @@ describe("K2 guard — a retry the visitor did not have keyboard focus on (ugcpo
   });
 });
 
-describe("Cancel — focus survives unmounting itself on a pending row (ugcportal-ff2a)", () => {
+describe("Cancel — focus survives unmounting itself (ugcportal-ff2a)", () => {
   it("moves focus to the row's own status line once Cancel turns a pending row into a cancelled failure", async () => {
     mount();
     setAltText("A fox crossing a snowy field at dawn");
@@ -428,6 +443,66 @@ describe("Cancel — focus survives unmounting itself on a pending row (ugcporta
     // still there to land on.
     expect(document.activeElement).not.toBe(document.body);
     expect(document.activeElement).toBe(statusLineWithin(rowB));
+  });
+
+  it("moves focus to the row's own status line once Cancel aborts an in-flight (uploading) row", async () => {
+    mount();
+    setAltText("A fox crossing a snowy field at dawn");
+    addFile(imageFile());
+
+    // The only file queued, so drain() claims it immediately — Cancel here
+    // reaches the OTHER branch of cancel(), the in-flight abort, not the
+    // still-queued one the test above exercises.
+    await waitUntil(() => FakeXhr.instances.length > 0, "the request to start");
+
+    const row = rowContaining("photo.png");
+    const cancelButton = buttonWithText(row, "Cancel");
+    cancelButton.focus();
+    expect(document.activeElement).toBe(cancelButton);
+
+    await click(cancelButton);
+    await waitUntil(
+      () => buttonWithTextOrNull(row, "Cancel") === null,
+      "Cancel to unmount once the in-flight upload is aborted",
+    );
+
+    expect(document.activeElement).not.toBe(document.body);
+    expect(document.activeElement).toBe(statusLineWithin(row));
+  });
+});
+
+describe("Cancel guard — focus parked elsewhere is left alone (ugcportal-ff2a)", () => {
+  it("leaves focus exactly where it was when Cancel is activated with focus elsewhere", async () => {
+    mount();
+    setAltText("A fox crossing a snowy field at dawn");
+    addFile(imageFile("a.png"));
+    addFile(imageFile("b.png"));
+
+    await waitUntil(
+      () => FakeXhr.instances.length > 0,
+      "a.png's request to start",
+    );
+
+    const rowB = rowContaining("b.png");
+    const cancelButton = buttonWithText(rowB, "Cancel");
+
+    const elsewhere = document.createElement("input");
+    document.body.append(elsewhere);
+    elsewhere.focus();
+    try {
+      expect(document.activeElement).toBe(elsewhere);
+      expect(document.activeElement).not.toBe(cancelButton);
+
+      await click(cancelButton);
+      await waitUntil(
+        () => buttonWithTextOrNull(rowB, "Cancel") === null,
+        "Cancel to unmount once the row becomes a cancelled failure",
+      );
+
+      expect(document.activeElement).toBe(elsewhere);
+    } finally {
+      elsewhere.remove();
+    }
   });
 });
 
@@ -477,10 +552,102 @@ describe("Remove — focus survives dismissing the whole row (ugcportal-ff2a)", 
     expect(document.activeElement).not.toBe(document.body);
     expect(document.activeElement).toBe(buttonWithText(rowB, "Try again"));
   });
+
+  it("moves focus to the previous row's first control once Remove dismisses the last row in the queue", async () => {
+    mount();
+    setAltText("A fox crossing a snowy field at dawn");
+    addFile(imageFile("a.png"));
+    addFile(imageFile("b.png"));
+
+    await waitUntil(
+      () => FakeXhr.instances.length > 0,
+      "a.png's request to start",
+    );
+    act(() => {
+      FakeXhr.instances[0].respond(500, { error: "Something broke" });
+    });
+    await waitUntil(
+      () => FakeXhr.instances.length > 1,
+      "b.png's request to start",
+    );
+    act(() => {
+      FakeXhr.instances[1].respond(500, { error: "Something broke" });
+    });
+    await waitUntil(
+      () => buttonWithTextOrNull(rowContaining("b.png"), "Try again") !== null,
+      "b.png's row to fail too",
+    );
+
+    // b.png is the LAST row this time — the opposite case from the test
+    // above, where the dismissed row had a NEXT sibling but no previous one.
+    const rowB = rowContaining("b.png");
+    const removeButton = buttonWithText(rowB, "Remove");
+    removeButton.focus();
+    expect(document.activeElement).toBe(removeButton);
+
+    await click(removeButton);
+    await waitUntil(
+      () => container.textContent?.includes("b.png") === false,
+      "b.png's row to be dismissed entirely",
+    );
+
+    const rowA = rowContaining("a.png");
+    expect(document.activeElement).not.toBe(document.body);
+    expect(document.activeElement).toBe(buttonWithText(rowA, "Try again"));
+  });
+});
+
+describe("Remove/Clear guard — focus parked elsewhere is left alone (ugcportal-ff2a)", () => {
+  it("leaves focus exactly where it was when Remove is activated with focus elsewhere", async () => {
+    mount();
+    setAltText("A fox crossing a snowy field at dawn");
+    addFile(imageFile("a.png"));
+    addFile(imageFile("b.png"));
+
+    await waitUntil(
+      () => FakeXhr.instances.length > 0,
+      "a.png's request to start",
+    );
+    act(() => {
+      FakeXhr.instances[0].respond(500, { error: "Something broke" });
+    });
+    await waitUntil(
+      () => FakeXhr.instances.length > 1,
+      "b.png's request to start",
+    );
+    act(() => {
+      FakeXhr.instances[1].respond(500, { error: "Something broke" });
+    });
+    await waitUntil(
+      () => buttonWithTextOrNull(rowContaining("b.png"), "Try again") !== null,
+      "b.png's row to fail too",
+    );
+
+    const rowA = rowContaining("a.png");
+    const removeButton = buttonWithText(rowA, "Remove");
+
+    const elsewhere = document.createElement("input");
+    document.body.append(elsewhere);
+    elsewhere.focus();
+    try {
+      expect(document.activeElement).toBe(elsewhere);
+      expect(document.activeElement).not.toBe(removeButton);
+
+      await click(removeButton);
+      await waitUntil(
+        () => container.textContent?.includes("a.png") === false,
+        "a.png's row to be dismissed entirely",
+      );
+
+      expect(document.activeElement).toBe(elsewhere);
+    } finally {
+      elsewhere.remove();
+    }
+  });
 });
 
 describe("Clear — focus survives dismissing the only row in the queue (ugcportal-ff2a)", () => {
-  it("falls back to the file input once Clear dismisses the only row left", async () => {
+  it("falls back to the 'Choose files' label once Clear dismisses the only row left", async () => {
     mount();
     setAltText("A fox crossing a snowy field at dawn");
     addFile(imageFile());
@@ -505,13 +672,13 @@ describe("Clear — focus survives dismissing the only row in the queue (ugcport
     );
 
     // The only row in the queue, so there is no neighbouring row's control
-    // to land on either — the file input is the one control this page
-    // always has (see `dismiss()` in upload-form.tsx), named explicitly
+    // to land on either — the "Choose files" label is the one control this
+    // page always has (see `dismiss()` in upload-form.tsx), named explicitly
     // here rather than inferred from wherever the DOM happens to place it.
-    const fileInput = container.querySelector('input[type="file"]');
-    expect(fileInput).not.toBeNull();
+    const label = addFilesLabelOrNull();
+    expect(label).not.toBeNull();
     expect(document.activeElement).not.toBe(document.body);
-    expect(document.activeElement).toBe(fileInput);
+    expect(document.activeElement).toBe(label);
   });
 });
 
