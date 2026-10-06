@@ -154,6 +154,24 @@ describe("the S3 reachability startup check (ugcportal-ze1o)", () => {
     expect(probe).toHaveBeenCalledTimes(1);
   });
 
+  /**
+   * K3's other half: the test above uses a probe that resolves, so it only
+   * proves there is no *scheduled* re-check after success. A single eager
+   * retry on FAILURE (no loop, no timer — just calling `probe()` a second
+   * time from inside the catch block) would pass that test and the source
+   * check below unmodified, since neither `setInterval(` nor `while(`
+   * appears in such a retry. This closes that gap directly on the failure
+   * path, found and confirmed by fixture-mutating `checkS3Reachability` to
+   * retry once inline on failure (pre-review): this test fails as expected
+   * against that mutation.
+   */
+  it("never invokes the probe again after a failure, either (K3 failure-path)", async () => {
+    const probe = vi.fn().mockRejectedValue(transportError("ECONNREFUSED"));
+
+    await checkS3Reachability({ probe, env: env({ S3_ENDPOINT: ENDPOINT }) });
+    expect(probe).toHaveBeenCalledTimes(1);
+  });
+
   it("introduces no setInterval or retry (while) loop in its own source (K3 source check)", () => {
     const source = readFileSync(
       path.join(REPO_ROOT, "src", "instrumentation-node.ts"),
