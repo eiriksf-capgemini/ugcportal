@@ -255,11 +255,22 @@ describe("the advertising-disclosure label (K1, K2, K3)", () => {
     const item = await getPublicMediaItem("pv-item-leak-disclosure");
     expect(item).not.toBeNull();
     expect(item?.advertisingLabel).toBe("Reklame");
-    expect(item).not.toHaveProperty("benefitReceived");
-    expect(item).not.toHaveProperty("benefitKind");
-    expect(item).not.toHaveProperty("marketValueOre");
-    expect(item).not.toHaveProperty("benefitSource");
-    expect(item).not.toHaveProperty("benefitSourceId");
+    // NOT `expect(item).not.toHaveProperty("benefitReceived")` and siblings —
+    // a pre-review mutation check found those cannot fail: Prisma nests a
+    // relation under its own key, so a flat, TOP-LEVEL `benefitReceived`
+    // could never appear on `item` regardless of what the query selects or
+    // how badly a future edit mismapped it. `GalleryItem` has no
+    // `advertisingDisclosure` property at all to check a nested leak
+    // location on either — `toGalleryItem` replaces the whole relation with
+    // the single flat `advertisingLabel` field. The exhaustive key-list
+    // assertion in src/lib/gallery-items.test.ts ("carries no field the
+    // anonymous projection withholds") is what actually pins the mapped
+    // shape; the `JSON.stringify` scan below is what is left to check HERE,
+    // and mutation-tested real: widening MEDIA_ANONYMOUS_SELECT's
+    // `advertisingDisclosure` AND bypassing `toGalleryItem`'s own narrowing
+    // (spreading the raw row onto the result) together made it fail on
+    // "Secret Brand Ltd"; neither mutation alone did, which is exactly what
+    // "the query is narrow, and the mapping is independently narrow" means.
     const serialised = JSON.stringify(item);
     expect(serialised).not.toContain("Secret Brand");
     expect(serialised).not.toContain("secret-brand");

@@ -187,8 +187,9 @@ function sanitizedMediaText(value: unknown, allowNewlines = false): string {
  * before this bead, and K3's "no disclosure" state), an object with
  * `label: null` when it has one but `benefitReceived` is not true (K3's
  * "benefitReceived false" state, and the write path's own invariant that a
- * label never survives alongside that — see src/lib/advertising-
- * disclosure.ts's model comment), and `{ label: "Advertisement / Reklame" }`
+ * label never survives alongside that — see
+ * src/lib/advertising-disclosure.ts's model comment), and
+ * `{ label: "Advertisement / Reklame" }`
  * (or one of the other three permitted strings) when it has a declared,
  * labelled benefit.
  *

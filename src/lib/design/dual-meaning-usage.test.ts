@@ -327,9 +327,15 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
   "src/app/media/[previewId]/page.tsx": { "text-muted-foreground": 1 },
   "src/components/site/page-shell.tsx": { "text-foreground": 1 },
   "src/components/site/section-heading.ts": { "text-foreground": 1 },
-  // Round-1 review simplified this component (K2's spec marker renders
-  // unconditionally, the K3 advertising-label branch is gone until
-  // ugcportal-qnq9.1 lands) — one text-foreground usage now, not two.
+  // Round-1 review simplified this component (K2's spec marker rendered
+  // unconditionally, since nothing yet recorded a real paid/gifted job to
+  // branch on) — one text-foreground usage, not two. UPDATED
+  // (ugcportal-e0jv, part B of ugcportal-qnq9.1): the K3 advertising-label
+  // branch exists now, conditional on the spec marker's own absence — but
+  // its badge is GALLERY_ADVERTISING_LABEL_CLASS (bg-primary/text-primary-
+  // foreground, src/components/gallery/containment.ts), a DIFFERENT pair
+  // this file does not track, so the spec marker's own text-foreground
+  // count is unaffected and stays at exactly one.
   "src/components/portfolio/portfolio-tile.tsx": { "text-foreground": 1 },
   // Round 2 extracted INLINE_LINK_CLASS as a LOCAL constant for the two
   // identically-styled links in this file; round 5 moved that constant out
