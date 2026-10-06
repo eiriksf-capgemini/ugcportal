@@ -403,7 +403,7 @@ describe("colour-token compile guard: every literal class token naming a declare
    * already exported from usage.ts and used elsewhere in this gate for alpha-
    * modifier discovery) rather than a second, hand-kept list. Round 2's own
    * guard hardcoded `bg`/`text`/`border` - correct as far as it went, but
-   * `discoverColorNamespaces` finds 45 real namespaces today (`ring`,
+   * `discoverColorNamespaces` finds 51 real namespaces today (`ring`,
    * `outline`, `fill`, `stroke`, `accent`, `caret`, `divide`, `shadow`,
    * `decoration`, every directional `border-*`, every `mask-*`/`scrollbar-*`
    * variant, and more) - reusing the derived list here is strictly more
@@ -503,13 +503,25 @@ describe("colour-token compile guard: every literal class token naming a declare
    */
   const COLOR_TOKEN_SHAPE = new RegExp(
     `^(?:${COLOR_TOKEN_PREFIXES.map(escapeForAlternation).join("|")})-` +
-      `(?:${COLOR_TOKEN_NAMES.map(escapeForAlternation).join("|")})$`,
+      `(?:${COLOR_TOKEN_NAMES.map(escapeForAlternation).join("|")})` +
+      // Optional alpha modifier (round 3 review finding): `text-petrol-900/50`
+      // is the same bug as `text-petrol-900` - Tailwind resolves the colour
+      // first and applies the alpha to it, so an undeclared colour compiles to
+      // no rule with or without the modifier - and `/` is deliberately NOT in
+      // CANDIDATE_TOKEN_DELIMITERS, so the whole token (name AND modifier)
+      // reaches this check and is compiled as written, for the bare
+      // percentage (`/50`) and arbitrary (`/[0.5]`) forms. The variable form
+      // (`/(--alpha)`) is shredded at its parentheses into `text-petrol-900/`
+      // plus `--alpha`; `tokensInLiteral` below trims that trailing `/` so the
+      // bare colour is still checked.
+      `(?:/(?:\\d{1,3}|\\[[^\\]]+\\]))?$`,
   );
 
   /** Every colour-token-shaped candidate token in one already-extracted literal's text. */
   function tokensInLiteral(literal: string): string[] {
     return literal
       .split(CANDIDATE_TOKEN_DELIMITERS)
+      .map((token) => (token.endsWith("/") ? token.slice(0, -1) : token))
       .filter((token) => token !== "" && COLOR_TOKEN_SHAPE.test(token));
   }
 
@@ -649,6 +661,27 @@ describe("colour-token compile guard: every literal class token naming a declare
         "bg-petrol-400 (or anything else) appearing in the same string, template literal, or cn() call",
     ).toBeNull();
     expect(compileCandidate(okCandidates[0]), "text-surface-0 compiles").not.toBeNull();
+  });
+
+  it("alpha-modifier shape (round 3 review finding): a non-compiling candidate carrying an opacity suffix is caught, and a compiling one with the same suffix is not flagged", () => {
+    // `text-petrol-900/50` - the same undeclared colour, with Tailwind's
+    // opacity modifier appended. `/` is not a delimiter, so the token reaches
+    // COLOR_TOKEN_SHAPE whole; the shape's optional alpha group admits it,
+    // and compiling it as written yields no rule, exactly like the bare name.
+    // The sibling with a declared colour (`bg-petrol-400/50`) compiles, so the
+    // modifier itself is never what trips the guard.
+    const literal = "bg-petrol-400/50 text-petrol-900/50 text-surface-0/[0.5]";
+    const candidates = tokensInLiteral(literal);
+    expect(candidates).toEqual(["bg-petrol-400/50", "text-petrol-900/50", "text-surface-0/[0.5]"]);
+    // The variable-alpha form is shredded at its parentheses; the bare colour
+    // left behind is what gets checked, so the undeclared one is still caught.
+    expect(tokensInLiteral("text-petrol-900/(--alpha)")).toEqual(["text-petrol-900"]);
+    expect(compileCandidate(candidates[0]), "bg-petrol-400/50 compiles").not.toBeNull();
+    expect(
+      compileCandidate(candidates[1]),
+      "text-petrol-900/50 must compile to NO rule - the alpha modifier does not rescue an undeclared colour",
+    ).toBeNull();
+    expect(compileCandidate(candidates[2]), "text-surface-0/[0.5] compiles").not.toBeNull();
   });
 
   /**
