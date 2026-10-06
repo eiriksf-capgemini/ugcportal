@@ -283,6 +283,58 @@ export const GALLERY_CAPTION_CLASS =
   "mt-1.5 text-sm whitespace-pre-line text-muted-foreground";
 
 /**
+ * The advertising-disclosure label (ugcportal-e0jv K1/K4, part B of
+ * ugcportal-qnq9.1): "Advertisement / Reklame" or one of the other three
+ * permitted forms (src/lib/advertising-disclosure.ts), rendered first on a
+ * tile that carries one — see `GalleryItemAdvertisingLabel`
+ * (src/components/gallery/gallery-item.tsx), which places it ahead of
+ * `GALLERY_CAPTION_CLASS`/`GALLERY_TAG_CLASS` in both the gallery grid and
+ * the per-item page.
+ *
+ * MUST NOT READ AS A TAG OR A CAPTION (K4), which is a real constraint on
+ * this string, not a style preference: `GALLERY_TAG_CLASS` just above is
+ * quiet, muted, no fill, no border — "a caption, not a label" by its own
+ * comment's own words — and `GALLERY_CAPTION_CLASS` is quiet body text.
+ * Both are correct for what THEY are (an optional chip, an optional
+ * sentence); a compliance disclosure is neither; a visitor must be able to
+ * tell at a glance that this line is doing something different from either.
+ * So this is a solid, filled badge — the opposite treatment from both of
+ * its neighbours — rather than a third shade of muted, quiet text.
+ *
+ * `bg-primary`/`text-primary-foreground`, REUSED, not a new colour pairing
+ * invented for this one badge: the same two tokens, in the same roles,
+ * src/components/ui/button.tsx's `default` variant already fills with (the
+ * comment there: "the only solid petrol fill in the system, for the one
+ * primary action on a surface") and this same file's own
+ * `GALLERY_TILE_VIDEO_BADGE_CLASS` (the VIDEO play affordance, ugcportal-dzz,
+ * PR #146) already reused for the identical reason — riding the contrast
+ * gate's existing `primary-label-on-primary` measurement
+ * (src/lib/design/contrast.ts, 4.5:1 body-text threshold) rather than
+ * asking it to learn a second pairing. No alpha modifier on either utility,
+ * so `src/lib/design/usage.ts`'s alpha-coverage scan has nothing new to
+ * resolve either.
+ *
+ * NO TRANSITION, NO HOVER, NO MOTION UTILITY of any kind (K4's "prefers-
+ * reduced-motion unaffected"): this is a static badge of static text, same
+ * as the video-play badge's own "nothing here animates" reasoning, so there
+ * is nothing for `prefers-reduced-motion` to need reducing in the first
+ * place — motion-reduce-pairing.test.ts's project-wide scan has nothing new
+ * to flag because nothing here triggers under `hover:`/`group-hover:`/
+ * `active:`/`focus:` at all.
+ *
+ * `rounded-md`, matching this file's own tile radius (`GALLERY_TILE_ASPECT_
+ * CLASS`'s sibling, `GALLERY_TILE_BASE_CLASS`) rather than a pill
+ * (`rounded-full`): a pill reads as a filter/category chip in this design
+ * system's own vocabulary (see docs/design — tag chips elsewhere are
+ * rounded-full-free already), and a disclosure label is not a category.
+ * `w-fit` so the fill hugs the text rather than stretching to the tile's
+ * own width, the same reason an inline badge anywhere else in this app
+ * never spans its container.
+ */
+export const GALLERY_ADVERTISING_LABEL_CLASS =
+  "mb-1.5 inline-flex w-fit items-center rounded-md bg-primary px-2 py-0.5 text-xs font-semibold tracking-wide text-primary-foreground uppercase";
+
+/**
  * SUBJECT TAGS (ugcportal-jsc), and the three decisions behind where they sit.
  *
  * WHY UNDER THE TILE AND NOT OVER IT. An overlay reads better on a

@@ -218,6 +218,12 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await prisma.media.deleteMany({});
+  // After media (whose disclosure rows cascade-delete with it, see the
+  // schema's own `onDelete: Cascade`): a BenefitSource has no delete path
+  // in the product and is Restrict-protected, so a test that seeds one
+  // (ugcportal-e0jv's K2 describe block, below) would collide with the
+  // next test's same slug otherwise.
+  await prisma.benefitSource.deleteMany({});
   await prisma.user.deleteMany({});
   await prisma.user.create({
     data: { id: UPLOADER, email: "uploader@example.com", role: "USER" },
@@ -450,6 +456,112 @@ describe("K2 — nothing about the original or its uploader reaches the markup",
       expect(source).toBe(mediaPreviewPath("pv-a"));
       expect(source).not.toContain(UPLOADER_MARKER);
     }
+  });
+});
+
+/**
+ * K2 (ugcportal-e0jv, part B of ugcportal-qnq9.1): the advertising-
+ * disclosure label crosses to the public feed and the rendered gallery, and
+ * NOTHING ELSE from the disclosure does — not `benefitReceived`, not the
+ * benefit kind or market value, not the brand's name or slug. Exercised
+ * against the REAL public feed route (`GET /api/public/media`) and the
+ * real server-rendered home page, over a real database, the same reasoning
+ * every other leak check in this file gives: a mocked feed would prove the
+ * render layer can draw whatever it is handed, not that the query ever
+ * withholds anything.
+ */
+describe("K2 — the advertising label crosses to the feed, and nothing else from the disclosure does", () => {
+  const BRAND_NAME_MARKER = "AcmeCamerasLtdMarker";
+  const BRAND_SLUG_MARKER = "acme-cameras-ltd-marker";
+
+  async function seedLabelledDisclosure(mediaId: string) {
+    const source = await prisma.benefitSource.create({
+      data: { slug: BRAND_SLUG_MARKER, name: BRAND_NAME_MARKER },
+    });
+    await prisma.mediaAdvertisingDisclosure.create({
+      data: {
+        mediaId,
+        benefitReceived: true,
+        benefitKind: "FREE_PRODUCT",
+        benefitSourceId: source.id,
+        marketValueOre: 450000,
+        label: "Advertisement / Reklame",
+      },
+    });
+  }
+
+  it("the rendered home page shows the label and nothing else about the disclosure", async () => {
+    await seedMedia({ id: "a", createdAt: new Date("2026-03-01T00:00:00Z") });
+    await seedLabelledDisclosure("a");
+
+    const markup = await renderGallery();
+
+    expect(markup).toContain("Advertisement / Reklame");
+    expect(markup).not.toContain("benefitReceived");
+    expect(markup).not.toContain("FREE_PRODUCT");
+    expect(markup).not.toContain("450000");
+    expect(markup).not.toContain(BRAND_NAME_MARKER);
+    expect(markup).not.toContain(BRAND_SLUG_MARKER);
+  });
+
+  it("the real GET /api/public/media JSON carries only { label } from the disclosure relation", async () => {
+    await seedMedia({ id: "a", createdAt: new Date("2026-03-01T00:00:00Z") });
+    await seedLabelledDisclosure("a");
+
+    const response = await GET(
+      new Request(new URL(publicMediaListingPath({}), "http://gallery.test")),
+    );
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      items: Array<{
+        id: string;
+        advertisingDisclosure?: { label?: string } | null;
+      }>;
+    };
+
+    const item = body.items.find((entry) => entry.id === "a");
+    expect(item).toBeDefined();
+    expect(item?.advertisingDisclosure).toEqual({
+      label: "Advertisement / Reklame",
+    });
+    // Exhaustive on the relation's OWN keys, not merely a `not.toContain` on
+    // the whole response — a sibling field on the same object would not show
+    // up in a substring scan if it happened to equal another field's value,
+    // but it cannot escape a direct key-list assertion.
+    expect(Object.keys(item?.advertisingDisclosure ?? {})).toEqual(["label"]);
+
+    const serialised = JSON.stringify(body);
+    expect(serialised).not.toContain("benefitReceived");
+    expect(serialised).not.toContain("benefitKind");
+    expect(serialised).not.toContain("marketValueOre");
+    expect(serialised).not.toContain("benefitSource");
+    expect(serialised).not.toContain(BRAND_NAME_MARKER);
+    expect(serialised).not.toContain(BRAND_SLUG_MARKER);
+  });
+
+  it("shows nothing for an item with benefitReceived false, or no disclosure row at all (K3)", async () => {
+    await seedMedia({ id: "no-benefit", createdAt: new Date("2026-03-02T00:00:00Z") });
+    await prisma.mediaAdvertisingDisclosure.create({
+      data: { mediaId: "no-benefit", benefitReceived: false },
+    });
+    await seedMedia({ id: "no-disclosure", createdAt: new Date("2026-03-03T00:00:00Z") });
+
+    const markup = await renderGallery();
+    expect(renderedIds(markup)).toEqual(
+      expect.arrayContaining(["no-benefit", "no-disclosure"]),
+    );
+    expect(markup).not.toContain("data-gallery-advertising-label");
+
+    const response = await GET(
+      new Request(new URL(publicMediaListingPath({}), "http://gallery.test")),
+    );
+    const body = (await response.json()) as {
+      items: Array<{ id: string; advertisingDisclosure?: unknown }>;
+    };
+    const noBenefit = body.items.find((entry) => entry.id === "no-benefit");
+    const noDisclosure = body.items.find((entry) => entry.id === "no-disclosure");
+    expect(noBenefit?.advertisingDisclosure).toEqual({ label: null });
+    expect(noDisclosure?.advertisingDisclosure).toBeNull();
   });
 });
 

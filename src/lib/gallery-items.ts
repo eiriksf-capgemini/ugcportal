@@ -1,3 +1,4 @@
+import { isPermittedAdvertisingLabel } from "@/lib/advertising-disclosure";
 import { stripCurationTags } from "@/lib/curation-tags";
 import { dedupeBy } from "@/lib/dedupe";
 import { hasUnsafeText, validateAltText, validateCaption } from "@/lib/media-rules";
@@ -102,6 +103,27 @@ export type GalleryItem = {
    * chips under it rather than as a gap or an empty label.
    */
   tags: GalleryTag[];
+  /**
+   * The advertising-disclosure label (ugcportal-e0jv, part B of
+   * ugcportal-qnq9.1), or `null` when this item carries none — no
+   * disclosure row at all, a disclosure with `benefitReceived` false, or
+   * (defensively, see `toAdvertisingLabel` below) a stored value that is
+   * not, exactly, one of `PERMITTED_ADVERTISING_LABELS`.
+   *
+   * `null` MEANS "render nothing" (K3/K4), not "unknown" or "loading" — the
+   * same two-state contract `caption`'s `""` has, just with `null` instead
+   * of `""` because a label is never an empty-string value that happens to
+   * be falsy; it is either one of four exact strings or absent.
+   *
+   * THE ONE FIELD ON THIS TYPE THAT IS NOT MERELY SANITISED BUT RE-VALIDATED
+   * against a closed allowlist on every read (`toAdvertisingLabel`) — unlike
+   * `altText`/`caption`, which are free text and merely cleaned, a label
+   * that is not EXACTLY one of the four permitted strings must never reach
+   * a renderer, because every renderer that receives it treats its mere
+   * presence as "this item is disclosed", and a near-miss string here would
+   * be a label rendered that nobody validated.
+   */
+  advertisingLabel: string | null;
 };
 
 /**
@@ -119,6 +141,13 @@ export type PublicMediaRowish = {
   caption?: unknown;
   tags?: unknown;
   kind?: unknown;
+  /**
+   * The disclosure RELATION as MEDIA_ANONYMOUS_SELECT projects it:
+   * `{ label: string | null } | null`, loosely typed like every other field
+   * here because this is a parsed JSON body as much as it is a Prisma row.
+   * See `toAdvertisingLabel` for what is actually trusted out of it.
+   */
+  advertisingDisclosure?: unknown;
 };
 
 /**
@@ -147,6 +176,48 @@ export type PublicMediaRowish = {
 function sanitizedMediaText(value: unknown, allowNewlines = false): string {
   const result = allowNewlines ? validateCaption(value) : validateAltText(value);
   return result.ok ? result.value : "";
+}
+
+/**
+ * The advertising-disclosure label on one row, or `null` (ugcportal-e0jv).
+ *
+ * Reads `row.advertisingDisclosure`, the relation MEDIA_ANONYMOUS_SELECT
+ * projects as `{ label: string | null } | null` — `null` when the item has
+ * no disclosure row at all (the ordinary case for everything published
+ * before this bead, and K3's "no disclosure" state), an object with
+ * `label: null` when it has one but `benefitReceived` is not true (K3's
+ * "benefitReceived false" state, and the write path's own invariant that a
+ * label never survives alongside that — see src/lib/advertising-
+ * disclosure.ts's model comment), and `{ label: "Advertisement / Reklame" }`
+ * (or one of the other three permitted strings) when it has a declared,
+ * labelled benefit.
+ *
+ * RE-VALIDATES the label against the SAME closed allowlist the write path
+ * and the publish gate use (`isPermittedAdvertisingLabel`,
+ * src/lib/advertising-disclosure.ts) rather than trusting any non-empty
+ * string. This is a read path, and this module's whole discipline (see
+ * `sanitizedMediaText`'s own comment, three functions up) is not trusting
+ * that every row reaching it was written through the one API route that
+ * validates on the way in — a raw statement, a future importer, or a label
+ * that was valid under an allowlist since narrowed would otherwise render
+ * as if it were today's canonical wording. A near-miss or stale value is
+ * treated exactly like "no label" (K3's rule: an unlabelled benefit must
+ * not be implied by rendering nothing, but a value this function cannot
+ * vouch for is not better than nothing — see this function's own type's
+ * doc comment on `GalleryItem.advertisingLabel` for why "null means render
+ * nothing" is the right failure direction here, same as a missing preview
+ * id is for the row as a whole in `toGalleryItem` below).
+ *
+ * Deliberately NOT reading `benefitReceived` anywhere in this module, or
+ * anywhere downstream of it — MEDIA_ANONYMOUS_SELECT never selects it (see
+ * that constant's own comment), so there is nothing here to read even if a
+ * caller wanted to.
+ */
+function toAdvertisingLabel(value: unknown): string | null {
+  if (typeof value !== "object" || value === null) return null;
+  const { label } = value as { label?: unknown };
+  if (typeof label !== "string") return null;
+  return isPermittedAdvertisingLabel(label) ? label : null;
 }
 
 /**
@@ -292,6 +363,7 @@ export function toGalleryItem(row: PublicMediaRowish): GalleryItem | null {
     // and a `tags` that can be `undefined` is a `.map` waiting to throw in a
     // component that has no reason to check.
     tags: toGalleryTags(row.tags),
+    advertisingLabel: toAdvertisingLabel(row.advertisingDisclosure),
   };
 }
 
