@@ -266,18 +266,82 @@ being priced (round 3) — see § 5. Every reading still agrees on the
 qualitative finding: most subagent spend was still running on Opus at
 measurement time.
 
-**This baseline is a "before" figure, not a "before and after" — and still
-is.** Nothing in this PR changed runtime behavior — § 1 mechanism 2 (the
-actual backstop) is still only partially in effect (see § 1's status note
-for exactly which half, and for whom). The re-run that would show whether
-that partial fix actually moved the Opus share (`ugcportal-0xw`) has **not
-been run yet** as of this writing. K1's acceptance criterion ("re-running... over a later
-window and showing the Opus share of subagent requests has fallen") still
-needs that second run, over a window that postdates `2tc`'s adoption. Re-run
-the command above then and compare against the baseline in this section —
-don't treat the ~$795 recoverable-savings figure (§ 1, computed from this
-section's own numbers) as a confirmed, already-recovered saving until that
-comparison exists; it is a pre-fix baseline, not a current result.
+**This baseline is now a "before," with an "after" captured below
+(`ugcportal-0xw`).** Nothing in the PR that added this file changed runtime
+behavior — § 1 mechanism 2 (the actual backstop) is still only partially in
+effect (see § 1's status note for exactly which half, and for whom). K1's
+acceptance criterion ("re-running... over a later window and showing the
+Opus share of subagent requests has fallen") is addressed by the
+re-measurement immediately below. The ~$795 recoverable-savings figure a few
+paragraphs up (§ 1, computed from this section's own pre-fix numbers) is
+still exactly that — a pre-fix figure; the post-fix window below is the
+current result, not a replacement for it.
+
+**Re-measured 2026-10-06 (`ugcportal-0xw`), window `--since 2026-09-30`**
+(the day after `ugcportal-2tc` set `CLAUDE_CODE_SUBAGENT_MODEL=sonnet`
+globally, 2026-09-29) **through 2026-10-06** (the day this was run) — the
+same two commands as above, self-test run first per § 5 (`python3 -m
+unittest test_usage_indicators -v` from the `scripts/` directory: 35 tests,
+all passing):
+
+```bash
+python3 .claude/skills/harness-cost-controls/scripts/usage_indicators.py --since 2026-09-30
+python3 .claude/skills/harness-cost-controls/scripts/usage_indicators.py --since 2026-09-30 --project ugcportal
+```
+
+**This measurement covers only Eirik's own machine.** The fix that could
+move this number, `ugcportal-2tc`, is a global `env` block in Eirik's
+personal `~/.claude/settings.json` (§ 1 mechanism 2's status note), not
+anything this repo ships; `~/.claude/projects` is this same machine's own
+transcript history. A different machine, a different contributor's
+checkout, or a CI run would show no improvement here regardless of what
+this section reports, because it never received the fix.
+
+Anomalies ledger (both runs, banner printed in full, no key hidden):
+`files_unreadable` 0, `lines_json_error` 0, `lines_not_assistant_with_usage`
+0, `lines_usage_not_dict` 0, `lines_missing_id` 0, `lines_missing_timestamp`
+0, `unpriced_models` `{}` on the filtered rows on both runs. Three keys are
+non-zero, and each is expected given what it counts (per the banner's own
+"whole matched glob, not limited to `--since`/`--project`" caveat):
+`lines_no_usage_substring` (233,288 all-projects / 233,350 project-scoped —
+non-assistant lines with no usage field, not dropped priceable data);
+`lines_dedup_superseded` (30,489 / 30,493 — the max-output-tokens dedup from
+§ 5's round-1 fix doing its job, not data loss); `lines_unrecognized_model`
+61 on both runs — a whole-history count with no window concept, up from the
+45 recorded at the 2026-09-28 baseline because it accumulates over
+everything this machine's glob has matched since, not a regression specific
+to this window.
+
+All-projects run: 37,191 requests, $3,093.83 list-price total. Subagent
+(isSidechain) spend $2,287.45 of $3,093.83 (73.9% of dollars), 33,653 of
+37,191 requests (90.5%) — partitioned into Opus $610.80 across 4,498
+requests, Sonnet $1,484.37 across 27,952 requests, and other (Fable/Haiku)
+$192.28 across 1,203 requests. **Opus share of subagent spend: 26.7% by
+dollars, 13.4% by request count** (4,498 of 33,653).
+
+`--project ugcportal` run: 34,585 requests, $2,870.45 list-price total.
+Subagent spend $2,255.10 of $2,870.45 (78.6%), 32,708 of 34,585 requests
+(94.6%) — Opus $607.04 across 4,458 requests, Sonnet $1,458.91 across
+27,053 requests, other $189.15 across 1,197 requests. **Opus share of
+subagent spend: 26.9% by dollars, 13.6% by request count** (4,458 of
+32,708).
+
+Against the 2026-09-28 baseline above — 89.9% of subagent dollars, ~84.0%
+of subagent requests on both the all-projects run (8,301 of 9,888) and the
+project-scoped run (8,169 of 9,729) — both figures fell sharply in this
+window: dollars from ~89.9% to ~26.7-26.9%, requests from ~84.0% to
+~13.4-13.6%. **K1 of `ugcportal-9ak` ("the Opus share of subagent requests
+has fallen") is met**, on both the dollar and request-count measures, on
+this machine. This lands in the same range as the independent before/after
+already recorded in `docs/process/release-cost-v0.4.0-vs-v0.5.0.md` § 4
+(~88% of subagent dollars in the v0.4.0 window, 09-18 to 09-28, falling to
+~25% in the v0.5.0 window, 09-29 to 10-05) — a differently-windowed
+measurement, same script, same machine.
+
+As with every other figure in this file, the dollar amounts above are
+**notional** under subscription/seat-based access (§ 1); the request-count
+shares are the plan-neutral figures, and that is the measure K1 is actually
+verified by.
 
 ## 5. When this measurement itself is wrong
 
