@@ -1,4 +1,5 @@
 import { stripCurationTags } from "@/lib/curation-tags";
+import { dedupeBy } from "@/lib/dedupe";
 import { hasUnsafeText, validateAltText, validateCaption } from "@/lib/media-rules";
 import { mediaPreviewPath } from "@/lib/routes";
 
@@ -328,25 +329,27 @@ export function isGenuinelyEmptyPage(
  * an id within one page both survived, and the comment here claimed a net that
  * was not under that half of the fall. The failure it claimed to catch —
  * duplicate React keys — was therefore exactly the failure it let through.
+ * Running `dedupeBy` (src/lib/dedupe.ts, ugcportal-oejb) over the ONE
+ * combined array keeps that guarantee for both halves at once: by the time
+ * it runs, "already on screen" and "already earlier in the incoming page"
+ * are no longer two cases, only two reasons a key can have been seen before.
  *
  * Still a display safety net rather than a proof: it keeps the keys unique if
  * the cursor contract is ever broken, and says nothing about whether it is.
  *
- * It returns the existing array unchanged when there is nothing new, so a
- * repeated final page does not re-render the grid.
+ * It returns the existing array unchanged when there is nothing new (by
+ * `===`, not just by value), so a repeated final page does not re-render the
+ * grid. `existing` itself is assumed to carry no internal duplicate id —
+ * true by induction, since this function is the only way the gallery ever
+ * grows that array and it never lets one through — so `combined.length`
+ * can only exceed `existing.length` by the count of genuinely fresh items.
  */
 export function appendGalleryItems(
   existing: GalleryItem[],
   incoming: GalleryItem[],
 ): GalleryItem[] {
-  const seen = new Set(existing.map((item) => item.id));
-  const fresh: GalleryItem[] = [];
-  for (const item of incoming) {
-    if (seen.has(item.id)) continue;
-    seen.add(item.id);
-    fresh.push(item);
-  }
-  return fresh.length === 0 ? existing : [...existing, ...fresh];
+  const combined = dedupeBy([...existing, ...incoming], (item) => item.id);
+  return combined.length === existing.length ? existing : combined;
 }
 
 /**
