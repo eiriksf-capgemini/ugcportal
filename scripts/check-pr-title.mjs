@@ -3,16 +3,18 @@
  * Conventional Commit PR title guard (ugcportal-euqi).
  *
  * Pulled out of .github/workflows/ci.yml's `guard-conventional-commit-title`
- * job so the bead-id pattern has a unit-tested home instead of only a local
+ * job so the bead-id pattern has a unit-tested home rather than a local
  * `grep -qE` a later edit could silently loosen or break. See
  * check-pr-title.test.mjs for the table this pattern is scored against.
  *
  * Accepts a release title (`chore(release): vX.Y.Z`, no bead id) or
  * `<type>(<scope>): <description> (<bead-id>)`. The bead-id group accepts
- * both a top-level id (`ugcportal-qnq9`) and exactly one dot-separated child
+ * both a top-level id (`ugcportal-qnq9`) and a single dot-separated child
  * suffix (`ugcportal-qnq9.14`, how `bd create --parent=<id>` numbers a
  * child) -- but not a second level of nesting (`ugcportal-qnq9.14.3`) and
- * not a non-numeric or empty suffix (`ugcportal-qnq9.`, `ugcportal-qnq9.a`).
+ * not a non-numeric or empty suffix (`ugcportal-qnq9.`, `ugcportal-qnq9.a`);
+ * see check-pr-title.test.mjs's "rejects a second level of dotted nesting"
+ * and its two non-numeric-suffix cases for where that's asserted.
  */
 import { isMainModule } from "./lib/is-main.mjs";
 

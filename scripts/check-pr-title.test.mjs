@@ -1,8 +1,8 @@
 /**
  * Tests for the Conventional Commit PR title guard (ugcportal-euqi).
  *
- * The original defect: PR #89 was titled
- * "docs(research): ... (ugcportal-qnq9.14)" and failed
+ * The originating defect (ugcportal-euqi): a PR titled
+ * "docs(research): ... (ugcportal-qnq9.14)" failed
  * guard-conventional-commit-title because the old PATTERN's bead-id group,
  * ([a-zA-Z0-9]+-[a-zA-Z0-9]+)$, has no room for the dot-separated child
  * suffix bd creates with `--parent=<id>`. This table is run in CI (via
@@ -63,11 +63,12 @@ describe("isValidPrTitle", () => {
     expect(isValidPrTitle("")).toBe(false);
   });
 
-  // K2's guardrail: confirm the pattern cannot be silently widened to drop
-  // the bead-id requirement entirely without this table catching it. Mutate
-  // the bead-id group to optional, the way a careless "fix" for a missing
-  // id might, and assert the mutated pattern fails the table -- so this test
-  // is a guard against a specific regression, not just current behaviour.
+  // K2's guardrail: if the bead-id group were made optional (the way a
+  // careless "fix" for a missing id might), this table should fail. Proven
+  // directly below by regenerating PATTERN with that one group made
+  // optional and asserting the mutated pattern now matches `feat(x): y` --
+  // so this test is a guard against a specific regression, not just a
+  // check of current behaviour.
   it("would fail this table if the bead-id group were made optional", () => {
     const widenedSource = PATTERN.source.replace(
       ` \\([a-zA-Z0-9]+-[a-zA-Z0-9]+(?:\\.[0-9]+)?\\)$`,
