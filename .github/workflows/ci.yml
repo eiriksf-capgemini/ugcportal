@@ -7,17 +7,28 @@ on:
   push:
     branches: [main]
 
+# One run per PR at a time: a newer push cancels the run it supersedes.
+# Pushes to main are never cancelled, so every merge commit is verified
+# (ugcportal-ugcportal-0an4).
+concurrency:
+  # Edited events (title or body) skip the quality job, so they must not
+  # share a group with code events: otherwise a body edit right after a push
+  # cancels the run that carries the head's only quality result
+  # (ugcportal-ugcportal-sxwb).
+  group: ci-${{ github.event.pull_request.number || github.ref }}-${{ github.event.action == 'edited' && 'edited' || 'code' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
-  guard-sensitive-files:
-    name: Guard sensitive settings files
+  guards:
+    name: Guards (sensitive files, version consistency, PR title, harness self-test)
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Fail if .claude/settings*.json or CLAUDE.md is bundled with other changes
+        if: github.event_name == 'pull_request'
         env:
           BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
@@ -28,12 +39,6 @@ jobs:
             echo "::error::This PR touches .claude/settings.json, .claude/settings.local.json, or CLAUDE.md. Per CLAUDE.md policy, changes to these files must go through a dedicated PR for human review and must never be bundled with unrelated work. Split this change out."
             exit 1
           fi
-
-  guard-version-consistency:
-    name: Guard package.json/package-lock.json version consistency
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
 
       - name: Check version fields match
         run: |
@@ -60,12 +65,8 @@ jobs:
             console.log('✓ Version fields match: ' + pv);
           "
 
-  guard-conventional-commit-title:
-    name: Guard conventional-commit PR title
-    runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
-    steps:
       - name: Check PR title follows Conventional Commits
+        if: github.event_name == 'pull_request'
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
         run: |
@@ -75,14 +76,6 @@ jobs:
             echo "::error::PR title must follow Conventional Commits: <type>(<scope>): <description> (<bead-id>), e.g. 'feat(gallery): add lightbox (ugcportal-71y)'. Scope and the trailing bead-id are both required (the only exception is a release commit: 'chore(release): vX.Y.Z'). Valid types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert. See CLAUDE.md > 'Conventional Commits & Release Notes'."
             exit 1
           fi
-
-  usage-indicators-selftest:
-    name: harness-cost-controls self-test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Check whether harness-cost-controls scripts changed
         id: changed
@@ -121,6 +114,9 @@ jobs:
   quality:
     name: Lint, test, typecheck, build
     runs-on: ubuntu-latest
+    # A PR title or body edit changes nothing the suite can see; the guards
+    # job still runs on it so the title guard keeps working (ugcportal-ugcportal-0an4).
+    if: github.event_name == 'push' || github.event.action != 'edited'
     steps:
       - uses: actions/checkout@v4
 
