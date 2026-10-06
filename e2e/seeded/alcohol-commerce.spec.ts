@@ -217,11 +217,13 @@ test("K6: the drink's tile carries no commercial outbound link", async ({
   page,
 }) => {
   /*
-   * The fourth affordance the criterion names. There is no commercial-link
-   * column yet (ugcportal-qnq9.2), so this asserts the shape rather than a
+   * The fourth affordance the criterion names. The commercial-link column now
+   * exists (`CommercialLink`, ugcportal-qnq9.2.1) but nothing renders it — no
+   * public read path selects the relation, and the marker and the `rel` tokens
+   * are ugcportal-qnq9.2.2 — so this still asserts the SHAPE rather than a
    * field: every link inside the tile stays on this origin. An affiliate link
    * is by definition off-origin, so the day one is rendered without a gate
-   * this fails.
+   * this fails, which is exactly what it has to do when that bead lands.
    */
   await page.goto("/");
 

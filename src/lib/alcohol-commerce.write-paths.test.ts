@@ -72,8 +72,14 @@ const GATE = "benefitAttachmentRefusal";
  * Each entry is here for a stated reason, because an unexplained allowlist is
  * how this kind of test stops meaning anything:
  *
- *   - the disclosure route is THE write path, and it calls the gate (asserted
- *     separately below, which is the half an allowlist cannot carry);
+ *   - the disclosure route is the write path that ATTACHES A BENEFIT, and it
+ *     calls the gate (asserted separately below, which is the half an
+ *     allowlist cannot carry);
+ *   - the commercial-links route is the write path that ATTACHES A LINK
+ *     (ugcportal-qnq9.2.1), and it calls the same gate. It arrived exactly the
+ *     way the docstring above predicted a second writer would — a new route,
+ *     a new statute to think about — and this file failed on the PR that added
+ *     it, naming the function to call;
  *   - `benefit-source.ts` is the module that mints the row, and it is called
  *     BY that route inside the gated branch rather than reaching the gate
  *     itself — a predicate-free data-access helper, deliberately;
@@ -86,7 +92,10 @@ const GATE = "benefitAttachmentRefusal";
  * would be a stale entry of exactly the kind the third case below refuses.
  */
 const ALLOWED: Record<string, string> = {
-  "app/api/media/[id]/disclosure/route.ts": "the write path; calls the gate",
+  "app/api/media/[id]/disclosure/route.ts":
+    "attaches a benefit; calls the gate",
+  "app/api/media/[id]/commercial-links/route.ts":
+    "attaches a commercial link; calls the gate",
   "lib/benefit-source.ts": "mints the row, called from inside the gated branch",
   "app/api/media/[id]/publish/route.ts": "reads the pointer to refuse on it",
 };
@@ -120,11 +129,18 @@ function srcWriteSites(): string[] {
 }
 
 describe("ugcportal-qnq9.3 K4: every benefit-source write path is gated", () => {
-  it("finds the write path, so the enumeration is not vacuous", () => {
+  it("finds both write paths, so the enumeration is not vacuous", () => {
     // Without this, a scanner that silently matched nothing — a changed
     // needle, a broken strip, the wrong root — would make every assertion
-    // below pass.
+    // below pass. BOTH are named rather than one: the commercial-link route
+    // reaches the column only through Prisma's nested-write form
+    // (`benefitSource: { connect: … }`), so a needle set narrowed to the
+    // column name alone would still find the disclosure route and quietly
+    // stop finding this one.
     expect(srcWriteSites()).toContain("app/api/media/[id]/disclosure/route.ts");
+    expect(srcWriteSites()).toContain(
+      "app/api/media/[id]/commercial-links/route.ts",
+    );
   });
 
   it("lists no file that is not accounted for", () => {
@@ -150,12 +166,13 @@ describe("ugcportal-qnq9.3 K4: every benefit-source write path is gated", () => 
     }
   });
 
-  it("calls the gate from the route that writes the pointer", () => {
+  it("calls the gate from every route that writes the pointer", () => {
     // The claim the allowlist itself cannot make. Asserted per file rather
     // than once, so a second write path added to ALLOWED has to call the gate
-    // to get past this.
+    // to get past this — which is what the commercial-links route had to do.
     const writers = [
       "app/api/media/[id]/disclosure/route.ts",
+      "app/api/media/[id]/commercial-links/route.ts",
       "app/api/media/[id]/publish/route.ts",
     ];
     for (const file of writers) {
