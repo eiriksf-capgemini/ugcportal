@@ -301,9 +301,10 @@ describe("validateCommercialLinkNetwork (K5)", () => {
    * THE THIRD COLUMN IS THE `field`, and it is here because this validator is
    * the only one in the module that covers two body fields. The message and
    * the field have to name the SAME one: the field key exists so a caller can
-   * find the input to correct, and five of these refusals are about
-   * `networkOther` while the first six are about `network`. The route used to
-   * report `network` for all eleven, which this column would have caught.
+   * find the input to correct: of the fourteen rows below, the first six are
+   * about `network` and the remaining eight are about `networkOther`. The route
+   * used to report `network` for every one of them, which this column would
+   * have caught.
    */
   it.each([
     [undefined, undefined, "'network' must be one of", "network"],

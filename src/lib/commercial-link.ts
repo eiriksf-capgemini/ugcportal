@@ -76,7 +76,8 @@ export const MAX_COMMERCIAL_LINK_NETWORK_OTHER_LENGTH = 64;
  * link needs a distinct destination and a brand that somebody has already
  * recorded a §3.1a answer against — so this is an authenticated owner filling
  * up their own item rather than an authorization hole. It is still a row
- * count with no ceiling on a table that is read on every public surface.
+ * count with no ceiling on a table that ugcportal-qnq9.2.2 will read on every
+ * public surface once it ships (today nothing public reads it).
  *
  * SIX, and the number is about the page rather than about the database. Each
  * link renders its own per-link advertising marker beside the item
