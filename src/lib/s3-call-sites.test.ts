@@ -215,7 +215,7 @@ type Analysis = {
    * this analysis cannot follow it: handed to a function as an argument,
    * pulled apart by a destructuring pattern, stored in an object literal,
    * returned, or (for the factory) passed around uncalled. See
-   * `isFollowableClientPosition` for the three positions that are fine.
+   * `isAllowedClientPosition` for the three positions that are fine.
    */
   escapedClientFiles: string[];
   /** Files constructing `new S3Client(...)` directly. */
@@ -895,9 +895,9 @@ describe("ugcportal-98rb K4: spellings that must not bypass the guard", () => {
       }
     `);
     expect(result.escapedClientFiles).toEqual(["app/api/scratch/route.ts"]);
-    // The send inside the helper IS seen and IS wrapped — the escape is the
-    // only thing wrong with this file.
-    expect(result.unwrappedSendFiles).toEqual([]);
+    // The helper's own send is not analysed: its client arrives as a parameter,
+    // which is exactly the position the escape rule refuses to follow. The
+    // escape is therefore the whole finding; nothing here asserts on sends.
   });
 
   it("accepts the same refactor done so the client never leaves", () => {
