@@ -574,9 +574,13 @@ the evidence:
 
    **Do not reflexively delete the `User` rows.** `DELETE FROM User` is not
    a narrow operation. Enumerated from `prisma/schema.prisma` as of 457323d
-   (`ugcportal-vsm`, the last commit to touch it) by walking every
-   `onDelete: Cascade` relation transitively from `User` — re-derive it the
-   same way rather than trusting this list to have aged well:
+   (`ugcportal-vsm`) by walking every `onDelete: Cascade` relation
+   transitively from `User`, and re-derived the same way for
+   `ugcportal-qnq9.1` when `MediaAdvertisingDisclosure` was added — re-derive
+   it that way again rather than trusting this list to have aged well.
+   `src/lib/access-control-doc.test.ts` fails if it ever stops matching the
+   schema, so the table below is current even when this paragraph's commit
+   reference is not:
 
    | Destroyed | Reached via | What is actually lost |
    | --- | --- | --- |
@@ -585,6 +589,7 @@ the evidence:
    | `Media` | `Media.user` | every upload record |
    | `MediaListing` | `Media` | price and sale state |
    | `MediaRightsClearance` | `MediaListing` | the clearance on each upload |
+   | `MediaAdvertisingDisclosure` | `Media` | the advertising-disclosure record: whether a benefit was received, what it was, which brand it came from, its market value, and the label (`ugcportal-qnq9.1`). The `BenefitSource` brand row itself is **not** destroyed — it is `onDelete: Restrict`, shared vocabulary rather than one person's data |
    | `ResaleRightsReview` | `ResaleRightsReview.uploader` | **the uploader's standing rights clearance**, with its `evidenceKey`/`evidenceSha256` pointers into `rights-evidence/` |
    | `InstagramAccount` | `InstagramAccount.connectedBy` | **the connected account including `accessTokenEncrypted`** — note this is whoever *ran* the connect, not a property of the account being deleted |
 
