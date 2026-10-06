@@ -32,9 +32,10 @@ gh pr checks <n>
 
 It must be written down rather than left in a shell variable, because **each Bash invocation is a fresh shell — no variable set in one tool call survives into the next.** An earlier draft assigned `run_started=$(date ...)` here and referenced `$run_started` in step 4b; that expands to the empty string, `select(. < "")` is false for every timestamp, and the probe silently returned `0` on every PR, which reads as "genuinely fresh". Three rounds of review have now found the same bootstrap branch unreachable by three different routes, and this was the third. The general rule, which applies to every command in this file: **a value that has to cross a step boundary gets written down; a value used inside one command block must be assigned inside that same block.** Where this file assigns a variable (`me=`, `stop_at=`), the whole fenced block is one invocation and must be run as one.
 
-**Write down two more values from that output, for the same reason:**
+**Write down three more values from that output, for the same reason:**
 
 - **`headRefOid`** — the branch's head SHA. Every comment template in step 5 records it (`head <headRefOid>`), the `7+` row's condition 3 compares the live head against the one recorded in the anchor comment, and step 1a's lock object points at it. It used to be fetched *only* inside the `7+` block, which runs on a handful of PRs and never before an ordinary round 1-6 blocking comment — so that template's `head <headRefOid>` field had no value to fill in, and an agent either left the placeholder standing or invented something. Either way the anchor a later round compares against carried no real SHA, which silently disarms the SHA half of condition 3 and leaves it resting on the human-comment probe alone. **A value a template requires must be fetched by a step that always runs before that template.**
+- **`headRefName`** — the branch name itself. The merge step's branch-deletion verification (below) runs `git ls-remote --heads origin <headRefName>`; it is already in this step's `--json` field list above, so only the writing-down was missing.
 - **`author.login`** — the account that opened the PR. Step 4b's counter needs it: a round chain whose markers were written by the PR's own author is self-asserted, and a self-asserted chain can never be `exact`.
 
 Bail out immediately (no review, no approval, no merge — just report why) if:
@@ -500,6 +501,29 @@ gh pr merge <n> --squash --delete-branch   # fall back to --merge or --rebase if
 
 If `gh pr merge` fails after the approval lands, the marker is already on the PR, so the next run counts this round correctly — report the failure and stop rather than re-approving.
 
+**`--delete-branch` is a request, not a confirmed result (ugcportal-nvg0).** It is also not this skill's whole merge history: `--delete-branch` was only added to this step at `640799c` (PR #46, 2026-09-28) — a PR merged before that date was never passed the flag at all, not just occasionally missed by it. Either way, verify the branch is actually gone instead of trusting the flag:
+
+```bash
+git ls-remote --heads origin <headRefName>   # headRefName from step 1 -- must print nothing
+```
+
+If it still prints a line, delete it explicitly and re-check:
+
+```bash
+git push origin --delete <headRefName>
+git ls-remote --heads origin <headRefName>   # must print nothing now
+```
+
+If the branch is still there after that, say so plainly in your step 6 report with the exact command and output — do not report the merge as fully clean.
+
+If this merge was driven from inside the implementer's own worktree (the usual case for an agent-run merge), that worktree and its local branch are now eligible for the same script's one-shot sweep, scoped to this one branch rather than the repo-wide form in step 7 below — run it from the main checkout, not from inside the worktree being removed, rather than removing them by hand:
+
+```bash
+node scripts/sweep-merged-branches.mjs --branch <headRefName> --execute
+```
+
+`classifyWorktree` there gates the worktree's `git branch -D` on an executable check (the branch tip reachable from a remote, or equal to this merge's `headRefOid`), not a comment — the guard a hand-run `git branch -D` here would not have.
+
 If the PR merges at round 4+ with low findings deferred, say so explicitly in the approval body and list the bead ids from step 5a.
 
 If anything blocks: do not approve, do not merge. Post a single clear comment stating exactly which gate(s) failed (sensitive path / CI red / findings, **each finding with the severity you assigned it in step 4**), the round number and its chain status (`exact` / `approx` / `broken`), and what a human or the implementer needs to do next. **Stamp the round marker** so the next round can count itself:
@@ -604,4 +628,15 @@ State plainly:
 - Bead ids filed in step 5a, if any.
 - The `tokens_qa` figure recorded in step 4a (or note that it was skipped, and why).
 
-If merged, confirm the merge actually happened (`gh pr view <n> --json state,mergedAt`).
+If merged, confirm the merge actually happened (`gh pr view <n> --json state,mergedAt`) and confirm the branch-deletion check above — gone on the first try, gone only after the explicit delete, or still present and reported as such.
+
+## 7. One-shot cleanup sweep (drift, not a single PR)
+
+The checks above verify one branch, right after one merge. Branches and worktrees also go stale in bulk — a human merge that bypassed this skill, an earlier skill version, a worktree whose directory was deleted by hand without `git worktree remove`. `scripts/sweep-merged-branches.mjs` finds that drift across the whole repo in one pass, using the same rule as above (a branch or worktree is a candidate only when its PR's state is exactly `MERGED` — asserted below):
+
+```bash
+node scripts/sweep-merged-branches.mjs             # dry run: lists every candidate and why
+node scripts/sweep-merged-branches.mjs --execute   # removes them
+```
+
+It never touches a branch with an `OPEN` or `CLOSED`-without-merge PR, a branch with no PR at all (a human decision each time — this includes non-PR refs like Dolt's own branch under `refs/heads`), a dirty or locked worktree, a worktree with commits that aren't reachable from any remote branch and don't match the merged PR's own head commit, or the main branch and checkout — `scripts/sweep-merged-branches.test.mjs` asserts each of those against the pure classifier, including against real temporary git repositories for the unpushed-commit and deleted-directory cases. This unscoped, repo-wide form is for drift that already exists — run it on a schedule, or whenever `git worktree list` or `git branch -r` looks longer than expected. The merge step above runs the same script as part of its own per-PR flow, scoped to one branch (`--branch <name>`); only this repo-wide form does not run automatically.
