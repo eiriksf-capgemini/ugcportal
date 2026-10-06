@@ -186,10 +186,11 @@ function scanRealTreeOnce(): { offenders: string[]; warnings: string[] } {
 // ugcportal-9faa: explicit timeout, not a bigger global default. A full-tree
 // TypeScript parse (see scanRealTreeOnce above) is real CPU work with
 // nothing left to cache away once it has already been reduced to one pass;
-// measured under machine load (vitest --no-file-parallelism at load
-// average ~150-165), the combined K6 + fail-closed-path real-tree scan
-// below took up to ~2s, close enough to the 5s default that it would have
-// blown through it outright at the load average 190 this bead was filed
+// measured with `vitest run --no-file-parallelism` at a natural (not
+// synthetic) 1-minute load average of ~164 on this machine, this whole
+// file -- the real-tree scan below plus its own cheap fixture tests --
+// took 3023ms, close enough to the 5s default that it would have blown
+// through it outright at the load average 190 this bead was filed
 // against.
 describe("K6: the analytics host/script name appears nowhere outside the gated loader", { timeout: 15_000 }, () => {
   it("finds files to scan (sanity check on the walker itself)", () => {
