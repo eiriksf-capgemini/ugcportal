@@ -2,9 +2,11 @@
 
 import type PhotoSwipeLightbox from "photoswipe/lightbox";
 import {
+  type MouseEvent as ReactMouseEvent,
   type RefObject,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
 } from "react";
@@ -185,8 +187,8 @@ export function Gallery({
    * already announcing "Showing all N photographs.") is a sensible,
    * always-present landing spot — UNLIKE the button, it is never
    * conditionally rendered, so `pagingStatusRef.current` is already the
-   * final element by the time `loadMore` can act on it below, with no need
-   * to wait for a later render the way the button's own ref would.
+   * final element by the time the layout effect below can act on it, with
+   * no need to wait for a later render the way the button's own ref would.
    *
    * `tabIndex={-1}` on that paragraph (below, in `GalleryPaging`) is what
    * makes it a valid `.focus()` target without adding it to the Tab order.
@@ -194,18 +196,19 @@ export function Gallery({
   const pagingStatusRef = useRef<HTMLParagraphElement>(null);
 
   /**
-   * The "Load more" / "Try again" button itself, so `loadMore` can tell
-   * whether the visitor was still on it before moving focus elsewhere
-   * (ugcportal-jx4 round-2 review finding).
+   * Whether the visitor was still on "Load more" when its request finished,
+   * so the layout effect below knows whether to hand focus to the paging
+   * status line once the button it came from unmounts (ugcportal-jx4 K2;
+   * split from a single inline check into this ref plus the effect per
+   * ugcportal-dj4i item 3).
    *
-   * Without this, the focus handoff below fired unconditionally whenever a
-   * page turned out to be the last one — including when the visitor had
-   * already tabbed away to something else entirely while the request was
-   * in flight, in which case yanking focus to the status line is exactly
-   * the kind of surprise a focus-management fix is supposed to prevent,
-   * not cause.
+   * Set inside `loadMore`, at request-completion time, not at click time:
+   * see the comment on that assignment for why the two give different
+   * answers whenever a visitor tabs away while the request is in flight,
+   * and gallery.focus.test.tsx's "K2 guard" tests for what that difference
+   * guards.
    */
-  const loadMoreButtonRef = useRef<HTMLButtonElement>(null);
+  const shouldFocusStatusRef = useRef(false);
 
   useEffect(() => {
     /*
@@ -231,6 +234,27 @@ export function Gallery({
       live?.destroy();
     };
   }, []);
+
+  /**
+   * The K2 handoff's "act" half (ugcportal-dj4i item 3) — keyed on `hasMore`
+   * so it runs once, exactly when "Load more" actually turns into the
+   * end-of-list state, rather than on every render. `shouldFocusStatusRef`
+   * defaults to `false`, so a mount where `hasMore` already starts `false`
+   * (a gallery with no further page from the first render) runs this once
+   * and does nothing — there is no click to have set the ref yet.
+   *
+   * A layout effect, not an ordinary one: it runs synchronously after React
+   * commits the re-render that unmounts the button, before the browser
+   * paints, which is the same timing a real focus handoff needs (compare
+   * `app-shell.tsx`'s skip link, also a programmatic `.focus()` on commit).
+   */
+  useLayoutEffect(() => {
+    if (hasMore) return;
+    if (shouldFocusStatusRef.current) {
+      pagingStatusRef.current?.focus();
+    }
+    shouldFocusStatusRef.current = false;
+  }, [hasMore]);
 
   const openLightbox = useCallback(
     async (index: number, isLive: () => boolean) => {
@@ -323,75 +347,80 @@ export function Gallery({
     [openLightbox],
   );
 
-  const loadMore = useCallback(async () => {
-    if (cursor === null || loadState === "loading") return;
-    setLoadState("loading");
-    try {
-      const response = await fetch(publicMediaListingPath({ cursor }), {
-        headers: { accept: "application/json" },
-      });
-      if (!response.ok) {
-        throw new Error(`the gallery feed answered ${response.status}`);
-      }
-      const payload: unknown = await response.json();
-      const page = readListingPage(payload);
-      const nextHasMore = page.hasMore && page.nextCursor !== null;
-      setItems((current) => appendGalleryItems(current, page.items));
-      setCursor(page.nextCursor);
-      setHasMore(nextHasMore);
-      setLoadState("idle");
-      if (!nextHasMore) {
-        /*
-         * The button this click is on is about to unmount (`{hasMore ? ...
-         * : null}` below) — but only chase it with focus if the visitor is
-         * actually still ON IT right now (ugcportal-jx4 round-2/4 review
-         * findings). Checked synchronously here, before this function
-         * returns and React gets a chance to commit the re-render that
-         * removes the button: nothing else runs between the state updates
-         * above and this line, so `document.activeElement` still reflects
-         * whatever the visitor's last actual action left it as — including
-         * a Tab elsewhere while this request was in flight, which must be
-         * left alone rather than overridden.
-         *
-         * No `=== document.body` branch (round-4 review finding; an earlier
-         * version had one, reasoning it meant "the button already
-         * unmounted"). That reasoning doesn't hold AT THIS POINT: nothing
-         * has unmounted yet, this check runs strictly before the state
-         * updates above are committed — so `activeElement === body` here
-         * means only "nothing was ever focused in the first place", which
-         * is the ordinary case for a plain mouse click (Safari does not
-         * focus a button on click, and neither does jsdom's synthetic
-         * click here). Treating that as "move focus" would hand a mouse
-         * visitor who never asked for keyboard focus an unrequested focus
-         * ring on the status line.
-         *
-         * WHAT MATTERS IS THAT NOTHING AWAITS BETWEEN THE STATE UPDATES
-         * ABOVE AND THIS CHECK — the same shape as `tornDown` and
-         * `activations` further up this file, and the same reason it
-         * matters: a guard is only as good as the span it actually covers.
-         * `setHasMore`/`setLoadState` above are synchronous calls that
-         * QUEUE a re-render; they do not commit one. If a future edit put
-         * an `await` anywhere between them and `document.activeElement`
-         * here — logging, another fetch, anything — React could commit
-         * that re-render in the gap, the button could actually unmount, and
-         * `loadMoreButtonRef.current` would already read `null` by the time
-         * this line ran: the guard would silently stop recognising the
-         * visitor who was genuinely still on the button, for a reason
-         * entirely unrelated to where their focus was. A guard that reads
-         * correct in isolation but sits on the wrong side of an `await` is
-         * exactly the failure shape those two comments warn about, not a
-         * new one.
-         */
-        if (document.activeElement === loadMoreButtonRef.current) {
-          pagingStatusRef.current?.focus();
+  const loadMore = useCallback(
+    async (button: HTMLButtonElement) => {
+      if (cursor === null || loadState === "loading") return;
+      setLoadState("loading");
+      try {
+        const response = await fetch(publicMediaListingPath({ cursor }), {
+          headers: { accept: "application/json" },
+        });
+        if (!response.ok) {
+          throw new Error(`the gallery feed answered ${response.status}`);
         }
+        const payload: unknown = await response.json();
+        const page = readListingPage(payload);
+        const nextHasMore = page.hasMore && page.nextCursor !== null;
+        setItems((current) => appendGalleryItems(current, page.items));
+        setCursor(page.nextCursor);
+        setHasMore(nextHasMore);
+        setLoadState("idle");
+        if (!nextHasMore) {
+          /*
+           * `button` is the click event's own `currentTarget` (passed in by
+           * the caller below, ugcportal-dj4i item 4) — it identifies the
+           * control this request was issued from without a persistent ref
+           * dedicated to that one comparison. The comparison itself still
+           * has to happen HERE, not in the click handler: only "was the
+           * visitor on the button when this request STARTED" is knowable
+           * there, and the guard this gates (gallery.focus.test.tsx's "K2
+           * guard" describe blocks) needs "was the visitor on the button
+           * when it FINISHED" — a visitor who tabs away while the request is
+           * in flight must be left alone, not chased.
+           *
+           * Checked synchronously here, before this function returns and
+           * React gets a chance to commit the re-render that removes the
+           * button: nothing else runs between the state updates above and
+           * this line, so `document.activeElement` still reflects whatever
+           * the visitor's last actual action left it as. The actual
+           * `.focus()` call reads this ref from the `useLayoutEffect` above,
+           * once `hasMore` turning `false` actually commits — this line only
+           * decides whether that effect should act.
+           *
+           * No `=== document.body` branch (round-4 review finding; an
+           * earlier version had one, reasoning it meant "the button already
+           * unmounted"). That reasoning doesn't hold AT THIS POINT: nothing
+           * has unmounted yet, this check runs strictly before the state
+           * updates above are committed — so `activeElement === body` here
+           * means only "nothing was ever focused in the first place", the
+           * ordinary case for a plain mouse click (Safari does not focus a
+           * button on click, and neither does jsdom's synthetic click here).
+           * Treating that as "move focus" would hand a mouse visitor an
+           * unrequested focus ring on the status line.
+           *
+           * WHAT MATTERS IS THAT NOTHING AWAITS BETWEEN THE STATE UPDATES
+           * ABOVE AND THIS CHECK — the same shape as `tornDown` and
+           * `activations` further up this file: `setHasMore`/`setLoadState`
+           * above are synchronous calls that QUEUE a re-render, they do not
+           * commit one. An `await` inserted anywhere between them and
+           * `document.activeElement` here would let React commit that
+           * re-render in the gap, unmounting `button` for real before this
+           * line ran — at which point `document.activeElement` can no
+           * longer equal it regardless of where focus actually was, which
+           * would silently stop recognising the visitor who was genuinely
+           * still on the button, for a reason entirely unrelated to where
+           * their focus was.
+           */
+          shouldFocusStatusRef.current = document.activeElement === button;
+        }
+      } catch {
+        // Deliberately keeps `cursor` and `hasMore` as they were, so the retry
+        // asks for the same page rather than silently skipping it.
+        setLoadState("error");
       }
-    } catch {
-      // Deliberately keeps `cursor` and `hasMore` as they were, so the retry
-      // asks for the same page rather than silently skipping it.
-      setLoadState("error");
-    }
-  }, [cursor, loadState]);
+    },
+    [cursor, loadState],
+  );
 
   /*
    * Decided by the shared `isGenuinelyEmptyPage` (src/lib/gallery-items.ts;
@@ -510,9 +539,8 @@ export function Gallery({
         viewerFailed={viewerFailed}
         count={items.length}
         statusRef={pagingStatusRef}
-        buttonRef={loadMoreButtonRef}
-        onLoadMore={() => {
-          void loadMore();
+        onLoadMore={(event) => {
+          void loadMore(event.currentTarget);
         }}
       />
     </div>
@@ -604,7 +632,6 @@ function GalleryPaging({
   viewerFailed,
   count,
   statusRef,
-  buttonRef,
   onLoadMore,
 }: {
   hasMore: boolean;
@@ -612,8 +639,7 @@ function GalleryPaging({
   viewerFailed: boolean;
   count: number;
   statusRef: RefObject<HTMLParagraphElement | null>;
-  buttonRef: RefObject<HTMLButtonElement | null>;
-  onLoadMore: () => void;
+  onLoadMore: (event: ReactMouseEvent<HTMLButtonElement>) => void;
 }) {
   return (
     <div className="mt-8 flex flex-col items-center gap-3">
@@ -659,7 +685,6 @@ function GalleryPaging({
       </p>
       {hasMore ? (
         <Button
-          ref={buttonRef}
           type="button"
           size="lg"
           variant={loadState === "error" ? "outline" : "default"}
