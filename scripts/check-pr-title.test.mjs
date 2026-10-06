@@ -1,0 +1,80 @@
+/**
+ * Tests for the Conventional Commit PR title guard (ugcportal-euqi).
+ *
+ * The original defect: PR #89 was titled
+ * "docs(research): ... (ugcportal-qnq9.14)" and failed
+ * guard-conventional-commit-title because the old PATTERN's bead-id group,
+ * ([a-zA-Z0-9]+-[a-zA-Z0-9]+)$, has no room for the dot-separated child
+ * suffix bd creates with `--parent=<id>`. This table is run in CI (via
+ * scripts/check-pr-title.mjs's CLI entry point, exercised through npm test
+ * since vitest collects this file directly) so a later regex edit has
+ * something to fail, per the bead's K1 "Verified by" clause.
+ */
+import { describe, expect, it } from "vitest";
+
+import { isValidPrTitle, PATTERN } from "./check-pr-title.mjs";
+
+describe("isValidPrTitle", () => {
+  it("accepts the real PR #89 title with a dotted child bead id", () => {
+    expect(isValidPrTitle("docs(research): write up the finding (ugcportal-qnq9.14)")).toBe(true);
+  });
+
+  it("accepts a top-level (non-child) bead id", () => {
+    expect(isValidPrTitle("feat(gallery): add lightbox with PhotoSwipe (ugcportal-71y)")).toBe(true);
+  });
+
+  it("accepts a release title with no bead id", () => {
+    expect(isValidPrTitle("chore(release): v1.2.3")).toBe(true);
+  });
+
+  it("accepts a breaking-change marker before the colon", () => {
+    expect(isValidPrTitle("feat(auth)!: require verified email (ugcportal-abc1)")).toBe(true);
+  });
+
+  it("rejects a dotted suffix with no digits", () => {
+    expect(isValidPrTitle("docs(research): x (ugcportal-qnq9.)")).toBe(false);
+  });
+
+  it("rejects a dotted suffix that isn't numeric", () => {
+    expect(isValidPrTitle("docs(research): x (ugcportal-qnq9.a)")).toBe(false);
+  });
+
+  it("rejects a bead id with no suffix after the dash", () => {
+    expect(isValidPrTitle("docs(research): x (ugcportal-)")).toBe(false);
+  });
+
+  it("rejects a second level of dotted nesting", () => {
+    expect(isValidPrTitle("docs(research): x (ugcportal-qnq9.14.3.1)")).toBe(false);
+  });
+
+  it("rejects a title with no bead id at all", () => {
+    expect(isValidPrTitle("feat(x): y")).toBe(false);
+  });
+
+  it("rejects a title missing the required (scope)", () => {
+    expect(isValidPrTitle("docs: write something (ugcportal-qnq9.14)")).toBe(false);
+  });
+
+  it("rejects an unknown commit type", () => {
+    expect(isValidPrTitle("wip(gallery): still working (ugcportal-71y)")).toBe(false);
+  });
+
+  it("rejects an empty title", () => {
+    expect(isValidPrTitle("")).toBe(false);
+  });
+
+  // K2's guardrail: confirm the pattern cannot be silently widened to drop
+  // the bead-id requirement entirely without this table catching it. Mutate
+  // the bead-id group to optional, the way a careless "fix" for a missing
+  // id might, and assert the mutated pattern fails the table -- so this test
+  // is a guard against a specific regression, not just current behaviour.
+  it("would fail this table if the bead-id group were made optional", () => {
+    const widenedSource = PATTERN.source.replace(
+      ` \\([a-zA-Z0-9]+-[a-zA-Z0-9]+(?:\\.[0-9]+)?\\)$`,
+      `(?: \\([a-zA-Z0-9]+-[a-zA-Z0-9]+(?:\\.[0-9]+)?\\))?$`,
+    );
+    expect(widenedSource).not.toBe(PATTERN.source); // the replace actually matched something
+    const widened = new RegExp(widenedSource);
+    expect(widened.test("feat(x): y")).toBe(true); // the regression this guards against
+  });
+});
