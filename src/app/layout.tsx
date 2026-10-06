@@ -7,6 +7,7 @@ import { ConsentProvider } from "@/components/consent/consent-context";
 import { CookieBanner } from "@/components/consent/cookie-banner";
 import { readConsentCookieOnServer } from "@/lib/consent.server";
 import { SITE_DESCRIPTION, SITE_NAME } from "@/lib/site";
+import { siteVerification } from "@/lib/site-verification";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -46,6 +47,13 @@ export const metadata: Metadata = {
     template: `%s · ${SITE_NAME}`,
   },
   description: SITE_DESCRIPTION,
+  // Search Console and Pinterest site verification (ugcportal-qnq9.12, K4),
+  // set once here so every page under this layout inherits it — Next merges
+  // a child route's own `metadata`/`generateMetadata` over this object
+  // rather than replacing it outright, and no page in this app sets its own
+  // `verification` key to override it with. See src/lib/site-verification.ts
+  // for why this is meta tags only, never a script.
+  verification: siteVerification(),
 };
 
 export default async function RootLayout({ children }: LayoutProps<"/">) {

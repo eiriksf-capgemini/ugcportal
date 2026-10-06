@@ -32,11 +32,20 @@
  * even though no single `node:` specifier names it, so this module is where
  * every check this repository has needed so far that isn't safe to bundle
  * for the edge compile has ended up.
+ *
+ * `checkSiteOriginConfigured` (ugcportal-qnq9.12) is the one exception to
+ * that pattern, not a counter-example to it: `@/lib/origin` imports nothing
+ * Node-only and would bundle for the edge compile just as well as it does
+ * here. It is wired in alongside the others anyway, for the SAME reason
+ * `registerNodeOnlyChecks` exists as one function rather than scattering
+ * calls across multiple places — one list of "warnings a deployment should
+ * see at boot", not a decision about what this module is allowed to import.
  */
 import { HeadBucketCommand } from "@aws-sdk/client-s3";
 
 import { LEGAL_PAGES } from "@/lib/legal/pages";
 import { checkLegalPagesPublishable } from "@/lib/legal/publishable";
+import { checkSiteOriginConfigured } from "@/lib/origin";
 import { classifyTransportFailure, getBucketName, getS3Client } from "@/lib/s3";
 
 /**
@@ -207,16 +216,19 @@ export async function checkS3Reachability({
  * Every boot check that belongs behind the Node-runtime guard. Called once
  * from src/instrumentation.ts's `register()`.
  *
- * The legal-pages check is logged FIRST, before the S3 probe is even
- * started, not gathered into one array and logged together (round-2 review
- * finding 1): it is synchronous and independent of S3 reachability, so
- * there is no reason for a slow or hanging S3 endpoint to sit in front of
- * it. Under the old ordering a GDPR-relevant warning could be delayed up to
- * `S3_REACHABILITY_TIMEOUT_MS` behind the S3 probe, and lost entirely if the
- * process was killed in that window. The S3 probe itself stays awaited
- * here, not fire-and-forget — that part is the bead's own K2 design (`bd
- * show ugcportal-ze1o`), not an oversight: `register()` must still resolve
- * only once the probe has settled or timed out.
+ * The legal-pages and site-origin checks are logged FIRST, before the S3
+ * probe is even started, not gathered into one array and logged together
+ * (round-2 review finding 1, ugcportal-ze1o): both are synchronous and
+ * independent of S3 reachability, so there is no reason for a slow or
+ * hanging S3 endpoint to sit in front of either. Under the old ordering a
+ * GDPR-relevant warning could be delayed up to `S3_REACHABILITY_TIMEOUT_MS`
+ * behind the S3 probe, and lost entirely if the process was killed in that
+ * window — the same reasoning applies to `checkSiteOriginConfigured`
+ * (ugcportal-qnq9.12), added alongside it for exactly that reason rather
+ * than appended after the S3 probe. The S3 probe itself stays awaited here,
+ * not fire-and-forget — that part is the bead's own K2 design (`bd show
+ * ugcportal-ze1o`), not an oversight: `register()` must still resolve only
+ * once the probe has settled or timed out.
  */
 export async function registerNodeOnlyChecks(): Promise<void> {
   // ugcportal-qnq9.4: while a LEGAL_* variable is unset (env.example) the
@@ -227,6 +239,16 @@ export async function registerNodeOnlyChecks(): Promise<void> {
   const legalWarning = checkLegalPagesPublishable(LEGAL_PAGES);
   if (legalWarning) {
     console.error(legalWarning);
+  }
+
+  // ugcportal-qnq9.12 (review round 1, finding 1): while AUTH_URL is unset
+  // or unparseable, the per-item canonical link, the sitemap and robots.txt
+  // either fall back to a localhost URL (outside production) or omit the
+  // URL entirely (in production) — say which, and which variable to set,
+  // at boot rather than leaving it to whoever first reads page source.
+  const siteOriginWarning = checkSiteOriginConfigured();
+  if (siteOriginWarning) {
+    console.error(siteOriginWarning);
   }
 
   const s3Warning = await checkS3Reachability();
