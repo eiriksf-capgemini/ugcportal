@@ -29,9 +29,9 @@ const REPO_ROOT = path.resolve(__dirname, "..", "..");
  * `workers: 1` (ugcportal-qqnt.4): `fullyParallel: false` alone only
  * serialises the tests WITHIN one spec file — Playwright still schedules
  * separate FILES onto separate workers by default, and this directory now
- * holds two (alcohol-commerce.spec.ts, front-page-hero-portfolio.spec.ts),
- * each with its own `beforeAll`/`afterAll` writing to the identical SQLite
- * file this one dev server reads. Two files' seed/cleanup hooks racing each
+ * holds three (alcohol-commerce.spec.ts, front-page-hero-portfolio.spec.ts,
+ * share-og.spec.ts), each with its own `beforeAll`/`afterAll` writing to the
+ * identical SQLite file this one dev server reads. Files' seed/cleanup hooks racing each
  * other over that one file is exactly the `SQLITE_BUSY` shape
  * review-standards names as a real, reproduced failure elsewhere in this
  * repo's e2e suites (ugcportal-2yj's own citation, PR #101 round 1) — not a
@@ -47,7 +47,7 @@ const REPO_ROOT = path.resolve(__dirname, "..", "..");
  * file here does not touch any row it did not create — every id a given file
  * writes carries that file's own prefix (`e2e-qnq9-3-` for
  * alcohol-commerce.spec.ts, `e2e-qqnt4-` for
- * front-page-hero-portfolio.spec.ts).
+ * front-page-hero-portfolio.spec.ts, `e2e-lju-` for share-og.spec.ts).
  *
  * `npm run dev` rather than a production build, unlike e2e/production: nothing
  * here depends on NODE_ENV, and `next dev` keeps the run to seconds. It also
