@@ -1,5 +1,13 @@
 /**
- * Tests for the dev-start migration check (ugcportal-w7wc).
+ * Tests for the dev-start migration check (ugcportal-w7wc), including the
+ * env-file precedence fix (ugcportal-h2yd): this file used to read
+ * `process.env.DATABASE_URL` as the shell gave it, so a DATABASE_URL set
+ * only in `.env.local` was invisible here while `next dev`, started right
+ * after, read it and queried a different, unmigrated database. See
+ * scripts/lib/env-files.test.mjs for the precedence-order unit tests
+ * ("$name" describe block there); the "resolveDatabaseUrl" describe below
+ * is this file's own test that the migration check wires that resolver in
+ * -- a fixture `.env.local` with DATABASE_URL set, nothing else present.
  *
  * The decision function is driven directly; the runner is driven through an
  * injected command runner that records what it was asked to run, so "which
@@ -15,7 +23,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
   DEPLOY_ARGS,
@@ -24,6 +32,7 @@ import {
   isLocalFileDatabase,
   parsePendingMigrations,
   planMigrationCheck,
+  resolveDatabaseUrl,
   runMigrationCheck,
 } from "./check-migrations.mjs";
 
@@ -150,6 +159,54 @@ describe("isLocalFileDatabase", () => {
     expect(isLocalFileDatabase("   ")).toBe(false);
     expect(isLocalFileDatabase(42)).toBe(false);
     expect(isLocalFileDatabase(null)).toBe(false);
+  });
+});
+
+describe("resolveDatabaseUrl", () => {
+  /** @type {string} */
+  let dir;
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "ugcportal-resolve-database-url-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("the reported bug's exact fixture: DATABASE_URL set only in .env.local is what the script targets", () => {
+    fs.writeFileSync(path.join(dir, ".env.local"), 'DATABASE_URL="file:./local-only.db"\n');
+    expect(resolveDatabaseUrl({ cwd: dir, envTarget: {} })).toBe("file:./local-only.db");
+  });
+
+  it("is undefined, not a stale value, when no .env* file sets it and nothing else does either", () => {
+    expect(resolveDatabaseUrl({ cwd: dir, envTarget: {} })).toBeUndefined();
+  });
+
+  it("precedence with both files present: .env.local wins over a plain .env", () => {
+    fs.writeFileSync(path.join(dir, ".env"), "DATABASE_URL=file:env.db\n");
+    fs.writeFileSync(path.join(dir, ".env.local"), "DATABASE_URL=file:env-local.db\n");
+    expect(resolveDatabaseUrl({ cwd: dir, envTarget: {} })).toBe("file:env-local.db");
+  });
+
+  it("precedence with all four files present: .env.development.local wins", () => {
+    fs.writeFileSync(path.join(dir, ".env"), "DATABASE_URL=file:env.db\n");
+    fs.writeFileSync(path.join(dir, ".env.development"), "DATABASE_URL=file:env-development.db\n");
+    fs.writeFileSync(path.join(dir, ".env.local"), "DATABASE_URL=file:env-local.db\n");
+    fs.writeFileSync(
+      path.join(dir, ".env.development.local"),
+      "DATABASE_URL=file:env-development-local.db\n",
+    );
+    expect(resolveDatabaseUrl({ cwd: dir, envTarget: {} })).toBe(
+      "file:env-development-local.db",
+    );
+  });
+
+  it("never overrides a DATABASE_URL already present in the target env", () => {
+    fs.writeFileSync(path.join(dir, ".env.local"), "DATABASE_URL=file:env-local.db\n");
+    expect(
+      resolveDatabaseUrl({ cwd: dir, envTarget: { DATABASE_URL: "file:already-set.db" } }),
+    ).toBe("file:already-set.db");
   });
 });
 

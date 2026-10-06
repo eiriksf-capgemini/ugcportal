@@ -18,6 +18,16 @@
  * so a non-zero exit here means `next dev` never starts. Not npm's `predev`
  * hook, which reaches the same place through one more npm process.
  *
+ * DATABASE_URL is resolved with scripts/lib/env-files.mjs's `loadDevEnvFiles`,
+ * the same `.env*` precedence `next dev` itself uses, before anything below
+ * reads `process.env.DATABASE_URL` or spawns prisma (ugcportal-h2yd). Before
+ * this, a DATABASE_URL set only in `.env.local` was invisible here: this
+ * script read `process.env` as the shell gave it (nothing), and the prisma
+ * CLI it spawns loaded prisma7.config.ts's bare `import "dotenv/config"`,
+ * which only reads `.env` -- so migrations landed on Prisma's `file:./dev.db`
+ * fallback while `next dev`, started right after, read `.env.local` and
+ * queried a different, unmigrated database.
+ *
  * WHAT IT IS ALLOWED TO RUN: `prisma migrate status`, and for a local
  * `file:` datasource `prisma migrate deploy`. Those two and nothing else —
  * this runs unattended against whatever working database a developer has in
@@ -36,6 +46,7 @@ import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { loadDevEnvFiles } from "./lib/env-files.mjs";
 import { isMainModule } from "./lib/is-main.mjs";
 
 /** Prefix on every line this script prints, matching scripts/with-local-ca.mjs. */
@@ -291,6 +302,27 @@ export function runMigrationCheck({ run, databaseUrl, out }) {
   return 0;
 }
 
+/**
+ * The DATABASE_URL `next dev` will itself end up using, resolved from
+ * `cwd`'s `.env*` files with the same precedence (ugcportal-h2yd; see
+ * scripts/lib/env-files.mjs for the order and why it lives there rather
+ * than a bare `dotenv/config`).
+ *
+ * Takes `envTarget` so a test can resolve against a throwaway object
+ * instead of mutating the real `process.env` of the test runner, and `cwd`
+ * so a test can point it at a fixture directory instead of this repo's own
+ * root -- `main()` below passes `process.env` and `REPO_ROOT`.
+ *
+ * @param {object} options
+ * @param {string} options.cwd
+ * @param {Record<string, string | undefined>} [options.envTarget]
+ * @returns {string | undefined}
+ */
+export function resolveDatabaseUrl({ cwd, envTarget = process.env }) {
+  const { env } = loadDevEnvFiles({ cwd, envTarget });
+  return env.DATABASE_URL;
+}
+
 /* c8 ignore start -- process wiring, exercised by `npm run dev` itself */
 const REPO_ROOT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -300,7 +332,7 @@ const PRISMA_BIN = path.join(REPO_ROOT, "node_modules", ".bin", "prisma");
 
 function main() {
   const exitCode = runMigrationCheck({
-    databaseUrl: process.env.DATABASE_URL,
+    databaseUrl: resolveDatabaseUrl({ cwd: REPO_ROOT }),
     out: {
       log: (message) => console.log(message),
       error: (message) => console.error(message),
