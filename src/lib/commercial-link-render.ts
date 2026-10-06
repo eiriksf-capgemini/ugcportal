@@ -4,22 +4,28 @@ import { hasUnsafeText } from "@/lib/media-rules";
 
 /**
  * How a `CommercialLink` is rendered, on every public surface (ugcportal-
- * qnq9.2.2). ONE module, imported by the gallery tile, the lightbox and
- * /media/[previewId], so the `rel` tokens and the marker text are the same
- * string wherever a link is drawn rather than three hand-typed copies that
- * could drift apart — the exact failure `GALLERY_RADIUS_CLASS`'s own history
- * (ugcportal-o312) shows a copy-per-caller eventually produces.
+ * qnq9.2.2). ONE module, imported directly by gallery-item.tsx (the shared
+ * component the gallery tile, the portfolio tile and /media/[previewId] all
+ * render `GalleryItemCommercialLinks` through) and by lightbox.ts (which
+ * builds its own DOM by hand, outside React), so the `rel` tokens and the
+ * marker text are the same string wherever a link is drawn rather than
+ * separate hand-typed copies that could drift apart — the exact failure
+ * `GALLERY_RADIUS_CLASS`'s own history (ugcportal-o312) shows a copy-per-
+ * caller eventually produces.
  *
  * NO PRISMA IMPORT, and no import that reaches one — same claim
  * src/lib/commercial-link.ts makes next door, for the same reason: the only
  * type pulled from the generated client is an enum, a plain string union with
  * no runtime client behind it.
  *
- * WHAT THIS IS NOT. It does not decide WHETHER a link may render on an item —
- * that is `toGalleryItem` in src/lib/gallery-items.ts, the one chokepoint that
- * gates every surface on the disclosure label being present (ugcportal-jain:
- * a withdrawn disclosure must never leave a link rendering). This module only
- * decides what a link that has already passed that gate SAYS and LOOKS LIKE.
+ * WHAT THIS IS NOT. It does not decide WHETHER a link may render on an item
+ * — that is the render-time gate (ugcportal-jain: a withdrawn disclosure must
+ * never leave a link rendering), which lives in TWO places this module is
+ * downstream of and does not duplicate: `toGalleryItem`
+ * (src/lib/gallery-items.ts) for every React-rendered surface, and
+ * `listPublicMedia` (src/lib/public-media.ts) for the raw `GET
+ * /api/public/media` JSON. This module only decides what a link that has
+ * already passed one of those gates SAYS and LOOKS LIKE.
  */
 
 /**

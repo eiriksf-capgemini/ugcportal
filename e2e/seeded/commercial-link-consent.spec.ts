@@ -8,8 +8,8 @@ import { loadDevEnvFiles } from "../../scripts/lib/env-files.mjs";
  * page carrying a commercial link makes no request toward any affiliate host
  * and sets no cookie or storage item for one — proven over the REAL rendered
  * link, not a synthetic page, so this fails the day anything turns the bare
- * `<a href>` (GalleryItemCommercialLinks, src/components/gallery/gallery-
- * item.tsx) into something that fires on load.
+ * `<a href>` (GalleryItemCommercialLinks,
+ * src/components/gallery/gallery-item.tsx) into something that fires on load.
  *
  * ITS OWN DIRECTORY AND ITS OWN CONFIG (e2e/seeded/playwright.config.ts), for
  * the reason e2e/seeded/alcohol-commerce.spec.ts's own header gives at

@@ -451,7 +451,10 @@ export const GALLERY_COMMERCIAL_LINK_ITEM_CLASS = "text-xs leading-4";
  * (ugcportal-rw9j round 5) — `link-on-background` in src/lib/design/
  * contrast.ts is the pairing already measured for exactly this placement
  * (`--primary` text on `--background`), and `INLINE_LINK_CLASS` is what rides
- * it rather than a fourth hand-typed `text-primary underline` in this file.
+ * it rather than another hand-typed `text-primary underline` copy in this
+ * file — the exact duplication round 5 already consolidated out of
+ * contact-section.tsx and the three admin settings pages (see that
+ * constant's own comment).
  * Second, semantics: `text-muted-foreground` is the right read for "a label
  * about this item" (`GALLERY_TAG_CLASS`, `GALLERY_CAPTION_CLASS`) and the
  * wrong one for "an active control that leaves the site" — a commercial link

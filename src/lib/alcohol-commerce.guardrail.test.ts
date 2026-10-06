@@ -553,8 +553,11 @@ describe("ugcportal-qnq9.2.2 K5: the RENDERER agrees with the table above", () =
    * The same enumeration as "every published row in the database" above, one
    * layer further downstream: through `MEDIA_ANONYMOUS_SELECT` and
    * `toGalleryItem` — the exact projection and the exact chokepoint every
-   * public surface reads through — rather than a direct Prisma query of
-   * every column. The K6 guardrail above proves the TABLE never holds a
+   * React-rendered surface (the gallery tile, the lightbox, the portfolio
+   * tile, /media/[previewId]) reads through — rather than a direct Prisma
+   * query of every column. (The raw `GET /api/public/media` JSON has its own
+   * separate chokepoint, `listPublicMedia`, src/lib/public-media.ts, not
+   * exercised here.) The K6 guardrail above proves the TABLE never holds a
    * commercial link against an alcohol fact; this proves the RENDERED
    * item agrees, which is a different claim: a bug in `toGalleryItem`'s own
    * gate (K1's "gate on the label", not on alcohol at all) could in

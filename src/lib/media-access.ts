@@ -311,8 +311,12 @@ export const MEDIA_ANONYMOUS_SELECT = {
   // its own sibling `advertisingDisclosure.label` to condition on. A
   // published item whose disclosure was withdrawn after a link was
   // attached (ugcportal-jain) still has this relation selected — the gate
-  // is `toGalleryItem` (src/lib/gallery-items.ts#toGalleryCommercialLinks),
-  // which computes `[]` whenever the re-validated label is `null`,
+  // is downstream, in TWO independent places that both re-validate the
+  // same label: `toGalleryItem`
+  // (src/lib/gallery-items.ts#toGalleryCommercialLinks) for every React-
+  // rendered surface, and `listPublicMedia` (src/lib/public-media.ts) for
+  // the raw `GET /api/public/media` JSON, which never calls `toGalleryItem`
+  // at all. Both compute `[]` whenever the re-validated label is `null`,
   // regardless of what this query returned. See
   // src/app/api/public/media/route.test.ts for the leak test over this
   // select's own shape, mirroring the disclosure's e0jv K2 test above.

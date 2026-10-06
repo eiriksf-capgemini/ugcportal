@@ -65,9 +65,10 @@ export type GalleryItemKind = "IMAGE" | "VIDEO";
 /**
  * One commercial outbound link, as every public surface renders it
  * (ugcportal-qnq9.2.2 K1/K4): the destination, and the visible text the
- * anchor itself carries (`commercialLinkText`, src/lib/commercial-link-
- * render.ts — the network's own name, or the brand's free-text name for
- * `OTHER`). Nothing else — never `benefitSourceId`, the brand's real name,
+ * anchor itself carries (`commercialLinkText`,
+ * src/lib/commercial-link-render.ts — the network's own name, or the
+ * brand's free-text name for `OTHER`). Nothing else — never
+ * `benefitSourceId`, the brand's real name,
  * or `alcoholLinked`, none of which `MEDIA_ANONYMOUS_SELECT` even selects
  * (src/lib/media-access.ts).
  *
@@ -156,20 +157,31 @@ export type GalleryItem = {
   /**
    * This item's commercial outbound links (ugcportal-qnq9.2.2), in the order
    * the feed sent them. ALWAYS `[]` when `advertisingLabel` is `null` —
-   * enforced in `toGalleryItem`, the one chokepoint every surface reads
-   * through, REGARDLESS of what the raw row's own `commercialLinks` carries.
+   * enforced in `toGalleryItem`, REGARDLESS of what the raw row's own
+   * `commercialLinks` carries.
    *
-   * THIS IS THE ugcportal-jain FIX, AT THE RENDER LAYER. The attach gate
-   * only ever checked the disclosure at the moment a link was attached
-   * (`commercialLinkDisclosureRefusal`'s own docstring, src/lib/commercial-
-   * link.ts, "WHAT THAT GATES, AND WHAT IT DOES NOT"); withdrawing the
-   * disclosure afterwards (`PUT .../disclosure` with `benefitReceived:
-   * false`) clears the label but neither refuses the write nor detaches any
-   * link, and publish re-checks neither. So a published row can carry rows
-   * in `commercialLinks` with a `null` label, and the ONLY thing standing
-   * between that row and a rendered affiliate link with no label above it is
-   * this field being computed from `advertisingLabel`, not from whatever the
-   * `commercialLinks` relation happens to hold.
+   * THIS IS THE ugcportal-jain FIX, AT THE RENDER LAYER — one of TWO
+   * independent chokepoints, not the only one. `toGalleryItem` is read
+   * through by every surface that renders a `GalleryItem` (the gallery
+   * tile, the lightbox, the portfolio tile and /media/[previewId]); the raw
+   * JSON `GET /api/public/media` response does NOT go through it at all — it
+   * serialises `listPublicMedia`'s own result directly — so that surface has
+   * its OWN copy of this same gate, in `listPublicMedia`
+   * (src/lib/public-media.ts), re-validating the same label the identical
+   * way. Both exist because neither can stand in for the other; see that
+   * function's own comment for why.
+   *
+   * The attach gate only ever checked the disclosure at the moment a link
+   * was attached (`commercialLinkDisclosureRefusal`'s own docstring,
+   * src/lib/commercial-link.ts, "WHAT THAT GATES, AND WHAT IT DOES NOT");
+   * withdrawing the disclosure afterwards (`PUT .../disclosure` with
+   * `benefitReceived: false`) clears the label but neither refuses the write
+   * nor detaches any link, and publish re-checks neither. So a published row
+   * can carry rows in `commercialLinks` with a `null` label, and what stands
+   * between that row and a rendered affiliate link with no label above it,
+   * on every React-rendered surface, is this field being computed from
+   * `advertisingLabel` rather than from whatever the `commercialLinks`
+   * relation happens to hold.
    */
   commercialLinks: GalleryCommercialLink[];
 };

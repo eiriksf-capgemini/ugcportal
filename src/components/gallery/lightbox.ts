@@ -358,11 +358,11 @@ export const LIGHTBOX_COMMERCIAL_LINK_MARKER_CLASS = "pswp__commercial-link-mark
  * "textContent always" rather than "innerHTML when nothing is user-supplied
  * today" — the one rule that cannot quietly stop holding when that changes.
  *
- * `rel`/`target` come from `commercialLinkRel()` (src/lib/commercial-link-
- * render.ts), the SAME function every other surface calls — see that
- * module's own comment for what each token does. A bare `<a href>` with no
- * listener attached: nothing here fires before the visitor actually
- * activates the anchor (K3).
+ * `rel`/`target` come from `commercialLinkRel()`
+ * (src/lib/commercial-link-render.ts), the SAME function every other
+ * surface calls — see that module's own comment for what each token does.
+ * A bare `<a href>` with no listener attached: nothing here fires before
+ * the visitor actually activates the anchor (K3).
  *
  * REBUILT ON EVERY `change`, not merely shown/hidden the way `register
  * SlideTextElement`'s single text node is: the NUMBER of links differs per
