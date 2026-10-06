@@ -232,9 +232,9 @@ Five things about the shape of that command are load-bearing — all five were b
 
 - **Aggregation happens once, downstream of `--paginate` — never inside `--jq`.** `gh api --paginate --jq` applies the filter to each page *separately*, so an aggregating `--jq` prints one number per page. Verified against `gh-32` (11 issue comments) with `?per_page=2`: the aggregating form printed `0` six times. On a PR where markers stop in page 1 the output is `5\n0`, and an agent reading the last line sees "no markers" on a six-round PR. The per-comment `--jq` above emits one line per comment on every page and lets `jq -Rrn` do the `max` once over the whole stream.
 - **The marker must be the comment's *first line*, and the pattern is anchored to it (`^...$`).** A marker string that appears anywhere else — mid-sentence, inside a code fence, inside a `> ` quote of an earlier comment — is discussion about markers, not a marker. This is the load-bearing defence, and `gh-43` is the natural experiment, because its own reviews quote marker strings while arguing about them. Measured on it: relaxing the filter to scan *every* line with an *unanchored* pattern, across inline comments too, reads **`6 approx`**; the anchored form reads **`2 exact`**, which is the true count. The inflated reading is pure discussion — including a `6` and an `approx` that no round ever stamped.
-- **Read only the two places this skill writes:** issue comments (`gh pr comment`) and review bodies (`gh pr review --approve --body`). Inline review comments (`pulls/<n>/comments`) are excluded because that endpoint is the one place this skill never writes and `code-review` and humans always do. Measured on `gh-43`, the anchor alone is currently enough — adding inline comments back while keeping the anchor still reads `2 exact` — so this is the belt to the anchor's braces, not a substitute for it.
+- **Read only the two places this skill writes:** issue comments (`gh pr comment`) and review bodies (`gh pr review --approve --body`). Both are read on equal footing — the counter does not prefer one over the other — because review bodies are read defensively, for a future reviewer whose identity differs from the PR author (post-`ugcportal-62b6`), not because a historical marker lives there: self-approval has failed on every one of this repo's 125 merged PRs to date, so no review body has ever carried a stamped marker (PR #131's only marker sits on a `COMMENTED` review, not an approval), and step 5 now ensures a future approval body carries none either (its note on why the approval body must never repeat the issue comment's stamp). Inline review comments (`pulls/<n>/comments`) are excluded because that endpoint is the one place this skill never writes and `code-review` and humans always do. Measured on `gh-43`, the anchor alone is currently enough — adding inline comments back while keeping the anchor still reads `2 exact` — so this is the belt to the anchor's braces, not a substitute for it.
 - **The contiguity check allocates nothing, and every `N` is sanity-bounded *before* it is used.** The check used to be `$ns != [range($ns[0]; $ns[-1] + 1)]`, which materialises an array sized by an integer taken straight from an untrusted comment: one comment reading `<!-- ugcportal-review-round: 100000000000 -->` then hangs or OOMs the counter on **every** subsequent run against that PR — a denial of service against the gate itself, since no round can be counted and therefore nothing can be decided. Measured here: the `range()` form took **5.2 s** on a marker of `1e8`, and `ugcportal-1xf` records it being killed after 8 s at `1e11`. The arithmetic form `($ns[-1] - $ns[0] + 1) != ($ns | length)` answers the identical question — `unique` has already sorted and de-duplicated the list, so its span equals its length exactly when it is consecutive — in **0.013 s** at `1e8` and **0.008 s** at `1e11`. The `$ceiling` of 100 is the belt to that: any marker, or any reset, above it makes the chain `broken` before arithmetic or allocation happens at all, because against a round cap of 6 no honest process comes within an order of magnitude of it, so a number that large is a forgery or a typo either way. Measured: `{1, 1e11}` → `100000000000 broken`; a reset of `101` → `101 broken`; `{1, 2, 100}` → `100 broken` (a gap, caught by contiguity, not by the ceiling).
-- **The approving comment carries a marker too.** `gh pr merge` can fail *after* `gh pr review --approve` succeeds — the branch stopped being mergeable between step 1 and step 5, or none of squash/merge/rebase is allowed on the repo. That leaves a completed round with an approval and no other trace. A marker on the approval costs nothing when the merge does succeed, and is the only reason that round is visible when it doesn't.
+- **The marker is posted as its own issue comment before anything else, and does not wait on approval.** `gh pr review --approve` does not merely *sometimes* fail after the fact — it is refused outright, every time, on a PR authored by the same account as the reviewer (`GraphQL: Review Can not approve your own pull request`), which is every PR in this repo today: `gh api user --jq .login` and `gh pr view <n> --json author` return the same login on every PR checked (#108, #121, #124, #138, #111; step 4b), and the error was reproduced directly on #111 and #138. Stamping the marker only in the approval body would mean no marker at all on that path. Posting it as an issue comment first means the round is recorded whether or not approval is even attempted, and whether `gh pr merge` later succeeds, fails, or is never reached. On the rare chain where approval *is* attempted and does succeed (reviewer and PR author differ — not yet true here), its body carries **no** marker of its own — only a sentence pointing back at the issue comment. A second marker repeating the same `N` is not a second copy of the record, it is a duplicate that step 5's note below shows reads as `broken`, so the issue comment stays the one and only place this round's number is stamped.
 
 ### The marker is untrusted input, and the chain is what makes it usable
 
@@ -487,19 +487,45 @@ gh api repos/:owner/:repo/git/ref/review-locks/pr-<n> --jq .object.sha
 
 If that is not the tag sha you minted in step 1a (or the ref is gone), another run owns this PR now: **stamp nothing**, post nothing, and report that you stood down at the stamp. The stamp is the write that can corrupt the chain, so this is the one place the lock has to be checked rather than assumed.
 
-To merge — note the round marker in the approval body, for the reason given in step 4b:
+To merge — post the round marker as its own issue comment **first**, before attempting approval or calling merge, so the marker is on the PR regardless of what either of those does:
 
 ```bash
-gh pr review <n> --approve --body "$(cat <<'EOF'
+gh pr comment <n> --body "$(cat <<'EOF'
 <!-- ugcportal-review-round: <N> -->
 Auto-approved (review round <N>, chain <exact|approx>): CI green, no sensitive paths touched, no blocking findings.
 EOF
 )"
+```
+
+Then attempt approval, but **only where it can succeed** — resolve identity fresh in the same command block (see step 1's note on why a value can't cross blocks):
+
+```bash
+me=$(gh api user --jq .login) || { echo "cannot resolve reviewer identity — fix auth first" >&2; exit 1; }
+[ -n "$me" ] || { echo "empty reviewer identity — fix auth first" >&2; exit 1; }
+pr_author=$(gh pr view <n> --json author --jq .author.login) || { echo "cannot resolve the PR author" >&2; exit 1; }
+[ -n "$pr_author" ] || { echo "empty PR author" >&2; exit 1; }
+if [ "$(echo "$me" | tr '[:upper:]' '[:lower:]')" = "$(echo "$pr_author" | tr '[:upper:]' '[:lower:]')" ]; then
+  echo "reviewer ($me) is the PR author — gh pr review --approve would fail with \"Can not approve your own pull request\"; skipping the attempt. Marker already posted above." >&2
+else
+  gh pr review <n> --approve --body "$(cat <<'EOF'
+Approved for review round <N> (chain <exact|approx>): CI green, no sensitive paths touched, no blocking findings. The round marker lives on the issue comment posted immediately above, not here — this body deliberately carries no `ugcportal-review-round` line of its own, so it cannot duplicate that round's count (see the note below).
+EOF
+)"
+fi
+```
+
+**This approval body must never contain a line matching the round-marker pattern, even when approval succeeds.** The issue comment above already stamped `<!-- ugcportal-review-round: <N> -->` for this round; a second comment or review body repeating the same `N` is not corroboration to step 4b's counter, it is a duplicate, and `($mk | length) != ($ns | length)` reads that as proof the chain cannot be trusted — it reports `broken`, not `exact`. Reproduced directly against the step 4b jq pipeline: a fixture of one issue-comment marker `<!-- ugcportal-review-round: 1 -->` plus one review-body marker repeating the same line, same author, unedited, reads **`1 broken`**; the same shape at round 2 (one comment at round 1, two more — comment and review — both stamped `2`) reads **`2 broken`**, matching what round 1's reviewer found live on this PR. With the fix above — the issue-comment marker alone, the approval body carrying only the prose pointer — the identical fixture reads **`1 approx`** (self-authored, which is every chain in this repo today) or **`1 exact`** (the hypothetical post-`ugcportal-62b6` case where reviewer and author differ). So the issue comment is not merely posted *first*, it is the **only** marker home; the approval body, on the rare chain where it is attempted and succeeds, is prose that references it, never a second stamp.
+
+**On a self-asserted chain — reviewer and PR author are the same account, which today is every PR in this repo (step 4b's bullet above has the evidence) — do not attempt approval and do not treat its absence as a failure.** `gh pr review --approve` is refused outright (`Can not approve your own pull request`) on every such PR; it is a structural property of this repo's single-identity setup, the same fact that makes the chain `approx` in step 4b, not a sign anything went wrong this round. Retrying it, or escalating because it failed, accomplishes nothing — skip it and move on.
+
+**The merge does not depend on an approval record.** `main` carries no branch protection (`gh api repos/:owner/:repo/branches/main/protection` → `404 Branch not protected`), so `gh pr merge` does not require an approving review to succeed — proceed to merge whether the approval attempt above ran, succeeded, or was skipped:
+
+```bash
 gh repo view --json squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed   # pick an allowed method, prefer squash
 gh pr merge <n> --squash --delete-branch   # fall back to --merge or --rebase if squash isn't allowed
 ```
 
-If `gh pr merge` fails after the approval lands, the marker is already on the PR, so the next run counts this round correctly — report the failure and stop rather than re-approving.
+If `gh pr merge` fails for an unrelated reason (the branch stopped being mergeable, or none of squash/merge/rebase is allowed on the repo), the marker is already on the PR from the first command above, so the next run counts this round correctly — report the failure and stop rather than retrying blind.
 
 **`--delete-branch` is a request, not a confirmed result (ugcportal-nvg0).** It is also not this skill's whole merge history: `--delete-branch` was only added to this step at `640799c` (PR #46, 2026-09-28) — a PR merged before that date was never passed the flag at all, not just occasionally missed by it. Either way, verify the branch is actually gone instead of trusting the flag:
 
@@ -524,7 +550,7 @@ node scripts/sweep-merged-branches.mjs --branch <headRefName> --execute
 
 `classifyWorktree` there gates the worktree's `git branch -D` on an executable check (the branch tip reachable from a remote, or equal to this merge's `headRefOid`), not a comment — the guard a hand-run `git branch -D` here would not have.
 
-If the PR merges at round 4+ with low findings deferred, say so explicitly in the approval body and list the bead ids from step 5a.
+If the PR merges at round 4+ with low findings deferred, say so explicitly in the round-marker comment posted before merge (and in the approval body too, on the rare chain where approval is attempted and succeeds) and list the bead ids from step 5a.
 
 If anything blocks: do not approve, do not merge. Post a single clear comment stating exactly which gate(s) failed (sensitive path / CI red / findings, **each finding with the severity you assigned it in step 4**), the round number and its chain status (`exact` / `approx` / `broken`), and what a human or the implementer needs to do next. **Stamp the round marker** so the next round can count itself:
 
@@ -588,7 +614,7 @@ EOF
 
 If any of that text could itself contain a line reading exactly `EOF`, change the delimiter (`<<'BD_EOF'`) rather than trimming the text.
 
-Then list the new bead ids in the approval body and in your step 6 report. If you cannot file the beads (e.g. `bd` is unavailable), do **not** merge on the severity gate — comment and leave it for a human, because the gate's whole safety property is that deferral is recorded.
+Then list the new bead ids in the round-marker comment posted before merge (and in the approval body too, where one exists) and in your step 6 report. If you cannot file the beads (e.g. `bd` is unavailable), do **not** merge on the severity gate — comment and leave it for a human, because the gate's whole safety property is that deferral is recorded.
 
 Scope freeze still applies: these are new beads, not additions to the PR. See `review-standards` section 1.
 
@@ -608,7 +634,7 @@ So step 5's three entry conditions all apply, and the first one is what closes i
 
 - **Run steps 1-4.1 in full**, `code-review` included, at its normal depth. Do not try to scope the reviewer.
 - **What changes is what may block: severity, never age.** The PR stays open if the escalated blocker is unresolved, **or if any medium-or-above is outstanding, whenever it was first raised**. Lows are filed under 5a rather than fixed here, and that is the only relaxation. An earlier draft said "the escalated blocker, or a *new* medium-or-above", which left a medium first raised at round 7 in neither bucket — so at round 8 the text permitted merging past an open medium, contradicting both "nothing above low is ever closed by the cap" and "a medium-or-above blocks at every round including the last". Age was never the right axis.
-- **This round cannot start another, and cannot be re-entered for free.** It ends in exactly one of two states: merge on step 5's always-applies gates (saying in the approval body that this is a post-escalation verification round, and linking the anchor comment it answers), or hand it back to the same human. Either way it stamps a counting marker, which becomes the new anchor — so a subsequent round 8 has to show fresh evidence against *that* comment, not against the original round-6 one. Without that, rounds 8, 9, 10 … all re-qualified off the same stale artifacts and the post-escalation band was unbounded. (If the escalated blocker was a *sensitive path*, step 2 still stands and the PR goes to a human regardless.)
+- **This round cannot start another, and cannot be re-entered for free.** It ends in exactly one of two states: merge on step 5's always-applies gates (saying in the round-marker comment that this is a post-escalation verification round, and linking the anchor comment it answers), or hand it back to the same human. Either way it stamps a counting marker, which becomes the new anchor — so a subsequent round 8 has to show fresh evidence against *that* comment, not against the original round-6 one. Without that, rounds 8, 9, 10 … all re-qualified off the same stale artifacts and the post-escalation band was unbounded. (If the escalated blocker was a *sensitive path*, step 2 still stands and the PR goes to a human regardless.)
 
 That is where the cost bound actually comes from: not from looking less, but from this being the last round that can block, with a human on the other side of it either way.
 
