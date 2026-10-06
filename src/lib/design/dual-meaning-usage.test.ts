@@ -317,6 +317,14 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
    * shared constant.
    */
   "src/app/portfolio/page.tsx": { "text-muted-foreground": 1 },
+  // ugcportal-qnq9.12: the per-item page's "short text" paragraph, directly
+  // on the page canvas (--background) like every other entry in this
+  // group — the same muted-foreground-on-background pairing
+  // GALLERY_CAPTION_CLASS and /portfolio's own empty-state paragraph use,
+  // just not reused verbatim (see that file's own comment for why: its
+  // margin is sized for sitting under a cropped grid tile, not this page's
+  // full-width image).
+  "src/app/media/[previewId]/page.tsx": { "text-muted-foreground": 1 },
   "src/components/site/page-shell.tsx": { "text-foreground": 1 },
   "src/components/site/section-heading.ts": { "text-foreground": 1 },
   // Round-1 review simplified this component (K2's spec marker renders

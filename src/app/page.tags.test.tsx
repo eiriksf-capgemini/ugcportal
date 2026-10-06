@@ -447,9 +447,24 @@ describe("K4 — one gallery, never a section or a route per tag", () => {
         ),
       ),
     ).toEqual([]);
-    // And no dynamic segment anywhere, which is the other shape a per-tag
-    // page takes — `/[tag]`, `/browse/[slug]`.
-    expect(routes.filter((route) => route.includes("["))).toEqual([]);
+    // And no dynamic segment anywhere THAT NAMES A TAG, which is the other
+    // shape a per-tag page takes — `/[tag]`, `/browse/[slug]`.
+    //
+    // `/media/[previewId]` (ugcportal-qnq9.12) is the one allowed exception,
+    // named explicitly rather than by loosening this check to "any
+    // identifier not literally called tag". It is a per-ITEM route, not a
+    // per-tag one: its dynamic segment is the opaque preview handle every
+    // anonymous surface already uses (src/lib/routes.ts's mediaPreviewPath),
+    // not a subject-vocabulary word, and nothing about it lets a visitor
+    // browse by tag — K4's own `renders the tags as inert labels, not as
+    // links to anywhere` test above still holds for this page exactly as it
+    // does for the gallery.
+    const ALLOWED_DYNAMIC_ROUTES = new Set(["/media/[previewId]"]);
+    expect(
+      routes.filter(
+        (route) => route.includes("[") && !ALLOWED_DYNAMIC_ROUTES.has(route),
+      ),
+    ).toEqual([]);
   });
 
   it("renders the tags as inert labels, not as links to anywhere", async () => {

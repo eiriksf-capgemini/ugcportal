@@ -31,6 +31,23 @@ export function expectedOrigin(): string | null {
 }
 
 /**
+ * The origin used to build fully-qualified public URLs: the sitemap, the
+ * robots file's `sitemap` field, and a per-item page's canonical link
+ * (ugcportal-qnq9.12).
+ *
+ * Falls back to AUTH_URL's own documented local default (env.example:
+ * `AUTH_URL=http://localhost:3000`) rather than returning `null` or
+ * throwing. A crawler-facing route is not optional the way an auth redirect
+ * is — `next build` can evaluate app/sitemap.ts and app/robots.ts ahead of
+ * any request, with no Origin/Host header to fall back to the way
+ * `isSameOriginRequest` does above, so this needs a usable value even when
+ * AUTH_URL is unset in whatever environment is building.
+ */
+export function siteOrigin(): string {
+  return expectedOrigin() ?? "http://localhost:3000";
+}
+
+/**
  * Whether this request may be treated as same-origin.
  *
  * A **present but mismatched** Origin is refused. A **missing** Origin is

@@ -192,7 +192,15 @@ function applicationSources(): { file: string; code: string }[] {
   return walkSourceFiles(
     SRC_ROOT,
     (file) =>
-      isTestFile(file) || file.includes("/generated/") || file.endsWith(".test-support.ts"),
+      isTestFile(file) ||
+      file.includes("/generated/") ||
+      file.endsWith(".test-support.ts") ||
+      // src/app/robots.ts (ugcportal-qnq9.12): Next's `MetadataRoute.Robots`
+      // shape names its own field `userAgent` — which crawler a rule
+      // addresses ("*" for all of them), a robots.txt AUTHORING concept —
+      // which trips this scan's `userAgent` pattern with nothing behind it:
+      // this route takes no `Request` and reads nothing about any visitor.
+      file.endsWith("/app/robots.ts"),
   ).map((file) => ({
     file: path.relative(REPO_ROOT, file),
     code: stripComments(readFileSync(file, "utf8"), file),
