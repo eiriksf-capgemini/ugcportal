@@ -558,6 +558,47 @@ describe("the per-upload triage questions (ugcportal-qn3)", () => {
     }
   });
 
+  it("names the wine-accessory question specifically", async () => {
+    // ugcportal-qnq9.3's other fact, pinned by its own words for the same
+    // reason the two above are. The three examples are §3.1a's own list of
+    // what the accessory angle is, and they are what tells an admin that an
+    // EMPTY glass is this question's `yes` rather than the alcohol
+    // question's.
+    const markup = await renderPage();
+    expect(markup).toContain("Is the subject a wine accessory");
+    expect(markup).toContain(escapeHtml("a tool-type wine app?"));
+  });
+
+  it("marks a question neither answer blocks", async () => {
+    // The counterpart of the case below. The screen's closing sentence says
+    // a "yes" needs a clearance on that layer; for WINE_ACCESSORY there is
+    // no clearance and no blocker, and an admin who read the general rule
+    // would treat the site's own chosen subject as something to be cleared.
+    const markup = await renderPage();
+    const recorded = TRIAGE_FACTS.filter(
+      (fact) => fact.settledBy === "recorded",
+    );
+    // Guards the loop: with no such fact registered the assertions below
+    // would vacuously pass against a screen that renders no note at all.
+    expect(recorded.length).toBeGreaterThan(0);
+    for (const fact of recorded) {
+      const question = escapeHtml(fact.question);
+      const after = markup.slice(markup.indexOf(question));
+      const row = after.slice(0, after.indexOf("</li>"));
+      expect(
+        row,
+        `${fact.layer}'s question does not say either answer is fine`,
+      ).toContain(escapeHtml("Either answer is fine here"));
+      // And NOT the stricter note, which is the mistake this branch exists
+      // to prevent: before this fact existed the screen marked everything
+      // that was not clearance-settled as final.
+      expect(
+        row,
+        `${fact.layer}'s question is wrongly marked final`,
+      ).not.toContain(escapeHtml("A “yes” here is final"));
+    }
+  });
+
   it("marks a question whose discriminant it does not recognise", async () => {
     // The screen's half of the gate's fail-closed reading. `triageBlocker`
     // refuses a fact whose `settledBy` is neither literal
@@ -588,6 +629,13 @@ describe("the per-upload triage questions (ugcportal-qn3)", () => {
       const row = unrecognised.slice(unrecognised.indexOf(question));
       expect(row.slice(0, row.indexOf("</li>"))).toContain(
         escapeHtml("A “yes” here is final"),
+      );
+      // And the REASSURING note is withheld, which is the half the third
+      // discriminant added. A screen reading `!== "nothing"` for that branch
+      // would tell an admin that either answer is fine about a fact the gate
+      // is blocking.
+      expect(row.slice(0, row.indexOf("</li>"))).not.toContain(
+        escapeHtml("Either answer is fine here"),
       );
 
       // The control: a value the screen does recognise as clearable drops

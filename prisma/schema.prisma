@@ -74,20 +74,24 @@ model User {
   // past — see "Renaming a person" in docs/access-control.md.
   configuredHandle String? @unique
 
-  accounts           Account[]
-  sessions           Session[]
-  media              Media[]
-  instagramAccounts  InstagramAccount[]
+  accounts               Account[]
+  sessions               Session[]
+  media                  Media[]
+  instagramAccounts      InstagramAccount[]
   // THE anchor of the resale-rights gate (ugcportal-vsm). One standing
   // review per uploader, answering "may this person's uploads be resold at
   // all, and is that answer still current". The gate reaches it through
   // Media.userId, never through a column a listing's author chooses.
-  resaleRightsReview ResaleRightsReview?    @relation("ResaleRightsSubject")
+  resaleRightsReview     ResaleRightsReview?    @relation("ResaleRightsSubject")
   // Resale-rights reviews this user signed off (ugcportal-0ss). Named so the
   // relation stays unambiguous against the anchor above.
-  resaleReviews      ResaleRightsReview[]   @relation("ResaleRightsReviewer")
-  layerClearances    MediaRightsClearance[] @relation("MediaRightsClearer")
-  triagedListings    MediaListing[]         @relation("MediaListingTriager")
+  resaleReviews          ResaleRightsReview[]   @relation("ResaleRightsReviewer")
+  layerClearances        MediaRightsClearance[] @relation("MediaRightsClearer")
+  triagedListings        MediaListing[]         @relation("MediaListingTriager")
+  // Brands whose alcohol question this person answered (ugcportal-qnq9.3 K4).
+  // Nothing reads this direction; it is the back-relation Prisma requires for
+  // BenefitSource.alcoholAnsweredBy.
+  answeredBenefitSources BenefitSource[]        @relation("BenefitSourceAlcoholAnswerer")
 }
 
 // One row per linked login provider (Google, Facebook, ...) for a user.
@@ -580,6 +584,19 @@ enum ResaleRightsRoute {
 // a bypass (src/lib/resale-rights.test.ts, "stays blocked even with a
 // clearance on its own layer").
 //
+// WINE_ACCESSORY is the second member that is not "present but handled",
+// and it is not an encumbrance either (ugcportal-qnq9.3, docs/ugc-research.md
+// §3.1a). The site's chosen wine angle is the ACCESSORY - an empty glass, a
+// cooler, a tool-type wine app - and §3.1a settles that accessories ARE
+// monetisable, precisely because they are not the drink. So this layer's
+// TriageFact is registered `settledBy: "recorded"`: both answers pass, and
+// only leaving it unanswered blocks, because an item nobody has classified
+// is an item nobody has looked at. It is a member here for the same reason
+// ALCOHOL is - the registry is keyed one-entry-per-layer, and that is what
+// makes the question askable and blocking while unanswered. A
+// MediaRightsClearance row naming it is inert, as it is for ALCOHOL, and for
+// a stronger reason: the entry carries no blocker for a clearance to lift.
+//
 // EVERY MEMBER OF THIS ENUM MUST HAVE A TriageFact REGISTERED AGAINST IT in
 // src/lib/resale-rights.ts. The gate iterates that registry rather than a
 // hand-written list, so adding a value here without an entry there leaves
@@ -594,6 +611,7 @@ enum RightsLayer {
   THIRD_PARTY_CREATOR
   SPONSORED_CONTENT
   ALCOHOL
+  WINE_ACCESSORY
 }
 
 // What a ResaleRightsEvent row was recorded against.
@@ -788,6 +806,22 @@ model MediaListing {
   // monetisable and this column is what keeps them distinguishable from the
   // drink.
   depictsAlcohol    Boolean?
+  // Is the subject a wine ACCESSORY - an empty glass, a cooler, a tool-type
+  // wine app (ugcportal-qnq9.3, docs/ugc-research.md §3.1a)? Nullable and
+  // untriaged by default like the rest, and that is the only state that
+  // blocks: unlike every other column here, NEITHER answer encumbers the
+  // item. §3.1a settles accessories as monetisable, so a `true` here must
+  // sell, which is why its TriageFact is `settledBy: "recorded"` and carries
+  // no blocker at all.
+  //
+  // INDEPENDENT OF depictsAlcohol, not a shade of it. An empty glass is an
+  // accessory and shows no alcohol; a cooler with labelled bottles on the
+  // shelf is both, and the alcohol answer blocks it whatever this column
+  // says. Recorded rather than inferred because the two questions have
+  // different answers on the same photograph, and because the layout
+  // separation in ugcportal-qnq9.11 needs to know which items are the
+  // accessory ones.
+  wineAccessory     Boolean?
   // Who completed the triage above, and when.
   //
   // Read by the gate, not just recorded: every flag here is an assertion
@@ -905,7 +939,51 @@ model BenefitSource {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  disclosures MediaAdvertisingDisclosure[]
+  /// Does this company produce, import or sell alcohol, or share a brand or
+  /// trademark with an alcoholic drink (ugcportal-qnq9.3 K4,
+  /// docs/ugc-research.md §3.1a practical rule 1: "Before any paid deal,
+  /// check who's behind the brand. If the company also produces, imports or
+  /// sells alcohol, decline.")?
+  ///
+  /// THREE STATES, AND TWO OF THEM REFUSE. `true` is alcohol-linked and no
+  /// benefit, link or label may be attached to anything from it. NULL means
+  /// NOBODY HAS ASKED, and that refuses too — an unasked question must never
+  /// pass as a `no`, which is why this is `Boolean?` with no `@default(false)`
+  /// and why the migration that adds it backfills NULL. Only an explicit
+  /// `false` lets a benefit through. The predicate that reads all three is
+  /// `alcoholLinkedBrandRefusal` in src/lib/alcohol-commerce.ts — nothing
+  /// else decides what a value of this column means; every other reader
+  /// passes it straight to that function, which
+  /// src/lib/alcohol-commerce.write-paths.test.ts enumerates.
+  ///
+  /// §3.1a's wine-app sub-case folds in here rather than getting a column of
+  /// its own: an app that sells wine, prices it, pushes specific products or
+  /// is run by an importer, retailer or producer is a company that sells
+  /// alcohol, and that is the same question this already asks.
+  alcoholLinked Boolean?
+
+  /// WHEN the answer above was recorded, and by whom. The bead asks for a
+  /// "recorded, dated answer", and a compliance record about a commercial
+  /// relationship that cannot say as-of-when is not one.
+  ///
+  /// NEITHER IS READ BY THE GATE, deliberately, and that is the difference
+  /// from MediaListing.triagedByUserId one model over — that one is re-read
+  /// so a demoted admin's triage stops counting. There is no equivalent here:
+  /// the answer is a fact about a company, not an assertion about a third
+  /// party's rights, and it does not expire when its author's role changes.
+  /// They are the audit trail, not the enforcement.
+  ///
+  /// SetNull rather than Restrict: deleting the person who checked a brand
+  /// must not take the brand's answer with it, and must not be blocked by it
+  /// either. The answer survives unattributed, and still refuses or permits
+  /// exactly as before.
+  alcoholAnsweredAt       DateTime?
+  alcoholAnsweredByUserId String?
+
+  disclosures       MediaAdvertisingDisclosure[]
+  alcoholAnsweredBy User?                        @relation("BenefitSourceAlcoholAnswerer", fields: [alcoholAnsweredByUserId], references: [id], onDelete: SetNull)
+
+  @@index([alcoholAnsweredByUserId])
 }
 
 /// One item's advertising-disclosure record (ugcportal-qnq9.1).
@@ -915,9 +993,12 @@ model BenefitSource {
 /// idiom MediaListing's triage booleans use, one level up: the row's absence
 /// and `benefitReceived = NULL` both mean unanswered, and one function
 /// collapses the two — `advertisingLabelPublishRefusal` in
-/// src/lib/advertising-disclosure.ts, which is the only interpreter of this
-/// column outside the route that writes it (see its docstring for the grep).
-/// Do not add a second reader that checks only one of them.
+/// src/lib/advertising-disclosure.ts. It is no longer the ONLY reader
+/// (ugcportal-qnq9.3 added `commercialPublishRefusal` in
+/// src/lib/alcohol-commerce.ts, which asks a different question of the same
+/// column), but both read it as `!== true`; see that function's docstring for
+/// the grep and for why the two readings must stay identical.
+/// Do not add a reader that checks only one of the two unanswered states.
 ///
 /// WHAT UNANSWERED DOES TODAY: nothing. An item with no row publishes exactly
 /// as it did before this bead, because every row that existed when this

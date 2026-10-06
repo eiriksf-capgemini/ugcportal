@@ -196,17 +196,30 @@ export default async function ResaleRightsSettingsPage({
               {/*
                 Which kind of question this is, read off the registry rather
                 than written out here, so a fact no clearance settles is not
-                presented as if an admin could sign it away
+                presented as if an admin could sign it away, and a fact
+                neither answer encumbers is not presented as a problem
                 (ugcportal-qnq9.3). Asserted by "marks a question no
-                clearance can settle as final" in page.test.tsx, which reads
-                the registry and looks for this note inside that question's
-                own <li>.
+                clearance can settle as final" and "marks a question neither
+                answer blocks" in page.test.tsx, each of which reads the
+                registry and looks for its note inside that question's own
+                <li>.
 
-                The same `!== "clearance"` reading the gate uses in
-                `triageBlocker`, so a discriminant neither side recognises
-                leaves the screen saying what the gate does.
+                THE ORDER OF THESE TWO TESTS IS THE FAIL-CLOSED READING, and
+                it is the opposite pair of comparisons from `triageBlocker`'s
+                for the same reason that function uses them: the exact
+                discriminant is required for the branch that REASSURES, and a
+                negation is enough for the branch that WARNS. So a
+                discriminant neither side recognises gets the "a yes is
+                final" note here and gets blocked there — the screen says
+                something stricter than the truth rather than something
+                looser.
               */}
-              {fact.settledBy !== "clearance" ? (
+              {fact.settledBy === "recorded" ? (
+                <span className="block text-xs">
+                  Either answer is fine here: this one is recorded, not
+                  cleared. Only leaving it blank blocks the sale.
+                </span>
+              ) : fact.settledBy !== "clearance" ? (
                 <span className="block text-xs">
                   A &ldquo;yes&rdquo; here is final: no clearance lifts it.
                 </span>
@@ -217,9 +230,10 @@ export default async function ResaleRightsSettingsPage({
         <p className="mt-2 text-xs text-ink-muted">
           Unanswered is not &ldquo;no&rdquo;: an upload with any of these
           left blank cannot be sold, and a &ldquo;yes&rdquo; needs its own
-          clearance on that layer — except where the list above says a
-          &ldquo;yes&rdquo; is final, which no clearance can reopen. No admin
-          screen asks them yet, so no upload is sellable today.
+          clearance on that layer — except where the list above says
+          otherwise, either because a &ldquo;yes&rdquo; is final and no
+          clearance can reopen it, or because neither answer blocks anything.
+          No admin screen asks them yet, so no upload is sellable today.
         </p>
       </div>
       {/*

@@ -45,6 +45,11 @@ function clearListing(overrides: Partial<GateListing> = {}): GateListing {
     thirdPartyCreator: false,
     sponsoredContent: false,
     depictsAlcohol: false,
+    // Answered `false` rather than `true` only because the baseline has to
+    // pick one, and "not a wine accessory" is the answer that claims least.
+    // Both answers are sellable — "sells on either answer, because neither
+    // encumbers anything" below asserts exactly that, which is K1.
+    wineAccessory: false,
     // The triage is signed by a current admin: every flag above is an
     // assertion about a third party's rights, so the gate wants a name.
     triagedByUserId: "admin-1",
@@ -508,6 +513,7 @@ describe("per-upload triage (checklist Part C)", () => {
     thirdPartyCreator: {},
     sponsoredContent: {},
     depictsAlcohol: {},
+    wineAccessory: {},
   };
 
   /** A justification for one layer, signed by a current admin. */
@@ -540,21 +546,33 @@ describe("per-upload triage (checklist Part C)", () => {
    * Every fact a clearance can settle, answered `true`, with the evidence
    * each needs.
    *
-   * A fact the registry marks `settledBy: "nothing"` is deliberately left
-   * at the baseline `false`. Answering one `true` is an unconditional stop,
-   * so including it here would make every case below report THAT fact's
-   * blocker instead of the one it is about — the cases would still fail for
-   * a broken gate, but they would stop being about the layer they name.
-   * Each such fact gets its own `true` case: the per-fact table below
-   * overrides its own field, and ugcportal-qnq9.3's describe covers ALCOHOL
-   * in full.
+   * Only the facts a clearance CAN settle, which is what "with the evidence
+   * each needs" means — the other two kinds have no evidence to supply.
+   *
+   * A fact the registry marks `settledBy: "nothing"` is deliberately left at
+   * the baseline `false`. Answering one `true` is an unconditional stop, so
+   * including it here would make every case below report THAT fact's blocker
+   * instead of the one it is about — the cases would still fail for a broken
+   * gate, but they would stop being about the layer they name. A
+   * `settledBy: "recorded"` fact is left at the baseline for the opposite
+   * reason: its `true` changes nothing, so setting it would add a value no
+   * case reads.
+   *
+   * Each skipped fact gets its own cases instead: the per-fact table below
+   * overrides its own field whichever kind it is, ugcportal-qnq9.3's
+   * describe covers ALCOHOL in full, and the `"recorded"` branch of the
+   * table is where WINE_ACCESSORY's two passing answers are asserted.
+   *
+   * Written as `!== "clearance"` rather than listing the two skipped
+   * discriminants, so a fourth kind added later is skipped here rather than
+   * silently assumed clearable.
    */
   function allFactsPresent(
     overrides: Partial<GateListing> = {},
   ): Partial<GateListing> {
     const listing: Partial<GateListing> = {};
     for (const fact of TRIAGE_FACTS) {
-      if (fact.settledBy === "nothing") {
+      if (fact.settledBy !== "clearance") {
         continue;
       }
       Object.assign(listing, { [fact.field]: true }, FACT_EXTRAS[fact.field]);
@@ -579,6 +597,75 @@ describe("per-upload triage (checklist Part C)", () => {
           evaluateSellability(withListing({ [fact.field]: null }), NOW),
         ).toEqual({ sellable: false, blocker: "triage_incomplete" });
       });
+
+      if (fact.settledBy === "recorded") {
+        /**
+         * THE WHOLE CONTENT OF A `"recorded"` FACT, and ugcportal-qnq9.3's
+         * K1 at the gate level: both answers sell, so the only thing this
+         * fact can do to an upload is block it while it is unanswered —
+         * asserted by the case above, which runs for every kind.
+         *
+         * Both answers are checked, not just the `true` one. A gate that
+         * read this fact the wrong way round would still pass a `true`-only
+         * case if it happened to invert, and the baseline fixture already
+         * carries `false`.
+         */
+        it("sells on either answer, because neither encumbers anything", () => {
+          for (const answer of [true, false]) {
+            expect(
+              evaluateSellability(
+                withListing({ [fact.field]: answer }),
+                NOW,
+              ),
+              `${fact.field} = ${answer} must be sellable`,
+            ).toEqual({ sellable: true });
+          }
+        });
+
+        /**
+         * And it is not settled by, or blocked by, anything on its layer.
+         * A clearance naming it is an inert record — more inert than
+         * ALCOHOL's, which at least names a blocker the gate returns; this
+         * entry has no blocker at all.
+         */
+        it("neither needs nor is changed by a clearance on its own layer", () => {
+          for (const answer of [true, false]) {
+            expect(
+              evaluateSellability(
+                withListing({
+                  [fact.field]: answer,
+                  layerClearances: [clearance(fact.layer)],
+                }),
+                NOW,
+              ),
+            ).toEqual({ sellable: true });
+          }
+        });
+
+        /**
+         * The one cross-fact claim §3.1a actually makes, and the reason this
+         * fact is independent rather than a softener: an item classified as
+         * an accessory that nevertheless SHOWS the drink is still refused.
+         * A cooler with labelled bottles on the shelf is exactly that item.
+         */
+        it("does not rescue an item that another fact stops", () => {
+          const stopper = TRIAGE_FACTS.find(
+            (other) => other.settledBy === "nothing",
+          );
+          expect(stopper).toBeTruthy();
+          expect(
+            evaluateSellability(
+              withListing({
+                [fact.field]: true,
+                [stopper!.field]: true,
+              }),
+              NOW,
+            ),
+          ).toEqual({ sellable: false, blocker: stopper!.blocker });
+        });
+
+        return;
+      }
 
       it("blocks when present with no clearance", () => {
         expect(evaluateSellability(factPresent(fact), NOW)).toEqual({
@@ -1101,6 +1188,126 @@ describe("ugcportal-qnq9.3: alcohol as a triage fact", () => {
     );
 
     expect(fact?.question).toContain("whatever it actually holds");
+  });
+});
+
+/**
+ * ugcportal-qnq9.3, the half that PERMITS: the wine accessory.
+ *
+ * K1 is the criterion this bead was rewritten to add, and it is the only
+ * acceptance criterion in the file that asserts a success. The previous
+ * version of the bead treated everything wine-adjacent as uncommercialisable,
+ * which would have refused all four commercial affordances on the site's own
+ * chosen subject — empty glasses, coolers, tool-type wine apps
+ * (docs/ugc-research.md §3.1a, and the Decisions table's "Wine angle" row).
+ *
+ * The generated case table above already asserts that both answers sell and
+ * that no clearance changes either. What is pinned here is the wiring and the
+ * independence, neither of which that table can see.
+ */
+describe("ugcportal-qnq9.3: the wine accessory as a recorded fact", () => {
+  /**
+   * The wiring, pinned once, for the same reason the ALCOHOL case above is
+   * pinned: `tsc` would accept any other member of each union in place of
+   * these values, and getting one wrong produces a gate that still compiles
+   * and still passes the generated table. `blocker` is the one that matters
+   * most — `undefined` is what makes the §3.1a accessory monetisable, and
+   * any SellabilityBlocker here would refuse it.
+   */
+  it("is registered against WINE_ACCESSORY as a fact that only records", () => {
+    const fact = TRIAGE_FACTS.find(
+      (candidate) => candidate.layer === RightsLayer.WINE_ACCESSORY,
+    );
+
+    expect(fact?.field).toBe("wineAccessory");
+    expect(fact?.settledBy).toBe("recorded");
+    expect(fact?.blocker).toBeUndefined();
+  });
+
+  it("names the accessory, not the drink, in the question it asks", () => {
+    // §3.1a's own three examples. A question asking only "is this about
+    // wine?" would be answered `true` by a photograph of a full glass, which
+    // is the one item the whole distinction exists to keep out of commerce.
+    const fact = TRIAGE_FACTS.find(
+      (candidate) => candidate.layer === RightsLayer.WINE_ACCESSORY,
+    );
+
+    expect(fact?.question).toContain("empty glass");
+    expect(fact?.question).toContain("cooler");
+    expect(fact?.question).toContain("wine app");
+  });
+
+  it("sells an empty glass, which is the whole point of the rewrite", () => {
+    // K1 end to end at the gate: the accessory answered `yes`, the drink
+    // answered `no`, everything else clean — sellable. Stated as the
+    // comparison it is, against the item that differs only in showing the
+    // drink, so neither half can pass for the other's reason.
+    expect(
+      evaluateSellability(
+        withListing({ wineAccessory: true, depictsAlcohol: false }),
+        NOW,
+      ),
+    ).toEqual({ sellable: true });
+
+    expect(
+      evaluateSellability(
+        withListing({ wineAccessory: true, depictsAlcohol: true }),
+        NOW,
+      ),
+    ).toEqual({ sellable: false, blocker: "alcohol_depicted" });
+  });
+
+  it("blocks an upload where nobody has answered the accessory question", () => {
+    expect(
+      evaluateSellability(withListing({ wineAccessory: null }), NOW),
+    ).toEqual({ sellable: false, blocker: "triage_incomplete" });
+  });
+
+  /**
+   * THE FAIL-CLOSED READING OF THE THIRD DISCRIMINANT, which is why the gate
+   * asks `=== "recorded"` rather than, say, `!== "nothing"`.
+   *
+   * This is the mirror of "blocks a fact whose discriminant it does not
+   * recognise" one describe up, and it is a different claim: that one proves
+   * an unreadable discriminant does not reach the CLEARANCE path, this one
+   * proves it does not reach the PERMITTING path. Both readings agree on
+   * every entry in the committed registry — `tsc` sees to that — so the only
+   * input that separates them has to be spliced in.
+   */
+  it("does not let an unrecognised discriminant reach the permitting branch", () => {
+    const registry = TRIAGE_FACTS as TriageFact[];
+    const index = registry.findIndex(
+      (candidate) => candidate.layer === RightsLayer.WINE_ACCESSORY,
+    );
+    expect(index).toBeGreaterThanOrEqual(0);
+    const original = registry[index];
+
+    // Answered `true`, which under the real entry is sellable. A fact whose
+    // discriminant cannot be read must not keep that answer's meaning.
+    const upload = withListing({ wineAccessory: true });
+    expect(evaluateSellability(upload, NOW)).toEqual({ sellable: true });
+
+    try {
+      registry[index] = {
+        ...original,
+        settledBy: "decide-this-later",
+        // A blocker, because an unreadable entry falls through to the branch
+        // that returns one. Without it the gate would return `undefined` as
+        // a blocker, which is a different defect from the one under test and
+        // would make this case pass for the wrong reason.
+        blocker: "third_party_layer_uncleared",
+      } as unknown as TriageFact;
+
+      expect(evaluateSellability(upload, NOW)).toEqual({
+        sellable: false,
+        blocker: "third_party_layer_uncleared",
+      });
+    } finally {
+      registry[index] = original;
+    }
+
+    expect(TRIAGE_FACTS[index]).toBe(original);
+    expect(evaluateSellability(upload, NOW)).toEqual({ sellable: true });
   });
 });
 

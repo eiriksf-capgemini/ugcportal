@@ -113,7 +113,30 @@ function storedDisclosure() {
       benefitKind: true,
       marketValueOre: true,
       label: true,
-      benefitSource: { select: { slug: true, name: true } },
+      benefitSource: { select: { slug: true, name: true, alcoholLinked: true } },
+    },
+  });
+}
+
+/**
+ * A listing on the seeded item with the alcohol question answered `no` and
+ * every other triage question answered too (ugcportal-qnq9.3).
+ *
+ * Only `depictsAlcohol` is read by anything in this file — the publish gate
+ * selects that column and nothing else — but the row is filled in completely
+ * so it is not a half-triaged listing that a later reader has to interpret.
+ */
+async function seedAlcoholFreeListing(depictsAlcohol: boolean | null = false) {
+  await prisma.mediaListing.create({
+    data: {
+      mediaId: MEDIA_ID,
+      depictsPeople: false,
+      depictsMinors: false,
+      containsMusic: false,
+      thirdPartyCreator: false,
+      sponsoredContent: false,
+      depictsAlcohol,
+      wineAccessory: true,
     },
   });
 }
@@ -122,6 +145,15 @@ const GIFTED_GLASS = {
   benefitReceived: true,
   benefitKind: "FREE_PRODUCT",
   benefitSource: "Riedel",
+  // §3.1a practical rule 1's answer, checked and clean (ugcportal-qnq9.3 K4).
+  // Carried by the baseline fixture because an UNCHECKED brand is refused
+  // exactly as an alcohol-linked one is, so a body that left this out would
+  // make every case below fail for this bead's reason rather than its own.
+  // Riedel makes glasses, which is the site's chosen subject, and does not
+  // make the drink — so `false` is the true answer as well as the convenient
+  // one. The qnq9.3 describe at the bottom of this file is where the other
+  // two answers are the subject.
+  benefitSourceAlcoholLinked: false,
   marketValueOre: 49900,
   label: "Advertisement / Reklame",
 };
@@ -180,7 +212,7 @@ describe("recording a benefit", () => {
       benefitKind: "FREE_PRODUCT",
       marketValueOre: 49900,
       label: "Advertisement / Reklame",
-      benefitSource: { slug: "riedel", name: "Riedel" },
+      benefitSource: { slug: "riedel", name: "Riedel", alcoholLinked: false },
     });
   });
 
@@ -199,6 +231,7 @@ describe("recording a benefit", () => {
     expect((await storedDisclosure())?.benefitSource).toEqual({
       slug: "riedel",
       name: "Riedel",
+      alcoholLinked: false,
     });
   });
 
@@ -210,6 +243,7 @@ describe("recording a benefit", () => {
         benefitReceived: true,
         benefitKind: "EVENT_INVITATION",
         benefitSource: "Oslo Vinfestival",
+        benefitSourceAlcoholLinked: false,
         label: "Annonse",
       }),
       context(),
@@ -240,6 +274,7 @@ describe("recording a benefit", () => {
         benefitReceived: true,
         benefitKind: "PAYMENT",
         benefitSource: "Coravin",
+        benefitSourceAlcoholLinked: false,
         label: "Annonse",
       }),
       context(),
@@ -253,7 +288,7 @@ describe("recording a benefit", () => {
       // number in a tax record.
       marketValueOre: null,
       label: "Annonse",
-      benefitSource: { slug: "coravin", name: "Coravin" },
+      benefitSource: { slug: "coravin", name: "Coravin", alcoholLinked: false },
     });
   });
 });
@@ -446,13 +481,15 @@ describe("declaring no benefit, and withdrawing an answer", () => {
   );
 });
 
-describe("the disclosure and the publish gate together (K2, K5)", () => {
-  function publishRequest() {
-    return new Request(`http://localhost/api/media/${MEDIA_ID}/publish`, {
-      method: "POST",
-    });
-  }
+/** A publish request for the seeded item. Module-level because two describes
+ * use it: the label gate's and ugcportal-qnq9.3's. */
+function publishRequest() {
+  return new Request(`http://localhost/api/media/${MEDIA_ID}/publish`, {
+    method: "POST",
+  });
+}
 
+describe("the disclosure and the publish gate together (K2, K5)", () => {
   it("refuses to publish once a benefit is declared outside the API with no label", async () => {
     // The row the WRITE path refuses to create, written straight to the table
     // — which is the only way this state can exist, and exactly the state the
@@ -478,6 +515,13 @@ describe("the disclosure and the publish gate together (K2, K5)", () => {
 
   it("publishes once a permitted label is recorded through the route", async () => {
     await seedMedia();
+    // The alcohol question answered `no` (ugcportal-qnq9.3 K6). Needed from
+    // that bead on: publishing an item that RECORDS A BENEFIT now also
+    // requires somebody to have said there is no alcohol in it, so without a
+    // listing this case would end in a 400 about the wrong thing. That the
+    // untriaged state really does refuse is a case of its own, in the qnq9.3
+    // describe below.
+    await seedAlcoholFreeListing();
     await prisma.mediaAdvertisingDisclosure.create({
       data: { mediaId: MEDIA_ID, benefitReceived: true, label: null },
     });
@@ -538,5 +582,306 @@ describe("the disclosure and the publish gate together (K2, K5)", () => {
       select: { publishedAt: true },
     });
     expect(row.publishedAt).toBeNull();
+  });
+});
+
+/**
+ * ugcportal-qnq9.3 K2 (the disclosure affordance) and K4 (the brand check),
+ * through the real route and against a real database.
+ *
+ * K4 is why the brand is a row at all: "does this company produce, import or
+ * sell alcohol, or share a brand or trademark with an alcoholic drink" is a
+ * fact about a company, and §3.1a practical rule 1 says to ask it BEFORE any
+ * paid deal. Two of its three states refuse, and the second one — unchecked —
+ * is the one the criterion spells out: "an unasked question never passes as a
+ * no".
+ *
+ * K1 is the other half of every case here, and is asserted throughout the
+ * file above rather than only once: GIFTED_GLASS is a free wine GLASS from a
+ * glassmaker, which is the accessory §3.1a settles as monetisable, and every
+ * success in this file is that item.
+ */
+describe("alcohol and the brand behind the benefit (ugcportal-qnq9.3 K2/K4)", () => {
+  /** Who is already on record as alcohol-linked, or not, before the request.
+   * Written straight to the table because no surface in the product records a
+   * `yes` — see the route's own comment on why that is deliberate. */
+  async function recordBrand(name: string, alcoholLinked: boolean | null) {
+    await prisma.benefitSource.create({
+      data: {
+        slug: name.toLowerCase(),
+        name,
+        alcoholLinked,
+        alcoholAnsweredAt: alcoholLinked === null ? null : new Date(),
+      },
+    });
+  }
+
+  it("refuses a benefit on an item recorded as showing alcohol", async () => {
+    // K2: `depictsAlcohol = true` and the row is unchanged. Nothing lifts it
+    // — §3.1a judges the picture, whatever the glass actually holds — so the
+    // brand being clean and the label being permitted change nothing.
+    await seedMedia();
+    await seedAlcoholFreeListing(true);
+
+    const response = await PUT(disclosureRequest(GIFTED_GLASS), context());
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body.field).toBe("depictsAlcohol");
+    expect(await storedDisclosure()).toBeNull();
+    // And no brand was minted on the way to the refusal: nothing in this
+    // product deletes a BenefitSource, so a brand created for a declaration
+    // that was then refused is permanent debris.
+    expect(await prisma.benefitSource.count()).toBe(0);
+  });
+
+  it("records the benefit on an item triaged clean of alcohol", async () => {
+    // The comparison that makes the case above about the answer rather than
+    // about the fixture: the same request, the same brand, one column
+    // different.
+    await seedMedia();
+    await seedAlcoholFreeListing(false);
+
+    expect((await PUT(disclosureRequest(GIFTED_GLASS), context())).status).toBe(
+      200,
+    );
+  });
+
+  it("records a benefit on an item nobody has triaged yet", async () => {
+    // THE ONE PLACE THE WRITE PATH IS DELIBERATELY PERMISSIVE, and it is
+    // worth a case of its own because it looks like a gap. The advertising
+    // label is itself a legal requirement, and an operator who cannot write
+    // down a gift they received publishes an undisclosed advertisement — a
+    // worse breach reached by being stricter. The untriaged item simply
+    // cannot go PUBLIC, which the next case asserts.
+    await seedMedia();
+
+    expect((await PUT(disclosureRequest(GIFTED_GLASS), context())).status).toBe(
+      200,
+    );
+  });
+
+  it("will not publish that item until the alcohol question is answered", async () => {
+    // The other half of the case above, and K6's actual guarantee: the
+    // honest record is allowed, the public page is not.
+    await seedMedia();
+    await PUT(disclosureRequest(GIFTED_GLASS), context());
+
+    const refused = await PUBLISH(publishRequest(), context());
+    expect(refused.status).toBe(400);
+    expect((await refused.json()).field).toBe("depictsAlcohol");
+
+    await seedAlcoholFreeListing(false);
+    expect((await PUBLISH(publishRequest(), context())).status).toBe(200);
+  });
+
+  it("refuses a benefit from a brand recorded as alcohol-linked", async () => {
+    // K4's first half. The picture is clean and the label is permitted, so
+    // the refusal can only be about the company.
+    await seedMedia();
+    await seedAlcoholFreeListing(false);
+    await recordBrand("Vinmonopolet", true);
+
+    const response = await PUT(
+      disclosureRequest({
+        ...GIFTED_GLASS,
+        benefitSource: "Vinmonopolet",
+        // Submitted as a `no`, and ignored: a recorded `yes` is a one-way
+        // door, or the check is bypassable by whoever wants the deal.
+        benefitSourceAlcoholLinked: false,
+      }),
+      context(),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body.field).toBe("benefitSource");
+    expect(await storedDisclosure()).toBeNull();
+    // The recorded answer stands, unrewritten by the attempt.
+    expect(
+      await prisma.benefitSource.findUniqueOrThrow({
+        where: { slug: "vinmonopolet" },
+        select: { alcoholLinked: true },
+      }),
+    ).toEqual({ alcoholLinked: true });
+  });
+
+  it("refuses a benefit from a brand nobody has checked", async () => {
+    // K4's second half, in both the shapes "unchecked" arrives in: a brand
+    // row carrying a null answer, and a brand name nobody has ever submitted
+    // (no row at all, which is the first-contact case).
+    await seedMedia();
+    await seedAlcoholFreeListing(false);
+    await recordBrand("Unchecked Brand", null);
+
+    for (const benefitSource of ["Unchecked Brand", "Never Named Before"]) {
+      const response = await PUT(
+        disclosureRequest({
+          ...GIFTED_GLASS,
+          benefitSource,
+          benefitSourceAlcoholLinked: undefined,
+        }),
+        context(),
+      );
+      const body = await response.json();
+
+      expect(response.status, `${benefitSource} was not refused`).toBe(400);
+      expect(body.field).toBe("benefitSource");
+      expect(body.error).toMatch(/an unasked question is not a no/i);
+      expect(await storedDisclosure()).toBeNull();
+    }
+
+    // The unnamed brand was not minted by the refused attempt either.
+    expect(await prisma.benefitSource.count()).toBe(1);
+  });
+
+  it("refuses a benefit the request itself answers `yes` for", async () => {
+    // §3.1a practical rule 1's own instruction — "if the company also
+    // produces, imports or sells alcohol, decline" — enforced rather than
+    // left to the operator's discipline. Answering honestly does not buy a
+    // way through.
+    await seedMedia();
+    await seedAlcoholFreeListing(false);
+
+    const response = await PUT(
+      disclosureRequest({
+        ...GIFTED_GLASS,
+        benefitSource: "Arcus",
+        benefitSourceAlcoholLinked: true,
+      }),
+      context(),
+    );
+
+    expect(response.status).toBe(400);
+    expect((await response.json()).field).toBe("benefitSource");
+    expect(await storedDisclosure()).toBeNull();
+  });
+
+  it("records the brand's `no` once, dated and attributed", async () => {
+    // What a passing declaration leaves behind: the answer on the brand row,
+    // with a timestamp and the person who gave it, because the bead asks for
+    // a "recorded, dated answer" about a commercial relationship.
+    await seedMedia();
+    await seedAlcoholFreeListing(false);
+
+    await PUT(disclosureRequest(GIFTED_GLASS), context());
+
+    const brand = await prisma.benefitSource.findUniqueOrThrow({
+      where: { slug: "riedel" },
+      select: {
+        alcoholLinked: true,
+        alcoholAnsweredAt: true,
+        alcoholAnsweredByUserId: true,
+      },
+    });
+    expect(brand.alcoholLinked).toBe(false);
+    expect(brand.alcoholAnsweredAt).toBeInstanceOf(Date);
+    expect(brand.alcoholAnsweredByUserId).toBe(OWNER_ID);
+  });
+
+  it("does not ask again once the brand carries an answer", async () => {
+    // The reason the answer lives on the brand and not on the item: the
+    // second item from the same brand needs no answer submitted, and does not
+    // get a fresh timestamp either — the first answer is the one on record.
+    await seedMedia();
+    await seedAlcoholFreeListing(false);
+    await PUT(disclosureRequest(GIFTED_GLASS), context());
+
+    const first = await prisma.benefitSource.findUniqueOrThrow({
+      where: { slug: "riedel" },
+      select: { alcoholAnsweredAt: true },
+    });
+
+    const response = await PUT(
+      disclosureRequest({
+        ...GIFTED_GLASS,
+        marketValueOre: 10000,
+        benefitSourceAlcoholLinked: undefined,
+      }),
+      context(),
+    );
+
+    expect(response.status).toBe(200);
+    expect(
+      (
+        await prisma.benefitSource.findUniqueOrThrow({
+          where: { slug: "riedel" },
+          select: { alcoholAnsweredAt: true },
+        })
+      ).alcoholAnsweredAt,
+    ).toEqual(first.alcoholAnsweredAt);
+  });
+
+  it("refuses an answer that is neither true nor false", async () => {
+    // `null` included, unlike `benefitReceived` where it means "withdraw".
+    // There is no withdrawing this one: a request that could reset a brand to
+    // unchecked is a request that could erase a `yes`.
+    await seedMedia();
+    await seedAlcoholFreeListing(false);
+
+    for (const answer of [null, "no", 0]) {
+      const response = await PUT(
+        disclosureRequest({
+          ...GIFTED_GLASS,
+          benefitSourceAlcoholLinked: answer,
+        }),
+        context(),
+      );
+      expect(response.status, `${JSON.stringify(answer)} was accepted`).toBe(
+        400,
+      );
+      expect((await response.json()).field).toBe("benefitSourceAlcoholLinked");
+    }
+    expect(await storedDisclosure()).toBeNull();
+  });
+
+  it("refuses the answer on a declaration of no benefit", async () => {
+    // The same contradictory-field rule the kind, the value and the label
+    // follow: a withdrawal that also carries a brand answer is a caller who
+    // believes they recorded something.
+    await seedMedia();
+
+    const response = await PUT(
+      disclosureRequest({
+        benefitReceived: false,
+        benefitSourceAlcoholLinked: false,
+      }),
+      context(),
+    );
+
+    expect(response.status).toBe(400);
+    expect((await response.json()).field).toBe("benefitSourceAlcoholLinked");
+  });
+
+  it("never blocks withdrawing a benefit, whatever the item shows", async () => {
+    // Taking a declaration back is the remedy, so the gate sits on the
+    // declaring branch only — the same rule the curation price route follows
+    // for un-pricing. Here the item shows alcohol AND the brand is
+    // alcohol-linked, which is the worst state a row can be in.
+    await seedMedia();
+    await seedAlcoholFreeListing(false);
+    await PUT(disclosureRequest(GIFTED_GLASS), context());
+    await prisma.mediaListing.update({
+      where: { mediaId: MEDIA_ID },
+      data: { depictsAlcohol: true },
+    });
+    await prisma.benefitSource.update({
+      where: { slug: "riedel" },
+      data: { alcoholLinked: true },
+    });
+
+    const response = await PUT(
+      disclosureRequest({ benefitReceived: false }),
+      context(),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await storedDisclosure()).toEqual({
+      benefitReceived: false,
+      benefitKind: null,
+      marketValueOre: null,
+      label: null,
+      benefitSource: null,
+    });
   });
 });

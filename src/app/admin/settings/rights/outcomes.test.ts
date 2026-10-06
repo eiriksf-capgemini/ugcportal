@@ -62,14 +62,25 @@ describe("BLOCKER_MESSAGES", () => {
    * in front of an admin instead of a sentence.
    */
   it("has a sentence for every triage fact's blocker", () => {
-    for (const fact of TRIAGE_FACTS) {
+    // Over the facts that CAN block. A `settledBy: "recorded"` entry names
+    // no blocker — `tsc` refuses one that does — so there is no wording for
+    // it to be missing, and the `blocker === undefined` skip below is the
+    // only reading of that under which this loop still asserts something
+    // about every fact that has one. The counterpart assertion, that such a
+    // fact really does reach the gate, is "blocks the whole upload while it
+    // is unanswered" in src/lib/resale-rights.test.ts.
+    const blocking = TRIAGE_FACTS.filter((fact) => fact.blocker !== undefined);
+    expect(blocking.length).toBeGreaterThan(0);
+
+    for (const fact of blocking) {
+      const blocker = fact.blocker!;
       expect(
-        Object.hasOwn(BLOCKER_MESSAGES, fact.blocker),
-        `${fact.layer} names the blocker ${fact.blocker}, which has no wording`,
+        Object.hasOwn(BLOCKER_MESSAGES, blocker),
+        `${fact.layer} names the blocker ${blocker}, which has no wording`,
       ).toBe(true);
       expect(
-        BLOCKER_MESSAGES[fact.blocker].length,
-        `${fact.layer}'s blocker ${fact.blocker} has no real sentence`,
+        BLOCKER_MESSAGES[blocker].length,
+        `${fact.layer}'s blocker ${blocker} has no real sentence`,
       ).toBeGreaterThan(10);
     }
   });
