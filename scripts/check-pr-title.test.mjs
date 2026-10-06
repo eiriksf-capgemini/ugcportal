@@ -60,12 +60,12 @@ describe("isValidPrTitle", () => {
     expect(isValidPrTitle("feat(auth)!: require verified email (ugcportal-abc1)")).toBe(true);
   });
 
-  // F1 (round-1 review): bd prime documents --parent as "task under epic,
-  // subtask under task" -- two levels -- with nothing capping further
-  // nesting after that, so a subtask of a child task (ugcportal-qnq9.14.1)
-  // is a real id `bd` can mint, and so is a subtask of *that* in principle.
-  // These three accept tests are the depth boundary; the four reject tests
-  // below them are what still fails at any depth.
+  // bd prime documents --parent as "task under epic, subtask under task" --
+  // two levels -- with nothing capping further nesting after that, so a
+  // subtask of a child task (ugcportal-qnq9.14.1) is a real id `bd` can
+  // mint, and so is a subtask of *that* in principle. These three accept
+  // tests are the depth boundary; the four reject tests below them are what
+  // no depth makes valid.
   it("accepts a two-level (subtask-of-a-child-task) bead id", () => {
     expect(isValidPrTitle("docs(research): x (ugcportal-qnq9.14.1)")).toBe(true);
   });
@@ -94,11 +94,10 @@ describe("isValidPrTitle", () => {
     expect(isValidPrTitle("docs(research): x (ugcportal-)")).toBe(false);
   });
 
-  // F2 (round-1 review): this is the regression F1 introduces a new way to
-  // get wrong -- tightening the suffix back to "at most one level" (the
-  // pre-F1 shape) must make the two accept tests above fail, not just
-  // change PATTERN's source string. Proven directly, the same way the
-  // optional-group guardrail further down proves its own regression.
+  // Guards the depth widening above the same way: tightening the suffix
+  // back to "at most one level" must make the two accept tests above fail,
+  // not just change PATTERN's source string. Proven directly, the same way
+  // the optional-group guardrail further down proves its own regression.
   it("would fail the two- and three-level accept tests above if the suffix were tightened back to one level", () => {
     const tightenedSource = PATTERN.source.replace("(?:\\.[0-9]+)*", "(?:\\.[0-9]+)?");
     expect(tightenedSource).not.toBe(PATTERN.source); // the replace actually matched something
@@ -140,12 +139,11 @@ describe("isValidPrTitle", () => {
   });
 });
 
-// F3 (round-1 review): the table above exercises `isValidPrTitle` directly;
-// nothing exercised `main()`, `isMainModule(...)`, the `PR_TITLE ?? ""`
-// default or the `process.exitCode = 1` path -- the parts CI actually runs,
-// by spawning this file as a subprocess. This block closes that gap by doing
-// the same thing: spawning the real CLI with PR_TITLE set (or deliberately
-// unset) and reading its real exit code.
+// The table above exercises `isValidPrTitle` directly; this block covers
+// `main()`, `isMainModule(...)`, the `PR_TITLE ?? ""` default and the
+// `process.exitCode = 1` path -- the parts CI actually runs -- by spawning
+// the real CLI with PR_TITLE set (or deliberately unset) and reading its
+// real exit code.
 describe("main() via the CLI", () => {
   it("exits 0 for a valid title", () => {
     expect(runCli("docs(research): x (ugcportal-qnq9.14)")).toBe(0);

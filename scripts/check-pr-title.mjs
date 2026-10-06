@@ -14,8 +14,9 @@
  * under task", i.e. at least two levels (`ugcportal-qnq9.14`, then
  * `ugcportal-qnq9.14.1` for a subtask of that task), and nothing caps how
  * many times `--parent` can be applied again after that. Each dot segment
- * must still be non-empty and numeric -- a trailing dot, an empty segment
- * (`..`) or a non-numeric segment (`.a`) are rejected at any depth; see
+ * must be non-empty and numeric at any depth -- a trailing dot, an empty
+ * segment (`..`) or a non-numeric segment (`.a`) are rejected regardless of
+ * how deep they appear; see
  * check-pr-title.test.mjs's dotted-nesting and non-numeric-suffix cases for
  * where each of those is asserted.
  */
