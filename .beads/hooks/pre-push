@@ -72,15 +72,27 @@ cd "$_ugcportal_repo_root" || exit 0
 # interactive prompt) would otherwise block `git push` indefinitely, unlike
 # every command in the managed section above it.
 _ugcportal_timeout=${UGCPORTAL_HOOK_TIMEOUT:-300}
+# ugcportal-xxy2: GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE and GIT_PREFIX can be
+# set in this hook's environment (inherited from whatever invoked `git push`,
+# e.g. an agent harness pinning git operations to a worktree) and, when set,
+# override -C/cwd for git's OWN repository discovery. A test spawned by `npm
+# test` below that shells out to git without pinning -C or its own cwd would
+# then silently operate on whatever repo GIT_DIR points at instead of its own
+# fixture -- reproduced 2026-10-06 with a plain `git config user.name Test`
+# and a path-less `git init -q --bare`, each of which flipped a real repo's
+# config (core.bare=true, identity overwritten) purely from inheriting these
+# four variables, with no -C and no cwd override in the call itself. `env -u
+# VAR` is a no-op when VAR is already unset, so stripping unconditionally is
+# safe whether or not the hook happens to be running with them set.
 _ugcportal_run() {
   if command -v timeout >/dev/null 2>&1; then
-    timeout "$_ugcportal_timeout" "$@"
+    timeout "$_ugcportal_timeout" env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX "$@"
   elif command -v gtimeout >/dev/null 2>&1; then
-    gtimeout "$_ugcportal_timeout" "$@"
+    gtimeout "$_ugcportal_timeout" env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX "$@"
   elif command -v perl >/dev/null 2>&1; then
-    perl -e 'alarm shift; exec @ARGV' "$_ugcportal_timeout" "$@"
+    perl -e 'alarm shift; exec @ARGV' "$_ugcportal_timeout" env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX "$@"
   else
-    "$@"
+    env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX "$@"
   fi
 }
 
