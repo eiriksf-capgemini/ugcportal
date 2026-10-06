@@ -26,22 +26,23 @@ import { describe, expect, it } from "vitest";
  *
  * THE ANALYSIS IS A PURE FUNCTION OVER (name, source) PAIRS (`analyze`
  * below), and that is not a style choice: it is what lets the rules be
- * tested against FIXTURES as well as against the repository. Round-1 review
- * finding 1 was that the first version of this file recognised only the
- * literal `getS3Client().send(...)` chain, so a route spelled the other
- * idiomatic way —
+ * tested against FIXTURES as well as against the repository. A guard is
+ * only worth the spellings its matcher recognises, and a matcher built
+ * around the literal `getS3Client().send(...)` chain recognises one. A
+ * route spelled the other idiomatic way —
  *
  *     const client = getS3Client();
  *     await client.send(new GetObjectCommand(...));   // no transport branch
  *
- * — passed all eight of its assertions. It failed silently in both
- * directions at once: the aliased send was not seen, so the file never
- * entered `directS3Modules`, so the ROUTE rule did not apply to it either,
- * and neither companion pin noticed. Hoisting the client into a local is the
- * natural spelling the moment a handler makes two sends, which both
- * `deleteObjectBestEffort` and POST /api/media already invite. The
- * "bypasses" describe block at the bottom of this file now runs each of
- * those spellings through `analyze` and asserts it is CAUGHT.
+ * — slips past such a matcher in both directions at once, silently: the
+ * aliased send is not seen, so the file never enters `directS3Modules`, so
+ * the ROUTE rule does not apply to it either, and no companion pin
+ * notices. Hoisting the client into a local is the natural spelling the
+ * moment a handler makes two sends, which both `deleteObjectBestEffort` and
+ * POST /api/media already invite. So the matcher below resolves aliases
+ * instead, and the "spellings that must not bypass the guard" describe
+ * block at the bottom of this file runs each of them through `analyze` and
+ * asserts it is CAUGHT.
  *
  * WHY THIS IS A TEST AND NOT @aws-sdk MIDDLEWARE. The alternative the bead
  * asks to be considered (`bd show ugcportal-98rb`, notes) is to install
@@ -403,9 +404,9 @@ function analyze(
 
       // A real branch, not a mention: `instanceof` is an operator, and a
       // comment is trivia rather than a node, so a `// TODO: handle
-      // ObjectStorageUnreachableError` cannot satisfy this (round-1 review
-      // finding 5, which is exactly what the old `source.includes` check
-      // did accept).
+      // ObjectStorageUnreachableError` cannot satisfy this. A
+      // `source.includes("ObjectStorageUnreachableError")` check would
+      // accept exactly that, which is why this is phrased on the AST.
       if (
         ts.isBinaryExpression(node) &&
         node.operatorToken.kind === ts.SyntaxKind.InstanceOfKeyword &&
@@ -598,9 +599,9 @@ describe("ugcportal-98rb K4: every S3 call site is transport-classified", () => 
 
   it("lists every caller of objectStorageUnreachableLogFields", () => {
     // src/lib/s3.ts's doc comment for that helper points HERE rather than
-    // naming its callers in prose, because prose miscounts: round-1 review
-    // finding 2 was that comment saying "three" when there were four. This
-    // list cannot drift, because adding a caller fails this assertion.
+    // naming its callers in prose, because prose miscounts — a hand-written
+    // "three" there outlived the arrival of a fourth caller. This list
+    // cannot drift: adding or removing a caller fails this assertion.
     expect(repo.logFieldsCallerFiles).toEqual([
       "app/api/admin/rights/decision/route.ts",
       "app/api/media/[id]/route.ts",
@@ -611,8 +612,8 @@ describe("ugcportal-98rb K4: every S3 call site is transport-classified", () => 
 });
 
 /**
- * Round-1 review finding 1: the rules above are only worth what their
- * matcher recognises, and the first version recognised one spelling.
+ * The rules above are only worth what their matcher recognises, so each
+ * spelling it has to recognise gets a fixture here rather than an argument.
  *
  * Each fixture below is a complete, self-contained little "repository" run
  * through the same `analyze` the scan above uses. Every one of them is a
@@ -731,9 +732,9 @@ describe("ugcportal-98rb K4: spellings that must not bypass the guard", () => {
   });
 
   it("catches a route whose only mention of the error is a comment", () => {
-    // Round-1 review finding 5. The old rule was `source.includes(...)`, so
-    // this fixture satisfied it; `instanceof` is an operator and a comment
-    // is trivia, so it cannot now.
+    // A `source.includes("ObjectStorageUnreachableError")` rule accepts
+    // this fixture. `instanceof` is an operator and a comment is trivia,
+    // so the rule as written cannot.
     const result = route(`
       import { getS3Client, sendWithTransportClassification } from "@/lib/s3";
       export async function GET() {

@@ -101,11 +101,11 @@ describe("objectStorageUnreachableLogFields (ugcportal-98rb)", () => {
   // that they all spread this one object. If a field is dropped here it is
   // dropped from every one of them at once, which is the point — and is why
   // the field set is pinned exactly rather than spot-checked. The callers
-  // are deliberately not counted or named here: round-1 review finding 3
-  // was this comment saying "three" when there were four. The authoritative
-  // list is the "lists every caller of objectStorageUnreachableLogFields"
-  // assertion in src/lib/s3-call-sites.test.ts, which derives it from the
-  // AST.
+  // are deliberately not counted or named here — a hand-written count in
+  // this very comment said "three" while there were four. The
+  // authoritative list is the "lists every caller of
+  // objectStorageUnreachableLogFields" assertion in
+  // src/lib/s3-call-sites.test.ts, which derives it from the AST.
   const cause = Object.assign(new Error("socket hang up"), {
     code: "ECONNREFUSED",
   });

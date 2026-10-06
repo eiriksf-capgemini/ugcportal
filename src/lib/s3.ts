@@ -285,9 +285,8 @@ export class ObjectStorageUnreachableError extends Error {
  * same failure (ugcportal-98rb K1/K2: "the SAME structured line is logged").
  *
  * WHO THE CALLERS ARE IS NOT WRITTEN DOWN HERE. An earlier version of this
- * comment named them in prose and said "three" when there were four
- * (round-1 review finding 2 on this PR — it had missed
- * src/app/api/admin/rights/decision/route.ts). The list lives in
+ * comment named them in prose and said "three" when there were four — it
+ * had missed src/app/api/admin/rights/decision/route.ts. The list lives in
  * src/lib/s3-call-sites.test.ts instead, in its "lists every caller of
  * objectStorageUnreachableLogFields" assertion, which is computed from the
  * AST and fails when a caller is added or removed — so it cannot be out by
