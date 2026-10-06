@@ -39,11 +39,26 @@ type RouteContext = { params: Promise<{ id: string }> };
  */
 
 /**
- * The body is a small flat object — a boolean, an enum name, a short brand
- * name, an integer and a label of at most 24 characters. 2048 leaves generous
- * room for JSON escaping and still refuses anything that is not that. App
- * Router puts no default cap on a request body, so without this the length
- * checks below would only run after the server had buffered whatever arrived.
+ * The body is a small flat object: a boolean, an enum name, a brand name
+ * (bounded by MAX_BENEFIT_SOURCE_NAME_LENGTH), an integer, and a label
+ * (bounded by MAX_ADVERTISING_LABEL_INPUT_LENGTH).
+ *
+ * NO FIELD LENGTH IS RESTATED HERE. Both caps live next to the validator
+ * that enforces each, and a second copy of either number in this comment is
+ * a number that can go stale without anything failing.
+ *
+ * 2048 is NOT derived from those caps and does not claim to bound their
+ * worst case — a 256-code-unit label of astral characters JSON-escapes to
+ * more than 2048 bytes on its own. It is sized for a real body: the longest
+ * value the label allowlist can ever store is a couple of dozen characters,
+ * and a brand name is a few words. A body larger than this is refused with a
+ * 413 before it is buffered, which is the right answer for a request that is
+ * not the shape this route accepts, and no body a legitimate client sends
+ * comes near it.
+ *
+ * App Router puts no default cap on a request body, so without this the
+ * length checks below would only run after the server had buffered whatever
+ * arrived.
  */
 const MAX_DISCLOSURE_BODY_BYTES = 2048;
 

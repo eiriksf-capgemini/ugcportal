@@ -6,6 +6,7 @@ import {
   BENEFIT_KINDS,
   ENGLISH_ONLY_ADVERTISING_LABELS,
   FORBIDDEN_ADVERTISING_LABEL_TERMS,
+  FORBIDDEN_LABEL_REFUSAL_PREFIX,
   isBenefitKind,
   isPermittedAdvertisingLabel,
   MAX_ADVERTISING_LABEL_INPUT_LENGTH,
@@ -95,30 +96,67 @@ describe("forbidden advertising labels (K3)", () => {
     );
   });
 
-  it.each(FORBIDDEN_CASES)("rejects %j, naming the word", (term) => {
-    const result = validateAdvertisingLabel(term);
+  /**
+   * ASSERT THE FORBIDDEN PATH, NOT MERELY THE REFUSAL. `ok === false` is not
+   * evidence here, and neither is the message naming the submitted term:
+   * the allowlist refuses all thirteen words on its own, and its generic
+   * message interpolates the caller's own input and appends the permitted
+   * labels — so both of those needles are present with the forbidden list
+   * deleted entirely. Replacing the `FORBIDDEN_ADVERTISING_LABEL_TERMS`
+   * lookup in `validateAdvertisingLabel` with `undefined` left the whole
+   * suite green against the first version of these rows.
+   *
+   * The one behaviour the list adds is this message, so this is what every
+   * forbidden row asserts. `expectForbiddenRefusal` pairs it with the term,
+   * so a row still fails if the refusal names the wrong word.
+   */
+  function expectForbiddenRefusal(value: string, term: string) {
+    const result = validateAdvertisingLabel(value);
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(result.message).toContain(term);
+    expect(result.message).toContain(FORBIDDEN_LABEL_REFUSAL_PREFIX);
+    expect(result.message).toContain(`"${term}"`);
     // The refusal still tells the operator what they CAN use, or the message
     // is a dead end.
     expect(result.message).toContain("Advertisement / Reklame");
+  }
+
+  it("a non-forbidden refusal does NOT carry the marker (the absent needle)", () => {
+    // The control for every row below: without this, `toContain(PREFIX)`
+    // could be satisfied by a refusal message that carried the marker
+    // unconditionally.
+    const result = validateAdvertisingLabel("Paid post");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.message).not.toContain(FORBIDDEN_LABEL_REFUSAL_PREFIX);
+    // ...and it is still a refusal that names what the caller submitted,
+    // which is precisely why naming the term is not evidence of the
+    // forbidden path.
+    expect(result.message).toContain("Paid post");
+  });
+
+  it.each(FORBIDDEN_CASES)("rejects %j by the forbidden list", (term) => {
+    expectForbiddenRefusal(term, term);
   });
 
   it.each(FORBIDDEN_CASES)(
-    "rejects %j when it is only part of a longer label",
+    "rejects %j by the forbidden list when it is only part of a longer label",
     (term) => {
       // The failure this guards is a label that slips a rejected word past an
       // exact-match check by padding it: "Reklame (gifted)" is still a
       // disclosure using a word Forbrukertilsynet named as unacceptable.
-      const result = validateAdvertisingLabel(`Reklame (${term})`);
-      expect(result.ok).toBe(false);
+      // Note the padding is itself a PERMITTED label, so the allowlist alone
+      // would not refuse this on wording — only the term match does.
+      expectForbiddenRefusal(`Reklame (${term})`, term);
     },
   );
 
-  it.each(FORBIDDEN_CASES)("rejects %j in a different case", (term) => {
-    expect(validateAdvertisingLabel(term.toUpperCase()).ok).toBe(false);
-  });
+  it.each(FORBIDDEN_CASES)(
+    "rejects %j by the forbidden list in a different case",
+    (term) => {
+      expectForbiddenRefusal(term.toUpperCase(), term);
+    },
+  );
 
   it("the \\b trap: tolerates phrase spacing and does not split Norwegian words", () => {
     /*
@@ -131,7 +169,10 @@ describe("forbidden advertising labels (K3)", () => {
      *    exact about spacing that carries no meaning.
      */
     expect(/\bi samarbeid med\b/u.test("i  samarbeid med")).toBe(false);
-    expect(validateAdvertisingLabel("i  samarbeid med").ok).toBe(false);
+    // Asserted on the forbidden MARKER, not on `ok`: the allowlist refuses
+    // this string whatever the phrase match does, so `ok === false` would
+    // hold with the phrase matching broken.
+    expectForbiddenRefusal("i  samarbeid med", "i samarbeid med");
 
     /*
      * 2. A Norwegian letter as a false word boundary. `\b` is ASCII-only even
@@ -144,6 +185,10 @@ describe("forbidden advertising labels (K3)", () => {
     const result = validateAdvertisingLabel("ågave");
     expect(result.ok).toBe(false);
     if (result.ok) return;
+    // The positive claim: this refusal came from the ALLOWLIST, not from the
+    // forbidden list. Asserting only that the message omits `"gave"` would
+    // also pass if the forbidden path had fired and named some other word.
+    expect(result.message).not.toContain(FORBIDDEN_LABEL_REFUSAL_PREFIX);
     expect(result.message).not.toContain('"gave"');
   });
 

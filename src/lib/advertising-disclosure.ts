@@ -91,6 +91,28 @@ export const FORBIDDEN_ADVERTISING_LABEL_TERMS = Object.freeze([
 ] as const);
 
 /**
+ * The opening words of the refusal the FORBIDDEN list — and only that list —
+ * produces.
+ *
+ * Exported so a test can assert that a refusal came from the forbidden path
+ * specifically, rather than from the allowlist fall-through that would
+ * refuse the same input anyway. Producing this message is the ONLY behaviour
+ * FORBIDDEN_ADVERTISING_LABEL_TERMS adds (see its own note on being
+ * redundant against the allowlist), so an assertion that merely checks
+ * `ok === false`, or that the message mentions the submitted term, holds
+ * just as well with the whole list deleted — the generic refusal interpolates
+ * the caller's input and appends the permitted labels, so both needles are
+ * present either way. advertising-disclosure.test.ts therefore asserts this
+ * marker on every forbidden row, and asserts its ABSENCE on a non-forbidden
+ * refusal.
+ *
+ * A constant rather than the string typed again in the test file, so the two
+ * cannot drift: this is the string the message is built from.
+ */
+export const FORBIDDEN_LABEL_REFUSAL_PREFIX =
+  "Forbrukertilsynet does not accept";
+
+/**
  * English-only labels that are refused with a reason of their own.
  *
  * These cannot go in the term list above: "advertisement" is a WORD IN two of
@@ -255,7 +277,7 @@ export function validateAdvertisingLabel(
   if (forbidden) {
     return {
       ok: false,
-      message: `Forbrukertilsynet does not accept "${forbidden}" as an advertising label. Permitted labels: ${PERMITTED_ADVERTISING_LABELS.join(", ")}.`,
+      message: `${FORBIDDEN_LABEL_REFUSAL_PREFIX} "${forbidden}" as an advertising label. Permitted labels: ${PERMITTED_ADVERTISING_LABELS.join(", ")}.`,
     };
   }
 
