@@ -43,9 +43,12 @@ import {
   auditBodyText,
   auditContent,
   classifyClaimLine,
+  classifyDoneVerb,
   extractBodyLines,
   extractComments,
   extractProseLines,
+  findDoneVerbClassForSpan,
+  findDoneVerbOccurrences,
   findPathReferences,
   findQuotedSpans,
   parseArgs,
@@ -375,7 +378,92 @@ describe("tokenStillInDiff", () => {
   });
 });
 
+describe("classifyDoneVerb (ugcportal-bn94 round 1 F1/F2) -- first DONE verb BY POSITION, a whole-line summary only", () => {
+  it("classifies every REMOVAL verb, including the three F2 named as missing", () => {
+    expect(classifyDoneVerb("the stale line was deleted")).toBe("removal");
+    expect(classifyDoneVerb("the stale line was removed")).toBe("removal");
+    expect(classifyDoneVerb("the stale line was dropped")).toBe("removal");
+    expect(classifyDoneVerb("struck from the file")).toBe("removal");
+    // F2's own three reproductions, verbatim:
+    expect(classifyDoneVerb("The stale comment is no longer present.")).toBe("removal");
+    expect(classifyDoneVerb("That line is gone now.")).toBe("removal");
+    expect(classifyDoneVerb("The bug was eliminated in this commit.")).toBe("removal");
+  });
+
+  it("classifies every RESTORATION verb", () => {
+    expect(classifyDoneVerb("the guard was restored")).toBe("restoration");
+    expect(classifyDoneVerb("the check was re-added")).toBe("restoration");
+    expect(classifyDoneVerb("the guard was added back")).toBe("restoration");
+    expect(classifyDoneVerb("the guard was kept")).toBe("restoration");
+  });
+
+  it("classifies every NEUTRAL verb -- implies no direction either way", () => {
+    expect(classifyDoneVerb("the bug was fixed")).toBe("neutral");
+    expect(classifyDoneVerb("the figure was corrected")).toBe("neutral");
+  });
+
+  it("returns null for a line with no DONE verb at all", () => {
+    expect(classifyDoneVerb("this PR adds a button")).toBeNull();
+  });
+
+  it("returns whichever verb occurs FIRST, not a fixed category order -- a line with more than one verb is exactly why this whole-line summary is not what decides a span's direction", () => {
+    expect(classifyDoneVerb("Removed, then restored the guard.")).toBe("removal");
+    expect(classifyDoneVerb("Restored, then removed the guard.")).toBe("restoration");
+    expect(classifyDoneVerb("Fixed by removing the guard.")).toBe("neutral");
+    expect(classifyDoneVerb("Removed and fixed the stale check.")).toBe("removal");
+  });
+
+  it("F1's real reproduction: this whole-line summary alone gets PR #142's sentence WRONG ('removal', from 'dropped') -- which is exactly why auditBodyText assigns direction per span, not from this function", () => {
+    // 'dropped' (REMOVAL) occurs before 'Fixed' (NEUTRAL) in this real
+    // sentence, so classifyDoneVerb's first-by-position answer is
+    // "removal" -- if auditBodyText used THIS as the whole line's
+    // direction, $me/$pr_author would be flagged contradicted again,
+    // reproducing F1 exactly. See the auditBodyText fixture below (and
+    // findDoneVerbClassForSpan's own tests) for the per-span mechanism
+    // that gets this sentence's actual spans right regardless.
+    const sentence =
+      '2. **LOW, confirmed — "copied verbatim" was false.** The PR body claimed the new `$me`/`$pr_author` check was copied verbatim from step 4b, but it had dropped the two `[ -n ... ]` empty-string guards. Fixed by restoring both guards (`[ -n "$me" ] || ...` and `[ -n "$pr_author" ] || ...`), so the claim is now true rather than edited to stop making it.';
+    expect(classifyDoneVerb(sentence)).toBe("removal");
+  });
+});
+
+describe("findDoneVerbOccurrences / findDoneVerbClassForSpan (ugcportal-bn94 round 1 F1)", () => {
+  it("finds every verb occurrence across all three classes, sorted by position", () => {
+    const occurrences = findDoneVerbOccurrences("Removed the guard, then restored it, then fixed the caller.");
+    expect(occurrences.map((o) => o.cls)).toEqual(["removal", "restoration", "neutral"]);
+    expect(occurrences[0].index).toBeLessThan(occurrences[1].index);
+    expect(occurrences[1].index).toBeLessThan(occurrences[2].index);
+  });
+
+  it("assigns a span to whichever occurrence is nearest it, not simply the first in the line", () => {
+    const text = "Removed the old guard. Much later, restored a different one.";
+    const occurrences = findDoneVerbOccurrences(text);
+    const earlySpanIndex = text.indexOf("old guard"); // near "Removed"
+    const lateSpanIndex = text.indexOf("different one"); // near "restored"
+    expect(findDoneVerbClassForSpan(occurrences, earlySpanIndex)).toBe("removal");
+    expect(findDoneVerbClassForSpan(occurrences, lateSpanIndex)).toBe("restoration");
+  });
+
+  it("breaks an exact-distance tie toward the earlier occurrence", () => {
+    // Synthetic occurrences, not derived from a real sentence, so the two
+    // distances are exactly equal by construction (|5-0| === |5-10|) rather
+    // than relying on a real string's indexOf arithmetic to land exactly on
+    // a tie.
+    const occurrences = [
+      { index: 0, cls: "removal" },
+      { index: 10, cls: "restoration" },
+    ];
+    expect(findDoneVerbClassForSpan(occurrences, 5)).toBe("removal");
+  });
+
+  it("returns null for no occurrences", () => {
+    expect(findDoneVerbClassForSpan([], 5)).toBeNull();
+  });
+});
+
 describe("auditBodyText (ugcportal-bn94)", () => {
+  const NO_DONE = { doneClaimStillPresent: [], doneClaimStillAbsent: [], doneClaimToVerify: [] };
+
   it("K1: reports a PR body's test count as a MEASUREMENT candidate with its line", () => {
     const body = "## Pre-review\n\n1. Gates: vitest 165 files / 3520 tests, all green.\n";
     expect(auditBodyText(body)).toEqual([
@@ -384,12 +472,12 @@ describe("auditBodyText (ugcportal-bn94)", () => {
         text: "1. Gates: vitest 165 files / 3520 tests, all green.",
         categories: ["MEASUREMENT"],
         missingReferences: [],
-        doneClaimStillPresent: [],
+        ...NO_DONE,
       },
     ]);
   });
 
-  it("flags a DONE claim and confirms it against the diff (PR #147, 2026-10-06: a 'deleted' number that was still on an added line)", () => {
+  it("REMOVAL: flags a DONE claim and confirms it against the diff (PR #147, 2026-10-06: a 'deleted' number that was still on an added line)", () => {
     const body = 'Eight fixed: one MEASUREMENT deleted (the wrong "24 characters"); five ABSOLUTEs weakened.\n';
     const diffText = ["diff --git a/x.ts b/x.ts", "--- a/x.ts", "+++ b/x.ts", "@@ -1 +1 @@", "+ * a label of at most 24 characters."].join("\n");
     expect(auditBodyText(body, { diffText })).toEqual([
@@ -399,14 +487,117 @@ describe("auditBodyText (ugcportal-bn94)", () => {
         categories: ["DONE"],
         missingReferences: [],
         doneClaimStillPresent: ["24 characters"],
+        doneClaimStillAbsent: [],
+        doneClaimToVerify: [],
       },
     ]);
   });
 
-  it("flags a DONE claim without the contradiction check when no diff is available -- still worth a human's look", () => {
-    const body = "Both guards restored and fixed.\n";
-    expect(auditBodyText(body)).toEqual([
-      { line: 1, text: "Both guards restored and fixed.", categories: ["DONE"], missingReferences: [], doneClaimStillPresent: [] },
+  it("RESTORATION: a span ABSENT from the diff contradicts a 'restored' claim (the opposite direction from REMOVAL)", () => {
+    const body = 'Restored the guard, which is now `[ -n "$me" ]` again.\n';
+    const diffTextMissing = ["diff --git a/x.sh b/x.sh", "--- a/x.sh", "+++ b/x.sh", "@@ -1 +1 @@", "+something else entirely"].join("\n");
+    const out = auditBodyText(body, { diffText: diffTextMissing });
+    expect(out).toEqual([
+      {
+        line: 1,
+        text: 'Restored the guard, which is now `[ -n "$me" ]` again.',
+        categories: ["DONE"],
+        missingReferences: [],
+        doneClaimStillPresent: [],
+        doneClaimStillAbsent: ['[ -n "$me" ]'],
+        doneClaimToVerify: [],
+      },
+    ]);
+  });
+
+  it("RESTORATION: the same claim is NOT contradicted when the span really is back in the diff", () => {
+    const body = 'Restored the guard, which is now `[ -n "$me" ]` again.\n';
+    const diffTextPresent = ["diff --git a/x.sh b/x.sh", "--- a/x.sh", "+++ b/x.sh", "@@ -1 +1 @@", '+[ -n "$me" ] || exit 1'].join("\n");
+    const out = auditBodyText(body, { diffText: diffTextPresent });
+    expect(out[0].doneClaimStillAbsent).toEqual([]);
+    expect(out[0].categories).toEqual(["DONE"]);
+  });
+
+  it("NEUTRAL (simplified fixture): 'fixed'/'corrected' spans are listed to verify, never scored as contradicted in either direction", () => {
+    const body = "Fixed by restoring both guards (`$me`/`$pr_author` empty-string guards).\n";
+    // No diffText at all -- NEUTRAL doesn't need one, unlike REMOVAL/RESTORATION.
+    const out = auditBodyText(body);
+    expect(out).toEqual([
+      {
+        line: 1,
+        text: "Fixed by restoring both guards (`$me`/`$pr_author` empty-string guards).",
+        categories: ["DONE"],
+        missingReferences: [],
+        doneClaimStillPresent: [],
+        doneClaimStillAbsent: [],
+        doneClaimToVerify: ["$me", "$pr_author"],
+      },
+    ]);
+  });
+
+  it("NEUTRAL: still never scored even when diffText IS available and would otherwise 'contradict' it", () => {
+    // Same sentence as above, but now with a diff that does NOT contain
+    // $me/$pr_author at all -- a REMOVAL or RESTORATION read would call
+    // this a contradiction one way or the other; NEUTRAL must not.
+    const body = "Fixed by restoring both guards (`$me`/`$pr_author` empty-string guards).\n";
+    const diffText = ["diff --git a/x.sh b/x.sh", "--- a/x.sh", "+++ b/x.sh", "@@ -1 +1 @@", "+unrelated line"].join("\n");
+    const out = auditBodyText(body, { diffText });
+    expect(out[0].doneClaimStillPresent).toEqual([]);
+    expect(out[0].doneClaimStillAbsent).toEqual([]);
+    expect(out[0].doneClaimToVerify).toEqual(["$me", "$pr_author"]);
+  });
+
+  it("F1 reproduction, PR #142's own body sentence verbatim: the spans next to 'Fixed by restoring' are never flagged contradicted, even though the line also contains 'dropped' (REMOVAL)", () => {
+    // This exact sentence, with this exact diff shape (the guards present
+    // on an added line, i.e. correctly restored), is what round 1's F1
+    // reproduced: the old design reported `DONE contradicted, still in
+    // diff: "$me"` and `"$pr_author"` -- backwards, since restoring them
+    // was the whole point of the sentence. It no longer does, because each
+    // span is now assigned to its NEAREST verb occurrence rather than one
+    // verdict for the whole line (see findDoneVerbClassForSpan): the two
+    // short `$me`/`$pr_author` mentions and the two long bracket-expression
+    // spans all sit nearest "Fixed" (NEUTRAL, at the end of the line), so
+    // none of the four is scored -- while "copied verbatim" and the
+    // generic `[ -n ... ]` placeholder, both nearest "dropped" (REMOVAL),
+    // are checked in that direction and happen not to appear in this
+    // diffText either way, so they produce no output at all.
+    const sentence =
+      '2. **LOW, confirmed — "copied verbatim" was false.** The PR body claimed the new `$me`/`$pr_author` check was copied verbatim from step 4b, but it had dropped the two `[ -n ... ]` empty-string guards. Fixed by restoring both guards (`[ -n "$me" ] || ...` and `[ -n "$pr_author" ] || ...`), so the claim is now true rather than edited to stop making it.\n';
+    const diffText = [
+      "diff --git a/skill.sh b/skill.sh",
+      "--- a/skill.sh",
+      "+++ b/skill.sh",
+      "@@ -1,2 +1,2 @@",
+      '+[ -n "$me" ] || { echo "missing me"; exit 1; }',
+      '+[ -n "$pr_author" ] || { echo "missing pr_author"; exit 1; }',
+    ].join("\n");
+    const out = auditBodyText(sentence, { diffText });
+    expect(out).toHaveLength(1);
+    expect(out[0].categories).toEqual(["DONE"]);
+    expect(out[0].doneClaimStillPresent).toEqual([]);
+    expect(out[0].doneClaimStillAbsent).toEqual([]);
+    expect(out[0].doneClaimToVerify).toEqual(["$me", "$pr_author", '[ -n "$me" ] || ...', '[ -n "$pr_author" ] || ...']);
+  });
+
+  it("REMOVAL/RESTORATION: no contradiction check when no diff is available at all -- still flagged DONE for a human", () => {
+    expect(auditBodyText("The check was removed.\n")).toEqual([
+      { line: 1, text: "The check was removed.", categories: ["DONE"], missingReferences: [], ...NO_DONE },
+    ]);
+    expect(auditBodyText("The check was restored.\n")).toEqual([
+      { line: 1, text: "The check was restored.", categories: ["DONE"], missingReferences: [], ...NO_DONE },
+    ]);
+  });
+
+  it("REMOVAL/RESTORATION with a quoted span but STILL no diffText: the span itself is not scored OR listed (unlike NEUTRAL, which lists regardless)", () => {
+    // Deliberately exercises the `else if (diffText)` branch with a real
+    // span present -- the two fixtures just above have no quoted span at
+    // all, so they could not have caught a mutation that scored a span
+    // without a diff to check it against.
+    expect(auditBodyText('The check `[ -n "$me" ]` was removed.\n')).toEqual([
+      { line: 1, text: 'The check `[ -n "$me" ]` was removed.', categories: ["DONE"], missingReferences: [], ...NO_DONE },
+    ]);
+    expect(auditBodyText('The check `[ -n "$me" ]` was restored.\n')).toEqual([
+      { line: 1, text: 'The check `[ -n "$me" ]` was restored.', categories: ["DONE"], missingReferences: [], ...NO_DONE },
     ]);
   });
 
@@ -427,7 +618,7 @@ describe("auditBodyText (ugcportal-bn94)", () => {
         text: "See configured-users.ts for details.",
         categories: [],
         missingReferences: ["configured-users.ts"],
-        doneClaimStillPresent: [],
+        ...NO_DONE,
       },
     ]);
   });

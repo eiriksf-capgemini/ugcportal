@@ -78,18 +78,37 @@
  * could not see it at all before this mode existed -- it only ever read
  * files the diff touched.
  *
- *   DONE   a line matching deleted/removed/fixed/corrected (`both X
- *          corrected`/`all N corrected` need no separate pattern -- the
- *          aggregate count sits next to the same verb). Checked against the
- *          diff (`gh pr diff <n>`, or the local working tree's diff for
- *          `--body`): any quoted or code-span token (`"24 characters"`,
- *          `` `[ -n "$me" ]` ``) in that line that STILL appears on an added
- *          or unchanged line is reported as "DONE contradicted" -- the diff
- *          itself, not a human's second-guessing, shows the claim is false
- *          (observed 2026-10-06: PR #147's body said a stale "24 characters"
- *          comment was gone, and the diff still had it on an added line).
+ *   DONE   a line matching one of three verb classes, each quoted span
+ *          assigned to whichever occurrence of ANY class sits nearest it
+ *          (`findDoneVerbOccurrences`/`findDoneVerbClassForSpan` -- see
+ *          their file-level doc comment for why this is PER SPAN, not one
+ *          verdict per line: round 1 of this PR's own review, F1, found
+ *          directly against PR #142's real body ("...it had dropped the
+ *          two `[ -n ... ]` empty-string guards. Fixed by restoring both
+ *          guards (`$me`/`$pr_author`...)") that a single shared direction,
+ *          or any fixed per-line precedence among the three classes, gets
+ *          one of this bead's own two real reproductions backwards). Each
+ *          span is then checked against the diff (`gh pr diff <n>`, or the
+ *          local working tree's diff for `--body`) in ITS assigned verb's
+ *          own direction:
+ *            REMOVAL (deleted/removed/dropped/no longer/eliminated/struck/
+ *              gone): a quoted span STILL on an added/unchanged line is
+ *              "DONE contradicted" (observed 2026-10-06: PR #147's body
+ *              said a stale "24 characters" comment was gone, and the diff
+ *              still had it on an added line).
+ *            RESTORATION (restored/re-added/added back/kept): a quoted span
+ *              ABSENT from every added/unchanged line is "DONE contradicted"
+ *              -- the other direction, for the opposite claim.
+ *            NEUTRAL (fixed/corrected): no direction is implied, so nothing
+ *              is scored either way -- a span nearest a NEUTRAL verb is
+ *              listed for a human to read, never asserted true or false.
+ *          `both X corrected`/`all N corrected` need no separate pattern --
+ *          the aggregate count sits next to the same verb already matched.
  *          When no diff is available, or a line names nothing quotable, the
- *          line is still flagged DONE for a human to check by hand.
+ *          line is still flagged DONE for a human to check by hand. None of
+ *          the three regexes claims completeness beyond its literal list
+ *          (F2) -- "struck through"/"strikethrough", other tenses of "gone"/
+ *          "no longer", and other verbs entirely are not matched.
  *
  * Body-mode output is a SEPARATE block with its own "body candidates found"
  * count, never summed into file-mode's "candidates found" (K2): the two
@@ -238,18 +257,140 @@ const PATH_RE =
   /(?<![\w@$/.-])((?:[\w.-]+\/)*[\w.-]+\.(?:[cm]?[jt]sx?|css|scss|md|mdx|prisma|sh|ya?ml|json|html|pem|sql))(?::(\d+)(?:-\d+)?)?(?![\w/-])/g;
 const URL_RE = /https?:\/\/\S+/g;
 
-// ugcportal-bn94: a PR-body "done" claim -- the body says a thing was
-// deleted, removed, fixed or corrected, which (unlike ABSOLUTE/MEASUREMENT/
-// TEMPORAL/HISTORY, all judged from the sentence alone) is mechanically
-// checkable whenever the sentence also names what, in a quoted span: if
-// that literal text is still sitting in an added or unchanged line of the
-// diff, the "done" claim is contradicted by the diff itself, not merely
-// worth a human's judgement. "both X corrected" / "all N corrected" need no
-// separate pattern -- the aggregate count is just the quantifier next to the
-// same verb this regex already matches ("...both guards restored" still
-// contains "restored"? no -- but "...both corrected"/"all three fixed" do
-// contain "corrected"/"fixed", which this regex does match).
-const DONE_RE = /\b(deleted|removed|fixed|corrected)\b/i;
+// ugcportal-bn94: a PR-body "done" claim -- the body says something
+// happened to a thing it names in a quoted span, which (unlike ABSOLUTE/
+// MEASUREMENT/TEMPORAL/HISTORY, all judged from the sentence alone) is
+// mechanically checkable against the diff -- but which direction counts as
+// "contradicted" depends on WHICH verb, and round 1 of this PR's own review
+// (F1) found that getting this wrong is not hypothetical: it reproduced
+// directly against PR #142's own body, "Fixed by restoring both guards
+// (`$me`/`$pr_author`...)", where a single shared "still present = false"
+// rule flagged the restored guards as contradicted -- backwards, since
+// restoring something means it SHOULD still be there. Three verb classes,
+// each with its own direction (or none):
+//
+//   REMOVAL       deleted/removed/dropped/no longer/eliminated/struck/gone.
+//                 The claim is "X is gone" -- contradicted when a quoted
+//                 span is STILL on an added or unchanged line of the diff
+//                 (PR #147, 2026-10-06: "24 characters" claimed deleted,
+//                 still present on an added line).
+//   RESTORATION   restored/re-added/added back/kept. The claim is "X is
+//                 (still) here" -- contradicted the OTHER way: when a
+//                 quoted span is ABSENT from every added or unchanged
+//                 line, i.e. the "restored" thing is not actually there.
+//   NEUTRAL       fixed/corrected. Vaguer than either -- "fixed" says
+//                 nothing about whether the things it names should now be
+//                 present or absent. Neutral spans are listed to verify by
+//                 hand, never scored either direction. "both X corrected"/
+//                 "all N corrected" need no separate pattern -- the
+//                 aggregate count is just the quantifier next to the same
+//                 verb already matched.
+//
+// A PER-LINE classification (one verdict for the whole line) cannot satisfy
+// both of this bead's own real reproductions, which is a fact discovered
+// empirically while fixing F1, not a hypothetical edge case: PR #147's body
+// has "Eight fixed: one MEASUREMENT deleted (the wrong "24 characters")..."
+// -- NEUTRAL ("fixed") and REMOVAL ("deleted") on ONE line, needing the
+// REMOVAL answer for "24 characters" (it IS the contradiction this bead
+// exists to catch). PR #142's body has "...it had dropped the two
+// `[ -n ... ]` empty-string guards. Fixed by restoring both guards
+// (`$me`/`$pr_author`...)" -- REMOVAL ("dropped") and NEUTRAL ("Fixed") on
+// ONE line too, needing the NEUTRAL answer for $me/$pr_author (REMOVAL's
+// "still present = contradicted" is exactly backwards there). Any fixed
+// per-line precedence order gets one of these two real sentences wrong --
+// tried NEUTRAL-first (reproduced in earlier review discussion), which
+// fixed #142 and broke #147's own fixture in the same change.
+//
+// So the direction is chosen per SPAN, not per line: findDoneVerbOccurrences
+// finds every verb occurrence with its position; auditBodyText assigns each
+// quoted span to whichever occurrence sits NEAREST to that span's own
+// (last) position in the line, and uses THAT occurrence's class. In both
+// real sentences above, the quoted span in question sits textually next to
+// the verb that actually governs it ("deleted (the wrong "24
+// characters")"; "Fixed by restoring both guards (`$me`/`$pr_author`...)")
+// -- nearest-by-position is a cheap proxy for "which clause is this span
+// actually in" that resolves both without parsing clauses explicitly.
+// classifyDoneVerb below (first verb BY POSITION, not by a fixed class
+// order) is kept as a simple whole-line summary -- it answers "is there a
+// DONE verb in this line at all, and which one comes first" for a line
+// with no spans to disambiguate -- but it is NOT what decides a span's
+// direction; two sentences above and their tests two using the SAME verb
+// pair ("fixed" + a removal verb) in one line, needing opposite span
+// answers, are exactly why no single-line summary could be.
+//
+// Deliberately NOT exhaustive (F2): "struck" does not cover "struck
+// through"/"strikethrough" as one token, and "gone"/"no longer" do not
+// cover every tense ("going", "will no longer"). Each regex below names
+// exactly the literal forms it matches -- nothing here claims completeness
+// beyond that list.
+const DONE_REMOVAL_RE = /\b(deleted|removed|dropped|no longer|eliminated|struck|gone)\b/i;
+const DONE_RESTORATION_RE = /\b(restored|re-added|added back|kept)\b/i;
+const DONE_NEUTRAL_RE = /\b(fixed|corrected)\b/i;
+// Global twins of the three regexes above, for matchAll in
+// findDoneVerbOccurrences -- a fresh RegExp per call so matchAll's own
+// internal lastIndex state is never shared across calls or with the
+// non-global `.test()` versions above (two different regex OBJECTS, same
+// source and flags plus "g").
+const DONE_VERB_CLASSES = [
+  ["removal", DONE_REMOVAL_RE],
+  ["restoration", DONE_RESTORATION_RE],
+  ["neutral", DONE_NEUTRAL_RE],
+];
+
+/**
+ * Every DONE-verb occurrence in `text`, across all three classes, as
+ * `{ index, cls }` sorted by position -- the input `findDoneVerbClassForSpan`
+ * (below) assigns each quoted span to its nearest one.
+ *
+ * @param {string} text
+ * @returns {{ index: number, cls: "removal" | "restoration" | "neutral" }[]}
+ */
+export function findDoneVerbOccurrences(text) {
+  const occurrences = [];
+  for (const [cls, re] of DONE_VERB_CLASSES) {
+    const global = new RegExp(re.source, re.flags.includes("g") ? re.flags : `${re.flags}g`);
+    for (const match of text.matchAll(global)) occurrences.push({ index: match.index, cls });
+  }
+  occurrences.sort((a, b) => a.index - b.index);
+  return occurrences;
+}
+
+/**
+ * The class of whichever DONE-verb occurrence sits nearest `spanIndex` (by
+ * absolute character distance, ties broken toward the earlier occurrence --
+ * English usually states the verb before the thing it governs, "deleted
+ * (X)"/"restoring (X)", so on a tie the one to the left is the more likely
+ * governor). `null` when `occurrences` is empty.
+ *
+ * @param {{ index: number, cls: string }[]} occurrences
+ * @param {number} spanIndex
+ * @returns {"removal" | "restoration" | "neutral" | null}
+ */
+export function findDoneVerbClassForSpan(occurrences, spanIndex) {
+  let best = null;
+  let bestDist = Infinity;
+  for (const occ of occurrences) {
+    const dist = Math.abs(occ.index - spanIndex);
+    if (dist < bestDist || (dist === bestDist && occ.index < (best?.index ?? Infinity))) {
+      best = occ;
+      bestDist = dist;
+    }
+  }
+  return best?.cls ?? null;
+}
+
+/**
+ * The class of the FIRST (by position) DONE-verb occurrence in `text`, or
+ * `null` for none -- a whole-line summary for a line with no spans to
+ * disambiguate by position (see the file-level comment above for why this
+ * is not what decides an individual span's direction).
+ *
+ * @param {string} text
+ * @returns {"removal" | "restoration" | "neutral" | null}
+ */
+export function classifyDoneVerb(text) {
+  return findDoneVerbOccurrences(text)[0]?.cls ?? null;
+}
 // A quoted or code-span token: "24 characters", `[ -n "$me" ]`. Double quotes
 // and backticks only -- a single-quote pair is not reliable prose punctuation
 // to pair on, since an ordinary contraction's apostrophe ("isn't ... won't")
@@ -373,7 +514,8 @@ export function tokenStillInDiff(token, diffText) {
 // vocabulary (ABSOLUTE/MEASUREMENT/TEMPORAL/HISTORY/REFERENCE -- none of it
 // changed, per the bead's explicit "out of scope") over the PR body's own
 // text, plus one new category that only makes sense for a body: a "done"
-// claim (DONE_RE above) that the diff itself can contradict.
+// claim (classifyDoneVerb above) that the diff itself can, for two of its
+// three verb classes, contradict.
 //
 // Deliberately a SEPARATE code path from the file-mode audit above/below,
 // with its own candidate list and its own printed counts -- never unioned
@@ -404,20 +546,34 @@ export function extractBodyLines(bodyText) {
 
 /**
  * @typedef {{ line: number, text: string, categories: string[],
- *            missingReferences: string[], doneClaimStillPresent: string[] }} BodyClaimCandidate
+ *            missingReferences: string[], doneClaimStillPresent: string[],
+ *            doneClaimStillAbsent: string[], doneClaimToVerify: string[] }} BodyClaimCandidate
  */
 
 /**
  * Audits a PR body's text with the same categories auditContent uses for a
  * comment (ABSOLUTE/MEASUREMENT/TEMPORAL/HISTORY via classifyClaimLine,
- * REFERENCE via findPathReferences/referenceExists), plus DONE: a line
- * matching DONE_RE is reported with category "DONE", and any of its quoted
- * spans found still present in `diffText` (via tokenStillInDiff) is reported
- * in `doneClaimStillPresent` -- a "this thing was deleted/removed/fixed/
- * corrected" claim the diff itself shows is not true. `diffText` is optional
- * (null when no diff could be fetched): a DONE line is still flagged for a
- * human either way, only the mechanical contradiction check is skipped, per
- * the bead's "where that is mechanically checkable".
+ * REFERENCE via findPathReferences/referenceExists), plus DONE: a line with
+ * any DONE-verb occurrence (findDoneVerbOccurrences) is reported with
+ * category "DONE", and EACH of its quoted spans (findQuotedSpans) is
+ * assigned to whichever occurrence sits nearest it
+ * (findDoneVerbClassForSpan) and checked against `diffText`
+ * (tokenStillInDiff) in THAT occurrence's direction -- round 1's F1 finding
+ * on this PR itself (reproduced against PR #142's own body, "...it had
+ * dropped the two `[ -n ... ]` empty-string guards. Fixed by restoring both
+ * guards (`$me`/`$pr_author`...)") is exactly what one direction for the
+ * whole line gets backwards, since that one line carries both a REMOVAL
+ * verb ("dropped") and a NEUTRAL one ("Fixed") governing different spans:
+ *
+ *   REMOVAL      a span still present is the contradiction -> doneClaimStillPresent.
+ *   RESTORATION  a span still absent is the contradiction -> doneClaimStillAbsent.
+ *   NEUTRAL      neither direction is implied by "fixed"/"corrected" alone --
+ *                spans are listed in doneClaimToVerify for a human to read,
+ *                never scored as a contradiction either way.
+ *
+ * `diffText` is optional (null when no diff could be fetched): a DONE line
+ * is still flagged for a human either way, only the mechanical check is
+ * skipped, per the bead's "where that is mechanically checkable".
  *
  * @param {string} bodyText
  * @param {{ diffText?: string | null, existingFiles?: string[] }} options
@@ -430,11 +586,40 @@ export function auditBodyText(bodyText, { diffText = null, existingFiles = [] } 
     const missingReferences = findPathReferences(text)
       .filter((ref) => !referenceExists(ref.token, "", existingFiles))
       .map((ref) => ref.token);
-    const isDoneClaim = DONE_RE.test(text);
-    const doneClaimStillPresent = isDoneClaim && diffText ? findQuotedSpans(text).filter((span) => tokenStillInDiff(span, diffText)) : [];
+    // PER SPAN, not per line (see the file-level DONE comment above): each
+    // quoted span is assigned to whichever verb occurrence of any class
+    // sits nearest its own (last) position in the line, and checked in
+    // THAT occurrence's direction -- a line can carry a REMOVAL-governed
+    // span and a NEUTRAL-governed span at once (PR #142's real sentence
+    // does; see the auditBodyText test fixture reproducing it verbatim).
+    const verbOccurrences = findDoneVerbOccurrences(text);
+    const isDoneClaim = verbOccurrences.length > 0;
+    let doneClaimStillPresent = [];
+    let doneClaimStillAbsent = [];
+    let doneClaimToVerify = [];
+    if (isDoneClaim) {
+      for (const span of findQuotedSpans(text)) {
+        const spanIndex = text.lastIndexOf(span);
+        const cls = findDoneVerbClassForSpan(verbOccurrences, spanIndex);
+        if (cls === "neutral") {
+          // NEUTRAL never scores a direction, with or without diffText --
+          // "fixed"/"corrected" alone says nothing about whether the span
+          // it governs should now be present or absent -- but it is still
+          // worth a human reading, so it's listed either way.
+          doneClaimToVerify.push(span);
+        } else if (diffText) {
+          // REMOVAL/RESTORATION need the diff to mean anything; without
+          // one, a span governed by either is not scored at all (not even
+          // listed to verify), matching the no-diff-available posture the
+          // rest of this category already has.
+          if (cls === "removal" && tokenStillInDiff(span, diffText)) doneClaimStillPresent.push(span);
+          else if (cls === "restoration" && !tokenStillInDiff(span, diffText)) doneClaimStillAbsent.push(span);
+        }
+      }
+    }
     if (isDoneClaim) categories.push("DONE");
     if (categories.length === 0 && missingReferences.length === 0) continue;
-    candidates.push({ line, text, categories, missingReferences, doneClaimStillPresent });
+    candidates.push({ line, text, categories, missingReferences, doneClaimStillPresent, doneClaimStillAbsent, doneClaimToVerify });
   }
   return candidates;
 }
@@ -785,17 +970,34 @@ function runBodyMode({ prNumber, base: explicitBase }) {
 
   const candidates = auditBodyText(bodyText, { diffText, existingFiles });
 
-  const counts = { ABSOLUTE: 0, MEASUREMENT: 0, TEMPORAL: 0, HISTORY: 0, DONE: 0, "REFERENCE not found": 0, "DONE contradicted": 0 };
+  const counts = {
+    ABSOLUTE: 0,
+    MEASUREMENT: 0,
+    TEMPORAL: 0,
+    HISTORY: 0,
+    DONE: 0,
+    "REFERENCE not found": 0,
+    "DONE contradicted": 0,
+    "DONE to verify": 0,
+  };
   console.log(`--- claims-audit: PR BODY claims (source: ${source}${diffText === null ? ", no diff available" : ""}) ---`);
   console.log(`body candidates found: ${candidates.length}`);
   for (const c of candidates) {
     for (const cat of c.categories) counts[cat]++;
     if (c.missingReferences.length > 0) counts["REFERENCE not found"]++;
-    if (c.doneClaimStillPresent.length > 0) counts["DONE contradicted"]++;
+    // Both directions count toward the same "DONE contradicted" total --
+    // a restoration claim the diff shows is absent is just as false as a
+    // removal claim the diff shows is still present (round 1 F1: these are
+    // now two DISTINCT checks, in opposite directions, never one shared
+    // "still present" rule applied to both).
+    if (c.doneClaimStillPresent.length > 0 || c.doneClaimStillAbsent.length > 0) counts["DONE contradicted"]++;
+    if (c.doneClaimToVerify.length > 0) counts["DONE to verify"]++;
     const tags = [
       ...c.categories,
       ...c.missingReferences.map((t) => `REFERENCE not found: ${t}`),
       ...c.doneClaimStillPresent.map((t) => `DONE contradicted, still in diff: ${JSON.stringify(t)}`),
+      ...c.doneClaimStillAbsent.map((t) => `DONE contradicted, absent from diff: ${JSON.stringify(t)}`),
+      ...c.doneClaimToVerify.map((t) => `DONE to verify by hand (no verdict): ${JSON.stringify(t)}`),
     ].join(", ");
     console.log(`  body:${c.line} [${tags}] ${c.text}`);
   }
@@ -805,7 +1007,7 @@ function runBodyMode({ prNumber, base: explicitBase }) {
       .join(", ")}`,
   );
   console.log(
-    "(advisory only -- does not affect exit status; printed and counted separately from file-mode's candidates, never merged into that count (K2); a DONE contradicted by the diff is strong evidence the claim is false, not merely worth asking about)",
+    "(advisory only -- does not affect exit status; printed and counted separately from file-mode's candidates, never merged into that count (K2); a DONE contradicted by the diff is strong evidence that specific claim is false, in whichever direction its verb implied -- a DONE to verify is NOT a verdict, just a span worth a human's own look, since \"fixed\"/\"corrected\" alone implies neither direction)",
   );
 }
 
