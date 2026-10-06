@@ -12,10 +12,21 @@ import { siteOrigin } from "@/lib/origin";
  * is visible at all is `publishedAt`/`legalReadiness`, enforced at the
  * routes themselves (404, in production refusing to serve), not a
  * `Disallow` rule a crawler is free to ignore anyway.
+ *
+ * `sitemap` is OMITTED, not defaulted to a guess, when `siteOrigin()` returns
+ * `null` (review round 1, finding 1) — in production, that means AUTH_URL is
+ * unset or malformed, and pointing at `http://localhost:3000/sitemap.xml`
+ * would be worse than pointing at nothing: a URL no public crawler can ever
+ * reach, published with no sign anything is wrong. `checkSiteOriginConfigured`
+ * (src/lib/origin.ts, wired into src/instrumentation-node.ts) is what reports
+ * the actual cause; this file's job is only to not publish a wrong URL.
+ * `allow: "/"` still stands either way — it names no host, so it is correct
+ * regardless of whether a real origin is configured.
  */
 export default function robots(): MetadataRoute.Robots {
+  const origin = siteOrigin();
   return {
     rules: { userAgent: "*", allow: "/" },
-    sitemap: `${siteOrigin()}/sitemap.xml`,
+    ...(origin !== null ? { sitemap: `${origin}/sitemap.xml` } : {}),
   };
 }

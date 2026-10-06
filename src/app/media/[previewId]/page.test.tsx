@@ -95,6 +95,40 @@ describe("K1: a published item's page", () => {
     expect(metadata.title).not.toBe("page-item-ok.jpg");
     expect(metadata.title).not.toMatch(/^\d+$/);
   });
+
+  /**
+   * Review round 1, finding 1 (MEDIUM, CONFIRMED): `siteOrigin()` now
+   * returns `null` in production when AUTH_URL is unset or malformed, rather
+   * than falling back to `http://localhost:3000`. This page's own job is to
+   * OMIT `alternates.canonical` rather than assert a loopback address is
+   * this item's permanent URL — see `generateMetadata`'s own comment.
+   */
+  it("omits alternates.canonical in production when AUTH_URL is unset", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("AUTH_URL", "");
+    try {
+      const metadata = await generateMetadata(params("pv-page-item-ok"));
+      expect(metadata.alternates).toBeUndefined();
+      // Title/description are unaffected: they describe the item, not its
+      // own URL.
+      expect(metadata.title).toBe("A bowl of mushroom risotto on a wooden table");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("still includes alternates.canonical outside production, via the localhost fallback", async () => {
+    vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("AUTH_URL", "");
+    try {
+      const metadata = await generateMetadata(params("pv-page-item-ok"));
+      expect(metadata.alternates?.canonical).toBe(
+        "http://localhost:3000/media/pv-page-item-ok",
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
 });
 
 describe("K2: a never-published item", () => {

@@ -17,9 +17,17 @@
  * `isCallbackSecure`, for the same reason.
  */
 
-/** The canonical public origin, from AUTH_URL (Auth.js's own source of truth). */
-export function expectedOrigin(): string | null {
-  const configured = process.env.AUTH_URL;
+/**
+ * The canonical public origin, from AUTH_URL (Auth.js's own source of truth).
+ *
+ * `env` is a parameter, same convention as `src/lib/legal/contact.ts` and
+ * `src/lib/legal/publishable.ts`, so a test can exercise an unset or
+ * malformed value without mutating the real `process.env.AUTH_URL` (which
+ * `isSameOriginRequest`'s own existing tests still do directly — this
+ * parameter is additive, not a change to that behaviour).
+ */
+export function expectedOrigin(env: NodeJS.ProcessEnv = process.env): string | null {
+  const configured = env.AUTH_URL;
   if (!configured) {
     return null;
   }
@@ -35,16 +43,61 @@ export function expectedOrigin(): string | null {
  * robots file's `sitemap` field, and a per-item page's canonical link
  * (ugcportal-qnq9.12).
  *
- * Falls back to AUTH_URL's own documented local default (env.example:
- * `AUTH_URL=http://localhost:3000`) rather than returning `null` or
- * throwing. A crawler-facing route is not optional the way an auth redirect
- * is — `next build` can evaluate app/sitemap.ts and app/robots.ts ahead of
- * any request, with no Origin/Host header to fall back to the way
- * `isSameOriginRequest` does above, so this needs a usable value even when
- * AUTH_URL is unset in whatever environment is building.
+ * Returns `null` in two cases now, not one — review round 1 finding 1.
+ * Outside production, an unset or malformed AUTH_URL still falls back to
+ * AUTH_URL's own documented local default (env.example:
+ * `AUTH_URL=http://localhost:3000`): a crawler-facing route is not optional
+ * the way an auth redirect is, so `npm run dev`/`next build` without
+ * AUTH_URL configured still produces a working sitemap/canonical link to
+ * inspect, with no Origin/Host header to fall back to the way
+ * `isSameOriginRequest` does above.
+ *
+ * IN PRODUCTION, THE FALLBACK IS REFUSED. A real deployment that is missing
+ * or has a broken AUTH_URL must not silently publish `http://localhost:3000`
+ * on every per-item canonical link, in `/sitemap.xml`, and in
+ * `/robots.txt`'s `sitemap` field — that is a wrong URL on a surface built
+ * to be read by every crawler at once, with nothing in the response itself
+ * to say so. `null` here means every caller must omit the URL rather than
+ * guess at a substitute; see `checkSiteOriginConfigured` below for the
+ * boot-time half of this (the equivalent of `checkLegalPagesPublishable`,
+ * src/lib/legal/publishable.ts, for this configuration gap), and
+ * src/app/sitemap.ts / src/app/robots.ts / src/app/media/[previewId]/page.tsx
+ * for what each surface does with `null`.
  */
-export function siteOrigin(): string {
-  return expectedOrigin() ?? "http://localhost:3000";
+export function siteOrigin(env: NodeJS.ProcessEnv = process.env): string | null {
+  const origin = expectedOrigin(env);
+  if (origin) return origin;
+  return env.NODE_ENV === "production" ? null : "http://localhost:3000";
+}
+
+/**
+ * The boot-time check for `siteOrigin()`'s configuration (review round 1
+ * finding 1), same convention as `checkLegalPagesPublishable`
+ * (src/lib/legal/publishable.ts): warn in EVERY environment while AUTH_URL
+ * is unset or unparseable, so a misconfigured deployment is caught at the
+ * first log line rather than by a crawler (or a human reading page source)
+ * finding `http://localhost:3000` on a canonical link, or finding the
+ * sitemap/robots surfaces quietly omitting URLs in production.
+ *
+ * Called from `registerNodeOnlyChecks` (src/instrumentation-node.ts); see
+ * that module's own comment for why boot checks live there rather than in
+ * src/instrumentation.ts directly.
+ */
+export function checkSiteOriginConfigured(
+  env: NodeJS.ProcessEnv = process.env,
+): string | null {
+  if (expectedOrigin(env) !== null) {
+    return null;
+  }
+  return env.NODE_ENV === "production"
+    ? "[origin] AUTH_URL is not set or is not a valid URL, so a real public origin " +
+        "cannot be built. Production will NOT publish http://localhost:3000 on the " +
+        "per-item canonical link, /sitemap.xml or /robots.txt's sitemap field — it " +
+        "omits those URLs instead, which is safer but means this deployment has no " +
+        "working sitemap or canonical links until AUTH_URL is set. See env.example."
+    : "[origin] AUTH_URL is not set or is not a valid URL, so the per-item canonical " +
+        "link, /sitemap.xml and /robots.txt's sitemap field fall back to " +
+        "http://localhost:3000 outside production. See env.example.";
 }
 
 /**

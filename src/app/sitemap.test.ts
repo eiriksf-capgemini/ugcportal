@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { mediaItemPath } from "@/lib/routes";
 import { seedMedia } from "@/lib/test-support/media-fixtures";
@@ -19,7 +19,11 @@ vi.mock("@/lib/auth", () => ({
 const database = createTemporaryDatabase();
 const { prisma } = await import("@/lib/prisma");
 const { listPublicMedia, publicMediaListingUrl } = await import("@/lib/public-media");
-const { default: sitemap } = await import("@/app/sitemap");
+const {
+  default: sitemap,
+  MAX_SITEMAP_ITEM_ENTRIES,
+  resetSitemapCapLogThrottle,
+} = await import("@/app/sitemap");
 
 const UPLOADER = "uploader-qnq9-12-sitemap";
 
@@ -204,9 +208,17 @@ describe("sitemap() (K3)", () => {
    * is typed read-only on `ProcessEnv` (`tsc` rejects a bare assignment to
    * it), and `vi.stubEnv` is the vitest-provided way around that which also
    * restores the original value reliably.
+   *
+   * `AUTH_URL` is ALSO stubbed to a valid URL here (review round 1, finding
+   * 1 follow-up): `siteOrigin()` now returns `null` in production when
+   * AUTH_URL is unset, which short-circuits `sitemap()` to an empty array
+   * before the legal-page filter below ever runs — this test's own claim is
+   * about THAT filter, not about the no-origin case (covered by its own
+   * describe block further down), so a real origin is given to isolate it.
    */
   it("excludes /privacy and /licence once NODE_ENV is production and they are still a draft", async () => {
     vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("AUTH_URL", "https://ugc.example");
     try {
       const entries = await sitemap();
       const urls = entries.map((entry) => entry.url);
@@ -246,5 +258,101 @@ describe("app/sitemap.ts source (K3)", () => {
     const live = stripComments(source, path);
     expect(live).toContain("PUBLIC_MEDIA_SCOPE");
     expect(live).not.toMatch(/publishedAt\s*:\s*{\s*not\s*:\s*null\s*}/);
+  });
+});
+
+/**
+ * Review round 1, finding 1 (MEDIUM, CONFIRMED): `siteOrigin()` now returns
+ * `null` in production when AUTH_URL is unset or malformed, rather than
+ * falling back to `http://localhost:3000` on a surface every crawler reads
+ * at once. `sitemap()`'s own job here is to return an empty sitemap rather
+ * than publish a wrong URL — see that function's own comment for why.
+ */
+describe("sitemap() when there is no configured origin (review round 1, finding 1)", () => {
+  it("returns an empty sitemap rather than localhost URLs, in production with AUTH_URL unset", async () => {
+    await seedMedia(prisma, {
+      id: "sm-no-origin",
+      userId: UPLOADER,
+      createdAt: new Date("2026-03-08T00:00:00.000Z"),
+    });
+
+    vi.stubEnv("NODE_ENV", "production");
+    const originalAuthUrl = process.env.AUTH_URL;
+    delete process.env.AUTH_URL;
+    try {
+      const entries = await sitemap();
+      expect(entries).toEqual([]);
+    } finally {
+      if (originalAuthUrl === undefined) {
+        delete process.env.AUTH_URL;
+      } else {
+        process.env.AUTH_URL = originalAuthUrl;
+      }
+      vi.unstubAllEnvs();
+    }
+  });
+});
+
+/**
+ * Review round 1, finding 2 (LOW, CONFIRMED): hitting the item cap silently
+ * dropped older published items with no operational signal. Mocking the
+ * query's row count rather than seeding 50,000 real rows, per the finding's
+ * own suggested fallback — a real fixture at this size is not cheap (see
+ * `prisma/schema.prisma`'s own measurement note on the public-feed index,
+ * which timed a 200k-row scratch database for a comparable reason), and the
+ * claim under test ("rows.length === the cap triggers a warning") does not
+ * need the query's `where`/`select`/`orderBy` to be real — those are already
+ * covered, against a real database, by the tests above.
+ */
+describe("sitemap() at the item cap (review round 1, finding 2)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    resetSitemapCapLogThrottle();
+  });
+
+  function mockRowCount(count: number): void {
+    vi.spyOn(prisma.media, "findMany").mockResolvedValue(
+      Array.from({ length: count }, (_, index) => ({
+        previewId: `pv-cap-${index}`,
+        publishedAt: new Date("2026-03-09T00:00:00.000Z"),
+      })) as never,
+    );
+  }
+
+  it("warns when the query returns exactly the cap, naming the cap", async () => {
+    mockRowCount(MAX_SITEMAP_ITEM_ENTRIES);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await sitemap();
+      expect(warn).toHaveBeenCalledTimes(1);
+      const [message, detail] = warn.mock.calls[0];
+      expect(String(message)).toContain("cap");
+      expect(detail).toMatchObject({ cap: MAX_SITEMAP_ITEM_ENTRIES });
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("does not warn when the query returns fewer rows than the cap", async () => {
+    mockRowCount(MAX_SITEMAP_ITEM_ENTRIES - 1);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await sitemap();
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("throttles a second cap warning within the same window", async () => {
+    mockRowCount(MAX_SITEMAP_ITEM_ENTRIES);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await sitemap();
+      await sitemap();
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

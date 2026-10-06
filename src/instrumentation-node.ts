@@ -28,6 +28,7 @@
  */
 import { LEGAL_PAGES } from "@/lib/legal/pages";
 import { checkLegalPagesPublishable } from "@/lib/legal/publishable";
+import { checkSiteOriginConfigured } from "@/lib/origin";
 
 /**
  * Every boot check that belongs behind the Node-runtime guard. Called once
@@ -40,6 +41,12 @@ export async function registerNodeOnlyChecks(): Promise<void> {
     // publishable.ts); say which at boot rather than leaving it to the
     // first visitor to find.
     checkLegalPagesPublishable(LEGAL_PAGES),
+    // ugcportal-qnq9.12 (review round 1, finding 1): while AUTH_URL is unset
+    // or unparseable, the per-item canonical link, the sitemap and robots.txt
+    // either fall back to a localhost URL (outside production) or omit the
+    // URL entirely (in production) — say which, and which variable to set,
+    // at boot rather than leaving it to whoever first reads page source.
+    checkSiteOriginConfigured(),
   ]) {
     if (warning) {
       console.error(warning);

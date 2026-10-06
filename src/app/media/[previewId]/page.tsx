@@ -56,6 +56,18 @@ export const dynamic = "force-dynamic";
  * unpublished item's page from shipping a `<title>`/description built from
  * data that should not be public at all, even for the brief moment before
  * the page component's own render would have caught it.
+ *
+ * `alternates.canonical` is OMITTED, not defaulted to a guess, when
+ * `siteOrigin()` returns `null` (review round 1, finding 1) — in production
+ * that means AUTH_URL is unset or malformed, and a canonical link pointing
+ * at `http://localhost:3000` would assert to every search engine that this
+ * page's real, permanent address is a loopback address nobody outside the
+ * server can ever reach — arguably worse than no canonical link at all,
+ * since a wrong one actively misdirects deduplication rather than merely
+ * omitting a hint. The title/description are unaffected either way: they
+ * describe the item, not its own URL, so they have nothing to omit.
+ * `checkSiteOriginConfigured` (src/lib/origin.ts, wired into
+ * src/instrumentation-node.ts) is what reports the actual cause.
  */
 export async function generateMetadata({
   params,
@@ -65,10 +77,13 @@ export async function generateMetadata({
   if (!item) notFound();
 
   const title = mediaItemTitle(item);
+  const origin = siteOrigin();
   return {
     title,
     description: mediaItemShortText(item),
-    alternates: { canonical: `${siteOrigin()}${mediaItemPath(previewId)}` },
+    ...(origin !== null
+      ? { alternates: { canonical: `${origin}${mediaItemPath(previewId)}` } }
+      : {}),
   };
 }
 
