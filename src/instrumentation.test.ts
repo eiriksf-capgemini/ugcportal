@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { builtinModules } from "node:module";
 import path from "node:path";
 
 import ts from "typescript";
@@ -362,9 +363,21 @@ describe("the legal-pages startup check", () => {
 /**
  * K3 (ugcportal-177y): moving the legal-pages check behind the
  * NEXT_RUNTIME guard must not silently drop any of the OTHER boot checks
- * that were never part of the problem. This drives every warning branch at
- * once, under the runtime value Next actually sets for the compile that
- * really executes at startup, and asserts they all still speak.
+ * that were never part of the problem. This drives four of register()'s
+ * five warning branches at once, under the runtime value Next actually
+ * sets for the compile that really executes at startup, and asserts they
+ * all still speak.
+ *
+ * The fifth, `checkConfiguredUsers`, cannot be exercised from THIS test:
+ * this file mocks `@/config/users` to an empty array (see the top of this
+ * file), and an empty array produces no problems for `checkConfiguredUsers`
+ * to report regardless of whether `register()` still calls it. Its wiring
+ * into `register()` is proven separately by
+ * src/instrumentation.configured-users.test.ts, which mocks a users array
+ * with real problems in its own module registry — a second file, not a
+ * second describe block here, because the array is a module-level constant
+ * and a single registry can only mock it one way (see that file's own doc
+ * comment).
  */
 describe("register() under the node runtime (ugcportal-177y, K3)", () => {
   afterEach(() => {
@@ -372,7 +385,7 @@ describe("register() under the node runtime (ugcportal-177y, K3)", () => {
     vi.restoreAllMocks();
   });
 
-  it("still runs every pre-existing boot check when NEXT_RUNTIME is nodejs", async () => {
+  it("still runs four of the five pre-existing boot checks when NEXT_RUNTIME is nodejs (the fifth is covered elsewhere, see the describe-level comment)", async () => {
     vi.stubEnv("NODE_ENV", "production");
     vi.stubEnv("NEXT_RUNTIME", "nodejs");
     vi.stubEnv(PERMITTED_EMAILS_VAR, "");
@@ -399,21 +412,36 @@ describe("register() under the node runtime (ugcportal-177y, K3)", () => {
  * K4 (ugcportal-177y): "Following should never happen: a Node built-in
  * reaching the Edge Instrumentation bundle again." This walks
  * src/instrumentation.ts's STATIC import graph — the modules reachable
- * without a dynamic `import()`, which is exactly what Next bundles into the
- * edge compile — and asserts none of them has a static import of a `node:`
- * built-in. It is scoped to this repository's own source (relative and `@/`
- * specifiers); a bare package specifier (`next`, `@aws-sdk/...`) is treated
- * as an external dependency and not walked into, matching how this bug was
- * actually investigated (bd notes on ugcportal-177y): "the users array's own
- * unusable identities..." etc. all name files under src/, not node_modules.
+ * without a dynamic `import()` — and asserts none of them has a static
+ * import of a Node built-in, bare (`"crypto"`) or `node:`-prefixed
+ * (`"node:crypto"`); nothing in this repo's eslint config enforces the
+ * prefix, so a regression could reintroduce the bare form just as easily as
+ * the prefixed one.
+ *
+ * This is a CONSERVATIVE over-approximation of what Next actually bundles
+ * for the edge compile, not an exact match: it walks every module reachable
+ * through a static VALUE import, which can visit a module Next's own
+ * tree-shaking would otherwise drop, but it never misses one Next actually
+ * bundles. `import type` / `export type`
+ * declarations are the one shape excluded — the compiler erases them before
+ * Next ever bundles anything, so counting them would only inflate false
+ * positives (the repo's own `import type { LegalPage } from
+ * "@/lib/legal/publishable"` at src/lib/legal/pages.ts:3 is exactly this
+ * shape) without protecting against a real one. A bare package specifier
+ * (`next`, `@aws-sdk/...`) is treated as an external dependency and not
+ * walked into: this repository's own source is what the investigation
+ * actually checked — `bd show ugcportal-177y` confirms `@/config/users`,
+ * `@/lib/contact`, `@/lib/sign-in-policy`, `@/lib/legal/contact` and
+ * `@/lib/email-shape` import nothing from `node:*` — not node_modules.
  *
  * The walker uses the TypeScript compiler's own AST (`ts.isImportDeclaration`
  * / `ts.isExportDeclaration`) rather than a regex, specifically so a dynamic
  * `import(...)` call expression — a different AST node entirely — is never
- * mistaken for a static one. The two "control" tests below exercise that
- * distinction directly against fixtures, so a walker that stopped telling
- * static and dynamic imports apart would be caught here, not only by the
- * real-file test going green for the wrong reason.
+ * mistaken for a static one. The control tests below exercise that
+ * distinction, the bare-vs-prefixed builtin classification, and the
+ * type-only exclusion directly against fixtures, so a regression in any of
+ * the three is caught here, not only by the real-file test going green for
+ * the wrong reason.
  */
 describe("the edge-safe static import graph (ugcportal-177y, K4)", () => {
   function staticImportSpecifiers(source: string, fileName: string): string[] {
@@ -427,7 +455,15 @@ describe("the edge-safe static import graph (ugcportal-177y, K4)", () => {
     const specifiers: string[] = [];
     function visit(node: ts.Node) {
       if (
-        (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
+        ts.isImportDeclaration(node) &&
+        !node.importClause?.isTypeOnly &&
+        node.moduleSpecifier &&
+        ts.isStringLiteral(node.moduleSpecifier)
+      ) {
+        specifiers.push(node.moduleSpecifier.text);
+      } else if (
+        ts.isExportDeclaration(node) &&
+        !node.isTypeOnly &&
         node.moduleSpecifier &&
         ts.isStringLiteral(node.moduleSpecifier)
       ) {
@@ -437,6 +473,20 @@ describe("the edge-safe static import graph (ugcportal-177y, K4)", () => {
     }
     visit(sourceFile);
     return specifiers;
+  }
+
+  /**
+   * A Node built-in can be named either way — `"crypto"` or
+   * `"node:crypto"` — and both reach the same module. `node:module`'s own
+   * `builtinModules` list is the bare-name source of truth; the `node:`
+   * prefix check stays alongside it rather than being subsumed by it
+   * because `builtinModules` does not itself list the prefixed form for
+   * every entry.
+   */
+  const NODE_BUILTIN_NAMES = new Set(builtinModules);
+
+  function isNodeBuiltinSpecifier(specifier: string): boolean {
+    return specifier.startsWith("node:") || NODE_BUILTIN_NAMES.has(specifier);
   }
 
   const RESOLVABLE_EXTENSIONS = [".ts", ".tsx", ".js", ".jsx"];
@@ -477,7 +527,16 @@ describe("the edge-safe static import graph (ugcportal-177y, K4)", () => {
     }
   }
 
-  function walkStaticImportGraph(entryFile: string): {
+  /**
+   * `readSource` is injectable (defaulting to the real filesystem) so a
+   * test can hand the walker a virtual file map instead of writing to disk
+   * — see the bare-builtin fixture test below, which is the only caller
+   * that overrides it.
+   */
+  function walkStaticImportGraph(
+    entryFile: string,
+    readSource: (file: string) => string = (file) => readFileSync(file, "utf8"),
+  ): {
     visited: string[];
     nodeBuiltins: { file: string; specifier: string }[];
   } {
@@ -488,9 +547,9 @@ describe("the edge-safe static import graph (ugcportal-177y, K4)", () => {
       const file = queue.shift();
       if (file === undefined || visited.has(file)) continue;
       visited.add(file);
-      const source = readFileSync(file, "utf8");
+      const source = readSource(file);
       for (const specifier of staticImportSpecifiers(source, file)) {
-        if (specifier.startsWith("node:")) {
+        if (isNodeBuiltinSpecifier(specifier)) {
           nodeBuiltins.push({ file, specifier });
           continue;
         }
@@ -503,7 +562,7 @@ describe("the edge-safe static import graph (ugcportal-177y, K4)", () => {
     return { visited: Array.from(visited), nodeBuiltins };
   }
 
-  it("flags a direct static import of a node builtin (control)", () => {
+  it("flags a direct static import of a node:-prefixed builtin (control)", () => {
     const specifiers = staticImportSpecifiers(
       'import { createHash } from "node:crypto";\n',
       "virtual.ts",
@@ -523,13 +582,62 @@ describe("the edge-safe static import graph (ugcportal-177y, K4)", () => {
     expect(specifiers).not.toContain("node:crypto");
   });
 
+  it("does not collect a type-only import's specifier (control)", () => {
+    // The shape src/lib/legal/pages.ts:3 actually has:
+    // `import type { LegalPage } from "@/lib/legal/publishable"`. The
+    // compiler erases this before Next ever bundles anything, so it must
+    // not count as a static edge the walk follows — fixture-mutated below
+    // by checking the same specifier DOES get collected without the
+    // `type` keyword.
+    const typeOnly = staticImportSpecifiers(
+      'import type { Hash } from "node:crypto";\n',
+      "virtual.ts",
+    );
+    expect(typeOnly).not.toContain("node:crypto");
+
+    const value = staticImportSpecifiers(
+      'import { createHash } from "node:crypto";\n',
+      "virtual.ts",
+    );
+    expect(value).toContain("node:crypto");
+  });
+
+  it("treats a bare builtin specifier as a hit too, not only the node:-prefixed form (fixture)", () => {
+    const entry = "/virtual/entry.ts";
+    const files = new Map<string, string>([
+      [entry, 'import { createHash } from "crypto";\n'],
+    ]);
+    const { nodeBuiltins } = walkStaticImportGraph(entry, (file) => {
+      const content = files.get(file);
+      if (content === undefined) {
+        throw new Error(`no such virtual file: ${file}`);
+      }
+      return content;
+    });
+
+    expect(nodeBuiltins).toEqual([{ file: entry, specifier: "crypto" }]);
+  });
+
   it("never reaches a node: builtin from src/instrumentation.ts's static imports", () => {
     const entry = path.join(REPO_ROOT, "src", "instrumentation.ts");
     const { visited, nodeBuiltins } = walkStaticImportGraph(entry);
 
     expect(nodeBuiltins).toEqual([]);
-    // Not vacuous: the walk actually traversed this repo's own modules
-    // beyond the entry file (config/users, contact, sign-in-policy, ...).
-    expect(visited.length).toBeGreaterThan(1);
+    // Not vacuous: `resolveOwnSourceFile` swallows every resolution
+    // failure as `null`, so a resolver
+    // regression that silently dropped most `@/` specifiers would still
+    // leave `nodeBuiltins` empty — for the wrong reason — and
+    // `visited.length > 1` alone would not catch it. Asserting the exact
+    // resolved set does: it fails the moment the walk stops reaching a
+    // module it should.
+    expect(new Set(visited)).toEqual(
+      new Set([
+        entry,
+        path.join(REPO_ROOT, "src", "config", "users.ts"),
+        path.join(REPO_ROOT, "src", "lib", "contact.ts"),
+        path.join(REPO_ROOT, "src", "lib", "sign-in-policy.ts"),
+        path.join(REPO_ROOT, "src", "lib", "email-shape.ts"),
+      ]),
+    );
   });
 });
