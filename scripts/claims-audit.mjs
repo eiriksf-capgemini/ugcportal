@@ -67,6 +67,69 @@
  *                ends with, that token -- a stale pointer, or a dependency
  *                file the comment should name as one.
  *
+ * PR BODY MODE (`--pr <n>` / `--body`, ugcportal-bn94): the five categories
+ * above plus one more, over the PR's DESCRIPTION rather than its diff. The
+ * bead's own evidence is why this exists: on PR #125 five of six round 1-3
+ * findings were Family 1 claims sitting in the body, not a comment; #107's
+ * round-3 low and #117's F3 were body-only; #112 round 4's stale figures
+ * were in the body's own pre-review checklist. A PR body is prose a reviewer
+ * reads before the diff, so a false "N corrected" or "copied verbatim"
+ * costs exactly the review round a stale comment does, and this script
+ * could not see it at all before this mode existed -- it only ever read
+ * files the diff touched.
+ *
+ *   DONE   a line matching one of three verb classes, each quoted span
+ *          scoped to its OWN SENTENCE first (`splitIntoSentences`, a
+ *          conservative backtick-aware sentence splitter -- round 2's own
+ *          review found a PR body "line" is often a whole multi-sentence
+ *          paragraph, and plain nearest-by-position across the WHOLE line
+ *          misattributed two early, unrelated spans in PR #147's real body
+ *          to a late, unrelated "restored"), then assigned to whichever
+ *          occurrence of ANY class WITHIN THAT SENTENCE sits nearest it
+ *          (`findDoneVerbOccurrences`/`findDoneVerbClassForSpan` -- see
+ *          their file-level doc comment for why this is PER SPAN, not one
+ *          verdict per line: round 1 of this PR's own review, F1, found
+ *          directly against PR #142's real body ("...it had dropped the
+ *          two `[ -n ... ]` empty-string guards. Fixed by restoring both
+ *          guards (`$me`/`$pr_author`...)") that a single shared direction,
+ *          or any fixed per-line precedence among the three classes, gets
+ *          one of this bead's own two real reproductions backwards). A
+ *          span whose own sentence has no DONE verb at all is not a DONE
+ *          claim, full stop. Each remaining span is then checked against
+ *          the diff (`gh pr diff <n>`, or the local working tree's diff for
+ *          `--body`) in ITS assigned verb's own direction:
+ *            REMOVAL (deleted/removed/dropped/no longer/eliminated/struck/
+ *              gone): a quoted span STILL on an added/unchanged line is
+ *              "DONE contradicted" (observed 2026-10-06: PR #147's body
+ *              said a stale "24 characters" comment was gone, and the diff
+ *              still had it on an added line).
+ *            RESTORATION (restored/re-added/added back/kept): a quoted span
+ *              ABSENT from every added/unchanged line is "DONE contradicted"
+ *              -- the other direction, for the opposite claim.
+ *            NEUTRAL (fixed/corrected): no direction is implied, so nothing
+ *              is scored either way -- a span nearest a NEUTRAL verb is
+ *              listed for a human to read, never asserted true or false.
+ *          `both X corrected`/`all N corrected` need no separate pattern --
+ *          the aggregate count sits next to the same verb already matched.
+ *          When no diff is available, or a line names nothing quotable, the
+ *          line is still flagged DONE for a human to check by hand. None of
+ *          the three regexes claims completeness beyond its literal list
+ *          (F2) -- "struck through"/"strikethrough", other tenses of "gone"/
+ *          "no longer", and other verbs entirely are not matched.
+ *
+ * Body-mode output is a SEPARATE block with its own "body candidates found"
+ * count, never summed into file-mode's "candidates found" (K2): the two
+ * modes are mutually exclusive per invocation (parseArgs refuses `--pr`/
+ * `--body` combined with each other or with `--all-lines`), so there is no
+ * shared total to compute even by accident. `--pr <n>` fetches both the
+ * body (`gh pr view <n> --json body -q .body`) and the diff (`gh pr diff
+ * <n>`) over the network; `--body` reads the body from stdin instead (the
+ * shape the pre-review skill uses on a draft body before `gh pr create` has
+ * even run) and diffs the local working tree against `--base` (or its
+ * default), the same ref resolution file mode uses. Out of scope, per the
+ * bead: auditing review comments, and changing the five original
+ * categories' vocabulary -- DONE is additive, not a rewrite of ABSOLUTE.
+ *
  * Comments are found with the TypeScript compiler API's own AST
  * (`typescript` is already a project dependency), never a hand-rolled
  * tokenizer -- the same decision scripts/sweep-candidates.mjs records, for
@@ -88,6 +151,17 @@
  *       added lines -- the sweep for stale SIBLINGS of a sentence a fix
  *       just changed (the Family 4 case: PR #102 found the same corrected
  *       model stated five places, over four rounds).
+ *
+ *   node scripts/claims-audit.mjs --pr <n>
+ *     PR BODY MODE (ugcportal-bn94, see above): fetches PR <n>'s body and
+ *       diff with `gh` and audits the body text. `--pr=<n>` works the same.
+ *   node scripts/claims-audit.mjs --body < /tmp/pr-body-draft.md
+ *     PR BODY MODE from stdin: audits a not-yet-posted body (what the
+ *       pre-review skill runs) against the LOCAL working tree's diff,
+ *       using `--base` the same way file mode does.
+ *     Neither form combines with `--all-lines` (a body has no added-lines
+ *       concept) or with each other; `--pr` does not take `--base` (its
+ *       diff is the PR's own, from `gh`, not a local ref).
  *
  * Self-test: npm test -- runs scripts/claims-audit.test.mjs (vitest).
  *
@@ -145,12 +219,15 @@
  * what is actually on disk.
  */
 
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
 
 import ts from "typescript";
 
 import {
   getChangedLineNumbersSince,
+  getUnifiedDiffSince,
   listTrackedFiles,
   listUntrackedFiles,
   readFileFromWorkingTree,
@@ -158,6 +235,11 @@ import {
   resolveMergeBase,
 } from "./lib/git-diff.mjs";
 import { isMainModule } from "./lib/is-main.mjs";
+
+// A PR diff (or body) can be large; same ceiling as scripts/lib/git-diff.mjs's
+// LARGE_MAX_BUFFER, kept local here since this constant is about `gh`
+// subprocess output, not a `git` plumbing concern that file owns.
+const GH_MAX_BUFFER = 64 * 1024 * 1024;
 
 const TS_FAMILY_RE = /\.[cm]?[jt]sx?$/;
 const MARKDOWN_RE = /\.mdx?$/;
@@ -181,6 +263,241 @@ const MEASUREMENT_RE =
 const PATH_RE =
   /(?<![\w@$/.-])((?:[\w.-]+\/)*[\w.-]+\.(?:[cm]?[jt]sx?|css|scss|md|mdx|prisma|sh|ya?ml|json|html|pem|sql))(?::(\d+)(?:-\d+)?)?(?![\w/-])/g;
 const URL_RE = /https?:\/\/\S+/g;
+
+// ugcportal-bn94: a PR-body "done" claim -- the body says something
+// happened to a thing it names in a quoted span, which (unlike ABSOLUTE/
+// MEASUREMENT/TEMPORAL/HISTORY, all judged from the sentence alone) is
+// mechanically checkable against the diff -- but which direction counts as
+// "contradicted" depends on WHICH verb, and round 1 of this PR's own review
+// (F1) found that getting this wrong is not hypothetical: it reproduced
+// directly against PR #142's own body, "Fixed by restoring both guards
+// (`$me`/`$pr_author`...)", where a single shared "still present = false"
+// rule flagged the restored guards as contradicted -- backwards, since
+// restoring something means it SHOULD still be there. Three verb classes,
+// each with its own direction (or none):
+//
+//   REMOVAL       deleted/removed/dropped/no longer/eliminated/struck/gone.
+//                 The claim is "X is gone" -- contradicted when a quoted
+//                 span is STILL on an added or unchanged line of the diff
+//                 (PR #147, 2026-10-06: "24 characters" claimed deleted,
+//                 still present on an added line).
+//   RESTORATION   restored/re-added/added back/kept. The claim is "X is
+//                 (still) here" -- contradicted the OTHER way: when a
+//                 quoted span is ABSENT from every added or unchanged
+//                 line, i.e. the "restored" thing is not actually there.
+//   NEUTRAL       fixed/corrected. Vaguer than either -- "fixed" says
+//                 nothing about whether the things it names should now be
+//                 present or absent. Neutral spans are listed to verify by
+//                 hand, never scored either direction. "both X corrected"/
+//                 "all N corrected" need no separate pattern -- the
+//                 aggregate count is just the quantifier next to the same
+//                 verb already matched.
+//
+// A PER-LINE classification (one verdict for the whole line) cannot satisfy
+// both of this bead's own real reproductions, which is a fact discovered
+// empirically while fixing F1, not a hypothetical edge case: PR #147's body
+// has "Eight fixed: one MEASUREMENT deleted (the wrong "24 characters")..."
+// -- NEUTRAL ("fixed") and REMOVAL ("deleted") on ONE line, needing the
+// REMOVAL answer for "24 characters" (it IS the contradiction this bead
+// exists to catch). PR #142's body has "...it had dropped the two
+// `[ -n ... ]` empty-string guards. Fixed by restoring both guards
+// (`$me`/`$pr_author`...)" -- REMOVAL ("dropped") and NEUTRAL ("Fixed") on
+// ONE line too, needing the NEUTRAL answer for $me/$pr_author (REMOVAL's
+// "still present = contradicted" is exactly backwards there). Any fixed
+// per-line precedence order gets one of these two real sentences wrong --
+// tried NEUTRAL-first (reproduced in earlier review discussion), which
+// fixed #142 and broke #147's own fixture in the same change.
+//
+// So the direction is chosen per SPAN, not per line: findDoneVerbOccurrences
+// finds every verb occurrence with its position; auditBodyText assigns each
+// quoted span to whichever occurrence sits NEAREST to that span's own
+// (last) position in the line, and uses THAT occurrence's class. In both
+// real sentences above, the quoted span in question sits textually next to
+// the verb that actually governs it ("deleted (the wrong "24
+// characters")"; "Fixed by restoring both guards (`$me`/`$pr_author`...)")
+// -- nearest-by-position is a cheap proxy for "which clause is this span
+// actually in" that resolves both without parsing clauses explicitly.
+// classifyDoneVerb below (first verb BY POSITION, not by a fixed class
+// order) is kept as a simple whole-line summary -- it answers "is there a
+// DONE verb in this line at all, and which one comes first" for a line
+// with no spans to disambiguate -- but it is NOT what decides a span's
+// direction; two sentences above and their tests two using the SAME verb
+// pair ("fixed" + a removal verb) in one line, needing opposite span
+// answers, are exactly why no single-line summary could be.
+//
+// Deliberately NOT exhaustive (F2): "struck" does not cover "struck
+// through"/"strikethrough" as one token, and "gone"/"no longer" do not
+// cover every tense ("going", "will no longer"). Each regex below names
+// exactly the literal forms it matches -- nothing here claims completeness
+// beyond that list.
+const DONE_REMOVAL_RE = /\b(deleted|removed|dropped|no longer|eliminated|struck|gone)\b/i;
+const DONE_RESTORATION_RE = /\b(restored|re-added|added back|kept)\b/i;
+const DONE_NEUTRAL_RE = /\b(fixed|corrected)\b/i;
+// Global twins of the three regexes above, for matchAll in
+// findDoneVerbOccurrences -- a fresh RegExp per call so matchAll's own
+// internal lastIndex state is never shared across calls or with the
+// non-global `.test()` versions above (two different regex OBJECTS, same
+// source and flags plus "g").
+const DONE_VERB_CLASSES = [
+  ["removal", DONE_REMOVAL_RE],
+  ["restoration", DONE_RESTORATION_RE],
+  ["neutral", DONE_NEUTRAL_RE],
+];
+
+/**
+ * Every DONE-verb occurrence in `text`, across all three classes, as
+ * `{ index, cls }` sorted by position -- the input `findDoneVerbClassForSpan`
+ * (below) assigns each quoted span to its nearest one.
+ *
+ * @param {string} text
+ * @returns {{ index: number, cls: "removal" | "restoration" | "neutral" }[]}
+ */
+export function findDoneVerbOccurrences(text) {
+  const occurrences = [];
+  for (const [cls, re] of DONE_VERB_CLASSES) {
+    const global = new RegExp(re.source, re.flags.includes("g") ? re.flags : `${re.flags}g`);
+    for (const match of text.matchAll(global)) occurrences.push({ index: match.index, cls });
+  }
+  occurrences.sort((a, b) => a.index - b.index);
+  return occurrences;
+}
+
+/**
+ * The class of whichever DONE-verb occurrence sits nearest `spanIndex` (by
+ * absolute character distance, ties broken toward the earlier occurrence --
+ * English usually states the verb before the thing it governs, "deleted
+ * (X)"/"restoring (X)", so on a tie the one to the left is the more likely
+ * governor). `null` when `occurrences` is empty.
+ *
+ * @param {{ index: number, cls: string }[]} occurrences
+ * @param {number} spanIndex
+ * @returns {"removal" | "restoration" | "neutral" | null}
+ */
+export function findDoneVerbClassForSpan(occurrences, spanIndex) {
+  let best = null;
+  let bestDist = Infinity;
+  for (const occ of occurrences) {
+    const dist = Math.abs(occ.index - spanIndex);
+    if (dist < bestDist || (dist === bestDist && occ.index < (best?.index ?? Infinity))) {
+      best = occ;
+      bestDist = dist;
+    }
+  }
+  return best?.cls ?? null;
+}
+
+/**
+ * The class of the FIRST (by position) DONE-verb occurrence in `text`, or
+ * `null` for none -- a whole-line summary for a line with no spans to
+ * disambiguate by position (see the file-level comment above for why this
+ * is not what decides an individual span's direction).
+ *
+ * @param {string} text
+ * @returns {"removal" | "restoration" | "neutral" | null}
+ */
+export function classifyDoneVerb(text) {
+  return findDoneVerbOccurrences(text)[0]?.cls ?? null;
+}
+
+// ugcportal-bn94 round 2's own review (new finding, confirmed): nearest-by-
+// position alone is sound WITHIN one sentence or clause, but a PR body
+// "line" is frequently a whole multi-sentence paragraph (bodies aren't
+// hard-wrapped), and nearest-by-position has no sentence-boundary awareness
+// at that scope. Reproduced against PR #147's real body: a paragraph whose
+// only DONE verb ("restored") sits at the END, about one specific clause,
+// while two EARLIER spans belonging to unrelated sentences ("Measured at
+// the previous head: `validateAdvertisingLabel(...)` is `ok === false`
+// ...") got assigned to "restored" anyway, for lack of anything closer to
+// compare against, and were reported contradicted for a restoration claim
+// neither sentence was making.
+//
+// SENTENCE_BOUNDARY_RE below is intentionally conservative, not a real
+// sentence tokenizer: a period/semicolon/question mark/exclamation mark,
+// then a single space, then an uppercase letter, a backtick or a quote
+// mark. That specific lookahead set matters -- "2. **LOW" (a markdown
+// numbered-list marker followed by a bold-markup asterisk) does NOT split,
+// because "*" is in none of those three categories, so a plain numbered
+// list item is not mistaken for a two-sentence line. A period inside a
+// backtick code span (`foo.bar()`) must never count as a boundary either,
+// even though the regex alone cannot tell the difference -- findBacktickRanges
+// below finds every paired `` `...` `` span first, and any candidate
+// boundary whose punctuation mark falls inside one of those ranges is
+// discarded before splitting.
+const SENTENCE_BOUNDARY_RE = /[.;?!] (?=[A-Z`"'])/g;
+
+/**
+ * The character-index ranges `[start, end]` of every paired backtick span
+ * in `text` (both delimiters' own positions, exclusive content between
+ * them) -- an unpaired trailing backtick is ignored, since there is no
+ * matching close to make a range from.
+ *
+ * @param {string} text
+ * @returns {[number, number][]}
+ */
+export function findBacktickRanges(text) {
+  const ranges = [];
+  let openIndex = null;
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] !== "`") continue;
+    if (openIndex === null) openIndex = i;
+    else {
+      ranges.push([openIndex, i]);
+      openIndex = null;
+    }
+  }
+  return ranges;
+}
+
+/**
+ * Splits `text` into sentences at SENTENCE_BOUNDARY_RE matches, except any
+ * whose punctuation mark falls strictly inside a backtick span (see the
+ * file comment above `SENTENCE_BOUNDARY_RE` for why). Each sentence is
+ * `{ start, end, text }` with `start`/`end` the ORIGINAL string's character
+ * offsets (`text.slice(start, end)` reproduces `.text`), so a caller can map
+ * an index from `findQuotedSpans`/`findDoneVerbOccurrences` straight back
+ * to which sentence it falls in without re-searching the whole line.
+ * Returns a single sentence spanning the whole input when no boundary is
+ * found (the common case for most PR-body lines, which really are one
+ * sentence).
+ *
+ * @param {string} text
+ * @returns {{ start: number, end: number, text: string }[]}
+ */
+export function splitIntoSentences(text) {
+  const backtickRanges = findBacktickRanges(text);
+  const cutPoints = [];
+  for (const match of text.matchAll(SENTENCE_BOUNDARY_RE)) {
+    const punctuationIndex = match.index;
+    const insideBacktickSpan = backtickRanges.some(([open, close]) => punctuationIndex > open && punctuationIndex < close);
+    if (!insideBacktickSpan) cutPoints.push(punctuationIndex + match[0].length);
+  }
+  const starts = [0, ...cutPoints];
+  const ends = [...cutPoints, text.length];
+  return starts.map((start, i) => ({ start, end: ends[i], text: text.slice(start, ends[i]) }));
+}
+
+/**
+ * The sentence (from `splitIntoSentences`'s output) whose `[start, end)`
+ * range contains `index`, or the LAST sentence if `index` lands exactly at
+ * (or past) the text's own length -- defensive only; every real caller here
+ * passes an index `splitIntoSentences` already covers.
+ *
+ * @param {{ start: number, end: number, text: string }[]} sentences
+ * @param {number} index
+ * @returns {{ start: number, end: number, text: string }}
+ */
+export function findSentenceContaining(sentences, index) {
+  return sentences.find((s) => index >= s.start && index < s.end) ?? sentences[sentences.length - 1];
+}
+
+// A quoted or code-span token: "24 characters", `[ -n "$me" ]`. Double quotes
+// and backticks only -- a single-quote pair is not reliable prose punctuation
+// to pair on, since an ordinary contraction's apostrophe ("isn't ... won't")
+// would otherwise pair across two unrelated words as if it were one quoted
+// span. Requires at least 2 characters so a lone punctuation mark inside
+// quotes does not become a token every line of the universe would trivially
+// contain.
+const QUOTED_SPAN_RE = /"([^"\n]{2,200})"|`([^`\n]{2,200})`/g;
 
 /**
  * Which claim categories a single comment line triggers.
@@ -235,6 +552,197 @@ export function referenceExists(token, fromFile, existingFiles) {
   if (existing.has(relative)) return true;
   const suffix = `/${token}`;
   return existingFiles.some((p) => p.endsWith(suffix));
+}
+
+/**
+ * Quoted or code-span tokens in a line, as plain strings with the quote
+ * marks stripped, deduplicated and order-preserved. These are the only
+ * "referenced text" a done-claim check (below) trusts enough to search the
+ * diff for literally -- a bare word or number in free prose is too likely to
+ * recur by coincidence, but a quoted phrase or a code span is, by the
+ * writer's own formatting, the specific thing the sentence is about.
+ *
+ * @param {string} text
+ * @returns {string[]}
+ */
+export function findQuotedSpans(text) {
+  const spans = [];
+  const seen = new Set();
+  for (const match of text.matchAll(QUOTED_SPAN_RE)) {
+    const span = match[1] ?? match[2];
+    if (!seen.has(span)) {
+      seen.add(span);
+      spans.push(span);
+    }
+  }
+  return spans;
+}
+
+/**
+ * True when `token` (a literal substring, not a pattern) appears on an ADDED
+ * line or an unchanged CONTEXT line of `diffText` -- a standard unified diff
+ * with git's normal context (not `-U0`: a done claim's referenced text can
+ * sit on a line the diff never touched at all, and `-U0`'s zero-context
+ * output would not include that line to search). File-header lines (`+++
+ * b/path`, `--- a/path`) are excluded so a token that happens to equal part
+ * of a file's own path is not mistaken for code content. A line that was
+ * only REMOVED (`-`, and not `---`) does not count: that is exactly what a
+ * true "deleted" or "removed" claim predicts, not a contradiction of it.
+ *
+ * @param {string} token
+ * @param {string} diffText
+ * @returns {boolean}
+ */
+export function tokenStillInDiff(token, diffText) {
+  if (!token) return false;
+  for (const line of diffText.split("\n")) {
+    if (line.startsWith("+++") || line.startsWith("---")) continue;
+    if (line.startsWith("+") || line.startsWith(" ")) {
+      if (line.slice(1).includes(token)) return true;
+    }
+  }
+  return false;
+}
+
+// --- PR body audit (ugcportal-bn94) ---------------------------------------
+//
+// claims-audit's original mode (below, in main()) only ever read files the
+// diff touched -- a PR's own DESCRIPTION, where most late-round Family 1
+// findings now land (the bead's own evidence: PR #125 round 3, #107 round 3,
+// #112 round 4), was invisible to it. This section runs the SAME claim
+// vocabulary (ABSOLUTE/MEASUREMENT/TEMPORAL/HISTORY/REFERENCE -- none of it
+// changed, per the bead's explicit "out of scope") over the PR body's own
+// text, plus one new category that only makes sense for a body: a "done"
+// claim (classifyDoneVerb above) that the diff itself can, for two of its
+// three verb classes, contradict.
+//
+// Deliberately a SEPARATE code path from the file-mode audit above/below,
+// with its own candidate list and its own printed counts -- never unioned
+// into the file-mode count (K2): a clean diff must never hide a dirty body,
+// and a dirty diff must never bury a clean body's count inside a larger
+// combined number a reader would misread as "the diff's problem", when it
+// was the prose that was wrong. The two modes are also mutually exclusive
+// per run (see parseArgs/main below): there is structurally no shared
+// "total" to accidentally compute in the first place.
+
+/**
+ * Every non-blank line of a PR body, as `{ line, text }` -- the same
+ * granularity extractProseLines uses for a Markdown file (every line is
+ * prose; a PR body has no comment markers to strip), since a PR body IS
+ * Markdown.
+ *
+ * @param {string} bodyText
+ * @returns {{ line: number, text: string }[]}
+ */
+export function extractBodyLines(bodyText) {
+  const out = [];
+  bodyText.split("\n").forEach((raw, i) => {
+    const text = raw.trim();
+    if (text !== "") out.push({ line: i + 1, text });
+  });
+  return out;
+}
+
+/**
+ * @typedef {{ line: number, text: string, categories: string[],
+ *            missingReferences: string[], doneClaimStillPresent: string[],
+ *            doneClaimStillAbsent: string[], doneClaimToVerify: string[] }} BodyClaimCandidate
+ */
+
+/**
+ * Audits a PR body's text with the same categories auditContent uses for a
+ * comment (ABSOLUTE/MEASUREMENT/TEMPORAL/HISTORY via classifyClaimLine,
+ * REFERENCE via findPathReferences/referenceExists), plus DONE: a line with
+ * any DONE-verb occurrence (findDoneVerbOccurrences) is reported with
+ * category "DONE", and EACH of its quoted spans (findQuotedSpans) is first
+ * scoped to its OWN sentence (splitIntoSentences/findSentenceContaining),
+ * then assigned to whichever DONE-verb occurrence WITHIN THAT SENTENCE sits
+ * nearest it (findDoneVerbClassForSpan, given only that sentence's
+ * occurrences) and checked against `diffText` (tokenStillInDiff) in THAT
+ * occurrence's direction. Two real reproductions drove this, both this
+ * bead's own: round 1's F1 (PR #142's body, "...it had dropped the two
+ * `[ -n ... ]` empty-string guards. Fixed by restoring both guards
+ * (`$me`/`$pr_author`...)") showed one direction for a whole LINE is wrong
+ * when the line carries more than one verb class; round 2's own finding
+ * (PR #147's body, a three-sentence paragraph whose only DONE verb,
+ * "restored", sits in the last sentence) showed nearest-by-position across
+ * a whole multi-sentence paragraph is ALSO wrong, assigning two earlier,
+ * unrelated spans in sentences with no DONE verb at all to that one late
+ * "restored" for lack of anything closer to compare against. A span whose
+ * OWN sentence has no DONE-verb occurrence is not a DONE claim at all --
+ * it never reaches `findDoneVerbClassForSpan` and lands in none of the
+ * three result arrays below:
+ *
+ *   REMOVAL      a span still present is the contradiction -> doneClaimStillPresent.
+ *   RESTORATION  a span still absent is the contradiction -> doneClaimStillAbsent.
+ *   NEUTRAL      neither direction is implied by "fixed"/"corrected" alone --
+ *                spans are listed in doneClaimToVerify for a human to read,
+ *                never scored as a contradiction either way.
+ *
+ * `diffText` is optional (null when no diff could be fetched): a DONE line
+ * is still flagged for a human either way, only the mechanical check is
+ * skipped, per the bead's "where that is mechanically checkable".
+ *
+ * @param {string} bodyText
+ * @param {{ diffText?: string | null, existingFiles?: string[] }} options
+ * @returns {BodyClaimCandidate[]}
+ */
+export function auditBodyText(bodyText, { diffText = null, existingFiles = [] } = {}) {
+  const candidates = [];
+  for (const { line, text } of extractBodyLines(bodyText)) {
+    const categories = classifyClaimLine(text);
+    const missingReferences = findPathReferences(text)
+      .filter((ref) => !referenceExists(ref.token, "", existingFiles))
+      .map((ref) => ref.token);
+    // PER SPAN, not per line (see the file-level DONE comment above): each
+    // quoted span is assigned to whichever verb occurrence of any class
+    // sits nearest its own (last) position in the line, and checked in
+    // THAT occurrence's direction -- a line can carry a REMOVAL-governed
+    // span and a NEUTRAL-governed span at once (PR #142's real sentence
+    // does; see the auditBodyText test fixture reproducing it verbatim).
+    const verbOccurrences = findDoneVerbOccurrences(text);
+    const isDoneClaim = verbOccurrences.length > 0;
+    let doneClaimStillPresent = [];
+    let doneClaimStillAbsent = [];
+    let doneClaimToVerify = [];
+    if (isDoneClaim) {
+      // A PR-body "line" is frequently a whole multi-sentence paragraph
+      // (bodies aren't hard-wrapped), and nearest-by-position alone has no
+      // sentence-boundary awareness -- round 2's own review reproduced this
+      // directly against PR #147's real body: an early, unrelated span got
+      // assigned to a late "restored" with nothing closer in the WHOLE LINE
+      // to compare against. Scoping each span's candidate verbs to its OWN
+      // sentence first (splitIntoSentences/findSentenceContaining) fixes
+      // that: a span in a sentence with no DONE verb at all is not a DONE
+      // claim, full stop -- it never reaches `findDoneVerbClassForSpan`.
+      const sentences = splitIntoSentences(text);
+      for (const span of findQuotedSpans(text)) {
+        const spanIndex = text.lastIndexOf(span);
+        const sentence = findSentenceContaining(sentences, spanIndex);
+        const sentenceVerbOccurrences = verbOccurrences.filter((occ) => occ.index >= sentence.start && occ.index < sentence.end);
+        if (sentenceVerbOccurrences.length === 0) continue;
+        const cls = findDoneVerbClassForSpan(sentenceVerbOccurrences, spanIndex);
+        if (cls === "neutral") {
+          // NEUTRAL never scores a direction, with or without diffText --
+          // "fixed"/"corrected" alone says nothing about whether the span
+          // it governs should now be present or absent -- but it is still
+          // worth a human reading, so it's listed either way.
+          doneClaimToVerify.push(span);
+        } else if (diffText) {
+          // REMOVAL/RESTORATION need the diff to mean anything; without
+          // one, a span governed by either is not scored at all (not even
+          // listed to verify), matching the no-diff-available posture the
+          // rest of this category already has.
+          if (cls === "removal" && tokenStillInDiff(span, diffText)) doneClaimStillPresent.push(span);
+          else if (cls === "restoration" && !tokenStillInDiff(span, diffText)) doneClaimStillAbsent.push(span);
+        }
+      }
+    }
+    if (isDoneClaim) categories.push("DONE");
+    if (categories.length === 0 && missingReferences.length === 0) continue;
+    candidates.push({ line, text, categories, missingReferences, doneClaimStillPresent, doneClaimStillAbsent, doneClaimToVerify });
+  }
+  return candidates;
 }
 
 // --- comment extraction --------------------------------------------------
@@ -389,31 +897,43 @@ export function auditContent(content, filePath, changedLines, { existingFiles })
   return candidates;
 }
 
-const KNOWN_FLAGS_HELP = "recognized: --base <ref>, --base=<ref>, --all-lines";
+const KNOWN_FLAGS_HELP = "recognized: --base <ref>, --base=<ref>, --all-lines, --pr <n>, --pr=<n>, --body";
 
 /**
- * Parses argv into `{ base, allLines }`, or a single named `error` instead
- * of any silent fallback. Replaces the narrower parseBaseArg (ugcportal-np1i
- * round 1 findings L1/L2):
+ * Parses argv into `{ base, allLines, prNumber, bodyFromStdin }`, or a
+ * single named `error` instead of any silent fallback. Replaces the
+ * narrower parseBaseArg (ugcportal-np1i round 1 findings L1/L2):
  *
  * - `--base <ref>` and `--base=<ref>` both set `base`, the same (K2).
  * - `--base` followed by nothing, by an empty `=value`, or by a token that
  *   itself looks like a flag (`--base --all-lines` -- the shape an unset
  *   shell variable in a wrapper script produces) is a named "requires a
  *   value" error (L1), not a silent swallow of the next flag as the ref.
- * - Any other `--`-prefixed token that isn't `--all-lines` -- a genuine typo
- *   like `--bas=foo`, not just a broken `--base` -- is a named "unknown
+ * - `--pr <n>` and `--pr=<n>` (ugcportal-bn94) switch to PR-body mode: `n`
+ *   must be a bare positive integer, the same "requires a value" shape as
+ *   `--base` above for anything else (missing, flag-shaped, non-numeric).
+ * - `--body` (ugcportal-bn94) also switches to PR-body mode, reading the
+ *   body text from stdin instead of fetching it with `gh pr view`.
+ * - `--pr` and `--body` are mutually exclusive (two body sources), and
+ *   neither combines with `--all-lines` (a PR body has no "added lines"
+ *   concept -- the whole body is always audited) or `--base` on `--pr`
+ *   specifically (its diff comes from `gh pr diff <n>`, not a local ref;
+ *   `--base` DOES combine with `--body`, which diffs the local working tree).
+ * - Any other `--`-prefixed token that isn't one of the above -- a genuine
+ *   typo like `--bas=foo`, not just a broken `--base` -- is a named "unknown
  *   flag" error (L2), not a silent fallback to the default base.
  * - A bare positional argument (no leading `--`) is also a named error:
  *   this script takes no positional arguments, so one is almost always a
  *   mistyped flag.
  *
  * @param {string[]} args
- * @returns {{ base?: string, allLines: boolean, error?: string }}
+ * @returns {{ base?: string, allLines: boolean, prNumber?: number, bodyFromStdin?: boolean, error?: string }}
  */
 export function parseArgs(args) {
   let base;
   let allLines = false;
+  let prNumber;
+  let bodyFromStdin = false;
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === "--base") {
@@ -437,12 +957,42 @@ export function parseArgs(args) {
       allLines = true;
       continue;
     }
+    if (arg === "--pr") {
+      const value = args[i + 1];
+      if (value === undefined || !/^\d+$/.test(value)) {
+        return { allLines, error: "--pr requires a PR number, e.g. --pr 147 or --pr=147" };
+      }
+      prNumber = Number(value);
+      i++;
+      continue;
+    }
+    if (arg.startsWith("--pr=")) {
+      const value = arg.slice("--pr=".length);
+      if (!/^\d+$/.test(value)) {
+        return { allLines, error: "--pr= requires a PR number after the =, e.g. --pr=147" };
+      }
+      prNumber = Number(value);
+      continue;
+    }
+    if (arg === "--body") {
+      bodyFromStdin = true;
+      continue;
+    }
     if (arg.startsWith("--")) {
       return { allLines, error: `unknown flag: ${arg} (${KNOWN_FLAGS_HELP})` };
     }
     return { allLines, error: `unexpected argument: ${arg} (${KNOWN_FLAGS_HELP})` };
   }
-  return { base, allLines };
+  if (prNumber !== undefined && bodyFromStdin) {
+    return { allLines, error: "--pr and --body are mutually exclusive -- pick one PR-body source" };
+  }
+  if (allLines && (prNumber !== undefined || bodyFromStdin)) {
+    return { allLines, error: "--all-lines does not apply to PR-body mode (--pr / --body) -- the whole body is always audited" };
+  }
+  if (base !== undefined && prNumber !== undefined) {
+    return { allLines, error: "--base does not apply to --pr <n> -- its diff comes from `gh pr diff <n>`, not a local ref" };
+  }
+  return { base, allLines, prNumber, bodyFromStdin: bodyFromStdin || undefined };
 }
 
 function allLineNumbers(content) {
@@ -452,12 +1002,146 @@ function allLineNumbers(content) {
   return lines;
 }
 
+/**
+ * The impure half of PR-body mode: fetches the body text and (best-effort)
+ * a diff to check "done" claims against, then prints auditBodyText's result
+ * in a block that never shares a "candidates found" line, a counts line, or
+ * any other printed total with file-mode's (K2). Exits non-zero only when
+ * the body itself could not be obtained at all (an empty or unreadable PR
+ * body makes every other step meaningless) -- same refusal posture as
+ * file-mode's workingTreeReadFailed guard below, but body-mode's own
+ * failure, never combined with it. A diff that cannot be fetched degrades
+ * to flagging DONE claims without the mechanical contradiction check,
+ * rather than refusing the whole run, since the ABSOLUTE/MEASUREMENT/
+ * TEMPORAL/HISTORY/REFERENCE categories do not need a diff at all.
+ *
+ * @param {{ prNumber?: number, base?: string }} parsed `bodyFromStdin` itself
+ *   is not read here -- the caller already established that exactly one of
+ *   `prNumber`/`bodyFromStdin` is set (main()'s dispatch condition), so
+ *   `prNumber === undefined` already means "read the body from stdin".
+ */
+function runBodyMode({ prNumber, base: explicitBase }) {
+  const source = prNumber !== undefined ? `PR #${prNumber}` : "stdin";
+  let bodyText;
+  let diffText = null;
+
+  if (prNumber !== undefined) {
+    try {
+      bodyText = execFileSync("gh", ["pr", "view", String(prNumber), "--json", "body", "-q", ".body"], {
+        encoding: "utf8",
+        maxBuffer: GH_MAX_BUFFER,
+      });
+    } catch (err) {
+      console.error(`claims-audit: gh pr view ${prNumber} --json body failed: ${((err.stderr ?? err.message) + "").trim()}`);
+      process.exit(1);
+    }
+    try {
+      diffText = execFileSync("gh", ["pr", "diff", String(prNumber)], { encoding: "utf8", maxBuffer: GH_MAX_BUFFER });
+    } catch (err) {
+      console.error(
+        `claims-audit: gh pr diff ${prNumber} failed (${((err.stderr ?? err.message) + "").trim()}) -- DONE claims will be flagged without the mechanical still-present check.`,
+      );
+    }
+  } else {
+    try {
+      bodyText = fs.readFileSync(0, "utf8");
+    } catch (err) {
+      console.error(`claims-audit: could not read a PR body from stdin: ${err.message}`);
+      process.exit(1);
+    }
+    const base = explicitBase ?? resolveDefaultBase();
+    let mergeBase = null;
+    try {
+      mergeBase = resolveMergeBase(base);
+    } catch (err) {
+      if (explicitBase !== undefined) {
+        // An explicitly-given --base that doesn't resolve is refused, same
+        // as file-mode's M1 (ugcportal-np1i): a silent fall-through here
+        // would report DONE claims checked against a diff the caller never
+        // asked for.
+        console.error(`claims-audit: --base ${base} does not resolve against HEAD: ${err.message}`);
+        process.exit(1);
+      }
+      // No explicit --base, and the computed default (e.g. HEAD~1 before a
+      // second commit exists) doesn't resolve either: there is no earlier
+      // commit to diff against, but the working tree may still be worth
+      // reporting against HEAD alone, below.
+    }
+    const diffRef = mergeBase ?? "HEAD";
+    try {
+      diffText = getUnifiedDiffSince(diffRef);
+    } catch (err) {
+      console.error(
+        `claims-audit: could not diff ${diffRef} against the working tree (${err.message}) -- DONE claims will be flagged without the mechanical still-present check.`,
+      );
+    }
+  }
+
+  if (bodyText.trim() === "") {
+    console.error(`claims-audit: the PR body (source: ${source}) is empty -- nothing to audit.`);
+    process.exit(1);
+  }
+
+  let existingFiles = [];
+  try {
+    existingFiles = [...listTrackedFiles(), ...listUntrackedFiles()];
+  } catch (err) {
+    console.error(`claims-audit: git ls-files failed, REFERENCE checks disabled: ${err.message}`);
+  }
+
+  const candidates = auditBodyText(bodyText, { diffText, existingFiles });
+
+  const counts = {
+    ABSOLUTE: 0,
+    MEASUREMENT: 0,
+    TEMPORAL: 0,
+    HISTORY: 0,
+    DONE: 0,
+    "REFERENCE not found": 0,
+    "DONE contradicted": 0,
+    "DONE to verify": 0,
+  };
+  console.log(`--- claims-audit: PR BODY claims (source: ${source}${diffText === null ? ", no diff available" : ""}) ---`);
+  console.log(`body candidates found: ${candidates.length}`);
+  for (const c of candidates) {
+    for (const cat of c.categories) counts[cat]++;
+    if (c.missingReferences.length > 0) counts["REFERENCE not found"]++;
+    // Both directions count toward the same "DONE contradicted" total --
+    // a restoration claim the diff shows is absent is just as false as a
+    // removal claim the diff shows is still present (round 1 F1: these are
+    // now two DISTINCT checks, in opposite directions, never one shared
+    // "still present" rule applied to both).
+    if (c.doneClaimStillPresent.length > 0 || c.doneClaimStillAbsent.length > 0) counts["DONE contradicted"]++;
+    if (c.doneClaimToVerify.length > 0) counts["DONE to verify"]++;
+    const tags = [
+      ...c.categories,
+      ...c.missingReferences.map((t) => `REFERENCE not found: ${t}`),
+      ...c.doneClaimStillPresent.map((t) => `DONE contradicted, still in diff: ${JSON.stringify(t)}`),
+      ...c.doneClaimStillAbsent.map((t) => `DONE contradicted, absent from diff: ${JSON.stringify(t)}`),
+      ...c.doneClaimToVerify.map((t) => `DONE to verify by hand (no verdict): ${JSON.stringify(t)}`),
+    ].join(", ");
+    console.log(`  body:${c.line} [${tags}] ${c.text}`);
+  }
+  console.log(
+    `by category: ${Object.entries(counts)
+      .map(([k, v]) => `${k} ${v}`)
+      .join(", ")}`,
+  );
+  console.log(
+    "(advisory only -- does not affect exit status; printed and counted separately from file-mode's candidates, never merged into that count (K2); a DONE contradicted by the diff is strong evidence that specific claim is false, in whichever direction its verb implied -- a DONE to verify is NOT a verdict, just a span worth a human's own look, since \"fixed\"/\"corrected\" alone implies neither direction)",
+  );
+}
+
 function main() {
   const args = process.argv.slice(2);
-  const { base: explicitBase, allLines, error: argError } = parseArgs(args);
+  const { base: explicitBase, allLines, prNumber, bodyFromStdin, error: argError } = parseArgs(args);
   if (argError) {
     console.error(`claims-audit: ${argError}`);
     process.exit(1);
+  }
+  if (prNumber !== undefined || bodyFromStdin) {
+    runBodyMode({ prNumber, bodyFromStdin, base: explicitBase });
+    return;
   }
   const base = explicitBase ?? resolveDefaultBase();
   const baseWasExplicit = explicitBase !== undefined;
@@ -525,6 +1209,11 @@ function main() {
   try {
     trackedFiles = listTrackedFiles();
   } catch (err) {
+    // Same guard as the two reads above: without it, referenceExists()
+    // below would see an empty tracked-file list and flag a REFERENCE not
+    // found against every existing tracked file this read would otherwise
+    // have returned, instead of refusing like the other two required reads.
+    workingTreeReadFailed = true;
     console.error(`claims-audit: git ls-files failed, reference checks disabled: ${err.message}`);
   }
   // A reference check needs both lists: untracked files are a first-class

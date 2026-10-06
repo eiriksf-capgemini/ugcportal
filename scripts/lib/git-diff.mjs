@@ -265,6 +265,24 @@ export function getChangedLineNumbersSince(ref) {
 }
 
 /**
+ * The raw unified diff between `ref` and the CURRENT WORKING TREE, WITH
+ * git's default context lines (not `-U0`) -- unlike getChangedLineNumbersSince
+ * above, a caller here needs the actual line TEXT, not just line numbers, so
+ * a line a "done" claim (ugcportal-bn94's PR-body audit: deleted/removed/
+ * fixed/corrected) names can be found whether it sits on a `+` line or on an
+ * unchanged context line `git diff -U0` would have omitted entirely. Used by
+ * claims-audit.mjs's `--body` (stdin) mode; `--pr <n>` mode instead reads
+ * `gh pr diff <n>`'s equivalent output directly, since that PR's diff is not
+ * necessarily this checkout's working tree.
+ *
+ * @param {string} ref usually the output of resolveMergeBase, or HEAD
+ * @returns {string}
+ */
+export function getUnifiedDiffSince(ref) {
+  return execFileSync("git", ["diff", ref], { encoding: "utf8", maxBuffer: LARGE_MAX_BUFFER });
+}
+
+/**
  * A file's content as it sits on disk right now -- unstaged edits, staged
  * edits and untracked files all read the same way, because all three are
  * about to be committed/pushed and none of them is readable with

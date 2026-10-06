@@ -135,3 +135,59 @@ export const LEGAL_SIGN_OFF: LegalSignOff | null = {
 
 /** The ISO date the text was last checked against the code. */
 export const LEGAL_LAST_REVIEWED = "2026-10-05";
+
+/**
+ * A SET LEGAL_* value that still reads like env.example's own illustrative
+ * text (ugcportal-qnq9.15 item 2, PR #90 round 6 cap) — the whole word
+ * "example" (env.example's samples all contain it: "Example Hosting AS,
+ * Norway", an "...@example.com" address) or a bare TODO, in any case.
+ *
+ * WARN-ONLY, by design, and never fed into `legalReadiness` (src/lib/legal/
+ * publishable.ts): round 3 deliberately stopped scanning an operator's own
+ * value for stray brackets/TBD, because a real value like "Acme Hosting
+ * [Oslo], Norway" must never be BLOCKED for merely containing them. This is
+ * a narrower, separate signal that keeps that promise — it flags a likely
+ * copy-paste of the sample text without ever making `blocked` or `draft`
+ * true, so it cannot reintroduce a false block.
+ */
+export const SUSPICIOUS_VALUE_PATTERN = /\bexample\b|\btodo\b/i;
+
+export type SuspiciousLegalValue = { name: LegalContactVar; value: string };
+
+/**
+ * Every LEGAL_* variable that is SET (an unset one is `readLegalContact`'s
+ * `missing`, not this) but whose value still matches
+ * `SUSPICIOUS_VALUE_PATTERN` — first-seen (LEGAL_CONTACT_VARS) order.
+ */
+export function suspiciousLegalValues(
+  env: NodeJS.ProcessEnv = process.env,
+): SuspiciousLegalValue[] {
+  const { contact, missing } = readLegalContact(env);
+  const missingVars = new Set(missing);
+  return (Object.keys(LEGAL_CONTACT_VARS) as LegalContactField[])
+    .map((field) => ({ name: LEGAL_CONTACT_VARS[field], value: contact[field] }))
+    .filter(({ name, value }) => !missingVars.has(name) && SUSPICIOUS_VALUE_PATTERN.test(value));
+}
+
+/**
+ * The boot-time message for `suspiciousLegalValues`, or null when nothing
+ * was flagged — same one-formatter idiom as `blockerWarning`
+ * (src/lib/legal/publishable.ts), kept in this module because it is about
+ * the VALUES an operator set, not about whether a page may render.
+ */
+export function suspiciousLegalValueWarning(
+  env: NodeJS.ProcessEnv = process.env,
+): string | null {
+  const found = suspiciousLegalValues(env);
+  if (found.length === 0) {
+    return null;
+  }
+  return found
+    .map(
+      ({ name, value }) =>
+        `[legal] ${name} is set to "${value}", which still reads like env.example's own ` +
+        "sample text or a stray TODO. If that really is the deployment's value this is a " +
+        "coincidence and safe to ignore; otherwise replace it.",
+    )
+    .join("\n");
+}

@@ -1,6 +1,6 @@
 ---
 name: pre-review
-description: The implementer's own review pass on a branch, run BEFORE opening the PR in this repo — build, typecheck, lint and the full test suite against the branch merged with current origin/main, the repo's guard suites named, the four-family sweep with scripts/sweep-candidates.mjs, a comment-claims audit with scripts/claims-audit.mjs (every never/always/cannot/only/exactly/guarantees/ensures, every measurement, every pointer, with the evidence beside it), a fixture-mutation check for every new assertion, and a diff-hygiene pass. Produces the checklist block the PR body must carry. Use when a bead's implementation is complete and the next step would be `git push` / `gh pr create`; also when a reviewer asks whether pre-review ran.
+description: The implementer's own review pass on a branch, run BEFORE opening the PR in this repo — build, typecheck, lint and the full test suite against the branch merged with current origin/main, the repo's guard suites named, the four-family sweep with scripts/sweep-candidates.mjs, a comment-claims audit with scripts/claims-audit.mjs (every never/always/cannot/only/exactly/guarantees/ensures, every measurement, every pointer, with the evidence beside it), a fixture-mutation check for every new assertion, a diff-hygiene pass, and (once the PR body itself is drafted) the same audit run over that body text with `claims-audit --body`/`--pr <n>`, which also flags a "deleted"/"fixed"/"corrected" claim the diff itself contradicts. Produces the checklist block the PR body must carry. Use when a bead's implementation is complete and the next step would be `git push` / `gh pr create`; also when a reviewer asks whether pre-review ran.
 ---
 
 # Pre-review (ugcportal)
@@ -119,7 +119,7 @@ git diff origin/main...HEAD --stat                       # every file is the bea
 git log origin/main..HEAD --format='%s%n%b' | grep -c 'Co-Authored-By: Claude'   # the attribution line this repo uses
 ```
 
-Four cheap lows from v0.5.0: a hunk that belonged to another PR (#82 round 1, then round 2 when the fix commit said it was removed and it was not), the wrong `Co-Authored-By` (#91 round 1), a `docs(...)` title on a PR that added a route handler (#83 round 5), a PR body still carrying a claim the code had dropped two rounds earlier (#98 rounds 5-6). Check the PR title's type against the diff, and reread the PR body against the final diff — the body is prose and the claims audit does not see it.
+Four cheap lows from v0.5.0: a hunk that belonged to another PR (#82 round 1, then round 2 when the fix commit said it was removed and it was not), the wrong `Co-Authored-By` (#91 round 1), a `docs(...)` title on a PR that added a route handler (#83 round 5), a PR body still carrying a claim the code had dropped two rounds earlier (#98 rounds 5-6). Check the PR title's type against the diff, and reread the PR body against the final diff.
 
 Then paste this into the PR body, filled in. Every line is a fact you observed, with the number or the word "nothing"; nothing here is a promise.
 
@@ -137,9 +137,20 @@ Then paste this into the PR body, filled in. Every line is a fact you observed, 
 5. Fixture mutation: <n> new assertions, <n> fixture-mutated, each failed as described; <exceptions, with why>.
 6. Real flow driven: <command and observation | none, because ...>.
 7. Diff hygiene: <n> files, all in scope; attribution on <n>/<n> commits; title type <type> matches the diff; PR body reread against the final diff.
+8. PR-body audit (`claims-audit --body`): <n> body candidates; ABSOLUTE <n>, MEASUREMENT <n>, TEMPORAL <n>, HISTORY <n>, DONE <n> (contradicted by the diff: <n>, fixed), REFERENCE not found <n> (fixed).
 ```
 
 If a step found something and you fixed it, say so in the line — a finding pre-review caught is the whole point, not something to hide. If it found something you chose not to fix, say that too, and why; the reviewer will otherwise find it at round 1 for the price of a round.
+
+**Step 8 is a required step, run AFTER the body above is otherwise finished writing, not a nice-to-have appended later** (ugcportal-bn94). Step 4's `claims-audit` only ever read files the diff touched, so a stale count or a retracted justification written directly into the PR DESCRIPTION was invisible to it -- and the bead's own evidence is that most late-round Family 1 findings now live exactly there: PR #125 round 3 (five of six findings body-only), PR #107's round-3 low, PR #117's F3, PR #112 round 4's stale pre-review figures, and, the same day this step was added, PR #147's body claiming a number was deleted when it was not, PR #142's "copied verbatim" when a guard had been dropped. Before `gh pr create` (or before updating the body on a later round), write the whole draft -- including your best-effort fill-in of this line itself -- to a scratch file and run:
+
+```bash
+node scripts/claims-audit.mjs --body < /tmp/pr-body-draft.md
+```
+
+Read every line the same way step 4 teaches: a MEASUREMENT or test count moves into a test or gets the real number; a TEMPORAL/ABSOLUTE claim about the PR itself (not the code) is either true at this head or weakened; and a **DONE** finding ("deleted", "removed", "fixed", "corrected", "both X corrected", "all N corrected") marked `DONE contradicted` means the diff ITSELF still has what you just told the reviewer was gone -- that is not a judgement call, fix the sentence or the code before this PR exists with the wrong one in it. Fix what you find, update this line's counts to match, and re-run once more if the fix changed the body meaningfully -- the same close-the-loop the fixture-mutation check (step 5) already asks for. On a later review round that rewrites part of the body (a `## Round N` section, a corrected figure), re-run this step against the new body text before pushing that round's commit; `--pr <n>` (against the already-posted body, once one exists) is the equivalent check a reviewer or a later round can run without a draft file.
+
+`--pr <n>` and `--body` are mutually exclusive, and neither combines with `--all-lines` (a PR body has no "added lines" -- the whole thing is always audited); `--pr` does not take `--base` either, since its diff comes from `gh pr diff <n>`, not a local ref. This step's counts are printed and tallied entirely separately from step 4's file-mode run (K2 of the bead) -- a clean diff must never stand in for a dirty body, or the reverse.
 
 ## What this does and does not buy
 
