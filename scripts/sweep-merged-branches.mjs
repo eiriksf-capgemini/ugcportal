@@ -51,7 +51,7 @@
  * the base ref is gone -- observed three times in one day (#126, #120,
  * #123), each needing a brand-new PR number and losing its comment history.
  * `--execute` guards every `"remove"`-classified remote branch against this
- * in three stages, round 2 of this bead having found gaps in the original
+ * in three stages, a later pass over this bead having found gaps in the original
  * single-stage version (a 30-item silent cap on an un-`--limit`ed query, no
  * re-check once retargeting itself had taken real time, and a frozen
  * recorded base that can point at a branch this same run already deleted):
@@ -250,7 +250,7 @@ export function parseRetargetFlag(argv) {
 
 /**
  * Resolves where an open PR stacked on a branch about to be deleted should
- * actually be retargeted to (round 2 finding 2, ugcportal-hvaf): not always
+ * actually be retargeted to (ugcportal-hvaf): not always
  * the deleted branch's own recorded `baseRefName` directly, because that
  * value is a merged PR's frozen GitHub history -- it is never updated after
  * the branch IT pointed to is itself deleted. Concretely: branch A's merged
@@ -295,7 +295,7 @@ export function resolveNewBase({ baseRefName, remoteBranchNames, prInfoByBranch,
 
 /**
  * The final check immediately before the irreversible `deleteRemoteBranch`
- * call (round 2 finding 3, ugcportal-hvaf) -- a TOCTOU window the earlier,
+ * call (ugcportal-hvaf) -- a TOCTOU window the earlier,
  * batch-derived retarget decision (`classifyBranchRetarget`, fed from the
  * single upfront `gh pr list --state open` snapshot `fetchOpenPrsByBase`
  * takes) cannot close on its own: that snapshot is read once, before this
@@ -407,8 +407,7 @@ export function buildPrInfoByBranch(prs) {
 
 /**
  * `gh pr list --state open --json number,baseRefName` output -> every
- * currently OPEN PR, grouped by its base branch (round 2 finding 7,
- * ugcportal-hvaf). One repo-wide snapshot, fetched once near the top of
+ * currently OPEN PR, grouped by its base branch (ugcportal-hvaf). One repo-wide snapshot, fetched once near the top of
  * `main()` alongside `fetchPrInfoByBranch`'s own `--state all` snapshot,
  * answers "does anything currently depend on this branch as a base" for
  * EVERY `"remove"`-candidate branch at once -- the same N-calls-to-one-call
@@ -504,7 +503,7 @@ function fetchPrInfoByBranch() {
   return buildPrInfoByBranch(prs);
 }
 
-/** One repo-wide `gh pr list --state open` snapshot (round 2 finding 7, ugcportal-hvaf) -- see buildOpenPrsByBase's own doc for why this exists instead of one `gh pr list --base <branch>` call per candidate. Same `--limit`/cap-warning discipline as fetchPrInfoByBranch, for the same silent-truncation reason (round 2 finding 1). */
+/** One repo-wide `gh pr list --state open` snapshot (ugcportal-hvaf) -- see buildOpenPrsByBase's own doc for why this exists instead of one `gh pr list --base <branch>` call per candidate. Same `--limit`/cap-warning discipline as fetchPrInfoByBranch, for the same silent-truncation reason (ugcportal-hvaf). */
 function fetchOpenPrsByBase() {
   const out = execFileSync("gh", ["pr", "list", "--state", "open", "--json", "number,baseRefName", "--limit", String(PR_LIST_LIMIT)], {
     encoding: "utf8",
@@ -585,17 +584,17 @@ export function deleteRemoteBranch(name, cwd = ".") {
 
 /**
  * Every currently OPEN PR whose base is `branch`, queried fresh. This is the
- * ONLY live, per-branch open-PR query left in this file (round 2 finding 7
- * moved the earlier, batch-derived existence check to `fetchOpenPrsByBase`)
- * -- `main()` calls this exactly once per `"remove"` candidate, immediately
+ * ONLY live, per-branch open-PR query left in this file -- the earlier,
+ * batch-derived existence check lives in `fetchOpenPrsByBase` instead --
+ * and `main()` calls this exactly once per `"remove"` candidate, immediately
  * before that candidate's `deleteRemoteBranch` call, as the final
- * TOCTOU-closing safety check (`classifyPreDeleteRecheck`, round 2 finding
- * 3): the batch snapshot is read once before the loop starts and retargeting
+ * TOCTOU-closing safety check (`classifyPreDeleteRecheck`, ugcportal-hvaf):
+ * the batch snapshot is read once before the loop starts and retargeting
  * itself takes real time, so only a live query taken at the moment of
  * deletion can rule out a PR opened in between. Same `--limit`/cap-warning
- * discipline as the other two `gh pr list` call sites in this file (round 2
- * finding 1). Not unit-tested directly, same convention as the other `gh`-
- * calling functions in this section (see the section comment above).
+ * discipline as the other two `gh pr list` call sites in this file. Not
+ * unit-tested directly, same convention as the other `gh`-calling functions
+ * in this section (see the section comment above).
  *
  * @returns {{number: number}[]}
  */
@@ -625,7 +624,7 @@ function fetchPrBaseState(prNumber) {
  * Runs for every `"remove"`-classified branch, before `main()`'s final
  * pre-delete recheck (ugcportal-hvaf): retargets every OPEN PR in
  * `openPrsBasedOnBranch` (the upfront batch snapshot, `fetchOpenPrsByBase` --
- * round 2 finding 7, not a fresh call of its own) to `newBase` -- or, if
+ * ugcportal-hvaf, not a fresh call of its own) to `newBase` -- or, if
  * `retarget` is false, keeps the branch and reports instead of touching
  * anything -- and verifies every retarget actually landed before giving the
  * caller the go-ahead to delete. Fails closed: any error (an edit, a verify
@@ -633,7 +632,7 @@ function fetchPrBaseState(prNumber) {
  * auto-closing a PR whose base just vanished out from under it.
  *
  * Not atomic across multiple stacked PRs, by design, not by oversight
- * (round 2 finding 5): if PR N's retarget+verify succeeds but PR N+1's then
+ * (ugcportal-hvaf): if PR N's retarget+verify succeeds but PR N+1's then
  * fails, N is NOT rolled back -- it is already safely rebased onto
  * `newBase`, which is strictly safer than leaving it on a branch about to be
  * deleted. What this function guarantees instead is that the caller always
@@ -715,13 +714,13 @@ function main() {
   }
   const mainBranch = resolveMainBranch();
   const prInfoByBranch = fetchPrInfoByBranch();
-  const openPrsByBase = fetchOpenPrsByBase(); // round 2 finding 7: one batch call, not one per candidate
+  const openPrsByBase = fetchOpenPrsByBase(); // ugcportal-hvaf: one batch call, not one per candidate
 
   const remoteBranchList = fetchRemoteBranches();
   // Mutable, and kept in sync as THIS run's own deletions land below --
   // resolveNewBase needs to see a branch this run already deleted as gone,
   // not as it stood in the snapshot taken before the removal loop started
-  // (round 2 finding 2).
+  // (ugcportal-hvaf).
   const remoteBranchNames = new Set(remoteBranchList);
 
   let branchCandidates = remoteBranchList.map((name) => ({
@@ -810,7 +809,7 @@ function main() {
     }
 
     // Final TOCTOU-closing recheck, live, immediately before the irreversible
-    // delete (round 2 finding 3) -- not the batch snapshot above, which was
+    // delete (ugcportal-hvaf) -- not the batch snapshot above, which was
     // read before this loop started and is now stale by however long the
     // retargeting above took.
     let freshOpenPrs;
