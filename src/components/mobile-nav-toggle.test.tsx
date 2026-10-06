@@ -258,9 +258,10 @@ describe("MobileNavToggle (ugcportal-14k9)", () => {
   });
 
   /**
-   * ugcportal-0sdf K2: `isPlainLeftClick` (src/components/primary-nav-
-   * link.tsx) checks five things - `!event.defaultPrevented`,
-   * `event.button === 0`, and the three modifier keys - but only the
+   * ugcportal-0sdf K2: `isPlainLeftClick`
+   * (src/components/primary-nav-link.tsx) checks five things -
+   * `!event.defaultPrevented`, `event.button === 0`, and the three
+   * modifier keys - but only the
    * `metaKey` clause had a test above it (the Cmd-click case). The other
    * four clauses could each be deleted from the real guard and every test
    * in this file would still pass. One test per remaining clause below,
