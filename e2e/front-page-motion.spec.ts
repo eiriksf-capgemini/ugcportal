@@ -2,31 +2,38 @@ import { expect, test } from "@playwright/test";
 
 /**
  * ugcportal-6dvg K3: with `prefers-reduced-motion: reduce` emulated, no
- * fade-in or hover-lift animation runs on the hero's decorative surfaces —
- * and, where a gallery tile actually exists to check, its own pre-existing
- * hover-scale transition (src/components/gallery/containment.ts,
- * untouched by this bead) still resolves to the same "nothing computed
- * transitions" state. The "positive controls" describe block further down
- * this file proves the other half of that claim — that both effects are
- * real, visible ones under ORDINARY motion — under its own
- * `reducedMotion: "no-preference"` override.
+ * fade-in or hover-lift animation runs on the hero's visual tiles — real
+ * photograph or neutral fallback alike, there are always exactly three of
+ * them (ugcportal-qqnt.4 K1) — and, where a gallery tile actually exists to
+ * check, its own pre-existing hover-scale transition
+ * (src/components/gallery/containment.ts, untouched by this bead) still
+ * resolves to the same "nothing computed transitions" state. The "positive
+ * controls" describe block further down this file proves the other half of
+ * that claim — that both effects are real, visible ones under ORDINARY
+ * motion — under its own `reducedMotion: "no-preference"` override.
  *
  * Not wired into CI, same as e2e/petrol-theme.spec.ts — see
  * playwright.config.ts's own comment.
  */
 test.use({ reducedMotion: "reduce" });
 
-test("K3: the hero's decorative surfaces have no computed animation under reduced motion", async ({
+test("K3: the hero's visual tiles have no computed animation under reduced motion", async ({
   page,
 }) => {
   await page.goto("/");
 
-  // `[data-home-hero-decoration] span` (round-2 review, low finding), not
-  // the structural `div[aria-hidden='true'] > span` this used to select by:
-  // the same selector front-page.spec.ts's own geometry check already uses
-  // for these shapes, so a future markup change to HeroDecoration's wrapper
-  // cannot silently desync the two checks from each other.
-  const shapes = page.locator("[data-home-hero-decoration] span");
+  /*
+   * RETARGETED (ugcportal-qqnt.4), not removed: `[data-home-hero-decoration]
+   * span` selected `HeroDecoration`'s three decorative circles, which K1
+   * replaced with `HeroVisual` — up to three real `<img>` tiles plus a
+   * neutral `<div>` fallback for whichever slot(s) have no curated preview
+   * (hero.tsx's own comment). `[data-home-hero-visual] > *` selects
+   * whichever mix of the two is actually rendered, the same way
+   * front-page.spec.ts's own geometry check now does, so a future markup
+   * change to the wrapper cannot silently desync the two checks from each
+   * other.
+   */
+  const shapes = page.locator("[data-home-hero-visual] > *");
   const count = await shapes.count();
   expect(count).toBeGreaterThan(0);
 
@@ -179,22 +186,25 @@ test.describe("positive controls: the motion-safe effects are real under ordinar
 
   /**
    * Round-5 review, low finding: the sibling of the hover-lift control
-   * above, for the hero's OTHER `motion-safe:`-gated effect — the
-   * decorative shapes' fade-in. Nothing previously proved
-   * `motion-safe:animate-[home-fade-in_700ms_ease-out_both]` actually
-   * applies the keyframe at all under ordinary motion: deleting it from
-   * hero.tsx left every one of this suite's other checks (and all 2584
-   * unit tests) green, while under `no-preference` the three shapes would
-   * stay at `opacity: 0` forever (`motion-safe:opacity-0` from
-   * hero.tsx:52-53, not their opacity-100 base — see the opacity: 1
-   * assertion below) with nothing ever animating them to `opacity: 1`.
+   * above, for the hero's OTHER `motion-safe:`-gated effect — the visual
+   * tiles' fade-in (real photograph or neutral fallback alike, ugcportal-
+   * qqnt.4 K1; RETARGETED from `[data-home-hero-decoration] span`, the
+   * selector for `HeroDecoration`'s three decorative circles K1 replaced —
+   * see this file's other `[data-home-hero-visual] > *` use above for the
+   * same rename). Nothing previously proved `motion-safe:animate-[home-
+   * fade-in_700ms_ease-out_both]` actually applies the keyframe at all
+   * under ordinary motion: deleting it from hero.tsx left every one of this
+   * suite's other checks green, while under `no-preference` the tiles would
+   * stay at `opacity: 0` forever (`motion-safe:opacity-0`, not their
+   * opacity-100 base — see the opacity: 1 assertion below) with nothing
+   * ever animating them to `opacity: 1`.
    */
-  test("the hero's decorative shapes actually fade in when motion is not reduced", async ({
+  test("the hero's visual tiles actually fade in when motion is not reduced", async ({
     page,
   }) => {
     await page.goto("/");
 
-    const shapes = page.locator("[data-home-hero-decoration] span");
+    const shapes = page.locator("[data-home-hero-visual] > *");
     const count = await shapes.count();
     expect(count).toBeGreaterThan(0);
 
@@ -204,10 +214,13 @@ test.describe("positive controls: the motion-safe effects are real under ordinar
         (el) => getComputedStyle(el).animationName,
       );
       expect(animationName).toBe("home-fade-in");
-      // Waits for the animation (up to 700ms, plus each shape's own
-      // staggered 0/150/300ms delay) to actually finish and settle at its
-      // `to` keyframe (`opacity: 1`), via the same auto-retrying assertion
-      // as the hover-lift control above, rather than a fixed sleep.
+      // Waits for the animation (up to 700ms) to actually finish and settle
+      // at its `to` keyframe (`opacity: 1`), via the same auto-retrying
+      // assertion as the hover-lift control above, rather than a fixed
+      // sleep. Unlike the decorative circles this replaces, every tile here
+      // shares one timing with no stagger between them (hero.tsx's own
+      // `HERO_VISUAL_TILE_MOTION_CLASS`) — simpler, and nothing in K3 asks
+      // for a stagger.
       await expect(shape).toHaveCSS("opacity", "1");
     }
   });

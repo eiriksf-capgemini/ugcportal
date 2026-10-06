@@ -4,7 +4,7 @@ import { Gallery } from "@/components/gallery/gallery";
 import { GalleryUnavailable } from "@/components/gallery/gallery-unavailable";
 import { EmptyState } from "@/components/home/empty-state";
 import { Hero } from "@/components/home/hero";
-import { isGenuinelyEmptyPage, toGalleryItems } from "@/lib/gallery-items";
+import { isGenuinelyEmptyPage, toGalleryItems, type GalleryItem } from "@/lib/gallery-items";
 import { listPortfolioPieces } from "@/lib/portfolio";
 import {
   listPublicMedia,
@@ -22,13 +22,41 @@ import { resolveSessionOrAnonymous } from "@/lib/session-or-anonymous";
  * different control flow (`catch` vs. an `if`) for reasons that comment
  * explains — only the JSX itself was duplicated, not the branching.
  */
-function unavailable(signedIn: boolean): ReactElement {
+function unavailable(signedIn: boolean, portfolioPieces: GalleryItem[]): ReactElement {
   return (
     <>
-      <Hero signedIn={signedIn} />
+      <Hero signedIn={signedIn} portfolioPieces={portfolioPieces} />
       <GalleryUnavailable />
     </>
   );
+}
+
+/**
+ * The hero's photographic tiles (ugcportal-qqnt.4 K1) degrade to the
+ * fallback petrol tiles `<HeroVisual>` itself already renders for an
+ * under-filled set, rather than crashing `Home()`'s render, the same
+ * resilience `resolveSessionOrAnonymous` gives the session read just below
+ * — a dropped database connection reading curated portfolio pieces is a
+ * real possibility on the SAME database `listPublicMedia` and
+ * `resolveSessionOrAnonymous` already guard against independently, not a
+ * hypothetical one invented for symmetry.
+ *
+ * Not wrapped in `cache()`/a `WeakSet` dedupe the way that module's own
+ * session read is: this function has exactly one caller (`Home` below),
+ * where the session read has three (this page, AuthStatus, UploadNavLink)
+ * that can all independently hit the identical rejected promise in one
+ * render — there is nothing here for a second layer to dedupe.
+ */
+async function resolveHeroPortfolioPieces(): Promise<GalleryItem[]> {
+  try {
+    return await listPortfolioPieces();
+  } catch (error) {
+    console.error(
+      "[src/app/page.tsx] the hero's portfolio-preview read failed; falling back to the neutral placeholder tiles",
+      error,
+    );
+    return [];
+  }
 }
 
 /**
@@ -105,6 +133,13 @@ export default async function Home() {
    * synchronous component taking the resolved boolean as a prop.
    */
   const sessionPromise = resolveSessionOrAnonymous();
+  /*
+   * Kicked off here too, alongside `sessionPromise`, rather than awaited
+   * immediately — the same "independent reads should not block on each
+   * other" reasoning as that promise's own comment, now for a THIRD,
+   * independent read (the session, the listing, and this) instead of two.
+   */
+  const portfolioPiecesPromise = resolveHeroPortfolioPieces();
 
   /*
    * `listMedia` only reports `ok: false` for a malformed `?cursor=`, and the
@@ -138,13 +173,13 @@ export default async function Home() {
   try {
     result = await listPublicMedia(publicMediaListingUrl());
   } catch {
-    return unavailable(hasSignedInUser(await sessionPromise));
+    return unavailable(hasSignedInUser(await sessionPromise), await portfolioPiecesPromise);
   }
 
   const signedIn = hasSignedInUser(await sessionPromise);
 
   if (!result.ok) {
-    return unavailable(signedIn);
+    return unavailable(signedIn, await portfolioPiecesPromise);
   }
 
   /*
@@ -177,18 +212,28 @@ export default async function Home() {
   );
 
   /*
-   * The portfolio sample for the living empty state (ugcportal-qqnt.5),
-   * read only on the branch that can use it — `<Gallery>` never reads
-   * `listPortfolioPieces` at all, so a page with published media pays
-   * nothing extra for this. `EmptyState` stays a plain, synchronous
-   * component (see its own comment for why); the query is awaited here,
-   * the same way `signedIn` above is resolved before `<Hero>` ever sees it.
+   * ONE read, shared by the hero (ugcportal-qqnt.4 K1) and the living empty
+   * state's own portfolio sample (ugcportal-qqnt.5) — not two. `<Hero>`
+   * needs `listPortfolioPieces()` on EVERY render regardless of gallery
+   * state (`portfolioPiecesPromise` above, kicked off unconditionally,
+   * already the single fetch this page makes), so `<EmptyState>` reuses
+   * that SAME already-resolved array rather than issuing a second,
+   * redundant Prisma query for the identical rows — the one thing the
+   * ORIGINAL version of this line (before the hero also needed this data)
+   * optimised for ("read only on the branch that can use it") no longer
+   * applies now that the hero's own read already pays that cost on every
+   * branch; sharing the one result is strictly cheaper than reintroducing
+   * a second query just to preserve that no-longer-relevant optimisation.
+   * `EmptyState` stays a plain, synchronous component (see its own comment
+   * for why) and still only ever SEES this array on the genuinely-empty
+   * branch (the ternary below, unchanged) — an on-screen gallery never
+   * reads it either way.
    */
-  const portfolioPieces = isGenuinelyEmpty ? await listPortfolioPieces() : [];
+  const portfolioPieces = await portfolioPiecesPromise;
 
   return (
     <>
-      <Hero signedIn={signedIn} />
+      <Hero signedIn={signedIn} portfolioPieces={portfolioPieces} />
       {isGenuinelyEmpty ? (
         <EmptyState pieces={portfolioPieces} />
       ) : (
