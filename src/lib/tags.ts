@@ -1,3 +1,4 @@
+import { dedupeBy } from "@/lib/dedupe";
 import {
   MAX_TAGS_PER_ITEM,
   MAX_TAG_NAME_LENGTH,
@@ -203,8 +204,17 @@ export function validateTagName(value: unknown): TagNameValidation {
  *
  * Duplicates are collapsed rather than refused, because two spellings of one
  * tag ("Food" and "food") are not a mistake worth a 400 — they resolve to one
- * row either way, and the relation is a set. The FIRST spelling wins, so the
- * order the caller sent is the order that survives.
+ * row either way, and the relation is a set. The FIRST spelling wins
+ * (`dedupeBy`, src/lib/dedupe.ts, ugcportal-oejb), so the order the caller
+ * sent is the order that survives.
+ *
+ * Validation runs BEFORE the dedupe, one entry at a time, and returns on the
+ * first failure — so an invalid entry refuses the whole request even if a
+ * later, duplicate-of-something-already-valid entry would otherwise have
+ * been dropped silently. The partial list built up to that point is
+ * discarded along with the failure; nothing here has decided yet which
+ * entries are duplicates of which, because that only matters once every
+ * entry is known to be valid.
  *
  * The count cap is applied AFTER collapsing, so sending "Food" seven times is
  * one tag rather than a refusal.
@@ -214,23 +224,23 @@ export function parseTagNames(value: unknown): TagListValidation {
     return { ok: false, message: "Field 'tags' must be an array of strings" };
   }
 
-  const bySlug = new Map<string, ParsedTag>();
+  const parsed: ParsedTag[] = [];
   for (const entry of value) {
     const validated = validateTagName(entry);
     if (!validated.ok) return validated;
-    if (!bySlug.has(validated.value.slug)) {
-      bySlug.set(validated.value.slug, validated.value);
-    }
+    parsed.push(validated.value);
   }
 
-  if (bySlug.size > MAX_TAGS_PER_ITEM) {
+  const deduped = dedupeBy(parsed, (tag) => tag.slug);
+
+  if (deduped.length > MAX_TAGS_PER_ITEM) {
     return {
       ok: false,
       message: `An item may have at most ${MAX_TAGS_PER_ITEM} tags`,
     };
   }
 
-  return { ok: true, value: [...bySlug.values()] };
+  return { ok: true, value: deduped };
 }
 
 /**

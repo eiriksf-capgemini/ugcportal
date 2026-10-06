@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
 import { describe, expect, it } from "vitest";
 
 import { hasUnsafeText } from "@/lib/media-rules";
@@ -362,5 +365,21 @@ describe("parseTagNames", () => {
       "books",
       "food",
     ]);
+  });
+
+  /** ugcportal-oejb K1: adopts the shared `dedupeBy` (src/lib/dedupe.ts). */
+  it("calls the shared dedupeBy rather than its own Map-based loop", () => {
+    const source = readFileSync(
+      fileURLToPath(new URL("./tags.ts", import.meta.url)),
+      "utf8",
+    );
+    const start = source.indexOf("export function parseTagNames(");
+    expect(start).toBeGreaterThan(-1);
+    const end = source.indexOf("\n}\n", start);
+    expect(end).toBeGreaterThan(start);
+    const body = source.slice(start, end);
+
+    expect(body).toContain("dedupeBy(");
+    expect(body).not.toMatch(/bySlug\.has\(|bySlug\.set\(/);
   });
 });
