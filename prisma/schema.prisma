@@ -256,6 +256,13 @@ model Media {
   // (ugcportal-vsm). Optional, and its absence is not sellable — see
   // `not_listed_for_sale` in src/lib/resale-rights.ts.
   listing MediaListing?
+  // The advertising-disclosure record for this upload (ugcportal-qnq9.1),
+  // if the operator has answered "was a benefit received for this". A
+  // SEPARATE table rather than columns here, and separate from
+  // MediaListing's triage too — see MediaAdvertisingDisclosure's own
+  // comment at the bottom of this file for why those are three different
+  // questions.
+  advertisingDisclosure MediaAdvertisingDisclosure?
 
   @@index([userId])
   // Matches the listing query in GET /api/media exactly: filter on userId,
@@ -773,4 +780,135 @@ model MediaRightsClearance {
   // choosing between two answers to the same question.
   @@unique([listingId, layer])
   @@index([clearedByUserId])
+}
+
+// --- advertising disclosure (ugcportal-qnq9.1) -------------------------------
+//
+// Forbrukertilsynet's labelling rule (docs/ugc-research.md §3.2): any item the
+// operator received payment or another benefit for must carry a prominent
+// advertising label, and the label must come first. §5.7 adds that posting in
+// English does not change this, because the site is run from Norway.
+//
+// THIS IS NOT THE RESALE TRIAGE, and the two must not be folded together.
+// MediaListing.sponsoredContent and RightsLayer.SPONSORED_CONTENT answer "may
+// this be RESOLD" for the sellability gate (src/lib/resale-rights.ts). A brand
+// deal that blocks resale and a brand deal that must be labelled are different
+// questions with different answers: an item can be perfectly sellable and still
+// need a label, and an unsellable item is not thereby an advertisement.
+
+/// What the operator received. The six kinds §3.2 names ("free or loaned
+/// products, discounts, trips and events") plus plain payment.
+///
+/// An ENUM rather than a Tag-style row, which is the opposite of the call
+/// ugcportal-jsc made for subject tags — deliberately. A subject tag is an
+/// open vocabulary the operator invents ("coffee" was not foreseen); this is
+/// a closed list taken verbatim from a regulator's text, and a seventh kind
+/// appearing means the regulator's guidance changed, which is a migration and
+/// a re-read of §3.2, not a row somebody types into a form.
+enum BenefitKind {
+  PAYMENT
+  FREE_PRODUCT
+  LOANED_PRODUCT
+  DISCOUNT
+  TRIP
+  EVENT_INVITATION
+}
+
+/// The brand behind a benefit — who paid, or who sent the free product.
+///
+/// A TABLE, NOT A STRING COLUMN on the disclosure, and the reason is a
+/// requirement that does not exist yet: ugcportal-qnq9.3 K4 has to answer "does
+/// this brand produce, import or sell alcohol" and refuse the benefit if it
+/// does (§3.1a practical rule 1). That answer belongs to the brand, not to one
+/// item — "Vinmonopolet" is the same answer on every item it ever appears on —
+/// so free text here would mean either re-asking per item or inventing a
+/// brand table later and migrating every spelling anyone ever typed. This bead
+/// does not add the alcohol column; it makes the place for it exist.
+///
+/// `slug` is the identity key and `name` the display form, the same split
+/// Tag uses and for the same reason: "Riedel" and "riedel" are one brand, and
+/// an alcohol answer recorded against one spelling must not be bypassable by
+/// typing another.
+model BenefitSource {
+  id        String   @id @default(cuid())
+  slug      String   @unique
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  disclosures MediaAdvertisingDisclosure[]
+}
+
+/// One item's advertising-disclosure record (ugcportal-qnq9.1).
+///
+/// 1:1 with Media and optional, so an item that nobody has answered the
+/// question for has NO ROW. That is the same "absence means not yet decided"
+/// idiom MediaListing's triage booleans use, one level up: the row's absence
+/// and `benefitReceived = NULL` both mean unanswered, and exactly one function
+/// collapses the two — `advertisingLabelPublishRefusal` in
+/// src/lib/advertising-disclosure.ts. Do not add a second reader that checks
+/// only one of them.
+///
+/// WHAT UNANSWERED DOES TODAY: nothing. An item with no row publishes exactly
+/// as it did before this bead, because every row that existed when this
+/// migration ran is in that state and there is no backfill that could honestly
+/// answer the question for them. `benefitReceived` is nullable rather than
+/// `Boolean @default(false)` precisely so that "nobody has said" stays
+/// distinguishable from "somebody said no" — which is what would let a later
+/// bead (ugcportal-qn3's unanswered-question-blocks-publishing mechanism, if it
+/// lands) move this field onto that mechanism without a second migration to
+/// recover a distinction a default had already thrown away.
+model MediaAdvertisingDisclosure {
+  id      String @id @default(cuid())
+  mediaId String @unique
+
+  /// Was a benefit received for this item? NULL means unanswered — see the
+  /// model comment above.
+  benefitReceived Boolean?
+  /// What the benefit was, and who it came from. Both required by the write
+  /// path (PUT /api/media/[id]/disclosure) whenever `benefitReceived` is true,
+  /// and both null otherwise; nullable here because "no benefit" and
+  /// "unanswered" are the ordinary states and neither has a kind or a source.
+  benefitKind     BenefitKind?
+  benefitSourceId String?
+
+  /// The benefit's market value in ØRE — integer minor units of NOK, so no
+  /// float ever touches money (the same rule MediaListing.priceCents states,
+  /// which uses the minor-unit convention under a cent-flavoured name; this
+  /// column is named for the unit it actually holds).
+  ///
+  /// §3.3: free and discounted products are taxable income AT MARKET VALUE.
+  /// Recorded here because this is where the benefit is already being written
+  /// down, and optional because the value of an event invitation is often
+  /// genuinely unknown at the moment the label is set. Whether the income log
+  /// REQUIRES it is ugcportal-qnq9.6's call, not this bead's — this bead only
+  /// makes sure the number has somewhere true to live.
+  marketValueOre Int?
+
+  /// The advertising label as it will be rendered, e.g. "Advertisement /
+  /// Reklame". Validated against a closed allowlist before it is stored
+  /// (`validateAdvertisingLabel`, src/lib/advertising-disclosure.ts) and
+  /// re-checked by the publish gate, which does not trust that every row was
+  /// written through that validator.
+  ///
+  /// Nullable, because an item with no benefit has no label and a label on
+  /// honest content is itself misleading (K4). It is NOT nullable in
+  /// combination with `benefitReceived = true`: that pair is what the publish
+  /// gate refuses, and what the write path refuses to create in the first
+  /// place.
+  label String?
+
+  /// When the declaration was last changed. This is a compliance record about
+  /// a commercial relationship, so "as of when" is part of what it says.
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  media         Media          @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+  /// Restrict, not Cascade or SetNull: deleting a brand must not silently
+  /// erase the source of a benefit that was declared publicly. There is no
+  /// delete path for a BenefitSource in the product; this makes adding one a
+  /// deliberate act rather than a quiet data loss.
+  benefitSource BenefitSource? @relation(fields: [benefitSourceId], references: [id], onDelete: Restrict)
+
+  @@index([benefitSourceId])
 }

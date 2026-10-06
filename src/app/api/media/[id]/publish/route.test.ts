@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { PERMITTED_ADVERTISING_LABELS } from "@/lib/advertising-disclosure";
 import type { OwnedMediaRow } from "@/lib/media-access";
 
 const authMock = vi.fn();
@@ -19,11 +20,28 @@ const mediaCreateManyMock = vi.fn();
 const mediaUpsertMock = vi.fn();
 const mediaDeleteMock = vi.fn();
 const mediaDeleteManyMock = vi.fn();
+// The advertising-disclosure table (ugcportal-qnq9.1). Its reader is the
+// publish gate; every WRITE method is mocked and listed in WRITE_MOCKS below
+// for the same reason Media's are — a publish that reached for one would show
+// up rather than sliding past a test that only inspects the call it expected.
+const disclosureFindUniqueMock = vi.fn();
+const disclosureUpdateManyMock = vi.fn();
+const disclosureUpdateMock = vi.fn();
+const disclosureCreateMock = vi.fn();
+const disclosureUpsertMock = vi.fn();
+const disclosureDeleteMock = vi.fn();
+const disclosureDeleteManyMock = vi.fn();
 const executeRawMock = vi.fn();
 const queryRawMock = vi.fn();
 const transactionMock = vi.fn();
 
 const WRITE_MOCKS = [
+  disclosureUpdateManyMock,
+  disclosureUpdateMock,
+  disclosureCreateMock,
+  disclosureUpsertMock,
+  disclosureDeleteMock,
+  disclosureDeleteManyMock,
   mediaUpdateMock,
   mediaCreateMock,
   mediaCreateManyMock,
@@ -52,6 +70,15 @@ vi.mock("@/lib/prisma", () => ({
       upsert: mediaUpsertMock,
       delete: mediaDeleteMock,
       deleteMany: mediaDeleteManyMock,
+    },
+    mediaAdvertisingDisclosure: {
+      findUnique: disclosureFindUniqueMock,
+      updateMany: disclosureUpdateManyMock,
+      update: disclosureUpdateMock,
+      create: disclosureCreateMock,
+      upsert: disclosureUpsertMock,
+      delete: disclosureDeleteMock,
+      deleteMany: disclosureDeleteManyMock,
     },
     $executeRaw: executeRawMock,
     $queryRaw: queryRawMock,
@@ -188,6 +215,10 @@ beforeEach(() => {
   mediaFindUniqueMock.mockResolvedValue(null);
   mediaFindFirstMock.mockResolvedValue(null);
   mediaUpdateManyMock.mockResolvedValue({ count: 1 });
+  // No disclosure row is the state every item that existed before
+  // ugcportal-qnq9.1 is in, and the state every existing test in this file
+  // means to exercise. The tests that are ABOUT the gate override it.
+  disclosureFindUniqueMock.mockResolvedValue(null);
 });
 
 describe("ownership gate on publish/unpublish (K2)", () => {
@@ -530,6 +561,188 @@ describe("publishing without alt text (ugcportal-gwr K1)", () => {
 
     expect(response.status).toBe(400);
     expect(mediaUpdateManyMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("publishing an item with a benefit but no advertising label (ugcportal-qnq9.1 K2)", () => {
+  /**
+   * K2: an item whose benefit flag is true and whose disclosure label is null
+   * or blank must be refused with 4xx, and publishedAt must stay null.
+   * Mirrors the blank-altText refusal above, which is what the bead asks for.
+   *
+   * The label values here are the REAL ones from
+   * src/lib/advertising-disclosure.ts rather than literals typed again: the
+   * list is a compliance decision (ugcportal-qnq9.14) and a test carrying its
+   * own copy would keep passing after that decision changed.
+   */
+
+  it.each([null, "", "   "])(
+    "refuses with 400 naming the field when the stored label is %j",
+    async (label) => {
+      signedInAs(OWNER_ID);
+      mediaFindUniqueMock.mockResolvedValue(unpublishedMedia);
+      disclosureFindUniqueMock.mockResolvedValue({
+        benefitReceived: true,
+        label,
+      });
+
+      const response = await POST(publishRequest("POST"), context());
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.field).toBe("advertisingLabel");
+      expect(body.error).toMatch(/advertising label/i);
+      // publishedAt stays null because nothing was written at all.
+      expect(mediaUpdateManyMock).not.toHaveBeenCalled();
+      expectNoOtherWrites();
+    },
+  );
+
+  it("refuses a stored label that is not on the permitted list", async () => {
+    // Defence in depth, the same shape the whitespace-only alt-text case
+    // takes: PUT /api/media/[id]/disclosure will not write this, but the
+    // publish gate must not assume every row went through that route.
+    signedInAs(OWNER_ID);
+    mediaFindUniqueMock.mockResolvedValue(unpublishedMedia);
+    disclosureFindUniqueMock.mockResolvedValue({
+      benefitReceived: true,
+      label: "Sponsored",
+    });
+
+    const response = await POST(publishRequest("POST"), context());
+
+    expect(response.status).toBe(400);
+    expect(mediaUpdateManyMock).not.toHaveBeenCalled();
+  });
+
+  it.each(PERMITTED_ADVERTISING_LABELS)(
+    "publishes normally when the label is %j",
+    async (label) => {
+      signedInAs(OWNER_ID);
+      mediaFindUniqueMock.mockResolvedValue(unpublishedMedia);
+      disclosureFindUniqueMock.mockResolvedValue({
+        benefitReceived: true,
+        label,
+      });
+
+      const response = await POST(publishRequest("POST"), context());
+
+      expect(response.status).toBe(200);
+      expect(writtenPayloads()).toEqual([{ publishedAt: expect.any(Date) }]);
+    },
+  );
+
+  it.each([null, false])(
+    "publishes an item whose benefit answer is %j, with no label",
+    async (benefitReceived) => {
+      // K4's storage side, and the no-row case's twin: a label is required
+      // only of an item that declares a benefit. An honest item carries none,
+      // and must not be blocked for not carrying one.
+      signedInAs(OWNER_ID);
+      mediaFindUniqueMock.mockResolvedValue(unpublishedMedia);
+      disclosureFindUniqueMock.mockResolvedValue({
+        benefitReceived,
+        label: null,
+      });
+
+      const response = await POST(publishRequest("POST"), context());
+
+      expect(response.status).toBe(200);
+    },
+  );
+
+  it("publishes an item that has no disclosure row at all", async () => {
+    // Every item that existed when this bead's migration ran. If this ever
+    // starts refusing, every pre-existing draft becomes unpublishable with
+    // nothing in the product able to clear it.
+    signedInAs(OWNER_ID);
+    mediaFindUniqueMock.mockResolvedValue(unpublishedMedia);
+    disclosureFindUniqueMock.mockResolvedValue(null);
+
+    const response = await POST(publishRequest("POST"), context());
+
+    expect(response.status).toBe(200);
+    expect(disclosureFindUniqueMock).toHaveBeenCalledWith({
+      where: { mediaId: MEDIA_ID },
+      select: { benefitReceived: true, label: true },
+    });
+  });
+
+  it("checks ownership before the disclosure, not after", async () => {
+    // The 400 must not become a way to probe someone else's library — and
+    // the gate must not even read the disclosure for a caller it will refuse.
+    signedInAs(OTHER_ID);
+    mediaFindUniqueMock.mockResolvedValue(unpublishedMedia);
+    disclosureFindUniqueMock.mockResolvedValue({
+      benefitReceived: true,
+      label: null,
+    });
+
+    const response = await POST(publishRequest("POST"), context());
+
+    expect(response.status).toBe(403);
+    expect(disclosureFindUniqueMock).not.toHaveBeenCalled();
+  });
+
+  it("does not block unpublishing an unlabelled item", async () => {
+    // DELETE /publish cannot fail: retracting an undisclosed advertisement is
+    // the remedy, so the gate must never stand in its way. The disclosure is
+    // not even read.
+    signedInAs(OWNER_ID);
+    mediaFindUniqueMock.mockResolvedValue(publishedMedia);
+    disclosureFindUniqueMock.mockResolvedValue({
+      benefitReceived: true,
+      label: null,
+    });
+
+    const response = await DELETE(publishRequest("DELETE"), context());
+
+    expect(response.status).toBe(200);
+    expect((await response.json()).publishedAt).toBeNull();
+    expect(disclosureFindUniqueMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses even an ALREADY-published row, unlike the alt-text gate", async () => {
+    /*
+     * The one place this gate deliberately differs from the alt-text one a
+     * few describes up, which exempts an already-published row because a
+     * rolling deploy can mint a blank-altText row that is not in breach of
+     * anything. There is no equivalent here: no backfill creates this state,
+     * and PUT /api/media/[id]/disclosure refuses to write it. A published row
+     * in this state was written outside the API and IS an undisclosed
+     * advertisement, so answering 200 to "publish it" is the wrong answer.
+     */
+    signedInAs(OWNER_ID);
+    mediaFindUniqueMock.mockResolvedValue(publishedMedia);
+    mediaFindFirstMock.mockResolvedValue(toOwnerShape(publishedMedia));
+    disclosureFindUniqueMock.mockResolvedValue({
+      benefitReceived: true,
+      label: null,
+    });
+
+    const response = await POST(publishRequest("POST"), context());
+
+    expect(response.status).toBe(400);
+    expect((await response.json()).field).toBe("advertisingLabel");
+    expect(mediaUpdateManyMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses before reading the disclosure when alt text is missing too", async () => {
+    // Ordering, so the cheaper in-memory check short-circuits the round trip.
+    signedInAs(OWNER_ID);
+    mediaFindUniqueMock.mockResolvedValue({
+      ...unpublishedMedia,
+      altText: null,
+    });
+    disclosureFindUniqueMock.mockResolvedValue({
+      benefitReceived: true,
+      label: null,
+    });
+
+    const response = await POST(publishRequest("POST"), context());
+
+    expect((await response.json()).field).toBe("altText");
+    expect(disclosureFindUniqueMock).not.toHaveBeenCalled();
   });
 });
 
