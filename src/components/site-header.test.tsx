@@ -157,7 +157,12 @@ describe("SiteHeader (ugcportal-14k9)", () => {
    * "expected 541 to be greater than 2765" (the nav landmark now renders at
    * markup index 541, before the relocated toggle at 2765), while the rest
    * of the suite (8/9 tests, none referencing the toggle's own position)
-   * stayed green. Reverted immediately after.
+   * stayed green. Separately, the `toggle` lookup's own "not found" guard
+   * was checked by renaming mobile-nav-toggle.tsx's closed-state label from
+   * "Open menu" to "Open navigation menu": this test failed with
+   * `mobile toggle (sr-only "Open menu" label) not found`, as expected for
+   * an indexOf-based marker whose text changed. Both mutations reverted
+   * immediately after.
    */
   it("places the mobile toggle (right after the wordmark), the main nav, and the upload link between the wordmark and the auth widget", () => {
     const markup = renderHeader();

@@ -119,7 +119,7 @@ describe("K2: every visible string, for review", () => {
    * `toContain` only asks "is this substring present somewhere", never "is
    * there anything else". The literal `EXPECTED_FULL_TEXT`/
    * `EXPECTED_COMPACT_TEXT` strings below are an exact equality check on the
-   * footer's full `textContent` instead — the only way to make the claim
+   * footer's full `textContent` instead, which makes the claim
    * "every visible string" hold in BOTH directions (an omission still fails
    * equality, same as before; now an addition fails it too). Spelled out
    * literally here rather than built by concatenating the imported
@@ -129,16 +129,20 @@ describe("K2: every visible string, for review", () => {
    * together — the same self-reference flaw site-header.test.tsx's own
    * EXPECTED_SITE_NAME comment names and rejects for the header's strings.
    *
-   * MUTATION (performed once, verified, and reverted — not left in the
-   * tree): appended an extra sentence to the rendered tagline paragraph in
-   * site-footer.tsx (simulating "a string is added to the footer"). Before
-   * this change, the old `toContain`-loop stayed green under that mutation
-   * (every original needle is still present; the loop never notices the
-   * addition). After this change, `expect(text).toBe(EXPECTED_FULL_TEXT)`
-   * failed immediately, reporting the actual string with the extra sentence
-   * appended vs. the expected literal — confirming the exact-equality
-   * assertion is the one that catches an addition, not just a removal.
-   * Reverted immediately after.
+   * MUTATION (performed once per variant, verified, and reverted — not left
+   * in the tree): for the full variant, appended an extra sentence to the
+   * rendered tagline paragraph in site-footer.tsx (simulating "a string is
+   * added to the footer"). Before this change, the old `toContain`-loop
+   * stayed green under that mutation (every original needle is still
+   * present; the loop never notices the addition). After this change,
+   * `expect(text).toBe(EXPECTED_FULL_TEXT)` failed immediately, reporting
+   * the actual string with the extra sentence appended vs. the expected
+   * literal. The compact variant renders no tagline at all (see its own
+   * branch below), so that mutation alone would never exercise its
+   * assertion — checked separately by appending a word to the compact
+   * variant's own `<span>` instead; `expect(text).toBe(EXPECTED_COMPACT_TEXT)`
+   * failed the same way. Both confirm the exact-equality assertion catches
+   * an addition, not just a removal. Reverted immediately after.
    */
   function renderWithConsent(compact: boolean): string {
     return renderToStaticMarkup(
