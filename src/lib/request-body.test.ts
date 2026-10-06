@@ -1151,9 +1151,10 @@ describe("request-body.ts — every body read is stall-guarded", () => {
    * looked at. This fails when a read is added that is neither guarded nor
    * deliberately excepted, rather than waiting for someone to notice.
    *
-   * `true` means "the stream being read traces back to stallGuarded in the
-   * same function". `false` entries are the exception list, and each one
-   * carries why it is allowed to read an unguarded stream.
+   * Each line is `<function>:<read site> -> stall-guarded` when the stream
+   * being read traces back to stallGuarded in the same function, or
+   * `-> UNGUARDED` otherwise; the UNGUARDED lines are the exception list, and
+   * each one carries, in the comment above it, why that read is allowed.
    */
   const EXPECTED = [
     // The peek, guarded before its first read (ugcportal-dvb).
