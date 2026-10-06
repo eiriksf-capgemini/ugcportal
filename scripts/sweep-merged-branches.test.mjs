@@ -459,7 +459,7 @@ describe("classifyGhApiDeleteFailure (ugcportal-ix0s)", () => {
     expect(classifyGhApiDeleteFailure({ ghMissing: true, output: "HTTP 404 Not Found" })).toBe("unavailable");
   });
 
-  it("is 'unavailable' (fall back to git push --delete) for a plain HTTP 404 response body -- round 1 finding, ugcportal-ix0s: a 404 from this endpoint was verified live to mean the repository couldn't be resolved, not that the branch is already gone, so it is NOT treated as already-gone and must fall back instead", () => {
+  it("is 'unavailable' (fall back to git push --delete) for a plain HTTP 404 response body -- ugcportal-ix0s: a 404 from this endpoint was verified live to mean the repository couldn't be resolved, not that the branch is already gone, so it is NOT treated as already-gone and must fall back instead", () => {
     expect(
       classifyGhApiDeleteFailure({
         ghMissing: false,
@@ -468,7 +468,7 @@ describe("classifyGhApiDeleteFailure (ugcportal-ix0s)", () => {
     ).toBe("unavailable");
   });
 
-  it("is 'unavailable' for gh's own 'HTTP 404' stderr line even without a JSON status field -- same round-1 finding", () => {
+  it("is 'unavailable' for gh's own 'HTTP 404' stderr line even without a JSON status field -- same ugcportal-ix0s reasoning", () => {
     expect(classifyGhApiDeleteFailure({ ghMissing: false, output: "gh: Not Found (HTTP 404)" })).toBe("unavailable");
   });
 
@@ -998,9 +998,9 @@ const SWEEP_SCRIPT_PATH = fileURLToPath(new URL("./sweep-merged-branches.mjs", i
  * (the only shape this endpoint is actually observed to return for an
  * already-gone ref, verified 2026-10-06 -- see `classifyGhApiDeleteFailure`'s
  * own doc), `"404"` (verified live to mean the REPOSITORY couldn't be
- * resolved, not that the branch is already gone -- round 1 finding,
- * ugcportal-ix0s: must fall back to `git push origin --delete` like any
- * other unrecognized failure, not be treated as already-gone) or `"500"`,
+ * resolved, not that the branch is already gone -- ugcportal-ix0s: must fall
+ * back to `git push origin --delete` like any other unrecognized failure,
+ * not be treated as already-gone) or `"500"`,
  * fails the call with that real response shape instead, without touching
  * `remoteDir`.
  */
@@ -1296,8 +1296,8 @@ describe("end-to-end against a real temp git remote and a stateful fake gh (ugcp
 // not exist" from the real API, not HTTP 404) is accepted the same way, and
 // that a real `git push origin --delete` actually runs -- and still
 // succeeds -- when the API fails for any other reason, including a 404
-// (round 1 finding, ugcportal-ix0s: verified live to mean the repository
-// couldn't be resolved, not that the branch is already gone).
+// (ugcportal-ix0s: verified live to mean the repository couldn't be
+// resolved, not that the branch is already gone).
 //
 // "Never reaches git push" is proven with a real git mechanism, not an
 // assertion about which function got called: a `pre-receive` hook installed
@@ -1421,7 +1421,7 @@ describe("deleteRemoteBranch: GitHub API primary path, git push fallback (ugcpor
     }
   });
 
-  it("falls back to a real git push --delete when the API call returns a 404 (round 1 finding, ugcportal-ix0s: verified live to mean the repo couldn't be resolved, not that the branch is already gone -- an unmatched 404 must fall back like any other unrecognized failure), and that still removes the branch", () => {
+  it("falls back to a real git push --delete when the API call returns a 404 (ugcportal-ix0s: verified live to mean the repo couldn't be resolved, not that the branch is already gone -- an unmatched 404 must fall back like any other unrecognized failure), and that still removes the branch", () => {
     const { root, repoDir, remoteDir, ghBinDir } = setupFixture("ix0s-fallback-");
     try {
       const pushLog = installPushLogger(remoteDir);

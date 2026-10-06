@@ -315,8 +315,8 @@ export function resolveNewBase({ baseRefName, remoteBranchNames, prInfoByBranch,
  * 422 `{"message":"Reference does not exist",...,"status":"422"}` /
  * `gh: Reference does not exist (HTTP 422)` on stdout/stderr respectively --
  * that is the only already-gone shape this classifies. A 404 is
- * deliberately NOT treated as already-gone (round 1 finding, CONFIRMED,
- * ugcportal-ix0s): verified live that this endpoint also returns
+ * deliberately NOT treated as already-gone (ugcportal-ix0s): verified live
+ * that this endpoint also returns
  * `{"message":"Not Found","status":"404"}` / `gh: Not Found (HTTP 404)` when
  * the REPOSITORY itself cannot be resolved (e.g. `{owner}/{repo}` doesn't
  * expand because `origin` isn't a GitHub remote), which is a materially
