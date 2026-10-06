@@ -79,7 +79,7 @@ function tokenAlphaKey(
  * ["--sidebar-primary"]`) used to "cover" every `bg-petrol-400` usage
  * (button.tsx's default-neutral fill, the upload queue's progress-bar fill -
  * one of the four PR #79 regressions this bead exists because of) even with
- * `petrol-900-on-petrol-400` - the entry that actually measures what's
+ * `surface-0-on-petrol-400` - the entry that actually measures what's
  * painted on top of that fill - deleted entirely. `contrast.test.ts`'s own
  * K3 block proves this both ways below.
  *
@@ -488,7 +488,12 @@ describe("the gate cannot be routed around", () => {
    * existing pairing (the CTA pill's hover fill is the alpha-free MODIFIED
    * utility `hover:bg-petrol-200`, a different usage the alpha scanner,
    * not this bare one, already accounts for), which is what surfaces this
-   * gap.
+   * gap. `HeroDecoration`'s other two bare fills (`bg-petrol-100`,
+   * `bg-petrol-400`) needed no entry here for the same, now-moot reason
+   * #175 renamed one of their covering pairings over (`surface-0-on-
+   * petrol-400`, not `petrol-900-on-petrol-400`) — both literals are simply
+   * gone from hero.tsx along with the rest of `HeroDecoration`, so there is
+   * nothing left here for either pairing id to explain away.
    */
   const AUDITED_DECORATIVE_BACKGROUND_USAGES: Readonly<Record<string, number>> = {
     "src/components/home/hero.tsx:bg-petrol-200": 1,
@@ -647,8 +652,10 @@ describe("the gate cannot be routed around", () => {
    * `buildForegroundVerifiedThreshold` the real gate above uses.
    *
    * Doing that honestly surfaced round 1 finding 2: `bg-petrol-400`'s
-   * background coverage was NOT in fact load-bearing on `petrol-900-on-
-   * petrol-400` before this PR's fix, because `--sidebar-primary` (aliased to
+   * background coverage was NOT in fact load-bearing on this entry (at the
+   * time still called `petrol-900-on-petrol-400`; ugcportal-ei5c later
+   * renamed it to `surface-0-on-petrol-400`, same background reference)
+   * before this PR's fix, because `--sidebar-primary` (aliased to
    * the identical `--color-petrol-400` literal) already supplied an
    * unrelated background entry of its own
    * (`sidebar-primary-foreground-on-sidebar-primary`) that `tokenAlphaKey`'s
@@ -672,18 +679,18 @@ describe("the gate cannot be routed around", () => {
    * false "reds".
    */
   describe("K3: the round-5 PAIRINGS entries, against the real, mutated PAIRINGS array", () => {
-    const petrol900OnPetrol400 = PAIRINGS.find((p) => p.id === "petrol-900-on-petrol-400");
+    const surfaceOnPetrol400 = PAIRINGS.find((p) => p.id === "surface-0-on-petrol-400");
     const petrol400FillOnOldSurface = PAIRINGS.filter((p) =>
       p.id.startsWith("petrol-400-fill-on-old-surface-"),
     );
 
     it("both round-5 entries this bead's premise names are still in PAIRINGS to mutate", () => {
-      expect(petrol900OnPetrol400, "petrol-900-on-petrol-400").toBeDefined();
+      expect(surfaceOnPetrol400, "surface-0-on-petrol-400").toBeDefined();
       expect(petrol400FillOnOldSurface.length, "petrol-400-fill-on-old-surface-*").toBeGreaterThan(0);
     });
 
     /**
-     * petrol-900-on-petrol-400's OWN background reference (`--color-petrol-400`)
+     * surface-0-on-petrol-400's OWN background reference (`--color-petrol-400`)
      * is what a real, shipped `bg-petrol-400` usage's coverage (this bare
      * scanner's "background role" check) actually depends on - NOT
      * petrol-400-fill-on-old-surface-*, which measures petrol-400 the other
@@ -696,12 +703,12 @@ describe("the gate cannot be routed around", () => {
      * This is the one sub-test that now genuinely reds on its own mutation
      * (PR #115 round 1 findings 1+2, fixed together): with the real
      * `backgroundTokenIdentity` fix in place, deleting only
-     * `petrol-900-on-petrol-400` from the real PAIRINGS array removes
+     * `surface-0-on-petrol-400` from the real PAIRINGS array removes
      * `bg-petrol-400`'s only covering entry - `sidebar-primary-foreground-
      * on-sidebar-primary` no longer substitutes for it.
      */
     it.each(THEME_MODES)(
-      "petrol-900-on-petrol-400 is bg-petrol-400's only covering entry, and deleting it reds the real gate (%s)",
+      "surface-0-on-petrol-400 is bg-petrol-400's only covering entry, and deleting it reds the real gate (%s)",
       (mode) => {
         const modeTokens = tokensByMode[mode];
         const petrol400Fill = usedBareUtilities.find(
@@ -715,21 +722,21 @@ describe("the gate cannot be routed around", () => {
 
         // With PAIRINGS intact: covered, and the gate can now say BY WHAT
         // (PR #115 round 1 finding 2's "report which entry covered a
-        // usage") - exactly petrol-900-on-petrol-400, not an alias.
+        // usage") - exactly surface-0-on-petrol-400, not an alias.
         const coveredToday = buildMeasuredBackground(PAIRINGS, modeTokens).get(backgroundKey);
         expect(
           [...(coveredToday ?? [])],
           `[${mode}] covering entries for bg-petrol-400`,
-        ).toEqual(["petrol-900-on-petrol-400"]);
+        ).toEqual(["surface-0-on-petrol-400"]);
 
         // The real PAIRINGS array, minus exactly that one entry.
         const withoutEntry = buildMeasuredBackground(
-          PAIRINGS.filter((pairing) => pairing.id !== "petrol-900-on-petrol-400"),
+          PAIRINGS.filter((pairing) => pairing.id !== "surface-0-on-petrol-400"),
           modeTokens,
         );
         expect(
           withoutEntry.get(backgroundKey)?.size ?? 0,
-          `[${mode}] bg-petrol-400 must be uncovered once petrol-900-on-petrol-400 is removed`,
+          `[${mode}] bg-petrol-400 must be uncovered once surface-0-on-petrol-400 is removed`,
         ).toBe(0);
       },
     );
@@ -781,31 +788,43 @@ describe("the gate cannot be routed around", () => {
     );
 
     /**
-     * petrol-900-on-petrol-400's other half: text-petrol-900 as a foreground
-     * on the fill, at body's 4.5:1. ugcportal-ei5c: `--color-petrol-900` is
-     * declared outside `@theme`, so `text-petrol-900` compiles to no
-     * Tailwind utility at all and findBareColorUtilities correctly never
-     * reports it as a shipped usage (see that function's own doc comment on
-     * why a non-compiling bare candidate is excluded, not flagged) - a
-     * synthetic usage stands in for the one Tailwind itself refuses to
-     * generate. Closing that compile gap is ugcportal-ei5c's job, not this
-     * bead's.
+     * The remaining half of the original gap this describe block's header
+     * names: text-petrol-900 as a foreground on the fill, at body's 4.5:1.
+     * `--color-petrol-900` is declared outside `@theme`, so `text-petrol-900`
+     * compiles to no Tailwind utility at all and findBareColorUtilities
+     * correctly never reports it as a shipped usage (see that function's own
+     * doc comment on why a non-compiling bare candidate is excluded, not
+     * flagged) - a synthetic usage stands in for the one Tailwind itself
+     * refuses to generate.
      *
-     * Disclosed, not fixed, the same way as the previous test: deleting
-     * petrol-900-on-petrol-400 leaves this key at exactly body's 4.5:1
-     * regardless, but not via the same entries in both modes - light via
-     * foreground-on-background (`--foreground: var(--petrol-900)` only in
-     * light; `var(--paper)` in dark) and selection-text-on-selection; dark via
-     * primary-label-on-primary/-hover (`--primary-foreground: var(--petrol-900)`
-     * only in dark; `#fff` in light) and selection-text-on-selection, which is
-     * mode-invariant.
+     * ugcportal-ei5c closed this gap for button.tsx's default-neutral
+     * variant - its one real caller (the upload queue's "Sign in" link,
+     * shown on a failed upload that needs re-authentication) now renders
+     * `text-surface-0`, a label `surface-0-on-petrol-400` above
+     * actually measures - but NOT for src/app/upload/upload-form.tsx's
+     * "Choose files" label, which pastes `bg-petrol-400 text-petrol-900`
+     * directly rather than going through the Button component and is out of
+     * that bead's stated scope. So unlike the PAIRINGS id this describe
+     * block used to filter out here (gone now - the id itself was renamed,
+     * not merely deleted, so there is nothing left to subtract), this
+     * synthetic usage is checked directly against the real, current
+     * PAIRINGS: the gate still reports this key as "covered", but only by
+     * accident, via an unrelated reference that happens to resolve to the
+     * same literal - not via any entry that actually measures
+     * text-petrol-900 on bg-petrol-400 the way surface-0-on-petrol-400 once
+     * did. Disclosed, not fixed: light mode via foreground-on-background
+     * (`--foreground: var(--petrol-900)` only in light; `var(--paper)` in
+     * dark) and selection-text-on-selection; dark mode via
+     * primary-label-on-primary/-hover
+     * (`--primary-foreground: var(--petrol-900)` only in dark; `#fff` in
+     * light) and selection-text-on-selection, which is mode-invariant.
      */
     it.each(THEME_MODES)(
-      "petrol-900-on-petrol-400 measures text-petrol-900 as a foreground on the fill, shadowed per mode on this axis (%s)",
+      "text-petrol-900 (upload-form.tsx's \"Choose files\" label) still compiles to no utility, and is only accidentally 'covered', per mode (%s)",
       (mode) => {
         const modeTokens = tokensByMode[mode];
         const syntheticLabelUsage: AlphaUtilityUsage = {
-          file: "synthetic - ugcportal-ei5c: text-petrol-900 compiles to no Tailwind utility",
+          file: "synthetic - src/app/upload/upload-form.tsx's \"Choose files\" label: text-petrol-900 compiles to no Tailwind utility",
           utility: "text-petrol-900",
           property: "--petrol-900",
           alphaPercent: 100,
@@ -814,20 +833,13 @@ describe("the gate cannot be routed around", () => {
         };
         const usageKey = `${resolveToken(syntheticLabelUsage.property, modeTokens)}@${syntheticLabelUsage.alphaPercent}`;
 
-        const withEntry = buildForegroundVerifiedThreshold(PAIRINGS, modeTokens);
-        expect(withEntry.get(usageKey), `[${mode}] covered today`).toBe(THRESHOLDS.body);
-
-        const withoutEntry = buildForegroundVerifiedThreshold(
-          PAIRINGS.filter((pairing) => pairing.id !== "petrol-900-on-petrol-400"),
-          modeTokens,
-        );
         const shadowedBy =
           mode === "light"
             ? "foreground-on-background / selection-text-on-selection"
             : "primary-label-on-primary / primary-label-on-primary-hover / selection-text-on-selection";
         expect(
-          withoutEntry.get(usageKey),
-          `[${mode}] still reads as body-verified via ${shadowedBy} - a known, disclosed shadow on this axis, not fixed by this PR`,
+          buildForegroundVerifiedThreshold(PAIRINGS, modeTokens).get(usageKey),
+          `[${mode}] reads as body-verified only via ${shadowedBy} - a known, disclosed shadow on this axis, not a real measurement of this usage, and not fixed by ugcportal-ei5c`,
         ).toBe(THRESHOLDS.body);
       },
     );

@@ -67,6 +67,20 @@ fi
 _ugcportal_repo_root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
 cd "$_ugcportal_repo_root" || exit 0
 
+# ugcportal-cky9: decision by Eirik 2026-10-06 -- agent pushes set
+# UGCPORTAL_PREPUSH=skip to bypass lint/test/build/typecheck below entirely;
+# CI (.github/workflows/ci.yml) re-verifies every push regardless and is
+# authoritative. This must stay the first thing after the repo-root cd
+# above and before the timeout/env-strip machinery that follows -- a single
+# `[` comparison costs well under a second, which is the whole point: the
+# incident this fixes was nine agents each paying for the full suite twice
+# (their own gates, then this hook) under load. Default (human) push
+# behaviour is unchanged when the variable is unset or set to anything else.
+if [ "$UGCPORTAL_PREPUSH" = "skip" ]; then
+  echo "ugcportal: pre-push suite skipped by UGCPORTAL_PREPUSH=skip; CI is authoritative"
+  exit 0
+fi
+
 # Bound every command below the same way the beads block above bounds its
 # own -- a hang here (network call, misconfigured watch mode, an
 # interactive prompt) would otherwise block `git push` indefinitely, unlike
