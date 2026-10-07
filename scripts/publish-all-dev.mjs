@@ -305,8 +305,13 @@ export async function main({ argv = process.argv.slice(2), cwd = process.cwd(), 
 }
 
 if (isMainModule(import.meta.url)) {
-  loadDevEnvFiles({ cwd: path.dirname(path.dirname(fileURLToPath(import.meta.url))) });
-  main().then((code) => {
+  // The repo root, for both the `.env*` chain and a relative `file:` path:
+  // `npm run` already puts cwd there, and resolving against the same
+  // directory regardless keeps `node scripts/publish-all-dev.mjs` run from
+  // elsewhere on the same database `next dev` uses.
+  const repoRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+  loadDevEnvFiles({ cwd: repoRoot });
+  main({ cwd: repoRoot }).then((code) => {
     process.exitCode = code;
   });
 }
