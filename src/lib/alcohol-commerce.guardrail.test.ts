@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
+import { toGalleryItem } from "@/lib/gallery-items";
 import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db";
 
 /**
@@ -57,6 +58,13 @@ const { POST: ATTACH_LINK } = await import(
   "@/app/api/media/[id]/commercial-links/route"
 );
 const { CURRENT_CHECKLIST_VERSION } = await import("@/lib/resale-rights");
+// Dynamic, like every other import in this block: `media-access.ts` imports
+// `@/lib/auth` at module scope, and a STATIC import of it above (before
+// `authMock` is assigned) throws "Cannot access 'authMock' before
+// initialization" — vitest hoists `vi.mock` above the imports, so the
+// static import's own module evaluation would call the mock factory while
+// `authMock` is still in its temporal dead zone.
+const { MEDIA_ANONYMOUS_SELECT } = await import("@/lib/media-access");
 
 /**
  * The operator, who is both the owner of every item and the admin who prices
@@ -535,6 +543,89 @@ describe("ugcportal-qnq9.3 K6: every published row in the database", () => {
       expect(
         row.commercialLinks,
         `${row.id} has a commercial link`,
+      ).toEqual([]);
+    }
+  });
+});
+
+describe("ugcportal-qnq9.2.2 K5: the RENDERER agrees with the table above", () => {
+  /**
+   * The same enumeration as "every published row in the database" above, one
+   * layer further downstream: through `MEDIA_ANONYMOUS_SELECT` and
+   * `toGalleryItem` — the exact projection and the exact chokepoint every
+   * React-rendered surface (the gallery tile, the lightbox, the portfolio
+   * tile, /media/[previewId]) reads through — rather than a direct Prisma
+   * query of every column. (The raw `GET /api/public/media` JSON has its own
+   * separate chokepoint, `listPublicMedia`, src/lib/public-media.ts, not
+   * exercised here.) The K6 guardrail above proves the TABLE never holds a
+   * commercial link against an alcohol fact; this proves the RENDERED
+   * item agrees, which is a different claim: a bug in `toGalleryItem`'s own
+   * gate (K1's "gate on the label", not on alcohol at all) could in
+   * principle let a row through unchanged while every assertion above still
+   * passes, because those assertions never call it.
+   *
+   * REUSES THIS FILE'S OWN REGISTRY (the `PLAN` driven in `beforeAll` via
+   * the real write paths), not a second fixture — the same "driving the real
+   * write paths, not seeding the offending rows directly" discipline this
+   * file's own header states, extended to the render layer rather than
+   * re-stated for a hand-built database.
+   */
+  async function renderedPublishedItems() {
+    const rows = await prisma.media.findMany({
+      where: { publishedAt: { not: null } },
+      select: MEDIA_ANONYMOUS_SELECT,
+    });
+    return rows
+      .map((row) => toGalleryItem(row))
+      .filter((item): item is NonNullable<typeof item> => item !== null);
+  }
+
+  /** Brand facts per link id, read independently of the renderer (which
+   * carries no brand information at all — see GalleryCommercialLink's own
+   * comment) so this test can tell whether a rendered link's brand was
+   * actually clean rather than merely trusting the renderer withheld it. */
+  async function brandAlcoholAnswerByLinkId() {
+    const links = await prisma.commercialLink.findMany({
+      select: { id: true, benefitSource: { select: { alcoholLinked: true } } },
+    });
+    return new Map(links.map((link) => [link.id, link.benefitSource.alcoholLinked]));
+  }
+
+  it("rendered something, so the sweep below is not vacuous", async () => {
+    const items = await renderedPublishedItems();
+    expect(items.some((item) => item.id === "accessory")).toBe(true);
+    expect(
+      items.find((item) => item.id === "accessory")?.commercialLinks,
+    ).toHaveLength(1);
+  });
+
+  it("never renders a commercial link whose brand is alcohol-linked or unchecked", async () => {
+    const items = await renderedPublishedItems();
+    const brandAnswers = await brandAlcoholAnswerByLinkId();
+
+    for (const item of items) {
+      for (const link of item.commercialLinks) {
+        expect(
+          brandAnswers.get(link.id),
+          `${item.id} renders a commercial link (${link.id}) whose brand's alcohol answer is ${JSON.stringify(brandAnswers.get(link.id) ?? null)}`,
+        ).toBe(false);
+      }
+    }
+  });
+
+  it("renders no commercial link at all on an item recorded as showing alcohol", async () => {
+    const items = await renderedPublishedItems();
+    const alcoholRows = await prisma.media.findMany({
+      where: { publishedAt: { not: null }, listing: { depictsAlcohol: true } },
+      select: { id: true },
+    });
+    const alcoholIds = new Set(alcoholRows.map((row) => row.id));
+
+    for (const item of items) {
+      if (!alcoholIds.has(item.id)) continue;
+      expect(
+        item.commercialLinks,
+        `${item.id} depicts alcohol and still renders a commercial link`,
       ).toEqual([]);
     }
   });

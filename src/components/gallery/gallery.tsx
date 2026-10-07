@@ -26,6 +26,7 @@ import {
 import {
   GalleryItemAdvertisingLabel,
   GalleryItemCaption,
+  GalleryItemCommercialLinks,
   GalleryItemTags,
 } from "@/components/gallery/gallery-item";
 import {
@@ -580,6 +581,15 @@ export function Gallery({
             </button>
             <GalleryItemCaption item={item} />
             <GalleryItemTags item={item} />
+            {/*
+              The commercial outbound links (ugcportal-qnq9.2.2 K1), LAST —
+              after the caption and the tags, since this is the one element
+              on the tile's own card that leaves the site. Renders nothing
+              for an item with none, which is every item whose disclosure is
+              not both present and labelled (see GalleryItemCommercialLinks'
+              own comment, gallery-item.tsx, for the ugcportal-jain gate).
+            */}
+            <GalleryItemCommercialLinks item={item} />
           </li>
         ))}
       </ul>

@@ -71,7 +71,11 @@ export type MediaTagLabel = TagLabel;
  * `SelectedScalars`, and the resulting type would simply not carry the field
  * the author thought they had added.
  */
-type MediaProjectionKey = keyof MediaModel | "tags" | "advertisingDisclosure";
+type MediaProjectionKey =
+  | keyof MediaModel
+  | "tags"
+  | "advertisingDisclosure"
+  | "commercialLinks";
 
 /**
  * Owner-facing: everything about the row its own uploader may see.
@@ -143,6 +147,26 @@ export const MEDIA_OWNER_SELECT = {
   // could not be added below without first existing, at least this
   // narrowly, here.
   advertisingDisclosure: { select: { label: true } },
+  // The commercial outbound links on this item (ugcportal-qnq9.2.2). UNLIKE
+  // `advertisingDisclosure` just above, this entry is NOT narrower than what
+  // the anonymous select needs — it is the exact same value, for a reason
+  // worth stating rather than assuming: nothing here is an owner-only
+  // compliance field the way `benefitReceived`/`benefitKind`/`benefitSource`
+  // are on the disclosure. `url`, `network` and `networkOther` are exactly
+  // what K4 permits a public reader to see, so there is no narrower-but-
+  // still-useful owner projection to invent — see the anonymous entry below
+  // for what is deliberately NOT here (`benefitSourceId`, the brand
+  // relation, `alcoholLinked`). It still exists on the owner side at all
+  // only so the anonymous entry below can satisfy `satisfies
+  // Partial<typeof MEDIA_OWNER_SELECT>` (the same mechanism
+  // `advertisingDisclosure`'s own comment names) — GET /api/media does not
+  // today read `commercialLinks` off its own result (the attach/detach
+  // route, which DOES need the full row, has its own `COMMERCIAL_LINK_SELECT`
+  // and does not go through this constant at all).
+  commercialLinks: {
+    select: { id: true, url: true, network: true, networkOther: true },
+    orderBy: { createdAt: "asc" },
+  },
   // `userId` and `key` are absent from both selects and must stay that way.
   // `key` is the ungated paid original (ugcportal-5d6). `userId` would be
   // redundant on the owner's own view, and on the anonymous feed it would let
@@ -263,6 +287,43 @@ export const MEDIA_ANONYMOUS_SELECT = {
   // states), and src/app/api/public/media/route.test.ts for the leak test
   // proving the serialised feed carries nothing else from this relation.
   advertisingDisclosure: { select: { label: true } },
+  // This item's commercial outbound links (ugcportal-qnq9.2.2 K4): `id`
+  // (never rendered — a React/DOM key), `url` (the canonical https
+  // destination), `network` and `networkOther` (what the anchor's own
+  // visible text and the "marker text" are built from,
+  // src/lib/commercial-link-render.ts). DELIBERATELY ABSENT:
+  // `benefitSourceId` and the `benefitSource` relation it points at — the
+  // brand's real name and its `alcoholLinked` answer are a compliance
+  // record about a commercial relationship, the identical reasoning
+  // `advertisingDisclosure` just above gives for withholding
+  // `benefitSourceId`/`benefitSource` from that relation, not a fact this
+  // feed exists to publish. `createdAt`/`updatedAt` are withheld too: this
+  // feed already reports the ITEM's own `createdAt`, and a second,
+  // per-link timestamp is not something any surface reads.
+  //
+  // `orderBy: { createdAt: "asc" }` so the links render in the order they
+  // were attached — the same "stable order, not whatever the join happened
+  // to return" reasoning `MEDIA_TAGS_SELECT`'s own `orderBy` gives, so two
+  // requests for the same item do not render its links in different
+  // positions.
+  //
+  // THE RENDER-TIME GATE IS NOT HERE, and cannot be: this select cannot see
+  // its own sibling `advertisingDisclosure.label` to condition on. A
+  // published item whose disclosure was withdrawn after a link was
+  // attached (ugcportal-jain) still has this relation selected — the gate
+  // is downstream, in TWO independent places that both re-validate the
+  // same label: `toGalleryItem`
+  // (src/lib/gallery-items.ts#toGalleryCommercialLinks) for every React-
+  // rendered surface, and `listPublicMedia` (src/lib/public-media.ts) for
+  // the raw `GET /api/public/media` JSON, which never calls `toGalleryItem`
+  // at all. Both compute `[]` whenever the re-validated label is `null`,
+  // regardless of what this query returned. See
+  // src/app/api/public/media/route.test.ts for the leak test over this
+  // select's own shape, mirroring the disclosure's e0jv K2 test above.
+  commercialLinks: {
+    select: { id: true, url: true, network: true, networkOther: true },
+    orderBy: { createdAt: "asc" },
+  },
 } as const satisfies Partial<typeof MEDIA_OWNER_SELECT>;
 
 /**
@@ -354,6 +415,19 @@ export type OwnerMedia = SelectedScalars<typeof MEDIA_OWNER_SELECT> & {
 export type AnonymousMedia = SelectedScalars<typeof MEDIA_ANONYMOUS_SELECT> & {
   tags: MediaTagLabel[];
   advertisingDisclosure: { label: string | null } | null;
+  /**
+   * The commercial-link relation exactly as MEDIA_ANONYMOUS_SELECT's own
+   * `commercialLinks` entry projects it (ugcportal-qnq9.2.2) — present here
+   * for the same "no type lie" reason `advertisingDisclosure` is: this
+   * select really does return it, so a type that omitted it would be
+   * honest about neither.
+   */
+  commercialLinks: {
+    id: string;
+    url: string;
+    network: string;
+    networkOther: string | null;
+  }[];
 };
 
 /**

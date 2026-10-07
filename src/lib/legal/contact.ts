@@ -131,11 +131,19 @@ export const LEGAL_SIGN_OFF: LegalSignOff | null = {
   // (ugcportal-mj50); only /privacy's digest below changed — the /licence
   // value is byte-identical to the one it replaces, since this PR touched
   // no licence text.
+  //
+  // Eirik approved the uploads category's fifth `what` paragraph (the
+  // commercial-link record: a link's destination and the network it routes
+  // through) and the matching `legalBasis`/`recipients` wording on
+  // 2026-10-07 (ugcportal-qnq9.2.2; the PR carrying it opened as a draft
+  // and left draft on that approval). As with ugcportal-mj50 above, only
+  // /privacy's digest below changed; /licence's is byte-identical to the
+  // value it replaces, since this PR touches no licence text.
   by: "Eirik Sander-Fjeld",
-  date: "2026-10-06",
-  bead: "ugcportal-mj50",
+  date: "2026-10-07",
+  bead: "ugcportal-qnq9.2.2",
   authoredSha256: {
-    "/privacy": "28aec31b8f15d05f9cd69c6687b47fa6c37adf8f63081ae9397068dd266d55fd",
+    "/privacy": "dc3ef3a370262bde8f62819b9abca572af42f0565e8efc5706a183dae91d4ee3",
     "/licence": "ae6a4a484a0bc2c571121a5f2e02c2bc9db46dd5d14eb6915abafe1b5fd8f901",
   },
 };

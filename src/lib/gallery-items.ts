@@ -1,4 +1,6 @@
 import { isPermittedAdvertisingLabel } from "@/lib/advertising-disclosure";
+import { MAX_COMMERCIAL_LINKS_PER_ITEM, validateCommercialLinkUrl } from "@/lib/commercial-link";
+import { commercialLinkText } from "@/lib/commercial-link-render";
 import { stripCurationTags } from "@/lib/curation-tags";
 import { dedupeBy } from "@/lib/dedupe";
 import { hasUnsafeText, validateAltText, validateCaption } from "@/lib/media-rules";
@@ -59,6 +61,34 @@ export type GalleryTag = {
  * literals need to depend on.
  */
 export type GalleryItemKind = "IMAGE" | "VIDEO";
+
+/**
+ * One commercial outbound link, as every public surface renders it
+ * (ugcportal-qnq9.2.2 K1/K4): the destination, and the visible text the
+ * anchor itself carries (`commercialLinkText`,
+ * src/lib/commercial-link-render.ts — the network's own name, or the
+ * brand's free-text name for `OTHER`). Nothing else — never
+ * `benefitSourceId`, the brand's real name,
+ * or `alcoholLinked`, none of which `MEDIA_ANONYMOUS_SELECT` even selects
+ * (src/lib/media-access.ts).
+ *
+ * The bilingual marker ("Advertisement link / Annonselenke") is NOT a field
+ * here: it is the same constant string for every link on every item
+ * (`COMMERCIAL_LINK_MARKER_TEXT`), so there is nothing per-link about it to
+ * carry — every renderer imports the constant directly, the same way every
+ * renderer of `advertisingLabel` imports `PERMITTED_ADVERTISING_LABELS`
+ * rather than this type carrying a redundant copy of a fixed string.
+ */
+export type GalleryCommercialLink = {
+  /** React/DOM key; never rendered as content. */
+  id: string;
+  /** The canonical `https://` destination, re-validated on every read — see
+   * `toGalleryCommercialLinks` for why a row's own validator pass is not
+   * trusted blindly here either. */
+  url: string;
+  /** The anchor's own visible text. */
+  text: string;
+};
 
 export type GalleryItem = {
   id: string;
@@ -124,6 +154,36 @@ export type GalleryItem = {
    * be a label rendered that nobody validated.
    */
   advertisingLabel: string | null;
+  /**
+   * This item's commercial outbound links (ugcportal-qnq9.2.2), in the order
+   * the feed sent them. ALWAYS `[]` when `advertisingLabel` is `null` —
+   * enforced in `toGalleryItem`, REGARDLESS of what the raw row's own
+   * `commercialLinks` carries.
+   *
+   * THIS IS THE ugcportal-jain FIX, AT THE RENDER LAYER — one of TWO
+   * independent chokepoints, not the only one. `toGalleryItem` is read
+   * through by every surface that renders a `GalleryItem` (the gallery
+   * tile, the lightbox, the portfolio tile and /media/[previewId]); the raw
+   * JSON `GET /api/public/media` response does NOT go through it at all — it
+   * serialises `listPublicMedia`'s own result directly — so that surface has
+   * its OWN copy of this same gate, in `listPublicMedia`
+   * (src/lib/public-media.ts), re-validating the same label the identical
+   * way. Both exist because neither can stand in for the other; see that
+   * function's own comment for why.
+   *
+   * The attach gate only ever checked the disclosure at the moment a link
+   * was attached (`commercialLinkDisclosureRefusal`'s own docstring,
+   * src/lib/commercial-link.ts, "WHAT THAT GATES, AND WHAT IT DOES NOT");
+   * withdrawing the disclosure afterwards (`PUT .../disclosure` with
+   * `benefitReceived: false`) clears the label but neither refuses the write
+   * nor detaches any link, and publish re-checks neither. So a published row
+   * can carry rows in `commercialLinks` with a `null` label, and what stands
+   * between that row and a rendered affiliate link with no label above it,
+   * on every React-rendered surface, is this field being computed from
+   * `advertisingLabel` rather than from whatever the `commercialLinks`
+   * relation happens to hold.
+   */
+  commercialLinks: GalleryCommercialLink[];
 };
 
 /**
@@ -148,6 +208,13 @@ export type PublicMediaRowish = {
    * See `toAdvertisingLabel` for what is actually trusted out of it.
    */
   advertisingDisclosure?: unknown;
+  /**
+   * The commercial-link relation as MEDIA_ANONYMOUS_SELECT projects it
+   * (ugcportal-qnq9.2.2): an array of `{ id, url, network, networkOther }`,
+   * loosely typed like every other field here for the same reason — see
+   * `toGalleryCommercialLinks` for what is actually trusted out of it.
+   */
+  commercialLinks?: unknown;
 };
 
 /**
@@ -329,6 +396,64 @@ function asIsoString(value: unknown): string | null {
 }
 
 /**
+ * The commercial links on one row, filtered down to the ones that may
+ * actually render (ugcportal-qnq9.2.2 K1/K5, and the ugcportal-jain fix).
+ *
+ * `label` IS THE GATE, and it is checked FIRST, before anything about the
+ * raw `value` is even inspected. An item with no permitted advertising label
+ * renders NO commercial link at all, whatever `value` contains — this is
+ * what keeps a link from rendering on an item whose disclosure was
+ * withdrawn after the link was attached (see `GalleryItem.commercialLinks`'s
+ * own comment for the full account of the gap this closes). The caller
+ * passes the SAME `label` this function's sibling `toAdvertisingLabel`
+ * already computed for the same row, so there is exactly one place a label
+ * is decided to be permitted or not, not two that could disagree.
+ *
+ * Every other check here is the ordinary "a parsed HTTP body is not a Prisma
+ * row" discipline this module applies everywhere else (`toGalleryTags`,
+ * `toAdvertisingLabel`): `id`/`url` must be non-empty strings, the url is
+ * RE-VALIDATED with `validateCommercialLinkUrl` rather than trusted as
+ * already-canonical — a row reached through anything other than the attach
+ * route (a raw statement, a future importer) is not assumed to have passed
+ * it — and the per-item cap is re-applied defensively even though the attach
+ * route already enforces it at write time, for the same "do not trust the
+ * invariant holds" reasoning `toGalleryItem` itself states for a missing
+ * `previewId`.
+ */
+function toGalleryCommercialLinks(
+  value: unknown,
+  label: string | null,
+): GalleryCommercialLink[] {
+  if (label === null || !Array.isArray(value)) return [];
+
+  const links: GalleryCommercialLink[] = [];
+  const seen = new Set<string>();
+  for (const entry of value) {
+    if (links.length >= MAX_COMMERCIAL_LINKS_PER_ITEM) break;
+    if (typeof entry !== "object" || entry === null) continue;
+    const { id, url, network, networkOther } = entry as {
+      id?: unknown;
+      url?: unknown;
+      network?: unknown;
+      networkOther?: unknown;
+    };
+    if (typeof id !== "string" || id === "" || seen.has(id)) continue;
+    const validatedUrl = validateCommercialLinkUrl(url);
+    if (!validatedUrl.ok) continue;
+    seen.add(id);
+    links.push({
+      id,
+      url: validatedUrl.value,
+      text: commercialLinkText({
+        network,
+        networkOther: typeof networkOther === "string" ? networkOther : null,
+      }),
+    });
+  }
+  return links;
+}
+
+/**
  * Converts one feed row, or returns null if it cannot be rendered safely.
  *
  * The only rejection that matters is a missing or non-string `previewId`. The
@@ -352,6 +477,8 @@ export function toGalleryItem(row: PublicMediaRowish): GalleryItem | null {
       : null;
   if (id === null || previewId === null) return null;
 
+  const advertisingLabel = toAdvertisingLabel(row.advertisingDisclosure);
+
   return {
     id,
     previewSrc: mediaPreviewPath(previewId),
@@ -364,7 +491,10 @@ export function toGalleryItem(row: PublicMediaRowish): GalleryItem | null {
     // and a `tags` that can be `undefined` is a `.map` waiting to throw in a
     // component that has no reason to check.
     tags: toGalleryTags(row.tags),
-    advertisingLabel: toAdvertisingLabel(row.advertisingDisclosure),
+    advertisingLabel,
+    // Gated on `advertisingLabel`, not on anything in `row.commercialLinks`
+    // itself — see `toGalleryCommercialLinks`'s own comment (ugcportal-jain).
+    commercialLinks: toGalleryCommercialLinks(row.commercialLinks, advertisingLabel),
   };
 }
 

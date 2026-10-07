@@ -79,6 +79,7 @@ function piece(id: string): GalleryItem {
     caption: "",
     tags: [],
     advertisingLabel: null,
+    commercialLinks: [],
   };
 }
 

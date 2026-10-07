@@ -15,6 +15,7 @@
     "test:e2e:alcohol-commerce": "playwright test --config=e2e/seeded/playwright.config.ts alcohol-commerce.spec.ts",
     "test:e2e:hero-portfolio": "playwright test --config=e2e/seeded/playwright.config.ts front-page-hero-portfolio.spec.ts",
     "test:e2e:share-og": "playwright test --config=e2e/seeded/playwright.config.ts share-og.spec.ts",
+    "test:e2e:commercial-link-consent": "playwright test --config=e2e/seeded/playwright.config.ts commercial-link-consent.spec.ts",
     "postinstall": "prisma generate"
   },
   "dependencies": {

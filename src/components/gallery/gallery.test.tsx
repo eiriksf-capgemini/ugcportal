@@ -350,6 +350,85 @@ describe("ugcportal-e0jv — the advertising-disclosure label", () => {
   });
 });
 
+describe("ugcportal-qnq9.2.2 — commercial outbound links", () => {
+  const ITEMS = toGalleryItems([
+    {
+      id: "linked",
+      previewId: "pv-linked",
+      publishedAt: "2026-03-01T00:00:00.000Z",
+      advertisingDisclosure: { label: "Advertisement / Reklame" },
+      commercialLinks: [
+        {
+          id: "link-1",
+          url: "https://track.adtraction.com/t/t?a=1",
+          network: "ADTRACTION",
+          networkOther: null,
+        },
+      ],
+    },
+    {
+      id: "unlabelled-with-row",
+      previewId: "pv-unlabelled-with-row",
+      publishedAt: "2026-03-02T00:00:00.000Z",
+      // No disclosure — but a raw commercial link is still attached, the
+      // ugcportal-jain shape `toGalleryItems` must already have emptied.
+      commercialLinks: [
+        {
+          id: "link-stale",
+          url: "https://track.example.com/stale",
+          network: "AWIN",
+          networkOther: null,
+        },
+      ],
+    },
+  ]);
+
+  it("K1: the top-of-page advertising label is present, and the link text is immediately followed by the bilingual marker, in that DOM order", () => {
+    const markup = render({ initialItems: ITEMS });
+
+    expect(markup).toContain('data-gallery-advertising-label="linked"');
+
+    const anchorMatch = /<a[^>]*data-commercial-link="link-1"[^>]*>([^<]*)<\/a>/.exec(
+      markup,
+    );
+    expect(anchorMatch).not.toBeNull();
+    const anchorEnd = (anchorMatch?.index ?? -1) + (anchorMatch?.[0].length ?? 0);
+    const markerIndex = markup.indexOf(
+      "Advertisement link / Annonselenke",
+      anchorEnd - 1,
+    );
+    // Immediately after: nothing but the sibling <span> tag's own opening
+    // markup sits between the anchor's closing tag and the marker text.
+    expect(markerIndex).toBeGreaterThanOrEqual(anchorEnd);
+    expect(markup.slice(anchorEnd, markerIndex)).toMatch(/^<span[^>]*>$/);
+  });
+
+  it("K2: carries exactly rel=\"sponsored nofollow noopener noreferrer\" and target=\"_blank\"", () => {
+    const markup = render({ initialItems: ITEMS });
+    const anchorTag = /<a[^>]*data-commercial-link="link-1"[^>]*>/.exec(markup)?.[0];
+    expect(anchorTag).toBeDefined();
+    expect(anchorTag).toContain('rel="sponsored nofollow noopener noreferrer"');
+    expect(anchorTag).toContain('target="_blank"');
+  });
+
+  it("the marker is never a title attribute or a hashtag-shaped chip", () => {
+    const markup = render({ initialItems: ITEMS });
+    const anchorTag = /<a[^>]*data-commercial-link="link-1"[^>]*>/.exec(markup)?.[0];
+    expect(anchorTag).not.toContain("title=");
+    expect(markup).not.toContain("#Advertisement");
+  });
+
+  it("ugcportal-jain: renders no link at all for an item whose row carries one but whose label is absent", () => {
+    const markup = render({ initialItems: ITEMS });
+    const ownTile = tiles(markup).find((tile) =>
+      tile.includes('data-gallery-tile="unlabelled-with-row"'),
+    );
+    expect(ownTile).toBeDefined();
+    expect(markup).not.toContain("track.example.com/stale");
+    expect(markup).not.toContain('data-commercial-link="link-stale"');
+  });
+});
+
 describe("the states around the grid", () => {
   it("offers a load-more control only when the feed says there is more", () => {
     const withMore = render({ initialCursor: "cursor-1", initialHasMore: true });

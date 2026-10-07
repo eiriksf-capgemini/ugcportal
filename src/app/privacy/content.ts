@@ -191,13 +191,14 @@ export function privacyContent(contact: LegalContact): PrivacyContent {
           "The original file is kept as uploaded. Any information the camera or phone embedded in it — such as location, device details and capture time — stays in that original. The watermarked preview is generated without that embedded information. The original is never shown to the public; the gallery and every image link only ever reach the preview.",
           `The files themselves live in object storage run by ${contact.storageProvider}. The records about them live in the site's database.`,
           "If an item was made in exchange for a benefit — payment, a free or loaned product, a discount or discount code, a trip, or an event invitation — the site also records that a benefit was received, the brand or other source it came from, and the advertising label shown on the item, because Norwegian marketing law requires that kind of post to be clearly labelled as advertising. This record is kept for as long as the item is and is deleted with it; the label is shown publicly on the item, but the brand or other source behind the benefit is not.",
+          "If that benefit record includes a commercial outbound link — up to six per item — the site also records its destination and the network it is routed through. Once the item is published with the link attached and a valid advertising label, the destination and the network are shown publicly, marked as an advertisement link; the brand or other source behind that link is not shown, even when it differs from the brand named in the benefit above.",
         ],
         purpose:
           "To run the gallery and portfolio, and later to offer originals for sale.",
         legalBasis:
-          "The site's legitimate interest in publishing its own work (GDPR Art. 6(1)(f)). For people who appear in an image, see the next section. The advertising-disclosure record rests on the same legitimate interest, in meeting Norway's advertising-labelling rules and being able to show that it has (GDPR Art. 6(1)(f)).",
+          "The site's legitimate interest in publishing its own work (GDPR Art. 6(1)(f)). For people who appear in an image, see the next section. The advertising-disclosure record, and the commercial-link record alongside it, rest on the same legitimate interest, in meeting Norway's advertising-labelling rules and being able to show that it has (GDPR Art. 6(1)(f)).",
         recipients:
-          "The storage provider named above holds the files. Everyone can see the watermarked preview, alt text, caption, tags, and upload and publication dates of a published item — and, on an item that carries one, its advertising label — and nothing else: not the original, not the filename, not who uploaded it, and not the brand or other source behind a benefit.",
+          "The storage provider named above holds the files. Everyone can see the watermarked preview, alt text, caption, tags, and upload and publication dates of a published item — and, on an item that carries one, its advertising label, and the destination and network of any commercial link attached to it — and nothing else: not the original, not the filename, not who uploaded it, and not the brand or other source behind a benefit or a commercial link.",
         retention: {
           kind: "stated",
           text: "An item is kept until its uploader deletes it. Deleting removes the database record and then the original and the preview from storage; if storage cannot be reached, the failure is logged and the file is removed by hand. Unpublishing an item hides it but keeps it. There is no automatic expiry.",
@@ -461,18 +462,24 @@ export const MODEL_COVERAGE: Readonly<
   // uploader's own record about their own item, cascade-deleted with the item,
   // and not an administrator's judgement about a third party.
   //
-  // THE UPLOADS CATEGORY'S PROSE IS NOT CHANGED BY THIS BEAD, and that is a
-  // decision rather than an omission. Its `recipients` sentence lists what
-  // everyone can see of a published item and ends "and nothing else"; that
-  // sentence is still true, because nothing renders a commercial link — no
-  // public read path selects the relation, and the marker, the `rel` tokens
-  // and the surfaces are ugcportal-qnq9.2.2. When that bead publishes the
-  // destination, this category's `what` and `recipients` need a sentence
-  // naming it and LEGAL_SIGN_OFF (src/lib/legal/contact.ts) has to be
-  // re-recorded against the new digest in the same PR — exactly the sequence
-  // ugcportal-mj50 went through for the disclosure. The attach route is in
-  // this category's `reviewAgainst` list so that the next reader of this page
-  // is pointed at it.
+  // THE CATEGORY'S PROSE NOW NAMES THIS RECORD (ugcportal-qnq9.2.2): the
+  // uploads category's fifth `what` paragraph says what is recorded (a
+  // link's destination and the network it routes through) and when it
+  // becomes public (once the item is published with the link attached and a
+  // valid advertising label — the render-time gate `toGalleryItem`,
+  // src/lib/gallery-items.ts, and `listPublicMedia`, src/lib/public-media.ts,
+  // both enforce, closing ugcportal-jain's render-side gap), its
+  // `legalBasis` carries the matching sentence, and its `recipients` says
+  // the destination and network are public but the brand or other source
+  // behind the link is not — the same distinction the disclosure's own
+  // sentence draws for `benefitSource`, extended here because a link's own
+  // `benefitSourceId` can name a DIFFERENT brand than the disclosure's (see
+  // this model's own schema comment). That sentence changed the uploads
+  // category's authored text, so LEGAL_SIGN_OFF (src/lib/legal/contact.ts)
+  // was re-recorded against the new digest in the same change — the same
+  // sequence ugcportal-mj50 went through for the disclosure. The attach
+  // route is in this category's `reviewAgainst` list so that the next reader
+  // of this page is pointed at it.
   CommercialLink: { category: "uploads" },
   BenefitSource: {
     notPersonalData:

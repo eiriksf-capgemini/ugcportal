@@ -9,6 +9,7 @@ import {
 import {
   GalleryItemAdvertisingLabel,
   GalleryItemCaption,
+  GalleryItemCommercialLinks,
   GalleryItemTags,
 } from "@/components/gallery/gallery-item";
 import { galleryItemAlt, type GalleryItem } from "@/lib/gallery-items";
@@ -137,6 +138,15 @@ export function PortfolioTile({
       */}
       {piece.advertisingLabel === null ? <PortfolioSpecMarker /> : null}
       <GalleryItemTags item={piece} />
+      {/*
+        The commercial outbound links (ugcportal-qnq9.2.2): nothing stops an
+        operator curating a labelled, paid/gifted piece into this page (the
+        same reasoning this component's own GalleryItemAdvertisingLabel call
+        above gives), so this surface gets the same render every other one
+        does rather than a silent gap just because it was not in the bead's
+        own named list of three.
+      */}
+      <GalleryItemCommercialLinks item={piece} />
     </li>
   );
 }
