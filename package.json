@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "node scripts/check-migrations.mjs && node scripts/with-local-ca.mjs next dev",
     "dev:inspect": "node scripts/check-migrations.mjs && node --inspect node_modules/next/dist/bin/next dev",
+    "dev:publish-all": "node scripts/publish-all-dev.mjs",
     "build": "node scripts/with-local-ca.mjs next build",
     "start": "node scripts/with-local-ca.mjs next start",
     "lint": "eslint",
@@ -38,7 +39,7 @@
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.13.0",
-    "@libsql/client": "0.17.4",
+    "@libsql/client": "^0.17.4",
     "@playwright/test": "^1.63.0",
     "@tailwindcss/node": "^4",
     "@tailwindcss/postcss": "^4",
