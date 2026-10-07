@@ -1,5 +1,128 @@
 # Changelog
 
+## v0.6.0 - 2026-10-07
+
+### 💰 Cost Summary
+
+| Type | Impl | QA | Total | Beads with data |
+|---|---:|---:|---:|:---:|
+| ✨ Features | 7,650,607 | 4,134,460 | 11,785,067 | 16/16 |
+| 🐛 Fixes | 8,181,006 | 9,978,370 | 18,159,376 | 25/30 |
+| 📝 Documentation | 1,304,144 | 1,555,308 | 2,859,452 | 9/9 |
+| ♻️ Refactoring | 2,378,838 | 1,941,389 | 4,320,227 | 6/6 |
+| 🧪 Tests | 1,964,589 | 2,407,991 | 4,372,580 | 7/7 |
+| 🏗️ Build & CI | 770,110 | 809,572 | 1,579,682 | 6/6 |
+| 🔧 Chores | 2,181,362 | 2,328,754 | 4,510,116 | 7/11 |
+| **Total** | **24,430,656** | **23,155,844** | **47,586,500** | **76/85** |
+
+*Cost figures come from bead metadata (`tokens_impl`/`tokens_qa`) as recorded as of this release. `tokens_impl` is a best-effort manual estimate that isn't consistently recorded, and a bead's `tokens_qa` can keep growing later from review on a follow-up fix without retroactively updating a past release — treat these totals as a lower bound, not the release's full or final cost.*
+
+### ✨ Features
+
+- **Per-link marker, rel hardening and every-surface and feed exposure of commercial links** (`ugcportal-qnq9.2.2`, scope: disclosure) — [#183](https://github.com/eiriksf-capgemini/ugcportal/pull/183)
+- **Commercial-link record: destination, network and the brand/alcohol attach gate** (`ugcportal-qnq9.2.1`, scope: disclosure) — [#176](https://github.com/eiriksf-capgemini/ugcportal/pull/176)
+- **Wine-accessory commerce: alcohol must never appear in commercial imagery, and alcohol-linked brands are refused** (`ugcportal-qnq9.3`, scope: rights) — [#157](https://github.com/eiriksf-capgemini/ugcportal/pull/157), [#168](https://github.com/eiriksf-capgemini/ugcportal/pull/168)
+- **Affiliate and commercial outbound links: labelled per link, labelled at the top, consent-gated, never on alcohol** (`ugcportal-qnq9.2`, scope: disclosure) — [#176](https://github.com/eiriksf-capgemini/ugcportal/pull/176), [#183](https://github.com/eiriksf-capgemini/ugcportal/pull/183)
+- **Advertising disclosure A: record the benefit behind an item and gate publishing on a permitted label** (`ugcportal-qnq9.1`, scope: disclosure) — [#147](https://github.com/eiriksf-capgemini/ugcportal/pull/147)
+- **Share buttons + Open Graph preview tags** (`ugcportal-lju`, scope: sharing) — [#180](https://github.com/eiriksf-capgemini/ugcportal/pull/180)
+- **Advertising disclosure B: render the advertising label on the public item page and feed, and expose it through MEDIA_ANONYMOUS_SELECT** (`ugcportal-e0jv`, scope: disclosure) — [#162](https://github.com/eiriksf-capgemini/ugcportal/pull/162)
+- **claims-audit cannot see the PR body, where most late-round family-1 findings now live** (`ugcportal-bn94`, scope: process) — [#154](https://github.com/eiriksf-capgemini/ugcportal/pull/154)
+- **Empty state shows portfolio tiles, not a sentence and a clipped button** (`ugcportal-qqnt.5`, scope: design) — [#177](https://github.com/eiriksf-capgemini/ugcportal/pull/177)
+- **Hero: a 25-word lead, one visitor call to action ('See the portfolio'), and three overlapping photographs instead of decorative circles** (`ugcportal-qqnt.4`, scope: design) — [#173](https://github.com/eiriksf-capgemini/ugcportal/pull/173)
+- **Header: one row with a brand mark and a wordmark that outranks the nav, no tagline row, and a single sign-in control** (`ugcportal-qqnt.3`, scope: design) — [#171](https://github.com/eiriksf-capgemini/ugcportal/pull/171)
+- **Front page type scale: the hero carries the h1, section titles step down, and Fraunces is reserved for display** (`ugcportal-qqnt.1`, scope: design) — [#114](https://github.com/eiriksf-capgemini/ugcportal/pull/114)
+- **Front page UX polish: hierarchy, one button system, a real hero visual and an above-the-fold portfolio** (`ugcportal-qqnt`, scope: design) — [#181](https://github.com/eiriksf-capgemini/ugcportal/pull/181)
+- **Discoverability: per-item pages with descriptive titles, a sitemap, and Search Console and Pinterest site verification** (`ugcportal-qnq9.12`, scope: seo) — [#144](https://github.com/eiriksf-capgemini/ugcportal/pull/144)
+- **Minors as a first-class per-upload triage fact, on a reusable null-blocks mechanism** (`ugcportal-qn3`, scope: rights) — [#145](https://github.com/eiriksf-capgemini/ugcportal/pull/145)
+- **No product surface records a brand as alcohol-linked after it was first answered no; the disclosure route can only write null to false** (`ugcportal-mqh8`, scope: rights) — [#174](https://github.com/eiriksf-capgemini/ugcportal/pull/174)
+
+### 🐛 Fixes
+
+- **pre-push hook exports GIT_DIR and GIT_WORK_TREE into the test run, so any test that shells out to git operates on the real repository** (`ugcportal-xxy2`, scope: tooling) — [#135](https://github.com/eiriksf-capgemini/ugcportal/pull/135)
+- **npm run dev starts against a dev.db that is six migrations behind, so every auth() call and every sign-in fails with 'no such column'** (`ugcportal-w7wc`, scope: db) — [#117](https://github.com/eiriksf-capgemini/ugcportal/pull/117)
+- **GALLERY_ADVERTISING_LABEL_CLASS still uses rounded-md (8px) after qqnt.2 moved the tile it sits beside to rounded-lg (10px); its own comment now falsely claims they match** (`ugcportal-o312`, scope: design) — [#169](https://github.com/eiriksf-capgemini/ugcportal/pull/169)
+- **readJsonBody has no idle timeout: a stalled JSON request holds a slot for 300s on three routes** (`ugcportal-8hsf`, scope: upload) — [#158](https://github.com/eiriksf-capgemini/ugcportal/pull/158)
+- **code-review finder forks posted directly to the live PR, including a stray write-access test comment, despite read-only instructions** (`ugcportal-cr2h`, scope: process) — [#155](https://github.com/eiriksf-capgemini/ugcportal/pull/155)
+- **Finder-angle forks spawned by a reviewer report to the orchestrator, leaving the reviewer waiting indefinitely** (`ugcportal-p4jw`, scope: process) — [#155](https://github.com/eiriksf-capgemini/ugcportal/pull/155)
+- **Branch cleanup must retarget open PRs based on a branch before deleting it** (`ugcportal-hvaf`, scope: process) — [#143](https://github.com/eiriksf-capgemini/ugcportal/pull/143), [#152](https://github.com/eiriksf-capgemini/ugcportal/pull/152)
+- **code-review fork force-removed another agent's review worktree it did not create** (`ugcportal-lasi`, scope: process) — [#155](https://github.com/eiriksf-capgemini/ugcportal/pull/155)
+- **claims-audit reports 0 candidates on uncommitted files and ignores --base=<ref>, producing a false all-clean before the first commit** (`ugcportal-np1i`, scope: process) — [#133](https://github.com/eiriksf-capgemini/ugcportal/pull/133)
+- **Build warns: node:crypto from legal/publishable.ts reaches the Edge Instrumentation bundle** (`ugcportal-177y`, scope: privacy) — [#111](https://github.com/eiriksf-capgemini/ugcportal/pull/111)
+- **Gallery does not branch on kind: a published video renders as a photograph** (`ugcportal-dzz`, scope: gallery) — [#146](https://github.com/eiriksf-capgemini/ugcportal/pull/146)
+- **Upload peek has no idle timeout: a stalled multipart connection holds a request slot for 300s** (`ugcportal-dvb`, scope: upload) — [#149](https://github.com/eiriksf-capgemini/ugcportal/pull/149)
+- **request-body.test.ts: the EXPECTED docstring still describes true/false entries after the list became verdict-suffixed strings** (`ugcportal-ufdx`, scope: upload) — [#158](https://github.com/eiriksf-capgemini/ugcportal/pull/158)
+- **K4 guard: a dangling function pointer and an assertion that cannot fail in the escape-rule fixtures** (`ugcportal-bq1k`, scope: storage) — [#156](https://github.com/eiriksf-capgemini/ugcportal/pull/156)
+- **sweep-merged-branches deletes remote branches with git push --delete, which runs the full pre-push suite and fails on load flakes; use the GitHub API ref delete instead** (`ugcportal-ix0s`, scope: process) — [#165](https://github.com/eiriksf-capgemini/ugcportal/pull/165)
+- **buttonVariants base uses outline-none plus a ring for focus-visible, invisible under forced-colors; every public-page button inherits it** (`ugcportal-oavb`, scope: design) — [#170](https://github.com/eiriksf-capgemini/ugcportal/pull/170)
+- **claims-audit.test.mjs K2 flakes on the 5s default timeout under machine load** (`ugcportal-5whs`, scope: process) — [#163](https://github.com/eiriksf-capgemini/ugcportal/pull/163)
+- **check-migrations.mjs loads only .env while Next also loads .env.local with precedence, so a DATABASE_URL in .env.local alone migrates one database and serves another** (`ugcportal-h2yd`, scope: db) — [#160](https://github.com/eiriksf-capgemini/ugcportal/pull/160)
+- **Button default-neutral's label colour compiles to no utility, so the measured contrast pairing is for a colour never painted** (`ugcportal-ei5c`, scope: design) — [#175](https://github.com/eiriksf-capgemini/ugcportal/pull/175)
+- **About page contact notice links /privacy while the statement is still a draft in production** (`ugcportal-nf9l`, scope: legal) — [#140](https://github.com/eiriksf-capgemini/ugcportal/pull/140)
+- **Upload queue 'Try again' button unmounts under keyboard focus, dropping focus to body** (`ugcportal-ff2a`, scope: upload) — [#112](https://github.com/eiriksf-capgemini/ugcportal/pull/112)
+- **S3-touching sibling routes answer transport failures as an undifferentiated 500/redirect, not a deliberate 503** (`ugcportal-98rb`, scope: storage) — [#156](https://github.com/eiriksf-capgemini/ugcportal/pull/156)
+- **K2's contrast gate has no coverage check for non-alpha-modified colour utilities** (`ugcportal-5gca`, scope: process) — [#115](https://github.com/eiriksf-capgemini/ugcportal/pull/115)
+- **The evidence-encryption startup check and encryptionSetting() disagree about any value needing a trim** (`ugcportal-gkj`, scope: rights) — [#153](https://github.com/eiriksf-capgemini/ugcportal/pull/153)
+- **Upload form "Choose files" label hand-pastes bg-petrol-400 text-petrol-900, a label colour that compiles to no utility** (`ugcportal-z1nh`, scope: design) — [#182](https://github.com/eiriksf-capgemini/ugcportal/pull/182)
+- **claims-audit: a listTrackedFiles() failure does not set workingTreeReadFailed, so every reference to an existing file is falsely flagged REFERENCE not found** (`ugcportal-aigs`, scope: process) — [#161](https://github.com/eiriksf-capgemini/ugcportal/pull/161)
+- **Lightbox fade animation ignores prefers-reduced-motion** (`ugcportal-i72n`, scope: gallery) — [#124](https://github.com/eiriksf-capgemini/ugcportal/pull/124)
+- **Post-cap lows from PR #85: monotonic clock for the throttle, two-way SDK parity test, stale call-site comment, shared body-record guard, attempts field per branch, shared log interval, looser cleanup-log assertion** (`ugcportal-qz1u`, scope: upload) — [#130](https://github.com/eiriksf-capgemini/ugcportal/pull/130)
+- **GET /api/public/media's 500 on a thrown listing error has no cache-control: no-store** (`ugcportal-c70s`, scope: process) — [#108](https://github.com/eiriksf-capgemini/ugcportal/pull/108)
+- **NODE_OPTIONS=--inspect attaches to the with-local-ca wrapper instead of the wrapped Next.js process** (`ugcportal-ymp4`, scope: tooling) — [#139](https://github.com/eiriksf-capgemini/ugcportal/pull/139)
+
+### 📝 Documentation
+
+- **Release cost comparison v0.4.0 vs v0.5.0: cost per feature, model performance, the most expensive features and how to reduce them** (`ugcportal-apsq`, scope: process) — [#104](https://github.com/eiriksf-capgemini/ugcportal/pull/104)
+- **/privacy uploads category must name the advertising-disclosure record (BenefitSource, MediaAdvertisingDisclosure) and both LEGAL_SIGN_OFF digests must be re-recorded** (`ugcportal-mj50`, scope: privacy) — [#167](https://github.com/eiriksf-capgemini/ugcportal/pull/167)
+- **pr-review-merge stamps the round marker inside the approval body, but approving your own PR is impossible on this repo, so merged rounds can end with no marker** (`ugcportal-u25s`, scope: process) — [#142](https://github.com/eiriksf-capgemini/ugcportal/pull/142)
+- **Backlog review before v0.6.0: audit of every open bead, release line-up and mardi-gras status model** (`ugcportal-t7oh`, scope: process) — [#106](https://github.com/eiriksf-capgemini/ugcportal/pull/106)
+- **CLAUDE.md token-cost paragraph still says pr-review-merge forks code-review and records an exact subagent_tokens figure; stale once PR #155 merges** (`ugcportal-a4ue`, scope: process) — [#159](https://github.com/eiriksf-capgemini/ugcportal/pull/159)
+- **pr-review-merge SKILL.md: two stale sentences, step 2 overclaims guard-sensitive-files hard-fails every CLAUDE.md diff, and the "Two residual limits" paragraph still calls the review body the approval marker home** (`ugcportal-yvbi`, scope: process) — [#151](https://github.com/eiriksf-capgemini/ugcportal/pull/151)
+- **auth.ts comment still says the upload page calls plain auth() and costs two session queries** (`ugcportal-0cdw`, scope: auth) — [#118](https://github.com/eiriksf-capgemini/ugcportal/pull/118)
+- **Front page: one e2e comment attributes the shapes' opacity 0 to the wrong class** (`ugcportal-quxl`, scope: design) — [#148](https://github.com/eiriksf-capgemini/ugcportal/pull/148)
+- **Scanner PR follow-up: two stale counts in comments (fail-closed exits, confirmed holes)** (`ugcportal-96eb`, scope: privacy) — [#119](https://github.com/eiriksf-capgemini/ugcportal/pull/119)
+
+### ♻️ Refactoring
+
+- **One button system on the public pages: a primary, a secondary, one radius, used identically in header, hero and empty state** (`ugcportal-qqnt.2`, scope: design) — [#122](https://github.com/eiriksf-capgemini/ugcportal/pull/122)
+- **Post-cap lows from PR #93: preview re-check, strip-at-query, stale mock, duplicated classes, stacked JSDoc, thin wrapper** (`ugcportal-qnq9.16`, scope: portfolio) — [#166](https://github.com/eiriksf-capgemini/ugcportal/pull/166)
+- **Post-cap lows from PR #90: per-page boot message, operator-value sanity scan, test-support comment, shared legal loader** (`ugcportal-qnq9.15`, scope: privacy) — [#164](https://github.com/eiriksf-capgemini/ugcportal/pull/164)
+- **Post-cap lows from PR #87: shared click helper, fake-timer block, useLayoutEffect handoff, event.currentTarget instead of a ref, getter accessors, targeted selector** (`ugcportal-dj4i`, scope: gallery) — [#134](https://github.com/eiriksf-capgemini/ugcportal/pull/134)
+- **Post-cap lows from PR #81: shared entry-match predicate, strict colon spacing, floating JSDoc, double parse per sign-in** (`ugcportal-qlfo`, scope: auth) — [#150](https://github.com/eiriksf-capgemini/ugcportal/pull/150)
+- **Extract one first-occurrence-wins dedupe helper for gallery-items, tags and sign-in-policy** (`ugcportal-oejb`, scope: lib) — [#128](https://github.com/eiriksf-capgemini/ugcportal/pull/128)
+
+### 🧪 Tests
+
+- **Tree-walking test suites (claims-audit, analytics-host.grep, throttled-log.no-sibling-copy, sweep-merged-branches, watermark) time out at the 5 s default under machine load, making the pre-push hook a coin flip** (`ugcportal-9faa`, scope: process) — [#163](https://github.com/eiriksf-capgemini/ugcportal/pull/163)
+- **rights page test 'does not appear at exactly the page size' times out at 5s under CI load, failing unrelated PRs** (`ugcportal-qudv`, scope: admin) — [#132](https://github.com/eiriksf-capgemini/ugcportal/pull/132)
+- **No CI-wired test renders AuthStatus and asserts it actually uses size="header-sm" (only e2e, not wired into CI, checks the real radius)** (`ugcportal-6wkd`, scope: design) — [#178](https://github.com/eiriksf-capgemini/ugcportal/pull/178)
+- **Reduced-motion scan: residual variant shapes and the e2e directory Tailwind's @source not would not exclude** (`ugcportal-61pv`, scope: design) — [#129](https://github.com/eiriksf-capgemini/ugcportal/pull/129)
+- **Footer K2 string test is inclusion-only; header e2e locators unscoped to the banner landmark** (`ugcportal-6uxr`, scope: design) — [#179](https://github.com/eiriksf-capgemini/ugcportal/pull/179)
+- **Header: assert the mobile toggle's position in the header-order test; cover the remaining modifier-click guards** (`ugcportal-0sdf`, scope: design) — [#179](https://github.com/eiriksf-capgemini/ugcportal/pull/179)
+- **Post-cap lows from PR #91: pinEnvironment comment overclaims; session id is case-folded before the delete** (`ugcportal-0p5s`, scope: auth) — [#138](https://github.com/eiriksf-capgemini/ugcportal/pull/138)
+
+### 🏗️ Build & CI
+
+- **CI: a PR body edit cancels the in-flight push run and then skips the quality job, leaving the head with no test result** (`ugcportal-sxwb`, scope: process) — [#137](https://github.com/eiriksf-capgemini/ugcportal/pull/137)
+- **CI bills five rounded-up jobs per run and re-runs the full suite on every PR body edit, exhausting the Actions minutes** (`ugcportal-0an4`, scope: process) — [#127](https://github.com/eiriksf-capgemini/ugcportal/pull/127)
+- **Pre-push hook skips the full suite when an agent push sets UGCPORTAL_PREPUSH=skip; CI stays authoritative** (`ugcportal-cky9`, scope: process) — [#172](https://github.com/eiriksf-capgemini/ugcportal/pull/172)
+- **Wire 'prisma migrate diff --exit-code' into CI as a drift guard** (`ugcportal-33hi`, scope: process) — [#110](https://github.com/eiriksf-capgemini/ugcportal/pull/110)
+- **guard-sensitive-files fails a CLAUDE.md-only PR too, so the dedicated PR the policy asks for can never be green** (`ugcportal-6hmh`, scope: process) — [#141](https://github.com/eiriksf-capgemini/ugcportal/pull/141)
+- **CI title guard rejects hierarchical bead ids (ugcportal-qnq9.14), so every child of an epic cannot be named in a PR title** (`ugcportal-euqi`, scope: process) — [#107](https://github.com/eiriksf-capgemini/ugcportal/pull/107)
+
+### 🔧 Chores
+
+- **PR close must delete the merged origin branch and prune the local worktree** (`ugcportal-nvg0`, scope: process) — [#109](https://github.com/eiriksf-capgemini/ugcportal/pull/109), [#113](https://github.com/eiriksf-capgemini/ugcportal/pull/113)
+- **Review process: why most PRs take six rounds, and how to find issues locally before the PR** (`ugcportal-wzgw`, scope: process) — [#105](https://github.com/eiriksf-capgemini/ugcportal/pull/105)
+- **Beads sync is local-only: no Dolt remote on the code repository, backup outside the repo folder** (`ugcportal-z3j1`, scope: process) — [#136](https://github.com/eiriksf-capgemini/ugcportal/pull/136)
+- **Re-measure subagent Opus share a week after ugcportal-9ak lands** (`ugcportal-0xw`, scope: process) — [#131](https://github.com/eiriksf-capgemini/ugcportal/pull/131)
+- **PR #158 body: the rewritten claims-audit paragraph says the fix keeps await reader.cancel() on the 413 path, which is the opposite of what it ships** (`ugcportal-1b88`, scope: process) — [#158](https://github.com/eiriksf-capgemini/ugcportal/pull/158)
+- **PR #158 body: the claims-audit --pr figures and the "both contradictions are on one line" note do not reproduce against the posted body** (`ugcportal-g6n6`, scope: process) — [#158](https://github.com/eiriksf-capgemini/ugcportal/pull/158)
+- **Consolidate gallery.tsx's inline genuinely-empty check onto gallery-items.ts's isGenuinelyEmptyPage** (`ugcportal-3wcd`, scope: process) — [#121](https://github.com/eiriksf-capgemini/ugcportal/pull/121)
+- **Add boot-time S3 reachability warning in src/instrumentation.ts** (`ugcportal-ze1o`, scope: storage) — [#116](https://github.com/eiriksf-capgemini/ugcportal/pull/116)
+- **PR #157 body item 6: the "three dots" gloss credits a mechanism that is inert there** (`ugcportal-9v2u`, scope: process) — [#157](https://github.com/eiriksf-capgemini/ugcportal/pull/157)
+- **route.test.ts's console.error spy is a blanket global silence rather than scoped** (`ugcportal-f6w3`, scope: process) — [#108](https://github.com/eiriksf-capgemini/ugcportal/pull/108)
+- **Duplicated throttled-log pattern between public-media.ts and watermark.ts** (`ugcportal-z3lo`, scope: process) — [#125](https://github.com/eiriksf-capgemini/ugcportal/pull/125)
+
 ## v0.5.0 - 2026-10-05
 
 ### 💰 Cost Summary
