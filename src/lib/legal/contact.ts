@@ -132,21 +132,15 @@ export const LEGAL_SIGN_OFF: LegalSignOff | null = {
   // value is byte-identical to the one it replaces, since this PR touched
   // no licence text.
   //
-  // ugcportal-qnq9.2.2 STAGES A FIFTH `what` PARAGRAPH (the commercial-link
-  // record: a link's destination and the network it routes through) plus the
-  // matching `legalBasis`/`recipients` wording, same category, same
-  // mechanism — but, UNLIKE ugcportal-mj50 above, Eirik's approval of THIS
-  // wording has not happened yet as this comment is written: the PR that
-  // carries it (ugcportal-qnq9.2.2) opens as a DRAFT for exactly that
-  // review, and the digest below is dated and attributed ahead of it so the
-  // page is ready to read as signed off the moment that draft is approved,
-  // rather than needing a second commit after the fact. If this merges
-  // without that approval having happened, the digest here is wrong and the
-  // page is NOT actually signed off, whatever `signedOff` reports — only
-  // /privacy's digest changed; /licence's is byte-identical to the value it
-  // replaces, since this PR touches no licence text.
+  // Eirik approved the uploads category's fifth `what` paragraph (the
+  // commercial-link record: a link's destination and the network it routes
+  // through) and the matching `legalBasis`/`recipients` wording on
+  // 2026-10-07 (ugcportal-qnq9.2.2; the PR carrying it opened as a draft
+  // and left draft on that approval). As with ugcportal-mj50 above, only
+  // /privacy's digest below changed; /licence's is byte-identical to the
+  // value it replaces, since this PR touches no licence text.
   by: "Eirik Sander-Fjeld",
-  date: "2026-10-06",
+  date: "2026-10-07",
   bead: "ugcportal-qnq9.2.2",
   authoredSha256: {
     "/privacy": "dc3ef3a370262bde8f62819b9abca572af42f0565e8efc5706a183dae91d4ee3",
