@@ -6,14 +6,15 @@
  * skipped, with a reason, and the exit code is non-zero) are each asserted
  * here. K1 (the live run) is a manual check against dev.db. The one real
  * I/O path, `readPublishInputs`, is exercised against a temporary SQLite
- * file built with the same `node:sqlite` the script uses, so the column
+ * file built with the same `@libsql/client` the script uses, so the column
  * names in its SQL are checked against a schema rather than trusted.
  */
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 
+
+import { createClient } from "@libsql/client";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
@@ -235,11 +236,11 @@ describe("readPublishInputs against a real SQLite file", () => {
     dir = undefined;
   });
 
-  function makeDb() {
+  async function makeDb() {
     dir = mkdtempSync(path.join(tmpdir(), "publish-all-dev-"));
     const file = path.join(dir, "dev.db");
-    const db = new DatabaseSync(file);
-    db.exec(`
+    const db = createClient({ url: `file:${file}` });
+    await db.executeMultiple(`
       CREATE TABLE "Media" ("id" TEXT PRIMARY KEY, "userId" TEXT NOT NULL, "createdAt" TEXT NOT NULL, "publishedAt" TEXT);
       CREATE TABLE "Session" ("id" TEXT PRIMARY KEY, "sessionToken" TEXT NOT NULL, "userId" TEXT NOT NULL, "expires" TEXT NOT NULL);
       INSERT INTO "Media" VALUES ('older', 'alice', '2026-10-07T10:00:00Z', NULL);
@@ -251,8 +252,8 @@ describe("readPublishInputs against a real SQLite file", () => {
     return file;
   }
 
-  it("returns only unpublished rows, oldest first, plus every session", () => {
-    const { unpublished, sessions } = readPublishInputs(makeDb());
+  it("returns only unpublished rows, oldest first, plus every session", async () => {
+    const { unpublished, sessions } = await readPublishInputs(await makeDb());
     expect(unpublished).toEqual([
       { id: "older", userId: "alice" },
       { id: "newer", userId: "bob" },
@@ -261,7 +262,7 @@ describe("readPublishInputs against a real SQLite file", () => {
   });
 
   it("main(): end to end with a stub fetch -- publishes alice's row, skips bob's, exits 1", async () => {
-    const file = makeDb();
+    const file = await makeDb();
     const { fetch, calls } = stubFetch(200);
     const logged = [];
     const code = await main({

@@ -14,8 +14,9 @@
  * belonging to that row's owner, read from the local Session table. That is
  * what keeps every gate the route applies (alt text, advertising label,
  * alcohol facts, watermarked preview, ownership) applied here too, without a
- * second copy of any of them in this file; the database is opened read-only
- * and only ever READ (media ids and owners, session tokens).
+ * second copy of any of them in this file. The database is only ever READ:
+ * `readPublishInputs` below is two SELECTs (media ids and owners, session
+ * tokens) and nothing else in this file touches it.
  *
  * LOCAL ONLY, by two independent refusals in `preflight` below: DATABASE_URL
  * must be a local `file:` URL (the same rule scripts/check-migrations.mjs
@@ -34,8 +35,9 @@
  * server has to be running: this script is a client of it, not a replacement.
  */
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
+
+import { createClient } from "@libsql/client";
 
 import { isLocalFileDatabase } from "./check-migrations.mjs";
 import { loadDevEnvFiles } from "./lib/env-files.mjs";
@@ -143,24 +145,31 @@ export function preflight({ databaseUrl, baseUrl }) {
 }
 
 /**
- * Reads what the plan needs and nothing else. Read-only open: this file never
- * writes to the database, and the flag makes that a property of the
- * connection rather than of the SQL below.
+ * Reads what the plan needs and nothing else: these two SELECTs are the only
+ * statements this script ever sends to the database. Through
+ * `@libsql/client`, the same driver `@prisma/adapter-libsql` puts under the
+ * app's own Prisma client (src/lib/prisma.ts), rather than `node:sqlite`,
+ * which CI's Node 20 does not have.
  * @param {string} dbPath
- * @returns {{ unpublished: Array<{ id: string, userId: string }>, sessions: Array<{ userId: string, sessionToken: string, expires: string }> }}
+ * @returns {Promise<{ unpublished: Array<{ id: string, userId: string }>, sessions: Array<{ userId: string, sessionToken: string, expires: string }> }>}
  */
-export function readPublishInputs(dbPath) {
-  const db = new DatabaseSync(dbPath, { readOnly: true });
+export async function readPublishInputs(dbPath) {
+  const db = createClient({ url: `file:${dbPath}` });
   try {
-    const unpublished = db
-      .prepare(
-        'SELECT "id", "userId" FROM "Media" WHERE "publishedAt" IS NULL ORDER BY "createdAt"',
-      )
-      .all();
-    const sessions = db
-      .prepare('SELECT "userId", "sessionToken", "expires" FROM "Session"')
-      .all();
-    return { unpublished, sessions };
+    const unpublished = await db.execute(
+      'SELECT "id", "userId" FROM "Media" WHERE "publishedAt" IS NULL ORDER BY "createdAt"',
+    );
+    const sessions = await db.execute(
+      'SELECT "userId", "sessionToken", "expires" FROM "Session"',
+    );
+    return {
+      unpublished: unpublished.rows.map((row) => ({ id: String(row.id), userId: String(row.userId) })),
+      sessions: sessions.rows.map((row) => ({
+        userId: String(row.userId),
+        sessionToken: String(row.sessionToken),
+        expires: String(row.expires),
+      })),
+    };
   } finally {
     db.close();
   }
@@ -286,7 +295,7 @@ export async function main({ argv = process.argv.slice(2), cwd = process.cwd(), 
   const dbPath = sqlitePathFromDatabaseUrl(env.DATABASE_URL, cwd);
   let inputs;
   try {
-    inputs = readPublishInputs(dbPath);
+    inputs = await readPublishInputs(dbPath);
   } catch (cause) {
     error(`${PREFIX} could not read ${dbPath}: ${cause instanceof Error ? cause.message : String(cause)}`);
     return 2;
