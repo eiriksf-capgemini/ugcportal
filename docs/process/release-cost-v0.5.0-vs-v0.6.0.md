@@ -78,7 +78,7 @@ Three things follow.
 
 ### 3.2 Implementation passes
 
-`tokens_impl_passes` is set on 59 of the 85 beads: 16 beads took one pass, 21 two, 15 three, 5 four, 3 five (`ff2a`, `qnq9.3`, `qqnt.4`) and 1 seven (`nvg0`). The previous report's budget rule B2 ("three implementation passes without a clean round: stop") would have fired on nine beads. Two of `qqnt.4`'s five passes were merge-conflict resolutions against `#175` and `#177`, not fixes — the cost `wzgw` item 5 moves from a red `main` to the implementer.
+`tokens_impl_passes` is set on 61 of the 85 beads: 16 beads took one pass, 21 two, 15 three, 5 four, 3 five (`ff2a`, `qnq9.3`, `qqnt.4`) and 1 seven (`nvg0`). The previous report's budget rule B2 ("three implementation passes without a clean round: stop") would have fired on nine beads. Two of `qqnt.4`'s five passes were merge-conflict resolutions against `#175` and `#177`, not fixes — the cost `wzgw` item 5 moves from a red `main` to the implementer.
 
 ## 4. Model tier performance
 
@@ -150,7 +150,7 @@ Each of these is in a bead's notes or close reason; none is in the token figures
 - **22 rounds state no severity** (section 1); at least 17 of them blocking rounds, across 14 PRs.
 - **Seven PRs merged with no review round**: `#104`, `#105`, `#106`, `#113`, `#127`, `#136`, `#137`, all process docs, skills or workflow files, all human-merged. Whether a docs-only process PR needs a review round is a decision that should be written down, not inferred from its absence.
 - **The appendix's per-round estimate is now superseded by recorded figures** on 68 beads and should read `tokens_qa_rN` when present instead of dividing. Until it does, its "Lows-only tail rounds" and "Tail review (crude)" columns overstate the tail by about 3× (section 3.1).
-- **`tokens_impl_passes` missing on 26 beads**, so B2 cannot be checked on them.
+- **`tokens_impl_passes` missing on 24 beads**, so B2 cannot be checked on them.
 - **Shared PRs carry the cost once**: `#155` (`cr2h`/`p4jw`/`lasi`), `#158` (four beads), `#179` (`0sdf`/`6uxr`), `#156` (`98rb`/`bq1k`), `#163` (`9faa`/`5whs`), `#157` (`qnq9.3`/`9v2u`), `#108` (`c70s`/`f6w3`). Nine beads therefore show as free.
 - **`qnq9.2` and `6uxr` record `0`** rather than nothing; `qnq9.2` is an epic whose children carry the cost, `6uxr` shared an implementer run with `0sdf`. Both say so in their notes; the script should treat an explicit `0` with a note the same as missing.
 - **Harness window vs release window**: `usage_indicators.py` filters by calendar day; 10-05 holds both the v0.5.0 post-release investigations and the start of v0.6.0, so the two-day figure (10-06, 10-07) is the one quoted.
