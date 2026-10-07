@@ -4,9 +4,18 @@ services:
     # quay.io/minio/* is the maintained registry.
     image: quay.io/minio/minio:RELEASE.2025-04-08T15-41-24Z
     command: server /data --console-address ":9001"
+    # HOST ports are overridable; CONTAINER ports are not. minio-init below
+    # reaches MinIO as minio:9000 over the compose network, and that side
+    # must stay fixed. The host side is a variable because 9000 is not
+    # reliably free on a developer machine: Zscaler's tunnel holds TCP 9000
+    # on its 100.64.0.1 interface, which makes both 0.0.0.0:9000 and
+    # 127.0.0.1:9000 fail with "address already in use" (ugcportal-20bb;
+    # the same collision was already noted at ugcportal-aeb's close). On
+    # such a machine set MINIO_HOST_PORT (and S3_ENDPOINT to match) in the
+    # env compose reads -- `.env`, or `docker compose --env-file .env.local`.
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "${MINIO_HOST_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_HOST_PORT:-9001}:9001"
     environment:
       MINIO_ROOT_USER: ${S3_ACCESS_KEY_ID:-minioadmin}
       MINIO_ROOT_PASSWORD: ${S3_SECRET_ACCESS_KEY:-minioadmin}
