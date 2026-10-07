@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "node scripts/check-migrations.mjs && node scripts/with-local-ca.mjs next dev",
     "dev:inspect": "node scripts/check-migrations.mjs && node --inspect node_modules/next/dist/bin/next dev",
+    "dev:publish-all": "node scripts/publish-all-dev.mjs",
     "build": "node scripts/with-local-ca.mjs next build",
     "start": "node scripts/with-local-ca.mjs next start",
     "lint": "eslint",
