@@ -181,11 +181,15 @@ const WRITE_PATH = "app/api/media/route.ts";
  *
  * Why an allowance exists at all. From ugcportal-3ae on, a Media row with no
  * attestation is on no anonymous surface — `PUBLIC_MEDIA_SCOPE` filters it
- * out — so nine test files that seed published media need a declaration
- * alongside it. `src/lib/test-support/media-fixtures.ts` is the one copy of
- * "what a published row looks like" those files share; the alternative is
- * nine copies of eleven columns, which is the sibling-omission family this
- * scan's own header names.
+ * out — so seven test files that import `seedMedia` from this module need a
+ * declaration alongside it (not nine — the count and the method for
+ * re-deriving it, by `import`/`from` declaration rather than by grepping the
+ * bare path, live in that module's own comment above the write, since a
+ * number restated in two places is a number that can drift in one of them).
+ * `src/lib/test-support/media-fixtures.ts` is the one copy of "what a
+ * published row looks like" those files share; the alternative is seven
+ * copies of eleven columns, which is the sibling-omission family this scan's
+ * own header names.
  *
  * Why it is safe, and the two things that keep it so rather than this
  * paragraph. The directory is test-only by construction, and

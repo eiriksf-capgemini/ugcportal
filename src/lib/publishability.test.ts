@@ -210,8 +210,13 @@ describe("K2: a person in the frame needs the PEOPLE layer settled", () => {
     const blocker = publishabilityBlocker(
       upload({ attestation: showingPeople }),
     );
+    // Asserted by name, against the one value that is right, rather than
+    // also against a value that is merely wrong: `toBe("people_uncleared")`
+    // already fails on any other blocker, including `attestation_missing`,
+    // so a second assertion naming that one specifically added no case this
+    // one did not already cover (review round 2, finding 2 — the twin of
+    // round 1's finding 7 in route.test.ts, which removed the same shape).
     expect(blocker).toBe("people_uncleared");
-    expect(blocker).not.toBe("attestation_missing");
   });
 
   it("publishes the same upload once a PEOPLE clearance exists", () => {

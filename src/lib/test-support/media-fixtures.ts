@@ -113,11 +113,23 @@ export async function seedMedia(
     That matcher gap is real and is ugcportal-xqal; this file does not rely on
     it.
 
-    Writing it here rather than in each test file is the point. Nine test
-    files seed published media through this helper and all nine need a
-    declaration now that the public scope requires one; nine copies of these
-    eleven columns is precisely the sibling-omission shape this file's own
-    header says it exists to prevent.
+    Writing it here rather than in each test file is the point. Seven test
+    files import `seedMedia` from this module to seed published media — not
+    nine: a bare count here would be a figure nobody could check without
+    retyping it, so re-derive it instead of trusting it. List every test
+    file under `src` whose own `import` or dynamic `import()` names this
+    module, the way `importSpecifiersIn` in
+    src/lib/attestation-write-paths.test.ts resolves specifiers, rather than
+    grepping the path as a bare string — a plain grep for the path
+    overcounts, catching a comment in route.test.ts that only mentions this
+    file and the path string literals inside
+    attestation-write-paths.test.ts's own scanner fixtures, neither of which
+    imports or calls `seedMedia`. The other seeders in this tree (that
+    file's `row()`, for one) build the row themselves rather than going
+    through here. All seven of the real importers need a declaration now
+    that the public scope requires one; seven copies of these eleven columns
+    is precisely the sibling-omission shape this file's own header says it
+    exists to prevent.
   */
   await client.mediaAttestation.create({
     data: {

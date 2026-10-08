@@ -1453,8 +1453,16 @@ describe("publishing something showing a person requires a PEOPLE clearance (ugc
     expect(body.blocker).toBe("people_uncleared");
     // A redundant negative assertion about the attestation blocker used to
     // sit here; once the line above passes it had no failing case (review
-    // round 1, finding 7). What it reached for is asserted where it can
-    // fail: "every message is distinct" in src/lib/publishability.test.ts.
+    // round 1, finding 7). It is NOT "every message is distinct" in
+    // src/lib/publishability.test.ts that would catch a routing regression
+    // here (round 2, finding 2 — that test guards message collisions in the
+    // static PUBLISH_BLOCKER_MESSAGES map, a different bug class, and does
+    // not move if `publishabilityBlocker` picks the wrong code for this
+    // input). The `toBe` above already is the specific-value assertion that
+    // distinguishes `people_uncleared` from every other blocker; the
+    // predicate-level case this HTTP test exercises is
+    // src/lib/publishability.test.ts's own K2 test, which asserts the same
+    // way for the same reason.
     expect(body.error).toBe(PUBLISH_BLOCKER_MESSAGES.people_uncleared);
     expect(mediaUpdateManyMock).not.toHaveBeenCalled();
     expectNoOtherWrites();
