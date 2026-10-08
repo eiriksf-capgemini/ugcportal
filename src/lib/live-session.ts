@@ -234,8 +234,12 @@ export function recordedIdentity(session: Session): {
  * Re-check the sign-in policy for an existing session, and refuse it when
  * the identity that minted it is no longer permitted.
  *
- * Returns the session untouched when it is still permitted, so the permitted
- * path adds nothing to the object the rest of the app reads.
+ * BOTH BRANCHES NARROW (ugcportal-5gii). Neither the permitted nor the
+ * refused answer is the object this function was handed: `permittedSession`
+ * and `refusedSession` each build a new one by naming the fields it
+ * carries. The permitted path used to `return session`, and at runtime that
+ * object is the whole `Session` ROW — `sessionToken` included — which
+ * @auth/core writes straight out as the body of GET /api/auth/session.
  */
 export async function enforceLiveSessionPolicy(
   session: Session,
@@ -253,7 +257,7 @@ export async function enforceLiveSessionPolicy(
     provider: recorded.provider,
   });
   if (decision.permitted) {
-    return session;
+    return permittedSession(session);
   }
 
   const suppressed = dueToLog(refusalLog, decision.reason);
@@ -368,6 +372,128 @@ async function revokeSession(id: string | null, userId: string): Promise<void> {
       );
     }
   }
+}
+
+/**
+ * Build an object by naming the keys to keep off `source`, in the order
+ * `keys` lists them — never by removing the ones to drop. This is what makes
+ * `SESSION_CLIENT_KEYS` / `SESSION_USER_CLIENT_KEYS` below load-bearing
+ * rather than decorative commentary: `permittedSession` and
+ * `permittedSessionUser` call this with those exact constants, so the only
+ * way to change what the payload discloses is to edit the constant, and
+ * doing so is the whole diff a reviewer sees.
+ */
+function pick<T extends object, K extends keyof T>(
+  source: T,
+  keys: readonly K[],
+): Pick<T, K> {
+  const result = {} as Pick<T, K>;
+  for (const key of keys) {
+    result[key] = source[key];
+  }
+  return result;
+}
+
+/**
+ * THE SESSION PAYLOAD'S ALLOWLIST (ugcportal-5gii), in the same spirit as
+ * `MEDIA_ANONYMOUS_SELECT` in src/lib/media-access.ts: a column reaches an
+ * audience because somebody decided it should, never because it happened to
+ * be on the row.
+ *
+ * These two tuples ARE that decision, written down, and they are the ONLY
+ * place it is written: `permittedSession` and `permittedSessionUser` below
+ * build their answer by calling `pick` with exactly these constants, so
+ * there is no second, hand-written field list in production code for them
+ * to drift from. src/lib/auth.session-payload.test.ts additionally derives
+ * its expected key set from these same constants (not just a hand-written
+ * literal) and keeps one hand-written literal as an independent anchor, so
+ * a change to either the constants or the `pick` call is caught from both
+ * directions.
+ *
+ * WHY AN ALLOWLIST AND NOT A DELETE. The leak this fixes was not a field
+ * someone forgot to remove; it was the absence of any decision at all — the
+ * permitted path returned the adapter's `Session` row, so every column the
+ * schema has or ever gains is disclosed by default. Removing `sessionToken`
+ * alone would have left `id`, `userId`, `signInProvider` and `signInEmail`
+ * out, and would re-leak the next column added to `model Session`.
+ *
+ * `expires` is kept because `DefaultSession` requires it and
+ * /api/auth/session clients read it; `user` because it is the entire reason
+ * the endpoint exists.
+ */
+export const SESSION_CLIENT_KEYS = ["expires", "user"] as const;
+
+/**
+ * The same decision for the nested user, which needs its own: at runtime
+ * `session.user` is the whole `User` ROW the adapter read (@auth/core does
+ * `session: { ...session, user }` over @auth/prisma-adapter's
+ * `getSessionAndUser`), so `emailVerified`, `createdAt`, `updatedAt` and
+ * `configuredHandle` are all reachable through it.
+ *
+ * WHY THESE FIVE, each with the reader that needs it:
+ *
+ *   `id`    every gate — `hasSignedInUser` (src/lib/session.ts),
+ *           `requireAdmin` (src/lib/admin.ts), `session?.user?.id` in the
+ *           media routes;
+ *   `role`  `requireAdmin`, re-read per request so a demotion lands at once;
+ *   `name`  the header (src/components/auth-status.tsx:95);
+ *   `email` the same header line's fallback, and the actor address recorded
+ *           by src/app/admin/settings/users/actions.ts and
+ *           src/app/api/admin/rights/decision/route.ts;
+ *   `image` not read by any first-party surface today, and kept anyway
+ *           because it is part of @auth/core's OWN idea of the client
+ *           subset: its JWT branch builds `user: { name, email, image }` and
+ *           calls that "a limited subset of information to the client"
+ *           (@auth/core/lib/actions/session.js). Dropping it would narrow
+ *           below the library's documented session shape.
+ *
+ * No other `User` column has a reader (checked by grepping `session.user`
+ * across src/ for this bead), so no other column is disclosed.
+ */
+export const SESSION_USER_CLIENT_KEYS = [
+  "id",
+  "name",
+  "email",
+  "image",
+  "role",
+] as const;
+
+/**
+ * The session a permitted request gets: the two allowlisted keys, built by
+ * naming them, over an object that is NOT the row.
+ *
+ * A fresh object rather than the argument, which is a behaviour change worth
+ * stating: callers used to get back the very object they passed in
+ * (`result === session`), and src/lib/live-session.test.ts asserted exactly
+ * that with `expect(result).toBe(session)`. They now get a narrowed copy.
+ * What the callers actually read is listed above field by field, none of it
+ * depends on object identity, and returning the argument is what put the
+ * row in the response body.
+ */
+function permittedSession(session: Session): Session {
+  return pick(
+    { expires: session.expires, user: permittedSessionUser(session.user) },
+    SESSION_CLIENT_KEYS,
+  );
+}
+
+/**
+ * `undefined` in, `undefined` out, so a permitted session that somehow has
+ * no user narrows to the same shape a refused one does rather than
+ * inventing a user object with five undefined fields — which
+ * `hasSignedInUser` would still refuse, but which would read as a signed-in
+ * visitor to anything checking for the key.
+ */
+function permittedSessionUser(user: Session["user"]): Session["user"] {
+  if (!user) {
+    return undefined;
+  }
+  // Named via `pick` and `SESSION_USER_CLIENT_KEYS`, deliberately. A spread
+  // with deletions here would compile, read almost identically in a diff,
+  // and disclose whatever `model User` gains next; a hand-written object
+  // literal here would, as round 1 found, silently disconnect from the
+  // constant above it.
+  return pick(user, SESSION_USER_CLIENT_KEYS);
 }
 
 /**

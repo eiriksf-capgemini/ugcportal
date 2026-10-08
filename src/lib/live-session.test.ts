@@ -151,7 +151,7 @@ afterEach(async () => {
 });
 
 describe("a session whose identity is still permitted (K2)", () => {
-  it("is handed back untouched, with its rows intact", async () => {
+  it("keeps its user and its rows, as a narrowed copy of the row", async () => {
     const [first] = await signedIn({});
     const session = sessionFor(first);
 
@@ -160,9 +160,14 @@ describe("a session whose identity is still permitted (K2)", () => {
       email: LISTED,
     });
 
-    // The same object, not a copy: the permitted path adds nothing to what
-    // the rest of the app reads.
-    expect(result).toBe(session);
+    // A COPY, NOT THE ARGUMENT, and that is the fix for ugcportal-5gii:
+    // this used to assert `result === session`, which is precisely what put
+    // the whole `Session` row — `sessionToken` included — into the body of
+    // GET /api/auth/session. What the rest of the app actually reads is
+    // asserted instead, and the payload's exact key set is pinned in
+    // src/lib/auth.session-payload.test.ts.
+    expect(result).not.toBe(session);
+    expect(result).not.toHaveProperty("sessionToken");
     expect(result.user?.id).toBe(USER_ID);
     expect(await liveSessionIds()).toEqual(["session-0", "session-1"]);
   });
