@@ -3,7 +3,7 @@ import { resolveSessionOrAnonymous } from "@/lib/session-or-anonymous";
 import { hasSignedInUser } from "@/lib/session";
 
 /**
- * The header's nav landmark for /upload (ugcportal-t0y), shown only to
+ * The header's nav entry for /upload (ugcportal-t0y), shown only to
  * exactly the population src/app/upload/page.tsx:37 itself would let
  * through — gated on `hasSignedInUser` (src/lib/session.ts), the same
  * predicate src/components/auth-status.tsx uses (ugcportal-t0y round 3
@@ -40,10 +40,25 @@ import { hasSignedInUser } from "@/lib/session";
  *    synchronous input" the moment it meets one, so app-shell.tsx's own
  *    tests stub this component out rather than executing it.
  *
- * All-or-nothing rather than always rendering an empty <nav> and hiding only
- * the link inside it: a landmark with no content is a known screen-reader
- * anti-pattern, so a signed-out visitor gets no <nav> here at all rather than
- * one that resolves to empty.
+ * All-or-nothing rather than always rendering an empty list item and hiding
+ * only the link inside it: an empty list entry is as much a known screen-
+ * reader anti-pattern as a landmark with no content, so a signed-out visitor
+ * gets no entry here at all rather than one that resolves to empty.
+ *
+ * ugcportal-i7lr: this used to wrap the link in its OWN `<nav aria-
+ * label="Primary">`, a second navigation landmark sitting right next to
+ * site-header.tsx's `<nav aria-label="Main navigation">` and holding only
+ * this one link — a landmark a screen-reader user could jump to that offered
+ * a choice between "a real menu" and "a menu of exactly one item" for no
+ * reason. It now returns a bare `<li>` instead, so the caller can splice it
+ * in as one more item of the SAME shared `<ul>` the header's main nav and
+ * its mobile-toggle twin both render from (site-header.tsx renders this
+ * twice — once directly inside the desktop `<ul>`, once passed as
+ * `children` into `MobileNavToggle` — both reaching the same session gate
+ * below, so the two can never disagree about whether Upload belongs in the
+ * list). The all-or-nothing contract above (null, never an empty node) is
+ * exactly what keeps that splice safe: there is never a stray empty `<li>`
+ * for a signed-out visitor either.
  *
  * The auth gate lives here, server-side; whether the link is the CURRENT
  * page does not, and lives in the Client Component it renders
@@ -58,8 +73,8 @@ export async function UploadNavLink() {
   if (!hasSignedInUser(session)) return null;
 
   return (
-    <nav aria-label="Primary" className="shrink-0">
+    <li>
       <UploadLink />
-    </nav>
+    </li>
   );
 }

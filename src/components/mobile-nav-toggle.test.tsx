@@ -537,6 +537,45 @@ describe("MobileNavToggle (ugcportal-14k9)", () => {
   });
 
   /**
+   * ugcportal-i7lr K3: `children` is the slot site-header.tsx uses to pass
+   * its own `<UploadNavLink />` into this panel's `<ul>`, so the mobile menu
+   * carries the same upload entry the desktop `<nav>` does rather than
+   * silently dropping it (see this component's own doc comment on the prop).
+   * This proves the mechanism itself at runtime - that whatever is passed as
+   * `children` actually lands inside the SAME `<ul>` the mapped `items` do,
+   * positioned AFTER them - independent of SiteHeader/UploadNavLink, which
+   * have their own dedicated test files.
+   *
+   * THE FIXTURE MUTATION: removed `{children}` from the `<ul>` in this
+   * component's own source and reran this test by hand: the extra `<li>` was
+   * never found in the panel (`extra` came back `null`), so the assertion
+   * below failed as expected. Reverted immediately after.
+   */
+  it("K3: renders an extra child after the mapped items, inside the same panel list", () => {
+    act(() => {
+      root.render(
+        <MobileNavToggle items={ITEMS}>
+          <li data-testid="extra-item">
+            <a href="/upload">Upload</a>
+          </li>
+        </MobileNavToggle>,
+      );
+    });
+
+    act(() => {
+      toggleButton().click();
+    });
+
+    const nav = panel();
+    expect(nav, "panel did not open").not.toBeNull();
+    const links = [...(nav?.querySelectorAll("a") ?? [])];
+    expect(links.map((a) => a.textContent)).toEqual(["Gallery", "About", "Upload"]);
+
+    const extra = nav?.querySelector('[data-testid="extra-item"]');
+    expect(extra, "extra child not found in the panel").not.toBeNull();
+  });
+
+  /**
    * THE FIXTURE MUTATION (review-standards family 3): confirms the K1 test
    * above is actually checking something that can fail, by running the same
    * assertions against a markup shape where the panel is open but EMPTY -

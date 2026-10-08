@@ -141,13 +141,32 @@ export function SiteHeader() {
             <span className="min-w-0 truncate">{SITE_NAME}</span>
           </Link>
 
-          <MobileNavToggle items={NAV_ITEMS} />
+          {/*
+            ugcportal-i7lr: `<UploadNavLink />` is passed here as `children`
+            so the mobile popover's `<ul>` ends with the exact same upload
+            entry the desktop `<nav>` below does — the same element, the
+            same session gate, rendered a second time the same way
+            MobileNavToggle already renders a second copy of NAV_ITEMS (see
+            that component's own comment) rather than reading a markup
+            block repositioned by CSS.
+          */}
+          <MobileNavToggle items={NAV_ITEMS}>
+            <UploadNavLink />
+          </MobileNavToggle>
 
           {/*
             The desktop form of the same nav MobileNavToggle renders below
             `md` — see that component's own comment for why this is a
             second, separate rendering of NAV_ITEMS rather than one markup
             block repositioned by CSS.
+
+            ONE landmark (ugcportal-i7lr): `<UploadNavLink />` used to render
+            its own `<nav aria-label="Primary">` as a SIBLING of this one,
+            so a signed-in visitor's header carried two nav landmarks, the
+            second holding only the Upload link. It now returns a bare `<li>`
+            (or null, signed out) and is rendered as the last item of THIS
+            `<ul>` instead — one nav landmark, with Upload an ordinary
+            member of its list rather than a landmark of its own.
           */}
           <nav aria-label="Main navigation" className="hidden md:flex">
             <ul className="flex items-center gap-4 text-sm">
@@ -156,10 +175,9 @@ export function SiteHeader() {
                   <PrimaryNavLink href={item.href}>{item.label}</PrimaryNavLink>
                 </li>
               ))}
+              <UploadNavLink />
             </ul>
           </nav>
-
-          <UploadNavLink />
 
           <div className="ml-auto flex min-w-0 items-center gap-2">
             <AuthStatus />

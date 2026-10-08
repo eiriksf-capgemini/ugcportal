@@ -421,9 +421,11 @@ describe("the assembled shell: AuthStatus and UploadNavLink survive a rejected g
     expect(authMarkup).toContain(">Sign in<");
     expect(authMarkup).not.toContain("Sign out");
 
-    // UploadNavLink() renders `null` (no `<nav>` at all) for a signed-out
-    // visitor — see that component's own "all-or-nothing" comment — so
-    // resolving to `null` IS the signed-out markup here, not a crash.
+    // UploadNavLink() renders `null` (no nav entry at all, since ugcportal-
+    // i7lr folded it into site-header.tsx's own single nav landmark as a
+    // plain <li>) for a signed-out visitor — see that component's own
+    // "all-or-nothing" comment — so resolving to `null` IS the signed-out
+    // markup here, not a crash.
     expect(navResult.value).toBeNull();
 
     // Exactly one log for the whole request, not three. This proves the
