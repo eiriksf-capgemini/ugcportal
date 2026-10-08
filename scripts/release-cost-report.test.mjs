@@ -370,6 +370,59 @@ describe("classifySeverity (severity is read from the reviewer's words, never gu
       // Same-line flag is still excluded -- this isn't just deleting the check.
       expect(classifySeverity("Found 2 medium --comment next round")).toMatchObject({ medium: 0 });
     });
+
+    describe("same-line flag exclusion is a closed whitelist of line terminators, not a blacklist of whitespace (ugcportal-zo8n round 4)", () => {
+      // Round 2 excluded a flag glued to the count after any `\s` (which
+      // also matches "\n"); round 3 narrowed that to `[ \t]` to stop
+      // matching "\n", but `[ \t]` only recognises two ASCII characters as
+      // "same line" -- every OTHER whitespace character (NBSP, the
+      // U+2002/U+3000 family, \f, \v) was then misread as if it were a line
+      // break, which wrongly took a quoted CLI invocation like
+      // "121 high<NBSP>--comment" back OUT of the exclusion and counted it
+      // as a real finding again -- the original bug's exact shape, just
+      // with a different character in the gap. This enumerates the actual
+      // line terminators instead -- \n, \r (and \r\n), U+2028 LINE
+      // SEPARATOR, U+2029 PARAGRAPH SEPARATOR, U+0085 NEL -- so "same line"
+      // means "not one of these five characters", a closed set that a
+      // whitespace character nobody thought of cannot defeat.
+      //
+      // Characters are built with String.fromCodePoint rather than typed as
+      // literal \u escapes in this file's own source, so nothing here
+      // depends on how this file's text happens to get encoded.
+      const bodyWithGap = (gap) => `\`121 high${gap}--comment\`): 0 findings.`;
+
+      it.each([
+        ["LF", "\n"],
+        ["CR", "\r"],
+        ["CRLF", "\r\n"],
+        ["LINE SEPARATOR (U+2028)", String.fromCodePoint(0x2028)],
+        ["PARAGRAPH SEPARATOR (U+2029)", String.fromCodePoint(0x2029)],
+        ["NEL (U+0085)", String.fromCodePoint(0x0085)],
+      ])("counts the flag as a real finding across a genuine line terminator: %s", (_name, gap) => {
+        // These separate the count from the flag onto a different line, so
+        // this is no longer the glued quoted-CLI shape -- it must count.
+        expect(classifySeverity(bodyWithGap(gap))).toMatchObject({ medium: 121 });
+      });
+
+      it.each([
+        ["SPACE (U+0020)", " "],
+        ["TAB (U+0009)", "\t"],
+        ["NBSP (U+00A0) -- reachable: leaks in from rich-text copy-paste", String.fromCodePoint(0x00a0)],
+        ["EN SPACE (U+2002)", String.fromCodePoint(0x2002)],
+        ["IDEOGRAPHIC SPACE (U+3000)", String.fromCodePoint(0x3000)],
+        ["FIGURE SPACE (U+2007)", String.fromCodePoint(0x2007)],
+        ["NARROW NO-BREAK SPACE (U+202F)", String.fromCodePoint(0x202f)],
+        ["MONGOLIAN VOWEL SEPARATOR (U+180E)", String.fromCodePoint(0x180e)],
+        ["WORD JOINER (U+2060)", String.fromCodePoint(0x2060)],
+        ["FORM FEED (\\f) -- unreachable in practice, wrong in principle under round 3", "\f"],
+        ["VERTICAL TAB (\\v) -- unreachable in practice, wrong in principle under round 3", "\v"],
+      ])("excludes the flag as same-line across a non-terminator space: %s", (_name, gap) => {
+        // None of these is a line terminator, so the flag is still "on the
+        // same line" as the count -- this is still the quoted-CLI shape
+        // and must not count.
+        expect(classifySeverity(bodyWithGap(gap))).toMatchObject({ medium: 0 });
+      });
+    });
   });
 });
 

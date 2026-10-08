@@ -474,6 +474,22 @@ export function classifySeverity(body) {
   // "Round-1 mediums verified fixed" is a back-reference, not a count: the
   // number must not be glued to a hyphen or follow the word "round".
   const summary = /(?<![\w-])(?<!round\s)(\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+(?:of them\s+|further\s+|more\s+|new\s+|post-cap\s+|comment\s+|cap\s+|confirmed\s+|plausible\s+)?(mediums?|highs?|lows?)\b(?!-or-above)(?!\s+or\s+above)/gi;
+  // "Same line" is a closed WHITELIST of genuine line terminators -- \n, \r
+  // (and \r\n, which is just \r then \n, both already in the set), U+2028
+  // LINE SEPARATOR, U+2029 PARAGRAPH SEPARATOR, U+0085 NEL -- rather than an
+  // open BLACKLIST of whitespace that isn't one. Rounds 1-3 each narrowed a
+  // blacklist (bare "--", then \s, then [ \t]) and each left a residue:
+  // [ \t] still misreads U+00A0 NBSP (reachable -- leaks in from rich-text
+  // copy-paste) and the whole U+2002/U+3000/U+2007/U+202F/U+180E/U+2060
+  // family of spaces, plus \f/\v, as line breaks -- wrongly taking a quoted
+  // CLI invocation like "121 high<NBSP>--comment" OUT of the same-line
+  // exclusion and back into being counted as a real medium, the original
+  // bug's exact shape with a different character in the gap. Defining the
+  // five characters a line break actually IS, and treating every other
+  // character -- whitespace or not -- as "same line", means a character
+  // nobody enumerated by name can't defeat this the way it kept defeating
+  // the blacklist.
+  const sameLineFlag = /^[^\n\r\u2028\u2029\u0085]*--[A-Za-z]/;
   for (const m of text.matchAll(summary)) {
     const n = wordToNumber(m[1]);
     if (n === null) continue;
@@ -488,12 +504,9 @@ export function classifySeverity(body) {
     // own prose does this constantly, including in this PR's own body) and
     // must still count.
     if (text[m.index - 1] === "#") continue;
-    // The flag must be on the same line as the count: `[ \t]`, not `\s`,
-    // which also matches "\n" -- a severity count followed by a line break
-    // and then a flag-shaped token on the NEXT line (e.g. a verdict line
-    // followed by a separate "--comment" invocation note) is not the same
-    // quoted-CLI-invocation shape as `121 high --comment` and must still count.
-    if (/^[ \t]*--[A-Za-z]/.test(text.slice(m.index + m[0].length, m.index + m[0].length + 8))) continue;
+    // The flag must be on the same line as the count -- see sameLineFlag
+    // above for what "same line" is built out of.
+    if (sameLineFlag.test(text.slice(m.index + m[0].length, m.index + m[0].length + 8))) continue;
     if (/^low/i.test(m[2])) summaryLow = Math.max(summaryLow, n);
     else summaryMedium = Math.max(summaryMedium, n);
   }
