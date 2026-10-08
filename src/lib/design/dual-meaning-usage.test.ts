@@ -249,6 +249,16 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
     "text-ink": 1,
     "text-muted-foreground": 1,
   },
+  // ugcportal-qfy9: the per-layer clearance form. One `text-ink`, in the
+  // shared textarea class, whose own `bg-surface-3` fill is the background
+  // it renders against — the identical pairing triage-form.tsx uses for its
+  // selects one file over. No text-muted-foreground: every other line in
+  // this component sits inside the rights-layer well on page.tsx
+  // (`bg-muted`), so the helper text under the label is text-ink-muted, as
+  // the sibling rights screen does inside its own wells.
+  "src/app/admin/curation/clearance-form.tsx": {
+    "text-ink": 1,
+  },
   "src/app/admin/settings/users/page.tsx": { "text-muted-foreground": 4 },
   "src/app/admin/settings/instagram/page.tsx": { "text-muted-foreground": 3 },
   "src/app/upload/page.tsx": { "text-muted-foreground": 1 },

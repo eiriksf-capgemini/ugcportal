@@ -18,6 +18,7 @@ import {
   type GateListing,
   type GateReview,
   type GateUpload,
+  CLEARABLE_LAYERS,
   MEDIA_GATE_SELECT,
   TRIAGE_FACTS,
   type TriageFact,
@@ -26,8 +27,10 @@ import {
   evaluateSellability,
   isResaleRightsRoute,
   isResaleRightsStatus,
+  isClearableLayer,
   isSellable,
   triageBlocker,
+  unsettledLayers,
   uploaderClearanceBlocker,
 } from "@/lib/resale-rights";
 
@@ -1938,5 +1941,216 @@ describe("ugcportal-15r: the uploader's own attestation", () => {
         "attestation_uploader_not_adult",
       );
     });
+  });
+});
+
+describe("unsettledLayers (ugcportal-qfy9)", () => {
+  /** The clearance a layer needs: non-blank reason, signed by a current admin. */
+  function adminClearance(layer: RightsLayer): GateLayerClearance {
+    return {
+      layer,
+      reason: `Justification for ${layer}`,
+      clearedByUserId: "admin-1",
+      clearedBy: { role: "ADMIN" },
+    };
+  }
+
+  /** Every clearable layer answered `true`, nothing cleared. */
+  function everyLayerPresent(
+    overrides: Partial<GateListing> = {},
+  ): GateListing {
+    return clearListing({
+      ...Object.fromEntries(
+        TRIAGE_FACTS.map((fact) => [
+          fact.field,
+          fact.settledBy === "clearance",
+        ]),
+      ),
+      modelReleaseKey: "releases/media-1/release.pdf",
+      ...overrides,
+    });
+  }
+
+  it("is empty for a listing where nothing is in the way", () => {
+    // The baseline, so every non-empty answer below means something.
+    expect(unsettledLayers(clearListing())).toEqual([]);
+  });
+
+  it("agrees with the gate about whether ANYTHING blocks", () => {
+    /*
+      The two readings have to coincide, or the screen and the gate are
+      telling an admin different stories. Checked over a table of listings
+      rather than on one, including the states where only ONE of the two
+      could plausibly be wrong: an unanswered fact, an unsigned triage, a
+      layer nothing settles.
+    */
+    const cases: readonly (readonly [string, GateListing])[] = [
+      ["clean", clearListing()],
+      ["every layer present", everyLayerPresent()],
+      [
+        "one layer cleared",
+        everyLayerPresent({
+          layerClearances: [adminClearance(RightsLayer.MUSIC)],
+        }),
+      ],
+      [
+        "all cleared",
+        everyLayerPresent({
+          layerClearances: CLEARABLE_LAYERS.map(adminClearance),
+        }),
+      ],
+      ["unanswered fact", clearListing({ containsMusic: null })],
+      ["alcohol depicted", clearListing({ depictsAlcohol: true })],
+      ["wine accessory", clearListing({ wineAccessory: true })],
+      [
+        "people without a release",
+        clearListing({
+          depictsPeople: true,
+          modelReleaseKey: null,
+          layerClearances: [adminClearance(RightsLayer.PEOPLE)],
+        }),
+      ],
+    ];
+    for (const [name, listing] of cases) {
+      const blocked = triageBlocker(listing) !== null;
+      // The triage signature is phase 2 of the gate and belongs to no
+      // layer, so it is the one blocker `unsettledLayers` cannot report —
+      // none of these fixtures is unsigned, which keeps the comparison
+      // honest rather than true by construction.
+      expect(listing.triagedBy?.role, name).toBe("ADMIN");
+      expect(unsettledLayers(listing).length > 0, name).toBe(blocked);
+    }
+  });
+
+  it("drops exactly the cleared layer, for every clearable layer in turn", () => {
+    /*
+      The pure-function half of K1. The integration test in
+      curation-clearance-write.test.ts walks the sequence against a real
+      database; this walks the whole table, which is cheap here and would
+      not be there.
+    */
+    for (const cleared of CLEARABLE_LAYERS) {
+      const listing = everyLayerPresent({
+        layerClearances: [adminClearance(cleared)],
+      });
+      expect(unsettledLayers(listing), cleared).toEqual(
+        CLEARABLE_LAYERS.filter((layer) => layer !== cleared),
+      );
+    }
+  });
+
+  it("reports a layer nobody has ANSWERED, not only one nobody cleared", () => {
+    // An unanswered question is not a settled one. The gate refuses the
+    // whole upload for it (`triage_incomplete`); this says which question.
+    expect(unsettledLayers(clearListing({ containsMusic: null }))).toEqual([
+      RightsLayer.MUSIC,
+    ]);
+  });
+
+  it("reports a layer nothing settles even with a clearance recorded", () => {
+    // ALCOHOL stays in the list whatever anyone signs, which is what makes
+    // the screen refuse to offer it a form.
+    const listing = clearListing({
+      depictsAlcohol: true,
+      layerClearances: [adminClearance(RightsLayer.ALCOHOL)],
+    });
+    expect(unsettledLayers(listing)).toEqual([RightsLayer.ALCOHOL]);
+  });
+
+  it("does not report a layer whose `true` encumbers nothing", () => {
+    // WINE_ACCESSORY: §3.1a settles accessories as monetisable, so a `yes`
+    // is the subject of the site rather than a question to clear.
+    expect(unsettledLayers(clearListing({ wineAccessory: true }))).toEqual([]);
+  });
+
+  it("keeps a layer blocked when its clearance is unsigned, blank or demoted", () => {
+    // The three ways `layerIsCleared` says no. Each one on its own, so a
+    // helper that checked only "a row exists" fails all three.
+    const broken: readonly GateLayerClearance[] = [
+      { ...adminClearance(RightsLayer.MUSIC), reason: "   " },
+      { ...adminClearance(RightsLayer.MUSIC), clearedByUserId: null },
+      { ...adminClearance(RightsLayer.MUSIC), clearedBy: { role: "USER" } },
+    ];
+    for (const clearance of broken) {
+      expect(
+        unsettledLayers(
+          clearListing({ containsMusic: true, layerClearances: [clearance] }),
+        ),
+        JSON.stringify(clearance),
+      ).toEqual([RightsLayer.MUSIC]);
+    }
+  });
+
+  it("never lets one layer's clearance settle another", () => {
+    /*
+      K2 as a pure-function table: for every ORDERED PAIR of distinct
+      clearable layers, a clearance on the first must leave the second in
+      the list. A `layerIsCleared` matching any clearance passes a
+      one-pair test for whichever pair the test picked.
+    */
+    for (const cleared of CLEARABLE_LAYERS) {
+      for (const other of CLEARABLE_LAYERS) {
+        if (other === cleared) continue;
+        const listing = everyLayerPresent({
+          layerClearances: [adminClearance(cleared)],
+        });
+        const remaining = unsettledLayers(listing);
+        // Both directions in the same assertion pair: the cleared layer is
+        // gone AND the other one is not. The `toContain` alone would pass
+        // against a gate that cleared nothing at all.
+        expect(remaining, `${cleared} -> ${other}`).not.toContain(cleared);
+        expect(remaining, `${cleared} -> ${other}`).toContain(other);
+      }
+    }
+  });
+});
+
+describe("CLEARABLE_LAYERS and isClearableLayer (ugcportal-qfy9)", () => {
+  it('is exactly the registry\'s `settledBy: "clearance"` layers', () => {
+    expect(CLEARABLE_LAYERS).toEqual(
+      TRIAGE_FACTS.filter((fact) => fact.settledBy === "clearance").map(
+        (fact) => fact.layer,
+      ),
+    );
+    // Non-empty and a strict subset: an empty list would make the write
+    // path refuse everything, and a list equal to the whole enum would let
+    // ALCOHOL be "cleared".
+    expect(CLEARABLE_LAYERS.length).toBeGreaterThan(0);
+    expect(CLEARABLE_LAYERS.length).toBeLessThan(
+      Object.values(RightsLayer).length,
+    );
+  });
+
+  it("excludes every layer the gate would not consult a clearance for", () => {
+    for (const fact of TRIAGE_FACTS) {
+      expect(
+        CLEARABLE_LAYERS.includes(fact.layer),
+        `${fact.layer} (${fact.settledBy})`,
+      ).toBe(fact.settledBy === "clearance");
+    }
+  });
+
+  it("accepts a clearable layer and refuses everything else", () => {
+    for (const layer of CLEARABLE_LAYERS) {
+      expect(isClearableLayer(layer), layer).toBe(true);
+    }
+    for (const layer of [RightsLayer.ALCOHOL, RightsLayer.WINE_ACCESSORY]) {
+      expect(isClearableLayer(layer), layer).toBe(false);
+    }
+    // A form field is a string, and these are the shapes one can arrive as.
+    for (const value of [
+      "music",
+      "MUSIC ",
+      "",
+      null,
+      undefined,
+      0,
+      ["MUSIC"],
+      { layer: "MUSIC" },
+      "toString",
+      "__proto__",
+    ]) {
+      expect(isClearableLayer(value), JSON.stringify(value)).toBe(false);
+    }
   });
 });

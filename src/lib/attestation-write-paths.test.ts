@@ -1,12 +1,16 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import ts from "typescript";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { isTestFile, scriptKindFor, walkSourceFiles } from "@/lib/design/scan-source";
+import { isTestFile, walkSourceFiles } from "@/lib/design/scan-source";
+import {
+  type PrismaModelWrite,
+  bindingsNamed,
+  prismaModelWritesIn,
+} from "@/lib/test-support/prisma-write-scan";
 
 /**
  * ugcportal-15r K3, as a claim about the WHOLE TREE: an attestation row is
@@ -60,108 +64,28 @@ import { isTestFile, scriptKindFor, walkSourceFiles } from "@/lib/design/scan-so
 
 const SRC_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-/** Prisma methods that create or replace a MediaAttestation row. */
-const WRITE_METHODS = new Set([
-  "create",
-  "createMany",
-  "createManyAndReturn",
-  "upsert",
-  "update",
-  "updateMany",
-]);
+/**
+ * The matcher itself lives in src/lib/test-support/prisma-write-scan.ts,
+ * shared with ugcportal-qfy9's clearance scan next door. It used to be
+ * inline here; a second table needing the identical AST walk is exactly
+ * when a copy starts to drift, so the walk moved and this file kept the
+ * part that is about attestations: which model, which relation, which file
+ * is allowed to write it, and what the write has to say.
+ *
+ * `walkSourceFiles` is still called HERE rather than behind the helper, so
+ * scripts/tree-walk-timeout-guard.test.mjs can still see that this file
+ * walks the tree and hold it to the cached-helper mitigation below.
+ */
+export type AttestationWrite = PrismaModelWrite;
 
 /** The relation field a nested write would go through. */
 const RELATION_FIELD = "attestation";
 
-/** Prisma's nested-write operations on a relation. */
-const NESTED_WRITE_OPERATIONS = new Set([
-  "create",
-  "createMany",
-  "connectOrCreate",
-  "upsert",
-  "update",
-  "updateMany",
-]);
-
-export type AttestationWrite = {
-  /** `tx.mediaAttestation.create` / `prisma.mediaAttestation.upsert` / … */
-  readonly callee: string;
-  /** The method name at the end of it, or the nested operation. */
-  readonly method: string;
-  /** The call's first argument, as source text. Empty for a nested write. */
-  readonly argument: string;
-  /** True when this is Prisma's nested `attestation: { create: … }` form. */
-  readonly nested: boolean;
-};
-
-function sourceFileOf(file: string): ts.SourceFile {
-  return ts.createSourceFile(
-    file,
-    readFileSync(file, "utf8"),
-    ts.ScriptTarget.Latest,
-    /* setParentNodes */ true,
-    scriptKindFor(file),
-  );
-}
-
-/**
- * Every MediaAttestation write in one file, as AST nodes.
- *
- * Exported so the fixture cases at the bottom can drive it over a temp
- * directory — the scanner is tested, not merely used.
- */
 export function attestationWritesIn(file: string): AttestationWrite[] {
-  const source = sourceFileOf(file);
-  const writes: AttestationWrite[] = [];
-
-  const visit = (node: ts.Node): void => {
-    // (1) `<anything>.mediaAttestation.<writeMethod>(…)`.
-    if (
-      ts.isCallExpression(node) &&
-      ts.isPropertyAccessExpression(node.expression) &&
-      WRITE_METHODS.has(node.expression.name.text) &&
-      ts.isPropertyAccessExpression(node.expression.expression) &&
-      node.expression.expression.name.text === "mediaAttestation"
-    ) {
-      writes.push({
-        callee: node.expression.getText(source),
-        method: node.expression.name.text,
-        argument: node.arguments[0]?.getText(source) ?? "",
-        nested: false,
-      });
-    }
-
-    // (2) Prisma's nested write: an object property named `attestation`
-    // whose value is an object literal carrying a write operation. This is
-    // the shape that sets the same row without naming the model, so a
-    // matcher that only looked for (1) would call it "not a write path".
-    if (
-      ts.isPropertyAssignment(node) &&
-      (ts.isIdentifier(node.name) || ts.isStringLiteral(node.name)) &&
-      node.name.text === RELATION_FIELD &&
-      ts.isObjectLiteralExpression(node.initializer)
-    ) {
-      for (const property of node.initializer.properties) {
-        const name =
-          property.name && (ts.isIdentifier(property.name) || ts.isStringLiteral(property.name))
-            ? property.name.text
-            : "";
-        if (NESTED_WRITE_OPERATIONS.has(name)) {
-          writes.push({
-            callee: `${RELATION_FIELD}: { ${name} }`,
-            method: name,
-            argument: node.initializer.getText(source),
-            nested: true,
-          });
-        }
-      }
-    }
-
-    ts.forEachChild(node, visit);
-  };
-
-  visit(source);
-  return writes;
+  return prismaModelWritesIn(file, {
+    model: "mediaAttestation",
+    relationField: RELATION_FIELD,
+  });
 }
 
 /** Files, relative to `root` with POSIX separators, that write an attestation. */
@@ -174,28 +98,11 @@ export function scanAttestationWritePaths(root: string): string[] {
 
 /**
  * Every `const/let/var userId = …` initialiser in a file, as source text.
- *
- * Used to prove the identifier the write names really does come from the
- * session rather than from the request body — "called with `session.user.id`"
- * is a claim about where the value came from, and the call site alone cannot
- * answer it.
+ * Delegates to the shared scanner for the same reason the matcher above
+ * does; the name is kept because it is what the cases below read.
  */
 export function userIdBindingsIn(file: string): string[] {
-  const source = sourceFileOf(file);
-  const bindings: string[] = [];
-  const visit = (node: ts.Node): void => {
-    if (
-      ts.isVariableDeclaration(node) &&
-      ts.isIdentifier(node.name) &&
-      node.name.text === "userId" &&
-      node.initializer
-    ) {
-      bindings.push(node.initializer.getText(source));
-    }
-    ts.forEachChild(node, visit);
-  };
-  visit(source);
-  return bindings;
+  return bindingsNamed(file, "userId");
 }
 
 /**
