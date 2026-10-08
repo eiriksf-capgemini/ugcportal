@@ -843,11 +843,10 @@ export type ScaleNameCollision = {
 /**
  * Matches a scale-token-shaped custom property: `--color-<name>-<step>`,
  * where `<step>` is a run of digits (`50`, `200`, `950`, ...) or the literal
- * `deep` (this app's one non-numeric step, `--color-petrol-deep`/
- * `--color-fjord-deep`). `<name>` itself may contain hyphens (`danger-surface`
- * does not end in a step, so it never matches; `chart-1` does, deliberately -
- * see the function doc comment on why a perfect alias there is fine, not a
- * false negative).
+ * `deep` (this app's one non-numeric step). `<name>` itself may contain
+ * hyphens (`danger-surface` does not end in a step, so it never matches;
+ * `chart-1` does, deliberately - see the function doc comment on why a
+ * perfect alias there is fine, not a false negative).
  */
 const SCALE_STEP_PROPERTY = /^--color-([a-z][a-z0-9]*(?:-[a-z][a-z0-9]*)*)-(\d+|deep)$/;
 
