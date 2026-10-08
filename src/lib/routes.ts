@@ -22,6 +22,19 @@ export const RIGHTS_BRANDS_PATH = "/admin/settings/rights/brands";
 // that route's own docstring for the grep that backs this claim.
 export const RIGHTS_BRAND_ALCOHOL_PATH = "/api/admin/rights/brands/alcohol";
 
+/**
+ * The curation triage screen (ugcportal-vq3z) — the admin surface that
+ * records the per-upload Part C triage the sellability gate reads.
+ *
+ * NOT under /admin/settings, unlike the three screens above it. Those record
+ * standing configuration about a person, a brand or a connected account;
+ * this one is per-upload case work, and it is the UI half of the endpoint
+ * already living at /api/admin/curation/[id]/price. Price and licence
+ * (ugcportal-yzo7) and the per-layer clearances (ugcportal-qfy9) join this
+ * screen rather than getting screens of their own.
+ */
+export const CURATION_PATH = "/admin/curation";
+
 // Manual upload (ugcportal-n3c). Since the Instagram integration was
 // deferred, this page is the only door media comes in through.
 export const UPLOAD_PATH = "/upload";
