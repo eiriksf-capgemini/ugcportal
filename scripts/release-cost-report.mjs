@@ -482,8 +482,13 @@ export function classifySeverity(body) {
     // a severity count) or `121 high --comment` (a quoted CLI invocation --
     // the exact text of PR #121's own round-1 body, which named the
     // code-review args verbatim and was read as 121 mediums before this fix).
+    // The exclusion must recognise a *flag* -- "--" glued to a letter with no
+    // space, as in `--comment`/`--base`/`--pr` -- not just any two dashes: a
+    // bare "N medium -- prose" uses "--" as a plain separator (this project's
+    // own prose does this constantly, including in this PR's own body) and
+    // must still count.
     if (text[m.index - 1] === "#") continue;
-    if (/^\s*--/.test(text.slice(m.index + m[0].length, m.index + m[0].length + 4))) continue;
+    if (/^\s*--[A-Za-z]/.test(text.slice(m.index + m[0].length, m.index + m[0].length + 8))) continue;
     if (/^low/i.test(m[2])) summaryLow = Math.max(summaryLow, n);
     else summaryMedium = Math.max(summaryMedium, n);
   }
@@ -717,6 +722,22 @@ const SENSITIVE_PATH_NEGATION_RE = /\b(no|none|zero|not|never|nothing|without|fr
  * reads "...this PR touches a sensitive path** (...), so this run does not
  * approve or merge..." -- the "does not" there is about merging, not about
  * whether the path is sensitive, and must not flip this to negated).
+ *
+ * Known blind spot (ugcportal-zo8n), left deliberately unhandled rather than
+ * papered over: this is backward-only. A FORWARD negation -- the cue coming
+ * after the mention instead of before it, as in "Sensitive path check: none
+ * found." or a quoted CLI invocation like `grep "sensitive path" src/` whose
+ * surrounding prose later says "found zero real hits" -- reads as genuine
+ * (`true`) when a human would read it as a clean check. Across all 77 cached
+ * v0.6.0 PR bodies plus this file's own fixtures, this blind spot never
+ * actually misclassified anything (nobody in that corpus phrases a negation
+ * forward), so this is a latent risk, not a live bug; see
+ * `release-cost-report.test.mjs`'s "known forward-negation blind spot"
+ * cases for inputs pinned to today's (wrong) answer rather than silently
+ * left untested. If real review prose starts using a forward phrasing,
+ * extend this function rather than re-widening the backward check -- a
+ * whole-sentence negation check was tried and rejected above for flipping
+ * genuine mentions that carry an unrelated negation later in the sentence.
  *
  * @param {string} text
  */

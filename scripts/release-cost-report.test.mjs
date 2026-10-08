@@ -345,6 +345,20 @@ describe("classifySeverity (severity is read from the reviewer's words, never gu
       const mutated = pr121.round1Body.replace("`121 high --comment`): 0 findings (`[]`)", "`121 high --comment`): 2 medium findings");
       expect(classifySeverity(mutated)).toMatchObject({ medium: 2 });
     });
+
+    it("distinguishes a flag (no space before the following letter) from a plain '--' separator (ugcportal-577s)", () => {
+      // A bare "N <severity> -- prose" must still count: this project's own
+      // prose uses "--" as a plain separator constantly (including in PR
+      // #201's own body and in the pr-review-merge skill doc), and the
+      // original #121 fix over-corrected to treat ANY two-dash run after a
+      // severity word as a CLI invocation, silently zeroing a real verdict.
+      expect(classifySeverity("Found 2 medium -- will fix in next round.")).toMatchObject({ medium: 2, low: 0 });
+      expect(classifySeverity("Found 1 low -- filed as a followup bead.")).toMatchObject({ medium: 0, low: 1 });
+      // A real flag -- glued directly to the dashes, no space -- is still
+      // excluded, on more than just the committed #121 fixture's `--comment`.
+      expect(classifySeverity("`121 high --base main`: 0 findings.")).toMatchObject({ medium: 0 });
+      expect(classifySeverity("`121 high --pr 201`: 0 findings.")).toMatchObject({ medium: 0 });
+    });
   });
 });
 
@@ -373,6 +387,25 @@ describe("hasGenuineSensitivePathMention (ugcportal-577s)", () => {
   it("returns false when the phrase never appears at all", () => {
     expect(hasGenuineSensitivePathMention("CI green, zero findings, merging.")).toBe(false);
     expect(hasGenuineSensitivePathMention("")).toBe(false);
+  });
+
+  describe("known forward-negation blind spot (ugcportal-zo8n): pinned, not fixed", () => {
+    // This function is deliberately backward-only (see its docstring): it
+    // only looks at the clause *before* a "sensitive path(s)" mention for a
+    // negation cue. A negation stated *after* the mention reads as genuine
+    // today, which is the wrong answer for a human reader. The reviewer
+    // checked all 77 cached v0.6.0 PR bodies plus this file's fixtures and
+    // found zero real occurrences of this phrasing -- latent, not manifest
+    // -- so these cases pin today's (known-wrong) behaviour rather than
+    // silently going untested, per the docstring's own instruction not to
+    // re-widen the backward check to cover this.
+    it("reads a forward 'none found' as genuine (wrong, but pinned)", () => {
+      expect(hasGenuineSensitivePathMention("Sensitive path check: none found.")).toBe(true);
+    });
+
+    it("reads a quoted CLI mention followed by a forward negation as genuine (wrong, but pinned)", () => {
+      expect(hasGenuineSensitivePathMention('Ran `grep -rn "sensitive path" src/` and found zero real hits.')).toBe(true);
+    });
   });
 });
 
