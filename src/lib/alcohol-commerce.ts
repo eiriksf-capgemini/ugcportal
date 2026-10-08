@@ -45,6 +45,22 @@ export type BenefitSourceAlcoholFacts = { alcoholLinked: boolean | null };
 export type ListingAlcoholFacts = { depictsAlcohol: boolean | null };
 
 /**
+ * What these rules read about the commercial links attached to one item
+ * (ugcportal-6uxv). A COUNT, not the rows: every rule here asks only whether
+ * any link is attached, and a projection that handed over URLs and brand ids
+ * would invite a caller to decide something else with them in a module whose
+ * whole claim is that it decides §9-2 from a handful of nullable scalars.
+ *
+ * `number` with no "unanswered" state, unlike the two types above, and the
+ * difference is real rather than an oversight: a listing or a brand row can
+ * be genuinely missing, but "how many commercial links does this item carry"
+ * always has an answer, and that answer is zero. A caller that cannot
+ * produce the count has not done the read, which is a bug rather than a
+ * state to be total over.
+ */
+export type CommercialLinkFacts = { commercialLinkCount: number };
+
+/**
  * What the record says about alcohol in the picture.
  *
  * THREE VALUES, NOT A BOOLEAN, because the two refusing states are refused by
@@ -203,6 +219,76 @@ export function commercialPublishRefusal(item: {
   }
 
   return null;
+}
+
+/**
+ * The gate the TRIAGE WRITE path calls before recording an alcohol answer
+ * (ugcportal-6uxv K1).
+ *
+ * THE CONVERSE OF `benefitAttachmentRefusal`, and the reason it has to exist
+ * separately. That one asks "may a commercial thing be attached to this
+ * picture?" at the moment something commercial arrives, reading the alcohol
+ * answer already on the row. This one asks the same legal question from the
+ * other end of the clock: the commercial thing is already attached, and it is
+ * the ANSWER that is arriving. §9-2 does not care which of the two facts was
+ * recorded first — the forbidden state is the pair — so guarding only the
+ * order that happened to be implemented first leaves the other order as a
+ * two-step route to exactly the row the ban is about.
+ *
+ * THE INCOMING ANSWER, NOT THE STORED ONE, is what `listing` carries here.
+ * The caller passes the value it is about to write, so this decides on the
+ * state the transaction would LEAVE BEHIND rather than on the transition. An
+ * item already recorded as showing alcohol and already carrying a link is in
+ * breach, and re-recording that same answer is refused too: the publish route
+ * makes the identical call for the identical reason ("a published row that
+ * fails this was written outside this API and IS in breach, and answering 200
+ * ... because it already happens to be public is the wrong answer to give").
+ * It also means the guard needs no read of the previous answer at all, so
+ * there is no stale-read window between deciding and writing.
+ *
+ * NOT SCOPED TO PUBLISHED ITEMS, although the criterion that asks for it is
+ * written about one. Three reasons, in order of weight. A commercial link can
+ * only be attached to an item that already declares a benefit under a
+ * permitted label (`commercialLinkDisclosureRefusal`), so an unpublished item
+ * carrying one is an advertisement one request away from the public rather
+ * than a draft. Refusing only the published case would leave unpublish ->
+ * reclassify -> publish as a route to the same row, and whether the publish
+ * at the end of it refuses depends on `benefitReceived` still being true —
+ * which withdrawal clears (ugcportal-jain). And the guardrail enumeration
+ * this invariant is measured by already asserts no link sits on an
+ * alcohol-recorded row ANYWHERE, published or not
+ * (src/lib/alcohol-commerce.guardrail.test.ts, "leaves no price, benefit or
+ * link anywhere on an item recorded as showing alcohol").
+ *
+ * LINKS ONLY, not every commercial affordance. A price and a recorded benefit
+ * are reclassifiable-behind in exactly the same way and are NOT guarded here;
+ * that is ugcportal-n0vq, filed from this bead, not an oversight. The
+ * argument for not folding them in now is that each has a different escape
+ * hatch for the admin (unprice, withdraw the disclosure) and so a different
+ * message, and this function's input type is the extension point: another
+ * fact goes in the parameter object beside `commercialLinks`.
+ */
+export function alcoholReclassificationRefusal(item: {
+  /** The answer about to be written, not the one currently stored. */
+  listing: ListingAlcoholFacts | null | undefined;
+  commercialLinks: CommercialLinkFacts;
+}): AlcoholCommerceRefusal | null {
+  // `=== "depicted"` and not `!== "absent"`, matching the WRITE-side reading
+  // in `benefitAttachmentRefusal` rather than the publish-side one. Only a
+  // recorded `yes` creates the forbidden pair; an answer being cleared back
+  // to "nobody has looked" leaves an item that cannot be published while a
+  // benefit stands (`commercialPublishRefusal` refuses the unanswered state
+  // at the public boundary), and refusing it here would mean an admin who
+  // mis-clicked `yes` could not take it back without first dismantling the
+  // item's links.
+  if (alcoholDepiction(item.listing) !== "depicted") return null;
+  if (item.commercialLinks.commercialLinkCount < 1) return null;
+
+  return {
+    error:
+      "This item already carries a commercial link, and nothing commercial may sit on a picture showing alcohol (alkoholloven § 9-2). Detach every commercial link on it first, then record the alcohol answer — recording it now would leave a live advertising link under a photograph of a drink.",
+    field: "depictsAlcohol",
+  };
 }
 
 /**
