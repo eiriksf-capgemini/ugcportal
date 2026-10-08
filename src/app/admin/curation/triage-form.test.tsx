@@ -5,12 +5,15 @@ import {
   CurationTriageForm,
   type TriageFormAnswers,
 } from "@/app/admin/curation/triage-form";
+import type { AttestationAnswers } from "@/lib/attestation";
+import { TRIAGE_FACT_ATTESTATION_FIELD } from "@/lib/curation-attestation";
 import {
   TRIAGE_ANSWER_NO,
   TRIAGE_ANSWER_UNANSWERED,
   TRIAGE_ANSWER_YES,
 } from "@/lib/curation-triage";
 import { TRIAGE_FACTS } from "@/lib/resale-rights";
+import { completeAttestationAnswers } from "@/lib/test-support/attestation";
 
 /**
  * The triage form is an EDIT form over security-relevant columns: submitting
@@ -33,11 +36,15 @@ function answers(value: boolean | null): TriageFormAnswers {
   ) as TriageFormAnswers;
 }
 
-function render(stored: TriageFormAnswers | null): string {
+function render(
+  stored: TriageFormAnswers | null,
+  attestation: AttestationAnswers | null = null,
+): string {
   return renderToStaticMarkup(
     <CurationTriageForm
       mediaId="media-1"
       answers={stored}
+      attestation={attestation}
       action={() => undefined}
     />,
   );
@@ -152,5 +159,59 @@ describe("the form round-trips the stored answers", () => {
         );
       }
     }
+  });
+});
+
+describe("the uploader's attestation seeds an unanswered question (ugcportal-vlnn K1)", () => {
+  // depictsPeople <-> showsIdentifiablePeople, per
+  // TRIAGE_FACT_ATTESTATION_FIELD in src/lib/curation-attestation.ts — the
+  // one mapped field this file needs to prove the behaviour on.
+  const MAPPED_FIELD = "depictsPeople";
+  const ATTESTATION_FIELD = TRIAGE_FACT_ATTESTATION_FIELD[MAPPED_FIELD];
+  if (!ATTESTATION_FIELD) {
+    throw new Error(
+      `${MAPPED_FIELD} has no attestation counterpart — update this test's fixture field`,
+    );
+  }
+
+  it("defaults an unanswered question to the uploader's attested answer", () => {
+    const attestation = completeAttestationAnswers({
+      [ATTESTATION_FIELD]: true,
+    } as Partial<AttestationAnswers>);
+    const markup = render(null, attestation);
+    expect(selectedValue(markup, MAPPED_FIELD)).toBe(TRIAGE_ANSWER_YES);
+  });
+
+  it("never overrides a question the admin has already answered, even where they disagree", () => {
+    // The admin already recorded "no"; the uploader's attestation says
+    // "yes". Re-rendering the form must keep showing what the admin
+    // actually recorded, not reconstruct it from the uploader's answer —
+    // the exact failure this form's own docstring warns about, now with a
+    // second source that could silently win.
+    const attestation = completeAttestationAnswers({
+      [ATTESTATION_FIELD]: true,
+    } as Partial<AttestationAnswers>);
+    const stored = answers(false);
+    const markup = render(stored, attestation);
+    expect(selectedValue(markup, MAPPED_FIELD)).toBe(TRIAGE_ANSWER_NO);
+  });
+
+  it("does not seed a triage fact the attestation never asks about", () => {
+    // depictsAlcohol has no entry in TRIAGE_FACT_ATTESTATION_FIELD — the
+    // attestation never asks about it (see that module's own comment) — so
+    // a complete attestation must not seed it with anything.
+    const attestation = completeAttestationAnswers();
+    const markup = render(null, attestation);
+    expect(selectedValue(markup, "depictsAlcohol")).toBe(
+      TRIAGE_ANSWER_UNANSWERED,
+    );
+  });
+
+  it("leaves a question unanswered when there is no attestation at all", () => {
+    // The fixture mutation that makes the first case non-vacuous: the only
+    // difference from it is the attestation's presence, and the result
+    // flips from a seeded answer to none.
+    const markup = render(null, null);
+    expect(selectedValue(markup, MAPPED_FIELD)).toBe(TRIAGE_ANSWER_UNANSWERED);
   });
 });

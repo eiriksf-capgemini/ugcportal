@@ -5,6 +5,11 @@ import type { RightsLayer } from "@/generated/prisma/enums";
 import { PAGE_CONTAINER_CLASS } from "@/components/site/page-shell";
 import { INLINE_LINK_CLASS } from "@/components/ui/inline-link";
 import { requireAdmin } from "@/lib/admin";
+import {
+  compareTriageFactToAttestation,
+  triageDisagreesWithAttestation,
+  type UploaderTriageComparison,
+} from "@/lib/curation-attestation";
 import { TRIAGE_ANSWER_SELECT } from "@/lib/curation-triage";
 import { prisma } from "@/lib/prisma";
 import {
@@ -86,6 +91,29 @@ const UPLOAD_SELECT = {
   createdAt: true,
   publishedAt: true,
   user: { select: { id: true, name: true, email: true } },
+  // The uploader's own rights declaration (ugcportal-15r), read here so
+  // ugcportal-vlnn can render it beside the admin's own flag and warn on a
+  // disagreement. `null` is "nobody asked the uploader anything" — see
+  // GateAttestation's own comment in src/lib/resale-rights.ts — and that is
+  // exactly the value `compareTriageFactToAttestation` below treats as
+  // distinct from every stored `false`. Written out rather than spread from
+  // ATTESTATION_QUESTIONS, for the same reason TRIAGE_ANSWER_SELECT above is:
+  // Prisma infers the row type from the literal, and attestation.test.ts /
+  // attestation-migration.test.ts already pin that these nine columns (plus
+  // `authorship`) are the whole of AttestationAnswers.
+  attestation: {
+    select: {
+      authorship: true,
+      ownOriginalNotFromWeb: true,
+      showsIdentifiablePeople: true,
+      showsMinors: true,
+      containsMusicNotOwned: true,
+      otherCreativeContributor: true,
+      brandOrSponsorship: true,
+      aiGenerated: true,
+      uploaderIsAdult: true,
+    },
+  },
   listing: {
     select: {
       id: true,
@@ -178,6 +206,49 @@ function answerLabel(stored: boolean | null): string {
 }
 
 /**
+ * What to say about the uploader's own attestation beside one triage fact
+ * (ugcportal-vlnn K1), distinguishing all three states the admin can see:
+ * the fact is not one the attestation asks about at all, the upload has no
+ * attestation on file, or the uploader answered yes/no. Never "No" for the
+ * middle case — that is exactly the collapse K3 forbids.
+ */
+function uploaderAttestationLabel(comparison: UploaderTriageComparison): string | null {
+  switch (comparison.kind) {
+    case "not_applicable":
+      return null;
+    case "no_attestation":
+      return "no attestation on file";
+    case "answered":
+      return comparison.value ? "Yes" : "No";
+  }
+}
+
+/**
+ * DOM id of one upload's uploader-attestation note for one triage fact.
+ * Exported so page.test.tsx can scope a needle to this one row rather than
+ * matching a bare "Yes"/"No" that this screen's own prose could also
+ * contain — the same reason rightsLayersSectionId exists above.
+ */
+export function triageFactAttestationId(
+  mediaId: string,
+  field: string,
+): string {
+  return `triage-attestation-${mediaId}-${field}`;
+}
+
+/**
+ * DOM id of one upload's disagreement warning for one triage fact
+ * (ugcportal-vlnn K2). Exported for the same reason as
+ * triageFactAttestationId.
+ */
+export function triageFactDisagreementId(
+  mediaId: string,
+  field: string,
+): string {
+  return `triage-disagreement-${mediaId}-${field}`;
+}
+
+/**
  * Curation triage (ugcportal-vq3z).
  *
  * Lists owner-uploaded Media and records the per-upload Part C triage facts
@@ -192,8 +263,11 @@ function answerLabel(stored: boolean | null): string {
  *   - price and licence, and re-evaluating sellability at render
  *     (ugcportal-yzo7) — the price endpoint already exists at
  *     /api/admin/curation/[id]/price and is not driven from here yet;
- *   - showing the uploader's own attestation beside the admin's answer
- *     (ugcportal-vlnn, which also needs ugcportal-15r).
+ *   - deciding what a disagreement between the admin's flag and the
+ *     uploader's attestation MEANS for sellability (ugcportal-9pic). This
+ *     screen renders the disagreement; the gate reads none of the six
+ *     content answers this screen also asks and does not change behaviour
+ *     because of one.
  *
  * THE SYNCED INSTAGRAM POST IS NOT SHOWN, and that is a statement about the
  * data rather than a design choice deferred. ugcportal-2eh Option A settles
@@ -436,16 +510,53 @@ export default async function AdminCurationPage({
                     resale-rights screen and contrast.ts).
                   */}
                   <dl className="mt-2 space-y-1 text-xs text-ink-muted">
-                    {TRIAGE_FACTS.map((fact) => (
-                      <div key={fact.field}>
-                        <dt className="inline font-medium">
-                          {fact.question}{" "}
-                        </dt>
-                        <dd className="inline">
-                          {answerLabel(listing?.[fact.field] ?? null)}
-                        </dd>
-                      </div>
-                    ))}
+                    {TRIAGE_FACTS.map((fact) => {
+                      const adminAnswer = listing?.[fact.field] ?? null;
+                      const comparison = compareTriageFactToAttestation(
+                        fact.field,
+                        upload.attestation,
+                      );
+                      const uploaderLabel = uploaderAttestationLabel(comparison);
+                      const disagrees = triageDisagreesWithAttestation(
+                        adminAnswer,
+                        comparison,
+                      );
+                      return (
+                        <div key={fact.field}>
+                          <dt className="inline font-medium">
+                            {fact.question}{" "}
+                          </dt>
+                          <dd className="inline">
+                            {answerLabel(adminAnswer)}
+                          </dd>
+                          {/*
+                            The uploader's own answer, rendered as a SEPARATE
+                            <dd> from the admin's — never appended into the
+                            same one — so "renders the stored answer" in
+                            page.test.tsx keeps matching `<dd>Yes</dd>`
+                            exactly, and so a disagreement, below, can be its
+                            own element rather than text spliced into the
+                            admin's.
+                          */}
+                          {uploaderLabel !== null ? (
+                            <dd
+                              id={triageFactAttestationId(upload.id, fact.field)}
+                              className="ml-1 inline"
+                            >
+                              (uploader: {uploaderLabel})
+                            </dd>
+                          ) : null}
+                          {disagrees ? (
+                            <dd
+                              id={triageFactDisagreementId(upload.id, fact.field)}
+                              className="ml-1 inline font-medium text-destructive"
+                            >
+                              Disagrees with the uploader&rsquo;s attestation
+                            </dd>
+                          ) : null}
+                        </div>
+                      );
+                    })}
                     <div>
                       <dt className="inline font-medium">Recorded by: </dt>
                       <dd className="inline">
@@ -542,6 +653,7 @@ export default async function AdminCurationPage({
                     <CurationTriageForm
                       mediaId={upload.id}
                       answers={listing}
+                      attestation={upload.attestation}
                       action={recordTriage}
                     />
                   </div>

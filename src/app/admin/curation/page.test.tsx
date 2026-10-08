@@ -2,8 +2,12 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { RightsLayer } from "@/generated/prisma/enums";
+import type { AttestationAnswers } from "@/lib/attestation";
+import { TRIAGE_FACT_ATTESTATION_FIELD } from "@/lib/curation-attestation";
+import { TRIAGE_ANSWER_NO, TRIAGE_ANSWER_YES } from "@/lib/curation-triage";
 import { CLEARABLE_LAYERS, TRIAGE_FACTS } from "@/lib/resale-rights";
 import { mediaPreviewPath } from "@/lib/routes";
+import { completeAttestationRow } from "@/lib/test-support/attestation";
 import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db";
 
 /**
@@ -47,6 +51,8 @@ const {
   MAX_UPLOADS,
   UPLOAD_LIST_ID,
   rightsLayersSectionId,
+  triageFactAttestationId,
+  triageFactDisagreementId,
 } = await import("@/app/admin/curation/page");
 
 const ADMIN = { user: { id: "admin-1", email: "admin@example.com", role: "ADMIN" } };
@@ -166,6 +172,42 @@ async function triage(mediaId: string, triagedByUserId: string | null) {
       triagedAt: new Date("2026-10-02T09:30:00.000Z"),
     },
   });
+}
+
+/**
+ * The uploader's own rights attestation (ugcportal-15r) for a fixture
+ * upload, attested by the upload's own owner (`owner-1`, matching
+ * `createUpload`'s default). `overrides` take the attestation's OWN field
+ * names (`showsIdentifiablePeople`, not `depictsPeople`) since this is the
+ * uploader's row, not the admin's.
+ */
+async function attest(
+  mediaId: string,
+  overrides: Partial<AttestationAnswers> = {},
+) {
+  await prisma.mediaAttestation.create({
+    data: completeAttestationRow(mediaId, "owner-1", overrides),
+  });
+}
+
+/**
+ * The value of the pre-selected `<option>` in one triage question's
+ * `<select>`, or `null` when none is — the same measured regex
+ * triage-form.test.tsx uses for the same reason: a React version that
+ * swapped the order `selected`/`value` render in would otherwise fail every
+ * caller for a reason that has nothing to do with this page.
+ */
+function selectedValue(markup: string, name: string): string | null {
+  const block = new RegExp(
+    `<select[^>]*name="${name}"[^>]*>([\\s\\S]*?)</select>`,
+  ).exec(markup)?.[1];
+  if (block === undefined) {
+    throw new Error(`no select named ${name} in the rendered form`);
+  }
+  const match =
+    /<option selected(?:=""|)\s+value="([^"]*)"/.exec(block) ??
+    /<option value="([^"]*)"\s+selected/.exec(block);
+  return match?.[1] ?? null;
 }
 
 beforeAll(async () => {
@@ -369,6 +411,143 @@ describe("the recorded triage, read back", () => {
     // prose uses the word too, and a row-wide substring match would start
     // passing for the wrong reason if that copy ever moved into the row.
     expect(row).toMatch(/Recorded by:\s*<\/dt><dd[^>]*>nobody/);
+  });
+});
+
+describe("ugcportal-vlnn: the uploader's attestation beside the admin's flag", () => {
+  // The TRIAGE_FACTS fields the attestation also asks about, read off the
+  // shared registry rather than hand-listed — the single source of truth
+  // both page.tsx and triage-form.tsx read, so this file cannot test a
+  // mapping the implementation does not actually use.
+  const MAPPED_FACTS = Object.entries(TRIAGE_FACT_ATTESTATION_FIELD) as [
+    string,
+    keyof AttestationAnswers,
+  ][];
+
+  it("K1: renders the uploader's own answer beside the admin's flag for every fact the attestation asks about", async () => {
+    await createUpload("media-1");
+    const overrides = Object.fromEntries(
+      MAPPED_FACTS.map(([, attestationField], i) => [
+        attestationField,
+        i % 2 === 0,
+      ]),
+    ) as Partial<AttestationAnswers>;
+    await attest("media-1", overrides);
+
+    const markup = await renderPage();
+    for (const [triageField, attestationField] of MAPPED_FACTS) {
+      const label = overrides[attestationField] ? "Yes" : "No";
+      const needle = `id="${triageFactAttestationId("media-1", triageField)}"`;
+      expect(markup, triageField).toContain(needle);
+      expect(
+        new RegExp(`${needle}[^>]*>\\(uploader: ${label}\\)`).test(markup),
+        triageField,
+      ).toBe(true);
+    }
+
+    // A triage fact the attestation never asks about — the registry's own
+    // comment names `depictsAlcohol` and `wineAccessory` — renders no
+    // uploader column at all, rather than a column that happens to say
+    // nothing useful.
+    expect(markup).not.toContain(
+      `id="${triageFactAttestationId("media-1", "depictsAlcohol")}"`,
+    );
+  });
+
+  it("K1: an untriaged admin flag defaults to the uploader's attested answer", async () => {
+    await createUpload("media-1");
+    await attest("media-1", {
+      showsIdentifiablePeople: true,
+      showsMinors: false,
+    });
+    const markup = await renderPage({ edit: "media-1" });
+    expect(selectedValue(markup, "depictsPeople")).toBe(TRIAGE_ANSWER_YES);
+    expect(selectedValue(markup, "depictsMinors")).toBe(TRIAGE_ANSWER_NO);
+  });
+
+  it("K1: a recorded admin answer is never replaced by the uploader's, even where they disagree", async () => {
+    await createUpload("media-1");
+    // The uploader says no; `triage()` records depictsPeople (FIELDS[0]) as
+    // `true`, so these two disagree — the case where silently preferring
+    // either the stored or the attested value would be easiest to miss.
+    await attest("media-1", { showsIdentifiablePeople: false });
+    await triage("media-1", "admin-1");
+    const markup = await renderPage({ edit: "media-1" });
+    expect(selectedValue(markup, "depictsPeople")).toBe(TRIAGE_ANSWER_YES);
+  });
+
+  it("K2: warns when the admin's flag disagrees with the uploader's, and not when they agree", async () => {
+    await createUpload("media-1");
+    await attest("media-1", { showsIdentifiablePeople: true });
+    await prisma.mediaListing.create({
+      data: {
+        mediaId: "media-1",
+        ...Object.fromEntries(FIELDS.map((field) => [field, false])),
+        triagedByUserId: "admin-1",
+        triagedAt: new Date("2026-10-02T09:30:00.000Z"),
+      },
+    });
+
+    const disagreementId = triageFactDisagreementId(
+      "media-1",
+      "depictsPeople",
+    );
+    let markup = await renderPage();
+    expect(markup).toContain(`id="${disagreementId}"`);
+
+    // Both directions required by K2: the same fixture, with the two facts
+    // made to agree, must show no warning.
+    await prisma.mediaListing.update({
+      where: { mediaId: "media-1" },
+      data: { depictsPeople: true },
+    });
+    markup = await renderPage();
+    expect(markup).not.toContain(`id="${disagreementId}"`);
+  });
+
+  it("K3: an upload with no attestation renders as 'not asked', distinct from a stored no and from silent agreement", async () => {
+    await createUpload("media-1"); // no attestation at all
+    await createUpload("media-2");
+    await attest("media-2", { showsIdentifiablePeople: false }); // explicit no
+    await triage("media-1", "admin-1"); // admin recorded every fact
+
+    const markup = await renderPage();
+    const row1 = uploadRows(markup).find((row) => row.includes("media-1.jpg"));
+    const row2 = uploadRows(markup).find((row) => row.includes("media-2.jpg"));
+    expect(row1).toBeDefined();
+    expect(row2).toBeDefined();
+
+    const noAttestationId = triageFactAttestationId(
+      "media-1",
+      "depictsPeople",
+    );
+    expect(
+      new RegExp(
+        `id="${noAttestationId}"[^>]*>\\(uploader: no attestation on file\\)`,
+      ).test(row1 as string),
+    ).toBe(true);
+
+    const explicitNoId = triageFactAttestationId("media-2", "depictsPeople");
+    expect(
+      new RegExp(`id="${explicitNoId}"[^>]*>\\(uploader: No\\)`).test(
+        row2 as string,
+      ),
+    ).toBe(true);
+
+    // The fixture mutation that makes the two assertions above non-vacuous:
+    // the rows actually render differently rather than happening to share a
+    // passing regex.
+    expect(row1).not.toEqual(row2);
+
+    // No disagreement is ever shown where there is nothing to compare
+    // against — an implementation that defaulted the missing uploader
+    // answer to the admin's own value would show no warning for the wrong
+    // reason (false agreement) rather than the right one (nothing asked).
+    for (const fact of TRIAGE_FACTS) {
+      expect(row1).not.toContain(
+        `id="${triageFactDisagreementId("media-1", fact.field)}"`,
+      );
+    }
   });
 });
 
