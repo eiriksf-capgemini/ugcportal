@@ -1,3 +1,4 @@
+import { alcoholReclassificationRefusal } from "@/lib/alcohol-commerce";
 import type { TriageAnswers } from "@/lib/curation-triage";
 import { prisma } from "@/lib/prisma";
 import { TRIAGE_FACTS } from "@/lib/resale-rights";
@@ -12,16 +13,17 @@ import { TRIAGE_FACTS } from "@/lib/resale-rights";
  * sellability gate in src/lib/resale-rights.ts trusts, were readable and
  * unwritable. This function is the writer.
  *
- * IT IS DELIBERATELY A SINGLE CHOKEPOINT, and that shape is what
- * ugcportal-6uxv rides on. That bead has to refuse (or detach) a commercial
- * link when `depictsAlcohol` flips to `true` on an already-published item,
- * and a rule like that is only enforceable if there is exactly one place the
- * flip can happen. The insertion point is marked below, inside the same
- * transaction as the read and the write, between the preview check and the
- * `upsert`: it has the Media row, the previous listing state and the new
- * answers in hand, and it can refuse by returning a refusal of its own
- * without any caller changing. Do not add a second triage writer; widen this
- * one.
+ * IT IS DELIBERATELY A SINGLE CHOKEPOINT, and ugcportal-6uxv is what now
+ * stands on that shape: the §9-2 guard below refuses an incoming
+ * `depictsAlcohol: true` while the item carries a live commercial link, and a
+ * rule like that is only enforceable because there is exactly one place the
+ * flip can happen. Re-confirm before relying on it rather than taking this
+ * paragraph's word for it —
+ * `git grep -n "mediaListing\.\(update\|upsert\|create\|updateMany\)" -- src`
+ * outside tests returns this upsert and the price endpoint
+ * (src/app/api/admin/curation/[id]/price/route.ts), which writes `priceCents`
+ * and `currency` and no triage column. Do not add a second triage writer;
+ * widen this one.
  *
  * The server action in src/app/admin/curation/actions.ts is its only
  * non-test caller today (`git grep recordTriageFacts -- src`) and is where
@@ -39,7 +41,11 @@ import { TRIAGE_FACTS } from "@/lib/resale-rights";
  * rather than by memory, so a refusal added here cannot ship rendering
  * nothing.
  */
-export const TRIAGE_WRITE_REFUSALS = ["media_not_found", "no_preview"] as const;
+export const TRIAGE_WRITE_REFUSALS = [
+  "media_not_found",
+  "no_preview",
+  "alcohol_with_commercial_links",
+] as const;
 
 export type TriageWriteRefusal = (typeof TRIAGE_WRITE_REFUSALS)[number];
 
@@ -147,7 +153,25 @@ export async function recordTriageFacts({
       // returned: it is `previews/{userId}/{uuid}`, so handing it back would
       // put an uploader's account id into whatever renders the result. The
       // caller gets the listing id and nothing else.
-      select: { id: true, previewKey: true },
+      select: {
+        id: true,
+        previewKey: true,
+        // How many commercial links are attached, for the §9-2 guard below
+        // (ugcportal-6uxv). A COUNT and not the rows: the gate decides on
+        // "any", and the URL and the brand behind each link are a compliance
+        // record this function has no business reading, by the same rule the
+        // line above states for `previewKey`.
+        //
+        // READ UNCONDITIONALLY, not behind `if (facts.depictsAlcohol)`,
+        // which is the call the publish route already made for its own
+        // alcohol lookup and for the reason it gives there: a short-circuit
+        // on the caller's side is a SECOND reading of the field the gate
+        // itself reads, in a place that cannot see the gate's rule, and the
+        // direction that mistake fails in is the gate never running at all.
+        // One indexed count on a rare, deliberate admin action is the cheaper
+        // side of that trade.
+        _count: { select: { commercialLinks: true } },
+      },
     });
     if (!media) {
       return { kind: "media_not_found" };
@@ -158,17 +182,53 @@ export async function recordTriageFacts({
 
     /*
       ===================================================================
-      CHOKEPOINT FOR ugcportal-6uxv (the alcohol-reclassification guard).
+      THE ALCOHOL-RECLASSIFICATION GUARD (ugcportal-6uxv K1).
       ===================================================================
-      Everything that rule needs is in scope right here and nowhere else:
-      `media` identifies the item, `facts.depictsAlcohol` is the incoming
-      answer, and the row's previous answers plus its commercial links are one
-      `tx` read away. A guard inserted at this line runs inside the same
-      transaction as the write it governs, and can refuse by returning a new
-      member of TRIAGE_WRITE_REFUSALS — no caller changes, and no other code
-      path can get around it, because there is no other triage writer.
-      Deliberately NOT implemented here: ugcportal-6uxv owns it.
+      alkoholloven § 9-2 forbids the PAIR — a picture showing alcohol with
+      something commercial on it — and says nothing about which half was
+      recorded first. The attach route already refuses the one order
+      (`benefitAttachmentRefusal`: no link onto an item recorded as showing
+      alcohol). This is the other order, and until ugcportal-vq3z created
+      this function it was not reachable at all, because nothing in `src`
+      could write `depictsAlcohol`. That is the real interim cover, not the
+      publish route: `commercialPublishRefusal` returns null outright unless
+      `disclosure.benefitReceived === true`, and it only ever runs on a
+      publish REQUEST, so it could never have seen a reclassification of an
+      item that was already public.
+
+      HERE AND NOT IN THE ACTION, because here the count and the write it
+      governs are the same statement of work: there is no window in which a
+      caller could read a clean count, be preempted, and then issue the upsert
+      against a row that has changed underneath it. NOT because the
+      transaction serialises them — it does not, and the honest caveat the
+      docstring above records applies unchanged: `@prisma/adapter-libsql`
+      opens SQLite transactions as `deferred`, so a link attached by a
+      concurrent request between this count and the upsert is not excluded by
+      anything here. What covers that direction is the attach route's own
+      gate, which asks the mirror question from inside its own transaction and
+      refuses a link onto a row already recorded as showing alcohol. Both
+      orders are guarded; neither guard serialises against the other, and the
+      residual window is one interleaving of two rare, deliberate operator acts.
+
+      THE INCOMING ANSWER IS WHAT IS JUDGED (`facts`, the registry-rebuilt
+      object about to be written), not the row's current one. See
+      `alcoholReclassificationRefusal` for why that is a decision about the
+      state the transaction would leave behind rather than about a transition,
+      and why no read of the previous answer is needed.
     */
+    if (
+      alcoholReclassificationRefusal({
+        listing: facts,
+        commercialLinks: { commercialLinkCount: media._count.commercialLinks },
+      })
+    ) {
+      // The whole answer set is discarded, not just the alcohol column. A
+      // partial write — "we recorded your other six answers" — would leave
+      // the row stamped with this admin's name and this timestamp over a
+      // triage they did not complete, which is the exact failure
+      // `triageFactColumns` throws to prevent one layer up.
+      return { kind: "alcohol_with_commercial_links" };
+    }
 
     const listing = await tx.mediaListing.upsert({
       where: { mediaId },

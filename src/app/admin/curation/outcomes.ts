@@ -29,6 +29,8 @@ const OUTCOME_MESSAGES: Record<TriageOutcomeCode, string> = {
     "That upload no longer exists, so there is nothing to triage. The list has been refreshed.",
   no_preview:
     "That upload has no watermarked preview yet, so it cannot be put into the curation flow. Nothing was recorded — curating it now would mean offering the unprotected original.",
+  alcohol_with_commercial_links:
+    "That upload already carries a commercial link, and nothing commercial may sit on a picture showing alcohol (alkoholloven § 9-2). Nothing was recorded — not even your other answers, because a half-recorded triage would put your name on a set you did not finish. Detach the item’s commercial links first, then answer the alcohol question.",
 };
 
 /**
