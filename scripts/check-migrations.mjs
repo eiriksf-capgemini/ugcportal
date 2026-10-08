@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
  * Bring the local database up to date, or refuse to start the dev server
- * (ugcportal-w7wc).
+ * (ugcportal-w7wc) or the production-shaped local server `npm run start`
+ * boots (ugcportal-i40s).
  *
  * WHY THIS EXISTS: the generated Prisma client selects every scalar column
  * the schema declares, so a single column a migration has not added yet
@@ -14,9 +15,15 @@
  * while the session read underneath it fails — so nothing about the symptom
  * points at the database.
  *
- * Wired as the first half of package.json's `dev` script, ahead of the `&&`,
- * so a non-zero exit here means `next dev` never starts. Not npm's `predev`
- * hook, which reaches the same place through one more npm process.
+ * Wired as the first half of package.json's `dev` and `start` scripts, ahead
+ * of each one's `&&`, so a non-zero exit here means `next dev` / `next
+ * start` never starts. Not npm's `predev` / `prestart` hooks, which reach
+ * the same place through one more npm process. `build` does NOT run this:
+ * it never reads the schema (ugcportal-i40s — `npm run build` against a
+ * `file:` URL for a database that does not even exist still produces a
+ * normal build, because `next.config.ts`'s `output: "standalone"` and this
+ * app's all-dynamic routes mean nothing is prerendered against the
+ * database).
  *
  * DATABASE_URL is resolved with scripts/lib/env-files.mjs's `loadDevEnvFiles`,
  * the same `.env*` precedence `next dev` itself uses, before anything below
