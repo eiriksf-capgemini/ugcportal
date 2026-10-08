@@ -17,6 +17,11 @@ import {
   isMediaAuthorship,
   parseAttestation,
 } from "@/lib/attestation";
+import {
+  MEDIA_ALT_TEXT_FIELD,
+  MEDIA_CAPTION_FIELD,
+  MEDIA_TAGS_FIELD,
+} from "@/lib/routes";
 
 /**
  * ugcportal-15r K1, at the level the wire format is decided: the questions
@@ -118,10 +123,21 @@ describe("the registry is the one list of questions", () => {
     for (const name of names) {
       expect(name.startsWith(MEDIA_ATTESTATION_FIELD_PREFIX), name).toBe(true);
     }
-    expect(names).not.toContain("altText");
-    expect(names).not.toContain("caption");
-    expect(names).not.toContain("tags");
-    expect(names).not.toContain("file");
+    /*
+     * Disjoint from the OTHER parts POST /api/media reads, computed from the
+     * real constants rather than from four string literals — `expect(names)
+     * .not.toContain("altText")` is an assertion that cannot fail, because
+     * no attestation field is ever spelled "altText" with or without the
+     * prefix. Reading the constants means a renamed `MEDIA_CAPTION_FIELD`,
+     * or a prefix someone shortened to nothing, is what this compares
+     * against.
+     */
+    const otherParts = new Set([
+      MEDIA_ALT_TEXT_FIELD,
+      MEDIA_CAPTION_FIELD,
+      MEDIA_TAGS_FIELD,
+    ]);
+    expect(names.filter((name) => otherParts.has(name))).toEqual([]);
     expect(new Set(names).size).toBe(names.length);
   });
 });

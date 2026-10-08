@@ -191,6 +191,11 @@ describe("the tag picker on the upload page", () => {
     // the wrong reason.
     expect(markup).toContain("Wine &amp; drink");
     expect(markup).toContain("Tag what you add next");
+    // The marker attribute the "no subjects" case below asserts the ABSENCE
+    // of. Without this, that `not.toContain` could never fail — a renamed
+    // or deleted attribute would satisfy it just as well as a picker that
+    // correctly did not render.
+    expect(markup).toContain('data-upload-tag-picker=""');
     expect(
       [...markup.matchAll(/<input[^>]*type="checkbox"/g)],
     ).toHaveLength(SEEDED_TAGS.length);
