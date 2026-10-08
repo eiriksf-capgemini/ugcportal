@@ -1079,10 +1079,7 @@ export function evaluateSellability(
   // more useful of the two — the sale record is an admin's next action, the
   // missing declaration is a question nobody ever put to the only person who
   // could answer it.
-  const attestation = attestationBlocker(
-    upload.attestation ?? null,
-    upload.userId,
-  );
+  const attestation = attestationBlocker(upload.attestation ?? null, upload.userId);
   if (attestation) {
     return { sellable: false, blocker: attestation };
   }
@@ -1124,9 +1121,6 @@ export function evaluateSellability(
 }
 
 /** Boolean form of {@link evaluateSellability}, for call sites that only branch. */
-export function isSellable(
-  upload: GateUpload,
-  now: Date = new Date(),
-): boolean {
+export function isSellable(upload: GateUpload, now: Date = new Date()): boolean {
   return evaluateSellability(upload, now).sellable;
 }

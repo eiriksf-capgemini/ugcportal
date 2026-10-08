@@ -370,9 +370,10 @@ export default async function AdminCurationPage({
               layer ON it, because `unsettledLayers` runs the same
               per-fact rule `triageBlocker` does.
 
-              `?? []` for an untriaged upload: there is no listing to ask
-              about, nothing to clear, and the well below says so rather
-              than rendering an empty one.
+              The `: []` branch covers an untriaged upload: there is no
+              listing to ask about and nothing to clear. The well below is
+              itself conditioned on `listing`, so for this case it renders
+              nothing at all rather than an empty one.
             */
             const blockingLayers = listing ? unsettledLayers(listing) : [];
             // Only the layers a clearance can actually settle. ALCOHOL can

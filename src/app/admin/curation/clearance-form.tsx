@@ -19,10 +19,9 @@ import { Button } from "@/components/ui/button";
  * forms, would record a clearance against a layer nobody cleared.
  *
  * NOT AN EDIT FORM, unlike the triage form next door. There is no stored
- * reason to round-trip, because a layer that already has a clearance is
- * rendered as a record rather than as a form (see page.tsx): the write
- * refuses a second row for a layer that has one, and a box pre-filled with
- * the existing reason would invite an overwrite that cannot happen.
+ * reason to round-trip: the write refuses a second row for a layer that
+ * already has one, and a box pre-filled with the existing reason would
+ * invite an overwrite that cannot happen.
  */
 
 const TEXTAREA_CLASS =

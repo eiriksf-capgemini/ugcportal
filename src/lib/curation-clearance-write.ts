@@ -201,11 +201,13 @@ export async function recordLayerClearance({
       });
       clearanceId = clearance.id;
     } catch (error: unknown) {
-      // P2002 is Prisma's unique-constraint violation, which on this table
-      // can only be `(listingId, layer)` — the one unique index it carries.
-      // Narrowed by code rather than caught broadly, so a foreign-key
-      // failure or a driver error still propagates instead of being
-      // reported to an admin as "already recorded".
+      // P2002 is Prisma's unique-constraint violation. The table also
+      // carries the primary key's own autoindex, but `id` is a
+      // client-generated cuid not supplied by this code, so in practice the
+      // index this hits is `(listingId, layer)`. Narrowed by code rather
+      // than caught broadly, so a foreign-key failure or a driver error
+      // still propagates instead of being reported to an admin as "already
+      // recorded".
       if (!isUniqueConstraintViolation(error)) {
         throw error;
       }
