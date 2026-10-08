@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { RightsLayer } from "@/generated/prisma/enums";
 import { mediaItemPath } from "@/lib/routes";
 import { seedMedia } from "@/lib/test-support/media-fixtures";
 import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db";
@@ -258,6 +259,70 @@ describe("app/sitemap.ts source (K3)", () => {
     const live = stripComments(source, path);
     expect(live).toContain("PUBLIC_MEDIA_SCOPE");
     expect(live).not.toMatch(/publishedAt\s*:\s*{\s*not\s*:\s*null\s*}/);
+  });
+});
+
+describe("no uncleared item URL is handed to a crawler (ugcportal-3ae K3)", () => {
+  /**
+   * The surface an earlier draft of this bead's K3 left out, and the worst
+   * one to leave out: every other anonymous reader shows an uncleared row
+   * to whoever happens to load the page, and this one hands its URL to
+   * search engines, which keep it.
+   */
+  it("omits a published row whose uploader never declared anything", async () => {
+    await seedMedia(prisma, {
+      id: "sm-declared",
+      userId: UPLOADER,
+      createdAt: new Date("2026-03-01T00:00:00.000Z"),
+    });
+    await seedMedia(prisma, {
+      id: "sm-undeclared",
+      userId: UPLOADER,
+      createdAt: new Date("2026-03-02T00:00:00.000Z"),
+      attested: false,
+    });
+
+    const entries = await sitemap();
+
+    expect(itemPreviewIds(entries)).toEqual(["pv-sm-declared"]);
+    // Not merely absent from the parsed id list — absent from the document.
+    expect(JSON.stringify(entries)).not.toContain("sm-undeclared");
+  });
+
+  it("omits one showing an identifiable person until the PEOPLE layer is cleared", async () => {
+    await prisma.user.create({
+      data: {
+        id: "admin-sitemap-3ae",
+        email: "admin-sitemap-3ae@example.com",
+        role: "ADMIN",
+      },
+    });
+    await seedMedia(prisma, {
+      id: "sm-people",
+      userId: UPLOADER,
+      createdAt: new Date("2026-03-01T00:00:00.000Z"),
+      showsIdentifiablePeople: true,
+    });
+
+    expect(itemPreviewIds(await sitemap())).toEqual([]);
+
+    // Seeded directly — ugcportal-qfy9 owns the write path, and it is not
+    // in yet. Only the clearance changes between the two assertions.
+    await prisma.mediaListing.create({
+      data: {
+        mediaId: "sm-people",
+        depictsPeople: true,
+        layerClearances: {
+          create: {
+            layer: RightsLayer.PEOPLE,
+            reason: "Model release on file; covers online commercial publication.",
+            clearedByUserId: "admin-sitemap-3ae",
+          },
+        },
+      },
+    });
+
+    expect(itemPreviewIds(await sitemap())).toEqual(["pv-sm-people"]);
   });
 });
 

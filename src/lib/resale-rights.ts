@@ -123,6 +123,39 @@ export function isResaleRightsRoute(value: unknown): value is ResaleRightsRoute 
   );
 }
 
+/**
+ * Why the uploader's own declaration (ugcportal-15r) does not hold. Separate
+ * codes rather than one `attestation_invalid`, because each one names a
+ * different person's next action: the uploader re-attests, an admin stops
+ * ticking boxes on someone's behalf, everyone re-reads a revised document,
+ * and the last two are not fixable at all.
+ *
+ * A NAMED SUBSET of SellabilityBlocker rather than six members spelled
+ * inline there (ugcportal-3ae). The publish gate
+ * (src/lib/publishability.ts) asks the same question about the same row and
+ * reaches a DIFFERENT answer for one of these codes — publishing is not
+ * selling — so it has to decide, per code, whether that code blocks a
+ * publish too. It does that with a `Record<AttestationBlocker, …>`, which is
+ * what makes a seventh code added here a `tsc` failure over there rather
+ * than a code that silently permits a publish nobody considered.
+ *
+ * IN CHECK ORDER, matching `attestationBlocker` below, and the order is
+ * load-bearing for exactly one reader: `attestation_uploader_not_adult` is
+ * the LAST check, which is what lets the publish gate treat it as
+ * non-blocking without also having to re-run the five before it. Pinned by
+ * "checks the adult declaration last" in resale-rights.test.ts.
+ */
+export const ATTESTATION_BLOCKERS = [
+  "attestation_missing",
+  "attestation_incomplete",
+  "attestation_not_by_uploader",
+  "attestation_version_retired",
+  "attestation_rights_disclaimed",
+  "attestation_uploader_not_adult",
+] as const;
+
+export type AttestationBlocker = (typeof ATTESTATION_BLOCKERS)[number];
+
 /** Why an upload is not sellable. Closed set, safe to render and to log. */
 export type SellabilityBlocker =
   | "no_review"
@@ -131,17 +164,7 @@ export type SellabilityBlocker =
   | "checklist_version_retired"
   | "reviewer_not_admin"
   | "upload_owner_unknown"
-  // The uploader's own declaration (ugcportal-15r). Separate codes rather
-  // than one `attestation_invalid`, because each one names a different
-  // person's next action: the uploader re-attests, an admin stops ticking
-  // boxes on someone's behalf, everyone re-reads a revised document, and the
-  // last two are not fixable at all.
-  | "attestation_missing"
-  | "attestation_incomplete"
-  | "attestation_not_by_uploader"
-  | "attestation_version_retired"
-  | "attestation_rights_disclaimed"
-  | "attestation_uploader_not_adult"
+  | AttestationBlocker
   | "not_listed_for_sale"
   | "triage_incomplete"
   | "triage_not_signed_by_admin"
@@ -386,12 +409,25 @@ function isTriaged(value: unknown): value is boolean {
  * Without it, a demoted admin's layer clearances quietly survive as long as
  * some *other* admin signed the uploader.
  */
-function layerIsCleared(listing: GateListing, layer: RightsLayer): boolean {
+export function layerIsCleared(
+  /**
+   * Narrowed to the one field this reads (ugcportal-3ae). It used to take a
+   * whole `GateListing`, which is more than the question needs and more than
+   * the publish gate has: `src/lib/publishability.ts` asks about exactly one
+   * layer on a listing it loaded two columns of, and widening its read to
+   * satisfy a parameter type would have meant loading the whole triage to
+   * answer a question about none of it. The alternative — a second copy of
+   * these four conditions over there — is this repo's defect family 4, a
+   * rule enforced at one of N call sites.
+   */
+  listing: { layerClearances?: GateLayerClearance[] } | null | undefined,
+  layer: RightsLayer,
+): boolean {
   // `?? []` and `?.trim()` for the same reason as everything else in this
   // module: a missing relation or a null column must answer "not cleared",
   // not throw a TypeError that some caller might catch and treat as a
   // transient failure.
-  const clearance = (listing.layerClearances ?? []).find(
+  const clearance = (listing?.layerClearances ?? []).find(
     (candidate) => candidate.layer === layer,
   );
   if (!clearance) {
@@ -806,7 +842,7 @@ export function triageBlocker(listing: GateListing): SellabilityBlocker | null {
 export function attestationBlocker(
   attestation: GateAttestation | null,
   uploaderUserId: string,
-): SellabilityBlocker | null {
+): AttestationBlocker | null {
   // (a) Fail closed, and fail closed with a code that says SILENCE rather
   // than a code that says no. Every upload made before ugcportal-15r is in
   // this state, as is anything a future second write path creates without an

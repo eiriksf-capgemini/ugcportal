@@ -198,8 +198,91 @@ export function userIdBindingsIn(file: string): string[] {
   return bindings;
 }
 
-/** The one file allowed to write one, and why. */
+/**
+ * Every module specifier a file imports, as written — `import`/`export …
+ * from`, and the dynamic `import("…")` form that `await import()` in a test
+ * or a lazy loader uses.
+ *
+ * From the AST rather than from the text, for the reason the whole file
+ * gives: a string that merely LOOKS like a path (a log line, a docstring,
+ * this very comment) is not an import, and a text scan cannot tell.
+ */
+export function importSpecifiersIn(file: string): string[] {
+  const source = sourceFileOf(file);
+  const specifiers: string[] = [];
+
+  const visit = (node: ts.Node): void => {
+    if (
+      (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
+      node.moduleSpecifier &&
+      ts.isStringLiteral(node.moduleSpecifier)
+    ) {
+      specifiers.push(node.moduleSpecifier.text);
+    }
+    if (
+      ts.isCallExpression(node) &&
+      node.expression.kind === ts.SyntaxKind.ImportKeyword &&
+      node.arguments[0] &&
+      ts.isStringLiteralLike(node.arguments[0])
+    ) {
+      specifiers.push(node.arguments[0].text);
+    }
+    ts.forEachChild(node, visit);
+  };
+
+  visit(source);
+  return specifiers;
+}
+
+/**
+ * Non-test files outside `test-support/` that import something from it,
+ * relative to `root` with POSIX separators.
+ *
+ * Exported so the fixture cases at the bottom drive it over a temp
+ * directory — the scanner is tested, not merely used, the same rule
+ * `scanAttestationWritePaths` follows.
+ */
+export function scanTestSupportImporters(root: string): string[] {
+  return walkSourceFiles(root, (file) => isTestFile(file))
+    .filter((file) => !file.split(path.sep).includes("test-support"))
+    .filter((file) =>
+      importSpecifiersIn(file).some(
+        (specifier) =>
+          specifier.includes("/test-support/") ||
+          specifier.endsWith("/test-support"),
+      ),
+    )
+    .map((file) => path.relative(root, file).split(path.sep).join("/"))
+    .sort();
+}
+
+/** The one PRODUCT file allowed to write one, and why. */
 const WRITE_PATH = "app/api/media/route.ts";
+
+/**
+ * The one TEST-SUPPORT file allowed to write one (ugcportal-3ae).
+ *
+ * Why an allowance exists at all. From ugcportal-3ae on, a Media row with no
+ * attestation is on no anonymous surface — `PUBLIC_MEDIA_SCOPE` filters it
+ * out — so nine test files that seed published media need a declaration
+ * alongside it. `src/lib/test-support/media-fixtures.ts` is the one copy of
+ * "what a published row looks like" those files share; the alternative is
+ * nine copies of eleven columns, which is the sibling-omission family this
+ * scan's own header names.
+ *
+ * Why it is safe, and the two things that keep it so rather than this
+ * paragraph. The directory is test-only by construction, and
+ * "nothing in the application imports test-support" below asserts that
+ * directly — so this write cannot become a second way a real upload acquires
+ * a declaration its uploader never gave. And the file writes it as a plain
+ * `client.mediaAttestation.create` statement, which matcher (1) sees, rather
+ * than as a nested create behind a ternary, which it would not
+ * (ugcportal-xqal) — the allowance is taken in the open.
+ */
+const TEST_SUPPORT_WRITE_PATH = "lib/test-support/media-fixtures.ts";
+
+/** Both, sorted the way `scanAttestationWritePaths` returns them. */
+const ALLOWED_WRITE_PATHS = [WRITE_PATH, TEST_SUPPORT_WRITE_PATH].sort();
 
 /**
  * ONE WALK OF `src/`, AND ONE PARSE OF THE WRITE PATH, shared by every case
@@ -210,6 +293,7 @@ const WRITE_PATH = "app/api/media/route.ts";
  */
 let cachedWritePaths: string[] | undefined;
 let cachedRouteWrites: AttestationWrite[] | undefined;
+let cachedTestSupportImporters: string[] | undefined;
 
 function writePaths(): string[] {
   return (cachedWritePaths ??= scanAttestationWritePaths(SRC_ROOT));
@@ -219,6 +303,10 @@ function routeWrites(): AttestationWrite[] {
   return (cachedRouteWrites ??= attestationWritesIn(
     path.join(SRC_ROOT, WRITE_PATH),
   ));
+}
+
+function testSupportImporters(): string[] {
+  return (cachedTestSupportImporters ??= scanTestSupportImporters(SRC_ROOT));
 }
 
 describe("ugcportal-15r K3: exactly one place writes an attestation", () => {
@@ -231,8 +319,30 @@ describe("ugcportal-15r K3: exactly one place writes an attestation", () => {
     expect(found.length).toBeGreaterThan(0);
   });
 
-  it("finds it in exactly one file, and that file is POST /api/media", () => {
-    expect(found).toEqual([WRITE_PATH]);
+  it("finds it in exactly two files: POST /api/media, and the test-support fixture", () => {
+    // Two, not one, since ugcportal-3ae — and the second is pinned by name
+    // rather than by a pattern, so a THIRD writer (an importer, an admin
+    // screen, a bulk re-attest tool) fails here by existing, which is the
+    // whole claim K3 makes.
+    expect(found).toEqual(ALLOWED_WRITE_PATHS);
+  });
+
+  it("nothing in the application imports test-support", () => {
+    /*
+     * The compensating control for the allowance above (ugcportal-3ae), and
+     * the reason that allowance does not weaken K3. `media-fixtures.ts`
+     * writes an attestation attributed to whoever the caller names — which
+     * is exactly the admin-asserts-what-they-cannot-know shape §3.1
+     * forbids — and the only thing making that harmless is that no shipped
+     * code path can reach it.
+     *
+     * Asserted over import SPECIFIERS from the AST, not over file text: a
+     * comment or a docstring naming the directory (this repo is full of
+     * them, including the one you are reading) is not an import, and a text
+     * scan would have to allowlist each one until it meant nothing. Proved
+     * against a fixture tree at the bottom of this file, both directions.
+     */
+    expect(testSupportImporters()).toEqual([]);
   });
 
   it("writes exactly one attestation there, through an explicit create", () => {
@@ -414,6 +524,43 @@ describe("the scanner itself, against a fixture tree", () => {
 
     const [write] = attestationWritesIn(path.join(root, "elsewhere.ts"));
     expect(write.argument).not.toMatch(/attestedByUserId:\s*userId\b/);
+  });
+
+  it("sees an application file importing test-support — the mutation for the allowance", () => {
+    /*
+     * Run, not described. The allowance granted to media-fixtures.ts above
+     * rests entirely on "no application file can reach it", and an
+     * assertion that cannot fail would make that sentence decoration.
+     */
+    const root = tree({
+      "lib/test-support/media-fixtures.ts": "export const seedMedia = 1;",
+      "app/importer.ts": 'import { seedMedia } from "@/lib/test-support/media-fixtures";',
+      "app/lazy.ts": 'const m = await import("@/lib/test-support/db");',
+      "app/reexport.ts": 'export { seedMedia } from "../lib/test-support/media-fixtures";',
+    });
+
+    expect(scanTestSupportImporters(root)).toEqual([
+      "app/importer.ts",
+      "app/lazy.ts",
+      "app/reexport.ts",
+    ]);
+  });
+
+  it("does NOT report a file that only MENTIONS the directory, or a test that imports it", () => {
+    const root = tree({
+      // Prose, a string and a test file — the three shapes a text scan
+      // would have had to allowlist one by one.
+      "app/prose.ts": [
+        "// see @/lib/test-support/media-fixtures for the fixture",
+        'export const PATH = "@/lib/test-support/media-fixtures";',
+        "export const N = 1;",
+      ].join("\n"),
+      "app/fine.test.ts":
+        'import { seedMedia } from "@/lib/test-support/media-fixtures";',
+      "lib/test-support/db.ts": 'import { x } from "@/lib/test-support/other";',
+    });
+
+    expect(scanTestSupportImporters(root)).toEqual([]);
   });
 
   it("reports every userId binding, so a second one cannot hide", () => {

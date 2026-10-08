@@ -1296,12 +1296,40 @@ describe("GET /api/public/media — visibility is not sellability (K4)", () => {
       expect(serialized.toLowerCase()).not.toContain(forbidden.toLowerCase());
     }
 
-    // And the query that produced it asked about visibility only.
+    // And the query that produced it asked about visibility and rights
+    // only — never about a price, a licence or a sale record.
+    //
+    // `AND` joined the three column filters in ugcportal-3ae: it holds the
+    // rights predicates (`PUBLIC_MEDIA_RIGHTS_SCOPE`) — the uploader's
+    // attestation, and the PEOPLE layer where a person is shown. Those are
+    // visibility questions, not sale ones. What this case is actually
+    // guarding is restated below over the serialised filter, so "a new key
+    // appeared" is not by itself an excuse to extend the list: a
+    // `priceCents`, a `MediaListing.priceCents` or a `resaleRightsReview`
+    // reaching this where-clause fails whatever it is nested under.
     const where = mediaFindManyMock.mock.calls[0][0].where;
     expect(Object.keys(where).sort()).toEqual([
+      "AND",
       "previewId",
       "previewKey",
       "publishedAt",
     ]);
+    const filter = JSON.stringify(where).toLowerCase();
+    // A positive control first, so the loop below cannot pass because the
+    // serialised filter is empty or because `where` stopped being the
+    // object this case thinks it is — family 3, a needle that could never
+    // have been there.
+    expect(filter).toContain("publishedat");
+    expect(filter).toContain("layerclearances");
+    for (const forbidden of [
+      "price",
+      "currency",
+      "licence",
+      "license",
+      "resalerights",
+      "sellab",
+    ]) {
+      expect(filter).not.toContain(forbidden);
+    }
   });
 });

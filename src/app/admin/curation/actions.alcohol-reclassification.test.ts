@@ -1,5 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { MediaAuthorship } from "@/generated/prisma/enums";
+import { CURRENT_ATTESTATION_VERSION } from "@/lib/attestation";
 import {
   TRIAGE_ANSWER_NO,
   TRIAGE_ANSWER_YES,
@@ -172,6 +174,28 @@ async function buildItem(
       sizeBytes: 1024,
       originalName: `${id}.png`,
       altText: "A glass on a table",
+    },
+  });
+
+  // The uploader's rights declaration (ugcportal-3ae). Without one the
+  // publish below is refused 422 — for a reason that has nothing to do with
+  // alcohol, which is precisely the "refused for an unrelated reason" this
+  // builder's own status assertions exist to catch. Nobody identifiable is
+  // in the frame, so no PEOPLE clearance is needed.
+  await prisma.mediaAttestation.create({
+    data: {
+      mediaId: id,
+      attestedByUserId: OPERATOR,
+      attestationVersion: CURRENT_ATTESTATION_VERSION,
+      authorship: MediaAuthorship.AUTHOR,
+      ownOriginalNotFromWeb: true,
+      showsIdentifiablePeople: false,
+      showsMinors: false,
+      containsMusicNotOwned: false,
+      otherCreativeContributor: false,
+      brandOrSponsorship: true,
+      aiGenerated: false,
+      uploaderIsAdult: true,
     },
   });
 

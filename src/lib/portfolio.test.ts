@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { RightsLayer } from "@/generated/prisma/enums";
 import { seedMedia } from "@/lib/test-support/media-fixtures";
 import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db";
 
@@ -227,5 +228,66 @@ describe("listPortfolioPieces", () => {
     const ids = pieces.map((p) => p.id);
     expect(ids).toContain(`piece-newest-${MAX_PORTFOLIO_PIECES}`);
     expect(ids).not.toContain("piece-newest-0");
+  });
+});
+
+describe("the portfolio inherits the rights filter from PUBLIC_MEDIA_SCOPE (ugcportal-3ae K3)", () => {
+  it("drops a published, portfolio-tagged row whose uploader never declared anything", async () => {
+    await seedMedia(prisma, {
+      id: "piece-declared",
+      userId: UPLOADER,
+      createdAt: new Date("2026-03-02T00:00:00Z"),
+      tags: [PORTFOLIO_TAG_SLUG],
+    });
+    await seedMedia(prisma, {
+      id: "piece-undeclared",
+      userId: UPLOADER,
+      createdAt: new Date("2026-03-01T00:00:00Z"),
+      tags: [PORTFOLIO_TAG_SLUG],
+      attested: false,
+    });
+
+    const pieces = await listPortfolioPieces();
+
+    // The sibling is there, so the absence is the filter rather than an
+    // empty query.
+    expect(pieces.map((piece) => piece.id)).toEqual(["piece-declared"]);
+  });
+
+  it("drops one showing an identifiable person with no PEOPLE clearance, and keeps it once cleared", async () => {
+    /*
+     * Seeded directly: nothing in the product writes a
+     * MediaRightsClearance row yet (ugcportal-qfy9 owns that path), so the
+     * permitting half of this pair is only reachable this way for now.
+     */
+    await prisma.user.create({
+      data: { id: "admin-qnq9-7", email: "admin-qnq9-7@example.com", role: "ADMIN" },
+    });
+    for (const id of ["piece-people", "piece-people-cleared"]) {
+      await seedMedia(prisma, {
+        id,
+        userId: UPLOADER,
+        createdAt: new Date("2026-03-01T00:00:00Z"),
+        tags: [PORTFOLIO_TAG_SLUG],
+        showsIdentifiablePeople: true,
+      });
+    }
+    await prisma.mediaListing.create({
+      data: {
+        mediaId: "piece-people-cleared",
+        depictsPeople: true,
+        layerClearances: {
+          create: {
+            layer: RightsLayer.PEOPLE,
+            reason: "Model release on file; covers online commercial publication.",
+            clearedByUserId: "admin-qnq9-7",
+          },
+        },
+      },
+    });
+
+    const pieces = await listPortfolioPieces();
+
+    expect(pieces.map((piece) => piece.id)).toEqual(["piece-people-cleared"]);
   });
 });

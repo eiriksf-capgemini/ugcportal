@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { RightsLayer } from "@/generated/prisma/enums";
 import { seedMedia } from "@/lib/test-support/media-fixtures";
 import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db";
 
@@ -333,5 +334,65 @@ describe("src/lib/media-item.ts source (K5)", () => {
 
     expect(live).toMatch(/select:\s*MEDIA_ANONYMOUS_SELECT\s*,/);
     expect(live).not.toContain("MEDIA_OWNER_SELECT");
+  });
+});
+
+describe("/media/[previewId] inherits the rights filter (ugcportal-3ae K3)", () => {
+  it("answers null for a published row whose uploader never declared anything", async () => {
+    await seedMedia(prisma, {
+      id: "item-declared",
+      userId: UPLOADER,
+      createdAt: new Date("2026-03-01T00:00:00.000Z"),
+    });
+    await seedMedia(prisma, {
+      id: "item-undeclared",
+      userId: UPLOADER,
+      createdAt: new Date("2026-03-02T00:00:00.000Z"),
+      attested: false,
+    });
+
+    // The sibling resolves, so `null` below is the filter rather than a
+    // lookup that cannot find anything by handle at all.
+    expect(await getPublicMediaItem("pv-item-declared")).not.toBeNull();
+    expect(await getPublicMediaItem("pv-item-undeclared")).toBeNull();
+  });
+
+  it("answers null for one showing an identifiable person, and the item once the PEOPLE layer is cleared", async () => {
+    await prisma.user.create({
+      data: {
+        id: "admin-item-3ae",
+        email: "admin-item-3ae@example.com",
+        role: "ADMIN",
+      },
+    });
+    // Two rows rather than one queried twice: `getPublicMediaItem` is
+    // `cache()`d, so re-asking about the same handle in one test would be
+    // asking the cache rather than the database.
+    for (const id of ["item-people", "item-people-cleared"]) {
+      await seedMedia(prisma, {
+        id,
+        userId: UPLOADER,
+        createdAt: new Date("2026-03-01T00:00:00.000Z"),
+        showsIdentifiablePeople: true,
+      });
+    }
+    // Seeded directly: ugcportal-qfy9 owns the clearance write path and is
+    // not in yet. The clearance is the ONLY difference between the two rows.
+    await prisma.mediaListing.create({
+      data: {
+        mediaId: "item-people-cleared",
+        depictsPeople: true,
+        layerClearances: {
+          create: {
+            layer: RightsLayer.PEOPLE,
+            reason: "Model release on file; covers online commercial publication.",
+            clearedByUserId: "admin-item-3ae",
+          },
+        },
+      },
+    });
+
+    expect(await getPublicMediaItem("pv-item-people")).toBeNull();
+    expect(await getPublicMediaItem("pv-item-people-cleared")).not.toBeNull();
   });
 });

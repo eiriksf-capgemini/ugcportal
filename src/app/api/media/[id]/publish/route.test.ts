@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { MediaAuthorship, RightsLayer } from "@/generated/prisma/enums";
 import { PERMITTED_ADVERTISING_LABELS } from "@/lib/advertising-disclosure";
+import { CURRENT_ATTESTATION_VERSION } from "@/lib/attestation";
 import type { OwnedMediaRow } from "@/lib/media-access";
+import { PUBLISH_BLOCKER_MESSAGES } from "@/lib/publishability";
 
 const authMock = vi.fn();
 
@@ -25,6 +28,18 @@ const mediaDeleteManyMock = vi.fn();
 // for the same reason Media's are — a publish that reached for one would show
 // up rather than sliding past a test that only inspects the call it expected.
 const disclosureFindUniqueMock = vi.fn();
+// The uploader's rights declaration (ugcportal-15r), read by the publish
+// gate ugcportal-3ae added. Every write method is mocked and listed in
+// WRITE_MOCKS below for the same reason Media's are: this route reads it and
+// must never write it — an attestation written by a publish request would be
+// the platform ticking the uploader's boxes for them.
+const attestationFindUniqueMock = vi.fn();
+const attestationUpdateManyMock = vi.fn();
+const attestationUpdateMock = vi.fn();
+const attestationCreateMock = vi.fn();
+const attestationUpsertMock = vi.fn();
+const attestationDeleteMock = vi.fn();
+const attestationDeleteManyMock = vi.fn();
 const listingFindUniqueMock = vi.fn();
 const listingUpdateManyMock = vi.fn();
 const listingUpdateMock = vi.fn();
@@ -43,6 +58,12 @@ const queryRawMock = vi.fn();
 const transactionMock = vi.fn();
 
 const WRITE_MOCKS = [
+  attestationUpdateManyMock,
+  attestationUpdateMock,
+  attestationCreateMock,
+  attestationUpsertMock,
+  attestationDeleteMock,
+  attestationDeleteManyMock,
   listingUpdateManyMock,
   listingUpdateMock,
   listingCreateMock,
@@ -97,6 +118,15 @@ vi.mock("@/lib/prisma", () => ({
       delete: listingDeleteMock,
       deleteMany: listingDeleteManyMock,
     },
+    mediaAttestation: {
+      findUnique: attestationFindUniqueMock,
+      updateMany: attestationUpdateManyMock,
+      update: attestationUpdateMock,
+      create: attestationCreateMock,
+      upsert: attestationUpsertMock,
+      delete: attestationDeleteMock,
+      deleteMany: attestationDeleteManyMock,
+    },
     mediaAdvertisingDisclosure: {
       findUnique: disclosureFindUniqueMock,
       updateMany: disclosureUpdateManyMock,
@@ -116,6 +146,7 @@ const { DELETE, POST } = await import("@/app/api/media/[id]/publish/route");
 
 const OWNER_ID = "user-a";
 const OTHER_ID = "user-b";
+const ADMIN_ID = "user-admin";
 const MEDIA_ID = "media-1";
 
 const PUBLISHED_AT = new Date("2026-03-01T09:00:00.000Z");
@@ -146,6 +177,39 @@ const CHECKED_BRAND = {
  * describe below rather than of these cases.
  */
 const TRIAGED_ALCOHOL_FREE = { depictsAlcohol: false as boolean | null };
+
+/**
+ * The uploader's own rights declaration, complete and in force
+ * (ugcportal-3ae K1).
+ *
+ * Spread into the default for every case in this file for the same reason
+ * `altText` is present on `unpublishedMedia` and CHECKED_BRAND on the
+ * disclosure fixtures: from this bead on, an upload with no declaration
+ * cannot be published at all, so a fixture without one would make every case
+ * above fail for THIS bead's reason instead of its own. The cases that ARE
+ * about the declaration override it explicitly.
+ */
+const VALID_ATTESTATION = {
+  attestedByUserId: OWNER_ID,
+  attestationVersion: CURRENT_ATTESTATION_VERSION,
+  authorship: MediaAuthorship.AUTHOR,
+  ownOriginalNotFromWeb: true,
+  showsIdentifiablePeople: false,
+  showsMinors: false,
+  containsMusicNotOwned: false,
+  otherCreativeContributor: false,
+  brandOrSponsorship: false,
+  aiGenerated: false,
+  uploaderIsAdult: true,
+};
+
+/** A PEOPLE clearance an admin signed, as the gate reads it. */
+const PEOPLE_CLEARANCE_BY_ADMIN = {
+  layer: RightsLayer.PEOPLE,
+  reason: "Model release on file, countersigned 2026-02-02; covers online commercial publication.",
+  clearedByUserId: ADMIN_ID,
+  clearedBy: { role: "ADMIN" as const },
+};
 
 const unpublishedMedia: OwnedMediaRow = {
   id: MEDIA_ID,
@@ -274,8 +338,13 @@ beforeEach(() => {
   disclosureFindUniqueMock.mockResolvedValue(null);
   // No listing row: an item nobody has put forward for sale, which is every
   // item in this file except where a case says otherwise. With no benefit
-  // declared the alcohol gate answers null whatever this holds.
+  // declared the alcohol gate answers null whatever this holds, and with the
+  // uploader declaring nobody identifiable is shown, the people gate asks
+  // for no clearance.
   listingFindUniqueMock.mockResolvedValue(null);
+  // A complete, in-force declaration by the owner (ugcportal-3ae). See
+  // VALID_ATTESTATION for why this is the default rather than null.
+  attestationFindUniqueMock.mockResolvedValue(VALID_ATTESTATION);
 });
 
 describe("ownership gate on publish/unpublish (K2)", () => {
@@ -1239,5 +1308,252 @@ describe("publishing is visibility only, never sellability (K4)", () => {
     ]) {
       expect(body).not.toHaveProperty(forbidden);
     }
+  });
+});
+
+/**
+ * ugcportal-3ae K1 and K2, at the route.
+ *
+ * The gate's own unit cases live in src/lib/publishability.test.ts; these
+ * are about the HTTP contract K1 states — the status code, the closed-set
+ * blocker, and `publishedAt` unchanged — and about K2's requirement that the
+ * two refusals be told apart from each other rather than both just reading
+ * "refused".
+ */
+describe("publishing requires the uploader's declaration (ugcportal-3ae K1)", () => {
+  it("refuses with 422 and `attestation_missing`, and writes nothing", async () => {
+    signedInAs(OWNER_ID);
+    mediaFindUniqueMock.mockResolvedValue(unpublishedMedia);
+    attestationFindUniqueMock.mockResolvedValue(null);
+
+    const response = await POST(publishRequest("POST"), context());
+    const body = await response.json();
+
+    expect(response.status).toBe(422);
+    expect(body.blocker).toBe("attestation_missing");
+    expect(body.error).toBe(PUBLISH_BLOCKER_MESSAGES.attestation_missing);
+    // K1's "publishedAt is unchanged", as the only thing that can change it:
+    // the route issued no write at all, so there is nothing to have changed
+    // it with. route.integration.test.ts asserts the stored column itself.
+    expect(mediaUpdateManyMock).not.toHaveBeenCalled();
+    expectNoOtherWrites();
+  });
+
+  it("refuses an already-published row too, rather than answering an idempotent 200", async () => {
+    // The two refusals above this one in the handler are not gated on
+    // `publishedAt === null` either, and for the reason stated there: a
+    // published row that fails this IS the row K3 says must not be on a
+    // public surface, and PUBLIC_MEDIA_SCOPE has already stopped serving it.
+    signedInAs(OWNER_ID);
+    mediaFindUniqueMock.mockResolvedValue(publishedMedia);
+    attestationFindUniqueMock.mockResolvedValue(null);
+
+    const response = await POST(publishRequest("POST"), context());
+
+    expect(response.status).toBe(422);
+    expect((await response.json()).blocker).toBe("attestation_missing");
+    expect(mediaUpdateManyMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses a declaration made by somebody other than the uploader", async () => {
+    signedInAs(OWNER_ID);
+    mediaFindUniqueMock.mockResolvedValue(unpublishedMedia);
+    attestationFindUniqueMock.mockResolvedValue({
+      ...VALID_ATTESTATION,
+      attestedByUserId: ADMIN_ID,
+    });
+
+    const response = await POST(publishRequest("POST"), context());
+
+    expect(response.status).toBe(422);
+    expect((await response.json()).blocker).toBe("attestation_not_by_uploader");
+    expect(mediaUpdateManyMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses a declaration at a retired version", async () => {
+    signedInAs(OWNER_ID);
+    mediaFindUniqueMock.mockResolvedValue(unpublishedMedia);
+    attestationFindUniqueMock.mockResolvedValue({
+      ...VALID_ATTESTATION,
+      attestationVersion: "1999-01-01.1",
+    });
+
+    const response = await POST(publishRequest("POST"), context());
+
+    expect(response.status).toBe(422);
+    expect((await response.json()).blocker).toBe(
+      "attestation_version_retired",
+    );
+  });
+
+  it("refuses a declaration that disclaims the rights outright", async () => {
+    signedInAs(OWNER_ID);
+    mediaFindUniqueMock.mockResolvedValue(unpublishedMedia);
+    attestationFindUniqueMock.mockResolvedValue({
+      ...VALID_ATTESTATION,
+      authorship: MediaAuthorship.NEITHER,
+    });
+
+    const response = await POST(publishRequest("POST"), context());
+
+    expect(response.status).toBe(422);
+    expect((await response.json()).blocker).toBe(
+      "attestation_rights_disclaimed",
+    );
+  });
+
+  it("publishes an upload whose uploader declared they are under 18", async () => {
+    /*
+     * The one attestation answer that blocks a SALE and not a publish
+     * (PUBLISH_ATTESTATION_BLOCKERS in src/lib/publishability.ts): §3.2 is
+     * about capacity to grant a licence, and publishing grants none. This
+     * case is what stops that decision from being quietly reversed into
+     * "a seventeen-year-old may not show their own photograph".
+     */
+    signedInAs(OWNER_ID);
+    mediaFindUniqueMock.mockResolvedValue(unpublishedMedia);
+    attestationFindUniqueMock.mockResolvedValue({
+      ...VALID_ATTESTATION,
+      uploaderIsAdult: false,
+    });
+
+    const response = await POST(publishRequest("POST"), context());
+
+    expect(response.status).toBe(200);
+    expect(writtenPayloads()).toHaveLength(1);
+  });
+});
+
+describe("publishing something showing a person requires a PEOPLE clearance (ugcportal-3ae K2)", () => {
+  /**
+   * The upload K2 is about: the declaration is complete and in force, and
+   * the uploader has said an identifiable person is in the frame.
+   */
+  const attestationShowingPeople = {
+    ...VALID_ATTESTATION,
+    showsIdentifiablePeople: true,
+  };
+
+  it("refuses on `people_uncleared` — NOT on the attestation blocker", async () => {
+    /*
+     * K2's distinguishability requirement, stated as the thing that could
+     * go wrong: a test asserting only "refused" would pass if the refusal
+     * came from the attestation check firing, which is a completely
+     * different failure with a completely different fix. So the declaration
+     * here is valid in every respect, and the blocker is asserted by name.
+     */
+    signedInAs(OWNER_ID);
+    mediaFindUniqueMock.mockResolvedValue(unpublishedMedia);
+    attestationFindUniqueMock.mockResolvedValue(attestationShowingPeople);
+
+    const response = await POST(publishRequest("POST"), context());
+    const body = await response.json();
+
+    expect(response.status).toBe(422);
+    expect(body.blocker).toBe("people_uncleared");
+    expect(body.blocker).not.toBe("attestation_missing");
+    expect(body.error).toBe(PUBLISH_BLOCKER_MESSAGES.people_uncleared);
+    expect(mediaUpdateManyMock).not.toHaveBeenCalled();
+    expectNoOtherWrites();
+  });
+
+  it("publishes the SAME upload once the PEOPLE clearance exists", async () => {
+    /*
+     * The other half of the pair K2 asks for, and the half that connects the
+     * assertion above to the clearance rather than to anything else: the
+     * only thing that changes between these two cases is the clearance row.
+     */
+    signedInAs(OWNER_ID);
+    mediaFindUniqueMock.mockResolvedValue(unpublishedMedia);
+    attestationFindUniqueMock.mockResolvedValue(attestationShowingPeople);
+    listingFindUniqueMock.mockResolvedValue({
+      depictsAlcohol: null,
+      depictsPeople: true,
+      layerClearances: [PEOPLE_CLEARANCE_BY_ADMIN],
+    });
+
+    const response = await POST(publishRequest("POST"), context());
+
+    expect(response.status).toBe(200);
+    expect(writtenPayloads()).toHaveLength(1);
+    expect(Object.keys(writtenPayloads()[0])).toEqual(["publishedAt"]);
+  });
+
+  it("refuses when the clearance was signed by somebody who is no longer an admin", async () => {
+    signedInAs(OWNER_ID);
+    mediaFindUniqueMock.mockResolvedValue(unpublishedMedia);
+    attestationFindUniqueMock.mockResolvedValue(attestationShowingPeople);
+    listingFindUniqueMock.mockResolvedValue({
+      depictsAlcohol: null,
+      depictsPeople: true,
+      layerClearances: [
+        { ...PEOPLE_CLEARANCE_BY_ADMIN, clearedBy: { role: "USER" } },
+      ],
+    });
+
+    const response = await POST(publishRequest("POST"), context());
+
+    expect(response.status).toBe(422);
+    expect((await response.json()).blocker).toBe("people_uncleared");
+  });
+
+  it("refuses when a DIFFERENT layer is cleared and PEOPLE is not", async () => {
+    // Per-layer clearances settle their own layer and nothing else; a
+    // MUSIC clearance saying "licence purchased" is not an answer about a
+    // person in the frame.
+    signedInAs(OWNER_ID);
+    mediaFindUniqueMock.mockResolvedValue(unpublishedMedia);
+    attestationFindUniqueMock.mockResolvedValue(attestationShowingPeople);
+    listingFindUniqueMock.mockResolvedValue({
+      depictsAlcohol: null,
+      depictsPeople: true,
+      layerClearances: [
+        { ...PEOPLE_CLEARANCE_BY_ADMIN, layer: RightsLayer.MUSIC },
+      ],
+    });
+
+    const response = await POST(publishRequest("POST"), context());
+
+    expect(response.status).toBe(422);
+    expect((await response.json()).blocker).toBe("people_uncleared");
+  });
+
+  it("refuses when the ADMIN triage says a person is shown and the uploader said otherwise", async () => {
+    /*
+     * The two answers can disagree, and the dangerous direction is the
+     * `no`: an uploader who ticks "nobody identifiable" on a street
+     * portrait must not thereby publish it over an admin's recorded `yes`.
+     */
+    signedInAs(OWNER_ID);
+    mediaFindUniqueMock.mockResolvedValue(unpublishedMedia);
+    attestationFindUniqueMock.mockResolvedValue(VALID_ATTESTATION);
+    listingFindUniqueMock.mockResolvedValue({
+      depictsAlcohol: null,
+      depictsPeople: true,
+      layerClearances: [],
+    });
+
+    const response = await POST(publishRequest("POST"), context());
+
+    expect(response.status).toBe(422);
+    expect((await response.json()).blocker).toBe("people_uncleared");
+  });
+
+  it("does not demand a clearance when neither the uploader nor an admin says a person is shown", async () => {
+    // An untriaged listing is the ordinary state of every upload on this
+    // site. Requiring an admin to answer first would make publishing an
+    // admin-gated act, which is ugcportal-55nt's open question rather than
+    // this gate's to decide.
+    signedInAs(OWNER_ID);
+    mediaFindUniqueMock.mockResolvedValue(unpublishedMedia);
+    listingFindUniqueMock.mockResolvedValue({
+      depictsAlcohol: null,
+      depictsPeople: null,
+      layerClearances: [],
+    });
+
+    const response = await POST(publishRequest("POST"), context());
+
+    expect(response.status).toBe(200);
   });
 });

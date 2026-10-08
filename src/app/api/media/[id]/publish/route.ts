@@ -9,6 +9,11 @@ import {
 } from "@/lib/media-access";
 import { mediaPreviewColumns } from "@/lib/media";
 import { prisma } from "@/lib/prisma";
+import {
+  PUBLISH_ATTESTATION_SELECT,
+  PUBLISH_LISTING_SELECT,
+  publishRightsRefusal,
+} from "@/lib/publishability";
 
 // App Router hands dynamic segments in as a Promise (Next 16).
 type RouteContext = { params: Promise<{ id: string }> };
@@ -206,11 +211,62 @@ export async function POST(_request: Request, { params }: RouteContext) {
   // exactly one place.
   const listing = await prisma.mediaListing.findUnique({
     where: { mediaId: id },
-    select: { depictsAlcohol: true },
+    select: {
+      depictsAlcohol: true,
+      // The people half of the rights gate below (ugcportal-3ae): the
+      // admin's own answer to the people question, and the per-layer
+      // clearances with each clearer's CURRENT role. Folded into the read
+      // this branch already makes rather than issued as a second one — the
+      // same trade the disclosure read above states, and the reason the
+      // select is spread from `PUBLISH_LISTING_SELECT` is so there is one
+      // copy of what that gate reads rather than one here and one in the
+      // module that decides.
+      ...PUBLISH_LISTING_SELECT,
+    },
   });
   const alcoholRefusal = commercialPublishRefusal({ disclosure, listing });
   if (alcoholRefusal) {
     return NextResponse.json(alcoholRefusal, { status: 400 });
+  }
+
+  // AND NOTHING IS PUBLISHED THAT ITS UPLOADER HAS NOT VOUCHED FOR, OR THAT
+  // SHOWS A PERSON NOBODY HAS SIGNED OFF ON (ugcportal-3ae K1/K2). The gate
+  // itself is src/lib/publishability.ts; see that module for why it is
+  // separate from `evaluateSellability` and for what each refusal means.
+  //
+  // 422 rather than the 400 its two neighbours above answer with. Those
+  // refuse a FIELD the operator can go and correct — an advertising label,
+  // an alcohol answer — and a 400 naming the field is the right shape for
+  // that. These refuse the REQUEST as semantically impossible given records
+  // that live outside this form entirely: the fix is a re-upload through
+  // the flow that asks the rights questions, or an administrator recording
+  // a clearance. The body carries `blocker`, a closed-set code, rather than
+  // `field`, for the same reason.
+  //
+  // NOT GATED ON `publishedAt === null`, matching the two refusals above
+  // rather than the alt-text one. The alt-text check is transition-only
+  // because an already-published row with blank alt text is a rolling-deploy
+  // artefact that is in breach of nothing. A published row with no
+  // attestation is the opposite: it is precisely the row K3 says must not be
+  // on a public surface, and `PUBLIC_MEDIA_SCOPE` has already stopped
+  // serving it. Answering 200 to "publish this" because it is already marked
+  // published would be this route reporting success for a row the site is
+  // refusing to show.
+  //
+  // THE ATTESTATION IS READ HERE AND NOT THROUGH `requireOwnedMedia`, the
+  // same trade the two reads above make: PATCH, DELETE and tags have no use
+  // for it, and a join on the shared gate would make all of them pay.
+  const attestation = await prisma.mediaAttestation.findUnique({
+    where: { mediaId: id },
+    select: PUBLISH_ATTESTATION_SELECT,
+  });
+  const rightsRefusal = publishRightsRefusal({
+    userId: access.userId,
+    attestation,
+    listing,
+  });
+  if (rightsRefusal) {
+    return NextResponse.json(rightsRefusal, { status: 422 });
   }
 
   // Two different problems hide behind "this row has no usable preview", and
