@@ -389,6 +389,13 @@ export function readRoundChain(items, prAuthor, reviewer) {
  * say it found nothing -- the report prints "unstated" for that round
  * rather than a number.
  *
+ * A bare number next to a severity word is only a count in a findings
+ * context (ugcportal-zo8n): a number glued to a `#` (an issue/PR reference)
+ * or immediately followed by a `--flag` (a quoted CLI invocation, e.g. PR
+ * #121's own round-1 body quoting `121 high --comment` as the code-review
+ * args) is not read as a severity count, however close a severity word
+ * sits next to it.
+ *
  * @param {string} body
  */
 export function classifySeverity(body) {
@@ -470,6 +477,12 @@ export function classifySeverity(body) {
     const n = wordToNumber(m[1]);
     if (n === null) continue;
     if (/\bround[- ]?$/i.test(text.slice(Math.max(0, m.index - 8), m.index))) continue;
+    // Not a findings-context count: `#121 high` (an issue/PR reference, not
+    // a severity count) or `121 high --comment` (a quoted CLI invocation --
+    // the exact text of PR #121's own round-1 body, which named the
+    // code-review args verbatim and was read as 121 mediums before this fix).
+    if (text[m.index - 1] === "#") continue;
+    if (/^\s*--/.test(text.slice(m.index + m[0].length, m.index + m[0].length + 4))) continue;
     if (/^low/i.test(m[2])) summaryLow = Math.max(summaryLow, n);
     else summaryMedium = Math.max(summaryMedium, n);
   }
@@ -683,18 +696,53 @@ export function tailRounds(rounds) {
   return Math.max(0, maxN - lastMedium);
 }
 
+/** A negation cue that, inside the clause around a "sensitive path(s)"
+ * mention, means the mention is saying the PR did NOT touch one -- "no
+ * sensitive paths touched", "none touch a sensitive path", "zero sensitive
+ * paths", "doesn't touch a sensitive path" -- rather than stating the reason
+ * it was held for a human. */
+const SENSITIVE_PATH_NEGATION_RE = /\b(no|none|zero|not|never|nothing|without|free of|clear of|clean of)\b|n['’]t\b/i;
+
+/**
+ * Whether text contains a GENUINE "this touches/touched a sensitive path"
+ * statement, as opposed to a negated aside that only mentions the phrase to
+ * rule it out (ugcportal-577s: "no sensitive paths touched" on an
+ * auto-approval matched the old plain `/sensitive path/i` test). Looks at
+ * the clause immediately before each mention -- back to the nearest
+ * sentence boundary, or 60 characters, whichever is closer -- for a
+ * negation cue; a mention with no negation cue in that lead-in is genuine.
+ * Deliberately a clause-local check, not whole-sentence: a sentence can
+ * carry an unrelated negation after the mention (PR #185's round-1 body
+ * reads "...this PR touches a sensitive path** (...), so this run does not
+ * approve or merge..." -- the "does not" there is about merging, not about
+ * whether the path is sensitive, and must not flip this to negated).
+ *
+ * @param {string} text
+ */
+export function hasGenuineSensitivePathMention(text) {
+  const s = String(text ?? "");
+  const mentionRe = /sensitive paths?/gi;
+  let m;
+  while ((m = mentionRe.exec(s))) {
+    const boundary = Math.max(s.lastIndexOf(".", m.index), s.lastIndexOf(";", m.index), s.lastIndexOf(":", m.index), s.lastIndexOf("\n", m.index), m.index - 60);
+    const before = s.slice(Math.max(0, boundary + 1), m.index);
+    if (!SENSITIVE_PATH_NEGATION_RE.test(before)) return true;
+  }
+  return false;
+}
+
 /**
  * How the PR got over the line, read from the close reason and the PR's
  * own final comments. Heuristic: the close reason is free text, so this is
  * labelled as such in the report and the close reason is the source of truth.
  */
-function outcomeOf(bead, prAnalyses, rounds) {
+export function outcomeOf(bead, prAnalyses, rounds) {
   const cr = bead.close_reason ?? "";
   if (prAnalyses.length === 0) return "no PR";
   if (/withdrawn|premise was wrong/i.test(cr)) return "withdrawn";
   const lastBodies = prAnalyses.map((p) => (p.lastRoundBody ?? "") + " " + p.extras.map((e) => e.head).join(" ")).join(" ");
   if (/round-6 cap|\bthe cap\b|cap escalation|after the cap|at the cap/i.test(cr) || (rounds !== null && rounds >= 6)) return "cap → human";
-  if (/sensitive path/i.test(cr) || /sensitive path/i.test(lastBodies)) return "human (sensitive path)";
+  if (hasGenuineSensitivePathMention(cr) || hasGenuineSensitivePathMention(lastBodies)) return "human (sensitive path)";
   if (/\bby Eirik\b|Eirik's (decision|instruction)|human merge|Eirik (approved|merged)/i.test(cr) || /Eirik('s)? (decision|instruction|merge)/i.test(lastBodies)) return "human";
   if (/\bMerging\b|auto-merge|merged round 1|squash-merged by pr-review-merge/i.test(cr + " " + lastBodies)) return "auto-merged";
   if (!cr || cr.trim() === "Closed") return "merged (no close reason)";

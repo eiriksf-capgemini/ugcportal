@@ -1,11 +1,18 @@
 /**
  * Tests for the pure parts of the release cost report (ugcportal-apsq):
  * CHANGELOG membership parsing, estimate (~) marking, median, the step-4b
- * round-chain reader, the stated-severity classifier and the close-reason
- * round parser. The bd / gh / git plumbing is not exercised here; the
- * fixtures below are shaped like the real comments and notes in this repo
- * (quoted from PRs #75, #79, #94, #95, #98 and the beads they belong to).
+ * round-chain reader, the stated-severity classifier, the close-reason
+ * round parser and the merge-outcome heuristic. The bd / gh / git plumbing
+ * is not exercised here; most fixtures below are shaped like the real
+ * comments and notes in this repo (quoted from PRs #75, #79, #94, #95,
+ * #98). Three are real bodies fetched once with `gh api` and committed
+ * under scripts/fixtures/ (ugcportal-577s, ugcportal-zo8n) rather than
+ * hit over the network from a test: PR #121's round-1 body (a zero-finding
+ * approval that reproduces both defects at once), PR #173's round-2 body
+ * (an auto-merge whose body says "no sensitive paths touched") and PR
+ * #185's round-1 body (a genuine sensitive-path hold, the control case).
  */
+import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -18,7 +25,9 @@ import {
   estimateFlags,
   firstLine,
   fmtTokens,
+  hasGenuineSensitivePathMention,
   median,
+  outcomeOf,
   parseChangelogMembership,
   parsePrs,
   parseRoundsFromCloseReason,
@@ -26,6 +35,11 @@ import {
   spliceGenerated,
   tailRounds,
 } from "./release-cost-report.mjs";
+
+const loadFixture = (name) => JSON.parse(fs.readFileSync(new URL(`./fixtures/${name}`, import.meta.url), "utf8"));
+const pr121 = loadFixture("pr-121-round1.json");
+const pr173 = loadFixture("pr-173-round2.json");
+const pr185 = loadFixture("pr-185-round1.json");
 
 const CHANGELOG = `# Changelog
 
@@ -302,6 +316,98 @@ describe("classifySeverity (severity is read from the reviewer's words, never gu
 
   it("treats an explicit 'zero findings' verdict as stated with no mediums", () => {
     expect(classifySeverity("Round 1 (chain approx). code-review found zero findings; all four families swept and reported. Merging.")).toMatchObject({ medium: 0, low: 0, stated: true });
+  });
+
+  describe("ugcportal-zo8n: a bare number is only a count beside a severity word in a findings context", () => {
+    it("does not read PR #121's own round-1 body (which quotes its code-review invocation as '121 high --comment') as 121 mediums", () => {
+      // #121 was a zero-finding approval. The old parser took '121' from the
+      // quoted CLI args -- `121 high --comment` -- immediately preceding
+      // '--comment', not from any stated finding.
+      expect(classifySeverity(pr121.round1Body)).toMatchObject({ medium: 0, low: 0, stated: true, findings: 0 });
+    });
+
+    it("does not read a PR-number reference glued to a severity word as a count", () => {
+      expect(classifySeverity("See #121 high priority backlog for context; unrelated to this review.")).toMatchObject({ medium: 0, low: 0 });
+    });
+
+    it("still reads a genuine 'N <severity>' summary count that is not a PR reference or a CLI invocation", () => {
+      // Control: a weaker 'fix' that always returns 0 would also pass the
+      // #121 assertion above. This asserts the opposite failure mode never
+      // happens: a real stated count must still come through.
+      expect(classifySeverity("Review round 1. Found 2 medium findings and 1 low finding, both confirmed.")).toMatchObject({ medium: 2, low: 1 });
+    });
+
+    it("mutating the committed #121 fixture to genuinely state a medium count changes the classification", () => {
+      // Fixture mutation control: the real zero-finding body parses to 0;
+      // swapping in matching finding-labelled text for the same code-review
+      // line must parse to a real count, proving the fix discriminates on
+      // context rather than on this specific body's text.
+      const mutated = pr121.round1Body.replace("`121 high --comment`): 0 findings (`[]`)", "`121 high --comment`): 2 medium findings");
+      expect(classifySeverity(mutated)).toMatchObject({ medium: 2 });
+    });
+  });
+});
+
+describe("hasGenuineSensitivePathMention (ugcportal-577s)", () => {
+  it("reads a genuine 'touches a sensitive path' statement as genuine", () => {
+    expect(hasGenuineSensitivePathMention("Requires human approval and merge: this PR touches a sensitive path.")).toBe(true);
+    expect(hasGenuineSensitivePathMention(pr185.round1Body)).toBe(true);
+  });
+
+  it("does not read a negated mention as genuine, in several phrasings a reviewer actually uses", () => {
+    expect(hasGenuineSensitivePathMention("CI green, no sensitive paths touched, no blocking findings.")).toBe(false);
+    expect(hasGenuineSensitivePathMention("none of the changed files touch a sensitive path.")).toBe(false);
+    expect(hasGenuineSensitivePathMention("zero sensitive paths in this diff.")).toBe(false);
+    expect(hasGenuineSensitivePathMention("the diff doesn't touch a sensitive path.")).toBe(false);
+    expect(hasGenuineSensitivePathMention(pr121.round1Body)).toBe(false);
+    expect(hasGenuineSensitivePathMention(pr173.round2Body)).toBe(false);
+  });
+
+  it("is not fooled by an unrelated negation elsewhere in the same sentence (PR #185's own 'does not approve or merge' follows its genuine mention)", () => {
+    // Control: a naive whole-sentence negation check would see "does not"
+    // later in this same sentence and misread the genuine mention as
+    // negated. The clause-local check must not do that.
+    expect(hasGenuineSensitivePathMention("this PR touches a sensitive path (docker-compose.yml), so this run does not approve or merge regardless of outcome.")).toBe(true);
+  });
+
+  it("returns false when the phrase never appears at all", () => {
+    expect(hasGenuineSensitivePathMention("CI green, zero findings, merging.")).toBe(false);
+    expect(hasGenuineSensitivePathMention("")).toBe(false);
+  });
+});
+
+describe("outcomeOf (ugcportal-577s: the outcome heuristic)", () => {
+  const mkAnalysis = (body, extras = []) => ({ number: 1, state: "MERGED", mergedAt: "2026-10-06T00:00:00Z", lastRoundBody: body, extras });
+
+  it("K1: an auto-merge whose body reads 'no sensitive paths touched' classifies as auto-merged, not sensitive-path", () => {
+    expect(outcomeOf({ close_reason: "" }, [mkAnalysis(pr173.round2Body)], 2)).toBe("auto-merged");
+  });
+
+  it("K2 (control): a genuine sensitive-path hold still classifies as human (sensitive path)", () => {
+    // This is what distinguishes a real fix from simply deleting the
+    // heuristic: a PR that really was held for a human for this reason
+    // must still be labelled as such.
+    expect(outcomeOf({ close_reason: "" }, [mkAnalysis(pr185.round1Body)], 1)).toBe("human (sensitive path)");
+  });
+
+  it("the shared PR #121 fixture (zero-finding approval, also mentions 'no sensitive paths touched') classifies as auto-merged", () => {
+    expect(outcomeOf({ close_reason: "" }, [mkAnalysis(pr121.round1Body)], 1)).toBe("auto-merged");
+  });
+
+  it("Never: a body containing 'no sensitive paths' classifies as sensitive-path", () => {
+    expect(outcomeOf({ close_reason: "" }, [mkAnalysis("Auto-approved: CI green, no sensitive paths touched, no blocking findings. Merging.")], 1)).not.toBe("human (sensitive path)");
+  });
+
+  it("mutating the committed #173 fixture to a genuine sensitive-path hold changes the classification", () => {
+    // Fixture mutation control: swap the negated mention for a genuine one
+    // in the same real body and confirm the label flips.
+    const mutated = pr173.round2Body.replace("CI green, no sensitive paths touched, no blocking findings.", "Requires human approval and merge: this PR touches a sensitive path.");
+    expect(outcomeOf({ close_reason: "" }, [mkAnalysis(mutated)], 2)).toBe("human (sensitive path)");
+  });
+
+  it("still reports 'no PR' and 'withdrawn' as before (unaffected by this fix)", () => {
+    expect(outcomeOf({ close_reason: "" }, [], null)).toBe("no PR");
+    expect(outcomeOf({ close_reason: "Withdrawn: premise was wrong." }, [mkAnalysis("x")], 1)).toBe("withdrawn");
   });
 });
 
