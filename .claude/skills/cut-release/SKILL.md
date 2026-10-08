@@ -152,10 +152,10 @@ bd list --all --json \
          else "MISSING: \($missing | join(", "))" end)'
 ```
 
-Three details in that pipeline are load-bearing, and the first two were bugs in this step's first draft:
+Every line of that pipeline is load-bearing:
 
-- **`tonumber` before `unique`.** Sorting the item numbers as *strings* orders them `1, 10, 2, 3, …`, so any retrospective with ten or more recommendations is read wrong. `unique` on numbers sorts numerically.
-- **`unique`, not a bare list.** An item can legitimately be owned by more than one bead — item 5 of `release-cost-v0.5.0-vs-v0.6.0.md` is owned by both `ugcportal-zo8n` and `ugcportal-577s`. Without `unique` the command prints `5` twice against its own example document, which is exactly the kind of output that makes a by-eye comparison go wrong.
+- **`tonumber` before `unique`** (a bug in this step's first draft). Sorting the item numbers as *strings* orders them `1, 10, 2, 3, …`, so any retrospective with ten or more recommendations is read wrong. `unique` on numbers sorts numerically.
+- **`unique`, not a bare list** (also a first-draft bug). An item can legitimately be owned by more than one bead — item 5 of `release-cost-v0.5.0-vs-v0.6.0.md` is owned by both `ugcportal-zo8n` and `ugcportal-577s`. Without `unique` the command prints `5` twice against its own example document, which is exactly the kind of output that makes a by-eye comparison go wrong.
 - **`range(1; $total + 1)` assumes the recommendations are numbered contiguously from 1.** If a document skips a number, that number is reported `MISSING` and there is no recommendation behind it; step 4's premise check is what catches that, and the answer there is to file nothing and record why.
 - **The `total` guard is the step's K3 assertion, and it runs before anything reads the tracker.** `[ "${total:-0}" -gt 0 ]` with the `:-0` default, because an unset variable in a numeric test is the silent pass-through this repo keeps re-finding: three separate findings on one PR were the same empty-variable-becomes-a-tautology bug.
 
