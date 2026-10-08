@@ -122,8 +122,8 @@ describe("the registry is the one list of questions", () => {
     /*
      * Literal "attestation.", not MEDIA_ATTESTATION_FIELD_PREFIX — every name
      * above is itself built from that constant via attestationFieldName, so
-     * comparing against the constant can never fail. Comparing against the
-     * literal is what actually checks the constant still holds that value.
+     * comparing against the constant just restates whatever value it holds.
+     * Comparing against the literal is what checks that value directly.
      */
     for (const name of names) {
       expect(name.startsWith("attestation."), name).toBe(true);
