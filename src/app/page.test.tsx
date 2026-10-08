@@ -1,6 +1,8 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { MediaAuthorship } from "@/generated/prisma/enums";
+import { CURRENT_ATTESTATION_VERSION } from "@/lib/attestation";
 import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db";
 
 /**
@@ -117,6 +119,12 @@ type SeedOptions = {
   published?: boolean;
   withPreview?: boolean;
   kind?: "IMAGE" | "VIDEO";
+  /**
+   * The uploader's rights declaration (ugcportal-3ae). Default true: a row
+   * without one is on no anonymous surface at all, so every case in this
+   * file that is about something else needs one.
+   */
+  attested?: boolean;
 };
 
 async function seedMedia({
@@ -125,6 +133,7 @@ async function seedMedia({
   published = true,
   withPreview = true,
   kind = "IMAGE",
+  attested = true,
 }: SeedOptions) {
   await prisma.media.create({
     data: {
@@ -141,6 +150,25 @@ async function seedMedia({
       originalName: originalNameFor(id),
       createdAt,
       publishedAt: published ? new Date("2026-03-04T10:00:00.000Z") : null,
+    },
+  });
+
+  if (!attested) return;
+
+  await prisma.mediaAttestation.create({
+    data: {
+      mediaId: id,
+      attestedByUserId: UPLOADER,
+      attestationVersion: CURRENT_ATTESTATION_VERSION,
+      authorship: MediaAuthorship.AUTHOR,
+      ownOriginalNotFromWeb: true,
+      showsIdentifiablePeople: false,
+      showsMinors: false,
+      containsMusicNotOwned: false,
+      otherCreativeContributor: false,
+      brandOrSponsorship: false,
+      aiGenerated: false,
+      uploaderIsAdult: true,
     },
   });
 }
@@ -813,5 +841,46 @@ describe("K4 — paging yields the union of items exactly once", () => {
     expect(page.items.map((item) => item.id)).toEqual(["only"]);
     expect(page.hasMore).toBe(false);
     expect(page.nextCursor).toBeNull();
+  });
+});
+
+/**
+ * ugcportal-3ae K3, for the two surfaces `listPublicMedia` serves.
+ *
+ * One query site, two anonymous readers: the server-rendered home page
+ * below, and GET /api/public/media — which is why both are asserted here
+ * rather than one standing in for the other. A fix that reached the
+ * rendered HTML and not the raw JSON is a leak to any direct consumer, and
+ * this repo has shipped exactly that shape before (`tags`, round 4 of
+ * ugcportal-qnq9).
+ */
+describe("a published row with no uploader attestation reaches neither reader (ugcportal-3ae K3)", () => {
+  beforeEach(async () => {
+    await seedMedia({
+      id: "declared",
+      createdAt: new Date("2026-03-02T00:00:00Z"),
+    });
+    await seedMedia({
+      id: "undeclared",
+      createdAt: new Date("2026-03-01T00:00:00Z"),
+      attested: false,
+    });
+  });
+
+  it("is absent from the server-rendered home page", async () => {
+    const markup = await renderGallery();
+
+    // The sibling IS there, which is what makes the absence mean
+    // "filtered" rather than "the page rendered nothing".
+    expect(renderedIds(markup)).toEqual(["declared"]);
+    expect(markup).not.toContain("undeclared");
+    expect(markup).not.toContain("pv-undeclared");
+  });
+
+  it("is absent from GET /api/public/media, in the raw JSON", async () => {
+    const page = await fetchPage(null, 20);
+
+    expect(page.items.map((item) => item.id)).toEqual(["declared"]);
+    expect(JSON.stringify(page)).not.toContain("undeclared");
   });
 });

@@ -1,5 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
+import { MediaAuthorship, RightsLayer } from "@/generated/prisma/enums";
+import { CURRENT_ATTESTATION_VERSION } from "@/lib/attestation";
 import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db";
 
 /**
@@ -28,12 +30,16 @@ vi.mock("@/lib/auth", () => ({ auth: authMock }));
 const { POST } = await import("@/app/api/media/[id]/publish/route");
 
 const OWNER_ID = "owner-gwr-k1";
+const ADMIN_ID = "admin-3ae";
 const MEDIA_ID = "media-gwr-k1";
 
 beforeAll(async () => {
   await applyMigrations(prisma);
   await prisma.user.create({
     data: { id: OWNER_ID, email: "owner-gwr-k1@example.com" },
+  });
+  await prisma.user.create({
+    data: { id: ADMIN_ID, email: "admin-3ae@example.com", role: "ADMIN" },
   });
 });
 
@@ -43,12 +49,36 @@ afterAll(async () => {
 });
 
 afterEach(async () => {
+  // MediaListing, MediaAttestation and MediaRightsClearance all cascade from
+  // Media, so one delete clears the fixture.
   await prisma.media.deleteMany({});
   authMock.mockReset();
 });
 
-async function seedPublishableMedia(overrides: { altText?: string | null } = {}) {
-  return prisma.media.create({
+type SeedOptions = {
+  altText?: string | null;
+  /** ugcportal-3ae: write the uploader's declaration. Default true. */
+  attested?: boolean;
+  /** The uploader's own answer to the people question. */
+  showsIdentifiablePeople?: boolean;
+  /** The admin's answer, on a MediaListing. `undefined` writes no listing. */
+  depictsPeople?: boolean | null;
+  /** Record a PEOPLE clearance signed by a current admin. */
+  peopleCleared?: boolean;
+  published?: boolean;
+};
+
+async function seedPublishableMedia(overrides: SeedOptions = {}) {
+  const {
+    altText = null,
+    attested = true,
+    showsIdentifiablePeople = false,
+    depictsPeople,
+    peopleCleared = false,
+    published = false,
+  } = overrides;
+
+  const media = await prisma.media.create({
     data: {
       id: MEDIA_ID,
       userId: OWNER_ID,
@@ -59,12 +89,63 @@ async function seedPublishableMedia(overrides: { altText?: string | null } = {})
       mimeType: "image/png",
       sizeBytes: 2048,
       originalName: "IMG_4821.HEIC",
-      altText: overrides.altText ?? null,
+      altText,
       createdAt: new Date("2026-01-01T00:00:00.000Z"),
-      publishedAt: null,
+      publishedAt: published ? new Date("2026-02-01T00:00:00.000Z") : null,
     },
   });
+
+  if (attested) {
+    await prisma.mediaAttestation.create({
+      data: {
+        mediaId: MEDIA_ID,
+        attestedByUserId: OWNER_ID,
+        attestationVersion: CURRENT_ATTESTATION_VERSION,
+        authorship: MediaAuthorship.AUTHOR,
+        ownOriginalNotFromWeb: true,
+        showsIdentifiablePeople,
+        showsMinors: false,
+        containsMusicNotOwned: false,
+        otherCreativeContributor: false,
+        brandOrSponsorship: false,
+        aiGenerated: false,
+        uploaderIsAdult: true,
+      },
+    });
+  }
+
+  if (depictsPeople !== undefined || peopleCleared) {
+    /*
+      Seeded DIRECTLY rather than through the admin curation screen
+      ugcportal-qfy9 shipped in `ba9991f`. This file is about the publish
+      route's HTTP behaviour against real rows, so the clearance is a
+      precondition to arrange, not the subject — the same way the
+      attestation above it is written straight into the table. What these
+      cases establish is that the route publishes GIVEN a clearance row,
+      not that the admin flow produces one; qfy9's own suite covers that.
+    */
+    await prisma.mediaListing.create({
+      data: {
+        mediaId: MEDIA_ID,
+        depictsPeople: depictsPeople ?? null,
+        layerClearances: peopleCleared
+          ? {
+              create: {
+                layer: RightsLayer.PEOPLE,
+                reason:
+                  "Model release on file; covers online commercial publication.",
+                clearedByUserId: ADMIN_ID,
+              },
+            }
+          : undefined,
+      },
+    });
+  }
+
+  return media;
 }
+
+const ALT_TEXT = "A fox crossing a snowy field at dawn";
 
 function publishRequest() {
   return new Request(`http://localhost/api/media/${MEDIA_ID}/publish`, {
@@ -122,5 +203,122 @@ describe("publishing without alt text, against a real database (ugcportal-gwr K1
       where: { id: MEDIA_ID },
     });
     expect(row.publishedAt).toBeNull();
+  });
+});
+
+/**
+ * ugcportal-3ae K1, K2 and K4, against the same real database.
+ *
+ * The mocked route tests next door already assert the status code and the
+ * blocker. What a mock cannot say is what K1 and K4 are actually about: that
+ * the `publishedAt` COLUMN in storage is unchanged by a refused publish, and
+ * that nothing anywhere grants publishability to a row that predates this
+ * change.
+ */
+describe("publishing requires the uploader's declaration, against a real database (ugcportal-3ae K1)", () => {
+  it("refuses with 422 and leaves publishedAt null in the database", async () => {
+    authMock.mockResolvedValue({ user: { id: OWNER_ID, role: "USER" } });
+    await seedPublishableMedia({ altText: ALT_TEXT, attested: false });
+
+    const response = await POST(publishRequest(), context());
+
+    expect(response.status).toBe(422);
+    expect((await response.json()).blocker).toBe("attestation_missing");
+
+    const row = await prisma.media.findUniqueOrThrow({ where: { id: MEDIA_ID } });
+    expect(row.publishedAt).toBeNull();
+  });
+
+  it("publishes and persists publishedAt once the declaration is there", async () => {
+    authMock.mockResolvedValue({ user: { id: OWNER_ID, role: "USER" } });
+    await seedPublishableMedia({ altText: ALT_TEXT, attested: true });
+
+    const response = await POST(publishRequest(), context());
+    expect(response.status).toBe(200);
+
+    const row = await prisma.media.findUniqueOrThrow({ where: { id: MEDIA_ID } });
+    expect(row.publishedAt).not.toBeNull();
+  });
+});
+
+describe("the PEOPLE clearance, against a real database (ugcportal-3ae K2)", () => {
+  it("refuses on `people_uncleared` and leaves the column null", async () => {
+    authMock.mockResolvedValue({ user: { id: OWNER_ID, role: "USER" } });
+    await seedPublishableMedia({
+      altText: ALT_TEXT,
+      showsIdentifiablePeople: true,
+    });
+
+    const response = await POST(publishRequest(), context());
+    const body = await response.json();
+
+    expect(response.status).toBe(422);
+    // By NAME. "Refused" alone would also be satisfied by the attestation
+    // check firing, which is a different failure with a different fix.
+    expect(body.blocker).toBe("people_uncleared");
+
+    const row = await prisma.media.findUniqueOrThrow({ where: { id: MEDIA_ID } });
+    expect(row.publishedAt).toBeNull();
+  });
+
+  it("publishes the same upload once a real PEOPLE clearance row exists", async () => {
+    authMock.mockResolvedValue({ user: { id: OWNER_ID, role: "USER" } });
+    await seedPublishableMedia({
+      altText: ALT_TEXT,
+      showsIdentifiablePeople: true,
+      depictsPeople: true,
+      peopleCleared: true,
+    });
+
+    const response = await POST(publishRequest(), context());
+    expect(response.status).toBe(200);
+
+    const row = await prisma.media.findUniqueOrThrow({ where: { id: MEDIA_ID } });
+    expect(row.publishedAt).not.toBeNull();
+  });
+});
+
+describe("no retroactive grant to rows that predate this change (ugcportal-3ae K4)", () => {
+  it("leaves a pre-existing published row with no attestation exactly as it was — unbackfilled", async () => {
+    /*
+     * The migration half of K4, as a claim about the database rather than
+     * about a diff: the row this bead's gate would refuse is one that was
+     * ALREADY published, and nothing — no migration, no default, no
+     * backfill — may hand it a declaration it never made. If something did,
+     * `attestation` here would be non-null and the publish below would
+     * answer 200.
+     *
+     * This bead adds no migration at all; `MediaAttestation` and
+     * `MediaRightsClearance` both predate it (ugcportal-15r, ugcportal-qn3).
+     * That is exactly why this is worth asserting rather than assuming: "no
+     * migration" is only a guarantee of "no retroactive grant" while nobody
+     * adds one, and this fails the day somebody does.
+     */
+    authMock.mockResolvedValue({ user: { id: OWNER_ID, role: "USER" } });
+    await seedPublishableMedia({
+      altText: ALT_TEXT,
+      attested: false,
+      published: true,
+    });
+
+    const before = await prisma.media.findUniqueOrThrow({
+      where: { id: MEDIA_ID },
+      include: { attestation: true },
+    });
+    expect(before.publishedAt).not.toBeNull();
+    expect(before.attestation).toBeNull();
+
+    const response = await POST(publishRequest(), context());
+    expect(response.status).toBe(422);
+    expect((await response.json()).blocker).toBe("attestation_missing");
+
+    const after = await prisma.media.findUniqueOrThrow({
+      where: { id: MEDIA_ID },
+      include: { attestation: true },
+    });
+    // Still no declaration, and the original timestamp untouched: refusing
+    // a publish must not quietly unpublish either.
+    expect(after.attestation).toBeNull();
+    expect(after.publishedAt).toEqual(before.publishedAt);
   });
 });

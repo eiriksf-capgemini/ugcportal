@@ -9,6 +9,8 @@ import {
   vi,
 } from "vitest";
 
+import { MediaAuthorship } from "@/generated/prisma/enums";
+import { CURRENT_ATTESTATION_VERSION } from "@/lib/attestation";
 import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db";
 
 /**
@@ -88,6 +90,27 @@ async function seedMedia(publishedAt: Date | null = null) {
       altText: "A wine glass on a windowsill",
       createdAt: new Date("2026-01-01T00:00:00.000Z"),
       publishedAt,
+    },
+  });
+
+  // The uploader's rights declaration (ugcportal-3ae). The publish gate
+  // refuses without one, and this file's publish cases are about the
+  // disclosure rather than about that — nobody identifiable is in the frame,
+  // so no PEOPLE clearance is needed either.
+  await prisma.mediaAttestation.create({
+    data: {
+      mediaId: MEDIA_ID,
+      attestedByUserId: OWNER_ID,
+      attestationVersion: CURRENT_ATTESTATION_VERSION,
+      authorship: MediaAuthorship.AUTHOR,
+      ownOriginalNotFromWeb: true,
+      showsIdentifiablePeople: false,
+      showsMinors: false,
+      containsMusicNotOwned: false,
+      otherCreativeContributor: false,
+      brandOrSponsorship: true,
+      aiGenerated: false,
+      uploaderIsAdult: true,
     },
   });
 }

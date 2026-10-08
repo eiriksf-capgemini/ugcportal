@@ -3,11 +3,13 @@ import { stripCurationTags } from "@/lib/curation-tags";
 import { MEDIA_ANONYMOUS_SELECT } from "@/lib/media-access";
 import {
   listMedia,
+  type MediaAnonymousColumnScope,
   type MediaAnonymousListingSelect,
   type MediaAnonymousScope,
   type MediaListingItem,
   type MediaListingResult,
 } from "@/lib/media-listing";
+import { PUBLIC_MEDIA_RIGHTS_SCOPE } from "@/lib/publishability";
 import {
   publicMediaListingPath,
   type PublicMediaListingParams,
@@ -35,10 +37,59 @@ import {
  * publish filter structurally, and MEDIA_ANONYMOUS_SELECT is still the
  * narrower of the two projections. This is an extraction, not a new contract.
  */
-export const PUBLIC_MEDIA_SCOPE: MediaAnonymousScope = {
+/**
+ * The three NOT-NULL COLUMN filters, named apart from the rights half below
+ * (ugcportal-3ae).
+ *
+ * This is the half the public feed's partial index mirrors — see the
+ * `@@index([createdAt, id], where: …)` comment in prisma/schema.prisma — and
+ * src/lib/media-public-feed-index-migration.test.ts derives the index's
+ * expected WHERE clause from `Object.keys` of THIS constant. Before the
+ * rights filter existed it derived them from `PUBLIC_MEDIA_SCOPE` directly,
+ * which stopped being right the moment the scope gained a key that is not a
+ * column at all.
+ */
+export const PUBLIC_MEDIA_COLUMN_SCOPE: MediaAnonymousColumnScope = {
   publishedAt: { not: null },
   previewKey: { not: null },
   previewId: { not: null },
+};
+
+/**
+ * WHAT IS PUBLIC, in one object: the three column filters above, and the
+ * rights predicates (`PUBLIC_MEDIA_RIGHTS_SCOPE`, src/lib/publishability.ts
+ * — a valid uploader attestation, and a cleared PEOPLE layer wherever an
+ * identifiable person is shown).
+ *
+ * THE RIGHTS PREDICATES ARE HERE, IN THE SCOPE, AND NOT AT THE FOUR QUERIES
+ * THAT USE IT (ugcportal-3ae K3). That placement is the criterion, not an
+ * implementation detail of it. Four call sites serve five anonymous
+ * surfaces today — `listPublicMedia` below (the paginated API route AND the
+ * server-rendered home page), `listPortfolioPieces` (src/lib/portfolio.ts),
+ * the sitemap (src/app/sitemap.ts, which hands item URLs to crawlers) and
+ * the per-item page's read (src/lib/media-item.ts) — and an earlier draft of
+ * this bead listed only three of them. The one it missed was the sitemap.
+ * Any version of this fix that is written out per call site is one reader
+ * away from that mistake again, and the reader it would be missing is the
+ * one that publishes to Google.
+ *
+ * What makes it stick is not this comment: it is that
+ * `MediaAnonymousScope` (src/lib/media-listing.ts) now REQUIRES the rights
+ * half structurally, so a hand-built anonymous scope without it does not
+ * compile, and that src/lib/public-media.consumers.test.ts fails when a
+ * consumer of this constant is not covered by a test asserting the filter
+ * actually holds for it.
+ *
+ * A NOTE ON WHAT THIS COSTS, because it is large and deliberate: every row
+ * published before ugcportal-3ae landed has no attestation — nothing
+ * backfills one, by design (K4) — so every one of them leaves the public
+ * surfaces on the next request. That is fail-closed working, not a
+ * regression. Their owners re-publish through the current upload flow,
+ * which asks the rights questions.
+ */
+export const PUBLIC_MEDIA_SCOPE: MediaAnonymousScope = {
+  ...PUBLIC_MEDIA_COLUMN_SCOPE,
+  ...PUBLIC_MEDIA_RIGHTS_SCOPE,
 };
 
 /** A row exactly as the public feed returns it. */
