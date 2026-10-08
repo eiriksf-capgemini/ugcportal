@@ -154,14 +154,14 @@ function ProgressBar({ item }: { item: QueueItem }) {
     >
       <div
         /*
-          bg-petrol-400, not bg-primary (ugcportal-rw9j review round 5,
+          bg-fjord-400, not bg-primary (ugcportal-rw9j review round 5,
           code-review): the track above is bg-surface-3, the untouched
           near-black surface scale - --primary measured only 1.59:1 there in
-          light mode. --color-petrol-400 (the same old-surface-safe accent
+          light mode. --color-fjord-400 (the same old-surface-safe accent
           default-neutral uses, see button.tsx) clears 5.57:1 against this
           specific track.
         */
-        className="h-full rounded-full bg-petrol-400 transition-[width] duration-200"
+        className="h-full rounded-full bg-fjord-400 transition-[width] duration-200"
         /*
           Inline, because the value is per-row and continuous; there is no
           utility class for "37%". Width only — the colour is a token.

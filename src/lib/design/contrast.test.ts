@@ -5,7 +5,7 @@ import path from "node:path";
 import postcss from "postcss";
 import { describe, expect, it } from "vitest";
 
-import { parseColor } from "./color";
+import { parseColor, toHex } from "./color";
 import {
   PAIRINGS,
   RING_ALPHA_MODIFIER,
@@ -13,8 +13,10 @@ import {
   SURFACES,
   THRESHOLDS,
   evaluatePairing,
+  findColorScaleNameCollisions,
   parseTokenReference,
   type Pairing,
+  type ScaleNameCollision,
 } from "./contrast";
 import {
   DARK_MEDIA_SELECTOR,
@@ -74,12 +76,12 @@ function tokenAlphaKey(
  * a DIFFERENT component that happens to share the literal by coincidence of
  * this theme's current values, not by being the same semantic concept -
  * confirmed for real, not hypothetically: `--sidebar-primary` and
- * `--color-petrol-400` currently resolve to the identical literal, so
+ * `--color-fjord-400` currently resolve to the identical literal, so
  * `sidebar-primary-foreground-on-sidebar-primary` (`background:
- * ["--sidebar-primary"]`) used to "cover" every `bg-petrol-400` usage
+ * ["--sidebar-primary"]`) used to "cover" every `bg-fjord-400` usage
  * (button.tsx's default-neutral fill, the upload queue's progress-bar fill -
  * one of the four PR #79 regressions this bead exists because of) even with
- * `surface-0-on-petrol-400` - the entry that actually measures what's
+ * `surface-0-on-fjord-400` - the entry that actually measures what's
  * painted on top of that fill - deleted entirely. `contrast.test.ts`'s own
  * K3 block proves this both ways below.
  *
@@ -95,11 +97,21 @@ function tokenAlphaKey(
  * continuing on to whatever `--X` itself happens to equal. `--sidebar-primary`
  * has no `--color-sidebar-primary`-shaped counterpart pointing at it from a
  * usage's side (a scanned usage's property is always the `--color-<name>`
- * form, never a bare semantic name), and `--color-petrol-400` has no bare
- * `--petrol-400` alias to unwrap to (the petrol scale's OKLCH values live
+ * form, never a bare semantic name), and `--color-fjord-400` has no bare
+ * `--fjord-400` alias to unwrap to (the fjord scale's OKLCH values live
  * directly under `--color-*`, never behind a semantic alias - confirmed:
- * `globals.css` declares no bare `--petrol-400`) - so neither collapses into
+ * `globals.css` declares no bare `--fjord-400`) - so neither collapses into
  * the other under this narrower rule, and the two stay distinct keys.
+ *
+ * ugcportal-uo15 note: `--color-petrol-100`/`-200`/`-500` are a DIFFERENT
+ * case from `--color-fjord-400` here - those three now ARE exactly this
+ * shape of alias (`--color-petrol-200: var(--petrol-200)`), so
+ * `backgroundTokenIdentity` DOES unwrap them to their bare `--petrol-200`
+ * form. That is correct, not a new instance of the bug this function fixes:
+ * the bare and `--color-` forms are the SAME colour now (K1), so collapsing
+ * them is exactly the "two spellings, one guarantee" behaviour K2's fix
+ * (described above) protects for a real alias, not an accidental, value-only
+ * coincidence the way `--sidebar-primary`/`--color-fjord-400` was.
  */
 function backgroundTokenIdentity(
   property: string,
@@ -489,11 +501,13 @@ describe("the gate cannot be routed around", () => {
    * utility `hover:bg-petrol-200`, a different usage the alpha scanner,
    * not this bare one, already accounts for), which is what surfaces this
    * gap. `HeroDecoration`'s other two bare fills (`bg-petrol-100`,
-   * `bg-petrol-400`) needed no entry here for the same, now-moot reason
-   * #175 renamed one of their covering pairings over (`surface-0-on-
-   * petrol-400`, not `petrol-900-on-petrol-400`) — both literals are simply
-   * gone from hero.tsx along with the rest of `HeroDecoration`, so there is
-   * nothing left here for either pairing id to explain away.
+   * `bg-petrol-400`, as they were spelled before ugcportal-uo15 renamed the
+   * second one to `bg-fjord-400`) needed no entry here for the same,
+   * now-moot reason #175 renamed one of their covering pairings over
+   * (`surface-0-on-petrol-400` at the time, `surface-0-on-fjord-400` today) —
+   * both literals are simply gone from hero.tsx along with the rest of
+   * `HeroDecoration`, so there is nothing left here for either pairing id to
+   * explain away.
    */
   const AUDITED_DECORATIVE_BACKGROUND_USAGES: Readonly<Record<string, number>> = {
     "src/components/home/hero.tsx:bg-petrol-200": 1,
@@ -636,7 +650,7 @@ describe("the gate cannot be routed around", () => {
   /**
    * ugcportal-5gca K3: "a PAIRINGS entry deleted while the usage it measures
    * is still in the source, with no test failing" was the exact mutation
-   * round 5 of PR #79 let through - bg-petrol-400 and text-petrol-900 shipped
+   * round 5 of PR #79 let through - bg-fjord-400 and text-petrol-900 shipped
    * on button.tsx's default-neutral and the upload dropzone's "Choose files"
    * label with no coverage check able to see either.
    *
@@ -651,12 +665,12 @@ describe("the gate cannot be routed around", () => {
    * entry its own name describes, through the same `buildMeasuredBackground`/
    * `buildForegroundVerifiedThreshold` the real gate above uses.
    *
-   * Doing that honestly surfaced round 1 finding 2: `bg-petrol-400`'s
+   * Doing that honestly surfaced round 1 finding 2: `bg-fjord-400`'s
    * background coverage was NOT in fact load-bearing on this entry (at the
    * time still called `petrol-900-on-petrol-400`; ugcportal-ei5c later
-   * renamed it to `surface-0-on-petrol-400`, same background reference)
+   * renamed it to `surface-0-on-fjord-400`, same background reference)
    * before this PR's fix, because `--sidebar-primary` (aliased to
-   * the identical `--color-petrol-400` literal) already supplied an
+   * the identical `--color-fjord-400` literal) already supplied an
    * unrelated background entry of its own
    * (`sidebar-primary-foreground-on-sidebar-primary`) that `tokenAlphaKey`'s
    * full literal resolution could not tell apart from the real one. Fixed by
@@ -665,7 +679,7 @@ describe("the gate cannot be routed around", () => {
    * general abandonment of cross-reference sharing (see those functions' own
    * doc comments for why, and for why the general case is left alone).
    *
-   * The two FOREGROUND sub-tests below (petrol-400 as a UI-boundary mark,
+   * The two FOREGROUND sub-tests below (fjord-400 as a UI-boundary mark,
    * petrol-900 as the label on the fill) are NOT fixed the same way, and are
    * not claimed to be: `buildForegroundVerifiedThreshold`'s cross-reference
    * sharing is deliberate and tested (see "does not let a UI-boundary
@@ -673,76 +687,76 @@ describe("the gate cannot be routed around", () => {
    * verified RATIO is a fact about the rendered colour, so letting a
    * different reference's proof survive a collision is correct there, not a
    * bug to narrow. Both axes remain genuinely shadowed by an unrelated
-   * reference today (`chart-3-on-surface-*` for petrol-400 as foreground;
+   * reference today (`chart-3-on-surface-*` for fjord-400 as foreground;
    * `foreground-on-background`/`selection-text-on-selection` for petrol-900
    * as foreground), and the sub-tests assert that reality rather than a
    * false "reds".
    */
   describe("K3: the round-5 PAIRINGS entries, against the real, mutated PAIRINGS array", () => {
-    const surfaceOnPetrol400 = PAIRINGS.find((p) => p.id === "surface-0-on-petrol-400");
-    const petrol400FillOnOldSurface = PAIRINGS.filter((p) =>
-      p.id.startsWith("petrol-400-fill-on-old-surface-"),
+    const surfaceOnFjord400 = PAIRINGS.find((p) => p.id === "surface-0-on-fjord-400");
+    const fjord400FillOnOldSurface = PAIRINGS.filter((p) =>
+      p.id.startsWith("fjord-400-fill-on-old-surface-"),
     );
 
     it("both round-5 entries this bead's premise names are still in PAIRINGS to mutate", () => {
-      expect(surfaceOnPetrol400, "surface-0-on-petrol-400").toBeDefined();
-      expect(petrol400FillOnOldSurface.length, "petrol-400-fill-on-old-surface-*").toBeGreaterThan(0);
+      expect(surfaceOnFjord400, "surface-0-on-fjord-400").toBeDefined();
+      expect(fjord400FillOnOldSurface.length, "fjord-400-fill-on-old-surface-*").toBeGreaterThan(0);
     });
 
     /**
-     * surface-0-on-petrol-400's OWN background reference (`--color-petrol-400`)
-     * is what a real, shipped `bg-petrol-400` usage's coverage (this bare
+     * surface-0-on-fjord-400's OWN background reference (`--color-fjord-400`)
+     * is what a real, shipped `bg-fjord-400` usage's coverage (this bare
      * scanner's "background role" check) actually depends on - NOT
-     * petrol-400-fill-on-old-surface-*, which measures petrol-400 the other
+     * fjord-400-fill-on-old-surface-*, which measures fjord-400 the other
      * way around (as a foreground UI-boundary mark against the surfaces
      * behind it - see the next test). This bare scanner classifies every
      * `bg-*` utility as background role unconditionally (isBackgroundRole),
-     * so a real `bg-petrol-400` usage is never checked against
-     * petrol-400-fill-on-old-surface-* at all.
+     * so a real `bg-fjord-400` usage is never checked against
+     * fjord-400-fill-on-old-surface-* at all.
      *
      * This is the one sub-test that now genuinely reds on its own mutation
      * (PR #115 round 1 findings 1+2, fixed together): with the real
      * `backgroundTokenIdentity` fix in place, deleting only
-     * `surface-0-on-petrol-400` from the real PAIRINGS array removes
-     * `bg-petrol-400`'s only covering entry - `sidebar-primary-foreground-
+     * `surface-0-on-fjord-400` from the real PAIRINGS array removes
+     * `bg-fjord-400`'s only covering entry - `sidebar-primary-foreground-
      * on-sidebar-primary` no longer substitutes for it.
      */
     it.each(THEME_MODES)(
-      "surface-0-on-petrol-400 is bg-petrol-400's only covering entry, and deleting it reds the real gate (%s)",
+      "surface-0-on-fjord-400 is bg-fjord-400's only covering entry, and deleting it reds the real gate (%s)",
       (mode) => {
         const modeTokens = tokensByMode[mode];
-        const petrol400Fill = usedBareUtilities.find(
-          (usage) => usage.property === "--color-petrol-400" && usage.role === "background",
+        const fjord400Fill = usedBareUtilities.find(
+          (usage) => usage.property === "--color-fjord-400" && usage.role === "background",
         );
         expect(
-          petrol400Fill,
-          "bg-petrol-400 is still shipped as a background somewhere in src",
+          fjord400Fill,
+          "bg-fjord-400 is still shipped as a background somewhere in src",
         ).toBeDefined();
-        const backgroundKey = `${backgroundTokenIdentity(petrol400Fill!.property, modeTokens)}@${petrol400Fill!.alphaPercent}`;
+        const backgroundKey = `${backgroundTokenIdentity(fjord400Fill!.property, modeTokens)}@${fjord400Fill!.alphaPercent}`;
 
         // With PAIRINGS intact: covered, and the gate can now say BY WHAT
         // (PR #115 round 1 finding 2's "report which entry covered a
-        // usage") - exactly surface-0-on-petrol-400, not an alias.
+        // usage") - exactly surface-0-on-fjord-400, not an alias.
         const coveredToday = buildMeasuredBackground(PAIRINGS, modeTokens).get(backgroundKey);
         expect(
           [...(coveredToday ?? [])],
-          `[${mode}] covering entries for bg-petrol-400`,
-        ).toEqual(["surface-0-on-petrol-400"]);
+          `[${mode}] covering entries for bg-fjord-400`,
+        ).toEqual(["surface-0-on-fjord-400"]);
 
         // The real PAIRINGS array, minus exactly that one entry.
         const withoutEntry = buildMeasuredBackground(
-          PAIRINGS.filter((pairing) => pairing.id !== "surface-0-on-petrol-400"),
+          PAIRINGS.filter((pairing) => pairing.id !== "surface-0-on-fjord-400"),
           modeTokens,
         );
         expect(
           withoutEntry.get(backgroundKey)?.size ?? 0,
-          `[${mode}] bg-petrol-400 must be uncovered once surface-0-on-petrol-400 is removed`,
+          `[${mode}] bg-fjord-400 must be uncovered once surface-0-on-fjord-400 is removed`,
         ).toBe(0);
       },
     );
 
     /**
-     * petrol-400-fill-on-old-surface-*'s own half: petrol-400 as a FOREGROUND
+     * fjord-400-fill-on-old-surface-*'s own half: fjord-400 as a FOREGROUND
      * UI-boundary mark (the button fill / progress-bar fill's own visibility)
      * against the old near-black surface scale as background. This bare
      * scanner's role convention never generates a usage on this axis for a
@@ -750,9 +764,9 @@ describe("the gate cannot be routed around", () => {
      * shape (`AlphaUtilityUsage`'s own type, not a scanner result).
      *
      * Disclosed, not fixed (see this describe block's own header): deleting
-     * petrol-400-fill-on-old-surface-* from the real PAIRINGS array leaves
+     * fjord-400-fill-on-old-surface-* from the real PAIRINGS array leaves
      * this key at exactly ui's 3:1 regardless, because chart-3-on-surface-0/1
-     * (`foreground: "--chart-3"`, and `--chart-3: var(--color-petrol-400)`
+     * (`foreground: "--chart-3"`, and `--chart-3: var(--color-fjord-400)`
      * in globals.css) resolves to the identical literal and is itself
      * checked at `ui`. Narrowing `buildForegroundVerifiedThreshold`'s
      * cross-reference sharing to fix this would also narrow it for the
@@ -760,13 +774,13 @@ describe("the gate cannot be routed around", () => {
      * gate's scope, and asserted as what it is rather than claimed fixed.
      */
     it.each(THEME_MODES)(
-      "petrol-400-fill-on-old-surface-* measures petrol-400 as a UI-boundary foreground, shadowed by chart-3-on-surface-* on this axis (%s)",
+      "fjord-400-fill-on-old-surface-* measures fjord-400 as a UI-boundary foreground, shadowed by chart-3-on-surface-* on this axis (%s)",
       (mode) => {
         const modeTokens = tokensByMode[mode];
         const syntheticFillUsage: AlphaUtilityUsage = {
           file: "synthetic - this bare scanner's bg=background-role convention never classifies a fill this way",
-          utility: "bg-petrol-400",
-          property: "--color-petrol-400",
+          utility: "bg-fjord-400",
+          property: "--color-fjord-400",
           alphaPercent: 100,
           role: "foreground",
           prefix: "bg",
@@ -777,7 +791,7 @@ describe("the gate cannot be routed around", () => {
         expect(withEntries.get(usageKey), `[${mode}] covered today`).toBe(THRESHOLDS.ui);
 
         const withoutEntries = buildForegroundVerifiedThreshold(
-          PAIRINGS.filter((pairing) => !pairing.id.startsWith("petrol-400-fill-on-old-surface-")),
+          PAIRINGS.filter((pairing) => !pairing.id.startsWith("fjord-400-fill-on-old-surface-")),
           modeTokens,
         );
         expect(
@@ -791,7 +805,7 @@ describe("the gate cannot be routed around", () => {
      * The remaining half of the original gap this describe block's header
      * names: text-petrol-900 as a foreground on the fill, at body's 4.5:1 -
      * NOW FIXED (ugcportal-z1nh). This used to be a synthetic usage, because
-     * `--color-petrol-900` is declared outside `@theme`, so `text-petrol-900`
+     * `--color-fjord-900` is declared outside `@theme`, so `text-petrol-900`
      * compiled to no Tailwind utility at all and findBareColorUtilities
      * correctly never reported it as a shipped usage (see that function's own
      * doc comment on why a non-compiling bare candidate is excluded, not
@@ -801,9 +815,9 @@ describe("the gate cannot be routed around", () => {
      * ugcportal-ei5c closed this gap for button.tsx's default-neutral
      * variant - its one real caller (the upload queue's "Sign in" link,
      * shown on a failed upload that needs re-authentication) renders
-     * `text-surface-0`, a label `surface-0-on-petrol-400` above actually
+     * `text-surface-0`, a label `surface-0-on-fjord-400` above actually
      * measures - but left src/app/upload/upload-form.tsx's "Choose files"
-     * label out of scope, still pasting `bg-petrol-400 text-petrol-900`
+     * label out of scope, still pasting `bg-fjord-400 text-petrol-900`
      * directly rather than going through the Button component. ugcportal-
      * z1nh fixed that label onto the identical `text-surface-0` token
      * (staying a hand-styled label rather than adopting buttonVariants
@@ -815,7 +829,7 @@ describe("the gate cannot be routed around", () => {
      * Two things this asserts, not one: that the real scan actually finds
      * this usage (a 0-results scan here would mean the fix regressed, or the
      * label's class string moved/changed shape, silently), and that it is
-     * verified GENUINELY by surface-0-on-petrol-400 - not merely via some
+     * verified GENUINELY by surface-0-on-fjord-400 - not merely via some
      * unrelated reference that happens to resolve to the same literal, the
      * exact "only accidentally covered" shape this test used to document for
      * the pre-fix bug. Filtering PAIRINGS down to ONLY that one entry and
@@ -824,7 +838,7 @@ describe("the gate cannot be routed around", () => {
      * the unrelated reference supplying it would be gone.
      */
     it.each(THEME_MODES)(
-      "text-surface-0 (upload-form.tsx's \"Choose files\" label, after ugcportal-z1nh) is a real, shipped usage, genuinely verified by surface-0-on-petrol-400, per mode (%s)",
+      "text-surface-0 (upload-form.tsx's \"Choose files\" label, after ugcportal-z1nh) is a real, shipped usage, genuinely verified by surface-0-on-fjord-400, per mode (%s)",
       (mode) => {
         const modeTokens = tokensByMode[mode];
         const labelUsage = usedBareUtilities.find(
@@ -845,14 +859,14 @@ describe("the gate cannot be routed around", () => {
           `[${mode}] real PAIRINGS`,
         ).toBe(THRESHOLDS.body);
 
-        // Not an accidental shadow: surface-0-on-petrol-400 ALONE already
+        // Not an accidental shadow: surface-0-on-fjord-400 ALONE already
         // reaches body's threshold for this key, with every other PAIRINGS
         // entry removed.
-        const onlyThisPairing = PAIRINGS.filter((p) => p.id === "surface-0-on-petrol-400");
-        expect(onlyThisPairing.length, "surface-0-on-petrol-400 present").toBe(1);
+        const onlyThisPairing = PAIRINGS.filter((p) => p.id === "surface-0-on-fjord-400");
+        expect(onlyThisPairing.length, "surface-0-on-fjord-400 present").toBe(1);
         expect(
           buildForegroundVerifiedThreshold(onlyThisPairing, modeTokens).get(usageKey),
-          `[${mode}] surface-0-on-petrol-400 alone - a weaker result here would mean this key only ` +
+          `[${mode}] surface-0-on-fjord-400 alone - a weaker result here would mean this key only ` +
             "reads as covered via some OTHER, unrelated reference, the same accidental-shadow shape " +
             "this test used to document for the pre-fix bug",
         ).toBe(THRESHOLDS.body);
@@ -1007,6 +1021,12 @@ describe("the gate cannot be routed around", () => {
       // --ring resolves to the same literal as --primary in this codebase
       // (both var(--color-petrol-400)) - the same real collision K2's own
       // test uses, reused here as a synthetic decorative pairing.
+      // NOTE (ugcportal-uo15): this claim already looked stale before this
+      // bead - --ring tracks --primary, which is var(--petrol-700) (hex) in
+      // light mode, not --color-petrol-400/--color-fjord-400 - filed as
+      // ugcportal-hiae rather than fixed here (scope freeze; this test
+      // does not depend on the comment, only on the real resolveToken calls
+      // below).
       foreground: "--ring",
       background: ["--color-surface-0"],
       requirement: "decorative",
@@ -1039,7 +1059,7 @@ describe("the gate cannot be routed around", () => {
   /**
    * Finding 3 of round 2. The gamut rejection only fires for tokens named in
    * PAIRINGS, and the usage scanner only sees alpha-modified utilities, so
-   * `bg-petrol-900` could ship a clipped colour with the suite green. Anything
+   * `bg-fjord-900` could ship a clipped colour with the suite green. Anything
    * in a @theme block is a utility Tailwind will emit, so that is the right
    * place to draw the line: if it can be used, it has to be real.
    */
@@ -1182,11 +1202,31 @@ describe("parseTokenReference", () => {
  * shape rather than just value - see the petrol-palette comment near the top
  * of globals.css for why these are a separate set of tokens, not a renamed
  * version of the old one.
+ *
+ * Updated again by ugcportal-uo15: that "old OKLCH scale" is the thing K1 of
+ * this bead fixed from colliding with the hex one by NAME - every step
+ * without a hex counterpart (300, 400, 600, 700, 800, 900, 950, deep) is
+ * renamed `--color-fjord-*`, and every step WITH one (100, 200, 500) is now
+ * a direct alias of the hex token (`--color-petrol-200: var(--petrol-200)`,
+ * not an independent OKLCH literal) - so "ships the full scale" is now two
+ * checks, one per surviving name, not one.
  */
 describe("petrol is demoted, not removed", () => {
-  it("still ships the full --color-petrol-50..950 scale", () => {
-    for (const step of [50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 950]) {
+  it("still ships every surviving --color-petrol-* step (the ones a hex counterpart claimed)", () => {
+    for (const step of [50, 100, 200, 500]) {
       expect(tokens.has(`--color-petrol-${step}`), `petrol-${step}`).toBe(true);
+    }
+  });
+
+  it("still ships the full renamed --color-fjord-* scale (ugcportal-uo15)", () => {
+    for (const step of [300, 400, 600, 700, 800, 900, 950, "deep"]) {
+      expect(tokens.has(`--color-fjord-${step}`), `fjord-${step}`).toBe(true);
+    }
+  });
+
+  it("no longer has a --color-petrol-* entry at the steps this bead renamed away", () => {
+    for (const step of [300, 400, 600, 700, 800, 900, 950, "deep"]) {
+      expect(tokens.has(`--color-petrol-${step}`), `petrol-${step} should not exist`).toBe(false);
     }
   });
 
@@ -1283,7 +1323,7 @@ describe("K1: the exact palette docs/design/tokens.css adopted", () => {
 /**
  * ugcportal-rw9j review round 5 (code-review): RING_OVERRIDE_SURFACES
  * (contrast.ts) hand-duplicates globals.css's own `.bg-surface-0, ...
- * .bg-sidebar { --ring: var(--color-petrol-400); }` selector list, with
+ * .bg-sidebar { --ring: var(--color-fjord-400); }` selector list, with
  * nothing tying the two together before this test - exactly the kind of
  * two-list drift this repo's own review history keeps finding (round 4's
  * MAJOR finding against the predecessor of this same override). Resolves
@@ -1382,4 +1422,143 @@ describe("the surface scale", () => {
     );
     expect(Number(scrim?.[1])).toBeLessThan(levels[0].lightness);
   });
+});
+
+/**
+ * ugcportal-uo15 K1: "given the change, when the same step is read both
+ * ways, both resolve to the same colour". Checks the ACTUAL Tailwind-
+ * compiled `bg-petrol-200` utility (via `designSystem`, the same mechanism
+ * button.test.ts and usage.ts use to confirm a candidate compiles at all), not
+ * merely the two declarations' text - so a future change that keeps the two
+ * `var()` chains textually distinct but makes them compile to the same
+ * value by coincidence would still be caught as readable-both-ways by this
+ * test, which is the actual guarantee K1 asks for, and a change that LOOKS
+ * aliased in the declaration but gets re-written by some future Tailwind
+ * compile step would be caught too.
+ */
+describe("K1 (ugcportal-uo15): bg-petrol-200 and var(--petrol-200) resolve to the same colour", () => {
+  /** The `background-color`/`color` declaration a compiled utility carries, resolved to a final hex. */
+  function compiledUtilityHex(
+    utility: string,
+    property: "background-color" | "color",
+    mode: Map<string, Declaration> = tokens,
+  ): string {
+    const [css] = designSystem.candidatesToCss([utility]);
+    if (css === null) {
+      throw new Error(`"${utility}" does not compile to any Tailwind rule`);
+    }
+    let declaredValue: string | undefined;
+    postcss.parse(css).walkDecls((decl) => {
+      if (decl.prop === property) declaredValue = decl.value;
+    });
+    if (declaredValue === undefined) {
+      throw new Error(`"${utility}" compiled, but produced no ${property} declaration: ${css}`);
+    }
+    const varMatch = /^var\(\s*(--[\w-]+)\s*\)$/.exec(declaredValue.trim());
+    const resolved = varMatch ? resolveToken(varMatch[1], mode) : declaredValue.trim();
+    return toHex(parseColor(resolved));
+  }
+
+  it("bg-petrol-200 (the @theme-compiled utility) equals var(--petrol-200) (the hex reference token)", () => {
+    const utilityHex = compiledUtilityHex("bg-petrol-200", "background-color");
+    const bareHex = toHex(parseColor(resolveToken("--petrol-200", tokens)));
+    expect(utilityHex, "bg-petrol-200").toBe(bareHex);
+
+    // The BEFORE state this bead fixes, quoted in the PR body: #bce7ec
+    // (oklch(0.9 0.045 205), @theme's old independent literal) vs #9fc5c8
+    // (docs/design/tokens.css's hex). Pinning both the equality above AND
+    // the exact shared value below means a future edit that makes them
+    // equal by both drifting to some THIRD colour still fails this test.
+    expect(utilityHex, "the AFTER value - tokens.css's own hex").toBe("#9fc5c8");
+  });
+
+  it.each(["petrol-100", "petrol-500"] as const)(
+    "bg-%s also resolves to the identical colour both ways (K1 is not step-200-only)",
+    (step) => {
+      const utilityHex = compiledUtilityHex(`bg-${step}`, "background-color");
+      const bareHex = toHex(parseColor(resolveToken(`--${step}`, tokens)));
+      expect(utilityHex, `bg-${step}`).toBe(bareHex);
+    },
+  );
+});
+
+/**
+ * ugcportal-uo15 K3: "following should never happen - two live scales again
+ * share a step name across `@theme` and `:root`, in either direction".
+ *
+ * `findColorScaleNameCollisions` (contrast.ts) is written against the
+ * invariant, not against petrol by name, so this suite proves that two ways:
+ * first that it actually CAN fail (the fixture-mutation check the bead's own
+ * K3 and this repo's review standards ask for - re-add a colliding pair and
+ * watch it fail, then remove it and watch it pass), then that the real,
+ * shipped stylesheet has zero collisions, in both theme modes.
+ */
+describe("K3 (ugcportal-uo15): no two live colour scales share a step name across @theme and :root", () => {
+  function fixtureTokens(declared: Record<string, string>): Map<string, Declaration> {
+    const map = new Map<string, Declaration>();
+    for (const [property, value] of Object.entries(declared)) {
+      map.set(property, { property, value, selector: "(fixture)" });
+    }
+    return map;
+  }
+
+  it("FIXTURE MUTATION: fails when a --color-<name>-<step> and --<name>-<step> pair resolve to different colours", () => {
+    // Exactly this bead's own before-state: @theme's independent OKLCH
+    // literal and tokens.css's hex, both named "petrol-200".
+    const colliding = fixtureTokens({
+      "--color-petrol-200": "oklch(0.9 0.045 205)",
+      "--petrol-200": "#9fc5c8",
+    });
+    const collisions = findColorScaleNameCollisions(colliding);
+    expect(
+      collisions,
+      "the guard must catch this - if it does not, it cannot fail and is not a guard",
+    ).toEqual([
+      {
+        colorProperty: "--color-petrol-200",
+        bareProperty: "--petrol-200",
+        colorHex: "#bce7ec",
+        bareHex: "#9fc5c8",
+      } satisfies ScaleNameCollision,
+    ]);
+  });
+
+  it("FIXTURE MUTATION, reverted: once --color-petrol-200 aliases --petrol-200 directly, the same pair no longer collides", () => {
+    // This bead's own after-state: a direct var() alias, not an independent
+    // literal that happens to match today and could drift apart tomorrow.
+    const fixed = fixtureTokens({
+      "--petrol-200": "#9fc5c8",
+      "--color-petrol-200": "var(--petrol-200)",
+    });
+    expect(findColorScaleNameCollisions(fixed)).toEqual([]);
+  });
+
+  it("does not flag a --color-<name>-<step> with no bare counterpart at all", () => {
+    // --color-fjord-400 (this bead's renamed OKLCH ramp): nothing is
+    // declared at bare --fjord-400, so there is only one value for this
+    // name and nothing for it to disagree with.
+    const noCounterpart = fixtureTokens({
+      "--color-fjord-400": "oklch(0.72 0.085 205)",
+    });
+    expect(findColorScaleNameCollisions(noCounterpart)).toEqual([]);
+  });
+
+  it("does not flag a legitimate --color-X: var(--X) semantic alias sharing a step number (e.g. chart-1)", () => {
+    // globals.css's real `@theme inline` shape (`--color-chart-1: var(--chart-1)`):
+    // --chart-1 happens to end in a digit too, so SCALE_STEP_PROPERTY matches
+    // it the same way it matches a real scale step - correctly, since a
+    // genuine alias always resolves both sides to the identical colour.
+    const aliasedChart = fixtureTokens({
+      "--chart-1": "#9fc5c8",
+      "--color-chart-1": "var(--chart-1)",
+    });
+    expect(findColorScaleNameCollisions(aliasedChart)).toEqual([]);
+  });
+
+  it.each(THEME_MODES)(
+    "the real, shipped stylesheet has zero scale-name collisions (%s)",
+    (mode) => {
+      expect(findColorScaleNameCollisions(tokensByMode[mode])).toEqual([]);
+    },
+  );
 });

@@ -71,7 +71,7 @@ export const SURFACES = [
 /**
  * ugcportal-rw9j review round 4: the distinct, resolved-token list behind
  * globals.css's --ring-on-old-surfaces rule (`.bg-surface-0, ... .bg-sidebar
- * { --ring: var(--color-petrol-400); }`) - --color-surface-0..4 cover
+ * { --ring: var(--color-fjord-400); }`) - --color-surface-0..4 cover
  * .bg-surface-0..4 directly; --color-surface-1 also covers .bg-muted/
  * .bg-card/.bg-sidebar and --color-surface-2 also covers .bg-popover/
  * .bg-accent/.bg-secondary (all already in this list via their shared
@@ -193,7 +193,7 @@ export const PAIRINGS: Pairing[] = [
   },
   /*
    * ugcportal-rw9j review round 3: globals.css scopes a --ring override back
-   * to --color-petrol-400 on every element that also carries one of the old
+   * to --color-fjord-400 on every element that also carries one of the old
    * near-black surface background classes (bg-surface-*, bg-muted, bg-card,
    * ...) - resolveToken/loadThemeTokens has no notion of a class-scoped CSS
    * override, so this checks the literal token that override points at
@@ -218,14 +218,14 @@ export const PAIRINGS: Pairing[] = [
    */
   ...RING_OVERRIDE_SURFACES.map((surface) => ({
     id: `focus-ring-on-old-surface-${surface.replace("--color-", "")}`,
-    foreground: `--color-petrol-400/${RING_ALPHA_MODIFIER}`,
+    foreground: `--color-fjord-400/${RING_ALPHA_MODIFIER}`,
     background: [surface],
     requirement: "ui" as const,
     usage:
       "The focus indicator on a control that still lives on the near-black surface scale (the resale-rights decision form's inputs, the upload page's file dropzone, a destructive well's own controls, ...), via the --ring override scoped to these surface classes in globals.css.",
   })),
   /*
-   * ugcportal-rw9j review round 5 (code-review): --color-petrol-400 at FULL
+   * ugcportal-rw9j review round 5 (code-review): --color-fjord-400 at FULL
    * opacity (not the RING_ALPHA_MODIFIER-alpha ring above) against the same
    * old-surface list - button.tsx's default-neutral variant and the upload
    * queue's per-row progress-bar fill both paint it solid on one of these
@@ -235,21 +235,22 @@ export const PAIRINGS: Pairing[] = [
    * entry rather than folded into the one above.
    */
   ...RING_OVERRIDE_SURFACES.map((surface) => ({
-    id: `petrol-400-fill-on-old-surface-${surface.replace("--color-", "")}`,
-    foreground: "--color-petrol-400",
+    id: `fjord-400-fill-on-old-surface-${surface.replace("--color-", "")}`,
+    foreground: "--color-fjord-400",
     background: [surface],
     requirement: "ui" as const,
     usage:
-      "default-neutral's fill and the upload queue's progress-bar fill, both solid --color-petrol-400 on a control that still lives on the near-black surface scale.",
+      "default-neutral's fill and the upload queue's progress-bar fill, both solid --color-fjord-400 on a control that still lives on the near-black surface scale.",
   })),
   /*
    * ugcportal-rw9j review round 5 (code-review): the label on top of that
    * same fill, chosen to mirror dark mode's own --primary (a light fill
    * with a dark label). Originally written as `--petrol-900` (this entry
    * was called `petrol-900-on-petrol-400`) - but `--petrol-900` is the hex
-   * reference-palette token (see globals.css's "two blocks, and the split
-   * is the whole point" comment), declared outside `@theme`, so
-   * `text-petrol-900` never compiled to a Tailwind utility at all:
+   * reference-palette token (see globals.css's own petrol-hex comment;
+   * ugcportal-uo15 later renamed the OTHER, OKLCH `--color-petrol-900` to
+   * `--color-fjord-900` so the two can no longer be confused by name),
+   * declared outside `@theme`, so `text-petrol-900` never compiled to a Tailwind utility at all:
    * button.tsx's default-neutral variant painted this label in whatever
    * colour it happened to inherit from the page's ambient
    * `--foreground` - confirmed by rendering both colour schemes
@@ -267,9 +268,9 @@ export const PAIRINGS: Pairing[] = [
    *
    * UPDATE (ugcportal-z1nh): the upload dropzone's "Choose files" label
    * (src/app/upload/upload-form.tsx) was NOT a caller of this variant - it
-   * pasted `bg-petrol-400 text-petrol-900` directly, the identical
+   * pasted `bg-fjord-400 text-petrol-900` directly, the identical
    * never-compiles bug, disclosed but left out of ugcportal-ei5c's stated
-   * scope. Fixed now, onto this same `text-surface-0`/`--color-petrol-400`
+   * scope. Fixed now, onto this same `text-surface-0`/`--color-fjord-400`
    * pair rather than through buttonVariants (see that file's own comment on
    * why it stays a hand-styled label) - so this entry's `usage` below now
    * names both real callers, and button.test.ts's hand-pasted-pair guard
@@ -278,9 +279,9 @@ export const PAIRINGS: Pairing[] = [
    * non-compiling candidate.
    */
   {
-    id: "surface-0-on-petrol-400",
+    id: "surface-0-on-fjord-400",
     foreground: "--color-surface-0",
-    background: ["--color-petrol-400"],
+    background: ["--color-fjord-400"],
     requirement: "body",
     usage: "Label on default-neutral's fill (button.tsx) - the upload queue's \"Sign in\" link shown on a failed upload that needs re-authentication - and, directly (not through buttonVariants), the upload dropzone's \"Choose files\" label (src/app/upload/upload-form.tsx).",
   },
@@ -451,7 +452,7 @@ export const PAIRINGS: Pairing[] = [
    * declared `-foreground` token (the "documents every *-foreground token"
    * test below requires it to be covered by some pairing), and --secondary
    * itself is untouched, documented, near-black-scale coverage for the same
-   * reason --color-petrol-600..950 are kept despite not driving a current
+   * reason --color-fjord-600..950 are kept despite not driving a current
    * utility - available if something reaches for it, not proof that
    * something does today.
    */
@@ -634,14 +635,14 @@ export const PAIRINGS: Pairing[] = [
    * start, with a LABEL token that actually compiles to a Tailwind utility.
    * At the time this was written, default-neutral's own label was
    * `text-petrol-900`, which has no `bg-`/`text-petrol-900` utility at all:
-   * `--color-petrol-900` is declared in the OKLCH near-black `:root` block,
+   * `--color-fjord-900` is declared in the OKLCH near-black `:root` block,
    * not `@theme` (see that block's own "stopping Tailwind emitting
-   * bg-petrol-900 and friends" comment) — confirmed empirically by
+   * bg-fjord-900 and friends" comment) — confirmed empirically by
    * compiling globals.css and checking the generated utilities, not
    * assumed. Filed as a pre-existing issue rather than silently reused: see
    * the PR description. (ugcportal-ei5c later fixed default-neutral's own
    * label to this same `text-surface-0` token, for the identical reason —
-   * see button.tsx's and `surface-0-on-petrol-400`'s own comments — so the
+   * see button.tsx's and `surface-0-on-fjord-400`'s own comments — so the
    * two variants now share a label token, just against two different
    * fills.) `--color-surface-0` IS in `@theme` (so `text-surface-0` is
    * real), is a genuine near-black, and is not one of this file's existing
@@ -649,17 +650,27 @@ export const PAIRINGS: Pairing[] = [
    * is a new foreground use of an existing token, not a new token.
    *
    * `--color-petrol-100`, NOT `--petrol-100` (round-3 review, CONFIRMED
-   * medium — an earlier version of this entry checked the wrong one): this
-   * app has TWO separately-declared petrol-100 tokens (see globals.css's own
-   * "two blocks, and the split is the whole point" comment) — `--petrol-100`
-   * is the hex reference-palette value (`#cfe8e7`), declared in `:root` and
-   * never exposed as a Tailwind utility, while `--color-petrol-100` is the
-   * OKLCH scale value (`oklch(0.95 0.028 205)`) inside `@theme`, which is
-   * what `bg-petrol-100` — the actual class on hero.tsx's CTA — resolves
-   * to. Checking the hex one verified a ratio for a colour this button never
-   * paints; the sibling `petrol-400-fill-on-old-surface-*` pairing above
-   * already gets this right, checking `--color-petrol-400`, not
-   * `--petrol-400`.
+   * medium — an earlier version of this entry checked the wrong one): at
+   * the time, this app had TWO separately-declared, DIFFERENTLY-VALUED
+   * petrol-100 tokens — `--petrol-100` the hex reference-palette value
+   * (`#cfe8e7`), declared in `:root` and never exposed as a Tailwind
+   * utility, and `--color-petrol-100` an independently-authored OKLCH value
+   * (`oklch(0.95 0.028 205)`) inside `@theme`, which is what `bg-petrol-100`
+   * — the actual class on hero.tsx's CTA — resolved to. Checking the hex
+   * one verified a ratio for a colour this button never painted.
+   *
+   * ugcportal-uo15 closed that particular gap generally rather than only
+   * here: `--color-petrol-100` (and `-200`/`-500`) is now declared as
+   * `var(--petrol-100)` in globals.css's `@theme` block, so the two no
+   * longer diverge at all — checking either resolves to the identical
+   * `#cfe8e7`. This entry still checks `--color-petrol-100` specifically,
+   * not because the values differ anymore but because that is the literal
+   * property `bg-petrol-100` resolves through, which is what this pairing
+   * claims to verify. The sibling `fjord-400-fill-on-old-surface-*` pairing
+   * above checks the analogous `--color-fjord-400`, not `--petrol-400` —
+   * step 400 has no hex counterpart at all, so that pair was never at risk
+   * of this particular confusion, only of the general one ugcportal-uo15's
+   * rename now forecloses for every step.
    */
   {
     id: "surface-0-on-petrol-100",
@@ -794,4 +805,76 @@ export function evaluatePairing(
     foregroundHex: toHex(compositeOver(foreground, background)),
     backgroundHex: toHex(background),
   };
+}
+
+/**
+ * ugcportal-uo15 K3: "following should never happen - two live scales again
+ * share a step name across `@theme` and `:root`, in either direction".
+ *
+ * Written against the INVARIANT, not against petrol specifically (bd memory
+ * `source-text-guards-are-specified-by-invariant`): this bead's bug was one
+ * instance of a general shape - a `--color-<name>-<step>` custom property
+ * (the kind `@theme` can turn into a Tailwind utility) and a bare
+ * `--<name>-<step>` property (the kind a reference palette like
+ * docs/design/tokens.css declares) sharing a NAME while resolving to
+ * DIFFERENT colours. Any future scale that does this - petrol again, or a
+ * brand-new one nobody has named yet - trips this the same way, because the
+ * check is "do these two specific properties disagree", not "is this
+ * specific string 'petrol'".
+ *
+ * Deliberately permissive about the other direction: a `--color-X-N` with NO
+ * bare `--X-N` counterpart (most of `--color-surface-*`, `--color-danger-*`,
+ * the renamed `--color-fjord-*` ramp) is not a collision - there is only one
+ * value for that name, so there is nothing to disagree. Likewise a
+ * `--color-X-N` whose bare counterpart happens to be a `var()` ALIAS of it
+ * (`--color-petrol-200: var(--petrol-200)`, this bead's own fix) resolves
+ * both sides to the identical final colour and is correctly not flagged -
+ * that is K1's goal state, not K3's failure state.
+ */
+export type ScaleNameCollision = {
+  /** The `@theme`-shaped property, e.g. `--color-petrol-200`. */
+  colorProperty: string;
+  /** The bare property sharing its name and step, e.g. `--petrol-200`. */
+  bareProperty: string;
+  colorHex: string;
+  bareHex: string;
+};
+
+/**
+ * Matches a scale-token-shaped custom property: `--color-<name>-<step>`,
+ * where `<step>` is a run of digits (`50`, `200`, `950`, ...) or the literal
+ * `deep` (this app's one non-numeric step). `<name>` itself may contain
+ * hyphens (`danger-surface` does not end in a step, so it never matches;
+ * `chart-1` does, deliberately - see the function doc comment on why a
+ * perfect alias there is fine, not a false negative).
+ */
+const SCALE_STEP_PROPERTY = /^--color-([a-z][a-z0-9]*(?:-[a-z][a-z0-9]*)*)-(\d+|deep)$/;
+
+/**
+ * Finds every `--color-<name>-<step>` / `--<name>-<step>` pair that both
+ * exist in `tokens` and resolve to different colours. Empty means K3 holds.
+ *
+ * Takes a plain token map, not a file path: contrast.test.ts's own
+ * fixture-mutation check (K3's own "re-add a colliding pair and confirm the
+ * guard fails" instruction) constructs a synthetic map with a deliberate
+ * collision and feeds it straight in, without writing a throwaway CSS file.
+ */
+export function findColorScaleNameCollisions(
+  tokens: Map<string, Declaration>,
+): ScaleNameCollision[] {
+  const collisions: ScaleNameCollision[] = [];
+  for (const colorProperty of tokens.keys()) {
+    const match = SCALE_STEP_PROPERTY.exec(colorProperty);
+    if (!match) continue;
+    const [, name, step] = match;
+    const bareProperty = `--${name}-${step}`;
+    if (!tokens.has(bareProperty)) continue;
+
+    const colorHex = toHex(parseColor(resolveToken(colorProperty, tokens)));
+    const bareHex = toHex(parseColor(resolveToken(bareProperty, tokens)));
+    if (colorHex !== bareHex) {
+      collisions.push({ colorProperty, bareProperty, colorHex, bareHex });
+    }
+  }
+  return collisions;
 }

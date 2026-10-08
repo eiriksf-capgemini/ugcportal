@@ -164,18 +164,18 @@ describe("buttonVariants base: no bare outline-none without a forced-colors-visi
 
 /**
  * ugcportal-ei5c K1/K3: default-neutral used to name `text-petrol-900` - a
- * class that compiles to NO Tailwind rule at all, because `--color-petrol-900`
+ * class that compiles to NO Tailwind rule at all, because `--color-fjord-900`
  * is declared in globals.css's near-black `:root` block, deliberately
  * outside `@theme`, specifically so Tailwind does not emit `bg-`/`text-`
  * utilities for it (see that block's own "stopping Tailwind emitting
- * bg-petrol-900 and friends" comment). The label therefore rendered in
+ * bg-fjord-900 and friends" comment). The label therefore rendered in
  * whatever colour it happened to inherit from the page's ambient
  * `--foreground` - confirmed by rendering both colour schemes: `rgb(11,
  * 46, 51)` in light mode, which happens to equal `--petrol-900`'s own
  * value only because light mode's `--foreground` IS `--petrol-900`, not
  * because the utility painted it, but `rgb(250, 247, 242)` (`--paper`,
  * near-white) in dark mode - while contrast.ts's `petrol-900-on-petrol-400`
- * pairing (now `surface-0-on-petrol-400`, retargeted at the token the
+ * pairing (now `surface-0-on-fjord-400`, retargeted at the token the
  * variant actually paints today) documented a measured ratio for a colour
  * that was never reliably painted - a false claim of coverage. Nothing in
  * this repo's existing scanners would have caught
@@ -229,7 +229,7 @@ describe("buttonVariants K1/K3 (ugcportal-ei5c): every bare colour utility a var
           css,
           `"${variant}" variant's "${token}" names "${candidate}", which compiles to no Tailwind ` +
             `rule at all - the exact ugcportal-ei5c bug shape (a token declared outside @theme on ` +
-            `purpose, e.g. --color-petrol-900). A contrast.ts pairing for this colour would document ` +
+            `purpose, e.g. --color-fjord-900). A contrast.ts pairing for this colour would document ` +
             `a ratio for a colour the browser never paints.`,
         ).not.toBeNull();
       }
@@ -245,16 +245,16 @@ describe("buttonVariants K1/K3 (ugcportal-ei5c): every bare colour utility a var
    * checked directly through the same bare-candidate extraction and
    * compile step the `it.each` above runs.
    */
-  it("catches the exact pre-fix default-neutral string (bg-petrol-400 text-petrol-900 hover:brightness-95) as shipping a non-compiling bare utility", () => {
-    const preFixClasses = "bg-petrol-400 text-petrol-900 hover:brightness-95".split(/\s+/);
+  it("catches the exact pre-fix default-neutral string (bg-fjord-400 text-petrol-900 hover:brightness-95) as shipping a non-compiling bare utility", () => {
+    const preFixClasses = "bg-fjord-400 text-petrol-900 hover:brightness-95".split(/\s+/);
     const candidates = preFixClasses
       .map(bareColorCandidate)
       .filter((candidate): candidate is string => candidate !== null);
-    expect(candidates).toEqual(["bg-petrol-400", "text-petrol-900"]);
+    expect(candidates).toEqual(["bg-fjord-400", "text-petrol-900"]);
 
     const [fillCss] = designSystem.candidatesToCss([candidates[0]]);
     const [labelCss] = designSystem.candidatesToCss([candidates[1]]);
-    expect(fillCss, "bg-petrol-400 compiles - the fill was never the bug").not.toBeNull();
+    expect(fillCss, "bg-fjord-400 compiles - the fill was never the bug").not.toBeNull();
     expect(
       labelCss,
       "text-petrol-900 must compile to NO rule - that is the exact bug this bead fixes",
@@ -274,7 +274,7 @@ describe("buttonVariants K1/K3 (ugcportal-ei5c): every bare colour utility a var
  * ugcportal-z1nh: the K1/K3 describe block above only ever compiled
  * `buttonVariants`' OWN generated class strings - it could not have caught
  * src/app/upload/upload-form.tsx's "Choose files" label, which paints the
- * identical `bg-petrol-400`/`text-petrol-900` pair by pasting the classes
+ * identical `bg-fjord-400`/`text-petrol-900` pair by pasting the classes
  * directly into a hand-written `className` string, never calling
  * `buttonVariants` at all. That was ugcportal-ei5c's own stated scope
  * boundary (see this file's and button.tsx's comments on the gap, and
@@ -288,7 +288,7 @@ describe("buttonVariants K1/K3 (ugcportal-ei5c): every bare colour utility a var
  *     `bg-petrol-N` fill, then compile every bare `bg-`/`text-`/`border-`
  *     candidate sharing that SAME string. Round 1 review (CONFIRMED medium)
  *     found it missed the identical pair split across a template-literal
- *     interpolation's nested quoted segments (``className={`bg-petrol-400
+ *     interpolation's nested quoted segments (``className={`bg-fjord-400
  *     ${active ? "text-petrol-900" : "text-surface-0"}`}``) - fixed by
  *     tokenising on quote/template delimiters too (CANDIDATE_TOKEN_DELIMITERS
  *     below), not only whitespace.
@@ -297,7 +297,7 @@ describe("buttonVariants K1/K3 (ugcportal-ei5c): every bare colour utility a var
  *     idiom is `cn()` (the npm `cn` package, used in 13 files including
  *     `button.tsx` itself: `cn(buttonVariants({ variant, size, className
  *     }))`) with SEPARATE STRING ARGUMENTS -
- *     `cn("bg-petrol-400", active ? "text-petrol-900" : "text-surface-0")`
+ *     `cn("bg-fjord-400", active ? "text-petrol-900" : "text-surface-0")`
  *     - never one shared literal for a pairing check to find, no matter how
  *     the tokeniser inside one literal was fixed. (Both round-1 and this
  *     file's own round-1/2 comments wrongly said no `clsx`/`classnames`-
@@ -327,7 +327,7 @@ describe("buttonVariants K1/K3 (ugcportal-ei5c): every bare colour utility a var
  *
  * The one limit that remains, stated rather than solved: a CLASS NAME
  * COMPUTED AT RUNTIME FROM SOMETHING THAT IS NOT A LITERAL - a bare
- * interpolated identifier (`` `bg-petrol-400 ${labelClass}` ``, where
+ * interpolated identifier (`` `bg-fjord-400 ${labelClass}` ``, where
  * `labelClass` is a variable), a function call, string concatenation
  * resolved outside this one file, or any value this scan cannot read
  * directly off the page as quoted text - is invisible to it. This is a
@@ -437,10 +437,23 @@ describe("colour-token compile guard: every literal class token naming a declare
    * and its siblings, `--terracotta-*`) as well as inside it: those are
    * exactly the names this whole guard exists to catch a USE of, and
    * excluding them from the candidate shape would make the compile check
-   * below unreachable for the one bug family this bead is about. 68 names
-   * resolve this way today (confirmed by running this function standalone
-   * in review) - `petrol-50` through `petrol-950` and `petrol-deep`,
-   * `surface-0` through `surface-4`, `ink`/`ink-muted`, `primary`/
+   * below unreachable for the one bug family this bead is about.
+   *
+   * ugcportal-uo15: this count moved (confirmed by running this function
+   * standalone after that bead) because that bead un-collapsed two bare
+   * names this Set used to merge by accident - before it, `--petrol-900`
+   * (hex) and `--color-petrol-900` (the OKLCH near-black scale, since
+   * renamed `--color-fjord-900`) both stripped to the identical bare string
+   * `"petrol-900"`, so this Set counted them as ONE name despite being two
+   * differently-valued tokens; same for step 700. Post-rename they strip to
+   * `"petrol-900"` and `"fjord-900"` and count as two - net +2 over
+   * whatever this file's count said before that bead, not a sign anything
+   * else changed. The scale is `petrol-50`/`-100`/`-200`/`-500` plus the
+   * hex-only `petrol-700`/`-900` (five of docs/design/tokens.css's own
+   * steps, now the single source for the `@theme`-registered three - see
+   * globals.css's own K1 comment) and `fjord-300`/`-400`/`-600`/`-700`/
+   * `-800`/`-900`/`-950`/`-deep` (ugcportal-axu/eh5's renamed OKLCH ramp),
+   * plus `surface-0` through `surface-4`, `ink`/`ink-muted`, `primary`/
    * `primary-hover`/`primary-foreground`, `destructive`/`destructive-surface`
    * (and its `-hover`), `accent`/`accent-foreground`, `chart-1` through
    * `chart-5`, every `sidebar-*` alias, and more - none hand-typed here.
@@ -575,7 +588,7 @@ describe("colour-token compile guard: every literal class token naming a declare
         compileCandidate(token),
         `${file}: "${token}" names a declared colour token family but compiles to no Tailwind rule at all - ` +
           `this is the ugcportal-ei5c/ugcportal-z1nh bug shape (a token declared outside @theme on purpose, ` +
-          `e.g. --color-petrol-900, or a genuine typo). A contrast.ts pairing for this colour would document ` +
+          `e.g. --color-fjord-900, or a genuine typo). A contrast.ts pairing for this colour would document ` +
           `a ratio for a colour the browser never paints.`,
       ).not.toBeNull();
     }
@@ -597,7 +610,7 @@ describe("colour-token compile guard: every literal class token naming a declare
    */
   it("flat string shape (the original ugcportal-ei5c/ugcportal-z1nh bug shape): a non-compiling candidate sharing a flat string with others is caught", () => {
     const preFixLiteral =
-      "cursor-pointer rounded-lg bg-petrol-400 px-3 py-2 text-sm font-medium text-petrol-900 transition-colors hover:brightness-95";
+      "cursor-pointer rounded-lg bg-fjord-400 px-3 py-2 text-sm font-medium text-petrol-900 transition-colors hover:brightness-95";
     const candidates = tokensInLiteral(preFixLiteral);
     // "text-sm" is NOT a colour-token-shaped candidate under this round's
     // matcher (unlike round 1/2's bareColorCandidate, which matched any
@@ -606,9 +619,9 @@ describe("colour-token compile guard: every literal class token naming a declare
     // token name, so COLOR_TOKEN_SHAPE never matches it at all. Likewise
     // "rounded-lg", "font-medium", "transition-colors" and
     // "hover:brightness-95" name no colour namespace this scan watches.
-    expect(candidates).toEqual(["bg-petrol-400", "text-petrol-900"]);
+    expect(candidates).toEqual(["bg-fjord-400", "text-petrol-900"]);
 
-    expect(compileCandidate(candidates[0]), "bg-petrol-400 compiles - the fill was never the bug").not.toBeNull();
+    expect(compileCandidate(candidates[0]), "bg-fjord-400 compiles - the fill was never the bug").not.toBeNull();
     expect(
       compileCandidate(candidates[1]),
       "text-petrol-900 must compile to NO rule - that is the exact bug this bead fixes",
@@ -616,14 +629,14 @@ describe("colour-token compile guard: every literal class token naming a declare
   });
 
   it("nested-quote template-literal shape (round 1 review finding): a candidate split across a ternary's own quoted segments is caught with no bg-petrol-N fill required nearby", () => {
-    const nestedLiteral = 'bg-petrol-400 ${active ? "text-petrol-900" : "text-surface-0"}';
+    const nestedLiteral = 'bg-fjord-400 ${active ? "text-petrol-900" : "text-surface-0"}';
     const candidates = tokensInLiteral(nestedLiteral);
     // "active" (the ternary's own condition) names no colour namespace and
     // is correctly absent; both quoted branches are found as separate
     // candidates, with no pairing step required to find either.
-    expect(candidates).toEqual(["bg-petrol-400", "text-petrol-900", "text-surface-0"]);
+    expect(candidates).toEqual(["bg-fjord-400", "text-petrol-900", "text-surface-0"]);
 
-    expect(compileCandidate(candidates[0]), "bg-petrol-400 compiles").not.toBeNull();
+    expect(compileCandidate(candidates[0]), "bg-fjord-400 compiles").not.toBeNull();
     expect(
       compileCandidate(candidates[1]),
       "text-petrol-900 must compile to NO rule even nested inside a ternary's own quoted segment",
@@ -632,7 +645,7 @@ describe("colour-token compile guard: every literal class token naming a declare
   });
 
   it("separate cn() arguments shape (round 2 review finding): a candidate that never shares ANY string with another candidate is caught", () => {
-    // cn("bg-petrol-400", active ? "text-petrol-900" : "text-surface-0") -
+    // cn("bg-fjord-400", active ? "text-petrol-900" : "text-surface-0") -
     // button.tsx's own conditional-className idiom (the `cn` npm package,
     // used in 13 files including button.tsx itself). Three separate string
     // ARGUMENTS, no template literal or interpolation at all - unlike the
@@ -643,22 +656,22 @@ describe("colour-token compile guard: every literal class token naming a declare
     // independently-extracted literals - exactly what STRING_LITERAL would
     // match from that real source line, one call argument at a time - with
     // no shared state or ordering between them.
-    const fillLiteral = "bg-petrol-400";
+    const fillLiteral = "bg-fjord-400";
     const brokenLiteral = "text-petrol-900";
     const okLiteral = "text-surface-0";
 
     const fillCandidates = tokensInLiteral(fillLiteral);
     const brokenCandidates = tokensInLiteral(brokenLiteral);
     const okCandidates = tokensInLiteral(okLiteral);
-    expect(fillCandidates).toEqual(["bg-petrol-400"]);
+    expect(fillCandidates).toEqual(["bg-fjord-400"]);
     expect(brokenCandidates).toEqual(["text-petrol-900"]);
     expect(okCandidates).toEqual(["text-surface-0"]);
 
-    expect(compileCandidate(fillCandidates[0]), "bg-petrol-400 compiles").not.toBeNull();
+    expect(compileCandidate(fillCandidates[0]), "bg-fjord-400 compiles").not.toBeNull();
     expect(
       compileCandidate(brokenCandidates[0]),
       "text-petrol-900 must compile to NO rule - found and checked with zero dependence on " +
-        "bg-petrol-400 (or anything else) appearing in the same string, template literal, or cn() call",
+        "bg-fjord-400 (or anything else) appearing in the same string, template literal, or cn() call",
     ).toBeNull();
     expect(compileCandidate(okCandidates[0]), "text-surface-0 compiles").not.toBeNull();
   });
@@ -668,15 +681,15 @@ describe("colour-token compile guard: every literal class token naming a declare
     // opacity modifier appended. `/` is not a delimiter, so the token reaches
     // COLOR_TOKEN_SHAPE whole; the shape's optional alpha group admits it,
     // and compiling it as written yields no rule, exactly like the bare name.
-    // The sibling with a declared colour (`bg-petrol-400/50`) compiles, so the
+    // The sibling with a declared colour (`bg-fjord-400/50`) compiles, so the
     // modifier itself is never what trips the guard.
-    const literal = "bg-petrol-400/50 text-petrol-900/50 text-surface-0/[0.5]";
+    const literal = "bg-fjord-400/50 text-petrol-900/50 text-surface-0/[0.5]";
     const candidates = tokensInLiteral(literal);
-    expect(candidates).toEqual(["bg-petrol-400/50", "text-petrol-900/50", "text-surface-0/[0.5]"]);
+    expect(candidates).toEqual(["bg-fjord-400/50", "text-petrol-900/50", "text-surface-0/[0.5]"]);
     // The variable-alpha form is shredded at its parentheses; the bare colour
     // left behind is what gets checked, so the undeclared one is still caught.
     expect(tokensInLiteral("text-petrol-900/(--alpha)")).toEqual(["text-petrol-900"]);
-    expect(compileCandidate(candidates[0]), "bg-petrol-400/50 compiles").not.toBeNull();
+    expect(compileCandidate(candidates[0]), "bg-fjord-400/50 compiles").not.toBeNull();
     expect(
       compileCandidate(candidates[1]),
       "text-petrol-900/50 must compile to NO rule - the alpha modifier does not rescue an undeclared colour",
@@ -692,15 +705,15 @@ describe("colour-token compile guard: every literal class token naming a declare
    */
   it("ignores arbitrary-value candidates and the bg-(--var) shorthand, which compile and are not this bug shape", () => {
     const arbitraryLiteral =
-      "rounded-[min(var(--radius-md),12px)] bg-petrol-400 bg-[rgb(0,0,0)] text-[oklch(0.5,0.1,180)]";
-    const shorthandLiteral = "bg-petrol-400 text-(--scratch-undeclared-var)";
+      "rounded-[min(var(--radius-md),12px)] bg-fjord-400 bg-[rgb(0,0,0)] text-[oklch(0.5,0.1,180)]";
+    const shorthandLiteral = "bg-fjord-400 text-(--scratch-undeclared-var)";
 
     // Only the real, declared fill is extracted - every arbitrary-value
     // fragment and the CSS-variable shorthand are shredded into pieces that
     // match no declared token name, exactly as this file's own
     // COLOR_TOKEN_SHAPE comment states.
-    expect(tokensInLiteral(arbitraryLiteral)).toEqual(["bg-petrol-400"]);
-    expect(tokensInLiteral(shorthandLiteral)).toEqual(["bg-petrol-400"]);
+    expect(tokensInLiteral(arbitraryLiteral)).toEqual(["bg-fjord-400"]);
+    expect(tokensInLiteral(shorthandLiteral)).toEqual(["bg-fjord-400"]);
 
     // Confirmed directly, not only by absence from the candidate list: both
     // forms compile regardless, so even if a future change made this scan
