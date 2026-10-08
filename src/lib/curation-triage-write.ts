@@ -125,8 +125,10 @@ function triageFactColumns(answers: TriageAnswers): TriageAnswers {
  * consequences are small in both directions — a lost race on the delete
  * surfaces as a foreign-key failure on a row that is about to cascade away,
  * and a lost race on the preview check means a triage recorded moments before
- * the preview appeared. Neither can produce a sellable item, because the gate
- * re-evaluates everything at render and at checkout.
+ * the preview appeared. Neither can produce a sellable item: nothing renders
+ * or sells from these facts yet, and the price endpoint is the sole caller
+ * of `evaluateSellability` — durable render-time re-evaluation is
+ * `ugcportal-yzo7`'s job, its K4.
  */
 export async function recordTriageFacts({
   mediaId,

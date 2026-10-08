@@ -338,8 +338,8 @@ describe("the recorded triage, read back", () => {
   it("warns when the signer is no longer an admin", async () => {
     // The gate re-reads the signer's CURRENT role (`triagedBy?.role !==
     // "ADMIN"` in triageBlocker), so a triage signed by someone since
-    // demoted is void. Surfaced here rather than left to be refused silently
-    // at render time.
+    // demoted is void. Surfaced here since no render-time gate exists yet
+    // (ugcportal-yzo7, K4).
     await createUpload("media-1");
     await triage("media-1", "demoted-1");
     const row = uploadRows(await renderPage())[0];

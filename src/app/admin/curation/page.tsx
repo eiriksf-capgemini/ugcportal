@@ -304,7 +304,7 @@ export default async function AdminCurationPage({
             // that signer being an admin right now — `triageBlocker` checks
             // `triagedBy?.role !== "ADMIN"`, re-read at evaluation time, so a
             // signature from someone since demoted is void. Surfaced here
-            // rather than left for the render-time gate to refuse silently.
+            // since no render-time gate exists yet (ugcportal-yzo7, K4).
             const signedByCurrentAdmin =
               listing?.triagedByUserId != null && triager?.role === "ADMIN";
 
