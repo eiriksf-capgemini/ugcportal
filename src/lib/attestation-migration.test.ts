@@ -216,8 +216,9 @@ describe("ugcportal-15r K4: an unattested upload is not an all-negative one", ()
   });
 
   it("sells the attested one and refuses the unattested one", async () => {
-    // media-1's attestation answers `no` to every question — including
-    // every question an administrator would triage — and `AUTHOR` to the
+    // media-1's attestation answers `no` to every question except
+    // `uploaderIsAdult` (`true`, the one clean answer) — including every
+    // other question an administrator would triage — and `AUTHOR` to the
     // authorship one. That is the strongest form of the claim: a row of
     // explicit `no`s SELLS, so the refusal below cannot be the gate
     // disliking negative answers. It is the absence of the row.

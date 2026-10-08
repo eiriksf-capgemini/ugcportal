@@ -8,7 +8,6 @@ import {
   ATTESTATION_QUESTIONS,
   ATTESTATION_YES,
   CURRENT_ATTESTATION_VERSION,
-  MEDIA_ATTESTATION_FIELD_PREFIX,
   MEDIA_ATTESTATION_VERSION_FIELD,
   MEDIA_AUTHORSHIP_VALUES,
   type AttestationAnswers,
@@ -120,17 +119,22 @@ describe("the registry is the one list of questions", () => {
       attestationFieldName(ATTESTATION_AUTHORSHIP_QUESTION.field),
       ...ATTESTATION_QUESTIONS.map(({ field }) => attestationFieldName(field)),
     ];
+    /*
+     * Literal "attestation.", not MEDIA_ATTESTATION_FIELD_PREFIX — every name
+     * above is itself built from that constant via attestationFieldName, so
+     * comparing against the constant can never fail. Comparing against the
+     * literal is what actually checks the constant still holds that value.
+     */
     for (const name of names) {
-      expect(name.startsWith(MEDIA_ATTESTATION_FIELD_PREFIX), name).toBe(true);
+      expect(name.startsWith("attestation."), name).toBe(true);
     }
     /*
      * Disjoint from the OTHER parts POST /api/media reads, computed from the
      * real constants rather than from four string literals — `expect(names)
      * .not.toContain("altText")` is an assertion that cannot fail, because
      * no attestation field is ever spelled "altText" with or without the
-     * prefix. Reading the constants means a renamed `MEDIA_CAPTION_FIELD`,
-     * or a prefix someone shortened to nothing, is what this compares
-     * against.
+     * prefix. Reading the constants means a renamed `MEDIA_CAPTION_FIELD`
+     * is what this compares against.
      */
     const otherParts = new Set([
       MEDIA_ALT_TEXT_FIELD,
