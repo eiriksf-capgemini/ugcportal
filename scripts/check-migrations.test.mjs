@@ -1,6 +1,7 @@
 /**
- * Tests for the dev-start migration check (ugcportal-w7wc), including the
- * env-file precedence fix (ugcportal-h2yd): this file used to read
+ * Tests for the dev-start migration check (ugcportal-w7wc), reused unmodified
+ * by `npm run start` (ugcportal-i40s — see the "K1" describe block below),
+ * including the env-file precedence fix (ugcportal-h2yd): this file used to read
  * `process.env.DATABASE_URL` as the shell gave it, so a DATABASE_URL set
  * only in `.env.local` was invisible here while `next dev`, started right
  * after, read it and queried a different, unmigrated database. See
@@ -629,4 +630,116 @@ describe("against the installed Prisma", () => {
     expect(plan.action).toBe("apply");
     expect(plan.pending).toEqual(removed);
   }, 120_000);
+});
+
+/**
+ * K1 (ugcportal-i40s): `npm run start` now runs this exact script ahead of
+ * `next start`, the same way `npm run dev` already does — see package.json.
+ * The first `it` below pins that wiring, by text, so a reordering across
+ * the `&&` (migration check after Next has already started, the ugcportal-
+ * w7wc failure mode one entry point over) fails here. The rest drives the
+ * REAL `check-migrations.mjs` as a subprocess, against a REAL database
+ * built with the REAL prisma CLI — not a crafted status string — because
+ * `start` has no wiring of its own beyond "run this file", so proving this
+ * file refuses a stale database for real is proving `start` does too.
+ *
+ * The "stale" fixture is an otherwise fully-migrated database with its last
+ * two `_prisma_migrations` rows deleted (the same trick "reports migrations
+ * removed from the history as pending, by name" above uses to make
+ * `migrate status` call them pending) — except here `migrate deploy` is
+ * actually allowed to run, and it fails for real: it tries to re-run SQL
+ * that already landed (`ALTER TABLE ... ADD COLUMN`, `CREATE TABLE`) and
+ * SQLite rejects the duplicate. That is what makes this a REAL `migrate
+ * deploy` failure rather than a mock answer standing in for one.
+ *
+ * A weaker check would pass only part of this: one that always exits
+ * non-zero passes "exits non-zero and names the pending migrations" but
+ * fails "lets start through once the database is actually current"; one
+ * whose non-zero exit comes from an unrelated crash (e.g. a typo'd script
+ * path) would satisfy neither the exit-code assertion's intent nor the
+ * names-the-migrations assertion, since nothing would print the names.
+ * Only a check that is actually deciding on pending-ness passes both.
+ */
+describe("K1: npm run start refuses to boot against pending migrations", () => {
+  it("package.json wires the migration check ahead of next start, in that order", () => {
+    const script = JSON.parse(
+      fs.readFileSync(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8"),
+    ).scripts.start;
+    expect(script).toBeDefined();
+    expect(script).toMatch(/scripts\/check-migrations\.mjs.*&&.*next.*start/);
+  });
+
+  describe("against a real stale fixture database", () => {
+    /** @type {string} */
+    let dir;
+    /** @type {string} */
+    let dbPath;
+    /** @type {string[]} */
+    let removed;
+
+    beforeAll(() => {
+      dir = fs.mkdtempSync(path.join(os.tmpdir(), "ugcportal-start-migrations-"));
+      dbPath = path.join(dir, "stale.db");
+      execFileSync(PRISMA_BIN, ["migrate", "deploy"], {
+        cwd: REPO_ROOT,
+        env: { ...process.env, DATABASE_URL: `file:${dbPath}` },
+      });
+      const applied = fs
+        .readdirSync(MIGRATIONS_DIR, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => entry.name)
+        .sort();
+      removed = applied.slice(-2);
+      execFileSync(PRISMA_BIN, ["db", "execute", "--stdin"], {
+        cwd: REPO_ROOT,
+        env: { ...process.env, DATABASE_URL: `file:${dbPath}` },
+        stdio: ["pipe", "pipe", "pipe"],
+        input: `DELETE FROM _prisma_migrations WHERE migration_name IN (${removed
+          .map((name) => `'${name}'`)
+          .join(", ")});`,
+      });
+    }, 120_000);
+
+    afterAll(() => {
+      fs.rmSync(dir, { recursive: true, force: true });
+    });
+
+    it("exits non-zero and names the pending migrations, before whatever runs next ever would", () => {
+      const result = spawnSync(process.execPath, [SCRIPT], {
+        cwd: REPO_ROOT,
+        encoding: "utf8",
+        env: { ...process.env, DATABASE_URL: `file:${dbPath}` },
+      });
+      expect(result.status).not.toBe(0);
+      const output = `${result.stdout ?? ""}${result.stderr ?? ""}`;
+      for (const name of removed) {
+        expect(output).toContain(name);
+      }
+    }, 60_000);
+
+    it("mutation check: lets start through, silently, once this same database is actually brought up to date", () => {
+      // The fixture's two "pending" migrations already landed on the real
+      // schema; what's missing is only their `_prisma_migrations` bookkeeping
+      // row, so the correct, non-destructive fix — the one a human following
+      // the P3018 error above would run — is `migrate resolve --applied`,
+      // not another `migrate deploy` (which would just fail the same way
+      // again). Resolved in the same order they were removed: deploy, and
+      // therefore resolve, cannot skip ahead to the second while the first
+      // is still unresolved.
+      for (const name of removed) {
+        execFileSync(PRISMA_BIN, ["migrate", "resolve", "--applied", name], {
+          cwd: REPO_ROOT,
+          env: { ...process.env, DATABASE_URL: `file:${dbPath}` },
+        });
+      }
+
+      const result = spawnSync(process.execPath, [SCRIPT], {
+        cwd: REPO_ROOT,
+        encoding: "utf8",
+        env: { ...process.env, DATABASE_URL: `file:${dbPath}` },
+      });
+      expect(result.status).toBe(0);
+      expect(`${result.stdout ?? ""}${result.stderr ?? ""}`).toBe("");
+    }, 60_000);
+  });
 });
