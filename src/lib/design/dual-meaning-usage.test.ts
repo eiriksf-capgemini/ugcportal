@@ -226,6 +226,29 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
     "text-muted-foreground": 3,
     "text-ink": 5,
   },
+  // ugcportal-vq3z: the curation triage screen. All seven
+  // text-muted-foreground usages are body copy on the plain page canvas —
+  // the three intro paragraphs, the empty-state line, the per-row uploader
+  // detail line, the "no watermarked preview" line and the truncation
+  // notice. None is inside a bg-muted/bg-destructive-surface well: the text
+  // inside this screen's wells is either text-ink-muted (the per-row triage
+  // detail list, exactly as the sibling rights screen does), text-destructive
+  // (the error banner) or untokenised (the two confirmation banners). The one
+  // text-primary is the "Record the triage" link, also on the canvas.
+  "src/app/admin/curation/page.tsx": {
+    "text-muted-foreground": 7,
+    "text-primary": 1,
+  },
+  // ugcportal-vq3z: the triage form. `text-ink` is the shared select class,
+  // whose own `bg-surface-3` fill is the background it renders against —
+  // the identical pairing decision-form.tsx uses for its five fields on the
+  // sibling screen. The one text-muted-foreground is the form's intro
+  // paragraph, which sits in a border-only container with no fill, so the
+  // page canvas is behind it.
+  "src/app/admin/curation/triage-form.tsx": {
+    "text-ink": 1,
+    "text-muted-foreground": 1,
+  },
   "src/app/admin/settings/users/page.tsx": { "text-muted-foreground": 4 },
   "src/app/admin/settings/instagram/page.tsx": { "text-muted-foreground": 3 },
   "src/app/upload/page.tsx": { "text-muted-foreground": 1 },
