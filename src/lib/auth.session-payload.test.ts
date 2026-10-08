@@ -236,14 +236,41 @@ describe("what the narrowing must keep (K2)", () => {
     expect((body.user as Record<string, unknown>).role).toBe("ADMIN");
   });
 
-  it("reads role from the adapter row on every request, not from the session", async () => {
-    // The pair, so neither answer is the one it always gives: revoking
-    // somebody's admin role has to take effect on their next request.
-    const admin = await sessionBody(sessionRow(), userRow({ role: "ADMIN" }));
-    const plain = await sessionBody(sessionRow(), userRow({ role: "USER" }));
+  it("reads role from the adapter row argument, not from session.user", async () => {
+    // Round 1 found this test's fixture passed the SAME object as both
+    // `session.user` and the adapter-row `user` argument (that is what
+    // `sessionBody` above does), so no assertion here could tell which one
+    // `toRole(user)` in src/lib/auth.ts actually reads — a callback that
+    // read `session.user.role` instead would have passed identically.
+    // @auth/core always builds `session.user` from that same `user` object
+    // (`session: { ...session, user }`,
+    // node_modules/@auth/core/lib/actions/session.js), so the two cannot
+    // diverge in production; they are deliberately made to diverge here,
+    // which is the only way to pin which one the implementation reads
+    // rather than which one happens to agree with it today.
+    async function roleWith(
+      sessionUserRole: "ADMIN" | "USER",
+      adapterUserRole: "ADMIN" | "USER",
+    ): Promise<unknown> {
+      const adapterUser = userRow({ role: adapterUserRole });
+      const payload = await authConfig.callbacks.session({
+        session: {
+          ...sessionRow(),
+          user: userRow({ role: sessionUserRole }),
+        },
+        user: adapterUser,
+      } as unknown as Parameters<typeof authConfig.callbacks.session>[0]);
+      const body = JSON.parse(
+        JSON.stringify({ user: adapterUser, ...payload }),
+      ) as Record<string, unknown>;
+      return (body.user as Record<string, unknown>).role;
+    }
 
-    expect((admin.user as Record<string, unknown>).role).toBe("ADMIN");
-    expect((plain.user as Record<string, unknown>).role).toBe("USER");
+    // The pair, so neither answer is the one it always gives: whichever
+    // argument is read, the opposite-role fixture pins it rather than
+    // agreeing with it by coincidence.
+    expect(await roleWith("USER", "ADMIN")).toBe("ADMIN");
+    expect(await roleWith("ADMIN", "USER")).toBe("USER");
   });
 
   it("still surfaces the name, email and image the header draws", async () => {
@@ -304,18 +331,23 @@ describe("the payload is an allowlist, not a denylist (K3)", () => {
     ]);
   });
 
-  it("declares that allowlist where a reader will find it", () => {
-    // The constants are the written-down decision; these two lines are what
-    // stop them drifting from the literals every other test in this file
-    // asserts against.
-    expect([...SESSION_CLIENT_KEYS]).toEqual(["expires", "user"]);
-    expect([...SESSION_USER_CLIENT_KEYS]).toEqual([
-      "id",
-      "name",
-      "email",
-      "image",
-      "role",
-    ]);
+  it("declares that allowlist where a reader will find it", async () => {
+    // Round 1 found these two assertions checked the constants against
+    // hand-written literals and nothing else — `permittedSession` and
+    // `permittedSessionUser` built their answer with their OWN hand-written
+    // object literals, so the constants were never read by production code,
+    // and a field added to one of those literals (with this test's literals
+    // updated to match) left the constants silently wrong. Production code
+    // now builds the payload by calling `pick(user, SESSION_USER_CLIENT_KEYS)`
+    // (src/lib/live-session.ts), so this assertion compares the REAL
+    // serialised output to a key set DERIVED from the constants, not to a
+    // second hand-written copy of them — a field that reaches the body
+    // without going through the constants fails this, even if every other
+    // literal in this file is updated to match it.
+    const body = await sessionBody();
+
+    expect(keysOf(body)).toEqual([...SESSION_CLIENT_KEYS].sort());
+    expect(keysOf(body.user)).toEqual([...SESSION_USER_CLIENT_KEYS].sort());
   });
 });
 

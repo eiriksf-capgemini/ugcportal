@@ -375,19 +375,40 @@ async function revokeSession(id: string | null, userId: string): Promise<void> {
 }
 
 /**
+ * Build an object by naming the keys to keep off `source`, in the order
+ * `keys` lists them — never by removing the ones to drop. This is what makes
+ * `SESSION_CLIENT_KEYS` / `SESSION_USER_CLIENT_KEYS` below load-bearing
+ * rather than decorative commentary: `permittedSession` and
+ * `permittedSessionUser` call this with those exact constants, so the only
+ * way to change what the payload discloses is to edit the constant, and
+ * doing so is the whole diff a reviewer sees.
+ */
+function pick<T extends object, K extends keyof T>(
+  source: T,
+  keys: readonly K[],
+): Pick<T, K> {
+  const result = {} as Pick<T, K>;
+  for (const key of keys) {
+    result[key] = source[key];
+  }
+  return result;
+}
+
+/**
  * THE SESSION PAYLOAD'S ALLOWLIST (ugcportal-5gii), in the same spirit as
  * `MEDIA_ANONYMOUS_SELECT` in src/lib/media-access.ts: a column reaches an
  * audience because somebody decided it should, never because it happened to
  * be on the row.
  *
- * These two tuples ARE that decision, written down. `permittedSession`
- * below builds its answer by naming exactly these fields, and
- * src/lib/auth.session-payload.test.ts asserts three separate things: that
- * the serialised body's key set equals these tuples, that these tuples hold
- * the literal names written here, and that a column-shaped property added
- * to the fixture does not appear in the body. The second of those is what
- * stops a leak from being waved through by widening the spec, and the third
- * is what a denylist (`delete payload.sessionToken`) fails.
+ * These two tuples ARE that decision, written down, and they are the ONLY
+ * place it is written: `permittedSession` and `permittedSessionUser` below
+ * build their answer by calling `pick` with exactly these constants, so
+ * there is no second, hand-written field list in production code for them
+ * to drift from. src/lib/auth.session-payload.test.ts additionally derives
+ * its expected key set from these same constants (not just a hand-written
+ * literal) and keeps one hand-written literal as an independent anchor, so
+ * a change to either the constants or the `pick` call is caught from both
+ * directions.
  *
  * WHY AN ALLOWLIST AND NOT A DELETE. The leak this fixes was not a field
  * someone forgot to remove; it was the absence of any decision at all — the
@@ -450,10 +471,10 @@ export const SESSION_USER_CLIENT_KEYS = [
  * row in the response body.
  */
 function permittedSession(session: Session): Session {
-  return {
-    expires: session.expires,
-    user: permittedSessionUser(session.user),
-  };
+  return pick(
+    { expires: session.expires, user: permittedSessionUser(session.user) },
+    SESSION_CLIENT_KEYS,
+  );
 }
 
 /**
@@ -467,16 +488,12 @@ function permittedSessionUser(user: Session["user"]): Session["user"] {
   if (!user) {
     return undefined;
   }
-  // Spelled out one field at a time, deliberately. A spread with deletions
-  // here would compile, read almost identically in a diff, and disclose
-  // whatever `model User` gains next.
-  return {
-    id: user.id,
-    name: user.name,
-    email: user.email,
-    image: user.image,
-    role: user.role,
-  };
+  // Named via `pick` and `SESSION_USER_CLIENT_KEYS`, deliberately. A spread
+  // with deletions here would compile, read almost identically in a diff,
+  // and disclose whatever `model User` gains next; a hand-written object
+  // literal here would, as round 1 found, silently disconnect from the
+  // constant above it.
+  return pick(user, SESSION_USER_CLIENT_KEYS);
 }
 
 /**
