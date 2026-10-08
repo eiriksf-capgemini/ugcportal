@@ -2,7 +2,7 @@
 
 import { Popover } from "@base-ui/react/popover";
 import { Menu, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import { PrimaryNavLink } from "@/components/primary-nav-link";
 import { Button } from "@/components/ui/button";
@@ -109,8 +109,25 @@ export type NavItem = { href: string; label: string };
  * dismiss-on-resize effect's `matchMedia` listener, and Popover's own
  * Escape/outside-press listeners, that come and go with `open`) justifies
  * building.
+ *
+ * `children` (ugcportal-i7lr): an optional extra tail for the SAME `<ul>`
+ * `items` renders into, rendered after the mapped items rather than as a
+ * markup shape of its own. site-header.tsx passes its own `<UploadNavLink />`
+ * here — the same element it also renders directly inside the always-visible
+ * desktop `<nav>` — so the upload entry reaches both renderings of the
+ * header's nav from the one call site, rather than this component needing
+ * its own copy of the session gate `UploadNavLink` carries. Optional, and
+ * rendered as plain `{children}` with no wrapper: when it is `null` (a
+ * signed-out visitor, per UploadNavLink's own all-or-nothing contract) this
+ * adds nothing to the list, not an empty node.
  */
-export function MobileNavToggle({ items }: { items: NavItem[] }) {
+export function MobileNavToggle({
+  items,
+  children,
+}: {
+  items: NavItem[];
+  children?: ReactNode;
+}) {
   const [open, setOpen] = useState(false);
 
   /*
@@ -182,6 +199,7 @@ export function MobileNavToggle({ items }: { items: NavItem[] }) {
                     </PrimaryNavLink>
                   </li>
                 ))}
+                {children}
               </ul>
             </Popover.Popup>
           </Popover.Positioner>

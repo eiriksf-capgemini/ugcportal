@@ -90,16 +90,30 @@ describe("UploadNavLink (ugcportal-t0y)", () => {
     expect(await UploadNavLink()).toBeNull();
   });
 
-  it("puts the link inside a real <nav aria-label=\"Primary\"> landmark", async () => {
+  /**
+   * ugcportal-i7lr: this used to assert a `<nav aria-label="Primary">`
+   * landmark of its own — a SECOND nav landmark sitting next to the header's
+   * own "Main navigation" (site-header.tsx), holding only this one link. It
+   * now returns a bare `<li>` instead, so the caller (site-header.tsx) can
+   * splice it into the END of the shared `<ul>` that landmark already
+   * renders, rather than wrapping it in a landmark of its own.
+   *
+   * THE FIXTURE MUTATION: re-wrapping the returned `<li>` in its own
+   * `<nav aria-label="Primary">` here (reverting this file's own change) is
+   * exactly the regression this guards — `markup).not.toMatch(/<nav\b/)`
+   * would fail against that markup, since it would contain one. Performed by
+   * hand against a copy of the real output, confirmed to fail, not left in
+   * the tree.
+   */
+  it("puts the link inside a bare <li>, not a nav landmark of its own", async () => {
     getSessionMock.mockResolvedValue(SIGNED_IN_USER);
 
     const markup = await renderLink();
-    const match = /<nav[^>]*aria-label="Primary"[^>]*>([\s\S]*?)<\/nav>/.exec(
-      markup,
-    );
+    const match = /<li[^>]*>([\s\S]*?)<\/li>/.exec(markup);
 
-    expect(match, 'no <nav aria-label="Primary"> landmark found').not.toBeNull();
+    expect(match, "no <li> wrapper found").not.toBeNull();
     expect(match?.[1]).toMatch(UPLOAD_ANCHOR);
+    expect(markup).not.toMatch(/<nav\b/);
   });
 
   /**

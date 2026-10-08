@@ -35,10 +35,14 @@ import { describe, expect, it, vi } from "vitest";
  * independently-drifting copies.
  */
 vi.mock("@/components/upload-nav-link", () => ({
+  // ugcportal-i7lr: the real component returns a bare <li> (or null), not
+  // its own <nav> landmark, since site-header.tsx now splices it into the
+  // end of the shared "Main navigation" <ul> - this stub matches that shape
+  // even though this file's own assertions don't look at it either way.
   UploadNavLink: () => (
-    <nav aria-label="Primary" data-testid="nav-stub">
+    <li data-testid="nav-stub">
       <a href="/upload">Upload</a>
-    </nav>
+    </li>
   ),
 }));
 vi.mock("@/components/auth-status", () => ({

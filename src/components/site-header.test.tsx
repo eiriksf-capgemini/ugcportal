@@ -1,6 +1,15 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ReactElement } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import { stripComments } from "@/lib/design/scan-source";
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const SITE_HEADER_PATH = path.join(HERE, "site-header.tsx");
 
 /**
  * The strings and the About route this bead ships, spelled out literally
@@ -31,14 +40,24 @@ const EXPECTED_ABOUT_PATH = "/about";
  * parent tree it is walking synchronously (confirmed empirically there).
  * This file is about the header's own static structure - the nav, the
  * wordmark, the mobile toggle - not about either stub's own gating logic,
- * which each already has its own dedicated test file.
+ * which each already has its own dedicated test file (upload-nav-link.test.tsx
+ * covers UploadNavLink's real session gate; this file only needs it to stand
+ * in for "signed in" or "signed out" deterministically).
+ *
+ * `uploadNavStubShowsItem` (ugcportal-i7lr): toggled per test so this one
+ * stub can stand in for both of UploadNavLink's real, all-or-nothing outputs
+ * - the real component's own contract (upload-nav-link.tsx's doc comment,
+ * and upload-nav-link.test.tsx's K1/K2) - without this file needing to mock
+ * a session at all.
  */
+let uploadNavStubShowsItem = true;
 vi.mock("@/components/upload-nav-link", () => ({
-  UploadNavLink: () => (
-    <nav aria-label="Primary" data-testid="upload-nav-stub">
-      <a href="/upload">Upload</a>
-    </nav>
-  ),
+  UploadNavLink: () =>
+    uploadNavStubShowsItem ? (
+      <li data-testid="upload-nav-stub">
+        <a href="/upload">Upload</a>
+      </li>
+    ) : null,
 }));
 vi.mock("@/components/auth-status", () => ({
   AuthStatus: () => <div data-testid="auth-stub">auth widget</div>,
@@ -49,6 +68,10 @@ const { SiteHeader } = await import("./site-header");
 function renderHeader(): string {
   return renderToStaticMarkup(SiteHeader() as ReactElement);
 }
+
+beforeEach(() => {
+  uploadNavStubShowsItem = true;
+});
 
 describe("SiteHeader (ugcportal-14k9)", () => {
   it("K2: every visible string is English, and matches the strings reviewed in the PR", () => {
@@ -187,6 +210,110 @@ describe("SiteHeader (ugcportal-14k9)", () => {
     expect(nav).toBeGreaterThan(wordmark);
     expect(uploadNav).toBeGreaterThan(nav);
     expect(auth).toBeGreaterThan(uploadNav);
+  });
+
+  /**
+   * ugcportal-i7lr K1: a signed-in visitor's header used to expose TWO nav
+   * landmarks - this file's own "Main navigation" and UploadNavLink's own
+   * "Primary", holding only the Upload link (see upload-nav-link.tsx's old
+   * shape, and this file's own pre-merge mock, which wrapped the stub in
+   * exactly that second `<nav>`). UploadNavLink now returns a bare `<li>`
+   * instead (upload-nav-link.test.tsx covers that contract on the real
+   * component directly); this is the other half - that site-header.tsx's own
+   * markup never wraps a second `<nav>` around it, so there is exactly one
+   * landmark, with the stub's "Upload" anchor nested inside it as an
+   * ordinary list item.
+   *
+   * THE FIXTURE MUTATION: re-wrapped this file's own stub back in its old
+   * `<nav aria-label="Primary">...</nav>` (reverting this bead's change to
+   * the mock above) and reran this test by hand: `navTags` had length 2, so
+   * `toHaveLength(1)` failed before the descendant checks were even reached.
+   * Reverted immediately after.
+   */
+  it("K1: exactly one nav landmark in the header, with Upload a descendant of it", () => {
+    const markup = renderHeader();
+    const navTags = [...markup.matchAll(/<nav\b[^>]*>/g)];
+
+    expect(navTags).toHaveLength(1);
+
+    const navOpenIndex = navTags[0].index ?? -1;
+    const navCloseIndex = markup.indexOf("</nav>", navOpenIndex);
+    expect(navOpenIndex).toBeGreaterThan(-1);
+    expect(navCloseIndex).toBeGreaterThan(navOpenIndex);
+
+    const uploadEntryIndex = markup.indexOf('data-testid="upload-nav-stub"');
+    expect(uploadEntryIndex, "Upload entry not found").toBeGreaterThan(-1);
+    expect(uploadEntryIndex).toBeGreaterThan(navOpenIndex);
+    expect(uploadEntryIndex).toBeLessThan(navCloseIndex);
+  });
+
+  /**
+   * ugcportal-i7lr K2: a signed-out visitor must see no Upload entry AND no
+   * stray empty `<li>` left in its place - the all-or-nothing contract
+   * upload-nav-link.tsx's own comment describes, and that file's own test
+   * suite's K2 covers for the real component resolving to `null`. This is
+   * the other half: that site-header.tsx splices in whatever UploadNavLink
+   * actually returns rather than always rendering a wrapper `<li>` around it
+   * regardless.
+   *
+   * THE FIXTURE MUTATION, on the guard itself: `/<li>\s*<\/li>/` must match
+   * a genuinely empty list item, confirmed inline below against a literal
+   * `"<li></li>"` fixture, so the "no empty <li>" assertion above it is not
+   * vacuously true against markup that could never contain one.
+   */
+  it("K2: signed out - no Upload entry, and no empty <li> in its place", () => {
+    uploadNavStubShowsItem = false;
+    const markup = renderHeader();
+
+    expect(markup).not.toContain('href="/upload"');
+    expect(markup).not.toContain('data-testid="upload-nav-stub"');
+    expect(markup).not.toMatch(/<li>\s*<\/li>/);
+    expect([...markup.matchAll(/<nav\b[^>]*>/g)]).toHaveLength(1);
+
+    expect("<li></li>").toMatch(/<li>\s*<\/li>/);
+  });
+
+  /**
+   * ugcportal-i7lr K3: "the mobile toggle loses its items, or the desktop
+   * and mobile lists drift apart, because the merge touched one and not the
+   * other." Neither half of that is observable through renderToStaticMarkup
+   * here - MobileNavToggle's own popover panel is unmounted while closed
+   * (confirmed by mobile-nav-toggle.test.tsx's own "starts closed" test), so
+   * a static render of this header never shows the mobile panel's contents
+   * at all. This checks the one thing that actually prevents the drift: that
+   * site-header.tsx's own SOURCE passes the identical `NAV_ITEMS` binding to
+   * both the desktop `.map()` and `<MobileNavToggle items={NAV_ITEMS}>`, and
+   * the identical `<UploadNavLink />` element - written once per call site,
+   * not two independently-maintained copies that merely happen to agree
+   * today - to both the desktop `<ul>` and MobileNavToggle's own `children`
+   * slot. Whether that `children` slot itself actually renders what it's
+   * given, after the mapped items, once the panel opens, is that
+   * component's own dedicated test file's job, with a real DOM and a real
+   * click - this file cannot open anything.
+   *
+   * THE FIXTURE MUTATION: performed by hand against two separate copies of
+   * site-header.tsx. First, a SECOND, independently-defined
+   * `const MOBILE_NAV_ITEMS = [{ href: "/", label: "Gallery" }];` (dropping
+   * About) passed to `<MobileNavToggle items={MOBILE_NAV_ITEMS}>` instead of
+   * `NAV_ITEMS` - exactly the "merge touched one and not the other" drift
+   * K3 names. The `items={NAV_ITEMS}` assertion below failed against that
+   * copy (the source reads `items={MOBILE_NAV_ITEMS}` instead). Second,
+   * reverted that and instead removed the `<UploadNavLink />` child from
+   * `<MobileNavToggle>` entirely (reverting to the pre-merge shape, where
+   * only the desktop `<ul>` carried Upload): the two-occurrences assertion
+   * failed, finding 1, not 2. Both reverted immediately after.
+   */
+  it("K3: the desktop nav and MobileNavToggle read from the same NAV_ITEMS and the same UploadNavLink", () => {
+    const source = stripComments(
+      readFileSync(SITE_HEADER_PATH, "utf8"),
+      SITE_HEADER_PATH,
+    );
+
+    expect(source).toContain("NAV_ITEMS.map(");
+    expect(source).toContain("items={NAV_ITEMS}");
+
+    const uploadNavLinkUsages = [...source.matchAll(/<UploadNavLink\s*\/>/g)];
+    expect(uploadNavLinkUsages).toHaveLength(2);
   });
 
   it("renders exactly one header landmark", () => {
