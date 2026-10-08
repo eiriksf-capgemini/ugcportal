@@ -1,11 +1,17 @@
 import { notFound } from "next/navigation";
 
+import type { RightsLayer } from "@/generated/prisma/enums";
+
 import { PAGE_CONTAINER_CLASS } from "@/components/site/page-shell";
 import { INLINE_LINK_CLASS } from "@/components/ui/inline-link";
 import { requireAdmin } from "@/lib/admin";
 import { TRIAGE_ANSWER_SELECT } from "@/lib/curation-triage";
 import { prisma } from "@/lib/prisma";
-import { TRIAGE_FACTS } from "@/lib/resale-rights";
+import {
+  CLEARABLE_LAYERS,
+  TRIAGE_FACTS,
+  unsettledLayers,
+} from "@/lib/resale-rights";
 import {
   ADMIN_USERS_PATH,
   CURATION_PATH,
@@ -13,7 +19,8 @@ import {
   mediaPreviewPath,
 } from "@/lib/routes";
 
-import { recordTriage } from "./actions";
+import { recordClearance, recordTriage } from "./actions";
+import { CurationClearanceForm } from "./clearance-form";
 import { triageOutcomeMessage } from "./outcomes";
 import { CurationTriageForm } from "./triage-form";
 
@@ -86,9 +93,29 @@ const UPLOAD_SELECT = {
       // cannot be omitted here and silently render as "Not answered" in the
       // form below.
       ...TRIAGE_ANSWER_SELECT,
+      // Not a triage answer and not optional here: `modelReleaseKey` is
+      // what PEOPLE's `alsoRequires` reads, so without it `unsettledLayers`
+      // below would be answering a different question from the gate's.
+      // GateListing requires it, so omitting it fails `tsc` at the call
+      // rather than quietly under-reporting a blocked layer.
+      modelReleaseKey: true,
       triagedAt: true,
       triagedByUserId: true,
       triagedBy: { select: { name: true, email: true, role: true } },
+      // The per-layer justifications (ugcportal-qfy9). `clearedByUserId`
+      // and the clearer's CURRENT role are both selected because that is
+      // what `layerIsCleared` decides on — a clearance signed by someone
+      // since demoted is not one the gate stands behind, and this screen
+      // must not report it as settled when the gate does not.
+      layerClearances: {
+        select: {
+          layer: true,
+          reason: true,
+          clearedAt: true,
+          clearedByUserId: true,
+          clearedBy: { select: { name: true, email: true, role: true } },
+        },
+      },
     },
   },
 } as const;
@@ -121,6 +148,28 @@ function toCurationRow<Row extends { previewKey: string | null }>({
   };
 }
 
+/**
+ * The registry's wording of the question each layer answers, so the
+ * clearance forms below ask the same question the gate blocks on.
+ *
+ * Built from TRIAGE_FACTS rather than written out, for the reason the
+ * triage form gives: a layer added to the registry is asked here without
+ * anyone remembering.
+ */
+const LAYER_QUESTIONS: ReadonlyMap<RightsLayer, string> = new Map(
+  TRIAGE_FACTS.map((fact) => [fact.layer, fact.question]),
+);
+
+/**
+ * DOM id of one upload's rights-layer well. Exported so page.test.tsx can
+ * read the layers of ONE row out of a page that renders several, rather
+ * than matching "the first well on the page" — the mistake the upload list
+ * id above records.
+ */
+export function rightsLayersSectionId(mediaId: string): string {
+  return `rights-layers-${mediaId}`;
+}
+
 /** "Yes" / "No" / "Not answered" for one stored triage column. */
 function answerLabel(stored: boolean | null): string {
   if (stored === true) return "Yes";
@@ -140,8 +189,6 @@ function answerLabel(stored: boolean | null): string {
  *
  * WHAT THIS SCREEN DOES NOT DO, so that the absences are not mistaken for
  * gaps:
- *   - per-layer clearances, which is what a `yes` to most of these questions
- *     then needs (ugcportal-qfy9);
  *   - price and licence, and re-evaluating sellability at render
  *     (ugcportal-yzo7) — the price endpoint already exists at
  *     /api/admin/curation/[id]/price and is not driven from here yet;
@@ -169,7 +216,7 @@ export default async function AdminCurationPage({
     notFound();
   }
 
-  const { error, triage, edit } = await searchParams;
+  const { error, triage, clearance, edit } = await searchParams;
 
   const rows = await prisma.media.findMany({
     // Newest first, with `id` as the tiebreak so two uploads sharing a
@@ -249,21 +296,27 @@ export default async function AdminCurationPage({
         there is nothing synced to show yet.
       </p>
       {/*
-        Price, licence and the per-layer clearances are not on this screen
-        yet; ugcportal-yzo7 and ugcportal-qfy9 add them here rather than
-        elsewhere. Said in the markup as well as in the docstring above,
-        because an admin who finds no price field should know it is absent on
-        purpose rather than broken.
+        Price and licence are not on this screen yet; ugcportal-yzo7 adds
+        them here rather than elsewhere. Said in the markup as well as in
+        the docstring above, because an admin who finds no price field
+        should know it is absent on purpose rather than broken.
       */}
       <p className="mt-2 text-sm text-muted-foreground">
-        Recording the triage does not set a price, grant a licence, or clear
-        any rights layer a &ldquo;yes&rdquo; needs. Those are separate
-        decisions and are not on this screen yet.
+        Recording the triage does not set a price or grant a licence. Those are
+        separate decisions and are not on this screen yet. The rights layers a
+        &ldquo;yes&rdquo; needs are cleared one at a time below, each with its
+        own justification: clearing one settles that layer and no other.
       </p>
 
       {triage === "recorded" ? (
         <p className="mt-6 rounded-lg border border-border bg-muted p-3 text-sm">
           Triage recorded.
+        </p>
+      ) : null}
+      {clearance === "recorded" ? (
+        <p className="mt-6 rounded-lg border border-border bg-muted p-3 text-sm">
+          Clearance recorded for that one layer. Every other layer still blocks
+          until it has its own.
         </p>
       ) : null}
       {errorMessage ? (
@@ -307,6 +360,29 @@ export default async function AdminCurationPage({
             // since no render-time gate exists yet (ugcportal-yzo7, K4).
             const signedByCurrentAdmin =
               listing?.triagedByUserId != null && triager?.role === "ADMIN";
+
+            /*
+              THE LAYERS STILL IN THE WAY (ugcportal-qfy9), from the gate's
+              own `unsettledLayers` rather than from a reading of the
+              columns here. Two things follow, and both are the point:
+              clearing one layer removes exactly that layer from this list,
+              and a clearance signed by someone since demoted keeps its
+              layer ON it, because `unsettledLayers` runs the same
+              per-fact rule `triageBlocker` does.
+
+              `?? []` for an untriaged upload: there is no listing to ask
+              about, nothing to clear, and the well below says so rather
+              than rendering an empty one.
+            */
+            const blockingLayers = listing ? unsettledLayers(listing) : [];
+            // Only the layers a clearance can actually settle. ALCOHOL can
+            // be on `blockingLayers` and must never get a form: nothing
+            // settles it, so a box to type a justification into would be
+            // an invitation to record a sentence the gate will not read.
+            const clearableBlocking = blockingLayers.filter((layer) =>
+              CLEARABLE_LAYERS.includes(layer),
+            );
+            const clearances = listing?.layerClearances ?? [];
 
             return (
               <li key={upload.id} className="space-y-4 p-4">
@@ -382,6 +458,67 @@ export default async function AdminCurationPage({
                     </div>
                   </dl>
                 </div>
+
+                {listing ? (
+                  <div
+                    id={rightsLayersSectionId(upload.id)}
+                    className="rounded-lg border border-border bg-muted p-3 text-sm"
+                  >
+                    <p className="font-medium">Rights layers</p>
+                    <p className="mt-1 text-xs text-ink-muted">
+                      One justification per layer. Clearing a layer settles that
+                      layer only — a music licence is not an answer about an
+                      identifiable person, and the gate never reads one
+                      layer&rsquo;s clearance for another.
+                    </p>
+                    {clearances.length > 0 ? (
+                      <dl className="mt-2 space-y-1 text-xs text-ink-muted">
+                        {clearances.map((recorded) => (
+                          <div key={recorded.layer}>
+                            <dt className="inline font-medium">
+                              {recorded.layer} cleared:{" "}
+                            </dt>
+                            <dd className="inline">
+                              {recorded.reason} —{" "}
+                              {recorded.clearedBy?.name ??
+                                recorded.clearedBy?.email ??
+                                recorded.clearedByUserId ??
+                                "nobody"}{" "}
+                              ({recorded.clearedBy?.role ?? "no account"}) ·{" "}
+                              {dateTimeFormat.format(recorded.clearedAt)}
+                            </dd>
+                          </div>
+                        ))}
+                      </dl>
+                    ) : null}
+                    {clearableBlocking.length === 0 ? (
+                      <p className="mt-2 text-xs text-ink-muted">
+                        {blockingLayers.length === 0
+                          ? "No layer is blocking this upload."
+                          : "No layer here is one a clearance settles. What is still blocking cannot be cleared by recording a justification."}
+                      </p>
+                    ) : (
+                      <ul className="mt-2 space-y-3">
+                        {clearableBlocking.map((layer) => (
+                          <li key={layer}>
+                            {editingMediaId === upload.id ? (
+                              <CurationClearanceForm
+                                mediaId={upload.id}
+                                layer={layer}
+                                question={LAYER_QUESTIONS.get(layer) ?? ""}
+                                action={recordClearance}
+                              />
+                            ) : (
+                              <p className="text-xs text-ink-muted">
+                                {layer} is not settled yet.
+                              </p>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                ) : null}
 
                 {!upload.hasPreview ? (
                   /*
