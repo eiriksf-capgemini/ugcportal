@@ -191,7 +191,7 @@ const buttonVariants = cva(
          * near-black surface scale (bg-surface-0..4 / bg-destructive-surface)
          * measures --primary at only 1.59-2.03:1 there in light mode, same
          * root cause as outline-neutral's own PETROL_OUTLINE_STYLE gap.
-         * --color-petrol-400 (the pre-rw9j --ring/--sidebar-primary value)
+         * --color-fjord-400 (the pre-rw9j --ring/--sidebar-primary value)
          * paired with --petrol-900 as the label (the same fill-light/label-
          * dark pairing dark mode's own --primary already uses) measures
          * 4.8-7.75:1 against every old surface and, at the time (with
@@ -199,7 +199,7 @@ const buttonVariants = cva(
          * below for why that token changed to `--color-surface-0` under
          * ugcportal-ei5c), 6.02:1 for the label on its own fill - a NEW
          * measurement this round (contrast.ts's
-         * petrol-400-fill-on-old-surface-* and, at the time,
+         * fjord-400-fill-on-old-surface-* and, at the time,
          * petrol-900-on-petrol-400), not one focus-ring-on-old-surface
          * already covered: that pairing only ever checked this same token
          * at RING_ALPHA_MODIFIER alpha,
@@ -209,11 +209,11 @@ const buttonVariants = cva(
          * filled-button treatment to design and verify.
          *
          * FIXED (ugcportal-ei5c): this used to read `text-petrol-900`, which
-         * does not compile to any rule at all - `--color-petrol-900` (the
+         * does not compile to any rule at all - `--color-fjord-900` (the
          * OKLCH near-black scale's version of this token) is declared in
          * :root, not @theme, specifically so Tailwind does NOT emit a
          * `text-`/`bg-` utility for it (see globals.css's own "stopping
-         * Tailwind emitting bg-petrol-900 and friends" comment) - confirmed
+         * Tailwind emitting bg-fjord-900 and friends" comment) - confirmed
          * empirically by compiling globals.css and checking the generated
          * utilities. The label therefore rendered in whatever colour the
          * caller happened to inherit from the page's ambient
@@ -232,21 +232,21 @@ const buttonVariants = cva(
          * genuinely declared in `@theme`, so the utility compiles, and a
          * real near-black that paints identically in both colour schemes,
          * unlike the inherited value it replaces. Its own contrast.ts
-         * pairing (`surface-0-on-petrol-400`, replacing the dead one)
+         * pairing (`surface-0-on-fjord-400`, replacing the dead one)
          * measures 7.75:1 in both colour schemes (neither token is
          * overridden per mode) - not reused from `default-tint`'s own
          * `surface-0-on-petrol-100` pairing, because that fill is
          * `--color-petrol-100` (L 0.95), lighter than this variant's
-         * `--color-petrol-400` (L 0.72), so the ratio does not carry over.
+         * `--color-fjord-400` (L 0.72), so the ratio does not carry over.
          * The upload dropzone's "Choose files" label
-         * (src/app/upload/upload-form.tsx) pastes the same `bg-petrol-400`
+         * (src/app/upload/upload-form.tsx) pastes the same `bg-fjord-400`
          * fill directly rather than going through this variant - disclosed,
          * not fixed, here (out of this bead's stated scope) but fixed by
          * ugcportal-z1nh onto this same `text-surface-0` label, with its own
          * comment on why it stays a hand-styled label rather than adopting
          * this variant wholesale.
          */
-        "default-neutral": "bg-petrol-400 text-surface-0 hover:brightness-95",
+        "default-neutral": "bg-fjord-400 text-surface-0 hover:brightness-95",
         /*
          * ugcportal-qqnt.2: the primary action on the front page's petrol-
          * GRADIENT well (`.home-hero-surface`, src/components/home/
@@ -257,7 +257,7 @@ const buttonVariants = cva(
          * label - the same fill-light/label-dark shape `default-neutral`
          * uses, and (since ugcportal-ei5c) the same `text-surface-0` label
          * token too - but a different, lighter fill (`petrol-100` here vs
-         * `petrol-400` there), so its own contrast.ts pairing rather than
+         * `fjord-400` there), so its own contrast.ts pairing rather than
          * assuming the ratio carries over. Colours and hover step are
          * exactly what the hero's own hand-styled CTA already used, moved
          * here unchanged: `surface-0-on-petrol-100` and

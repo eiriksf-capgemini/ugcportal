@@ -177,47 +177,73 @@
 @custom-variant dark (&:is(.dark *));
 
 /*
- * Petrol (ugcportal-eh5) — kept in full, demoted from dominant surface colour
- * to accent. It now drives links, focus rings, selection and the single
- * primary action, and nothing else.
+ * Fjord (ugcportal-eh5, renamed from "petrol" by ugcportal-uo15) — kept in
+ * full, demoted from dominant surface colour to accent. It now drives chart
+ * marks, the sidebar's active/focus treatment, and the focus ring on every
+ * control still living on the untouched near-black surface scale, and
+ * nothing else.
  *
- * The scale is split across two blocks, and the split is the whole point.
+ * ugcportal-uo15's whole point: this OKLCH ramp and the petrol-hex block
+ * below used to BOTH be named "petrol", at overlapping step numbers (100,
+ * 200, 500, 700, 900), so `bg-petrol-200` (this ramp, via `@theme`) and
+ * `var(--petrol-200)` (the hex scale) resolved to two different colours
+ * under the one name - a defect generator, not just a wrong colour, because
+ * either spelling passed review. Renaming this entire ramp to "fjord" -
+ * every step, not only the ones that collided - means "petrol" names
+ * exactly one scale now, and a future hex addition at any step cannot
+ * collide with this one again. See `contrast.test.ts`'s "no two live scales
+ * share a step name" guard, which enforces that generally, not only for
+ * this one historical pair.
  *
- * petrol-600 through petrol-950 fall OUTSIDE the sRGB gamut at hue 205.
- * Measured, not asserted: the browser clips them, so petrol-950 paints as
- * #001619 and petrol-800 as #004148, and their real contrast is whatever the
+ * fjord-600 through fjord-950 fall OUTSIDE the sRGB gamut at hue 205.
+ * Measured, not asserted: the browser clips them, so fjord-950 paints as
+ * #001619 and fjord-800 as #004148, and their real contrast is whatever the
  * clip happens to produce. They are declared here in :root rather than in
  * @theme, which keeps every value in eh5's scale present and referenceable
- * (K4) while stopping Tailwind emitting `bg-petrol-900` and friends — because
+ * (K4) while stopping Tailwind emitting `bg-fjord-900` and friends — because
  * a utility that exists is a utility something will eventually use, and the
  * contrast gate only measures tokens named in PAIRINGS. Filed as
  * ugcportal-acx; eh5's numbers are left as-shipped rather than quietly
- * rewritten underneath it.
+ * rewritten underneath it (ugcportal-uo15 renamed the tokens, not the
+ * numbers - acx's own gamut-clipping fix, if it ever lands, lands on
+ * `--color-fjord-*` now).
  *
  * `emits no out-of-gamut colour as a usable utility` in contrast.test.ts
  * enforces this for any future token, not just these five.
  */
 :root {
-  --color-petrol-600: oklch(0.5 0.09 205);
-  --color-petrol-700: oklch(0.42 0.08 205);
-  --color-petrol-800: oklch(0.34 0.065 205);
-  --color-petrol-900: oklch(0.27 0.05 205);
-  --color-petrol-950: oklch(0.18 0.035 205);
+  --color-fjord-600: oklch(0.5 0.09 205);
+  --color-fjord-700: oklch(0.42 0.08 205);
+  --color-fjord-800: oklch(0.34 0.065 205);
+  --color-fjord-900: oklch(0.27 0.05 205);
+  --color-fjord-950: oklch(0.18 0.035 205);
 }
 
 /*
  * The petrol palette (ugcportal-rw9j) — phase 1 of docs/design/tokens.css's
- * six adopted colours. Named the way that reference file names them
- * (`--petrol-700`, `--paper`, ...), not the way the scale above is named
- * (`--color-petrol-700`): these are a different, independently-adopted set
- * of exact sRGB hex values, not a new rung on ugcportal-axu/eh5's OKLCH
- * near-black scale, and giving them a visibly different name keeps the two
- * from being mistaken for each other.
+ * six adopted colours, and (ugcportal-uo15) the single source for every
+ * `--color-petrol-<step>` `@theme` entry below at a step this file defines
+ * (100, 200, 500): e.g. `--color-petrol-200: var(--petrol-200)`, not an
+ * independently-authored OKLCH value, so `bg-petrol-200` and
+ * `var(--petrol-200)` now resolve to the identical colour whichever spelling
+ * a caller reaches for - K1's exact requirement. A `var()` reference
+ * resolves against the cascade, not file order, but this block has to stay
+ * textually before the `@theme` block below for the same reason any
+ * "upstream source, downstream alias" pair usually reads top-to-bottom.
+ *
+ * Before ugcportal-uo15, this comment said giving the two scales "a visibly
+ * different name keeps the two from being mistaken for each other" - true
+ * of the NAMES, false of the COLOURS: this hex scale's own `--petrol-200`
+ * and the OKLCH ramp's `--color-petrol-200` were different colours sharing
+ * one step number, which is exactly the bug this bead exists to close. The
+ * OKLCH ramp (ugcportal-axu/eh5's near-black scale) is renamed to
+ * `--color-fjord-*` above and below instead, so "petrol" now names exactly
+ * one scale: this one.
  *
  * Plain hex, not OKLCH: K1 checks the rendered page against these exact
  * bytes (`#FAF7F2`, `#14555F`, ...), so there is no perceptual-scale reason
  * to round-trip them through a colour space that would reintroduce the exact
- * gamut/rounding drift documented above for --color-petrol-900..600.
+ * gamut/rounding drift documented above for --color-fjord-900..600.
  *
  * `--petrol-500` and `--petrol-200`/`--petrol-100` are docs/design/tokens.css's
  * own documented hover/tint steps, not independently invented here — see
@@ -313,15 +339,44 @@
 }
 
 @theme {
-  --color-petrol-50: oklch(0.98 0.014 205);
-  --color-petrol-100: oklch(0.95 0.028 205);
-  --color-petrol-200: oklch(0.9 0.045 205);
-  --color-petrol-300: oklch(0.82 0.065 205);
-  --color-petrol-400: oklch(0.72 0.085 205);
-  --color-petrol-500: oklch(0.6 0.095 205);
+  /*
+   * ugcportal-uo15 K1: these three are THE collision steps - the hex petrol
+   * scale above and the (now renamed) OKLCH "fjord" ramp below both used to
+   * define 100/200/500, under the shared name "petrol", at different
+   * values. Each is now a direct alias of its hex counterpart, never an
+   * independently-authored OKLCH literal, so `bg-petrol-100`/`-200`/`-500`
+   * and `var(--petrol-100)`/`-200`/`-500` always resolve to the identical
+   * colour - there is no second value left to drift back out of step with
+   * this one. (--color-petrol-700/900 are NOT given a theme entry here:
+   * nothing in src renders `bg-petrol-700`/`bg-petrol-900` today, promoting
+   * them would be new scope beyond this bead's K1-K4, and the hex tokens
+   * remain directly usable via `var(--petrol-700)`/`var(--petrol-900)`,
+   * exactly as before.)
+   */
+  --color-petrol-100: var(--petrol-100);
+  --color-petrol-200: var(--petrol-200);
+  --color-petrol-500: var(--petrol-500);
 
-  /* The deepest petrol that actually exists in sRGB; see the note above. */
-  --color-petrol-deep: oklch(0.32 0.054 205);
+  /*
+   * `--color-petrol-50` is deliberately NOT renamed to `--color-fjord-50`
+   * even though it is part of the same independently-adopted OKLCH ramp as
+   * the fjord steps below: docs/design/tokens.css never defines a
+   * `--petrol-50`, so this step has no hex counterpart to collide with
+   * today, and leaving it under "petrol" keeps alive the real-token
+   * truncation usage.test.ts's bare-utility scanner regression test depends
+   * on (`bg-petrol-500/50` mis-parsed as `bg-petrol-50`, PR #115 round 3) -
+   * renaming it would have required inventing a replacement collision
+   * fixture rather than fixing anything K1-K4 asks for. Nothing in src
+   * consumes it either way (same as `--color-fjord-deep` below); it exists
+   * for the "every declared step is referenceable" reason ugcportal-eh5's
+   * K4 originally gave for the whole ramp.
+   */
+  --color-petrol-50: oklch(0.98 0.014 205);
+  --color-fjord-300: oklch(0.82 0.065 205);
+  --color-fjord-400: oklch(0.72 0.085 205);
+
+  /* The deepest fjord that actually exists in sRGB; see the note above. */
+  --color-fjord-deep: oklch(0.32 0.054 205);
 
   /*
    * SURFACE SCALE — the deliverable.
@@ -498,7 +553,7 @@
  * One cross-cutting consequence of that split, found while building this:
  * --ring is applied globally (`* { outline-ring/80 }`), so pointing it at
  * the new --primary (needed so the focus ring is visible at all on the new
- * light canvas - the old --color-petrol-400 measures 1.3-2.4:1 against
+ * light canvas - the old --color-fjord-400 measures 1.3-2.4:1 against
  * --paper) would otherwise also apply to every focusable control still
  * living on the untouched near-black surface scale. Fixed, not merely
  * flagged (review round 3, after the no-fix version of this comment
@@ -574,14 +629,22 @@
   --selection-foreground: var(--petrol-900);
 
   /*
-   * Nothing charts yet. These are kept in the petrol family plus one neutral
-   * so the tokens are at least legible on the canvas and in a card, which the
-   * contrast gate enforces. A real categorical ramp is a job for whoever first
-   * ships a chart.
+   * Nothing charts yet. These are kept in the petrol/fjord family plus one
+   * neutral so the tokens are at least legible on the canvas and in a card,
+   * which the contrast gate enforces. A real categorical ramp is a job for
+   * whoever first ships a chart.
+   *
+   * ugcportal-uo15 side effect, called out in that bead's PR body with
+   * before/after hex: `--chart-1` and `--chart-4` sit on the two steps (200,
+   * 500) this bead moved onto the hex petrol scale, so their RESOLVED colour
+   * changes even though their own declaration (`var(--color-petrol-200)`/
+   * `var(--color-petrol-500)`) is textually unchanged. `--chart-2`/`--chart-3`
+   * keep their original OKLCH values - only their token NAME moved, to
+   * `--color-fjord-300`/`--color-fjord-400`.
    */
   --chart-1: var(--color-petrol-200);
-  --chart-2: var(--color-petrol-300);
-  --chart-3: var(--color-petrol-400);
+  --chart-2: var(--color-fjord-300);
+  --chart-3: var(--color-fjord-400);
   --chart-4: var(--color-petrol-500);
   --chart-5: var(--color-ink-muted);
 
@@ -589,12 +652,12 @@
 
   --sidebar: var(--color-surface-1);
   --sidebar-foreground: var(--color-ink);
-  --sidebar-primary: var(--color-petrol-400);
+  --sidebar-primary: var(--color-fjord-400);
   --sidebar-primary-foreground: var(--color-surface-0);
   --sidebar-accent: var(--color-surface-2);
   --sidebar-accent-foreground: var(--color-ink);
   --sidebar-border: var(--color-line);
-  --sidebar-ring: var(--color-petrol-400);
+  --sidebar-ring: var(--color-fjord-400);
 }
 
 /*
@@ -637,7 +700,7 @@
  * `focus-visible:border-ring`) resolves against whichever value is in scope
  * on that element, so a control on one of these surfaces is correct
  * automatically, including ones added after this comment, with no
- * per-component override to remember. --color-petrol-400 is the value
+ * per-component override to remember. --color-fjord-400 is the value
  * --ring held before this bead - already verified against every one of
  * these surfaces (the focus-ring-on-old-surface pairing in contrast.ts), so
  * this is a revert, scoped to exactly the surfaces that still need it.
@@ -654,7 +717,7 @@
 .bg-secondary,
 .bg-destructive-surface,
 .bg-sidebar {
-  --ring: var(--color-petrol-400);
+  --ring: var(--color-fjord-400);
 }
 
 @layer base {

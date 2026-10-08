@@ -673,7 +673,7 @@ export function findAlphaColorUtilities(
  * for (`border-style`, `background-size`, `text-align`), so they are
  * excluded on their own merits.
  *
- * A bare candidate that does not compile AT ALL (`--color-petrol-900` is the
+ * A bare candidate that does not compile AT ALL (`--color-fjord-900` is the
  * real example: declared in globals.css but deliberately kept outside
  * `@theme`, so `text-petrol-900` is not a Tailwind utility at all - see
  * ugcportal-ei5c, which found button.tsx's default-neutral variant shipping
