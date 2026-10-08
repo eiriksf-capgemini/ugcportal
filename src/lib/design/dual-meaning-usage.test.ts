@@ -259,9 +259,18 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
   // labels now do too (ugcportal-qnq9.16, item 4 of the lows deferred from
   // PR #93's round-6 review — TEXT_LABEL_CLASS, audited below), so this
   // file carries no literal "text-ink" of its own left to pin.
+  // Raised from text-foreground: 2 / text-muted-foreground: 5 by
+  // ugcportal-15r's AttestationFields, which renders directly on
+  // --background like the tag picker beside it (its own legend, each
+  // question's legend, and one label per radio - the yes/no pairs, the three
+  // authorship options - take text-foreground; the block's intro, every "why
+  // we ask" line and each question's own help text take
+  // text-muted-foreground). No new token and no new context: the same two
+  // the TagPicker fieldset immediately below it already uses, on the same
+  // page canvas, which is the case this whole audit calls correct.
   "src/app/upload/upload-form.tsx": {
-    "text-foreground": 2,
-    "text-muted-foreground": 5,
+    "text-foreground": 7,
+    "text-muted-foreground": 8,
   },
   // text-ink: 1 (low finding 5) - the queued file's name, on the upload
   // page's own plain canvas (ugcportal-n3c).

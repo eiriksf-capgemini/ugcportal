@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { completeAttestationAnswers } from "@/lib/test-support/attestation";
+import { CURRENT_ATTESTATION_VERSION } from "@/lib/attestation";
 import { CURRENT_CHECKLIST_VERSION } from "@/lib/resale-rights";
 
 /**
@@ -36,6 +38,16 @@ const SELLABLE_UPLOAD = {
       validUntil: null,
       reviewedBy: { role: "ADMIN" },
     },
+  },
+  // The uploader's own rights attestation (ugcportal-15r). Built from the
+  // shared fixture rather than written out, for the reason the checklist
+  // version one line up is a constant: a hand-listed set of answers stops
+  // covering every question the day a tenth is added, and this fixture's job
+  // is to clear the gate so the write race is what is under test.
+  attestation: {
+    attestedByUserId: "owner-1",
+    attestationVersion: CURRENT_ATTESTATION_VERSION,
+    ...completeAttestationAnswers(),
   },
   listing: {
     depictsPeople: false,

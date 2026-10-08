@@ -1,3 +1,5 @@
+import type { AttestationSubmission } from "@/lib/attestation";
+
 import {
   cancelledFailure,
   failureForResponse,
@@ -86,6 +88,14 @@ export async function uploadItem(
   /** Alt text and caption chosen for this file (ugcportal-gwr). */
   altText = "",
   caption = "",
+  /**
+   * The rights attestation chosen for this file (ugcportal-15r). LAST and
+   * optional for the reason `tags` gives: every existing caller and test
+   * keeps working unchanged. `undefined` makes a request POST /api/media
+   * answers 400, which is the honest outcome for a caller that did not
+   * collect one.
+   */
+  attestation?: AttestationSubmission,
 ): Promise<void> {
   dispatch({ type: "started", id });
 
@@ -96,6 +106,7 @@ export async function uploadItem(
       tags,
       altText,
       caption,
+      attestation,
       signal,
       onProgress: ({ loadedBytes }) =>
         dispatch({ type: "progress", id, loadedBytes }),
@@ -146,6 +157,15 @@ export type QueueEntry = {
    */
   altText: string;
   caption: string;
+  /**
+   * The rights attestation given at the moment the file was ADDED
+   * (ugcportal-15r), captured per entry for the reason `tags` is, and with
+   * more at stake: a retry that re-read the form would re-send a WARRANTY the
+   * uploader did not give about this file. It is `AttestationSubmission |
+   * undefined` rather than required so `enqueueFiles`' existing callers and
+   * tests keep compiling; `UploadForm` never queues a file without one.
+   */
+  attestation?: AttestationSubmission;
 };
 
 /**
@@ -178,6 +198,13 @@ export function enqueueFiles(
    */
   altText = "",
   caption = "",
+  /**
+   * The rights attestation for this batch (ugcportal-15r), copied into each
+   * entry for the same reason `tags` is. `UploadForm` has already refused the
+   * add if it is incomplete — see `completedAttestation` in
+   * ./attestation-fields.
+   */
+  attestation?: AttestationSubmission,
 ): { items: QueueItem[]; entries: QueueEntry[] } {
   const pairs = files.map((file) => ({
     item: makeQueueItem(nextId(), file),
@@ -194,6 +221,7 @@ export function enqueueFiles(
         tags: [...tags],
         altText,
         caption,
+        attestation,
       })),
   };
 }
@@ -231,6 +259,7 @@ export async function drainQueue(
       entry.tags,
       entry.altText,
       entry.caption,
+      entry.attestation,
     );
   }
 }

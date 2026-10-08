@@ -14,6 +14,17 @@ import { ACCEPTED_MIME_TYPES } from "@/lib/media-rules";
 
 import { altTextFieldError, captionFieldError } from "./alt-text";
 import {
+  ATTESTATION_AUTHORSHIP_QUESTION,
+  ATTESTATION_QUESTIONS,
+  type AttestationDraft,
+  attestationDraftError,
+  completedAttestation,
+  emptyAttestationDraft,
+  setAttestationAnswer,
+  setAttestationAuthorship,
+  unansweredAttestationFields,
+} from "./attestation-fields";
+import {
   acceptedTypesSummary,
   cancelledFailure,
   mayRetry,
@@ -111,6 +122,24 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
   const [attemptedFilenames, setAttemptedFilenames] = useState<
     readonly string[] | null
   >(null);
+
+  /**
+   * The rights attestation for the next batch (ugcportal-15r), and whether
+   * an add has already been refused for it.
+   *
+   * TWO PIECES OF STATE HERE AND NOT ONE, unlike `attemptedFilenames` above
+   * — which merged `altTextTouched` into itself precisely to avoid this
+   * shape. The difference is that the alt-text pair represented ONE fact
+   * ("refused, with these filenames"); these two represent the answers and
+   * whether anyone has tried yet, which are independent. The draft changes
+   * on every click and the refusal has to SURVIVE those clicks until the
+   * last question is answered — otherwise answering question one clears the
+   * marks from under the eight the visitor has not reached yet.
+   */
+  const [attestation, setAttestation] = useState<AttestationDraft>(
+    emptyAttestationDraft,
+  );
+  const [attestationRefused, setAttestationRefused] = useState(false);
 
   /**
    * The authoritative work queue, OUTSIDE React state on purpose.
@@ -355,6 +384,34 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
       }
 
       /*
+       * THE RIGHTS ATTESTATION HAS TO BE COMPLETE (ugcportal-15r K1), and —
+       * like the alt-text gate above — checked HERE, before anything is
+       * queued or sent.
+       *
+       * The server refuses an incomplete attestation too (POST /api/media,
+       * 400), so this is an affordance rather than the boundary. It is still
+       * worth having for the reason every other precheck on this page is: an
+       * upload refused after the whole multipart body has been buffered
+       * costs the visitor the entire file, once per file in the batch.
+       *
+       * REFUSES THE WHOLE DROP rather than queueing the files as `failed`,
+       * the same call the alt-text gate makes above and for the same reason:
+       * a queue row reports something the server would refuse about THE
+       * FILE, and an unanswered rights question is not about any particular
+       * file.
+       *
+       * `completedAttestation` returns null for exactly the state
+       * `attestationDraftError` reports on, so there is one rule and the
+       * message on screen cannot describe a different condition from the one
+       * that did the blocking.
+       */
+      const submission = completedAttestation(attestation);
+      if (submission === null) {
+        setAttestationRefused(true);
+        return;
+      }
+
+      /*
        * CLEAR a stale refusal (round 5 finding): `attemptedFilenames` is only
        * ever WRITTEN by the gate above, on refusal — nothing on this success
        * path used to touch it. So a visitor who hit the K2 filename-equality
@@ -373,6 +430,9 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
        * files if not for the field itself.
        */
       if (attemptedFilenames !== null) setAttemptedFilenames(null);
+      // Same reasoning for the attestation's own refusal flag: an add that
+      // succeeded is not a refusal anyone should still be looking at.
+      if (attestationRefused) setAttestationRefused(false);
 
       /*
        * The tag NAMES for this batch, resolved from the ticked slugs at the
@@ -393,6 +453,7 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
         tagNames,
         altText.trim(),
         caption.trim(),
+        submission,
       );
       dispatchQueue({ type: "queued", items: queued });
 
@@ -402,6 +463,7 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
           tags: entry.tags,
           altText: entry.altText,
           caption: entry.caption,
+          attestation: entry.attestation,
         });
         queueRef.current.push(entry);
       }
@@ -411,6 +473,8 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
     [
       altText,
       attemptedFilenames,
+      attestation,
+      attestationRefused,
       availableTags,
       caption,
       drain,
@@ -536,6 +600,11 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
         tags: queued.tags,
         altText: queued.altText,
         caption: queued.caption,
+        // The attestation the FIRST attempt carried. Re-reading the form
+        // here would re-send a warranty about this file that its uploader
+        // has not given — the strongest case on this page for why a retry
+        // replays rather than rebuilds.
+        attestation: queued.attestation,
       });
       drain();
     },
@@ -674,6 +743,19 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
           if (attemptedFilenames !== null) setAttemptedFilenames(null);
         }}
         onCaptionChange={setCaption}
+      />
+
+      <AttestationFields
+        draft={attestation}
+        refused={attestationRefused}
+        onAuthorshipChange={(value) =>
+          setAttestation((current) => setAttestationAuthorship(current, value))
+        }
+        onAnswerChange={(field, value) =>
+          setAttestation((current) =>
+            setAttestationAnswer(current, field, value),
+          )
+        }
       />
 
       <TagPicker
@@ -926,6 +1008,157 @@ function AltTextFields({
         {captionError ?? ""}
       </p>
     </div>
+  );
+}
+
+/**
+ * The uploader's own rights attestation for the next files (ugcportal-15r).
+ *
+ * WHY THE UPLOADER AND NOT AN ADMIN. docs/legal/manual-upload-rights-review.md
+ * §3.1: every per-upload rights fact the sellability gate reads today is an
+ * admin's assertion about a file the admin did not make. An admin looking at a
+ * landscape cannot know whether the person who uploaded it took it. These nine
+ * questions are the only place anyone asks the one person who can know.
+ *
+ * YES/NO RADIOS, NOT CHECKBOXES, and that is this component's single most
+ * load-bearing decision. A checkbox has two states and the resting one is
+ * "no" — so a question nobody read would be stored as a warranty that, for
+ * instance, nobody under 18 is shown. ugcportal-15r K4 is exactly that
+ * conflation ("not asked" and "answered no" must stay distinguishable), and
+ * this is where it is either preserved or lost: a pair of radios with neither
+ * selected has a third state, and `unansweredAttestationFields` reports it.
+ * The same reason the wire format spells `yes`/`no` out rather than relying on
+ * a part being present (see ATTESTATION_YES in src/lib/attestation.ts).
+ *
+ * THE QUESTIONS ARE MAPPED, NOT WRITTEN OUT. `ATTESTATION_QUESTIONS` is the
+ * single list the server's parser, the gate's completeness check and the legal
+ * document test all read too, so a question added to the schema and the parser
+ * cannot be missing here — and one rendered here cannot be unstored.
+ *
+ * EACH QUESTION IS ITS OWN `<fieldset>` with a `<legend>`, nested inside the
+ * block's outer one. A `<legend>` is what associates a name with a SET of form
+ * controls, and each yes/no pair is such a set; `aria-label` on the inputs
+ * would name the options ("yes") without ever naming what is being answered.
+ * The two radios in a pair share a `name`, which is what makes them one group
+ * for the keyboard.
+ *
+ * `refused` is a PROP rather than state watched here, exactly like
+ * `AltTextFields`' `attemptedFilenames`: "has the visitor tried and failed"
+ * belongs to the thing that tried — `addFiles` in the parent — not to a
+ * control watching its own value. Marking nine questions red before anyone has
+ * done anything would be the alternative.
+ */
+function AttestationFields({
+  draft,
+  refused,
+  onAuthorshipChange,
+  onAnswerChange,
+}: {
+  draft: AttestationDraft;
+  refused: boolean;
+  onAuthorshipChange: (value: string) => void;
+  onAnswerChange: (
+    field: (typeof ATTESTATION_QUESTIONS)[number]["field"],
+    value: boolean,
+  ) => void;
+}) {
+  const groupId = useId();
+  const errorId = useId();
+  // Computed with the SAME functions `addFiles` gated on, so what is marked
+  // and what blocked cannot disagree — the rule AltTextFields follows for
+  // `altTextFieldError`.
+  const unanswered = new Set(unansweredAttestationFields(draft));
+  const error = refused ? attestationDraftError(draft) : null;
+
+  return (
+    <fieldset
+      className="mt-6"
+      data-upload-attestation=""
+      aria-describedby={errorId}
+    >
+      <legend className="text-sm font-medium text-foreground">
+        Your rights in these files
+        <span aria-hidden="true"> *</span>
+        <span className="sr-only"> (every question required)</span>
+      </legend>
+      <p className="mt-1 max-w-prose text-xs text-muted-foreground">
+        Applies to files you add from now on. You are the only person who can
+        answer these, and your answers are stored with each file. Answer
+        honestly — a wrong answer here is something the operator may act on.
+      </p>
+
+      <fieldset className="mt-4" data-attestation-question={
+        ATTESTATION_AUTHORSHIP_QUESTION.field
+      }>
+        <legend className="max-w-prose text-sm text-foreground">
+          {ATTESTATION_AUTHORSHIP_QUESTION.question}
+          {unanswered.has(ATTESTATION_AUTHORSHIP_QUESTION.field) && refused ? (
+            <span className="ml-2 text-xs text-destructive">Not answered</span>
+          ) : null}
+        </legend>
+        <p className="mt-1 max-w-prose text-xs text-muted-foreground">
+          {ATTESTATION_AUTHORSHIP_QUESTION.why}
+        </p>
+        <div className="mt-2 flex flex-col gap-1">
+          {ATTESTATION_AUTHORSHIP_QUESTION.options.map((option) => (
+            <label
+              key={option.value}
+              className="flex items-center gap-2 text-sm text-foreground"
+            >
+              <input
+                type="radio"
+                name={`${groupId}-${ATTESTATION_AUTHORSHIP_QUESTION.field}`}
+                value={option.value}
+                checked={draft.authorship === option.value}
+                onChange={() => onAuthorshipChange(option.value)}
+                className="size-4 accent-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+              />
+              {option.label}
+            </label>
+          ))}
+        </div>
+      </fieldset>
+
+      {ATTESTATION_QUESTIONS.map(({ field, question, why }) => (
+        <fieldset key={field} className="mt-4" data-attestation-question={field}>
+          <legend className="max-w-prose text-sm text-foreground">
+            {question}
+            {unanswered.has(field) && refused ? (
+              <span className="ml-2 text-xs text-destructive">Not answered</span>
+            ) : null}
+          </legend>
+          <p className="mt-1 max-w-prose text-xs text-muted-foreground">{why}</p>
+          <div className="mt-2 flex gap-5">
+            {[
+              { label: "Yes", value: true },
+              { label: "No", value: false },
+            ].map((option) => (
+              <label
+                key={option.label}
+                className="flex items-center gap-2 text-sm text-foreground"
+              >
+                <input
+                  type="radio"
+                  name={`${groupId}-${field}`}
+                  value={option.label.toLowerCase()}
+                  checked={draft.answers[field] === option.value}
+                  onChange={() => onAnswerChange(field, option.value)}
+                  className="size-4 accent-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                />
+                {option.label}
+              </label>
+            ))}
+          </div>
+        </fieldset>
+      ))}
+
+      {/* Rendered unconditionally, empty when there is nothing wrong — the
+          same rule the alt-text error and the tag cap message follow, so it
+          is announced rather than silently inserted. */}
+      <p id={errorId} role="alert" className="mt-3 text-xs text-destructive">
+        {error ?? ""}
+      </p>
+    </fieldset>
   );
 }
 
