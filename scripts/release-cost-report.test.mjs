@@ -359,6 +359,17 @@ describe("classifySeverity (severity is read from the reviewer's words, never gu
       expect(classifySeverity("`121 high --base main`: 0 findings.")).toMatchObject({ medium: 0 });
       expect(classifySeverity("`121 high --pr 201`: 0 findings.")).toMatchObject({ medium: 0 });
     });
+
+    it("requires the flag to be on the same line as the count: a line break before '--word' is not a CLI invocation (ugcportal-zo8n round 2)", () => {
+      // \s in the flag-exclusion regex also matches "\n", so a severity count
+      // followed by a line break and then a flag-shaped token on the NEXT
+      // line was wrongly excluded as if it were `121 high --comment` glued
+      // to the same line. A real verdict followed by an unrelated
+      // "--comment"-shaped note on its own line must still count.
+      expect(classifySeverity("Found 2 medium\n--comment next round")).toMatchObject({ medium: 2, low: 0, stated: true });
+      // Same-line flag is still excluded -- this isn't just deleting the check.
+      expect(classifySeverity("Found 2 medium --comment next round")).toMatchObject({ medium: 0 });
+    });
   });
 });
 

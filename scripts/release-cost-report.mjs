@@ -488,7 +488,12 @@ export function classifySeverity(body) {
     // own prose does this constantly, including in this PR's own body) and
     // must still count.
     if (text[m.index - 1] === "#") continue;
-    if (/^\s*--[A-Za-z]/.test(text.slice(m.index + m[0].length, m.index + m[0].length + 8))) continue;
+    // The flag must be on the same line as the count: `[ \t]`, not `\s`,
+    // which also matches "\n" -- a severity count followed by a line break
+    // and then a flag-shaped token on the NEXT line (e.g. a verdict line
+    // followed by a separate "--comment" invocation note) is not the same
+    // quoted-CLI-invocation shape as `121 high --comment` and must still count.
+    if (/^[ \t]*--[A-Za-z]/.test(text.slice(m.index + m[0].length, m.index + m[0].length + 8))) continue;
     if (/^low/i.test(m[2])) summaryLow = Math.max(summaryLow, n);
     else summaryMedium = Math.max(summaryMedium, n);
   }
