@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { toGalleryItem } from "@/lib/gallery-items";
+import { completeAttestationRow } from "@/lib/test-support/attestation";
 import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db";
 
 /**
@@ -241,6 +242,14 @@ beforeAll(async () => {
         originalName: `${item.id}.png`,
         altText: item.what,
       },
+    });
+
+    // The uploader's own rights attestation (ugcportal-15r), so a refusal at
+    // the price route below is never about a missing declaration. Written on
+    // every item including the ones with no listing, which keeps the one
+    // reason an item is refused the one this file is about.
+    await prisma.mediaAttestation.create({
+      data: completeAttestationRow(item.id, OPERATOR),
     });
 
     if (item.depictsAlcohol !== "none") {

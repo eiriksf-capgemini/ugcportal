@@ -63,6 +63,22 @@ export const BLOCKER_MESSAGES: Record<SellabilityBlocker, string> = {
     "Cleared against a retired version of the checklist. Re-review against the current one.",
   upload_owner_unknown:
     "This file records no uploader, so there is nobody whose clearance could cover it.",
+  // The uploader's own declaration (ugcportal-15r). Six sentences rather than
+  // one, because each names a different next action and three of them are not
+  // an admin's to take — an admin reading "the attestation is invalid" would
+  // have no idea whether to re-review, to find the uploader, or to stop.
+  attestation_missing:
+    "The uploader was never asked whether they have the rights to this file, so there is no declaration to rely on. Uploads made before the rights questions existed are all in this state; there is no way to answer them retrospectively on the uploader's behalf.",
+  attestation_incomplete:
+    "This file's rights declaration is missing an answer. It cannot have been written by the upload form, which refuses an incomplete one — so treat it as a data fault and look at where the row came from.",
+  attestation_not_by_uploader:
+    "The rights declaration on this file was made by somebody other than the person who uploaded it. A declaration is only worth something from the person who can actually know, so this one does not count.",
+  attestation_version_retired:
+    "The uploader declared against a retired version of the rights questions. The questions have changed since, so their answers no longer cover what is now asked.",
+  attestation_rights_disclaimed:
+    "The uploader says they are neither the author of this file nor licensed by the author. There is nothing for them to grant, so nothing here can be sold whatever the triage says.",
+  attestation_uploader_not_adult:
+    "The uploader declared that they are under 18. A resale licence granted by a minor is at best voidable, so this file cannot be offered for sale.",
   not_listed_for_sale:
     "This upload hasn't been put forward for sale, so nobody has triaged what is in it.",
   triage_incomplete: "This upload has not been triaged yet.",

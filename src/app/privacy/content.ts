@@ -439,6 +439,29 @@ export const MODEL_COVERAGE: Readonly<
   ResaleRightsEvent: { category: "audit" },
   MediaListing: { category: "rights" },
   MediaRightsClearance: { category: "rights" },
+  // The uploader's own rights attestation (ugcportal-15r): nine answers they
+  // give about each of their own files, with the version of the text they
+  // were shown and when.
+  //
+  // WITH THE RIGHTS RECORDS, NOT WITH THE UPLOADS, which is the opposite
+  // call from MediaAdvertisingDisclosure and CommercialLink below — both of
+  // which are also "the uploader's own declaration about their own item".
+  // The difference is what the record is FOR and who reads it: those two
+  // exist to make an item lawful to publish and are partly PUBLIC (the
+  // advertising label, the link's destination). This one exists solely to
+  // decide whether an item may be SOLD, it is read by the same sellability
+  // gate as the review and the triage beside it (src/lib/resale-rights.ts),
+  // and no part of it is ever rendered to a visitor.
+  //
+  // THE CATEGORY'S PROSE DOES NOT YET NAME THIS RECORD, and that is a known
+  // gap rather than an oversight: its `what` still describes only the
+  // administrator's side ("an administrator works through a rights review
+  // ... per item, the triage answers"). Writing the uploader's declaration
+  // into it changes the page's authored digest, which puts /privacy back in
+  // draft until the sign-off in src/lib/legal/contact.ts is re-recorded by a
+  // human — the sequence ugcportal-mj50 and ugcportal-qnq9.2.2 each went
+  // through for the two records below. Filed as ugcportal-fsdf.
+  MediaAttestation: { category: "rights" },
   // The advertising disclosure sits with the uploads rather than with the
   // rights records, even though MediaListing.sponsoredContent looks similar:
   // that one answers "may this be RESOLD" for an administrator, and this one

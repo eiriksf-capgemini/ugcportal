@@ -573,7 +573,7 @@ the evidence:
 3. **Then decide, per account, whether it should exist at all.**
 
    **Do not reflexively delete the `User` rows.** `DELETE FROM User` is not
-   a narrow operation. Enumerated from `prisma/schema.prisma` as of 457323d
+   a narrow operation. Enumerated from `prisma/schema.prisma` as of 165130d
    (`ugcportal-vsm`) by walking every `onDelete: Cascade` relation
    transitively from `User`, and re-derived the same way for
    `ugcportal-qnq9.1` when `MediaAdvertisingDisclosure` was added and again
@@ -592,6 +592,7 @@ the evidence:
    | `MediaRightsClearance` | `MediaListing` | the clearance on each upload |
    | `MediaAdvertisingDisclosure` | `Media` | the advertising-disclosure record: whether a benefit was received, what it was, which brand it came from, its market value, and the label (`ugcportal-qnq9.1`). The `BenefitSource` brand row itself is **not** destroyed — it is `onDelete: Restrict`, shared vocabulary rather than one person's data |
    | `CommercialLink` | `Media` | every commercial outbound link on the upload: its destination, its affiliate network and which brand it points at (`ugcportal-qnq9.2.1`). The `BenefitSource` it names is **not** destroyed, for the same `onDelete: Restrict` reason as the row above — so deleting a user erases where their links pointed while leaving the brand vocabulary, and the brand's alcohol answer, intact for everyone else |
+   | `MediaAttestation` | `Media` | **the uploader's own rights declaration** about each of their files (`ugcportal-15r`): on what basis they could license it, whether it shows identifiable people or anyone under 18, whether it carries music or another creative contributor or a sponsorship, whether it is AI-generated, and whether they declared themselves 18 or over — with the version of the text they were shown. Reached twice, by two `onDelete: Cascade` edges that agree — through `Media` (listed here) and directly through `MediaAttestation.attestedBy`, since the attester is always the file's own owner. Nothing re-asks these questions, so an upload that survived this would be permanently unsellable (`attestation_missing`) |
    | `ResaleRightsReview` | `ResaleRightsReview.uploader` | **the uploader's standing rights clearance**, with its `evidenceKey`/`evidenceSha256` pointers into `rights-evidence/` |
    | `InstagramAccount` | `InstagramAccount.connectedBy` | **the connected account including `accessTokenEncrypted`** — note this is whoever *ran* the connect, not a property of the account being deleted |
 

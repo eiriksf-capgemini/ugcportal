@@ -1,9 +1,16 @@
 import {
   ResaleRightsRoute,
   ResaleRightsStatus,
+  MediaAuthorship,
   RightsLayer,
   type Role,
 } from "@/generated/prisma/enums";
+import {
+  ACCEPTED_ATTESTATION_VERSIONS,
+  ATTESTATION_QUESTIONS,
+  type AttestationAnswers,
+  isMediaAuthorship,
+} from "@/lib/attestation";
 
 /**
  * The sellability gate (ugcportal-0ss, re-anchored by ugcportal-vsm),
@@ -124,6 +131,17 @@ export type SellabilityBlocker =
   | "checklist_version_retired"
   | "reviewer_not_admin"
   | "upload_owner_unknown"
+  // The uploader's own declaration (ugcportal-15r). Separate codes rather
+  // than one `attestation_invalid`, because each one names a different
+  // person's next action: the uploader re-attests, an admin stops ticking
+  // boxes on someone's behalf, everyone re-reads a revised document, and the
+  // last two are not fixable at all.
+  | "attestation_missing"
+  | "attestation_incomplete"
+  | "attestation_not_by_uploader"
+  | "attestation_version_retired"
+  | "attestation_rights_disclaimed"
+  | "attestation_uploader_not_adult"
   | "not_listed_for_sale"
   | "triage_incomplete"
   | "triage_not_signed_by_admin"
@@ -199,8 +217,32 @@ export type GateListing = {
 };
 
 /**
+ * The uploader's own rights declaration about this file (ugcportal-15r), as
+ * the gate sees it.
+ *
+ * EVERY ANSWER IS A PLAIN `boolean`, NOT `boolean | null`, which is the one
+ * structural difference from `GateListing` above and the point of
+ * ugcportal-15r K4. A triage column is nullable because an admin answers the
+ * questions one screen at a time, long after the row exists, so `null` has to
+ * mean "not answered yet". An attestation row is written complete or not at
+ * all (`NOT NULL` on every column, no defaults — see the migration), so there
+ * is no half-answered state for a `?? false` to turn into a warranty. "Not
+ * asked" is `attestation: null` on the upload, and nothing can coerce the
+ * absence of a row into a row of `no`s.
+ *
+ * `attestedByUserId` is typed nullable anyway, like `GateUpload.userId` above
+ * and for the same stated reason: the column is `NOT NULL` under the real
+ * schema, so an ordinary Prisma read cannot produce null, and the guard is
+ * for a hand-assembled input.
+ */
+export type GateAttestation = AttestationAnswers & {
+  attestedByUserId: string | null;
+  attestationVersion: string;
+};
+
+/**
  * An upload as the gate sees it: the Media row, its uploader's standing
- * review, and its sale record.
+ * review, its own attestation, and its sale record.
  *
  * Shaped like the Prisma row so callers can pass the result of
  * MEDIA_GATE_SELECT straight in. Note the direction — the review hangs off
@@ -211,6 +253,13 @@ export type GateListing = {
 export type GateUpload = {
   userId: string | null;
   user: { resaleRightsReview: GateReview | null } | null;
+  /**
+   * `null` means NOBODY ASKED THE UPLOADER ANYTHING — the state every upload
+   * made before ugcportal-15r is in, and the state an upload written by any
+   * future second writer would be in. It is never "the uploader said no"; see
+   * GateAttestation.
+   */
+  attestation: GateAttestation | null;
   listing: GateListing | null;
 };
 
@@ -242,6 +291,29 @@ const REVIEW_GATE_SELECT = {
 export const MEDIA_GATE_SELECT = {
   userId: true,
   user: { select: { resaleRightsReview: { select: REVIEW_GATE_SELECT } } },
+  // The uploader's own declaration (ugcportal-15r). Written out rather than
+  // spread from ATTESTATION_QUESTIONS for the same reason the listing's keys
+  // are written out below — Prisma infers the row type from the literal — and
+  // kept honest the same way: GateAttestation requires every answer, so a
+  // missing key here fails `tsc` at the call sites that pass this select's
+  // result to the gate, and "selects every attested answer the gate reads"
+  // (resale-rights.test.ts) asserts these keys are exactly
+  // ATTESTATION_QUESTIONS' fields plus the three below.
+  attestation: {
+    select: {
+      attestedByUserId: true,
+      attestationVersion: true,
+      authorship: true,
+      ownOriginalNotFromWeb: true,
+      showsIdentifiablePeople: true,
+      showsMinors: true,
+      containsMusicNotOwned: true,
+      otherCreativeContributor: true,
+      brandOrSponsorship: true,
+      aiGenerated: true,
+      uploaderIsAdult: true,
+    },
+  },
   listing: {
     select: {
       // One key per TRIAGE_FACTS entry, plus the evidence pointer PEOPLE
@@ -695,6 +767,114 @@ export function triageBlocker(listing: GateListing): SellabilityBlocker | null {
 }
 
 /**
+ * Item 7 of the target contract in docs/legal/manual-upload-rights-review.md
+ * §4: "an uploader attestation exists for this file, at an accepted
+ * attestation version, made by `Media.userId` (not by an admin on their
+ * behalf)." Returns the blocker, or null when the declaration holds.
+ *
+ * `uploaderUserId` is passed in rather than read off a field on the
+ * attestation, so the comparison is always against the file's OWN owner.
+ * There is no second value here for the owner check to disagree with, which
+ * is the same construction `uploaderClearanceBlocker` relies on one function
+ * down.
+ *
+ * WHAT THIS DOES NOT DO, deliberately, and this is the boundary of
+ * ugcportal-15r rather than an omission. Six of the nine answers — people,
+ * minors, music, another contributor, brand/sponsorship, AI — are the same
+ * questions MediaListing's triage asks an ADMIN, and this function reads none
+ * of them. Nothing here decides what it means when the uploader says "yes,
+ * there is music" and the admin triaged `containsMusic: false`, or the other
+ * way round. That question is open, it is not this bead's to settle, and
+ * answering it by quietly taking the stricter of the two would hard-code a
+ * policy nobody chose into a function whose other rules are all written down.
+ * The answers are stored and attributed so the disagreement can be SEEN
+ * (ugcportal-vlnn renders them side by side); what it costs is
+ * ugcportal-9pic.
+ *
+ * The three it does act on are the three nobody else asks, so no disagreement
+ * is possible:
+ *
+ *   - `authorship: NEITHER` — the uploader says they are neither the author
+ *     nor licensed by the author. There is nothing for them to grant, and no
+ *     admin triage flag expresses this at all (§3.1).
+ *   - `uploaderIsAdult: false` — §3.2: under vergemålsloven a resale licence
+ *     granted by someone under 18 is at best voidable. Blocking on an
+ *     explicit "no" is reading the answer that was collected; it is not age
+ *     VERIFICATION, which nothing here does and which is ugcportal-5pik.
+ *   - a version no longer accepted — nobody but this module tracks that.
+ */
+export function attestationBlocker(
+  attestation: GateAttestation | null,
+  uploaderUserId: string,
+): SellabilityBlocker | null {
+  // (a) Fail closed, and fail closed with a code that says SILENCE rather
+  // than a code that says no. Every upload made before ugcportal-15r is in
+  // this state, as is anything a future second write path creates without an
+  // attestation — which is the state K3's repository scan exists to keep from
+  // arriving unnoticed.
+  if (!attestation) {
+    return "attestation_missing";
+  }
+
+  // (b) Every answer present and of the right shape.
+  //
+  // The columns are `NOT NULL` and `GateAttestation` types them `boolean`, so
+  // an ordinary Prisma read cannot reach this branch — which is exactly why
+  // it is here rather than left to the type. The input this guards is the
+  // hand-assembled one: a fixture, a hand-written query, a future select that
+  // maps a column wrong. `typeof value === "boolean"` rather than a null
+  // check, for the reason `isTriaged` gives above: `undefined === null` is
+  // false, and that specific reading is how a fail-open got into this module
+  // once already.
+  //
+  // Iterated over ATTESTATION_QUESTIONS rather than listed, so a tenth
+  // question added to the form and the schema cannot be left unchecked here.
+  for (const { field } of ATTESTATION_QUESTIONS) {
+    if (typeof attestation[field] !== "boolean") {
+      return "attestation_incomplete";
+    }
+  }
+  if (!isMediaAuthorship(attestation.authorship)) {
+    return "attestation_incomplete";
+  }
+
+  // (c) Made by the uploader, not by an admin on their behalf. This is the
+  // one check that makes the table worth more than the triage it sits beside:
+  // an attestation signed by somebody who did not make the file is the same
+  // admin-asserts-what-they-cannot-know problem §3.1 describes, wearing the
+  // uploader's name.
+  if (
+    typeof attestation.attestedByUserId !== "string" ||
+    attestation.attestedByUserId !== uploaderUserId
+  ) {
+    return "attestation_not_by_uploader";
+  }
+
+  // (d) At a version still in force. A revision that adds or narrows a
+  // question retires the old string, and every upload attested under it stops
+  // selling until its uploader answers the new text.
+  if (!ACCEPTED_ATTESTATION_VERSIONS.has(attestation.attestationVersion)) {
+    return "attestation_version_retired";
+  }
+
+  // (e) The uploader says there is nothing for them to grant. No clearance
+  // settles this and none is consulted — the same `settledBy: "nothing"`
+  // shape ALCOHOL has in TRIAGE_FACTS, for the same reason: the fix is a
+  // different file, not a signature.
+  if (attestation.authorship === MediaAuthorship.NEITHER) {
+    return "attestation_rights_disclaimed";
+  }
+
+  // (f) §3.2. Self-declared, unverified, and still the pragmatic floor: a
+  // licence this platform cannot rely on is not one it should be selling.
+  if (!attestation.uploaderIsAdult) {
+    return "attestation_uploader_not_adult";
+  }
+
+  return null;
+}
+
+/**
  * Steps 1–4 of Part E.3: is this *uploader* cleared right now. Returns the
  * blocker, or null when the standing clearance holds.
  *
@@ -791,7 +971,22 @@ export function evaluateSellability(
     return { sellable: false, blocker: uploaderBlocker };
   }
 
-  // (5) The upload has to have been put forward for sale at all. The
+  // (5) The uploader's own declaration about THIS FILE
+  // (ugcportal-15r; §4 item 7). Placed here, between the uploader's standing
+  // clearance and the admin's per-upload triage, because that is the order
+  // §4 sets out and because it is the order the facts are created in: a
+  // person is cleared once, declares once per file at upload, and is triaged
+  // by an admin afterwards. A `bare` upload with no listing therefore reports
+  // `attestation_missing` rather than `not_listed_for_sale`, which is the
+  // more useful of the two — the sale record is an admin's next action, the
+  // missing declaration is a question nobody ever put to the only person who
+  // could answer it.
+  const attestation = attestationBlocker(upload.attestation ?? null, upload.userId);
+  if (attestation) {
+    return { sellable: false, blocker: attestation };
+  }
+
+  // (6) The upload has to have been put forward for sale at all. The
   // clearance above says the *person* may resell their work; it says nothing
   // about this particular file, and an upload nobody has triaged is an
   // upload nobody has looked at.
@@ -800,7 +995,7 @@ export function evaluateSellability(
     return { sellable: false, blocker: "not_listed_for_sale" };
   }
 
-  // (6) Per-upload triage (Part C). The uploader-level clearance covers the
+  // (7) Per-upload triage (Part C). The uploader-level clearance covers the
   // owner's own copyright only.
   //
   // One call, over TRIAGE_FACTS — not a list of per-column checks here.

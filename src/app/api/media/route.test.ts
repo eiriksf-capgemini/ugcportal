@@ -9,6 +9,14 @@ import {
   MAX_ORIGINAL_NAME_LENGTH,
   MAX_UPLOAD_BYTES,
 } from "@/lib/media";
+import {
+  ACCEPTED_ATTESTATION_VERSIONS,
+  ATTESTATION_QUESTIONS,
+  CURRENT_ATTESTATION_VERSION,
+  MEDIA_ATTESTATION_VERSION_FIELD,
+  attestationFieldName,
+  attestationFormParts,
+} from "@/lib/attestation";
 import { BODY_STALL_TIMEOUT_MS } from "@/lib/request-body";
 import { ObjectStorageUnreachableError } from "@/lib/s3";
 import {
@@ -27,6 +35,11 @@ const mediaCreateMock = vi.fn();
 // mock rather than stubbed inline so a test can assert WHICH tags were
 // resolved, and in what shape.
 const tagUpsertMock = vi.fn();
+// The uploader's rights attestation (ugcportal-15r). Its own mock rather
+// than a nested write on `media.create`, because K3 asserts the route calls
+// `mediaAttestation.create` explicitly and these tests are what check WHAT it
+// is called with.
+const attestationCreateMock = vi.fn();
 const mediaFindManyMock = vi.fn();
 const mediaFindFirstMock = vi.fn();
 
@@ -41,6 +54,7 @@ vi.mock("@/lib/auth", () => ({
 const txClient = {
   media: { create: mediaCreateMock },
   tag: { upsert: tagUpsertMock },
+  mediaAttestation: { create: attestationCreateMock },
 };
 
 /**
@@ -59,6 +73,20 @@ const mediaCreateOutsideTransaction = vi.fn(() => {
   );
 });
 
+/**
+ * The same tripwire for the attestation (ugcportal-15r). A Media row
+ * committed without the declaration its uploader just gave is an upload that
+ * can never be sold and whose uploader has already answered the questions;
+ * outside the transaction, a failure between the two writes leaves exactly
+ * that. A `$transaction` mock that hands back the same client cannot tell the
+ * two apart, so this makes the non-transactional path throw.
+ */
+const attestationCreateOutsideTransaction = vi.fn(() => {
+  throw new Error(
+    "mediaAttestation.create ran outside the transaction; a media row could commit with no attestation",
+  );
+});
+
 vi.mock("@/lib/prisma", () => ({
   prisma: {
     media: {
@@ -69,6 +97,7 @@ vi.mock("@/lib/prisma", () => ({
     tag: {
       upsert: tagUpsertMock,
     },
+    mediaAttestation: { create: attestationCreateOutsideTransaction },
     $transaction: async (run: (tx: typeof txClient) => unknown) =>
       run(txClient),
   },
@@ -185,6 +214,36 @@ function selectedRow(overrides: Record<string, unknown> = {}) {
 }
 
 /**
+ * A complete, clean rights attestation (ugcportal-15r) as multipart parts.
+ *
+ * Built through `attestationFormParts`, the same function the browser's
+ * transport uses, rather than by writing nine field names out here — so a
+ * renamed field or a changed `yes`/`no` spelling moves this fixture too
+ * instead of leaving it asserting against a wire format nothing sends.
+ *
+ * Every yes/no answered `no`, which is the combination a clean upload gives.
+ * Individual tests override one answer, or drop a part entirely, to check
+ * what the route does then.
+ */
+function attestationParts(
+  overrides: Partial<Record<string, boolean>> = {},
+): [string, string][] {
+  const answers = Object.fromEntries(
+    ATTESTATION_QUESTIONS.map(({ field }) => [
+      field,
+      overrides[field] ?? field === "uploaderIsAdult",
+    ]),
+  );
+  return attestationFormParts({
+    version: CURRENT_ATTESTATION_VERSION,
+    answers: {
+      authorship: "AUTHOR",
+      ...answers,
+    } as Parameters<typeof attestationFormParts>[0]["answers"],
+  });
+}
+
+/**
  * `tags` parts go AFTER the file part, which is the order the browser sends
  * and the order POST /api/media depends on: it finds the file part by peeking
  * at the first PART_HEADER_PEEK_BYTES, and a field ahead of it pushes the
@@ -195,7 +254,19 @@ function buildRequest(
   tags: readonly string[] = [],
   /** Alt text and caption (ugcportal-gwr), appended after the file and the
    * tags for the same ordering reason both already follow it. */
-  fields: { altText?: string; caption?: string } = {},
+  fields: {
+    altText?: string;
+    caption?: string;
+    /**
+     * The rights attestation parts (ugcportal-15r). Defaults to a complete,
+     * clean one, so every test written before this bead keeps testing what
+     * it was written to test rather than all failing with the 400 for a
+     * missing attestation. Pass `[]` to send none, or
+     * `attestationParts({...})` to change an answer — the cases that are
+     * ABOUT the attestation do exactly that.
+     */
+    attestation?: [string, string][];
+  } = {},
 ) {
   const formData = new FormData();
   if (file) {
@@ -206,6 +277,9 @@ function buildRequest(
   }
   if (fields.altText !== undefined) formData.set("altText", fields.altText);
   if (fields.caption !== undefined) formData.set("caption", fields.caption);
+  for (const [name, value] of fields.attestation ?? attestationParts()) {
+    formData.append(name, value);
+  }
   return new Request("http://localhost/api/media", {
     method: "POST",
     body: formData,
@@ -233,12 +307,19 @@ function multipartRequest({
   filename = "photo.png",
   contentType = "image/png",
   contentLength,
+  attestation,
 }: {
   payload?: Uint8Array;
   payloadBytes?: number;
   filename?: string;
   contentType?: string;
   contentLength?: string;
+  /**
+   * The rights attestation parts (ugcportal-15r), AFTER the file part for
+   * the same peek-window reason tags and the caption are. Defaults to a
+   * complete, clean one; pass `[]` for a request that carries none.
+   */
+  attestation?: [string, string][];
 }) {
   const encoder = new TextEncoder();
   const head = encoder.encode(
@@ -246,7 +327,17 @@ function multipartRequest({
       `Content-Disposition: form-data; name="file"; filename="${filename}"\r\n` +
       `Content-Type: ${contentType}\r\n\r\n`,
   );
-  const tail = encoder.encode(`\r\n--${MULTIPART_BOUNDARY}--\r\n`);
+  const trailingFields = (attestation ?? attestationParts())
+    .map(
+      ([name, value]) =>
+        `\r\n--${MULTIPART_BOUNDARY}\r\n` +
+        `Content-Disposition: form-data; name="${name}"\r\n\r\n` +
+        `${value}`,
+    )
+    .join("");
+  const tail = encoder.encode(
+    `${trailingFields}\r\n--${MULTIPART_BOUNDARY}--\r\n`,
+  );
 
   const chunks: Uint8Array[] = [head];
   if (payload) {
@@ -296,6 +387,9 @@ beforeEach(() => {
   s3SendMock.mockReset();
   mediaCreateMock.mockReset();
   mediaCreateOutsideTransaction.mockClear();
+  attestationCreateMock.mockReset();
+  attestationCreateMock.mockResolvedValue({ id: "attestation-1" });
+  attestationCreateOutsideTransaction.mockClear();
   tagUpsertMock.mockReset();
   tagUpsertMock.mockImplementation(async ({ create }) => create);
   mediaFindManyMock.mockReset();
@@ -1946,6 +2040,19 @@ describe("POST /api/media — upload memory (ugcportal-05b)", () => {
         );
       }
     }
+    // The rights attestation (ugcportal-15r), AFTER the file part. These two
+    // tests are about where the FILE part sits relative to other fields, so
+    // the attestation goes on the far side of it where the browser puts it
+    // and where it cannot affect what the peek window sees.
+    for (const [name, value] of attestationParts()) {
+      chunks.push(
+        encoder.encode(
+          `\r\n--${MULTIPART_BOUNDARY}\r\n` +
+            `Content-Disposition: form-data; name="${name}"\r\n\r\n` +
+            `${value}`,
+        ),
+      );
+    }
     chunks.push(encoder.encode(`\r\n--${MULTIPART_BOUNDARY}--\r\n`));
 
     let index = 0;
@@ -3004,5 +3111,211 @@ describe("POST /api/media — alt text and caption", () => {
     );
 
     expect(response.status).toBe(201);
+  });
+});
+
+/**
+ * ugcportal-15r K1 and K3 at the route: POST /api/media collects a complete
+ * attestation, stores an explicit answer for every question with the version
+ * the uploader was shown, names the authenticated uploader as the actor, and
+ * refuses rather than defaulting anything.
+ */
+describe("POST /api/media — the uploader's rights attestation (ugcportal-15r)", () => {
+  function imageFile() {
+    return new File([REAL_PNG], "photo.png", { type: "image/png" });
+  }
+
+  /** The `data` the route passed to `mediaAttestation.create`. */
+  function storedAttestation() {
+    expect(attestationCreateMock).toHaveBeenCalledTimes(1);
+    return attestationCreateMock.mock.calls[0][0].data;
+  }
+
+  beforeEach(() => {
+    authMock.mockResolvedValue({ user: { id: "user-1" } });
+    s3SendMock.mockResolvedValue({});
+    mediaCreateMock.mockImplementation(async () => selectedRow());
+  });
+
+  it("stores an explicit answer for every question, with the version", async () => {
+    const response = await POST(
+      buildRequest(imageFile(), [], {
+        attestation: attestationParts({
+          showsIdentifiablePeople: true,
+          aiGenerated: true,
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(201);
+    const data = storedAttestation();
+
+    // Every column, derived from the registry rather than listed — a tenth
+    // question added to the form but not written here fails this case
+    // rather than being stored as nothing.
+    for (const { field } of ATTESTATION_QUESTIONS) {
+      expect(typeof data[field], field).toBe("boolean");
+    }
+    expect(data.authorship).toBe("AUTHOR");
+    expect(data.attestationVersion).toBe(CURRENT_ATTESTATION_VERSION);
+
+    // The two answers that differ from the fixture's default actually
+    // arrived as `true`, so this is not passing on "nine booleans of some
+    // value" — which `typeof` alone would.
+    expect(data.showsIdentifiablePeople).toBe(true);
+    expect(data.aiGenerated).toBe(true);
+    expect(data.showsMinors).toBe(false);
+    expect(data.containsMusicNotOwned).toBe(false);
+  });
+
+  it("writes it against the media row it just created", async () => {
+    await POST(buildRequest(imageFile()));
+
+    expect(storedAttestation().mediaId).toBe("media-1");
+  });
+
+  it("names the authenticated uploader, never anything from the body", async () => {
+    /*
+     * K3's other half, exercised rather than read off the source. The body
+     * carries a plausible-looking actor field; the stored row must ignore it
+     * and use the session's id. `src/lib/attestation-write-paths.test.ts`
+     * proves the SHAPE (one call site, `attestedByUserId: userId`, `userId`
+     * bound from the session); this proves the behaviour.
+     */
+    authMock.mockResolvedValue({ user: { id: "the-real-uploader" } });
+
+    await POST(
+      buildRequest(imageFile(), [], {
+        attestation: [
+          ...attestationParts(),
+          ["attestedByUserId", "somebody-else"],
+          ["attestation.attestedByUserId", "somebody-else"],
+          ["userId", "somebody-else"],
+        ],
+      }),
+    );
+
+    expect(storedAttestation().attestedByUserId).toBe("the-real-uploader");
+  });
+
+  it("writes it inside the same transaction as the media row", async () => {
+    // The module-level `prisma.mediaAttestation.create` throws (see the
+    // tripwire at the top of this file), so a route that wrote outside the
+    // transaction would fail here rather than quietly leaving a media row
+    // that can never be sold behind a failed second write.
+    const response = await POST(buildRequest(imageFile()));
+
+    expect(response.status).toBe(201);
+    expect(attestationCreateOutsideTransaction).not.toHaveBeenCalled();
+  });
+
+  /*
+   * THE K1 FIXTURE MUTATION, one case per question: drop exactly one
+   * question's part and confirm the upload is REFUSED rather than defaulted.
+   * Generated from the registry, so a tenth question gets its own case for
+   * free — a single hand-written "omit one field" case would only ever
+   * prove it for whichever field somebody picked.
+   */
+  for (const { field } of ATTESTATION_QUESTIONS) {
+    it(`refuses an upload with no answer to ${field}, rather than defaulting it`, async () => {
+      const name = attestationFieldName(field);
+      const response = await POST(
+        buildRequest(imageFile(), [], {
+          attestation: attestationParts().filter(([part]) => part !== name),
+        }),
+      );
+
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toMatchObject({ field: name });
+      // Nothing was written, and — because this is refused before any
+      // PutObject — nothing was stored in the bucket to compensate for.
+      expect(mediaCreateMock).not.toHaveBeenCalled();
+      expect(attestationCreateMock).not.toHaveBeenCalled();
+      expect(s3SendMock).not.toHaveBeenCalled();
+    });
+  }
+
+  it("refuses an upload that carries no attestation at all", async () => {
+    const response = await POST(buildRequest(imageFile(), [], { attestation: [] }));
+
+    expect(response.status).toBe(400);
+    expect(mediaCreateMock).not.toHaveBeenCalled();
+    expect(s3SendMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses an answer that is neither yes nor no", async () => {
+    // "" and "false" are what an HTML form would most plausibly send for an
+    // unanswered question; both must be a refusal, not a stored `no`.
+    for (const value of ["", "false", "maybe"]) {
+      mediaCreateMock.mockClear();
+      const response = await POST(
+        buildRequest(imageFile(), [], {
+          attestation: attestationParts().map(([name, existing]) =>
+            name === attestationFieldName("showsMinors")
+              ? [name, value]
+              : [name, existing],
+          ),
+        }),
+      );
+
+      expect(response.status, value).toBe(400);
+      expect(mediaCreateMock).not.toHaveBeenCalled();
+    }
+  });
+
+  it("refuses a version the server no longer accepts", async () => {
+    const response = await POST(
+      buildRequest(imageFile(), [], {
+        attestation: attestationParts().map(([name, value]) =>
+          name === MEDIA_ATTESTATION_VERSION_FIELD
+            ? [name, "2019-01-01.0"]
+            : [name, value],
+        ),
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    expect(mediaCreateMock).not.toHaveBeenCalled();
+  });
+
+  it("stores the version the client sent, not the one the server knows", async () => {
+    /*
+     * The honest direction, asserted (see `parseAttestation`'s docstring): a
+     * tab opened before a revision shows the OLD questions, and stamping the
+     * current version on its answers would record that the uploader was
+     * asked something they never saw. Driven over every accepted version, so
+     * this case keeps meaning something once there is more than one.
+     */
+    for (const version of ACCEPTED_ATTESTATION_VERSIONS) {
+      attestationCreateMock.mockClear();
+      await POST(
+        buildRequest(imageFile(), [], {
+          attestation: attestationParts().map(([name, value]) =>
+            name === MEDIA_ATTESTATION_VERSION_FIELD ? [name, version] : [name, value],
+          ),
+        }),
+      );
+
+      expect(storedAttestation().attestationVersion).toBe(version);
+    }
+  });
+
+  it("refuses before any bytes are stored, like the tag check", async () => {
+    // Position, not just outcome. A refusal after the PutObject would leave
+    // an orphaned object to compensate for; this asserts the order rather
+    // than trusting the comment in the route.
+    await POST(buildRequest(imageFile(), [], { attestation: [] }));
+
+    expect(s3SendMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses an unauthenticated upload before it reads the attestation", async () => {
+    // Not an attestation claim, a guard on the one above: the 400s in this
+    // block are only meaningful while a signed-out request still gets 401.
+    authMock.mockResolvedValue(null);
+
+    const response = await POST(buildRequest(imageFile(), [], { attestation: [] }));
+
+    expect(response.status).toBe(401);
   });
 });

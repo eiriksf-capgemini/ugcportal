@@ -4,6 +4,7 @@ import { DeleteObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
 import { NextResponse } from "next/server";
 
 import { auth } from "@/lib/auth";
+import { parseAttestation } from "@/lib/attestation";
 import {
   FALLBACK_ORIGINAL_NAME,
   MAX_UPLOAD_BYTES,
@@ -506,6 +507,42 @@ async function handleUpload(
     return NextResponse.json({ error: caption.message }, { status: 400 });
   }
 
+  /*
+   * THE UPLOADER'S OWN RIGHTS ATTESTATION (ugcportal-15r,
+   * docs/legal/manual-upload-rights-review.md §3.1).
+   *
+   * REQUIRED, unlike alt text and the caption immediately above, and that
+   * asymmetry is the whole bead. Alt text is enforced at publish because a
+   * row with none is merely unpublishable; an upload with no attestation is a
+   * file nobody ever asked the only person who could know anything about. The
+   * gate refuses it (`attestation_missing`), so accepting the bytes and
+   * sorting it out later would only mean storing a file that can never be
+   * sold and whose uploader has since closed the tab.
+   *
+   * REFUSED HERE, BEFORE ANY WORK — same position, and same reason, as the
+   * tag check above: this runs before the watermark and before either
+   * PutObject, so a refusal leaves nothing in the bucket to compensate for.
+   *
+   * 400 rather than 422. The body is well-formed multipart that this endpoint
+   * understood; what is wrong is that a required part is absent or carries a
+   * value outside its closed set, which is the same class of fault as a
+   * malformed tag one field up and gets the same status. 422 is reserved here
+   * for a file this route could read but could not process
+   * (`generateWatermarkedPreview` failing), which is a different thing.
+   *
+   * `body.value.get`, not `getAll`: one answer per question per upload. A
+   * part sent as a file arrives as a File, and `parseAttestation` refuses a
+   * non-string outright rather than coercing it — "[object File]" is not
+   * "yes", but neither is it an error unless something says so.
+   */
+  const attestation = parseAttestation((name) => body.value.get(name));
+  if (!attestation.ok) {
+    return NextResponse.json(
+      { error: attestation.message, field: attestation.field },
+      { status: 400 },
+    );
+  }
+
   const buffer = Buffer.from(await file.arrayBuffer());
   if (sniffKind(buffer) !== validation.kind) {
     return NextResponse.json(
@@ -664,7 +701,7 @@ async function handleUpload(
     const media = await prisma.$transaction(async (tx) => {
       const tagRefs = await resolveTagRows(tags.value, tx);
 
-      return tx.media.create({
+      const created = await tx.media.create({
         data: {
           userId,
           kind: validation.kind,
@@ -692,6 +729,47 @@ async function handleUpload(
         },
         select: MEDIA_OWNER_SELECT,
       });
+
+      /*
+       * THE ONE PLACE AN ATTESTATION IS EVER WRITTEN (ugcportal-15r K3), and
+       * `src/lib/attestation-write-paths.test.ts` is what keeps it the one
+       * place: that test parses every file under src/ and fails if a second
+       * call site exists, or if this one stops naming `userId`.
+       *
+       * `attestedByUserId: userId` — `session.user.id`, read at the top of
+       * this handler and nowhere else. NOT a value from the request body,
+       * which is the mistake this guards: the whole worth of the row is that
+       * it names the person who uploaded the file, and a client-supplied
+       * actor would let anyone attest on anyone's behalf. The gate re-checks
+       * it against `Media.userId` anyway (`attestation_not_by_uploader`),
+       * because a check at write time is not a check on rows written before
+       * it existed or by a path that forgot it.
+       *
+       * An explicit `tx.mediaAttestation.create` rather than Prisma's nested
+       * `attestation: { create: ... }` on the `media.create` above. The
+       * nested form would write the same two rows in the same transaction,
+       * and it would hide the actor: `attestedByUserId` would be set from the
+       * parent's relation context in one place and spelled out in none, so
+       * the structural assertion K3 asks for — "always called with
+       * session.user.id" — would have nothing to read. The scan does cover
+       * the nested shape too, so reaching for it later fails rather than
+       * slipping past.
+       *
+       * INSIDE THE SAME TRANSACTION as the media row, for the reason the tag
+       * rows are: a Media row committed without its attestation is an upload
+       * that can never be sold and whose uploader has already answered the
+       * questions. Rolling both back leaves the uploader able to retry.
+       */
+      await tx.mediaAttestation.create({
+        data: {
+          mediaId: created.id,
+          attestedByUserId: userId,
+          attestationVersion: attestation.version,
+          ...attestation.answers,
+        },
+      });
+
+      return created;
     });
 
     return NextResponse.json(media, { status: 201 });

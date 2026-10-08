@@ -7,6 +7,7 @@ import {
   evaluateSellability,
   isSellable,
 } from "@/lib/resale-rights";
+import { completeAttestationRow } from "@/lib/test-support/attestation";
 import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db";
 
 /**
@@ -75,6 +76,27 @@ async function setReview(
   });
 }
 
+/**
+ * Hands media-1 to another user, attestation and all (ugcportal-15r).
+ *
+ * BOTH ROWS, NOT JUST `Media.userId`, and the reason is a property worth
+ * naming: the gate refuses an attestation whose `attestedByUserId` is not the
+ * file's current owner (`attestation_not_by_uploader`), so moving a file
+ * without moving its declaration blocks on that before the review anchor is
+ * ever consulted. That is correct — owner-1's warranty is not user-1's — and
+ * it is asserted directly in src/lib/resale-rights.test.ts. Here it would
+ * only overdetermine the two cases below, which are about WHOSE REVIEW the
+ * gate follows, so this helper keeps the attestation out of the way by
+ * keeping it valid.
+ */
+async function reassignUpload(userId: string) {
+  await prisma.media.update({ where: { id: "media-1" }, data: { userId } });
+  await prisma.mediaAttestation.update({
+    where: { mediaId: "media-1" },
+    data: { attestedByUserId: userId },
+  });
+}
+
 beforeAll(async () => {
   await applyMigrations(prisma);
   await prisma.user.create({
@@ -96,6 +118,12 @@ beforeAll(async () => {
       sizeBytes: 1234,
       originalName: "original.jpg",
     },
+  });
+  // The uploader's own rights attestation (ugcportal-15r). Without it every
+  // case in this file would block on `attestation_missing` before the gate
+  // reached the review or the triage it is actually testing.
+  await prisma.mediaAttestation.create({
+    data: completeAttestationRow("media-1", "owner-1"),
   });
   await prisma.mediaListing.create({
     data: {
@@ -184,10 +212,7 @@ describe("ugcportal-vsm: a clearance covers its own uploader only", () => {
     ).toBe(200);
 
     // Nothing about the listing changes — only who the file belongs to.
-    await prisma.media.update({
-      where: { id: "media-1" },
-      data: { userId: "user-1" },
-    });
+    await reassignUpload("user-1");
     await prisma.mediaListing.update({
       where: { id: "listing-1" },
       data: { priceCents: null },
@@ -201,10 +226,7 @@ describe("ugcportal-vsm: a clearance covers its own uploader only", () => {
     });
     expect(await priceOf()).toBeNull();
 
-    await prisma.media.update({
-      where: { id: "media-1" },
-      data: { userId: "owner-1" },
-    });
+    await reassignUpload("owner-1");
   });
 
   it("follows the file when the other user is the cleared one", async () => {
@@ -215,18 +237,12 @@ describe("ugcportal-vsm: a clearance covers its own uploader only", () => {
       (await POST(priceRequest({ priceCents: 100 }), context())).status,
     ).toBe(422);
 
-    await prisma.media.update({
-      where: { id: "media-1" },
-      data: { userId: "user-1" },
-    });
+    await reassignUpload("user-1");
     expect(
       (await POST(priceRequest({ priceCents: 100 }), context())).status,
     ).toBe(200);
 
-    await prisma.media.update({
-      where: { id: "media-1" },
-      data: { userId: "owner-1" },
-    });
+    await reassignUpload("owner-1");
   });
 });
 
@@ -675,6 +691,9 @@ describe("the shapes ugcportal-74w and ugcportal-p3v need", () => {
         originalName: "second.jpg",
       },
     });
+    await prisma.mediaAttestation.create({
+      data: completeAttestationRow("media-2", "owner-1"),
+    });
     await prisma.mediaListing.create({
       data: {
         id: "listing-2",
@@ -721,10 +740,20 @@ describe("the shapes ugcportal-74w and ugcportal-p3v need", () => {
         sizeBytes: 10,
         originalName: "bare.jpg",
       },
+      select: { id: true },
+    });
+    // Attested, so the one thing missing is the sale record. Without this it
+    // would block on `attestation_missing` first (ugcportal-15r) and this
+    // case would pass without ever reaching the predicate it names.
+    await prisma.mediaAttestation.create({
+      data: completeAttestationRow(bare.id, "owner-1"),
+    });
+    const bareUpload = await prisma.media.findUniqueOrThrow({
+      where: { id: bare.id },
       select: MEDIA_GATE_SELECT,
     });
 
-    expect(evaluateSellability(bare)).toEqual({
+    expect(evaluateSellability(bareUpload)).toEqual({
       sellable: false,
       blocker: "not_listed_for_sale",
     });
