@@ -45,6 +45,8 @@ const OUTCOME_MESSAGES: Record<TriageOutcomeCode, string> = {
     "That upload has not been triaged yet, so there is no record to attach a clearance to. Record the triage first; the layers a “yes” needs are the ones you can then clear.",
   clearance_already_recorded:
     "That layer already has a clearance, and nothing was changed. One layer carries one justification, so a second would leave the gate choosing between two answers to the same question — revising one is a separate, deliberate act that does not exist yet.",
+  alcohol_with_commercial_links:
+    "That upload already carries a commercial link, and nothing commercial may sit on a picture showing alcohol (alkoholloven § 9-2). Nothing was recorded — not even your other answers, because a half-recorded triage would put your name on a set you did not finish. Detach the item’s commercial links first, then answer the alcohol question.",
 };
 
 /**
