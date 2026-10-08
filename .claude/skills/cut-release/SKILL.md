@@ -113,6 +113,63 @@ bd update <id> --set-metadata released_in=v<version>
 
 This is what makes the skill idempotent — re-running it immediately after should find zero unreleased issues. Steps 6 and 7 aren't atomic: if you're interrupted between writing `CHANGELOG.md` and finishing these `bd update` calls, check `CHANGELOG.md`'s top section before rerunning from step 1 — if it already contains the version you were about to write, finish tagging the remaining beads by hand instead of regenerating (which would duplicate the section).
 
+## 7a. Reconcile the previous release's retrospective
+
+A retrospective nobody converts into beads expires silently. Of the eight process changes in `docs/process/release-cost-v0.5.0-vs-v0.6.0.md` section 9, five still had no bead of any kind when v0.7.0 was being planned — items 2, 3, 4, 6 and 8, filed by hand on 2026-10-08 only because someone went looking (`ugcportal-p7x7`). **Writing a recommendation down is not tracking it.**
+
+This step is **non-blocking**. It never stops a release. An unconverted recommendation is a tracker problem, not a reason to withhold a cut — file the bead, report it, carry on to step 8.
+
+**1. Find the document.** Retrospectives live in `docs/process/`, named for the releases they compare (`release-cost-<prev>-vs-<this>.md`, `release-cost-<a>-to-<c>.md`). You want the one covering the release *before* the one you are cutting: by the time v0.7.0 is cut, v0.6.0's retrospective should be fully converted.
+
+```bash
+ls docs/process/release-cost-*.md
+```
+
+If no retrospective covers the previous release, say so in the step-10 report and go to step 8. A release can legitimately be the first, or its retrospective can still be in flight. "No document" is a *reported outcome*, never a silent pass.
+
+**2. Read its recommendations.** Each retrospective ends in a numbered recommendations section (`## 9. Process changes for v0.7.0`, `## 6. Recommendations for v0.6.0`). The heading wording varies between documents; the numbered list does not.
+
+**Assert before you judge.** If you parsed zero recommendations, that is a failure *of this step*, not a clean document — the heading moved, the numbering changed, or you opened the wrong file. Report the file and the heading you looked for, and stop this step (not the release). A check that matches nothing and reports success is this repo's family-3 defect, and it is the most likely way this step rots.
+
+**3. Match each against the tracker.** A bead owning a retrospective recommendation carries `metadata.retro_source`, valued `<document-filename>#<item-number>`:
+
+```bash
+bd list --all --json \
+  | jq -r --arg doc "release-cost-v0.5.0-vs-v0.6.0.md" \
+      '[.[] | select((.metadata.retro_source // "") | startswith($doc + "#"))]
+       | map(.metadata.retro_source | split("#")[1]) | sort | join(", ")'
+```
+
+That is an exact key, deliberately *not* a title search. The five missing items above were found by grepping bead titles for phrases like "shape budget" and "delta round" — a heuristic that fails silently the moment someone words a bead differently, and which cannot distinguish "no bead" from "a bead I failed to describe".
+
+Use `--all`. `bd list` excludes closed beads by default, and a recommendation that was converted *and shipped* in an earlier cycle is reconciled, not missing.
+
+**4. Verify the premise, then file what is genuinely missing.** For each item number with no bead, first check the recommendation against current `main`. A recommendation written a release ago may already be implemented: `ugcportal-ytai` was filed from a memory describing a review fan-out problem that PR #155 had already fixed, and was closed unstarted the same day. **Converted does not mean unverified.** If the premise no longer holds, file nothing, and record why against the retrospective's own bead.
+
+If it does hold, create the bead in the form the `bead-template` skill requires — user story with In/Out of scope, K-numbered criteria each with a `Verified by`, a guardrail `K`, a `Premise verified:` line, and `model`/`model_effort`/`model_why`. Do **not** paste the recommendation text into the description and call it a bead: that is exactly the shape that left 20 unformed beads behind in v0.6.0 (`ugcportal-nr72`).
+
+```bash
+bd create "<title>" --type=task --priority=<n> \
+  --description="As a <role>, I want <capability>, so that <benefit>.
+
+In scope: ...
+Out of scope: ..." \
+  --acceptance="K1: Given ..., when ..., <outcome>.
+Verified by: ...
+
+K2: Following should never happen: ...
+Verified by: ..." \
+  --notes="Premise verified <date>: <command or file checked>." \
+  --deps="discovered-from:<retrospective-bead-id>" \
+  --metadata='{"cc_type":"chore","cc_scope":"process","model":"sonnet","model_effort":"high","model_why":"...","retro_source":"release-cost-v0.5.0-vs-v0.6.0.md#2"}'
+```
+
+**5. Backfill `retro_source` on beads that already existed.** The first run against a given document finds recommendations whose beads exist but predate this convention. Set the key on those rather than filing duplicates — matching by hand once is what makes every later run exact.
+
+**Why the pointer lives on the bead and not in the document.** The obvious design is to annotate each recommendation in the retrospective with its bead id. Don't. Step 8 relies on a release PR touching only `CHANGELOG.md`, `package.json` and `package-lock.json` — that three-file set is what makes it non-sensitive and auto-mergeable under `pr-review-merge`'s step-2 gate. Editing `docs/process/*.md` inside the release commit would widen that diff and silently invalidate the claim step 8 makes about it. On the bead, the pointer costs the release PR nothing.
+
+**6. Report.** Step 10 states the document read, how many recommendations it held, how many were already converted, every bead id filed, and every recommendation deliberately not filed with its reason. If the step was skipped, name which branch of 1 or 2 caused it.
+
 ## 8. Ship it
 
 This step commits and pushes — defer to CLAUDE.md's "Agent Context Profiles" for whether you may do that unprompted (Conservative default: report the generated changes and wait for explicit approval before committing/pushing; only proceed straight to branch/commit/push/PR if the user's request or the active profile already grants that authority).
@@ -136,3 +193,5 @@ Do this only after confirming the release PR from step 8 is merged (`gh pr view 
 ## 10. Report back
 
 State the computed version, the bump reason (which issue(s) triggered feat/major), how many issues were included, whether step 5a's Cost Summary was included or skipped (and why, if skipped, or note any malformed `tokens_impl`/`tokens_qa` value it ignored), the PR URL, and the GitHub Release URL (or why it was skipped/deferred).
+
+Then step 7a's result, which is reported whether or not it filed anything: the retrospective document read and how many recommendations it held, how many were already converted, every bead id filed, and every recommendation deliberately not filed with its reason. If 7a was skipped or stopped, say which branch of its steps 1 or 2 caused it — a retrospective silently going unread is the failure this step exists to prevent, so "nothing to report" is never an acceptable rendering of it.
