@@ -14,7 +14,7 @@
  * genuinely new, this-bead copies sharing one implementation is the bounded
  * fix; touching usage.ts is not this bead's job.
  */
-import { readdirSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 
 import ts from "typescript";
@@ -112,6 +112,33 @@ export const SCRIPT_KIND_BY_EXTENSION: Readonly<Record<string, ts.ScriptKind>> =
 export function scriptKindFor(fileName: string): ts.ScriptKind {
   const extension = fileName.slice(fileName.lastIndexOf(".") + 1).toLowerCase();
   return SCRIPT_KIND_BY_EXTENSION[extension] ?? ts.ScriptKind.TS;
+}
+
+/**
+ * Read one file and parse it, in the dialect `scriptKindFor` picks for it.
+ *
+ * WHY IT LIVES HERE. Every AST-based scanner in this repo opens with the
+ * same five lines, and the two arguments that matter are the script kind and
+ * `setParentNodes`. Getting the kind wrong parses a `.tsx` file as `.ts` and
+ * reports nothing for every JSX file in the tree; omitting `setParentNodes`
+ * makes a caller's `node.parent` check throw. Since this is exactly the
+ * composition of `scriptKindFor` with a file read, it belongs beside it
+ * rather than being copied per scanner - the same consolidation argument
+ * `walkSourceFiles` and `stripComments` above are the result of.
+ *
+ * `setParentNodes` is ON for every caller rather than a parameter. The
+ * callers that do not need `node.parent` pay a parse cost they would not
+ * otherwise; a caller that needs it and does not get it is broken in a way
+ * that only shows up at runtime, which is the worse of the two.
+ */
+export function sourceFileOf(file: string): ts.SourceFile {
+  return ts.createSourceFile(
+    file,
+    readFileSync(file, "utf8"),
+    ts.ScriptTarget.Latest,
+    /* setParentNodes */ true,
+    scriptKindFor(file),
+  );
 }
 
 /**

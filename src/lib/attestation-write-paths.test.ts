@@ -3,9 +3,14 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import ts from "typescript";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { isTestFile, walkSourceFiles } from "@/lib/design/scan-source";
+import {
+  isTestFile,
+  sourceFileOf,
+  walkSourceFiles,
+} from "@/lib/design/scan-source";
 import {
   type PrismaModelWrite,
   bindingsNamed,
@@ -113,6 +118,11 @@ export function userIdBindingsIn(file: string): string[] {
  * From the AST rather than from the text, for the reason the whole file
  * gives: a string that merely LOOKS like a path (a log line, a docstring,
  * this very comment) is not an import, and a text scan cannot tell.
+ *
+ * Parsed with `sourceFileOf` from src/lib/design/scan-source.ts, which is
+ * also what the shared Prisma write scanner this file imports uses — one
+ * "read and parse a source file in the right dialect" primitive for the
+ * whole repo, next to the `scriptKindFor` that picks that dialect.
  */
 export function importSpecifiersIn(file: string): string[] {
   const source = sourceFileOf(file);
@@ -227,10 +237,25 @@ describe("ugcportal-15r K3: exactly one place writes an attestation", () => {
   });
 
   it("finds it in exactly two files: POST /api/media, and the test-support fixture", () => {
-    // Two, not one, since ugcportal-3ae — and the second is pinned by name
-    // rather than by a pattern, so a THIRD writer (an importer, an admin
-    // screen, a bulk re-attest tool) fails here by existing, which is the
-    // whole claim K3 makes.
+    /*
+     * Two, not one, since ugcportal-3ae — and the second is pinned by name
+     * rather than by a pattern, so a THIRD writer fails here by existing
+     * IN EVERY SHAPE THE SCANNER SEES: a `*.mediaAttestation.<write>(…)`
+     * call, and a nested `attestation: { <write>: … }` whose value is an
+     * object literal. That covers an importer, an admin screen or a bulk
+     * re-attest tool written the ordinary way.
+     *
+     * IT DOES NOT COVER A NESTED WRITE BEHIND A CONDITIONAL, and this is
+     * the sentence where that matters rather than somewhere it can be
+     * skipped (ugcportal-3ae review round 1, finding 4). The nested matcher
+     * requires `ts.isObjectLiteralExpression(node.initializer)`, so
+     * `attestation: grant ? { create: {…} } : undefined` is not an object
+     * literal and is not reported — verified by adding exactly that third
+     * writer and watching this suite stay green. That gap is ugcportal-xqal.
+     * Nothing in this branch relies on it: the one test-support write
+     * allowed below is a plain `client.mediaAttestation.create` statement,
+     * which matcher (1) sees.
+     */
     expect(found).toEqual(ALLOWED_WRITE_PATHS);
   });
 

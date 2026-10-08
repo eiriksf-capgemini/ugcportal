@@ -376,8 +376,10 @@ describe("/media/[previewId] inherits the rights filter (ugcportal-3ae K3)", () 
         showsIdentifiablePeople: true,
       });
     }
-    // Seeded directly: ugcportal-qfy9 owns the clearance write path and is
-    // not in yet. The clearance is the ONLY difference between the two rows.
+    // Seeded directly rather than through the admin screen ugcportal-qfy9
+    // shipped in `ba9991f`: this file is about what the item page serves,
+    // so the clearance is a precondition to arrange. The clearance is the
+    // ONLY difference between the two rows.
     await prisma.mediaListing.create({
       data: {
         mediaId: "item-people-cleared",

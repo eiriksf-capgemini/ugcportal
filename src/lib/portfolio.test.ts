@@ -256,9 +256,10 @@ describe("the portfolio inherits the rights filter from PUBLIC_MEDIA_SCOPE (ugcp
 
   it("drops one showing an identifiable person with no PEOPLE clearance, and keeps it once cleared", async () => {
     /*
-     * Seeded directly: nothing in the product writes a
-     * MediaRightsClearance row yet (ugcportal-qfy9 owns that path), so the
-     * permitting half of this pair is only reachable this way for now.
+     * Seeded directly rather than through the admin curation screen
+     * ugcportal-qfy9 shipped in `ba9991f`. This file is about what
+     * /portfolio lists, so the clearance is a precondition to arrange and
+     * not the subject; qfy9's own suite covers the writing of one.
      */
     await prisma.user.create({
       data: { id: "admin-qnq9-7", email: "admin-qnq9-7@example.com", role: "ADMIN" },

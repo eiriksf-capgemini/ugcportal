@@ -48,11 +48,15 @@ import {
  * and is still open; nothing here answers it. This adds conditions to
  * publishing, which is strictly the safer direction under either answer.
  * What a clearance lapsing AFTER publication does to a row that is already
- * public is ugcportal-nffp. Per-layer clearance WRITES are ugcportal-qfy9 —
- * at the time this landed nothing in the product wrote a
- * `MediaRightsClearance` row at all, so the refusing half of this gate is
- * what is reachable end to end and the permitting half is exercised by
- * tests that seed a clearance directly.
+ * public is ugcportal-nffp. Per-layer clearance WRITES are ugcportal-qfy9,
+ * which merged as `ba9991f` while this was under review: the admin curation
+ * screen now writes `MediaRightsClearance` rows, so the permitting half of
+ * K2 has a product surface behind it. The tests here still seed clearances
+ * DIRECTLY rather than driving that screen — this gate is a unit of
+ * src/lib, and an end-to-end admin-flow-then-publish case belongs to
+ * neither bead's suite — so what they prove is the gate's behaviour given a
+ * clearance row, not that the admin flow produces one. qfy9's own tests
+ * prove that half.
  */
 
 /**
@@ -122,7 +126,7 @@ const PUBLISH_ATTESTATION_BLOCKERS: Record<
  * Typed as a full `Record<PublishBlocker, string>`, so a blocker added above
  * with no message fails `tsc` — not review, and not a test.
  *
- * WHERE THEY ARE SHOWN, as of 168ebc9: in the 422 body. There is no
+ * WHERE THEY ARE SHOWN, as of ba9991f: in the 422 body. There is no
  * owner-facing publish control to put them beside yet. Evidence, and the
  * command to re-check it rather than a count that rots:
  * `grep -rn "api/media/.*publish" src` — outside the route's own directory
@@ -313,8 +317,16 @@ export function publishRightsRefusal(
  * ITSELF rather than repeated at each of those surfaces. That is the half
  * that covers the SIXTH reader, the one somebody adds next year: a new
  * anonymous query that reaches for the scope constant inherits this with
- * nothing to remember, and one that does not reach for it fails
- * src/lib/public-media.consumers.test.ts.
+ * nothing to remember.
+ *
+ * A QUERY THAT DOES NOT REACH FOR IT IS NOT COVERED, here or anywhere else
+ * (ugcportal-3ae review round 1, findings 2 and 3; an earlier draft of this
+ * paragraph claimed such a query fails the consumers guard, which it does
+ * not). src/lib/public-media.consumers.test.ts catches a reader that NAMES
+ * the constant, by named import or by namespace import; its header sets out
+ * what it is blind to, with the fixtures for both. The hand-written-`where`
+ * shape is ugcportal-7egi. The four readers there are at ba9991f spread the
+ * scope.
  */
 
 /** The attestation a public row must carry, as a Prisma relation filter. */

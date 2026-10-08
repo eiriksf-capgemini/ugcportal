@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -6,7 +6,11 @@ import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { isTestFile, scriptKindFor, walkSourceFiles } from "@/lib/design/scan-source";
+import {
+  isTestFile,
+  sourceFileOf,
+  walkSourceFiles,
+} from "@/lib/design/scan-source";
 
 /**
  * ugcportal-3ae K3, as a claim about the WHOLE TREE: every anonymous reader
@@ -23,8 +27,21 @@ import { isTestFile, scriptKindFor, walkSourceFiles } from "@/lib/design/scan-so
  *
  * So the list is not maintained by reading the bead. It is derived from the
  * source, by the scan below, and compared against an explicit map. A sixth
- * reader added next year fails this file by existing, and the only way to
- * make it pass is to name the test that covers it.
+ * reader that REACHES FOR THE SCOPE CONSTANT — by named import or by
+ * namespace import, both proved against a fixture at the bottom of this
+ * file — fails this file by existing, and the only way to make it pass is
+ * to name the test that covers it.
+ *
+ * WHAT IT DOES NOT SEE, stated here rather than left for somebody to find
+ * out (ugcportal-3ae review round 1, findings 2 and 3). This scan answers
+ * "who uses the constant", so it is blind to a reader that never mentions
+ * it: an anonymous query that hand-writes `where: { publishedAt: { not:
+ * null } }` instead of spreading the scope is not in the set the map is
+ * compared against, and `toEqual` therefore still passes. Nothing else
+ * catches that shape either — `MediaAnonymousScope` in
+ * src/lib/media-listing.ts only binds a query that routes through
+ * `listMedia`. That gap is real and is filed as ugcportal-7egi; it is NOT
+ * closed by this file, and no comment here should be read as saying it is.
  *
  * WHAT "COVERED" MEANS, and why it is more than a filename. Each covering
  * test file must contain a `describe` or `it` whose TITLE carries this
@@ -78,13 +95,8 @@ export function scanScopeConsumers(root: string): string[] {
 }
 
 function referencesScope(file: string): boolean {
-  const source = ts.createSourceFile(
-    file,
-    readFileSync(file, "utf8"),
-    ts.ScriptTarget.Latest,
-    /* setParentNodes */ true,
-    scriptKindFor(file),
-  );
+  const source = sourceFileOf(file);
+  const namespaces = namespaceImportNames(source);
 
   let found = false;
   const visit = (node: ts.Node): void => {
@@ -99,10 +111,48 @@ function referencesScope(file: string): boolean {
       found = true;
       return;
     }
+    /*
+     * …EXCEPT through a NAMESPACE IMPORT, which the rule above would reject
+     * for exactly the reason it exists. `import * as publicMedia from
+     * "@/lib/public-media"` … `where: publicMedia.PUBLIC_MEDIA_SCOPE` puts
+     * the only occurrence of the name in property-access position, so the
+     * first branch — written to reject `config.PUBLIC_MEDIA_SCOPE` on an
+     * unrelated object — rejected a real reader too. Review round 1 of
+     * ugcportal-3ae proved that gap by writing such a reader into the tree
+     * and watching this file stay green; "the scanner itself" below now
+     * drives the same shape against a fixture.
+     *
+     * The namespace objects are collected from the file's own imports
+     * rather than matching any `<anything>.PUBLIC_MEDIA_SCOPE`, which keeps
+     * the original exclusion intact: `config.PUBLIC_MEDIA_SCOPE` is still
+     * not a reference, because nothing imported `config` as a namespace.
+     */
+    if (
+      ts.isPropertyAccessExpression(node) &&
+      node.name.text === SCOPE &&
+      ts.isIdentifier(node.expression) &&
+      namespaces.has(node.expression.text)
+    ) {
+      found = true;
+      return;
+    }
     ts.forEachChild(node, visit);
   };
   visit(source);
   return found;
+}
+
+/** The local names bound by `import * as X from "…"` in one parsed file. */
+function namespaceImportNames(source: ts.SourceFile): Set<string> {
+  const names = new Set<string>();
+  for (const statement of source.statements) {
+    if (!ts.isImportDeclaration(statement)) continue;
+    const bindings = statement.importClause?.namedBindings;
+    if (bindings && ts.isNamespaceImport(bindings)) {
+      names.add(bindings.name.text);
+    }
+  }
+  return names;
 }
 
 /**
@@ -110,7 +160,7 @@ function referencesScope(file: string): boolean {
  * surface it serves.
  *
  * The four query sites and the five surfaces behind them, re-derived from
- * the source at 168ebc9 rather than copied from the bead:
+ * the source at ba9991f rather than copied from the bead:
  *
  *   lib/public-media.ts   `listPublicMedia` — TWO surfaces, one query: the
  *                         paginated GET /api/public/media, and the
@@ -135,14 +185,7 @@ const COVERAGE_MARKER = "ugcportal-3ae";
 
 /** Titles of every `describe`/`it` in a file, read off the AST. */
 export function suiteTitlesIn(file: string): string[] {
-  const source = ts.createSourceFile(
-    file,
-    readFileSync(file, "utf8"),
-    ts.ScriptTarget.Latest,
-    /* setParentNodes */ true,
-    scriptKindFor(file),
-  );
-
+  const source = sourceFileOf(file);
   const titles: string[] = [];
   const visit = (node: ts.Node): void => {
     if (ts.isCallExpression(node)) {
@@ -275,6 +318,58 @@ describe("the scanner itself, against a fixture tree", () => {
       "app/api/public/feed-v2/route.ts",
       "lib/public-media.ts",
     ]);
+  });
+
+  it("FAILS on a reader that reaches the scope through a NAMESPACE import", () => {
+    /*
+     * The mutation for review round 1's finding 3, run rather than
+     * described. Before this, `referencesScope` rejected every identifier
+     * in property-access position — which was right for
+     * `config.PUBLIC_MEDIA_SCOPE` and wrong for a real reader written
+     * `import * as publicMedia from "@/lib/public-media"`, whose only
+     * occurrence of the name is in exactly that position. Such a reader
+     * passed the suite 11/11 while being a genuine fifth consumer.
+     */
+    const root = tree({
+      "lib/public-media.ts": `export const ${SCOPE} = {};`,
+      "app/api/public/feed-v3/route.ts": [
+        'import * as publicMedia from "@/lib/public-media";',
+        `export const GET = () => prisma.media.findMany({ where: publicMedia.${SCOPE} });`,
+      ].join("\n"),
+    });
+
+    expect(scanScopeConsumers(root)).toEqual([
+      "app/api/public/feed-v3/route.ts",
+      "lib/public-media.ts",
+    ]);
+  });
+
+  it("still ignores the same member access on something NOT imported as a namespace", () => {
+    /*
+     * The other direction of the same fix, and the reason the namespace
+     * names are collected from the file's own imports rather than matching
+     * any `<anything>.PUBLIC_MEDIA_SCOPE`. A config object that happens to
+     * carry a key of this name is not a reader, and a scan that counted it
+     * would put files on the map that use nothing.
+     *
+     * A namespace import of a DIFFERENT module reading this member would
+     * be reported — deliberately, since that is some module exporting a
+     * constant of this name and the map failing loudly is the right
+     * direction for it.
+     */
+    const root = tree({
+      "lib/named.ts": [
+        `import { config } from "@/lib/config";`,
+        `export const x = config.${SCOPE};`,
+      ].join("\n"),
+      "lib/bare.ts": `export const y = settings.rights.${SCOPE};`,
+      "lib/other-member.ts": [
+        'import * as publicMedia from "@/lib/public-media";',
+        "export const z = publicMedia.PUBLIC_MEDIA_COLUMN_SCOPE;",
+      ].join("\n"),
+    });
+
+    expect(scanScopeConsumers(root)).toEqual([]);
   });
 
   it("does NOT report a file that only mentions the constant in prose or a string", () => {

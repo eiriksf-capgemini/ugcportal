@@ -116,11 +116,13 @@ async function seedPublishableMedia(overrides: SeedOptions = {}) {
 
   if (depictsPeople !== undefined || peopleCleared) {
     /*
-      Seeded DIRECTLY, because nothing in the product writes a
-      MediaRightsClearance row yet — that write path is ugcportal-qfy9,
-      in flight alongside this. Fail-closed is testable without it; the
-      PERMITTING half of K2 is only reachable this way until qfy9 lands,
-      and that is stated in this bead's PR rather than implied otherwise.
+      Seeded DIRECTLY rather than through the admin curation screen
+      ugcportal-qfy9 shipped in `ba9991f`. This file is about the publish
+      route's HTTP behaviour against real rows, so the clearance is a
+      precondition to arrange, not the subject — the same way the
+      attestation above it is written straight into the table. What these
+      cases establish is that the route publishes GIVEN a clearance row,
+      not that the admin flow produces one; qfy9's own suite covers that.
     */
     await prisma.mediaListing.create({
       data: {

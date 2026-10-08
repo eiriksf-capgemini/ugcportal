@@ -1451,7 +1451,10 @@ describe("publishing something showing a person requires a PEOPLE clearance (ugc
 
     expect(response.status).toBe(422);
     expect(body.blocker).toBe("people_uncleared");
-    expect(body.blocker).not.toBe("attestation_missing");
+    // A redundant negative assertion about the attestation blocker used to
+    // sit here; once the line above passes it had no failing case (review
+    // round 1, finding 7). What it reached for is asserted where it can
+    // fail: "every message is distinct" in src/lib/publishability.test.ts.
     expect(body.error).toBe(PUBLISH_BLOCKER_MESSAGES.people_uncleared);
     expect(mediaUpdateManyMock).not.toHaveBeenCalled();
     expectNoOtherWrites();
@@ -1555,5 +1558,43 @@ describe("publishing something showing a person requires a PEOPLE clearance (ugc
     const response = await POST(publishRequest("POST"), context());
 
     expect(response.status).toBe(200);
+  });
+
+  it("does not block unpublishing a row this gate refuses to publish", async () => {
+    /*
+     * The sibling each of the three neighbouring publish gates already has
+     * ("does not block unpublishing an unlabelled item", "...a row with no
+     * alt text", "...one"), and which this one was missing (review round 1,
+     * finding 6). Taking a row down is the REMEDY for every refusal above,
+     * so a gate that stood in DELETE's way would trap the uncleared
+     * photograph of an identifiable person on the public site — the exact
+     * failure the gate exists to prevent, arriving through the fix for it.
+     *
+     * BOTH halves of the gate are made to refuse at once, so this cannot
+     * pass because only one of them happened not to be consulted: there is
+     * no declaration at all (K1), and the admin's triage says a person is
+     * shown with no clearance (K2).
+     *
+     * The two `not.toHaveBeenCalled()` assertions are what give this a
+     * failing case the status code alone would not: DELETE has no other
+     * reason to read either table, so a gate wrongly copied into it is
+     * visible here even in a form that let the request through anyway.
+     */
+    signedInAs(OWNER_ID);
+    mediaFindUniqueMock.mockResolvedValue(publishedMedia);
+    attestationFindUniqueMock.mockResolvedValue(null);
+    listingFindUniqueMock.mockResolvedValue({
+      depictsAlcohol: null,
+      depictsPeople: true,
+      layerClearances: [],
+    });
+
+    const response = await DELETE(publishRequest("DELETE"), context());
+
+    expect(response.status).toBe(200);
+    expect((await response.json()).publishedAt).toBeNull();
+    expect(writtenPayloads()).toEqual([{ publishedAt: null }]);
+    expect(attestationFindUniqueMock).not.toHaveBeenCalled();
+    expect(listingFindUniqueMock).not.toHaveBeenCalled();
   });
 });

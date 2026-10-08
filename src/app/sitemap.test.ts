@@ -306,8 +306,10 @@ describe("no uncleared item URL is handed to a crawler (ugcportal-3ae K3)", () =
 
     expect(itemPreviewIds(await sitemap())).toEqual([]);
 
-    // Seeded directly — ugcportal-qfy9 owns the write path, and it is not
-    // in yet. Only the clearance changes between the two assertions.
+    // Seeded directly rather than through the admin screen ugcportal-qfy9
+    // shipped in `ba9991f`: this file is about what the sitemap emits, so
+    // the clearance is a precondition to arrange. Only the clearance
+    // changes between the two assertions.
     await prisma.mediaListing.create({
       data: {
         mediaId: "sm-people",

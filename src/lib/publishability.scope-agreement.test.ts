@@ -27,6 +27,15 @@ import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db"
  * the product can write, and both are tracked as ugcportal-0epl. Writing
  * them down here is what makes a third one, or a change to either of these,
  * a test failure rather than a discovery.
+ *
+ * "Nothing in the product can write them" re-checked at `ba9991f`, after
+ * ugcportal-qfy9 landed the clearance write path this bead's PR had
+ * described as in flight: `recordLayerClearance`
+ * (src/lib/curation-clearance-write.ts) stores `reason.trim()` and refuses
+ * a blank one as `clearance_reason_blank` before it writes, so the
+ * whitespace-only clearance stays unreachable through the only surface
+ * that mints one. Nothing updates `Media.userId`, so the other stays
+ * unreachable for its own reason.
  */
 
 vi.mock("@/lib/auth", () => ({
@@ -228,11 +237,15 @@ async function seed(testCase: Case): Promise<void> {
   if (testCase.depictsPeople === undefined && !testCase.clearance) return;
 
   /*
-    Clearances are SEEDED DIRECTLY, because nothing in the product writes a
-    MediaRightsClearance row at the time this landed — that write path is
-    ugcportal-qfy9, built in parallel. The refusing half of this gate is
-    reachable end to end today; the permitting half is reachable only this
-    way, and the PR says so rather than implying an admin flow exercised it.
+    Clearances are SEEDED DIRECTLY rather than through the admin curation
+    screen that ugcportal-qfy9 shipped in `ba9991f`. Not because no writer
+    exists — one does now — but because this file compares a src/lib
+    predicate against a Prisma `where` over one row per state, including
+    states (`clearance-reason-blank`) that writer deliberately refuses to
+    produce. Driving a form here would make those states unseedable and
+    prove nothing extra about the agreement. What these cases therefore
+    establish is the gate's behaviour GIVEN a clearance row, not that the
+    admin flow produces one; qfy9's own suite covers that half.
   */
   const clearance = testCase.clearance;
   await prisma.mediaListing.create({
