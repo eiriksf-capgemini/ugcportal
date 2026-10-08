@@ -1,5 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { INLINE_LINK_CLASS } from "@/components/ui/inline-link";
+import type { AttestationAnswers } from "@/lib/attestation";
+import { compareTriageFactToAttestation } from "@/lib/curation-attestation";
 import {
   type StoredTriageAnswers,
   TRIAGE_ANSWER_NO,
@@ -48,6 +50,7 @@ const SELECT_CLASS =
 export function CurationTriageForm({
   mediaId,
   answers,
+  attestation = null,
   action,
 }: {
   /**
@@ -57,6 +60,14 @@ export function CurationTriageForm({
    */
   mediaId: string;
   answers: TriageFormAnswers | null;
+  /**
+   * The uploader's own rights declaration (ugcportal-15r), or `null` when
+   * nobody has attested to anything for this upload — ugcportal-vlnn K1/K3.
+   * Optional, defaulting to `null`, so a caller that predates this bead
+   * still compiles rather than being forced to thread a value it does not
+   * have.
+   */
+  attestation?: AttestationAnswers | null;
   /**
    * The server action that records the triage. Passed in rather than imported
    * here so this module can be rendered in a test without a running action
@@ -76,29 +87,62 @@ export function CurationTriageForm({
         <a className={INLINE_LINK_CLASS} href={RIGHTS_SETTINGS_PATH}>
           resale rights
         </a>{" "}
-        screen, which reads the same registry this form does.
+        screen, which reads the same registry this form does. Where the
+        uploader&rsquo;s own attestation answers the same question, it is
+        shown underneath — it is a starting point for this field, not a
+        substitute for your own judgment of the file.
       </p>
-      {TRIAGE_FACTS.map((fact) => (
-        <label key={fact.field} className="block text-xs font-medium">
-          {fact.question}
-          <select
-            name={fact.field}
-            /*
-              The stored answer, or "Not answered" when there is none. NOT a
-              `no` default: "not asked" and "asked, answer no" are different
-              states and only one of them sells (ugcportal-qn3), so a form
-              that opened on `no` would turn the act of looking at an upload
-              into an assertion that there is nobody identifiable in it.
-            */
-            defaultValue={triageAnswerValue(answers?.[fact.field])}
-            className={SELECT_CLASS}
-          >
-            <option value={TRIAGE_ANSWER_UNANSWERED}>Not answered</option>
-            <option value={TRIAGE_ANSWER_YES}>Yes</option>
-            <option value={TRIAGE_ANSWER_NO}>No</option>
-          </select>
-        </label>
-      ))}
+      {TRIAGE_FACTS.map((fact) => {
+        const stored = answers?.[fact.field] ?? null;
+        const comparison = compareTriageFactToAttestation(
+          fact.field,
+          attestation,
+        );
+        /*
+          The admin flag DEFAULTS to the uploader's answer (ugcportal-vlnn
+          K1), but only when nothing has been recorded yet: `stored` wins
+          whenever it is not null, so re-opening an already-triaged question
+          always shows what was actually recorded, never a reconstruction of
+          it — the exact failure this form's own docstring warns about. `??`
+          is safe here specifically because `stored` is `boolean | null`,
+          never `false | undefined`: a stored `false` short-circuits the `??`
+          and is kept, it is never read as "nothing recorded" and replaced by
+          the uploader's answer.
+        */
+        const defaultAnswer =
+          stored ?? (comparison.kind === "answered" ? comparison.value : null);
+        return (
+          <label key={fact.field} className="block text-xs font-medium">
+            {fact.question}
+            {comparison.kind === "answered" ? (
+              <span className="block font-normal text-ink-muted">
+                Uploader attested: {comparison.value ? "Yes" : "No"}
+              </span>
+            ) : comparison.kind === "no_attestation" ? (
+              <span className="block font-normal text-ink-muted">
+                No attestation on file for this upload.
+              </span>
+            ) : null}
+            <select
+              name={fact.field}
+              /*
+                The stored answer, or the uploader's own as a starting point,
+                or "Not answered" when there is neither. NOT a `no` default:
+                "not asked" and "asked, answer no" are different states and
+                only one of them sells (ugcportal-qn3), so a form that opened
+                on `no` would turn the act of looking at an upload into an
+                assertion that there is nobody identifiable in it.
+              */
+              defaultValue={triageAnswerValue(defaultAnswer)}
+              className={SELECT_CLASS}
+            >
+              <option value={TRIAGE_ANSWER_UNANSWERED}>Not answered</option>
+              <option value={TRIAGE_ANSWER_YES}>Yes</option>
+              <option value={TRIAGE_ANSWER_NO}>No</option>
+            </select>
+          </label>
+        );
+      })}
       <Button type="submit" size="sm">
         Record triage
       </Button>
