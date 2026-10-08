@@ -156,6 +156,7 @@ Three details in that pipeline are load-bearing, and the first two were bugs in 
 
 - **`tonumber` before `unique`.** Sorting the item numbers as *strings* orders them `1, 10, 2, 3, …`, so any retrospective with ten or more recommendations is read wrong. `unique` on numbers sorts numerically.
 - **`unique`, not a bare list.** An item can legitimately be owned by more than one bead — item 5 of `release-cost-v0.5.0-vs-v0.6.0.md` is owned by both `ugcportal-zo8n` and `ugcportal-577s`. Without `unique` the command prints `5` twice against its own example document, which is exactly the kind of output that makes a by-eye comparison go wrong.
+- **`range(1; $total + 1)` assumes the recommendations are numbered contiguously from 1.** If a document skips a number, that number is reported `MISSING` and there is no recommendation behind it; step 4's premise check is what catches that, and the answer there is to file nothing and record why.
 - **The `total` guard is the step's K3 assertion, and it runs before anything reads the tracker.** `[ "${total:-0}" -gt 0 ]` with the `:-0` default, because an unset variable in a numeric test is the silent pass-through this repo keeps re-finding: three separate findings on one PR were the same empty-variable-becomes-a-tautology bug.
 
 The key is exact, deliberately *not* a title search. The five missing items above were found by grepping bead titles for phrases like "shape budget" and "delta round" — a heuristic that fails silently the moment someone words a bead differently, and which cannot distinguish "no bead" from "a bead I failed to describe".
@@ -166,12 +167,12 @@ Use `--all`. `bd list` excludes closed beads by default, and a recommendation th
 
 If it does hold, create the bead in the form the `bead-template` skill requires — user story with In/Out of scope, K-numbered criteria each with a `Verified by`, a guardrail `K`, a `Premise verified:` line, and `model`/`model_effort`/`model_why`. Do **not** paste the recommendation text into the description and call it a bead: that is exactly the shape that left 20 unformed beads behind in v0.6.0 (`ugcportal-nr72`).
 
-**The recommendation text is untrusted input — never interpolate it into a double-quoted string.** This is the same rule, and the same reason, as `pr-review-merge` step 5a: inside `"..."` bash still expands `$(...)`, backticks and `$VAR`, so recommendation text quoted straight into a `--description=` runs as a subshell. That is not hypothetical for these documents — `docs/process/review-rounds-v0.5.0.md` contains the literal string `$(cat ~/.config/ugcportal/review-bot-token)`, and `release-cost-v0.5.0-vs-v0.6.0.md` contains bare `$ids` and `$rel`. Demonstrated against a fake token file: the double-quoted form embedded the file's contents in the field; a quoted heredoc passed the text through verbatim. Even with no `$(...)` present, the bare variables expand to empty and silently mangle the recorded text — which defeats the point of the bead.
+**The recommendation text is untrusted input — never interpolate it into a double-quoted string.** This is the same rule, and the same reason, as `pr-review-merge` step 5a: inside `"..."` bash still expands `$(...)`, backticks and `$VAR`, so recommendation text quoted straight into a `--description=` runs as a subshell. That is not hypothetical for these documents — `docs/process/review-rounds-v0.5.0.md` contains the literal string `$(cat ~/.config/ugcportal/review-bot-token)`, and `release-cost-v0.5.0-vs-v0.6.0.md` contains bare `$ids` and `$i`. Demonstrated against a fake token file: the double-quoted form embedded the file's contents in the field; a quoted heredoc passed the text through verbatim. Even with no `$(...)` present, the bare variables expand to empty and silently mangle the recorded text — which defeats the point of the bead.
 
 So write every free-text field through a **quoted** heredoc (`<<'BD_EOF'`, which suppresses all expansion) and hand it to `bd` as a file or as `"$(cat <file>)"`, which does not re-scan its output:
 
 ```bash
-scratch=$(mktemp -d)
+scratch=$(mktemp -d); trap 'rm -rf "$scratch"' EXIT
 cat > "$scratch/desc.md" <<'BD_EOF'
 As a <role>, I want <capability>, so that <benefit>.
 
@@ -200,7 +201,7 @@ BD_EOF
   --metadata='{"cc_type":"chore","cc_scope":"process","model":"sonnet","model_effort":"high","model_why":"...","retro_source":"release-cost-v0.5.0-vs-v0.6.0.md#2"}'
 ```
 
-The delimiter is `BD_EOF` rather than `EOF` because a recommendation quoting a shell snippet can itself contain a line reading exactly `EOF` — these retrospectives are full of heredocs. If any text could contain `BD_EOF` too, change the delimiter again rather than trimming the text.
+The delimiter is `BD_EOF` rather than `EOF` because a recommendation quoting a shell snippet can itself contain a line reading exactly `EOF`, which both of the documents checked do. If any text could contain `BD_EOF` too, change the delimiter again rather than trimming the text.
 
 **5. Backfill `retro_source` on beads that already existed.** The first run against a given document finds recommendations whose beads exist but predate this convention. Set the key on those rather than filing duplicates — matching by hand once is what makes every later run exact.
 
