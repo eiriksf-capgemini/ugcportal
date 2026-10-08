@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
+import { CURRENT_ATTESTATION_VERSION } from "@/lib/attestation";
 import {
   applyMigration,
   applyMigrations,
@@ -72,27 +73,48 @@ if (!PARTIAL_INDEX_MIGRATION) {
 // this test to the repo's own dev.db instead of a fresh temporary one.
 const database = createTemporaryDatabase();
 const { prisma } = await import("@/lib/prisma");
-const { listPublicMedia, publicMediaListingUrl, PUBLIC_MEDIA_SCOPE } =
-  await import("@/lib/public-media");
+const {
+  listPublicMedia,
+  publicMediaListingUrl,
+  PUBLIC_MEDIA_COLUMN_SCOPE,
+  PUBLIC_MEDIA_SCOPE,
+} = await import("@/lib/public-media");
+const { PUBLIC_MEDIA_RIGHTS_SCOPE } = await import("@/lib/publishability");
 
 /**
- * The predicate set the handler actually sends, read off `PUBLIC_MEDIA_SCOPE`
- * itself rather than hand-copied — so if a future change adds, removes or
- * renames a filter on the feed and the index is not updated to match, this
- * derivation (and the assertion below that uses it) moves with the real
- * scope instead of silently continuing to check a stale, hand-written list.
+ * The COLUMN predicates the handler sends, read off
+ * `PUBLIC_MEDIA_COLUMN_SCOPE` itself rather than hand-copied — so if a future
+ * change adds, removes or renames a not-null column filter on the feed and the
+ * index is not updated to match, this derivation (and the assertion below that
+ * uses it) moves with the real scope instead of silently continuing to check a
+ * stale, hand-written list.
  *
  * Plain `Object.keys`, not a filter re-deriving "which keys mean not-null" —
- * `MediaAnonymousScope` (src/lib/media-listing.ts) is the type that already
- * decides that, and it is the deciding type on purpose: every key it declares
- * — `publishedAt`, `previewKey`, `previewId` — is typed `{ not: null }`, and
- * the one key that isn't a not-null filter, `userId`, is typed `?: never`, so
- * `PUBLIC_MEDIA_SCOPE` (typed as `MediaAnonymousScope`) cannot assign it at
- * all; `Object.keys` never sees it because nothing can give it a value. A
- * filter re-checking each value's shape here would be re-deciding, in a second
- * place, something the type already decided in one.
+ * `MediaAnonymousColumnScope` (src/lib/media-listing.ts) is the type that
+ * already decides that, and it is the deciding type on purpose: every key it
+ * declares — `publishedAt`, `previewKey`, `previewId` — is typed
+ * `{ not: null }`, and the one key that isn't a not-null filter, `userId`, is
+ * typed `?: never`, so the constant cannot assign it at all; `Object.keys`
+ * never sees it because nothing can give it a value. A filter re-checking each
+ * value's shape here would be re-deciding, in a second place, something the
+ * type already decided in one.
+ *
+ * READ OFF THE COLUMN HALF AND NOT OFF `PUBLIC_MEDIA_SCOPE` SINCE
+ * ugcportal-3ae. The feed's filter is no longer three column predicates: it
+ * also carries the rights predicates (`PUBLIC_MEDIA_RIGHTS_SCOPE`), which are
+ * relation filters over MediaAttestation and MediaRightsClearance and which no
+ * partial index on `Media` can express. `Object.keys` of the whole scope would
+ * now yield `AND` — not a column, and nothing the index could or should name.
+ * The two halves are kept apart in src/lib/public-media.ts precisely so this
+ * derivation can keep pointing at the part that IS the index's business; the
+ * case below pins that the whole scope is exactly those two halves and nothing
+ * else, so a fourth column filter added straight to `PUBLIC_MEDIA_SCOPE` —
+ * bypassing the column half, and so bypassing this check — fails rather than
+ * going unindexed and unnoticed.
  */
-const PUBLIC_FEED_NOT_NULL_COLUMNS = Object.keys(PUBLIC_MEDIA_SCOPE).sort();
+const PUBLIC_FEED_NOT_NULL_COLUMNS = Object.keys(
+  PUBLIC_MEDIA_COLUMN_SCOPE,
+).sort();
 
 /** One Media row, with every column this test varies spelled out. */
 function mediaRow(options: {
@@ -175,6 +197,37 @@ beforeAll(async () => {
   // file actually tests. See this bead's own catch-up line in
   // src/lib/minors-triage-migration.test.ts for the identical precedent.
   await applyMigrations(prisma, { startAfter: PARTIAL_INDEX_MIGRATION });
+
+  // Every one of the four rows gets the uploader's rights declaration
+  // (ugcportal-3ae): without one no row is on the feed at all, and the three
+  // disqualified rows would then each be absent for the WRONG reason —
+  // "nobody attested it" rather than "it fails the column predicate this
+  // case is about". AFTER the catch-up above rather than beside the Media
+  // inserts: MediaAttestation is created by a migration later than the one
+  // this file stops at, so the table does not exist yet up there.
+  for (const id of [
+    "media-qualifies",
+    "media-unpublished",
+    "media-no-preview-key",
+    "media-no-preview-id",
+  ]) {
+    await prisma.mediaAttestation.create({
+      data: {
+        mediaId: id,
+        attestedByUserId: "user-feed-index",
+        attestationVersion: CURRENT_ATTESTATION_VERSION,
+        authorship: "AUTHOR",
+        ownOriginalNotFromWeb: true,
+        showsIdentifiablePeople: false,
+        showsMinors: false,
+        containsMusicNotOwned: false,
+        otherCreativeContributor: false,
+        brandOrSponsorship: false,
+        aiGenerated: false,
+        uploaderIsAdult: true,
+      },
+    });
+  }
 }, 30_000);
 
 afterAll(async () => {
@@ -203,7 +256,23 @@ describe("the public feed's partial index (ugcportal-ei7)", () => {
     ]);
   });
 
-  it("carries a WHERE clause naming EXACTLY the feed's predicate set — not hand-copied, but derived from PUBLIC_MEDIA_SCOPE (K3)", async () => {
+  it("is still the whole of PUBLIC_MEDIA_SCOPE's keys: the column half plus the rights half, and nothing else (ugcportal-3ae)", () => {
+    // What this closes: a fourth not-null column filter written straight
+    // into PUBLIC_MEDIA_SCOPE rather than into PUBLIC_MEDIA_COLUMN_SCOPE
+    // would be invisible to the derivation above, so the index assertion
+    // below would keep passing against three columns while the feed
+    // filtered on four — which is exactly the "index predicate narrower
+    // than the query" regression ugcportal-ei7's own K3 is about, arriving
+    // from the other side.
+    expect(Object.keys(PUBLIC_MEDIA_SCOPE).sort()).toEqual(
+      [
+        ...Object.keys(PUBLIC_MEDIA_COLUMN_SCOPE),
+        ...Object.keys(PUBLIC_MEDIA_RIGHTS_SCOPE),
+      ].sort(),
+    );
+  });
+
+  it("carries a WHERE clause naming EXACTLY the feed's predicate set — not hand-copied, but derived from PUBLIC_MEDIA_COLUMN_SCOPE (K3)", async () => {
     // Fails first if the fixture itself drifted: three columns is what this
     // test is built to exercise, and a change here would silently change
     // what's being asserted below.

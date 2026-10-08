@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { ResaleRightsStatus, RightsLayer } from "@/generated/prisma/enums";
+import {
+  MediaAuthorship,
+  ResaleRightsStatus,
+  RightsLayer,
+} from "@/generated/prisma/enums";
 import {
   ACCEPTED_ATTESTATION_VERSIONS,
   ATTESTATION_QUESTIONS,
@@ -1884,6 +1888,57 @@ describe("ugcportal-15r: the uploader's own attestation", () => {
       expect(attestationBlocker(cleanAttestation(), "owner-1")).toBeNull();
       expect(attestationBlocker(cleanAttestation(), "someone-else")).toBe(
         "attestation_not_by_uploader",
+      );
+    });
+
+    it("checks the adult declaration last (ugcportal-3ae)", () => {
+      /*
+       * Pinning an ORDER, because something now depends on it. The publish
+       * gate (src/lib/publishability.ts) maps
+       * `attestation_uploader_not_adult` to "does not block a publish" and
+       * then CONTINUES — §3.2 is about capacity to grant a licence, and
+       * publishing grants none. That is only sound while this code is the
+       * LAST thing this function can report, so that receiving it means
+       * every earlier check already passed.
+       *
+       * Each case below is an attestation that is under-18 AND defective
+       * one other way; each must report the OTHER defect. Move the adult
+       * check earlier and every one of them starts reporting
+       * `attestation_uploader_not_adult` instead — and the publish gate
+       * silently starts letting a retired version, a disclaimed right or
+       * an admin-signed declaration through.
+       */
+      const underage = { ...cleanAttestation(), uploaderIsAdult: false };
+
+      expect(
+        attestationBlocker(
+          { ...underage, attestationVersion: "1999-01-01.1" },
+          "owner-1",
+        ),
+      ).toBe("attestation_version_retired");
+      expect(
+        attestationBlocker(
+          { ...underage, authorship: MediaAuthorship.NEITHER },
+          "owner-1",
+        ),
+      ).toBe("attestation_rights_disclaimed");
+      expect(attestationBlocker(underage, "someone-else")).toBe(
+        "attestation_not_by_uploader",
+      );
+      expect(
+        attestationBlocker(
+          {
+            ...underage,
+            showsMinors: undefined as unknown as boolean,
+          },
+          "owner-1",
+        ),
+      ).toBe("attestation_incomplete");
+
+      // And with nothing else wrong, it is reported — so the cases above
+      // are about ORDER rather than about the check having been removed.
+      expect(attestationBlocker(underage, "owner-1")).toBe(
+        "attestation_uploader_not_adult",
       );
     });
   });

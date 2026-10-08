@@ -1,8 +1,6 @@
-import { readFileSync } from "node:fs";
-
 import ts from "typescript";
 
-import { scriptKindFor } from "@/lib/design/scan-source";
+import { sourceFileOf } from "@/lib/design/scan-source";
 
 /**
  * Test-only helper (not imported by any application code): find every place
@@ -81,16 +79,6 @@ export type PrismaModelWriteOptions = {
    */
   readonly relationField?: string;
 };
-
-function sourceFileOf(file: string): ts.SourceFile {
-  return ts.createSourceFile(
-    file,
-    readFileSync(file, "utf8"),
-    ts.ScriptTarget.Latest,
-    /* setParentNodes */ true,
-    scriptKindFor(file),
-  );
-}
 
 /** Every write of `model` in one file, as AST matches. */
 export function prismaModelWritesIn(

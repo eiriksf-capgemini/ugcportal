@@ -1,5 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { MediaAuthorship } from "@/generated/prisma/enums";
+import { CURRENT_ATTESTATION_VERSION } from "@/lib/attestation";
 import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db";
 
 /**
@@ -307,6 +309,26 @@ describe("K1: the publish gate refuses on the brand's NEXT publish attempt", () 
         sizeBytes: 2048,
         originalName: "IMG_0003.HEIC",
         altText: "A wine glass on a shelf",
+      },
+    });
+    // The uploader's rights declaration (ugcportal-3ae): without one the
+    // publish below is refused 422 for a reason that has nothing to do with
+    // this file's subject. Nobody is in the frame, so no PEOPLE clearance is
+    // needed.
+    await prisma.mediaAttestation.create({
+      data: {
+        mediaId: MEDIA_ID,
+        attestedByUserId: OWNER_ID,
+        attestationVersion: CURRENT_ATTESTATION_VERSION,
+        authorship: MediaAuthorship.AUTHOR,
+        ownOriginalNotFromWeb: true,
+        showsIdentifiablePeople: false,
+        showsMinors: false,
+        containsMusicNotOwned: false,
+        otherCreativeContributor: false,
+        brandOrSponsorship: true,
+        aiGenerated: false,
+        uploaderIsAdult: true,
       },
     });
     await prisma.mediaListing.create({

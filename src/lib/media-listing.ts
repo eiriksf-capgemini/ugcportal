@@ -6,6 +6,7 @@ import {
   type MediaTagLabel,
 } from "@/lib/media-access";
 import { prisma } from "@/lib/prisma";
+import type { MediaPublicRightsScope } from "@/lib/publishability";
 
 /**
  * The one keyset-paginated Media listing, shared by the owner's own view
@@ -75,7 +76,7 @@ export type MediaOwnerScope = {
  * next to this comment. That is the point: the decision belongs beside the
  * rule, not in whichever route copied it.
  */
-export type MediaAnonymousScope = {
+export type MediaAnonymousColumnScope = {
   publishedAt: { not: null };
   userId?: never;
   // Both preview columns, unlike the owner arm above. `previewId` because it
@@ -86,6 +87,35 @@ export type MediaAnonymousScope = {
   previewKey: { not: null };
   previewId: { not: null };
 };
+
+/**
+ * The three NOT-NULL column filters above, plus the rights predicates
+ * (ugcportal-3ae): a valid uploader attestation, and — where an identifiable
+ * person is shown — a cleared PEOPLE layer.
+ *
+ * STRUCTURALLY REQUIRED, exactly like `publishedAt` one type up and for the
+ * identical reason. An anonymous feed that forgot the publish filter used to
+ * typecheck; this type is what stopped that, and the rights filter is the
+ * same class of omission with the same cost — a leak, here of a photograph
+ * of somebody who never agreed to be on this site. A future anonymous query
+ * that builds its own scope object cannot leave them out and still compile.
+ *
+ * WHY THE SPLIT INTO TWO HALVES. The column half is the part the public
+ * feed's partial index mirrors (`@@index([createdAt, id], where: …)` in
+ * prisma/schema.prisma, measured in ugcportal-ei7), and
+ * src/lib/media-public-feed-index-migration.test.ts derives the index's
+ * expected WHERE clause from it by `Object.keys`. The rights half is
+ * relation filters, which no partial index on Media can carry. Keeping them
+ * separately named is what lets that derivation stay honest instead of
+ * demanding an `attestation IS NOT NULL` column that does not exist.
+ *
+ * The rights half's own shape and reasoning live in
+ * src/lib/publishability.ts, beside the row-at-a-time predicate it has to
+ * agree with. Imported as a TYPE only, so this module — which does import
+ * the Prisma client — stays out of that one's dependency graph.
+ */
+export type MediaAnonymousScope = MediaAnonymousColumnScope &
+  MediaPublicRightsScope;
 
 export type MediaListingScope = MediaOwnerScope | MediaAnonymousScope;
 
