@@ -4,8 +4,10 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
 import { requireAdmin } from "@/lib/admin";
+import { recordLayerClearance } from "@/lib/curation-clearance-write";
 import { parseTriageAnswers } from "@/lib/curation-triage";
 import { recordTriageFacts } from "@/lib/curation-triage-write";
+import { isClearableLayer } from "@/lib/resale-rights";
 import { CURATION_PATH } from "@/lib/routes";
 
 import type { TriageOutcomeCode } from "./outcomes";
@@ -95,4 +97,73 @@ function triageErrorPath(
   mediaId: string,
 ): string {
   return `${CURATION_PATH}?error=${error}&edit=${encodeURIComponent(mediaId)}`;
+}
+
+/**
+ * Record one rights layer's clearance for one upload (ugcportal-qfy9 K1).
+ *
+ * The same shape as `recordTriage` above, and the same reasoning for every
+ * part of it: `requireAdmin` here rather than trusting the page that
+ * rendered the form, because a server action is a public endpoint reachable
+ * by POSTing its action id; `throw` for a refused caller, because a
+ * non-admin has no screen to be sent back to; a redirect carrying one of a
+ * closed set of codes for everything an admin can legitimately get wrong.
+ *
+ * ONE LAYER PER SUBMISSION, from a form field the write re-validates against
+ * the registry. The form renders one of these per blocking layer, so the
+ * admin clears MUSIC by submitting the MUSIC form — there is no "clear all"
+ * and no multi-select, because the whole point of the bead is that a
+ * justification covers the layer it names and no other.
+ *
+ * `reason` is the one piece of free text on this screen, and it is never
+ * echoed into a redirect, a code or a message: it goes to the column and
+ * nowhere else. The codes below say what was wrong; none of them repeats
+ * what was typed.
+ */
+export async function recordClearance(formData: FormData) {
+  const session = await requireAdmin();
+  if (!session) {
+    throw new Error("Forbidden");
+  }
+
+  const mediaId = formData.get("mediaId");
+  if (typeof mediaId !== "string" || !mediaId) {
+    // Not a user-facing state, for the same reason `recordTriage` gives: the
+    // form carries this in a hidden field, so its absence is a tampered
+    // request rather than a mistake to render a banner for.
+    throw new Error("Missing media id");
+  }
+
+  const layer = formData.get("layer");
+  // A tampered or stale `layer` is a user-facing state rather than a throw,
+  // unlike the media id: the set of clearable layers is read off the
+  // registry, so a page rendered before a layer stopped being clearable
+  // submits a value that is now refused, and that is worth a sentence. The
+  // write re-checks it too — `isClearableLayer` is what decides, in one
+  // place, and the string never reaches Prisma unless it passes there.
+  if (typeof layer !== "string" || !isClearableLayer(layer)) {
+    return redirect(triageErrorPath("clearance_layer_not_clearable", mediaId));
+  }
+
+  const reason = formData.get("reason");
+  const outcome = await recordLayerClearance({
+    mediaId,
+    layer,
+    // `?? ""` and not a throw: an empty textarea submits "", a missing field
+    // is a tampered request, and both mean the same thing here — no
+    // justification was given, which the write refuses with a sentence the
+    // admin can act on.
+    reason: typeof reason === "string" ? reason : "",
+    // From the session, never from the form. The clearance names the person
+    // the gate will re-read the role of; a form-supplied actor would let a
+    // caller sign an admin's name to their own justification.
+    actorUserId: session.user.id,
+  });
+
+  revalidatePath(CURATION_PATH);
+  return redirect(
+    outcome.kind === "recorded"
+      ? `${CURATION_PATH}?clearance=recorded&edit=${encodeURIComponent(mediaId)}`
+      : triageErrorPath(outcome.kind, mediaId),
+  );
 }

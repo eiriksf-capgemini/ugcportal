@@ -672,6 +672,94 @@ export const TRIAGE_FACTS: readonly TriageFact[] = [
 ];
 
 /**
+ * WHAT ONE REGISTERED FACT CONTRIBUTES: its blocker, or null when that fact
+ * is settled on its own terms. Phase 3 of `triageBlocker` below, for a
+ * single entry.
+ *
+ * ONE FUNCTION RATHER THAN A LOOP BODY, because ugcportal-qfy9 needs the
+ * same decision asked two ways and the two must not be able to disagree.
+ * `triageBlocker` asks "is anything blocking?" and stops at the first
+ * answer; `unsettledLayers` asks "WHICH layers are blocking?" and has to ask
+ * about every entry. A second implementation of the per-fact rule — one in
+ * the gate and one for the screen — is exactly how a cleared MUSIC layer
+ * comes to be reported as a cleared PEOPLE layer, which is the invariant
+ * this function exists to make unexpressible: there is one rule, and both
+ * callers run it.
+ *
+ * Per fact and never across facts. Nothing here reads another entry's
+ * answer or another layer's clearance, so no clearance can settle a layer
+ * other than its own — `layerIsCleared` is called with `fact.layer` and
+ * with nothing else.
+ */
+function factBlocker(
+  listing: GateListing,
+  fact: TriageFact,
+): SellabilityBlocker | null {
+  const answer = listing[fact.field];
+  // `=== false` rather than `!== true`, which is not a style choice.
+  // `triageBlocker`'s phase 1 already guarantees a real boolean by the time
+  // it calls this, so the two read the same on that path — but `!== true`
+  // treats `null` as "skip", which is the fail-OPEN reading, so weakening or
+  // reordering phase 1 later would turn an unanswered fact into an absent
+  // one with nothing to notice. `unsettledLayers` runs no phase 1 at all, so
+  // here the distinction is live rather than defensive. Written this way the
+  // skip needs an explicit `no`, and anything else falls through to the
+  // block below.
+  if (answer === false) {
+    return null;
+  }
+  if (!isTriaged(answer)) {
+    return "triage_incomplete";
+  }
+  // A fact the registry records for its own sake is answered here and goes
+  // no further in the permitting direction: neither answer encumbers the
+  // item, so there is nothing to settle and nothing to block on
+  // (WINE_ACCESSORY — §3.1a's accessories are monetisable).
+  //
+  // THIS BRANCH IS FIRST, AND `tsc` KEEPS IT FIRST. Below it, `fact` is
+  // narrowed to the two variants that carry a `blocker`; move this test
+  // after them and `fact.blocker` is `SellabilityBlocker | undefined`,
+  // which does not typecheck as a return value. So the one ordering in
+  // which a non-encumbering fact could fall through to a blocker that does
+  // not exist is not expressible.
+  //
+  // Written as `=== "recorded"` rather than a negation, which is the
+  // opposite choice from the line below it and for the same underlying
+  // reason: this is the branch that PERMITS, so only the exact discriminant
+  // may reach it. An object whose `settledBy` is unreadable — a
+  // hand-built fixture, a registry assembled at runtime — falls past this
+  // test and is blocked by the next one.
+  if (fact.settledBy === "recorded") {
+    return null;
+  }
+  // A fact nothing settles is answered here and goes no further: no
+  // clearance is consulted, so none can be written to get past it. This
+  // branch is what makes ALCOHOL a stop rather than a hurdle, and it is
+  // read off the registry so the rule lives beside the fact it governs.
+  //
+  // Written as `!== "clearance"` rather than `=== "nothing"`, for the same
+  // reason phase 3 skips on `=== false` rather than `!== true`. `tsc`
+  // refuses an entry with a missing or unrecognised `settledBy` (verified
+  // by mutation: removing the key from the ALCOHOL entry fails
+  // `npm run typecheck`), but an object that reached here some other way —
+  // a hand-built fixture, a registry assembled at runtime — would then
+  // have an unreadable discriminant, and the readings differ on exactly
+  // that input: this one blocks, `=== "nothing"` would fall through to the
+  // clearance path and sell on an admin's signature.
+  if (fact.settledBy !== "clearance") {
+    return fact.blocker;
+  }
+  const missingEvidence = fact.alsoRequires?.(listing) ?? null;
+  if (missingEvidence) {
+    return missingEvidence;
+  }
+  if (!layerIsCleared(listing, fact.layer)) {
+    return fact.blocker;
+  }
+  return null;
+}
+
+/**
  * Part C of the checklist, in full: the one helper the gate iterates.
  * Returns the first blocker, or null when the whole triage holds.
  *
@@ -688,7 +776,8 @@ export const TRIAGE_FACTS: readonly TriageFact[] = [
  *   3. Each `true` settled on its own terms — or, for a fact the registry
  *      marks `settledBy: "nothing"`, not settled at all; or, for one marked
  *      `settledBy: "recorded"`, nothing to settle, because neither answer
- *      encumbers the item.
+ *      encumbers the item. One call to `factBlocker` per entry; the first
+ *      non-null answer is the one returned.
  */
 export function triageBlocker(listing: GateListing): SellabilityBlocker | null {
   for (const fact of TRIAGE_FACTS) {
@@ -702,68 +791,77 @@ export function triageBlocker(listing: GateListing): SellabilityBlocker | null {
   }
 
   for (const fact of TRIAGE_FACTS) {
-    const answer = listing[fact.field];
-    // `=== false` rather than `!== true`, which is not a style choice.
-    // Phase 1 already guarantees a real boolean here, so the two read the
-    // same today — but `!== true` treats `null` as "skip", which is the
-    // fail-OPEN reading, so weakening or reordering phase 1 later would
-    // turn an unanswered fact into an absent one with nothing to notice.
-    // Written this way the skip needs an explicit `no`, and anything else
-    // falls through to the block below.
-    if (answer === false) {
-      continue;
-    }
-    if (!isTriaged(answer)) {
-      return "triage_incomplete";
-    }
-    // A fact the registry records for its own sake is answered here and goes
-    // no further in the permitting direction: neither answer encumbers the
-    // item, so there is nothing to settle and nothing to block on
-    // (WINE_ACCESSORY — §3.1a's accessories are monetisable).
-    //
-    // THIS BRANCH IS FIRST, AND `tsc` KEEPS IT FIRST. Below it, `fact` is
-    // narrowed to the two variants that carry a `blocker`; move this test
-    // after them and `fact.blocker` is `SellabilityBlocker | undefined`,
-    // which does not typecheck as a return value. So the one ordering in
-    // which a non-encumbering fact could fall through to a blocker that does
-    // not exist is not expressible.
-    //
-    // Written as `=== "recorded"` rather than a negation, which is the
-    // opposite choice from the line below it and for the same underlying
-    // reason: this is the branch that PERMITS, so only the exact discriminant
-    // may reach it. An object whose `settledBy` is unreadable — a
-    // hand-built fixture, a registry assembled at runtime — falls past this
-    // test and is blocked by the next one.
-    if (fact.settledBy === "recorded") {
-      continue;
-    }
-    // A fact nothing settles is answered here and goes no further: no
-    // clearance is consulted, so none can be written to get past it. This
-    // branch is what makes ALCOHOL a stop rather than a hurdle, and it is
-    // read off the registry so the rule lives beside the fact it governs.
-    //
-    // Written as `!== "clearance"` rather than `=== "nothing"`, for the same
-    // reason phase 3 skips on `=== false` rather than `!== true`. `tsc`
-    // refuses an entry with a missing or unrecognised `settledBy` (verified
-    // by mutation: removing the key from the ALCOHOL entry fails
-    // `npm run typecheck`), but an object that reached here some other way —
-    // a hand-built fixture, a registry assembled at runtime — would then
-    // have an unreadable discriminant, and the readings differ on exactly
-    // that input: this one blocks, `=== "nothing"` would fall through to the
-    // clearance path and sell on an admin's signature.
-    if (fact.settledBy !== "clearance") {
-      return fact.blocker;
-    }
-    const missingEvidence = fact.alsoRequires?.(listing) ?? null;
-    if (missingEvidence) {
-      return missingEvidence;
-    }
-    if (!layerIsCleared(listing, fact.layer)) {
-      return fact.blocker;
+    const blocker = factBlocker(listing, fact);
+    if (blocker) {
+      return blocker;
     }
   }
 
   return null;
+}
+
+/**
+ * EVERY rights layer that is still in the way, in registry order
+ * (ugcportal-qfy9 K1).
+ *
+ * `triageBlocker` returns the FIRST blocker and stops, which is the right
+ * answer to "may this be sold" and the wrong one for the question this bead
+ * is about. Three layers can share one blocker code — MUSIC,
+ * THIRD_PARTY_CREATOR and SPONSORED_CONTENT all report
+ * `third_party_layer_uncleared` — so "still blocked" cannot distinguish
+ * "clearing MUSIC settled nothing" from "clearing MUSIC settled MUSIC and
+ * the other two remain". A test written against `triageBlocker` alone
+ * therefore passes even if clearing a layer does nothing at all, which is
+ * the assertion ugcportal-qfy9 K1 names as insufficient.
+ *
+ * So this reports the SET, and clearing one layer must shrink it by exactly
+ * one. Off the same `factBlocker` the gate runs, so the set and the gate
+ * cannot drift: a layer is in this list if and only if its own entry
+ * contributes a blocker.
+ *
+ * A layer nobody has ANSWERED is in the list too. That is the honest
+ * reading rather than an edge case — an unanswered question is not a
+ * settled one — and it matches phase 1 of the gate, which refuses the
+ * whole upload for it.
+ *
+ * NOT A SELLABILITY ANSWER. An empty list means every per-layer question is
+ * settled; it says nothing about the uploader's clearance, the attestation,
+ * or who signed the triage. Whether something may be sold is decided by
+ * `evaluateSellability`, and this helper is not part of that decision.
+ */
+export function unsettledLayers(listing: GateListing): RightsLayer[] {
+  return TRIAGE_FACTS.filter((fact) => factBlocker(listing, fact) !== null).map(
+    (fact) => fact.layer,
+  );
+}
+
+/**
+ * The layers a MediaRightsClearance can actually settle, read off the
+ * registry rather than listed (ugcportal-qfy9).
+ *
+ * ALCOHOL and WINE_ACCESSORY are members of `RightsLayer` and are not in
+ * here: `factBlocker` consults a clearance only for a `settledBy:
+ * "clearance"` entry, so a row naming either of them is accepted by the
+ * table and read by nothing. Deriving the list means the write path and the
+ * screen refuse exactly the layers the gate would ignore, with nothing to
+ * keep in step by hand.
+ */
+export const CLEARABLE_LAYERS: readonly RightsLayer[] = TRIAGE_FACTS.filter(
+  (fact) => fact.settledBy === "clearance",
+).map((fact) => fact.layer);
+
+/**
+ * True for a value that is a `RightsLayer` AND one a clearance settles.
+ *
+ * Both halves in one predicate on purpose: a form field is a string, and
+ * the two ways it can be wrong — not a layer at all, or a layer no
+ * clearance is consulted for — both end in a row the gate will never read.
+ */
+export function isClearableLayer(value: unknown): value is RightsLayer {
+  return (
+    typeof value === "string" &&
+    (CLEARABLE_LAYERS as readonly string[]).includes(value)
+  );
 }
 
 /**

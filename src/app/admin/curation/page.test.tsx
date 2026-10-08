@@ -1,7 +1,8 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { TRIAGE_FACTS } from "@/lib/resale-rights";
+import { RightsLayer } from "@/generated/prisma/enums";
+import { CLEARABLE_LAYERS, TRIAGE_FACTS } from "@/lib/resale-rights";
 import { mediaPreviewPath } from "@/lib/routes";
 import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db";
 
@@ -28,11 +29,24 @@ vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 
 const database = createTemporaryDatabase();
 const { prisma } = await import("@/lib/prisma");
+/*
+  DYNAMIC, like the two imports above it and for a reason this file learned
+  the hard way: `@/lib/curation-clearance-write` imports `@/lib/prisma`,
+  which builds its adapter from DATABASE_URL AT IMPORT TIME. A static import
+  of it at the top of this file would bind the client before
+  `createTemporaryDatabase()` had pointed the variable at a temp file, and
+  `applyMigrations` below would then run against whatever database the
+  environment happened to name.
+*/
+const { CLEARANCE_WRITE_REFUSALS } = await import(
+  "@/lib/curation-clearance-write"
+);
 const {
   default: AdminCurationPage,
   ERROR_BANNER_ID,
   MAX_UPLOADS,
   UPLOAD_LIST_ID,
+  rightsLayersSectionId,
 } = await import("@/app/admin/curation/page");
 
 const ADMIN = { user: { id: "admin-1", email: "admin@example.com", role: "ADMIN" } };
@@ -513,5 +527,277 @@ describe("outcome banners", () => {
       const markup = await renderPage({ error });
       expect(markup, error).not.toContain(`id="${ERROR_BANNER_ID}"`);
     }
+  });
+});
+
+describe("the rights-layer well (ugcportal-qfy9)", () => {
+  /**
+   * A listing presenting EVERY clearable layer at once, so "one form per
+   * blocking layer" is measurable. The shared `triage` helper above
+   * alternates its answers, which would leave some layers absent and make
+   * a count of the rendered forms mean nothing.
+   */
+  async function triageWithEveryLayerPresent(mediaId: string) {
+    await prisma.mediaListing.create({
+      data: {
+        mediaId,
+        ...Object.fromEntries(
+          TRIAGE_FACTS.map((fact) => [
+            fact.field,
+            fact.settledBy === "clearance",
+          ]),
+        ),
+        modelReleaseKey: `releases/${mediaId}/release.pdf`,
+        triagedByUserId: "admin-1",
+        triagedAt: new Date("2026-10-02T09:30:00.000Z"),
+      },
+    });
+  }
+
+  /**
+   * One upload's rights-layer well, by its own id.
+   *
+   * Named by id rather than taken as "the first well", because the page
+   * renders one per listed upload and the triage well above it looks the
+   * same — and DEPTH-AWARE rather than cut at the next closing tag, which
+   * is the mistake the `uploadRows` helper at the top of this file records.
+   * A slice that ran to the end of the document would make every
+   * "contains" assertion below true for content belonging to another
+   * upload, and every "does not contain" one a coincidence; "isolates one
+   * upload's well from another's" asserts it does not.
+   */
+  function layerWell(markup: string, mediaId: string): string {
+    const id = rightsLayersSectionId(mediaId);
+    expect(markup).toContain(`id="${id}"`);
+    const open = markup.lastIndexOf("<div", markup.indexOf(`id="${id}"`));
+    const tagPattern = /<div\b[^>]*>|<\/div>/g;
+    tagPattern.lastIndex = open;
+    let depth = 0;
+    let match: RegExpExecArray | null;
+    while ((match = tagPattern.exec(markup))) {
+      depth += match[0].startsWith("</") ? -1 : 1;
+      if (depth === 0) {
+        return markup.slice(open, match.index + match[0].length);
+      }
+    }
+    throw new Error(`unbalanced markup around ${id}`);
+  }
+
+  /** The `value` of every `name="layer"` hidden input in some markup. */
+  function submittedLayers(markup: string): string[] {
+    return [...markup.matchAll(/<input[^>]*name="layer"[^>]*>/g)].map(
+      (match) => /value="([^"]*)"/.exec(match[0])?.[1] ?? "",
+    );
+  }
+
+  it("isolates one upload's well from another's", async () => {
+    /*
+      The helper above is load-bearing: every assertion in this block is
+      "this well contains / does not contain a layer", and a slice that ran
+      past the end of one well would read the next upload's forms as part
+      of it. So the helper is tested on the input that would expose that —
+      two triaged uploads, one of which has a layer the other does not.
+    */
+    await createUpload("media-1");
+    await createUpload("media-2", {
+      createdAt: new Date("2026-09-01T00:00:00.000Z"),
+    });
+    await triageWithEveryLayerPresent("media-1");
+    await prisma.mediaListing.create({
+      data: {
+        mediaId: "media-2",
+        ...Object.fromEntries(TRIAGE_FACTS.map((fact) => [fact.field, false])),
+        triagedByUserId: "admin-1",
+        triagedAt: new Date("2026-10-02T09:30:00.000Z"),
+      },
+    });
+
+    const markup = await renderPage({ edit: "media-1" });
+    // Both wells are on the page...
+    expect(markup).toContain(`id="${rightsLayersSectionId("media-1")}"`);
+    expect(markup).toContain(`id="${rightsLayersSectionId("media-2")}"`);
+    // ...and neither slice reaches into the other.
+    expect(layerWell(markup, "media-1")).not.toContain(
+      `id="${rightsLayersSectionId("media-2")}"`,
+    );
+    expect(layerWell(markup, "media-2")).not.toContain(
+      `id="${rightsLayersSectionId("media-1")}"`,
+    );
+    expect(submittedLayers(layerWell(markup, "media-2"))).toEqual([]);
+  });
+
+  it("renders no well at all for an upload nobody has triaged", async () => {
+    // There is no MediaListing to hang a clearance off, and the write
+    // refuses one. A well full of forms that could only be refused would be
+    // the screen contradicting the server.
+    await createUpload("media-1");
+    expect(await renderPage({ edit: "media-1" })).not.toContain(
+      `id="${rightsLayersSectionId("media-1")}"`,
+    );
+
+    // The positive control, in the same test rather than inferred from
+    // another: triage the same upload and the well appears. Without it a
+    // renamed id, or a section that stopped rendering entirely, would make
+    // the assertion above pass for the wrong reason.
+    await triageWithEveryLayerPresent("media-1");
+    expect(await renderPage({ edit: "media-1" })).toContain(
+      `id="${rightsLayersSectionId("media-1")}"`,
+    );
+  });
+
+  it("renders one form per blocking clearable layer, each naming its own layer", async () => {
+    await createUpload("media-1");
+    await triageWithEveryLayerPresent("media-1");
+
+    const markup = await renderPage({ edit: "media-1" });
+    const layers = submittedLayers(layerWell(markup, "media-1"));
+
+    // Exactly the clearable set, once each. A screen that rendered one form
+    // for "the upload" rather than one per layer would show a single field,
+    // and one that repeated a layer would let the same justification be
+    // submitted twice.
+    expect([...layers].sort()).toEqual([...CLEARABLE_LAYERS].sort());
+    expect(new Set(layers).size).toBe(layers.length);
+  });
+
+  it("drops only the cleared layer's form when a layer is cleared", async () => {
+    /*
+      THE RENDERING HALF of K1, with the same mutation the write path's
+      test uses: clear ONE layer and count. A screen that read "has any
+      clearance" rather than "has this layer's clearance" would drop every
+      form at once.
+    */
+    await createUpload("media-1");
+    await triageWithEveryLayerPresent("media-1");
+    const listing = await prisma.mediaListing.findUniqueOrThrow({
+      where: { mediaId: "media-1" },
+      select: { id: true },
+    });
+    await prisma.mediaRightsClearance.create({
+      data: {
+        listingId: listing.id,
+        layer: RightsLayer.MUSIC,
+        reason: "Licence purchased, ref 4412",
+        clearedByUserId: "admin-1",
+      },
+    });
+
+    const markup = await renderPage({ edit: "media-1" });
+    const well = layerWell(markup, "media-1");
+    expect([...submittedLayers(well)].sort()).toEqual(
+      CLEARABLE_LAYERS.filter((layer) => layer !== RightsLayer.MUSIC).sort(),
+    );
+    // And the recorded one is shown as a record, with its reason and signer.
+    expect(well).toContain("MUSIC cleared");
+    expect(well).toContain("Licence purchased, ref 4412");
+  });
+
+  it("shows a layer as blocking again when its clearer is no longer an admin", async () => {
+    // The gate re-reads the clearer's current role, and this screen has to
+    // agree with it: a demoted admin's justification that still read as
+    // "cleared" here would send a curator looking for a different reason
+    // the upload will not sell.
+    await createUpload("media-1");
+    await triageWithEveryLayerPresent("media-1");
+    const listing = await prisma.mediaListing.findUniqueOrThrow({
+      where: { mediaId: "media-1" },
+      select: { id: true },
+    });
+    await prisma.mediaRightsClearance.create({
+      data: {
+        listingId: listing.id,
+        layer: RightsLayer.MUSIC,
+        reason: "Licence purchased",
+        clearedByUserId: "demoted-1",
+      },
+    });
+
+    const well = layerWell(await renderPage({ edit: "media-1" }), "media-1");
+    expect(submittedLayers(well)).toContain(RightsLayer.MUSIC);
+  });
+
+  it("offers no form for a layer no clearance settles", async () => {
+    /*
+      ALCOHOL blocks forever on a `yes`, and WINE_ACCESSORY blocks on
+      neither answer. Neither may be rendered with a box to type a
+      justification into: the write refuses both, and a form that can only
+      be refused teaches an admin that signing something fixes it.
+    */
+    await createUpload("media-1");
+    await prisma.mediaListing.create({
+      data: {
+        mediaId: "media-1",
+        ...Object.fromEntries(TRIAGE_FACTS.map((fact) => [fact.field, true])),
+        modelReleaseKey: "releases/media-1/release.pdf",
+        triagedByUserId: "admin-1",
+        triagedAt: new Date("2026-10-02T09:30:00.000Z"),
+      },
+    });
+
+    const layers = submittedLayers(
+      layerWell(await renderPage({ edit: "media-1" }), "media-1"),
+    );
+    expect(layers).not.toContain(RightsLayer.ALCOHOL);
+    expect(layers).not.toContain(RightsLayer.WINE_ACCESSORY);
+    expect([...layers].sort()).toEqual([...CLEARABLE_LAYERS].sort());
+  });
+
+  it("renders no clearance form on a row the admin has not opened", async () => {
+    // One upload's forms at a time, like the triage form: a page of open
+    // reason boxes invites typing a justification into the wrong row.
+    await createUpload("media-1");
+    await triageWithEveryLayerPresent("media-1");
+    const markup = await renderPage();
+    expect(submittedLayers(layerWell(markup, "media-1"))).toEqual([]);
+    expect(markup).toContain("is not settled yet");
+  });
+
+  it("says so when nothing is left to clear", async () => {
+    await createUpload("media-1");
+    await prisma.mediaListing.create({
+      data: {
+        mediaId: "media-1",
+        ...Object.fromEntries(TRIAGE_FACTS.map((fact) => [fact.field, false])),
+        triagedByUserId: "admin-1",
+        triagedAt: new Date("2026-10-02T09:30:00.000Z"),
+      },
+    });
+    const well = layerWell(await renderPage({ edit: "media-1" }), "media-1");
+    expect(well).toContain("No layer is blocking this upload.");
+    expect(submittedLayers(well)).toEqual([]);
+  });
+
+  it("confirms a recorded clearance, and says it settled one layer", async () => {
+    await createUpload("media-1");
+    expect(await renderPage({ clearance: "recorded" })).toContain(
+      "Clearance recorded for that one layer",
+    );
+    // And not on an ordinary page load, so the banner is reporting the
+    // `?clearance=` parameter rather than being part of the screen.
+    expect(await renderPage()).not.toContain(
+      "Clearance recorded for that one layer",
+    );
+  });
+
+  it("renders a DISTINCT message for each clearance refusal code", async () => {
+    /*
+      Not just "a banner appeared". Five codes that all resolved to the same
+      sentence would satisfy a per-code `toContain(ERROR_BANNER_ID)` and
+      still tell an admin something true about a refusal that did not
+      happen — so the banner's own text is collected and the five are
+      required to differ.
+    */
+    await createUpload("media-1");
+    const banners: string[] = [];
+    for (const code of CLEARANCE_WRITE_REFUSALS) {
+      const markup = await renderPage({ error: code });
+      const banner = new RegExp(
+        `<p[^>]*id="${ERROR_BANNER_ID}"[^>]*>([\\s\\S]*?)</p>`,
+      ).exec(markup)?.[1];
+      expect(banner, code).toBeTruthy();
+      banners.push(banner ?? "");
+    }
+    expect(banners).toHaveLength(CLEARANCE_WRITE_REFUSALS.length);
+    expect(new Set(banners).size).toBe(banners.length);
   });
 });
