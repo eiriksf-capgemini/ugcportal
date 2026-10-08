@@ -389,12 +389,13 @@ export function readRoundChain(items, prAuthor, reviewer) {
  * say it found nothing -- the report prints "unstated" for that round
  * rather than a number.
  *
- * A bare number next to a severity word is only a count in a findings
- * context (ugcportal-zo8n): a number glued to a `#` (an issue/PR reference)
- * or immediately followed by a `--flag` (a quoted CLI invocation, e.g. PR
- * #121's own round-1 body quoting `121 high --comment` as the code-review
- * args) is not read as a severity count, however close a severity word
- * sits next to it.
+ * Two specific non-findings contexts are excluded from the count
+ * (ugcportal-zo8n), however close a severity word sits next to the number:
+ * a number glued to a `#` (an issue/PR reference) and a number immediately
+ * followed by a `--flag` (a quoted CLI invocation, e.g. PR #121's own
+ * round-1 body quoting `121 high --comment` as the code-review args). This
+ * is not an exhaustive findings-context check -- only the two shapes this
+ * repo's own review bodies are known to produce.
  *
  * @param {string} body
  */

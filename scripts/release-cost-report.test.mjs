@@ -331,9 +331,9 @@ describe("classifySeverity (severity is read from the reviewer's words, never gu
     });
 
     it("still reads a genuine 'N <severity>' summary count that is not a PR reference or a CLI invocation", () => {
-      // Control: a weaker 'fix' that always returns 0 would also pass the
-      // #121 assertion above. This asserts the opposite failure mode never
-      // happens: a real stated count must still come through.
+      // Control: a weaker "fix" that always returns 0 would also pass the
+      // #121 assertion above. This case checks the opposite failure mode on
+      // one concrete input: a real stated count still comes through here.
       expect(classifySeverity("Review round 1. Found 2 medium findings and 1 low finding, both confirmed.")).toMatchObject({ medium: 2, low: 1 });
     });
 
