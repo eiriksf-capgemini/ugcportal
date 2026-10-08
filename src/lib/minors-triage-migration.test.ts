@@ -12,6 +12,7 @@ import {
   createTemporaryDatabase,
   migrationNames,
 } from "@/lib/test-support/db";
+import { completeAttestationRow } from "@/lib/test-support/attestation";
 
 /**
  * ugcportal-qn3 K2, against a real database rather than a reading of the
@@ -89,6 +90,23 @@ beforeAll(async () => {
   // it is here so the next one does not break this file in a way that
   // looks like a defect in the migration under test.
   await applyMigrations(prisma, { startAfter: MINORS_MIGRATION! });
+
+  /*
+   * The uploader's own rights attestation (ugcportal-15r), which the gate
+   * started requiring in 20261008200000 — after the migration under test, so
+   * the catch-up above is what brought the table. Seeded here because every
+   * case below is about the ONE question the migration under test added: an
+   * upload with no attestation blocks on `attestation_missing` before the
+   * gate ever reaches the triage, which would make "blocks until answered"
+   * pass whether or not that migration did anything.
+   *
+   * Written through the generated client rather than as raw SQL, unlike the
+   * seed above: that one had to predate the migration under test, this one
+   * runs after every migration has been applied.
+   */
+  await prisma.mediaAttestation.create({
+    data: completeAttestationRow("media-1", "owner-1"),
+  });
 
   // The catch-up above can bring triage columns of its own, and it
   // backfills them NULL for exactly the same reason this one does. Left

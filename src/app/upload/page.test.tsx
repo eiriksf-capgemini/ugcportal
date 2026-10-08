@@ -253,7 +253,15 @@ describe("the tag picker on the upload page", () => {
      */
     const markup = await renderPage();
 
-    const rendered = [...markup.matchAll(/value="([^"]+)"/g)].map(
+    // Scoped to the tag picker's own fieldset (`data-upload-tag-picker`)
+    // rather than read off the whole page: ugcportal-15r's attestation
+    // block renders twenty-one radios with `value=` of its own above this
+    // one, and an unscoped match would be asserting the order of those.
+    const picker = /<fieldset[^>]*data-upload-tag-picker=""[\s\S]*?<\/fieldset>/.exec(
+      markup,
+    );
+    expect(picker, "no tag picker fieldset in the markup").toBeTruthy();
+    const rendered = [...picker![0].matchAll(/value="([^"]+)"/g)].map(
       (match) => match[1],
     );
     expect(rendered).toEqual(["books", "food", "wine-drink"]);
@@ -266,7 +274,13 @@ describe("the tag picker on the upload page", () => {
 
     expect(markup).toContain("No subjects have been set up yet");
     expect(markup).not.toContain('type="checkbox"');
-    expect(markup).not.toContain("<fieldset");
+    // The TAG PICKER's fieldset specifically, not any fieldset on the page:
+    // ugcportal-15r's rights attestation is a fieldset too, and is rendered
+    // whether or not a subject vocabulary exists. The marker attribute is
+    // what tells the two apart — `not.toContain("<fieldset")` would now be
+    // asserting that the attestation is absent, which is the opposite of
+    // what this page should do.
+    expect(markup).not.toContain('data-upload-tag-picker=""');
   });
 
   it("renders the picker BEFORE the drop zone", async () => {

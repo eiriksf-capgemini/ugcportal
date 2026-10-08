@@ -1,4 +1,8 @@
 import {
+  type AttestationSubmission,
+  attestationFormParts,
+} from "@/lib/attestation";
+import {
   MEDIA_ALT_TEXT_FIELD,
   MEDIA_CAPTION_FIELD,
   MEDIA_TAGS_FIELD,
@@ -161,6 +165,19 @@ export type UploadRequest = {
    */
   altText?: string;
   caption?: string;
+  /**
+   * The uploader's rights attestation for this file (ugcportal-15r).
+   *
+   * OPTIONAL AT THIS LAYER AND REQUIRED BY THE SERVER, which is the opposite
+   * of the asymmetry `altText` carries one line up and is worth saying why.
+   * `altText` is optional at the server too; this is optional here only
+   * because this module is a transport and has no business deciding what a
+   * valid upload is — POST /api/media answers 400 for a request without one,
+   * and `UploadForm` refuses to queue a file before it gets here. Making it
+   * required in this type would mean every transport test in the repo had to
+   * construct a nine-answer object to assert something about a stall timer.
+   */
+  attestation?: AttestationSubmission;
   onProgress?: (progress: UploadProgress) => void;
   signal?: AbortSignal;
 };
@@ -200,7 +217,7 @@ function parseJson(text: string): unknown {
 }
 
 export function uploadFile(
-  { file, tags, altText, caption, onProgress, signal }: UploadRequest,
+  { file, tags, altText, caption, attestation, onProgress, signal }: UploadRequest,
   createRequest: XhrFactory = () => new XMLHttpRequest(),
 ): Promise<UploadResponseSummary> {
   return new Promise((resolve, reject) => {
@@ -240,6 +257,28 @@ export function uploadFile(
     }
     if (caption !== undefined && caption !== "") {
       form.append(MEDIA_CAPTION_FIELD, caption);
+    }
+    /*
+      The rights attestation (ugcportal-15r), appended last and after the file
+      part for the same body-peek reason everything else here is.
+
+      Through `attestationFormParts` rather than by spelling the field names
+      out: that function is the inverse of the server's `parseAttestation` and
+      lives beside it, so a renamed field or a changed `yes`/`no` spelling
+      moves on both sides at once. Writing the loop here would be the second
+      place that knows the wire format, and the one that silently falls
+      behind.
+
+      OMITTED ENTIRELY when absent rather than sent as empty parts, the same
+      "the no-op path makes the request it always made" treatment tags, alt
+      text and the caption get above. A request with no attestation is one the
+      server refuses with a 400 naming the missing field, which is a better
+      answer than nine empty strings.
+    */
+    if (attestation !== undefined) {
+      for (const [name, value] of attestationFormParts(attestation)) {
+        form.append(name, value);
+      }
     }
 
     const xhr = createRequest();

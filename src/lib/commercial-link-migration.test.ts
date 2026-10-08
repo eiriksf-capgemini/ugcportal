@@ -170,8 +170,20 @@ describe("ugcportal-qnq9.2.1: adding the commercial link to an existing database
     expect(added.map(key).sort()).toEqual([
       "index:CommercialLink_benefitSourceId_idx",
       "index:CommercialLink_mediaId_url_key",
+      // The catch-up above, showing up exactly as its own comment says a
+      // later migration's DDL would: 20261008200000 (ugcportal-15r) adds the
+      // MediaAttestation table, its foreign-key index, its one-per-file
+      // unique index, and SQLite's own autoindex for the TEXT PRIMARY KEY.
+      // Listed rather than filtered out, because the value of this
+      // assertion is that it is a COMPLETE diff — a later migration that
+      // quietly altered CommercialLink or Media would be invisible in a
+      // version of this list that only named what somebody expected.
+      "index:MediaAttestation_attestedByUserId_idx",
+      "index:MediaAttestation_mediaId_key",
       "index:sqlite_autoindex_CommercialLink_1",
+      "index:sqlite_autoindex_MediaAttestation_1",
       "table:CommercialLink",
+      "table:MediaAttestation",
     ]);
 
     // Nothing dropped, and no pre-existing table or index redefined — which

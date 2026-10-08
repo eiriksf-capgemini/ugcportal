@@ -3,6 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { answerAttestation } from "./attestation.test-support";
 import { UploadForm } from "./upload-form";
 
 /**
@@ -148,6 +149,11 @@ function mount(): void {
   act(() => {
     root.render(<UploadForm />);
   });
+  // The rights attestation (ugcportal-15r) is required before `addFiles`
+  // will queue anything, and it is not what any case in this file is about.
+  // Answered through the real radios, so these tests still go through the
+  // same gate a visitor does rather than around it.
+  answerAttestation(container, act);
 }
 
 /**

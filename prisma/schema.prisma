@@ -92,6 +92,11 @@ model User {
   // Nothing reads this direction; it is the back-relation Prisma requires for
   // BenefitSource.alcoholAnsweredBy.
   answeredBenefitSources BenefitSource[]        @relation("BenefitSourceAlcoholAnswerer")
+  // Rights attestations this person made about their own uploads
+  // (ugcportal-15r). The back-relation Prisma requires for
+  // MediaAttestation.attestedBy; nothing reads this direction, because the
+  // gate always arrives from a Media row.
+  mediaAttestations      MediaAttestation[]     @relation("MediaAttestationAuthor")
 }
 
 // One row per linked login provider (Google, Facebook, ...) for a user.
@@ -272,6 +277,12 @@ model Media {
   // per link and an item can carry more than one — see CommercialLink's own
   // comment at the bottom of this file.
   commercialLinks       CommercialLink[]
+  // The uploader's own rights declaration about this file (ugcportal-15r),
+  // if one was collected. Optional at the schema level because rows that
+  // predate the table have none and nothing backfills one — the gate reads
+  // that absence as `attestation_missing` rather than as a row of `no`s.
+  // See MediaAttestation's own comment at the bottom of this file.
+  attestation           MediaAttestation?
 
   @@index([userId])
   // Matches the listing query in GET /api/media exactly: filter on userId,
@@ -1185,4 +1196,112 @@ model CommercialLink {
   /// any commercial link still point at this brand" on every attempted
   /// BenefitSource delete, which without this is a full scan.
   @@index([benefitSourceId])
+}
+
+// --- the uploader's own rights attestation (ugcportal-15r) -------------------
+//
+// docs/legal/manual-upload-rights-review.md §3.1: every per-upload rights fact
+// the gate reads today is an ADMIN's assertion about a file the admin did not
+// make, and the uploader — the only person who can know whether they took the
+// photograph — is never asked anything. This is where the asking is recorded.
+//
+// NOT A SECOND COPY OF THE TRIAGE. MediaListing's booleans stay exactly what
+// they are: what an admin concluded, signed, and can be held to. These are
+// what the UPLOADER declared, at upload time, before any admin saw the file.
+// The two answer the same questions on purpose, from different people, so that
+// ugcportal-vlnn can show them side by side and a disagreement is visible
+// rather than averaged away. Nothing in this model resolves a disagreement —
+// see the blocker list in src/lib/resale-rights.ts for exactly which of these
+// answers the gate acts on and which it only records.
+
+/// On what basis the uploader claims to be able to grant anything at all
+/// (§3.1: "I am the author / I hold a written licence from the author
+/// (attach) / neither").
+///
+/// AN ENUM RATHER THAN A BOOLEAN, because the three states are not two. "I
+/// licensed it from the author" is a perfectly sellable answer that is NOT
+/// "I am the author", and collapsing them would lose the one distinction
+/// that says where the written instrument has to come from. `NEITHER` is the
+/// answer that ends the conversation: there is nothing for this platform to
+/// be granted, whatever any later admin concludes about the file.
+enum MediaAuthorship {
+  AUTHOR
+  LICENSED_FROM_AUTHOR
+  NEITHER
+}
+
+/// One uploader's rights declaration about one file (ugcportal-15r).
+///
+/// A SEPARATE TABLE, ONE-TO-ONE WITH MEDIA, NOT COLUMNS ON MEDIA — and the
+/// reason is ugcportal-15r's K4 rather than tidiness. Columns on Media would
+/// have to be nullable, because Media rows predate this table and because
+/// every other writer Media will ever get (ugcportal-ct0's Instagram sync)
+/// would otherwise have to supply nine answers before a row could exist. A
+/// nullable Boolean answer makes "nobody asked" and "the uploader said no"
+/// the same shape, one `?? false` away from being the same value — and the
+/// second of those is a warranty while the first is silence. As its own
+/// table, EVERY ANSWER COLUMN IS NOT NULL: there is no "half attested" row to
+/// coerce, and "not asked" is the absence of the row, which no coercion can
+/// turn into a `no`. Asserted against the real DDL in
+/// src/lib/attestation-migration.test.ts.
+///
+/// NOTHING BACKFILLS. An upload made before this existed has no attestation
+/// and is therefore not sellable (`attestation_missing`), which is the honest
+/// state: nobody asked its uploader anything. Re-attesting an old upload is a
+/// product decision nobody has taken and no code path offers.
+model MediaAttestation {
+  id      String @id @default(cuid())
+  mediaId String @unique
+
+  /// WHO SAID IT. Required, never nullable: an anonymous warranty is not one
+  /// the operator can rely on or act on, which is the whole of §3.1's point
+  /// (2). The gate additionally requires this to equal `Media.userId` —
+  /// `attestation_not_by_uploader` in src/lib/resale-rights.ts — because an
+  /// admin ticking the boxes on an uploader's behalf is precisely the
+  /// admin-asserts-what-they-cannot-know failure this table exists to end.
+  /// The database cannot express "equal to the parent row's userId", so that
+  /// check lives in the gate and in the single write path (K3).
+  attestedByUserId String
+
+  /// Which text the uploader was shown, from docs/legal/upload-rights-attestation.md.
+  /// Retiring a version (dropping it from ACCEPTED_ATTESTATION_VERSIONS in
+  /// src/lib/attestation.ts) immediately makes every upload attested under it
+  /// unsellable until someone re-attests — the same blast radius, and the
+  /// same reason for it, as ResaleRightsReview.checklistVersion.
+  attestationVersion String
+  attestedAt         DateTime @default(now())
+
+  /// §3.1's nine questions. One column each, all NOT NULL — see the model
+  /// comment. `src/lib/attestation.ts` holds the question wording and is the
+  /// single list the form, the parser, the gate and the document test all
+  /// iterate, so a tenth question cannot be added to one of them alone.
+  authorship               MediaAuthorship
+  /// "The file is my own original, not saved from a website."
+  ownOriginalNotFromWeb    Boolean
+  /// "It shows identifiable people."
+  showsIdentifiablePeople  Boolean
+  /// "Anyone shown is under 18."
+  showsMinors              Boolean
+  /// "It contains music I did not create."
+  containsMusicNotOwned    Boolean
+  /// "Someone else contributed creatively."
+  otherCreativeContributor Boolean
+  /// "It was made for a brand, or under a sponsorship."
+  brandOrSponsorship       Boolean
+  /// "It is wholly or partly AI-generated."
+  aiGenerated              Boolean
+  /// "I am 18 or older." §3.2: a resale licence granted by someone under 18
+  /// is at best voidable under vergemålsloven. This is a SELF-DECLARATION and
+  /// nothing verifies it — whether the declarer has the legal capacity to
+  /// grant anything, and what would verify it, is ugcportal-5pik.
+  uploaderIsAdult          Boolean
+
+  media      Media @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+  /// Cascade, not Restrict: an account deletion must not be blocked by the
+  /// uploader's own declarations about their own files. Those files go in the
+  /// same delete (Media.user is Cascade too), so this edge only matters for
+  /// the ordering, not for whether the row survives.
+  attestedBy User  @relation("MediaAttestationAuthor", fields: [attestedByUserId], references: [id], onDelete: Cascade)
+
+  @@index([attestedByUserId])
 }

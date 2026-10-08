@@ -2,8 +2,14 @@ import { describe, expect, it } from "vitest";
 
 import { ResaleRightsStatus, RightsLayer } from "@/generated/prisma/enums";
 import {
+  ACCEPTED_ATTESTATION_VERSIONS,
+  ATTESTATION_QUESTIONS,
+  CURRENT_ATTESTATION_VERSION,
+} from "@/lib/attestation";
+import {
   ACCEPTED_CHECKLIST_VERSIONS,
   CURRENT_CHECKLIST_VERSION,
+  type GateAttestation,
   type GateLayerClearance,
   type GateListing,
   type GateReview,
@@ -12,6 +18,7 @@ import {
   TRIAGE_FACTS,
   type TriageFact,
   type TriageFactField,
+  attestationBlocker,
   evaluateSellability,
   isResaleRightsRoute,
   isResaleRightsStatus,
@@ -30,6 +37,37 @@ function clearedReview(overrides: Partial<GateReview> = {}): GateReview {
     reviewedByUserId: "admin-1",
     validUntil: null,
     reviewedBy: { role: "ADMIN" },
+    ...overrides,
+  };
+}
+
+/**
+ * An attestation that passes every check the gate makes of one: present,
+ * complete, made by the file's own uploader, at the current version, with
+ * authorship claimed and the uploader an adult (ugcportal-15r).
+ *
+ * Every yes/no answer is an explicit `false`. That is an ANSWER written into
+ * a NOT NULL column, not an absence — the two are different inputs to the
+ * gate and "tells an unattested upload apart from an all-negative one" below
+ * is the case that holds them apart.
+ */
+function cleanAttestation(
+  overrides: Partial<GateAttestation> = {},
+): GateAttestation {
+  const answers = Object.fromEntries(
+    // Derived from the registry rather than listed, so a tenth question
+    // cannot leave this fixture answering nine and failing every case in
+    // this file with `attestation_incomplete`.
+    ATTESTATION_QUESTIONS.map(({ field }) => [
+      field,
+      field === "uploaderIsAdult",
+    ]),
+  ) as Omit<GateAttestation, "attestedByUserId" | "attestationVersion" | "authorship">;
+  return {
+    attestedByUserId: "owner-1",
+    attestationVersion: CURRENT_ATTESTATION_VERSION,
+    authorship: "AUTHOR",
+    ...answers,
     ...overrides,
   };
 }
@@ -71,6 +109,7 @@ function sellableUpload(overrides: Partial<GateUpload> = {}): GateUpload {
   return {
     userId: "owner-1",
     user: { resaleRightsReview: clearedReview() },
+    attestation: cleanAttestation(),
     listing: clearListing(),
     ...overrides,
   };
@@ -110,6 +149,7 @@ describe("ugcportal-vsm: the clearance is the uploader's, reached through the fi
    */
   it("routes the review through the uploader and nowhere else", () => {
     expect(Object.keys(MEDIA_GATE_SELECT).sort()).toEqual([
+      "attestation",
       "listing",
       "user",
       "userId",
@@ -131,6 +171,34 @@ describe("ugcportal-vsm: the clearance is the uploader's, reached through the fi
         "modelReleaseKey",
         "triagedBy",
         "triagedByUserId",
+      ].sort(),
+    );
+  });
+
+  /**
+   * The same claim for the attestation half (ugcportal-15r): the select
+   * loads every answer the gate reads and nothing that could name a
+   * different person's declaration.
+   *
+   * The answer columns come from ATTESTATION_QUESTIONS rather than a
+   * hand-list, so a tenth question is covered here the moment it exists;
+   * the three non-answer keys stay written out, which is what keeps this an
+   * assertion that nothing ELSE has crept in. Without it,
+   * `MEDIA_GATE_SELECT` could quietly stop loading `attestedByUserId` and
+   * every real-database caller would get `attestation_not_by_uploader` on a
+   * perfectly good row — or, worse, a future edit could load a `userId`
+   * from somewhere other than the file and give the owner check a second
+   * value to disagree with, which is the thing ugcportal-vsm removed.
+   */
+  it("selects every attested answer the gate reads, and nothing else", () => {
+    expect(
+      Object.keys(MEDIA_GATE_SELECT.attestation.select).sort(),
+    ).toEqual(
+      [
+        ...ATTESTATION_QUESTIONS.map((question) => question.field),
+        "attestationVersion",
+        "attestedByUserId",
+        "authorship",
       ].sort(),
     );
   });
@@ -1460,5 +1528,360 @@ describe("enum guards", () => {
     expect(isResaleRightsRoute("CONTRACT")).toBe(true);
     expect(isResaleRightsRoute("contract")).toBe(false);
     expect(isResaleRightsRoute("toString")).toBe(false);
+  });
+});
+
+/**
+ * ugcportal-15r K2 and K4: the gate reads the uploader's own declaration,
+ * and reads the absence of one as silence rather than as a row of `no`s.
+ *
+ * The fixture (`cleanAttestation` at the top of this file) answers every
+ * question explicitly — `false` to the eight content questions, `true` to
+ * "I am 18 or older", `AUTHOR` to the authorship one — and the baseline case
+ * above proves that combination SELLS. Every case below is that minus or
+ * plus one thing, so a failure names the fact that did the blocking.
+ */
+describe("ugcportal-15r: the uploader's own attestation", () => {
+  it("blocks an upload nobody ever asked the uploader about", () => {
+    expect(evaluateSellability(sellableUpload({ attestation: null }), NOW)).toEqual(
+      { sellable: false, blocker: "attestation_missing" },
+    );
+  });
+
+  it("blocks it before the sale record, so the message names the right gap", () => {
+    // Order matters here because the gate returns the FIRST blocker, and
+    // `not_listed_for_sale` is an administrator's next action while
+    // `attestation_missing` is a question nobody put to the one person who
+    // could answer it. docs/legal/manual-upload-rights-review.md §4 puts the
+    // attestation at item 7 and the listing at item 8, which is this order.
+    expect(
+      evaluateSellability(
+        sellableUpload({ attestation: null, listing: null }),
+        NOW,
+      ),
+    ).toEqual({ sellable: false, blocker: "attestation_missing" });
+  });
+
+  it("still puts the uploader's standing clearance first", () => {
+    // The other side of the same ordering claim (§4 items 1-6 before item
+    // 7): an uploader nobody has cleared is reported as such even when the
+    // attestation is also missing. Without this, "blocks before the sale
+    // record" above would be consistent with the attestation check having
+    // been put at the very top, which §4 does not say.
+    expect(
+      evaluateSellability(
+        sellableUpload({ attestation: null, user: null }),
+        NOW,
+      ),
+    ).toEqual({ sellable: false, blocker: "no_review" });
+  });
+
+  describe("K4: 'not asked' and 'answered no' are different states", () => {
+    /**
+     * An attestation answering `no` to every yes/no question, which is what
+     * an uploader with a clean original actually gives.
+     *
+     * NOT "every field false": `uploaderIsAdult` is the one question whose
+     * `no` is the blocking answer, and `authorship` is not a boolean at all.
+     * Both readings of "all-negative" are tested — this one, and the
+     * literal one below — because K4's claim has to hold for either.
+     */
+    const allNegative = cleanAttestation();
+
+    it("sells an upload whose uploader answered no to every question", () => {
+      expect(
+        evaluateSellability(
+          sellableUpload({ attestation: allNegative }),
+          NOW,
+        ),
+      ).toEqual({ sellable: true });
+    });
+
+    it("refuses the same upload with no attestation at all", () => {
+      /*
+       * THE WHOLE OF K4, in one comparison: two uploads identical in every
+       * other respect, one with explicit `no`s and one with silence, and
+       * the verdicts differ. A `?? false` anywhere between the column and
+       * this predicate collapses them, and this is the assertion that
+       * cannot pass if it does.
+       */
+      const attested = evaluateSellability(
+        sellableUpload({ attestation: allNegative }),
+        NOW,
+      );
+      const silent = evaluateSellability(
+        sellableUpload({ attestation: null }),
+        NOW,
+      );
+
+      expect(attested).not.toEqual(silent);
+      expect(attested.sellable).toBe(true);
+      expect(silent.sellable).toBe(false);
+    });
+
+    it("refuses the literal all-false reading too, and for its own reason", () => {
+      // "Answered no to everything" taken completely literally includes "no"
+      // to "I am 18 or older". That blocks — but with
+      // `attestation_uploader_not_adult`, which is still a DIFFERENT answer
+      // from `attestation_missing`. K4 holds on either reading of the
+      // phrase, which is why both are here rather than one.
+      const everythingFalse = cleanAttestation({ uploaderIsAdult: false });
+
+      expect(
+        evaluateSellability(
+          sellableUpload({ attestation: everythingFalse }),
+          NOW,
+        ),
+      ).toEqual({
+        sellable: false,
+        blocker: "attestation_uploader_not_adult",
+      });
+      expect(
+        evaluateSellability(sellableUpload({ attestation: null }), NOW).sellable,
+      ).toBe(false);
+      expect(
+        evaluateSellability(
+          sellableUpload({ attestation: everythingFalse }),
+          NOW,
+        ),
+      ).not.toEqual(
+        evaluateSellability(sellableUpload({ attestation: null }), NOW),
+      );
+    });
+
+    for (const { field } of ATTESTATION_QUESTIONS) {
+      it(`treats an unanswered ${field} as incomplete, never as a no`, () => {
+        /*
+         * One case per question, generated from the registry, and the
+         * mutation is per field rather than wholesale: a `?? false` applied
+         * to one column would pass a test that only ever nulled a different
+         * one. `null` is the shape a hand-written query or a future select
+         * that maps a column wrong would produce; `undefined` is the shape a
+         * select that omitted the key entirely would.
+         */
+        for (const absent of [null, undefined]) {
+          const broken = {
+            ...cleanAttestation(),
+            [field]: absent,
+          } as unknown as GateAttestation;
+
+          expect(
+            evaluateSellability(sellableUpload({ attestation: broken }), NOW),
+            `${field} = ${String(absent)}`,
+          ).toEqual({ sellable: false, blocker: "attestation_incomplete" });
+        }
+      });
+    }
+
+    it("treats an unreadable authorship as incomplete", () => {
+      const broken = {
+        ...cleanAttestation(),
+        authorship: "something-else",
+      } as unknown as GateAttestation;
+
+      expect(
+        evaluateSellability(sellableUpload({ attestation: broken }), NOW),
+      ).toEqual({ sellable: false, blocker: "attestation_incomplete" });
+    });
+  });
+
+  describe("K2: the verdict moves with the attested facts", () => {
+    it("refuses an uploader who says they are neither author nor licensee", () => {
+      /*
+       * THE FIXTURE MUTATION K2 ASKS FOR: one attested fact flipped, and
+       * the blocker set changes accordingly. Nothing else about this upload
+       * differs from the baseline that sells, so the assertion is connected
+       * to the attestation and not to an unrelated predicate.
+       */
+      expect(
+        evaluateSellability(
+          sellableUpload({ attestation: cleanAttestation({ authorship: "NEITHER" }) }),
+          NOW,
+        ),
+      ).toEqual({ sellable: false, blocker: "attestation_rights_disclaimed" });
+    });
+
+    it("sells on a written licence from the author, as on authorship", () => {
+      // The mirror image, so the case above is not passing because every
+      // non-default value is refused. Two of the three answers are sellable
+      // and the registry says which.
+      expect(
+        evaluateSellability(
+          sellableUpload({
+            attestation: cleanAttestation({
+              authorship: "LICENSED_FROM_AUTHOR",
+            }),
+          }),
+          NOW,
+        ),
+      ).toEqual({ sellable: true });
+    });
+
+    it("refuses an uploader who says they are under 18", () => {
+      expect(
+        evaluateSellability(
+          sellableUpload({
+            attestation: cleanAttestation({ uploaderIsAdult: false }),
+          }),
+          NOW,
+        ),
+      ).toEqual({ sellable: false, blocker: "attestation_uploader_not_adult" });
+    });
+
+    it("refuses an attestation made by somebody other than the uploader", () => {
+      /*
+       * The bead's own note: "Mutate the fixture, not just the code: the K2
+       * test must construct a row whose attestedByUserId differs from
+       * Media.userId and see it blocked." An admin ticking the boxes on an
+       * uploader's behalf is the admin-asserts-what-they-cannot-know
+       * failure §3.1 describes, wearing the uploader's name.
+       */
+      expect(
+        evaluateSellability(
+          sellableUpload({
+            attestation: cleanAttestation({ attestedByUserId: "admin-1" }),
+          }),
+          NOW,
+        ),
+      ).toEqual({ sellable: false, blocker: "attestation_not_by_uploader" });
+    });
+
+    it("refuses one whose actor is missing entirely", () => {
+      expect(
+        evaluateSellability(
+          sellableUpload({
+            attestation: cleanAttestation({ attestedByUserId: null }),
+          }),
+          NOW,
+        ),
+      ).toEqual({ sellable: false, blocker: "attestation_not_by_uploader" });
+    });
+
+    it("follows the FILE's owner, not a name on the attestation", () => {
+      // The anchor, the same way `sellableUpload` proves it for the review:
+      // moving the file to another user invalidates a declaration that is
+      // still perfectly well-formed. Nobody assembling a row gets to decide
+      // whose declaration applies.
+      expect(
+        evaluateSellability(
+          sellableUpload({
+            userId: "user-2",
+            user: { resaleRightsReview: clearedReview() },
+          }),
+          NOW,
+        ),
+      ).toEqual({ sellable: false, blocker: "attestation_not_by_uploader" });
+    });
+
+    it("refuses a version no longer accepted", () => {
+      expect(
+        evaluateSellability(
+          sellableUpload({
+            attestation: cleanAttestation({ attestationVersion: "2019-01-01.0" }),
+          }),
+          NOW,
+        ),
+      ).toEqual({ sellable: false, blocker: "attestation_version_retired" });
+    });
+
+    it("accepts every version the module currently accepts", () => {
+      // Derived rather than pinned to one string, so adding a second
+      // accepted version does not need this case edited — and so the case
+      // above is about retirement rather than about one hard-coded value.
+      for (const version of ACCEPTED_ATTESTATION_VERSIONS) {
+        expect(
+          evaluateSellability(
+            sellableUpload({
+              attestation: cleanAttestation({ attestationVersion: version }),
+            }),
+            NOW,
+          ),
+          version,
+        ).toEqual({ sellable: true });
+      }
+    });
+  });
+
+  describe("what the gate deliberately does NOT read (ugcportal-9pic)", () => {
+    /**
+     * The boundary of this bead, as a test rather than only as a comment.
+     *
+     * Six of the nine answers are the same questions `MediaListing`'s triage
+     * asks an administrator, and the gate reads none of them. That is not an
+     * omission to be quietly fixed by whoever next reads this file: resolving
+     * uploader-versus-admin disagreement by taking the stricter answer would
+     * hard-code a policy nobody chose. ugcportal-9pic owns the decision.
+     *
+     * Asserted so that CHANGING it is a visible act with this comment in the
+     * diff, rather than something that happens by accident — and so that
+     * ugcportal-9pic, when it lands, has a case that must be rewritten.
+     */
+    const contentFields = [
+      "ownOriginalNotFromWeb",
+      "showsIdentifiablePeople",
+      "showsMinors",
+      "containsMusicNotOwned",
+      "otherCreativeContributor",
+      "brandOrSponsorship",
+      "aiGenerated",
+    ] as const;
+
+    it("covers every content answer, so this block cannot silently shrink", () => {
+      // `uploaderIsAdult` is the one yes/no the gate DOES act on, which is
+      // why it is the only member of the registry absent from the list
+      // above. Derived rather than asserted by eye.
+      expect([...contentFields, "uploaderIsAdult"].sort()).toEqual(
+        ATTESTATION_QUESTIONS.map(({ field }) => field).sort(),
+      );
+    });
+
+    for (const field of contentFields) {
+      it(`sells regardless of the uploader's answer to ${field}`, () => {
+        for (const answer of [true, false]) {
+          expect(
+            evaluateSellability(
+              sellableUpload({
+                attestation: cleanAttestation({
+                  // `ownOriginalNotFromWeb` reads the other way round from
+                  // the rest — a `no` there is the worrying answer — but the
+                  // claim is the same for both values either way.
+                  [field]: answer,
+                }),
+              }),
+              NOW,
+            ),
+            `${field} = ${answer}`,
+          ).toEqual({ sellable: true });
+        }
+      });
+    }
+
+    it("still blocks on the ADMIN's answer to the same question", () => {
+      // The reason the block above is not a hole: the triage half of the
+      // gate is unchanged, so an item an admin says shows people still needs
+      // a model release and a PEOPLE clearance whatever the uploader said.
+      // What is undecided is only what happens when the two DISAGREE.
+      expect(
+        evaluateSellability(
+          sellableUpload({
+            attestation: cleanAttestation({ showsIdentifiablePeople: false }),
+            listing: clearListing({ depictsPeople: true }),
+          }),
+          NOW,
+        ),
+      ).toEqual({ sellable: false, blocker: "model_release_missing" });
+    });
+  });
+
+  describe("attestationBlocker on its own", () => {
+    it("is the same rule the gate applies, not a second copy", () => {
+      // Exported for the admin screen the way `uploaderClearanceBlocker` is,
+      // and checked here against the whole gate so the two cannot drift.
+      expect(attestationBlocker(null, "owner-1")).toBe("attestation_missing");
+      expect(attestationBlocker(cleanAttestation(), "owner-1")).toBeNull();
+      expect(attestationBlocker(cleanAttestation(), "someone-else")).toBe(
+        "attestation_not_by_uploader",
+      );
+    });
   });
 });
