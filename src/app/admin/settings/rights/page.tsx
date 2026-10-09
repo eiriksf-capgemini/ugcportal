@@ -190,7 +190,13 @@ export default async function ResaleRightsSettingsPage({
         <p className="font-medium">
           Asked of every upload, separately from the clearance below
         </p>
-        <ul className="mt-2 list-disc space-y-1 pl-5 text-ink-muted">
+        {/*
+          text-muted-foreground, not text-ink-muted (ugcportal-6uc2, phase
+          2): this list sits inside the bg-muted well above, which now reads
+          the paper scale (globals.css), not the near-black one text-ink-
+          muted is tuned for.
+        */}
+        <ul className="mt-2 list-disc space-y-1 pl-5 text-muted-foreground">
           {TRIAGE_FACTS.map((fact) => (
             <li key={fact.field}>
               {fact.question}
@@ -228,7 +234,7 @@ export default async function ResaleRightsSettingsPage({
             </li>
           ))}
         </ul>
-        <p className="mt-2 text-xs text-ink-muted">
+        <p className="mt-2 text-xs text-muted-foreground">
           Unanswered is not &ldquo;no&rdquo;: an upload with any of these
           left blank cannot be sold, and a &ldquo;yes&rdquo; needs its own
           clearance on that layer — except where the list above says
@@ -350,17 +356,21 @@ export default async function ResaleRightsSettingsPage({
                       : " — clear to sell, once each upload is triaged"}
                   </p>
                   {/*
-                    text-ink-muted, not text-muted-foreground (ugcportal-rw9j
-                    review round 1): both of these sit inside the bg-muted/
-                    bg-destructive-surface well above, which is still the old
-                    near-black surface scale this phase leaves untouched.
-                    --muted-foreground now means "secondary text on the page
-                    canvas" (see globals.css and contrast.ts's
-                    muted-foreground-on-background comment) and measures only
-                    3.18:1 against --muted in light mode - --color-ink-muted
-                    is the token still tuned for this well, exactly like
-                    --color-ink for the destructive-well body copy above it in
-                    contrast.ts.
+                    text-ink-muted when blocker (the bg-destructive-surface
+                    branch above, still the near-black surface scale this
+                    bead leaves untouched - see --color-ink for the
+                    destructive-well body copy above it in contrast.ts);
+                    text-muted-foreground when not (the bg-muted branch,
+                    which now reads the paper scale as of ugcportal-6uc2,
+                    phase 2 - --color-ink-muted would be near-invisible
+                    there, the same failure shape muted-foreground-on-
+                    background's own comment describes). The enclosing
+                    div's own className above picks the same two branches on
+                    the same condition - this has to track it exactly,
+                    because review (which gates the <dl> below) and blocker
+                    are independent: a reviewed, non-blocking upload renders
+                    the <dl> inside the bg-muted branch, not the destructive
+                    one.
                   */}
                   {blocker ? (
                     <p className="mt-1 text-ink-muted">
@@ -368,7 +378,13 @@ export default async function ResaleRightsSettingsPage({
                     </p>
                   ) : null}
                   {review ? (
-                    <dl className="mt-2 space-y-1 text-xs text-ink-muted">
+                    <dl
+                      className={
+                        blocker
+                          ? "mt-2 space-y-1 text-xs text-ink-muted"
+                          : "mt-2 space-y-1 text-xs text-muted-foreground"
+                      }
+                    >
                       <div>
                         <dt className="inline font-medium">Reviewer: </dt>
                         <dd className="inline">

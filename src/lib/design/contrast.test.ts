@@ -8,10 +8,12 @@ import { describe, expect, it } from "vitest";
 import { parseColor, toHex } from "./color";
 import {
   PAIRINGS,
+  PHASE_2_MOVED_TOKENS,
   RING_ALPHA_MODIFIER,
   RING_OVERRIDE_SURFACES,
   SURFACES,
   THRESHOLDS,
+  checkPhase2MigrationClaim,
   evaluatePairing,
   findColorScaleNameCollisions,
   parseTokenReference,
@@ -1245,16 +1247,28 @@ describe("petrol is demoted, not removed", () => {
     expect(tokens.get("--selection")?.value).toMatch(/^var\(--petrol-\d+\)$/);
   });
 
-  it("no longer paints cards, overlays, the secondary button or the neutral hover fill", () => {
+  it("no longer paints overlays, the secondary button or the neutral hover fill", () => {
     // The demotion, stated as a check: the big areas are all neutral surface.
     // --background is deliberately NOT in this list any more (ugcportal-rw9j):
     // painting the page canvas with the petrol/paper palette is this bead's
     // entire point, not a regression of the demotion K4 originally checked.
-    for (const token of ["--card", "--popover", "--muted", "--accent", "--secondary", "--sidebar"]) {
+    // --card and --muted are ALSO deliberately not in this list any more
+    // (ugcportal-6uc2, phase 2): see "moves --card and --muted off the
+    // near-black scale onto the paper one" below for their own check -
+    // this test now documents exactly the SIX tokens phase 2 did not touch.
+    for (const token of ["--popover", "--accent", "--secondary", "--sidebar"]) {
       expect(tokens.get(token)?.value, token).toMatch(
         /^var\(--color-(surface-\d+|scrim)\)$/,
       );
     }
+  });
+
+  it("moves --card and --muted off the near-black scale onto the paper one (ugcportal-6uc2, phase 2)", () => {
+    expect(tokens.get("--card")?.value).toBe("var(--paper-card)");
+    expect(tokens.get("--muted")?.value).toBe("var(--paper-card)");
+    const darkTokens = tokensByMode.dark;
+    expect(darkTokens.get("--card")?.value).toBe("var(--petrol-card)");
+    expect(darkTokens.get("--muted")?.value).toBe("var(--petrol-card)");
   });
 
   it("paints the page canvas with the petrol/paper palette, in both modes", () => {
@@ -1280,7 +1294,18 @@ describe("K1: the exact palette docs/design/tokens.css adopted", () => {
     expect(resolveToken("--primary-foreground", tokens)).toBe("#ffffff");
   });
 
-  it("declares a dark-mode override for exactly the tokens this phase touches", () => {
+  it("declares a dark-mode override for exactly the tokens phase 1 and phase 2 together touch", () => {
+    // ugcportal-6uc2 (phase 2) adds --card, --muted and --border to this
+    // set: both --card/--muted now carry a foreground that already flips in
+    // dark mode (--card-foreground tracks --foreground; --muted-foreground
+    // is re-declared two lines below), so each needs its own dark fill or
+    // the pair goes light-on-light (see globals.css's own comment on this
+    // block). --border is included too, for the decorative reason
+    // docs/design/tokens.css gives it a distinct dark value at all - see
+    // the same comment. --input is deliberately NOT here: it is the one
+    // phase-2 token proven to need no dark-mode override at all (one
+    // mode-invariant value already clears 3:1 in both modes - see its own
+    // declaration's comment in globals.css).
     const darkOnly = parseDeclarations(css).filter((declaration) =>
       DARK_MEDIA_SELECTOR.test(declaration.selector),
     );
@@ -1293,6 +1318,9 @@ describe("K1: the exact palette docs/design/tokens.css adopted", () => {
         "--primary",
         "--primary-hover",
         "--primary-foreground",
+        "--card",
+        "--muted",
+        "--border",
       ]),
     );
   });
@@ -1561,4 +1589,86 @@ describe("K3 (ugcportal-uo15): no two live colour scales share a step name acros
       expect(findColorScaleNameCollisions(tokensByMode[mode])).toEqual([]);
     },
   );
+});
+
+/**
+ * K4 (ugcportal-6uc2): "following should never happen - the phase-1 holding
+ * comment in globals.css is deleted while any of --border, --input, --card
+ * or --muted still reads from the near-black scale, leaving the file
+ * claiming a migration it did not finish."
+ *
+ * Same shape as K3's own fixture-mutation suite just above: prove the real
+ * file is clean today, then prove the guard function actually CAN fail by
+ * feeding it a deliberately mutated (comment-stripped CSS text, near-black
+ * token) pair, then prove reverting either half of that mutation clears it.
+ */
+describe("K4 (ugcportal-6uc2): the phase-2 holding comment must not claim a finished migration", () => {
+  it("names the same four tokens this bead's K1-K3 move", () => {
+    expect([...PHASE_2_MOVED_TOKENS].sort()).toEqual(
+      ["--border", "--card", "--input", "--muted"].sort(),
+    );
+  });
+
+  it("the real, shipped stylesheet: comment present, and none of the four still reads near-black", () => {
+    const result = checkPhase2MigrationClaim(css, tokens);
+    expect(result.commentPresent, "holding-comment marker").toBe(true);
+    expect(result.stillNearBlack, "tokens still on the near-black scale").toEqual([]);
+    expect(result.claimsUnfinishedMigrationAsDone).toBe(false);
+  });
+
+  it("FIXTURE MUTATION: comment deleted while --card still reads near-black fails the guard", () => {
+    const mutatedCss = css.replace(
+      "Phase 2 (ugcportal-6uc2) is that approval acted on",
+      "",
+    );
+    expect(
+      mutatedCss.length,
+      "the replace above must actually have removed something",
+    ).toBeLessThan(css.length);
+
+    const mutatedTokens = new Map(tokens);
+    mutatedTokens.set("--card", {
+      property: "--card",
+      value: "var(--color-surface-1)",
+      selector: "(fixture)",
+    });
+
+    const result = checkPhase2MigrationClaim(mutatedCss, mutatedTokens);
+    expect(result.commentPresent, "marker should be gone").toBe(false);
+    expect(result.stillNearBlack, "mutated --card should be caught").toEqual(["--card"]);
+    expect(
+      result.claimsUnfinishedMigrationAsDone,
+      "the guard must catch this - if it does not, it cannot fail and is not a guard",
+    ).toBe(true);
+  });
+
+  it("FIXTURE MUTATION, reverted (comment restored): the same near-black --card no longer trips the guard once the comment is honest about it", () => {
+    const mutatedTokens = new Map(tokens);
+    mutatedTokens.set("--card", {
+      property: "--card",
+      value: "var(--color-surface-1)",
+      selector: "(fixture)",
+    });
+    // css (unmutated) still carries the comment here - this is deliberately
+    // the PRE-phase-2 state (comment present, migration not yet done), which
+    // K4 does not forbid: the comment is what makes that state honest.
+    const result = checkPhase2MigrationClaim(css, mutatedTokens);
+    expect(result.commentPresent).toBe(true);
+    expect(result.stillNearBlack).toEqual(["--card"]);
+    expect(result.claimsUnfinishedMigrationAsDone).toBe(false);
+  });
+
+  it("FIXTURE MUTATION, reverted (migration finished): comment deleted but all four genuinely on the paper scale does not trip the guard either", () => {
+    const mutatedCss = css.replace(
+      "Phase 2 (ugcportal-6uc2) is that approval acted on",
+      "",
+    );
+    // tokens (unmutated) already has all four correctly off the near-black
+    // scale - this is the hypothetical FUTURE state where deleting the
+    // comment would be honest, because the migration really is finished.
+    const result = checkPhase2MigrationClaim(mutatedCss, tokens);
+    expect(result.commentPresent).toBe(false);
+    expect(result.stillNearBlack).toEqual([]);
+    expect(result.claimsUnfinishedMigrationAsDone).toBe(false);
+  });
 });

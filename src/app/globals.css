@@ -279,6 +279,47 @@
   --paper: #faf7f2;
   --paper-line: #d8d3c8;
   --ink-muted-petrol: #6b6b63;
+
+  /*
+   * ugcportal-6uc2 (phase 2): the paper scale's own "raised" and "control
+   * boundary" steps, the counterparts `--color-surface-*`/`--color-line-
+   * strong` are for the near-black scale. `--card`/`--muted`/`--input`
+   * below are built from these, not from a literal inline in the semantic
+   * block, so the same value has one name and one place to audit it.
+   *
+   * `--paper-card: #ffffff` is docs/design/tokens.css's own light-mode
+   * `--card` value, taken verbatim. `--muted` reuses it rather than
+   * inventing a second near-identical tone: the pre-existing near-black
+   * scale gave `--card` and `--muted` the SAME value (`--color-surface-1`,
+   * both before this bead) and this keeps that relationship rather than
+   * introducing a new "card vs muted" distinction nobody asked for.
+   *
+   * `--paper-line-strong` has no reference-file counterpart (docs/design/
+   * tokens.css only ever names one line colour per mode) — invented here on
+   * the near-black scale's own template: `--color-line-strong` is the step
+   * of its scale that clears 3:1 against every background the scale's own
+   * boundary has to sit on, and this is that same exercise run against the
+   * paper family instead. #8c8373 measures 3.50:1 against `--paper`, 3.74:1
+   * against `--paper-card`/white, and (checked because `--input` is
+   * deliberately NOT mode-gated below) 3.86:1 against dark mode's
+   * `--petrol-900` background and 3.34:1 against `--petrol-card` — margin
+   * above 3:1 everywhere it can actually render, not a value picked to
+   * barely clear one specific pairing.
+   */
+  --paper-card: #ffffff;
+  --paper-line-strong: #8c8373;
+
+  /*
+   * Dark-mode counterparts of the two tokens above, both docs/design/
+   * tokens.css's own dark-mode values verbatim (`--line`/`--card` under its
+   * `@media (prefers-color-scheme: dark)` block) — not independently
+   * invented the way `--paper-line-strong` was, because the reference file
+   * already specifies both for dark mode. `--petrol-muted` does not exist
+   * as its own token for the same reason `--paper-card` covers both
+   * `--card` and `--muted` in light mode: see the dark-mode override below.
+   */
+  --petrol-line: #1f4a50;
+  --petrol-card: #10393f;
 }
 
 /*
@@ -532,7 +573,7 @@
  * Semantic layer. Every shadcn/base-ui token maps onto the surface scale
  * above; petrol appears only where an accent belongs.
  *
- * Phase 1 mandate (ugcportal-rw9j): this block touches exactly the page
+ * Phase 1 mandate (ugcportal-rw9j): this block touched exactly the page
  * canvas (--background, --foreground, --muted-foreground - added after a
  * live axe run on the home page found it was really a page-canvas token in
  * disguise, see its own comment below), the primary action (--primary and
@@ -541,36 +582,77 @@
  * --primary/--primary-hover directly rather than through --secondary (see
  * that file).
  *
- * --card, --popover, --muted, --accent, --secondary, --destructive-*,
- * --sidebar-*, --chart-*, --border and --input are DELIBERATELY left
- * reading from the near-black surface scale above. That is correct for the
- * one place this app still wants an immersive near-black context (the
- * lightbox scrim), and is a known, deliberate inconsistency everywhere else
- * until fase 2 (cards, borders, form fields) is approved — Eirik approves a
- * screenshot of phase 1 first. Do not "fix" the resulting clash by editing
- * values in this list; that is fase 2's job, not this one's.
+ * Phase 1 deliberately left --card, --popover, --muted, --accent,
+ * --secondary, --destructive-*, --sidebar-*, --chart-*, --border and --input
+ * all reading from the near-black surface scale above, pending a screenshot
+ * approval (Eirik, 2026-10-08) named in ugcportal-rw9j's own notes.
  *
- * One cross-cutting consequence of that split, found while building this:
- * --ring is applied globally (`* { outline-ring/80 }`), so pointing it at
- * the new --primary (needed so the focus ring is visible at all on the new
- * light canvas - the old --color-fjord-400 measures 1.3-2.4:1 against
- * --paper) would otherwise also apply to every focusable control still
- * living on the untouched near-black surface scale. Fixed, not merely
- * flagged (review round 3, after the no-fix version of this comment
- * incorrectly cited "admin/settings/{rights,instagram}'s cards" - this
- * codebase has no Card/Popover component and no bg-card/bg-popover usage
- * anywhere; the real instances were the resale-rights decision form's inputs
- * and the upload page's file dropzone, both on bg-surface-*): see the
+ * Phase 2 (ugcportal-6uc2) is that approval acted on, for exactly FOUR of
+ * those ten: --border, --input, --card and --muted now read from the paper
+ * scale (--paper-line/--paper-line-strong/--paper-card, declared above,
+ * with --petrol-line/--petrol-card as their dark-mode counterparts) - see
+ * each one's own declaration below for why. TEXT_INPUT_CLASS
+ * (src/components/ui/text-input.ts), which used to paint its own field with
+ * literal near-black utilities instead of these semantic tokens, moved onto
+ * them in the same bead, which is also what makes `bg-card`/`text-card-
+ * foreground` real, shipped usages now - review round 3's "this codebase
+ * has no Card/Popover component and no bg-card/bg-popover usage anywhere"
+ * is no longer true of --card specifically (--popover still has none).
+ *
+ * The remaining SIX - --popover, --accent, --secondary, --destructive-*,
+ * --sidebar-*, --chart-* - are UNCHANGED and still deliberately read from
+ * the near-black surface scale. Two different reasons, not one:
+ *
+ *   - The lightbox scrim is the one place this app still wants an immersive
+ *     near-black context, and it does NOT depend on any of the four tokens
+ *     this phase moved - confirmed by reading globals.css's own .pswp rule
+ *     below, which sets `--pswp-bg: var(--color-scrim)` and
+ *     `--pswp-placeholder-bg: var(--color-surface-1)` directly, never
+ *     through --card or --muted. Moving --card/--muted is therefore not a
+ *     visual change to the scrim at all, not merely "probably fine".
+ *   - --popover, --accent, --secondary, --destructive-*, --sidebar-* and
+ *     --chart-* simply have not been touched yet. There is no present
+ *     mandate to repaint them, and no claim here that they are done - the
+ *     next bead to reach one of them should say so itself, the same way
+ *     this comment does for the four it moves.
+ *
+ * Do not "fix" the resulting clash on those six by editing values in this
+ * list; that is a future bead's job, not this one's.
+ *
+ * One cross-cutting consequence found while building phase 1: --ring is
+ * applied globally (`* { outline-ring/80 }`), so pointing it at the new
+ * --primary (needed so the focus ring is visible at all on the new light
+ * canvas - the old --color-fjord-400 measures 1.3-2.4:1 against --paper)
+ * would otherwise also apply to every focusable control still living on the
+ * untouched near-black surface scale. Fixed, not merely flagged: see the
  * --ring-on-old-surfaces override below, scoped to exactly the background
- * classes that still need the old value.
+ * classes that still need the old value. Phase 2 removes `.bg-card` and
+ * `.bg-muted` from that override's selector list (see its own comment) -
+ * both now paint a light, paper-toned fill, so forcing the near-black-tuned
+ * ring colour onto a focusable control inside either would be fighting the
+ * canvas it is actually drawn on, not protecting it.
  */
 :root {
   color-scheme: light dark;
 
   --background: var(--paper);
   --foreground: var(--petrol-900);
-  --card: var(--color-surface-1);
-  --card-foreground: var(--color-ink);
+  /*
+   * ugcportal-6uc2 (phase 2): --card moves off --color-surface-1 onto
+   * --paper-card (declared above) - nothing in src renders `bg-card`
+   * directly yet except TEXT_INPUT_CLASS (this same bead), but the token
+   * itself is still contrast-checked "as wired rather than as intended"
+   * (src/lib/design/contrast.ts), so it moves with the other three even
+   * though its own real-usage footprint is small today.
+   *
+   * --card-foreground tracks --foreground, the same indirection --ring uses
+   * to track --primary below: the dark-mode block only re-declares --card
+   * (to --petrol-card) and --foreground (to --paper) separately, and this
+   * means card-foreground-on-card is automatically the right pair in BOTH
+   * modes without a third override naming the combination explicitly.
+   */
+  --card: var(--paper-card);
+  --card-foreground: var(--foreground);
   --popover: var(--color-surface-2);
   --popover-foreground: var(--color-ink);
 
@@ -586,7 +668,15 @@
 
   --secondary: var(--color-surface-2);
   --secondary-foreground: var(--color-ink);
-  --muted: var(--color-surface-1);
+  /*
+   * ugcportal-6uc2 (phase 2): --muted moves off --color-surface-1 onto
+   * --paper-card, the SAME value --card now uses (see that declaration's
+   * own comment above for why this reuses one token rather than inventing
+   * a second near-identical "muted" tone) - every `bg-muted` callout panel
+   * across the admin screens (resale-rights, curation, Instagram settings)
+   * and the purchase-offer panel repaints from this one change.
+   */
+  --muted: var(--paper-card);
   /*
    * --ink-muted-petrol ("dempet tekst" in docs/design/tokens.css), not
    * --color-ink-muted (ugcportal-rw9j, found by a live axe run on the home
@@ -597,13 +687,30 @@
    * is tuned for the near-black canvas and measured 1.9:1 here against the
    * new --paper background; --ink-muted-petrol clears 5.0:1.
    *
-   * Review round 1 found one real exception to "none of them inside a
-   * --muted/--card fill": admin/settings/rights/page.tsx did, at 3.18:1,
-   * which is fixed there (text-ink-muted) rather than here - --muted/--card
-   * stay on the untouched near-black scale this phase, so the ONE place that
-   * rendered --muted-foreground inside one needed to stop doing that, not
-   * the other way round. See the muted-foreground-on-background comment in
-   * contrast.ts for the full reasoning.
+   * Review round 1 (phase 1) found one real exception to "none of them
+   * inside a --muted/--card fill": admin/settings/rights/page.tsx did, at
+   * 3.18:1, fixed there (text-ink-muted) rather than here, because at the
+   * time --muted/--card still read the untouched near-black scale.
+   *
+   * ugcportal-6uc2 (phase 2) reverses that specific fix: now that --muted/
+   * --card read the paper scale, text-ink-muted (tuned for the near-black
+   * scale) is the wrong token wherever it sits directly inside a `bg-muted`
+   * well with no near-black fill of its own in between, and --muted-
+   * foreground (this token) is the right one again - the same call this
+   * comment made for the page canvas in ugcportal-rw9j, just one surface
+   * later. Every such call site (admin/settings/rights/page.tsx and its
+   * brands screen, admin/curation/page.tsx, the curation price and
+   * clearance forms, and src/components/media/purchase-offer.tsx) was
+   * re-audited for this bead; see src/lib/design/dual-meaning-usage.test.ts
+   * for the updated (file, token, count) pins. A handful of other
+   * text-ink-muted usages were traced and confirmed to sit on a `bg-muted`
+   * element's SIBLING `bg-destructive-surface` branch (a shared container
+   * that renders one or the other depending on a boolean) or inside their
+   * own untouched bg-surface-* well (the triage form's selects) - those
+   * stay text-ink-muted, correctly, because the near-black scale genuinely
+   * is still what they render against. See the muted-foreground-on-muted
+   * and muted-foreground-on-background comments in contrast.ts for the
+   * full reasoning.
    */
   --muted-foreground: var(--ink-muted-petrol);
 
@@ -614,8 +721,33 @@
   --destructive: var(--color-danger);
   --destructive-surface: var(--color-danger-surface);
   --destructive-surface-hover: var(--color-danger-surface-hover);
-  --border: var(--color-line);
-  --input: var(--color-line-strong);
+  /*
+   * ugcportal-6uc2 (phase 2): --border moves off --color-line onto
+   * --paper-line - the header/footer hairline and every `border-border`
+   * rule across the app repaint from this one change, which is K1's own
+   * acceptance criterion. Decorative (WCAG 1.4.11 does not cover ornamental
+   * separation; see divider-on-background in contrast.ts), so there is no
+   * ratio this has to clear - it is this subtle on purpose, mirroring
+   * --color-line's own reasoning for the near-black scale one block up.
+   */
+  --border: var(--paper-line);
+  /*
+   * --input moves off --color-line-strong onto --paper-line-strong - the
+   * boundary of every input, outline button and the curation screens'
+   * admin fields (border-input, still paired with their own untouched
+   * bg-surface-3 fill: see FIELD_CLASS in price-form.tsx/decision-form.tsx/
+   * triage-form.tsx/clearance-form.tsx, unchanged by this bead). Checked at
+   * 3:1 against every surface it can actually land on - paper, paper-card,
+   * AND the near-black surface scale and destructive wells those admin
+   * fields still use - in src/lib/design/contrast.ts's control-edge-*
+   * pairings. Deliberately NOT mode-gated the way --border/--card/--muted
+   * are: #8c8373 already clears 3:1 against both light mode's --paper and
+   * dark mode's --petrol-900/--petrol-card (measured in --paper-line-
+   * strong's own comment above), so a dark-mode override would be an
+   * unneeded second value to keep in sync, not a fix for anything that
+   * fails without one.
+   */
+  --input: var(--paper-line-strong);
   /*
    * Tracks --primary rather than repeating its value: the dark-mode block
    * below only re-declares --primary, and this indirection means --ring
@@ -672,12 +804,34 @@
  * this file for the measured reason (--petrol-700 falls to 1.3-3:1 against
  * both this dark background and the near-black surface scale; --petrol-200/
  * 100 clear 6.2-11.3:1 against both).
+ *
+ * ugcportal-6uc2 (phase 2) adds --card, --muted and --border here, for a
+ * reason that did not exist before this bead: --card/--muted now carry
+ * --card-foreground/--muted-foreground, and the LATTER already flips to a
+ * light colour in dark mode (--card-foreground tracks --foreground, which
+ * this block already sent to --paper; --muted-foreground is re-declared to
+ * --petrol-200 two lines below) - a light foreground needs a DARK fill to
+ * read against, and without this override --card/--muted would still be
+ * light-mode's --paper-card (white) in dark mode too, light-on-light. Both
+ * repoint to --petrol-card, the same reuse --card/--muted already share in
+ * light mode (see their own comments above) - not a new per-token value to
+ * keep in sync. --border repoints to --petrol-line for the equivalent
+ * reason docs/design/tokens.css gives it a distinct dark value at all: it
+ * is decorative, so nothing REQUIRES this, but leaving it at light mode's
+ * --paper-line (a warm tan) against this dark petrol canvas would be a
+ * colour choice nobody actually made, not a deliberate subtle hairline the
+ * way --petrol-line (1.48:1 here, by design - see divider-on-background in
+ * contrast.ts) is. --input is deliberately NOT here; see its own comment
+ * above for why one mode-invariant value already covers both modes.
  */
 @media (prefers-color-scheme: dark) {
   :root {
     --background: var(--petrol-900);
     --foreground: var(--paper);
     --muted-foreground: var(--petrol-200);
+    --card: var(--petrol-card);
+    --muted: var(--petrol-card);
+    --border: var(--petrol-line);
 
     --primary: var(--petrol-200);
     --primary-hover: var(--petrol-100);
@@ -704,14 +858,25 @@
  * --ring held before this bead - already verified against every one of
  * these surfaces (the focus-ring-on-old-surface pairing in contrast.ts), so
  * this is a revert, scoped to exactly the surfaces that still need it.
+ *
+ * ugcportal-6uc2 (phase 2) removes `.bg-muted` and `.bg-card` from this
+ * list: both now paint a light, paper-toned fill (see globals.css's phase-2
+ * comment on the semantic block above), so forcing the near-black-tuned
+ * --color-fjord-400 ring back on here would fight the canvas those two are
+ * actually drawn on now, not protect it - the plain, unscoped --ring
+ * (already verified against --card/--muted by focus-ring-on-card/-on-muted
+ * in contrast.ts) is correct for both. Safe, not just convenient:
+ * --color-surface-1 - the literal both classes resolved to before this
+ * bead - stays covered by `.bg-surface-1` and `.bg-sidebar` below, so the
+ * RESOLVED set this override protects is unchanged (contrast.test.ts's "RING_
+ * OVERRIDE_SURFACES matches globals.css's own selector list" proves this by
+ * resolving both sides, not by trusting the claim).
  */
 .bg-surface-0,
 .bg-surface-1,
 .bg-surface-2,
 .bg-surface-3,
 .bg-surface-4,
-.bg-muted,
-.bg-card,
 .bg-popover,
 .bg-accent,
 .bg-secondary,

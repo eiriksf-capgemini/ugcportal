@@ -45,9 +45,11 @@ import { cn } from "cn"
  *    utilities. A real variant means "the pre-rw9j neutral outline" is a
  *    single word at the call site instead of a string a reviewer has to
  *    diff against PETROL_OUTLINE_STYLE by hand; border-input is
- *    --color-line-strong, already measured at 3:1+ against every near-black
- *    surface including this one (control-edge-on-destructive-surface in
- *    contrast.ts).
+ *    --paper-line-strong as of ugcportal-6uc2 (phase 2 moved --input off
+ *    --color-line-strong onto the paper scale) - independently re-verified
+ *    at 3:1+ against every near-black surface including this one
+ *    (control-edge-on-destructive-surface in contrast.ts), not merely
+ *    assumed to still hold once the token it reads changed.
  * 6. THE RULE (ugcportal-qqnt.2): every button-like control on the public
  *    pages (header, hero, empty state) resolves to one of this file's own
  *    `buttonVariants` class sets - never a hand-written `inline-flex ...

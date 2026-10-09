@@ -57,7 +57,13 @@ export function CurationClearanceForm({
       <input type="hidden" name="layer" value={layer} />
       <label className="block text-xs font-medium" htmlFor={reasonId}>
         Why is {layer} settled for this upload?
-        <span className="mt-1 block font-normal text-ink-muted">
+        {/*
+          text-muted-foreground, not text-ink-muted (ugcportal-6uc2, phase
+          2): this form renders inside page.tsx's "Rights layers" bg-muted
+          well, which now reads the paper scale, not the near-black one this
+          label used to assume.
+        */}
+        <span className="mt-1 block font-normal text-muted-foreground">
           {question} This justification covers {layer} and nothing else — every
           other layer still blocks until it has its own.
         </span>
