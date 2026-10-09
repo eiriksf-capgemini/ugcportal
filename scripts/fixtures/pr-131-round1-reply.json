@@ -1,0 +1,19 @@
+{
+  "source": "gh api repos/eiriksf-capgemini/ugcportal/issues/comments/6012860974, fetched 2026-10-09 for ugcportal-zo8n (round-6 regression: \"two lows fixed\" zeroed by an unrelated `--since` flag 273 chars later in the same paragraph)",
+  "commentUrl": "https://github.com/eiriksf-capgemini/ugcportal/pull/131#issuecomment-6012860974",
+  "pr": {
+    "author": {
+      "id": "U_kgDOEvYN4g",
+      "is_bot": false,
+      "login": "eiriksf-capgemini",
+      "name": "Eirik Sander-Fjeld"
+    },
+    "closedAt": "2026-10-06T09:45:54Z",
+    "createdAt": "2026-10-06T08:42:46Z",
+    "mergedAt": "2026-10-06T09:45:54Z",
+    "number": 131,
+    "state": "MERGED",
+    "title": "docs(process): re-measure the subagent Opus share after the routing fix and record it (ugcportal-0xw)"
+  },
+  "round1ReplyBody": "Round 1's two lows fixed in 51be7e9: anomalies-ledger paragraph now names `rows_since_filtered` (18,934) and `rows_project_filtered` (2,621) alongside the three whole-glob keys; window-start paragraph now discloses the 2026-09-30 vs. bead's 2026-09-29 one-day shift, with a one-off `--since 2026-09-29` re-run (13.6% Opus request share, all-projects) shown against the 13.4% the 09-30 window reports — not materially different."
+}
