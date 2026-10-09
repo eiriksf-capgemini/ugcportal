@@ -53,8 +53,8 @@ function parsePriceInput(body: unknown): ParseResult {
       // minor units, and a float here becomes a rounding argument later.
       return { ok: false, error: "priceCents must be an integer or null" };
     }
-    // The range half is `isStorablePriceCents` (src/lib/curation-price-write.ts),
-    // so this route and the admin screen cannot disagree about the ceiling.
+    // The range half is `isStorablePriceCents` (src/lib/pricing.ts), so this
+    // route and the admin screen cannot disagree about the ceiling.
     // The write re-checks it anyway and answers `price_amount_invalid`; this
     // is here to produce the specific sentence a JSON caller gets, which a
     // closed-set refusal code cannot.

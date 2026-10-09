@@ -244,9 +244,12 @@ describe("an offer is re-evaluated at render, not read off the stored price (ugc
     /*
      * Written straight to the column, which is the only way to reach this
      * state: `recordPrice` refuses an unsupported code. The failure it
-     * prevents is not cosmetic — `Intl.NumberFormat` throws a RangeError for
-     * an unrecognised code, so an offer built from one would be a 500 on a
-     * page that was merely trying to show a photograph.
+     * prevents is not cosmetic: "XYZ" is well-formed enough that
+     * `Intl.NumberFormat` renders it rather than throwing (`"XYZ 1,250.00"`),
+     * so a reader cannot rely on a crash to keep an un-allowlisted currency
+     * off the page — `isSupportedCurrency` is the only thing that does, and
+     * without it an offer could show an amount at the wrong number of minor
+     * units with nothing to flag that it was wrong.
      */
     await prisma.mediaListing.update({
       where: { mediaId: MEDIA_ID },

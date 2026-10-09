@@ -10,15 +10,15 @@ import { TRIAGE_WRITE_REFUSALS } from "@/lib/curation-triage-write";
  */
 
 /**
- * Every code `?error=` may carry: the refusals each of the two writes can
+ * Every code `?error=` may carry: the refusals each of the three writes can
  * return, plus the one the triage action decides before it gets there.
  *
  * Composed from TRIAGE_WRITE_REFUSALS, CLEARANCE_WRITE_REFUSALS and
- * PRICE_WRITE_REFUSALS rather than hand-listed, so a refusal added to either write path cannot reach
+ * PRICE_WRITE_REFUSALS rather than hand-listed, so a refusal added to any write path cannot reach
  * this screen with no message. The `Record` below is typed over this union,
  * so `tsc` — not a test, and not review — refuses a new refusal that
- * nobody has written a sentence for. The two sets are disjoint by naming
- * convention (`clearance_…`, `price_…`) rather than by accident; a collision would
+ * nobody has written a sentence for. The three sets are disjoint by naming
+ * (`clearance_…`, `price_…`, and triage's own unprefixed names) rather than by accident; a collision would
  * silently give one refusal the other's sentence.
  */
 export const TRIAGE_OUTCOME_CODES = [

@@ -176,12 +176,10 @@ export function publicOffer(
     return null;
   }
   // An unsupported currency is NOT rendered as an amount with a bad code: it
-  // is no offer at all. `formatOfferPrice` would throw a RangeError out of
-  // `Intl.NumberFormat` for an unrecognised code, which on a server
-  // component is a 500 on a page that was merely trying to show a
-  // photograph — and for a code that IS recognised by Intl but is not on the
-  // allowlist, it would render an amount divided by 100 that may not be the
-  // right number of minor units at all.
+  // is no offer at all. A code that IS recognised by `Intl.NumberFormat` but
+  // is not on the allowlist would still render — as an amount divided by 100
+  // that may not be the right number of minor units at all, which is what
+  // the allowlist in src/lib/pricing.ts exists to rule out.
   if (!isSupportedCurrency(listing.currency)) {
     return null;
   }

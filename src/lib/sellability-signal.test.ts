@@ -84,7 +84,7 @@ const GATED_INDIRECTIONS: Readonly<Record<string, string>> = {
 
 /**
  * Files that read or name `priceCents` and legitimately do not ask the gate,
- * each with the reason. An allowlist of one; adding to it is a decision
+ * each with the reason. An allowlist of two; adding to it is a decision
  * somebody writes down, not a default.
  */
 const ALLOWED_WITHOUT_GATE: Readonly<Record<string, string>> = {

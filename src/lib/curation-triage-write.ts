@@ -7,11 +7,12 @@ import { TRIAGE_FACTS } from "@/lib/resale-rights";
  * THE ONE PLACE MEDIALISTING TRIAGE FACTS ARE WRITTEN (ugcportal-vq3z).
  *
  * Before this bead nothing in `src` wrote a MediaListing triage column at
- * all — the only writer of the table was the price endpoint
- * (src/app/api/admin/curation/[id]/price/route.ts), which writes `priceCents`
- * and `currency` and deliberately nothing else. So these columns, which the
- * sellability gate in src/lib/resale-rights.ts trusts, were readable and
- * unwritable. This function is the writer.
+ * all — the only writer of the table was the price write path (today
+ * `recordPrice` in src/lib/curation-price-write.ts; see that file's own
+ * header), which writes `priceCents` and `currency` and deliberately
+ * nothing else. So these columns, which the sellability gate in
+ * src/lib/resale-rights.ts trusts, were readable and unwritable. This
+ * function is the writer.
  *
  * IT IS DELIBERATELY A SINGLE CHOKEPOINT, and ugcportal-6uxv is what now
  * stands on that shape: the §9-2 guard below refuses an incoming
@@ -20,9 +21,9 @@ import { TRIAGE_FACTS } from "@/lib/resale-rights";
  * flip can happen. Re-confirm before relying on it rather than taking this
  * paragraph's word for it —
  * `git grep -n "mediaListing\.\(update\|upsert\|create\|updateMany\)" -- src`
- * outside tests returns this upsert and the price endpoint
- * (src/app/api/admin/curation/[id]/price/route.ts), which writes `priceCents`
- * and `currency` and no triage column. Do not add a second triage writer;
+ * outside tests returns this upsert and `recordPrice`'s own update
+ * (src/lib/curation-price-write.ts), which writes `priceCents` and
+ * `currency` and no triage column. Do not add a second triage writer;
  * widen this one.
  *
  * The server action in src/app/admin/curation/actions.ts is its only
