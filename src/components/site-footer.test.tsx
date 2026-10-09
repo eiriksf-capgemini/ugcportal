@@ -43,12 +43,14 @@ import { FooterNavLink, SiteFooter } from "./site-footer";
  *     forces a blocked outcome deterministically regardless of the real
  *     sign-off (missing config alone is enough — see that describe
  *     block's own comment);
- *  4. the POSITIVE path — configured AND signed off, in production — is
- *     ALSO tested below that, against today's REAL LEGAL_SIGN_OFF rather
- *     than a fixture (ugcportal-alg signed off the real pages after this
- *     component was first written; this case exists precisely because
- *     that is a fact that changes over time and the other three cases
- *     cannot exercise it at all).
+ *  4. the fully-configured path, in production, is ALSO tested below that
+ *     against today's REAL LEGAL_SIGN_OFF rather than a fixture
+ *     (ugcportal-alg signed off the real pages after this component was
+ *     first written; this case exists precisely because that is a fact
+ *     that changes over time and the other three cases cannot exercise it
+ *     at all). As of ugcportal-fsdf the real fact is that /licence is
+ *     signed off and /privacy is not — a change to /privacy's authored
+ *     prose put it back in draft pending a human re-approval.
  *
  * The real e2e coverage (an actual production server, today's REAL
  * readiness, the meta tag read from the rendered page) lives in
@@ -230,9 +232,18 @@ describe.each([
     //    the first two tests' outcome depend only on NODE_ENV, the one
     //    axis they mean to exercise, rather than on whatever the real
     //    sign-off currently says about the real prose;
-    //  - the third test is the POSITIVE case those two cannot reach: fully
-    //    configured (FILLED_LEGAL_ENV) AND actually signed off, against
-    //    today's real LEGAL_SIGN_OFF rather than a fixture.
+    //  - the third test is the case those two cannot reach: fully
+    //    configured (FILLED_LEGAL_ENV), against today's real
+    //    LEGAL_SIGN_OFF rather than a fixture. As of ugcportal-fsdf that
+    //    real fact is no longer "both pages signed off": /privacy's
+    //    authored prose changed (the uploader's own rights attestation,
+    //    src/lib/attestation.ts, now described in the rights-clearance
+    //    category), so its digest no longer matches LEGAL_SIGN_OFF and it
+    //    reads as a draft until a human re-approves it — the same sequence
+    //    ugcportal-mj50 and ugcportal-qnq9.2.2 each went through. /licence,
+    //    whose prose this change does not touch, is unaffected and is
+    //    still really signed off. The test below asserts exactly that
+    //    split rather than "both link".
     afterEach(() => {
       vi.unstubAllEnvs();
     });
@@ -266,26 +277,29 @@ describe.each([
     // off, in production — was untested; every test above exercises a
     // BLOCKED outcome. FILLED_LEGAL_ENV makes `missing.length === 0`; the
     // real `LEGAL_SIGN_OFF` (src/lib/legal/contact.ts, set by ugcportal-alg
-    // in PR #99) is left to its default rather than injected, because it
-    // already matches the real /privacy and /licence prose's current
-    // digests today — this test is therefore read as "the footer correctly
-    // links once a page IS actually configured and signed off", using the
-    // real fact rather than a synthetic one. Mutation-verified (see PR
-    // description): with the sign-off `legalLinkBlocked` reads forced to
-    // `null` instead of the real constant, this test fails — confirming it
-    // is genuinely exercising the sign-off, not merely the filled
-    // configuration.
-    it("links Privacy and Licence normally in production once configured and signed off (today's real sign-off)", () => {
+    // in PR #99) is left to its default rather than injected, so this test
+    // reads the real fact rather than a synthetic one. Mutation-verified
+    // (see PR description): with the sign-off `legalLinkBlocked` reads
+    // forced to `null` instead of the real constant, this test fails —
+    // confirming it is genuinely exercising the sign-off, not merely the
+    // filled configuration.
+    //
+    // Updated for ugcportal-fsdf: today's real fact is that /licence is
+    // signed off and /privacy is not (see the block comment above), so the
+    // two must now disagree — asserting "both link" here would be the same
+    // stale-premise mistake this comment elsewhere warns against.
+    it("links Licence normally in production once configured and signed off, but still shows /privacy as a draft (today's real sign-off; ugcportal-fsdf)", () => {
       vi.stubEnv("NODE_ENV", "production");
       for (const [name, value] of Object.entries(FILLED_LEGAL_ENV)) {
         vi.stubEnv(name, value);
       }
 
       const markup = render(compact);
-      expect(markup).toContain(`href="${PRIVACY_PATH}"`);
       expect(markup).toContain(`href="${LICENCE_PATH}"`);
-      expect(markup).not.toContain("data-footer-draft-link");
-      expect(markup).not.toContain("coming soon");
+      expect(markup).not.toContain(`data-footer-draft-link="${LICENCE_PATH}"`);
+      expect(markup).not.toContain(`href="${PRIVACY_PATH}"`);
+      expect(markup).toContain(`data-footer-draft-link="${PRIVACY_PATH}"`);
+      expect(markup).toContain("coming soon");
     });
   },
 );

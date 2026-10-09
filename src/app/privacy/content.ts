@@ -248,6 +248,7 @@ export function privacyContent(contact: LegalContact): PrivacyContent {
         title: "Rights-clearance records",
         what: [
           "Before anything can be sold, an administrator works through a rights review. The site records, per uploader, the standing decision (its status, how the rights were obtained, who decided, when, until when, and any conditions); per item, the triage answers (people, music, other creators, sponsorship), a price, and who triaged it; and per rights layer, the written justification and who signed it.",
+          "Separately, before an item can be offered for sale its own uploader is asked nine questions about that one file and answers them under their own name, not an administrator's: on what basis they can grant a licence to it — as its author, under a written licence from the author, or neither; whether the file is their own original and not saved from a website; whether it shows identifiable people, and whether anyone shown is under 18; whether it contains music they do not own; whether someone else contributed creatively; whether it was made for a brand or under a sponsorship; whether it is wholly or partly AI-generated; and whether they are themselves 18 or older. The site stores one record of these answers per file, which version of the question text they were shown, and when they answered. The record is read by the sellability check and by administrators doing rights triage; it is never shown to the public.",
           "Evidence files — signed instruments, model releases, filled-in checklists — are stored under a private prefix in object storage that no public route can reach. Only the storage key and a hash of the file are recorded in the database. Server-side encryption of those files is requested when the deployment is configured for it, and a production server that starts without it logs a warning.",
         ],
         purpose: "To make sure nothing is offered for sale without the rights to sell it.",
@@ -267,6 +268,7 @@ export function privacyContent(contact: LegalContact): PrivacyContent {
           "src/lib/resale-rights-review.ts",
           "src/app/api/admin/rights/decision/route.ts",
           "src/instrumentation.ts",
+          "src/lib/attestation.ts",
         ],
       },
       {
@@ -453,14 +455,20 @@ export const MODEL_COVERAGE: Readonly<
   // gate as the review and the triage beside it (src/lib/resale-rights.ts),
   // and no part of it is ever rendered to a visitor.
   //
-  // THE CATEGORY'S PROSE DOES NOT YET NAME THIS RECORD, and that is a known
-  // gap rather than an oversight: its `what` still describes only the
-  // administrator's side ("an administrator works through a rights review
-  // ... per item, the triage answers"). Writing the uploader's declaration
-  // into it changes the page's authored digest, which puts /privacy back in
-  // draft until the sign-off in src/lib/legal/contact.ts is re-recorded by a
-  // human — the sequence ugcportal-mj50 and ugcportal-qnq9.2.2 each went
-  // through for the two records below. Filed as ugcportal-fsdf.
+  // THE CATEGORY'S PROSE NOW NAMES THIS RECORD (ugcportal-fsdf): the
+  // category's second `what` paragraph says what is asked (the nine
+  // questions, verbatim in substance to src/lib/attestation.ts's
+  // ATTESTATION_QUESTIONS/ATTESTATION_AUTHORSHIP_QUESTION), that the
+  // uploader answers under their own name rather than an administrator's,
+  // and that it is never shown to the public. `legalBasis` and `recipients`
+  // were left as they already stood: both already generalise to this record
+  // (the site's legitimate interest in selling only what it may sell and
+  // being able to show why; no recipient beyond the site itself) without
+  // needing new wording. That sentence changed the page's authored digest,
+  // which puts /privacy back in draft until the sign-off in
+  // src/lib/legal/contact.ts is re-recorded by a human — the same sequence
+  // ugcportal-mj50 and ugcportal-qnq9.2.2 each went through for the two
+  // records below.
   MediaAttestation: { category: "rights" },
   // The advertising disclosure sits with the uploads rather than with the
   // rights records, even though MediaListing.sponsoredContent looks similar:
