@@ -224,7 +224,7 @@ describe("formatReport", () => {
     const text = formatReport(result);
     expect(text).toContain("Examined 1 bead(s)");
     expect(text).toContain("Flagged 1 as unreachable");
-    expect(text).toContain("stuck");
+    expect(text).toContain('stuck [open] "title of stuck"');
     expect(text).toContain("ugcportal-ghost (does not exist)");
   });
 
