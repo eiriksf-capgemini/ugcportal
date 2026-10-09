@@ -12,7 +12,18 @@ import { auth } from "@/lib/auth";
 // the hot path; it has no business loading an image-processing library.
 import { PREVIEW_CONTENT_TYPE, PREVIEW_KEY_PREFIX } from "@/lib/media";
 import { MEDIA_PREVIEW_DELIVERY_SELECT } from "@/lib/media-access";
+import type { MediaAnonymousScope } from "@/lib/media-listing";
 import { prisma } from "@/lib/prisma";
+// ugcportal-nffp. The comment above asks that anything added to this hot
+// path's module graph be checked rather than assumed, so: `@/lib/public-media`
+// imports `@/lib/advertising-disclosure`, `@/lib/curation-tags`,
+// `@/lib/media-access`, `@/lib/media-listing`, `@/lib/publishability`,
+// `@/lib/routes` and `@/lib/throttled-log`. Three of those this route already
+// imports; the rest are plain TypeScript with no native dependency, and
+// `media-listing` reaches only `media-access`, `prisma` and a type. Read off
+// the import statements rather than off a build trace — unlike the 86-file
+// figure above, which was measured.
+import { PUBLIC_MEDIA_SCOPE } from "@/lib/public-media";
 import {
   ObjectStorageUnreachableError,
   getBucketName,
@@ -220,23 +231,61 @@ export function resetPreviewStorageUnreachableLogThrottle(): void {
 }
 
 /**
- * The scope for an anonymous caller: published previews, and nothing else.
+ * The scope for an anonymous caller: public previews, and nothing else.
  *
- * `publishedAt: { not: null }` is required by the type, and `userId` and `OR`
- * are `?: never`, for the same reason MediaAnonymousScope in
- * src/lib/media-listing.ts is shaped that way — so that "anonymous lookup with
- * the publish filter dropped" is not a spelling that compiles.
+ * `PUBLIC_MEDIA_SCOPE` (src/lib/public-media.ts) SPREAD WHOLE, NOT A
+ * HAND-WRITTEN `publishedAt: { not: null }` (ugcportal-nffp). Until this
+ * bead, this route spelled its own three-column filter, which made it the
+ * one anonymous reader of Media that the publish gate never reached: after
+ * ugcportal-3ae an uncleared row vanished from the feed, the home page, the
+ * portfolio, the sitemap and /media/[previewId] — and the photograph itself
+ * kept being served from here, at the stable URL the sitemap had already
+ * handed to crawlers. That is the failure of this bead's own title, on the
+ * surface that carries the bytes rather than a link to them.
+ *
+ * It also corrects a premise. ugcportal-7egi's note records "no leak today:
+ * all four anonymous readers at ba9991f do spread the scope" — true of the
+ * readers that NAME the constant, which is the set
+ * src/lib/public-media.consumers.test.ts scans, and this route was never in
+ * it. Reaching for the constant is what puts it there.
+ *
+ * `previewId: string` REPLACES the scope's own `previewId: { not: null }`,
+ * which is a narrowing: an equality match on a real handle already implies
+ * non-null. Every other key of the scope is kept, including the two column
+ * filters this route previously wrote by hand and the rights half it did
+ * not. `userId` and `OR` stay `?: never`, for the same reason
+ * `MediaAnonymousScope` (src/lib/media-listing.ts) is shaped that way — so
+ * that "anonymous lookup with a filter dropped" is not a spelling that
+ * compiles.
+ *
+ * WHAT THIS COSTS, TWICE OVER, because both halves are real.
+ *
+ * In ROWS: the same large, deliberate cost `PUBLIC_MEDIA_SCOPE`'s own
+ * comment describes. Every row published before ugcportal-3ae has no
+ * attestation, so its preview now 404s for anonymous callers as well.
+ * Those rows already left every listing surface when 3ae landed; this
+ * route was the last way to reach the image. The owner's own arm below is
+ * untouched, so nobody loses sight of their own upload.
+ *
+ * In WORK PER REQUEST: this is the hot path — a gallery page issues one
+ * request here per tile — and the rights half is relation filters, so each
+ * one now costs correlated lookups into `MediaAttestation`, `MediaListing`,
+ * `MediaRightsClearance` and `User` on top of the indexed `previewId`
+ * match. The cheaper shapes were considered and both are the wrong trade:
+ * checking rights only on the page that LINKS to the bytes leaves the URL
+ * itself ungated, which is the bug this is fixing; and caching the answer
+ * is the same mistake `previewCacheHeaders` below already refuses for
+ * `publishedAt`, since a clearance can lapse with no write to anything a
+ * cache would key on.
  */
-type AnonymousPreviewScope = {
+type AnonymousPreviewScope = Omit<MediaAnonymousScope, "previewId"> & {
   previewId: string;
-  previewKey: { not: null };
-  publishedAt: { not: null };
   userId?: never;
   OR?: never;
 };
 
 /**
- * The scope for a signed-in caller: published previews, plus their own
+ * The scope for a signed-in caller: public previews, plus their own
  * whatever its state.
  *
  * The owner branch is `{ userId: string }`, not an optional and not
@@ -250,11 +299,18 @@ type AnonymousPreviewScope = {
  * exists to prevent, arriving from a value that is `undefined` rather than
  * from any visible mistake. Requiring a `string` here, and normalising the
  * session exactly once in the handler, is what makes that unexpressible.
+ *
+ * THE PUBLIC ARM IS `MediaAnonymousScope`, NOT `{ publishedAt: { not: null } }`
+ * (ugcportal-nffp). A signed-in visitor looking at somebody else's item is
+ * an anonymous visitor as far as that item's rights are concerned, so the
+ * arm that is not "this is mine" has to be the full public scope. Typed as
+ * `MediaAnonymousScope` rather than written out, which is what makes an arm
+ * missing the rights half fail `tsc` rather than review.
  */
 type OwnerPreviewScope = {
   previewId: string;
   previewKey: { not: null };
-  OR: [{ publishedAt: { not: null } }, { userId: string }];
+  OR: [MediaAnonymousScope, { userId: string }];
   publishedAt?: never;
   userId?: never;
 };
@@ -279,16 +335,28 @@ type PreviewScope = AnonymousPreviewScope | OwnerPreviewScope;
  *
  * `previewKey: { not: null }` is in both arms because a row with no stored
  * object has nothing to serve; the runtime narrow in the handler re-checks it
- * for the null the column's type still permits.
+ * for the null the column's type still permits. In the anonymous arm it
+ * arrives with the rest of `PUBLIC_MEDIA_SCOPE` rather than being written
+ * here; in the owner arm it stays at the top level, because an owner fetching
+ * their own unpublished row still needs a stored object to serve.
+ *
+ * RE-EVALUATED PER REQUEST, which is the whole of ugcportal-nffp. Nothing
+ * about the rights half is snapshotted onto the Media row: a clearance
+ * deleted, a clearer demoted, an admin triage answering "yes, a person is
+ * shown", or an attestation version retired all change what this query
+ * returns with no write to the row at all. The route's `cache-control:
+ * private, no-cache` is the other half of that — see
+ * `previewCacheHeaders` below, which already argues the identical case for
+ * an unpublish.
  */
 function previewScope(previewId: string, viewerId: string | null): PreviewScope {
   if (viewerId === null) {
-    return { previewId, previewKey: { not: null }, publishedAt: { not: null } };
+    return { ...PUBLIC_MEDIA_SCOPE, previewId };
   }
   return {
     previewId,
     previewKey: { not: null },
-    OR: [{ publishedAt: { not: null } }, { userId: viewerId }],
+    OR: [PUBLIC_MEDIA_SCOPE, { userId: viewerId }],
   };
 }
 

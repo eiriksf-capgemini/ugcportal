@@ -18,40 +18,59 @@ import {
  * actually holds for it.
  *
  * WHY THIS FILE EXISTS AT ALL, stated as the failure rather than the rule.
- * The bead's own first draft of K3 named THREE anonymous surfaces. There are
- * five, served by four query sites, and the two the draft missed were
+ * The bead's own first draft of K3 named THREE anonymous surfaces. There
+ * were five at the time, served by four query sites, and the two the draft
+ * missed were
  * `src/app/sitemap.ts` — which hands item URLs to search engines — and
  * `src/lib/media-item.ts`. An implementer writing exactly the three tests
  * that draft named would have shipped an uncleared photograph of an
  * identifiable person into Google's index and passed review.
  *
  * So the list is not maintained by reading the bead. It is derived from the
- * source, by the scan below, and compared against an explicit map. A sixth
- * reader that REACHES FOR THE SCOPE CONSTANT — by named import or by
- * namespace import, both proved against a fixture at the bottom of this
+ * source, by the scan below, and compared against an explicit map. A
+ * seventh reader that REACHES FOR THE SCOPE CONSTANT — by named import or
+ * by namespace import, both proved against a fixture at the bottom of this
  * file — fails this file by existing, and the only way to make it pass is
- * to name the test that covers it.
+ * to name the tests that cover it.
  *
  * WHAT IT DOES NOT SEE, stated here rather than left for somebody to find
- * out (ugcportal-3ae review round 1, findings 2 and 3). This scan answers
- * "who uses the constant", so it is blind to a reader that never mentions
- * it: an anonymous query that hand-writes `where: { publishedAt: { not:
- * null } }` instead of spreading the scope is not in the set the map is
- * compared against, and `toEqual` therefore still passes. Nothing else
+ * out (ugcportal-3ae review round 1, findings 2 and 3), AND WHAT THAT HAS
+ * ALREADY COST (ugcportal-nffp). This scan answers "who uses the
+ * constant", so it is blind to a reader that never mentions it: an
+ * anonymous query that hand-writes `where: { publishedAt: { not: null } }`
+ * instead of spreading the scope is not in the set the map is compared
+ * against, and `toEqual` therefore still passes. That was not theoretical.
+ * GET /api/media/preview/[previewId] — the route that serves the actual
+ * bytes — was exactly that shape, and so sat outside this map while
+ * serving uncleared and lapsed photographs at a URL the sitemap had
+ * published. ugcportal-7egi's own note recorded "no leak today: all four
+ * anonymous readers at ba9991f do spread the scope", which was true of the
+ * readers this scan can see and false of the tree. The route now spreads
+ * the scope and is in the map below; the scanner gap itself is unchanged
+ * and is still 7egi's. Nothing else
  * catches that shape either — `MediaAnonymousScope` in
  * src/lib/media-listing.ts only binds a query that routes through
  * `listMedia`. That gap is real and is filed as ugcportal-7egi; it is NOT
  * closed by this file, and no comment here should be read as saying it is.
  *
  * WHAT "COVERED" MEANS, and why it is more than a filename. Each covering
- * test file must contain a `describe` or `it` whose TITLE carries this
- * bead's id — a title, read off the AST, not a comment and not a string
- * anywhere in the file. That is a weak proof on its own (a title is
- * cheap), and it is deliberately paired with the strong one next door:
+ * test file must contain a `describe` or `it` whose TITLE carries the bead
+ * id for the question it answers — a title, read off the AST, not a
+ * comment and not a string anywhere in the file. SINCE ugcportal-nffp
+ * THERE ARE TWO SUCH QUESTIONS per reader, and a reader is covered only
+ * when both are answered: does the rights filter REACH this reader
+ * (ugcportal-3ae), and is it RE-EVALUATED so that a clearance lapsing
+ * after publication removes the row (ugcportal-nffp). See `ScopeCoverage`
+ * below for why the first does not imply the second.
+ *
+ * A title is a weak proof on its own (a title is cheap), and it is
+ * deliberately paired with the strong ones next door:
  * src/lib/publishability.scope-agreement.test.ts runs the predicate and the
  * query filter over the same rows in a real database and compares them row
- * by row. This file answers "is every reader reached", that one answers
- * "does the filter say the right thing".
+ * by row, and src/lib/public-media.lapse.test.ts drives all six readers
+ * against one live row through a lapse and back. This file answers "is
+ * every reader reached", those answer "does the filter say the right
+ * thing" and "does it still say it tomorrow".
  *
  * `@/lib/public-media` is imported for the structural assertions at the
  * bottom; mocking auth is the same module-graph workaround every other
@@ -156,8 +175,27 @@ function namespaceImportNames(source: ts.SourceFile): Set<string> {
 }
 
 /**
- * Every reader, and the test file that proves the rights filter reaches the
- * surface it serves.
+ * TWO QUESTIONS PER READER, NOT ONE (ugcportal-nffp).
+ *
+ * `filter` names the test proving the rights filter REACHES this reader —
+ * ugcportal-3ae's question, which is about a row that was already in the
+ * refused state when it was seeded.
+ *
+ * `lapse` names the test proving the filter is RE-EVALUATED, so a clearance
+ * that stops holding after publication removes the row from this reader
+ * too — ugcportal-nffp's question. The two are not the same, and a reader
+ * can pass the first while failing the second: "seed it broken, assert it
+ * is hidden" is satisfied just as well by a materialised `isPublic` column
+ * written at publish time, which would go on serving an uncleared
+ * photograph for as long as nobody wrote to the row again.
+ */
+type ScopeCoverage = {
+  readonly filter: readonly string[];
+  readonly lapse: readonly string[];
+};
+
+/**
+ * Every reader, and the test files that answer both questions for it.
  *
  * The four query sites and the five surfaces behind them, re-derived from
  * the source at ba9991f rather than copied from the bead:
@@ -185,17 +223,64 @@ function namespaceImportNames(source: ts.SourceFile): Set<string> {
  *                         item that is not public cannot carry a public
  *                         price — so the publish gate applies to the offer
  *                         exactly as it applies to the photograph.
+ *
+ * A SIXTH JOINED AT ugcportal-nffp, and it is the one that carries the
+ * photograph itself:
+ *
+ *   app/api/media/preview/[previewId]/route.ts
+ *                         GET /api/media/preview/[previewId] — the only
+ *                         route in the app that serves media BYTES. Until
+ *                         that bead it hand-wrote its own
+ *                         `{ previewId, previewKey, publishedAt }` filter
+ *                         and consulted no gate at all, so an uncleared or
+ *                         lapsed photograph left all five readers above and
+ *                         stayed downloadable at the stable URL the sitemap
+ *                         had already handed to crawlers. It was absent
+ *                         from this map rather than failing it, because it
+ *                         never named the constant — the blind spot the
+ *                         header above describes and ugcportal-7egi owns.
+ *                         The fix was to make it name the constant.
  */
-const SCOPE_CONSUMERS: Readonly<Record<string, readonly string[]>> = {
-  "lib/public-media.ts": ["app/page.test.tsx"],
-  "lib/portfolio.ts": ["lib/portfolio.test.ts"],
-  "app/sitemap.ts": ["app/sitemap.test.ts"],
-  "lib/media-item.ts": ["lib/media-item.test.ts"],
-  "lib/sellable-media.ts": ["lib/sellable-media.test.ts"],
+const SCOPE_CONSUMERS: Readonly<Record<string, ScopeCoverage>> = {
+  "app/api/media/preview/[previewId]/route.ts": {
+    filter: ["app/api/media/preview/[previewId]/route.test.ts"],
+    lapse: ["lib/public-media.lapse.test.ts"],
+  },
+  "app/sitemap.ts": {
+    filter: ["app/sitemap.test.ts"],
+    lapse: ["lib/public-media.lapse.test.ts"],
+  },
+  "lib/media-item.ts": {
+    filter: ["lib/media-item.test.ts"],
+    lapse: ["lib/public-media.lapse.test.ts"],
+  },
+  "lib/portfolio.ts": {
+    filter: ["lib/portfolio.test.ts"],
+    lapse: ["lib/public-media.lapse.test.ts"],
+  },
+  "lib/public-media.ts": {
+    filter: ["app/page.test.tsx"],
+    lapse: ["lib/public-media.lapse.test.ts"],
+  },
+  "lib/sellable-media.ts": {
+    filter: ["lib/sellable-media.test.ts"],
+    lapse: ["lib/public-media.lapse.test.ts"],
+  },
 };
 
-/** The bead id a covering test's own title has to carry. */
-const COVERAGE_MARKER = "ugcportal-3ae";
+/**
+ * The bead id a covering test's own title has to carry, per question.
+ *
+ * ONE `lapse` FILE COVERS ALL SIX, which is deliberate rather than lazy:
+ * that file drives every reader against ONE seeded row through one helper,
+ * so a fix that reaches the listings and not the bytes — the exact shape
+ * this bead found — cannot leave five of six columns green and be called
+ * done.
+ */
+const COVERAGE_MARKERS: Readonly<Record<keyof ScopeCoverage, string>> = {
+  filter: "ugcportal-3ae",
+  lapse: "ugcportal-nffp",
+};
 
 /** Titles of every `describe`/`it` in a file, read off the AST. */
 export function suiteTitlesIn(file: string): string[] {
@@ -237,7 +322,7 @@ function consumers(): string[] {
   return (cachedConsumers ??= scanScopeConsumers(SRC_ROOT));
 }
 
-describe("every anonymous reader of PUBLIC_MEDIA_SCOPE is covered (ugcportal-3ae K3)", () => {
+describe("every anonymous reader of PUBLIC_MEDIA_SCOPE is covered, for the filter and for its lapse (ugcportal-3ae K3, ugcportal-nffp K3)", () => {
   it("finds readers at all", () => {
     // Guards every assertion below against passing because the walker or
     // the matcher broke and came back with nothing.
@@ -254,21 +339,25 @@ describe("every anonymous reader of PUBLIC_MEDIA_SCOPE is covered (ugcportal-3ae
     expect(consumers()).toEqual(Object.keys(SCOPE_CONSUMERS).sort());
   });
 
-  for (const [consumer, coveringTests] of Object.entries(SCOPE_CONSUMERS)) {
-    it(`${consumer} is covered by a test naming this bead`, () => {
-      expect(coveringTests.length).toBeGreaterThan(0);
-      for (const relative of coveringTests) {
-        const file = path.join(SRC_ROOT, relative);
-        const titles = suiteTitlesIn(file);
-        // Non-empty first: a path typo, or a file that stopped being a
-        // test, would otherwise read as "no title matched" either way.
-        expect(titles.length, relative).toBeGreaterThan(0);
-        expect(
-          titles.some((title) => title.includes(COVERAGE_MARKER)),
-          `${relative} has no describe/it naming ${COVERAGE_MARKER}`,
-        ).toBe(true);
-      }
-    });
+  for (const [consumer, coverage] of Object.entries(SCOPE_CONSUMERS)) {
+    for (const question of ["filter", "lapse"] as const) {
+      const marker = COVERAGE_MARKERS[question];
+      it(`${consumer} is covered for ${question} by a test naming ${marker}`, () => {
+        const coveringTests = coverage[question];
+        expect(coveringTests.length).toBeGreaterThan(0);
+        for (const relative of coveringTests) {
+          const file = path.join(SRC_ROOT, relative);
+          const titles = suiteTitlesIn(file);
+          // Non-empty first: a path typo, or a file that stopped being a
+          // test, would otherwise read as "no title matched" either way.
+          expect(titles.length, relative).toBeGreaterThan(0);
+          expect(
+            titles.some((title) => title.includes(marker)),
+            `${relative} has no describe/it naming ${marker}`,
+          ).toBe(true);
+        }
+      });
+    }
   }
 });
 

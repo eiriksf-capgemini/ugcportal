@@ -10,7 +10,7 @@ import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db"
  *
  * `publishabilityBlocker` (TypeScript, one row at a time) decides a publish
  * REQUEST. `PUBLIC_MEDIA_RIGHTS_SCOPE` (a Prisma `where`, spread into
- * `PUBLIC_MEDIA_SCOPE`) decides what five anonymous surfaces SERVE. They
+ * `PUBLIC_MEDIA_SCOPE`) decides what every anonymous surface SERVES. They
  * have to mean the same thing, and nothing in either file makes them: they
  * are written in different languages against different engines, and the way
  * they come apart is silent in exactly the dangerous direction — a row the

@@ -63,15 +63,21 @@ export const PUBLIC_MEDIA_COLUMN_SCOPE: MediaAnonymousColumnScope = {
  *
  * THE RIGHTS PREDICATES ARE HERE, IN THE SCOPE, AND NOT AT THE FOUR QUERIES
  * THAT USE IT (ugcportal-3ae K3). That placement is the criterion, not an
- * implementation detail of it. Four call sites serve five anonymous
- * surfaces today — `listPublicMedia` below (the paginated API route AND the
+ * implementation detail of it. SIX call sites reach for this constant
+ * today — `listPublicMedia` below (the paginated API route AND the
  * server-rendered home page), `listPortfolioPieces` (src/lib/portfolio.ts),
- * the sitemap (src/app/sitemap.ts, which hands item URLs to crawlers) and
- * the per-item page's read (src/lib/media-item.ts) — and an earlier draft of
- * this bead listed only three of them. The one it missed was the sitemap.
- * Any version of this fix that is written out per call site is one reader
- * away from that mistake again, and the reader it would be missing is the
- * one that publishes to Google.
+ * the sitemap (src/app/sitemap.ts, which hands item URLs to crawlers), the
+ * per-item page's read (src/lib/media-item.ts), its price block
+ * (`getPublicOffer`, src/lib/sellable-media.ts, added by ugcportal-yzo7)
+ * and the preview bytes (GET /api/media/preview/[previewId], added by
+ * ugcportal-nffp) — and an earlier draft of ugcportal-3ae listed only
+ * three. The one it missed was the sitemap. Any version of this fix that
+ * is written out per call site is one reader away from that mistake again,
+ * and the reader it would be missing is the one that publishes to Google.
+ *
+ * The count above is prose and will go stale; the enumeration that cannot
+ * is the AST scan in src/lib/public-media.consumers.test.ts, which derives
+ * the list from the tree and fails when it does not match the map there.
  *
  * What makes it stick is not this comment: it is that
  * `MediaAnonymousScope` (src/lib/media-listing.ts) now REQUIRES the rights

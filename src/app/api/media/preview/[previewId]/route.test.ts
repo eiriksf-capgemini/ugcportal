@@ -83,6 +83,11 @@ const { GET, PREVIEW_STORAGE_RETRY_AFTER_SECONDS, resetPreviewStorageUnreachable
 const { PREVIEW_CONTENT_TYPE, PREVIEW_KEY_PREFIX } = await import(
   "@/lib/media"
 );
+// ugcportal-nffp: the route reaches for this constant now, and so does the
+// assertion about the query it builds — see "puts the whole of
+// PUBLIC_MEDIA_SCOPE in the anonymous query" below for why it is read live
+// rather than transcribed.
+const { PUBLIC_MEDIA_SCOPE } = await import("@/lib/public-media");
 
 const OWNER_ID = "user-a";
 const OTHER_ID = "user-b";
@@ -186,11 +191,26 @@ const TABLE: Row[] = [
  * predicate is wrong, because it proves the handler said something and not
  * that the something excludes the right rows.
  *
- * Supports exactly the operators this route emits: equality, `{ not: null }`,
- * and `OR`. Note that an `OR` branch of `{}` matches everything here — which
- * is deliberate, because that is precisely what Prisma does with a filter
- * whose value is `undefined`, and it is the failure this evaluator has to be
- * able to reveal.
+ * Supports exactly the operators this route emits for the question this
+ * suite asks: equality, `{ not: null }`, and `OR`. Note that an `OR` branch
+ * of `{}` matches everything here — which is deliberate, because that is
+ * precisely what Prisma does with a filter whose value is `undefined`, and
+ * it is the failure this evaluator has to be able to reveal.
+ *
+ * WHAT IT DOES NOT EVALUATE, said here rather than left to be discovered
+ * (ugcportal-nffp). Since that bead the route's public arm is the whole of
+ * `PUBLIC_MEDIA_SCOPE`, whose rights half is an `AND` of relation filters
+ * over `MediaAttestation`, `MediaListing`, `MediaRightsClearance` and
+ * `User.role`. The rows above are flat objects with no relations, so that
+ * half is SKIPPED here — `AND` is not a column on a `Row`, the branch below
+ * finds no `not` key on it and moves on. Teaching this evaluator to
+ * interpret it would mean reimplementing Prisma's relation filters against
+ * fixtures that would then have to carry four more tables, which is how a
+ * hand-written evaluator starts agreeing with whatever the test expects.
+ * So the division is explicit: this suite owns byte delivery, caching,
+ * storage failures and the anonymous/owner split, and asserts the scope is
+ * inherited WHOLE; src/lib/public-media.lapse.test.ts owns what the rights
+ * half actually excludes, against a real database with the real migrations.
  */
 function matches(candidate: Row, where: Record<string, unknown>): boolean {
   for (const [field, condition] of Object.entries(where)) {
@@ -434,18 +454,58 @@ describe("K3: unpublished is 404, and identical to nonexistent", () => {
     expect(s3SendMock).not.toHaveBeenCalled();
   });
 
-  it("puts the publish filter in the query for an anonymous caller, with no owner branch", async () => {
+  it("puts the whole of PUBLIC_MEDIA_SCOPE in the anonymous query, with no owner branch (ugcportal-3ae)", async () => {
+    /*
+     * ugcportal-nffp: compared against the LIVE constant rather than
+     * against a transcription of it. This route used to spell its own
+     * `{ previewId, previewKey, publishedAt }`, which is why it was the one
+     * anonymous reader of Media the publish gate never reached — and a test
+     * that re-typed the expected keys here would have gone on passing
+     * while the rights half was added everywhere else. Reading
+     * `PUBLIC_MEDIA_SCOPE` itself means a predicate added to the scope is
+     * required here on the next run, with nobody updating this file.
+     *
+     * The evaluator above does not interpret the rights half — it
+     * understands equality, `{ not: null }` and `OR`, and skips the rest —
+     * so this assertion is the whole of what this suite proves about it.
+     * That the filter actually excludes an uncleared or lapsed row, on this
+     * reader and the five others, is proved against a real database in
+     * src/lib/public-media.lapse.test.ts.
+     */
     await call(UNPUBLISHED.previewId as string);
     const where = mediaFindFirstMock.mock.calls[0][0].where as Record<
       string,
       unknown
     >;
     expect(where).toEqual({
+      ...PUBLIC_MEDIA_SCOPE,
       previewId: UNPUBLISHED.previewId,
-      previewKey: { not: null },
-      publishedAt: { not: null },
     });
     expect("OR" in where).toBe(false);
+    expect("userId" in where).toBe(false);
+  });
+
+  it("puts the same scope in the signed-in caller's public arm (ugcportal-3ae)", async () => {
+    /*
+     * The arm that is not "this row is mine". A signed-in visitor looking
+     * at somebody else's item is, as far as that item's rights go, an
+     * anonymous visitor — so the public arm has to be the full scope and
+     * not the bare publish filter it used to be. The owner arm stays
+     * `{ userId: <string> }`, which is the property OwnerPreviewScope's own
+     * comment is about.
+     */
+    signedInAs(OWNER_ID);
+    await call(OTHERS_PUBLISHED.previewId as string);
+    const where = mediaFindFirstMock.mock.calls[0][0].where as Record<
+      string,
+      unknown
+    >;
+    expect(where).toEqual({
+      previewId: OTHERS_PUBLISHED.previewId,
+      previewKey: { not: null },
+      OR: [PUBLIC_MEDIA_SCOPE, { userId: OWNER_ID }],
+    });
+    expect("publishedAt" in where).toBe(false);
     expect("userId" in where).toBe(false);
   });
 
