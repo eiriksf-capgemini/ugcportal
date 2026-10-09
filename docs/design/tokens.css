@@ -6,7 +6,12 @@
    Den shippede paletten, kontraktskontrollen og token-navnene lever i
    globals.css og håndheves av src/lib/design (K1/K2); dette dokumentet
    endres ikke når de gjør det, og er ikke ment å synkroniseres mekanisk med
-   dem — se review-round 4-notatet på PR-en for ugcportal-rw9j. */
+   dem — se review-round 4-notatet på PR-en for ugcportal-rw9j.
+
+   --paper-line-strong/--line-strong er lagt til 2026-10-09 (ugcportal-6uc2,
+   fase 2), godkjent av Eirik samme dag - se dette tokenets egen kommentar
+   nedenfor for hvorfor fargen måtte oppfinnes i stedet for å gjenbruke en av
+   de vedtatte. */
 
 :root {
   --petrol-900: #0B2E33;   /* dyp petrol: tekst, footer, mørk base */
@@ -19,13 +24,26 @@
   --accent-100: #FBE4D3;   /* terrakotta-tint: «Til salgs»-merke */
   --accent-900: #7A3A17;   /* tekst på terrakotta-tint */
   --paper:      #FAF7F2;   /* varm hvit: sidebakgrunn i lys modus */
-  --paper-line: #D8D3C8;   /* hårlinje på lys flate */
+  --paper-line: #D8D3C8;   /* hårlinje på lys flate (dekorativ - ingen kontraktskrav) */
+  /* Kant på skjemafelt og andre kontroller på lys flate - IKKE en hårlinje
+     som --paper-line: dette er grensen som forteller at en kontroll er der
+     (WCAG 1.4.11), så den må holde 3:1, mens --paper-line eksplisitt ikke
+     trenger det. Godkjent 2026-10-09 (ugcportal-6uc2) som en ny verdi,
+     ikke en av de opprinnelig vedtatte: --input (denne) må holde 3:1 mot
+     ALLE flatene den faktisk havner på - --paper, --card (hvit), mørk
+     modus' --petrol-900/--petrol-card, OG den near-black «surface-3»-flaten
+     admin-skjemaene i curation-skjermen fortsatt bruker - og ingen vedtatt
+     farge klarer det overalt: --ink-muted bunner på 2.14:1 mot surface-3,
+     --petrol-700 på 1.36:1 samme sted. #8C8373 er verste tilfelle 3.07:1,
+     og samme verdi dekker begge fargemodus (se --line-strong under). */
+  --paper-line-strong: #8C8373;
   --ink-muted:  #6B6B63;   /* sekundærtekst */
 
   --bg: var(--paper);
   --fg: var(--petrol-900);
   --fg-muted: var(--ink-muted);
   --line: var(--paper-line);
+  --line-strong: var(--paper-line-strong);
   --card: #FFFFFF;
 
   --font-display: "Fraunces", Georgia, serif;
@@ -42,6 +60,10 @@
     --fg: var(--paper);
     --fg-muted: var(--petrol-200);
     --line: #1F4A50;
+    /* Samme verdi som lys modus, ikke en egen mørk variant: #8C8373 klarer
+       3:1 mot --petrol-900 (3.86:1) og --card under (3.34:1) også, så en
+       andre verdi ville vært noe å holde synkront uten å løse noe. */
+    --line-strong: #8C8373;
     --card: #10393F;
   }
 }

@@ -185,7 +185,20 @@ export function MobileNavToggle({
               role="navigation"
               aria-label="Main navigation"
               render={<nav />}
-              className="min-w-40 rounded-lg border border-border bg-background p-2 shadow-md"
+              /*
+                border-input, not border-border (round-1 review of
+                ugcportal-6uc2, CONFIRMED medium): this panel floats over
+                bg-background, the SAME fill the page behind it uses, so the
+                border is the only thing that identifies the open panel's
+                edge - a genuine interactive-control boundary (K3's 3:1), not
+                a decorative hairline. --border/--paper-line measures only
+                1.40:1 there; --input/--paper-line-strong (already verified
+                >=3:1 against --background - see control-edge-on-background
+                in contrast.ts) is the correct token for a floating popover's
+                own edge, the same one sign-in-menu.tsx's identical panel
+                uses.
+              */
+              className="min-w-40 rounded-lg border border-input bg-background p-2 shadow-md"
             >
               <ul className="flex flex-col">
                 {items.map((item) => (

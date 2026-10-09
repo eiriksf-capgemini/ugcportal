@@ -705,12 +705,27 @@
    * for the updated (file, token, count) pins. A handful of other
    * text-ink-muted usages were traced and confirmed to sit on a `bg-muted`
    * element's SIBLING `bg-destructive-surface` branch (a shared container
-   * that renders one or the other depending on a boolean) or inside their
-   * own untouched bg-surface-* well (the triage form's selects) - those
-   * stay text-ink-muted, correctly, because the near-black scale genuinely
-   * is still what they render against. See the muted-foreground-on-muted
-   * and muted-foreground-on-background comments in contrast.ts for the
-   * full reasoning.
+   * that renders one or the other depending on a boolean), or inside their
+   * own untouched bg-surface-* well (e.g. button.tsx's NEUTRAL_OUTLINE_STYLE)
+   * - those stay text-ink-muted, correctly, because the near-black scale
+   * genuinely is still what they render against.
+   *
+   * Round-1 review of this bead, CONFIRMED low: the sentence that used to
+   * sit here claimed a third category - "the triage form's selects" - as a
+   * text-ink-muted usage genuinely safe on its own bg-surface-3 well. That
+   * was wrong on its own terms (src/app/admin/curation/triage-form.tsx's
+   * selects use `text-ink`, a different token, not text-ink-muted at all)
+   * AND missed the real remaining gap it was reaching for: TWO text-ink-muted
+   * usages in src/app/upload/upload-form.tsx (the alt-text field's helper
+   * paragraph and the caption label's "(optional)" qualifier) that render
+   * directly on the plain page canvas, with no well of any kind around
+   * them - measured at ~1.9:1 against --paper, the identical failure shape
+   * TEXT_LABEL_CLASS's own text-ink has (see that constant's comment,
+   * ugcportal-4r0e). Pre-existing, on --color-ink-muted, a token this bead
+   * does not touch - filed as ugcportal-galb rather than fixed here.
+   *
+   * See the muted-foreground-on-muted and muted-foreground-on-background
+   * comments in contrast.ts for the full reasoning.
    */
   --muted-foreground: var(--ink-muted-petrol);
 

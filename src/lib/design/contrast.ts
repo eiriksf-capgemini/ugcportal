@@ -479,6 +479,30 @@ export const PAIRINGS: Pairing[] = [
    * `.bg-card` are removed from globals.css's --ring-on-old-surfaces
    * override (see that rule's own comment).
    */
+  /*
+   * Round-1 review of ugcportal-6uc2, CONFIRMED medium: sign-in-menu.tsx
+   * and mobile-nav-toggle.tsx both float a popover panel over
+   * `bg-background` - the SAME fill the page behind it uses - with a
+   * `border-border`/`border-X` edge as the only thing that identifies the
+   * open panel. Before this bead, `--border` was `--color-line` (11.62:1
+   * there, plenty), so the real 3:1 requirement was met by accident; once
+   * `--border` moved to the decorative `--paper-line` (1.40:1, correct for
+   * an ornamental hairline, wrong for a control boundary), both panels
+   * silently dropped below K3's floor with no pairing to catch it - this
+   * file had `control-edge-on-card`/`-on-muted` for the other two new
+   * surfaces `--input` can land on, but no entry at all for `--background`
+   * itself. Fixed at the component level (both now read `border-input`,
+   * the token this pairing verifies) and at the gate level (this entry),
+   * so a future floating panel reaching for `border-border` the same way
+   * has somewhere to fail.
+   */
+  {
+    id: "control-edge-on-background",
+    foreground: "--input",
+    background: ["--background"],
+    requirement: "ui",
+    usage: "The boundary of a floating panel that sits over the same --background fill as the page behind it (the sign-in menu and the mobile nav popover) - the border is the only thing identifying the open panel's edge.",
+  },
   {
     id: "control-edge-on-card",
     foreground: "--input",
@@ -996,12 +1020,38 @@ const PHASE_2_HOLDING_COMMENT_MARKER =
 
 export const PHASE_2_MOVED_TOKENS = ["--border", "--input", "--card", "--muted"] as const;
 
-/** A resolved declaration shaped like `var(--color-surface-<n>)` or `var(--color-scrim)` - the near-black scale's own members, the same pattern "no longer paints overlays..." in contrast.test.ts checks for the tokens this bead did NOT move. */
-const NEAR_BLACK_SCALE_REFERENCE = /^var\(--color-(surface-\d+|scrim)\)$/;
+/**
+ * A resolved declaration shaped like one of the near-black scale's own
+ * members: `var(--color-surface-<n>)` / `var(--color-scrim)` (the pre-bead
+ * values of --card and --muted) or `var(--color-line)` /
+ * `var(--color-line-strong)` (the pre-bead values of --border and --input).
+ *
+ * Round-1 review (PR #209), CONFIRMED medium: the first version of this
+ * pattern only matched the surface-\d+/scrim half - exactly the two tokens
+ * (--card, --muted) that happened to share a pre-bead value with each
+ * other, and not the other two (--border read --color-line, --input read
+ * --color-line-strong, neither of which this pattern recognised at all). A
+ * mutation test that reverted --card to its pre-bead value therefore
+ * passed, and happened to be the one fixture mutation this file originally
+ * shipped with - the guard was never exercised against --border/--input at
+ * all, which is why the gap survived the "mutate the fixture" discipline
+ * rather than being caught by it. contrast.test.ts's K4 describe block now
+ * parameterises its fixture mutation over all four of PHASE_2_MOVED_TOKENS,
+ * each reverted to ITS OWN documented pre-bead value, specifically so this
+ * class of "the guard only covers the tokens the author happened to test"
+ * gap cannot recur silently.
+ */
+const NEAR_BLACK_SCALE_REFERENCE =
+  /^var\(--color-(surface-\d+|scrim|line-strong|line)\)$/;
 
 export type Phase2MigrationClaimCheck = {
   commentPresent: boolean;
-  /** Which of PHASE_2_MOVED_TOKENS still resolves to the near-black scale. Empty when the migration is genuinely finished. */
+  /**
+   * Which of PHASE_2_MOVED_TOKENS still resolves to the near-black scale,
+   * OR is not declared at all (see checkPhase2MigrationClaim's own comment
+   * on why a missing token counts the same way a near-black one does).
+   * Empty when the migration is genuinely finished.
+   */
   stillNearBlack: string[];
   /** True in exactly the state K4 forbids: the comment is gone AND the migration is not actually finished. */
   claimsUnfinishedMigrationAsDone: boolean;
@@ -1019,9 +1069,24 @@ export function checkPhase2MigrationClaim(
   tokens: Map<string, Declaration>,
 ): Phase2MigrationClaimCheck {
   const commentPresent = css.includes(PHASE_2_HOLDING_COMMENT_MARKER);
-  const stillNearBlack = PHASE_2_MOVED_TOKENS.filter((token) =>
-    NEAR_BLACK_SCALE_REFERENCE.test(tokens.get(token)?.value ?? ""),
-  );
+  const stillNearBlack = PHASE_2_MOVED_TOKENS.filter((token) => {
+    const declaration = tokens.get(token);
+    /*
+     * Round-1 review (PR #209), CONFIRMED medium: `tokens.get(token)?.value
+     * ?? ""` let a DELETED token (not declared at all, the shape a botched
+     * refactor could leave behind as easily as reverting a value) read as
+     * "not near-black", because the empty string matches no pattern - the
+     * wrong default for a guard whose entire job is proving the migration
+     * finished, not merely failing to find evidence that it did not. A
+     * token this resolver cannot find is not proven to be on the paper
+     * scale either, so it is treated the same as one still reading the
+     * near-black scale: present in `stillNearBlack`, explicitly, rather
+     * than silently passing through a fallback that was never chosen for
+     * this reason.
+     */
+    if (!declaration) return true;
+    return NEAR_BLACK_SCALE_REFERENCE.test(declaration.value);
+  });
   return {
     commentPresent,
     stillNearBlack,
