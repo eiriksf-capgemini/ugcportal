@@ -48,9 +48,8 @@ import { seedMedia } from "@/lib/test-support/media-fixtures";
 /**
  * Not a thrower, unlike the other anonymous-surface suites: five of the six
  * readers here never call `auth()`, but GET /api/media/preview/[previewId]
- * does — it has an owner arm and, since round 1 of this bead's review, an
- * operator arm — and WHO IS ASKING is itself one of the things this file
- * has to assert. Settable rather than a fixed `null` for that reason; every
+ * does — it has an owner arm and an operator arm — and WHO IS ASKING is
+ * itself one of the things this file has to assert. Settable rather than a fixed `null` for that reason; every
  * caller goes through {@link previewStatus}, which sets it and puts it back.
  */
 const authMock = vi.fn<() => Promise<unknown>>(async () => null);
@@ -109,12 +108,12 @@ const PREVIEW_ID = `pv-${MEDIA_ID}`;
 type Viewer = null | {
   id: string;
   /**
-   * ABSENT is a state of its own, not a default (ugcportal-nffp review
-   * round 2). A session carrying a user id and no role at all is what a
-   * malformed or older-shaped session looks like, and it has to be
-   * expressible here — otherwise the cases that exercise it cannot go
-   * through {@link previewStatus} and have to build their own session and
-   * restore it by hand, which is the discipline this type exists to keep.
+   * ABSENT is a state of its own, not a default. A session carrying a user
+   * id and no role at all is what a malformed or older-shaped session looks
+   * like, and it has to be expressible here — otherwise the cases that
+   * exercise it cannot go through {@link previewStatus} and have to build
+   * their own session and restore it by hand, which is the discipline this
+   * type exists to keep.
    */
   role?: "USER" | "ADMIN";
 };
@@ -135,13 +134,12 @@ const AS_OWNER: Viewer = { id: OWNER, role: "USER" };
  * operator's view and call it the public's.
  *
  * EVERY CASE IN THIS FILE THAT TOUCHES THE ROUTE GOES THROUGH HERE, and
- * that is now true rather than merely asserted (review round 2). Two cases
- * used to set `authMock` and call `previewGET` directly, restoring outside
- * any `finally` — exactly the hazard the paragraph above describes, in the
- * same file that described it. There is no `restoreMocks` in
- * vitest.config.ts to catch it, so the fix was to make their sessions
- * expressible as a {@link Viewer} (a role is optional, and an id may be
- * blank) rather than to repeat the warning.
+ * that is enforced by {@link Viewer} being expressive enough to cover the
+ * odd sessions too — a role is optional and an id may be blank — rather
+ * than by each case remembering. There is no `restoreMocks` in
+ * vitest.config.ts, so a case that set `authMock` and called the route
+ * directly would leak its session into the next one with nothing to catch
+ * it.
  *
  * `role` is omitted from the session object when the viewer has none,
  * rather than being passed as `undefined`: `{ user: { id, role: undefined } }`
@@ -474,20 +472,18 @@ describe("a lapsed clearance removes an already-published item from every public
  * WHO MAY STILL FETCH THE BYTES — the question `surfaces()` above
  * deliberately does not ask, because it only ever asks anonymously.
  *
- * ROUND 1 OF REVIEW FOUND A REAL DEFECT HERE, and these cases are what
- * would have caught it. Putting `PUBLIC_MEDIA_SCOPE` into the public arm of
- * the SIGNED-IN scope took the preview away from every signed-in
- * non-owner, operators included — and the admin curation screen
- * (src/app/admin/curation/page.tsx) lists every upload with no `where` and
- * renders each thumbnail through this route. So the one screen whose job is
- * recording the clearance 404'd exactly the rows that needed one: clear the
- * photograph to see it, see it to clear it. The suite as first written could
- * not see that, because it had `auth` pinned to `null` and asserted a single
- * anonymous column.
+ * THE DEFECT THESE EXIST TO CATCH, stated as the failure. Putting
+ * `PUBLIC_MEDIA_SCOPE` into the public arm of the SIGNED-IN scope takes the
+ * preview away from every signed-in non-owner, operators included — and the
+ * admin curation screen (src/app/admin/curation/page.tsx) lists every upload
+ * with no `where` and renders each thumbnail through this route. The one
+ * screen whose job is recording the clearance then 404s exactly the rows
+ * that need one: clear the photograph to see it, see it to clear it. A suite
+ * with `auth` pinned to `null` and a single anonymous column cannot see any
+ * of that.
  *
  * Four viewers, three rows, and every cell is asserted rather than a
- * representative sample — the defect above lived in precisely the cell
- * nobody had written down.
+ * representative sample, because that failure lives in one cell.
  */
 describe("who may still fetch the preview bytes, by viewer (ugcportal-nffp K1)", () => {
   const UNPUBLISHED_ID = "media-nffp-unpublished";
@@ -587,30 +583,31 @@ describe("who may still fetch the preview bytes, by viewer (ugcportal-nffp K1)",
     expect(await previewStatus(AS_OPERATOR)).toBe(200);
   });
 
-  it("does not let a stale ADMIN claim in the session alone open the arm", async () => {
+  it("does not open the arm for a session that carries no role, even for a user who is an ADMIN", async () => {
     /*
-     * The converse, and the reason the demotion case above is not enough on
-     * its own: these tests hand the route a session object directly, so a
-     * case that only ever changed the session would pass against a route
-     * that trusted a token's copy of the role. `src/lib/auth.ts`'s session
-     * callback does not — it re-reads `User.role` — so the state this
-     * asserts is the one a stale JWT would produce, and the row is what
-     * decides.
+     * The arm is a pure function of the role it is HANDED, not of anything
+     * it looks up. This user IS an ADMIN in the database, and the session
+     * still does not open the arm, because the session carries no role —
+     * the shape a malformed or older-shaped session has.
      *
-     * Asserted as "the session is not the only input" rather than as a
-     * claim about the route's internals: with the row demoted, a session
-     * still claiming ADMIN must not resurrect the arm in production, and
-     * the thing that makes that true is the callback, not this route. What
-     * this case pins is that the arm is a pure function of the role it is
-     * HANDED, so the freshness guarantee has exactly one owner and it is
-     * named in src/lib/publish-authority.ts rather than re-implemented
-     * here.
+     * That is the fail-closed direction, and it is the one worth pinning:
+     * the route folds a missing role to `null` and `isPublishOperator`
+     * refuses it, so a session this route cannot read a role out of is
+     * treated as an ordinary signed-in visitor rather than given the
+     * benefit of the doubt. Keeping the role FRESH is a different
+     * guarantee with a different owner — `src/lib/auth.ts`'s session
+     * callback re-reads `User.role` per request — and the demotion case
+     * above is what exercises that.
      */
     await prisma.mediaRightsClearance.deleteMany({
       where: { listingId: await listingId(), layer: RightsLayer.PEOPLE },
     });
-    // A session with a user id but no role at all — a malformed or
-    // older-shaped session — is not an operator.
+    expect(
+      await prisma.user.findUniqueOrThrow({
+        where: { id: ADMIN },
+        select: { role: true },
+      }),
+    ).toEqual({ role: "ADMIN" });
     expect(await previewStatus({ id: ADMIN })).toBe(404);
   });
 

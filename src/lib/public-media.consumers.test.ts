@@ -34,20 +34,16 @@ import {
  * to name the tests that cover it.
  *
  * WHAT IT DOES NOT SEE, stated here rather than left for somebody to find
- * out (ugcportal-3ae review round 1, findings 2 and 3), AND WHAT THAT HAS
- * ALREADY COST (ugcportal-nffp). This scan answers "who uses the
+ * out, AND WHAT THAT HAS ALREADY COST (ugcportal-3ae, ugcportal-nffp). This scan answers "who uses the
  * constant", so it is blind to a reader that never mentions it: an
  * anonymous query that hand-writes `where: { publishedAt: { not: null } }`
  * instead of spreading the scope is not in the set the map is compared
- * against, and `toEqual` therefore still passes. That was not theoretical.
+ * against, and `toEqual` therefore still passes. That is not theoretical:
  * GET /api/media/preview/[previewId] — the route that serves the actual
- * bytes — was exactly that shape, and so sat outside this map while
- * serving uncleared and lapsed photographs at a URL the sitemap had
- * published. ugcportal-7egi's own note recorded "no leak today: all four
- * anonymous readers at ba9991f do spread the scope", which was true of the
- * readers this scan can see and false of the tree. The route now spreads
- * the scope and is in the map below; the scanner gap itself is unchanged
- * and is still 7egi's. Nothing else
+ * bytes — was exactly that shape until ugcportal-nffp, and so sat outside
+ * this map while serving uncleared and lapsed photographs at a URL the
+ * sitemap had published. It spreads the scope now and is in the map below;
+ * the scanner gap itself is unchanged and is still 7egi's. Nothing else
  * catches that shape either — `MediaAnonymousScope` in
  * src/lib/media-listing.ts only binds a query that routes through
  * `listMedia`. That gap is real and is filed as ugcportal-7egi; it is NOT

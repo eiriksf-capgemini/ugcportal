@@ -15,9 +15,8 @@ import { PREVIEW_CONTENT_TYPE, PREVIEW_KEY_PREFIX } from "@/lib/media";
 import { MEDIA_PREVIEW_DELIVERY_SELECT } from "@/lib/media-access";
 import type { MediaAnonymousScope } from "@/lib/media-listing";
 import { prisma } from "@/lib/prisma";
-// ugcportal-nffp round 1: the operator arm asks the question
-// src/lib/publish-authority.ts owns, rather than comparing a role here —
-// see OperatorPreviewScope below.
+// The operator arm asks the question src/lib/publish-authority.ts owns,
+// rather than comparing a role here — see OperatorPreviewScope below.
 import { isPublishOperator } from "@/lib/publish-authority";
 // ugcportal-nffp. The comment above asks that anything added to this hot
 // path's module graph be checked rather than assumed, so: `@/lib/public-media`
@@ -84,9 +83,10 @@ type RouteContext = { params: Promise<{ previewId: string }> };
  * about *sameness*.
  *
  * Every miss funnels through here: an id that does not exist, an unpublished
- * row belonging to somebody else, a row whose `previewKey` is unusable, and a
- * stored object that has gone missing. They must be indistinguishable to an
- * anonymous caller, and the cheapest way to guarantee that is to leave no
+ * row belonging to somebody else, a PUBLISHED row this caller may not see —
+ * its rights having lapsed, or never having held (ugcportal-nffp) — a row
+ * whose `previewKey` is unusable, and a stored object that has gone missing.
+ * They must be indistinguishable to an anonymous caller, and the cheapest way to guarantee that is to leave no
  * second place where a 404 can be spelled slightly differently — no variant
  * message, no extra header, no `reason` field added later "just for
  * debugging".
@@ -95,9 +95,9 @@ type RouteContext = { params: Promise<{ previewId: string }> };
  * a cached 404 would keep an item invisible after its owner published it, the
  * mirror of the staleness the success path guards against.
  *
- * On timing: the "no such id" and the "unpublished, not yours" cases run
- * exactly the same code — one `auth()`, one indexed `findFirst`, this
- * response — and neither reaches object storage. That removes the large,
+ * On timing: the "no such id", "unpublished, not yours" and "published but
+ * not cleared" cases run exactly the same code — one `auth()`, one indexed
+ * `findFirst`, this response — and none of them reaches object storage. That removes the large,
  * obvious signal, which would be a bucket round trip on one path and not the
  * other. It is not a constant-time claim, and none is made: SQLite's index
  * lookup for a missing key and for a filtered-out row are not provably
@@ -239,20 +239,14 @@ export function resetPreviewStorageUnreachableLogThrottle(): void {
  * The scope for an anonymous caller: public previews, and nothing else.
  *
  * `PUBLIC_MEDIA_SCOPE` (src/lib/public-media.ts) SPREAD WHOLE, NOT A
- * HAND-WRITTEN `publishedAt: { not: null }` (ugcportal-nffp). Until this
- * bead, this route spelled its own three-column filter, which made it the
- * one anonymous reader of Media that the publish gate never reached: after
- * ugcportal-3ae an uncleared row vanished from the feed, the home page, the
- * portfolio, the sitemap and /media/[previewId] — and the photograph itself
- * kept being served from here, at the stable URL the sitemap had already
- * handed to crawlers. That is the failure of this bead's own title, on the
- * surface that carries the bytes rather than a link to them.
- *
- * It also corrects a premise. ugcportal-7egi's note records "no leak today:
- * all four anonymous readers at ba9991f do spread the scope" — true of the
- * readers that NAME the constant, which is the set
- * src/lib/public-media.consumers.test.ts scans, and this route was never in
- * it. Reaching for the constant is what puts it there.
+ * HAND-WRITTEN `publishedAt: { not: null }` (ugcportal-nffp). A route that
+ * spells its own filter is a reader the publish gate does not reach and
+ * src/lib/public-media.consumers.test.ts cannot see, because that scan
+ * enumerates files NAMING the constant. This one did, and the cost was
+ * exact: an uncleared row left the feed, the home page, the portfolio, the
+ * sitemap and /media/[previewId], and the photograph itself kept being
+ * served from here — at the stable URL the sitemap had already handed to
+ * crawlers. Reaching for the constant fixes both halves.
  *
  * `previewId: string` REPLACES the scope's own `previewId: { not: null }`,
  * which is a narrowing: an equality match on a real handle already implies
@@ -272,14 +266,10 @@ export function resetPreviewStorageUnreachableLogThrottle(): void {
  * object. Those rows already left every listing surface when 3ae landed;
  * this route was the last way to reach the image.
  *
- * WHO STILL SEES IT, said precisely, because an earlier draft of this
- * paragraph said only "the owner's own arm is untouched, so nobody loses
- * sight of their own upload" and that was both too narrow and, for the
- * back office, wrong (round 1 of review). The owner's arm is indeed
- * untouched. So is the OPERATOR's — but only because `OperatorPreviewScope`
- * below was added for it; without that arm this cost landed on the admin
- * curation screen too, which is the one place the refusal had to be
- * repairable from.
+ * WHO STILL SEES IT: the owner, through their own arm below, and the
+ * OPERATOR, through `OperatorPreviewScope`. Without that second arm this
+ * cost would land on the admin curation screen as well, which is the one
+ * place the refusal has to be repairable from.
  *
  * In WORK PER REQUEST: this is the hot path — a gallery page issues one
  * request here per tile — and the rights half is relation filters, so each
@@ -331,8 +321,7 @@ type OwnerPreviewScope = {
 
 /**
  * The scope for an OPERATOR: any preview with a stored object, whatever its
- * publish state, whoever uploaded it, cleared or not (ugcportal-nffp, round
- * 1 of review).
+ * publish state, whoever uploaded it, cleared or not (ugcportal-nffp).
  *
  * WHY THIS ARM HAD TO EXIST THE MOMENT THE RIGHTS HALF ARRIVED. The
  * anonymous arm above is "what the public may see". The admin curation
@@ -372,24 +361,20 @@ type OwnerPreviewScope = {
  * cannot reach `Media.key`, and `cache-control: private, no-cache` plus
  * `Vary: Cookie` already stop one caller's answer being reused for another.
  *
- * WHAT IT CHANGES, MEASURED on a real database with one published row whose
- * PEOPLE clearance was deleted, and one unpublished row belonging to
- * somebody else (anon / signed-in stranger / operator / owner):
+ * WHAT EACH VIEWER GETS, measured on a real database and asserted in
+ * src/lib/public-media.lapse.test.ts — anon / signed-in stranger / operator
+ * / owner:
  *
- *   lapsed, published   before this PR 404 / 404 / 200 / 200
- *                       after the rights half   404 / 404 / 404 / 200
- *                       with this arm           404 / 404 / 200 / 200
- *   unpublished, other  before this PR 404 / 404 / 404 / 200
- *                       with this arm           404 / 404 / 200 / 200
+ *   published, cleared    200 / 200 / 200 / 200
+ *   published, lapsed     404 / 404 / 200 / 200
+ *   unpublished, other's  404 / 404 / 200 / 200
  *
- * The middle row of the first block is the regression this arm repairs. The
- * second block is a PRE-EXISTING 404 that this arm also closes, and that is
- * deliberate rather than overreach: the rule being written here is "an
- * operator is not the public", and a version of it restricted to published
- * rows would be encoding a rule nobody believes in order to keep a diff
- * small — while leaving the curation screen broken for the case it mostly
- * handles, since ugcportal-3ae means the ordinary order is upload, triage,
- * clear, THEN publish.
+ * THE LAST ROW IS WHY THE ARM IS NOT RESTRICTED TO PUBLISHED ROWS. The rule
+ * is "an operator is not the public"; a version that stopped at published
+ * rows would encode a rule nobody believes, and would leave the curation
+ * screen broken for the case it mostly handles — ugcportal-3ae means the
+ * ordinary order is upload, triage, clear, THEN publish, so most of what
+ * curation sees is unpublished.
  */
 type OperatorPreviewScope = {
   previewId: string;
@@ -397,8 +382,8 @@ type OperatorPreviewScope = {
   /*
    * All three spelled `?: never` rather than merely omitted, the same
    * construction the two scopes above use. WHAT THAT ACTUALLY BUYS, checked
-   * against `tsc` rather than assumed (ugcportal-nffp, review round 2): it
-   * rejects a REAL VALUE here and nothing else. `publishedAt: { not: null }`
+   * against `tsc` rather than assumed: it rejects a REAL VALUE here and
+   * nothing else. `publishedAt: { not: null }`
    * and `userId: someString` are both TS2322. `publishedAt: undefined`,
    * `userId: undefined` and `OR: undefined` all COMPILE, because
    * `exactOptionalPropertyTypes` is off in tsconfig.json and `?: never` is
@@ -408,9 +393,8 @@ type OperatorPreviewScope = {
    * simply ignores it. A real `OR: [...]` compiles for a different and
    * benign reason: the object then IS an `OwnerPreviewScope`.
    *
-   * So the honest claim is narrow, and it is not the one an earlier version
-   * of this comment made. `undefined` — the value Prisma drops, and the
-   * hazard this file is built around — is NOT caught here. It is caught
+   * So the honest claim is narrow. `undefined` — the value Prisma drops,
+   * and the hazard this file is built around — is NOT caught here. It is caught
    * where it matters, which is the owner arm's `{ userId: string }`:
    * `OR: [PUBLIC_MEDIA_SCOPE, { userId: undefined }]` is TS2322, verified,
    * and that is the one place an `undefined` would widen a scope rather
@@ -452,12 +436,13 @@ type PreviewScope =
  *     `null` result reached by a single path — the sameness becomes structural
  *     instead of maintained by hand.
  *
- * `previewKey: { not: null }` is in both arms because a row with no stored
- * object has nothing to serve; the runtime narrow in the handler re-checks it
- * for the null the column's type still permits. In the anonymous arm it
- * arrives with the rest of `PUBLIC_MEDIA_SCOPE` rather than being written
- * here; in the owner arm it stays at the top level, because an owner fetching
- * their own unpublished row still needs a stored object to serve.
+ * `previewKey: { not: null }` is in ALL THREE arms because a row with no
+ * stored object has nothing to serve, whoever is asking; the runtime narrow
+ * in the handler re-checks it for the null the column's type still permits.
+ * In the anonymous arm it arrives with the rest of `PUBLIC_MEDIA_SCOPE`
+ * rather than being written here; in the operator and owner arms it is at
+ * the top level, because neither of those filters on publish state and both
+ * still need a stored object to serve.
  *
  * RE-EVALUATED PER REQUEST, which is the whole of ugcportal-nffp. Nothing
  * about the rights half is snapshotted onto the Media row: a clearance

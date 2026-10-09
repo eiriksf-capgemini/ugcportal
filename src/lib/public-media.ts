@@ -61,7 +61,7 @@ export const PUBLIC_MEDIA_COLUMN_SCOPE: MediaAnonymousColumnScope = {
  * — a valid uploader attestation, and a cleared PEOPLE layer wherever an
  * identifiable person is shown).
  *
- * THE RIGHTS PREDICATES ARE HERE, IN THE SCOPE, AND NOT AT THE FOUR QUERIES
+ * THE RIGHTS PREDICATES ARE HERE, IN THE SCOPE, AND NOT AT THE QUERIES
  * THAT USE IT (ugcportal-3ae K3). That placement is the criterion, not an
  * implementation detail of it. SIX call sites reach for this constant
  * today — `listPublicMedia` below (the paginated API route AND the

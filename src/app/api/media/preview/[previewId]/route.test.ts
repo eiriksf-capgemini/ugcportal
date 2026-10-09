@@ -317,7 +317,7 @@ function signedInAs(userId: string) {
 }
 
 /**
- * Signed in AND an operator (ugcportal-nffp round 1).
+ * Signed in AND an operator.
  *
  * Separate from `signedInAs` rather than an optional second argument, so
  * every existing case above keeps handing the route a session with no role
@@ -499,19 +499,19 @@ describe("K3: unpublished is 404, and identical to nonexistent", () => {
 
   it("serves an operator somebody else's unpublished preview, which the curation screen needs (ugcportal-3ae)", async () => {
     /*
-     * The arm review round 1 required. The admin curation screen lists
-     * every upload with no `where` and renders each thumbnail through this
-     * route, so without this an operator cannot see the photograph they are
-     * being asked to record a clearance for. Behaviour, not just a shape:
-     * the row is somebody else's and unpublished, which is 404 for every
-     * other caller in this file.
+     * The admin curation screen lists every upload with no `where` and
+     * renders each thumbnail through this route, so without the operator
+     * arm an operator cannot see the photograph they are being asked to
+     * record a clearance for. Behaviour, not just a shape: the row is
+     * somebody else's and unpublished, which is 404 for every other caller
+     * in this file.
+     *
+     * OWNER_ID, NOT OTHER_ID, and the distinction is the whole test:
+     * `OTHERS_UNPUBLISHED` belongs to OTHER_ID, so an operator signed in as
+     * OTHER_ID would be served by the OWNER arm and this case would pass
+     * with the operator arm deleted. OWNER_ID is an operator who is not
+     * this row's owner, which is the only configuration that tests the arm.
      */
-    // OWNER_ID, not OTHER_ID (review round 2, found while recomputing the
-    // mutation sets): `OTHERS_UNPUBLISHED` belongs to OTHER_ID, so an
-    // operator signed in as OTHER_ID would be served by the OWNER arm and
-    // this case would pass with the operator arm deleted. OWNER_ID is an
-    // operator who is not this row's owner, which is the only
-    // configuration that tests the arm.
     signedInAsOperator(OWNER_ID);
     const response = await call(OTHERS_UNPUBLISHED.previewId as string);
     expect(response.status).toBe(200);
