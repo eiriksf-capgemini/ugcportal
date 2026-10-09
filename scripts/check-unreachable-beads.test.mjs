@@ -281,6 +281,23 @@ describe("formatReport", () => {
     const text = formatReport(findUnreachableBeads(beads));
     expect(text).toContain('deferred-with-date [DEFERRED until 2027-03-01] "title of deferred-with-date"');
   });
+
+  it("renders the cycle note on a chain node buildChain marked with note: \"cycle\" (sibling of the defer-until branch above)", () => {
+    // Same mutual-block-plus-independent-deferred-dead-end shape as the
+    // "buildChain cycle guard" describe block below, which asserts the raw
+    // `note: "cycle"` data directly -- this test instead runs the actual
+    // reporting path (findUnreachableBeads -> formatReport -> formatChain)
+    // over that same cycle-marked path, so the RENDERING of the marker, not
+    // just its presence in the data, is exercised.
+    const beads = [
+      bead("a", "open", ["b", "dead-a"]),
+      bead("b", "open", ["a", "dead-b"]),
+      bead("dead-a", "deferred"),
+      bead("dead-b", "deferred"),
+    ];
+    const text = formatReport(findUnreachableBeads(beads));
+    expect(text).toContain("(cycle, not followed further)");
+  });
 });
 
 describe("CLI end-to-end (--beads fixture file, never live bd)", () => {
