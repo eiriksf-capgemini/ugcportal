@@ -1,11 +1,15 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { RightsLayer } from "@/generated/prisma/enums";
+import { ResaleRightsStatus, RightsLayer } from "@/generated/prisma/enums";
 import type { AttestationAnswers } from "@/lib/attestation";
 import { TRIAGE_FACT_ATTESTATION_FIELD } from "@/lib/curation-attestation";
 import { TRIAGE_ANSWER_NO, TRIAGE_ANSWER_YES } from "@/lib/curation-triage";
-import { CLEARABLE_LAYERS, TRIAGE_FACTS } from "@/lib/resale-rights";
+import {
+  CLEARABLE_LAYERS,
+  CURRENT_CHECKLIST_VERSION,
+  TRIAGE_FACTS,
+} from "@/lib/resale-rights";
 import { mediaPreviewPath } from "@/lib/routes";
 import { completeAttestationRow } from "@/lib/test-support/attestation";
 import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db";
@@ -50,6 +54,7 @@ const {
   ERROR_BANNER_ID,
   MAX_UPLOADS,
   UPLOAD_LIST_ID,
+  priceSectionId,
   rightsLayersSectionId,
   triageFactAttestationId,
   triageFactDisagreementId,
@@ -394,8 +399,8 @@ describe("the recorded triage, read back", () => {
   it("warns when the signer is no longer an admin", async () => {
     // The gate re-reads the signer's CURRENT role (`triagedBy?.role !==
     // "ADMIN"` in triageBlocker), so a triage signed by someone since
-    // demoted is void. Surfaced here since no render-time gate exists yet
-    // (ugcportal-yzo7, K4).
+    // demoted is void. Surfaced here beside the triage, with the full
+    // verdict in the price well (ugcportal-yzo7).
     await createUpload("media-1");
     await triage("media-1", "demoted-1");
     const row = uploadRows(await renderPage())[0];
@@ -978,5 +983,110 @@ describe("the rights-layer well (ugcportal-qfy9)", () => {
     }
     expect(banners).toHaveLength(CLEARANCE_WRITE_REFUSALS.length);
     expect(new Set(banners).size).toBe(banners.length);
+  });
+});
+
+/**
+ * The price well (ugcportal-yzo7 K1/K4), on the admin side.
+ *
+ * TWO THINGS ARE ASSERTED TOGETHER AND MUST STAY TOGETHER: the stored
+ * amount, and the gate's CURRENT verdict on the same row. An admin shown an
+ * amount with no verdict would read the amount as permission, which is the
+ * exact misreading K5's repository scan exists to make impossible in code —
+ * this is the same rule at the surface a human looks at.
+ */
+describe("the price well (ugcportal-yzo7)", () => {
+  async function clearUploader(
+    status: ResaleRightsStatus = ResaleRightsStatus.CLEARED,
+  ) {
+    await prisma.resaleRightsReview.upsert({
+      where: { uploaderUserId: "owner-1" },
+      create: {
+        uploaderUserId: "owner-1",
+        status,
+        checklistVersion: CURRENT_CHECKLIST_VERSION,
+        reviewedByUserId: "admin-1",
+        reviewedAt: new Date("2026-10-01T00:00:00.000Z"),
+      },
+      update: { status },
+    });
+  }
+
+  /** Fully triaged with every fact answered NO, which needs no clearance. */
+  async function sellableListing(mediaId: string, priceCents: number | null) {
+    await prisma.mediaListing.create({
+      data: {
+        mediaId,
+        ...Object.fromEntries(FIELDS.map((field) => [field, false])),
+        priceCents,
+        currency: "NOK",
+        triagedByUserId: "admin-1",
+        triagedAt: new Date("2026-10-02T09:30:00.000Z"),
+      },
+    });
+  }
+
+  beforeEach(async () => {
+    await prisma.resaleRightsReview.deleteMany({});
+    await createUpload("priced-1");
+    await attest("priced-1");
+  });
+
+  it("reports a priced, currently sellable upload as both", async () => {
+    await sellableListing("priced-1", 125_000);
+    await clearUploader();
+
+    const markup = await renderPage();
+    const well = new RegExp(
+      `<div[^>]*id="${priceSectionId("priced-1")}"[^>]*>([\\s\\S]*?)</div>`,
+    ).exec(markup)?.[1];
+
+    expect(well).toBeDefined();
+    expect(well).toContain("125000");
+    expect(markup).toContain('data-sellability-verdict="sellable"');
+  });
+
+  it("keeps showing the amount when the gate refuses, with the blocker beside it", async () => {
+    /*
+      The admin-side K4. The price is unchanged and still rendered — hiding
+      it would leave an admin unable to see what is stranded on the row —
+      and the verdict says, in the same well, that nothing public will offer
+      it.
+    */
+    await sellableListing("priced-1", 125_000);
+    await clearUploader(ResaleRightsStatus.REVOKED);
+
+    const markup = await renderPage();
+    expect(markup).toContain("125000");
+    expect(markup).toContain('data-sellability-verdict="status_not_cleared"');
+    expect(markup).not.toContain('data-sellability-verdict="sellable"');
+
+    // THE RESTORE: the verdict follows the status, not the fixture.
+    await clearUploader(ResaleRightsStatus.CLEARED);
+    expect(await renderPage()).toContain('data-sellability-verdict="sellable"');
+  });
+
+  it("says an untriaged, unpriced upload is not priced", async () => {
+    await sellableListing("priced-1", null);
+    await clearUploader();
+    expect(await renderPage()).toContain("Not priced");
+  });
+
+  it("renders no price well at all for an upload with no triage record", async () => {
+    // There is no MediaListing row to put a price on, and offering a form
+    // that would answer `price_media_not_found` would be a dead control.
+    expect(await renderPage()).not.toContain(`id="${priceSectionId("priced-1")}"`);
+  });
+
+  it("renders the price form only for the row named by ?edit=", async () => {
+    await createUpload("priced-2", { previewId: "preview-priced-2" });
+    await attest("priced-2");
+    await sellableListing("priced-1", 125_000);
+    await sellableListing("priced-2", 4_200);
+    await clearUploader();
+
+    const markup = await renderPage({ edit: "priced-1" });
+    expect(markup).toContain('id="price-cents-priced-1"');
+    expect(markup).not.toContain('id="price-cents-priced-2"');
   });
 });

@@ -2,13 +2,13 @@ import { NextResponse } from "next/server";
 
 import { requireAdmin } from "@/lib/admin";
 import { isSameOriginRequest } from "@/lib/origin";
-import {
-  PRISMA_RECORD_NOT_FOUND,
-  prismaErrorCode,
-} from "@/lib/prisma-errors";
 import { readJsonBody } from "@/lib/request-body";
-import { prisma } from "@/lib/prisma";
-import { MEDIA_GATE_SELECT, evaluateSellability } from "@/lib/resale-rights";
+import { recordPrice } from "@/lib/curation-price-write";
+import {
+  MAX_PRICE_CENTS,
+  isStorablePriceCents,
+  isSupportedCurrency,
+} from "@/lib/pricing";
 
 // App Router hands dynamic segments in as a Promise (Next 16).
 type RouteContext = { params: Promise<{ id: string }> };
@@ -16,14 +16,13 @@ type RouteContext = { params: Promise<{ id: string }> };
 // Two numbers and a currency code. Anything larger is not this request.
 const MAX_BODY_BYTES = 1024;
 
-// 10 000 000 minor units — NOK 100 000. A ceiling exists so a fat finger or a
-// tampered client can't record a price that later becomes a charge; the
-// number itself is a placeholder for whatever ugcportal-p3v settles on.
-const MAX_PRICE_CENTS = 10_000_000;
-
-// Kept to currencies the checkout work (ugcportal-p3v) will actually
-// support, so a price can't be recorded in a currency nothing can charge.
-const SUPPORTED_CURRENCIES = new Set(["NOK", "EUR", "USD"]);
+// The ceiling and the currency allowlist both live in
+// src/lib/pricing.ts now (ugcportal-yzo7), shared by this route, the admin
+// form and the single write they all bound. This route used to own both, which was fine while it was
+// the only entry point; the admin curation screen is a second one, and a
+// bound enforced at one of two entry points is not a bound. What stays here
+// is the HTTP-shaped half: what a malformed BODY is, and which sentence a
+// caller gets for it.
 
 type PriceInput = { priceCents: number | null; currency?: string };
 type ParseResult =
@@ -54,7 +53,12 @@ function parsePriceInput(body: unknown): ParseResult {
       // minor units, and a float here becomes a rounding argument later.
       return { ok: false, error: "priceCents must be an integer or null" };
     }
-    if (priceCents < 0 || priceCents > MAX_PRICE_CENTS) {
+    // The range half is `isStorablePriceCents` (src/lib/curation-price-write.ts),
+    // so this route and the admin screen cannot disagree about the ceiling.
+    // The write re-checks it anyway and answers `price_amount_invalid`; this
+    // is here to produce the specific sentence a JSON caller gets, which a
+    // closed-set refusal code cannot.
+    if (!isStorablePriceCents(priceCents)) {
       return {
         ok: false,
         error: `priceCents must be between 0 and ${MAX_PRICE_CENTS}`,
@@ -62,10 +66,8 @@ function parsePriceInput(body: unknown): ParseResult {
     }
   }
 
-  if (currency !== undefined) {
-    if (typeof currency !== "string" || !SUPPORTED_CURRENCIES.has(currency)) {
-      return { ok: false, error: "Unsupported currency" };
-    }
+  if (currency !== undefined && !isSupportedCurrency(currency)) {
+    return { ok: false, error: "Unsupported currency" };
   }
 
   return {
@@ -83,29 +85,36 @@ function parsePriceInput(body: unknown): ParseResult {
  * a MediaListing id (ugcportal-vsm renamed the model from CuratedPost; the
  * endpoint's contract is unchanged).
  *
- * Three refusals, deliberately distinct:
+ * Four refusals, deliberately distinct:
  *   403 — not an admin. Same answer for signed-out and signed-in non-admin.
+ *   400 — the body is not a well-formed price.
  *   404 — no such listing.
  *   422 — the listing exists and the caller is allowed, but its uploader has
- *         no current resale-rights clearance, or the upload itself is not
- *         triaged. The request is well-formed; the state forbids it.
+ *         no current resale-rights clearance, the upload itself is not
+ *         triaged, or it has no watermarked preview (ugcportal-yzo7 K3). The
+ *         request is well-formed; the state forbids it.
  *
  * `{"priceCents": null}` — un-pricing — is **not** gated. The gate exists to
  * stop things being offered for sale; refusing to *withdraw* an offer would
  * point it backwards, and would strand a price on exactly the uploaders that
  * just lost their clearance. An admin can always take something off sale.
  *
- * The gate read and the write share a transaction. Note honestly what that
- * does and does not buy: `@prisma/adapter-libsql` opens SQLite transactions
- * as `deferred` (the known issue recorded on ugcportal-lu7 about
- * src/lib/roles.ts), so this does not serialise against a concurrent
- * revocation — a revoke committing between the read and the write can leave
- * a price set on a no-longer-cleared upload. Two things make that survivable,
- * and both are load-bearing: a price is not a sale, because the catalogue and
- * checkout evaluate this same gate again at render and at payment (Part E.3,
- * and an acceptance criterion on ugcportal-74w and ugcportal-p3v); and the
- * stale price really can be cleared afterwards, because un-pricing is
- * ungated.
+ * NOT THE PLACE THE RULES LIVE ANY MORE (ugcportal-yzo7). The gate read, the
+ * preview check and the update are `recordPrice`
+ * (src/lib/curation-price-write.ts), because the admin curation screen is now
+ * a second entry point for the same write and three conditions spelled at two
+ * entry points is how one of them comes to be missing the third. What stays
+ * here is HTTP: who may call it, what a malformed body is, and which status
+ * each outcome maps to.
+ *
+ * WHAT A STORED PRICE DOES NOT MEAN. An earlier version of this comment
+ * justified an unserialised transaction here by saying "the catalogue and
+ * checkout evaluate this same gate again at render and at payment". Neither
+ * existed when that was written (PR #196, review round 1). Half of it exists
+ * now: `src/lib/sellable-media.ts` re-evaluates the gate at RENDER, so a
+ * clearance that lapses after this endpoint ran removes the offer with no
+ * write at all. Checkout (ugcportal-p3v) still does not exist, and nothing
+ * here should be read as saying it does.
  */
 export async function POST(request: Request, { params }: RouteContext) {
   const session = await requireAdmin();
@@ -133,70 +142,59 @@ export async function POST(request: Request, { params }: RouteContext) {
     return NextResponse.json({ error: parsed.error }, { status: 400 });
   }
 
-  const unpricing = parsed.value.priceCents === null;
-
-  const result = await prisma.$transaction(async (tx) => {
-    // Read from the Media side, not the listing side, and with the shared
-    // select rather than a local one. That is what makes the clearance this
-    // endpoint checks the clearance of the file's own uploader: the path
-    // from the file to its review lives in MEDIA_GATE_SELECT, so there is
-    // nothing here that could point somewhere else. One query, no reshaping.
-    const upload = await tx.media.findFirst({
-      where: { listing: { id } },
-      select: MEDIA_GATE_SELECT,
-    });
-    // No listing with that id — or, impossible behind the foreign key but
-    // answered the same way, no file behind it.
-    if (!upload) {
-      return { kind: "not_found" } as const;
-    }
-
-    if (!unpricing) {
-      const gate = evaluateSellability(upload);
-      if (!gate.sellable) {
-        return { kind: "blocked", blocker: gate.blocker } as const;
-      }
-    }
-
-    try {
-      const updated = await tx.mediaListing.update({
-        where: { id },
-        data: {
-          priceCents: parsed.value.priceCents,
-          // Currency is only meaningful alongside a price, and applying it
-          // on an un-pricing call would be a write the gate never checked.
-          ...(!unpricing && parsed.value.currency
-            ? { currency: parsed.value.currency }
-            : {}),
-        },
-        select: { id: true, priceCents: true, currency: true },
-      });
-      return { kind: "ok", post: updated } as const;
-    } catch (error) {
-      // The gate read above and this write are not serialised (deferred
-      // transactions again), so the listing can be deleted in between. That is
-      // the same 404 the caller would have got a moment earlier, not a
-      // server fault — and answering it as one on an endpoint that maps
-      // 403/404/422 deliberately would be the odd one out.
-      if (prismaErrorCode(error) === PRISMA_RECORD_NOT_FOUND) {
-        return { kind: "not_found" } as const;
-      }
-      throw error;
-    }
+  // The gate, the preview check and the write all live in `recordPrice`
+  // (src/lib/curation-price-write.ts, ugcportal-yzo7), which the admin
+  // curation screen's `setPrice` action also calls. This route used to spell
+  // the gate read and the update inline; two entry points spelling the same
+  // three conditions is how one of them comes to be missing the third.
+  const outcome = await recordPrice({
+    target: { listingId: id },
+    priceCents: parsed.value.priceCents,
+    currency: parsed.value.currency,
   });
 
-  if (result.kind === "not_found") {
+  if (outcome.kind === "price_media_not_found") {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
-  if (result.kind === "blocked") {
+  if (outcome.kind === "price_no_preview") {
+    // 422 rather than 404 or 409: the listing exists and the caller is
+    // allowed, and the state forbids the request. `blocker` carries a code
+    // from the same closed set the UI reads, so an admin is told which step
+    // is missing rather than being handed a generic refusal.
+    return NextResponse.json(
+      {
+        error:
+          "Not sellable: this upload has no watermarked preview, so pricing it would offer the unprotected original.",
+        blocker: "no_preview",
+      },
+      { status: 422 },
+    );
+  }
+  if (outcome.kind === "price_amount_invalid") {
+    // Unreachable through `parsePriceInput` above, which refuses the same
+    // values with a more specific sentence first. Here because the write's
+    // outcome is a closed set and silently falling through a member of it
+    // would be a fail-open on the one endpoint that writes money.
+    return NextResponse.json(
+      { error: "priceCents must be an integer or null" },
+      { status: 400 },
+    );
+  }
+  if (outcome.kind === "price_not_sellable") {
     // The blocker code is one of a closed set (SellabilityBlocker), safe to
     // hand back: it tells an admin which step of the checklist is missing,
     // and this endpoint is admin-only anyway.
     return NextResponse.json(
-      { error: "Not sellable", blocker: result.blocker },
+      { error: "Not sellable", blocker: outcome.blocker },
       { status: 422 },
     );
   }
 
-  return NextResponse.json(result.post);
+  // The same three fields this endpoint has always echoed, rebuilt from the
+  // write's own outcome rather than from a second read.
+  return NextResponse.json({
+    id: outcome.listingId,
+    priceCents: outcome.kind === "priced" ? outcome.priceCents : null,
+    currency: outcome.currency,
+  });
 }

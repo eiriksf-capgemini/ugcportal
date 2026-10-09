@@ -23,9 +23,13 @@ import { CURRENT_CHECKLIST_VERSION } from "@/lib/resale-rights";
 const authMock = vi.fn();
 const updateMock = vi.fn();
 
-/** What MEDIA_GATE_SELECT returns for an upload that clears the gate. */
+/** What the price writer's select returns for an upload that clears the gate. */
 const SELLABLE_UPLOAD = {
   userId: "owner-1",
+  // The watermarked preview and the listing's own id (ugcportal-yzo7): the
+  // writer reads both off the same row the gate is evaluated on, so a
+  // fixture without them is refused before any race can happen.
+  previewKey: "previews/owner-1/preview.webp",
   user: {
     resaleRightsReview: {
       status: "CLEARED",
@@ -50,6 +54,7 @@ const SELLABLE_UPLOAD = {
     ...completeAttestationAnswers(),
   },
   listing: {
+    id: "listing-1",
     depictsPeople: false,
     depictsMinors: false,
     modelReleaseKey: null,
