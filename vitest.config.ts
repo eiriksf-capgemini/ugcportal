@@ -40,11 +40,15 @@ export default defineConfig({
     // over the migrations dir defeats its static analysis - see that file)
     // and copies every src/**/*.test.* into .next/standalone. Without this,
     // a `vitest run` in the same tree after a build collects that copy as a
-    // second, broken suite - double-counting real tests and failing ones
-    // that depend on dev-only tooling absent from the production-shaped
-    // .next/standalone (ugcportal-l99p). Nothing first-party ever lives
-    // under .next/, so the same "exclude the whole directory" reasoning
-    // above applies here too, not just a narrower .next/standalone/**.
+    // second, broken suite - double-counting real tests, and in some cases
+    // failing outright (e.g. a missing node_modules/.bin/prisma for
+    // scripts/check-migrations.test.mjs's copy, or a Next runtime invariant
+    // when a route handler's copy runs under vitest instead of Next's own
+    // server) because it's running from inside production build output,
+    // not the source tree it was copied from (ugcportal-l99p). Nothing
+    // first-party ever lives under .next/, so the same "exclude the whole
+    // directory" reasoning above applies here too, not just a narrower
+    // .next/standalone/**.
     exclude: [...defaultExclude, ".claude/**", "e2e/**", ".next/**"],
   },
 });
