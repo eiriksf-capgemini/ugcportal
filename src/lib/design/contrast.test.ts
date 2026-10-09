@@ -383,8 +383,12 @@ describe("the gate cannot be routed around", () => {
 
   it("never lets the SAME token be declared both a decorative foreground and a control-edge/focus-ring foreground in PAIRINGS", () => {
     // --color-line is exempt from 3:1 precisely because it is never the thing
-    // that tells you a control is there. --input / --color-line-strong is, and
-    // is checked at 3:1 above.
+    // that tells you a control is there. --input (the semantic token) and
+    // --color-line-strong (its own direct remaining consumer, the upload
+    // dropzone - these are two DIFFERENT literals as of ugcportal-6uc2 phase
+    // 2, not aliases of each other the way they were before) both are, and
+    // both are checked at 3:1 above (control-edge-* and line-strong-edge-on-*
+    // respectively).
     //
     // Round-1 review of ugcportal-6uc2, CONFIRMED medium: this proves PAIRINGS
     // is internally consistent (no one token reference is declared decorative
@@ -502,18 +506,60 @@ describe("the gate cannot be routed around", () => {
    * 3:1 with nothing in this file able to notice, because this file never
    * looked at a real `border-border` usage site at all.
    *
-   * This is the real check: every `border-border` usage this codebase
-   * actually ships (via the SAME `usedBareUtilities` scan the rest of this
-   * block uses - not a second, independent scan that could drift from it),
-   * audited by hand (round-1 review) for whether it identifies an
-   * interactive control or is genuinely decorative (static page chrome - a
-   * callout panel's own edge, a header/footer rule, a thumbnail frame, the
-   * global `* { @apply border-border }` base-layer default - none of which
-   * is a floating/toggleable control a sighted user needs the border to
-   * find). The two fixed floating-panel usages are gone from this codebase
-   * entirely now (both read `border-input` instead - see their own
-   * components' comments), not re-classified somewhere in this list - the
-   * right outcome for a defect, not a bucket to file it under.
+   * Round-2 review, CONFIRMED medium: round 1's own classification was ONE
+   * blanket sentence covering four categories, not a per-site judgement -
+   * exactly how a fifth site fitting none of the four (cookie-banner.tsx:
+   * `fixed`, `z-40`, conditionally rendered, over `bg-background`, with
+   * `border-t border-border` as its only edge - 1.3965:1 after this bead,
+   * indistinguishable from the footer it overlays when open) stayed
+   * invisible to a blanket claim that confidently said "none of which is a
+   * floating/toggleable control" four lines above being wrong about one.
+   * Fixed the same way as the first two (now `border-input`, see that
+   * component's own comment) and removed from this list entirely, same as
+   * they were.
+   *
+   * This file now states the classification as a RULE, checked per site
+   * below rather than asserted once in prose: a usage needs `ui`-grade
+   * coverage (a dedicated PAIRINGS entry, like control-edge-on-background)
+   * exactly when it is (a) removed from normal document flow (`fixed` or
+   * `absolute` positioning - NOT `sticky`, which still reserves its own
+   * space in flow and is never toggled), (b) shown/hidden by a specific
+   * user action rather than always present, and (c) painted on a fill
+   * identical to the page behind it, such that the border is the only cue
+   * marking where the panel starts. Every remaining entry below was
+   * checked against that rule, not assumed decorative by category:
+   *
+   *   - admin/curation/page.tsx (10), admin/settings/instagram/page.tsx
+   *     (2), admin/settings/rights/brands/page.tsx (3),
+   *     admin/settings/rights/page.tsx (6), admin/settings/users/page.tsx
+   *     (1): static, in-flow content - bg-muted/bg-destructive-surface
+   *     callout panels, `divide-y` list containers, one thumbnail frame, one
+   *     plain bordered `<div>` - none `fixed`/`absolute`, none toggled by a
+   *     user action; the data they show or don't (a recorded decision, an
+   *     empty list) is not the same thing as a popover opening and closing.
+   *   - globals.css (1): `* { @apply border-border }`, the base-layer
+   *     DEFAULT every element inherits before an actual border-width makes
+   *     it visible anywhere - not a specific component's boundary at all.
+   *   - legal-page.tsx (1): the draft-notice `<p role="status">`, shown or
+   *     not based on a `draft` prop (page content, not a user toggle),
+   *     static in the document flow, not floating over anything.
+   *   - purchase-offer.tsx (1): a `bg-muted` `<aside>`, present or absent
+   *     based on whether an offer exists (data, not a user toggle), static
+   *     in flow - the same shape as the admin bg-muted panels above, not a
+   *     floating overlay.
+   *   - site-footer.tsx (2), site-header.tsx (1): permanent page chrome,
+   *     always rendered (the header is `sticky`, which still occupies its
+   *     own space in flow and never disappears - unlike `fixed`, nothing
+   *     ever scrolls newly-visible content behind it the way a popover
+   *     appears over the page), never toggled.
+   *
+   * Checked for exhaustiveness, not merely asserted: grepped the whole
+   * `src/` tree for `fixed`/`absolute` co-occurring with any `border`
+   * utility, and separately for every `shadow-md`/`shadow-lg`/`shadow-xl`
+   * usage (a floating panel's own visual-separation cue, and a usage every
+   * genuine case in this codebase happens to carry) - both scans return
+   * exactly the three sites named above (two already fixed in round 1, the
+   * third fixed in round 2), confirming no fourth is still out there.
    *
    * Same discipline as AUDITED_DECORATIVE_BACKGROUND_USAGES below: keyed by
    * `${file}:${utility}` -> occurrence COUNT, not just file presence, so a
@@ -529,7 +575,6 @@ describe("the gate cannot be routed around", () => {
     "src/app/admin/settings/rights/page.tsx:border-border": 6,
     "src/app/admin/settings/users/page.tsx:border-border": 1,
     "src/app/globals.css:border-border": 1,
-    "src/components/consent/cookie-banner.tsx:border-border": 1,
     "src/components/legal/legal-page.tsx:border-border": 1,
     "src/components/media/purchase-offer.tsx:border-border": 1,
     "src/components/site-footer.tsx:border-border": 2,
@@ -1375,6 +1420,24 @@ describe("petrol is demoted, not removed", () => {
     expect(darkTokens.get("--muted")?.value).toBe("var(--petrol-card)");
   });
 
+  /**
+   * Round-2 review of ugcportal-6uc2, CONFIRMED low: --card/--muted got a
+   * value-pin test the moment they moved (immediately above); --border/
+   * --input, moved by the same bead, got none - an asymmetry with no
+   * reason behind it other than the first test happening to get written
+   * before this one did. --input is pinned to the SAME value in both
+   * modes deliberately (see its own declaration's comment in globals.css
+   * for why no dark override exists), unlike --border/--card/--muted,
+   * which all flip.
+   */
+  it("moves --border and --input off the near-black scale onto the paper one (ugcportal-6uc2, phase 2)", () => {
+    expect(tokens.get("--border")?.value).toBe("var(--paper-line)");
+    expect(tokens.get("--input")?.value).toBe("var(--paper-line-strong)");
+    const darkTokens = tokensByMode.dark;
+    expect(darkTokens.get("--border")?.value).toBe("var(--petrol-line)");
+    expect(darkTokens.get("--input")?.value).toBe("var(--paper-line-strong)");
+  });
+
   it("paints the page canvas with the petrol/paper palette, in both modes", () => {
     expect(tokens.get("--background")?.value).toBe("var(--paper)");
     expect(tokens.get("--foreground")?.value).toBe("var(--petrol-900)");
@@ -1460,8 +1523,14 @@ describe("K1: the exact palette docs/design/tokens.css adopted", () => {
  * two-list drift this repo's own review history keeps finding (round 4's
  * MAJOR finding against the predecessor of this same override). Resolves
  * both independently: the CSS selector's classes through their real
- * semantic aliases (`.bg-muted` -> `--muted` -> `--color-surface-1`, etc,
- * the same mapping documented on RING_OVERRIDE_SURFACES's own comment), and
+ * semantic aliases (`.bg-sidebar` -> `--sidebar` -> `--color-surface-1`, etc
+ * - round-2 review of ugcportal-6uc2, CONFIRMED: this used to say
+ * `.bg-muted` -> `--muted` -> `--color-surface-1`, which stopped being true
+ * in BOTH halves once phase 2 landed - `.bg-muted` is no longer in
+ * globals.css's selector list at all, and `--muted` no longer resolves to
+ * `--color-surface-1` either; `.bg-sidebar` is a selector this rule still
+ * actually carries - the same mapping documented on RING_OVERRIDE_SURFACES's
+ * own comment), and
  * RING_OVERRIDE_SURFACES's own tokens through resolveToken - then compares
  * the two resolved sets rather than the raw names, since one is literal
  * CSS classes and the other is TypeScript's --color-surface-N tokens.
@@ -1828,5 +1897,32 @@ describe("K4 (ugcportal-6uc2): the phase-2 holding comment must not claim a fini
     expect(result.commentPresent).toBe(false);
     expect(result.stillNearBlack).toEqual([]);
     expect(result.claimsUnfinishedMigrationAsDone).toBe(false);
+  });
+
+  /**
+   * Round-2 review, CONFIRMED low: with the round-1 `?? ""` fix in place, a
+   * token present with a value this resolver does not RECOGNISE (neither
+   * near-black-shaped nor an exact match for its own finished value) used
+   * to silently read as "not near-black" - `stillNearBlack: []` - the same
+   * result a genuinely finished migration produces. Each case below is one
+   * of the shapes round-2 review specifically tried: a truly empty value,
+   * nonsense text, a raw hex literal that bypasses the token system
+   * entirely, near-black in substance but not in the exact shape this
+   * resolver's pattern matches (trailing whitespace inside the value,
+   * wrong case) - every one of them must now throw, loudly, rather than
+   * silently joining either bucket.
+   */
+  it.each([
+    ["an empty value", ""],
+    ["nonsense text", "garbage"],
+    ["a raw hex literal bypassing the token system", "#1a1d1d"],
+    ["a near-black reference with trailing whitespace inside the value", "var(--color-surface-1) "],
+    ["a near-black reference in the wrong case", "VAR(--COLOR-LINE)"],
+  ])("FIXTURE MUTATION: --card with %s throws rather than silently passing", (_label, value) => {
+    const mutatedTokens = new Map(tokens);
+    mutatedTokens.set("--card", { property: "--card", value, selector: "(fixture)" });
+    expect(() => checkPhase2MigrationClaim(css, mutatedTokens)).toThrow(
+      /neither a recognised near-black-scale reference nor its expected finished value/,
+    );
   });
 });

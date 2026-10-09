@@ -229,8 +229,12 @@ export const PAIRINGS: Pairing[] = [
   /*
    * ugcportal-rw9j review round 3: globals.css scopes a --ring override back
    * to --color-fjord-400 on every element that also carries one of the old
-   * near-black surface background classes (bg-surface-*, bg-muted, bg-card,
-   * ...) - resolveToken/loadThemeTokens has no notion of a class-scoped CSS
+   * near-black surface background classes (bg-surface-*, bg-popover,
+   * bg-accent, bg-secondary, bg-destructive-surface, bg-sidebar - round-2
+   * review of ugcportal-6uc2, CONFIRMED low: this used to also list
+   * bg-muted/bg-card here, which phase 2 removed from that CSS selector,
+   * see this file's own ugcportal-6uc2 comment a few lines up) -
+   * resolveToken/loadThemeTokens has no notion of a class-scoped CSS
    * override, so this checks the literal token that override points at
    * directly (the same reason primary-hover-fill and friends check a literal
    * step of the petrol scale rather than a semantic alias elsewhere in this
@@ -325,7 +329,7 @@ export const PAIRINGS: Pairing[] = [
     "--color-line",
     "decorative",
     "Row dividers, card edges and section rules.",
-    "Purely ornamental separation. WCAG 1.4.11 covers the parts of a control that identify it, not decoration; a 3:1 hairline on every row would draw a bright grid across a page whose job is to disappear behind photographs. Controls use --color-line-strong, which is checked at 3:1 via line-strong-edge-on-* and control-edge-* below.",
+    "Purely ornamental separation. WCAG 1.4.11 covers the parts of a control that identify it, not decoration; a 3:1 hairline on every row would draw a bright grid across a page whose job is to disappear behind photographs. A control still on the near-black scale uses --color-line-strong directly (the upload dropzone's own border - round-2 review, CONFIRMED: this used to also credit control-edge-* here, which checks --input, a DIFFERENT literal since ugcportal-6uc2 phase 2 - see line-strong-edge-on-* below, the one entry that actually measures --color-line-strong).",
   ),
   /*
    * ugcportal-rw9j review round 5, superseded by ugcportal-6uc2 (phase 2):
@@ -495,13 +499,23 @@ export const PAIRINGS: Pairing[] = [
    * the token this pairing verifies) and at the gate level (this entry),
    * so a future floating panel reaching for `border-border` the same way
    * has somewhere to fail.
+   *
+   * Round-2 review, CONFIRMED medium: that "somewhere to fail" did not
+   * fire for a THIRD site of the identical shape - cookie-banner.tsx,
+   * `fixed`/`z-40`/conditionally rendered/`bg-background`, missed in round
+   * 1 because round 1's own audit was one blanket sentence ("none of which
+   * is a floating/toggleable control") rather than a per-site check - see
+   * the border-border audit in contrast.test.ts for the corrected,
+   * per-site version. Fixed the same way (now `border-input` too); this
+   * pairing needed no change, since it already covers any `--input`-on-
+   * `--background` usage regardless of which component adds one.
    */
   {
     id: "control-edge-on-background",
     foreground: "--input",
     background: ["--background"],
     requirement: "ui",
-    usage: "The boundary of a floating panel that sits over the same --background fill as the page behind it (the sign-in menu and the mobile nav popover) - the border is the only thing identifying the open panel's edge.",
+    usage: "The boundary of a floating panel that sits over the same --background fill as the page behind it (the sign-in menu, the mobile nav popover, and the cookie-consent banner) - the border is the only thing identifying the open panel's edge.",
   },
   {
     id: "control-edge-on-card",
@@ -1044,6 +1058,21 @@ export const PHASE_2_MOVED_TOKENS = ["--border", "--input", "--card", "--muted"]
 const NEAR_BLACK_SCALE_REFERENCE =
   /^var\(--color-(surface-\d+|scrim|line-strong|line)\)$/;
 
+/**
+ * The one value each of PHASE_2_MOVED_TOKENS resolves to in `globals.css`
+ * once the migration is genuinely finished (light mode - this function is
+ * only ever called with the light token map, see its own call site in
+ * contrast.test.ts). `--card`/`--muted` share a value deliberately (see
+ * their own declarations' comments); `--input` is the one token this bead
+ * leaves mode-invariant.
+ */
+const PHASE_2_FINISHED_VALUE: Record<(typeof PHASE_2_MOVED_TOKENS)[number], string> = {
+  "--border": "var(--paper-line)",
+  "--input": "var(--paper-line-strong)",
+  "--card": "var(--paper-card)",
+  "--muted": "var(--paper-card)",
+};
+
 export type Phase2MigrationClaimCheck = {
   commentPresent: boolean;
   /**
@@ -1063,6 +1092,25 @@ export type Phase2MigrationClaimCheck = {
  * contrast.test.ts's own fixture-mutation check constructs a synthetic
  * token map and a mutated copy of the real CSS text independently, the same
  * shape findColorScaleNameCollisions's own fixture tests already use.
+ *
+ * Round-2 review (PR #209), CONFIRMED low: with the round-1 `?? ""` fix in
+ * place, a token whose value matched NEITHER the near-black pattern NOR
+ * anything else still silently read as "finished" - `""`, `"garbage"`, a
+ * raw hex bypassing the token system entirely (`"#1a1d1d"`), or a value
+ * near-black in substance but not in the exact shape this resolver
+ * recognises (trailing whitespace, a different case) all produced
+ * `stillNearBlack: []`, the same as a value this function could actually
+ * verify. Silently certifying "not near-black" for a value this function
+ * does not recognise is the one answer that cannot be right for a guard -
+ * color.ts's own parseColor/contrastRatio already refuse to guess at
+ * anything they cannot fully parse, for the identical reason ("a contrast
+ * helper that quietly passes a pair it could not parse is worse than no
+ * helper at all, because the build stays green while the guarantee is
+ * gone" - see that file's own header comment). This function now holds
+ * itself to the same standard: a declared value that is neither a
+ * recognised near-black-scale reference NOR an EXACT match for that
+ * token's own known-good finished value (PHASE_2_FINISHED_VALUE) throws,
+ * rather than silently joining either bucket.
  */
 export function checkPhase2MigrationClaim(
   css: string,
@@ -1085,7 +1133,15 @@ export function checkPhase2MigrationClaim(
      * this reason.
      */
     if (!declaration) return true;
-    return NEAR_BLACK_SCALE_REFERENCE.test(declaration.value);
+    if (NEAR_BLACK_SCALE_REFERENCE.test(declaration.value)) return true;
+    if (declaration.value === PHASE_2_FINISHED_VALUE[token]) return false;
+    throw new Error(
+      `[design/contrast] checkPhase2MigrationClaim: ${token} = "${declaration.value}" is ` +
+        `neither a recognised near-black-scale reference nor its expected finished value ` +
+        `("${PHASE_2_FINISHED_VALUE[token]}") - refusing to guess whether the migration is ` +
+        `finished for this token. If this is a legitimate new value, teach this function ` +
+        `about it deliberately; do not relax it to pass silently.`,
+    );
   });
   return {
     commentPresent,

@@ -103,6 +103,53 @@ for (const mode of MODES) {
   });
 }
 
+/**
+ * K1 browser verification for ugcportal-6uc2 (phase 2) - round-2 review,
+ * CONFIRMED low: the bead's own K1 names "a computed-style assertion on
+ * that element" as its Verified-by, and nothing in this repo had actually
+ * run one; contrast.test.ts's "moves --card and --muted..." regression
+ * test pins the raw CSS declaration's TEXT ("var(--paper-card)"), which
+ * proves the token points at the right value but not that the real,
+ * shipped header/footer element renders it - the same gap this file's own
+ * phase-1 K1 test above closes for `--background`/`--primary`, just for
+ * `--border` instead. Scoped to desktop only (unlike phase 1's own K1,
+ * which also checks 320px) - the header/footer hairline's colour does not
+ * depend on viewport width, so a second viewport would prove nothing new;
+ * phase 1's narrower-vs-320px split exists for layout reasons this
+ * decorative colour check does not share.
+ */
+for (const mode of MODES) {
+  test.describe(`home page header/footer hairline (ugcportal-6uc2, phase 2, ${mode})`, () => {
+    test.use({ colorScheme: mode });
+
+    test("K1: the header/footer rule renders at the adopted paper-line token", async ({
+      page,
+    }) => {
+      await page.setViewportSize(VIEWPORTS.desktop);
+      await page.goto("/");
+
+      const headerBorder = await page
+        .locator("header")
+        .first()
+        .evaluate((el) => getComputedStyle(el).borderBottomColor);
+      const footerBorder = await page
+        .locator("[data-site-footer]")
+        .first()
+        .evaluate((el) => getComputedStyle(el).borderTopColor);
+
+      if (mode === "light") {
+        // --paper-line #D8D3C8
+        expect(headerBorder).toBe("rgb(216, 211, 200)");
+        expect(footerBorder).toBe("rgb(216, 211, 200)");
+      } else {
+        // --petrol-line #1F4A50
+        expect(headerBorder).toBe("rgb(31, 74, 80)");
+        expect(footerBorder).toBe("rgb(31, 74, 80)");
+      }
+    });
+  });
+}
+
 for (const mode of MODES) {
   test.describe(`held-back cross-page check (${mode})`, () => {
     test.use({ colorScheme: mode, viewport: VIEWPORTS.mobile320 });

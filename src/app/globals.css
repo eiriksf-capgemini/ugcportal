@@ -483,11 +483,21 @@
    * 1.4.11 does not apply to purely decorative boundaries, and a 3:1 hairline
    * everywhere would draw a bright grid over the photographs.
    *
-   * --color-line-strong is the boundary of an interactive control (inputs,
-   * outline buttons) — the thing that tells you a control is there. That is a
-   * non-text part of a UI component, so it must clear 3:1 on every surface it
-   * can appear on, and it does. That is why it is this light; it is not a
-   * style choice.
+   * --color-line-strong is the boundary of an interactive control - the
+   * thing that tells you a control is there. That is a non-text part of a
+   * UI component, so it must clear 3:1 on every surface it can appear on,
+   * and it does. That is why it is this light; it is not a style choice.
+   *
+   * Round-2 review of ugcportal-6uc2, CONFIRMED (flagged, not numbered):
+   * this used to say "(inputs, outline buttons)" - true before this bead,
+   * when --input: var(--color-line-strong) made every border-input usage a
+   * consumer of this exact token. Phase 2 repoints --input onto the paper
+   * scale (--paper-line-strong) instead, so inputs and outline buttons no
+   * longer read THIS token at all; its one remaining direct consumer is
+   * the upload dropzone's own border (border-line-strong,
+   * src/app/upload/upload-form.tsx - see line-strong-edge-on-* in
+   * src/lib/design/contrast.ts, added the same round --input moved, for
+   * exactly this reason).
    */
   --color-line: oklch(0.325 0.006 205);
   --color-line-strong: oklch(0.645 0.012 205);
@@ -706,9 +716,15 @@
    * text-ink-muted usages were traced and confirmed to sit on a `bg-muted`
    * element's SIBLING `bg-destructive-surface` branch (a shared container
    * that renders one or the other depending on a boolean), or inside their
-   * own untouched bg-surface-* well (e.g. button.tsx's NEUTRAL_OUTLINE_STYLE)
-   * - those stay text-ink-muted, correctly, because the near-black scale
-   * genuinely is still what they render against.
+   * own untouched bg-surface-* well (e.g. the upload dropzone's "or drag
+   * them here"/accepted-types copy, src/app/upload/upload-form.tsx, which
+   * carries its OWN bg-surface-1/bg-surface-2 fill in the same className,
+   * not button.tsx's NEUTRAL_OUTLINE_STYLE - round-2 review, CONFIRMED low:
+   * that citation named the wrong file AND the wrong token, since
+   * NEUTRAL_OUTLINE_STYLE uses text-ink, not text-ink-muted, on
+   * bg-transparent, not a well of its own at all) - those stay
+   * text-ink-muted, correctly, because the near-black scale genuinely is
+   * still what they render against.
    *
    * Round-1 review of this bead, CONFIRMED low: the sentence that used to
    * sit here claimed a third category - "the triage form's selects" - as a
@@ -750,8 +766,15 @@
    * --input moves off --color-line-strong onto --paper-line-strong - the
    * boundary of every input, outline button and the curation screens'
    * admin fields (border-input, still paired with their own untouched
-   * bg-surface-3 fill: see FIELD_CLASS in price-form.tsx/decision-form.tsx/
-   * triage-form.tsx/clearance-form.tsx, unchanged by this bead). Checked at
+   * bg-surface-3 fill: price-form.tsx's FIELD_CLASS, clearance-form.tsx's
+   * TEXTAREA_CLASS, triage-form.tsx's SELECT_CLASS, and decision-form.tsx's
+   * five inlined copies of the identical class string - round-2 review,
+   * CONFIRMED low: this used to say "FIELD_CLASS in
+   * price-form.tsx/decision-form.tsx/triage-form.tsx/clearance-form.tsx" as
+   * if one constant were shared across all four; it exists only in
+   * price-form.tsx, each sibling file names its own constant, and
+   * decision-form.tsx has no shared constant at all - unchanged by this
+   * bead, see ugcportal-eeip for the mismatch this leaves). Checked at
    * 3:1 against every surface it can actually land on - paper, paper-card,
    * AND the near-black surface scale and destructive wells those admin
    * fields still use - in src/lib/design/contrast.ts's control-edge-*
