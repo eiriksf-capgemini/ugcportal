@@ -1,9 +1,13 @@
 #!/usr/bin/env node
 /**
  * Reports beads that can never reach `bd ready` because every hard blocking
- * path out of them terminates in a bead that is deferred, missing (a
- * dependency id `bd show` cannot find), or depends on itself in a way that
- * never resolves (ugcportal-z4nh).
+ * path out of them terminates in a bead that is deferred, or missing (a
+ * dependency id `bd show` cannot find). A dependency cycle is deliberately
+ * NOT a third termination reason here, despite being the obvious thing a
+ * reader expects next to those two: `canReach` below treats any cycle as
+ * resolved, not stuck, so a pure `a -> b -> a` loop with nothing deferred
+ * or missing flags nothing -- see "Deliberately out of scope" further down
+ * (ugcportal-z4nh).
  *
  * Why this exists: the v0.7.0 premise audit (ugcportal-j5fl, 2026-10-08)
  * found seven beads in that release's line-up gated on beads that were
@@ -148,9 +152,11 @@ function describeNode(id, beadIndex) {
 
 /**
  * For a bead that does NOT resolve, walk from a single stuck direct blocker
- * down to its terminal (deferred or missing), through any intermediate
- * open/in_progress beads that are themselves only stuck because of it.
- * Returns an array of node descriptions, starting at `blockerId`.
+ * down to its terminal -- deferred, missing, or a cycle back to a bead
+ * already on this same path (marked and cut off, not followed further) --
+ * through any intermediate open/in_progress beads that are themselves only
+ * stuck because of it. Returns an array of node descriptions, starting at
+ * `blockerId`.
  */
 function buildChain(blockerId, beadIndex, memo, seen = new Set()) {
   const node = describeNode(blockerId, beadIndex);
