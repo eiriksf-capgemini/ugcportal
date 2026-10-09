@@ -106,7 +106,18 @@ const PREVIEW_ID = `pv-${MEDIA_ID}`;
  * every request — so a test that wants to demote an operator has to change
  * both the row and what the session reports, exactly as production does.
  */
-type Viewer = null | { id: string; role: "USER" | "ADMIN" };
+type Viewer = null | {
+  id: string;
+  /**
+   * ABSENT is a state of its own, not a default (ugcportal-nffp review
+   * round 2). A session carrying a user id and no role at all is what a
+   * malformed or older-shaped session looks like, and it has to be
+   * expressible here — otherwise the cases that exercise it cannot go
+   * through {@link previewStatus} and have to build their own session and
+   * restore it by hand, which is the discipline this type exists to keep.
+   */
+  role?: "USER" | "ADMIN";
+};
 
 const ANONYMOUS: Viewer = null;
 const AS_STRANGER: Viewer = { id: STRANGER, role: "USER" };
@@ -122,13 +133,34 @@ const AS_OWNER: Viewer = { id: OWNER, role: "USER" };
  * so a case that throws cannot leave the next one running as somebody else
  * — the failure mode that would make {@link surfaces} silently measure an
  * operator's view and call it the public's.
+ *
+ * EVERY CASE IN THIS FILE THAT TOUCHES THE ROUTE GOES THROUGH HERE, and
+ * that is now true rather than merely asserted (review round 2). Two cases
+ * used to set `authMock` and call `previewGET` directly, restoring outside
+ * any `finally` — exactly the hazard the paragraph above describes, in the
+ * same file that described it. There is no `restoreMocks` in
+ * vitest.config.ts to catch it, so the fix was to make their sessions
+ * expressible as a {@link Viewer} (a role is optional, and an id may be
+ * blank) rather than to repeat the warning.
+ *
+ * `role` is omitted from the session object when the viewer has none,
+ * rather than being passed as `undefined`: `{ user: { id, role: undefined } }`
+ * and `{ user: { id } }` are different objects to anything that uses `in`,
+ * and the route's own `?? null` is being exercised for the second shape.
  */
 async function previewStatus(
   viewer: Viewer,
   previewId: string = PREVIEW_ID,
 ): Promise<number> {
   authMock.mockResolvedValue(
-    viewer === null ? null : { user: { id: viewer.id, role: viewer.role } },
+    viewer === null
+      ? null
+      : {
+          user: {
+            id: viewer.id,
+            ...(viewer.role === undefined ? {} : { role: viewer.role }),
+          },
+        },
   );
   try {
     const response = await previewGET(
@@ -579,13 +611,7 @@ describe("who may still fetch the preview bytes, by viewer (ugcportal-nffp K1)",
     });
     // A session with a user id but no role at all — a malformed or
     // older-shaped session — is not an operator.
-    authMock.mockResolvedValue({ user: { id: ADMIN } });
-    const response = await previewGET(
-      new Request(`https://example.test/api/media/preview/${PREVIEW_ID}`),
-      { params: Promise.resolve({ previewId: PREVIEW_ID }) },
-    );
-    authMock.mockResolvedValue(null);
-    expect(response.status).toBe(404);
+    expect(await previewStatus({ id: ADMIN })).toBe(404);
   });
 
   it("treats a session carrying ADMIN but no usable id as anonymous, not as an operator", async () => {
@@ -600,13 +626,7 @@ describe("who may still fetch the preview bytes, by viewer (ugcportal-nffp K1)",
     await prisma.mediaRightsClearance.deleteMany({
       where: { listingId: await listingId(), layer: RightsLayer.PEOPLE },
     });
-    authMock.mockResolvedValue({ user: { id: "", role: "ADMIN" } });
-    const response = await previewGET(
-      new Request(`https://example.test/api/media/preview/${PREVIEW_ID}`),
-      { params: Promise.resolve({ previewId: PREVIEW_ID }) },
-    );
-    authMock.mockResolvedValue(null);
-    expect(response.status).toBe(404);
+    expect(await previewStatus({ id: "", role: "ADMIN" })).toBe(404);
   });
 });
 

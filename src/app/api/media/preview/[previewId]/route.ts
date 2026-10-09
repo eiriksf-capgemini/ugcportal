@@ -394,11 +394,38 @@ type OwnerPreviewScope = {
 type OperatorPreviewScope = {
   previewId: string;
   previewKey: { not: null };
-  // All three spelled `?: never` rather than merely omitted, the same
-  // construction the two scopes above use: this arm deliberately has no
-  // publish, owner or rights filter, and an edit that adds one by accident
-  // — the dangerous direction here being `undefined`, which Prisma drops —
-  // should not type-check into silence.
+  /*
+   * All three spelled `?: never` rather than merely omitted, the same
+   * construction the two scopes above use. WHAT THAT ACTUALLY BUYS, checked
+   * against `tsc` rather than assumed (ugcportal-nffp, review round 2): it
+   * rejects a REAL VALUE here and nothing else. `publishedAt: { not: null }`
+   * and `userId: someString` are both TS2322. `publishedAt: undefined`,
+   * `userId: undefined` and `OR: undefined` all COMPILE, because
+   * `exactOptionalPropertyTypes` is off in tsconfig.json and `?: never` is
+   * therefore `never | undefined`. A real `AND: PUBLIC_MEDIA_SCOPE.AND`
+   * bolted on here compiles too — `AND` exists on `AnonymousPreviewScope`,
+   * so the union's excess-property check lets it through and this arm
+   * simply ignores it. A real `OR: [...]` compiles for a different and
+   * benign reason: the object then IS an `OwnerPreviewScope`.
+   *
+   * So the honest claim is narrow, and it is not the one an earlier version
+   * of this comment made. `undefined` — the value Prisma drops, and the
+   * hazard this file is built around — is NOT caught here. It is caught
+   * where it matters, which is the owner arm's `{ userId: string }`:
+   * `OR: [PUBLIC_MEDIA_SCOPE, { userId: undefined }]` is TS2322, verified,
+   * and that is the one place an `undefined` would widen a scope rather
+   * than narrow it. This arm is already the widest in the file, so an
+   * `undefined` slipping in changes nothing about what it matches.
+   *
+   * These keys are therefore documentation that `tsc` partially enforces,
+   * not a guarantee. What closes the remaining gap is the route's own
+   * suite, and specifically the three `expect("<key>" in where).toBe(false)`
+   * lines beside its `toEqual` — not the `toEqual` itself, which treats
+   * `{ publishedAt: undefined }` and `{}` as equal and would miss exactly
+   * the case `tsc` misses. `"publishedAt" in { publishedAt: undefined }`
+   * is `true`, so those three lines are the assertion that actually fails
+   * on an `undefined`-valued key arriving here.
+   */
   publishedAt?: never;
   userId?: never;
   OR?: never;

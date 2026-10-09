@@ -506,7 +506,13 @@ describe("K3: unpublished is 404, and identical to nonexistent", () => {
      * the row is somebody else's and unpublished, which is 404 for every
      * other caller in this file.
      */
-    signedInAsOperator(OTHER_ID);
+    // OWNER_ID, not OTHER_ID (review round 2, found while recomputing the
+    // mutation sets): `OTHERS_UNPUBLISHED` belongs to OTHER_ID, so an
+    // operator signed in as OTHER_ID would be served by the OWNER arm and
+    // this case would pass with the operator arm deleted. OWNER_ID is an
+    // operator who is not this row's owner, which is the only
+    // configuration that tests the arm.
+    signedInAsOperator(OWNER_ID);
     const response = await call(OTHERS_UNPUBLISHED.previewId as string);
     expect(response.status).toBe(200);
     expect(getObjectKeys()).toEqual([OTHERS_UNPUBLISHED.previewKey]);
@@ -521,7 +527,8 @@ describe("K3: unpublished is 404, and identical to nonexistent", () => {
      * silent arrival would either reopen the public gate or quietly close
      * the operator one.
      */
-    signedInAsOperator(OTHER_ID);
+    // OWNER_ID for the reason the case above gives.
+    signedInAsOperator(OWNER_ID);
     await call(OTHERS_UNPUBLISHED.previewId as string);
     const where = mediaFindFirstMock.mock.calls[0][0].where as Record<
       string,
