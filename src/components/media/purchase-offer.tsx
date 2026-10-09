@@ -44,7 +44,12 @@ export function PurchaseOffer({ offer }: { offer: PublicOffer | null }) {
         Available to licence for{" "}
         <span data-offer-price>{formatOfferPrice(offer)}</span>
       </p>
-      <p className="mt-1 text-xs text-ink-muted">
+      {/*
+        text-muted-foreground, not text-ink-muted (ugcportal-6uc2, phase 2):
+        this whole panel is unconditionally bg-muted, which now reads the
+        paper scale.
+      */}
+      <p className="mt-1 text-xs text-muted-foreground">
         That is the price for the original file under the terms on the{" "}
         <a className={INLINE_LINK_CLASS} href={LICENCE_PATH}>
           licence page

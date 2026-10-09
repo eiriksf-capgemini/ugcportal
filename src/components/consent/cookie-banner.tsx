@@ -318,8 +318,22 @@ export function CookieBanner() {
        * banner (round 1, this bead) measured 1.81:1 on `--popover` in dark
        * mode before this was caught — bg-background is the one surface this
        * component is actually proven to work on.
+       *
+       * border-input, not border-border (round-2 review of ugcportal-6uc2,
+       * CONFIRMED medium): this is the untouched sibling of the two
+       * popovers round 1 already fixed - `fixed`, `z-40`, conditionally
+       * rendered (`if (!bannerOpen) return null` above), over the SAME
+       * bg-background fill as the page it floats over, with
+       * `border-t border-border` as the only thing marking where the
+       * banner starts. Before this bead --border was --color-line
+       * (11.62:1, safe by accident); after moving to --paper-line it
+       * measures 1.3965:1 - indistinguishable from the footer it overlays
+       * when open. border-input (already verified >=3:1 against
+       * --background via control-edge-on-background in contrast.ts, the
+       * same pairing the other two floating panels now rely on) is the
+       * correct token here for the same reason it is for them.
        */
-      className="fixed inset-x-0 bottom-0 z-40 border-t border-border bg-background px-4 py-4 shadow-lg sm:px-6"
+      className="fixed inset-x-0 bottom-0 z-40 border-t border-input bg-background px-4 py-4 shadow-lg sm:px-6"
     >
       <h2 ref={headingRef} tabIndex={-1} className="sr-only">
         Cookies
