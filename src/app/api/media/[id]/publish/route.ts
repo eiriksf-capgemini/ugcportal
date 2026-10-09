@@ -94,10 +94,7 @@ export async function POST(_request: Request, { params }: RouteContext) {
   // AFTER THE OWNERSHIP GATE, so this route's existing contract is untouched:
   // ugcportal-r1d specified 401 for an anonymous caller and 403 for someone
   // else's row, and a non-owner must keep getting the ownership answer rather
-  // than learning about this one. Putting it first would also mean a
-  // non-operator could tell an id that exists from one that does not, which
-  // the 403-vs-404 trade in `requireOwnedMedia` makes deliberately and only
-  // for a caller who has already been established as not the owner.
+  // than learning about this one.
   //
   // BEFORE EVERY CONDITION ON THE MATERIAL — alt text, the advertising label,
   // the alcohol answer and the ugcportal-3ae rights gate all come after it.
