@@ -505,8 +505,17 @@ export function classifySeverity(body) {
     // must still count.
     if (text[m.index - 1] === "#") continue;
     // The flag must be on the same line as the count -- see sameLineFlag
-    // above for what "same line" is built out of.
-    if (sameLineFlag.test(text.slice(m.index + m[0].length, m.index + m[0].length + 8))) continue;
+    // above for what "same line" is built out of. There is no fixed-width
+    // window here: sameLineFlag is anchored at the start of the sliced
+    // remainder and its own character class already stops at the first
+    // genuine line terminator, so testing the WHOLE same-line remainder
+    // (not a guessed number of characters) still only matches a flag that
+    // is actually on this line -- "121 high with the --comment flag" and
+    // "Found 121 high (as shown by --comment)" are excluded at any prose
+    // distance, while a flag after a real line break still counts, because
+    // sameLineFlag's own character class cannot match across that
+    // terminator no matter how far the slice extends past it.
+    if (sameLineFlag.test(text.slice(m.index + m[0].length))) continue;
     if (/^low/i.test(m[2])) summaryLow = Math.max(summaryLow, n);
     else summaryMedium = Math.max(summaryMedium, n);
   }

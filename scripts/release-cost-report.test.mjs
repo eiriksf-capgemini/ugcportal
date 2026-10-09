@@ -423,6 +423,57 @@ describe("classifySeverity (severity is read from the reviewer's words, never gu
         expect(classifySeverity(bodyWithGap(gap))).toMatchObject({ medium: 0 });
       });
     });
+
+    describe("same-line flag exclusion has no character window (ugcportal-577s round 5)", () => {
+      // Round 4 left an arbitrary 8-character lookahead after the count.
+      // That window caught the house style (`121 high --comment`, flag
+      // glued directly to the count) but missed a flag separated from the
+      // count by ordinary prose -- "121 high with the --comment flag" --
+      // so the quoted-invocation echo was read as a genuine verdict. The
+      // fix removes the window: the WHOLE same-line remainder is tested,
+      // bounded only by the round-4 terminator whitelist proved above, not
+      // a guessed character count.
+      const withProseGap = (filler) => `Found 121 high ${filler} with the --comment flag.`;
+
+      it.each(
+        [
+          "right",
+          "because the finding count looked off to the reviewer on a second read",
+          "after a long back-and-forth among reviewers about whether this should block the merge at all, and after re-reading the original finding text more than once",
+        ].map((filler) => [withProseGap(filler).indexOf("--") - withProseGap(filler).indexOf("high"), filler]),
+      )("excludes a flag separated from the count by prose, %d characters away (well beyond any fixed window)", (_distance, filler) => {
+        expect(classifySeverity(withProseGap(filler))).toMatchObject({ medium: 0 });
+      });
+
+      it("still excludes the house style -- a flag glued directly to the count with no prose gap", () => {
+        expect(classifySeverity("Found `121 high --comment`: 0 findings.")).toMatchObject({ medium: 0 });
+      });
+
+      it("still counts a flag-shaped token on the NEXT line (round-4 behaviour must not regress)", () => {
+        expect(classifySeverity("Found 121 high\n--comment next round")).toMatchObject({ medium: 121 });
+      });
+
+      it("still counts a line with no flag at all", () => {
+        expect(classifySeverity("Found 121 high severity findings in this round.")).toMatchObject({ medium: 121 });
+      });
+
+      it("MUTATION: a fixed-width window reintroduced would fail the prose-gap case above", () => {
+        // This pins the previous (buggy) behaviour as a negative control so
+        // the fix above is provably load-bearing: an 8-character lookahead,
+        // exactly what round 4 shipped, does NOT see "--comment" past a
+        // long prose gap and so would not exclude it -- the defect this
+        // round's finding reported. If this assertion ever stopped
+        // passing, the tests above would not be exercising a real fix.
+        const text = withProseGap(
+          "after a long back-and-forth among reviewers about whether this should block the merge at all, and after re-reading the original finding text more than once",
+        );
+        const m = /121\s+high/i.exec(text);
+        const windowed = text.slice(m.index + m[0].length, m.index + m[0].length + 8);
+        const terminatorClass = ["\\n", "\\r", String.fromCodePoint(0x2028), String.fromCodePoint(0x2029), String.fromCodePoint(0x85)].join("");
+        const mutatedSameLineFlag = new RegExp(`^[^${terminatorClass}]*--[A-Za-z]`);
+        expect(mutatedSameLineFlag.test(windowed)).toBe(false);
+      });
+    });
   });
 });
 
