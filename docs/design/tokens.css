@@ -37,11 +37,11 @@
      ingen vedtatt farge klarer det overalt: verste tilfelle for begge er
      surface-4 (lysest i near-black-skalaen, derfor LAVEST kontrast mot en
      middels mørk farge), der --ink-muted bunner på 2.14:1 og --petrol-700
-     på 1.36:1. #8C8373 sitt eget verste tilfelle, samme sted, er 3.07:1 -
+     på 1.37:1. #8C8373 sitt eget verste tilfelle, samme sted, er 3.07:1 -
      og samme verdi dekker begge fargemodus (se --line-strong under).
      Rettet 2026-10-09 (runde 2 av ugcportal-6uc2): disse to tallene stod
      først feilaktig mot surface-3 (der de faktisk er 2.4886:1 og 1.5883:1,
-     begge over 2.14/1.36) - PR-teksten sa surface-4 riktig hele tiden, bare
+     begge over 2.14/1.37) - PR-teksten sa surface-4 riktig hele tiden, bare
      ikke denne filen, som er selve grunnlaget for fargevalget og derfor
      måtte rettes. */
   --paper-line-strong: #8C8373;
