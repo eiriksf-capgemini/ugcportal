@@ -24,10 +24,21 @@ import { PRIVACY_PATH } from "@/lib/routes";
  * "draft" here uses UNSET_LEGAL_ENV (via `stubLegalEnv` with no values),
  * which forces `blocked`/`draft` true regardless of today's real
  * LEGAL_SIGN_OFF — same reasoning as site-footer.test.tsx's own "SiteFooter
- * wiring" block. "signed-off" uses FILLED_LEGAL_ENV against today's real
+ * wiring" block. "configured" uses FILLED_LEGAL_ENV against today's real
  * sign-off (not injected), the same "real fact, not a fixture" choice that
- * block's positive-path case makes, since the real /privacy page is
- * genuinely signed off today.
+ * block's positive-path case makes.
+ *
+ * As of ugcportal-fsdf, full configuration alone is no longer enough to
+ * unblock /privacy in production: its authored prose changed (the
+ * uploader's own rights attestation, src/lib/attestation.ts, now described
+ * in the rights-clearance category), so its digest no longer matches
+ * LEGAL_SIGN_OFF and it reads as a draft until a human re-approves it.
+ * Before ugcportal-fsdf the "configured"+"production" row below read
+ * `true` (linked); it now reads `false` (blocked) — that flip is the
+ * correct, expected consequence of the prose change, not a weakening of
+ * this file's own "never happen" guarantee, which is about the footer and
+ * the contact notice always agreeing with EACH OTHER, whatever the real
+ * sign-off currently says.
  */
 
 afterEach(() => {
@@ -41,13 +52,13 @@ function privacyLinked(markup: string): boolean {
 describe.each([
   ["draft", "production", false],
   ["draft", "development", true],
-  ["signed-off", "production", true],
-  ["signed-off", "development", true],
+  ["configured", "production", false],
+  ["configured", "development", true],
 ] as const)(
   "legal config=%s, NODE_ENV=%s",
   (configuration, nodeEnv, expectLinked) => {
     it(`footer and contact notice both ${expectLinked ? "link" : "block"} /privacy`, () => {
-      stubLegalEnv(nodeEnv, configuration === "signed-off" ? FILLED_LEGAL_ENV : {});
+      stubLegalEnv(nodeEnv, configuration === "configured" ? FILLED_LEGAL_ENV : {});
 
       const footerMarkup = renderToStaticMarkup(<SiteFooter />);
       const contactMarkup = renderToStaticMarkup(
