@@ -8,10 +8,12 @@ import { describe, expect, it } from "vitest";
 import { parseColor, toHex } from "./color";
 import {
   PAIRINGS,
+  PHASE_2_MOVED_TOKENS,
   RING_ALPHA_MODIFIER,
   RING_OVERRIDE_SURFACES,
   SURFACES,
   THRESHOLDS,
+  checkPhase2MigrationClaim,
   evaluatePairing,
   findColorScaleNameCollisions,
   parseTokenReference,
@@ -379,10 +381,24 @@ describe("the gate cannot be routed around", () => {
     }
   });
 
-  it("never lets a decorative token be the boundary of an interactive control", () => {
+  it("never lets the SAME token be declared both a decorative foreground and a control-edge/focus-ring foreground in PAIRINGS", () => {
     // --color-line is exempt from 3:1 precisely because it is never the thing
-    // that tells you a control is there. --input / --color-line-strong is, and
-    // is checked at 3:1 above.
+    // that tells you a control is there. --input (the semantic token) and
+    // --color-line-strong (its own direct remaining consumer, the upload
+    // dropzone - these are two DIFFERENT literals as of ugcportal-6uc2 phase
+    // 2, not aliases of each other the way they were before) both are, and
+    // both are checked at 3:1 above (control-edge-* and line-strong-edge-on-*
+    // respectively).
+    //
+    // Round-1 review of ugcportal-6uc2, CONFIRMED medium: this proves PAIRINGS
+    // is internally consistent (no one token reference is declared decorative
+    // by one entry and a control boundary by another) - it does NOT prove
+    // that the real, shipped markup never renders a decorative-classified
+    // token AS a control boundary. That second, stronger claim is what
+    // "every real border-border usage is audited, decorative or covered"
+    // below actually checks, against real usage sites rather than two lists
+    // of names - see that test's own comment for the regression this gap
+    // let through (sign-in-menu.tsx/mobile-nav-toggle.tsx's floating panels).
     const decorativeTokens = new Set(
       PAIRINGS.filter((pairing) => pairing.requirement === "decorative").map(
         (pairing) => parseTokenReference(pairing.foreground).property,
@@ -470,6 +486,141 @@ describe("the gate cannot be routed around", () => {
    * is active.
    */
   const usedBareUtilities = findBareColorUtilities();
+
+  /**
+   * Round-1 review of ugcportal-6uc2, CONFIRMED medium. "never lets a
+   * decorative token be the boundary of an interactive control" above only
+   * ever compared two PAIRINGS-derived SETS OF TOKEN NAMES - which proves
+   * the pairings list does not contradict itself, not that nothing in the
+   * real, shipped markup renders `--border` (a decorative-only token: its
+   * one PAIRINGS entry, divider-on-background, is explicitly justified as
+   * "ornamental separation", never checked at 3:1) as if it identified an
+   * interactive control. That is exactly the shape sign-in-menu.tsx and
+   * mobile-nav-toggle.tsx shipped: a floating popover panel, bordered in
+   * `border-border`, over the SAME `bg-background` fill as the page behind
+   * it - the border was the only thing identifying the open panel's edge,
+   * which is precisely what K3 means by "an interactive control's boundary".
+   * Before this bead, `--border` was `--color-line` (11.62:1, plenty, by
+   * accident); once it moved to the decorative `--paper-line` (1.40:1,
+   * correct for an ornamental hairline), both panels silently dropped below
+   * 3:1 with nothing in this file able to notice, because this file never
+   * looked at a real `border-border` usage site at all.
+   *
+   * Round-2 review, CONFIRMED medium: round 1's own classification was ONE
+   * blanket sentence covering four categories, not a per-site judgement -
+   * exactly how a fifth site fitting none of the four (cookie-banner.tsx:
+   * `fixed`, `z-40`, conditionally rendered, over `bg-background`, with
+   * `border-t border-border` as its only edge - 1.3965:1 after this bead,
+   * indistinguishable from the footer it overlays when open) stayed
+   * invisible to a blanket claim that confidently said "none of which is a
+   * floating/toggleable control" four lines above being wrong about one.
+   * Fixed the same way as the first two (now `border-input`, see that
+   * component's own comment) and removed from this list entirely, same as
+   * they were.
+   *
+   * This file now states the classification as a RULE, checked per site
+   * below rather than asserted once in prose: a usage needs `ui`-grade
+   * coverage (a dedicated PAIRINGS entry, like control-edge-on-background)
+   * exactly when it is (a) removed from normal document flow (`fixed` or
+   * `absolute` positioning), (b) shown/hidden by a specific user action
+   * rather than always present, and (c) painted on a fill identical to the
+   * page behind it, such that the border is the only cue marking where the
+   * panel starts. Every remaining entry below was checked against that
+   * rule, not assumed decorative by category:
+   *
+   *   - admin/curation/page.tsx (10), admin/settings/instagram/page.tsx
+   *     (2), admin/settings/rights/brands/page.tsx (3),
+   *     admin/settings/rights/page.tsx (6), admin/settings/users/page.tsx
+   *     (1): static, in-flow content - bg-muted/bg-destructive-surface
+   *     callout panels, `divide-y` list containers, one thumbnail frame, one
+   *     plain bordered `<div>` - none `fixed`/`absolute`, none toggled by a
+   *     user action; the data they show or don't (a recorded decision, an
+   *     empty list) is not the same thing as a popover opening and closing.
+   *   - globals.css (1): `* { @apply border-border }`, the base-layer
+   *     DEFAULT every element inherits before an actual border-width makes
+   *     it visible anywhere - not a specific component's boundary at all.
+   *   - legal-page.tsx (1): the draft-notice `<p role="status">`, shown or
+   *     not based on a `draft` prop (page content, not a user toggle),
+   *     static in the document flow, not floating over anything.
+   *   - purchase-offer.tsx (1): a `bg-muted` `<aside>`, present or absent
+   *     based on whether an offer exists (data, not a user toggle), static
+   *     in flow - the same shape as the admin bg-muted panels above, not a
+   *     floating overlay.
+   *   - site-footer.tsx (2), site-header.tsx (1): permanent page chrome,
+   *     always rendered, never toggled by a user action (criterion (b)
+   *     alone excludes both, regardless of positioning).
+   *
+   * Checked for exhaustiveness, not merely asserted: grepped the whole
+   * `src/` tree for every `shadow-md`/`shadow-lg`/`shadow-xl` usage (a
+   * floating panel's own visual-separation cue, and one every genuine case
+   * in this codebase happens to carry) - returns exactly the three sites
+   * named above (two already fixed in round 1, the third in round 2). A
+   * second grep, for `fixed`/`absolute` co-occurring with any `border`
+   * utility, returns only cookie-banner - the two popovers are base-ui
+   * `Popover.Popup` with no literal positioning class of their own, so
+   * that grep cannot see them; it corroborates the one site it does
+   * catch, not a second independent confirmation of all three.
+   *
+   * Same discipline as AUDITED_DECORATIVE_BACKGROUND_USAGES below: keyed by
+   * `${file}:${utility}` -> occurrence COUNT, not just file presence, so a
+   * SECOND, genuinely different `border-border` usage landing in an
+   * already-audited file (a new floating panel added to
+   * admin/curation/page.tsx, say) changes the count and fails loudly
+   * instead of riding the existing entry silently.
+   */
+  const AUDITED_DECORATIVE_BORDER_USAGES: Readonly<Record<string, number>> = {
+    "src/app/admin/curation/page.tsx:border-border": 10,
+    "src/app/admin/settings/instagram/page.tsx:border-border": 2,
+    "src/app/admin/settings/rights/brands/page.tsx:border-border": 3,
+    "src/app/admin/settings/rights/page.tsx:border-border": 6,
+    "src/app/admin/settings/users/page.tsx:border-border": 1,
+    "src/app/globals.css:border-border": 1,
+    "src/components/legal/legal-page.tsx:border-border": 1,
+    "src/components/media/purchase-offer.tsx:border-border": 1,
+    "src/components/site-footer.tsx:border-border": 2,
+    "src/components/site-header.tsx:border-border": 1,
+  };
+
+  function borderBorderOccurrences(
+    usages: readonly AlphaUtilityUsage[],
+  ): Record<string, number> {
+    const occurrences: Record<string, number> = {};
+    for (const usage of usages) {
+      if (usage.property !== "--color-border" || usage.utility !== "border-border") continue;
+      const key = `${usage.file}:${usage.utility}`;
+      occurrences[key] = (occurrences[key] ?? 0) + 1;
+    }
+    return occurrences;
+  }
+
+  it("every real border-border usage is audited, at exactly its audited count, and no new ones ride in unaudited", () => {
+    expect(borderBorderOccurrences(usedBareUtilities)).toEqual(
+      AUDITED_DECORATIVE_BORDER_USAGES,
+    );
+  });
+
+  it("FIXTURE MUTATION: a second, genuinely new border-border usage in an already-audited file does not ride the existing entry", () => {
+    // Reproduces the shape PR #115's own bg-petrol-200 mutation test proves
+    // for AUDITED_DECORATIVE_BACKGROUND_USAGES, for this new audited list:
+    // a real scan result with one MORE occurrence in an audited file must
+    // stop matching the pinned count, rather than silently passing because
+    // the file is already in the allowlist.
+    const mutated: AlphaUtilityUsage[] = [
+      ...usedBareUtilities,
+      {
+        file: "src/app/admin/curation/page.tsx",
+        utility: "border-border",
+        property: "--color-border",
+        alphaPercent: 100,
+        role: "foreground",
+        prefix: "border",
+      },
+    ];
+    expect(borderBorderOccurrences(mutated)).not.toEqual(AUDITED_DECORATIVE_BORDER_USAGES);
+    expect(borderBorderOccurrences(mutated)["src/app/admin/curation/page.tsx:border-border"]).toBe(
+      11,
+    );
+  });
 
   /**
    * ugcportal-5gca K2's "excluded with a derived reason" half, for a bare
@@ -1245,16 +1396,46 @@ describe("petrol is demoted, not removed", () => {
     expect(tokens.get("--selection")?.value).toMatch(/^var\(--petrol-\d+\)$/);
   });
 
-  it("no longer paints cards, overlays, the secondary button or the neutral hover fill", () => {
+  it("no longer paints overlays, the secondary button or the neutral hover fill", () => {
     // The demotion, stated as a check: the big areas are all neutral surface.
     // --background is deliberately NOT in this list any more (ugcportal-rw9j):
     // painting the page canvas with the petrol/paper palette is this bead's
     // entire point, not a regression of the demotion K4 originally checked.
-    for (const token of ["--card", "--popover", "--muted", "--accent", "--secondary", "--sidebar"]) {
+    // --card and --muted are ALSO deliberately not in this list any more
+    // (ugcportal-6uc2, phase 2): see "moves --card and --muted off the
+    // near-black scale onto the paper one" below for their own check -
+    // this test now documents exactly the SIX tokens phase 2 did not touch.
+    for (const token of ["--popover", "--accent", "--secondary", "--sidebar"]) {
       expect(tokens.get(token)?.value, token).toMatch(
         /^var\(--color-(surface-\d+|scrim)\)$/,
       );
     }
+  });
+
+  it("moves --card and --muted off the near-black scale onto the paper one (ugcportal-6uc2, phase 2)", () => {
+    expect(tokens.get("--card")?.value).toBe("var(--paper-card)");
+    expect(tokens.get("--muted")?.value).toBe("var(--paper-card)");
+    const darkTokens = tokensByMode.dark;
+    expect(darkTokens.get("--card")?.value).toBe("var(--petrol-card)");
+    expect(darkTokens.get("--muted")?.value).toBe("var(--petrol-card)");
+  });
+
+  /**
+   * Round-2 review of ugcportal-6uc2, CONFIRMED low: --card/--muted got a
+   * value-pin test the moment they moved (immediately above); --border/
+   * --input, moved by the same bead, got none - an asymmetry with no
+   * reason behind it other than the first test happening to get written
+   * before this one did. --input is pinned to the SAME value in both
+   * modes deliberately (see its own declaration's comment in globals.css
+   * for why no dark override exists), unlike --border/--card/--muted,
+   * which all flip.
+   */
+  it("moves --border and --input off the near-black scale onto the paper one (ugcportal-6uc2, phase 2)", () => {
+    expect(tokens.get("--border")?.value).toBe("var(--paper-line)");
+    expect(tokens.get("--input")?.value).toBe("var(--paper-line-strong)");
+    const darkTokens = tokensByMode.dark;
+    expect(darkTokens.get("--border")?.value).toBe("var(--petrol-line)");
+    expect(darkTokens.get("--input")?.value).toBe("var(--paper-line-strong)");
   });
 
   it("paints the page canvas with the petrol/paper palette, in both modes", () => {
@@ -1280,7 +1461,18 @@ describe("K1: the exact palette docs/design/tokens.css adopted", () => {
     expect(resolveToken("--primary-foreground", tokens)).toBe("#ffffff");
   });
 
-  it("declares a dark-mode override for exactly the tokens this phase touches", () => {
+  it("declares a dark-mode override for exactly the tokens phase 1 and phase 2 together touch", () => {
+    // ugcportal-6uc2 (phase 2) adds --card, --muted and --border to this
+    // set: both --card/--muted now carry a foreground that already flips in
+    // dark mode (--card-foreground tracks --foreground; --muted-foreground
+    // is re-declared two lines below), so each needs its own dark fill or
+    // the pair goes light-on-light (see globals.css's own comment on this
+    // block). --border is included too, for the decorative reason
+    // docs/design/tokens.css gives it a distinct dark value at all - see
+    // the same comment. --input is deliberately NOT here: it is the one
+    // phase-2 token proven to need no dark-mode override at all (one
+    // mode-invariant value already clears 3:1 in both modes - see its own
+    // declaration's comment in globals.css).
     const darkOnly = parseDeclarations(css).filter((declaration) =>
       DARK_MEDIA_SELECTOR.test(declaration.selector),
     );
@@ -1293,6 +1485,9 @@ describe("K1: the exact palette docs/design/tokens.css adopted", () => {
         "--primary",
         "--primary-hover",
         "--primary-foreground",
+        "--card",
+        "--muted",
+        "--border",
       ]),
     );
   });
@@ -1328,8 +1523,14 @@ describe("K1: the exact palette docs/design/tokens.css adopted", () => {
  * two-list drift this repo's own review history keeps finding (round 4's
  * MAJOR finding against the predecessor of this same override). Resolves
  * both independently: the CSS selector's classes through their real
- * semantic aliases (`.bg-muted` -> `--muted` -> `--color-surface-1`, etc,
- * the same mapping documented on RING_OVERRIDE_SURFACES's own comment), and
+ * semantic aliases (`.bg-sidebar` -> `--sidebar` -> `--color-surface-1`, etc
+ * - round-2 review of ugcportal-6uc2, CONFIRMED: this used to say
+ * `.bg-muted` -> `--muted` -> `--color-surface-1`, which stopped being true
+ * in BOTH halves once phase 2 landed - `.bg-muted` is no longer in
+ * globals.css's selector list at all, and `--muted` no longer resolves to
+ * `--color-surface-1` either; `.bg-sidebar` is a selector this rule still
+ * actually carries - the same mapping documented on RING_OVERRIDE_SURFACES's
+ * own comment), and
  * RING_OVERRIDE_SURFACES's own tokens through resolveToken - then compares
  * the two resolved sets rather than the raw names, since one is literal
  * CSS classes and the other is TypeScript's --color-surface-N tokens.
@@ -1561,4 +1762,167 @@ describe("K3 (ugcportal-uo15): no two live colour scales share a step name acros
       expect(findColorScaleNameCollisions(tokensByMode[mode])).toEqual([]);
     },
   );
+});
+
+/**
+ * K4 (ugcportal-6uc2): "following should never happen - the phase-1 holding
+ * comment in globals.css is deleted while any of --border, --input, --card
+ * or --muted still reads from the near-black scale, leaving the file
+ * claiming a migration it did not finish."
+ *
+ * Same shape as K3's own fixture-mutation suite just above: prove the real
+ * file is clean today, then prove the guard function actually CAN fail by
+ * feeding it a deliberately mutated (comment-stripped CSS text, near-black
+ * token) pair, then prove reverting either half of that mutation clears it.
+ */
+/**
+ * Round-1 review (PR #209), CONFIRMED medium: the ORIGINAL version of this
+ * suite mutated only `--card`, reverted to `var(--color-surface-1)`. That
+ * happens to be one of the two tokens `NEAR_BLACK_SCALE_REFERENCE`'s FIRST
+ * version actually recognised (--card and --muted shared a pre-bead value,
+ * `--color-surface-1`/`--color-scrim`); `--border` (pre-bead
+ * `var(--color-line)`) and `--input` (pre-bead `var(--color-line-strong)`)
+ * were never exercised at all, so the guard's blind spot for those two
+ * survived the "mutate the fixture" discipline rather than being caught by
+ * it. Every PRE_BEAD_VALUE below is this bead's own NOTES section, quoted
+ * directly: "`--card` line 572 ... `var(--color-surface-1)`", "`--muted`
+ * line 589 ... `var(--color-surface-1)`", "`--border` line 617
+ * `var(--color-line)`", "`--input` line 618 `var(--color-line-strong)`".
+ */
+const PRE_BEAD_VALUES = {
+  "--border": "var(--color-line)",
+  "--input": "var(--color-line-strong)",
+  "--card": "var(--color-surface-1)",
+  "--muted": "var(--color-surface-1)",
+} as const satisfies Record<(typeof PHASE_2_MOVED_TOKENS)[number], string>;
+
+describe("K4 (ugcportal-6uc2): the phase-2 holding comment must not claim a finished migration", () => {
+  it("names the same four tokens this bead's K1-K3 move", () => {
+    expect([...PHASE_2_MOVED_TOKENS].sort()).toEqual(
+      ["--border", "--card", "--input", "--muted"].sort(),
+    );
+  });
+
+  it("PRE_BEAD_VALUES covers exactly PHASE_2_MOVED_TOKENS, no more and no fewer", () => {
+    expect(Object.keys(PRE_BEAD_VALUES).sort()).toEqual(
+      [...PHASE_2_MOVED_TOKENS].sort(),
+    );
+  });
+
+  it("the real, shipped stylesheet: comment present, and none of the four still reads near-black", () => {
+    const result = checkPhase2MigrationClaim(css, tokens);
+    expect(result.commentPresent, "holding-comment marker").toBe(true);
+    expect(result.stillNearBlack, "tokens still on the near-black scale").toEqual([]);
+    expect(result.claimsUnfinishedMigrationAsDone).toBe(false);
+  });
+
+  it.each(PHASE_2_MOVED_TOKENS)(
+    "FIXTURE MUTATION: comment deleted while %s is reverted to its own pre-bead value fails the guard",
+    (token) => {
+      const mutatedCss = css.replace(
+        "Phase 2 (ugcportal-6uc2) is that approval acted on",
+        "",
+      );
+      expect(
+        mutatedCss.length,
+        "the replace above must actually have removed something",
+      ).toBeLessThan(css.length);
+
+      const mutatedTokens = new Map(tokens);
+      mutatedTokens.set(token, {
+        property: token,
+        value: PRE_BEAD_VALUES[token],
+        selector: "(fixture)",
+      });
+
+      const result = checkPhase2MigrationClaim(mutatedCss, mutatedTokens);
+      expect(result.commentPresent, "marker should be gone").toBe(false);
+      expect(result.stillNearBlack, `mutated ${token} should be caught`).toEqual([token]);
+      expect(
+        result.claimsUnfinishedMigrationAsDone,
+        `the guard must catch ${token} reverted to ${PRE_BEAD_VALUES[token]} - if it does not, it cannot fail and is not a guard`,
+      ).toBe(true);
+    },
+  );
+
+  it("FIXTURE MUTATION: comment deleted while a token is removed entirely (not merely reverted) also fails the guard", () => {
+    // Round-1 review (PR #209), CONFIRMED medium: `tokens.get(token)?.value
+    // ?? ""` let a DELETED token read as "not near-black" (the empty string
+    // matches no pattern), escaping the guard the same way the
+    // narrower-than-advertised regex did, just via a different gap. This
+    // mutation removes --muted from the token map ENTIRELY rather than
+    // reverting its value, which is the shape that specific fallback used
+    // to miss.
+    const mutatedCss = css.replace(
+      "Phase 2 (ugcportal-6uc2) is that approval acted on",
+      "",
+    );
+    const mutatedTokens = new Map(tokens);
+    mutatedTokens.delete("--muted");
+
+    const result = checkPhase2MigrationClaim(mutatedCss, mutatedTokens);
+    expect(result.stillNearBlack, "a deleted token must be caught too").toEqual(["--muted"]);
+    expect(result.claimsUnfinishedMigrationAsDone).toBe(true);
+  });
+
+  it.each(PHASE_2_MOVED_TOKENS)(
+    "FIXTURE MUTATION, reverted (comment restored): %s at its pre-bead value no longer trips the guard once the comment is honest about it",
+    (token) => {
+      const mutatedTokens = new Map(tokens);
+      mutatedTokens.set(token, {
+        property: token,
+        value: PRE_BEAD_VALUES[token],
+        selector: "(fixture)",
+      });
+      // css (unmutated) still carries the comment here - this is deliberately
+      // the PRE-phase-2 state (comment present, migration not yet done),
+      // which K4 does not forbid: the comment is what makes that state
+      // honest.
+      const result = checkPhase2MigrationClaim(css, mutatedTokens);
+      expect(result.commentPresent).toBe(true);
+      expect(result.stillNearBlack).toEqual([token]);
+      expect(result.claimsUnfinishedMigrationAsDone).toBe(false);
+    },
+  );
+
+  it("FIXTURE MUTATION, reverted (migration finished): comment deleted but all four genuinely on the paper scale does not trip the guard either", () => {
+    const mutatedCss = css.replace(
+      "Phase 2 (ugcportal-6uc2) is that approval acted on",
+      "",
+    );
+    // tokens (unmutated) already has all four correctly off the near-black
+    // scale - this is the hypothetical FUTURE state where deleting the
+    // comment would be honest, because the migration really is finished.
+    const result = checkPhase2MigrationClaim(mutatedCss, tokens);
+    expect(result.commentPresent).toBe(false);
+    expect(result.stillNearBlack).toEqual([]);
+    expect(result.claimsUnfinishedMigrationAsDone).toBe(false);
+  });
+
+  /**
+   * Round-2 review, CONFIRMED low: with the round-1 `?? ""` fix in place, a
+   * token present with a value this resolver does not RECOGNISE (neither
+   * near-black-shaped nor an exact match for its own finished value) used
+   * to silently read as "not near-black" - `stillNearBlack: []` - the same
+   * result a genuinely finished migration produces. Each case below is one
+   * of the shapes round-2 review specifically tried: a truly empty value,
+   * nonsense text, a raw hex literal that bypasses the token system
+   * entirely, near-black in substance but not in the exact shape this
+   * resolver's pattern matches (trailing whitespace inside the value,
+   * wrong case) - every one of them must now throw, loudly, rather than
+   * silently joining either bucket.
+   */
+  it.each([
+    ["an empty value", ""],
+    ["nonsense text", "garbage"],
+    ["a raw hex literal bypassing the token system", "#1a1d1d"],
+    ["a near-black reference with trailing whitespace inside the value", "var(--color-surface-1) "],
+    ["a near-black reference in the wrong case", "VAR(--COLOR-LINE)"],
+  ])("FIXTURE MUTATION: --card with %s throws rather than silently passing", (_label, value) => {
+    const mutatedTokens = new Map(tokens);
+    mutatedTokens.set("--card", { property: "--card", value, selector: "(fixture)" });
+    expect(() => checkPhase2MigrationClaim(css, mutatedTokens)).toThrow(
+      /neither a recognised near-black-scale reference nor its expected finished value/,
+    );
+  });
 });

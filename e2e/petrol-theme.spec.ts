@@ -103,6 +103,44 @@ for (const mode of MODES) {
   });
 }
 
+/**
+ * K1 browser verification for ugcportal-6uc2 (phase 2). Not wired into CI
+ * (ugcportal-68rt is the filed follow-up for that, same as the rest of
+ * this file). Scoped to desktop only: the hairline's colour does not
+ * depend on viewport width, so a second viewport would prove nothing new.
+ */
+for (const mode of MODES) {
+  test.describe(`home page header/footer hairline (ugcportal-6uc2, phase 2, ${mode})`, () => {
+    test.use({ colorScheme: mode });
+
+    test("K1: the header/footer rule renders at the adopted paper-line token", async ({
+      page,
+    }) => {
+      await page.setViewportSize(VIEWPORTS.desktop);
+      await page.goto("/");
+
+      const headerBorder = await page
+        .locator("header")
+        .first()
+        .evaluate((el) => getComputedStyle(el).borderBottomColor);
+      const footerBorder = await page
+        .locator("[data-site-footer]")
+        .first()
+        .evaluate((el) => getComputedStyle(el).borderTopColor);
+
+      if (mode === "light") {
+        // --paper-line #D8D3C8
+        expect(headerBorder).toBe("rgb(216, 211, 200)");
+        expect(footerBorder).toBe("rgb(216, 211, 200)");
+      } else {
+        // --petrol-line #1F4A50
+        expect(headerBorder).toBe("rgb(31, 74, 80)");
+        expect(footerBorder).toBe("rgb(31, 74, 80)");
+      }
+    });
+  });
+}
+
 for (const mode of MODES) {
   test.describe(`held-back cross-page check (${mode})`, () => {
     test.use({ colorScheme: mode, viewport: VIEWPORTS.mobile320 });
