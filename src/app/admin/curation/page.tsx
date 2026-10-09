@@ -14,7 +14,9 @@ import { TRIAGE_ANSWER_SELECT } from "@/lib/curation-triage";
 import { prisma } from "@/lib/prisma";
 import {
   CLEARABLE_LAYERS,
+  MEDIA_GATE_SELECT,
   TRIAGE_FACTS,
+  evaluateSellability,
   unsettledLayers,
 } from "@/lib/resale-rights";
 import {
@@ -24,9 +26,10 @@ import {
   mediaPreviewPath,
 } from "@/lib/routes";
 
-import { recordClearance, recordTriage } from "./actions";
+import { recordClearance, recordTriage, setPrice } from "./actions";
 import { CurationClearanceForm } from "./clearance-form";
 import { triageOutcomeMessage } from "./outcomes";
+import { CurationPriceForm } from "./price-form";
 import { CurationTriageForm } from "./triage-form";
 
 export const metadata = {
@@ -90,7 +93,26 @@ const UPLOAD_SELECT = {
   previewKey: true,
   createdAt: true,
   publishedAt: true,
-  user: { select: { id: true, name: true, email: true } },
+  // The gate's own anchor (ugcportal-yzo7). `Media.userId` is read so this
+  // screen can run `evaluateSellability` over the row it already loaded and
+  // tell an admin whether a stored price is one the catalogue would honour
+  // RIGHT NOW. It is not secret here — `user.id` is already rendered as the
+  // fallback label for an uploader with no email — and it is not a storage
+  // path, unlike `previewKey` two lines up.
+  userId: true,
+  user: {
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      // The uploader's standing resale-rights review, projected through the
+      // gate's own constant rather than re-spelled: a narrower copy here
+      // would read as `undefined` and the gate's guards would turn that into
+      // a refusal, so every priced item on this screen would report
+      // "not sellable" for a reason that was this select's fault.
+      ...MEDIA_GATE_SELECT.user.select,
+    },
+  },
   // The uploader's own rights declaration (ugcportal-15r), read here so
   // ugcportal-vlnn can render it beside the admin's own flag and warn on a
   // disagreement. `null` is "nobody asked the uploader anything" — see
@@ -103,6 +125,13 @@ const UPLOAD_SELECT = {
   // `authorship`) are the whole of AttestationAnswers.
   attestation: {
     select: {
+      // `attestedByUserId` and `attestationVersion` are not rendered: they
+      // are what `attestationBlocker` reads (the declaration has to be made
+      // by the file's own uploader, at a version still in force), and
+      // without them the gate verdict below would be `attestation_incomplete`
+      // for every upload on the screen.
+      attestedByUserId: true,
+      attestationVersion: true,
       authorship: true,
       ownOriginalNotFromWeb: true,
       showsIdentifiablePeople: true,
@@ -127,6 +156,12 @@ const UPLOAD_SELECT = {
       // GateListing requires it, so omitting it fails `tsc` at the call
       // rather than quietly under-reporting a blocked layer.
       modelReleaseKey: true,
+      // The money columns (ugcportal-yzo7). Read to round-trip the stored
+      // amount into the form below and to report it beside the gate's
+      // CURRENT verdict — never on its own: a stored price is a record that
+      // an admin once priced this, not evidence that it may be sold today.
+      priceCents: true,
+      currency: true,
       triagedAt: true,
       triagedByUserId: true,
       triagedBy: { select: { name: true, email: true, role: true } },
@@ -198,6 +233,16 @@ export function rightsLayersSectionId(mediaId: string): string {
   return `rights-layers-${mediaId}`;
 }
 
+/**
+ * DOM id of one upload's price well (ugcportal-yzo7). Exported for the same
+ * reason as `rightsLayersSectionId`: the tests read ONE row's price state out
+ * of a page that renders several, and a bare amount is a string this screen's
+ * other prose could also contain.
+ */
+export function priceSectionId(mediaId: string): string {
+  return `price-${mediaId}`;
+}
+
 /** "Yes" / "No" / "Not answered" for one stored triage column. */
 function answerLabel(stored: boolean | null): string {
   if (stored === true) return "Yes";
@@ -260,9 +305,10 @@ export function triageFactDisagreementId(
  *
  * WHAT THIS SCREEN DOES NOT DO, so that the absences are not mistaken for
  * gaps:
- *   - price and licence, and re-evaluating sellability at render
- *     (ugcportal-yzo7) — the price endpoint already exists at
- *     /api/admin/curation/[id]/price and is not driven from here yet;
+ *   - per-item LICENCE TERMS (ugcportal-74w.1). Price is on this screen now
+ *     (ugcportal-yzo7, below); what a buyer would be granted is still the
+ *     site-wide /licence text, because `MediaListing` has no column for
+ *     anything narrower and this bead added no migration;
  *   - deciding what a disagreement between the admin's flag and the
  *     uploader's attestation MEANS for sellability (ugcportal-9pic). This
  *     screen renders the disagreement; the gate reads none of the six
@@ -290,7 +336,7 @@ export default async function AdminCurationPage({
     notFound();
   }
 
-  const { error, triage, clearance, edit } = await searchParams;
+  const { error, triage, clearance, price, edit } = await searchParams;
 
   const rows = await prisma.media.findMany({
     // Newest first, with `id` as the tiebreak so two uploads sharing a
@@ -370,21 +416,32 @@ export default async function AdminCurationPage({
         there is nothing synced to show yet.
       </p>
       {/*
-        Price and licence are not on this screen yet; ugcportal-yzo7 adds
-        them here rather than elsewhere. Said in the markup as well as in
-        the docstring above, because an admin who finds no price field
-        should know it is absent on purpose rather than broken.
+        ugcportal-yzo7 put the price field on this screen. The sentence an
+        admin needs here is no longer "it is missing on purpose" but the
+        narrower one the feature actually earns: a price is not permission,
+        and the gate is re-asked on every public request.
       */}
       <p className="mt-2 text-sm text-muted-foreground">
-        Recording the triage does not set a price or grant a licence. Those are
-        separate decisions and are not on this screen yet. The rights layers a
-        &ldquo;yes&rdquo; needs are cleared one at a time below, each with its
-        own justification: clearing one settles that layer and no other.
+        Recording the triage does not set a price, and setting a price does not
+        grant a licence — what a buyer would be granted is the site-wide
+        licence text, not a per-item one. A stored price is an offer only while
+        the gate still clears the upload: the catalogue re-asks on every
+        request, so a revoked or lapsed clearance takes the item off sale with
+        nothing written to it. The rights layers a &ldquo;yes&rdquo; needs are
+        cleared one at a time below, each with its own justification: clearing
+        one settles that layer and no other.
       </p>
 
       {triage === "recorded" ? (
         <p className="mt-6 rounded-lg border border-border bg-muted p-3 text-sm">
           Triage recorded.
+        </p>
+      ) : null}
+      {price === "priced" || price === "unpriced" ? (
+        <p className="mt-6 rounded-lg border border-border bg-muted p-3 text-sm">
+          {price === "priced"
+            ? "Price recorded. It is an offer only while the gate still clears this upload — the catalogue re-asks on every request."
+            : "Price removed. This upload is off sale."}
         </p>
       ) : null}
       {clearance === "recorded" ? (
@@ -430,8 +487,10 @@ export default async function AdminCurationPage({
             // A triage the gate will accept needs BOTH a named signer and
             // that signer being an admin right now — `triageBlocker` checks
             // `triagedBy?.role !== "ADMIN"`, re-read at evaluation time, so a
-            // signature from someone since demoted is void. Surfaced here
-            // since no render-time gate exists yet (ugcportal-yzo7, K4).
+            // signature from someone since demoted is void. Surfaced
+            // here because an admin editing a triage needs to see it
+            // before they price anything; the full verdict, including
+            // this condition, is in the price well below (ugcportal-yzo7).
             const signedByCurrentAdmin =
               listing?.triagedByUserId != null && triager?.role === "ADMIN";
 
@@ -458,6 +517,22 @@ export default async function AdminCurationPage({
               CLEARABLE_LAYERS.includes(layer),
             );
             const clearances = listing?.layerClearances ?? [];
+
+            /*
+              THE GATE'S VERDICT ON THIS ROW, RIGHT NOW (ugcportal-yzo7).
+              Run over the row this page already loaded, through the same
+              `evaluateSellability` the price write and the public catalogue
+              both call — never re-derived from the columns on screen.
+
+              This is the admin-side half of K4, and it is why the stored
+              price is never rendered on its own below: a price that was
+              valid when it was set says nothing about today, and the one
+              place that answers today is this call. An admin looking at a
+              revoked uploader sees the amount AND
+              "not currently sellable: status_not_cleared", rather than an
+              amount that reads as permission.
+            */
+            const gate = evaluateSellability(upload);
 
             return (
               <li key={upload.id} className="space-y-4 p-4">
@@ -629,6 +704,48 @@ export default async function AdminCurationPage({
                         ))}
                       </ul>
                     )}
+                  </div>
+                ) : null}
+
+                {listing ? (
+                  <div
+                    id={priceSectionId(upload.id)}
+                    className="rounded-lg border border-border bg-muted p-3 text-sm"
+                  >
+                    <p className="font-medium">
+                      {listing.priceCents === null
+                        ? "Not priced"
+                        : `Priced at ${listing.priceCents} ${listing.currency} (minor units)`}
+                    </p>
+                    {/*
+                      THE VERDICT, ALWAYS BESIDE THE AMOUNT. Rendered whether
+                      or not there is a price, because "no price and sellable"
+                      and "a price and not sellable" are both states an admin
+                      has to be able to see at a glance — the second is the
+                      one this bead exists for.
+                    */}
+                    <p
+                      className={
+                        gate.sellable
+                          ? "mt-1 text-xs text-ink-muted"
+                          : "mt-1 text-xs font-medium text-destructive"
+                      }
+                      data-sellability-verdict={
+                        gate.sellable ? "sellable" : gate.blocker
+                      }
+                    >
+                      {gate.sellable
+                        ? "The gate clears this upload right now. The catalogue re-asks on every request, so this can stop being true without anything being written here."
+                        : `Not currently sellable: ${gate.blocker}. Any stored price is dormant — nothing public will offer this until the gate clears it again.`}
+                    </p>
+                    {editingMediaId === upload.id ? (
+                      <CurationPriceForm
+                        mediaId={upload.id}
+                        priceCents={listing.priceCents}
+                        currency={listing.currency}
+                        action={setPrice}
+                      />
+                    ) : null}
                   </div>
                 ) : null}
 

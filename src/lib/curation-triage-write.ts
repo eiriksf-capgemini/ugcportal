@@ -7,11 +7,12 @@ import { TRIAGE_FACTS } from "@/lib/resale-rights";
  * THE ONE PLACE MEDIALISTING TRIAGE FACTS ARE WRITTEN (ugcportal-vq3z).
  *
  * Before this bead nothing in `src` wrote a MediaListing triage column at
- * all — the only writer of the table was the price endpoint
- * (src/app/api/admin/curation/[id]/price/route.ts), which writes `priceCents`
- * and `currency` and deliberately nothing else. So these columns, which the
- * sellability gate in src/lib/resale-rights.ts trusts, were readable and
- * unwritable. This function is the writer.
+ * all — the only writer of the table was the price write path (today
+ * `recordPrice` in src/lib/curation-price-write.ts; see that file's own
+ * header), which writes `priceCents` and `currency` and deliberately
+ * nothing else. So these columns, which the sellability gate in
+ * src/lib/resale-rights.ts trusts, were readable and unwritable. This
+ * function is the writer.
  *
  * IT IS DELIBERATELY A SINGLE CHOKEPOINT, and ugcportal-6uxv is what now
  * stands on that shape: the §9-2 guard below refuses an incoming
@@ -20,9 +21,9 @@ import { TRIAGE_FACTS } from "@/lib/resale-rights";
  * flip can happen. Re-confirm before relying on it rather than taking this
  * paragraph's word for it —
  * `git grep -n "mediaListing\.\(update\|upsert\|create\|updateMany\)" -- src`
- * outside tests returns this upsert and the price endpoint
- * (src/app/api/admin/curation/[id]/price/route.ts), which writes `priceCents`
- * and `currency` and no triage column. Do not add a second triage writer;
+ * outside tests returns this upsert and `recordPrice`'s own update
+ * (src/lib/curation-price-write.ts), which writes `priceCents` and
+ * `currency` and no triage column. Do not add a second triage writer;
  * widen this one.
  *
  * The server action in src/app/admin/curation/actions.ts is its only
@@ -124,17 +125,25 @@ function triageFactColumns(answers: TriageAnswers): TriageAnswers {
  * a row can carry a real `previewKey` with a null `previewId`, so the handle
  * is not a proxy for the object.
  *
- * The read and the write share a transaction. The same honest caveat the
- * price endpoint records applies: `@prisma/adapter-libsql` opens SQLite
- * transactions as `deferred`, so this does not serialise against a
- * concurrent delete of the Media row or a concurrent watermark write. The
- * consequences are small in both directions — a lost race on the delete
- * surfaces as a foreign-key failure on a row that is about to cascade away,
- * and a lost race on the preview check means a triage recorded moments before
- * the preview appeared. Neither can produce a sellable item: nothing renders
- * or sells from these facts yet, and the price endpoint is the sole caller
- * of `evaluateSellability` — durable render-time re-evaluation is
- * `ugcportal-yzo7`'s job, its K4.
+ * The read and the write share a transaction, and what that buys is narrower
+ * than an earlier version of this paragraph claimed. It said
+ * `@prisma/adapter-libsql` opens SQLite transactions as `deferred` so this
+ * "does not serialise" against a concurrent write; that was inherited rather
+ * than measured, and ugcportal-yzo7 measured it — see `recordPrice`'s own
+ * comment in src/lib/curation-price-write.ts for what the probe found, which
+ * is that a competing write is blocked or refused rather than interleaved.
+ * What is genuinely not serialised is a concurrent DELETE of the Media row
+ * (a write that can already be in flight before this transaction reads) and
+ * a concurrent watermark write. The consequences are small in both
+ * directions — a lost race on the delete surfaces as a foreign-key failure on
+ * a row that is about to cascade away, and a lost race on the preview check
+ * means a triage recorded moments before the preview appeared.
+ *
+ * Neither can produce a durably sellable item, and that is now a mechanism
+ * rather than an absence: `src/lib/sellable-media.ts` (ugcportal-yzo7 K4)
+ * re-evaluates the whole gate at render, over these same facts, on every
+ * public request. A triage that should not have been recorded stops being
+ * believed the moment it is corrected, with nothing written to the price.
  */
 export async function recordTriageFacts({
   mediaId,

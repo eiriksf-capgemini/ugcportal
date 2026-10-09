@@ -6,6 +6,7 @@ import {
   GalleryItemCommercialLinks,
   GalleryItemTags,
 } from "@/components/gallery/gallery-item";
+import { PurchaseOffer } from "@/components/media/purchase-offer";
 import { PageShell } from "@/components/site/page-shell";
 import { ShareControl } from "@/components/share/share-control";
 import {
@@ -14,6 +15,7 @@ import {
   mediaItemTitle,
 } from "@/lib/media-item";
 import { siteOrigin } from "@/lib/origin";
+import { getPublicOffer } from "@/lib/sellable-media";
 import { mediaItemPath } from "@/lib/routes";
 
 /**
@@ -145,6 +147,28 @@ export default async function MediaItemPage({ params }: RouteContext) {
   const item = await getPublicMediaItem(previewId);
   if (!item) notFound();
 
+  /*
+    THE SALE GATE, RE-EVALUATED ON THIS REQUEST (ugcportal-yzo7 K4). Not read
+    off `item`: `GalleryItem` carries no price and deliberately never will —
+    it is the shape every public surface renders, and putting a stored amount
+    on it would make a price available to four more renderers that have not
+    asked the gate. This is a second, narrow read whose whole job is to ask
+    `isSellable` about the uploader's clearance AS IT IS NOW, so an item
+    priced while that clearance was good stops carrying an offer the moment
+    it is revoked, expires, or turns out to be signed under a retired
+    checklist version — with nothing written to the priced row.
+
+    (The status name itself is deliberately not written here: a comment
+    naming it would make this file a new mention under
+    src/lib/resale-rights-writers.test.ts, whose whole job is that a file
+    starting to talk about that status gets noticed in review.)
+
+    Deliberately NOT inside `generateMetadata` as well: an offer is not a
+    page description, and an og:description that quoted a price would be
+    cached by crawlers long after the clearance behind it lapsed.
+  */
+  const offer = await getPublicOffer(previewId);
+
   const title = mediaItemTitle(item);
 
   return (
@@ -201,6 +225,16 @@ export default async function MediaItemPage({ params }: RouteContext) {
       >
         {mediaItemShortText(item)}
       </p>
+
+      {/*
+        The offer (ugcportal-yzo7), AFTER the photograph and its text and
+        BEFORE the tags: it is a statement about this item, so it belongs
+        with the item's own copy rather than after the navigational chips.
+        Renders nothing at all when the gate says no — see PurchaseOffer's
+        own comment, and note that "nothing" is the state of every item on
+        this site today.
+      */}
+      <PurchaseOffer offer={offer} />
 
       <GalleryItemTags item={item} />
       {/*

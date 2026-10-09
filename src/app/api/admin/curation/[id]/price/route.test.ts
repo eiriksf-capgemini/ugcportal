@@ -114,6 +114,14 @@ beforeAll(async () => {
       userId: "owner-1",
       kind: "IMAGE",
       key: "uploads/owner-1/original.jpg",
+      // The watermarked preview (ugcportal-yzo7 K3). Without it every case in
+      // this file would be refused with `no_preview` before the gate reached
+      // the review or the triage it is actually testing — the preview check
+      // runs first, deliberately, because it is the more specific answer.
+      // The case that NULLS this column and watches the refusal appear is
+      // below; src/lib/curation-price-write.test.ts owns the fuller set.
+      previewKey: "previews/owner-1/preview.webp",
+      previewId: "pv-route-1",
       mimeType: "image/jpeg",
       sizeBytes: 1234,
       originalName: "original.jpg",
@@ -190,6 +198,52 @@ describe("the happy path", () => {
       (await POST(priceRequest({ priceCents: null }), context())).status,
     ).toBe(200);
     expect(await priceOf()).toBeNull();
+  });
+});
+
+describe("ugcportal-yzo7 K3: an upload with no watermarked preview", () => {
+  it("is refused with 422, then priced once a preview exists", async () => {
+    await setReview("CLEARED");
+    await prisma.media.update({
+      where: { id: "media-1" },
+      data: { previewKey: null },
+    });
+
+    const refused = await POST(priceRequest({ priceCents: 24900 }), context());
+    expect(refused.status).toBe(422);
+    await expect(refused.json()).resolves.toMatchObject({ blocker: "no_preview" });
+    expect(await priceOf()).toBeNull();
+
+    // MUTATE THE FIXTURE: restore the preview and the identical request is
+    // accepted — so the refusal is connected to this column and not to some
+    // unrelated state of the row.
+    await prisma.media.update({
+      where: { id: "media-1" },
+      data: { previewKey: "previews/owner-1/preview.webp" },
+    });
+    expect(
+      (await POST(priceRequest({ priceCents: 24900 }), context())).status,
+    ).toBe(200);
+    expect(await priceOf()).toBe(24900);
+  });
+
+  it("still lets an admin un-price it", async () => {
+    await setReview("CLEARED");
+    await POST(priceRequest({ priceCents: 24900 }), context());
+    await prisma.media.update({
+      where: { id: "media-1" },
+      data: { previewKey: null },
+    });
+
+    expect(
+      (await POST(priceRequest({ priceCents: null }), context())).status,
+    ).toBe(200);
+    expect(await priceOf()).toBeNull();
+
+    await prisma.media.update({
+      where: { id: "media-1" },
+      data: { previewKey: "previews/owner-1/preview.webp" },
+    });
   });
 });
 
@@ -665,7 +719,13 @@ describe("the shapes ugcportal-74w and ugcportal-p3v need", () => {
 
   /**
    * What a catalogue render would do: ONE query over Media with the shared
-   * select, then filter in memory. The re-anchoring is what makes this one
+   * select, then filter in memory.
+   *
+   * A SIMULATION, AND NO LONGER THE ONLY ONE. `src/lib/sellable-media.ts`
+   * (ugcportal-yzo7) is the real render-time consumer of the gate, and
+   * src/lib/sellable-media.test.ts asserts the same property against the
+   * real read path. These cases stay because they are about the SELECT
+   * being enough for one query, which is this endpoint's own concern. The re-anchoring is what makes this one
    * query — under ugcportal-0ss the listing's `mediaId` had no relation, so
    * the ownership half needed a second `in` lookup and a merge step every
    * caller had to remember.

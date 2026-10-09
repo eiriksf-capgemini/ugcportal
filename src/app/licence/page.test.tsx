@@ -59,7 +59,9 @@ describe("/licence", () => {
     const text = textContent(render());
     expect(text).toContain("All rights reserved");
     expect(text).toContain("without written permission");
-    expect(text).toContain("Nothing is offered for sale yet");
+    expect(text).toContain(
+      "An item can only be sold after an administrator has completed and recorded a rights review",
+    );
     expect(text).toContain(`E-mail ${FILLED_CONTACT.contactEmail}`);
   });
 

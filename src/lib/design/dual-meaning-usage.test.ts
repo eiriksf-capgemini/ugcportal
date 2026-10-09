@@ -259,6 +259,16 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
   "src/app/admin/curation/clearance-form.tsx": {
     "text-ink": 1,
   },
+  // ugcportal-yzo7: the price form. One `text-ink`, in the shared field
+  // class its number input and its currency select both take, whose own
+  // `bg-surface-3` fill is the background it renders against — the identical
+  // pairing clearance-form.tsx uses one file over. No text-muted-foreground:
+  // every line in this component sits inside the price well on page.tsx
+  // (`bg-muted`), so the helper text under the amount label is
+  // text-ink-muted, as its two sibling forms do inside their own wells.
+  "src/app/admin/curation/price-form.tsx": {
+    "text-ink": 1,
+  },
   "src/app/admin/settings/users/page.tsx": { "text-muted-foreground": 4 },
   "src/app/admin/settings/instagram/page.tsx": { "text-muted-foreground": 3 },
   "src/app/upload/page.tsx": { "text-muted-foreground": 1 },

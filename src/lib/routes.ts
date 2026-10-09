@@ -29,9 +29,11 @@ export const RIGHTS_BRAND_ALCOHOL_PATH = "/api/admin/rights/brands/alcohol";
  * NOT under /admin/settings, unlike the three screens above it. Those record
  * standing configuration about a person, a brand or a connected account;
  * this one is per-upload case work, and it is the UI half of the endpoint
- * already living at /api/admin/curation/[id]/price. Price and licence
- * (ugcportal-yzo7) and the per-layer clearances (ugcportal-qfy9) join this
- * screen rather than getting screens of their own.
+ * already living at /api/admin/curation/[id]/price. Price (ugcportal-yzo7)
+ * and the per-layer clearances (ugcportal-qfy9) both joined this screen
+ * rather than getting screens of their own. Per-item LICENCE TERMS did not,
+ * and are not here: there is no column for them (ugcportal-74w.1), so what a
+ * buyer would be granted is the site-wide text at LICENCE_PATH.
  */
 export const CURATION_PATH = "/admin/curation";
 
