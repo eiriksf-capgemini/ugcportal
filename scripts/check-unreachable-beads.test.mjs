@@ -18,6 +18,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import {
+  BD_LIST_ARGS,
   buildBeadIndex,
   canReach,
   directBlockers,
@@ -345,6 +346,46 @@ describe("formatReport", () => {
     const text = formatReport(findUnreachableBeads(beads));
     expect(text).toContain("stuck via: dead1");
     expect(text).toContain("stuck via: dead2");
+  });
+});
+
+describe("BD_LIST_ARGS (round-4 review: `bd list --all` hides gate/infra/template beads)", () => {
+  // `--all` only lifts the default closed-beads filter; it does NOT include
+  // gate, infra or template-molecule beads, which `bd list` hides
+  // unconditionally unless these three flags are also passed. A bead
+  // blocked by a hidden-but-real gate bead was misreported "missing" (and
+  // therefore permanently unreachable) before this fix -- see the fixture
+  // test below for the concrete before/after. This test instead pins down
+  // the actual production query: if someone later drops one of the include
+  // flags, this goes red without needing to run real `bd` at all.
+  it("requests gate, infra and template beads alongside the default --all", () => {
+    expect(BD_LIST_ARGS).toEqual(["list", "--all", "--include-gates", "--include-infra", "--include-templates", "--json"]);
+  });
+});
+
+describe("gate-bead blocker resolution (round-4 review, MEDIUM, family 1)", () => {
+  // A live shape from the real backlog: ugcportal-yck (deferred) depends on
+  // ugcportal-alg, a CLOSED bead of issue_type "gate" -- a `bd list --all`
+  // dump (without the three include flags) omits gate rows entirely, so
+  // `alg` would never appear in `beads` even though it is real and closed.
+  // This fixture reproduces that omission directly: a bead blocked by a
+  // gate bead that closed, where the gate bead's row is simply ABSENT from
+  // the array (modelling what the unfixed query produced) versus PRESENT
+  // (what BD_LIST_ARGS now produces).
+  const openBeadBlockedByClosedGate = bead("gated-work", "open", ["ugcportal-alg"]);
+  const closedGateBead = { ...bead("ugcportal-alg", "closed"), issue_type: "gate" };
+
+  it("without the gate row (the pre-fix query shape), a bead blocked by an invisible closed gate is wrongly flagged", () => {
+    const beadsWithGateHidden = [openBeadBlockedByClosedGate]; // closedGateBead omitted, as --include-gates would have been
+    const result = findUnreachableBeads(beadsWithGateHidden);
+    expect(result.flagged.map((f) => f.id)).toEqual(["gated-work"]); // the bug: false positive
+    expect(result.flagged[0].paths).toEqual([[{ id: "ugcportal-alg", status: "missing" }]]);
+  });
+
+  it("with the gate row present (the fixed query shape), the same bead resolves correctly and is not flagged", () => {
+    const beadsWithGateIncluded = [openBeadBlockedByClosedGate, closedGateBead];
+    const result = findUnreachableBeads(beadsWithGateIncluded);
+    expect(result.flagged).toEqual([]); // fixed: the gate is closed, so its dependent is fine
   });
 });
 

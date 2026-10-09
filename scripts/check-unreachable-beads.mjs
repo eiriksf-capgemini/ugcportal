@@ -47,11 +47,33 @@
  * than re-litigated, so it can never masquerade as a new kind of stuck
  * bead); re-triaging any release line-up.
  *
+ * Data completeness (round-4 review fix): `bd list --all` does NOT mean
+ * "every bead" -- `--all` only lifts the default closed-beads filter. Gate,
+ * infra and template-molecule beads stay hidden regardless, unless
+ * `--include-gates --include-infra --include-templates` are also passed.
+ * Gate beads are real `blocks` targets (e.g. the live edges
+ * `ugcportal-yck -> ugcportal-alg`, a CLOSED gate, and `ugcportal-847 ->
+ * ugcportal-gj4`, a DEFERRED one) -- omitting them from the fetch does not
+ * remove them from the graph, it just makes this script unable to resolve
+ * them, so a bead gated on an already-CLOSED gate got reported "missing"
+ * and therefore permanently stuck: a false positive, in the damaging
+ * direction for a tool whose job is telling people which edges to cut.
+ * `loadBeads` below passes all three include flags so every live blocker
+ * id resolves to its real status. Deliberate choice, not a default
+ * accepted blindly: gate/infra/template beads are walked and can be
+ * EXAMINED/FLAGGED exactly like any other bead, not special-cased out of
+ * the top-level report either -- a gate bead that is itself stuck behind a
+ * deferred blocker is exactly as real a finding as any other bead's, and
+ * filtering the report by `issue_type` would add a second, untested
+ * branch for a distinction (claimable work vs. coordination bead) this
+ * check's acceptance criteria never draws.
+ *
  * Usage:
  *   node scripts/check-unreachable-beads.mjs [--beads <file.json>] [--json]
- *     --beads <file>   use a saved `bd list --all --json` dump instead of
- *                      running `bd` live (also how the test fixtures drive
- *                      this script's CLI end-to-end)
+ *     --beads <file>   use a saved beads-array dump (see `BD_LIST_ARGS`
+ *                      below for the exact `bd list` invocation this
+ *                      produces) instead of running `bd` live (also how the
+ *                      test fixtures drive this script's CLI end-to-end)
  *     --json           machine-readable output instead of the text report
  *
  * No `--execute`: this check only reads, nothing here mutates a bead.
@@ -67,7 +89,7 @@ const TERMINAL_STATUSES = new Set(["closed", "deferred"]);
 
 // --- pure graph logic (unit-tested directly) --------------------------------
 
-/** @param {Array<object>} beads a `bd list --all --json` array
+/** @param {Array<object>} beads a beads array shaped like `bd list` with BD_LIST_ARGS's flags (see below)
  *  @returns {Map<string, object>} id -> bead record */
 export function buildBeadIndex(beads) {
   const index = new Map();
@@ -166,7 +188,7 @@ export function explainStuckPaths(id, beadIndex, memo) {
  * check's concern -- deferred is addressed by un-deferring it, closed is
  * done), and flags the ones that cannot resolve.
  *
- * @param {Array<object>} beads a `bd list --all --json` array
+ * @param {Array<object>} beads a beads array shaped like `bd list` with BD_LIST_ARGS's flags (see below)
  * @returns {{examinedCount: number, examinedIds: string[], flagged: Array<{id, title, status, paths}>}}
  */
 export function findUnreachableBeads(beads) {
@@ -220,11 +242,23 @@ export function formatReport({ examinedCount, flagged }) {
   return lines.join("\n");
 }
 
-// --- data access (not unit-tested: shells out to bd) ------------------------
+// --- data access -------------------------------------------------------------
+
+/**
+ * The exact `bd list` argv this script runs live. `--all` alone only lifts
+ * the default closed-beads filter -- it does NOT include gate, infra or
+ * template-molecule beads, which `bd list` hides unconditionally unless
+ * these three flags are also given. Exported (and unit-tested below, by
+ * asserting its contents rather than by actually invoking `bd`) so a future
+ * edit that silently drops one of the include flags -- reintroducing the
+ * round-4 false-positive -- fails a fast local test instead of waiting for
+ * the next `bd show <some-gate-id>` to catch it by hand again.
+ */
+export const BD_LIST_ARGS = ["list", "--all", "--include-gates", "--include-infra", "--include-templates", "--json"];
 
 function loadBeads(opts) {
   if (opts.beads) return JSON.parse(fs.readFileSync(opts.beads, "utf8"));
-  const out = execFileSync("bd", ["list", "--all", "--json"], { encoding: "utf8", maxBuffer: 1 << 28 });
+  const out = execFileSync("bd", BD_LIST_ARGS, { encoding: "utf8", maxBuffer: 1 << 28 });
   return JSON.parse(out);
 }
 
