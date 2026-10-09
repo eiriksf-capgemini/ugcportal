@@ -202,6 +202,38 @@ describe("findUnreachableBeads: multi-hop chain", () => {
   });
 });
 
+describe("buildChain cycle guard (distinct from canReach's own guard)", () => {
+  // canReach's cycle guard is exercised above ("a dependency cycle is
+  // treated as resolvable..."), but buildChain walks the SAME graph a
+  // second time, with its own `seen` set, to render a human-readable
+  // chain -- and has its own, separately-written guard (the
+  // `seen.has(blockerId)` check). Deleting that line does not make
+  // canReach's tests fail (nothing above exercises buildChain against a
+  // cycle at all); it only blows the stack here, in buildChain itself, on a
+  // bead that is unreachable via a genuine deferred dead-end AND sits in a
+  // mutual-block cycle with its own direct blocker.
+  it("terminates with a cycle marker instead of recursing forever, for a bead whose chain revisits a bead already on the path", () => {
+    const beads = [
+      bead("a", "open", ["b", "dead-a"]),
+      bead("b", "open", ["a", "dead-b"]),
+      bead("dead-a", "deferred"),
+      bead("dead-b", "deferred"),
+    ];
+    const result = findUnreachableBeads(beads);
+    expect(result.flagged.map((f) => f.id).sort()).toEqual(["a", "b"]);
+
+    const a = result.flagged.find((f) => f.id === "a");
+    // One path revisits "b" (the cycle) and is cut off with a cycle marker,
+    // rather than recursing until the stack overflows; the other path is
+    // the genuine, independent deferred dead end "dead-a".
+    const cyclePath = a.paths.find((p) => p.some((n) => n.note === "cycle"));
+    expect(cyclePath.map((n) => n.id)).toEqual(["b", "a", "b"]);
+    expect(cyclePath[2].note).toBe("cycle");
+    const deferredPath = a.paths.find((p) => p[0].id === "dead-a");
+    expect(deferredPath).toEqual([{ id: "dead-a", status: "deferred", title: "title of dead-a", deferUntil: null }]);
+  });
+});
+
 describe("explainStuckPaths", () => {
   it("returns one path per independently-stuck direct blocker", () => {
     const beads = [
@@ -233,6 +265,21 @@ describe("formatReport", () => {
     const text = formatReport(result);
     expect(text).toContain("Flagged 0 as unreachable");
     expect(text).toContain("(none)");
+  });
+
+  it("does NOT print (none) when beads are flagged", () => {
+    const result = findUnreachableBeads([bead("stuck", "open", ["ugcportal-ghost"])]);
+    const text = formatReport(result);
+    expect(text).not.toContain("(none)");
+  });
+
+  it("names the defer-until date on a deferred node that has one set", () => {
+    const beads = [
+      bead("stuck", "open", ["deferred-with-date"]),
+      bead("deferred-with-date", "deferred", [], { defer_until: "2027-03-01T00:00:00Z" }),
+    ];
+    const text = formatReport(findUnreachableBeads(beads));
+    expect(text).toContain('deferred-with-date [DEFERRED until 2027-03-01] "title of deferred-with-date"');
   });
 });
 
