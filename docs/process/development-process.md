@@ -8,7 +8,7 @@ rule has a number in it, the number came from a measurement, and the
 measurement is cited.
 
 The process exists today as enacted behaviour spread across five project
-skills, two user skills, 44 `bd` memories, three sections of `CLAUDE.md`,
+skills, three user skills, 44 `bd` memories, three sections of `CLAUDE.md`,
 and a running error log. Each piece is individually documented. Nothing
 described how they fit together, which is what this is for.
 
@@ -189,8 +189,10 @@ thing you are about to ship, or say explicitly that you did not.
 ### 5.1 Dispatch
 
 An implementer agent gets a brief. The brief names the bead, the setup, the
-quality bar, and the boundaries. Concurrency is capped at **three**
-implementer agents, and never two on the same `cc_scope` (`ugcportal-yzmp`).
+quality bar, and the boundaries. Concurrency is held to **three** implementer agents in practice, and never
+two on the same `cc_scope`. This is current orchestrator practice, **not a
+codified rule** — `ugcportal-yzmp` proposes making it one and is still OPEN;
+its own premise records that no cap exists in any enforced form.
 
 Mandatory setup, because each has burned a session:
 
@@ -224,8 +226,9 @@ when it came from a comment someone typed.
 
 ### 5.2 Implementation
 
-The implementer builds, tests, runs the gate (`lint`, `test`, `typecheck`,
-`build` — all four), and opens one PR with a Conventional Commit title
+The implementer builds, tests, runs the gate (`lint`, `test`, `build`,
+`typecheck` — all four, in that order: `typecheck` must follow `build`,
+which is the order `.github/workflows/ci.yml` runs them in), and opens one PR with a Conventional Commit title
 carrying the bead id. `CLAUDE.md` holds the type table and its semver
 mapping.
 
@@ -252,21 +255,33 @@ reviewed nothing and does not count as a round.
 | 6 (cap) | The same — but a blocker here goes to a **human**, not a seventh round. |
 | 7+ | Only on an **exact** marker chain, with a real round-6 stop and evidence someone acted on it; then a scoped verification pass, never a fresh hunt. |
 
-**Why severity and not a flat count.** Measured across five beads in one
-repo: 3.40M tokens of implementation, 1.32M of review, individual beads
-reaching nine implementation rounds — but the decay was *uneven*. One bead's
-round 7 found a live fail-open; another's round 9 found a data-format split
-that would have broken the next bead; a third's rounds 8 and 9 found an
-inaccurate comment and some duplicate log lines. A five-round cap would have
-stopped the two still earning and funded the one that was not.
-(`review-iteration-needs-a-severity-gate-not-a`, `ugcportal-2yj`.)
+**Why severity and not a flat count.** Measured 2026-09-25 across five beads:
+3.40M tokens of implementation, 1.32M of review, ~0.95M per bead, with a
+worst case of **ten implementation rounds and nine review passes**
+(`ugcportal-r1d`). Value decayed *unevenly*: `0ss` round 7 found a live
+fail-open (`NaN <= number` is `false`, so an `Invalid Date` skipped an expiry
+check and the gate could return sellable); `r1d` round 9 found a migration
+backfill minting 32-char hex where the runtime minted 36-char dashed UUIDs
+for the same column; `e86` rounds 8 and 9, by contrast, found an inaccurate
+comment and 27 duplicate stderr lines.
+
+The argument is **not** that a flat cap would have funded the wrong one.
+**There is no cap setting that keeps the two still earning and drops the one
+that was not** — at five it stops all three, including `0ss` and `r1d`
+*before* their defects surface; set high enough to reach round 9 it funds all
+three. The number of rounds carries no information about what a round is
+finding. Severity does. See `.claude/skills/review-standards/SKILL.md` §
+opening, which is the operative source; `ugcportal-2yj` has the full
+rationale.
 
 **Confidence changes what a low costs, never what a medium costs.** From
 round 4 an unsettled plausible medium blocks exactly as a confirmed one
 does. Both late-round defects that motivated the rule presented as
 unconfirmed plausible mediums before anyone ran them down.
 
-**The gate's lenient band has never once been reached in this repo.** The
+**The gate's lenient band has never been legitimately reached in this
+repo.** (It was applied by mistake three times in v0.5.0 — PRs #60, #61,
+#75 — which is a separate defect, not an exception to this.) The
 reviewer and the PR author are the same GitHub account, so every marker
 chain computes as `approx` rather than `exact`, and an `approx` chain runs
 the strict rounds-1–3 rule at *every* round. Cost of that, measured: one P3
@@ -306,10 +321,11 @@ one round and repeatedly replaces several.
    uncorrected sibling hides (`sibling-grep-the-subject-not-the-sentence`).
 
 A sharp illustration of family 4 from this release, on `ugcportal-z4nh`:
-round 1 found an untested cycle guard in `buildChain`. The fix was correct.
-Round 2 then found that the *rendering* of what that guard produces, two
-lines away in a different function, had the identical gap. **The fix landed
-directly beside a second instance of its own defect.**
+round 1 found an untested cycle guard in `buildChain`, and two unasserted
+branches in `formatChain`. The fixes were correct. Round 2 then found that
+`formatChain`'s *cycle-note* branch — two lines from the date branch round 1
+had just fixed, in the same function — had the identical gap. **The fix
+landed directly beside a second instance of its own defect.**
 
 ### 5.5 Scope freeze
 
@@ -422,8 +438,10 @@ its cost gets argued away. They cluster:
 - *briefing* — `never-enumerate-a-set-in-a-brief-from-memory`,
   `verify-every-bead-id-before-putting-it-in-a-brief`
 
-**Guards in CI.** `guard-sensitive-files` fails any PR touching `CLAUDE.md`
-or `.claude/settings*.json`; `guard-conventional-commit-title` enforces the
+**Guards in CI.** `guard-sensitive-files` fails a PR that **bundles** a
+change to `CLAUDE.md` or `.claude/settings*.json` with unrelated work
+(`scripts/check-sensitive-files.mjs`); a PR containing only such a file is
+routed to a human by `pr-review-merge` step 2 rather than by CI. `guard-conventional-commit-title` enforces the
 title form. A GitHub ruleset on `main` requires both CI contexts with
 `strict_required_status_checks_policy`. It does **not** appear under the
 legacy `/branches/main/protection` endpoint — read it via
@@ -476,17 +494,49 @@ path is the first defect family applied to itself.
 5. **Review finds claims, not logic.** Across roughly 35 review rounds on 16
    PRs in v0.7.0, **every blocking finding was a false or unsupported claim;
    none was a logic defect.** That is partly a compliment to the
-   implementers and partly a warning about what review is good at. The one
-   genuine logic defect of the release — a preview route that served image
-   bytes with no rights gate, so a photograph whose clearance lapsed vanished
-   from all five listing surfaces while staying downloadable at the stable
-   URL the sitemap had already given to crawlers — was found by an
-   **implementer's premise check before designing**, not by any review round
-   (`ugcportal-nffp`). Premise checking is the cheaper instrument and it is
-   applied less consistently than review.
-6. **The cap has never bound on a real disagreement.** Eleven of eleven
-   escalations ended in a merge. The human step is currently latency rather
-   than judgement.
+   implementers and partly a warning about what review is good at.
+
+   The release produced **two** genuine logic defects, and **neither was
+   found by a review round**:
+
+   - a `NOT: { listing: { is: { depictsPeople: true } } }` that is wrong
+     under SQL three-valued logic on a nullable column, and would have hidden
+     every published triage-started row on the site — caught by the
+     implementer's own TS-vs-Prisma agreement test on PR #200, before review
+     saw it;
+   - a preview route that served image bytes with no rights gate, so a
+     photograph whose clearance lapsed vanished from all five listing
+     surfaces while staying downloadable at the stable URL the sitemap had
+     already given to crawlers — caught by an implementer's **premise check
+     before designing** (`ugcportal-nffp`).
+
+   The common factor is not premise checking specifically: it is that both
+   were found by **executing something against reality** — a test that
+   compares two implementations, and a probe against a real database — while
+   review was reading. That is the sharper lesson, and it argues for
+   `Verified by:` naming an executed probe whenever the criterion is about
+   runtime behaviour rather than about source text.
+7. **The instruments themselves fail open.** This is defect family 2 — the
+   null/undefined variant — applied to the process rather than to the code,
+   and it is the most under-appreciated weakness here. A check that silently
+   matches nothing reports success: a dependency filter using the wrong
+   field name reported "nothing is stuck" over a backlog with ten dead
+   beads; `bd` writes silenced with `2>/dev/null` were reported as applied
+   when they had failed; a `||` fallback ran its second branch with the
+   arguments reversed and *succeeded*, recording a graph edge backwards.
+   In every case **the wrong answer was the reassuring one**, which is why
+   none of them announced itself. Three mitigations, all cheap and none yet
+   systematic: print the match count before trusting a zero; never silence
+   stderr on a mutating command; read the object back after a write that
+   matters.
+
+8. **The cap has rarely bound on a real disagreement.** In v0.5.0, eleven
+   of eleven escalations ended in a merge, making the human step latency
+   rather than judgement. It is not a clean 11/11 beyond that cut: v0.6.0's
+   #109 filed three findings at escalation, and in v0.7.0 Eirik authorised a
+   different fix after a regression on #201 (`ugcportal-fbng` A10). The
+   weakness is that the default outcome is approval, which trains the human
+   to approve — not that the step has never mattered.
 
 ---
 
