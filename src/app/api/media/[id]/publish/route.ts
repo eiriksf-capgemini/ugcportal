@@ -9,6 +9,7 @@ import {
 } from "@/lib/media-access";
 import { mediaPreviewColumns } from "@/lib/media";
 import { prisma } from "@/lib/prisma";
+import { publishOperatorRefusal } from "@/lib/publish-authority";
 import {
   PUBLISH_ATTESTATION_SELECT,
   PUBLISH_LISTING_SELECT,
@@ -19,7 +20,8 @@ import {
 type RouteContext = { params: Promise<{ id: string }> };
 
 /**
- * Publish / unpublish one media item (ugcportal-r1d). Owner only.
+ * Publish / unpublish one media item (ugcportal-r1d). Owner only — and, for
+ * the publishing direction, an OPERATOR's own row (ugcportal-9gt1).
  *
  * A route rather than a server action because the acceptance criteria are
  * stated in HTTP terms (401 unauthenticated, 403 for someone else's row) and
@@ -66,6 +68,48 @@ export async function POST(_request: Request, { params }: RouteContext) {
       { error: access.error },
       { status: access.status },
     );
+  }
+
+  // AND OWNING THE ROW IS NOT PERMISSION TO PUBLISH IT (ugcportal-9gt1).
+  // `requireOwnedMedia` above answers "is this row yours"; this answers "may
+  // you make anything public at all", and until this check existed nothing
+  // asked the second question. The rule — only operators publish — held
+  // solely because `ALLOWED_SIGNIN_EMAILS` happens to list two people, so
+  // adding a third address to let somebody upload would silently have handed
+  // them the public gallery. See src/lib/publish-authority.ts for the
+  // decision itself, and for why "may publish" is asked as its own question
+  // rather than by calling `requireAdmin` even though the two sets are the
+  // same set today.
+  //
+  // 403 — the same code the ownership gate above answers for "not your row",
+  // and deliberately the same: both mean "you may not do this", and the BODY
+  // is what tells them apart (that one is a bare `{ error: "Forbidden" }`,
+  // this one carries a `blocker`). A 422 would be wrong here. That code says
+  // "the records make this impossible", which is what the rights gate below
+  // means and is not what this means: nothing about the ROW is wrong, and no
+  // work on it changes the answer. The closed-set `blocker` rather than a
+  // `field` matches `publishRightsRefusal` for the reason it gives — there
+  // is no form field to point at.
+  //
+  // AFTER THE OWNERSHIP GATE, so this route's existing contract is untouched:
+  // ugcportal-r1d specified 401 for an anonymous caller and 403 for someone
+  // else's row, and a non-owner must keep getting the ownership answer rather
+  // than learning about this one. Putting it first would also mean a
+  // non-operator could tell an id that exists from one that does not, which
+  // the 403-vs-404 trade in `requireOwnedMedia` makes deliberately and only
+  // for a caller who has already been established as not the owner.
+  //
+  // BEFORE EVERY CONDITION ON THE MATERIAL — alt text, the advertising label,
+  // the alcohol answer and the ugcportal-3ae rights gate all come after it.
+  // Two reasons, and the second is the one that matters. It is cheaper: a
+  // refused caller costs no disclosure, listing or attestation read, three
+  // round trips that cannot change the answer. And it is quieter: a
+  // non-operator gets ONE stable sentence whatever state their row is in,
+  // instead of a refusal that narrates how far along the compliance record
+  // is and shifts as an administrator works on it.
+  const operatorRefusal = publishOperatorRefusal(access.role);
+  if (operatorRefusal) {
+    return NextResponse.json(operatorRefusal, { status: 403 });
   }
 
   // Alt text is REQUIRED TO PUBLISH (ugcportal-gwr K1) — not at upload, and
@@ -450,6 +494,24 @@ export async function POST(_request: Request, { params }: RouteContext) {
  *
  * No preview check here, unlike POST: a row with no preview was never visible,
  * so making sure it is not visible cannot fail.
+ *
+ * AND NO OPERATOR CHECK EITHER (ugcportal-9gt1), which is the one place this
+ * handler deliberately diverges from its sibling now rather than merely
+ * having less to verify. Every other refusal POST applies is a condition on
+ * making something public, and withdrawing it moves in the safe direction:
+ * the gate exists so that material reaches the public gallery only by an
+ * operator's decision, not so that it STAYS there against its owner's. An
+ * owner who is demoted, or who was never an operator but holds a row
+ * published before this rule existed, must still be able to take their own
+ * photograph down — gating this would turn a safety check into a trap, and
+ * route.test.ts asserts it does not. Nothing here gives an operator a way
+ * into somebody ELSE's visibility either: `requireOwnedMedia` has no role
+ * branch, so an admin who does not own the row still gets 403 from both
+ * handlers, exactly as before. ugcportal-r1d put admin curation of another
+ * person's visibility out of scope and no screen has taken it up since —
+ * the command, rather than a count that rots: `grep -rni unpublish src`
+ * outside this directory is comments and test names, with no component,
+ * server action or `fetch` among them.
  *
  * DELETE on this sub-resource ("the published state"), not on the media item;
  * DELETE /api/media/[id] still deletes the row and its objects.
