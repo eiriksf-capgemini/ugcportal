@@ -115,9 +115,16 @@ upload**. For two of them — `src/config/users.ts` and `ALLOWED_SIGNIN_EMAILS`
 — that is all it does: neither puts anything on the public gallery. The third,
 `ADMIN_BOOTSTRAP_EMAILS`, is the exception: `reconcileBootstrapAdmin`
 (`src/lib/admin-bootstrap.ts:83`) promotes a listed address to `role: "ADMIN"`
-on its first sign-in, and `ADMIN` is exactly what `isPublishOperator` checks
+at sign-in, once, and `ADMIN` is exactly what `isPublishOperator` checks
 for — so admission through that source *is* publish authority, not merely
 sign-in.
+
+"Once" is the role-history guard, not the account's first ever sign-in: the
+promotion runs when `prisma.roleChange.count` for that user is zero. So an
+account that already exists and has never had a role change is promoted at
+its **next** sign-in after the address is added to the list — which is the
+case that matters when the list is widened, rather than the case of a brand
+new account.
 
 That sentence used to be false by one layer. `POST /api/media/[id]/publish`
 asked `requireOwnedMedia` — "is this row yours" — and nothing else, so the
