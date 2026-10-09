@@ -313,7 +313,8 @@ describe("the scanner itself, against a fixture tree (ugcportal-yzo7 K5)", () =>
       ].join("\n"),
     });
     /*
-     * `computed.ts` is deliberately ABSENT from the expectation, and that is
+     * The third fixture file in this case is deliberately ABSENT from the
+     * expectation below, and that is
      * this scan's one real blind spot written down rather than discovered.
      * `r.listing["priceCents"]` through a string constant puts the column
      * name in a STRING, and a string literal is not an identifier — the same

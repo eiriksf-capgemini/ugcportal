@@ -240,6 +240,46 @@ describe("an offer is re-evaluated at render, not read off the stored price (ugc
     await expect(getPublicOffer(PREVIEW_ID)).resolves.not.toBeNull();
   });
 
+  it("offers nothing for a currency the write path would refuse", async () => {
+    /*
+     * Written straight to the column, which is the only way to reach this
+     * state: `recordPrice` refuses an unsupported code. The failure it
+     * prevents is not cosmetic — `Intl.NumberFormat` throws a RangeError for
+     * an unrecognised code, so an offer built from one would be a 500 on a
+     * page that was merely trying to show a photograph.
+     */
+    await prisma.mediaListing.update({
+      where: { mediaId: MEDIA_ID },
+      data: { currency: "XYZ" },
+    });
+    await expect(getPublicOffer(PREVIEW_ID)).resolves.toBeNull();
+    await expect(storedPrice()).resolves.toBe(PRICE_CENTS);
+
+    await prisma.mediaListing.update({
+      where: { mediaId: MEDIA_ID },
+      data: { currency: "NOK" },
+    });
+    await expect(getPublicOffer(PREVIEW_ID)).resolves.not.toBeNull();
+  });
+
+  it("offers nothing for an amount the write path would refuse", async () => {
+    // A negative amount, over the ceiling, or a non-integer: none is
+    // reachable through `recordPrice`, all are reachable in the column.
+    for (const bad of [-1, 10_000_001]) {
+      await prisma.mediaListing.update({
+        where: { mediaId: MEDIA_ID },
+        data: { priceCents: bad },
+      });
+      await expect(getPublicOffer(PREVIEW_ID), String(bad)).resolves.toBeNull();
+    }
+
+    await prisma.mediaListing.update({
+      where: { mediaId: MEDIA_ID },
+      data: { priceCents: PRICE_CENTS },
+    });
+    await expect(getPublicOffer(PREVIEW_ID)).resolves.not.toBeNull();
+  });
+
   it("treats a stored price of zero as no offer rather than as free", async () => {
     await recordPrice({ target: { mediaId: MEDIA_ID }, priceCents: 0 });
     await expect(storedPrice()).resolves.toBe(0);

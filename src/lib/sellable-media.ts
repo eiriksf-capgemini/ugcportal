@@ -1,6 +1,10 @@
 import { cache } from "react";
 
-import { type PublicOffer } from "@/lib/pricing";
+import {
+  isStorablePriceCents,
+  isSupportedCurrency,
+  type PublicOffer,
+} from "@/lib/pricing";
 import { prisma } from "@/lib/prisma";
 import { PUBLIC_MEDIA_SCOPE } from "@/lib/public-media";
 import {
@@ -142,6 +146,10 @@ export type { PublicOffer };
  * licensing decision nobody has taken, and rendering "NOK 0.00" beside a
  * photograph would be a claim this product has not made. Treated as "no
  * price set", the same as `null`, until a bead says otherwise.
+ *
+ * SO IS AN AMOUNT OR A CURRENCY THE WRITER WOULD REFUSE. Both are
+ * re-validated here against the same predicates the write path uses rather
+ * than trusted for having been stored — see the comments in the body.
  */
 export function publicOffer(
   upload: OfferUpload,
@@ -157,8 +165,24 @@ export function publicOffer(
   // day step (6) moves.
   if (!listing) return null;
 
+  // RE-VALIDATED ON READ, not merely non-null, and both halves for the same
+  // reason `toGalleryItem` re-checks an advertising label it was handed: do
+  // not trust that a row was written through the validator. `recordPrice` is
+  // the only writer today and these columns predate it, so a row written
+  // before it existed — or by a hand-written statement, or by a future
+  // second writer — can hold anything the column type allows.
   const priceCents = listing.priceCents;
-  if (typeof priceCents !== "number" || !Number.isSafeInteger(priceCents) || priceCents <= 0) {
+  if (!isStorablePriceCents(priceCents) || priceCents === 0) {
+    return null;
+  }
+  // An unsupported currency is NOT rendered as an amount with a bad code: it
+  // is no offer at all. `formatOfferPrice` would throw a RangeError out of
+  // `Intl.NumberFormat` for an unrecognised code, which on a server
+  // component is a 500 on a page that was merely trying to show a
+  // photograph — and for a code that IS recognised by Intl but is not on the
+  // allowlist, it would render an amount divided by 100 that may not be the
+  // right number of minor units at all.
+  if (!isSupportedCurrency(listing.currency)) {
     return null;
   }
   return { priceCents, currency: listing.currency };
