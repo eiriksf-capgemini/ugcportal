@@ -298,6 +298,54 @@ describe("formatReport", () => {
     const text = formatReport(findUnreachableBeads(beads));
     expect(text).toContain("(cycle, not followed further)");
   });
+
+  // Round 3 review: three rounds of one-at-a-time sibling hunting in this
+  // reporting layer were not converging, so this is the full enumeration of
+  // every conditional branch and loop in formatChain/formatReport, each with
+  // its own assertion (see the PR/bead notes for the mutation proving each
+  // of the four new ones below actually goes red):
+  //   formatChain  status === "missing"                      -- covered above
+  //   formatChain  status === "deferred", deferUntil present  -- covered above
+  //   formatChain  status === "deferred", deferUntil absent   -- NEW below
+  //   formatChain  note === "cycle" (true)                    -- covered above
+  //   formatChain  note === "cycle" (false/absent)             -- NEW below
+  //   formatReport outer loop, >1 flagged bead                -- NEW below
+  //   formatReport inner loop, >1 stuck path per bead          -- NEW below
+  //   formatReport flagged.length === 0 (true: "(none)")       -- covered above
+  //   formatReport flagged.length === 0 (false: no "(none)")   -- covered above
+
+  it("renders a deferred node with no defer_until with the plain fallback, no until suffix", () => {
+    const beads = [bead("stuck", "open", ["deferred-no-date"]), bead("deferred-no-date", "deferred")];
+    const text = formatReport(findUnreachableBeads(beads));
+    expect(text).toContain('deferred-no-date [DEFERRED] "title of deferred-no-date"');
+  });
+
+  it("does NOT render a cycle note on a node that was not marked with one", () => {
+    // A plain two-hop chain with no cycle anywhere in it: neither node
+    // should ever pick up "(cycle, not followed further)".
+    const beads = [bead("stuck", "open", ["blocker"]), bead("blocker", "open", ["dead"]), bead("dead", "deferred")];
+    const text = formatReport(findUnreachableBeads(beads));
+    expect(text).not.toContain("(cycle, not followed further)");
+  });
+
+  it("renders every flagged bead, not just the first (outer loop)", () => {
+    const beads = [
+      bead("first-stuck", "open", ["dead1"]),
+      bead("second-stuck", "open", ["dead2"]),
+      bead("dead1", "deferred"),
+      bead("dead2", "deferred"),
+    ];
+    const text = formatReport(findUnreachableBeads(beads));
+    expect(text).toContain('first-stuck [open] "title of first-stuck"');
+    expect(text).toContain('second-stuck [open] "title of second-stuck"');
+  });
+
+  it("renders every stuck path for a bead, not just the first (inner loop)", () => {
+    const beads = [bead("multi-stuck", "open", ["dead1", "dead2"]), bead("dead1", "deferred"), bead("dead2", "deferred")];
+    const text = formatReport(findUnreachableBeads(beads));
+    expect(text).toContain("stuck via: dead1");
+    expect(text).toContain("stuck via: dead2");
+  });
 });
 
 describe("CLI end-to-end (--beads fixture file, never live bd)", () => {
