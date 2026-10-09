@@ -4,7 +4,17 @@ import { MediaAuthorship, RightsLayer } from "@/generated/prisma/enums";
 import { PERMITTED_ADVERTISING_LABELS } from "@/lib/advertising-disclosure";
 import { CURRENT_ATTESTATION_VERSION } from "@/lib/attestation";
 import type { OwnedMediaRow } from "@/lib/media-access";
-import { PUBLISH_BLOCKER_MESSAGES } from "@/lib/publishability";
+import { PUBLISH_AUTHORITY_BLOCKER_MESSAGES } from "@/lib/publish-authority";
+import {
+  PUBLISH_BLOCKERS,
+  PUBLISH_BLOCKER_MESSAGES,
+} from "@/lib/publishability";
+import {
+  PERMITTED_EMAILS_VAR,
+  decideSignIn,
+  isBootstrapAdminSignIn,
+} from "@/lib/sign-in-policy";
+import { pinEnvironment } from "@/lib/test-support/env";
 
 const authMock = vi.fn();
 
@@ -148,6 +158,28 @@ const OWNER_ID = "user-a";
 const OTHER_ID = "user-b";
 const ADMIN_ID = "user-admin";
 const MEDIA_ID = "media-1";
+
+/**
+ * THE THIRD PERSON (ugcportal-9gt1 K3) — the account that does not exist
+ * yet, and whose arrival is the event this bead's gate defends against.
+ *
+ * `ALLOWLIST_BEFORE` is the instance as Eirik described it on 2026-10-09:
+ * two operators, him and Gry. `pinEnvironment` below applies the ONE EDIT
+ * that admits a third person — their address appended to the same variable —
+ * for every test in this file, and leaves `ADMIN_BOOTSTRAP_EMAILS` naming
+ * only the original two, because that is what the edit actually looks like.
+ * Nothing in this file reads either variable except the K3 case at the
+ * bottom, which is the point: the publish route has no opinion about the
+ * allowlist, and the refusal it gives that account is not derived from one.
+ */
+const NEWCOMER_ID = "user-newcomer";
+const NEWCOMER_EMAIL = "newcomer@example.com";
+const ALLOWLIST_BEFORE = "eirik@example.com,gry@example.com";
+
+pinEnvironment({
+  ALLOWED_SIGNIN_EMAILS: `${ALLOWLIST_BEFORE},${NEWCOMER_EMAIL}`,
+  ADMIN_BOOTSTRAP_EMAILS: "google:eirik@example.com,google:gry@example.com",
+});
 
 const PUBLISHED_AT = new Date("2026-03-01T09:00:00.000Z");
 
@@ -311,7 +343,23 @@ function publishRequest(method: "POST" | "DELETE") {
   });
 }
 
-function signedInAs(userId: string, role: "USER" | "ADMIN" = "USER") {
+/**
+ * THE DEFAULT ROLE IS `ADMIN`, i.e. an OPERATOR (ugcportal-9gt1).
+ *
+ * Same reason `VALID_ATTESTATION` and `altText` are defaults above: from
+ * that bead on, publishing requires the caller to be an operator, so a
+ * fixture signed in as an ordinary user would make every case in this file
+ * fail for THAT bead's reason instead of its own. Every case where the role
+ * matters states it rather than relying on this default: each `OTHER_ID`
+ * site below passes its own (`"USER"` where "not the owner" is the whole
+ * subject, `"ADMIN"` for the case about an admin having no override), and
+ * the operator describe at the bottom of this file passes `"USER"`.
+ *
+ * It does NOT make the new gate untested by making it easy to pass: the
+ * operator describe signs in as a non-operator explicitly, so deleting the
+ * check in the route fails those cases regardless of what this default is.
+ */
+function signedInAs(userId: string, role: "USER" | "ADMIN" = "ADMIN") {
   authMock.mockResolvedValue({ user: { id: userId, role } });
 }
 
@@ -381,7 +429,7 @@ describe("ownership gate on publish/unpublish (K2)", () => {
   });
 
   it("returns 403 when user B publishes user A's media, and writes nothing", async () => {
-    signedInAs(OTHER_ID);
+    signedInAs(OTHER_ID, "USER");
     mediaFindUniqueMock.mockResolvedValue(unpublishedMedia);
 
     const response = await POST(publishRequest("POST"), context());
@@ -393,7 +441,7 @@ describe("ownership gate on publish/unpublish (K2)", () => {
   });
 
   it("returns 403 when user B unpublishes user A's media, and writes nothing", async () => {
-    signedInAs(OTHER_ID);
+    signedInAs(OTHER_ID, "USER");
     mediaFindUniqueMock.mockResolvedValue(publishedMedia);
 
     const response = await DELETE(publishRequest("DELETE"), context());
@@ -631,7 +679,7 @@ describe("publishing without alt text (ugcportal-gwr K1)", () => {
 
   it("checks ownership before alt text, not after", async () => {
     // The 400 must not become a way to probe someone else's library.
-    signedInAs(OTHER_ID);
+    signedInAs(OTHER_ID, "USER");
     mediaFindUniqueMock.mockResolvedValue({
       ...unpublishedMedia,
       altText: null,
@@ -806,7 +854,7 @@ describe("publishing an item with a benefit but no advertising label (ugcportal-
   it("checks ownership before the disclosure, not after", async () => {
     // The 400 must not become a way to probe someone else's library — and
     // the gate must not even read the disclosure for a caller it will refuse.
-    signedInAs(OTHER_ID);
+    signedInAs(OTHER_ID, "USER");
     mediaFindUniqueMock.mockResolvedValue(unpublishedMedia);
     disclosureFindUniqueMock.mockResolvedValue({
       benefitReceived: true,
@@ -1179,7 +1227,7 @@ describe("publishing a row with no watermarked preview", () => {
   it("refuses before the ownership gate would be bypassed, not after", async () => {
     // The 409 must not become a way to probe someone else's library: the
     // ownership gate still runs first.
-    signedInAs(OTHER_ID);
+    signedInAs(OTHER_ID, "USER");
     mediaFindUniqueMock.mockResolvedValue(previewLessMedia);
 
     const response = await POST(publishRequest("POST"), context());
@@ -1604,5 +1652,208 @@ describe("publishing something showing a person requires a PEOPLE clearance (ugc
     expect(writtenPayloads()).toEqual([{ publishedAt: null }]);
     expect(attestationFindUniqueMock).not.toHaveBeenCalled();
     expect(listingFindUniqueMock).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * ---------------------------------------------------------------------------
+ * PUBLISHING REQUIRES AN OPERATOR, NOT MERELY OWNERSHIP (ugcportal-9gt1)
+ * ---------------------------------------------------------------------------
+ *
+ * Every case above this point signs in as an operator, because since this
+ * bead that is what it takes to publish anything at all. These are the cases
+ * where NOT being one is the subject.
+ *
+ * What makes them worth more than "a non-admin gets 403": each one arranges
+ * a row that satisfies every OTHER condition this route imposes — alt text,
+ * no undisclosed benefit, no alcohol, a complete in-force declaration by the
+ * uploader, nobody identifiable in the frame, a watermarked preview with a
+ * public handle. There is nothing left for the ugcportal-3ae rights gate or
+ * its two neighbours to refuse. So a refusal here can only be about the
+ * account, and the mutation in the first case — the same request, the same
+ * row, the same fixtures, with the role changed and nothing else — is what
+ * connects it to the role rather than to a gate that was already refusing.
+ */
+describe("publishing requires an operator, not merely ownership (ugcportal-9gt1)", () => {
+  /**
+   * A row with nothing wrong with it: this is the fixture against which a
+   * refusal means the caller, because it cannot mean the material.
+   *
+   * `TRIAGED_ALCOHOL_FREE` and a disclosure are deliberately NOT set — the
+   * file's default is no disclosure row at all, which declares no benefit,
+   * which is the state in which `advertisingLabelPublishRefusal` and
+   * `commercialPublishRefusal` both answer null. See their own describes
+   * above.
+   */
+  function arrangeFullyPublishableRow() {
+    mediaFindUniqueMock.mockResolvedValue(unpublishedMedia);
+    attestationFindUniqueMock.mockResolvedValue(VALID_ATTESTATION);
+    disclosureFindUniqueMock.mockResolvedValue(null);
+    listingFindUniqueMock.mockResolvedValue(null);
+  }
+
+  it("refuses the owner, then publishes the identical request once that same account is an operator (K1)", async () => {
+    arrangeFullyPublishableRow();
+    signedInAs(OWNER_ID, "USER");
+
+    const refused = await POST(publishRequest("POST"), context());
+
+    expect(refused.status).toBe(403);
+    expect(await refused.json()).toEqual({
+      error: PUBLISH_AUTHORITY_BLOCKER_MESSAGES.not_an_operator,
+      blocker: "not_an_operator",
+    });
+    expect(mediaUpdateManyMock).not.toHaveBeenCalled();
+    expectNoOtherWrites();
+
+    // THE MUTATION, and the only thing that differs between the two halves:
+    // the same account, the same row, the same request, now an operator.
+    // Without this half the case above would be satisfied by a route that
+    // refused every publish outright.
+    signedInAs(OWNER_ID, "ADMIN");
+
+    const permitted = await POST(publishRequest("POST"), context());
+
+    expect(permitted.status).toBe(200);
+    expect(writtenPayloads()).toEqual([{ publishedAt: expect.any(Date) }]);
+  });
+
+  it("refuses an owner whose ownership the gate has already accepted (K2)", async () => {
+    arrangeFullyPublishableRow();
+    signedInAs(OWNER_ID, "USER");
+
+    const response = await POST(publishRequest("POST"), context());
+    const body = await response.json();
+
+    expect(response.status).toBe(403);
+    // NOT the ownership refusal. Both answer 403, so the status alone cannot
+    // tell "this row is not yours" from "you may not publish"; the body is
+    // what distinguishes them, and the ownership gate's is a bare
+    // `{ error: "Forbidden" }` with no `blocker` at all.
+    expect(body).not.toEqual({ error: "Forbidden" });
+    expect(body.blocker).toBe("not_an_operator");
+    // And the ownership gate really did pass first: it read the row, and it
+    // is the caller's own.
+    expect(mediaFindUniqueMock).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: MEDIA_ID } }),
+    );
+    expect(unpublishedMedia.userId).toBe(OWNER_ID);
+  });
+
+  it("answers the operator question before any condition on the material", async () => {
+    // A row the ugcportal-3ae gate WOULD refuse: no declaration at all. An
+    // operator asking this gets 422 `attestation_missing` (see that
+    // describe); a non-operator must not, because the answer they are owed
+    // is about them and does not depend on how far along this row is.
+    mediaFindUniqueMock.mockResolvedValue(unpublishedMedia);
+    attestationFindUniqueMock.mockResolvedValue(null);
+    signedInAs(OWNER_ID, "USER");
+
+    const response = await POST(publishRequest("POST"), context());
+    const body = await response.json();
+
+    expect(response.status).toBe(403);
+    expect(body.blocker).toBe("not_an_operator");
+    // By name, not by "is not a rights code": a route that returned some
+    // third thing would pass that weaker form.
+    expect(PUBLISH_BLOCKERS).not.toContain(body.blocker);
+    // The three reads the later gates need never happened — the cheapness
+    // half of putting this check first.
+    expect(disclosureFindUniqueMock).not.toHaveBeenCalled();
+    expect(listingFindUniqueMock).not.toHaveBeenCalled();
+    expect(attestationFindUniqueMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses a non-operator even for a row whose alt text is missing too", async () => {
+    // The mirror of the case above against the FIRST condition the route
+    // checks rather than the last, so "before the material" is not just a
+    // statement about the gate that happens to sit furthest down.
+    mediaFindUniqueMock.mockResolvedValue({
+      ...unpublishedMedia,
+      altText: null,
+    });
+    signedInAs(OWNER_ID, "USER");
+
+    const response = await POST(publishRequest("POST"), context());
+    const body = await response.json();
+
+    expect(response.status).toBe(403);
+    expect(body.blocker).toBe("not_an_operator");
+    expect(body.field).toBeUndefined();
+  });
+
+  it("still lets a non-operator owner UNPUBLISH their own item", async () => {
+    // The deliberate asymmetry (see the DELETE handler's docstring):
+    // withdrawing something from the public gallery moves in the safe
+    // direction, and an owner who is not an operator — or who has been
+    // demoted since — must not be locked out of taking their own
+    // photograph down.
+    signedInAs(OWNER_ID, "USER");
+    mediaFindUniqueMock.mockResolvedValue(publishedMedia);
+
+    const response = await DELETE(publishRequest("DELETE"), context());
+
+    expect(response.status).toBe(200);
+    expect(writtenPayloads()).toEqual([{ publishedAt: null }]);
+  });
+
+  /**
+   * K3 — THE REASON THIS BEAD EXISTS.
+   *
+   * `pinEnvironment` at the top of this file puts `newcomer@example.com` on
+   * `ALLOWED_SIGNIN_EMAILS` for every test in it: the exact one-line edit an
+   * operator makes to let a third person upload. The two halves below are
+   * the whole claim — that edit really does admit them, and it confers no
+   * publish.
+   */
+  it("does not confer publish on an address added to ALLOWED_SIGNIN_EMAILS (K3)", async () => {
+    // Half one: the edit is real. Without it the same identity is refused at
+    // the door, so what follows is not a test of an address nobody admitted.
+    expect(
+      decideSignIn(
+        { user: { email: NEWCOMER_EMAIL }, account: { provider: "google" } },
+        { [PERMITTED_EMAILS_VAR]: ALLOWLIST_BEFORE },
+        [],
+      ).permitted,
+    ).toBe(false);
+    expect(
+      decideSignIn(
+        { user: { email: NEWCOMER_EMAIL }, account: { provider: "google" } },
+        // The live environment this file pinned, and an EMPTY configured-user
+        // array, so the permission can only have come from the allowlist
+        // variable rather than from src/config/users.ts.
+        process.env,
+        [],
+      ),
+    ).toEqual({ permitted: true, email: NEWCOMER_EMAIL });
+    // And it is only a sign-in grant: the bootstrap list is a different
+    // variable and does not name them, so the role this account signs in
+    // with is USER. That is the link between the allowlist edit and the
+    // session below, rather than an assumption about it.
+    expect(
+      isBootstrapAdminSignIn({
+        email: NEWCOMER_EMAIL,
+        provider: "google",
+      }),
+    ).toBe(false);
+
+    // Half two: and the public gallery is still closed to them, on an upload
+    // that is theirs and that nothing else about this route would refuse.
+    signedInAs(NEWCOMER_ID, "USER");
+    mediaFindUniqueMock.mockResolvedValue({
+      ...unpublishedMedia,
+      userId: NEWCOMER_ID,
+    });
+    attestationFindUniqueMock.mockResolvedValue({
+      ...VALID_ATTESTATION,
+      attestedByUserId: NEWCOMER_ID,
+    });
+
+    const response = await POST(publishRequest("POST"), context());
+
+    expect(response.status).toBe(403);
+    expect((await response.json()).blocker).toBe("not_an_operator");
+    expect(mediaUpdateManyMock).not.toHaveBeenCalled();
+    expectNoOtherWrites();
   });
 });

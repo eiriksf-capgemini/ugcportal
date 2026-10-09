@@ -35,8 +35,18 @@ const MEDIA_ID = "media-gwr-k1";
 
 beforeAll(async () => {
   await applyMigrations(prisma);
+  // ADMIN, i.e. an operator (ugcportal-9gt1). Every publishing case in this
+  // file needs the owner to be one, and the row says so as well as the
+  // mocked session does: the `session` callback in src/lib/auth.ts derives
+  // `session.user.role` from this column on every request, so a fixture
+  // where the two disagreed would be describing a state production cannot
+  // reach. The non-operator case below changes BOTH, together.
   await prisma.user.create({
-    data: { id: OWNER_ID, email: "owner-gwr-k1@example.com" },
+    data: {
+      id: OWNER_ID,
+      email: "owner-gwr-k1@example.com",
+      role: "ADMIN",
+    },
   });
   await prisma.user.create({
     data: { id: ADMIN_ID, email: "admin-3ae@example.com", role: "ADMIN" },
@@ -157,9 +167,19 @@ function context() {
   return { params: Promise.resolve({ id: MEDIA_ID }) };
 }
 
+/**
+ * The owner, signed in. `ADMIN` by default because since ugcportal-9gt1
+ * publishing takes an operator, so an ordinary-user session would make every
+ * case in this file refuse for that bead's reason rather than its own — the
+ * same default, for the same reason, as `signedInAs` in route.test.ts.
+ */
+function signedInAsOwner(role: "USER" | "ADMIN" = "ADMIN") {
+  authMock.mockResolvedValue({ user: { id: OWNER_ID, role } });
+}
+
 describe("publishing without alt text, against a real database (ugcportal-gwr K1)", () => {
   it("rejects the publish and leaves the row unpublished in the database", async () => {
-    authMock.mockResolvedValue({ user: { id: OWNER_ID, role: "USER" } });
+    signedInAsOwner();
     await seedPublishableMedia({ altText: null });
 
     const response = await POST(publishRequest(), context());
@@ -175,7 +195,7 @@ describe("publishing without alt text, against a real database (ugcportal-gwr K1
   });
 
   it("publishes and persists publishedAt once alt text is present", async () => {
-    authMock.mockResolvedValue({ user: { id: OWNER_ID, role: "USER" } });
+    signedInAsOwner();
     await seedPublishableMedia({
       altText: "A fox crossing a snowy field at dawn",
     });
@@ -193,7 +213,7 @@ describe("publishing without alt text, against a real database (ugcportal-gwr K1
   });
 
   it("never persists a publish with blank-only alt text", async () => {
-    authMock.mockResolvedValue({ user: { id: OWNER_ID, role: "USER" } });
+    signedInAsOwner();
     await seedPublishableMedia({ altText: "   " });
 
     const response = await POST(publishRequest(), context());
@@ -217,7 +237,7 @@ describe("publishing without alt text, against a real database (ugcportal-gwr K1
  */
 describe("publishing requires the uploader's declaration, against a real database (ugcportal-3ae K1)", () => {
   it("refuses with 422 and leaves publishedAt null in the database", async () => {
-    authMock.mockResolvedValue({ user: { id: OWNER_ID, role: "USER" } });
+    signedInAsOwner();
     await seedPublishableMedia({ altText: ALT_TEXT, attested: false });
 
     const response = await POST(publishRequest(), context());
@@ -230,7 +250,7 @@ describe("publishing requires the uploader's declaration, against a real databas
   });
 
   it("publishes and persists publishedAt once the declaration is there", async () => {
-    authMock.mockResolvedValue({ user: { id: OWNER_ID, role: "USER" } });
+    signedInAsOwner();
     await seedPublishableMedia({ altText: ALT_TEXT, attested: true });
 
     const response = await POST(publishRequest(), context());
@@ -243,7 +263,7 @@ describe("publishing requires the uploader's declaration, against a real databas
 
 describe("the PEOPLE clearance, against a real database (ugcportal-3ae K2)", () => {
   it("refuses on `people_uncleared` and leaves the column null", async () => {
-    authMock.mockResolvedValue({ user: { id: OWNER_ID, role: "USER" } });
+    signedInAsOwner();
     await seedPublishableMedia({
       altText: ALT_TEXT,
       showsIdentifiablePeople: true,
@@ -262,7 +282,7 @@ describe("the PEOPLE clearance, against a real database (ugcportal-3ae K2)", () 
   });
 
   it("publishes the same upload once a real PEOPLE clearance row exists", async () => {
-    authMock.mockResolvedValue({ user: { id: OWNER_ID, role: "USER" } });
+    signedInAsOwner();
     await seedPublishableMedia({
       altText: ALT_TEXT,
       showsIdentifiablePeople: true,
@@ -294,7 +314,7 @@ describe("no retroactive grant to rows that predate this change (ugcportal-3ae K
      * migration" is only a guarantee of "no retroactive grant" while nobody
      * adds one, and this fails the day somebody does.
      */
-    authMock.mockResolvedValue({ user: { id: OWNER_ID, role: "USER" } });
+    signedInAsOwner();
     await seedPublishableMedia({
       altText: ALT_TEXT,
       attested: false,
@@ -320,5 +340,68 @@ describe("no retroactive grant to rows that predate this change (ugcportal-3ae K
     // a publish must not quietly unpublish either.
     expect(after.attestation).toBeNull();
     expect(after.publishedAt).toEqual(before.publishedAt);
+  });
+});
+
+/**
+ * ugcportal-9gt1 K1, against the same real database.
+ *
+ * The mocked route tests next door already assert the 403 and the blocker.
+ * What a mock cannot say is the half this bead is actually about: that a
+ * refused publish leaves the `publishedAt` COLUMN null — the item really is
+ * not on the public gallery, not merely told it is not — and that the row
+ * whose publish was refused is otherwise complete, so the refusal cannot be
+ * one of the other gates misread.
+ *
+ * It also mutates the role in the `User` TABLE, not only in the session
+ * fixture. In production those are one fact: the `session` callback in
+ * src/lib/auth.ts sets `role: toRole(user)` from this column on every
+ * request, so a demotion takes effect on the demoted account's next request.
+ * Moving both together is what keeps the mutation an honest one rather than
+ * a fixture state the application cannot produce.
+ */
+describe("publishing takes an operator, against a real database (ugcportal-9gt1 K1)", () => {
+  afterEach(async () => {
+    // Put the role back even if an expectation above threw, so a failure in
+    // this describe cannot change what a later one is testing.
+    await prisma.user.update({
+      where: { id: OWNER_ID },
+      data: { role: "ADMIN" },
+    });
+  });
+
+  it("refuses the owner and leaves the column null, then publishes the identical request once that account is an operator", async () => {
+    await seedPublishableMedia({ altText: ALT_TEXT });
+    await prisma.user.update({
+      where: { id: OWNER_ID },
+      data: { role: "USER" },
+    });
+    signedInAsOwner("USER");
+
+    const refused = await POST(publishRequest(), context());
+
+    expect(refused.status).toBe(403);
+    expect((await refused.json()).blocker).toBe("not_an_operator");
+    const duringRefusal = await prisma.media.findUniqueOrThrow({
+      where: { id: MEDIA_ID },
+    });
+    expect(duringRefusal.publishedAt).toBeNull();
+
+    // THE MUTATION: the same account, the same row, the same request — an
+    // operator now. Without this half the assertions above would be
+    // satisfied by a route that refused everybody.
+    await prisma.user.update({
+      where: { id: OWNER_ID },
+      data: { role: "ADMIN" },
+    });
+    signedInAsOwner("ADMIN");
+
+    const permitted = await POST(publishRequest(), context());
+
+    expect(permitted.status).toBe(200);
+    const afterPublish = await prisma.media.findUniqueOrThrow({
+      where: { id: MEDIA_ID },
+    });
+    expect(afterPublish.publishedAt).not.toBeNull();
   });
 });

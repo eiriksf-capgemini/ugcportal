@@ -61,8 +61,20 @@ beforeAll(async () => {
       role: "ADMIN",
     },
   });
+  // The uploader, and an OPERATOR (ugcportal-9gt1): the K1 describe below
+  // publishes this person's own item through the real publish route, and
+  // since that bead publishing takes an operator as well as the row's
+  // owner. The column is set as well as the session fixture because the
+  // `session` callback in src/lib/auth.ts derives the role from it on every
+  // request, so a row and a session that disagreed would describe a state
+  // production cannot reach. USER_ID below stays an ordinary user, and it
+  // is that account the admin-gate cases use.
   await prisma.user.create({
-    data: { id: OWNER_ID, email: "owner-mqh8@example.com" },
+    data: {
+      id: OWNER_ID,
+      email: "owner-mqh8@example.com",
+      role: "ADMIN",
+    },
   });
   await prisma.user.create({
     data: { id: USER_ID, email: "user-mqh8@example.com" },
@@ -273,7 +285,7 @@ describe("K3: monotone — no write path can flip yes back to no", () => {
       },
     });
 
-    authMock.mockResolvedValue({ user: { id: OWNER_ID, role: "USER" } });
+    authMock.mockResolvedValue({ user: { id: OWNER_ID, role: "ADMIN" } });
     const response = await DISCLOSURE(
       new Request(`http://localhost/api/media/${MEDIA_ID}/disclosure`, {
         method: "PUT",
@@ -347,7 +359,7 @@ describe("K1: the publish gate refuses on the brand's NEXT publish attempt", () 
     // The owner records the benefit, naming a brand nobody has checked yet —
     // the disclosure route mints it and records the FIRST answer, `false`,
     // same as every brand's first contact through that route.
-    authMock.mockResolvedValue({ user: { id: OWNER_ID, role: "USER" } });
+    authMock.mockResolvedValue({ user: { id: OWNER_ID, role: "ADMIN" } });
     const recorded = await DISCLOSURE(
       new Request(`http://localhost/api/media/${MEDIA_ID}/disclosure`, {
         method: "PUT",
@@ -392,7 +404,7 @@ describe("K1: the publish gate refuses on the brand's NEXT publish attempt", () 
     const flipResponse = await FLIP(flipRequest(brandId));
     expect(flipResponse.status).toBe(303);
 
-    authMock.mockResolvedValue({ user: { id: OWNER_ID, role: "USER" } });
+    authMock.mockResolvedValue({ user: { id: OWNER_ID, role: "ADMIN" } });
     const refused = await PUBLISH(
       new Request(`http://localhost/api/media/${MEDIA_ID}/publish`, {
         method: "POST",

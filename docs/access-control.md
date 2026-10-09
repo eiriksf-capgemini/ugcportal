@@ -108,6 +108,57 @@ Deliberately **not** implemented, because each would silently be the decision:
 - an "allow all authenticated" escape hatch or `ALLOW_ANY_SIGNIN=true`;
 - self-service sign-up with later approval.
 
+## Signing in is not publishing (`ugcportal-9gt1`)
+
+Being admitted by any of the three sources below lets somebody **sign in and
+upload**. For two of them — `src/config/users.ts` and `ALLOWED_SIGNIN_EMAILS`
+— that is all it does: neither puts anything on the public gallery. The third,
+`ADMIN_BOOTSTRAP_EMAILS`, is the exception: `reconcileBootstrapAdmin`
+(`src/lib/admin-bootstrap.ts:83`) promotes a listed address to `role: "ADMIN"`
+at sign-in, once, and `ADMIN` is exactly what `isPublishOperator` checks
+for — so admission through that source *is* publish authority, not merely
+sign-in.
+
+"Once" is the role-history guard, not the account's first ever sign-in: the
+promotion runs when `prisma.roleChange.count` for that user is zero. So an
+account that already exists and has never had a role change is promoted at
+its **next** sign-in after the address is added to the list — which is the
+case that matters when the list is widened, rather than the case of a brand
+new account.
+
+That sentence used to be false by one layer. `POST /api/media/[id]/publish`
+asked `requireOwnedMedia` — "is this row yours" — and nothing else, so the
+rule Eirik stated on 2026-10-09 (only he and Gry publish and sell) was
+enforced for **selling**, by `requireAdmin` on the price route, and for
+publishing only in the sense that the permitted set happened to contain
+exactly those two people. Appending a third address to
+`ALLOWED_SIGNIN_EMAILS` so that a colleague could upload would have handed
+that colleague the public gallery, in one line, with no diff anywhere near
+the publish route.
+
+This is the defect at the top of this document one layer down, which is why
+it is written here and not only in the route: an *individually correct* gate
+(ownership) was carrying a decision nobody had asked it to carry. The fix is
+an explicit check — [`isPublishOperator`](../src/lib/publish-authority.ts),
+called by the publish route immediately after the ownership gate and before
+every condition on the material — and a 403 with
+`blocker: "not_an_operator"` when it fails.
+
+- **Operator means `role === ADMIN` today**, so the set is exactly the one
+  `ADMIN_BOOTSTRAP_EMAILS` and the admin UI already decide. No third list,
+  no new variable.
+- **But it is asked as its own question**, in its own module, rather than by
+  calling `requireAdmin`. "Opening later" most likely means somebody who may
+  publish their own uploads and may *not* change roles or sign a rights
+  clearance; that day is one edit to one function, instead of a hunt through
+  every call site that said "admin" and meant "publisher".
+- **Unpublishing is not gated.** Withdrawing an item moves in the safe
+  direction, and an owner who was never an operator — or who has since been
+  demoted — must still be able to take their own photograph down.
+- **Nothing here changes who may touch whose row.** An admin who does not own
+  an item still gets 403 from both handlers; admin curation of somebody
+  else's visibility remains out of scope (`ugcportal-r1d`).
+
 ## What an operator has to do
 
 | Source | Effect |

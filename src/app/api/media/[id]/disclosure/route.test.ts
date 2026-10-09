@@ -61,11 +61,17 @@ afterAll(async () => {
 });
 
 beforeEach(() => {
-  // The owner, signed in. The ownership-gate describe below overrides this
-  // per test; every other test in the file is about what the owner's own
-  // request does.
+  // The owner, signed in -- and an OPERATOR (ugcportal-9gt1). `role` is
+  // `ADMIN` because the cases below that cross into the publish route need
+  // it: publishing takes an operator as well as the row's owner since that
+  // bead, so an ordinary-user session would make them refuse 403 for a
+  // reason that is not what they are testing. Nothing in THIS route reads
+  // the role (it gates on `requireOwnedMedia` alone), so the change is
+  // invisible to every other case here.
+  // The ownership-gate describe overrides this per test; every other test
+  // in this file is about what the owner's own request does.
   authMock.mockReset();
-  authMock.mockResolvedValue({ user: { id: OWNER_ID, role: "USER" } });
+  authMock.mockResolvedValue({ user: { id: OWNER_ID, role: "ADMIN" } });
 });
 
 afterEach(async () => {

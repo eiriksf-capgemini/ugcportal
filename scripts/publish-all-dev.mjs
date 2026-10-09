@@ -13,8 +13,14 @@
  * unpublished row is POSTed to the running dev server with a session cookie
  * belonging to that row's owner, read from the local Session table. That is
  * what keeps every gate the route applies (alt text, advertising label,
- * alcohol facts, watermarked preview, ownership) applied here too, without a
- * second copy of any of them in this file. The database is only ever READ:
+ * alcohol facts, watermarked preview, ownership, and since ugcportal-9gt1
+ * the caller being an OPERATOR) applied here too, without a second copy of
+ * any of them in this file. That last one is the gate most likely to stop
+ * this script in a dev database seeded with ordinary users: a row whose
+ * owner is not an admin is reported as `HTTP 403` with the route's own
+ * sentence, and is not published. That is the script working, not failing --
+ * promote the account (or seed it as an admin) rather than reaching past the
+ * endpoint. The database is only ever READ:
  * `readPublishInputs` below is two SELECTs (media ids and owners, session
  * tokens) and nothing else in this file touches it.
  *
@@ -179,7 +185,12 @@ export async function readPublishInputs(dbPath) {
  * Pairs each unpublished row with an unexpired session of ITS OWNER -- the
  * route checks ownership (requireOwnedMedia answers 403 otherwise), so a
  * session for some other signed-in user would only turn into a refusal one
- * round trip later. Rows whose owner has no live session are reported as
+ * round trip later. Deliberately not "any admin's session": that would be a
+ * second refusal one round trip later rather than none, because the route's
+ * ownership gate has no role branch and 403s an admin on somebody else's
+ * row (ugcportal-r1d, unchanged by ugcportal-9gt1). Owning the row and being
+ * an operator are both required, and only the first is something this
+ * function can arrange. Rows whose owner has no live session are reported as
  * skipped, with the reason, rather than dropped.
  * @param {{ unpublished: Array<{ id: string, userId: string }>, sessions: Array<{ userId: string, sessionToken: string, expires: string }>, now: Date }} input
  */

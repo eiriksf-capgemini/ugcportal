@@ -1,3 +1,4 @@
+import type { Role } from "@/generated/prisma/enums";
 import type { MediaModel } from "@/generated/prisma/models";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
@@ -474,7 +475,7 @@ export function toOwnerMedia(media: OwnedMediaRow): OwnerMedia {
 }
 
 export type MediaAccessResult =
-  | { ok: true; userId: string; media: OwnedMediaRow }
+  | { ok: true; userId: string; role: Role; media: OwnedMediaRow }
   | { ok: false; status: 401 | 403 | 404; error: string };
 
 /**
@@ -491,6 +492,19 @@ export type MediaAccessResult =
  * scope its write by `{ id, userId }` (see the routes). What this gate buys
  * is the right status code and an early exit before any write is attempted.
  *
+ * IT ALSO HANDS BACK THE CALLER'S ROLE, AND DECIDES NOTHING WITH IT
+ * (ugcportal-9gt1). The publish route needs to know whether the caller is an
+ * operator as well as the owner — two different questions, and only the
+ * second one is this gate's. The role is already sitting on the session this
+ * function has just read, so returning it costs no query and no second
+ * `auth()` call, and it keeps the route's answer derived from ONE session
+ * read rather than from two that could disagree about a role revoked
+ * mid-request. What this must not become is a `role === "ADMIN"` branch in
+ * here: "may this caller touch this row" is unchanged by it, PATCH, DELETE
+ * and the tags route all ignore the field, and the decision lives in
+ * `isPublishOperator` (src/lib/publish-authority.ts) where the day the
+ * publish set stops equalling the admin set is one edit.
+ *
  * 403-vs-404: a caller who owns nothing here learns that the id exists.
  * That is a deliberate, narrow trade. Media ids are cuids — not enumerable,
  * so an attacker can't sweep the table for valid ones — and answering 404
@@ -503,10 +517,11 @@ export async function requireOwnedMedia(
   mediaId: string,
 ): Promise<MediaAccessResult> {
   const session = await auth();
-  const userId = session?.user?.id;
-  if (!userId) {
+  const user = session?.user;
+  if (!user?.id) {
     return { ok: false, status: 401, error: "Unauthorized" };
   }
+  const userId = user.id;
 
   // `include` rather than a bare findUnique: the tags come back alongside
   // every column, which is what `OwnedMediaRow` promises and what lets PATCH
@@ -523,5 +538,5 @@ export async function requireOwnedMedia(
     return { ok: false, status: 403, error: "Forbidden" };
   }
 
-  return { ok: true, userId, media };
+  return { ok: true, userId, role: user.role, media };
 }
