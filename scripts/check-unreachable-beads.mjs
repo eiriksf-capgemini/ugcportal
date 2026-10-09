@@ -236,7 +236,9 @@ function formatChain(chain) {
 export function formatReport({ examinedCount, flagged }) {
   const lines = [];
   lines.push(`Examined ${examinedCount} bead(s) not already closed or deferred.`);
-  lines.push(`Flagged ${flagged.length} as unreachable: every blocking path ends in deferred or missing work.`);
+  lines.push(
+    `Flagged ${flagged.length} as unreachable: every blocking path ends in deferred or missing work, or in a cycle, marked and not followed further.`,
+  );
   lines.push("");
   for (const bead of flagged) {
     lines.push(`${bead.id} [${bead.status}] "${bead.title}"`);
