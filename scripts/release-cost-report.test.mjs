@@ -1,11 +1,23 @@
 /**
  * Tests for the pure parts of the release cost report (ugcportal-apsq):
  * CHANGELOG membership parsing, estimate (~) marking, median, the step-4b
- * round-chain reader, the stated-severity classifier and the close-reason
- * round parser. The bd / gh / git plumbing is not exercised here; the
- * fixtures below are shaped like the real comments and notes in this repo
- * (quoted from PRs #75, #79, #94, #95, #98 and the beads they belong to).
+ * round-chain reader, the stated-severity classifier, the close-reason
+ * round parser and the merge-outcome heuristic. The bd / gh / git plumbing
+ * is not exercised here; most fixtures below are shaped like the real
+ * comments and notes in this repo (quoted from PRs #75, #79, #94, #95,
+ * #98). Five are real bodies fetched once with `gh api` and committed
+ * under scripts/fixtures/ (ugcportal-577s, ugcportal-zo8n, ugcportal-x9c7)
+ * rather than hit over the network from a test: PR #121's round-1 body (a
+ * zero-finding approval that reproduces both of the original defects at
+ * once), PR #173's round-2 body (an auto-merge whose body says "no
+ * sensitive paths touched"), PR #185's round-1 body (a genuine
+ * sensitive-path hold, the control case), and the two bodies the round-6
+ * proximity-only flag exclusion silently zeroed -- PR #131's round-1 reply
+ * ("two lows fixed", with an unrelated `--since` flag later in the same
+ * paragraph) and PR #193's round-1 review ("one CONFIRMED low", with the
+ * CSS custom property `--color-petrol-deep` later on the same line).
  */
+import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -18,14 +30,24 @@ import {
   estimateFlags,
   firstLine,
   fmtTokens,
+  hasGenuineSensitivePathMention,
   median,
+  outcomeOf,
   parseChangelogMembership,
   parsePrs,
   parseRoundsFromCloseReason,
+  readCodeSpans,
   readRoundChain,
   spliceGenerated,
   tailRounds,
 } from "./release-cost-report.mjs";
+
+const loadFixture = (name) => JSON.parse(fs.readFileSync(new URL(`./fixtures/${name}`, import.meta.url), "utf8"));
+const pr121 = loadFixture("pr-121-round1.json");
+const pr173 = loadFixture("pr-173-round2.json");
+const pr185 = loadFixture("pr-185-round1.json");
+const pr131 = loadFixture("pr-131-round1-reply.json");
+const pr193 = loadFixture("pr-193-round1.json");
 
 const CHANGELOG = `# Changelog
 
@@ -302,6 +324,357 @@ describe("classifySeverity (severity is read from the reviewer's words, never gu
 
   it("treats an explicit 'zero findings' verdict as stated with no mediums", () => {
     expect(classifySeverity("Round 1 (chain approx). code-review found zero findings; all four families swept and reported. Merging.")).toMatchObject({ medium: 0, low: 0, stated: true });
+  });
+
+  describe("ugcportal-zo8n: a bare number is only a count beside a severity word in a findings context", () => {
+    it("does not read PR #121's own round-1 body (which quotes its code-review invocation as '121 high --comment') as 121 mediums", () => {
+      // #121 was a zero-finding approval. The old parser took '121' from the
+      // quoted CLI args -- `121 high --comment` -- immediately preceding
+      // '--comment', not from any stated finding.
+      expect(classifySeverity(pr121.round1Body)).toMatchObject({ medium: 0, low: 0, stated: true, findings: 0 });
+    });
+
+    it("does not read a PR-number reference glued to a severity word as a count", () => {
+      expect(classifySeverity("See #121 high priority backlog for context; unrelated to this review.")).toMatchObject({ medium: 0, low: 0 });
+    });
+
+    it("still reads a genuine 'N <severity>' summary count that is not a PR reference or a CLI invocation", () => {
+      // Control: a weaker "fix" that always returns 0 would also pass the
+      // #121 assertion above. This case checks the opposite failure mode on
+      // one concrete input: a real stated count still comes through here.
+      expect(classifySeverity("Review round 1. Found 2 medium findings and 1 low finding, both confirmed.")).toMatchObject({ medium: 2, low: 1 });
+    });
+
+    it("mutating the committed #121 fixture to genuinely state a medium count changes the classification", () => {
+      // Fixture mutation control: the real zero-finding body parses to 0;
+      // swapping in matching finding-labelled text for the same code-review
+      // line must parse to a real count, proving the fix discriminates on
+      // context rather than on this specific body's text.
+      const mutated = pr121.round1Body.replace("`121 high --comment`): 0 findings (`[]`)", "`121 high --comment`): 2 medium findings");
+      expect(classifySeverity(mutated)).toMatchObject({ medium: 2 });
+    });
+
+    it("distinguishes a flag (no space before the following letter) from a plain '--' separator (ugcportal-577s)", () => {
+      // A bare "N <severity> -- prose" must still count: this project's own
+      // prose uses "--" as a plain separator constantly (including in PR
+      // #201's own body and in the pr-review-merge skill doc), and the
+      // original #121 fix over-corrected to treat ANY two-dash run after a
+      // severity word as a CLI invocation, silently zeroing a real verdict.
+      expect(classifySeverity("Found 2 medium -- will fix in next round.")).toMatchObject({ medium: 2, low: 0 });
+      expect(classifySeverity("Found 1 low -- filed as a followup bead.")).toMatchObject({ medium: 0, low: 1 });
+      // A real flag -- glued directly to the dashes, no space -- is still
+      // excluded, on more than just the committed #121 fixture's `--comment`.
+      expect(classifySeverity("`121 high --base main`: 0 findings.")).toMatchObject({ medium: 0 });
+      expect(classifySeverity("`121 high --pr 201`: 0 findings.")).toMatchObject({ medium: 0 });
+    });
+
+    it("requires the flag to be on the same line as the count: a line break before '--word' is not a CLI invocation (ugcportal-zo8n round 2)", () => {
+      // \s in the flag-exclusion regex also matches "\n", so a severity count
+      // followed by a line break and then a flag-shaped token on the NEXT
+      // line was wrongly excluded as if it were `121 high --comment` glued
+      // to the same line. A real verdict followed by an unrelated
+      // "--comment"-shaped note on its own line must still count.
+      expect(classifySeverity("Found 2 medium\n--comment next round")).toMatchObject({ medium: 2, low: 0, stated: true });
+      // Round 7 (ugcportal-x9c7) narrowed what the exclusion is testing: a
+      // flag is a CLI echo only when it shares a CODE SPAN with the count,
+      // so the quoted house style stays excluded while the same words in
+      // bare prose now count. Both forms are asserted here; the bare-prose
+      // one changed in round 7 and the quoted one did not.
+      expect(classifySeverity("Found 2 medium `--comment` next round")).toMatchObject({ medium: 2 });
+      expect(classifySeverity("Found `2 medium --comment` next round")).toMatchObject({ medium: 0 });
+      expect(classifySeverity("Found 2 medium --comment next round")).toMatchObject({ medium: 2 });
+    });
+
+    describe("same-line flag exclusion is a closed whitelist of line terminators, not a blacklist of whitespace (ugcportal-zo8n round 4)", () => {
+      // Round 2 excluded a flag glued to the count after any `\s` (which
+      // also matches "\n"); round 3 narrowed that to `[ \t]` to stop
+      // matching "\n", but `[ \t]` only recognises two ASCII characters as
+      // "same line" -- every OTHER whitespace character (NBSP, the
+      // U+2002/U+3000 family, \f, \v) was then misread as if it were a line
+      // break, which wrongly took a quoted CLI invocation like
+      // "121 high<NBSP>--comment" back OUT of the exclusion and counted it
+      // as a real finding again -- the original bug's exact shape, just
+      // with a different character in the gap. This enumerates the actual
+      // line terminators instead -- \n, \r (and \r\n), U+2028 LINE
+      // SEPARATOR, U+2029 PARAGRAPH SEPARATOR, U+0085 NEL -- so "same line"
+      // means "not one of these five characters", a closed set that a
+      // whitespace character nobody thought of cannot defeat.
+      //
+      // Characters are built with String.fromCodePoint rather than typed as
+      // literal \u escapes in this file's own source, so nothing here
+      // depends on how this file's text happens to get encoded.
+      const bodyWithGap = (gap) => `\`121 high${gap}--comment\`): 0 findings.`;
+
+      it.each([
+        ["LF", "\n"],
+        ["CR", "\r"],
+        ["CRLF", "\r\n"],
+        ["LINE SEPARATOR (U+2028)", String.fromCodePoint(0x2028)],
+        ["PARAGRAPH SEPARATOR (U+2029)", String.fromCodePoint(0x2029)],
+        ["NEL (U+0085)", String.fromCodePoint(0x0085)],
+      ])("counts the flag as a real finding across a genuine line terminator: %s", (_name, gap) => {
+        // These separate the count from the flag onto a different line, so
+        // this is no longer the glued quoted-CLI shape -- it must count.
+        expect(classifySeverity(bodyWithGap(gap))).toMatchObject({ medium: 121 });
+      });
+
+      it.each([
+        ["SPACE (U+0020)", " "],
+        ["TAB (U+0009)", "\t"],
+        ["NBSP (U+00A0) -- reachable: leaks in from rich-text copy-paste", String.fromCodePoint(0x00a0)],
+        ["EN SPACE (U+2002)", String.fromCodePoint(0x2002)],
+        ["IDEOGRAPHIC SPACE (U+3000)", String.fromCodePoint(0x3000)],
+        ["FIGURE SPACE (U+2007)", String.fromCodePoint(0x2007)],
+        ["NARROW NO-BREAK SPACE (U+202F)", String.fromCodePoint(0x202f)],
+        ["MONGOLIAN VOWEL SEPARATOR (U+180E)", String.fromCodePoint(0x180e)],
+        ["WORD JOINER (U+2060)", String.fromCodePoint(0x2060)],
+        ["FORM FEED (\\f) -- unreachable in practice, wrong in principle under round 3", "\f"],
+        ["VERTICAL TAB (\\v) -- unreachable in practice, wrong in principle under round 3", "\v"],
+      ])("excludes the flag as same-line across a non-terminator space: %s", (_name, gap) => {
+        // None of these is a line terminator, so the flag is still "on the
+        // same line" as the count -- this is still the quoted-CLI shape
+        // and must not count.
+        expect(classifySeverity(bodyWithGap(gap))).toMatchObject({ medium: 0 });
+      });
+    });
+
+    describe("readCodeSpans is a drop-in for the old `.replace(/[*`_]/g, '')` (ugcportal-x9c7)", () => {
+      // classifySeverity's item-label and summary regexes all run over the
+      // stripped text, so the lexer is only safe to substitute for the old
+      // one-line strip if it removes exactly the same characters and
+      // nothing else. Every committed real body is checked, plus the
+      // shapes the lexer has branches for.
+      const SHAPES = [
+        pr121.round1Body,
+        pr173.round2Body,
+        pr185.round1Body,
+        pr131.round1ReplyBody,
+        pr193.round1Body,
+        "plain prose, no markup at all",
+        "`one` span and `another`",
+        "``a `nested` backtick``",
+        "unbalanced ` backtick",
+        "```\nfenced\n--flag\n```\nafter",
+        "````\nunclosed fence\n",
+        "**bold** _em_ `code` ***both***",
+        `a${String.fromCodePoint(0x2028)}b${String.fromCodePoint(0x2029)}c${String.fromCodePoint(0x85)}d\r\ne\rf`,
+        "",
+      ];
+      it.each(SHAPES.map((s, i) => [i, s]))("strips identically on shape %d", (_i, s) => {
+        const lexed = readCodeSpans(s);
+        expect(lexed.text).toBe(s.replace(/[*`_]/g, ""));
+        // ...and the span map stays aligned with the text it describes.
+        expect(lexed.spanIds).toHaveLength(lexed.text.length);
+        for (const id of lexed.spanIds) if (id !== 0) expect(lexed.spanText.has(id)).toBe(true);
+      });
+    });
+
+    describe("the flag exclusion tests SAME CODE SPAN, not proximity (ugcportal-x9c7, round 7)", () => {
+      // Rounds 1-6 all tested a proxy -- "how far is the flag from the
+      // count, and is there a line break in between". Round 4 settled on a
+      // five-terminator whitelist plus an 8-character window; round 5
+      // removed the window; round 6 shipped that and regressed on real
+      // data, because with no window the whole of a long soft-wrapped
+      // paragraph counts as "near".
+      //
+      // The condition the exclusion actually wants is the house style
+      // itself: the count and the flag are quoted TOGETHER inside one
+      // markdown code span (`121 high --comment`), which is what makes the
+      // number an argument rather than a verdict. That is what is tested
+      // now. Distance no longer appears in the predicate at all.
+
+      describe("the two real bodies round 6 zeroed, as committed fixtures", () => {
+        it("PR #131's round-1 reply states two lows and is read as two, not zero", () => {
+          // "Round 1's two lows fixed in 51be7e9: ... with a one-off
+          // `--since 2026-09-29` re-run ...". The flag sits 273 characters
+          // after the count in the same unbroken paragraph, so every
+          // distance-based rule zeroed it; it is in its own code span while
+          // the count is in plain prose, so the span rule counts it.
+          expect(pr131.round1ReplyBody).toContain("two lows fixed");
+          expect(pr131.round1ReplyBody).toContain("`--since 2026-09-29`");
+          expect(classifySeverity(pr131.round1ReplyBody)).toMatchObject({ low: 2, stated: true });
+        });
+
+        it("PR #193's round-1 review states one CONFIRMED low and is read as one, not zero", () => {
+          // "... on the one CONFIRMED low-severity finding above. Please fix
+          // the `--color-petrol-deep` doc comment ...". Not a CLI flag at
+          // all -- a CSS custom property, 58 characters later, in its own
+          // span.
+          expect(pr193.round1Body).toContain("one CONFIRMED low-severity finding");
+          expect(pr193.round1Body).toContain("`--color-petrol-deep`");
+          expect(classifySeverity(pr193.round1Body)).toMatchObject({ low: 1, stated: true });
+        });
+      });
+
+      it("still excludes the house style: count and flag inside ONE span", () => {
+        expect(classifySeverity("Found `121 high --comment`: 0 findings.")).toMatchObject({ medium: 0 });
+        expect(classifySeverity(pr121.round1Body)).toMatchObject({ medium: 0 });
+      });
+
+      it("excludes a double-backtick span the same way, and a fenced block the same way", () => {
+        expect(classifySeverity("House style, doubled: ``121 high --comment``: 0 findings.")).toMatchObject({ medium: 0 });
+        const fenced = ["Invocation and its output:", "", "```", "code-review --comment --pr 201", "3 medium reported", "```", "", "Nothing else."].join("\n");
+        expect(classifySeverity(fenced)).toMatchObject({ medium: 0 });
+      });
+
+      it("counts the same fenced block once the flag is removed (control: the fence is not what excludes it)", () => {
+        const fenced = ["Invocation and its output:", "", "```", "code-review run", "3 medium reported", "```", "", "Nothing else."].join("\n");
+        expect(classifySeverity(fenced)).toMatchObject({ medium: 3 });
+      });
+
+      it("counts a count and a flag in DIFFERENT adjacent spans", () => {
+        expect(classifySeverity("Fixed `2 medium` findings; re-ran with `--comment`.")).toMatchObject({ medium: 2 });
+      });
+
+      it("counts a count in prose with the flag in a span (both regression shapes, reduced)", () => {
+        expect(classifySeverity("Found 2 medium findings; the CSS token `--color-petrol-deep` is unrelated.")).toMatchObject({ medium: 2 });
+        expect(classifySeverity("Two lows fixed; re-ran with `--since 2026-09-29` for comparison.")).toMatchObject({ low: 2 });
+      });
+
+      it("counts a count in prose with a bare flag anywhere after it, at any distance", () => {
+        // Round 5's own cases, re-decided. These are NOT quoted
+        // invocations -- nothing is in a code span -- so under the span
+        // rule they count. Round 6 read all three as zero.
+        expect(classifySeverity("Found 121 high with the --comment flag.")).toMatchObject({ medium: 121 });
+        expect(classifySeverity(`Found 121 high ${"filler ".repeat(40)}with the --comment flag.`)).toMatchObject({ medium: 121 });
+        expect(classifySeverity("Found 121 high severity findings in this round.")).toMatchObject({ medium: 121 });
+      });
+
+      it("has no window INSIDE a span either: an arbitrarily long quoted invocation still excludes", () => {
+        const long = `Quoted: \`code-review --base origin/main --pr 201 ${"x".repeat(400)} 121 high\`.`;
+        expect(long.indexOf(" 121 high") - long.indexOf("--base")).toBeGreaterThan(400);
+        expect(classifySeverity(long)).toMatchObject({ medium: 0 });
+      });
+
+      it("excludes a flag that precedes the count in the same span (argument order is not the point)", () => {
+        expect(classifySeverity("Ran `code-review --comment 121 high` and it reported nothing.")).toMatchObject({ medium: 0 });
+      });
+
+      it("counts across an UNBALANCED backtick, inline and fenced: an unterminated span opens no span at all", () => {
+        // Deliberate fail-open direction. Seven rounds of this defect have
+        // all erred the same way -- silently zeroing a stated verdict --
+        // and under-counting is the dangerous direction for this report,
+        // so an ambiguous span is resolved as "no span", which can only
+        // ever cause a count to be COUNTED.
+        expect(classifySeverity("Found 2 medium `--comment")).toMatchObject({ medium: 2 });
+        expect(classifySeverity("Found 2 medium --comment`")).toMatchObject({ medium: 2 });
+        expect(classifySeverity("Found ``2 medium --comment` next round")).toMatchObject({ medium: 2 });
+        expect(classifySeverity("```\nFound 2 medium --comment\nstill inside an unclosed fence\n")).toMatchObject({ medium: 2 });
+      });
+
+      it("MUTATION: ignoring span boundaries (round 6's proximity-only gate) re-breaks both regression fixtures", async () => {
+        // The strongest available form of this check: take the shipped
+        // module's own source, swap ONLY the same-span gate for round 6's
+        // proximity gate, import the result, and confirm the two fixtures
+        // above go back to zero. If they did not, the two assertions above
+        // would not be load-bearing -- they would pass with or without the
+        // span boundary.
+        const src = fs.readFileSync(new URL("./release-cost-report.mjs", import.meta.url), "utf8");
+        const SPAN_GATE = 'const spanId = lexed.spanIds[m.index] ?? 0;\n    if (spanId !== 0 && CLI_FLAG.test(lexed.spanText.get(spanId) ?? "")) continue;';
+        expect(src).toContain(SPAN_GATE);
+        const PROXIMITY_GATE = [
+          'const terminators = ["\\\\n", "\\\\r", String.fromCodePoint(0x2028), String.fromCodePoint(0x2029), String.fromCodePoint(0x85)].join("");',
+          '    if (new RegExp("^[^" + terminators + "]*--[A-Za-z]").test(text.slice(m.index + m[0].length))) continue;',
+        ].join("\n");
+        const mutatedSrc = src
+          .replace('from "./lib/is-main.mjs"', `from ${JSON.stringify(new URL("./lib/is-main.mjs", import.meta.url).href)}`)
+          .replace(SPAN_GATE, PROXIMITY_GATE);
+        expect(mutatedSrc).not.toContain(SPAN_GATE);
+        const mutant = await import(`data:text/javascript;base64,${Buffer.from(mutatedSrc, "utf8").toString("base64")}`);
+
+        // The mutant reproduces round 6's two real regressions exactly...
+        expect(mutant.classifySeverity(pr131.round1ReplyBody)).toMatchObject({ low: 0 });
+        expect(mutant.classifySeverity(pr193.round1Body)).toMatchObject({ low: 0 });
+        // ...while the shipped predicate reads both correctly...
+        expect(classifySeverity(pr131.round1ReplyBody)).toMatchObject({ low: 2 });
+        expect(classifySeverity(pr193.round1Body)).toMatchObject({ low: 1 });
+        // ...and the mutant still agrees on the case the exclusion exists
+        // for, so the mutation isolates the span boundary and nothing else.
+        expect(mutant.classifySeverity(pr121.round1Body)).toMatchObject({ medium: 0 });
+      });
+    });
+  });
+});
+
+describe("hasGenuineSensitivePathMention (ugcportal-577s)", () => {
+  it("reads a genuine 'touches a sensitive path' statement as genuine", () => {
+    expect(hasGenuineSensitivePathMention("Requires human approval and merge: this PR touches a sensitive path.")).toBe(true);
+    expect(hasGenuineSensitivePathMention(pr185.round1Body)).toBe(true);
+  });
+
+  it("does not read a negated mention as genuine, in several phrasings a reviewer actually uses", () => {
+    expect(hasGenuineSensitivePathMention("CI green, no sensitive paths touched, no blocking findings.")).toBe(false);
+    expect(hasGenuineSensitivePathMention("none of the changed files touch a sensitive path.")).toBe(false);
+    expect(hasGenuineSensitivePathMention("zero sensitive paths in this diff.")).toBe(false);
+    expect(hasGenuineSensitivePathMention("the diff doesn't touch a sensitive path.")).toBe(false);
+    expect(hasGenuineSensitivePathMention(pr121.round1Body)).toBe(false);
+    expect(hasGenuineSensitivePathMention(pr173.round2Body)).toBe(false);
+  });
+
+  it("is not fooled by an unrelated negation elsewhere in the same sentence (PR #185's own 'does not approve or merge' follows its genuine mention)", () => {
+    // Control: a naive whole-sentence negation check would see "does not"
+    // later in this same sentence and misread the genuine mention as
+    // negated. The clause-local check must not do that.
+    expect(hasGenuineSensitivePathMention("this PR touches a sensitive path (docker-compose.yml), so this run does not approve or merge regardless of outcome.")).toBe(true);
+  });
+
+  it("returns false when the phrase never appears at all", () => {
+    expect(hasGenuineSensitivePathMention("CI green, zero findings, merging.")).toBe(false);
+    expect(hasGenuineSensitivePathMention("")).toBe(false);
+  });
+
+  describe("known forward-negation blind spot (ugcportal-zo8n): pinned, not fixed", () => {
+    // This function is deliberately backward-only (see its docstring): it
+    // only looks at the clause *before* a "sensitive path(s)" mention for a
+    // negation cue. A negation stated *after* the mention reads as genuine
+    // today, which is the wrong answer for a human reader. The reviewer
+    // checked all 77 cached v0.6.0 PR bodies plus this file's fixtures and
+    // found zero real occurrences of this phrasing -- latent, not manifest
+    // -- so these cases pin today's (known-wrong) behaviour rather than
+    // silently going untested, per the docstring's own instruction not to
+    // re-widen the backward check to cover this.
+    it("reads a forward 'none found' as genuine (wrong, but pinned)", () => {
+      expect(hasGenuineSensitivePathMention("Sensitive path check: none found.")).toBe(true);
+    });
+
+    it("reads a quoted CLI mention followed by a forward negation as genuine (wrong, but pinned)", () => {
+      expect(hasGenuineSensitivePathMention('Ran `grep -rn "sensitive path" src/` and found zero real hits.')).toBe(true);
+    });
+  });
+});
+
+describe("outcomeOf (ugcportal-577s: the outcome heuristic)", () => {
+  const mkAnalysis = (body, extras = []) => ({ number: 1, state: "MERGED", mergedAt: "2026-10-06T00:00:00Z", lastRoundBody: body, extras });
+
+  it("K1: an auto-merge whose body reads 'no sensitive paths touched' classifies as auto-merged, not sensitive-path", () => {
+    expect(outcomeOf({ close_reason: "" }, [mkAnalysis(pr173.round2Body)], 2)).toBe("auto-merged");
+  });
+
+  it("K2 (control): a genuine sensitive-path hold still classifies as human (sensitive path)", () => {
+    // This is what distinguishes a real fix from simply deleting the
+    // heuristic: a PR that really was held for a human for this reason
+    // must still be labelled as such.
+    expect(outcomeOf({ close_reason: "" }, [mkAnalysis(pr185.round1Body)], 1)).toBe("human (sensitive path)");
+  });
+
+  it("the shared PR #121 fixture (zero-finding approval, also mentions 'no sensitive paths touched') classifies as auto-merged", () => {
+    expect(outcomeOf({ close_reason: "" }, [mkAnalysis(pr121.round1Body)], 1)).toBe("auto-merged");
+  });
+
+  it("Never: a body containing 'no sensitive paths' classifies as sensitive-path", () => {
+    expect(outcomeOf({ close_reason: "" }, [mkAnalysis("Auto-approved: CI green, no sensitive paths touched, no blocking findings. Merging.")], 1)).not.toBe("human (sensitive path)");
+  });
+
+  it("mutating the committed #173 fixture to a genuine sensitive-path hold changes the classification", () => {
+    // Fixture mutation control: swap the negated mention for a genuine one
+    // in the same real body and confirm the label flips.
+    const mutated = pr173.round2Body.replace("CI green, no sensitive paths touched, no blocking findings.", "Requires human approval and merge: this PR touches a sensitive path.");
+    expect(outcomeOf({ close_reason: "" }, [mkAnalysis(mutated)], 2)).toBe("human (sensitive path)");
+  });
+
+  it("still reports 'no PR' and 'withdrawn' as before (unaffected by this fix)", () => {
+    expect(outcomeOf({ close_reason: "" }, [], null)).toBe("no PR");
+    expect(outcomeOf({ close_reason: "Withdrawn: premise was wrong." }, [mkAnalysis("x")], 1)).toBe("withdrawn");
   });
 });
 
