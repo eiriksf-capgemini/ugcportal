@@ -162,13 +162,11 @@ The audit asks three questions of every bead in the line-up:
 It paid for itself immediately: at least two builds were prevented that
 would have been wasted, and the eighteen gaps became beads.
 
-**The mechanical half is being made a script.** `scripts/check-unreachable-beads.mjs`
-(`ugcportal-z4nh`) walks `blocks` edges and reports every open bead whose
-every blocking path ends in deferred or missing work. It is **not yet on
-`main`** — PR #207 was open at the time of writing — so treat this paragraph
-as describing intent until that merges. Its first live run on the real
-backlog flagged **ten**, of which seven were in the v0.7.0 line-up —
-including two
+**The mechanical half is now a script.** `scripts/check-unreachable-beads.mjs`
+(`ugcportal-z4nh`, merged in PR #207) walks `blocks` edges and reports every
+open bead whose every blocking path ends in deferred or missing work, or in a
+cycle it marks and does not follow. Its first live run on the real backlog
+flagged **ten**, of which seven were in the v0.7.0 line-up — including two
 review beads (`5x8` security, `rma` architecture) gated behind features that
 will not be built this release. A security review that waits for Stripe and
 Instagram before it can start is a review that never happens.
