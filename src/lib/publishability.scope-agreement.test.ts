@@ -10,7 +10,7 @@ import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db"
  *
  * `publishabilityBlocker` (TypeScript, one row at a time) decides a publish
  * REQUEST. `PUBLIC_MEDIA_RIGHTS_SCOPE` (a Prisma `where`, spread into
- * `PUBLIC_MEDIA_SCOPE`) decides what five anonymous surfaces SERVE. They
+ * `PUBLIC_MEDIA_SCOPE`) decides what every anonymous surface SERVES. They
  * have to mean the same thing, and nothing in either file makes them: they
  * are written in different languages against different engines, and the way
  * they come apart is silent in exactly the dangerous direction — a row the
@@ -34,8 +34,27 @@ import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db"
  * (src/lib/curation-clearance-write.ts) stores `reason.trim()` and refuses
  * a blank one as `clearance_reason_blank` before it writes, so the
  * whitespace-only clearance stays unreachable through the only surface
- * that mints one. Nothing updates `Media.userId`, so the other stays
- * unreachable for its own reason.
+ * that mints one.
+ *
+ * THE OTHER ONE — an attestation whose `attestedByUserId` is not the
+ * file's `Media.userId` — stays unreachable too, but not for the one-line
+ * reason it would be tempting to give. "Nothing updates `Media.userId`" is
+ * FALSE: `prisma/migrations/20261005120500_reconcile_configured_users/migration.sql`
+ * does, repointing a stray configured user's rows at their canonical
+ * account. The conclusion survives, for a reason worth knowing rather than
+ * re-deriving: that migration predates `MediaAttestation`, which
+ * `20261008200000_add_upload_rights_attestation` creates, so there is no
+ * attestation row in existence when it runs and nothing it can put out of
+ * step. No runtime writer of `Media.userId` exists anywhere in `src/` or
+ * `scripts/`.
+ *
+ * SO THE CONSTRAINT, STATED FOR WHOEVER ADDS THE NEXT `Media` WRITE: this
+ * disagreement is unreachable only while `Media.userId` is written once at
+ * upload and thereafter only by migrations that run before an attestation
+ * can exist. A runtime path that repoints an upload at a different owner —
+ * an account merge, a transfer, an admin reassignment — would make a row
+ * the publish gate refuses and this scope serves, and would have to move
+ * or delete the attestation in the same transaction.
  */
 
 vi.mock("@/lib/auth", () => ({
