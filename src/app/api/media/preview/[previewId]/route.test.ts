@@ -316,6 +316,18 @@ function signedInAs(userId: string) {
   authMock.mockResolvedValue({ user: { id: userId } });
 }
 
+/**
+ * Signed in AND an operator (ugcportal-nffp round 1).
+ *
+ * Separate from `signedInAs` rather than an optional second argument, so
+ * every existing case above keeps handing the route a session with no role
+ * — which is what an ordinary signed-in visitor is, and which must stay the
+ * default in this file.
+ */
+function signedInAsOperator(userId: string) {
+  authMock.mockResolvedValue({ user: { id: userId, role: "ADMIN" } });
+}
+
 describe("GET /api/media/preview/[previewId] — K1: the bytes come back", () => {
   it("serves a published preview to an anonymous caller", async () => {
     const response = await call(PUBLISHED.previewId as string);
@@ -483,6 +495,77 @@ describe("K3: unpublished is 404, and identical to nonexistent", () => {
     });
     expect("OR" in where).toBe(false);
     expect("userId" in where).toBe(false);
+  });
+
+  it("serves an operator somebody else's unpublished preview, which the curation screen needs (ugcportal-3ae)", async () => {
+    /*
+     * The arm review round 1 required. The admin curation screen lists
+     * every upload with no `where` and renders each thumbnail through this
+     * route, so without this an operator cannot see the photograph they are
+     * being asked to record a clearance for. Behaviour, not just a shape:
+     * the row is somebody else's and unpublished, which is 404 for every
+     * other caller in this file.
+     */
+    signedInAsOperator(OTHER_ID);
+    const response = await call(OTHERS_UNPUBLISHED.previewId as string);
+    expect(response.status).toBe(200);
+    expect(getObjectKeys()).toEqual([OTHERS_UNPUBLISHED.previewKey]);
+  });
+
+  it("gives an operator a scope with no publish, owner or rights filter at all (ugcportal-3ae)", async () => {
+    /*
+     * Spelled out rather than compared to a constant, because this arm is
+     * deliberately the ABSENCE of the other two — `toEqual` on the whole
+     * object is what makes a stray filter appearing here a failure, and the
+     * three `expect(... in where)` lines name the specific keys whose
+     * silent arrival would either reopen the public gate or quietly close
+     * the operator one.
+     */
+    signedInAsOperator(OTHER_ID);
+    await call(OTHERS_UNPUBLISHED.previewId as string);
+    const where = mediaFindFirstMock.mock.calls[0][0].where as Record<
+      string,
+      unknown
+    >;
+    expect(where).toEqual({
+      previewId: OTHERS_UNPUBLISHED.previewId,
+      previewKey: { not: null },
+    });
+    expect("OR" in where).toBe(false);
+    expect("userId" in where).toBe(false);
+    expect("publishedAt" in where).toBe(false);
+  });
+
+  it("does NOT take the operator arm for a session with a role but no usable id", async () => {
+    // The operator branch is guarded on the normalised viewer id as well as
+    // on the role, so a half-formed session falls through to the anonymous
+    // arm rather than to the widest one in the file.
+    authMock.mockResolvedValue({ user: { id: "", role: "ADMIN" } });
+    const response = await call(OTHERS_UNPUBLISHED.previewId as string);
+    expect(response.status).toBe(404);
+    expect(s3SendMock).not.toHaveBeenCalled();
+    const where = mediaFindFirstMock.mock.calls[0][0].where as Record<
+      string,
+      unknown
+    >;
+    expect(where).toEqual({
+      ...PUBLIC_MEDIA_SCOPE,
+      previewId: OTHERS_UNPUBLISHED.previewId,
+    });
+  });
+
+  it("does NOT take the operator arm for an ordinary signed-in USER", async () => {
+    authMock.mockResolvedValue({ user: { id: OTHER_ID, role: "USER" } });
+    await call(OTHERS_UNPUBLISHED.previewId as string);
+    const where = mediaFindFirstMock.mock.calls[0][0].where as Record<
+      string,
+      unknown
+    >;
+    expect(where).toEqual({
+      previewId: OTHERS_UNPUBLISHED.previewId,
+      previewKey: { not: null },
+      OR: [PUBLIC_MEDIA_SCOPE, { userId: OTHER_ID }],
+    });
   });
 
   it("puts the same scope in the signed-in caller's public arm (ugcportal-3ae)", async () => {

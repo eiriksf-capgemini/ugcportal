@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { GetObjectCommand } from "@aws-sdk/client-s3";
 import { NextResponse } from "next/server";
 
+import type { Role } from "@/generated/prisma/enums";
 import { auth } from "@/lib/auth";
 // Both from @/lib/media, deliberately, even though @/lib/watermark re-exports
 // PREVIEW_CONTENT_TYPE and reads as the more natural home for it. Importing it
@@ -14,6 +15,10 @@ import { PREVIEW_CONTENT_TYPE, PREVIEW_KEY_PREFIX } from "@/lib/media";
 import { MEDIA_PREVIEW_DELIVERY_SELECT } from "@/lib/media-access";
 import type { MediaAnonymousScope } from "@/lib/media-listing";
 import { prisma } from "@/lib/prisma";
+// ugcportal-nffp round 1: the operator arm asks the question
+// src/lib/publish-authority.ts owns, rather than comparing a role here —
+// see OperatorPreviewScope below.
+import { isPublishOperator } from "@/lib/publish-authority";
 // ugcportal-nffp. The comment above asks that anything added to this hot
 // path's module graph be checked rather than assumed, so: `@/lib/public-media`
 // imports `@/lib/advertising-disclosure`, `@/lib/curation-tags`,
@@ -262,10 +267,19 @@ export function resetPreviewStorageUnreachableLogThrottle(): void {
  *
  * In ROWS: the same large, deliberate cost `PUBLIC_MEDIA_SCOPE`'s own
  * comment describes. Every row published before ugcportal-3ae has no
- * attestation, so its preview now 404s for anonymous callers as well.
- * Those rows already left every listing surface when 3ae landed; this
- * route was the last way to reach the image. The owner's own arm below is
- * untouched, so nobody loses sight of their own upload.
+ * attestation, so its preview now 404s — for anonymous callers AND for a
+ * signed-in stranger, since the signed-in scope's public arm is this same
+ * object. Those rows already left every listing surface when 3ae landed;
+ * this route was the last way to reach the image.
+ *
+ * WHO STILL SEES IT, said precisely, because an earlier draft of this
+ * paragraph said only "the owner's own arm is untouched, so nobody loses
+ * sight of their own upload" and that was both too narrow and, for the
+ * back office, wrong (round 1 of review). The owner's arm is indeed
+ * untouched. So is the OPERATOR's — but only because `OperatorPreviewScope`
+ * below was added for it; without that arm this cost landed on the admin
+ * curation screen too, which is the one place the refusal had to be
+ * repairable from.
  *
  * In WORK PER REQUEST: this is the hot path — a gallery page issues one
  * request here per tile — and the rights half is relation filters, so each
@@ -315,7 +329,85 @@ type OwnerPreviewScope = {
   userId?: never;
 };
 
-type PreviewScope = AnonymousPreviewScope | OwnerPreviewScope;
+/**
+ * The scope for an OPERATOR: any preview with a stored object, whatever its
+ * publish state, whoever uploaded it, cleared or not (ugcportal-nffp, round
+ * 1 of review).
+ *
+ * WHY THIS ARM HAD TO EXIST THE MOMENT THE RIGHTS HALF ARRIVED. The
+ * anonymous arm above is "what the public may see". The admin curation
+ * screen (src/app/admin/curation/page.tsx) lists EVERY upload — its
+ * `findMany` has no `where` at all — and renders each one's thumbnail
+ * through `mediaPreviewPath`, i.e. through this route. The admin's job on
+ * that screen is to look at the photograph and answer whether an
+ * identifiable person is in it, which is the very thing a PEOPLE clearance
+ * records. Without this arm the screen 404s exactly the rows that need
+ * triaging, so the operator must clear the photograph to see it and see it
+ * to clear it. A gate whose own remedy is behind the gate is not a gate.
+ *
+ * AN OPERATOR IS NOT THE PUBLIC, and that is the whole justification rather
+ * than a convenience. Åvl § 104 is about a photograph being "gjengis eller
+ * vises offentlig"; docs/legal/manual-upload-rights-review.md §3.3 draws the
+ * same line for GDPR — "for storage and internal triage, legitimate
+ * interest (Art. 6(1)(f)) with a balancing test is arguable; for public
+ * display and for sale to third parties … consent". The controller's own
+ * staff performing the triage are the internal-triage case, not the public
+ * -display one. There is also no coherent model in which an operator may
+ * read this row's filename, its uploader's e-mail address and every triage
+ * flag on that same screen, may set its price and may sign a clearance on
+ * the depicted person's face, and may not see the watermarked thumbnail.
+ *
+ * `isPublishOperator` (src/lib/publish-authority.ts) RATHER THAN
+ * `role === "ADMIN"`, which is what that module asks of its callers: the
+ * day the publish set stops equalling the admin set is one edit there, and
+ * a hand-written role comparison here would be one of the call sites its
+ * own comment warns would then have to be hunted down. The role comes from
+ * the session this route already reads, and `src/lib/auth.ts`'s session
+ * callback re-derives it from the `User` row on every request, so a demoted
+ * operator loses this arm on their next request with nothing to invalidate
+ * — the same freshness `layerIsCleared` relies on for a clearance.
+ *
+ * NOT A WIDENING OF WHAT IS SERVED, only of who may ask: `previewKey: { not:
+ * null }` and the prefix guard in the handler are unchanged, so this still
+ * cannot reach `Media.key`, and `cache-control: private, no-cache` plus
+ * `Vary: Cookie` already stop one caller's answer being reused for another.
+ *
+ * WHAT IT CHANGES, MEASURED on a real database with one published row whose
+ * PEOPLE clearance was deleted, and one unpublished row belonging to
+ * somebody else (anon / signed-in stranger / operator / owner):
+ *
+ *   lapsed, published   before this PR 404 / 404 / 200 / 200
+ *                       after the rights half   404 / 404 / 404 / 200
+ *                       with this arm           404 / 404 / 200 / 200
+ *   unpublished, other  before this PR 404 / 404 / 404 / 200
+ *                       with this arm           404 / 404 / 200 / 200
+ *
+ * The middle row of the first block is the regression this arm repairs. The
+ * second block is a PRE-EXISTING 404 that this arm also closes, and that is
+ * deliberate rather than overreach: the rule being written here is "an
+ * operator is not the public", and a version of it restricted to published
+ * rows would be encoding a rule nobody believes in order to keep a diff
+ * small — while leaving the curation screen broken for the case it mostly
+ * handles, since ugcportal-3ae means the ordinary order is upload, triage,
+ * clear, THEN publish.
+ */
+type OperatorPreviewScope = {
+  previewId: string;
+  previewKey: { not: null };
+  // All three spelled `?: never` rather than merely omitted, the same
+  // construction the two scopes above use: this arm deliberately has no
+  // publish, owner or rights filter, and an edit that adds one by accident
+  // — the dangerous direction here being `undefined`, which Prisma drops —
+  // should not type-check into silence.
+  publishedAt?: never;
+  userId?: never;
+  OR?: never;
+};
+
+type PreviewScope =
+  | AnonymousPreviewScope
+  | OperatorPreviewScope
+  | OwnerPreviewScope;
 
 /**
  * Builds the WHERE clause, which IS the authorisation.
@@ -349,7 +441,21 @@ type PreviewScope = AnonymousPreviewScope | OwnerPreviewScope;
  * `previewCacheHeaders` below, which already argues the identical case for
  * an unpublish.
  */
-function previewScope(previewId: string, viewerId: string | null): PreviewScope {
+function previewScope(
+  previewId: string,
+  viewerId: string | null,
+  role: Role | null,
+): PreviewScope {
+  // BOTH, not just the role. `viewerId === null` is this route's single
+  // definition of "nobody is signed in" — see the handler, which normalises
+  // it once — and a role arriving without a usable id is a malformed
+  // session, not an operator. Requiring both keeps "no usable session means
+  // anonymous" absolute rather than something the operator branch can step
+  // around; `isPublishOperator` refuses a null or undefined role on its own
+  // side, so the two guards fail closed independently.
+  if (viewerId !== null && isPublishOperator(role)) {
+    return { previewId, previewKey: { not: null } };
+  }
   if (viewerId === null) {
     return { ...PUBLIC_MEDIA_SCOPE, previewId };
   }
@@ -563,8 +669,15 @@ export async function GET(
       ? sessionUserId
       : null;
 
+  // From the SAME session read as `viewerId` above, deliberately: a second
+  // `auth()` call could see a role the first did not, and this route would
+  // then be deciding one request against two different answers to "who is
+  // this". `?? null` folds a session with no role into "not an operator",
+  // which `isPublishOperator` would refuse anyway.
+  const viewerRole = session?.user?.role ?? null;
+
   const row = await prisma.media.findFirst({
-    where: previewScope(previewId, viewerId),
+    where: previewScope(previewId, viewerId, viewerRole),
     select: MEDIA_PREVIEW_DELIVERY_SELECT,
   });
 

@@ -349,12 +349,16 @@ export function publishRightsRefusal(
  *     empty every public surface of everything unpriced — the same
  *     argument this module's own header makes, and the one
  *     src/lib/sellable-media.ts makes for keeping sellability beside this
- *     scope rather than inside it (ugcportal-yzo7). The legal review says
- *     the same from its own side, dated 2026-09-28:
+ *     scope rather than inside it (ugcportal-yzo7). The legal review
+ *     reaches the same conclusion from its own side, dated 2026-09-28:
  *     docs/legal/manual-upload-rights-review.md §2, the "E.3 Revocation
  *     cascades" row — "a REVOKED uploader's files are unsellable (status
  *     check), but nothing unpublishes them … Public visibility is a
- *     separate switch (ugcportal-3ae)."
+ *     separate switch (ugcportal-3ae)." Cited as a second author agreeing,
+ *     not as a ruling: that document's status header makes every decision
+ *     in it a RECOMMENDATION until ugcportal-zec's process owner ratifies
+ *     it, and its §8 table is blank. The first reason above does not
+ *     depend on it.
  */
 
 /** The attestation a public row must carry, as a Prisma relation filter. */

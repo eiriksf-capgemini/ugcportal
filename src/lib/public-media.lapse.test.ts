@@ -45,13 +45,17 @@ import { seedMedia } from "@/lib/test-support/media-fixtures";
  * agrees with whatever the test expects.
  */
 
-vi.mock("@/lib/auth", () => ({
-  // Not a thrower, unlike the other anonymous-surface suites: five of the
-  // six readers here never call `auth()`, but GET /api/media/preview/[previewId]
-  // does — it has an owner branch — and an anonymous visitor is exactly the
-  // caller this file is about.
-  auth: async () => null,
-}));
+/**
+ * Not a thrower, unlike the other anonymous-surface suites: five of the six
+ * readers here never call `auth()`, but GET /api/media/preview/[previewId]
+ * does — it has an owner arm and, since round 1 of this bead's review, an
+ * operator arm — and WHO IS ASKING is itself one of the things this file
+ * has to assert. Settable rather than a fixed `null` for that reason; every
+ * caller goes through {@link previewStatus}, which sets it and puts it back.
+ */
+const authMock = vi.fn<() => Promise<unknown>>(async () => null);
+
+vi.mock("@/lib/auth", () => ({ auth: authMock }));
 
 vi.mock("@/lib/s3", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/s3")>();
@@ -89,8 +93,53 @@ const { GET: previewGET } = await import(
 
 const OWNER = "owner-nffp";
 const ADMIN = "admin-nffp";
+/** Signed in, an ordinary USER, and not the uploader of anything here. */
+const STRANGER = "stranger-nffp";
 const MEDIA_ID = "media-nffp";
 const PREVIEW_ID = `pv-${MEDIA_ID}`;
+
+/**
+ * Who is asking for the bytes. `null` is nobody signed in.
+ *
+ * The ROLE is carried here because the route reads it off the session —
+ * `src/lib/auth.ts`'s session callback re-derives it from the `User` row on
+ * every request — so a test that wants to demote an operator has to change
+ * both the row and what the session reports, exactly as production does.
+ */
+type Viewer = null | { id: string; role: "USER" | "ADMIN" };
+
+const ANONYMOUS: Viewer = null;
+const AS_STRANGER: Viewer = { id: STRANGER, role: "USER" };
+const AS_OPERATOR: Viewer = { id: ADMIN, role: "ADMIN" };
+const AS_OWNER: Viewer = { id: OWNER, role: "USER" };
+
+/**
+ * The status GET /api/media/preview/[previewId] answers one viewer, for one
+ * handle.
+ *
+ * 200 means that caller can still download the photograph; 404 means it is
+ * gone for them. Restores the anonymous session afterwards in a `finally`,
+ * so a case that throws cannot leave the next one running as somebody else
+ * — the failure mode that would make {@link surfaces} silently measure an
+ * operator's view and call it the public's.
+ */
+async function previewStatus(
+  viewer: Viewer,
+  previewId: string = PREVIEW_ID,
+): Promise<number> {
+  authMock.mockResolvedValue(
+    viewer === null ? null : { user: { id: viewer.id, role: viewer.role } },
+  );
+  try {
+    const response = await previewGET(
+      new Request(`https://example.test/api/media/preview/${previewId}`),
+      { params: Promise.resolve({ previewId }) },
+    );
+    return response.status;
+  } finally {
+    authMock.mockResolvedValue(null);
+  }
+}
 
 /**
  * Which public surfaces are serving the one seeded row right now.
@@ -104,10 +153,11 @@ async function surfaces(): Promise<Record<string, boolean>> {
   const feed = await listPublicMedia(publicMediaListingUrl());
   if (!feed.ok) throw new Error(`listPublicMedia failed: ${feed.error}`);
 
-  const preview = await previewGET(
-    new Request(`https://example.test/api/media/preview/${PREVIEW_ID}`),
-    { params: Promise.resolve({ previewId: PREVIEW_ID }) },
-  );
+  // ANONYMOUS, always. This helper answers "what does the public see", and
+  // the other five readers are anonymous by construction — they never call
+  // `auth()` at all. Who else may fetch the bytes is a different question
+  // and has its own describe below.
+  const previewStatusCode = await previewStatus(ANONYMOUS);
 
   return {
     feed: feed.page.items.some((item) => item.id === MEDIA_ID),
@@ -117,7 +167,7 @@ async function surfaces(): Promise<Record<string, boolean>> {
     offer: (await getPublicOffer(PREVIEW_ID)) !== null,
     // The bytes, not a link to them. 200 means a stranger can still download
     // the photograph; 404 means it is gone from the public web.
-    previewBytes: preview.status === 200,
+    previewBytes: previewStatusCode === 200,
   };
 }
 
@@ -164,6 +214,7 @@ async function seed(): Promise<void> {
     data: [
       { id: OWNER, email: "owner-nffp@example.com", role: "USER" },
       { id: ADMIN, email: "admin-nffp@example.com", role: "ADMIN" },
+      { id: STRANGER, email: "stranger-nffp@example.com", role: "USER" },
     ],
   });
   await prisma.tag.upsert({
@@ -387,6 +438,178 @@ describe("a lapsed clearance removes an already-published item from every public
   });
 });
 
+/**
+ * WHO MAY STILL FETCH THE BYTES — the question `surfaces()` above
+ * deliberately does not ask, because it only ever asks anonymously.
+ *
+ * ROUND 1 OF REVIEW FOUND A REAL DEFECT HERE, and these cases are what
+ * would have caught it. Putting `PUBLIC_MEDIA_SCOPE` into the public arm of
+ * the SIGNED-IN scope took the preview away from every signed-in
+ * non-owner, operators included — and the admin curation screen
+ * (src/app/admin/curation/page.tsx) lists every upload with no `where` and
+ * renders each thumbnail through this route. So the one screen whose job is
+ * recording the clearance 404'd exactly the rows that needed one: clear the
+ * photograph to see it, see it to clear it. The suite as first written could
+ * not see that, because it had `auth` pinned to `null` and asserted a single
+ * anonymous column.
+ *
+ * Four viewers, three rows, and every cell is asserted rather than a
+ * representative sample — the defect above lived in precisely the cell
+ * nobody had written down.
+ */
+describe("who may still fetch the preview bytes, by viewer (ugcportal-nffp K1)", () => {
+  const UNPUBLISHED_ID = "media-nffp-unpublished";
+
+  beforeEach(async () => {
+    // Somebody else's upload, never published. Its own row rather than a
+    // mutation of the one above, so the published cases keep their fixture.
+    await seedMedia(prisma, {
+      id: UNPUBLISHED_ID,
+      userId: OWNER,
+      createdAt: new Date("2026-02-20T00:00:00.000Z"),
+      published: false,
+    });
+  });
+
+  /** Every viewer's status for one handle, in one object. */
+  async function byViewer(previewId: string): Promise<Record<string, number>> {
+    return {
+      anonymous: await previewStatus(ANONYMOUS, previewId),
+      signedInStranger: await previewStatus(AS_STRANGER, previewId),
+      operator: await previewStatus(AS_OPERATOR, previewId),
+      owner: await previewStatus(AS_OWNER, previewId),
+    };
+  }
+
+  it("serves a cleared, published row to everyone", async () => {
+    // The row that makes every 404 below a change rather than the default.
+    expect(await byViewer(PREVIEW_ID)).toEqual({
+      anonymous: 200,
+      signedInStranger: 200,
+      operator: 200,
+      owner: 200,
+    });
+  });
+
+  it("withholds a LAPSED row from the public and the signed-in stranger, and keeps serving the operator and the owner", async () => {
+    /*
+     * The finding, as an assertion. `signedInStranger` is the cell that
+     * proves the gate still closes for an ordinary signed-in visitor — a
+     * fix that simply reopened the public arm would turn that cell green
+     * and this case red. `operator` is the cell that was 404 before the
+     * operator arm existed.
+     */
+    await prisma.mediaRightsClearance.deleteMany({
+      where: { listingId: await listingId(), layer: RightsLayer.PEOPLE },
+    });
+
+    expect(await byViewer(PREVIEW_ID)).toEqual({
+      anonymous: 404,
+      signedInStranger: 404,
+      operator: 200,
+      owner: 200,
+    });
+  });
+
+  it("withholds an UNPUBLISHED row from the public and the stranger, and serves the operator and the owner", async () => {
+    /*
+     * A PRE-EXISTING 404 for the operator, not one this bead introduced:
+     * before any of this, the signed-in scope was
+     * `OR: [{ publishedAt: { not: null } }, { userId }]`, so an operator
+     * looking at somebody else's unpublished upload got nothing either. The
+     * operator arm closes it too, which is deliberate — ugcportal-3ae means
+     * the ordinary order is upload, triage, clear, THEN publish, so
+     * unpublished rows are most of what the curation screen handles, and an
+     * operator arm that stopped at published rows would leave the deadlock
+     * standing for the common case while looking fixed.
+     */
+    expect(await byViewer(`pv-${UNPUBLISHED_ID}`)).toEqual({
+      anonymous: 404,
+      signedInStranger: 404,
+      operator: 200,
+      owner: 200,
+    });
+  });
+
+  it("closes the operator arm the moment that operator is demoted", async () => {
+    /*
+     * The operator arm is `isPublishOperator(role)` over the role the
+     * session reports, and `src/lib/auth.ts` re-derives that from the `User`
+     * row on every request. So a demotion has to land on the next request
+     * with nothing to invalidate — the same property `layerIsCleared` needs
+     * for a clearance, and the same lapse this whole file is about, now
+     * applied to the person asking rather than to the row.
+     *
+     * Both halves are changed, because production changes both: the column,
+     * and what the next session read therefore reports.
+     */
+    await prisma.mediaRightsClearance.deleteMany({
+      where: { listingId: await listingId(), layer: RightsLayer.PEOPLE },
+    });
+    expect(await previewStatus(AS_OPERATOR)).toBe(200);
+
+    await prisma.user.update({ where: { id: ADMIN }, data: { role: "USER" } });
+    expect(await previewStatus({ id: ADMIN, role: "USER" })).toBe(404);
+
+    await prisma.user.update({ where: { id: ADMIN }, data: { role: "ADMIN" } });
+    expect(await previewStatus(AS_OPERATOR)).toBe(200);
+  });
+
+  it("does not let a stale ADMIN claim in the session alone open the arm", async () => {
+    /*
+     * The converse, and the reason the demotion case above is not enough on
+     * its own: these tests hand the route a session object directly, so a
+     * case that only ever changed the session would pass against a route
+     * that trusted a token's copy of the role. `src/lib/auth.ts`'s session
+     * callback does not — it re-reads `User.role` — so the state this
+     * asserts is the one a stale JWT would produce, and the row is what
+     * decides.
+     *
+     * Asserted as "the session is not the only input" rather than as a
+     * claim about the route's internals: with the row demoted, a session
+     * still claiming ADMIN must not resurrect the arm in production, and
+     * the thing that makes that true is the callback, not this route. What
+     * this case pins is that the arm is a pure function of the role it is
+     * HANDED, so the freshness guarantee has exactly one owner and it is
+     * named in src/lib/publish-authority.ts rather than re-implemented
+     * here.
+     */
+    await prisma.mediaRightsClearance.deleteMany({
+      where: { listingId: await listingId(), layer: RightsLayer.PEOPLE },
+    });
+    // A session with a user id but no role at all — a malformed or
+    // older-shaped session — is not an operator.
+    authMock.mockResolvedValue({ user: { id: ADMIN } });
+    const response = await previewGET(
+      new Request(`https://example.test/api/media/preview/${PREVIEW_ID}`),
+      { params: Promise.resolve({ previewId: PREVIEW_ID }) },
+    );
+    authMock.mockResolvedValue(null);
+    expect(response.status).toBe(404);
+  });
+
+  it("treats a session carrying ADMIN but no usable id as anonymous, not as an operator", async () => {
+    /*
+     * The route normalises "nobody is signed in" exactly once, and the
+     * operator arm is guarded on that normalised id as well as on the role
+     * — so a half-formed session cannot step around it. Same family as the
+     * five `treats … as anonymous` cases in this route's own suite, which
+     * exist because Prisma drops an `undefined` filter and an empty `OR`
+     * branch matches every row.
+     */
+    await prisma.mediaRightsClearance.deleteMany({
+      where: { listingId: await listingId(), layer: RightsLayer.PEOPLE },
+    });
+    authMock.mockResolvedValue({ user: { id: "", role: "ADMIN" } });
+    const response = await previewGET(
+      new Request(`https://example.test/api/media/preview/${PREVIEW_ID}`),
+      { params: Promise.resolve({ previewId: PREVIEW_ID }) },
+    );
+    authMock.mockResolvedValue(null);
+    expect(response.status).toBe(404);
+  });
+});
+
 describe("a lapse reaches page two of the paginated feed as well (ugcportal-nffp K1)", () => {
   it("drops the lapsed row from a cursor walk, not only from the first page", async () => {
     /*
@@ -461,20 +684,28 @@ describe("a lapse reaches page two of the paginated feed as well (ugcportal-nffp
  *      public surface of every photograph nobody has priced, which is all
  *      of them.
  *
- *   2. THE LEGAL REVIEW HAS ALREADY RULED ON IT, dated 2026-09-28:
+ *   2. THE LEGAL REVIEW REACHED THE SAME CONCLUSION, dated 2026-09-28:
  *      docs/legal/manual-upload-rights-review.md §2, the "E.3 Revocation
- *      cascades" row. It records the checklist's own
- *      "all listings from that account are unpublished immediately" as an
- *      OVER-CLAIM — "a REVOKED uploader's files are unsellable (status
- *      check), but nothing unpublishes them (`publishedAt` is untouched;
- *      §3.3)" — and proposes the replacement text verbatim: "Admin
- *      revocation or uploader withdrawal → REVOKED → every file of that
- *      uploader fails the gate immediately. Public visibility is a separate
- *      switch (ugcportal-3ae)." The same document's §4 closes by saying the
- *      publish path should require the attestation and the PEOPLE
- *      clearance, "not the whole gate, because publishing is not selling".
- *      That is the gate ugcportal-3ae built and the one the cases above
- *      exercise.
+ *      cascades" row. READ IT AT THE RIGHT STRENGTH, because the row has
+ *      two halves and only one of them is settled. Its DESCRIPTIVE half is
+ *      a statement of fact about this code and is simply true — the
+ *      checklist's "all listings from that account are unpublished
+ *      immediately" is "an over-claim … a REVOKED uploader's files are
+ *      unsellable (status check), but nothing unpublishes them
+ *      (`publishedAt` is untouched; §3.3)". Its PRESCRIPTIVE half — the
+ *      proposed replacement "Admin revocation or uploader withdrawal →
+ *      REVOKED → every file of that uploader fails the gate immediately.
+ *      Public visibility is a separate switch (ugcportal-3ae)" — is a
+ *      RECOMMENDATION, not yet the process's decision: that document's own
+ *      status header says every decision in it becomes the process's when
+ *      ugcportal-zec's process owner ratifies it, and §8's ratification
+ *      table is still blank. So it is cited here as a second, independent
+ *      author reaching this conclusion, not as an authority that closes
+ *      the question. Reason 1 above carries the decision on its own; the
+ *      same document's §4 closing paragraph points the same way, scoping
+ *      the publish path to the attestation and the PEOPLE clearance, "not
+ *      the whole gate, because publishing is not selling" — which is the
+ *      gate ugcportal-3ae built and the one the cases above exercise.
  *
  *   3. THE RIGHT INSTRUMENT ALREADY EXISTS for the cases people reach for
  *      this one to cover. An uploader who wants their work off the site
