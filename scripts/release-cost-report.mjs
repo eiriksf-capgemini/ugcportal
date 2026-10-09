@@ -370,6 +370,184 @@ export function readRoundChain(items, prAuthor, reviewer) {
 // --- severity classification -----------------------------------------------
 
 /**
+ * The five characters that actually end a line, as a closed whitelist
+ * (ugcportal-zo8n round 4): LF, CR (and CRLF, which is just CR then LF),
+ * U+2028 LINE SEPARATOR, U+2029 PARAGRAPH SEPARATOR and U+0085 NEL.
+ * Everything else -- NBSP, the U+2002/U+3000/U+2007/U+202F/U+180E/U+2060
+ * family, \f, \v -- is an ordinary character that keeps the line going.
+ * Built with String.fromCodePoint rather than written as \u escapes so this
+ * file's own source encoding cannot decide what the set contains.
+ */
+const LINE_TERMINATORS = new Set(["\n", "\r", String.fromCodePoint(0x2028), String.fromCodePoint(0x2029), String.fromCodePoint(0x0085)]);
+
+/** Splits into lines, keeping each line's own terminator so text round-trips. */
+function splitLinesKeepingTerminators(src) {
+  const lines = [];
+  let start = 0;
+  for (let i = 0; i < src.length; i++) {
+    if (!LINE_TERMINATORS.has(src[i])) continue;
+    const term = src[i] === "\r" && src[i + 1] === "\n" ? "\r\n" : src[i];
+    lines.push({ text: src.slice(start, i), term });
+    i += term.length - 1;
+    start = i + 1;
+  }
+  lines.push({ text: src.slice(start), term: "" });
+  return lines;
+}
+
+/**
+ * Strips markdown emphasis and code markers ( * _ ` ) exactly as a plain
+ * `.replace(/[*`_]/g, "")` would, while recording which markdown CODE SPAN
+ * each surviving character came from. The "exactly" is pinned by a test
+ * ("is a drop-in for the old `.replace(/[*`_]/g, '')`"), not just asserted
+ * here, and was additionally checked against all 1316 non-empty review
+ * comments in this repo when it was written (ugcportal-x9c7).
+ *
+ * Three span forms are recognised:
+ *   - a fenced block, a line whose first non-blank characters are a run of
+ *     three or more backticks, closed by a later line opening a run at least
+ *     as long. The whole block, across lines, is ONE span.
+ *   - a double-backtick inline span (``…``), which may contain lone backticks.
+ *   - a single-backtick inline span (`…`).
+ * An inline span is LINE-LOCAL: it is opened and closed within one line, and
+ * backtick runs are paired left to right inside that line. This deliberately
+ * diverges from CommonMark, where an inline code span may contain a newline
+ * (rendered as a space). The divergence is load-bearing and is the safe way
+ * round: see classifySeverity's exclusion comment.
+ *
+ * UNBALANCED backticks -- an inline run with no partner on its line, or a
+ * fence that is never closed -- open NO span. The characters are still
+ * stripped (so the returned text is unchanged), but nothing is marked as
+ * code. This is the deliberate fail-open direction: an unterminated span can
+ * only ever cause a severity count to be COUNTED, never silently zeroed.
+ *
+ * @param {string} src
+ * @returns {{ text: string, spanIds: number[], spanText: Map<number, string> }}
+ *   `spanIds[i]` is the id of the code span containing `text[i]`, or 0 for a
+ *   character outside every span; `spanText` maps an id to that span's full
+ *   stripped content.
+ */
+export function readCodeSpans(src) {
+  const chars = [];
+  const spanIds = [];
+  const spanText = new Map();
+  let nextId = 1;
+
+  const emit = (s, id) => {
+    for (let k = 0; k < s.length; k++) {
+      const c = s[k];
+      if (c === "*" || c === "_" || c === "`") continue;
+      chars.push(c);
+      spanIds.push(id);
+    }
+  };
+  const openSpan = () => {
+    const id = nextId++;
+    spanText.set(id, "");
+    return id;
+  };
+  const emitInto = (s, id) => {
+    const before = chars.length;
+    emit(s, id);
+    if (id !== 0) spanText.set(id, spanText.get(id) + chars.slice(before).join(""));
+  };
+
+  const emitLine = (line) => {
+    let p = 0;
+    while (p < line.length) {
+      if (line[p] !== "`") {
+        emit(line[p], 0);
+        p++;
+        continue;
+      }
+      let run = 0;
+      while (p + run < line.length && line[p + run] === "`") run++;
+      // A closing run of EXACTLY the same length, later on this same line.
+      let q = p + run;
+      let close = -1;
+      while (q < line.length) {
+        if (line[q] !== "`") {
+          q++;
+          continue;
+        }
+        let r = 0;
+        while (q + r < line.length && line[q + r] === "`") r++;
+        if (r === run) {
+          close = q;
+          break;
+        }
+        q += r;
+      }
+      if (close === -1) {
+        // Unbalanced: no span. The backticks are dropped, as before.
+        p += run;
+        continue;
+      }
+      emitInto(line.slice(p + run, close), openSpan());
+      p = close + run;
+    }
+  };
+
+  const lines = splitLinesKeepingTerminators(src);
+  const fenceOpener = /^[ \t]*(`{3,})/;
+  for (let i = 0; i < lines.length; i++) {
+    const opener = fenceOpener.exec(lines[i].text);
+    if (opener) {
+      let close = -1;
+      for (let j = i + 1; j < lines.length; j++) {
+        const m = fenceOpener.exec(lines[j].text);
+        if (m && m[1].length >= opener[1].length) {
+          close = j;
+          break;
+        }
+      }
+      if (close !== -1) {
+        const id = openSpan();
+        for (let k = i; k <= close; k++) {
+          emitInto(lines[k].text, id);
+          emitInto(lines[k].term, id);
+        }
+        i = close;
+        continue;
+      }
+      // Unclosed fence: fall through and read the line as ordinary prose.
+    }
+    emitLine(lines[i].text);
+    emit(lines[i].term, 0);
+  }
+
+  return { text: chars.join(""), spanIds, spanText };
+}
+
+/**
+ * Applies a regex replacement to a `readCodeSpans` result, keeping `spanIds`
+ * aligned with the rewritten text (replacement characters inherit the span of
+ * the position the match started at).
+ */
+function replaceKeepingSpans(lexed, re, build) {
+  const out = [];
+  const ids = [];
+  let last = 0;
+  const copy = (from, to) => {
+    for (let k = from; k < to; k++) {
+      out.push(lexed.text[k]);
+      ids.push(lexed.spanIds[k]);
+    }
+  };
+  for (const m of lexed.text.matchAll(re)) {
+    copy(last, m.index);
+    const rep = build(m);
+    for (let k = 0; k < rep.length; k++) {
+      out.push(rep[k]);
+      ids.push(lexed.spanIds[m.index]);
+    }
+    last = m.index + m[0].length;
+  }
+  copy(last, lexed.text.length);
+  return { text: out.join(""), spanIds: ids, spanText: lexed.spanText };
+}
+
+/**
  * Counts the severities the reviewer STATED in one verdict comment.
  *
  * Two readings are combined. Item labels: a severity word that opens a
@@ -391,24 +569,31 @@ export function readRoundChain(items, prAuthor, reviewer) {
  *
  * Two specific non-findings contexts are excluded from the count
  * (ugcportal-zo8n), however close a severity word sits next to the number:
- * a number glued to a `#` (an issue/PR reference) and a number immediately
- * followed by a `--flag` (a quoted CLI invocation, e.g. PR #121's own
- * round-1 body quoting `121 high --comment` as the code-review args). This
- * is not an exhaustive findings-context check -- only the two shapes this
- * repo's own review bodies are known to produce.
+ * a number glued to a `#` (an issue/PR reference) and a number that shares a
+ * markdown CODE SPAN with a `--flag` (a quoted CLI invocation, e.g. PR #121's
+ * own round-1 body quoting `121 high --comment` as the code-review args).
+ * This is not an exhaustive findings-context check -- only the two shapes
+ * this repo's own review bodies are known to produce.
  *
  * @param {string} body
  */
 export function classifySeverity(body) {
   const raw = String(body ?? "");
   // Drop the marker line and strip markdown emphasis / code / brackets so
-  // "**MEDIUM**" and "`MEDIUM`" read like "MEDIUM".
-  const text = raw
-    .split("\n")
-    .filter((l) => !/^<!--/.test(l.trim()))
-    .join("\n")
-    .replace(/[*`_]/g, "")
-    .replace(/\[(code-review|conventions|recall)[^\]]*,\s*(medium|low|high|critical)\]/gi, "[$2]");
+  // "**MEDIUM**" and "`MEDIUM`" read like "MEDIUM". readCodeSpans strips
+  // exactly the same characters as the old `.replace(/[*`_]/g, "")` did, but
+  // also records which code span each surviving character came from.
+  const lexed = replaceKeepingSpans(
+    readCodeSpans(
+      raw
+        .split("\n")
+        .filter((l) => !/^<!--/.test(l.trim()))
+        .join("\n"),
+    ),
+    /\[(code-review|conventions|recall)[^\]]*,\s*(medium|low|high|critical)\]/gi,
+    (m) => `[${m[2]}]`,
+  );
+  const text = lexed.text;
 
   const result = { medium: 0, low: 0, stated: false, findings: null, mediumLabels: [], lowLabels: [] };
 
@@ -474,22 +659,7 @@ export function classifySeverity(body) {
   // "Round-1 mediums verified fixed" is a back-reference, not a count: the
   // number must not be glued to a hyphen or follow the word "round".
   const summary = /(?<![\w-])(?<!round\s)(\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+(?:of them\s+|further\s+|more\s+|new\s+|post-cap\s+|comment\s+|cap\s+|confirmed\s+|plausible\s+)?(mediums?|highs?|lows?)\b(?!-or-above)(?!\s+or\s+above)/gi;
-  // "Same line" is a closed WHITELIST of genuine line terminators -- \n, \r
-  // (and \r\n, which is just \r then \n, both already in the set), U+2028
-  // LINE SEPARATOR, U+2029 PARAGRAPH SEPARATOR, U+0085 NEL -- rather than an
-  // open BLACKLIST of whitespace that isn't one. Rounds 1-3 each narrowed a
-  // blacklist (bare "--", then \s, then [ \t]) and each left a residue:
-  // [ \t] still misreads U+00A0 NBSP (reachable -- leaks in from rich-text
-  // copy-paste) and the whole U+2002/U+3000/U+2007/U+202F/U+180E/U+2060
-  // family of spaces, plus \f/\v, as line breaks -- wrongly taking a quoted
-  // CLI invocation like "121 high<NBSP>--comment" OUT of the same-line
-  // exclusion and back into being counted as a real medium, the original
-  // bug's exact shape with a different character in the gap. Defining the
-  // five characters a line break actually IS, and treating every other
-  // character -- whitespace or not -- as "same line", means a character
-  // nobody enumerated by name can't defeat this the way it kept defeating
-  // the blacklist.
-  const sameLineFlag = /^[^\n\r\u2028\u2029\u0085]*--[A-Za-z]/;
+  const CLI_FLAG = /--[A-Za-z]/;
   for (const m of text.matchAll(summary)) {
     const n = wordToNumber(m[1]);
     if (n === null) continue;
@@ -504,18 +674,39 @@ export function classifySeverity(body) {
     // own prose does this constantly, including in this PR's own body) and
     // must still count.
     if (text[m.index - 1] === "#") continue;
-    // The flag must be on the same line as the count -- see sameLineFlag
-    // above for what "same line" is built out of. There is no fixed-width
-    // window here: sameLineFlag is anchored at the start of the sliced
-    // remainder and its own character class already stops at the first
-    // genuine line terminator, so testing the WHOLE same-line remainder
-    // (not a guessed number of characters) still only matches a flag that
-    // is actually on this line -- "121 high with the --comment flag" and
-    // "Found 121 high (as shown by --comment)" are excluded at any prose
-    // distance, while a flag after a real line break still counts, because
-    // sameLineFlag's own character class cannot match across that
-    // terminator no matter how far the slice extends past it.
-    if (sameLineFlag.test(text.slice(m.index + m[0].length))) continue;
+    // A flag is a CLI echo only when it shares a markdown CODE SPAN with the
+    // count. That is the condition itself, not a stand-in for it: the house
+    // style quotes the whole invocation inside one span -- `121 high
+    // --comment` -- so count and flag are code TOGETHER, and that is what
+    // makes the number an argument rather than a verdict.
+    //
+    // Six earlier rounds each tested a PROXY for this -- "no line terminator
+    // between the count and the flag", narrowed from any "--", to \s, to
+    // [ \t], to a five-terminator whitelist, to that whitelist plus an
+    // 8-character window, to that whitelist with the window removed. Every
+    // one of them answered a question about DISTANCE, and distance is not
+    // the thing: round 6 (whitelist, no window) read PR #131's "two lows
+    // fixed" as zero because an unrelated `--since 2026-09-29` sat 273
+    // characters later in the same unbroken paragraph, and PR #193's "one
+    // CONFIRMED low" as zero because a CSS custom property,
+    // `--color-petrol-deep`, sat 58 characters later (ugcportal-x9c7). In
+    // both, the flag-shaped token was in its OWN span and the count was in
+    // plain prose -- different contexts, which a distance test cannot see
+    // and a span test reads directly.
+    //
+    // The whole span is searched, not just the part after the count:
+    // `code-review --comment 121 high` is the same echo with the arguments
+    // reordered. A count outside every span is never an echo, however near a
+    // flag sits; a count inside a span whose own text carries no flag is
+    // never an echo either.
+    //
+    // The five line terminators from round 4 survive, moved from "where the
+    // proximity window stops" to "where an inline code span ends": an inline
+    // span is line-local, so `121 high<NBSP>--comment` is one span and is
+    // excluded, while `121 high\n--comment` is two unterminated runs, no
+    // span at all, and counts. See readCodeSpans.
+    const spanId = lexed.spanIds[m.index] ?? 0;
+    if (spanId !== 0 && CLI_FLAG.test(lexed.spanText.get(spanId) ?? "")) continue;
     if (/^low/i.test(m[2])) summaryLow = Math.max(summaryLow, n);
     else summaryMedium = Math.max(summaryMedium, n);
   }
