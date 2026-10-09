@@ -277,28 +277,39 @@ describe.each([
     // off, in production — was untested; every test above exercises a
     // BLOCKED outcome. FILLED_LEGAL_ENV makes `missing.length === 0`; the
     // real `LEGAL_SIGN_OFF` (src/lib/legal/contact.ts, set by ugcportal-alg
-    // in PR #99) is left to its default rather than injected, so this test
-    // reads the real fact rather than a synthetic one. Mutation-verified
-    // (see PR description): with the sign-off `legalLinkBlocked` reads
-    // forced to `null` instead of the real constant, this test fails —
-    // confirming it is genuinely exercising the sign-off, not merely the
-    // filled configuration.
+    // in PR #99) is left to its default rather than injected, so these tests
+    // read the real fact rather than a synthetic one.
     //
-    // Updated for ugcportal-fsdf: today's real fact is that /licence is
-    // signed off and /privacy is not (see the block comment above), so the
-    // two must now disagree — asserting "both link" here would be the same
-    // stale-premise mistake this comment elsewhere warns against.
-    it("links Licence normally in production once configured and signed off, but still shows /privacy as a draft (today's real sign-off; ugcportal-fsdf)", () => {
+    // TODAY'S REAL FACT IS THAT BOTH PAGES ARE IN DRAFT, and this is the
+    // merge of two changes that each put one of them there:
+    //   /licence — ugcportal-yzo7 (PR #203) removed the now-false sentence
+    //     "Nothing is offered for sale yet." from src/app/licence/content.ts.
+    //   /privacy — ugcportal-fsdf (PR #204) added the uploader-attestation
+    //     paragraph to src/app/privacy/content.ts.
+    // Each edit changed that page's authored digest, which by the mechanism
+    // LEGAL_SIGN_OFF's own comment describes returns the page to draft until
+    // Eirik reviews the new wording and re-records the digest. Both are the
+    // correct, expected outcome of their edit, not regressions to paper over.
+    //
+    // CONSEQUENCE FOR COVERAGE, stated rather than quietly dropped: with no
+    // page currently both configured and signed off, the POSITIVE path the
+    // round-2 MEDIUM added cannot be exercised against the real constants.
+    // It is not lost — it returns the moment either digest is re-recorded,
+    // and whoever applies that sign-off should restore an assertion here
+    // that the signed-off page links normally. Do not substitute a synthetic
+    // sign-off to keep a green positive case: that would re-create exactly
+    // the "reads a synthetic fact" problem this block was written to avoid.
+    it("shows both /privacy and /licence as drafts in production while their edited prose awaits sign-off (ugcportal-yzo7, ugcportal-fsdf)", () => {
       vi.stubEnv("NODE_ENV", "production");
       for (const [name, value] of Object.entries(FILLED_LEGAL_ENV)) {
         vi.stubEnv(name, value);
       }
 
       const markup = render(compact);
-      expect(markup).toContain(`href="${LICENCE_PATH}"`);
-      expect(markup).not.toContain(`data-footer-draft-link="${LICENCE_PATH}"`);
       expect(markup).not.toContain(`href="${PRIVACY_PATH}"`);
       expect(markup).toContain(`data-footer-draft-link="${PRIVACY_PATH}"`);
+      expect(markup).not.toContain(`href="${LICENCE_PATH}"`);
+      expect(markup).toContain(`data-footer-draft-link="${LICENCE_PATH}"`);
       expect(markup).toContain("coming soon");
     });
   },

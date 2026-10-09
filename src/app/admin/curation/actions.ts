@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 
 import { requireAdmin } from "@/lib/admin";
 import { recordLayerClearance } from "@/lib/curation-clearance-write";
+import { recordPrice } from "@/lib/curation-price-write";
 import { parseTriageAnswers } from "@/lib/curation-triage";
 import { recordTriageFacts } from "@/lib/curation-triage-write";
 import { isClearableLayer } from "@/lib/resale-rights";
@@ -166,4 +167,78 @@ export async function recordClearance(formData: FormData) {
       ? `${CURATION_PATH}?clearance=recorded&edit=${encodeURIComponent(mediaId)}`
       : triageErrorPath(outcome.kind, mediaId),
   );
+}
+
+/**
+ * Set or remove the price on one curated upload (ugcportal-yzo7 K1).
+ *
+ * The same shape as `recordTriage` and `recordClearance` above, and the same
+ * reasoning for every part of it: `requireAdmin` here rather than trusting
+ * the page that rendered the form, because a server action is a public
+ * endpoint reachable by POSTing its action id; `throw` for a refused caller,
+ * because a non-admin has no screen to be sent back to; a redirect carrying
+ * one of a closed set of codes for everything an admin can legitimately get
+ * wrong.
+ *
+ * THIS ACTION DECIDES NOTHING ABOUT SELLABILITY. It parses two form fields
+ * and hands them to `recordPrice` (src/lib/curation-price-write.ts), which is
+ * where the uploader's clearance (K2) and the watermarked preview (K3) are
+ * checked — the same function POST /api/admin/curation/[id]/price calls. An
+ * action that re-implemented either check would be the second copy that
+ * eventually disagrees, on the one write in this product that is about money.
+ *
+ * A BLANK AMOUNT IS AN UN-PRICING, NOT A MISTAKE. `formData.get` returns
+ * `""` for a cleared number field, and that is the admin taking the item off
+ * sale — the one operation here the gate does not refuse. A field that is
+ * missing ENTIRELY is a tampered request and is treated the same way, which
+ * is the fail-safe direction: the worst it can do is withdraw an offer.
+ */
+export async function setPrice(formData: FormData) {
+  const session = await requireAdmin();
+  if (!session) {
+    throw new Error("Forbidden");
+  }
+
+  const mediaId = formData.get("mediaId");
+  if (typeof mediaId !== "string" || !mediaId) {
+    // Not a user-facing state, for the same reason `recordTriage` gives: the
+    // form carries this in a hidden field, so its absence is a tampered
+    // request rather than a mistake to render a banner for.
+    throw new Error("Missing media id");
+  }
+
+  const raw = formData.get("priceCents");
+  const typed = typeof raw === "string" ? raw.trim() : "";
+  // `Number("")` is 0, not NaN, which would silently price an item at zero
+  // for an admin who meant to withdraw it. The empty check comes first and
+  // is what makes blank mean blank.
+  const priceCents = typed === "" ? null : Number(typed);
+  if (priceCents !== null && !Number.isSafeInteger(priceCents)) {
+    // `recordPrice` refuses this too (`price_amount_invalid`); caught here so
+    // the admin is not told "the gate refused you" for a typo. Both say the
+    // same sentence, from the same code.
+    return redirect(triageErrorPath("price_amount_invalid", mediaId));
+  }
+
+  const currency = formData.get("currency");
+  const outcome = await recordPrice({
+    // Media id, not listing id: every form on this screen carries the Media
+    // row's id, and `recordPrice` takes either so neither caller has to do a
+    // lookup just to speak the other's spelling.
+    target: { mediaId },
+    priceCents,
+    // `undefined` rather than `""` for a missing field: the write treats
+    // `undefined` as "leave the stored currency alone" and would refuse an
+    // empty string as unsupported, and an admin who only changed the amount
+    // must not have their request refused over a field they never touched.
+    currency: typeof currency === "string" && currency !== "" ? currency : undefined,
+  });
+
+  revalidatePath(CURATION_PATH);
+  if (outcome.kind === "priced" || outcome.kind === "unpriced") {
+    return redirect(
+      `${CURATION_PATH}?price=${outcome.kind}&edit=${encodeURIComponent(mediaId)}`,
+    );
+  }
+  return redirect(triageErrorPath(outcome.kind, mediaId));
 }

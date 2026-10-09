@@ -172,12 +172,26 @@ function namespaceImportNames(source: ts.SourceFile): Set<string> {
  *   lib/portfolio.ts      `listPortfolioPieces` — /portfolio.
  *   app/sitemap.ts        the item entries in /sitemap.xml.
  *   lib/media-item.ts     `getPublicMediaItem` — /media/[previewId].
+ *
+ * A FIFTH query site joined them at ugcportal-yzo7:
+ *
+ *   lib/sellable-media.ts `getPublicOffer` — the price block on
+ *                         /media/[previewId]. A SECOND read of the same
+ *                         item, not a widening of `getPublicMediaItem`'s:
+ *                         it projects the sale gate's own select, which
+ *                         reads `Media.userId` and the uploader's standing
+ *                         review, and those must never join the anonymous
+ *                         projection. It reaches for this scope because an
+ *                         item that is not public cannot carry a public
+ *                         price — so the publish gate applies to the offer
+ *                         exactly as it applies to the photograph.
  */
 const SCOPE_CONSUMERS: Readonly<Record<string, readonly string[]>> = {
   "lib/public-media.ts": ["app/page.test.tsx"],
   "lib/portfolio.ts": ["lib/portfolio.test.ts"],
   "app/sitemap.ts": ["app/sitemap.test.ts"],
   "lib/media-item.ts": ["lib/media-item.test.ts"],
+  "lib/sellable-media.ts": ["lib/sellable-media.test.ts"],
 };
 
 /** The bead id a covering test's own title has to carry. */
