@@ -86,8 +86,9 @@ type RouteContext = { params: Promise<{ previewId: string }> };
  * row belonging to somebody else, a PUBLISHED row this caller may not see —
  * its rights having lapsed, or never having held (ugcportal-nffp) — a row
  * whose `previewKey` is unusable, and a stored object that has gone missing.
- * They must be indistinguishable to an anonymous caller, and the cheapest way to guarantee that is to leave no
- * second place where a 404 can be spelled slightly differently — no variant
+ * They must be indistinguishable to an anonymous caller, and the cheapest
+ * way to guarantee that is to leave no second place where a 404 can be
+ * spelled slightly differently — no variant
  * message, no extra header, no `reason` field added later "just for
  * debugging".
  *
@@ -97,10 +98,11 @@ type RouteContext = { params: Promise<{ previewId: string }> };
  *
  * On timing: the "no such id", "unpublished, not yours" and "published but
  * not cleared" cases run exactly the same code — one `auth()`, one indexed
- * `findFirst`, this response — and none of them reaches object storage. That removes the large,
- * obvious signal, which would be a bucket round trip on one path and not the
- * other. It is not a constant-time claim, and none is made: SQLite's index
- * lookup for a missing key and for a filtered-out row are not provably
+ * `findFirst`, this response — and none of them reaches object storage.
+ * That removes the large, obvious signal, which would be a bucket round
+ * trip on one path and not the other. It is not a constant-time claim, and
+ * none is made: SQLite's index lookup for a missing key and for a
+ * filtered-out row are not provably
  * identical, and this route does not attempt to equalise them.
  */
 function previewNotFound(): NextResponse {
@@ -383,8 +385,8 @@ type OperatorPreviewScope = {
    * All three spelled `?: never` rather than merely omitted, the same
    * construction the two scopes above use. WHAT THAT ACTUALLY BUYS, checked
    * against `tsc` rather than assumed: it rejects a REAL VALUE here and
-   * nothing else. `publishedAt: { not: null }`
-   * and `userId: someString` are both TS2322. `publishedAt: undefined`,
+   * nothing else. `publishedAt: { not: null }` and `userId: someString`
+   * are both TS2322. `publishedAt: undefined`,
    * `userId: undefined` and `OR: undefined` all COMPILE, because
    * `exactOptionalPropertyTypes` is off in tsconfig.json and `?: never` is
    * therefore `never | undefined`. A real `AND: PUBLIC_MEDIA_SCOPE.AND`
@@ -394,8 +396,8 @@ type OperatorPreviewScope = {
    * benign reason: the object then IS an `OwnerPreviewScope`.
    *
    * So the honest claim is narrow. `undefined` — the value Prisma drops,
-   * and the hazard this file is built around — is NOT caught here. It is caught
-   * where it matters, which is the owner arm's `{ userId: string }`:
+   * and the hazard this file is built around — is NOT caught here. It is
+   * caught where it matters, which is the owner arm's `{ userId: string }`:
    * `OR: [PUBLIC_MEDIA_SCOPE, { userId: undefined }]` is TS2322, verified,
    * and that is the one place an `undefined` would widen a scope rather
    * than narrow it. This arm is already the widest in the file, so an

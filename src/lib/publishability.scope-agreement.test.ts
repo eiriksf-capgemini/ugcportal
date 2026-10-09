@@ -37,10 +37,10 @@ import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db"
  * that mints one.
  *
  * THE OTHER ONE — an attestation whose `attestedByUserId` is not the
- * file's `Media.userId` — stays unreachable too, but the one-line reason
- * one-line reason it would be tempting to give ("nothing updates
- * `Media.userId`") is FALSE. One thing does update it: `prisma/migrations/20261005120500_reconcile_configured_users/migration.sql`,
- * which repoints a stray configured user's rows at their canonical
+ * file's `Media.userId` — stays unreachable too, but not for the one-line
+ * reason it would be tempting to give. "Nothing updates `Media.userId`" is
+ * FALSE: `prisma/migrations/20261005120500_reconcile_configured_users/migration.sql`
+ * does, repointing a stray configured user's rows at their canonical
  * account. The conclusion survives, for a reason worth knowing rather than
  * re-deriving: that migration predates `MediaAttestation`, which
  * `20261008200000_add_upload_rights_attestation` creates, so there is no

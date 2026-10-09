@@ -36,8 +36,10 @@ import {
  * portfolio, the sitemap, the per-item page, its price block and the
  * preview bytes — inherits it from the scope constant rather than from
  * remembering to ask. (That list is prose and goes stale; the enumeration
- * that does not is the scan in src/lib/public-media.consumers.test.ts.) Writing a rule twice in two
- * languages is a real cost and it is paid deliberately: a row-at-a-time
+ * that does not is the scan in src/lib/public-media.consumers.test.ts.)
+ *
+ * Writing a rule twice in two languages is a real cost and it is paid
+ * deliberately: a row-at-a-time
  * predicate cannot filter a keyset-paginated query, and a `where` clause
  * cannot produce the message a refused publish has to show. They are kept
  * honest against each other by a cross-check that runs BOTH over the same
@@ -319,9 +321,9 @@ export function publishRightsRefusal(
  *
  * So the rule is also a `where`, and it is spread into `PUBLIC_MEDIA_SCOPE`
  * ITSELF rather than repeated at each of those surfaces. That is the half
- * that covers the SIXTH reader, the one somebody adds next year: a new
- * anonymous query that reaches for the scope constant inherits this with
- * nothing to remember.
+ * that covers the reader somebody adds next year: a new anonymous query
+ * that reaches for the scope constant inherits this with nothing to
+ * remember.
  *
  * A QUERY THAT DOES NOT REACH FOR IT IS NOT COVERED, here or anywhere else
  * (ugcportal-3ae review round 1, findings 2 and 3; an earlier draft of this
@@ -330,9 +332,9 @@ export function publishRightsRefusal(
  * the constant, by named import or by namespace import; its header sets out
  * what it is blind to, with the fixtures for both. The hand-written-`where`
  * shape is ugcportal-7egi. The four readers there are at ba9991f spread the
- * scope; a FIFTH that did not was found at ugcportal-nffp — GET
- * /api/media/preview/[previewId], the route that serves the bytes — and
- * now does.
+ * scope; another that did not was found at ugcportal-nffp — GET
+ * /api/media/preview/[previewId], the route that serves the bytes — and it
+ * does now.
  *
  * WHAT A LAPSE AFTER PUBLICATION DOES, which the header above left open as
  * ugcportal-nffp's question. Answered, and the answer splits in two:

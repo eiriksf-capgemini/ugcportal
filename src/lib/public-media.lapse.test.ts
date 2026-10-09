@@ -49,8 +49,9 @@ import { seedMedia } from "@/lib/test-support/media-fixtures";
  * Not a thrower, unlike the other anonymous-surface suites: five of the six
  * readers here never call `auth()`, but GET /api/media/preview/[previewId]
  * does — it has an owner arm and an operator arm — and WHO IS ASKING is
- * itself one of the things this file has to assert. Settable rather than a fixed `null` for that reason; every
- * caller goes through {@link previewStatus}, which sets it and puts it back.
+ * itself one of the things this file has to assert. Settable rather than a
+ * fixed `null` for that reason; every caller goes through
+ * {@link previewStatus}, which sets it and puts it back.
  */
 const authMock = vi.fn<() => Promise<unknown>>(async () => null);
 
@@ -234,10 +235,9 @@ async function listingId(): Promise<string> {
  * other row happened to answer.
  *
  * PRICED AND SELLABLE TOO, which is more than the visibility question needs
- * and is the point: `getPublicOffer` (src/lib/sellable-media.ts) is the
- * sixth reader of the scope, and a fixture that was never sellable would
- * make its column of every table below a constant `false` that proves
- * nothing.
+ * and is the point: `getPublicOffer` (src/lib/sellable-media.ts) is itself
+ * a reader of the scope, so a fixture that was never sellable would make
+ * its column of every table below a constant `false` that proves nothing.
  */
 async function seed(): Promise<void> {
   await prisma.user.createMany({

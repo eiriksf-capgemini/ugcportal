@@ -27,15 +27,16 @@ import {
  * identifiable person into Google's index and passed review.
  *
  * So the list is not maintained by reading the bead. It is derived from the
- * source, by the scan below, and compared against an explicit map. A
- * seventh reader that REACHES FOR THE SCOPE CONSTANT — by named import or
- * by namespace import, both proved against a fixture at the bottom of this
+ * source, by the scan below, and compared against an explicit map. A NEW
+ * reader that REACHES FOR THE SCOPE CONSTANT — by named import or by
+ * namespace import, both proved against a fixture at the bottom of this
  * file — fails this file by existing, and the only way to make it pass is
  * to name the tests that cover it.
  *
  * WHAT IT DOES NOT SEE, stated here rather than left for somebody to find
- * out, AND WHAT THAT HAS ALREADY COST (ugcportal-3ae, ugcportal-nffp). This scan answers "who uses the
- * constant", so it is blind to a reader that never mentions it: an
+ * out, AND WHAT THAT HAS ALREADY COST (ugcportal-3ae, ugcportal-nffp).
+ * This scan answers "who uses the constant", so it is blind to a reader
+ * that never mentions it: an
  * anonymous query that hand-writes `where: { publishedAt: { not: null } }`
  * instead of spreading the scope is not in the set the map is compared
  * against, and `toEqual` therefore still passes. That is not theoretical:
@@ -399,7 +400,7 @@ describe("the scanner itself, against a fixture tree", () => {
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   });
 
-  it("FAILS on a sixth reader — the mutation this guard exists for", () => {
+  it("FAILS on a reader the map does not name — the mutation this guard exists for", () => {
     /*
      * Run, not described. A scan that could not see a newly added reader
      * would make the enumeration above decoration, and the sitemap is the
