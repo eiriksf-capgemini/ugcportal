@@ -4,7 +4,9 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { seedMedia } from "@/lib/test-support/media-fixtures";
 import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db";
 import { siteOrigin } from "@/lib/origin";
-import { mediaItemPath, mediaPreviewPath } from "@/lib/routes";
+import { PURCHASE_OFFER_ID } from "@/components/media/purchase-offer";
+import { CURRENT_CHECKLIST_VERSION } from "@/lib/resale-rights";
+import { LICENCE_PATH, mediaItemPath, mediaPreviewPath } from "@/lib/routes";
 
 /**
  * /media/[previewId] (ugcportal-qnq9.12, K1/K2), against a real database.
@@ -467,5 +469,121 @@ describe("the advertising-disclosure label (K1, K3, K4)", () => {
     const html = renderToStaticMarkup(element);
 
     expect(html).not.toContain("data-gallery-advertising-label");
+  });
+});
+
+/**
+ * ugcportal-yzo7 K4, at the surface that renders it: the item page shows a
+ * price only while the gate still clears the item, and the clearance is
+ * re-read on every render.
+ *
+ * Here rather than only in src/lib/sellable-media.test.ts because the two
+ * claims are different. That file proves `getPublicOffer` returns null; this
+ * proves the PAGE then draws nothing — a page that called the gate and
+ * rendered the amount anyway would pass there and leak here.
+ */
+describe("ugcportal-yzo7 K4: the price block on the item page", () => {
+  const ADMIN = "admin-yzo7-page";
+  const PREVIEW_ID = "pv-page-item-priced";
+
+  beforeEach(async () => {
+    await prisma.user.create({
+      data: { id: ADMIN, email: "admin-yzo7-page@example.com", role: "ADMIN" },
+    });
+    await seedMedia(prisma, {
+      id: "page-item-priced",
+      userId: UPLOADER,
+      createdAt: new Date("2026-03-01T00:00:00.000Z"),
+      altText: "A bowl of mushroom risotto on a wooden table",
+    });
+    await prisma.mediaListing.create({
+      data: {
+        mediaId: "page-item-priced",
+        priceCents: 125_000,
+        currency: "NOK",
+        depictsPeople: false,
+        depictsMinors: false,
+        containsMusic: false,
+        thirdPartyCreator: false,
+        sponsoredContent: false,
+        depictsAlcohol: false,
+        wineAccessory: false,
+        triagedByUserId: ADMIN,
+        triagedAt: new Date("2026-03-02T00:00:00.000Z"),
+      },
+    });
+    await prisma.resaleRightsReview.create({
+      data: {
+        uploaderUserId: UPLOADER,
+        status: "CLEARED",
+        checklistVersion: CURRENT_CHECKLIST_VERSION,
+        reviewedByUserId: ADMIN,
+        reviewedAt: new Date("2026-03-01T00:00:00.000Z"),
+      },
+    });
+  });
+
+  it("renders the price while the uploader's clearance holds", async () => {
+    const html = renderToStaticMarkup(await MediaItemPage(params(PREVIEW_ID)));
+
+    expect(html).toContain(`id="${PURCHASE_OFFER_ID}"`);
+    expect(html).toContain("1,250.00");
+    // The licence the price is under, not a per-item one that does not exist.
+    expect(html).toContain(`href="${LICENCE_PATH}"`);
+  });
+
+  it("renders nothing at all once that clearance is revoked, and the price is still stored", async () => {
+    await prisma.resaleRightsReview.update({
+      where: { uploaderUserId: UPLOADER },
+      data: { status: "REVOKED" },
+    });
+
+    const html = renderToStaticMarkup(await MediaItemPage(params(PREVIEW_ID)));
+
+    // By id AND by the formatted amount: the id is the structural needle,
+    // the amount is what would actually leak.
+    expect(html).not.toContain(`id="${PURCHASE_OFFER_ID}"`);
+    expect(html).not.toContain("1,250.00");
+    // The page itself still renders — this withdraws an offer, not an item.
+    expect(html).toContain("A bowl of mushroom risotto on a wooden table");
+    await expect(
+      prisma.mediaListing.findUniqueOrThrow({
+        where: { mediaId: "page-item-priced" },
+        select: { priceCents: true },
+      }),
+    ).resolves.toEqual({ priceCents: 125_000 });
+
+    // THE RESTORE: the needle can come back, so its absence above was about
+    // the status and not about the fixture.
+    await prisma.resaleRightsReview.update({
+      where: { uploaderUserId: UPLOADER },
+      data: { status: "CLEARED" },
+    });
+    expect(
+      renderToStaticMarkup(await MediaItemPage(params(PREVIEW_ID))),
+    ).toContain(`id="${PURCHASE_OFFER_ID}"`);
+  });
+
+  it("renders no price for an item nobody has priced", async () => {
+    await prisma.mediaListing.update({
+      where: { mediaId: "page-item-priced" },
+      data: { priceCents: null },
+    });
+
+    expect(
+      renderToStaticMarkup(await MediaItemPage(params(PREVIEW_ID))),
+    ).not.toContain(`id="${PURCHASE_OFFER_ID}"`);
+  });
+
+  it("keeps the price out of the page's own metadata", async () => {
+    /*
+     * An og:description quoting an amount would be cached by crawlers and
+     * by every chat app that unfurls a link, long after the clearance behind
+     * it lapsed — a price this site could not honour, served from somebody
+     * else's cache, where no render-time gate can reach it.
+     */
+    const metadata = await generateMetadata(params(PREVIEW_ID));
+    expect(JSON.stringify(metadata)).not.toContain("1,250.00");
+    expect(JSON.stringify(metadata)).not.toContain("125000");
   });
 });

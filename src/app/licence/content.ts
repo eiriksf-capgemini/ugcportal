@@ -73,7 +73,7 @@ export function licenceContent(contact: LegalContact): LicenceContent {
         id: "buying",
         title: "Buying an original",
         paragraphs: [
-          "Nothing is offered for sale yet. An item can only be sold after an administrator has completed and recorded a rights review of the uploader and of that specific item, and no price can be set before that review is done.",
+          "An item can only be sold after an administrator has completed and recorded a rights review of the uploader and of that specific item, and no price can be set before that review is done.",
           "When an item is offered, the terms for that item — what you may do with the original, where, for how long, and whether exclusively — will be shown with it before you pay, and this page will be updated first. A purchase grants the use described in those terms; it does not transfer the copyright. Where an item states its own terms, they apply to that item; otherwise this page applies.",
         ],
         // The sellability gate (fail-closed: no review row means not

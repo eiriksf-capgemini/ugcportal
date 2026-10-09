@@ -1,4 +1,5 @@
 import { CLEARANCE_WRITE_REFUSALS } from "@/lib/curation-clearance-write";
+import { PRICE_WRITE_REFUSALS } from "@/lib/curation-price-write";
 import { TRIAGE_WRITE_REFUSALS } from "@/lib/curation-triage-write";
 
 /**
@@ -9,20 +10,21 @@ import { TRIAGE_WRITE_REFUSALS } from "@/lib/curation-triage-write";
  */
 
 /**
- * Every code `?error=` may carry: the refusals each of the two writes can
+ * Every code `?error=` may carry: the refusals each of the three writes can
  * return, plus the one the triage action decides before it gets there.
  *
- * Composed from TRIAGE_WRITE_REFUSALS and CLEARANCE_WRITE_REFUSALS rather
- * than hand-listed, so a refusal added to either write path cannot reach
+ * Composed from TRIAGE_WRITE_REFUSALS, CLEARANCE_WRITE_REFUSALS and
+ * PRICE_WRITE_REFUSALS rather than hand-listed, so a refusal added to any write path cannot reach
  * this screen with no message. The `Record` below is typed over this union,
  * so `tsc` — not a test, and not review — refuses a new refusal that
- * nobody has written a sentence for. The two sets are disjoint by naming
- * convention (`clearance_…`) rather than by accident; a collision would
+ * nobody has written a sentence for. The three sets are disjoint by naming
+ * (`clearance_…`, `price_…`, and triage's own unprefixed names) rather than by accident; a collision would
  * silently give one refusal the other's sentence.
  */
 export const TRIAGE_OUTCOME_CODES = [
   ...TRIAGE_WRITE_REFUSALS,
   ...CLEARANCE_WRITE_REFUSALS,
+  ...PRICE_WRITE_REFUSALS,
   "unanswered",
 ] as const;
 
@@ -45,6 +47,14 @@ const OUTCOME_MESSAGES: Record<TriageOutcomeCode, string> = {
     "That upload has not been triaged yet, so there is no record to attach a clearance to. Record the triage first; the layers a “yes” needs are the ones you can then clear.",
   clearance_already_recorded:
     "That layer already has a clearance, and nothing was changed. One layer carries one justification, so a second would leave the gate choosing between two answers to the same question — revising one is a separate, deliberate act that does not exist yet.",
+  price_media_not_found:
+    "That upload has no triage record, so there is nothing to attach a price to. Record the triage first — a price is an offer to sell, and an untriaged upload is one nobody has looked at.",
+  price_no_preview:
+    "That upload has no watermarked preview, so it cannot be priced. Nothing was recorded — the preview is what a buyer is shown before paying, and pricing an upload without one would put the unprotected original in front of them.",
+  price_not_sellable:
+    "The sale gate refuses this upload, so no price was recorded. The uploader needs a current resale-rights clearance, and every rights layer this upload carries needs its own — the layers still in the way are listed above.",
+  price_amount_invalid:
+    "A price has to be a whole number of minor units (øre, cents) within the allowed range, or blank to remove it. Nothing was recorded — a price that is not a whole number becomes a rounding argument the day somebody is charged.",
   alcohol_with_commercial_links:
     "That upload already carries a commercial link, and nothing commercial may sit on a picture showing alcohol (alkoholloven § 9-2). Nothing was recorded — not even your other answers, because a half-recorded triage would put your name on a set you did not finish. Detach the item’s commercial links first, then answer the alcohol question.",
 };
