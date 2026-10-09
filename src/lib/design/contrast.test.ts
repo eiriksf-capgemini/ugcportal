@@ -522,12 +522,11 @@ describe("the gate cannot be routed around", () => {
    * below rather than asserted once in prose: a usage needs `ui`-grade
    * coverage (a dedicated PAIRINGS entry, like control-edge-on-background)
    * exactly when it is (a) removed from normal document flow (`fixed` or
-   * `absolute` positioning - NOT `sticky`, which still reserves its own
-   * space in flow and is never toggled), (b) shown/hidden by a specific
-   * user action rather than always present, and (c) painted on a fill
-   * identical to the page behind it, such that the border is the only cue
-   * marking where the panel starts. Every remaining entry below was
-   * checked against that rule, not assumed decorative by category:
+   * `absolute` positioning), (b) shown/hidden by a specific user action
+   * rather than always present, and (c) painted on a fill identical to the
+   * page behind it, such that the border is the only cue marking where the
+   * panel starts. Every remaining entry below was checked against that
+   * rule, not assumed decorative by category:
    *
    *   - admin/curation/page.tsx (10), admin/settings/instagram/page.tsx
    *     (2), admin/settings/rights/brands/page.tsx (3),
@@ -548,18 +547,19 @@ describe("the gate cannot be routed around", () => {
    *     in flow - the same shape as the admin bg-muted panels above, not a
    *     floating overlay.
    *   - site-footer.tsx (2), site-header.tsx (1): permanent page chrome,
-   *     always rendered (the header is `sticky`, which still occupies its
-   *     own space in flow and never disappears - unlike `fixed`, nothing
-   *     ever scrolls newly-visible content behind it the way a popover
-   *     appears over the page), never toggled.
+   *     always rendered, never toggled by a user action (criterion (b)
+   *     alone excludes both, regardless of positioning).
    *
    * Checked for exhaustiveness, not merely asserted: grepped the whole
-   * `src/` tree for `fixed`/`absolute` co-occurring with any `border`
-   * utility, and separately for every `shadow-md`/`shadow-lg`/`shadow-xl`
-   * usage (a floating panel's own visual-separation cue, and a usage every
-   * genuine case in this codebase happens to carry) - both scans return
-   * exactly the three sites named above (two already fixed in round 1, the
-   * third fixed in round 2), confirming no fourth is still out there.
+   * `src/` tree for every `shadow-md`/`shadow-lg`/`shadow-xl` usage (a
+   * floating panel's own visual-separation cue, and one every genuine case
+   * in this codebase happens to carry) - returns exactly the three sites
+   * named above (two already fixed in round 1, the third in round 2). A
+   * second grep, for `fixed`/`absolute` co-occurring with any `border`
+   * utility, returns only cookie-banner - the two popovers are base-ui
+   * `Popover.Popup` with no literal positioning class of their own, so
+   * that grep cannot see them; it corroborates the one site it does
+   * catch, not a second independent confirmation of all three.
    *
    * Same discipline as AUDITED_DECORATIVE_BACKGROUND_USAGES below: keyed by
    * `${file}:${utility}` -> occurrence COUNT, not just file presence, so a

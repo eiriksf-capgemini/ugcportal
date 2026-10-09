@@ -104,19 +104,10 @@ for (const mode of MODES) {
 }
 
 /**
- * K1 browser verification for ugcportal-6uc2 (phase 2) - round-2 review,
- * CONFIRMED low: the bead's own K1 names "a computed-style assertion on
- * that element" as its Verified-by, and nothing in this repo had actually
- * run one; contrast.test.ts's "moves --card and --muted..." regression
- * test pins the raw CSS declaration's TEXT ("var(--paper-card)"), which
- * proves the token points at the right value but not that the real,
- * shipped header/footer element renders it - the same gap this file's own
- * phase-1 K1 test above closes for `--background`/`--primary`, just for
- * `--border` instead. Scoped to desktop only (unlike phase 1's own K1,
- * which also checks 320px) - the header/footer hairline's colour does not
- * depend on viewport width, so a second viewport would prove nothing new;
- * phase 1's narrower-vs-320px split exists for layout reasons this
- * decorative colour check does not share.
+ * K1 browser verification for ugcportal-6uc2 (phase 2). Not wired into CI
+ * (ugcportal-68rt is the filed follow-up for that, same as the rest of
+ * this file). Scoped to desktop only: the hairline's colour does not
+ * depend on viewport width, so a second viewport would prove nothing new.
  */
 for (const mode of MODES) {
   test.describe(`home page header/footer hairline (ugcportal-6uc2, phase 2, ${mode})`, () => {

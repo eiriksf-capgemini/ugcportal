@@ -690,55 +690,18 @@
   /*
    * --ink-muted-petrol ("dempet tekst" in docs/design/tokens.css), not
    * --color-ink-muted (ugcportal-rw9j, found by a live axe run on the home
-   * page, not reasoned out in advance): --muted-foreground renders directly
-   * on --background in the overwhelming majority of its real uses - the
-   * footer, gallery empty-state/loading copy, the signed-in user's email,
-   * supporting paragraphs on auth/error and the admin pages. --color-ink-muted
-   * is tuned for the near-black canvas and measured 1.9:1 here against the
-   * new --paper background; --ink-muted-petrol clears 5.0:1.
+   * page): --color-ink-muted is tuned for the near-black canvas and
+   * measures 1.9:1 against --paper; --ink-muted-petrol clears 5.0:1.
    *
-   * Review round 1 (phase 1) found one real exception to "none of them
-   * inside a --muted/--card fill": admin/settings/rights/page.tsx did, at
-   * 3.18:1, fixed there (text-ink-muted) rather than here, because at the
-   * time --muted/--card still read the untouched near-black scale.
-   *
-   * ugcportal-6uc2 (phase 2) reverses that specific fix: now that --muted/
-   * --card read the paper scale, text-ink-muted (tuned for the near-black
-   * scale) is the wrong token wherever it sits directly inside a `bg-muted`
-   * well with no near-black fill of its own in between, and --muted-
-   * foreground (this token) is the right one again - the same call this
-   * comment made for the page canvas in ugcportal-rw9j, just one surface
-   * later. Every such call site (admin/settings/rights/page.tsx and its
-   * brands screen, admin/curation/page.tsx, the curation price and
-   * clearance forms, and src/components/media/purchase-offer.tsx) was
-   * re-audited for this bead; see src/lib/design/dual-meaning-usage.test.ts
-   * for the updated (file, token, count) pins. A handful of other
-   * text-ink-muted usages were traced and confirmed to sit on a `bg-muted`
-   * element's SIBLING `bg-destructive-surface` branch (a shared container
-   * that renders one or the other depending on a boolean), or inside their
-   * own untouched bg-surface-* well (e.g. the upload dropzone's "or drag
-   * them here"/accepted-types copy, src/app/upload/upload-form.tsx, which
-   * carries its OWN bg-surface-1/bg-surface-2 fill in the same className,
-   * not button.tsx's NEUTRAL_OUTLINE_STYLE - round-2 review, CONFIRMED low:
-   * that citation named the wrong file AND the wrong token, since
-   * NEUTRAL_OUTLINE_STYLE uses text-ink, not text-ink-muted, on
-   * bg-transparent, not a well of its own at all) - those stay
-   * text-ink-muted, correctly, because the near-black scale genuinely is
-   * still what they render against.
-   *
-   * Round-1 review of this bead, CONFIRMED low: the sentence that used to
-   * sit here claimed a third category - "the triage form's selects" - as a
-   * text-ink-muted usage genuinely safe on its own bg-surface-3 well. That
-   * was wrong on its own terms (src/app/admin/curation/triage-form.tsx's
-   * selects use `text-ink`, a different token, not text-ink-muted at all)
-   * AND missed the real remaining gap it was reaching for: TWO text-ink-muted
-   * usages in src/app/upload/upload-form.tsx (the alt-text field's helper
-   * paragraph and the caption label's "(optional)" qualifier) that render
-   * directly on the plain page canvas, with no well of any kind around
-   * them - measured at ~1.9:1 against --paper, the identical failure shape
-   * TEXT_LABEL_CLASS's own text-ink has (see that constant's comment,
-   * ugcportal-4r0e). Pre-existing, on --color-ink-muted, a token this bead
-   * does not touch - filed as ugcportal-galb rather than fixed here.
+   * ugcportal-6uc2 (phase 2): --muted now reads the paper scale, so
+   * text-ink-muted is the wrong token wherever it sits directly inside a
+   * `bg-muted` well with no near-black fill of its own in between - fixed
+   * at every such call site this bead found. Some text-ink-muted usages
+   * elsewhere are still correct (genuinely rendering against an untouched
+   * near-black fill); others are a known, pre-existing gap on the plain
+   * page canvas, not introduced by this bead and not fixed here - see
+   * ugcportal-4r0e, ugcportal-galb and ugcportal-7g2o rather than an
+   * enumeration here that would only drift from the real call sites.
    *
    * See the muted-foreground-on-muted and muted-foreground-on-background
    * comments in contrast.ts for the full reasoning.
@@ -764,17 +727,11 @@
   --border: var(--paper-line);
   /*
    * --input moves off --color-line-strong onto --paper-line-strong - the
-   * boundary of every input, outline button and the curation screens'
-   * admin fields (border-input, still paired with their own untouched
-   * bg-surface-3 fill: price-form.tsx's FIELD_CLASS, clearance-form.tsx's
-   * TEXTAREA_CLASS, triage-form.tsx's SELECT_CLASS, and decision-form.tsx's
-   * five inlined copies of the identical class string - round-2 review,
-   * CONFIRMED low: this used to say "FIELD_CLASS in
-   * price-form.tsx/decision-form.tsx/triage-form.tsx/clearance-form.tsx" as
-   * if one constant were shared across all four; it exists only in
-   * price-form.tsx, each sibling file names its own constant, and
-   * decision-form.tsx has no shared constant at all - unchanged by this
-   * bead, see ugcportal-eeip for the mismatch this leaves). Checked at
+   * boundary of every input and outline button, including the admin
+   * forms' own fields (border-input, still paired with their own
+   * untouched bg-surface-3 fill - separate constants, unchanged by this
+   * bead; see ugcportal-eeip for which files and the mismatch this
+   * leaves). Checked at
    * 3:1 against every surface it can actually land on - paper, paper-card,
    * AND the near-black surface scale and destructive wells those admin
    * fields still use - in src/lib/design/contrast.ts's control-edge-*

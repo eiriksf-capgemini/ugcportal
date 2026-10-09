@@ -329,7 +329,7 @@ export const PAIRINGS: Pairing[] = [
     "--color-line",
     "decorative",
     "Row dividers, card edges and section rules.",
-    "Purely ornamental separation. WCAG 1.4.11 covers the parts of a control that identify it, not decoration; a 3:1 hairline on every row would draw a bright grid across a page whose job is to disappear behind photographs. A control still on the near-black scale uses --color-line-strong directly (the upload dropzone's own border - round-2 review, CONFIRMED: this used to also credit control-edge-* here, which checks --input, a DIFFERENT literal since ugcportal-6uc2 phase 2 - see line-strong-edge-on-* below, the one entry that actually measures --color-line-strong).",
+    "Purely ornamental separation. WCAG 1.4.11 covers the parts of a control that identify it, not decoration; a 3:1 hairline on every row would draw a bright grid across a page whose job is to disappear behind photographs. A control still on the near-black scale uses --color-line-strong directly (the upload dropzone's own border), checked at 3:1 by its own PAIRINGS entry.",
   ),
   /*
    * ugcportal-rw9j review round 5, superseded by ugcportal-6uc2 (phase 2):
