@@ -72,13 +72,21 @@ export const SURFACES = [
  * ugcportal-rw9j review round 4: the distinct, resolved-token list behind
  * globals.css's --ring-on-old-surfaces rule (`.bg-surface-0, ... .bg-sidebar
  * { --ring: var(--color-fjord-400); }`) - --color-surface-0..4 cover
- * .bg-surface-0..4 directly; --color-surface-1 also covers .bg-muted/
- * .bg-card/.bg-sidebar and --color-surface-2 also covers .bg-popover/
- * .bg-accent/.bg-secondary (all already in this list via their shared
- * resolved token, so no separate entries are needed for them);
- * --color-danger-surface is .bg-destructive-surface's resolved value, the
- * one member SURFACES above does not include. See the focus-ring-on-old-
- * surface comment below for why this is its own list rather than SURFACES.
+ * .bg-surface-0..4 directly; --color-surface-1 also covers .bg-sidebar
+ * and --color-surface-2 also covers .bg-popover/.bg-accent/.bg-secondary
+ * (all already in this list via their shared resolved token, so no separate
+ * entries are needed for them); --color-danger-surface is
+ * .bg-destructive-surface's resolved value, the one member SURFACES above
+ * does not include. See the focus-ring-on-old-surface comment below for why
+ * this is its own list rather than SURFACES.
+ *
+ * ugcportal-6uc2 (phase 2): `.bg-muted` and `.bg-card` used to also resolve
+ * to --color-surface-1 and are no longer in globals.css's selector list at
+ * all - both now paint a light, paper-toned fill (--paper-card), so forcing
+ * the near-black-tuned ring back on there would be wrong, not merely
+ * redundant. This list needs no change for that: --color-surface-1 stays
+ * covered by `.bg-surface-1` and `.bg-sidebar` regardless, so the RESOLVED
+ * set below is unaffected by two selectors leaving the CSS rule.
  *
  * Exported (round 5, code-review): nothing enforced this list staying in
  * sync with globals.css's own selector list until contrast.test.ts's
@@ -154,13 +162,19 @@ export const PAIRINGS: Pairing[] = [
    *
    * review round 4: every real text-primary usage (admin/settings/rights,
    * users, instagram pages) was traced and confirmed to sit on the plain
-   * page canvas, not inside any well - this codebase has no Card/Popover
-   * component and no bg-card/bg-popover usage anywhere (see globals.css's
-   * round-3 --ring comment). The focus ring is the one control that
-   * genuinely reaches the untouched near-black surfaces (the resale-rights
-   * decision form's inputs, the upload page's dropzone), fixed by the
-   * --ring-on-old-surfaces override and focus-ring-on-old-surface above -
-   * not by anything here.
+   * page canvas, not inside any well - at the time this codebase had no
+   * Card/Popover component and no bg-card/bg-popover usage anywhere (see
+   * globals.css's round-3 --ring comment). The focus ring is the one
+   * control that genuinely reaches the untouched near-black surfaces (the
+   * resale-rights decision form's inputs, the upload page's dropzone),
+   * fixed by the --ring-on-old-surfaces override and focus-ring-on-old-
+   * surface above - not by anything here.
+   *
+   * ugcportal-6uc2 (phase 2) makes "no bg-card usage anywhere" no longer
+   * true - TEXT_INPUT_CLASS renders `bg-card` now - but it still renders no
+   * `text-primary`, so this entry's own scoping is unaffected; see
+   * control-edge-on-card/focus-ring-on-card below for what DID need a new
+   * entry once bg-card became a real surface.
    */
   {
     id: "link-on-background",
@@ -175,6 +189,27 @@ export const PAIRINGS: Pairing[] = [
     "--input",
     "ui",
     "The boundary that identifies an interactive control: input borders, outline-button borders.",
+  ),
+  /*
+   * ugcportal-6uc2 (phase 2): the upload dropzone's resting-state border
+   * (src/app/upload/upload-form.tsx, `border-line-strong bg-surface-1`) is
+   * the one real usage of `--color-line-strong` that did NOT go through
+   * `--input` - before this bead `--input: var(--color-line-strong)` made
+   * the two interchangeable, so the dropzone rode along on control-edge-*
+   * above for free. Phase 2 repoints `--input` onto the paper scale, which
+   * breaks that equivalence: `--input` no longer resolves to the same
+   * literal `--color-line-strong` does, so the dropzone's border needs its
+   * OWN entry now, or it ships uncovered. Same requirement (`ui`, 3:1 - it
+   * is the boundary of the dropzone's own interactive region, the same role
+   * an input border plays) and the same near-black surfaces it has always
+   * rendered on (bg-surface-1 resting, bg-surface-2 dragging - both already
+   * in SURFACES).
+   */
+  ...onEverySurface(
+    "line-strong-edge",
+    "--color-line-strong",
+    "ui",
+    "The upload dropzone's own border (src/app/upload/upload-form.tsx), now that --input no longer aliases this token (ugcportal-6uc2).",
   ),
   /*
    * ugcportal-rw9j: scoped to --background rather than onEverySurface, for a
@@ -194,8 +229,12 @@ export const PAIRINGS: Pairing[] = [
   /*
    * ugcportal-rw9j review round 3: globals.css scopes a --ring override back
    * to --color-fjord-400 on every element that also carries one of the old
-   * near-black surface background classes (bg-surface-*, bg-muted, bg-card,
-   * ...) - resolveToken/loadThemeTokens has no notion of a class-scoped CSS
+   * near-black surface background classes (bg-surface-*, bg-popover,
+   * bg-accent, bg-secondary, bg-destructive-surface, bg-sidebar - round-2
+   * review of ugcportal-6uc2, CONFIRMED low: this used to also list
+   * bg-muted/bg-card here, which phase 2 removed from that CSS selector,
+   * see this file's own ugcportal-6uc2 comment a few lines up) -
+   * resolveToken/loadThemeTokens has no notion of a class-scoped CSS
    * override, so this checks the literal token that override points at
    * directly (the same reason primary-hover-fill and friends check a literal
    * step of the petrol scale rather than a semantic alias elsewhere in this
@@ -290,38 +329,40 @@ export const PAIRINGS: Pairing[] = [
     "--color-line",
     "decorative",
     "Row dividers, card edges and section rules.",
-    "Purely ornamental separation. WCAG 1.4.11 covers the parts of a control that identify it, not decoration; a 3:1 hairline on every row would draw a bright grid across a page whose job is to disappear behind photographs. Controls use --color-line-strong (--input), which is checked at 3:1 above.",
+    "Purely ornamental separation. WCAG 1.4.11 covers the parts of a control that identify it, not decoration; a 3:1 hairline on every row would draw a bright grid across a page whose job is to disappear behind photographs. A control still on the near-black scale uses --color-line-strong directly (the upload dropzone's own border), checked at 3:1 by its own PAIRINGS entry.",
   ),
   /*
-   * ugcportal-rw9j review round 5: --border (--color-line) is one of the
-   * tokens globals.css's phase-1-mandate comment explicitly, deliberately
-   * leaves on the untouched near-black surface scale - "kort, kantlinjer,
-   * skjemafelt" (cards, BORDERS, form fields) is phase 2's own named scope,
-   * not this bead's. That is why this entry exists only to MEASURE the
-   * consequence on --background, not to gate it: the header/footer hairline
-   * (`* { @apply border-border }` against the new --background) measures
-   * 11.6:1 in light mode and 1.16:1 in dark - the same colour was never
-   * retuned for either new canvas, light mode's high ratio is incidental
-   * (--paper happens to be far lighter than --color-line), and dark mode's
-   * low one is the same incidental mismatch in the other direction, not a
-   * new defect introduced by moving --background specifically. Fixing it
-   * means choosing a border treatment for the new canvas, i.e. doing part of
-   * fase 2's job inside phase 1 - out of scope for the same reason --border
-   * itself is. docs/design/tokens.css's own reference already names the
-   * fix for whoever picks up fase 2: a dedicated dark-mode `--line` distinct
-   * from `--paper-line` (`#1F4A50`, measured here at only ~1.48:1 against
-   * --petrol-900 - still subtle by the reference's own design, not a bug to
-   * chase further). Decorative: no threshold, so this cannot block K2; it
-   * exists so the gap is visible to whoever reads this file next, not
-   * silent the way it was before this round.
+   * ugcportal-rw9j review round 5, superseded by ugcportal-6uc2 (phase 2):
+   * this entry used to measure --color-line (not --border) against
+   * --background, because at the time --border still read --color-line
+   * directly and this was documented as a phase-1-exempt MEASUREMENT, not a
+   * gate - "kort, kantlinjer, skjemafelt" (cards, BORDERS, form fields) was
+   * named as a future bead's scope, not phase 1's.
+   *
+   * ugcportal-6uc2 IS that bead. --border now reads `--paper-line` (light)
+   * / `--petrol-line` (dark) - see globals.css's own --border declarations -
+   * so this entry's foreground changes from the literal `--color-line` to
+   * the semantic `--border`, which is what the real, rendered header/footer
+   * hairline (`* { @apply border-border }`) has always tracked. Still
+   * `decorative` (WCAG 1.4.11 does not cover ornamental separation - nothing
+   * about that classification changed), so there is still no ratio floor
+   * here; this is K1's own computed-style check, not a new gate. Measured at
+   * the new values: 1.40:1 light (`--paper-line` #d8d3c8 on `--paper`
+   * #faf7f2), 1.48:1 dark (`--petrol-line` #1f4a50 on `--petrol-900`
+   * #0b2e33) - both LOWER than the old, incidental 11.6:1/1.16:1 this same
+   * entry used to report, and deliberately so: the old ratios were an
+   * accident of a near-black line sitting on a canvas it was never tuned
+   * for, not a target to preserve. Low-but-decorative is what a subtle
+   * hairline on a light canvas is supposed to measure, by the reference
+   * file's own design.
    */
   {
     id: "divider-on-background",
-    foreground: "--color-line",
+    foreground: "--border",
     background: ["--background"],
     requirement: "decorative",
-    usage: "The header/footer hairline rule against the page canvas.",
-    why: "Phase-1-exempt, same as --border/--input generally (see globals.css's phase-1-mandate comment) - fase 2 (\"kantlinjer\") owns retuning this, not this bead. Measured and left visible rather than silently uncovered: 11.6:1 light, 1.16:1 dark.",
+    usage: "The header/footer hairline rule against the page canvas - K1's own acceptance criterion.",
+    why: "Ornamental separation (WCAG 1.4.11 does not cover it), same reasoning as --color-line's own onEverySurface entries above - a 3:1 hairline on every row would draw a bright grid across a page whose job is to disappear behind photographs. Measured at the paper-scale values: 1.40:1 light, 1.48:1 dark.",
   },
 
   {
@@ -384,38 +425,125 @@ export const PAIRINGS: Pairing[] = [
     usage: "Text inside a popover, menu or dialog.",
   },
   /*
-   * ugcportal-rw9j: --color-ink-muted, not --muted-foreground, for these two.
-   * --muted/--card stay on the untouched near-black surface scale this
-   * phase, and --muted-foreground now means "secondary text as this app
-   * actually renders it on the page canvas" (see muted-foreground-on-
-   * background below) - a page-canvas-specific token, the same split applied
-   * to --foreground vs --color-ink for the destructive well above.
+   * ugcportal-rw9j: originally --color-ink-muted, not --muted-foreground,
+   * for these two - --muted/--card stayed on the untouched near-black
+   * surface scale that phase, and --muted-foreground meant "secondary text
+   * as this app actually renders it on the page canvas" (see muted-
+   * foreground-on-background below) - a page-canvas-specific token, the
+   * same split applied to --foreground vs --color-ink for the destructive
+   * well above.
    *
-   * Review round 1 found this matters for real, not just in principle: this
-   * comment originally claimed nothing in the shipped app renders
-   * text-muted-foreground directly on bg-muted - false. src/app/admin/
-   * settings/rights/page.tsx rendered exactly that (an uploader's blocker
-   * message and review metadata, inside the same div as bg-muted/
-   * bg-destructive-surface), which measured 3.18:1 against the new
-   * --muted-foreground in light mode. Fixed there by switching those two
-   * elements to text-ink-muted - the token this pairing (and
-   * muted-foreground-on-destructive-surface below) actually measures - so
-   * the claim below is enforced by that page's own markup now, not merely
-   * documented here.
+   * Review round 1 (phase 1) found that mattered for real, not just in
+   * principle: src/app/admin/settings/rights/page.tsx rendered text-muted-
+   * foreground directly on bg-muted (an uploader's blocker message and
+   * review metadata, inside the same div as bg-muted/bg-destructive-
+   * surface), which measured 3.18:1 against --muted-foreground at the time.
+   * Fixed there by switching those two elements to text-ink-muted.
+   *
+   * ugcportal-6uc2 (phase 2) reverses this entry's foreground back to
+   * --muted-foreground, because --muted/--card themselves have now moved
+   * onto the paper scale - see globals.css's own --muted/--card
+   * declarations. --color-ink-muted (tuned for the near-black scale: light
+   * text meant to sit on a dark fill) would read as near-invisible on the
+   * new, light --muted/--card (confirmed: it is the identical failure
+   * shape muted-foreground-on-background's own comment below describes for
+   * --color-ink-muted against --paper, just against --muted/--card instead
+   * of --background). The round-1 fix above is reversed in the same
+   * direction, at every real call site this bead found: see
+   * src/lib/design/dual-meaning-usage.test.ts's AUDITED_USAGE for the
+   * (file, token, count) pins, and globals.css's own --muted-foreground
+   * comment for which text-ink-muted usages correctly stayed put (the ones
+   * genuinely still rendering against an untouched near-black fill).
    */
   {
     id: "muted-foreground-on-muted",
-    foreground: "--color-ink-muted",
+    foreground: "--muted-foreground",
     background: ["--muted"],
     requirement: "body",
     usage: "Secondary text on a muted fill.",
   },
   {
     id: "muted-foreground-on-card",
-    foreground: "--color-ink-muted",
+    foreground: "--muted-foreground",
     background: ["--card"],
     requirement: "body",
     usage: "Caption under an image, metadata line in a list row.",
+  },
+  /*
+   * ugcportal-6uc2 (phase 2): --input (border-input) and --ring (the focus
+   * indicator) can now both land on --card/--muted, which did not exist as
+   * a real background before this bead moved those two off the near-black
+   * scale. control-edge-on-card/-on-muted mirror control-edge-on-* above
+   * for the two new surfaces (TEXT_INPUT_CLASS's own border, now bg-card);
+   * focus-ring-on-card/-on-muted mirror focus-ring-on-background for the
+   * same reason focus-ring-on-old-surface exists for the near-black scale -
+   * a real caller (the curation screens' Button, default variant, rendered
+   * inside the "Rights layers"/price bg-muted wells) can focus there, and
+   * the plain, unscoped --ring is what it gets now that `.bg-muted`/
+   * `.bg-card` are removed from globals.css's --ring-on-old-surfaces
+   * override (see that rule's own comment).
+   */
+  /*
+   * Round-1 review of ugcportal-6uc2, CONFIRMED medium: sign-in-menu.tsx
+   * and mobile-nav-toggle.tsx both float a popover panel over
+   * `bg-background` - the SAME fill the page behind it uses - with a
+   * `border-border`/`border-X` edge as the only thing that identifies the
+   * open panel. Before this bead, `--border` was `--color-line` (11.62:1
+   * there, plenty), so the real 3:1 requirement was met by accident; once
+   * `--border` moved to the decorative `--paper-line` (1.40:1, correct for
+   * an ornamental hairline, wrong for a control boundary), both panels
+   * silently dropped below K3's floor with no pairing to catch it - this
+   * file had `control-edge-on-card`/`-on-muted` for the other two new
+   * surfaces `--input` can land on, but no entry at all for `--background`
+   * itself. Fixed at the component level (both now read `border-input`,
+   * the token this pairing verifies) and at the gate level (this entry),
+   * so a future floating panel reaching for `border-border` the same way
+   * has somewhere to fail.
+   *
+   * Round-2 review, CONFIRMED medium: that "somewhere to fail" did not
+   * fire for a THIRD site of the identical shape - cookie-banner.tsx,
+   * `fixed`/`z-40`/conditionally rendered/`bg-background`, missed in round
+   * 1 because round 1's own audit was one blanket sentence ("none of which
+   * is a floating/toggleable control") rather than a per-site check - see
+   * the border-border audit in contrast.test.ts for the corrected,
+   * per-site version. Fixed the same way (now `border-input` too); this
+   * pairing needed no change, since it already covers any `--input`-on-
+   * `--background` usage regardless of which component adds one.
+   */
+  {
+    id: "control-edge-on-background",
+    foreground: "--input",
+    background: ["--background"],
+    requirement: "ui",
+    usage: "The boundary of a floating panel that sits over the same --background fill as the page behind it (the sign-in menu, the mobile nav popover, and the cookie-consent banner) - the border is the only thing identifying the open panel's edge.",
+  },
+  {
+    id: "control-edge-on-card",
+    foreground: "--input",
+    background: ["--card"],
+    requirement: "ui",
+    usage: "TEXT_INPUT_CLASS's own border, now that its field renders on bg-card (ugcportal-6uc2).",
+  },
+  {
+    id: "control-edge-on-muted",
+    foreground: "--input",
+    background: ["--muted"],
+    requirement: "ui",
+    usage: "An input or outline-button border inside a bg-muted well (e.g. the curation screens' callout panels).",
+  },
+  {
+    id: "focus-ring-on-card",
+    foreground: `--ring/${RING_ALPHA_MODIFIER}`,
+    background: ["--card"],
+    requirement: "ui",
+    usage: "The focus indicator on a control inside a bg-card fill, e.g. TEXT_INPUT_CLASS's own field.",
+  },
+  {
+    id: "focus-ring-on-muted",
+    foreground: `--ring/${RING_ALPHA_MODIFIER}`,
+    background: ["--muted"],
+    requirement: "ui",
+    usage: "The focus indicator on a control inside a bg-muted well, e.g. the curation screens' Button inside the Rights layers/price panels.",
   },
   /*
    * ugcportal-rw9j K1: this is the pairing that actually matches reality.
@@ -877,4 +1005,147 @@ export function findColorScaleNameCollisions(
     }
   }
   return collisions;
+}
+
+/**
+ * K4 (ugcportal-6uc2): "following should never happen - the phase-1 holding
+ * comment in globals.css is deleted while any of --border, --input, --card
+ * or --muted still reads from the near-black scale, leaving the file
+ * claiming a migration it did not finish."
+ *
+ * The marker is a literal substring of the comment's own prose
+ * (PHASE_2_HOLDING_COMMENT_MARKER below), not a structural parse of CSS
+ * comments - this file already has a real CSS-comment stripper
+ * (stripComments in tokens.ts/scan-source.ts) for places that need one;
+ * this check only needs to know whether a SPECIFIC sentence survives, which
+ * a substring test answers directly. If a future edit rewords the comment
+ * without preserving this sentence, this guard fails too (an unknown
+ * marker reads as "absent", the same as a deleted comment), which is the
+ * conservative direction to fail in - better to require editing this
+ * constant too than to let the comment drift wording and quietly lose its
+ * own guard.
+ *
+ * PHASE_2_MOVED_TOKENS is the four tokens this bead's own K1-K3 move, named
+ * directly rather than derived - there is no general "which tokens moved"
+ * fact in the stylesheet to derive this from; it is this bead's own list.
+ */
+const PHASE_2_HOLDING_COMMENT_MARKER =
+  "Phase 2 (ugcportal-6uc2) is that approval acted on";
+
+export const PHASE_2_MOVED_TOKENS = ["--border", "--input", "--card", "--muted"] as const;
+
+/**
+ * A resolved declaration shaped like one of the near-black scale's own
+ * members: `var(--color-surface-<n>)` / `var(--color-scrim)` (the pre-bead
+ * values of --card and --muted) or `var(--color-line)` /
+ * `var(--color-line-strong)` (the pre-bead values of --border and --input).
+ *
+ * Round-1 review (PR #209), CONFIRMED medium: the first version of this
+ * pattern only matched the surface-\d+/scrim half - exactly the two tokens
+ * (--card, --muted) that happened to share a pre-bead value with each
+ * other, and not the other two (--border read --color-line, --input read
+ * --color-line-strong, neither of which this pattern recognised at all). A
+ * mutation test that reverted --card to its pre-bead value therefore
+ * passed, and happened to be the one fixture mutation this file originally
+ * shipped with - the guard was never exercised against --border/--input at
+ * all, which is why the gap survived the "mutate the fixture" discipline
+ * rather than being caught by it. contrast.test.ts's K4 describe block now
+ * parameterises its fixture mutation over all four of PHASE_2_MOVED_TOKENS,
+ * each reverted to ITS OWN documented pre-bead value, specifically so this
+ * class of "the guard only covers the tokens the author happened to test"
+ * gap cannot recur silently.
+ */
+const NEAR_BLACK_SCALE_REFERENCE =
+  /^var\(--color-(surface-\d+|scrim|line-strong|line)\)$/;
+
+/**
+ * The one value each of PHASE_2_MOVED_TOKENS resolves to in `globals.css`
+ * once the migration is genuinely finished (light mode - this function is
+ * only ever called with the light token map, see its own call site in
+ * contrast.test.ts). `--card`/`--muted` share a value deliberately (see
+ * their own declarations' comments); `--input` is the one token this bead
+ * leaves mode-invariant.
+ */
+const PHASE_2_FINISHED_VALUE: Record<(typeof PHASE_2_MOVED_TOKENS)[number], string> = {
+  "--border": "var(--paper-line)",
+  "--input": "var(--paper-line-strong)",
+  "--card": "var(--paper-card)",
+  "--muted": "var(--paper-card)",
+};
+
+export type Phase2MigrationClaimCheck = {
+  commentPresent: boolean;
+  /**
+   * Which of PHASE_2_MOVED_TOKENS still resolves to the near-black scale,
+   * OR is not declared at all (see checkPhase2MigrationClaim's own comment
+   * on why a missing token counts the same way a near-black one does).
+   * Empty when the migration is genuinely finished.
+   */
+  stillNearBlack: string[];
+  /** True in exactly the state K4 forbids: the comment is gone AND the migration is not actually finished. */
+  claimsUnfinishedMigrationAsDone: boolean;
+};
+
+/**
+ * Takes the raw CSS text (for the comment) and a resolved token map (for the
+ * four values) separately, rather than re-parsing both from one string:
+ * contrast.test.ts's own fixture-mutation check constructs a synthetic
+ * token map and a mutated copy of the real CSS text independently, the same
+ * shape findColorScaleNameCollisions's own fixture tests already use.
+ *
+ * Round-2 review (PR #209), CONFIRMED low: with the round-1 `?? ""` fix in
+ * place, a token whose value matched NEITHER the near-black pattern NOR
+ * anything else still silently read as "finished" - `""`, `"garbage"`, a
+ * raw hex bypassing the token system entirely (`"#1a1d1d"`), or a value
+ * near-black in substance but not in the exact shape this resolver
+ * recognises (trailing whitespace, a different case) all produced
+ * `stillNearBlack: []`, the same as a value this function could actually
+ * verify. Silently certifying "not near-black" for a value this function
+ * does not recognise is the one answer that cannot be right for a guard -
+ * color.ts's own parseColor/contrastRatio already refuse to guess at
+ * anything they cannot fully parse, for the identical reason ("a contrast
+ * helper that quietly passes a pair it could not parse is worse than no
+ * helper at all, because the build stays green while the guarantee is
+ * gone" - see that file's own header comment). This function now holds
+ * itself to the same standard: a declared value that is neither a
+ * recognised near-black-scale reference NOR an EXACT match for that
+ * token's own known-good finished value (PHASE_2_FINISHED_VALUE) throws,
+ * rather than silently joining either bucket.
+ */
+export function checkPhase2MigrationClaim(
+  css: string,
+  tokens: Map<string, Declaration>,
+): Phase2MigrationClaimCheck {
+  const commentPresent = css.includes(PHASE_2_HOLDING_COMMENT_MARKER);
+  const stillNearBlack = PHASE_2_MOVED_TOKENS.filter((token) => {
+    const declaration = tokens.get(token);
+    /*
+     * Round-1 review (PR #209), CONFIRMED medium: `tokens.get(token)?.value
+     * ?? ""` let a DELETED token (not declared at all, the shape a botched
+     * refactor could leave behind as easily as reverting a value) read as
+     * "not near-black", because the empty string matches no pattern - the
+     * wrong default for a guard whose entire job is proving the migration
+     * finished, not merely failing to find evidence that it did not. A
+     * token this resolver cannot find is not proven to be on the paper
+     * scale either, so it is treated the same as one still reading the
+     * near-black scale: present in `stillNearBlack`, explicitly, rather
+     * than silently passing through a fallback that was never chosen for
+     * this reason.
+     */
+    if (!declaration) return true;
+    if (NEAR_BLACK_SCALE_REFERENCE.test(declaration.value)) return true;
+    if (declaration.value === PHASE_2_FINISHED_VALUE[token]) return false;
+    throw new Error(
+      `[design/contrast] checkPhase2MigrationClaim: ${token} = "${declaration.value}" is ` +
+        `neither a recognised near-black-scale reference nor its expected finished value ` +
+        `("${PHASE_2_FINISHED_VALUE[token]}") - refusing to guess whether the migration is ` +
+        `finished for this token. If this is a legitimate new value, teach this function ` +
+        `about it deliberately; do not relax it to pass silently.`,
+    );
+  });
+  return {
+    commentPresent,
+    stillNearBlack,
+    claimsUnfinishedMigrationAsDone: !commentPresent && stillNearBlack.length > 0,
+  };
 }

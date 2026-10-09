@@ -183,8 +183,16 @@ export default async function BrandAlcoholSettingsPage({
                       .
                     </p>
                   ) : null}
+                  {/*
+                    text-muted-foreground, not text-ink-muted (ugcportal-
+                    6uc2, phase 2): alcoholLinked === false can only render
+                    this branch of the div above as bg-muted (the
+                    alcoholLinked === true branch is bg-destructive-surface,
+                    mutually exclusive with this condition), and bg-muted now
+                    reads the paper scale.
+                  */}
                   {brand.alcoholLinked === false ? (
-                    <p className="mt-1 text-ink-muted">
+                    <p className="mt-1 text-muted-foreground">
                       Recorded by the disclosure form the first time this
                       brand named a benefit. If this brand turns out to be
                       alcohol-linked after all, record it below — that answer

@@ -210,13 +210,28 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
   // wrote out by hand is now INLINE_LINK_CLASS (src/components/ui/inline-link.ts),
   // so their own "text-primary" counts drop; rights/page.tsx keeps one
   // differently-styled link of its own.
-  "src/app/admin/settings/rights/page.tsx": { "text-muted-foreground": 5, "text-primary": 1 },
+  // text-muted-foreground: 5 -> 8 (ugcportal-6uc2, phase 2): three new
+  // occurrences, all inside bg-muted wells that now read the paper scale -
+  // the TRIAGE_FACTS list and its trailing paragraph (both unconditionally
+  // bg-muted, were text-ink-muted), plus the per-uploader review <dl>,
+  // which is conditional on the SAME ternary as its enclosing div's
+  // className (blocker ? text-ink-muted : text-muted-foreground) - the
+  // literal string "text-muted-foreground" appears once in source either
+  // way, which is what this scanner counts.
+  "src/app/admin/settings/rights/page.tsx": { "text-muted-foreground": 8, "text-primary": 1 },
   // ugcportal-mqh8: the brand list renders on the same plain page canvas as
   // its sibling above - the body copy and the brand slug both sit outside
   // any bg-muted/bg-destructive-surface well (those wells use text-ink/
   // text-ink-muted instead, per contrast.ts), so the page-canvas token is
   // the correct one here too.
-  "src/app/admin/settings/rights/brands/page.tsx": { "text-muted-foreground": 5 },
+  //
+  // text-muted-foreground: 5 -> 6 (ugcportal-6uc2, phase 2): one new
+  // occurrence, the "Recorded by the disclosure form..." paragraph that
+  // renders only when alcoholLinked === false - which can only be the
+  // enclosing div's bg-muted branch (the alcoholLinked === true branch is
+  // bg-destructive-surface, mutually exclusive with this condition), and
+  // bg-muted now reads the paper scale. Was text-ink-muted before this bead.
+  "src/app/admin/settings/rights/brands/page.tsx": { "text-muted-foreground": 6 },
   // text-ink counts (ugcportal-14k9 PR #94 review round 1, low finding 5):
   // every field in this form - five identically-styled inputs/textareas -
   // renders on the resale-rights decision screen's plain page canvas, not
@@ -226,17 +241,29 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
     "text-muted-foreground": 3,
     "text-ink": 5,
   },
-  // ugcportal-vq3z: the curation triage screen. All seven
+  // ugcportal-vq3z: the curation triage screen. The original seven
   // text-muted-foreground usages are body copy on the plain page canvas —
   // the three intro paragraphs, the empty-state line, the per-row uploader
   // detail line, the "no watermarked preview" line and the truncation
-  // notice. None is inside a bg-muted/bg-destructive-surface well: the text
-  // inside this screen's wells is either text-ink-muted (the per-row triage
-  // detail list, exactly as the sibling rights screen does), text-destructive
-  // (the error banner) or untokenised (the two confirmation banners). The one
-  // text-primary is the "Record the triage" link, also on the canvas.
+  // notice. None of those seven is inside a bg-muted/bg-destructive-surface
+  // well. The one text-primary is the "Record the triage" link, also on the
+  // canvas.
+  //
+  // text-muted-foreground: 7 -> 13 (ugcportal-6uc2, phase 2): six new
+  // occurrences, all inside bg-muted wells that now read the paper scale -
+  // the per-upload triage <dl> (conditional on the same
+  // signedByCurrentAdmin ternary as its enclosing div's className: bg-muted
+  // -> text-muted-foreground, bg-destructive-surface -> text-ink-muted, the
+  // same pattern the resale-rights screen uses), and five unconditional
+  // occurrences inside the "Rights layers" and "price" panels (the intro
+  // paragraph, the per-layer clearance <dl>, the "no layer is blocking"/
+  // "not settled yet" lines, and the sellability verdict line) - all were
+  // text-ink-muted before this bead, back when bg-muted still read the
+  // near-black scale. The per-row uploader detail line and "no watermarked
+  // preview" line, among the original seven, stay on the plain canvas,
+  // untouched.
   "src/app/admin/curation/page.tsx": {
-    "text-muted-foreground": 7,
+    "text-muted-foreground": 13,
     "text-primary": 1,
   },
   // ugcportal-vq3z: the triage form. `text-ink` is the shared select class,
@@ -252,22 +279,31 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
   // ugcportal-qfy9: the per-layer clearance form. One `text-ink`, in the
   // shared textarea class, whose own `bg-surface-3` fill is the background
   // it renders against — the identical pairing triage-form.tsx uses for its
-  // selects one file over. No text-muted-foreground: every other line in
-  // this component sits inside the rights-layer well on page.tsx
-  // (`bg-muted`), so the helper text under the label is text-ink-muted, as
-  // the sibling rights screen does inside its own wells.
+  // selects one file over.
+  //
+  // text-muted-foreground: 0 -> 1 (ugcportal-6uc2, phase 2): every other
+  // line in this component sits inside the rights-layer well on page.tsx
+  // (`bg-muted`), which now reads the paper scale - the helper text under
+  // the label was text-ink-muted (tuned for the near-black scale that well
+  // used to read) and is text-muted-foreground now, the same flip the
+  // sibling rights screen's own wells made.
   "src/app/admin/curation/clearance-form.tsx": {
     "text-ink": 1,
+    "text-muted-foreground": 1,
   },
   // ugcportal-yzo7: the price form. One `text-ink`, in the shared field
   // class its number input and its currency select both take, whose own
   // `bg-surface-3` fill is the background it renders against — the identical
-  // pairing clearance-form.tsx uses one file over. No text-muted-foreground:
-  // every line in this component sits inside the price well on page.tsx
-  // (`bg-muted`), so the helper text under the amount label is
-  // text-ink-muted, as its two sibling forms do inside their own wells.
+  // pairing clearance-form.tsx uses one file over.
+  //
+  // text-muted-foreground: 0 -> 1 (ugcportal-6uc2, phase 2): the same flip
+  // as clearance-form.tsx above - every other line in this component sits
+  // inside the price well on page.tsx (`bg-muted`), which now reads the
+  // paper scale, so the helper text under the amount label is
+  // text-muted-foreground now, not text-ink-muted.
   "src/app/admin/curation/price-form.tsx": {
     "text-ink": 1,
+    "text-muted-foreground": 1,
   },
   "src/app/admin/settings/users/page.tsx": { "text-muted-foreground": 4 },
   "src/app/admin/settings/instagram/page.tsx": { "text-muted-foreground": 3 },
@@ -295,16 +331,22 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
   // text-ink: 1 (low finding 5) - the queued file's name, on the upload
   // page's own plain canvas (ugcportal-n3c).
   "src/app/upload/upload-queue-list.tsx": { "text-ink": 1 },
-  // text-ink: 2 (ugcportal-qnq9.16, item 4 of the lows deferred from PR
-  // #93's round-6 review): TEXT_INPUT_CLASS's one usage (on the input's
-  // own bg-surface-1 fill, the same well-interior case as
-  // decision-form.tsx's bg-surface-3 fields) plus TEXT_LABEL_CLASS's one
-  // (on the page canvas, the same case upload-form.tsx's and the
-  // About/Portfolio contact form's labels were each pinned under before
-  // both were extracted to this one shared constant). Both shared by
-  // upload-form.tsx and contact-mailto-form.tsx, neither of which has a
-  // literal "text-ink" of its own left to pin as a result.
-  "src/components/ui/text-input.ts": { "text-ink": 2 },
+  // text-ink: 1 as of ugcportal-6uc2 (phase 2), was 2 (ugcportal-qnq9.16,
+  // item 4 of the lows deferred from PR #93's round-6 review): the count
+  // used to be TEXT_INPUT_CLASS's one usage (on the input's own
+  // bg-surface-1 fill, the same well-interior case as decision-form.tsx's
+  // bg-surface-3 fields) plus TEXT_LABEL_CLASS's one (on the page canvas,
+  // the same case upload-form.tsx's and the About/Portfolio contact form's
+  // labels were each pinned under before both were extracted to this one
+  // shared constant). Phase 2 moved TEXT_INPUT_CLASS off text-ink entirely
+  // (now bg-card/text-card-foreground - see that constant's own comment),
+  // leaving only TEXT_LABEL_CLASS's text-ink - still on the page canvas,
+  // still NOT fixed by this bead (see TEXT_LABEL_CLASS's own comment on why
+  // that is a disclosed, separately-filed gap rather than silently carried
+  // forward). Both still shared by upload-form.tsx and
+  // contact-mailto-form.tsx, neither of which has a literal "text-ink" of
+  // its own left to pin as a result.
+  "src/components/ui/text-input.ts": { "text-ink": 1 },
   // text-ink: 2 (low finding 5) - button.tsx's OWN two usages
   // (NEUTRAL_OUTLINE_STYLE and the `ghost` variant), each documented there
   // as measured and safe only inside one of the old near-black wells. Pinned
@@ -401,6 +443,13 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
   // muted-foreground-on-background pairing, just a status region instead of
   // a caption.
   "src/components/share/share-control.tsx": { "text-muted-foreground": 1 },
+  // ugcportal-6uc2 (phase 2): the purchase-offer panel's supporting line,
+  // inside its own unconditionally-bg-muted <aside> - not on the page
+  // canvas the way the two entries above are, but bg-muted now reads the
+  // paper scale too (globals.css), so the same page-canvas-tuned token is
+  // correct here as well. Was text-ink-muted before this bead, back when
+  // bg-muted still read the near-black scale.
+  "src/components/media/purchase-offer.tsx": { "text-muted-foreground": 1 },
   "src/components/site/page-shell.tsx": { "text-foreground": 1 },
   "src/components/site/section-heading.ts": { "text-foreground": 1 },
   // Round-1 review simplified this component (K2's spec marker rendered

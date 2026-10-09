@@ -578,13 +578,22 @@ export default async function AdminCurationPage({
                       : "Not triaged"}
                   </p>
                   {/*
-                    text-ink-muted, not text-muted-foreground: this text sits
-                    inside the well above, which is still the near-black
-                    surface scale, and --muted-foreground is tuned for the
-                    page canvas instead (see the same note on the
-                    resale-rights screen and contrast.ts).
+                    text-muted-foreground when signedByCurrentAdmin (the
+                    bg-muted branch above, which now reads the paper scale
+                    as of ugcportal-6uc2, phase 2); text-ink-muted when not
+                    (the bg-destructive-surface branch, still the near-black
+                    surface scale this bead leaves untouched). Tracks the
+                    enclosing div's own className ternary exactly, the same
+                    reasoning the resale-rights screen's equivalent block
+                    gives (src/app/admin/settings/rights/page.tsx).
                   */}
-                  <dl className="mt-2 space-y-1 text-xs text-ink-muted">
+                  <dl
+                    className={
+                      signedByCurrentAdmin
+                        ? "mt-2 space-y-1 text-xs text-muted-foreground"
+                        : "mt-2 space-y-1 text-xs text-ink-muted"
+                    }
+                  >
                     {TRIAGE_FACTS.map((fact) => {
                       const adminAnswer = listing?.[fact.field] ?? null;
                       const comparison = compareTriageFactToAttestation(
@@ -652,14 +661,19 @@ export default async function AdminCurationPage({
                     className="rounded-lg border border-border bg-muted p-3 text-sm"
                   >
                     <p className="font-medium">Rights layers</p>
-                    <p className="mt-1 text-xs text-ink-muted">
+                    {/*
+                      text-muted-foreground, not text-ink-muted (ugcportal-
+                      6uc2, phase 2): this whole panel is unconditionally
+                      bg-muted, which now reads the paper scale.
+                    */}
+                    <p className="mt-1 text-xs text-muted-foreground">
                       One justification per layer. Clearing a layer settles that
                       layer only — a music licence is not an answer about an
                       identifiable person, and the gate never reads one
                       layer&rsquo;s clearance for another.
                     </p>
                     {clearances.length > 0 ? (
-                      <dl className="mt-2 space-y-1 text-xs text-ink-muted">
+                      <dl className="mt-2 space-y-1 text-xs text-muted-foreground">
                         {clearances.map((recorded) => (
                           <div key={recorded.layer}>
                             <dt className="inline font-medium">
@@ -679,7 +693,7 @@ export default async function AdminCurationPage({
                       </dl>
                     ) : null}
                     {clearableBlocking.length === 0 ? (
-                      <p className="mt-2 text-xs text-ink-muted">
+                      <p className="mt-2 text-xs text-muted-foreground">
                         {blockingLayers.length === 0
                           ? "No layer is blocking this upload."
                           : "No layer here is one a clearance settles. What is still blocking cannot be cleared by recording a justification."}
@@ -696,7 +710,7 @@ export default async function AdminCurationPage({
                                 action={recordClearance}
                               />
                             ) : (
-                              <p className="text-xs text-ink-muted">
+                              <p className="text-xs text-muted-foreground">
                                 {layer} is not settled yet.
                               </p>
                             )}
@@ -727,7 +741,7 @@ export default async function AdminCurationPage({
                     <p
                       className={
                         gate.sellable
-                          ? "mt-1 text-xs text-ink-muted"
+                          ? "mt-1 text-xs text-muted-foreground"
                           : "mt-1 text-xs font-medium text-destructive"
                       }
                       data-sellability-verdict={

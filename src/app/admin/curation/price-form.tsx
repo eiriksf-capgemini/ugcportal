@@ -55,7 +55,13 @@ export function CurationPriceForm({
       <input type="hidden" name="mediaId" value={mediaId} />
       <label className="block text-xs font-medium" htmlFor={amountId}>
         Price, in minor units
-        <span className="mt-1 block font-normal text-ink-muted">
+        {/*
+          text-muted-foreground, not text-ink-muted (ugcportal-6uc2, phase
+          2): this form renders inside page.tsx's "price" bg-muted well,
+          which now reads the paper scale, not the near-black one this label
+          used to assume.
+        */}
+        <span className="mt-1 block font-normal text-muted-foreground">
           Whole øre or cents — 125000 is NOK 1 250.00. Leave it blank to take
           this upload off sale; that is the one change here the rights gate
           does not stand in front of.
