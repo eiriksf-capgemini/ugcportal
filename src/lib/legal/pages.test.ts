@@ -133,14 +133,29 @@ describe("legalLinkBlocked", () => {
     expect(legalLinkBlocked(LICENCE_PATH, explicitFilled)).toBe(true);
   });
 
-  it("MUTATION CHECK: the reverse disagreement also follows the argument", () => {
+  // SUSPENDED, not deleted -- the third of three, and the one that makes
+  // the hole complete. Found at PR #204 round 2 after the first two were
+  // suspended and this sibling was missed.
+  //
+  // It read: process.env fully configured AND signed off (so it would not
+  // block on its own), explicit argument unconfigured, therefore blocked --
+  // proving the argument won. Its premise "and signed off" stopped being
+  // true when ugcportal-yzo7 drafted /licence, and with /licence blocked
+  // for sign-off reasons `legalLinkBlocked` returns true no matter which
+  // env is threaded through, so the assertion can no longer discriminate.
+  //
+  // WITH ALL THREE OF THESE SUSPENDED, ENV THREADING IS ENTIRELY UNCOVERED:
+  // dropping the `env` argument inside legalLinkBlocked -- the CONFIRMED
+  // medium this test was written to guard -- leaves every test in this file
+  // green. That is the real cost of the suspension and the reason
+  // ugcportal-44qs is not optional housekeeping. Restore all three together
+  // when a sign-off lands, pointed at whichever page is signed off, and do
+  // not substitute a synthetic sign-off to get there.
+  it("reads blocked for /licence under a reversed env disagreement too, while its prose awaits sign-off (ugcportal-yzo7)", () => {
     vi.stubEnv("NODE_ENV", "production");
     for (const [name, value] of Object.entries(FILLED_LEGAL_ENV)) {
       vi.stubEnv(name, value);
     }
-    // process.env is fully configured and signed off (would NOT block on
-    // its own); the explicit argument is unconfigured — blocked. /licence
-    // again, for the same reason as the test above.
     const explicitUnset = {
       NODE_ENV: "production",
       ...UNSET_LEGAL_ENV,

@@ -48,9 +48,15 @@ import { FooterNavLink, SiteFooter } from "./site-footer";
  *     (ugcportal-alg signed off the real pages after this component was
  *     first written; this case exists precisely because that is a fact
  *     that changes over time and the other three cases cannot exercise it
- *     at all). As of ugcportal-fsdf the real fact is that /licence is
- *     signed off and /privacy is not — a change to /privacy's authored
- *     prose put it back in draft pending a human re-approval.
+ *     at all). THE REAL FACT TODAY IS THAT BOTH PAGES ARE IN DRAFT:
+ *     ugcportal-yzo7 edited /licence's authored prose and ugcportal-fsdf
+ *     edited /privacy's, so neither digest matches LEGAL_SIGN_OFF until a
+ *     human re-approves. Point 4 therefore currently exercises the BLOCKED
+ *     path for both; the positive path it was written for returns when a
+ *     sign-off lands (ugcportal-44qs). An earlier version of this sentence
+ *     said /licence was signed off and /privacy was not — true when it was
+ *     written, false one merge later, which is the hazard this whole
+ *     docblock is about.
  *
  * The real e2e coverage (an actual production server, today's REAL
  * readiness, the meta tag read from the rendered page) lives in
