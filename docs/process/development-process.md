@@ -8,7 +8,7 @@ rule has a number in it, the number came from a measurement, and the
 measurement is cited.
 
 The process exists today as enacted behaviour spread across five project
-skills, three user skills, 44 `bd` memories, three sections of `CLAUDE.md`,
+skills, three user skills, 51 `bd` memories, three sections of `CLAUDE.md`,
 and a running error log. Each piece is individually documented. Nothing
 described how they fit together, which is what this is for.
 
@@ -164,8 +164,11 @@ would have been wasted, and the eighteen gaps became beads.
 
 **The mechanical half is now a script.** `scripts/check-unreachable-beads.mjs`
 (`ugcportal-z4nh`, merged in PR #207) walks `blocks` edges and reports every
-open bead whose every blocking path ends in deferred or missing work, or in a
-cycle it marks and does not follow. Its first live run on the real backlog
+open bead whose every blocking path ends in deferred or missing work. A
+dependency cycle is deliberately **not** a third termination reason — the
+walk treats a back-edge as resolved — and the script's own header says so,
+because it is the thing a reader expects next to the other two. Its first
+live run on the real backlog
 flagged **ten**, of which seven were in the v0.7.0 line-up — including two
 review beads (`5x8` security, `rma` architecture) gated behind features that
 will not be built this release. A security review that waits for Stripe and
@@ -251,7 +254,7 @@ reviewed nothing and does not count as a round.
 | 1–3 | **Any** finding, CONFIRMED or PLAUSIBLE, at any severity. Fix everything. |
 | 4–5 | Any **medium-or-above**, confirmed or unsettled. Lows are filed as beads and the PR merges. |
 | 6 (cap) | The same — but a blocker here goes to a **human**, not a seventh round. |
-| 7+ | Only on an **exact** marker chain, with a real round-6 stop and evidence someone acted on it; then a scoped verification pass, never a fresh hunt. |
+| 7+ | Only on an **exact** marker chain, anchored to the latest stop comment at or above 6, with evidence someone acted since it. See `pr-review-merge` step 5b, which is operative — `CLAUDE.md`'s phrasing of this row is stale relative to it. |
 
 **Why severity and not a flat count.** Measured 2026-09-25 across five beads:
 3.40M tokens of implementation, 1.32M of review, ~0.95M per bead, with a
@@ -319,8 +322,9 @@ one round and repeatedly replaces several.
    uncorrected sibling hides (`sibling-grep-the-subject-not-the-sentence`).
 
 A sharp illustration of family 4 from this release, on `ugcportal-z4nh`:
-round 1 found an untested cycle guard in `buildChain`, and two unasserted
-branches in `formatChain`. The fixes were correct. Round 2 then found that
+round 1 found an untested cycle guard in `buildChain`, plus two unasserted
+branches — `formatReport`'s `(none)` line and `formatChain`'s
+deferred-with-date branch. The fixes were correct. Round 2 then found that
 `formatChain`'s *cycle-note* branch — two lines from the date branch round 1
 had just fixed, in the same function — had the identical gap. **The fix
 landed directly beside a second instance of its own defect.**
@@ -405,15 +409,17 @@ is cheap to omit will be omitted under load.
 | `harness-cost-controls` | Model routing and subagent spend |
 | `cut-release` | Release notes, read from bead metadata, not git history |
 
-**User skills** used here: `bead-template` (the required bead form) and
-`retro` (the retrospective shape).
+**User skills** used here: `create-user-story` (the drift in phase 1),
+`bead-template` (the required bead form) and `retro` (the retrospective
+shape).
 
 **`CLAUDE.md`** holds what must be true for every agent regardless of task:
 the beads rules, the severity gate and round cap, Conventional Commits and
 their semver mapping, the token and model-fit metadata definitions, and the
 settings-file prohibition.
 
-**`bd` memories** (44) are the durable lessons. They are deliberately
+**`bd` memories** (51 as of 2026-10-09, and growing through the release)
+are the durable lessons. They are deliberately
 phrased as imperatives with the incident attached, because a rule without
 its cost gets argued away. They cluster:
 
@@ -489,13 +495,28 @@ path is the first defect family applied to itself.
 4. **Recording decays under load.** Token metadata, `prs`, and premise lines
    are all written by hand at the moment of least patience — after the work
    is done.
-5. **Review finds claims, not logic.** Across roughly 35 review rounds on 16
-   PRs in v0.7.0, **every blocking finding was a false or unsupported claim;
-   none was a logic defect.** That is partly a compliment to the
-   implementers and partly a warning about what review is good at.
+5. **Review finds claims far more readily than logic.** Across the v0.7.0
+   rounds, the overwhelming majority of blocking findings were false or
+   unsupported claims rather than logic defects. That is partly a compliment
+   to the implementers and partly a warning about what review is good at.
 
-   The release produced **two** genuine logic defects, and **neither was
-   found by a review round**:
+   The flat version of this claim — "review never found a logic defect" —
+   is **false**, and worth stating carefully because the document asserted
+   it in an earlier draft. Review did find logic defects, and the conditions
+   under which it did are the useful part:
+
+   - **when a brief pointed it at a layer nobody had looked at.** `#207`
+     round 4 found that `bd list --all` silently omits gate, infra and
+     template beads, so a bead gated on a *closed* gate would be reported
+     as permanently stuck. Three prior rounds had concentrated on the
+     rendering layer; round 4's brief said explicitly that this is the
+     condition under which a logic defect gets waved through.
+   - **when a fix round regressed something.** `#201` round 6 caught a
+     confirmed regression against real data.
+
+   What review did **not** catch is the two logic defects that were already
+   in the first push, both found instead by *executing something against
+   reality*:
 
    - a `NOT: { listing: { is: { depictsPeople: true } } }` that is wrong
      under SQL three-valued logic on a nullable column, and would have hidden
@@ -508,13 +529,12 @@ path is the first defect family applied to itself.
      already given to crawlers — caught by an implementer's **premise check
      before designing** (`ugcportal-nffp`).
 
-   The common factor is not premise checking specifically: it is that both
-   were found by **executing something against reality** — a test that
-   compares two implementations, and a probe against a real database — while
-   review was reading. That is the sharper lesson, and it argues for
+   A test comparing two implementations, and a probe against a real
+   database. Neither was reading. That is the sharper lesson, and it argues
+   for
    `Verified by:` naming an executed probe whenever the criterion is about
    runtime behaviour rather than about source text.
-7. **The instruments themselves fail open.** This is defect family 2 — the
+6. **The instruments themselves fail open.** This is defect family 2 — the
    null/undefined variant — applied to the process rather than to the code,
    and it is the most under-appreciated weakness here. A check that silently
    matches nothing reports success: a dependency filter using the wrong
@@ -528,7 +548,7 @@ path is the first defect family applied to itself.
    stderr on a mutating command; read the object back after a write that
    matters.
 
-8. **The cap has rarely bound on a real disagreement.** In v0.5.0, eleven
+7. **The cap has rarely bound on a real disagreement.** In v0.5.0, eleven
    of eleven escalations ended in a merge, making the human step latency
    rather than judgement. It is not a clean 11/11 beyond that cut: v0.6.0's
    #109 filed three findings at escalation, and in v0.7.0 Eirik authorised a
