@@ -466,7 +466,14 @@ for. A bead that violates one is mis-scoped, not ambitious.
 - **Only Eirik and Gry publish and sell.** Third-party contributor
   machinery stays in the codebase but is deprioritised. Revisit when that
   changes, not before.
-- **No disagreement or objection feature** — handled off-site.
+- **No uploader/admin disagreement feature** — handled off-site
+  (`ugcportal-9pic`). This covers the two operators disagreeing about a
+  rights assessment, and nothing else. It does **not** cover
+  `ugcportal-qnq9.5`, the notice-and-action route by which a rights-holder
+  or a depicted person objects and gets an item taken down — that is open,
+  it answers a copyright complaint, a withdrawal of consent under
+  åndsverkloven § 104 / GDPR Art. 21, or a DSA notice, and no decision has
+  withdrawn it.
 - **This is a hobby and will never replace either day job.** A proposal of
   enterprise scale for a two-person problem is mis-scoped.
 - **No legal counsel is engaged.** No criterion may be `Verified by:

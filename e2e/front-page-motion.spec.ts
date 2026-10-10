@@ -2,10 +2,11 @@ import { expect, test } from "@playwright/test";
 
 /**
  * ugcportal-6dvg K3: with `prefers-reduced-motion: reduce` emulated, no
- * fade-in or hover-lift animation runs on the hero's visual tiles — real
- * photograph or neutral fallback alike, there are always exactly three of
- * them (ugcportal-qqnt.4 K1) — and, where a gallery tile actually exists to
- * check, its own pre-existing hover-scale transition
+ * fade-in or hover-lift animation runs on the hero's visual tiles — where
+ * any render at all (ugcportal-a3hj K2 made that conditional on at least
+ * three curated pieces existing; see the hero-tile test below for why this
+ * suite's own dev database never has any) — and, where a gallery tile
+ * actually exists to check, its own pre-existing hover-scale transition
  * (src/components/gallery/containment.ts, untouched by this bead) still
  * resolves to the same "nothing computed transitions" state. The "positive
  * controls" describe block further down this file proves the other half of
@@ -23,19 +24,24 @@ test("K3: the hero's visual tiles have no computed animation under reduced motio
   await page.goto("/");
 
   /*
-   * RETARGETED (ugcportal-qqnt.4), not removed: `[data-home-hero-decoration]
-   * span` selected `HeroDecoration`'s three decorative circles, which K1
-   * replaced with `HeroVisual` — up to three real `<img>` tiles plus a
-   * neutral `<div>` fallback for whichever slot(s) have no curated preview
-   * (hero.tsx's own comment). `[data-home-hero-visual] > *` selects
-   * whichever mix of the two is actually rendered, the same way
-   * front-page.spec.ts's own geometry check now does, so a future markup
-   * change to the wrapper cannot silently desync the two checks from each
-   * other.
+   * RETARGETED (ugcportal-qqnt.4), RETARGETED AGAIN (ugcportal-a3hj K2):
+   * `[data-home-hero-decoration] span` selected `HeroDecoration`'s three
+   * decorative circles, which K1 replaced with `HeroVisual` — up to three
+   * real `<img>` tiles plus a neutral `<div>` fallback for whichever slot(s)
+   * had no curated preview. a3hj K2 then removed that fallback: below three
+   * published pieces the collage renders nothing at all, which this suite's
+   * own dev database, assumed seed-free (front-page.spec.ts's own header
+   * comment), now hits on every ordinary run — so there is normally nothing
+   * here to check, and this test skips rather than asserting `count > 0`
+   * against a count that would otherwise be 0.
+   * e2e/seeded/front-page-hero-portfolio.spec.ts carries the real version of
+   * this check, against three actually-seeded pieces.
    */
   const shapes = page.locator("[data-home-hero-visual] > *");
   const count = await shapes.count();
-  expect(count).toBeGreaterThan(0);
+  if (count === 0) {
+    test.skip(true, "no hero visual tile in this dev database to check");
+  }
 
   for (let index = 0; index < count; index += 1) {
     const computed = await shapes.nth(index).evaluate((el) => {
@@ -187,17 +193,18 @@ test.describe("positive controls: the motion-safe effects are real under ordinar
   /**
    * Round-5 review, low finding: the sibling of the hover-lift control
    * above, for the hero's OTHER `motion-safe:`-gated effect — the visual
-   * tiles' fade-in (real photograph or neutral fallback alike, ugcportal-
-   * qqnt.4 K1; RETARGETED from `[data-home-hero-decoration] span`, the
-   * selector for `HeroDecoration`'s three decorative circles K1 replaced —
-   * see this file's other `[data-home-hero-visual] > *` use above for the
-   * same rename). Nothing previously proved `motion-safe:animate-[home-
-   * fade-in_700ms_ease-out_both]` actually applies the keyframe at all
-   * under ordinary motion: deleting it from hero.tsx left every one of this
-   * suite's other checks green, while under `no-preference` the tiles would
-   * stay at `opacity: 0` forever (`motion-safe:opacity-0`, not their
-   * opacity-100 base — see the opacity: 1 assertion below) with nothing
-   * ever animating them to `opacity: 1`.
+   * tiles' fade-in. RETARGETED AGAIN (ugcportal-a3hj K2): see this file's
+   * other `[data-home-hero-visual] > *` use above for why this now skips on
+   * this suite's assumed-seed-free dev database rather than asserting
+   * `count > 0` — e2e/seeded/front-page-hero-portfolio.spec.ts carries the
+   * real version of this check against three actually-seeded pieces.
+   * Nothing previously proved `motion-safe:animate-[home-fade-in_700ms_
+   * ease-out_both]` actually applies the keyframe at all under ordinary
+   * motion: deleting it from hero.tsx left every one of this suite's other
+   * checks green, while under `no-preference` the tiles would stay at
+   * `opacity: 0` forever (`motion-safe:opacity-0`, not their opacity-100
+   * base — see the opacity: 1 assertion below) with nothing ever animating
+   * them to `opacity: 1`.
    */
   test("the hero's visual tiles actually fade in when motion is not reduced", async ({
     page,
@@ -206,7 +213,9 @@ test.describe("positive controls: the motion-safe effects are real under ordinar
 
     const shapes = page.locator("[data-home-hero-visual] > *");
     const count = await shapes.count();
-    expect(count).toBeGreaterThan(0);
+    if (count === 0) {
+      test.skip(true, "no hero visual tile in this dev database to check");
+    }
 
     for (let index = 0; index < count; index += 1) {
       const shape = shapes.nth(index);

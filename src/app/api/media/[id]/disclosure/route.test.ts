@@ -37,6 +37,9 @@ vi.mock("@/lib/auth", () => ({ auth: authMock }));
 
 const { PUT } = await import("@/app/api/media/[id]/disclosure/route");
 const { POST: PUBLISH } = await import("@/app/api/media/[id]/publish/route");
+const { POST: ATTACH_LINK, DELETE: DETACH_LINK } = await import(
+  "@/app/api/media/[id]/commercial-links/route"
+);
 const { PERMITTED_ADVERTISING_LABELS } = await import(
   "@/lib/advertising-disclosure"
 );
@@ -912,5 +915,137 @@ describe("alcohol and the brand behind the benefit (ugcportal-qnq9.3 K2/K4)", ()
       label: null,
       benefitSource: null,
     });
+  });
+});
+
+describe("ugcportal-jain K1: withdrawing while commercial links are attached", () => {
+  /**
+   * One attached link, through the real attach route rather than a raw
+   * insert.
+   *
+   * Driving the route is what makes the refusal below mean something: the
+   * attach gate requires a declared benefit under a permitted label
+   * (`commercialLinkDisclosureRefusal`), so a link exists here only because
+   * the item was in the compliant state this bead is about leaving.
+   */
+  async function attachLink() {
+    const response = await ATTACH_LINK(
+      new Request(`http://localhost/api/media/${MEDIA_ID}/commercial-links`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          url: "https://track.adtraction.com/t/t?a=1234&m=jain",
+          network: "ADTRACTION",
+          benefitSource: "Riedel",
+        }),
+      }),
+      context(),
+    );
+    expect(response.status).toBe(201);
+    return (await response.json()).id as string;
+  }
+
+  function attachedLinkCount() {
+    return prisma.commercialLink.count({ where: { mediaId: MEDIA_ID } });
+  }
+
+  async function seedCompliantItemWithLink() {
+    await seedMedia();
+    await seedAlcoholFreeListing(false);
+    expect((await PUT(disclosureRequest(GIFTED_GLASS), context())).status).toBe(
+      200,
+    );
+    return attachLink();
+  }
+
+  it.each([false, null])(
+    "answers 409 to `benefitReceived: %j` and changes nothing",
+    async (answer) => {
+      await seedCompliantItemWithLink();
+
+      const response = await PUT(
+        disclosureRequest({ benefitReceived: answer }),
+        context(),
+      );
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({
+        blocker: "commercial_links_attached",
+      });
+      // THE WHOLE POINT, asserted on the table rather than on the status: the
+      // transaction committed nothing, so the item is still the labelled,
+      // link-carrying item it was. A refusal that answered 409 and cleared
+      // the label anyway would pass a status-only assertion.
+      expect(await storedDisclosure()).toMatchObject({
+        benefitReceived: true,
+        label: "Advertisement / Reklame",
+      });
+      expect(await attachedLinkCount()).toBe(1);
+    },
+  );
+
+  it("is refused for BOTH withdrawal shapes, and for neither reason the alcohol gate gives", async () => {
+    // The refusal carries a `blocker` and no `field`, which is what
+    // distinguishes it from every other refusal this route can answer — all
+    // of which are 400s naming a body field. Without this, a test asserting
+    // only "not 200" would pass if the stray-field check had fired instead.
+    await seedCompliantItemWithLink();
+
+    const body = await (
+      await PUT(disclosureRequest({ benefitReceived: false }), context())
+    ).json();
+
+    expect(body.field).toBeUndefined();
+    expect(body.error).toContain("DELETE /api/media/[id]/commercial-links");
+  });
+
+  it("accepts the withdrawal once every link is detached", async () => {
+    // The two-request route out, which is what makes refusing rather than
+    // detaching an honest answer. If this ever stops working, the refusal
+    // above becomes a trap.
+    const linkId = await seedCompliantItemWithLink();
+
+    const detached = await DETACH_LINK(
+      new Request(
+        `http://localhost/api/media/${MEDIA_ID}/commercial-links?linkId=${linkId}`,
+        { method: "DELETE" },
+      ),
+      context(),
+    );
+    expect(detached.status).toBe(204);
+    expect(await attachedLinkCount()).toBe(0);
+
+    const response = await PUT(
+      disclosureRequest({ benefitReceived: false }),
+      context(),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await storedDisclosure()).toMatchObject({
+      benefitReceived: false,
+      label: null,
+    });
+  });
+
+  it("does not refuse a RE-DECLARATION while links are attached", async () => {
+    // The gate is on the label the write would LEAVE BEHIND, not on "is this
+    // a withdrawal". Correcting the market value on an item that carries
+    // links keeps a permitted label, so it must still be accepted — a gate
+    // written as "refuse any write while links exist" would freeze the
+    // disclosure of every item that carries one.
+    await seedCompliantItemWithLink();
+
+    const response = await PUT(
+      disclosureRequest({ ...GIFTED_GLASS, marketValueOre: 12345 }),
+      context(),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await storedDisclosure()).toMatchObject({
+      benefitReceived: true,
+      marketValueOre: 12345,
+      label: "Advertisement / Reklame",
+    });
+    expect(await attachedLinkCount()).toBe(1);
   });
 });

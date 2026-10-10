@@ -290,6 +290,44 @@ describe("K1 — the front page hero's call to action tracks session state", () 
   });
 });
 
+/**
+ * ugcportal-a3hj K4: rewriting the hero's visual must never cost the page
+ * its one real `<h1>`, nor duplicate it — checked here, on the fully
+ * assembled `Home()` page, in both session branches, since K4 names both
+ * explicitly ("in both the signed-in and signed-out branches"). This dev
+ * database is empty, so `<HeroVisual>` renders nothing (ugcportal-a3hj K2)
+ * regardless of session state — exactly the shape that would most easily
+ * let a second, accidental heading slip in beside the hero's own `<h1>`
+ * (src/app/page.tags.test.tsx's own "two headings total" test is the sibling
+ * check with at least one published item instead).
+ *
+ * FIXTURE MUTATION CHECK (performed by hand while writing this test, not
+ * left in the suite): temporarily rendered `<Hero>` twice in a row inside
+ * `Home()`'s returned fragment, confirmed this assertion failed (two `<h1>`
+ * elements), then reverted.
+ */
+describe("K4 — exactly one h1 on the front page, signed out and signed in", () => {
+  it("signed out: exactly one h1, and it is the hero's own", async () => {
+    const markup = await renderGallery();
+
+    const h1s = [...markup.matchAll(/<h1\b[^>]*>([^<]*)<\/h1>/g)];
+    expect(h1s).toHaveLength(1);
+    expect(h1s[0][1]).toBe("Real photos of the things you actually use.");
+  });
+
+  it("signed in: exactly one h1, and it is the hero's own", async () => {
+    getSessionMock.mockResolvedValueOnce({
+      user: { id: "user-1", email: "someone@example.com", role: "USER" },
+    });
+
+    const markup = await renderGallery();
+
+    const h1s = [...markup.matchAll(/<h1\b[^>]*>([^<]*)<\/h1>/g)];
+    expect(h1s).toHaveLength(1);
+    expect(h1s[0][1]).toBe("Real photos of the things you actually use.");
+  });
+});
+
 describe("K2 — the hero renders above the gallery, and the empty state does not render", () => {
   it("with published items present, shows the hero's title above the gallery grid and no living-empty-state marker", async () => {
     await seedMedia({ id: "a", createdAt: new Date("2026-03-01T00:00:00Z") });

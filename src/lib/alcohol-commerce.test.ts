@@ -4,10 +4,16 @@ import {
   type AlcoholDepiction,
   alcoholDepiction,
   alcoholLinkedBrandRefusal,
+  alcoholReclassificationRefusal,
   benefitAttachmentRefusal,
+  carriesCommercialLink,
   commercialPublishRefusal,
   effectiveBrandAlcoholAnswer,
 } from "@/lib/alcohol-commerce";
+import {
+  carriesUnlabelledCommercialLink,
+  MAX_COMMERCIAL_LINKS_PER_ITEM,
+} from "@/lib/commercial-link";
 
 /**
  * ugcportal-qnq9.3 K4 and K6, at the level the rules are actually decided:
@@ -181,11 +187,24 @@ describe("commercialPublishRefusal (K6)", () => {
     benefitSource: brand,
   });
 
+  /**
+   * The commercial-link half of the gate's input (ugcportal-jain), held at
+   * zero for every case that is about the BENEFIT half.
+   *
+   * Spelled out rather than defaulted in the function's own signature: the
+   * publish route produces this count from a real query, and a parameter with
+   * a default would let a future caller forget to pass it and still compile —
+   * which is the direction this gate must not fail in.
+   */
+  const NO_LINKS = { commercialLinkCount: 0 };
+  const ONE_LINK = { commercialLinkCount: 1 };
+
   it("permits the published accessory advertisement (K1)", () => {
     expect(
       commercialPublishRefusal({
         disclosure: LABELLED({ alcoholLinked: false }),
         listing: { depictsAlcohol: false },
+        commercialLinks: NO_LINKS,
       }),
     ).toBeNull();
   });
@@ -206,6 +225,7 @@ describe("commercialPublishRefusal (K6)", () => {
       commercialPublishRefusal({
         disclosure,
         listing: { depictsAlcohol: true },
+        commercialLinks: NO_LINKS,
       }),
     ).toBeNull();
   });
@@ -222,6 +242,7 @@ describe("commercialPublishRefusal (K6)", () => {
     const refusal = commercialPublishRefusal({
       disclosure: LABELLED({ alcoholLinked: false }),
       listing,
+      commercialLinks: NO_LINKS,
     });
 
     expect(refusal?.field).toBe("depictsAlcohol");
@@ -236,6 +257,7 @@ describe("commercialPublishRefusal (K6)", () => {
     const refusal = commercialPublishRefusal({
       disclosure: LABELLED(brand),
       listing: { depictsAlcohol: false },
+      commercialLinks: NO_LINKS,
     });
 
     expect(refusal?.field).toBe("benefitSource");
@@ -255,10 +277,155 @@ describe("commercialPublishRefusal (K6)", () => {
             benefitSource: null,
           } as unknown as { benefitReceived: boolean | null; benefitSource: null },
           listing: { depictsAlcohol: true },
+          commercialLinks: NO_LINKS,
         }),
         `${JSON.stringify(benefitReceived)} was treated as a declared benefit`,
       ).toBeNull();
     }
+  });
+
+  describe("the commercial-link half (ugcportal-jain)", () => {
+    /**
+     * Every disclosure state that is NOT a declared benefit. Before this
+     * bead the gate returned null outright for all four, so an item whose
+     * disclosure had been withdrawn carried its links past § 9-2 entirely.
+     */
+    const NOT_A_DECLARED_BENEFIT: [
+      string,
+      { benefitReceived: boolean | null; benefitSource: null } | null | undefined,
+    ][] = [
+      ["no disclosure row", null],
+      ["an undefined disclosure", undefined],
+      ["a withdrawn benefit", { benefitReceived: false, benefitSource: null }],
+      ["an unanswered benefit question", { benefitReceived: null, benefitSource: null }],
+    ];
+
+    const REFUSING_LISTINGS: [string, { depictsAlcohol: boolean | null } | null][] = [
+      ["recorded as showing alcohol", { depictsAlcohol: true }],
+      ["unanswered", { depictsAlcohol: null }],
+      ["absent entirely", null],
+    ];
+
+    it.each(
+      NOT_A_DECLARED_BENEFIT.flatMap(([benefitName, disclosure]) =>
+        REFUSING_LISTINGS.map(
+          ([listingName, listing]) =>
+            [benefitName, listingName, disclosure, listing] as const,
+        ),
+      ),
+    )(
+      "refuses a link-carrying item with %s whose picture is %s",
+      (_benefitName, _listingName, disclosure, listing) => {
+        // PARAMETERISED OVER THE WHOLE PRODUCT of both inputs rather than
+        // over one representative pair: "a link makes an item commercial" is
+        // a claim about every disclosure state the benefit half rejects, and
+        // a single instance would prove it for one of the four.
+        const refusal = commercialPublishRefusal({
+          disclosure,
+          listing,
+          commercialLinks: ONE_LINK,
+        });
+
+        expect(refusal?.field).toBe("depictsAlcohol");
+        expect(refusal?.error).toMatch(/alkoholloven/);
+      },
+    );
+
+    it.each(NOT_A_DECLARED_BENEFIT)(
+      "permits a link-carrying item with %s on a picture recorded free of alcohol",
+      (_name, disclosure) => {
+        // The counterweight to the case above: carrying a link is not itself
+        // refusable here. § 9-2 is about the PICTURE and the BRAND, and this
+        // module has no opinion about the label — that is
+        // `commercialLinkPublishRefusal`'s (src/lib/commercial-link.ts).
+        // Without this, the block above would pass just as well against a
+        // gate that refused every item carrying a link.
+        expect(
+          commercialPublishRefusal({
+            disclosure,
+            listing: { depictsAlcohol: false },
+            commercialLinks: ONE_LINK,
+          }),
+        ).toBeNull();
+      },
+    );
+
+    it("does not ask the brand question of a link-carrying item with no declared benefit", () => {
+      // `benefitSource` on this parameter is the DISCLOSURE's brand, and a
+      // CommercialLink row carries its own, which can name a different
+      // company. Asking `alcoholLinkedBrandRefusal` about an absent
+      // disclosure brand would refuse with `field: "benefitSource"`, naming a
+      // brand that is not the link's. The listing is clean, so the only
+      // refusal this could produce is the brand one.
+      expect(
+        commercialPublishRefusal({
+          disclosure: { benefitReceived: false, benefitSource: null },
+          listing: { depictsAlcohol: false },
+          commercialLinks: ONE_LINK,
+        }),
+      ).toBeNull();
+    });
+
+    it("still asks the brand question of a DECLARED benefit that also carries links", () => {
+      // The other side of the branch above: widening the gate must not have
+      // dropped the brand check for the items it already covered.
+      expect(
+        commercialPublishRefusal({
+          disclosure: LABELLED({ alcoholLinked: true }),
+          listing: { depictsAlcohol: false },
+          commercialLinks: ONE_LINK,
+        })?.field,
+      ).toBe("benefitSource");
+    });
+
+    it.each([
+      [0, false],
+      [1, true],
+      [2, true],
+      [MAX_COMMERCIAL_LINKS_PER_ITEM, true],
+      /*
+       * NOT A COUNT AT ALL, and the row this table exists for. Every reading
+       * below has to land on the SAME side for it, and that side has to be
+       * the refusing one: `NaN >= 1` is `false`, so a gate written the
+       * obvious way would be told an item carries no link and would wave it
+       * through — a rights gate failing open on a caller's arithmetic bug.
+       * `carriesCommercialLink` is written `!(count < 1)` for exactly this
+       * row, which is also the direction `alcoholReclassificationRefusal`
+       * already fails in. Unreachable from either production caller (both
+       * pass a Prisma count), which is why it is a direction choice rather
+       * than a live defect — and why it is pinned here rather than left to
+       * a comment.
+       */
+      [Number.NaN, true],
+    ])(
+      "reads a count of %s the way the reclassification gate reads it",
+      (commercialLinkCount, carries) => {
+        // THREE READINGS OF ONE DATUM (`CommercialLinkFacts`), asserted
+        // together because any two of them disagreeing is a silent split in
+        // what "carries a link" means. `carriesUnlabelledCommercialLink`
+        // (src/lib/commercial-link.ts) is in the list because its own
+        // docstring claims to be pinned here; an earlier version of that
+        // claim named this test while this test never called the function,
+        // so mutating its link half left this green.
+        const links = { commercialLinkCount };
+
+        expect(carriesCommercialLink(links)).toBe(carries);
+        expect(carriesUnlabelledCommercialLink(null, links)).toBe(carries);
+        expect(
+          commercialPublishRefusal({
+            disclosure: null,
+            listing: { depictsAlcohol: true },
+            commercialLinks: links,
+          }) !== null,
+        ).toBe(carries);
+        expect(
+          alcoholReclassificationRefusal({
+            listing: { depictsAlcohol: true },
+            commercialLinks: links,
+          }) !== null,
+        ).toBe(carries);
+      },
+    );
   });
 });
 

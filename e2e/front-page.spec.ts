@@ -38,14 +38,20 @@ test("the hero renders for an anonymous visitor, above whatever the gallery show
    * ugcportal-qqnt.4 K1's other half, checked on THIS suite's own
    * zero-portfolio-pieces database (see this file's own header comment):
    * `HeroDecoration`'s old marker must never reappear, on any count of
-   * curated pieces, not only the seeded three-piece case
-   * e2e/seeded/front-page-hero-portfolio.spec.ts covers. Zero pieces is a
-   * real, tested shape (hero.test.tsx's own "zero pieces" case) — three
-   * neutral fallback tiles and no `<img>` at all, not a missing one.
+   * curated pieces. RETARGETED by ugcportal-a3hj K2: zero pieces used to
+   * render three neutral fallback tiles (hero.tsx's own former
+   * `HERO_VISUAL_FALLBACK_CLASS`); the collage now renders nothing at all
+   * below three published pieces — no `data-home-hero-visual` container, no
+   * `<img>`, no fallback element — so all three assertions below are
+   * `toHaveCount(0)`. hero.test.tsx's own "K2: fewer than three portfolio
+   * pieces hides the collage entirely" describe block covers the same claim
+   * at the unit level, for zero/one/two pieces; the seeded three-piece case
+   * (e2e/seeded/front-page-hero-portfolio.spec.ts) is where the collage
+   * actually renders in a real browser.
    */
   await expect(page.locator("[data-home-hero-decoration]")).toHaveCount(0);
-  await expect(page.locator("[data-home-hero-visual] img")).toHaveCount(0);
-  await expect(page.locator("[data-home-hero-visual-fallback]")).toHaveCount(3);
+  await expect(page.locator("[data-home-hero-visual]")).toHaveCount(0);
+  await expect(page.locator("[data-home-hero-visual-fallback]")).toHaveCount(0);
 });
 
 test("K1: the living empty state offers an action, on a genuinely empty gallery", async ({
@@ -253,68 +259,27 @@ test("K1/K2: the hero CTA, the empty-state link and the header's sign-in buttons
  * roughly 1:1 wherever the two actually overlapped. src/lib/design/
  * contrast.ts could not catch this (it checks declared token pairs, not
  * what two elements happen to composite to at a given breakpoint); only
- * measuring real client rects in a browser found it. The fix confines the
- * shapes to their own flex-sibling box, which this test checks
- * geometrically rather than trusting the structure to hold.
+ * measuring real client rects in a browser found it.
  *
- * RETARGETED (ugcportal-qqnt.4), not removed: the fix this test guards is
- * `HeroDecoration`'s original containment box, which K1 kept (same classes,
- * same flex-sibling placement) under a new name, `HeroVisual` — see that
- * component's own comment for why the geometric guarantee still holds for
- * whatever mix of real `<img>` tiles and neutral fallback `<div>`s it
- * renders. `[data-home-hero-decoration] span` selected the three circles
- * this box used to hold; `[data-home-hero-visual] > *` selects whichever of
- * the two tile kinds actually renders now, the same selector
- * e2e/front-page-motion.spec.ts also uses, for the same reason.
+ * MOVED, not removed, by ugcportal-a3hj K2: the geometric check itself (this
+ * file's own former "no hero visual tile intersects..." test, parametrised
+ * over 360/768/1024px) needs at least one rendered tile to mean anything,
+ * and this suite's own dev database is assumed genuinely empty (this file's
+ * own header comment) — since K2, that renders no collage at all, which
+ * would make `expect(shapeRects.length).toBeGreaterThan(0)` fail on every
+ * ordinary run rather than skip a check that has nothing to verify. The real
+ * check, against real seeded pieces, now lives in
+ * e2e/seeded/front-page-hero-portfolio.spec.ts. What is left here is the
+ * negative half: on THIS suite's zero-piece database, the collage element
+ * this check would have measured does not exist at all.
  */
-type Rect = { x: number; y: number; width: number; height: number };
+test("no hero visual tile exists to intersect the hero's text or CTA, on a genuinely empty gallery", async ({
+  page,
+}) => {
+  await page.goto("/");
 
-function intersects(a: Rect, b: Rect): boolean {
-  return !(
-    a.x + a.width <= b.x ||
-    b.x + b.width <= a.x ||
-    a.y + a.height <= b.y ||
-    b.y + b.height <= a.y
-  );
-}
-
-for (const width of [360, 768, 1024]) {
-  test(`no hero visual tile intersects the hero's text or CTA at ${width}px`, async ({
-    page,
-  }) => {
-    await page.setViewportSize({ width, height: 900 });
-    await page.goto("/");
-
-    const { textRects, shapeRects } = await page.evaluate(() => {
-      const toRect = (el: Element) => {
-        const { x, y, width, height } = el.getBoundingClientRect();
-        return { x, y, width, height };
-      };
-      return {
-        textRects: [
-          ...document.querySelectorAll(
-            "[data-home-hero] h1, [data-home-hero] p, [data-home-hero] a",
-          ),
-        ].map(toRect),
-        shapeRects: [
-          ...document.querySelectorAll("[data-home-hero-visual] > *"),
-        ].map(toRect),
-      };
-    });
-
-    expect(textRects.length).toBeGreaterThan(0);
-    expect(shapeRects.length).toBeGreaterThan(0);
-
-    for (const text of textRects) {
-      for (const shape of shapeRects) {
-        expect(
-          intersects(text, shape),
-          `text rect ${JSON.stringify(text)} intersects hero visual tile rect ${JSON.stringify(shape)} at ${width}px`,
-        ).toBe(false);
-      }
-    }
-  });
-}
+  await expect(page.locator("[data-home-hero-visual] > *")).toHaveCount(0);
+});
 
 /**
  * ugcportal-qqnt.4 K3: "hero plus header stay at or under 620px at

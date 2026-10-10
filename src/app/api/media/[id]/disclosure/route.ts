@@ -11,6 +11,7 @@ import {
   effectiveBrandAlcoholAnswer,
 } from "@/lib/alcohol-commerce";
 import { resolveBenefitSource, validateBenefitSourceName } from "@/lib/benefit-source";
+import { disclosureWithdrawalRefusal } from "@/lib/commercial-link";
 import { requireOwnedMedia } from "@/lib/media-access";
 import { prisma } from "@/lib/prisma";
 import { PRISMA_RECORD_NOT_FOUND, prismaErrorCode } from "@/lib/prisma-errors";
@@ -149,6 +150,19 @@ function badRequest(message: string, field?: string) {
  * withdraw a benefit from an alcohol photograph would point the rule
  * backwards — the same argument the curation price route makes for leaving
  * un-pricing ungated.
+ *
+ * A WITHDRAWAL IS NOT UNCONDITIONAL, THOUGH, AND THE PARAGRAPH ABOVE USED TO
+ * READ AS IF IT WERE (ugcportal-jain). A DIFFERENT gate, from a different
+ * statute, refuses one: `disclosureWithdrawalRefusal`
+ * (src/lib/commercial-link.ts), called in `upsertDisclosure` below, answers
+ * 409 to a write that would leave this item carrying a commercial link with
+ * no permitted label — which every withdrawal would, since a withdrawal
+ * clears the label. Clearing it off an item that carries a link leaves a
+ * live advertising link with
+ * nothing above it saying so — Forbrukertilsynet's § 3.2, not alkoholloven's
+ * § 9-2. It points the rule forwards rather than backwards, and it traps
+ * nobody: DELETE /api/media/[id]/commercial-links is itself ungated, so the
+ * withdrawal is always two requests away.
  *
  * WHAT THIS DOES NOT DO: it does not unpublish. An item that is already public
  * and gains a benefit declaration WITH a valid label stays public, correctly —
@@ -345,6 +359,14 @@ type DisclosureWrite = {
 /**
  * Writes the disclosure, or answers null if the item is no longer there.
  *
+ * OR REFUSES: both of the gates this route applies to the stored state rather
+ * than to the body — `disclosureWithdrawalRefusal` (ugcportal-jain) and
+ * `benefitAttachmentRefusal` (ugcportal-qnq9.3) — are asked here rather than
+ * in the handler above, because each needs a fact read from the database in
+ * the same transaction as the write it governs. Both return the refusal body
+ * as a `NextResponse` from inside the transaction, which the handler passes
+ * straight back.
+ *
  * IN ONE TRANSACTION WITH the brand resolution, for the reason
  * `resolveBenefitSource` states: a brand minted for a disclosure whose write
  * then fails is permanent debris, because nothing in this product deletes a
@@ -373,9 +395,69 @@ async function upsertDisclosure(
         // that does not exist is `null` here, which `alcoholDepiction` reads
         // as unanswered — and an item nobody has put forward for sale is
         // exactly an item nobody has triaged.
-        select: { id: true, listing: { select: { depictsAlcohol: true } } },
+        select: {
+          id: true,
+          listing: { select: { depictsAlcohol: true } },
+          /*
+           * How many commercial links this item carries (ugcportal-jain).
+           *
+           * READ UNCONDITIONALLY, not behind "is this a withdrawal", which is
+           * the same call `recordTriageFacts` (src/lib/curation-triage-write.ts)
+           * and the publish route both make about their own § 9-2 lookups, for
+           * the reason they give: a short-circuit on the caller's side is a
+           * SECOND reading of the condition the gate itself reads, in a place
+           * that cannot see the gate's rule, and the direction that mistake
+           * fails in is the gate never running at all. One indexed count on a
+           * rare, deliberate act is the cheaper side of that trade.
+           *
+           * A COUNT AND NOT THE ROWS. `disclosureWithdrawalRefusal` decides on
+           * "any", and a URL and a brand id are a compliance record this
+           * handler has no business reading to answer a yes/no question.
+           *
+           * IN THE SAME TRANSACTION AS THE UPSERT it governs, and in the same
+           * statement as the ownership re-check, so the count this gate reads
+           * and the write it governs are one piece of work rather than two a
+           * concurrent attach could be slipped between. ugcportal-yzo7
+           * measured what that is worth at c5bf99f, against a real
+           * file-backed database through the real `@prisma/adapter-libsql`:
+           * a competing write on a second client fails `SQLITE_BUSY` and does
+           * not commit, and one on the same client — production's shape,
+           * since `prisma` is a singleton — blocks until this transaction
+           * finishes. The probe is recorded on `recordPrice`
+           * (src/lib/curation-price-write.ts); `recordTriageFacts`'s own
+           * docstring retracts the "deferred, so this does not serialise"
+           * claim that used to be repeated here and elsewhere as inherited
+           * rather than measured.
+           */
+          _count: { select: { commercialLinks: true } },
+        },
       });
       if (!owned) return null;
+
+      /*
+       * THE LABEL AND THE LINKS TRAVEL TOGETHER (ugcportal-jain K1). Judged on
+       * `write.label` — the label this transaction would LEAVE BEHIND — rather
+       * than on which branch of the handler above got here, so there is one
+       * statement of the rule and it is the rule itself rather than a proxy
+       * for it. On the declaring branch `write.label` is a value
+       * `validateAdvertisingLabel` just returned, so this never refuses there;
+       * on the withdrawing branch it is `null`, which is exactly the state
+       * that strands a link.
+       *
+       * 409 RATHER THAN 400, and no `field`: the same call the attach route
+       * makes for its per-item cap. The request is well-formed and the caller
+       * is authorized, and what refuses it is the row's current state — a
+       * state the caller can change, with a DELETE.
+       */
+      const strandedLinks = disclosureWithdrawalRefusal(write.label, {
+        commercialLinkCount: owned._count.commercialLinks,
+      });
+      if (strandedLinks) {
+        // Returned from inside the transaction, which commits — and commits
+        // nothing, because the only statement above it is a read, the same
+        // shape the alcohol refusal below uses.
+        return NextResponse.json(strandedLinks, { status: 409 });
+      }
 
       let benefitSourceId: string | null = null;
       if (write.benefitSource) {

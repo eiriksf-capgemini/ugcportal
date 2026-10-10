@@ -32,12 +32,12 @@ function unavailable(signedIn: boolean, portfolioPieces: GalleryItem[]): ReactEl
 }
 
 /**
- * The hero's photographic tiles (ugcportal-qqnt.4 K1) degrade to the
- * fallback petrol tiles `<HeroVisual>` itself already renders for an
- * under-filled set, rather than crashing `Home()`'s render, the same
- * resilience `resolveSessionOrAnonymous` gives the session read just below
- * — a dropped database connection reading curated portfolio pieces is a
- * real possibility on the SAME database `listPublicMedia` and
+ * The hero's photographic tiles (ugcportal-qqnt.4 K1) degrade to an empty
+ * array — which `<HeroVisual>` itself renders as nothing at all, ugcportal-
+ * a3hj K2 — rather than crashing `Home()`'s render, the same resilience
+ * `resolveSessionOrAnonymous` gives the session read just below — a dropped
+ * database connection reading curated portfolio pieces is a real
+ * possibility on the SAME database `listPublicMedia` and
  * `resolveSessionOrAnonymous` already guard against independently, not a
  * hypothetical one invented for symmetry.
  *
