@@ -22,7 +22,7 @@
  * two attestation spans. The two plain-canvas usages this bead found still
  * standing — triage-form.tsx's two attestation spans and upload-form.tsx's
  * alt-text helper + caption qualifier — are fixed in this same change (see
- * their own comments); this file is what stops a fifth one arriving
+ * their own comments); this file is what stops the next one arriving
  * unnoticed.
  *
  * WHY CONTENT, NOT JUST A COUNT OR A LINE. Two earlier shapes of this file
@@ -65,10 +65,10 @@
  *
  * SCANNED, PRECISELY. `occurrencesIn` walks the TypeScript AST (the same
  * parser `scan-source.ts`'s `sourceFileOf` already uses) and looks inside
- * exactly two shapes: a string literal / no-substitution template literal
- * (`ts.isStringLiteralLike`), and the static head/span segments of an
- * interpolated template (`ts.isTemplateExpression`). A match's position is
- * found by searching the literal's own RAW source slice
+ * the shapes `visit()` below checks for: a string literal / no-substitution
+ * template literal (`ts.isStringLiteralLike`), and the static head/span
+ * segments of an interpolated template (`ts.isTemplateExpression`). A
+ * match's position is found by searching the literal's own RAW source slice
  * (`sourceFile.text.slice(node.getStart(), node.getEnd())`), not its decoded
  * `.text` — the two can differ in length wherever the source contains an
  * escape sequence, which would have put the computed position at the wrong
@@ -116,10 +116,10 @@
  * - A usage reached through a SHARED NAMED IDENTIFIER — a `const` holding a
  *   class string, a pattern this codebase already uses (`TEXT_LABEL_CLASS`,
  *   `SELECT_CLASS`, `FIELD_CLASS`), and which CAN be referenced from more
- *   than one call site (`TEXT_LABEL_CLASS` is, from four: two in
- *   upload-form.tsx, two in contact-mailto-form.tsx) — is recorded only
- *   once, at wherever its literal actually sits: the identifier's own
- *   declaration. `occurrencesIn` walks string/template literals, not
+ *   than one call site (`TEXT_LABEL_CLASS` is, from both upload-form.tsx and
+ *   contact-mailto-form.tsx) — is recorded only once, at wherever its
+ *   literal actually sits: the identifier's own declaration.
+ *   `occurrencesIn` walks string/template literals, not
  *   references to them, so a second call site that renders the identical
  *   class list on a genuinely unsafe surface produces no signal of its own
  *   at all — no new key, nothing in `unaudited`, nothing `stale`. This is a
@@ -129,11 +129,12 @@
  *   Following an identifier out to every call site and judging each one's
  *   own surface is call-site- and JSX-ancestor-aware analysis this file does
  *   not attempt — the same gap dual-meaning-usage.test.ts's own header
- *   discloses for its four tracked tokens rather than solves, for the same
- *   reason. Not live today: every occurrence AUDITED_USAGE lists above is an
- *   inline literal, not a shared identifier, so this gap is latent rather
- *   than shipped — it would stop being latent the moment a `text-ink-muted`
- *   call site is refactored onto a constant used on more than one surface.
+ *   discloses for the tokens it tracks (DUAL_MEANING_TOKENS) rather than
+ *   solves, for the same reason. Not live today: every occurrence
+ *   AUDITED_USAGE lists above is an inline literal, not a shared identifier,
+ *   so this gap is latent rather than shipped — it would stop being latent
+ *   the moment a `text-ink-muted` call site is refactored onto a constant
+ *   used on more than one surface.
  */
 import path from "node:path";
 import { fileURLToPath } from "node:url";
