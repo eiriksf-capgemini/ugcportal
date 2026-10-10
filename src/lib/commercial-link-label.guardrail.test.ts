@@ -211,11 +211,12 @@ beforeAll(async () => {
    * 5: THE OUT-OF-BAND WRITE, and the one fixture in this file that does not
    * go through a route. It is here because the phases below are about the
    * BACKSTOPS, and after phase 4 the API can no longer produce the state they
-   * exist to catch. That state is still reachable: a raw statement, a future
-   * importer, a row that predates the gate, or — the one that is reachable
-   * today — a link attached concurrently with a withdrawal, which neither
-   * read excludes, because `@prisma/adapter-libsql` opens SQLite transactions
-   * as `deferred` (see `recordTriageFacts`'s own note on the same limit).
+   * exist to catch. That state is still reachable by two ordinary routes: a
+   * row written by a raw statement or a future importer, and every row
+   * already carrying the pair when phase 4's gate landed, since nothing
+   * backfills. NOT by a concurrent attach — that argument was inherited
+   * rather than measured, and ugcportal-yzo7 disproved it at c5bf99f; see
+   * `commercialLinkPublishRefusal`'s own docstring for the probe.
    *
    * It writes exactly what a successful withdrawal would have written, which
    * is what makes the phases below a regression of the recorded sequence

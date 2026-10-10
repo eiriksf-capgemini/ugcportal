@@ -6,10 +6,14 @@ import {
   alcoholLinkedBrandRefusal,
   alcoholReclassificationRefusal,
   benefitAttachmentRefusal,
+  carriesCommercialLink,
   commercialPublishRefusal,
   effectiveBrandAlcoholAnswer,
 } from "@/lib/alcohol-commerce";
-import { MAX_COMMERCIAL_LINKS_PER_ITEM } from "@/lib/commercial-link";
+import {
+  carriesUnlabelledCommercialLink,
+  MAX_COMMERCIAL_LINKS_PER_ITEM,
+} from "@/lib/commercial-link";
 
 /**
  * ugcportal-qnq9.3 K4 and K6, at the level the rules are actually decided:
@@ -374,29 +378,52 @@ describe("commercialPublishRefusal (K6)", () => {
       ).toBe("benefitSource");
     });
 
-    it.each([0, 1, 2, MAX_COMMERCIAL_LINKS_PER_ITEM])(
-      "reads a count of %i the way the reclassification gate reads it",
-      (commercialLinkCount) => {
-        // The two gates share one datum (`CommercialLinkFacts`) and must not
-        // come to disagree about what "carries a link" means: one reading
-        // `>= 1` and the other `< 1` of the same number is the only way they
-        // stay inverses. Run over the whole range a real item can hold, not
-        // over the boundary alone.
+    it.each([
+      [0, false],
+      [1, true],
+      [2, true],
+      [MAX_COMMERCIAL_LINKS_PER_ITEM, true],
+      /*
+       * NOT A COUNT AT ALL, and the row this table exists for. Every reading
+       * below has to land on the SAME side for it, and that side has to be
+       * the refusing one: `NaN >= 1` is `false`, so a gate written the
+       * obvious way would be told an item carries no link and would wave it
+       * through — a rights gate failing open on a caller's arithmetic bug.
+       * `carriesCommercialLink` is written `!(count < 1)` for exactly this
+       * row, which is also the direction `alcoholReclassificationRefusal`
+       * already fails in. Unreachable from either production caller (both
+       * pass a Prisma count), which is why it is a direction choice rather
+       * than a live defect — and why it is pinned here rather than left to
+       * a comment.
+       */
+      [Number.NaN, true],
+    ])(
+      "reads a count of %s the way the reclassification gate reads it",
+      (commercialLinkCount, carries) => {
+        // THREE READINGS OF ONE DATUM (`CommercialLinkFacts`), asserted
+        // together because any two of them disagreeing is a silent split in
+        // what "carries a link" means. `carriesUnlabelledCommercialLink`
+        // (src/lib/commercial-link.ts) is in the list because its own
+        // docstring claims to be pinned here; an earlier version of that
+        // claim named this test while this test never called the function,
+        // so mutating its link half left this green.
         const links = { commercialLinkCount };
-        const publishSaysCommercial =
+
+        expect(carriesCommercialLink(links)).toBe(carries);
+        expect(carriesUnlabelledCommercialLink(null, links)).toBe(carries);
+        expect(
           commercialPublishRefusal({
             disclosure: null,
             listing: { depictsAlcohol: true },
             commercialLinks: links,
-          }) !== null;
-        const reclassificationSaysCommercial =
+          }) !== null,
+        ).toBe(carries);
+        expect(
           alcoholReclassificationRefusal({
             listing: { depictsAlcohol: true },
             commercialLinks: links,
-          }) !== null;
-
-        expect(publishSaysCommercial).toBe(reclassificationSaysCommercial);
-        expect(publishSaysCommercial).toBe(commercialLinkCount >= 1);
+          }) !== null,
+        ).toBe(carries);
       },
     );
   });

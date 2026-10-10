@@ -5,7 +5,10 @@ import {
   type AdvertisingDisclosureFacts,
   type AdvertisingLabelRefusal,
 } from "@/lib/advertising-disclosure";
-import type { CommercialLinkFacts } from "@/lib/alcohol-commerce";
+import {
+  carriesCommercialLink,
+  type CommercialLinkFacts,
+} from "@/lib/alcohol-commerce";
 import { hasUnsafeText } from "@/lib/media-rules";
 
 /**
@@ -386,17 +389,18 @@ export function validateCommercialLinkNetwork(
  * module is the renderer (ugcportal-qnq9.2.2) and the difference decides
  * whether it has to re-check. It gates the ATTACH, and only the attach: at
  * the moment a link is written, the item carries a declared benefit under a
- * permitted label. It says nothing about any later moment. What holds the
- * pair together AFTER the attach is three other gates, none of them this one
- * (ugcportal-jain): `disclosureWithdrawalRefusal` below, which refuses a
- * disclosure write that would clear the label off an item that still carries
- * links; `commercialLinkPublishRefusal` below, which refuses to publish that
- * pair however the row came to hold it; and the render-time gates in
- * `toGalleryItem` (src/lib/gallery-items.ts) and `listPublicMedia`
- * (src/lib/public-media.ts), which serve `[]` links for an item whose label
- * is absent. So the top label's presence beside a link is an invariant of
- * the WRITE PATHS rather than of the column, and a renderer still must not
- * read it off this gate.
+ * permitted label. It says nothing about any later moment. FOUR other gates
+ * hold the pair together after it, and they come from two different beads.
+ * Two are write-side and are ugcportal-jain's: `disclosureWithdrawalRefusal`
+ * below, which refuses a disclosure write that would clear the label off an
+ * item that still carries links, and `commercialLinkPublishRefusal` below,
+ * which refuses to publish that pair however the row came to hold it. Two
+ * are render-side and are ugcportal-qnq9.2.2's, not this bead's and not
+ * jain's: `toGalleryItem` (src/lib/gallery-items.ts) and `listPublicMedia`
+ * (src/lib/public-media.ts) both serve `[]` links for an item whose label is
+ * absent. So the top label's presence beside a link is an invariant of the
+ * WRITE PATHS rather than of the column, and a renderer still must not read
+ * it off this gate.
  *
  * THE LABEL IS RE-CHECKED AGAINST THE ALLOWLIST rather than checked for being
  * non-blank, which is `isPermittedAdvertisingLabel`'s own stated job: this
@@ -461,18 +465,23 @@ export function commercialLinkDisclosureRefusal(
  * `null` and `undefined` — a disclosure row that does not exist, or one whose
  * label was cleared — both land on the unlabelled side.
  *
- * `>= 1` IS THE SAME READING `alcoholReclassificationRefusal` MAKES of the
- * same count (`< 1`, src/lib/alcohol-commerce.ts), inverted. Pinned by "reads
- * a count of %i the way the reclassification gate reads it" in
- * alcohol-commerce.test.ts — in that file rather than this one because it is
- * the only one that imports both modules — so the two cannot drift into
- * disagreeing about what "carries a link" means.
+ * THE LINK HALF IS NOT SPELLED HERE AT ALL. It delegates to
+ * `carriesCommercialLink` (src/lib/alcohol-commerce.ts, where
+ * `CommercialLinkFacts` itself lives), so there is one answer to "carries a
+ * link" across both modules rather than a `>= 1` here that could drift from
+ * the `< 1` the reclassification gate reads. An earlier version of this
+ * comment claimed that drift was pinned by a test naming both gates; it was
+ * not — that test never called this function, and mutating this line left it
+ * green. It is pinned now, by "reads a count of %s the way the
+ * reclassification gate reads it" in alcohol-commerce.test.ts, which calls
+ * all three readings over the same values including the one that is not a
+ * count.
  */
 export function carriesUnlabelledCommercialLink(
   label: string | null | undefined,
   links: CommercialLinkFacts,
 ): boolean {
-  return links.commercialLinkCount >= 1 && !isPermittedAdvertisingLabel(label);
+  return carriesCommercialLink(links) && !isPermittedAdvertisingLabel(label);
 }
 
 /** The one reason a disclosure write is refused by this module. A closed-set
@@ -543,13 +552,26 @@ export function disclosureWithdrawalRefusal(
  * THE BACKSTOP TO `disclosureWithdrawalRefusal`, NOT A SECOND COPY OF IT, and
  * the distinction is the same one `advertisingLabelPublishRefusal` draws for
  * the label it re-checks. The withdrawal refusal makes the forbidden pair
- * unreachable THROUGH THIS API. It cannot make it unreachable in the TABLE:
- * a row written by a raw statement or a future importer never met it, and —
- * the case that is reachable today — `@prisma/adapter-libsql` opens
- * transactions as `deferred` (see `recordTriageFacts`'s own note on the same
- * limitation), so a link attached concurrently with a withdrawal is excluded
- * by neither gate's read. Publishing is the one chokepoint every public
- * surface is downstream of, so it is where that residue is caught.
+ * unreachable THROUGH THIS API, FROM NOW ON. It cannot make it unreachable in
+ * the TABLE, and the two reasons are both ordinary rather than exotic: a row
+ * written by a raw statement or a future importer never met that gate, and
+ * every row already carrying the pair when this landed is still carrying it,
+ * because nothing backfills. Publishing is the one chokepoint every public
+ * surface is downstream of, so it is where that residue is caught — and
+ * answering 200 to such a row would be this API affirmatively calling it
+ * publishable, which is a different and worse thing than a renderer quietly
+ * declining to draw its links.
+ *
+ * NOT A RACE ARGUMENT. An earlier version of this paragraph claimed a link
+ * attached concurrently with a withdrawal was excluded by neither read,
+ * citing `@prisma/adapter-libsql`'s `deferred` transactions. ugcportal-yzo7
+ * measured that at c5bf99f against a real file-backed database through the
+ * real adapter and found the opposite: a competing write on a second client
+ * fails `SQLITE_BUSY` and does not commit, and one on the same client — which
+ * is production's shape, `prisma` being a singleton — blocks until the
+ * transaction finishes. See `recordPrice` (src/lib/curation-price-write.ts)
+ * for the probe itself, and `recordTriageFacts`'s docstring for the sentence
+ * retracting the inherited claim. This backstop never needed that argument.
  *
  * GATED ON THE LABEL ALONE, not on `benefitReceived`, which is the one place
  * this deliberately reads less than `commercialLinkDisclosureRefusal` above.

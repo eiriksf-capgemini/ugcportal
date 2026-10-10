@@ -179,10 +179,9 @@ export type GalleryItem = {
    * (`disclosureWithdrawalRefusal`) and the publish that re-checked neither
    * (`commercialLinkPublishRefusal`) — so through the API the pair is now
    * unreachable. THIS FIELD IS STILL NOT DERIVED FROM THAT, and must not be:
-   * a row written by a raw statement never met either gate, the two
-   * write-side reads are not serialised against a concurrent attach, and
-   * every row that reached the table BEFORE those gates existed is still
-   * sitting in it. What stands between such a row and a rendered advertising
+   * a row written by a raw statement never met either gate, and every row
+   * that reached the table BEFORE those gates existed is still sitting in
+   * it, because nothing backfills. What stands between such a row and a rendered advertising
    * link with no label above it, on every React-rendered surface, is this
    * field being computed from `advertisingLabel` rather than from whatever
    * the `commercialLinks` relation happens to hold.

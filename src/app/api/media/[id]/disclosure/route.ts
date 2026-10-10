@@ -415,16 +415,19 @@ async function upsertDisclosure(
            * handler has no business reading to answer a yes/no question.
            *
            * IN THE SAME TRANSACTION AS THE UPSERT it governs, and in the same
-           * statement as the ownership re-check, so there is no window in which
-           * this handler could read a clean count and then write against a row
-           * that has changed underneath it. NOT because the transaction
-           * serialises them: `@prisma/adapter-libsql` opens SQLite transactions
-           * as `deferred`, the honest caveat `recordTriageFacts` records for
-           * the identical shape of guard, so a link attached by a concurrent
-           * request between this read and the upsert is excluded by nothing
-           * here. What covers that interleaving is
-           * `commercialLinkPublishRefusal` at the publish boundary, which asks
-           * the same question of whatever the row actually ended up holding.
+           * statement as the ownership re-check, so the count this gate reads
+           * and the write it governs are one piece of work rather than two a
+           * concurrent attach could be slipped between. ugcportal-yzo7
+           * measured what that is worth at c5bf99f, against a real
+           * file-backed database through the real `@prisma/adapter-libsql`:
+           * a competing write on a second client fails `SQLITE_BUSY` and does
+           * not commit, and one on the same client — production's shape,
+           * since `prisma` is a singleton — blocks until this transaction
+           * finishes. The probe is recorded on `recordPrice`
+           * (src/lib/curation-price-write.ts); `recordTriageFacts`'s own
+           * docstring retracts the "deferred, so this does not serialise"
+           * claim that used to be repeated here and elsewhere as inherited
+           * rather than measured.
            */
           _count: { select: { commercialLinks: true } },
         },

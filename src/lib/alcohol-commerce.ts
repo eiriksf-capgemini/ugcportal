@@ -61,6 +61,36 @@ export type ListingAlcoholFacts = { depictsAlcohol: boolean | null };
 export type CommercialLinkFacts = { commercialLinkCount: number };
 
 /**
+ * Whether this item carries any commercial link at all (ugcportal-jain).
+ *
+ * ONE SPELLING OF "CARRIES A LINK", exported so that
+ * `carriesUnlabelledCommercialLink` (src/lib/commercial-link.ts) can read the
+ * identical predicate rather than writing a second `>= 1` that could come to
+ * disagree with this one.
+ *
+ * `!(count < 1)` RATHER THAN `count >= 1`, and the difference is only visible
+ * on a value that is not a count. `NaN >= 1` is `false`, so a caller that
+ * handed over arithmetic on a missing figure would be told the item carries
+ * no link and every gate downstream would wave it through — a rights gate
+ * failing open. `!(NaN < 1)` is `true`, so the same input refuses instead.
+ * That is also the direction `alcoholReclassificationRefusal` below already
+ * fails in for the same value, by writing its own test as `< 1` and treating
+ * a false answer as "do not return null" — so the two agree on every count a
+ * caller can produce AND on the one value none of them can, which is the
+ * claim alcohol-commerce.test.ts's "reads a count of %s" table asserts over
+ * all three readings.
+ *
+ * Unreachable from either caller today — the disclosure route passes
+ * `_count.commercialLinks` and the publish route a `prisma.commercialLink.count`,
+ * both non-negative integers — so this is a direction choice rather than a
+ * live defect, taken because the parameter is typed `number` and the cost of
+ * taking the closed side is one negation.
+ */
+export function carriesCommercialLink(links: CommercialLinkFacts): boolean {
+  return !(links.commercialLinkCount < 1);
+}
+
+/**
  * What the record says about alcohol in the picture.
  *
  * THREE VALUES, NOT A BOOLEAN, because the two refusing states are refused by
@@ -228,7 +258,7 @@ export function commercialPublishRefusal(item: {
   commercialLinks: CommercialLinkFacts;
 }): AlcoholCommerceRefusal | null {
   const declaresBenefit = item.disclosure?.benefitReceived === true;
-  const carriesLink = item.commercialLinks.commercialLinkCount >= 1;
+  const carriesLink = carriesCommercialLink(item.commercialLinks);
   if (!declaresBenefit && !carriesLink) return null;
 
   // Re-tested rather than reusing `declaresBenefit`, which TypeScript does
