@@ -205,19 +205,22 @@ export async function recordTriageFacts({
       publish REQUEST, so it could never have seen a reclassification of an
       item that was already public.
 
-      HERE AND NOT IN THE ACTION, because here the count and the write it
-      governs are the same statement of work: there is no window in which a
-      caller could read a clean count, be preempted, and then issue the upsert
-      against a row that has changed underneath it. NOT because the
-      transaction serialises them — it does not, and the honest caveat the
-      docstring above records applies unchanged: `@prisma/adapter-libsql`
-      opens SQLite transactions as `deferred`, so a link attached by a
-      concurrent request between this count and the upsert is not excluded by
-      anything here. What covers that direction is the attach route's own
-      gate, which asks the mirror question from inside its own transaction and
-      refuses a link onto a row already recorded as showing alcohol. Both
-      orders are guarded; neither guard serialises against the other, and the
-      residual window is one interleaving of two rare, deliberate operator acts.
+      HERE AND NOT IN THE ACTION, because here the count this gate reads and
+      the write it governs are one piece of work rather than two a concurrent
+      attach could be slipped between. A shared transaction only excludes a
+      competing write once it already holds its own lock — ugcportal-yzo7
+      measured what that is worth at c5bf99f, against a real file-backed
+      database through the real `@prisma/adapter-libsql`: a competing write
+      on a second client fails `SQLITE_BUSY` and does not commit, and one on
+      the same client — production's shape, since `prisma` is a singleton —
+      blocks until this transaction finishes. The probe is recorded on
+      `recordPrice` (src/lib/curation-price-write.ts); this file's own
+      docstring above already retracts the "deferred, so this does not
+      serialise" claim this paragraph used to repeat. The attach route's own
+      gate still matters, but for the OTHER order — a link attached before
+      this transaction opens, or after it commits, which its mirror question
+      refuses from inside its own transaction — not for one landing inside
+      this window, which the lock above already closes.
 
       THE INCOMING ANSWER IS WHAT IS JUDGED (`facts`, the registry-rebuilt
       object about to be written), not the row's current one. See

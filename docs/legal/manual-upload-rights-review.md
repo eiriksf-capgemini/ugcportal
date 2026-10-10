@@ -168,7 +168,7 @@ Under the account model, disconnecting the account was a revocation event with a
 
 ## 4. What must be true before any item is offered for sale — the re-evaluation, restated for manual upload
 
-`ugcportal-74w` K5 and `ugcportal-p3v` K3 already require `evaluateSellability()` to run at render and at checkout, because `$transaction` does not serialise under `@prisma/adapter-libsql` and a stored price proves nothing. That mechanism is right and this review does not touch it. What follows is what the predicate must *check* once the gaps above are closed — the target contract for `src/lib/resale-rights.ts`, in gate order. Items marked **(today)** are already enforced; items marked **(new)** are not.
+`ugcportal-74w` K5 and `ugcportal-p3v` K3 already require `evaluateSellability()` to run at render and at checkout, because a stored price proves nothing after the moment it is written: `validUntil` passing, a checklist version being retired, or the signing admin being demoted are all changes with no write for any transaction to serialise against (ugcportal-yzo7 measured the write-vs-write race itself closed, at c5bf99f — see `recordPrice`'s own comment in src/lib/curation-price-write.ts). That mechanism is right and this review does not touch it. What follows is what the predicate must *check* once the gaps above are closed — the target contract for `src/lib/resale-rights.ts`, in gate order. Items marked **(today)** are already enforced; items marked **(new)** are not.
 
 For the **uploader** (`Media.userId → User.resaleRightsReview`):
 

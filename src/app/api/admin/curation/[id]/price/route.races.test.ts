@@ -7,11 +7,14 @@ import { CURRENT_CHECKLIST_VERSION } from "@/lib/resale-rights";
 /**
  * The write races at the price endpoint.
  *
- * The gate read and the update share a transaction, but adapter-libsql opens
- * SQLite transactions as `deferred`, so the listing can be deleted in between.
- * Before this was mapped, that threw P2025 out of `$transaction` as an
- * unhandled 500 — on an endpoint whose whole design is answering 403, 404
- * and 422 deliberately.
+ * The gate read and the update share a transaction, but that does not
+ * serialise them against a DELETE of the listing from outside it: a delete
+ * is a write that can be in flight before this transaction's own read takes
+ * its lock, which is the one interleaving ugcportal-yzo7's probe (c5bf99f)
+ * did not rule out — see `recordPrice`'s own comment on the catch below its
+ * update, in src/lib/curation-price-write.ts. Before this was mapped, that
+ * threw P2025 out of `$transaction` as an unhandled 500 — on an endpoint
+ * whose whole design is answering 403, 404 and 422 deliberately.
  *
  * Mocked rather than raced, for the same reason as
  * resale-rights-review.conflict.test.ts: forcing the interleaving against a

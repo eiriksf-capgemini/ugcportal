@@ -4,10 +4,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  * The lost race on a *first* decision (ugcportal-0ss).
  *
  * `setResaleRightsStatus` reads whether a review row exists and then creates
- * one, and `@prisma/adapter-libsql` opens SQLite transactions as `deferred`,
- * so that read is not serialised against a concurrent writer. Two admins
- * deciding on the same never-reviewed uploader at the same moment can both
- * see no row and both try to create one. The unique index on
+ * one. That read is excluded from a concurrent writer only once this
+ * transaction already holds its own lock — ugcportal-yzo7 measured what that
+ * is worth at c5bf99f, against a real file-backed database through the real
+ * `@prisma/adapter-libsql` (see `recordPrice`'s own comment in
+ * src/lib/curation-price-write.ts). Before either lock is taken, two admins
+ * deciding on the same never-reviewed uploader at the same moment can still
+ * both see no row and both try to create one. The unique index on
  * `uploaderUserId` is what actually prevents two reviews existing; the
  * loser gets P2002.
  *
