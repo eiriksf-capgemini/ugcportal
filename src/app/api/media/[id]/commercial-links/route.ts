@@ -356,9 +356,16 @@ export async function POST(request: Request, { params }: RouteContext) {
  * an unlawful one is taken down, and a gate that could refuse it would point
  * the rule backwards — the item recorded as showing alcohol is exactly the
  * item whose link most needs removing, and it is the one a gate here would
- * refuse to remove. The disclosure route makes the same call for the same
- * reason ("WITHDRAWING A BENEFIT IS NEVER REFUSED BY THAT GATE"), and the
- * curation price route for un-pricing.
+ * refuse to remove. The disclosure route makes the same call about its
+ * ALCOHOL gate for the same reason ("WITHDRAWING A BENEFIT IS NEVER REFUSED
+ * BY THAT GATE"), and the curation price route for un-pricing.
+ *
+ * AND IT IS WHAT MAKES ugcportal-jain's WITHDRAWAL REFUSAL HONEST. That gate
+ * refuses a disclosure write that would clear the advertising label off an
+ * item still carrying links, and the message it answers with tells the
+ * operator to detach them here first. That instruction is only true while
+ * this handler refuses nothing; a gate added here would turn the two into a
+ * pair in which neither half can be removed before the other.
  *
  * This is also why src/lib/alcohol-commerce.write-paths.test.ts is satisfied
  * by a FILE that reaches `benefitAttachmentRefusal` rather than by a handler

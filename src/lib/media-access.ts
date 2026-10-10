@@ -309,9 +309,10 @@ export const MEDIA_ANONYMOUS_SELECT = {
   // positions.
   //
   // THE RENDER-TIME GATE IS NOT HERE, and cannot be: this select cannot see
-  // its own sibling `advertisingDisclosure.label` to condition on. A
-  // published item whose disclosure was withdrawn after a link was
-  // attached (ugcportal-jain) still has this relation selected — the gate
+  // its own sibling `advertisingDisclosure.label` to condition on. An item
+  // carrying a link with no permitted label — a row written outside this
+  // API, or one that predates ugcportal-jain's write-side gates — still has
+  // this relation selected. The gate
   // is downstream, in TWO independent places that both re-validate the
   // same label: `toGalleryItem`
   // (src/lib/gallery-items.ts#toGalleryCommercialLinks) for every React-

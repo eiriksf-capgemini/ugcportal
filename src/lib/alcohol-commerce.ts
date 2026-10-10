@@ -169,14 +169,35 @@ export function benefitAttachmentRefusal(item: {
  * chokepoint every public surface is downstream of, so it is where that is
  * enforced.
  *
- * ONLY AN ITEM THAT RECORDS A BENEFIT IS IN SCOPE. An item with no
- * disclosure, or one declaring no benefit, is not advertising for anything
- * and § 9-2 has nothing to say about it — a photograph of a glass of wine is
+ * ONLY AN ITEM CARRYING SOMETHING COMMERCIAL IS IN SCOPE, and there are now
+ * TWO ways to carry one. An item with no disclosure, or one declaring no
+ * benefit, and no commercial link either, is not advertising for anything and
+ * § 9-2 has nothing to say about it — a photograph of a glass of wine is
  * perfectly publishable as personal content, which is the distinction §3.1a
- * practical rule 2 (ugcportal-qnq9.11) is built on. Written as
- * `!== true` rather than `=== false || == null` so a column holding anything
- * else reads as "not a declared benefit", matching
+ * practical rule 2 (ugcportal-qnq9.11) is built on. The benefit half is
+ * written as `!== true` rather than `=== false || == null` so a column
+ * holding anything else reads as "not a declared benefit", matching
  * `advertisingLabelPublishRefusal`'s own reading of the same field.
+ *
+ * THE LINK HALF IS ugcportal-jain, and it is not redundant with the benefit
+ * half even though a link can only be ATTACHED to an item that declares one
+ * (`commercialLinkDisclosureRefusal`, src/lib/commercial-link.ts). The
+ * disclosure is cleared by a later request and the link is not, so "declares
+ * a benefit" and "carries an advertising link" are two different facts about
+ * the row by the time anybody publishes it. Before this half existed, an
+ * item whose disclosure had been withdrawn answered `null` here and its § 9-2
+ * questions were never asked at all, however many live affiliate links it
+ * still carried.
+ *
+ * THE BRAND QUESTION IS ASKED ONLY OF A DECLARED BENEFIT, though, and that
+ * asymmetry is deliberate rather than an omission. `benefitSource` on this
+ * parameter is the DISCLOSURE's brand; a `CommercialLink` row carries its own
+ * `benefitSourceId`, which can name a different company entirely (see that
+ * model's schema comment), and this type does not carry it. Asking
+ * `alcoholLinkedBrandRefusal` about an absent disclosure brand would refuse
+ * every link-carrying item with "nobody has recorded whether this brand…",
+ * naming a brand that is not the link's. The link's own brand is checked
+ * where it is known: at the attach, by `benefitAttachmentRefusal`.
  *
  * BOTH REFUSING STATES OF THE ALCOHOL QUESTION ARE REFUSED HERE, unlike at
  * the write — `!== "absent"`. An item nobody has triaged is an item nobody
@@ -204,16 +225,24 @@ export function commercialPublishRefusal(item: {
     | null
     | undefined;
   listing: ListingAlcoholFacts | null | undefined;
+  commercialLinks: CommercialLinkFacts;
 }): AlcoholCommerceRefusal | null {
-  if (item.disclosure?.benefitReceived !== true) return null;
+  const declaresBenefit = item.disclosure?.benefitReceived === true;
+  const carriesLink = item.commercialLinks.commercialLinkCount >= 1;
+  if (!declaresBenefit && !carriesLink) return null;
 
-  const brand = alcoholLinkedBrandRefusal(item.disclosure.benefitSource);
-  if (brand) return brand;
+  // Re-tested rather than reusing `declaresBenefit`, which TypeScript does
+  // not carry narrowing through: inside this branch `item.disclosure` is
+  // known to exist, so there is no non-null assertion to argue with.
+  if (item.disclosure?.benefitReceived === true) {
+    const brand = alcoholLinkedBrandRefusal(item.disclosure.benefitSource);
+    if (brand) return brand;
+  }
 
   if (alcoholDepiction(item.listing) !== "absent") {
     return {
       error:
-        "This item records a benefit received, so publishing it publishes an advertisement — and nobody has recorded that it is free of alcohol, or it is recorded as showing some. Answer the alcohol question with a `no` first (alkoholloven § 9-2).",
+        "This item carries something commercial — a recorded benefit, an advertising link, or both — so publishing it publishes an advertisement, and nobody has recorded that it is free of alcohol, or it is recorded as showing some. Answer the alcohol question with a `no` first (alkoholloven § 9-2).",
       field: "depictsAlcohol",
     };
   }
@@ -252,9 +281,11 @@ export function commercialPublishRefusal(item: {
  * permitted label (`commercialLinkDisclosureRefusal`), so an unpublished item
  * carrying one is an advertisement one request away from the public rather
  * than a draft. Refusing only the published case would leave unpublish ->
- * reclassify -> publish as a route to the same row, and whether the publish
- * at the end of it refuses depends on `benefitReceived` still being true —
- * which withdrawal clears (ugcportal-jain). And the guardrail enumeration
+ * reclassify -> publish as a route to the same row, and leave the publish at
+ * the end of it as the only thing standing in the way — a publish that, until
+ * ugcportal-jain widened `commercialPublishRefusal` above with the link
+ * count, asked nothing at all of an item whose `benefitReceived` a withdrawal
+ * had since cleared. And the guardrail enumeration
  * this invariant is measured by already asserts no link sits on an
  * alcohol-recorded row ANYWHERE, published or not
  * (src/lib/alcohol-commerce.guardrail.test.ts, "leaves no price, benefit or

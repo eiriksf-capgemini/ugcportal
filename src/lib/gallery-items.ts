@@ -160,8 +160,8 @@ export type GalleryItem = {
    * enforced in `toGalleryItem`, REGARDLESS of what the raw row's own
    * `commercialLinks` carries.
    *
-   * THIS IS THE ugcportal-jain FIX, AT THE RENDER LAYER — one of TWO
-   * independent chokepoints, not the only one. `toGalleryItem` is read
+   * THE RENDER LAYER'S COPY OF THE § 3.2 RULE — one of TWO independent
+   * chokepoints here, not the only one. `toGalleryItem` is read
    * through by every surface that renders a `GalleryItem` (the gallery
    * tile, the lightbox, the portfolio tile and /media/[previewId]); the raw
    * JSON `GET /api/public/media` response does NOT go through it at all — it
@@ -173,15 +173,19 @@ export type GalleryItem = {
    *
    * The attach gate only ever checked the disclosure at the moment a link
    * was attached (`commercialLinkDisclosureRefusal`'s own docstring,
-   * src/lib/commercial-link.ts, "WHAT THAT GATES, AND WHAT IT DOES NOT");
-   * withdrawing the disclosure afterwards (`PUT .../disclosure` with
-   * `benefitReceived: false`) clears the label but neither refuses the write
-   * nor detaches any link, and publish re-checks neither. So a published row
-   * can carry rows in `commercialLinks` with a `null` label, and what stands
-   * between that row and a rendered affiliate link with no label above it,
-   * on every React-rendered surface, is this field being computed from
-   * `advertisingLabel` rather than from whatever the `commercialLinks`
-   * relation happens to hold.
+   * src/lib/commercial-link.ts, "WHAT THAT GATES, AND WHAT IT DOES NOT").
+   * ugcportal-jain closed the two write-side holes that left — the
+   * withdrawal that cleared the label without touching the links
+   * (`disclosureWithdrawalRefusal`) and the publish that re-checked neither
+   * (`commercialLinkPublishRefusal`) — so through the API the pair is now
+   * unreachable. THIS FIELD IS STILL NOT DERIVED FROM THAT, and must not be:
+   * a row written by a raw statement never met either gate, the two
+   * write-side reads are not serialised against a concurrent attach, and
+   * every row that reached the table BEFORE those gates existed is still
+   * sitting in it. What stands between such a row and a rendered advertising
+   * link with no label above it, on every React-rendered surface, is this
+   * field being computed from `advertisingLabel` rather than from whatever
+   * the `commercialLinks` relation happens to hold.
    */
   commercialLinks: GalleryCommercialLink[];
 };
@@ -397,7 +401,8 @@ function asIsoString(value: unknown): string | null {
 
 /**
  * The commercial links on one row, filtered down to the ones that may
- * actually render (ugcportal-qnq9.2.2 K1/K5, and the ugcportal-jain fix).
+ * actually render (ugcportal-qnq9.2.2 K1/K5 — the render-side half of the
+ * § 3.2 rule whose write-side half is ugcportal-jain).
  *
  * `label` IS THE GATE, and it is checked FIRST, before anything about the
  * raw `value` is even inspected. An item with no permitted advertising label

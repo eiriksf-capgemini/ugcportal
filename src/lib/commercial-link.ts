@@ -5,6 +5,7 @@ import {
   type AdvertisingDisclosureFacts,
   type AdvertisingLabelRefusal,
 } from "@/lib/advertising-disclosure";
+import type { CommercialLinkFacts } from "@/lib/alcohol-commerce";
 import { hasUnsafeText } from "@/lib/media-rules";
 
 /**
@@ -22,10 +23,13 @@ import { hasUnsafeText } from "@/lib/media-rules";
  * WHAT THIS IS NOT. The alcohol and brand half of the attach gate is NOT
  * here: `benefitAttachmentRefusal` (src/lib/alcohol-commerce.ts) owns it, as
  * the one function that decides what the three alcohol answers mean, and the
- * route calls it directly. What IS here, below the field validators, is
- * `commercialLinkDisclosureRefusal` — the rule that a link may only be
- * attached to an item that already declares a benefit under a permitted
- * label, which is this bead's own rule and nobody else's.
+ * route calls it directly. What IS here, below the field validators, is the
+ * § 3.2 rule that a commercial link and a permitted advertising label travel
+ * together, asked at each of the three moments that can break the pair or
+ * publish a broken one: `commercialLinkDisclosureRefusal` when a link is
+ * attached (ugcportal-qnq9.2.1), `disclosureWithdrawalRefusal` when the label
+ * is about to be cleared, and `commercialLinkPublishRefusal` when the item is
+ * about to be made public (both ugcportal-jain).
  */
 
 /**
@@ -380,23 +384,19 @@ export function validateCommercialLinkNetwork(
  *
  * WHAT THAT GATES, AND WHAT IT DOES NOT, because the next reader of this
  * module is the renderer (ugcportal-qnq9.2.2) and the difference decides
- * whether it has to re-check. It gates the ATTACH: at the moment a link is
- * written, the item carries a declared benefit under a permitted label. It
- * holds nothing after that moment. PUT /api/media/[id]/disclosure with
- * `benefitReceived: false` is deliberately never refused ("WITHDRAWING A
- * BENEFIT IS NEVER REFUSED BY THAT GATE"), it clears `label`, and it names no
- * commercial link and detaches none — so an item can be left published,
- * carrying links, with no advertising label above them. Nothing downstream
- * notices: `commercialPublishRefusal` returns null as soon as
- * `benefitReceived` is not `true`, and the publish route selects no
- * `commercialLinks` relation at all, so neither the label check nor the § 9-2
- * check runs on that state. The counterexample is in this bead's own suite —
- * commercial-links/route.test.ts, "is never refused by the disclosure
- * precondition either", which builds exactly that row. So the top label's
- * presence is a property of THIS WRITE, not an invariant of the data, and a
- * renderer must not read it as one. Closing the gap — refusing the withdrawal
- * while links exist, detaching them with it, or re-checking at render — is
- * ugcportal-jain, not this bead.
+ * whether it has to re-check. It gates the ATTACH, and only the attach: at
+ * the moment a link is written, the item carries a declared benefit under a
+ * permitted label. It says nothing about any later moment. What holds the
+ * pair together AFTER the attach is three other gates, none of them this one
+ * (ugcportal-jain): `disclosureWithdrawalRefusal` below, which refuses a
+ * disclosure write that would clear the label off an item that still carries
+ * links; `commercialLinkPublishRefusal` below, which refuses to publish that
+ * pair however the row came to hold it; and the render-time gates in
+ * `toGalleryItem` (src/lib/gallery-items.ts) and `listPublicMedia`
+ * (src/lib/public-media.ts), which serve `[]` links for an item whose label
+ * is absent. So the top label's presence beside a link is an invariant of
+ * the WRITE PATHS rather than of the column, and a renderer still must not
+ * read it off this gate.
  *
  * THE LABEL IS RE-CHECKED AGAINST THE ALLOWLIST rather than checked for being
  * non-blank, which is `isPermittedAdvertisingLabel`'s own stated job: this
@@ -437,4 +437,149 @@ export function commercialLinkDisclosureRefusal(
   }
 
   return null;
+}
+
+/**
+ * Whether this pair of facts is a commercial link with nothing labelling the
+ * page above it — the state ugcportal-jain exists to make unreachable.
+ *
+ * ONE PREDICATE FOR BOTH GATES BELOW, and that is the point of extracting it
+ * rather than writing the condition out twice. `disclosureWithdrawalRefusal`
+ * and `commercialLinkPublishRefusal` refuse the SAME state at two different
+ * moments, with different remedies and so different messages; two copies of
+ * the condition would be two things that could come to disagree about what
+ * the forbidden state is, which is this repo's recurring defect family 2.
+ *
+ * THE LABEL IS RE-VALIDATED AGAINST THE CLOSED ALLOWLIST rather than checked
+ * for being non-null, and that is what makes this the same question the
+ * PUBLIC SURFACES ask. `toAdvertisingLabel` (src/lib/gallery-items.ts) and
+ * `listPublicMedia` (src/lib/public-media.ts) both render an item's links
+ * only when `isPermittedAdvertisingLabel` holds of the stored label; a gate
+ * that accepted a near-miss string here would refuse to publish fewer rows
+ * than the renderer hides, which is the two halves disagreeing about what
+ * "labelled" means. `isPermittedAdvertisingLabel` is a `typeof` check, so
+ * `null` and `undefined` — a disclosure row that does not exist, or one whose
+ * label was cleared — both land on the unlabelled side.
+ *
+ * `>= 1` IS THE SAME READING `alcoholReclassificationRefusal` MAKES of the
+ * same count (`< 1`, src/lib/alcohol-commerce.ts), inverted. Pinned by "reads
+ * a count of %i the way the reclassification gate reads it" in
+ * alcohol-commerce.test.ts — in that file rather than this one because it is
+ * the only one that imports both modules — so the two cannot drift into
+ * disagreeing about what "carries a link" means.
+ */
+export function carriesUnlabelledCommercialLink(
+  label: string | null | undefined,
+  links: CommercialLinkFacts,
+): boolean {
+  return links.commercialLinkCount >= 1 && !isPermittedAdvertisingLabel(label);
+}
+
+/** The one reason a disclosure write is refused by this module. A closed-set
+ * code rather than a `field`, in the same `{ error, blocker }` shape
+ * `publishOperatorRefusal` (src/lib/publish-authority.ts) and
+ * `publishRightsRefusal` (src/lib/publishability.ts) answer with, and for the
+ * reason they give: there is no edit to the request body that would make it
+ * succeed, so a key naming a body field would send the caller to change
+ * something that is not the problem. */
+export type DisclosureWithdrawalBlocker = "commercial_links_attached";
+
+export type DisclosureWithdrawalRefusal = {
+  readonly error: string;
+  readonly blocker: DisclosureWithdrawalBlocker;
+};
+
+/**
+ * Whether the disclosure write about to be made would strand this item's
+ * commercial links without a label (ugcportal-jain K1).
+ *
+ * THE LABEL THE WRITE WOULD LEAVE BEHIND, NOT THE ONE CURRENTLY STORED, which
+ * is the same choice `alcoholReclassificationRefusal` makes about the alcohol
+ * answer and for the same reason: § 3.2 forbids the PAIR, so what has to be
+ * judged is the state the transaction would commit rather than the transition
+ * it represents. It also means the caller needs no read of the previous label,
+ * so there is no stale-read window between deciding and writing.
+ *
+ * REFUSE RATHER THAN DETACH, which is the one decision in this bead worth
+ * arguing, because the bead offered both. Three reasons, in order of weight.
+ * It is what PR #198 chose for the mirror-image case — recording "this shows
+ * alcohol" against an item that already carries links
+ * (`alcoholReclassificationRefusal`) — and the two directions are the same
+ * shape of problem: a commercial link is already attached and the OTHER half
+ * of a forbidden pair is arriving, so answering them differently would be an
+ * asymmetry with nothing behind it. It destroys nothing: detaching on the
+ * operator's behalf would delete rows they may have spent money arranging, on
+ * a request that never mentioned them, and the row carries the destination
+ * nobody can reconstruct. And it traps nobody — DELETE
+ * /api/media/[id]/commercial-links is never gated by anything
+ * ("DETACHING IS NEVER GATED", that route's own docstring), so the operator
+ * always has the two-request route out, and it is the same two requests in
+ * the same order the reclassification refusal asks for.
+ *
+ * THIS IS NOT THE ALCOHOL GATE THE DISCLOSURE ROUTE'S OWN DOCSTRING EXEMPTS
+ * WITHDRAWALS FROM. That exemption is about § 9-2: an operator must always be
+ * able to take back a benefit declared against an alcohol photograph, because
+ * refusing that would point the rule backwards. This refusal points the other
+ * way — withdrawing while links remain is what CREATES an unlabelled
+ * advertisement — and it names the request that removes the obstacle.
+ */
+export function disclosureWithdrawalRefusal(
+  labelAfterWrite: string | null,
+  links: CommercialLinkFacts,
+): DisclosureWithdrawalRefusal | null {
+  if (!carriesUnlabelledCommercialLink(labelAfterWrite, links)) return null;
+
+  return {
+    error:
+      "This item carries a commercial link, and Forbrukertilsynet requires the page to be labelled at the top as well as at each link (docs/ugc-research.md §3.2). Detach every link with DELETE /api/media/[id]/commercial-links?linkId= first, then record this answer — recording it now would clear the label and leave a live advertising link with nothing above it saying so.",
+    blocker: "commercial_links_attached",
+  };
+}
+
+/**
+ * Whether this item's links and label forbid PUBLISHING it (ugcportal-jain
+ * K2's § 3.2 half).
+ *
+ * THE BACKSTOP TO `disclosureWithdrawalRefusal`, NOT A SECOND COPY OF IT, and
+ * the distinction is the same one `advertisingLabelPublishRefusal` draws for
+ * the label it re-checks. The withdrawal refusal makes the forbidden pair
+ * unreachable THROUGH THIS API. It cannot make it unreachable in the TABLE:
+ * a row written by a raw statement or a future importer never met it, and —
+ * the case that is reachable today — `@prisma/adapter-libsql` opens
+ * transactions as `deferred` (see `recordTriageFacts`'s own note on the same
+ * limitation), so a link attached concurrently with a withdrawal is excluded
+ * by neither gate's read. Publishing is the one chokepoint every public
+ * surface is downstream of, so it is where that residue is caught.
+ *
+ * GATED ON THE LABEL ALONE, not on `benefitReceived`, which is the one place
+ * this deliberately reads less than `commercialLinkDisclosureRefusal` above.
+ * That one is deciding whether a link may be CREATED, and a benefit nobody
+ * declared is a reason to refuse. This one is deciding whether a page may be
+ * SHOWN, and what the reader of that page actually sees is
+ * `MediaAdvertisingDisclosure.label` and nothing else — `toAdvertisingLabel`
+ * (src/lib/gallery-items.ts) renders the label off that column without
+ * consulting `benefitReceived` at all. So the state this must refuse is
+ * exactly the state the renderer would hide, which is the label being absent.
+ * A row with a permitted label and `benefitReceived` false is contradictory
+ * and is refused at the write (the disclosure route's stray-field check), but
+ * it is not an UNLABELLED advertisement, which is what § 3.2 is about.
+ */
+export function commercialLinkPublishRefusal(
+  disclosure: AdvertisingDisclosureFacts | null | undefined,
+  links: CommercialLinkFacts,
+): AdvertisingLabelRefusal | null {
+  if (!carriesUnlabelledCommercialLink(disclosure?.label, links)) return null;
+
+  return {
+    error:
+      "This item carries a commercial link but no permitted advertising label, so publishing it would publish an advertising link with nothing labelling the page above it (docs/ugc-research.md §3.2). Record a label with PUT /api/media/[id]/disclosure, or detach every link first. " +
+      `Permitted labels: ${PERMITTED_ADVERTISING_LABELS.join(", ")}.`,
+    // NOT `label` or `advertisingLabel`, which is what the sibling refusal a
+    // few lines earlier in the publish route answers with
+    // (`advertisingLabelPublishRefusal`). Two gates on the same route
+    // answering the same `field` would be two refusals a caller — and a test
+    // — could not tell apart, and this one has a remedy that one does not:
+    // detaching the links is as good an answer as recording a label.
+    field: "commercialLinks",
+  };
 }

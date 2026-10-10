@@ -255,13 +255,16 @@ export async function listPublicMedia(
         // whenever an item's label is absent — but that conversion only
         // runs for a caller that converts THROUGH it, and the raw JSON
         // GET /api/public/media serves `listPublicMedia`'s own result with
-        // no such conversion. Without this, a disclosure withdrawn AFTER a
-        // link was attached (ugcportal-jain: `PUT .../disclosure` with
-        // `benefitReceived: false` clears the label but detaches no link)
-        // would leave the link sitting in this raw response even though
-        // every rendered page already hides it — a leak to a direct API
-        // consumer, not a page visitor, the same audience round 4's `tags`
-        // fix names. RE-VALIDATED against the closed allowlist
+        // no such conversion. Without this, an item carrying a link with no
+        // permitted label would leave that link sitting in this raw response
+        // even though every rendered page already hides it — a leak to a
+        // direct API consumer, not a page visitor, the same audience round
+        // 4's `tags` fix names. ugcportal-jain has since refused that pair
+        // at both write paths (`disclosureWithdrawalRefusal` and
+        // `commercialLinkPublishRefusal`, src/lib/commercial-link.ts), which
+        // does NOT make this line redundant: a row written by a raw
+        // statement met neither gate, and every row already in the table
+        // when they landed is still in it. RE-VALIDATED against the closed allowlist
         // (`isPermittedAdvertisingLabel`), not merely checked for
         // non-null, for the same "do not trust a row was written through
         // the validator" reason `toAdvertisingLabel` gives for doing the

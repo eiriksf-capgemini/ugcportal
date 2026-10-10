@@ -74,12 +74,18 @@ function mediaRow(): Promise<Record<string, unknown>[]> {
 }
 
 /**
- * The two publish gates that read this item's advertising state, answered
- * from the database.
+ * The two publish gates whose answers this migration could have changed,
+ * answered from the database.
  *
  * Both are pure functions over a projection, so this is the publish route's
  * own decision without its auth, its preview check or its HTTP shape — the
  * part of "still publishes" this migration could possibly have broken.
+ *
+ * NOT ALL THREE of the route's disclosure gates: `commercialLinkPublishRefusal`
+ * (src/lib/commercial-link.ts) is left out because this item carries no links
+ * on either side of the migration — the table does not exist before it and is
+ * created empty by it — so that gate answers null in both snapshots whatever
+ * it does, which is an assertion that could not fail.
  */
 async function publishGateAnswers() {
   const disclosure = await prisma.mediaAdvertisingDisclosure.findUnique({
@@ -96,7 +102,15 @@ async function publishGateAnswers() {
   });
   return {
     label: advertisingLabelPublishRefusal(disclosure),
-    alcohol: commercialPublishRefusal({ disclosure, listing }),
+    alcohol: commercialPublishRefusal({
+      disclosure,
+      listing,
+      // Zero by construction on BOTH sides of the migration, not as a
+      // convenient fixture: before it the `CommercialLink` table does not
+      // exist, and the migration creates it empty. Counting it here would
+      // mean querying a table that is absent for the "before" snapshot.
+      commercialLinks: { commercialLinkCount: 0 },
+    }),
   };
 }
 
