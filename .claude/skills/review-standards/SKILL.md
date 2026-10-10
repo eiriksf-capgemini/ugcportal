@@ -67,6 +67,10 @@ Real instances from this repo:
 
 **The check:** re-read every comment, doc line and commit-message claim that says *never*, *always*, *guarantees*, *cannot*, or quotes a number, and confirm the code actually does that — on every path, not the one path you had in mind when you wrote it.
 
+**Its scope is the whole file, not the diff's hunks.** A claim does not have to sit in a hunk to be falsified by one, and it does not have to be new to be wrong. On PR #207 (`ugcportal-z4nh`) three instances — an opening summary, a docstring, and the tool's own **printed output** — sat in one file from its first commit, and the last of them was not found until round 6, the cap, because each round in between read the fix it had arrived for. Note which one mattered most and which was found last: the printed one. A claim made to the tool's user is a claim like any other. The full account, the commands that establish it, and what it does *not* explain are in `pr-review-merge` step 4.2, deliberately in one place only — §5 below is about exactly what happens to a claim kept in two.
+
+**This is not an instruction to re-read everything on every round.** The per-round sweep keeps its default scope; the whole-file obligation is carried by two bounded additions, each owned by a named round and each with an output that is absent when it was skipped — `pr-review-merge` 4.2 greps every file in the diff in full, but only after a fix that changed behaviour, and 4.3 reads every file top to bottom once per chain. Implementers get the same scope mechanically: `/pre-review`'s `claims-audit --all-lines` reads every line of every changed file, not only the added ones.
+
 ### Family 2 — a check compares the wrong two things
 
 Real instances from this repo:
