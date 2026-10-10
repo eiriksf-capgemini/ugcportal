@@ -949,7 +949,21 @@ function AltTextFields({
         <span aria-hidden="true"> *</span>
         <span className="sr-only"> (required)</span>
       </label>
-      <p className="mt-1 max-w-prose text-xs text-ink-muted">
+      {/*
+        text-muted-foreground, not text-ink-muted (ugcportal-7g2o, subsuming
+        ugcportal-galb: identical fix, same two usages). This paragraph sits
+        inside `<div className="mt-6" data-upload-alt-text-fields="">`, which
+        sets no bg-* of its own, so it renders on the plain page canvas
+        (--background) — --color-ink-muted measures 1.9003:1 there
+        (src/lib/design/ink-muted-usage.test.ts), below body text's 4.5:1.
+        Unlike this field's TEXT_LABEL_CLASS <label> above (its own text-ink,
+        ugcportal-4r0e, a different token not touched here), this is plain
+        body copy, so --muted-foreground — already measured safe on
+        --background by contrast.ts's muted-foreground-on-background pairing
+        — is the right token, not a one-off replacement invented for this
+        paragraph alone.
+      */}
+      <p className="mt-1 max-w-prose text-xs text-muted-foreground">
         Describe what the photo shows, for people using a screen reader and
         for search. Applies to files you add next.
       </p>
@@ -986,7 +1000,13 @@ function AltTextFields({
       </p>
 
       <label htmlFor={captionId} className={`mt-4 ${TEXT_LABEL_CLASS}`}>
-        Caption <span className="text-ink-muted">(optional)</span>
+        {/*
+          text-muted-foreground, not text-ink-muted (ugcportal-7g2o, same
+          reasoning as the alt-text helper paragraph above): this span is a
+          plain-canvas qualifier inside the same bg-less wrapper, so
+          --color-ink-muted's 1.9003:1 against --paper applies here too.
+        */}
+        Caption <span className="text-muted-foreground">(optional)</span>
       </label>
       <textarea
         id={captionId}
