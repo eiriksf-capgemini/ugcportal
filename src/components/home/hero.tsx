@@ -5,7 +5,7 @@ import { cn } from "cn";
 import { GALLERY_RADIUS_CLASS } from "@/components/gallery/containment";
 import { buttonVariants } from "@/components/ui/button";
 import { DISPLAY_TITLE_CLASS } from "@/components/type-scale";
-import { galleryItemAlt, type GalleryItem } from "@/lib/gallery-items";
+import type { GalleryItem } from "@/lib/gallery-items";
 import { PORTFOLIO_PATH, UPLOAD_PATH } from "@/lib/routes";
 
 export type HeroProps = {
@@ -46,7 +46,8 @@ export type HeroProps = {
  * 0/26%/44%, top 15%/0/40%), as Tailwind percentage-of-container arbitrary
  * values rather than fixed pixels, so the one set of classes reads
  * correctly at both of the box's own breakpoints (h-28/w-28 below `sm`,
- * h-40/w-40 at and above it) without a second set of numbers for each.
+ * `HERO_VISUAL_CONTAINER_SM_CLASS` at and above it) without a second set of
+ * numbers for each.
  */
 const HERO_VISUAL_TILE_POSITION_CLASS = [
   "left-0 top-[15%]",
@@ -54,14 +55,14 @@ const HERO_VISUAL_TILE_POSITION_CLASS = [
   "left-[44%] top-[40%]",
 ];
 
-/** Every hero visual tile's size, real photograph or fallback alike. */
+/** Every hero visual tile's size — always a real photograph (K2). */
 const HERO_VISUAL_TILE_SIZE_CLASS = "absolute h-[55%] w-[56%]";
 
 /**
- * The fade-in every hero visual tile carries, real photograph or fallback
- * alike (K3) — unchanged in mechanism from the decorative circles this
- * replaces (see this file's own git history for `HERO_DECORATIVE_SHAPE_
- * CLASS`, the prior name of this same string): `opacity-100` is the
+ * The fade-in every hero visual tile carries (K3) — unchanged in mechanism
+ * from the decorative circles this replaces (see this file's own git history
+ * for `HERO_DECORATIVE_SHAPE_CLASS`, the prior name of this same string):
+ * `opacity-100` is the
  * no-media-feature-support baseline (so a browser with neither value of
  * `prefers-reduced-motion` expressed still shows the tiles); `motion-safe:
  * opacity-0` plus the keyframe animation (src/app/globals.css) take over
@@ -77,14 +78,39 @@ const HERO_VISUAL_TILE_MOTION_CLASS =
   "opacity-100 motion-safe:opacity-0 motion-safe:animate-[home-fade-in_700ms_ease-out_both] motion-reduce:animate-none";
 
 /**
- * One neutral tone for every fallback tile (K1). The bead's own wording is
- * "a neutral petrol tile" — singular — one shade reused for whichever
- * slot(s) have no curated preview to show, not the three different shades
- * the decorative circles this replaces used to tell each other apart: there
- * is nothing to tell apart here, every fallback tile means the identical
- * thing ("no photograph in this slot yet").
+ * The collage's own box size at `sm` and above (ugcportal-a3hj K1) — the
+ * mockup's literal 240px (docs/design/forside.html's `.hero-art`), not a
+ * Tailwind spacing-scale step picked to be "close".
+ *
+ * `HERO_VISUAL_CONTAINER_SM_CLASS` below MUST be a static string literal,
+ * not built from this constant with a template literal — confirmed the hard
+ * way, in a real browser, not guessed: Tailwind v4 finds which classes to
+ * generate CSS for by statically scanning SOURCE TEXT for class-name
+ * substrings, never by evaluating the code, so
+ * `` `sm:h-[${HERO_VISUAL_CONTAINER_SM_PX}px]` `` ships the literal
+ * characters `${HERO_VISUAL_CONTAINER_SM_PX}` into the rendered HTML — a
+ * class name with no matching generated rule, hence no effect at all — while
+ * reading as correct in every test that only inspects the markup STRING
+ * (hero.test.tsx's own class-string check could not catch this; only a real
+ * rendered page, measured in a browser, could and did:
+ * e2e/seeded/front-page-hero-portfolio.spec.ts's own K1 size test). The two
+ * numbers below are therefore two independent literals, not one derived from
+ * the other, and hero.test.tsx's own size test checks the SAME exported
+ * `HERO_VISUAL_CONTAINER_SM_PX` against this literal class string precisely
+ * so the two cannot silently drift apart without a failing test — change one
+ * without the other and that test (and the e2e one) fails.
+ *
+ * Below `sm` the box keeps its pre-existing `h-28 w-28` (112px) — K1 only
+ * requires the mockup's geometry to hold "at sm and above"; the mockup's own
+ * mobile breakpoint (`max-width: 720px`, a different number than Tailwind's
+ * `sm` and a column-collapsing layout change, not just a resize) is out of
+ * scope here.
+ *
+ * Exported for hero.test.tsx only — nothing else in `src` imports it.
  */
-const HERO_VISUAL_FALLBACK_CLASS = "bg-petrol-200";
+export const HERO_VISUAL_CONTAINER_SM_PX = 240;
+
+const HERO_VISUAL_CONTAINER_SM_CLASS = "sm:h-[240px] sm:w-[240px]";
 
 /**
  * The intrinsic `<img>` width/height HTML attributes every hero tile
@@ -99,22 +125,25 @@ const HERO_VISUAL_FALLBACK_CLASS = "bg-petrol-200";
 const HERO_VISUAL_TILE_INTRINSIC_PX = 160;
 
 /**
- * The hero's photographic visual (ugcportal-qqnt.4 K1): up to three
- * overlapping radius-card tiles, each a real preview image of a curated
- * portfolio piece — `pieces` is `listPortfolioPieces()`'s own result
- * (src/lib/portfolio.ts), the SAME data and the SAME preview bytes
- * /portfolio itself renders, fetched once by src/app/page.tsx and handed
- * down rather than re-queried here. Replaces the three hand-rolled
- * decorative circles this bead's own premise found standing in for a real
- * photograph.
+ * The hero's photographic visual (ugcportal-qqnt.4 K1, re-scoped by
+ * ugcportal-a3hj K1/K2): exactly three overlapping radius-card tiles, each a
+ * real preview image of a curated portfolio piece — `pieces` is
+ * `listPortfolioPieces()`'s own result (src/lib/portfolio.ts), the SAME data
+ * and the SAME preview bytes /portfolio itself renders, fetched once by
+ * src/app/page.tsx and handed down rather than re-queried here.
  *
- * FEWER THAN THREE PREVIEWS: the remaining slot(s) render as a plain
- * neutral petrol tile instead of a photograph (the bead's own words) —
- * never fewer than three TILES, so the three position classes above never
- * have to change shape depending on how much curated content exists; only
- * WHAT fills a given slot does. Zero pieces therefore renders three
- * fallback tiles and no `<img>` at all — a tested shape
- * (hero.test.tsx's own "zero pieces" case), not a missing one.
+ * FEWER THAN THREE PREVIEWS: renders nothing at all (K2) — no container, no
+ * `<img>`, no filler of any kind. An earlier version of this component padded
+ * a short list out to three with a flat neutral tile per empty slot; that
+ * flat block is this bead's own premise (a 160px square of uniform colour
+ * inside a photographic hero reads as a failed image load, not as "more
+ * photos coming soon"), and recolouring it does not fix that — ANY filler
+ * block in an otherwise-photographic collage still reads as something that
+ * failed to load. So rather than trade one filler colour for another, a
+ * short list hides the whole collage instead: the hero's title, lead and CTA
+ * are a complete, non-broken-looking page on their own (see `Hero` below),
+ * and this component only ever appears once there are enough curated pieces
+ * to fill every slot with a real photograph.
  *
  * Confined to its OWN box — a flex sibling of the text column in `Hero`
  * below, never an absolutely-positioned overlay behind it — for the exact
@@ -127,8 +156,22 @@ const HERO_VISUAL_TILE_INTRINSIC_PX = 160;
  * `sm:flex-row`) still keeps those bounds a sibling of the text column at
  * every width — so a tile cannot reach the text column's rectangle
  * regardless of its own size or offset, the same geometric guarantee
- * e2e/front-page.spec.ts's "no hero visual tile intersects hero text or
- * CTA" check still asserts, now against this component's own markup.
+ * e2e/seeded/front-page-hero-portfolio.spec.ts's "no hero visual tile
+ * intersects hero text or CTA" check asserts against real seeded pieces
+ * (front-page.spec.ts's own copy of that check moved there with K2: its
+ * root dev database is assumed seed-free — see that file's own header
+ * comment — which this component now renders nothing at all against,
+ * leaving no tile there for that check to measure).
+ *
+ * DECORATIVE, NOT A SECOND GALLERY (K3): `aria-hidden="true"` on the
+ * container and an empty `alt` on every tile — these three photographs
+ * already appear, with real alt text, in the portfolio/gallery this hero
+ * sits above, so a screen reader is never asked to listen to the same three
+ * images described twice before reaching the one place they are actually
+ * browsable. `aria-hidden` on the container alone would already remove the
+ * whole subtree from the accessibility tree; the empty `alt` is a second,
+ * redundant guard for anything that reads `<img alt>` directly rather than
+ * through the accessibility tree.
  *
  * `data-home-hero-decoration` IS GONE (K1's own "no element with
  * data-home-hero-decoration remains") — `data-home-hero-visual` below is a
@@ -137,13 +180,19 @@ const HERO_VISUAL_TILE_INTRINSIC_PX = 160;
  * whatever this element happens to be now.
  */
 function HeroVisual({ pieces }: { pieces: GalleryItem[] }) {
-  const shown = pieces.slice(0, 3);
-  const fallbackCount = 3 - shown.length;
+  if (pieces.length < HERO_VISUAL_TILE_POSITION_CLASS.length) {
+    return null;
+  }
+  const shown = pieces.slice(0, HERO_VISUAL_TILE_POSITION_CLASS.length);
 
   return (
     <div
       data-home-hero-visual
-      className="relative h-28 w-28 shrink-0 self-center overflow-hidden sm:h-40 sm:w-40"
+      aria-hidden="true"
+      className={cn(
+        "relative h-28 w-28 shrink-0 self-center overflow-hidden",
+        HERO_VISUAL_CONTAINER_SM_CLASS,
+      )}
     >
       {shown.map((piece, index) => (
         // Same reasoning as src/components/portfolio/portfolio-tile.tsx: the
@@ -154,7 +203,7 @@ function HeroVisual({ pieces }: { pieces: GalleryItem[] }) {
         <img
           key={piece.id}
           src={piece.previewSrc}
-          alt={galleryItemAlt(piece, index)}
+          alt=""
           width={HERO_VISUAL_TILE_INTRINSIC_PX}
           height={HERO_VISUAL_TILE_INTRINSIC_PX}
           loading="eager"
@@ -169,23 +218,6 @@ function HeroVisual({ pieces }: { pieces: GalleryItem[] }) {
           )}
         />
       ))}
-      {Array.from({ length: fallbackCount }, (_, fallbackIndex) => {
-        const position = shown.length + fallbackIndex;
-        return (
-          <div
-            key={`fallback-${position}`}
-            aria-hidden="true"
-            data-home-hero-visual-fallback
-            className={cn(
-              HERO_VISUAL_TILE_SIZE_CLASS,
-              HERO_VISUAL_TILE_POSITION_CLASS[position],
-              GALLERY_RADIUS_CLASS,
-              HERO_VISUAL_FALLBACK_CLASS,
-              HERO_VISUAL_TILE_MOTION_CLASS,
-            )}
-          />
-        );
-      })}
     </div>
   );
 }
@@ -226,7 +258,10 @@ function HeroVisual({ pieces }: { pieces: GalleryItem[] }) {
  * "no stock photo", never "no photo" — but every one is a genuine, already-
  * published portfolio piece's own preview, served from this app's own
  * origin (`GalleryItem.previewSrc`, the SAME `/api/media/preview/...` path
- * /portfolio itself uses), never an external URL.
+ * /portfolio itself uses), never an external URL. `HeroVisual` only ever
+ * renders once there are at least three such pieces, and is entirely
+ * decorative/`aria-hidden` when it does (ugcportal-a3hj K2/K3) — see that
+ * component's own comment.
  */
 export function Hero({ signedIn, portfolioPieces }: HeroProps) {
   /*
@@ -314,6 +349,18 @@ export function Hero({ signedIn, portfolioPieces }: HeroProps) {
             comment on its base class for the current, systemic version and
             why a bare `outline-none` plus this app's `outline-hidden` idiom
             were both the wrong fix.
+
+            No `w-fit` (ugcportal-ocbo): the hand-rolled className this call
+            site replaced carried one explicitly; neither `buttonVariants`'
+            base nor `default-tint`/`lg` supplies an equivalent. Currently
+            inert, not a regression — this `<Link>` is the sole child of a
+            plain, non-flex/grid `<div className="mt-2">`, so it already
+            shrink-wraps to its own content with no `w-fit` needed. Disclosed
+            here rather than restored, since there is nothing a `w-fit` on an
+            already-shrink-wrapped element could change today for a test to
+            pin: if this `<div>` ever becomes a flex/grid container, THAT
+            change is what would make `w-fit`'s absence visible, and is the
+            moment to add it back (and a test for it) rather than now.
           */}
           <div className="mt-2">
             <Link
