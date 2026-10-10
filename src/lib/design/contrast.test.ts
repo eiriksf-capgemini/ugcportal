@@ -640,29 +640,23 @@ describe("the gate cannot be routed around", () => {
    * token, count)` for exactly this reason; this carries the same count
    * field forward rather than only claiming parity with it.
    *
-   * The one entry today: hero.tsx's `HeroVisual` (ugcportal-qqnt.4 K1;
-   * `HeroDecoration`'s replacement — this entry originally audited THAT
-   * component's three `bg-petrol-300` circles, which are gone now) renders
-   * a neutral `aria-hidden`, childless `<div>` fallback tile, confined to
-   * the same `overflow-hidden` box and confirmed (not assumed) geometrically
-   * isolated from the hero's text column by e2e/front-page.spec.ts's "no
-   * hero visual tile intersects hero text" check - see that component's own
-   * comment. `bg-petrol-200` shares no background reference with any
-   * existing pairing (the CTA pill's hover fill is the alpha-free MODIFIED
-   * utility `hover:bg-petrol-200`, a different usage the alpha scanner,
-   * not this bare one, already accounts for), which is what surfaces this
-   * gap. `HeroDecoration`'s other two bare fills (`bg-petrol-100`,
-   * `bg-petrol-400`, as they were spelled before ugcportal-uo15 renamed the
-   * second one to `bg-fjord-400`) needed no entry here for the same,
-   * now-moot reason #175 renamed one of their covering pairings over
-   * (`surface-0-on-petrol-400` at the time, `surface-0-on-fjord-400` today) —
-   * both literals are simply gone from hero.tsx along with the rest of
-   * `HeroDecoration`, so there is nothing left here for either pairing id to
-   * explain away.
+   * EMPTY as of ugcportal-a3hj K2. The one entry this allowlist ever held —
+   * hero.tsx's `HeroVisual` (ugcportal-qqnt.4 K1; `HeroDecoration`'s
+   * replacement) rendering a neutral `aria-hidden`, childless `<div>`
+   * fallback tile in `bg-petrol-200` for whichever slot(s) had no curated
+   * preview — is gone along with that fallback tile itself: a3hj K2 removed
+   * padding-with-placeholders entirely (fewer than three published pieces
+   * now renders no collage at all, rather than a mix of real photographs and
+   * this bare fill), so there is no longer any bare, decorative background
+   * usage anywhere in the source tree for this list to name. Left as an
+   * empty, still-exhaustiveness-checked allowlist (not deleted outright)
+   * so a FUTURE bare decorative background usage is a deliberate, audited
+   * addition here rather than something that starts passing silently the
+   * moment this map is gone. `AUDITED_DECORATIVE_BORDER_USAGES` above still
+   * demonstrates the identical "count, not just presence" mechanism against
+   * real, non-empty entries unrelated to this change.
    */
-  const AUDITED_DECORATIVE_BACKGROUND_USAGES: Readonly<Record<string, number>> = {
-    "src/components/home/hero.tsx:bg-petrol-200": 1,
-  };
+  const AUDITED_DECORATIVE_BACKGROUND_USAGES: Readonly<Record<string, number>> = {};
 
   /**
    * Occurrence counts behind the allowlist above, computed once (a fact
@@ -684,33 +678,67 @@ describe("the gate cannot be routed around", () => {
    * closes; the dedicated test below ("a second ... does not ride") proves
    * the count check actually bites, in isolation, without touching the real
    * hero.tsx.
+   *
+   * `audited` is a PARAMETER, defaulted to the real allowlist, rather than
+   * this function reading `AUDITED_DECORATIVE_BACKGROUND_USAGES` from
+   * closure directly — round-1 review on ugcportal-a3hj's own PR, CONFIRMED
+   * medium, the same shape PR #115 round 1 paid for once already: with no
+   * parameter, the moment the real allowlist's last entry is removed (as
+   * a3hj K2 just did), this function's `auditedCount !== undefined` branch
+   * becomes unreachable at every call site in this suite, and a dedicated
+   * mutation test could only go on "covering" it by reimplementing these two
+   * lines against a synthetic map INSTEAD OF calling this function — which
+   * proves the reimplementation, not the shipped code, and leaves a real
+   * regression in this comparison unguarded by anything. The real coverage
+   * check below (`it.each(THEME_MODES)`) still calls this with no third
+   * argument, so production behaviour is unchanged; only the dedicated
+   * mutation test now passes an explicit synthetic map, so it exercises
+   * this exact function body rather than a copy of it.
    */
   function isAuditedDecorativeBackground(
     usage: Pick<AlphaUtilityUsage, "file" | "utility">,
     occurrences: ReadonlyMap<string, number>,
+    audited: Readonly<Record<string, number>> = AUDITED_DECORATIVE_BACKGROUND_USAGES,
   ): boolean {
     const key = `${usage.file}:${usage.utility}`;
-    const auditedCount = AUDITED_DECORATIVE_BACKGROUND_USAGES[key];
+    const auditedCount = audited[key];
     return auditedCount !== undefined && occurrences.get(key) === auditedCount;
   }
 
   it("has exactly this audited decorative-background allowlist, at exactly its audited count, and no others", () => {
     // Pinned so a silent addition is a visible diff, the same reason
-    // PAIRINGS' own decorative-id list is frozen above.
-    expect(Object.keys(AUDITED_DECORATIVE_BACKGROUND_USAGES).sort()).toEqual(
-      ["src/components/home/hero.tsx:bg-petrol-200"].sort(),
-    );
+    // PAIRINGS' own decorative-id list is frozen above. EMPTY as of
+    // ugcportal-a3hj K2 (see the allowlist's own comment) — a real bare
+    // decorative-background usage would both add a key here AND show up in
+    // `bareBackgroundOccurrences`, so the loop below still has a real,
+    // non-vacuous (if currently empty) comparison to make.
+    expect(Object.keys(AUDITED_DECORATIVE_BACKGROUND_USAGES).sort()).toEqual([]);
     for (const [key, count] of Object.entries(AUDITED_DECORATIVE_BACKGROUND_USAGES)) {
       expect(bareBackgroundOccurrences.get(key), `${key} occurrence count`).toBe(count);
     }
   });
 
-  it("a second, non-decorative occurrence of an audited decorative background does not ride the existing entry", () => {
-    // Reproduces PR #115 round 1 finding 3 without touching the real
-    // hero.tsx: two bare bg-petrol-200 occurrences in the SAME audited file
-    // change the count the allowlist pins, so the second one - which could be
-    // real, non-decorative content - can no longer hide behind the one entry
-    // audited for a single, confirmed-decorative shape.
+  /**
+   * ugcportal-a3hj K2 retired the one real case this test used to exercise
+   * (two bare `bg-petrol-200` occurrences in hero.tsx, against a real
+   * audited-count-of-1 entry for that exact file) along with the allowlist
+   * entry itself, which is now empty (see its own comment). Reproduced here
+   * instead against a SYNTHETIC map passed as `isAuditedDecorativeBackground`'s
+   * third, defaulted argument — round-1 review on ugcportal-a3hj's own PR,
+   * CONFIRMED medium: an earlier version of this test rebuilt the function's
+   * two-line comparison inline against a local `syntheticAudited` object
+   * instead of calling the function, which meant NOTHING here exercised the
+   * real `isAuditedDecorativeBackground` body at all — a regression in that
+   * function's own comparison (the exact shape PR #115 round 1 paid for
+   * once already, this time with no instance left in the real allowlist to
+   * expose it) could land and no test anywhere would go red. Calling the
+   * real function with an explicit `audited` override keeps the general
+   * mechanism — a count, not just a Set of keys, so a SECOND occurrence in
+   * an already-audited file cannot ride the existing entry — proven against
+   * the SHIPPED code, independently of whatever the real, current allowlist
+   * happens to hold.
+   */
+  it("FIXTURE MUTATION: a second, non-decorative occurrence of an audited decorative background does not ride the existing entry", () => {
     const root = mkdtempSync(path.join(tmpdir(), "axu-contrast-"));
     try {
       const file = path.join(root, "src", "components", "home", "hero.tsx");
@@ -727,9 +755,12 @@ describe("the gate cannot be routed around", () => {
 
       const petrol200 = found.find((usage) => usage.utility === "bg-petrol-200");
       expect(petrol200, "fixture ships bg-petrol-200").toBeDefined();
-      expect(occurrences.get(`${petrol200!.file}:${petrol200!.utility}`)).toBe(2);
+      const key = `${petrol200!.file}:${petrol200!.utility}`;
+      expect(occurrences.get(key)).toBe(2);
+
+      const syntheticAudited: Readonly<Record<string, number>> = { [key]: 1 };
       expect(
-        isAuditedDecorativeBackground(petrol200!, occurrences),
+        isAuditedDecorativeBackground(petrol200!, occurrences, syntheticAudited),
         "two occurrences must not match the audited count of one",
       ).toBe(false);
     } finally {
