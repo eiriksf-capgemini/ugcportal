@@ -171,15 +171,20 @@ function raceOutcome(error: unknown): RaceOutcome | undefined {
  * caller renders, not exceptional conditions.
  *
  * Concurrency, honestly: the read of the current status and the write of the
- * new one share a transaction, but `@prisma/adapter-libsql` opens SQLite
- * transactions as `deferred`, so that does **not** make the read
- * non-stale (this is the known issue recorded on ugcportal-lu7 about
- * src/lib/roles.ts). Two simultaneous transitions can therefore both read the
- * same `fromStatus`, and one of them will either lose the race or fail with
- * SQLITE_BUSY_SNAPSHOT. The consequence here is a possibly misleading
- * `fromStatus` on one audit row — not a lost clearance and not a path to
- * CLEARED, because which *caller* may write CLEARED is decided before the
- * transaction opens, not by what the read returned.
+ * new one share a transaction, but that only excludes a competing write once
+ * THIS transaction already holds its own lock. ugcportal-yzo7 measured what
+ * that is worth at c5bf99f, against a real file-backed database through the
+ * real `@prisma/adapter-libsql` (see `recordPrice`'s own comment in
+ * src/lib/curation-price-write.ts): once open, a competing write fails
+ * `SQLITE_BUSY` on a second client and does not commit, or blocks on the
+ * same client — production's shape, since `prisma` is a singleton — until
+ * this transaction finishes. What that does not cover is two transitions
+ * each still in flight before either one's own read has taken its lock: two
+ * simultaneous calls to this function, starting at nearly the same moment,
+ * can still both read the same `fromStatus`. The consequence stays bounded
+ * either way — not a lost clearance and not a path to CLEARED, because which
+ * *caller* may write CLEARED is decided before the transaction opens, not by
+ * what the read returned.
  */
 export async function setResaleRightsStatus(
   uploaderUserId: string,
@@ -323,9 +328,13 @@ export async function setResaleRightsStatus(
             select: snapshot,
           });
     } catch (error) {
-      // Both paths, not just the create. Nothing here is serialised —
-      // adapter-libsql opens `deferred` transactions — so every row this
-      // write depends on can move underneath it:
+      // Both paths, not just the create. A competing write is excluded only
+      // once THIS transaction already holds its own lock (ugcportal-yzo7's
+      // probe, c5bf99f — see `recordPrice`'s comment in
+      // src/lib/curation-price-write.ts); a write still in flight before
+      // that, from a transition that started at nearly the same moment, is
+      // not, so every row this write depends on can have moved by the time
+      // it is retried:
       //
       //   * two first decisions on one uploader both see no existing row and
       //     both create one; the unique index picks a winner (P2002)
