@@ -152,13 +152,25 @@ This sweep is **required, not advisory**, on every round, and it is not a substi
 
 Step 4's angles and 4.1's families fix *what* to look for. This step and 4.3 fix *where*, because the scope those two default to — the diff, and in practice the commits pushed since the last round — is demonstrably not where family 1's instances live. **The diff is where a change is visible; it is not where the change's consequences land.**
 
-Measured on PR #207 (`ugcportal-z4nh`), which produced three instances of family 1 in one file: the module's opening summary, `buildChain`'s docstring, and `formatReport`'s **printed output**, which a rendered chain can contradict on the same screen. All three were present, unchanged, in the PR's first commit (`git cat-file -p 7bff68f:scripts/check-unreachable-beads.mjs`). Every commit after it up to `ebce8b14` touches **only** the test file — check it with `gh api repos/:owner/:repo/pulls/207/commits` and a `gh api repos/:owner/:repo/commits/<sha> --jq '.files[].filename'` per entry — so rounds 2, 3 and 4 each arrived to review a test-only fix, their attention followed those commits, and none of them re-read the file the claims were in. Round 3 enumerated every branch in the rendering layer; round 4 ran a dedicated family-1 pass. The three were found at rounds 5 and 6 and the escalation, for **339,206** review tokens (`tokens_qa_r5` + `tokens_qa_r6` on `ugcportal-z4nh`) on a bead that had already spent about 2.3M.
+**The evidence, PR #207 (`ugcportal-z4nh`).** One file carried three family-1 instances: the module's opening summary (line 4), `buildChain`'s docstring (line 129), and `formatReport`'s **printed output** (line 211), which a rendered chain can contradict on the same screen. Verify the shape of it with four commands:
 
-(PR #207's round-6 comment, and `ugcportal-78ka`'s own notes, both attribute the cycle terminal those claims got wrong to "a round-2 change". That attribution does not survive checking, and which of the two rules is load-bearing here turns on it: the cycle branch and all three claims are in the first commit, and nothing pushed to that file changed its behaviour until `ebce8b14`, the commit round 5 reviewed. So 4.2's trigger would first have fired at **round 5** on #207 — and its terms would have come from what `ebce8b14` changed, which beads `bd list` returns, not from the vocabulary of chain termination. It would have found none of the three. 4.3 is the rule that would have caught them, and did, once rounds 5 and 6 read the files whole.)
+```bash
+git cat-file -p 7bff68f:scripts/check-unreachable-beads.mjs          # all three claims, first commit
+gh api repos/:owner/:repo/pulls/207/commits --jq '.[].sha'           # then, per sha:
+gh api repos/:owner/:repo/commits/<sha> --jq '.files[].filename'     # test-only until ebce8b14
+```
+
+Every commit between the first and `ebce8b14` — the first non-test change, and the one round 5 arrived to review — touches only `scripts/check-unreachable-beads.test.mjs`. Rounds 2, 3 and 4 each arrived to review a test-only fix, their attention followed those commits, and none re-read the file the claims were in: round 3 enumerated every branch in the rendering layer, round 4 ran a dedicated family-1 pass. The opening summary surfaced at round 5; the docstring was found by the round-5 **fix**, whose implementer had been told to read the files whole; the printed output surfaced at round 6, which escalated at the cap. Rounds 5 and 6 cost **339,206** review tokens (`tokens_qa_r5` + `tokens_qa_r6` on `ugcportal-z4nh`) on a bead that had already spent about 2.3M.
+
+**What this does not explain, and must not be claimed to.** At round 1 all three were **added lines in that round's own diff** — the file was new — and round 1 ran the family-1 sweep over them and missed them anyway. So widening the scope addresses the five rounds that failed to *catch* an instance already on the page; it does not address the round that introduced it and read straight past it. What explains round 1 is not established here, and asserting it would repeat the overclaim this step exists to catch.
+
+**And a correction to the record.** PR #207's round-6 comment, and `ugcportal-78ka`'s own notes, both attribute the cycle terminal those claims got wrong to "a round-2 change". That does not survive the commands above, and which rule is load-bearing turns on it: nothing pushed to that file changed its behaviour until `ebce8b14`, so 4.2's trigger would first have fired at **round 5**, with terms drawn from what that commit changed — which beads `bd list` returns — not from the vocabulary of chain termination. It would have found none of the three. 4.3 is the rule that would have caught them, and did, once rounds 5 and 6 read the files whole.
 
 Two rules follow, one here and one in 4.3. Each names what fires it, what to run, and what to print, so a round that skipped one can be found to have skipped it rather than asserting it was thorough.
 
-**Trigger — computed, not judged.** Every round comment this skill posts records `head <sha>` (step 5's template). Take the latest one and compare it against this run's `headRefOid` from step 1:
+**Trigger — its input is computed; one call in it is a judgement, and the default is stated.** The file list below is produced by a command, not recalled. Whether a given change "alters behaviour" is a judgement on top of that list, and the rule for it is: if you cannot say in one clause what observable thing the change makes different, treat the trigger as **fired** and say which file made you unsure. The judgement may only ever resolve toward running the grep.
+
+**Every blocking round comment this skill posts records `head <sha>`** (step 5's blocking template; line 565 of this file says the same). The merge template deliberately does not, and that is harmless where it matters — a round that merges is terminal, so no later round reads it — with one edge: if `gh pr merge` then fails, the marker stands with no SHA and the next round takes the fail-safe branch below. Take the latest round comment and compare its SHA against this run's `headRefOid` from step 1:
 
 ```bash
 read -r prev_n prev_head < <(
@@ -168,22 +180,38 @@ read -r prev_n prev_head < <(
       | select(.body | test("^<!-- ugcportal-review-round: [0-9]+( approx)? -->")) ]
     | max_by(.at) | select(. != null)
     | ((.body | capture("ugcportal-review-round: (?<n>[0-9]+)") | .n) + "\t"
-       + (((.body | capture("head (?<sha>[0-9a-f]{7,40})"))? // {sha: ""}) | .sha))')
+       + (((.body | capture("(?<!-)\\bhead\\b[^0-9a-f]{0,2}(?<sha>[0-9a-f]{7,40})"; "i"))? // {sha: ""}) | .sha))')
 
 if [ -z "$prev_n" ]; then
-  echo "no previous round comment — this is round 1, 4.2 does not apply"
+  echo "no previous round comment — round 1; record trigger=n/a-round-1"
 elif [ -z "$prev_head" ]; then
-  echo "round $prev_n recorded no head SHA — treat the trigger as fired"
+  echo "round $prev_n records no head SHA — trigger FIRES, scope is the whole diff"
+elif ! changed=$(gh api repos/:owner/:repo/compare/"$prev_head"...<headRefOid> \
+                   --jq '.files[] | [.status, .filename] | @tsv' 2>/dev/null); then
+  echo "round $prev_n's recorded SHA did not resolve — trigger FIRES, scope is the whole diff"
 else
-  gh api repos/:owner/:repo/compare/"$prev_head"...<headRefOid> --jq '.files[] | [.status, .filename] | @tsv'
+  printf '%s\n' "$changed"
 fi
 ```
 
-Verified against PR #207: it reads `prev_n=6 prev_head=826c23de…` and lists `modified scripts/check-unreachable-beads.mjs`, the round-6 fix. On empty input it leaves both variables empty rather than erroring, and a marker with no `head` field yields the round number with an empty SHA — the three branches above, each run.
+**The capture pattern is the part that was measured, because the obvious one is wrong for this repo.** An earlier draft used `capture("head (?<sha>[0-9a-f]{7,40})")` — a bare SHA after a lowercase `head `. Reviewers here also write it in backticks (``head `db1eccfdb…` ``), capitalised (``Head `f800824…` ``) and abbreviated to seven characters. Measured over every round-marker comment in the repo (369 of them across 216 PRs, fetched through the GraphQL `pullRequests.comments` connection and matched on the same first-line anchor step 4b uses):
 
-The trigger fires when that list contains a **non-test** file whose change alters what the code does, returns, prints, stores or reads. A push that only adds or edits tests, comments or docs does not fire it; nor does round 1, which has no previous fix to wake. A round comment that records no `head <sha>` fails **safe**: treat the trigger as fired. An unknown resolves toward more checking here, the same way step 4b's bootstrap clamps an unknown count to 5 — toward the cap — rather than to 0.
+| pattern | all 369 | PRs from #200 on (52) |
+|---|---|---|
+| `head (?<sha>[0-9a-f]{7,40})` | 255 (69%) | 24 (46%) |
+| `(?<!-)\bhead\b[^0-9a-f]{0,2}(?<sha>[0-9a-f]{7,40})`, case-insensitive | **335 (91%)** | **49 (94%)** |
 
-This is deliberately the narrow trigger. A rule that fires on every round is one more paragraph every reviewer learns to skim, and the thing it is hunting — a sentence that was true until a fix made it false — only exists after a fix changed behaviour.
+Three things make that gap matter more than the percentages suggest. The pattern that misses produces *no file list*, so the step degrades to an unfocused whole-repo grep with no behaviour to draw terms from — the opposite of the narrow trigger this rule is sold on — and before this fix it did that on **more than half** of recent rounds. The 34 still unmatched are 19 approval/merge comments, whose template records no SHA by design, and 15 blocking comments on PRs #43-#61 (pre-convention) plus one on #211 where the reviewer simply omitted it; all take the fail-safe branch correctly.
+
+The `\b` on both sides is load-bearing, not tidiness: `header`, `heading` and `headline` are all common in these comments, and without it the gap lets them through. The `(?<!-)` in front of it is this step's own doing and was found by applying 4.2 to 4.2: the marker below originally named its field `prev-head=`, and `\bhead\b` matches inside `prev-head` — so on the new blocking template, where that line sits *above* the prose, the capture returned the **previous** round's SHA instead of this one's. Both halves of the fix are in: the field is named `since=`, and the lookbehind stops any future `*-head` field doing it again. Neither costs anything measurable — with the lookbehind the table above reads 335/369 and 49/52, the same numbers.
+
+The gap is **2**, not 4: widening it changes the hit rate by nothing (335 either way) and only adds false positives — at 4, `head, 37538292708,` on #182 captures a **GitHub Actions run id**, which is eleven hex-legal digits. That shape is why the `compare` call is inside the `if` rather than after it: a captured token that is not a commit returns 404, `gh api` exits non-zero, and the run takes the fail-safe branch instead of reasoning about an empty file list. Verified live — `compare/37538292708...6d52940b` → `404 Not Found` → fail-safe; `compare/6d52940...` (a seven-character SHA from #208's round-5 comment) → exit 0.
+
+Verified live on five PRs: #207 reads `prev_n=6 prev_head=826c23de…` and lists `modified scripts/check-unreachable-beads.mjs`; #210, which the old pattern read as `prev_head=[]`, now reads `prev_n=4 prev_head=e138f895…`; #208 reads a short SHA; #213 and #214 resolve too. Empty input leaves both variables empty rather than erroring, and a marker with no SHA yields the round number with an empty SHA — every branch above was run.
+
+The trigger fires when that list contains a **non-test** file whose change alters what the code does, returns, prints, stores or reads. A push that only adds or edits tests, comments or docs does not fire it; nor does round 1, which has no previous fix to wake. Both unknowns — no SHA recorded, or a SHA that does not resolve — fail **safe** and fire it, the same direction step 4b's bootstrap takes when it clamps an unknown count to 5, toward the cap, rather than to 0.
+
+This is deliberately the narrow trigger. A rule that fires on every round is one more paragraph every reviewer learns to skim, and the thing it is hunting — a sentence that was true until a fix made it false — only exists after a fix changed behaviour. The measurement above is what keeps that claim honest: with the broken pattern the step fired blind on most rounds, which is the cost argument inverted, and a future change to this pattern should re-run the table rather than assume it.
 
 **Action.** Name the behaviour that changed in the vocabulary the file's own prose uses for it — take the terms from the sentences that described it *before* the fix, not from generic English — and grep for them over every file the diff touches, in full, then once over the repo:
 
@@ -194,7 +222,13 @@ git grep -n -E '<terms>'
 
 Stem them: on #207 the prose said *terminates* in one place and *terminal* in another, so `terminal|…` misses the first. Run against the file as it stood at round 3's head, `git grep -n -E 'terminat|ends in|deferred or missing' af0092b2 -- scripts/check-unreachable-beads.mjs` returns exactly three hits — lines 4, 129 and 211 — and those three hits are the three instances, with no noise to wade through. That is the whole cost of the rule, measured on its own motivating case. Re-read every hit against what the code does **now**, including hits inside string literals the program prints: `formatReport`'s line was output to the tool's user, not a code comment, and it was the instance found last. If a term returns more hits than you are actually going to read, it is the wrong term — narrow it, and say in the output which terms you settled on.
 
-**Output**, in the round comment and in the step 6 report, in this shape:
+**Output — an artefact on every round, including the rounds where the trigger does not fire.** This is the half that decides whether the step is real. A rule whose no-fire branch requires no output is satisfiable by a reviewer who did nothing, because "I looked and it didn't apply" and "I never looked" leave the same trace: none. So every round-marker comment this skill posts carries this line, on its own line inside the body (never the first line — that belongs to the round marker):
+
+```
+<!-- ugcportal-fix-wake: N=<N> trigger=<fired|not-fired|n/a-round-1> since=<sha|none|unresolved> changed=<k files> terms=<regex|-> hits=<k|-> falsified=<k|-> -->
+```
+
+`since` and `changed` are the trigger command's own output, so **a not-fired round still has to run it** — it must name the SHA it compared against and how many files came back. Those two fields are what a reviewer who skipped the step cannot fill in, and `changed=0 files` against a real `since` SHA is a complete, checkable answer. When the trigger did fire, the comment also carries the readable form:
 
 ```
 Fix-wake re-grep (step 4.2): round <N-1> changed <behaviour, one clause>.
@@ -202,13 +236,22 @@ Terms `<regex>` — <k> hits across <m> files, <j> of them outside every diff hu
 <for each hit: file:line — still true / falsified (finding <id>) / already fixed>
 ```
 
-A round whose grep falsified nothing prints that same block, every hit carrying a "still true" verdict. That is the point of the clause, and it is the half most likely to be dropped: an empty result reported in this shape is evidence the grep ran, while an empty result reported as nothing at all cannot be told apart from a skip.
+A round whose grep falsified nothing prints that same block with every hit marked "still true", and `falsified=0` in the marker. An empty result reported in this shape is evidence the grep ran; an empty result reported as nothing at all cannot be told apart from a skip. Read the line back the same way 4.3's is read back, swapping the marker name:
+
+```bash
+gh api repos/:owner/:repo/issues/<n>/comments --paginate \
+    --jq '.[] | select((.body // "") | test("^<!-- ugcportal-review-round: [0-9]+( approx)? -->"))
+          | (.body // "") | split("\n")[] | sub("\r$"; "")
+          | select(test("^<!-- ugcportal-fix-wake: .* -->$"))'
+```
+
+**On the terms being self-chosen.** They are, and no rule can make them not be — but two things bound it. They must come from the sentences that described the behaviour *before* the fix, which is a checkable source, not an invention; and the `terms=` field puts the exact regex on the PR, so a later round, or a human, can re-run it against the same head and see what it returns. A narrow term list is not a defect; a narrow term list nobody can reproduce is.
 
 ### 4.3 One round reads every file in the diff whole, and round 3 owns it
 
 Step 4.2 fires only after a behaviour change, and on #207 nothing a round pushed changed behaviour until round 5. This is the rule that covers the text a diff never touched — including the text that was wrong from the first commit.
 
-**Trigger — named, so it is not left to whichever round happens to think of it.** The read happens on **round 3**, whatever that round finds; **and** on any round that reaches step 5's gate list with nothing blocking, if no earlier round in this chain recorded it, or if the diff has gained a file since the round that did (compare the marker's file list below against `gh pr view <n> --json files`). On a chain that merges before round 3, that is the approving round, so a chain of any length pays for this exactly once, and a chain that ends at round 1 pays the cheapest version of it.
+**Trigger — named, so it is not left to whichever round happens to think of it.** The read happens on **round 3**, whatever that round finds; **and** on any round that reaches step 5's gate list with nothing blocking, if no earlier round in this chain recorded it, or if the diff has gained a file since the round that did (compare the marker's file list below against `gh pr view <n> --json files`). On a chain that merges before round 3, that is the approving round. A chain of any length therefore pays for this at least once and normally exactly once — twice only when the diff gains a file after the round that did it, and then only for the files that were not covered. A chain that ends at round 1 pays the cheapest version of it.
 
 Reaching step 5 and finding the read still owed does not mean waving it through on the strength of a clean round — it means going back into step 4's depth and doing it before posting anything. It can produce findings, and if it does they are findings like any other at this round's severity gate: on #207 a read of exactly this kind, at round 6, produced the escalation.
 
@@ -493,7 +536,7 @@ First, the gates that apply at every round without exception. Approve and merge 
 - CI fully green (step 3)
 - The step 4.1 sweep was actually run, with all four families reported
 - **The step 4.3 whole-file read exists in this chain** — either this round did it, or an earlier round's `<!-- ugcportal-whole-file-read: … -->` marker covers every file now in the diff (4.3's read-back command). If neither is true, this is the round that owns it: do the read now, before stamping anything, and carry its marker and verdict lines in the comment you are about to post. A merge on a chain where no round ever read the files whole is the #207 outcome with the escalation removed.
-- **If step 4.2's trigger fired this round**, its output block — terms, hit count, per-hit verdict — is in that same comment. A fired trigger with no block is the rule not having run.
+- **Step 4.2's `<!-- ugcportal-fix-wake: … -->` line is in the comment you are about to post**, on every round, whether or not the trigger fired — with `since` and `changed` filled in from the trigger command's own output, and, when it fired, the readable block beside it. A missing line, or one reading `since=none` on a chain whose previous blocking comment does record a SHA, is the step not having run.
 
 Then apply the severity gate to the findings from steps 4 and 4.1, using the severities **you** assigned in step 4 and the round from step 4b. Definitions are in `review-standards` section 3; in short, **medium-or-above** is wrong behaviour a user or the data can reach (fail-open, authz gap, data loss, leaked credential, broken migration, a wrong figure a later bead builds on), and **low** is the correctness of the code's *description* rather than of the code (inaccurate comment, duplicate log lines, naming nit, an untidy test that still fails when the behaviour breaks). Note the one rule that is easy to get backwards: a **defective test inherits the severity of what it guards**, so a family-3 assertion-that-cannot-fail over a fresh fail-open fix is medium-or-above, not low.
 
@@ -634,10 +677,15 @@ To merge — post the round marker as its own issue comment **first**, before at
 ```bash
 gh pr comment <n> --body "$(cat <<'EOF'
 <!-- ugcportal-review-round: <N> -->
+<!-- ugcportal-fix-wake: N=<N> trigger=<fired|not-fired|n/a-round-1> since=<sha|none|unresolved> changed=<k files> terms=<regex|-> hits=<k|-> falsified=<k|-> -->
+<!-- ugcportal-whole-file-read: <every file in the diff, space separated> -->
 Auto-approved (review round <N>, chain <exact|approx>): CI green, no sensitive paths touched, no blocking findings.
+Whole-file read (step 4.3): <per-file verdicts>.
 EOF
 )"
 ```
+
+**The merge template carries both scope markers, and the `whole-file-read` one is not optional here.** Under 4.3 the round that merges owns the read whenever no earlier round recorded it, and the chains where that bites are exactly the short ones — a PR merging at round 1 or 2 copies this template verbatim, so a template without the marker would mean the shortest chains, the common case, never record the read at all. That is sibling-omission in the template set: 4.3's rule and the artefact it is checked by have to move together. This template deliberately does **not** record `head <headRefOid>`, unlike the blocking one below; see 4.2's note on why that is harmless and what the one edge case is.
 
 Then attempt approval, but **only where it can succeed** — resolve identity fresh in the same command block (see step 1's note on why a value can't cross blocks):
 
@@ -697,10 +745,13 @@ If anything blocks: do not approve, do not merge. Post a single clear comment st
 ```bash
 gh pr comment <n> --body "$(cat <<'EOF'
 <!-- ugcportal-review-round: <N> -->
+<!-- ugcportal-fix-wake: N=<N> trigger=<fired|not-fired|n/a-round-1> since=<sha|none|unresolved> changed=<k files> terms=<regex|-> hits=<k|-> falsified=<k|-> -->
 Review round <N> (chain <exact|approx>, head <headRefOid>). Blocking: ...
 EOF
 )"
 ```
+
+Add the `<!-- ugcportal-whole-file-read: … -->` marker and its per-file verdict lines to this template too on any round that owed the read — round 3, or an earlier round that would otherwise have approved (4.3). A blocking round that did the read still records it, because the record is what the *next* round reads back.
 
 The marker must be the literal string `<!-- ugcportal-review-round: N -->` (or `<!-- ugcportal-review-round: N approx -->` for a bootstrap, step 4b) with `N` the round that just completed, and it must be the **first line** of the comment body — that is exactly what step 4b's command matches.
 
@@ -790,7 +841,7 @@ State plainly:
 - If this run stopped before step 4 (CI, mergeability, base branch), say so and that it was stamped with a **non-counting** stop marker, so it is clear no round was consumed.
 - If this was round 7+, that it was a post-escalation verification round (step 5b), and the three things that let you enter that row: the chain was `exact`, the URL of the **latest** stop comment at or above 6, and the changed head SHA or non-bot human comment since it.
 - **All four recurring families from step 4.1, named, each with what it found (including "nothing").**
-- **Step 4.2**: whether the re-grep trigger fired (and the `prev_head`…`headRefOid` file list that decided it), and if it did, the terms grepped, the hit count, and the verdict per hit — "0 falsified" included.
+- **Step 4.2**: the `<!-- ugcportal-fix-wake: … -->` line exactly as you posted it — so `since` and `changed` are in the report whether or not the trigger fired — and, if it fired, the terms grepped, the hit count, and the verdict per hit, "0 falsified" included.
 - **Step 4.3**: whether this round did the whole-file read or which earlier round's marker covers it, and the per-file verdicts if it was this round's.
 - Findings with **the severity you assigned each one** (step 4's angles don't produce one on their own — see step 4's closing paragraph), and which were fixed versus deferred.
 - Bead ids filed in step 5a, if any.
