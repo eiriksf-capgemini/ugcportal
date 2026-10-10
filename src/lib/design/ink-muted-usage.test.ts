@@ -177,10 +177,9 @@ function normalize(raw: string): string {
 
 /**
  * Every `file:line:content` occurrence of `text-ink-muted` in one file — see
- * this file's own header for exactly which two literal shapes are scanned,
- * why the match position is computed against the literal's RAW source slice
- * rather than its decoded text, and why JSX text is deliberately not among
- * the shapes scanned.
+ * this file's own header for which literal shapes are scanned, why the match
+ * position is computed against the literal's RAW source slice rather than its
+ * decoded text, and why JSX text is deliberately not among them.
  */
 function occurrencesIn(file: string, relativeFile: string): string[] {
   const sourceFile = sourceFileOf(file);
