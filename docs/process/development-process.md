@@ -8,7 +8,7 @@ rule has a number in it, the number came from a measurement, and the
 measurement is cited.
 
 The process exists today as enacted behaviour spread across five project
-skills, three user skills, 51 `bd` memories, three sections of `CLAUDE.md`,
+skills, three user skills, 51 `bd` memories, several sections of `CLAUDE.md`,
 and a running error log. Each piece is individually documented. Nothing
 described how they fit together, which is what this is for.
 
@@ -124,8 +124,9 @@ status quo, and it is not visible from the positive criteria at all.
 - *A bead written on a false premise.* Three instances this release. One
   proposed removing an "unused" dependency that `src/app/globals.css`
   imports on line 125 — removal would have broken the build and the suite.
-  One claimed seed scripts and committed fixtures existed; neither did. One
-  described work already finished.
+  One scoped a backfill to "the seed scripts and any committed fixtures":
+  there is no seed script in this repo, and the committed fixtures already
+  carried what it meant to add. One described work already finished.
 - *An empty bead.* `ugcportal-74w.1` sat open at P2 inside a release
   line-up as a **title with no body** — no description, criteria, notes or
   metadata — eligible for dispatch to an implementer with nothing to build
@@ -168,8 +169,8 @@ open bead whose every blocking path ends in deferred or missing work. A
 dependency cycle is deliberately **not** a third termination reason — the
 walk treats a back-edge as resolved — and the script's own header says so,
 because it is the thing a reader expects next to the other two. Its first
-live run on the real backlog
-flagged **ten**, of which seven were in the v0.7.0 line-up — including two
+live run on the real backlog flagged **ten**, of which seven were in the
+v0.7.0 line-up — including two
 review beads (`5x8` security, `rma` architecture) gated behind features that
 will not be built this release. A security review that waits for Stripe and
 Instagram before it can start is a review that never happens.
@@ -190,7 +191,8 @@ thing you are about to ship, or say explicitly that you did not.
 ### 5.1 Dispatch
 
 An implementer agent gets a brief. The brief names the bead, the setup, the
-quality bar, and the boundaries. Concurrency is held to **three** implementer agents in practice, and never
+quality bar, and the boundaries. Concurrency is held to **three**
+implementer agents in practice, and never
 two on the same `cc_scope`. This is current orchestrator practice, **not a
 codified rule** — `ugcportal-yzmp` proposes making it one and is still OPEN;
 its own premise records that no cap exists in any enforced form.
@@ -229,7 +231,8 @@ when it came from a comment someone typed.
 
 The implementer builds, tests, runs the gate (`lint`, `test`, `build`,
 `typecheck` — all four, in that order: `typecheck` must follow `build`,
-which is the order `.github/workflows/ci.yml` runs them in), and opens one PR with a Conventional Commit title
+which is the order `.github/workflows/ci.yml` runs them in), and opens one
+PR with a Conventional Commit title
 carrying the bead id. `CLAUDE.md` holds the type table and its semver
 mapping.
 
@@ -382,8 +385,9 @@ a mechanical list in front of it is weak.** `/pre-review` and
 `scripts/claims-audit.mjs` exist because of that finding.
 
 **The error log.** `ugcportal-fbng` collects process errors and rule
-violations as they happen, in two sections: orchestrator errors and
-agent-side errors. Writing it *during* the release rather than after is
+violations as they happen, in four sections: orchestrator errors, agent-side
+errors, tooling and process gaps, and the measures worth carrying into the
+retrospective. Writing it *during* the release rather than after is
 deliberate — the cause of an error is legible for about an hour and
 reconstructed wrongly thereafter.
 
@@ -445,8 +449,9 @@ its cost gets argued away. They cluster:
 **Guards in CI.** `guard-sensitive-files` fails a PR that **bundles** a
 change to `CLAUDE.md` or `.claude/settings*.json` with unrelated work
 (`scripts/check-sensitive-files.mjs`); a PR containing only such a file is
-routed to a human by `pr-review-merge` step 2 rather than by CI. `guard-conventional-commit-title` enforces the
-title form. A GitHub ruleset on `main` requires both CI contexts with
+routed to a human by `pr-review-merge` step 2 rather than by CI.
+`guard-conventional-commit-title` enforces the title form. A GitHub ruleset
+on `main` requires both CI contexts with
 `strict_required_status_checks_policy`. It does **not** appear under the
 legacy `/branches/main/protection` endpoint — read it via
 `gh api repos/.../rules/branches/main`.
@@ -505,12 +510,16 @@ path is the first defect family applied to itself.
    it in an earlier draft. Review did find logic defects, and the conditions
    under which it did are the useful part:
 
-   - **when a brief pointed it at a layer nobody had looked at.** `#207`
+   - **after three rounds had exhausted a different layer.** `#207`
      round 4 found that `bd list --all` silently omits gate, infra and
      template beads, so a bead gated on a *closed* gate would be reported
-     as permanently stuck. Three prior rounds had concentrated on the
-     rendering layer; round 4's brief said explicitly that this is the
-     condition under which a logic defect gets waved through.
+     as permanently stuck. Its three predecessors had all worked the
+     rendering layer. The orchestrator's own account (`ugcportal-z4nh`
+     close-out note) attributes this to the round-4 brief having said
+     where *not* to look — but the briefs are not in the repository, so
+     that attribution is self-reported and the round-4 comment itself
+     credits only its own sweep. What is checkable is the sequence: the
+     layer changed, and the finding changed with it.
    - **when a fix round regressed something.** `#201` round 6 caught a
      confirmed regression against real data.
 
@@ -531,9 +540,8 @@ path is the first defect family applied to itself.
 
    A test comparing two implementations, and a probe against a real
    database. Neither was reading. That is the sharper lesson, and it argues
-   for
-   `Verified by:` naming an executed probe whenever the criterion is about
-   runtime behaviour rather than about source text.
+   for `Verified by:` naming an executed probe whenever the criterion is
+   about runtime behaviour rather than about source text.
 6. **The instruments themselves fail open.** This is defect family 2 — the
    null/undefined variant — applied to the process rather than to the code,
    and it is the most under-appreciated weakness here. A check that silently
