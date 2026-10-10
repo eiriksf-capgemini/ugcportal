@@ -678,13 +678,30 @@ describe("the gate cannot be routed around", () => {
    * closes; the dedicated test below ("a second ... does not ride") proves
    * the count check actually bites, in isolation, without touching the real
    * hero.tsx.
+   *
+   * `audited` is a PARAMETER, defaulted to the real allowlist, rather than
+   * this function reading `AUDITED_DECORATIVE_BACKGROUND_USAGES` from
+   * closure directly — round-1 review on ugcportal-a3hj's own PR, CONFIRMED
+   * medium, the same shape PR #115 round 1 paid for once already: with no
+   * parameter, the moment the real allowlist's last entry is removed (as
+   * a3hj K2 just did), this function's `auditedCount !== undefined` branch
+   * becomes unreachable at every call site in this suite, and a dedicated
+   * mutation test could only go on "covering" it by reimplementing these two
+   * lines against a synthetic map INSTEAD OF calling this function — which
+   * proves the reimplementation, not the shipped code, and leaves a real
+   * regression in this comparison unguarded by anything. The real coverage
+   * check below (`it.each(THEME_MODES)`) still calls this with no third
+   * argument, so production behaviour is unchanged; only the dedicated
+   * mutation test now passes an explicit synthetic map, so it exercises
+   * this exact function body rather than a copy of it.
    */
   function isAuditedDecorativeBackground(
     usage: Pick<AlphaUtilityUsage, "file" | "utility">,
     occurrences: ReadonlyMap<string, number>,
+    audited: Readonly<Record<string, number>> = AUDITED_DECORATIVE_BACKGROUND_USAGES,
   ): boolean {
     const key = `${usage.file}:${usage.utility}`;
-    const auditedCount = AUDITED_DECORATIVE_BACKGROUND_USAGES[key];
+    const auditedCount = audited[key];
     return auditedCount !== undefined && occurrences.get(key) === auditedCount;
   }
 
@@ -706,12 +723,20 @@ describe("the gate cannot be routed around", () => {
    * (two bare `bg-petrol-200` occurrences in hero.tsx, against a real
    * audited-count-of-1 entry for that exact file) along with the allowlist
    * entry itself, which is now empty (see its own comment). Reproduced here
-   * instead against a SYNTHETIC, locally-scoped allowlist, built the same
-   * shape the real one is (`${file}:${utility}` -> count), so the general
-   * mechanism PR #115 round 1 finding 3 added — a count, not just a Set of
-   * keys, so a SECOND occurrence in an already-audited file cannot ride the
-   * existing entry — stays proven independently of whatever the real,
-   * current allowlist happens to hold.
+   * instead against a SYNTHETIC map passed as `isAuditedDecorativeBackground`'s
+   * third, defaulted argument — round-1 review on ugcportal-a3hj's own PR,
+   * CONFIRMED medium: an earlier version of this test rebuilt the function's
+   * two-line comparison inline against a local `syntheticAudited` object
+   * instead of calling the function, which meant NOTHING here exercised the
+   * real `isAuditedDecorativeBackground` body at all — a regression in that
+   * function's own comparison (the exact shape PR #115 round 1 paid for
+   * once already, this time with no instance left in the real allowlist to
+   * expose it) could land and no test anywhere would go red. Calling the
+   * real function with an explicit `audited` override keeps the general
+   * mechanism — a count, not just a Set of keys, so a SECOND occurrence in
+   * an already-audited file cannot ride the existing entry — proven against
+   * the SHIPPED code, independently of whatever the real, current allowlist
+   * happens to hold.
    */
   it("FIXTURE MUTATION: a second, non-decorative occurrence of an audited decorative background does not ride the existing entry", () => {
     const root = mkdtempSync(path.join(tmpdir(), "axu-contrast-"));
@@ -734,9 +759,10 @@ describe("the gate cannot be routed around", () => {
       expect(occurrences.get(key)).toBe(2);
 
       const syntheticAudited: Readonly<Record<string, number>> = { [key]: 1 };
-      const auditedCount = syntheticAudited[key];
-      const isAudited = auditedCount !== undefined && occurrences.get(key) === auditedCount;
-      expect(isAudited, "two occurrences must not match the audited count of one").toBe(false);
+      expect(
+        isAuditedDecorativeBackground(petrol200!, occurrences, syntheticAudited),
+        "two occurrences must not match the audited count of one",
+      ).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
