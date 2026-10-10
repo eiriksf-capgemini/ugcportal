@@ -114,12 +114,23 @@ export function CurationTriageForm({
         return (
           <label key={fact.field} className="block text-xs font-medium">
             {fact.question}
+            {/*
+              text-muted-foreground, not text-ink-muted (ugcportal-7g2o): this
+              form's only render site (src/app/admin/curation/page.tsx) wraps
+              it in `<div className="rounded-lg border border-border p-3
+              text-sm">` with no bg-* class of its own, so it renders on the
+              plain page canvas (--background) — --color-ink-muted measures
+              1.9003:1 there (src/lib/design/ink-muted-usage.test.ts), below
+              body text's 4.5:1. --muted-foreground is the token tuned for
+              exactly this surface (contrast.ts's
+              muted-foreground-on-background pairing).
+            */}
             {comparison.kind === "answered" ? (
-              <span className="block font-normal text-ink-muted">
+              <span className="block font-normal text-muted-foreground">
                 Uploader attested: {comparison.value ? "Yes" : "No"}
               </span>
             ) : comparison.kind === "no_attestation" ? (
-              <span className="block font-normal text-ink-muted">
+              <span className="block font-normal text-muted-foreground">
                 No attestation on file for this upload.
               </span>
             ) : null}
