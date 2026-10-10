@@ -120,12 +120,15 @@ function isUniqueConstraintViolation(error: unknown): boolean {
  *
  * The duplicate is caught BOTH ways on purpose. The explicit read gives the
  * admin a sentence to read; the index is what actually makes the state
- * impossible. `@prisma/adapter-libsql` opens SQLite transactions as
- * `deferred` (the same caveat `recordTriageFacts` and the price endpoint
- * both record), so two concurrent calls can both pass the read — and then
- * the `create` violates the index, which is reported as the same refusal
- * rather than as a crash. Remove the read and the behaviour is unchanged;
- * remove the index and the read alone would let the race through.
+ * impossible. A shared transaction only excludes a competing write once it
+ * already holds its own lock — ugcportal-yzo7 measured that at c5bf99f (see
+ * `recordPrice`'s own comment in src/lib/curation-price-write.ts), and
+ * `recordTriageFacts`'s docstring retracts the "deferred, so nothing here
+ * excludes it" claim this paragraph used to borrow from the same two files.
+ * Before either lock is taken, two concurrent calls can still both pass the
+ * read — and then the `create` violates the index, which is reported as the
+ * same refusal rather than as a crash. Remove the read and the behaviour is
+ * unchanged; remove the index and the read alone would let the race through.
  */
 export async function recordLayerClearance({
   mediaId,
