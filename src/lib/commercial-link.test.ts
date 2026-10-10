@@ -2,12 +2,17 @@ import { describe, expect, it } from "vitest";
 
 import { CommercialLinkNetwork } from "@/generated/prisma/enums";
 import { hasUnsafeText } from "@/lib/media-rules";
+import { PERMITTED_ADVERTISING_LABELS } from "@/lib/advertising-disclosure";
 import {
+  carriesUnlabelledCommercialLink,
   COMMERCIAL_LINK_NETWORKS,
   commercialLinkDisclosureRefusal,
+  commercialLinkPublishRefusal,
+  disclosureWithdrawalRefusal,
   isCommercialLinkNetwork,
   MAX_COMMERCIAL_LINK_NETWORK_OTHER_LENGTH,
   MAX_COMMERCIAL_LINK_URL_LENGTH,
+  MAX_COMMERCIAL_LINKS_PER_ITEM,
   validateCommercialLinkNetwork,
   validateCommercialLinkUrl,
 } from "@/lib/commercial-link";
@@ -432,5 +437,174 @@ describe("commercialLinkDisclosureRefusal (the validator half of K3)", () => {
     // And never the one word ugcportal-qnq9.14 forbids everywhere, as a
     // standalone suggestion.
     expect(refusal?.error).not.toMatch(/(^|[\s,])Ad([\s,.]|$)/);
+  });
+});
+
+/**
+ * The § 3.2 rule after the attach (ugcportal-jain), at the level it is
+ * decided: a link count and a stored label, no database.
+ *
+ * EVERY CASE RUNS OVER BOTH GATES, through `each`, rather than over one with
+ * the other spot-checked. They share `carriesUnlabelledCommercialLink`
+ * precisely so they cannot disagree about what the forbidden pair is, and a
+ * test that exercised one would say nothing about whether the other still
+ * called it — which is how a sibling guard in this repo passed its own
+ * mutation test while covering half of what it claimed.
+ */
+const LABEL_GATES: [
+  string,
+  (label: string | null, count: number) => { error: string } | null,
+][] = [
+  [
+    "disclosureWithdrawalRefusal",
+    (label, count) =>
+      disclosureWithdrawalRefusal(label, { commercialLinkCount: count }),
+  ],
+  [
+    "commercialLinkPublishRefusal",
+    (label, count) =>
+      commercialLinkPublishRefusal(
+        { benefitReceived: true, label },
+        { commercialLinkCount: count },
+      ),
+  ],
+];
+
+describe("the label-and-link pair (ugcportal-jain)", () => {
+  const PERMITTED = PERMITTED_ADVERTISING_LABELS[0];
+
+  describe.each(LABEL_GATES)("%s", (_name, gate) => {
+    it.each([1, 2, MAX_COMMERCIAL_LINKS_PER_ITEM])(
+      "refuses %i unlabelled link(s)",
+      (count) => {
+        expect(gate(null, count)).not.toBeNull();
+      },
+    );
+
+    it.each(PERMITTED_ADVERTISING_LABELS)(
+      "permits a link under the permitted label %s",
+      (label) => {
+        // OVER THE WHOLE ALLOWLIST, not one member of it: the gate calls
+        // `isPermittedAdvertisingLabel`, and a mistake that recognised only
+        // the first entry would pass a single-label test while refusing
+        // three lawful disclosures.
+        expect(gate(label, 1)).toBeNull();
+      },
+    );
+
+    it.each([
+      ["a near-miss of a permitted label", "reklame"],
+      ["a permitted label with stray spacing", " Reklame "],
+      ["an English-only label", "Advertisement"],
+      ["an empty string", ""],
+      ["a label nobody validated", "Sponsored"],
+    ])("refuses a link under %s", (_name, label) => {
+      // RE-VALIDATED against the closed allowlist, not checked for being
+      // non-null — the same reading `toAdvertisingLabel` and
+      // `listPublicMedia` make, so the gate refuses exactly the rows the
+      // renderer would hide. A `!== null` check would pass all five of these.
+      expect(gate(label, 1)).not.toBeNull();
+    });
+
+    it("says nothing about an item carrying no link at all", () => {
+      // The counterweight. Without it every refusal above would hold just as
+      // well against a gate that refused every unlabelled item, links or no
+      // links — which would make an ordinary undisclosed photograph
+      // unpublishable.
+      expect(gate(null, 0)).toBeNull();
+    });
+
+    it("says nothing about a labelled item carrying no link", () => {
+      expect(gate(PERMITTED, 0)).toBeNull();
+    });
+  });
+
+  it.each([undefined, null])(
+    "treats a %j label as unlabelled at the publish gate",
+    (label) => {
+      // `undefined` is the no-disclosure-row case, which the publish route
+      // really does produce (`findUnique` answers null and the parameter is
+      // optional). `isPermittedAdvertisingLabel` is a `typeof` check, so both
+      // land on the unlabelled side rather than falling through a `=== null`.
+      const disclosure =
+        label === undefined ? null : { benefitReceived: null, label };
+      expect(
+        commercialLinkPublishRefusal(disclosure, { commercialLinkCount: 1 }),
+      ).not.toBeNull();
+    },
+  );
+
+  it("ignores benefitReceived at the publish gate", () => {
+    // GATED ON THE LABEL ALONE, deliberately, unlike
+    // `commercialLinkDisclosureRefusal` above. What a reader of the public
+    // page sees is the label column and nothing else (`toAdvertisingLabel`,
+    // src/lib/gallery-items.ts), so a row with a permitted label is a
+    // labelled page whatever `benefitReceived` says — and a row without one
+    // is not, whatever it says. Both directions asserted, because an
+    // implementation that read the field would get exactly one of them wrong.
+    for (const benefitReceived of [true, false, null]) {
+      expect(
+        commercialLinkPublishRefusal(
+          { benefitReceived, label: PERMITTED },
+          { commercialLinkCount: 1 },
+        ),
+        `a permitted label with benefitReceived ${benefitReceived} was refused`,
+      ).toBeNull();
+      expect(
+        commercialLinkPublishRefusal(
+          { benefitReceived, label: null },
+          { commercialLinkCount: 1 },
+        ),
+        `an absent label with benefitReceived ${benefitReceived} was permitted`,
+      ).not.toBeNull();
+    }
+  });
+
+  it("names the detach request in the withdrawal refusal, so the fix is in the message", () => {
+    const refusal = disclosureWithdrawalRefusal(null, {
+      commercialLinkCount: 1,
+    });
+
+    expect(refusal?.error).toContain(
+      "DELETE /api/media/[id]/commercial-links",
+    );
+    // A closed-set code rather than a `field`: no edit to the request body
+    // would make it succeed.
+    expect(refusal?.blocker).toBe("commercial_links_attached");
+  });
+
+  it("names every permitted label in the publish refusal, and the field is not the sibling gate's", () => {
+    const refusal = commercialLinkPublishRefusal(
+      { benefitReceived: false, label: null },
+      { commercialLinkCount: 1 },
+    );
+
+    for (const label of PERMITTED_ADVERTISING_LABELS) {
+      expect(refusal?.error).toContain(label);
+    }
+    // `advertisingLabelPublishRefusal` answers `advertisingLabel` on the same
+    // route; two gates answering one `field` would be two refusals nothing
+    // could tell apart.
+    expect(refusal?.field).toBe("commercialLinks");
+    expect(refusal?.field).not.toBe("advertisingLabel");
+  });
+
+  it("is one predicate, which both gates read", () => {
+    // `carriesUnlabelledCommercialLink` is exported so this can be asserted
+    // rather than described: both refusals must be exactly its answer over
+    // every combination, or the rule has two spellings that can drift.
+    for (const label of [null, "", "reklame", PERMITTED]) {
+      for (const commercialLinkCount of [0, 1, MAX_COMMERCIAL_LINKS_PER_ITEM]) {
+        const expected = carriesUnlabelledCommercialLink(label, {
+          commercialLinkCount,
+        });
+        for (const [name, gate] of LABEL_GATES) {
+          expect(
+            gate(label, commercialLinkCount) !== null,
+            `${name} disagreed about ${JSON.stringify(label)} with ${commercialLinkCount} link(s)`,
+          ).toBe(expected);
+        }
+      }
+    }
   });
 });

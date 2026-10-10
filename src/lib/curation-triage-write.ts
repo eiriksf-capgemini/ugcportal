@@ -200,10 +200,13 @@ export async function recordTriageFacts({
       alcohol). This is the other order, and until ugcportal-vq3z created
       this function it was not reachable at all, because nothing in `src`
       could write `depictsAlcohol`. That is the real interim cover, not the
-      publish route: `commercialPublishRefusal` returns null outright unless
-      `disclosure.benefitReceived === true`, and it only ever runs on a
-      publish REQUEST, so it could never have seen a reclassification of an
-      item that was already public.
+      publish route: when this guard was written `commercialPublishRefusal`
+      returned null outright unless `disclosure.benefitReceived === true`
+      (ugcportal-jain has since widened it, so an attached commercial link
+      now counts as commercial there too), and either way it only ever runs
+      on a publish REQUEST — which is the half of this argument that does not
+      depend on what it reads, and the reason it could never have seen a
+      reclassification of an item that was already public.
 
       HERE AND NOT IN THE ACTION, because here the count this gate reads and
       the write it governs are one piece of work rather than two a concurrent

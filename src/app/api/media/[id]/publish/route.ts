@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { advertisingLabelPublishRefusal } from "@/lib/advertising-disclosure";
 import { commercialPublishRefusal } from "@/lib/alcohol-commerce";
+import { commercialLinkPublishRefusal } from "@/lib/commercial-link";
 import {
   MEDIA_OWNER_SELECT,
   requireOwnedMedia,
@@ -211,6 +212,43 @@ export async function POST(_request: Request, { params }: RouteContext) {
     return NextResponse.json(refusal, { status: 400 });
   }
 
+  // AND NEITHER MAY AN ADVERTISING LINK WITH NO LABEL ABOVE IT
+  // (ugcportal-jain K2). The check above asks whether a DECLARED BENEFIT is
+  // labelled and answers null the moment `benefitReceived` is not `true`,
+  // which is precisely the state a withdrawal leaves behind — so until this
+  // bead, an item whose disclosure had been withdrawn after a link was
+  // attached passed every gate on this route and published carrying a live
+  // affiliate link with nothing labelling it. §3.2 wants the page labelled at
+  // the top AND at each link; the top label is rendered from
+  // `MediaAdvertisingDisclosure.label` and from nothing else.
+  //
+  // A SEPARATE COUNT RATHER THAN A WIDENED `requireOwnedMedia`, the same
+  // trade the disclosure read above states and for the same reason: PATCH,
+  // DELETE and tags have no use for the link count, and a join on the shared
+  // gate would make all three pay for it.
+  //
+  // A COUNT AND NOT THE ROWS — `CommercialLinkFacts`
+  // (src/lib/alcohol-commerce.ts) is what both gates below declare as their
+  // input, and both decide on "any". The destinations and the brands behind
+  // them are a compliance record this route has no business reading to answer
+  // a yes/no question.
+  //
+  // READ UNCONDITIONALLY, although the gate immediately below answers null
+  // for every item that carries no link, which is almost all of them. The
+  // version that skipped it behind a second reading of the disclosure would
+  // be the mistake the alcohol lookup further down documents at length: a
+  // short-circuit in a place that cannot see the gate's rule, failing in the
+  // direction of the gate never running.
+  const commercialLinks = {
+    commercialLinkCount: await prisma.commercialLink.count({
+      where: { mediaId: id },
+    }),
+  };
+  const linkRefusal = commercialLinkPublishRefusal(disclosure, commercialLinks);
+  if (linkRefusal) {
+    return NextResponse.json(linkRefusal, { status: 400 });
+  }
+
   // AND NO ADVERTISEMENT MAY SHOW ALCOHOL, OR COME FROM A BRAND THAT SELLS IT
   // (ugcportal-qnq9.3 K6). alkoholloven § 9-2 bans alcohol from appearing in
   // advertising for other products, and §3.1a reads the ban as covering
@@ -265,7 +303,15 @@ export async function POST(_request: Request, { params }: RouteContext) {
       ...PUBLISH_LISTING_SELECT,
     },
   });
-  const alcoholRefusal = commercialPublishRefusal({ disclosure, listing });
+  // `commercialLinks` is the same count the label gate above already took,
+  // reused rather than re-counted: two reads of the same number on one
+  // request could disagree, and the gate that ran second would be deciding
+  // about a row the gate that ran first never saw (ugcportal-jain).
+  const alcoholRefusal = commercialPublishRefusal({
+    disclosure,
+    listing,
+    commercialLinks,
+  });
   if (alcoholRefusal) {
     return NextResponse.json(alcoholRefusal, { status: 400 });
   }

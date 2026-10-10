@@ -63,6 +63,13 @@ const disclosureCreateMock = vi.fn();
 const disclosureUpsertMock = vi.fn();
 const disclosureDeleteMock = vi.fn();
 const disclosureDeleteManyMock = vi.fn();
+const commercialLinkCountMock = vi.fn();
+const commercialLinkUpdateManyMock = vi.fn();
+const commercialLinkUpdateMock = vi.fn();
+const commercialLinkCreateMock = vi.fn();
+const commercialLinkUpsertMock = vi.fn();
+const commercialLinkDeleteMock = vi.fn();
+const commercialLinkDeleteManyMock = vi.fn();
 const executeRawMock = vi.fn();
 const queryRawMock = vi.fn();
 const transactionMock = vi.fn();
@@ -86,6 +93,12 @@ const WRITE_MOCKS = [
   disclosureUpsertMock,
   disclosureDeleteMock,
   disclosureDeleteManyMock,
+  commercialLinkUpdateManyMock,
+  commercialLinkUpdateMock,
+  commercialLinkCreateMock,
+  commercialLinkUpsertMock,
+  commercialLinkDeleteMock,
+  commercialLinkDeleteManyMock,
   mediaUpdateMock,
   mediaCreateMock,
   mediaCreateManyMock,
@@ -145,6 +158,20 @@ vi.mock("@/lib/prisma", () => ({
       upsert: disclosureUpsertMock,
       delete: disclosureDeleteMock,
       deleteMany: disclosureDeleteManyMock,
+    },
+    // Counted for the §3.2 link-label gate (ugcportal-jain) and never
+    // written by this route; every writer on it is mocked and in WRITE_MOCKS
+    // above, so "publishing writes only publishedAt" keeps covering the
+    // table this route now reads — the same pairing `mediaListing` above
+    // states for its own read.
+    commercialLink: {
+      count: commercialLinkCountMock,
+      updateMany: commercialLinkUpdateManyMock,
+      update: commercialLinkUpdateMock,
+      create: commercialLinkCreateMock,
+      upsert: commercialLinkUpsertMock,
+      delete: commercialLinkDeleteMock,
+      deleteMany: commercialLinkDeleteManyMock,
     },
     $executeRaw: executeRawMock,
     $queryRaw: queryRawMock,
@@ -390,6 +417,11 @@ beforeEach(() => {
   // uploader declaring nobody identifiable is shown, the people gate asks
   // for no clearance.
   listingFindUniqueMock.mockResolvedValue(null);
+  // No commercial link, which is every item in this file except where a case
+  // says otherwise: a link can only be attached to an item that already
+  // declares a benefit under a permitted label, and the default disclosure
+  // above is no row at all.
+  commercialLinkCountMock.mockResolvedValue(0);
   // A complete, in-force declaration by the owner (ugcportal-3ae). See
   // VALID_ATTESTATION for why this is the default rather than null.
   attestationFindUniqueMock.mockResolvedValue(VALID_ATTESTATION);
@@ -1855,5 +1887,117 @@ describe("publishing requires an operator, not merely ownership (ugcportal-9gt1)
     expect((await response.json()).blocker).toBe("not_an_operator");
     expect(mediaUpdateManyMock).not.toHaveBeenCalled();
     expectNoOtherWrites();
+  });
+});
+
+/**
+ * The § 3.2 link-label gate at the route (ugcportal-jain K2).
+ *
+ * The sibling gate above it (`advertisingLabelPublishRefusal`) asks whether a
+ * DECLARED benefit is labelled, and answers null the moment `benefitReceived`
+ * stops being `true` — which is exactly what a withdrawal leaves behind. So
+ * every case here is an item carrying a link whose disclosure declares no
+ * benefit, which is the state that used to publish entirely ungated.
+ */
+describe("publishing an item whose commercial links have lost their label (ugcportal-jain)", () => {
+  /** What the route's own `prisma.commercialLink.count` answers. */
+  function carriesLinks(commercialLinkCount: number) {
+    commercialLinkCountMock.mockResolvedValue(commercialLinkCount);
+  }
+
+  it.each([
+    ["no disclosure row at all", null],
+    ["a withdrawn benefit", { benefitReceived: false, label: null, benefitSource: null }],
+    ["an unanswered benefit question", { benefitReceived: null, label: null, benefitSource: null }],
+    [
+      "a benefit withdrawn but a label left behind that nobody validated",
+      { benefitReceived: false, label: "sponsored", benefitSource: null },
+    ],
+  ])("refuses an item carrying a link with %s", async (_name, disclosure) => {
+    signedInAs(OWNER_ID);
+    mediaFindUniqueMock.mockResolvedValue(unpublishedMedia);
+    disclosureFindUniqueMock.mockResolvedValue(disclosure);
+    listingFindUniqueMock.mockResolvedValue(TRIAGED_ALCOHOL_FREE);
+    carriesLinks(1);
+
+    const response = await POST(publishRequest("POST"), context());
+
+    expect(response.status).toBe(400);
+    // `commercialLinks`, not `advertisingLabel`: proves the refusal came from
+    // THIS gate rather than from the label gate a few lines above it, which
+    // answers null for every one of these rows.
+    expect((await response.json()).field).toBe("commercialLinks");
+    expect(mediaUpdateManyMock).not.toHaveBeenCalled();
+    expectNoOtherWrites();
+  });
+
+  it("refuses an item that is ALREADY published, rather than answering 200", async () => {
+    // NOT GATED ON `publishedAt === null`, matching the two refusals beside
+    // it: a published row in this state was written outside this API and is
+    // in breach, so reporting success for it would be this route agreeing
+    // with a row the public surfaces are already refusing to show links for.
+    signedInAs(OWNER_ID);
+    mediaFindUniqueMock.mockResolvedValue(publishedMedia);
+    mediaFindFirstMock.mockResolvedValue(toOwnerShape(publishedMedia));
+    disclosureFindUniqueMock.mockResolvedValue(null);
+    listingFindUniqueMock.mockResolvedValue(TRIAGED_ALCOHOL_FREE);
+    carriesLinks(1);
+
+    const response = await POST(publishRequest("POST"), context());
+
+    expect(response.status).toBe(400);
+    expect((await response.json()).field).toBe("commercialLinks");
+    expect(mediaUpdateManyMock).not.toHaveBeenCalled();
+  });
+
+  it("does not block unpublishing one", async () => {
+    // Taking the page down is the remedy, so this gate must never stand in
+    // DELETE's way — the same rule the label and alcohol gates follow, and
+    // the reason the count is asserted never to have been read.
+    signedInAs(OWNER_ID);
+    mediaFindUniqueMock.mockResolvedValue(publishedMedia);
+    disclosureFindUniqueMock.mockResolvedValue(null);
+    carriesLinks(1);
+
+    const response = await DELETE(publishRequest("DELETE"), context());
+
+    expect(response.status).toBe(200);
+    expect((await response.json()).publishedAt).toBeNull();
+    expect(commercialLinkCountMock).not.toHaveBeenCalled();
+  });
+
+  it("publishes a link-carrying item that still has its label, which is the point", async () => {
+    // THE SUCCESS. Without it every refusal above would hold just as well
+    // for a gate wired to refuse every item that carries a link at all —
+    // which would make the whole commercial-link feature unpublishable.
+    signedInAs(OWNER_ID);
+    mediaFindUniqueMock.mockResolvedValue(unpublishedMedia);
+    disclosureFindUniqueMock.mockResolvedValue({
+      benefitReceived: true,
+      label: "Advertisement / Reklame",
+      benefitSource: { alcoholLinked: false },
+    });
+    listingFindUniqueMock.mockResolvedValue(TRIAGED_ALCOHOL_FREE);
+    carriesLinks(1);
+
+    const response = await POST(publishRequest("POST"), context());
+
+    expect(response.status).toBe(200);
+    expect(writtenPayloads()).toEqual([{ publishedAt: expect.any(Date) }]);
+  });
+
+  it("publishes an unlabelled item that carries no link", async () => {
+    // The other half of the scope limit: an ordinary undisclosed photograph
+    // has no label and must still publish. A gate that read the label alone
+    // would refuse every item in the library.
+    signedInAs(OWNER_ID);
+    mediaFindUniqueMock.mockResolvedValue(unpublishedMedia);
+    disclosureFindUniqueMock.mockResolvedValue(null);
+    listingFindUniqueMock.mockResolvedValue(TRIAGED_ALCOHOL_FREE);
+    carriesLinks(0);
+
+    const response = await POST(publishRequest("POST"), context());
+
+    expect(response.status).toBe(200);
   });
 });
