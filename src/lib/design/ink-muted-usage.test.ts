@@ -19,11 +19,9 @@
  * left intact: `TEXT_LABEL_CLASS`'s own `text-ink` (ugcportal-4r0e — a
  * DIFFERENT token, not tracked by this file, see its own bead), upload-
  * form.tsx's two helper paragraphs (ugcportal-galb), and triage-form.tsx's
- * two attestation spans. The two plain-canvas usages this bead found still
- * standing — triage-form.tsx's two attestation spans and upload-form.tsx's
- * alt-text helper + caption qualifier — are fixed in this same change (see
- * their own comments); this file is what stops the next one arriving
- * unnoticed.
+ * two attestation spans. Those of them that use this file's own token are
+ * fixed in this same change, each with its own comment at the call site;
+ * this file is what stops the next one arriving unnoticed.
  *
  * WHY CONTENT, NOT JUST A COUNT OR A LINE. Two earlier shapes of this file
  * were each found to have the same underlying hole, re-expressed:
