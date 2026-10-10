@@ -2,8 +2,9 @@
  * ugcportal-7g2o: an audit of every `text-ink-muted` usage in shipped
  * source, in the shape of AUDITED_DECORATIVE_BORDER_USAGES (contrast.test.ts)
  * and dual-meaning-usage.test.ts's own AUDITED_USAGE — but keyed PER
- * OCCURRENCE (`file:line`), not per file. See "WHY PER OCCURRENCE" below for
- * why a per-file count was tried first and found not to hold.
+ * OCCURRENCE, by its line AND its own literal content, not by file, and not
+ * by line alone. See "WHY CONTENT, NOT JUST A COUNT OR A LINE" below for the
+ * two shapes that were tried first and found not to hold.
  *
  * THE DEFECT THIS CLOSES. `--color-ink-muted` (what `text-ink-muted`
  * resolves to) is tuned for the near-black surface scale: light text meant
@@ -24,63 +25,93 @@
  * their own comments); this file is what stops a fifth one arriving
  * unnoticed.
  *
- * WHY PER OCCURRENCE. A per-file key, each entry a `count` plus one
- * classification covering the whole count — the same shape
- * AUDITED_DECORATIVE_BORDER_USAGES uses — has a hole this token's border
- * sibling does not: a border usage is the SAME role at every site, so a
- * per-file count is a legitimate summary of it. `text-ink-muted` is not —
- * the same literal string is correct on one surface and wrong on another —
- * so a file that already holds three correctly-classified `bg-surface-1`
- * usages can ABSORB a fourth, genuinely unsafe, plain-canvas usage by
- * nothing more than incrementing that file's count from 3 to 4: reproduced
- * for real, confirmed to pass every assertion a per-file version of this
- * audit has, including a fixture mutation that only ever tests whether the
- * SCAN disagrees with the allowlist. The count agrees with the allowlist;
- * the classification underneath it is simply never asked for.
+ * WHY CONTENT, NOT JUST A COUNT OR A LINE. Two earlier shapes of this file
+ * were each found to have the same underlying hole, re-expressed:
  *
- * Keying by `file:line` instead removes the arithmetic entirely: there is no
- * quantity to raise. A new occurrence is either a known key with its own
- * classification, or it is an unknown key, full stop — "bump a sibling's
- * count" is not an operation this shape of data has.
+ * 1. A per-FILE key, each entry a `count` plus one classification covering
+ *    the whole count — the shape AUDITED_DECORATIVE_BORDER_USAGES uses, fine
+ *    for a class whose every usage is the SAME role everywhere (true of a
+ *    border; not true of this token, correct on one surface and wrong on
+ *    another). A file already holding three correctly-classified
+ *    `bg-surface-1` usages could absorb a fourth, genuinely unsafe,
+ *    plain-canvas one by incrementing that file's count from 3 to 4 — no new
+ *    classification required, and every existing assertion (including a
+ *    fixture mutation) stayed green, because both only compared the raw
+ *    SCAN's total against the allowlist's total, never asked whether the
+ *    classification covering that total was true of every occurrence in it.
  *
- * WHAT THIS STILL CANNOT CATCH, STATED PLAINLY. This audit cannot verify
- * that a classification's `surface`/`pairingIds` are actually TRUE of the
- * line they are attached to — it has no JSX-ancestor-aware analysis, the
- * same documented scope limit dual-meaning-usage.test.ts's own header names
- * for a different token. Someone could add a new, genuinely unsafe,
- * plain-canvas occurrence and give it its OWN new `file:line` entry that
- * falsely copies an existing safe classification (`ink-muted-on-surface-1`,
- * say) onto it. That would pass every check here: the pairing is real, its
- * foreground really is `--color-ink-muted`, and it really does clear 4.5:1
- * — just not for the reason stated. What this file DOES guarantee is
- * narrower and mechanical: every occurrence has an explicit, individually
- * reviewable entry naming a real, passing, correctly-tokened pairing, and
- * none can ride in by raising a number. Whether a given entry's claimed
- * surface is the TRUE surface is a per-PR-diff question for a human reader,
- * same as it always was for a brand-new file under the old per-file design
- * — this change narrows the blast radius of that trust to one line instead
- * of a whole file, it does not remove the need for it.
+ * 2. A per-OCCURRENCE key by `file:line` alone closed that hole but opened a
+ *    narrower one of the same shape: a LINE NUMBER is a coordinate, not an
+ *    identity. If an edit shifts an existing, correctly-classified
+ *    occurrence away from its audited line while a DIFFERENT, unsafe
+ *    occurrence happens to land exactly on the line number it vacated, the
+ *    set of `file:line` keys can come out IDENTICAL to the audited set even
+ *    though the content behind one key completely changed — silently
+ *    absorbed, same as (1), just by coincidence of position instead of
+ *    arithmetic. See the "FIXTURE MUTATION: a collision" test below, which
+ *    demonstrates this shape failing to be caught by a line-only comparison
+ *    before showing the fix that catches it.
  *
- * Every classification is independently re-measured: `pairingId` must
- * resolve to a real PAIRINGS entry whose own `foreground` is
- * `--color-ink-muted` (a classification cannot point at a pairing measuring
- * a different token, e.g. `--muted-foreground`, just because it happens to
- * pass), the live evaluation of that pairing must clear body text's 4.5:1 in
- * BOTH colour schemes, and the ratio recorded here must match the live
- * light-mode number, so a drifted token fails loudly rather than leaving a
- * stale figure. There is deliberately no PAIRINGS entry anywhere pairing
- * `--color-ink-muted` with `--background`: it is known to fail (1.9003:1),
- * so an occurrence genuinely classified against the plain canvas has no
- * passing pairing id to point at.
+ * The key below is `file:line:content`, where `content` is the literal's own
+ * raw source text (the whole string/template literal, quotes included,
+ * whitespace collapsed). Content cannot coincide by accident the way a line
+ * number can — two genuinely different usages hashing to the identical
+ * literal text is not a coordinate collision, it is the two usages being
+ * textually indistinguishable, a different and far narrower residual (see
+ * "WHAT THIS STILL CANNOT CATCH" below). There is no longer a count to
+ * raise and no longer a bare coordinate to squat on: a new occurrence is
+ * either a known `file:line:content` key with its own classification, or it
+ * is unknown, full stop.
  *
- * Occurrences are found via the TypeScript AST (the same parser
- * `scan-source.ts`'s `sourceFileOf` already uses for this repo's other
- * source-text scanners), not a comment-stripped regex: a string, template,
- * or JSX-text literal's own text is, by construction, never comment prose,
- * so there is no separate comment-stripping step to get right or wrong here
- * — unlike dual-meaning-usage.test.ts and no-raw-hex.test.ts, which scan
- * raw (de-commented) text for a utility that can appear in more shapes than
- * a single literal.
+ * SCANNED, PRECISELY. `occurrencesIn` walks the TypeScript AST (the same
+ * parser `scan-source.ts`'s `sourceFileOf` already uses) and looks inside
+ * exactly two shapes: a string literal / no-substitution template literal
+ * (`ts.isStringLiteralLike`), and the static head/span segments of an
+ * interpolated template (`ts.isTemplateExpression`). A match's position is
+ * found by searching the literal's own RAW source slice
+ * (`sourceFile.text.slice(node.getStart(), node.getEnd())`), not its decoded
+ * `.text` — the two can differ in length wherever the source contains an
+ * escape sequence, which would have put the computed position at the wrong
+ * OFFSET and, for a literal that itself spans a line break, at the wrong
+ * LINE. Searching the raw slice removes the gap instead of documenting it:
+ * the index of a match within the raw slice is already an exact offset into
+ * the real source.
+ *
+ * NOT scanned: bare JSX text (the text between tags, as opposed to a
+ * string/template value inside an attribute). A Tailwind class is a
+ * `className` attribute's VALUE, never JSX text content, and every real
+ * usage in this codebase bears that out — so the omission costs nothing
+ * today. Stated as a scope boundary, not papered over: `occurrencesIn`
+ * does not call `ts.isJsxText` anywhere, and a literal `text-ink-muted`
+ * written as JSX text rather than inside a `className` string is invisible
+ * to this audit.
+ *
+ * WHAT THIS STILL CANNOT CATCH. Two residuals, both narrower than the ones
+ * this design closes, and both stated rather than solved:
+ *
+ * - This audit has no JSX-ancestor-aware static analysis, so it cannot
+ *   verify that a classification's `surface`/`pairingIds` are actually TRUE
+ *   of the occurrence they are attached to (the same scope limit dual-
+ *   meaning-usage.test.ts's own header names for a different token). A new,
+ *   genuinely unsafe occurrence could be given its own new, honestly-unique
+ *   key paired with a FALSE classification that happens to name a real,
+ *   passing pairing (`ink-muted-on-surface-1`, say). That passes every
+ *   check below: the pairing is real, its foreground really is
+ *   `--color-ink-muted`, and it really does clear 4.5:1 — just not for the
+ *   occurrence it is attached to. What IS enforced, mechanically: every
+ *   occurrence gets its own explicit, individually reviewable entry naming
+ *   a real, passing, correctly-tokened pairing, and none can ride in
+ *   unlabelled. Whether a given entry's claimed surface is the TRUE surface
+ *   is a per-PR-diff question for a human reader; this design does not
+ *   remove that need. It only guarantees there is always something
+ *   concrete, keyed to real content, for that reader to check.
+ * - Two occurrences whose entire literal is BYTE-IDENTICAL, on the same
+ *   line (an unlikely ternary like `cond ? "...text-ink-muted..." :
+ *   "...text-ink-muted..."` with identical branches) produce the
+ *   identical key and collide. `scanOccurrences` below treats that as a hard
+ *   failure (it throws, naming the duplicate key) rather than silently
+ *   merging the two or silently keeping only one — the same "never just
+ *   skip" discipline `usage.ts`'s own header holds itself to.
  */
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -116,51 +147,39 @@ function scannedFiles(): string[] {
   return (cachedFiles ??= walkSourceFiles(SRC_ROOT, isExcluded));
 }
 
+/** Collapses a literal's raw source slice to a single-line, single-spaced identity string, for both the audit key and human readability. */
+function normalize(raw: string): string {
+  return raw.trim().replace(/\s+/g, " ");
+}
+
 /**
- * Every `file:line` occurrence of `text-ink-muted` inside a string literal,
- * no-substitution template literal, or the static segments of an
- * interpolated template, in one file. A second occurrence landing on the
- * SAME line gets `#2`, `#3`, ... appended, so two usages sharing a line
- * cannot collide into one key — not a case any usage in this codebase hits
- * today, but the counter costs nothing and removes the possibility rather
- * than assuming it never happens.
- *
- * Column position is not tracked, only the line: a Tailwind class string
- * never spans a line break, so the line a match's index resolves to is
- * exact even though the index itself is computed against the literal's
- * OWN text (which excludes its surrounding quotes/backticks) rather than
- * against the full source — an off-by-one in the column that cannot move
- * the answer across a newline.
+ * Every `file:line:content` occurrence of `text-ink-muted` in one file — see
+ * this file's own header for exactly which two literal shapes are scanned,
+ * why the match position is computed against the literal's RAW source slice
+ * rather than its decoded text, and why JSX text is deliberately not among
+ * the shapes scanned.
  */
 function occurrencesIn(file: string, relativeFile: string): string[] {
   const sourceFile = sourceFileOf(file);
   const keys: string[] = [];
-  const seenOnLine = new Map<number, number>();
 
-  function record(literalStart: number, text: string): void {
+  function record(node: ts.Node): void {
+    const start = node.getStart(sourceFile);
+    const raw = sourceFile.text.slice(start, node.getEnd());
     TOKEN_PATTERN.lastIndex = 0;
     let match: RegExpExecArray | null;
-    while ((match = TOKEN_PATTERN.exec(text)) !== null) {
-      const line =
-        sourceFile.getLineAndCharacterOfPosition(literalStart + match.index).line + 1;
-      const seen = (seenOnLine.get(line) ?? 0) + 1;
-      seenOnLine.set(line, seen);
-      keys.push(seen === 1 ? `${relativeFile}:${line}` : `${relativeFile}:${line}#${seen}`);
+    while ((match = TOKEN_PATTERN.exec(raw)) !== null) {
+      const line = sourceFile.getLineAndCharacterOfPosition(start + match.index).line + 1;
+      keys.push(`${relativeFile}:${line}:${normalize(raw)}`);
     }
   }
 
   function visit(node: ts.Node): void {
     if (ts.isStringLiteralLike(node)) {
-      // `.getStart()` is the position of the opening quote/backtick; `.text`
-      // is the content AFTER it, so `+ 1` lines the two up (see this
-      // function's own doc comment on why a one-character error here cannot
-      // move the reported line).
-      record(node.getStart(sourceFile) + 1, node.text);
+      record(node);
     } else if (ts.isTemplateExpression(node)) {
-      record(node.head.getStart(sourceFile) + 1, node.head.text);
-      for (const span of node.templateSpans) {
-        record(span.literal.getStart(sourceFile) + 1, span.literal.text);
-      }
+      record(node.head);
+      for (const span of node.templateSpans) record(span.literal);
     }
     ts.forEachChild(node, visit);
   }
@@ -169,26 +188,34 @@ function occurrencesIn(file: string, relativeFile: string): string[] {
   return keys;
 }
 
-/** Every `text-ink-muted` occurrence in the shipped source tree, as `file:line` keys. */
+/** Every `text-ink-muted` occurrence in the shipped source tree, as `file:line:content` keys. */
+/**
+ * Refuses to silently merge or silently keep one of two occurrences whose
+ * (file, line, literal content) key is identical - see this file's own
+ * header, "WHAT THIS STILL CANNOT CATCH" - the same discipline usage.ts's
+ * own header holds itself to for an unresolvable shape. Exported as its own
+ * function, not inlined, so the throw itself has a direct unit test below
+ * rather than depending on a real duplicate source occurrence ever existing
+ * to exercise it.
+ */
+function assertUniqueKeys(keys: readonly string[]): ReadonlySet<string> {
+  const unique = new Set(keys);
+  if (unique.size !== keys.length) {
+    throw new Error(
+      `[ink-muted-usage] two occurrences produced the identical file:line:content key - ` +
+        `cannot tell them apart. Keys found: ${keys.join(" | ")}`,
+    );
+  }
+  return unique;
+}
+
 function scanOccurrences(): ReadonlySet<string> {
   const keys: string[] = [];
   for (const file of scannedFiles()) {
     const relative = path.relative(path.dirname(SRC_ROOT), file);
     keys.push(...occurrencesIn(file, relative));
   }
-  const unique = new Set(keys);
-  // Load-bearing, not a formality: if this ever fired it would mean two
-  // DIFFERENT occurrences produced the identical key and one silently
-  // vanished from the found set - exactly the kind of silent loss this
-  // file's whole design exists to refuse. Not expected to fire; see
-  // occurrencesIn's own same-line counter, which exists to prevent it.
-  if (unique.size !== keys.length) {
-    throw new Error(
-      `[ink-muted-usage] two occurrences produced the same key - occurrencesIn's ` +
-        `same-line counter has a gap. Keys found: ${keys.join(", ")}`,
-    );
-  }
-  return unique;
+  return assertUniqueKeys(keys);
 }
 
 /**
@@ -217,33 +244,35 @@ type OccurrenceClassification = {
 /**
  * Audited 2026-10-10 (ugcportal-7g2o). Every entry was traced by reading the
  * component's own render tree up to the nearest `bg-*`-carrying ancestor
- * (or the page canvas, when there is none).
+ * (or the page canvas, when there is none). Keys are generated by
+ * `occurrencesIn` above, not hand-typed — copy a failure message's exact key
+ * rather than re-deriving the line/content formatting by eye.
  */
 const AUDITED_USAGE: Readonly<Record<string, OccurrenceClassification>> = {
   // The per-uploader triage summary's <dl>, text-ink-muted only in the
   // `bg-destructive-surface` branch of its enclosing div's own className
   // ternary (the `bg-muted` branch uses text-muted-foreground instead,
   // tracked by dual-meaning-usage.test.ts).
-  "src/app/admin/curation/page.tsx:594": {
+  "src/app/admin/curation/page.tsx:594:\"mt-2 space-y-1 text-xs text-ink-muted\"": {
     surface: "bg-destructive-surface (the blocked-triage error well)",
     pairingIds: ["muted-foreground-on-destructive-surface"],
     lightRatio: 7.7703,
   },
-  // All three inside this file's two `bg-destructive-surface` wells: the
-  // alcohol-linked-brand disclosure well's "Recorded <date> by <admin>" line,
-  // and the separate "Needs attention: already published under this brand"
-  // well's supporting paragraph and its <ul> of affected items.
-  "src/app/admin/settings/rights/brands/page.tsx:175": {
+  // Inside this file's alcohol-linked-brand disclosure well: the "Recorded
+  // <date> by <admin>" line.
+  "src/app/admin/settings/rights/brands/page.tsx:175:\"mt-1 text-ink-muted\"": {
     surface: "bg-destructive-surface (the alcohol-linked disclosure well)",
     pairingIds: ["muted-foreground-on-destructive-surface"],
     lightRatio: 7.7703,
   },
-  "src/app/admin/settings/rights/brands/page.tsx:210": {
+  // The separate "Needs attention: already published under this brand" well:
+  // its supporting paragraph and its <ul> of affected items.
+  "src/app/admin/settings/rights/brands/page.tsx:210:\"mt-1 text-ink-muted\"": {
     surface: "bg-destructive-surface (the attention-needed well)",
     pairingIds: ["muted-foreground-on-destructive-surface"],
     lightRatio: 7.7703,
   },
-  "src/app/admin/settings/rights/brands/page.tsx:217": {
+  "src/app/admin/settings/rights/brands/page.tsx:217:\"mt-2 list-disc space-y-1 pl-5 text-ink-muted\"": {
     surface: "bg-destructive-surface (the attention-needed well)",
     pairingIds: ["muted-foreground-on-destructive-surface"],
     lightRatio: 7.7703,
@@ -251,12 +280,12 @@ const AUDITED_USAGE: Readonly<Record<string, OccurrenceClassification>> = {
   // The resale-rights review's blocker message and its <dl>, text-ink-muted
   // only in the `bg-destructive-surface` branch of the same div ternary
   // pattern page.tsx above uses.
-  "src/app/admin/settings/rights/page.tsx:376": {
+  "src/app/admin/settings/rights/page.tsx:376:\"mt-1 text-ink-muted\"": {
     surface: "bg-destructive-surface (the blocked-resale-rights well)",
     pairingIds: ["muted-foreground-on-destructive-surface"],
     lightRatio: 7.7703,
   },
-  "src/app/admin/settings/rights/page.tsx:384": {
+  "src/app/admin/settings/rights/page.tsx:384:\"mt-2 space-y-1 text-xs text-ink-muted\"": {
     surface: "bg-destructive-surface (the blocked-resale-rights well)",
     pairingIds: ["muted-foreground-on-destructive-surface"],
     lightRatio: 7.7703,
@@ -269,40 +298,40 @@ const AUDITED_USAGE: Readonly<Record<string, OccurrenceClassification>> = {
   // text-ink-muted on the PLAIN canvas until ugcportal-7g2o fixed them (see
   // their own comments) — they are text-muted-foreground now, tracked by
   // dual-meaning-usage.test.ts, not by this file.
-  "src/app/upload/upload-form.tsx:865": {
+  "src/app/upload/upload-form.tsx:865:\"text-sm text-ink-muted\"": {
     surface: "bg-surface-1 (resting) / bg-surface-2 (dragging over) — the upload dropzone panel",
     pairingIds: ["ink-muted-on-surface-1", "ink-muted-on-surface-2"],
     lightRatio: 7.5212,
   },
-  "src/app/upload/upload-form.tsx:866": {
+  "src/app/upload/upload-form.tsx:866:\"max-w-prose text-xs text-ink-muted\"": {
     surface: "bg-surface-1 (resting) / bg-surface-2 (dragging over) — the upload dropzone panel",
     pairingIds: ["ink-muted-on-surface-1", "ink-muted-on-surface-2"],
     lightRatio: 7.5212,
+  },
+  // Inside the queue row's own nested bg-destructive-surface failure well
+  // (the server's raw error detail).
+  "src/app/upload/upload-queue-list.tsx:203:\"mt-1 font-mono text-xs text-ink-muted\"": {
+    surface: "bg-destructive-surface (a failed upload's error detail)",
+    pairingIds: ["muted-foreground-on-destructive-surface"],
+    lightRatio: 7.7703,
   },
   // Three inside the queue row's own bg-surface-1 <li> (the status label,
   // the mime-type/size line, and the "uploaded, publish it from the
   // gallery" success note).
-  "src/app/upload/upload-queue-list.tsx:384": {
+  "src/app/upload/upload-queue-list.tsx:384:\"shrink-0 rounded-sm text-xs text-ink-muted outline-hidden focus:ring-3 focus:ring-ring/80\"": {
     surface: "bg-surface-1 (the queue row itself)",
     pairingIds: ["ink-muted-on-surface-1"],
     lightRatio: 8.4066,
   },
-  "src/app/upload/upload-queue-list.tsx:389": {
+  "src/app/upload/upload-queue-list.tsx:389:\"mt-1 text-xs text-ink-muted\"": {
     surface: "bg-surface-1 (the queue row itself)",
     pairingIds: ["ink-muted-on-surface-1"],
     lightRatio: 8.4066,
   },
-  "src/app/upload/upload-queue-list.tsx:422": {
+  "src/app/upload/upload-queue-list.tsx:422:\"text-xs text-ink-muted\"": {
     surface: "bg-surface-1 (the queue row itself)",
     pairingIds: ["ink-muted-on-surface-1"],
     lightRatio: 8.4066,
-  },
-  // Inside that row's own nested bg-destructive-surface failure well (the
-  // server's raw error detail).
-  "src/app/upload/upload-queue-list.tsx:203": {
-    surface: "bg-destructive-surface (a failed upload's error detail)",
-    pairingIds: ["muted-foreground-on-destructive-surface"],
-    lightRatio: 7.7703,
   },
 };
 
@@ -338,9 +367,26 @@ function diffAudit(
   };
 }
 
+/**
+ * Strips a `file:line:content` key down to `file:line` — used ONLY by the
+ * collision test below to show what a line-only comparison would have seen,
+ * never by the real audit.
+ */
+function fileAndLineOf(key: string): string {
+  const secondColon = key.indexOf(":", key.indexOf(":") + 1);
+  return key.slice(0, secondColon);
+}
+
 describe("text-ink-muted usage is audited per occurrence, by surface and ratio", () => {
   it("finds files to scan", () => {
     expect(scannedFiles().length).toBeGreaterThan(10);
+  });
+
+  it("the duplicate-key guard actually throws on a genuine collision", () => {
+    expect(() => assertUniqueKeys(["a:1:\"x\"", "a:1:\"x\""])).toThrow(
+      /identical file:line:content key/,
+    );
+    expect(() => assertUniqueKeys(["a:1:\"x\"", "a:2:\"x\""])).not.toThrow();
   });
 
   it("every classification points at a real PAIRINGS entry that actually measures --color-ink-muted", () => {
@@ -388,11 +434,11 @@ describe("text-ink-muted usage is audited per occurrence, by surface and ratio",
       diff.unaudited,
       `New text-ink-muted occurrence(s) found with no audit entry. For each, trace it up to ` +
         `the nearest bg-*-carrying ancestor (or the plain page canvas, if there is none) and add ` +
-        `a classification to AUDITED_USAGE keyed "file:line", naming the real surface and ` +
-        `PAIRINGS id — there is no passing pairing for --color-ink-muted on --background, so a ` +
-        `genuinely plain-canvas occurrence cannot be classified "safe"; switch it to ` +
-        `text-muted-foreground instead, the way ugcportal-7g2o fixed triage-form.tsx and ` +
-        `upload-form.tsx.`,
+        `a classification to AUDITED_USAGE keyed "file:line:content" (copy the exact key from ` +
+        `this message), naming the real surface and PAIRINGS id — there is no passing pairing ` +
+        `for --color-ink-muted on --background, so a genuinely plain-canvas occurrence cannot be ` +
+        `classified "safe"; switch it to text-muted-foreground instead, the way ugcportal-7g2o ` +
+        `fixed triage-form.tsx and upload-form.tsx.`,
     ).toEqual([]);
 
     expect(
@@ -405,14 +451,13 @@ describe("text-ink-muted usage is audited per occurrence, by surface and ratio",
   it("FIXTURE MUTATION: a new occurrence in a file that already has audited, safe usages is not absorbed", () => {
     // The scenario a per-file COUNT let through: a brand-new, unaudited
     // occurrence lands in upload-queue-list.tsx, a file that already has
-    // four audited, safe entries. Under the old per-file shape, the
+    // several audited, safe entries. Under the old per-file shape, the
     // "cheapest" adjustment was incrementing that file's one count - no new
-    // entry required, and the suite stayed green. Under file:line keys
-    // there is no count left to increment: the cheapest adjustment this
-    // design allows is making NO change to AUDITED_USAGE at all, which is
-    // exactly what is tried here.
+    // entry required, and the suite stayed green. There is no count left to
+    // increment here: the cheapest adjustment this design allows is making
+    // NO change to AUDITED_USAGE at all, which is exactly what is tried.
     const mutated = new Set(scanOccurrences());
-    const newKey = "src/app/upload/upload-queue-list.tsx:999";
+    const newKey = 'src/app/upload/upload-queue-list.tsx:999:"text-ink-muted"';
     mutated.add(newKey);
 
     const diff = diffAudit(mutated, AUDITED_USAGE);
@@ -424,10 +469,58 @@ describe("text-ink-muted usage is audited per occurrence, by surface and ratio",
 
   it("FIXTURE MUTATION: a new occurrence in a previously unaudited file fails naming that file", () => {
     const mutated = new Set(scanOccurrences());
-    const newKey = "src/components/media/a-hypothetical-new-component.tsx:12";
+    const newKey = 'src/components/media/a-hypothetical-new-component.tsx:12:"text-ink-muted"';
     mutated.add(newKey);
 
     const diff = diffAudit(mutated, AUDITED_USAGE);
     expect(diff.unaudited).toEqual([newKey]);
+  });
+
+  it("FIXTURE MUTATION: a collision - a new, unsafe occurrence landing on an audited line it did not shift from is not absorbed", () => {
+    // The exact shape a LINE-ONLY key (file:line, no content) cannot tell
+    // apart from nothing happening at all: pick a real audited occurrence,
+    // pretend its true content shifted away to a new line (an unrelated
+    // edit above it in the file), and pretend a DIFFERENT, unsafe occurrence
+    // landed exactly on the line number it vacated. The set of real
+    // `file:line` COORDINATES is unchanged by this - same count, same
+    // numbers - only the content behind one of them is now a lie.
+    const [victimKey] = Object.keys(AUDITED_USAGE).filter((key) =>
+      key.startsWith("src/app/upload/upload-form.tsx:865:"),
+    );
+    expect(victimKey, "fixture assumption: this occurrence still exists").toBeDefined();
+    const victimLine = fileAndLineOf(victimKey);
+
+    const shiftedAwayKey = victimLine.replace(":865", ":9999") + ':"text-sm text-ink-muted"';
+    const unsafeNewKey = `${victimLine}:"text-ink-muted"`; // same file:line, different (shorter, fabricated) content
+
+    const realFound = scanOccurrences();
+    const collided = new Set(realFound);
+    collided.delete(victimKey);
+    collided.add(shiftedAwayKey);
+    collided.add(unsafeNewKey);
+
+    // What a LINE-ONLY comparison would have seen: strip every key (both
+    // sides) down to file:line and diff that. The collision is invisible -
+    // victimLine is still present on both sides, and the genuinely new
+    // shiftedAwayKey's line (:9999) is the only thing that would show up,
+    // which is NOT the unsafe occurrence - it is the SAFE one that moved.
+    // A reviewer fixing just that one "new file" complaint would never be
+    // shown the unsafe occurrence silently sitting at :865 at all.
+    const lineOnlyFound = new Set([...collided].map(fileAndLineOf));
+    const lineOnlyAudited = new Set(Object.keys(AUDITED_USAGE).map(fileAndLineOf));
+    const lineOnlyUnaudited = [...lineOnlyFound].filter((k) => !lineOnlyAudited.has(k));
+    const lineOnlyStale = [...lineOnlyAudited].filter((k) => !lineOnlyFound.has(k));
+    expect(
+      lineOnlyUnaudited,
+      "demonstrates the hole: a line-only key reports only the shifted SAFE occurrence's new line, never the unsafe one squatting on the old line",
+    ).toEqual([fileAndLineOf(shiftedAwayKey)]);
+    expect(lineOnlyStale, "demonstrates the hole: the vacated line is not reported stale, because something (the wrong thing) is still there").toEqual([]);
+
+    // The real, content-keyed audit does not have this hole: both the
+    // genuinely new content at the old coordinate AND the shifted content at
+    // its new coordinate are unknown keys, and the original entry is stale.
+    const diff = diffAudit(collided, AUDITED_USAGE);
+    expect(diff.unaudited.sort()).toEqual([shiftedAwayKey, unsafeNewKey].sort());
+    expect(diff.stale).toEqual([victimKey]);
   });
 });
