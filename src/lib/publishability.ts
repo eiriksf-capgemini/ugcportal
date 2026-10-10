@@ -33,9 +33,13 @@ import {
  * `PUBLIC_MEDIA_RIGHTS_SCOPE` is the same rule as a Prisma `where`, spread
  * into `PUBLIC_MEDIA_SCOPE` (src/lib/public-media.ts) so that every
  * anonymous reader — the paginated feed, the server-rendered home page, the
- * portfolio, the sitemap and the per-item page — inherits it from the scope
- * constant rather than from remembering to ask. Writing a rule twice in two
- * languages is a real cost and it is paid deliberately: a row-at-a-time
+ * portfolio, the sitemap, the per-item page, its price block and the
+ * preview bytes — inherits it from the scope constant rather than from
+ * remembering to ask. (That list is prose and goes stale; the enumeration
+ * that does not is the scan in src/lib/public-media.consumers.test.ts.)
+ *
+ * Writing a rule twice in two languages is a real cost and it is paid
+ * deliberately: a row-at-a-time
  * predicate cannot filter a keyset-paginated query, and a `where` clause
  * cannot produce the message a refused publish has to show. They are kept
  * honest against each other by a cross-check that runs BOTH over the same
@@ -311,13 +315,15 @@ export function publishRightsRefusal(
  * carries it. The predicate above runs on a publish REQUEST, so it governs
  * rows that cross the line from now on and nothing else. Every row published
  * before it existed — and every row whose clearance situation changed since —
- * is still sitting in the table, and five anonymous surfaces read it.
+ * is still sitting in the table, and every anonymous surface reads it —
+ * six query sites as of ugcportal-nffp, enumerated by the scan in
+ * src/lib/public-media.consumers.test.ts rather than counted here.
  *
  * So the rule is also a `where`, and it is spread into `PUBLIC_MEDIA_SCOPE`
  * ITSELF rather than repeated at each of those surfaces. That is the half
- * that covers the SIXTH reader, the one somebody adds next year: a new
- * anonymous query that reaches for the scope constant inherits this with
- * nothing to remember.
+ * that covers the reader somebody adds next year: a new anonymous query
+ * that reaches for the scope constant inherits this with nothing to
+ * remember.
  *
  * A QUERY THAT DOES NOT REACH FOR IT IS NOT COVERED, here or anywhere else
  * (ugcportal-3ae review round 1, findings 2 and 3; an earlier draft of this
@@ -326,7 +332,35 @@ export function publishRightsRefusal(
  * the constant, by named import or by namespace import; its header sets out
  * what it is blind to, with the fixtures for both. The hand-written-`where`
  * shape is ugcportal-7egi. The four readers there are at ba9991f spread the
- * scope.
+ * scope; another that did not was found at ugcportal-nffp — GET
+ * /api/media/preview/[previewId], the route that serves the bytes — and it
+ * does now.
+ *
+ * WHAT A LAPSE AFTER PUBLICATION DOES, which the header above left open as
+ * ugcportal-nffp's question. Answered, and the answer splits in two:
+ *
+ *   - Everything the PREDICATE ABOVE consults is also in this `where`, so
+ *     it is re-evaluated on every read and a clearance that stops holding
+ *     takes the row off every public surface on the next request, with no
+ *     write to the row. src/lib/public-media.lapse.test.ts proves that by
+ *     mutating a live, currently-served row and putting it back.
+ *   - The uploader's standing `ResaleRightsReview` moving to REVOKED or
+ *     EXPIRED, its `validUntil` passing, or its checklist version being
+ *     retired does NOT depublish anything, and must not: that review
+ *     answers whether the work may be RESOLD, and folding it in here would
+ *     empty every public surface of everything unpriced — the same
+ *     argument this module's own header makes, and the one
+ *     src/lib/sellable-media.ts makes for keeping sellability beside this
+ *     scope rather than inside it (ugcportal-yzo7). The legal review
+ *     reaches the same conclusion from its own side, dated 2026-09-28:
+ *     docs/legal/manual-upload-rights-review.md §2, the "E.3 Revocation
+ *     cascades" row — "a REVOKED uploader's files are unsellable (status
+ *     check), but nothing unpublishes them … Public visibility is a
+ *     separate switch (ugcportal-3ae)." Cited as a second author agreeing,
+ *     not as a ruling: that document's status header makes every decision
+ *     in it a RECOMMENDATION until ugcportal-zec's process owner ratifies
+ *     it, and its §8 table is blank. The first reason above does not
+ *     depend on it.
  */
 
 /** The attestation a public row must carry, as a Prisma relation filter. */

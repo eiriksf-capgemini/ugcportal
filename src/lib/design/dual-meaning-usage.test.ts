@@ -269,12 +269,20 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
   // ugcportal-vq3z: the triage form. `text-ink` is the shared select class,
   // whose own `bg-surface-3` fill is the background it renders against —
   // the identical pairing decision-form.tsx uses for its five fields on the
-  // sibling screen. The one text-muted-foreground is the form's intro
-  // paragraph, which sits in a border-only container with no fill, so the
-  // page canvas is behind it.
+  // sibling screen. The one (now three) text-muted-foreground usages sit
+  // in the form's own border-only container with no fill, so the page
+  // canvas is behind all of them.
+  //
+  // text-muted-foreground: 1 -> 3 (ugcportal-7g2o): the two per-fact
+  // attestation spans ("Uploader attested: ...", "No attestation on file
+  // ...") were text-ink-muted, tuned for a dark fill this plain-canvas
+  // container does not have (1.9003:1 against --paper, see
+  // src/lib/design/ink-muted-usage.test.ts) — switched to the token this
+  // file's own pre-existing intro-paragraph entry already uses for the
+  // identical surface.
   "src/app/admin/curation/triage-form.tsx": {
     "text-ink": 1,
-    "text-muted-foreground": 1,
+    "text-muted-foreground": 3,
   },
   // ugcportal-qfy9: the per-layer clearance form. One `text-ink`, in the
   // shared textarea class, whose own `bg-surface-3` fill is the background
@@ -324,9 +332,19 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
   // text-muted-foreground). No new token and no new context: the same two
   // the TagPicker fieldset immediately below it already uses, on the same
   // page canvas, which is the case this whole audit calls correct.
+  //
+  // text-muted-foreground: 8 -> 10 (ugcportal-7g2o, subsuming ugcportal-galb
+  // — same two call sites, same fix): the alt-text field's helper paragraph
+  // ("Describe what the photo shows...") and the caption label's
+  // "(optional)" qualifier were text-ink-muted, both inside the bg-less
+  // `<div data-upload-alt-text-fields="">` — plain page canvas, where
+  // --color-ink-muted measures 1.9003:1 (src/lib/design/
+  // ink-muted-usage.test.ts). Neither is TEXT_LABEL_CLASS's own text-ink
+  // (ugcportal-4r0e, a different token on the <label> elements themselves,
+  // not in this file's scope or this bead's).
   "src/app/upload/upload-form.tsx": {
     "text-foreground": 7,
-    "text-muted-foreground": 8,
+    "text-muted-foreground": 10,
   },
   // text-ink: 1 (low finding 5) - the queued file's name, on the upload
   // page's own plain canvas (ugcportal-n3c).

@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { GetObjectCommand } from "@aws-sdk/client-s3";
 import { NextResponse } from "next/server";
 
+import type { Role } from "@/generated/prisma/enums";
 import { auth } from "@/lib/auth";
 // Both from @/lib/media, deliberately, even though @/lib/watermark re-exports
 // PREVIEW_CONTENT_TYPE and reads as the more natural home for it. Importing it
@@ -12,7 +13,21 @@ import { auth } from "@/lib/auth";
 // the hot path; it has no business loading an image-processing library.
 import { PREVIEW_CONTENT_TYPE, PREVIEW_KEY_PREFIX } from "@/lib/media";
 import { MEDIA_PREVIEW_DELIVERY_SELECT } from "@/lib/media-access";
+import type { MediaAnonymousScope } from "@/lib/media-listing";
 import { prisma } from "@/lib/prisma";
+// The operator arm asks the question src/lib/publish-authority.ts owns,
+// rather than comparing a role here — see OperatorPreviewScope below.
+import { isPublishOperator } from "@/lib/publish-authority";
+// ugcportal-nffp. The comment above asks that anything added to this hot
+// path's module graph be checked rather than assumed, so: `@/lib/public-media`
+// imports `@/lib/advertising-disclosure`, `@/lib/curation-tags`,
+// `@/lib/media-access`, `@/lib/media-listing`, `@/lib/publishability`,
+// `@/lib/routes` and `@/lib/throttled-log`. Three of those this route already
+// imports; the rest are plain TypeScript with no native dependency, and
+// `media-listing` reaches only `media-access`, `prisma` and a type. Read off
+// the import statements rather than off a build trace — unlike the 86-file
+// figure above, which was measured.
+import { PUBLIC_MEDIA_SCOPE } from "@/lib/public-media";
 import {
   ObjectStorageUnreachableError,
   getBucketName,
@@ -68,10 +83,12 @@ type RouteContext = { params: Promise<{ previewId: string }> };
  * about *sameness*.
  *
  * Every miss funnels through here: an id that does not exist, an unpublished
- * row belonging to somebody else, a row whose `previewKey` is unusable, and a
- * stored object that has gone missing. They must be indistinguishable to an
- * anonymous caller, and the cheapest way to guarantee that is to leave no
- * second place where a 404 can be spelled slightly differently — no variant
+ * row belonging to somebody else, a PUBLISHED row this caller may not see —
+ * its rights having lapsed, or never having held (ugcportal-nffp) — a row
+ * whose `previewKey` is unusable, and a stored object that has gone missing.
+ * They must be indistinguishable to an anonymous caller, and the cheapest
+ * way to guarantee that is to leave no second place where a 404 can be
+ * spelled slightly differently — no variant
  * message, no extra header, no `reason` field added later "just for
  * debugging".
  *
@@ -79,12 +96,13 @@ type RouteContext = { params: Promise<{ previewId: string }> };
  * a cached 404 would keep an item invisible after its owner published it, the
  * mirror of the staleness the success path guards against.
  *
- * On timing: the "no such id" and the "unpublished, not yours" cases run
- * exactly the same code — one `auth()`, one indexed `findFirst`, this
- * response — and neither reaches object storage. That removes the large,
- * obvious signal, which would be a bucket round trip on one path and not the
- * other. It is not a constant-time claim, and none is made: SQLite's index
- * lookup for a missing key and for a filtered-out row are not provably
+ * On timing: the "no such id", "unpublished, not yours" and "published but
+ * not cleared" cases run exactly the same code — one `auth()`, one indexed
+ * `findFirst`, this response — and none of them reaches object storage.
+ * That removes the large, obvious signal, which would be a bucket round
+ * trip on one path and not the other. It is not a constant-time claim, and
+ * none is made: SQLite's index lookup for a missing key and for a
+ * filtered-out row are not provably
  * identical, and this route does not attempt to equalise them.
  */
 function previewNotFound(): NextResponse {
@@ -220,23 +238,60 @@ export function resetPreviewStorageUnreachableLogThrottle(): void {
 }
 
 /**
- * The scope for an anonymous caller: published previews, and nothing else.
+ * The scope for an anonymous caller: public previews, and nothing else.
  *
- * `publishedAt: { not: null }` is required by the type, and `userId` and `OR`
- * are `?: never`, for the same reason MediaAnonymousScope in
- * src/lib/media-listing.ts is shaped that way — so that "anonymous lookup with
- * the publish filter dropped" is not a spelling that compiles.
+ * `PUBLIC_MEDIA_SCOPE` (src/lib/public-media.ts) SPREAD WHOLE, NOT A
+ * HAND-WRITTEN `publishedAt: { not: null }` (ugcportal-nffp). A route that
+ * spells its own filter is a reader the publish gate does not reach and
+ * src/lib/public-media.consumers.test.ts cannot see, because that scan
+ * enumerates files NAMING the constant. This one did, and the cost was
+ * exact: an uncleared row left the feed, the home page, the portfolio, the
+ * sitemap and /media/[previewId], and the photograph itself kept being
+ * served from here — at the stable URL the sitemap had already handed to
+ * crawlers. Reaching for the constant fixes both halves.
+ *
+ * `previewId: string` REPLACES the scope's own `previewId: { not: null }`,
+ * which is a narrowing: an equality match on a real handle already implies
+ * non-null. Every other key of the scope is kept, including the two column
+ * filters this route previously wrote by hand and the rights half it did
+ * not. `userId` and `OR` stay `?: never`, for the same reason
+ * `MediaAnonymousScope` (src/lib/media-listing.ts) is shaped that way — so
+ * that "anonymous lookup with a filter dropped" is not a spelling that
+ * compiles.
+ *
+ * WHAT THIS COSTS, TWICE OVER, because both halves are real.
+ *
+ * In ROWS: the same large, deliberate cost `PUBLIC_MEDIA_SCOPE`'s own
+ * comment describes. Every row published before ugcportal-3ae has no
+ * attestation, so its preview now 404s — for anonymous callers AND for a
+ * signed-in stranger, since the signed-in scope's public arm is this same
+ * object. Those rows already left every listing surface when 3ae landed;
+ * this route was the last way to reach the image.
+ *
+ * WHO STILL SEES IT: the owner, through their own arm below, and the
+ * OPERATOR, through `OperatorPreviewScope`. Without that second arm this
+ * cost would land on the admin curation screen as well, which is the one
+ * place the refusal has to be repairable from.
+ *
+ * In WORK PER REQUEST: this is the hot path — a gallery page issues one
+ * request here per tile — and the rights half is relation filters, so each
+ * one now costs correlated lookups into `MediaAttestation`, `MediaListing`,
+ * `MediaRightsClearance` and `User` on top of the indexed `previewId`
+ * match. The cheaper shapes were considered and both are the wrong trade:
+ * checking rights only on the page that LINKS to the bytes leaves the URL
+ * itself ungated, which is the bug this is fixing; and caching the answer
+ * is the same mistake `previewCacheHeaders` below already refuses for
+ * `publishedAt`, since a clearance can lapse with no write to anything a
+ * cache would key on.
  */
-type AnonymousPreviewScope = {
+type AnonymousPreviewScope = Omit<MediaAnonymousScope, "previewId"> & {
   previewId: string;
-  previewKey: { not: null };
-  publishedAt: { not: null };
   userId?: never;
   OR?: never;
 };
 
 /**
- * The scope for a signed-in caller: published previews, plus their own
+ * The scope for a signed-in caller: public previews, plus their own
  * whatever its state.
  *
  * The owner branch is `{ userId: string }`, not an optional and not
@@ -250,16 +305,122 @@ type AnonymousPreviewScope = {
  * exists to prevent, arriving from a value that is `undefined` rather than
  * from any visible mistake. Requiring a `string` here, and normalising the
  * session exactly once in the handler, is what makes that unexpressible.
+ *
+ * THE PUBLIC ARM IS `MediaAnonymousScope`, NOT `{ publishedAt: { not: null } }`
+ * (ugcportal-nffp). A signed-in visitor looking at somebody else's item is
+ * an anonymous visitor as far as that item's rights are concerned, so the
+ * arm that is not "this is mine" has to be the full public scope. Typed as
+ * `MediaAnonymousScope` rather than written out, which is what makes an arm
+ * missing the rights half fail `tsc` rather than review.
  */
 type OwnerPreviewScope = {
   previewId: string;
   previewKey: { not: null };
-  OR: [{ publishedAt: { not: null } }, { userId: string }];
+  OR: [MediaAnonymousScope, { userId: string }];
   publishedAt?: never;
   userId?: never;
 };
 
-type PreviewScope = AnonymousPreviewScope | OwnerPreviewScope;
+/**
+ * The scope for an OPERATOR: any preview with a stored object, whatever its
+ * publish state, whoever uploaded it, cleared or not (ugcportal-nffp).
+ *
+ * WHY THIS ARM HAD TO EXIST THE MOMENT THE RIGHTS HALF ARRIVED. The
+ * anonymous arm above is "what the public may see". The admin curation
+ * screen (src/app/admin/curation/page.tsx) lists EVERY upload — its
+ * `findMany` has no `where` at all — and renders each one's thumbnail
+ * through `mediaPreviewPath`, i.e. through this route. The admin's job on
+ * that screen is to look at the photograph and answer whether an
+ * identifiable person is in it, which is the very thing a PEOPLE clearance
+ * records. Without this arm the screen 404s exactly the rows that need
+ * triaging, so the operator must clear the photograph to see it and see it
+ * to clear it. A gate whose own remedy is behind the gate is not a gate.
+ *
+ * AN OPERATOR IS NOT THE PUBLIC, and that is the whole justification rather
+ * than a convenience. Åvl § 104 is about a photograph being "gjengis eller
+ * vises offentlig"; docs/legal/manual-upload-rights-review.md §3.3 draws the
+ * same line for GDPR — "for storage and internal triage, legitimate
+ * interest (Art. 6(1)(f)) with a balancing test is arguable; for public
+ * display and for sale to third parties … consent". The controller's own
+ * staff performing the triage are the internal-triage case, not the public
+ * -display one. There is also no coherent model in which an operator may
+ * read this row's filename, its uploader's e-mail address and every triage
+ * flag on that same screen, may set its price and may sign a clearance on
+ * the depicted person's face, and may not see the watermarked thumbnail.
+ *
+ * `isPublishOperator` (src/lib/publish-authority.ts) RATHER THAN
+ * `role === "ADMIN"`, which is what that module asks of its callers: the
+ * day the publish set stops equalling the admin set is one edit there, and
+ * a hand-written role comparison here would be one of the call sites its
+ * own comment warns would then have to be hunted down. The role comes from
+ * the session this route already reads, and `src/lib/auth.ts`'s session
+ * callback re-derives it from the `User` row on every request, so a demoted
+ * operator loses this arm on their next request with nothing to invalidate
+ * — the same freshness `layerIsCleared` relies on for a clearance.
+ *
+ * NOT A WIDENING OF WHAT IS SERVED, only of who may ask: `previewKey: { not:
+ * null }` and the prefix guard in the handler are unchanged, so this still
+ * cannot reach `Media.key`, and `cache-control: private, no-cache` plus
+ * `Vary: Cookie` already stop one caller's answer being reused for another.
+ *
+ * WHAT EACH VIEWER GETS, measured on a real database and asserted in
+ * src/lib/public-media.lapse.test.ts — anon / signed-in stranger / operator
+ * / owner:
+ *
+ *   published, cleared    200 / 200 / 200 / 200
+ *   published, lapsed     404 / 404 / 200 / 200
+ *   unpublished, other's  404 / 404 / 200 / 200
+ *
+ * THE LAST ROW IS WHY THE ARM IS NOT RESTRICTED TO PUBLISHED ROWS. The rule
+ * is "an operator is not the public"; a version that stopped at published
+ * rows would encode a rule nobody believes, and would leave the curation
+ * screen broken for the case it mostly handles — ugcportal-3ae means the
+ * ordinary order is upload, triage, clear, THEN publish, so most of what
+ * curation sees is unpublished.
+ */
+type OperatorPreviewScope = {
+  previewId: string;
+  previewKey: { not: null };
+  /*
+   * All three spelled `?: never` rather than merely omitted, the same
+   * construction the two scopes above use. WHAT THAT ACTUALLY BUYS, checked
+   * against `tsc` rather than assumed: it rejects a REAL VALUE here and
+   * nothing else. `publishedAt: { not: null }` and `userId: someString`
+   * are both TS2322. `publishedAt: undefined`,
+   * `userId: undefined` and `OR: undefined` all COMPILE, because
+   * `exactOptionalPropertyTypes` is off in tsconfig.json and `?: never` is
+   * therefore `never | undefined`. A real `AND: PUBLIC_MEDIA_SCOPE.AND`
+   * bolted on here compiles too — `AND` exists on `AnonymousPreviewScope`,
+   * so the union's excess-property check lets it through and this arm
+   * simply ignores it. A real `OR: [...]` compiles for a different and
+   * benign reason: the object then IS an `OwnerPreviewScope`.
+   *
+   * So the honest claim is narrow. `undefined` — the value Prisma drops,
+   * and the hazard this file is built around — is NOT caught here. It is
+   * caught where it matters, which is the owner arm's `{ userId: string }`:
+   * `OR: [PUBLIC_MEDIA_SCOPE, { userId: undefined }]` is TS2322, verified,
+   * and that is the one place an `undefined` would widen a scope rather
+   * than narrow it. This arm is already the widest in the file, so an
+   * `undefined` slipping in changes nothing about what it matches.
+   *
+   * These keys are therefore documentation that `tsc` partially enforces,
+   * not a guarantee. What closes the remaining gap is the route's own
+   * suite, and specifically the three `expect("<key>" in where).toBe(false)`
+   * lines beside its `toEqual` — not the `toEqual` itself, which treats
+   * `{ publishedAt: undefined }` and `{}` as equal and would miss exactly
+   * the case `tsc` misses. `"publishedAt" in { publishedAt: undefined }`
+   * is `true`, so those three lines are the assertion that actually fails
+   * on an `undefined`-valued key arriving here.
+   */
+  publishedAt?: never;
+  userId?: never;
+  OR?: never;
+};
+
+type PreviewScope =
+  | AnonymousPreviewScope
+  | OperatorPreviewScope
+  | OwnerPreviewScope;
 
 /**
  * Builds the WHERE clause, which IS the authorisation.
@@ -277,18 +438,45 @@ type PreviewScope = AnonymousPreviewScope | OwnerPreviewScope;
  *     `null` result reached by a single path — the sameness becomes structural
  *     instead of maintained by hand.
  *
- * `previewKey: { not: null }` is in both arms because a row with no stored
- * object has nothing to serve; the runtime narrow in the handler re-checks it
- * for the null the column's type still permits.
+ * `previewKey: { not: null }` is in ALL THREE arms because a row with no
+ * stored object has nothing to serve, whoever is asking; the runtime narrow
+ * in the handler re-checks it for the null the column's type still permits.
+ * In the anonymous arm it arrives with the rest of `PUBLIC_MEDIA_SCOPE`
+ * rather than being written here; in the operator and owner arms it is at
+ * the top level, because neither of those filters on publish state and both
+ * still need a stored object to serve.
+ *
+ * RE-EVALUATED PER REQUEST, which is the whole of ugcportal-nffp. Nothing
+ * about the rights half is snapshotted onto the Media row: a clearance
+ * deleted, a clearer demoted, an admin triage answering "yes, a person is
+ * shown", or an attestation version retired all change what this query
+ * returns with no write to the row at all. The route's `cache-control:
+ * private, no-cache` is the other half of that — see
+ * `previewCacheHeaders` below, which already argues the identical case for
+ * an unpublish.
  */
-function previewScope(previewId: string, viewerId: string | null): PreviewScope {
+function previewScope(
+  previewId: string,
+  viewerId: string | null,
+  role: Role | null,
+): PreviewScope {
+  // BOTH, not just the role. `viewerId === null` is this route's single
+  // definition of "nobody is signed in" — see the handler, which normalises
+  // it once — and a role arriving without a usable id is a malformed
+  // session, not an operator. Requiring both keeps "no usable session means
+  // anonymous" absolute rather than something the operator branch can step
+  // around; `isPublishOperator` refuses a null or undefined role on its own
+  // side, so the two guards fail closed independently.
+  if (viewerId !== null && isPublishOperator(role)) {
+    return { previewId, previewKey: { not: null } };
+  }
   if (viewerId === null) {
-    return { previewId, previewKey: { not: null }, publishedAt: { not: null } };
+    return { ...PUBLIC_MEDIA_SCOPE, previewId };
   }
   return {
     previewId,
     previewKey: { not: null },
-    OR: [{ publishedAt: { not: null } }, { userId: viewerId }],
+    OR: [PUBLIC_MEDIA_SCOPE, { userId: viewerId }],
   };
 }
 
@@ -495,8 +683,15 @@ export async function GET(
       ? sessionUserId
       : null;
 
+  // From the SAME session read as `viewerId` above, deliberately: a second
+  // `auth()` call could see a role the first did not, and this route would
+  // then be deciding one request against two different answers to "who is
+  // this". `?? null` folds a session with no role into "not an operator",
+  // which `isPublishOperator` would refuse anyway.
+  const viewerRole = session?.user?.role ?? null;
+
   const row = await prisma.media.findFirst({
-    where: previewScope(previewId, viewerId),
+    where: previewScope(previewId, viewerId, viewerRole),
     select: MEDIA_PREVIEW_DELIVERY_SELECT,
   });
 
