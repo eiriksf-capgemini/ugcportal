@@ -86,8 +86,9 @@
  * written as JSX text rather than inside a `className` string is invisible
  * to this audit.
  *
- * WHAT THIS STILL CANNOT CATCH. Two residuals, both narrower than the ones
- * this design closes, and both stated rather than solved:
+ * WHAT THIS STILL CANNOT CATCH. Stated rather than solved, and not offered
+ * as an exhaustive list: what follows is what this design's mechanism is
+ * known not to see, not a closed inventory of everything it might miss.
  *
  * - This audit has no JSX-ancestor-aware static analysis, so it cannot
  *   verify that a classification's `surface`/`pairingIds` are actually TRUE
@@ -112,6 +113,27 @@
  *   failure (it throws, naming the duplicate key) rather than silently
  *   merging the two or silently keeping only one — the same "never just
  *   skip" discipline `usage.ts`'s own header holds itself to.
+ * - A usage reached through a SHARED NAMED IDENTIFIER — a `const` holding a
+ *   class string, a pattern this codebase already uses (`TEXT_LABEL_CLASS`,
+ *   `SELECT_CLASS`, `FIELD_CLASS`), and which CAN be referenced from more
+ *   than one call site (`TEXT_LABEL_CLASS` is, from four: two in
+ *   upload-form.tsx, two in contact-mailto-form.tsx) — is recorded only
+ *   once, at wherever its literal actually sits: the identifier's own
+ *   declaration. `occurrencesIn` walks string/template literals, not
+ *   references to them, so a second call site that renders the identical
+ *   class list on a genuinely unsafe surface produces no signal of its own
+ *   at all — no new key, nothing in `unaudited`, nothing `stale`. This is a
+ *   different shape from the first residual above, not a restatement of it:
+ *   there, a key exists and carries a false label; here, nothing is ever
+ *   recorded for a second call site to be labelled (falsely or otherwise).
+ *   Following an identifier out to every call site and judging each one's
+ *   own surface is call-site- and JSX-ancestor-aware analysis this file does
+ *   not attempt — the same gap dual-meaning-usage.test.ts's own header
+ *   discloses for its four tracked tokens rather than solves, for the same
+ *   reason. Not live today: every occurrence AUDITED_USAGE lists above is an
+ *   inline literal, not a shared identifier, so this gap is latent rather
+ *   than shipped — it would stop being latent the moment a `text-ink-muted`
+ *   call site is refactored onto a constant used on more than one surface.
  */
 import path from "node:path";
 import { fileURLToPath } from "node:url";
