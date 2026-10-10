@@ -300,12 +300,18 @@ const AUDITED_USAGE: Readonly<Record<string, OccurrenceClassification>> = {
   // The resale-rights review's blocker message and its <dl>, text-ink-muted
   // only in the `bg-destructive-surface` branch of the same div ternary
   // pattern page.tsx above uses.
-  "src/app/admin/settings/rights/page.tsx:376:\"mt-1 text-ink-muted\"": {
+  //
+  // Lines 376/384 -> 383/391 (ugcportal-aqw): both occurrences SHIFTED
+  // DOWN SEVEN, by the `Covers:` row added to the <dl> and the comment
+  // above it. Neither the className nor the surface changed — the key
+  // carries the line only so a new occurrence cannot squat on an audited
+  // one's old line, which is what the collision case below exercises.
+  "src/app/admin/settings/rights/page.tsx:383:\"mt-1 text-ink-muted\"": {
     surface: "bg-destructive-surface (the blocked-resale-rights well)",
     pairingIds: ["muted-foreground-on-destructive-surface"],
     lightRatio: 7.7703,
   },
-  "src/app/admin/settings/rights/page.tsx:384:\"mt-2 space-y-1 text-xs text-ink-muted\"": {
+  "src/app/admin/settings/rights/page.tsx:391:\"mt-2 space-y-1 text-xs text-ink-muted\"": {
     surface: "bg-destructive-surface (the blocked-resale-rights well)",
     pairingIds: ["muted-foreground-on-destructive-surface"],
     lightRatio: 7.7703,

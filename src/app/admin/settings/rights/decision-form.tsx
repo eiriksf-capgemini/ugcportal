@@ -6,7 +6,7 @@ import {
   RESALE_RIGHTS_STATUSES,
 } from "@/lib/resale-rights";
 
-import { toDateInputValue } from "./dates";
+import { formatReviewTimestamp, toDateInputValue } from "./dates";
 
 /**
  * The resale-rights decision form (ugcportal-0ss, re-anchored to uploaders
@@ -33,6 +33,13 @@ export type DecisionFormReview = {
   validUntil: Date | null;
   conditions: string | null;
   checklistVersion: string;
+  /**
+   * How far the clearance reaches over time (ugcportal-aqw). Rendered so
+   * the reviewer can see what is recorded, but written back only behind
+   * the "record the scope" checkbox below — see the block that renders it.
+   */
+  coversUploadsBefore: Date | null;
+  coversFutureUploads: boolean;
 };
 
 export function ResaleRightsDecisionForm({
@@ -152,6 +159,84 @@ export function ResaleRightsDecisionForm({
           className="mt-1 block w-full rounded-md border border-input bg-surface-3 p-2 text-sm text-ink"
         />
       </label>
+      {/*
+        Which uploads this clearance covers (ugcportal-aqw,
+        docs/legal/manual-upload-rights-review.md §1 Gap 1).
+
+        THE TWO INPUTS ARE GATED BY THE CHECKBOX ABOVE THEM, and that is the
+        whole design of this block rather than a nicety. Everything else on
+        this form is written on every submit, which is why `validUntil` has
+        to round-trip its stored value. The scope must NOT work that way: the
+        date input is day-granular while the stored cut-off is an instant, so
+        a value that round-tripped would be silently rewritten to that day's
+        midnight on every unrelated edit. Instead the handler reads these two
+        only when `setScope` is ticked, and the writer leaves both columns
+        alone otherwise — so the ordinary edit preserves the scope by not
+        writing it, exactly as `restampChecklist` preserves the checklist
+        version. ugcportal-aqw K2.
+
+        They are still rendered with their stored values, because a reviewer
+        who IS re-recording the scope must see what they are replacing, and
+        because unticking the framework-licence box has to be possible.
+      */}
+      <fieldset className="space-y-2 rounded-md border border-input p-3">
+        <legend className="px-1 text-xs font-medium">
+          Scope: which uploads this clearance covers
+        </legend>
+        <p className="text-xs text-muted-foreground">
+          A clearance covers only the uploads that already existed when you
+          signed — those are the only ones you could have looked at. It
+          reaches later uploads only if the signed instrument is expressly a
+          framework licence over future works and you record that below.
+        </p>
+        <p className="text-xs text-muted-foreground">
+          {review?.coversFutureUploads
+            ? "Recorded now: a framework licence over future works — every upload by this person is in scope, whenever it was made."
+            : review?.coversUploadsBefore
+              ? `Recorded now: uploads made before ${formatReviewTimestamp(review.coversUploadsBefore)}. Anything uploaded at or after that instant is not sellable.`
+              : "Recorded now: no scope. Until one is recorded, nothing this uploader has uploaded is sellable."}
+        </p>
+        {/*
+          Unchecked on every render, and deliberately not a field that
+          round-trips — the same argument as the checklist re-stamp below.
+          Ticking it asserts that the reviewer has just decided the scope;
+          an assertion that persisted from last time would be the silent
+          widening this control exists to prevent.
+        */}
+        <label className="flex items-start gap-2 text-xs font-medium">
+          <input type="checkbox" name="setScope" value="yes" className="mt-0.5" />
+          <span>
+            I am recording the scope of this clearance now, from the two
+            fields below. Leave unticked to keep what is recorded above — an
+            edit to any other field on this form does not change the scope.
+          </span>
+        </label>
+        <label className="block text-xs font-medium">
+          Covers uploads made before (blank — the moment you record this
+          decision)
+          <input
+            type="date"
+            name="coversUploadsBefore"
+            defaultValue={toDateInputValue(review?.coversUploadsBefore ?? null)}
+            className="mt-1 block w-full rounded-md border border-input bg-surface-3 p-2 text-sm text-ink"
+          />
+        </label>
+        <label className="flex items-start gap-2 text-xs font-medium">
+          <input
+            type="checkbox"
+            name="coversFutureUploads"
+            value="yes"
+            defaultChecked={review?.coversFutureUploads ?? false}
+            className="mt-0.5"
+          />
+          <span>
+            The instrument is expressly a framework licence over future works,
+            so this clearance covers uploads made after today. Under åvl
+            § 67(2) nothing transfers beyond what clearly follows from the
+            agreement, so tick this only if the document says so in terms.
+          </span>
+        </label>
+      </fieldset>
       <label className="block text-xs font-medium">
         Conditions from Part D (optional)
         <textarea
