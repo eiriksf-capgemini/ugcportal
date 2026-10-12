@@ -166,13 +166,14 @@ export async function seedMedia(
  * rendered marker, a projection) would be exercising this instead and would
  * simply find no item.
  *
- * ONE COPY, for the same reason `seedMedia` above is one copy: four
- * fixtures across three test files (src/app/page.test.tsx,
- * src/lib/media-item.test.ts, src/app/media/[previewId]/page.test.tsx) need
- * the identical answer beside their labelled disclosure, and four copies of
- * it is the sibling-omission shape this module exists to prevent. The other triage answers are filled in so this
- * is a completed triage rather than a half-answered row a later reader has
- * to interpret; only `depictsAlcohol` is read by the scope.
+ * ONE COPY, for the same reason `seedMedia` above is one copy: 6 call sites
+ * across three test files (src/app/page.test.tsx ×2,
+ * src/lib/media-item.test.ts ×2, src/app/media/[previewId]/page.test.tsx
+ * ×2) need the identical answer beside their labelled disclosure, and 6
+ * copies of it is the sibling-omission shape this module exists to
+ * prevent. The other triage answers are filled in so this is a completed
+ * triage rather than a half-answered row a later reader has to interpret;
+ * only `depictsAlcohol` is read by the scope.
  */
 export async function seedAlcoholAnsweredListing(
   client: Pick<typeof PrismaSingleton, "mediaListing">,

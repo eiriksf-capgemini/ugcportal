@@ -197,11 +197,15 @@ export function benefitAttachmentRefusal(item: {
 /**
  * The gate the publish route calls (ugcportal-qnq9.3 K6).
  *
- * K6's guardrail is about PUBLISHED rows: this site must never serve a
- * commercial affordance on an image in which alcohol is visible or clearly
- * evoked, or from a brand that also sells alcohol. Publishing is the one
- * chokepoint every public surface is downstream of, so it is where that is
- * enforced.
+ * K6's guardrail is about rows this site SERVES: this site must never serve
+ * a commercial affordance on an image in which alcohol is visible or clearly
+ * evoked, or from a brand that also sells alcohol. This function is the
+ * publish-time half of enforcing that — it refuses the request rather than
+ * filtering a row already on the site. Publishing is no longer the one
+ * chokepoint every public surface is downstream of for the alcohol half: see
+ * "IT IS NO LONGER THE ONLY PLACE THAT STATE IS REFUSED" below. It still is
+ * for the brand half, which stays publish-only on purpose (ugcportal-mqh8,
+ * see "THE BRAND HALF IS DELIBERATELY NOT HERE" below).
  *
  * ONLY AN ITEM CARRYING SOMETHING COMMERCIAL IS IN SCOPE, and there are now
  * TWO ways to carry one. An item with no disclosure, or one declaring no
@@ -372,11 +376,18 @@ export function isAlcoholUnclearedAdvertisement(item: {
  *
  *     served  <=>  depictsAlcohol = false  OR  (no declared benefit AND no link)
  *
- * NO PRISMA IMPORT, keeping this module's own header claim true: a `where` is
- * a plain object, and its shape is checked where it is used — the constant is
- * assigned into `MediaPublicRightsScope` and that is handed to
- * `prisma.media.findMany`, so a key Prisma does not recognise is a compile
- * error at those call sites.
+ * NO PRISMA IMPORT, keeping this module's own header claim true — but not
+ * because a bad key here is a compile error. It is not: `MediaAlcoholCommerceScope`
+ * is `typeof` the two literals below, and the constant reaches
+ * `prisma.media.findMany` as a VARIABLE rather than an object literal, so
+ * TypeScript's excess-property checking never runs on it. Checked directly:
+ * `npx tsc --noEmit` stays at exit 0, zero diagnostics, with
+ * `notAColumnPrismaKnows: true` added to either arm below, and with
+ * `advertisingDisclosure` misspelled as `advertisingDisclosures`. What
+ * actually catches a bad key is Prisma itself, loudly, at runtime
+ * ("Unknown argument `notAColumnPrismaKnows`", "Did you mean
+ * `advertisingDisclosure`?"), and every reader's own test — real catches,
+ * just not static ones.
  *
  * THE "NOT TRUE" STATES ARE ENUMERATED POSITIVELY — a missing disclosure row,
  * `false`, and `null` — rather than written as one `NOT: { … true }`, and
