@@ -30,67 +30,95 @@ export const HEX_COLOR_SELECTORS = [
  * ugcportal-wz8w: Tailwind v4 finds which classes to generate CSS for by
  * STATICALLY SCANNING SOURCE TEXT for class-name substrings — it never
  * evaluates code (the same principle GATED_SCRIPT_SYNTAX_SELECTORS' own
- * KNOWN LIMIT comments below apply to a different defect class). A
- * `className` built by interpolating a runtime value into a template
- * literal — `` `sm:h-[${N}px]` `` — therefore ships the LITERAL `${N}`
- * characters into the rendered DOM: correct-looking markup TEXT, with no
- * matching generated CSS rule at all. ugcportal-a3hj shipped exactly this
- * (`` `sm:h-[${HERO_VISUAL_CONTAINER_SM_PX}px]` `` in
- * src/components/home/hero.tsx) past every automated gate — lint, every
- * unit test (which only inspect the markup STRING, and the string WAS
- * present), build and typecheck — and only a live, seeded e2e render
- * measuring getBoundingClientRect() in a real browser caught it.
+ * KNOWN LIMIT comments below apply to a different defect class). A class
+ * built by interpolating a runtime value into a template literal —
+ * `` `sm:h-[${N}px]` `` — therefore ships the LITERAL `${N}` characters
+ * into the rendered DOM: correct-looking markup TEXT, with no matching
+ * generated CSS rule at all. ugcportal-a3hj shipped exactly this past
+ * every automated gate — lint, every unit test (which only inspect the
+ * markup STRING, and the string WAS present), build and typecheck — and
+ * only a live, seeded e2e render measuring getBoundingClientRect() in a
+ * real browser caught it.
  *
  * Reuses the exact HEX_COLOR_SELECTORS mechanism above (`no-restricted-
- * syntax`) for a different class of CSS-authoring mistake: one selector
- * matching ANY TemplateLiteral carrying one or more `${...}` expressions,
- * found anywhere inside the VALUE of a JSX `className` attribute. A
- * descendant (not only a direct-child) combinator between the attribute
- * and the template literal, deliberately: this fires whether the
- * interpolated literal IS the className's value
- * (`className={`sm:h-[${n}px]`}`) or is PASSED INTO a helper that builds
- * the class string (`className={cn("base", `sm:h-[${n}px]`)}``,
- * `className={clsx(cond && `sm:h-[${n}px]`)}`, a `cva()` conditional
- * object key). The bead's own wording is "used as (or passed into) a JSX
- * className value", and nothing about the hazard is specific to WHICH
- * helper (if any) wraps the literal — cn/clsx/cva all end up the same
- * descendant of the attribute's expression — so this is one selector
- * rather than a per-helper list that could miss the next helper this repo
- * adopts.
+ * syntax`). THREE selectors, because the hazard is a property of the
+ * template literal and `no-restricted-syntax` cannot resolve an
+ * identifier back to its binding — so each selector names one SYNTACTIC
+ * PLACE a class string is written in this repo:
  *
- * `expressions.length>=1` is the load-bearing half of the selector: a
+ *   1. inside a JSX `className` attribute's own expression tree
+ *      (descendant, not direct-child: fires whether the literal IS the
+ *      value, `` className={`sm:h-[${n}px]`} ``, or is passed into a
+ *      helper, `` className={cn("base", `sm:h-[${n}px]`)} ``);
+ *   2. anywhere inside a `const …_CLASS` / `…_CLASSES` declarator — this
+ *      repo's dominant idiom for a class constant, and the shape
+ *      ugcportal-a3hj's bug ACTUALLY had: a module-level
+ *      `` const HERO_VISUAL_CONTAINER_SM_CLASS = `sm:h-[${N}px] …`; ``
+ *      referenced by identifier at the `cn()` call site, which selector 1
+ *      alone cannot see;
+ *   3. anywhere inside a call to one of the class-composition helpers
+ *      (`cn`, `clsx`, `classNames`, `classnames`, `cva`, `twMerge`,
+ *      `twJoin`) — which covers a `cva()` variant value built from a
+ *      template literal, as src/components/ui/button.tsx's `size.sm` and
+ *      `size["header-sm"]` were before this bead.
+ *
+ * `expressions.length>=1` is the load-bearing half of all three: a
  * template literal with NO substitutions (`` className={`sm:h-[240px]`}
  * ``) is fully static source TEXT, which Tailwind's scanner reads exactly
  * like a plain string literal — not a bug, and deliberately not flagged.
  *
  * KNOWN LIMIT, the same shape as every other static-selector guard in
- * this file (see e.g. GATED_CREATE_ELEMENT_MESSAGE's comment on aliasing):
- * this only sees a template literal that is ITSELF written somewhere
- * inside the className attribute's own expression tree. The historical
- * bug's full shape — a module-level `const X = `sm:h-[${N}px]`;`
- * declaration, referenced by its IDENTIFIER later at the className/`cn()`
- * call site — is a scope/data-flow join `no-restricted-syntax` cannot
- * make (no selector anywhere in this file resolves an identifier back to
- * its binding). What this selector catches is the general shape K1 asks
- * for: the interpolation appearing at, or passed into, a className use
- * site — not a one-off reproduction of every intermediate hop the
- * original PR happened to have before its own round-1 review fix.
+ * this file (see e.g. GATED_CREATE_ELEMENT_MESSAGE's comment on
+ * aliasing): a class string written in NONE of those three places is
+ * still invisible here. Measured examples that lint clean today —
+ * `` const heroSize = `sm:h-[${n}px]`; `` (a constant whose name does not
+ * end in `CLASS`/`CLASSES`), and
+ * `` function tile(n) { return `sm:h-[${n}px]`; } `` (a bare function
+ * return) — in both cases only as long as the result is then handed to
+ * `className` by IDENTIFIER rather than written inline, and never passed
+ * through `cn()`/`cva()`. Closing those needs scope analysis
+ * `no-restricted-syntax` does not do. Selectors 2 and 3 are deliberately
+ * name-based heuristics rather than an attempt at data flow: they cover
+ * the places this repo actually writes classes, and they are cheap to
+ * widen when it starts writing them somewhere else.
+ *
+ * Rule of thumb for the fix: compose whole class strings with
+ * `cn("mt-4", GALLERY_GRID_CLASS)`, never with a template literal. Every
+ * pre-existing site in `src` that these selectors flagged was converted
+ * that way in this bead's own PR (byte-identical output, asserted), so
+ * the guard ships with ZERO `eslint-disable` escapes anywhere in the
+ * repo — a disable here would also silence HEX_COLOR_SELECTORS and
+ * GATED_SCRIPT_SYNTAX_SELECTORS on the same line, since
+ * `no-restricted-syntax` has no per-selector granularity.
  */
 const INTERPOLATED_CLASSNAME_MESSAGE =
   "A Tailwind utility class may not be built by interpolating a runtime " +
-  "value into a template literal used as (or passed into) a JSX " +
-  "className. Tailwind v4's content scanner statically scans source TEXT " +
-  "for class names and never evaluates code, so e.g. `sm:h-[${N}px]` " +
-  "ships the literal `${N}` characters into the DOM with no matching " +
-  "generated CSS rule at all (ugcportal-a3hj) — and every unit test " +
-  "still passes, since they only inspect the markup STRING. Use a fully " +
-  "static class name instead — a literal string, or a value picked from " +
-  "a lookup table/ternary of whole literal class names.";
+  "value into a template literal — not in a JSX `className`, not in a " +
+  "`*_CLASS`/`*_CLASSES` constant, and not inside a `cn()`/`cva()`-family " +
+  "call. Tailwind v4's content scanner statically scans source TEXT for " +
+  "class names and never evaluates code, so e.g. `sm:h-[${N}px]` ships " +
+  "the literal `${N}` characters into the DOM with no matching generated " +
+  "CSS rule at all (ugcportal-a3hj) — and every unit test still passes, " +
+  "since they only inspect the markup STRING. Use a fully static class " +
+  "name instead — a literal string, a value picked from a lookup " +
+  "table/ternary of whole literal class names, or " +
+  '`cn("mt-4", GALLERY_GRID_CLASS)` to compose two whole class strings ' +
+  "without a template literal.";
 
 export const INTERPOLATED_CLASSNAME_SELECTORS = [
   {
     selector:
       'JSXAttribute[name.name="className"] TemplateLiteral[expressions.length>=1]',
+    message: INTERPOLATED_CLASSNAME_MESSAGE,
+  },
+  {
+    selector:
+      "VariableDeclarator[id.name=/CLASS(ES)?$/] TemplateLiteral[expressions.length>=1]",
+    message: INTERPOLATED_CLASSNAME_MESSAGE,
+  },
+  {
+    selector:
+      "CallExpression[callee.name=/^(cn|clsx|classNames|classnames|cva|twMerge|twJoin)$/] TemplateLiteral[expressions.length>=1]",
     message: INTERPOLATED_CLASSNAME_MESSAGE,
   },
 ];
@@ -512,9 +540,14 @@ const eslintConfig = defineConfig([
     rules: {
       "no-restricted-syntax": [
         "error",
-        // ugcportal-wz8w: a plain `.js`/`.mjs` file can carry JSX just as
-        // the gated-script selectors above already account for, and a
-        // selector that cannot match costs nothing.
+        // ugcportal-wz8w: load-bearing here, not just defensive. Two of
+        // the three selectors match in a NON-JSX file by design — a
+        // `const …_CLASS` declarator and a `cn()`/`cva()` call are how
+        // this repo's `.ts` class modules are written (e.g.
+        // src/components/gallery/containment.ts,
+        // src/components/site/section-heading.ts). The className selector
+        // additionally covers a plain `.js`/`.mjs` file carrying JSX, the
+        // same case the gated-script selectors above already account for.
         ...INTERPOLATED_CLASSNAME_SELECTORS,
         ...GATED_SCRIPT_SYNTAX_SELECTORS,
       ],

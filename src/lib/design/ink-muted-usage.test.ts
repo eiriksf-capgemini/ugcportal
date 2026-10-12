@@ -318,12 +318,12 @@ const AUDITED_USAGE: Readonly<Record<string, OccurrenceClassification>> = {
   // text-ink-muted on the PLAIN canvas until ugcportal-7g2o fixed them (see
   // their own comments) — they are text-muted-foreground now, tracked by
   // dual-meaning-usage.test.ts, not by this file.
-  "src/app/upload/upload-form.tsx:865:\"text-sm text-ink-muted\"": {
+  "src/app/upload/upload-form.tsx:867:\"text-sm text-ink-muted\"": {
     surface: "bg-surface-1 (resting) / bg-surface-2 (dragging over) — the upload dropzone panel",
     pairingIds: ["ink-muted-on-surface-1", "ink-muted-on-surface-2"],
     lightRatio: 7.5212,
   },
-  "src/app/upload/upload-form.tsx:866:\"max-w-prose text-xs text-ink-muted\"": {
+  "src/app/upload/upload-form.tsx:868:\"max-w-prose text-xs text-ink-muted\"": {
     surface: "bg-surface-1 (resting) / bg-surface-2 (dragging over) — the upload dropzone panel",
     pairingIds: ["ink-muted-on-surface-1", "ink-muted-on-surface-2"],
     lightRatio: 7.5212,
@@ -505,12 +505,12 @@ describe("text-ink-muted usage is audited per occurrence, by surface and ratio",
     // `file:line` COORDINATES is unchanged by this - same count, same
     // numbers - only the content behind one of them is now a lie.
     const [victimKey] = Object.keys(AUDITED_USAGE).filter((key) =>
-      key.startsWith("src/app/upload/upload-form.tsx:865:"),
+      key.startsWith("src/app/upload/upload-form.tsx:867:"),
     );
     expect(victimKey, "fixture assumption: this occurrence still exists").toBeDefined();
     const victimLine = fileAndLineOf(victimKey);
 
-    const shiftedAwayKey = victimLine.replace(":865", ":9999") + ':"text-sm text-ink-muted"';
+    const shiftedAwayKey = victimLine.replace(":867", ":9999") + ':"text-sm text-ink-muted"';
     const unsafeNewKey = `${victimLine}:"text-ink-muted"`; // same file:line, different (shorter, fabricated) content
 
     const realFound = scanOccurrences();

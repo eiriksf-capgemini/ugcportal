@@ -70,22 +70,29 @@ describe("gallery tile and its advertising-disclosure label share one radius (ug
       resolve(process.cwd(), "src/components/gallery/containment.ts"),
       "utf8",
     );
+    // Both definitions are `cn()` calls rather than template literals
+    // (ugcportal-wz8w made building a Tailwind class string by
+    // interpolation a lint error); the claim this test makes is unchanged,
+    // only the source-level form it reads.
     const tileDefinition = containment.match(
-      /export const GALLERY_TILE_BASE_CLASS = `[^`]*`;/,
+      /export const GALLERY_TILE_BASE_CLASS = cn\([^;]*\);/,
     )?.[0];
     const labelDefinition = containment.match(
-      /export const GALLERY_ADVERTISING_LABEL_CLASS =\s*`[^`]*`;/,
+      /export const GALLERY_ADVERTISING_LABEL_CLASS =\s*cn\([^;]*\);/,
     )?.[0];
     expect(tileDefinition).toBeDefined();
     expect(labelDefinition).toBeDefined();
-    // Both definitions interpolate the shared constant...
-    expect(tileDefinition).toContain("${GALLERY_RADIUS_CLASS}");
-    expect(labelDefinition).toContain("${GALLERY_RADIUS_CLASS}");
-    // ...and neither ALSO hand-types its own `rounded-*` utility outside
-    // that interpolation (stripping the `${GALLERY_RADIUS_CLASS}`
-    // placeholder before checking, so the interpolation site itself does
-    // not trip this).
-    expect(tileDefinition?.replace("${GALLERY_RADIUS_CLASS}", "")).not.toMatch(/\brounded-/);
-    expect(labelDefinition?.replace("${GALLERY_RADIUS_CLASS}", "")).not.toMatch(/\brounded-/);
+    // Both definitions name the shared constant...
+    expect(tileDefinition).toContain("GALLERY_RADIUS_CLASS");
+    expect(labelDefinition).toContain("GALLERY_RADIUS_CLASS");
+    // ...and neither ALSO hand-types its own `rounded-*` utility beside it
+    // (stripping the `GALLERY_RADIUS_CLASS` reference before checking, so
+    // the reference itself does not trip this).
+    expect(
+      tileDefinition?.replace("GALLERY_RADIUS_CLASS", ""),
+    ).not.toMatch(/\brounded-/);
+    expect(
+      labelDefinition?.replace("GALLERY_RADIUS_CLASS", ""),
+    ).not.toMatch(/\brounded-/);
   });
 });

@@ -1,6 +1,9 @@
 import type { Metadata } from "next";
 import { Fraunces, Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+
+import { cn } from "cn";
+
 import { AppShell } from "@/components/app-shell";
 import { AnalyticsLoader } from "@/components/consent/analytics-loader";
 import { ConsentProvider } from "@/components/consent/consent-context";
@@ -94,18 +97,12 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
        * browser to match the active mode for its own chrome - scrollbars, form
        * controls, the canvas before paint.
        */
-      /* eslint-disable-next-line no-restricted-syntax --
-         ugcportal-wz8w pre-existing hit, reported for triage (not fixed
-         here — scope freeze): the interpolated pieces are next/font's own
-         generated CSS-module `.variable` class names, not Tailwind
-         utilities — next/font's own compiler plugin emits CSS for these
-         independently of Tailwind's content scanner, so there is no
-         missing-rule hazard here today. Flagged anyway because the
-         selector cannot tell "a reference to a next/font class" apart
-         from "an arbitrary runtime value" without type information, and
-         narrowing it to try would be the same kind of selector-matrix
-         fragility this file's other guards already document and avoid. */
-      className={`${geistSans.variable} ${geistMono.variable} ${fraunces.variable} h-full antialiased`}
+      className={cn(
+        geistSans.variable,
+        geistMono.variable,
+        fraunces.variable,
+        "h-full antialiased",
+      )}
     >
       <body className="min-h-full">
         <ConsentProvider initialConsent={initialConsent}>

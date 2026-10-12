@@ -490,17 +490,7 @@ export function Gallery({
         Gallery
       </h2>
 
-      <ul
-        /* eslint-disable-next-line no-restricted-syntax --
-           ugcportal-wz8w pre-existing hit, reported for triage (not fixed
-           here — scope freeze): GALLERY_GRID_CLASS is a static string
-           constant (src/components/gallery/containment.ts) — its literal
-           classes already appear in scanned source at that declaration,
-           so there is no missing-rule hazard here today — but the
-           indirection is exactly the risky PATTERN this guard bans
-           outright. */
-        className={`mt-6 ${GALLERY_GRID_CLASS}`}
-      >
+      <ul className={cn("mt-6", GALLERY_GRID_CLASS)}>
         {items.map((item, index) => (
           <li key={item.id}>
             {/*

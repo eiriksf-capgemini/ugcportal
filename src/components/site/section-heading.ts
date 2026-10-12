@@ -1,3 +1,5 @@
+import { cn } from "cn";
+
 import { SECTION_TITLE_CLASS } from "@/components/type-scale";
 
 /**
@@ -16,15 +18,19 @@ import { SECTION_TITLE_CLASS } from "@/components/type-scale";
  * constant at the one shared size rather than keeping a second, smaller
  * "section" that would still disagree with it.
  */
-export const SECTION_HEADING_CLASS = `${SECTION_TITLE_CLASS} text-foreground`;
+export const SECTION_HEADING_CLASS = cn(SECTION_TITLE_CLASS, "text-foreground");
 
 /**
  * The shared wrapper spacing for one of the three sections above — "What we
  * offer", "Get in touch", "Samples" — one constant rather than the same
  * `"mt-10"` literal written out three times (ugcportal-qnq9.16, item 4 of
  * the lows deferred from PR #93's round-6 review). `ContactSection` also
- * needs `scroll-mt-[...]` alongside it; compose at the call site
- * (`` `${SECTION_WRAPPER_CLASS} scroll-mt-[...]` ``) rather than baking that
- * into this constant, which the other two sections do not need.
+ * needs `scroll-mt-[...]` alongside it; compose at the call site with
+ * `cn(SECTION_WRAPPER_CLASS, "scroll-mt-[...]")` rather than baking that
+ * into this constant, which the other two sections do not need. `cn()`,
+ * NOT a template literal: ugcportal-wz8w's lint guard (eslint.config.mjs,
+ * `INTERPOLATED_CLASSNAME_SELECTORS`) bans building a class string by
+ * interpolation, because Tailwind v4's scanner reads source TEXT and never
+ * evaluates it.
  */
 export const SECTION_WRAPPER_CLASS = "mt-10";

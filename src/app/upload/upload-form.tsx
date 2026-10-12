@@ -9,6 +9,8 @@ import {
   useState,
 } from "react";
 
+import { cn } from "cn";
+
 import { TEXT_INPUT_CLASS, TEXT_LABEL_CLASS } from "@/components/ui/text-input";
 import { ACCEPTED_MIME_TYPES } from "@/lib/media-rules";
 
@@ -999,18 +1001,7 @@ function AltTextFields({
         {altTextError ?? ""}
       </p>
 
-      <label
-        htmlFor={captionId}
-        /* eslint-disable-next-line no-restricted-syntax --
-           ugcportal-wz8w pre-existing hit, reported for triage (not fixed
-           here — scope freeze): TEXT_LABEL_CLASS is a static string
-           constant (src/components/ui/text-input.ts) — its literal
-           classes already appear in scanned source at that declaration,
-           so there is no missing-rule hazard here today — but the
-           indirection is exactly the risky PATTERN this guard bans
-           outright. */
-        className={`mt-4 ${TEXT_LABEL_CLASS}`}
-      >
+      <label htmlFor={captionId} className={cn("mt-4", TEXT_LABEL_CLASS)}>
         {/*
           text-muted-foreground, not text-ink-muted (ugcportal-7g2o, same
           reasoning as the alt-text helper paragraph above): this span is a
