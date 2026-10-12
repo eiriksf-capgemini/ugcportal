@@ -811,7 +811,7 @@ describe("end-to-end against real temporary git repositories", { timeout: 20_000
       ).toEqual({ action: "prune", reason: "worktree directory is gone -- git worktree prune will clear it" });
     } finally {
       try {
-        fixtureGit(repoDir, ["worktree", "prune"], { stdio: "ignore" });
+        fixtureGit(repoDir, ["worktree", "prune"], { stdio: ["ignore", "pipe", "pipe"] });
       } catch {
         // best-effort cleanup -- the assertions above are what the test is for
       }

@@ -289,6 +289,81 @@ gh api repos/:owner/:repo/issues/<n>/comments --paginate \
 
 Three things about that command, all of them the same reasons step 4b gives for its own: the filter is **per-comment**, so `--paginate` cannot turn it into one answer per page; the CR is stripped **upstream, inside `gh api --jq`**, where it is still a real carriage return, so a marker written through the web UI is still seen; and the pattern is anchored to a whole **line** of a comment whose first line is a round marker, so the same string quoted in a `> ` block or argued about mid-sentence does not count. That anchoring is weaker than the round marker's, and knowingly so: forging this marker buys an attacker nothing but the skipping of a read — it unlocks no leniency in step 5's table and moves no count — so it gets the cheap defence, not the integrity checks a round number gets.
 
+### 4.4 A number a round reports carries what it was measured against; an absence carries where it was looked for
+
+`ugcportal-kssp`; `review-standards` section 6. Steps 4.2 and 4.3 fix where to
+look. This one fixes what a round may *assert* about what it saw, and it is
+here because two review runs on 2026-10-12 reported a confident figure and a
+confident absence, both wrong, both in the reassuring direction:
+
+- one reported **`30 new tsc errors`** where the truth was **23**. It ran
+  `npx tsc --noEmit` without `npm run build` first; `tsconfig` includes
+  `.next/types`, so 7 `PageProps` errors came from the missing generated
+  types, not from the diff. A gross total was reported as a delta.
+- one reported that **`pr-review-merge` steps 4.2 and 4.3 do not exist**. They
+  do. It had read a stale copy of the file out of the shared checkout.
+
+Neither announced itself, because a grep that found nothing and a grep run
+against the wrong file produce the same output, and a count with no baseline
+beside it looks exactly like a count with one.
+
+**Trigger — mechanical, two shapes.** It fires on any sentence this round
+would post or report that is either:
+
+1. a **delta**: `N new …`, `N more …`, `up from`, `down from`, `regressed by`,
+   `introduced N` — any number whose meaning depends on a before-figure; or
+2. an **absence**: `does not exist`, `no longer`, `is not present`, `nothing
+   matches`, `was removed`, `there is no …` — any claim that something is not
+   there.
+
+If you cannot say in one clause which before-figure a number is relative to,
+the trigger has **fired**. It may only ever resolve toward measuring.
+
+**Action.**
+
+- For a delta: measure the baseline **yourself**, with the **same command on
+  the same tree**, and report both numbers and the command. Never subtract
+  from a figure someone else reported, from the PR body, or from a previous
+  round's comment — those were measured on a different tree. On this repo the
+  typecheck baseline is specifically:
+
+  ```bash
+  git stash list && git -C <worktree> rev-parse HEAD   # the tree you measured
+  npm run build && npx tsc --noEmit | tee /tmp/head.txt         # this head
+  git checkout origin/main && npm run build && npx tsc --noEmit | tee /tmp/base.txt
+  wc -l /tmp/head.txt /tmp/base.txt
+  ```
+
+  `npm run build` before `npx tsc --noEmit`, both times. Skipping it on either
+  side invents `PageProps` errors and attributes them to whichever side
+  skipped it.
+
+- For an absence: name the **path and the commit** of the copy you read, and
+  read it from the PR's own head, not from whatever checkout your shell
+  happens to be in. `gh api repos/:owner/:repo/contents/<path>?ref=<headRefOid>`
+  or `git -C <your worktree> show <headRefOid>:<path>` both answer this; "I
+  grepped the repo" does not. A stale local checkout is the single cheapest
+  way to produce a confident false absence, and this repo's agents routinely
+  have several checkouts of it on disk at once.
+
+**Output — on every round, including the rounds the trigger does not fire.**
+One line inside the round-marker comment body (never its first line, which
+belongs to the round marker):
+
+```
+<!-- ugcportal-measured: deltas=<k> absences=<k> at=<headRefOid> baseline=<sha|n/a> -->
+```
+
+`deltas=0 absences=0` is a complete answer and is what most rounds will carry.
+What the line buys is bounded and worth stating exactly, the same way 4.2's
+is: it is **not unforgeable** — `at=` can be copied off step 1's output and
+`baseline=` is one `git rev-parse origin/main` away. What it does buy is that
+a round reporting `30 new tsc errors` with no `baseline=` sha beside it, or
+with a `baseline=` equal to its own head, is now **visibly** unmeasured,
+where before it left exactly the trace that never measuring leaves: none.
+Read it back the same way 4.2's and 4.3's are read back, swapping the marker
+name.
+
 ## 4a. Record QA token cost
 
 Step 4 no longer runs `code-review` as a forked subagent, so there is no fork's `subagent_tokens` figure for this run to read. The figure that plays that role now is **this entire reviewer run's own token total** — this invocation of `pr-review-merge`, which did the review inline in step 4 — and only whoever invoked this run, typically an orchestrator session that ran it as a subagent, sees that total, in the completion notification *for this run*, once it finishes. This run has no way to read its own total while it is still executing, and must not estimate one.
@@ -306,6 +381,13 @@ So this step is something the invoking orchestrator does after this run is over,
      --set-metadata tokens_qa_note="reviewer agent total — pr-review-merge ran step 4 inline, no code-review fork (ugcportal-cr2h)"
    ```
    This read-then-write isn't atomic — `bd` has no compare-and-swap for metadata fields (only `--if-assignee`/`--if-status` guard status/assignee changes). If you have reason to think another review pass on the *same bead* is landing its own `tokens_qa` update around the same time, re-read with `bd show <bead-id>` immediately before writing and re-add your figure to whatever is there then; otherwise treat the accumulated total as a best-effort approximation, not an exact ledger.
+4. **Read the write back before reporting it as made** (`review-standards` section 6, mitigation 3):
+   ```bash
+   node scripts/bd-verify-metadata.mjs <bead-id> tokens_qa=<existing_plus_new>
+   ```
+   `bd update` exiting 0 is not evidence the value landed: a mistyped key writes a real key and exits 0, leaving `tokens_qa` holding the *old* figure while the orchestrator records it as updated — and because this field accumulates, the next round adds its own total to a number that silently never moved. The verifier prints the bead's whole metadata keyset, so a typo'd sibling key is visible beside the one that should have changed. A non-zero exit means do not report the figure as recorded; name the bead and the exit code instead.
+
+   This matters more here than anywhere else in this file, because nothing downstream ever cross-checks `tokens_qa` against another source. `cut-release`'s Cost Summary reads this field and nothing else, so a write that silently did not land does not show up as an error — it shows up as a smaller, confident number in a release note.
 
 **The reviewer run itself never calls `bd update --set-metadata tokens_qa` or `tokens_qa_note`.** It cannot see its own final token total before it has finished running, and guessing one here would be exactly the duration-based estimate this step has always forbidden. This applies regardless of whether the PR ends up merged or left for a human — the QA cost was incurred either way, and recording it is the invoking orchestrator's job once the total is known, not this run's.
 
@@ -817,7 +899,18 @@ EOF
 
 If any of that text could itself contain a line reading exactly `EOF`, change the delimiter (`<<'BD_EOF'`) rather than trimming the text.
 
-Then list the new bead ids in the round-marker comment posted before merge (and in the approval body too, where one exists) and in your step 6 report. If you cannot file the beads (e.g. `bd` is unavailable), do **not** merge on the severity gate — comment and leave it for a human, because the gate's whole safety property is that deferral is recorded.
+**Then read each new bead back before claiming it was filed** (`review-standards` section 6, mitigation 3). The `discovered-from` edge is the part that silently goes wrong: the recorded v0.7.0 instance is a `||` fallback whose second branch ran with the arguments **reversed**, *succeeded*, and recorded the graph edge backwards — a bead that reports as filed, with an edge pointing the wrong way, which no later step re-derives.
+
+```bash
+# the edge, in the direction it was meant to point
+bd show <new-bead-id> --json | jq -r '.[0].dependencies[] | "\(.type) -> \(.depends_on_id)"'
+# the fields the gate's safety property rests on
+node scripts/bd-verify-metadata.mjs <new-bead-id> cc_type=bug cc_scope=<scope>
+```
+
+The first command must print `discovered-from -> <bead-id-from-PR-title>`. If it prints the reverse, prints nothing, or prints an edge to some other bead, the deferral is **not** recorded and the severity gate's safety property does not hold — comment and leave the PR for a human rather than merging on it.
+
+Then list the new bead ids in the round-marker comment posted before merge (and in the approval body too, where one exists) and in your step 6 report, **each with the edge you read back beside it**, not just the id. If you cannot file the beads (e.g. `bd` is unavailable), do **not** merge on the severity gate — comment and leave it for a human, because the gate's whole safety property is that deferral is recorded.
 
 Scope freeze still applies: these are new beads, not additions to the PR. See `review-standards` section 1.
 
@@ -855,9 +948,10 @@ State plainly:
 - **All four recurring families from step 4.1, named, each with what it found (including "nothing").**
 - **Step 4.2**: the `<!-- ugcportal-fix-wake: … -->` line exactly as you posted it — so `since` and `changed` are in the report whether or not the trigger fired — and, if it fired, the terms grepped, the hit count, and the verdict per hit, "0 falsified" included.
 - **Step 4.3**: whether this round did the whole-file read or which earlier round's marker covers it, and the per-file verdicts if it was this round's.
+- **Step 4.4**: the `<!-- ugcportal-measured: … -->` line exactly as you posted it, so the head and the baseline are in the report whether or not the trigger fired — and, for every delta you report anywhere in this round, the baseline figure and the command that produced it, measured by you on the same tree; for every absence, the path and the commit you read it at.
 - Findings with **the severity you assigned each one** (step 4's angles don't produce one on their own — see step 4's closing paragraph), and which were fixed versus deferred.
-- Bead ids filed in step 5a, if any.
-- The `tokens_qa` figure recorded in step 4a (or note that it was skipped, and why).
+- Bead ids filed in step 5a, if any — **each with the `discovered-from` edge you read back beside it**, in the direction it points, not just the id.
+- The `tokens_qa` figure recorded in step 4a (or note that it was skipped, and why), and whether `bd-verify-metadata` confirmed it landed. "Recorded" without a read-back behind it is the claim, not the evidence.
 
 If merged, confirm the merge actually happened (`gh pr view <n> --json state,mergedAt`) and confirm the result of the scoped sweep above — removed and the final `git ls-remote` check confirms it gone, or kept (naming the reason the script printed) and still present.
 

@@ -47,14 +47,25 @@
  * necessarily the content of whatever is actually being pushed. When invoked from
  * .beads/hooks/pre-push (see that file's own KNOWN LIMITATION note), an
  * unusual push -- a different local branch than the one checked out, an
- * explicit SHA, `git push origin X:main` -- means this script silently
+ * explicit SHA, `git push origin X:main` -- means this script
  * sweeps HEAD's diff instead of the pushed ref's. This is a deliberate
  * scope decision, not an oversight: this tool is advisory-only (see K4
  * above), has no CI equivalent (nothing under .github/workflows/ invokes
  * it -- it only ever runs locally, manually or from this repo's pre-push
  * hook), and never blocks a push or a merge on its own -- so the blast
  * radius of inspecting the wrong ref here is a missed local hint, not a
- * bypassed gate.
+ * bypassed gate. What is no longer true of it is the word "silently":
+ * every run prints the scan block below first (ugcportal-kssp), naming the
+ * base ref, the SHA it resolved to, how many files were parsed, and every
+ * source/test file in the working tree that a committed-work-only diff
+ * cannot see.
+ *
+ * WHY THAT BLOCK EXISTS, in one line: on 2026-10-12 this script reported
+ * `candidates found: 0` on three PRs in one session where the real figures
+ * were 4, 19 and 42 -- twice because it ran before the work was committed,
+ * once because the new test files were still untracked. Nothing in its
+ * output distinguished those runs from a clean sweep, and a zero is the
+ * reassuring answer, so none of them announced itself.
  *
  * Both checks below parse with the TypeScript compiler API (`typescript`,
  * already a project dependency for `tsc --noEmit`) rather than hand-rolled
@@ -72,7 +83,15 @@
 
 import ts from "typescript";
 
-import { getChangedFiles, getChangedLineNumbersByFile, readFileAtHead, resolveDefaultBase } from "./lib/git-diff.mjs";
+import {
+  getChangedFiles,
+  getChangedLineNumbersByFile,
+  listDirtyTrackedFiles,
+  listUntrackedFiles,
+  readFileAtHead,
+  resolveDefaultBase,
+  resolveRefSha,
+} from "./lib/git-diff.mjs";
 import { isMainModule } from "./lib/is-main.mjs";
 
 const TEST_FILE_RE = /\.(test|spec)\.[cm]?[jt]sx?$/;
@@ -238,6 +257,87 @@ export function findSiblingGuardOmissions(content, changedLines, filePath) {
   return candidates;
 }
 
+// --- Scan provenance: what this run actually looked at ------------------
+
+/**
+ * The source and test files this run CANNOT see, because `base...HEAD` only
+ * ever describes committed work on HEAD. Two shapes, and both produced a
+ * false zero on this repo on 2026-10-12 (ugcportal-kssp): a run made before
+ * committing swept an empty diff, and a brand-new untracked test file was
+ * invisible to a run made after committing everything else. Three PRs in one
+ * session reported `candidates found: 0` where the figures on the committed
+ * diff were 4, 19 and 42.
+ *
+ * Deliberately NOT a fix to the scan's scope: making this script read the
+ * working tree the way scripts/claims-audit.mjs does is ugcportal-np1i's own
+ * follow-up and changes which lines the sibling check compares. This reports
+ * the blind spot instead of widening it, which is the narrower change and the
+ * one that makes a zero readable.
+ *
+ * @param {{untracked: string[], dirtyTracked: string[]}} working
+ * @returns {{path: string, why: string}[]} sorted by path
+ */
+export function findBlindSpotFiles({ untracked, dirtyTracked }) {
+  const byPath = new Map();
+  // Dirty-tracked first so that a path which is somehow in both lists keeps
+  // the reason a reader can act on without `git add` -- but the loops below
+  // never overwrite, so the order here is the precedence, stated rather than
+  // left to insertion luck.
+  for (const path of dirtyTracked) {
+    if (SOURCE_FILE_RE.test(path) && !byPath.has(path)) byPath.set(path, { path, why: "uncommitted changes" });
+  }
+  for (const path of untracked) {
+    if (SOURCE_FILE_RE.test(path) && !byPath.has(path)) byPath.set(path, { path, why: "untracked" });
+  }
+  return [...byPath.values()].sort((a, b) => a.path.localeCompare(b.path));
+}
+
+/**
+ * The block this script prints BEFORE either candidate count, so that a zero
+ * below it is readable as evidence rather than as silence (ugcportal-kssp
+ * mitigation 1; the reference shape is `pr-review-merge` step 4.2's
+ * `falsified=0` marker, which requires a round that falsified nothing to
+ * print the same block it would have printed had it found something).
+ *
+ * The property this is built for: **an empty result and a broken instrument
+ * must not render the same.** A run that examined 40 files and found no
+ * candidates prints a four-figure denominator and `blind spot: none`; a run
+ * that examined nothing prints `SCANNED NOTHING` in its own banner and names
+ * every file it could not see. The two are not confusable by eye.
+ *
+ * Pure so it is testable without a git repository: every number it prints is
+ * an argument.
+ *
+ * @param {{base: string, baseSha: string | null, changedFiles: string[],
+ *          testFilesScanned: string[], sourceFilesScanned: string[],
+ *          blindSpot: {path: string, why: string}[]}} scan
+ * @returns {string[]} lines, in order
+ */
+export function formatScanReport({ base, baseSha, changedFiles, testFilesScanned, sourceFilesScanned, blindSpot }) {
+  const lines = ["--- sweep-candidates: scan ---"];
+  lines.push(`base: ${base} (${baseSha ? baseSha.slice(0, 8) : "DID NOT RESOLVE"})`);
+  lines.push(
+    `files examined: ${changedFiles.length} in the diff -- ${testFilesScanned.length} test file(s) parsed for Family 3, ` +
+      `${sourceFilesScanned.length} non-test source file(s) parsed for Family 4`,
+  );
+
+  if (testFilesScanned.length + sourceFilesScanned.length === 0) {
+    lines.push("*** SCANNED NOTHING: this run parsed 0 files. Every count below is 0 because the");
+    lines.push("*** instrument did not look, NOT because it looked and found nothing. Do not report");
+    lines.push("*** these zeros as a sweep result.");
+  }
+
+  if (blindSpot.length === 0) {
+    lines.push("blind spot: none -- no source or test file in the working tree is uncommitted or untracked");
+  } else {
+    lines.push(`blind spot: ${blindSpot.length} source/test file(s) this scan CANNOT see (\`${base}...HEAD\` is committed work only):`);
+    for (const f of blindSpot) lines.push(`  ${f.path} (${f.why})`);
+    lines.push("  Commit them and re-run before reporting any count below as this branch's figure.");
+  }
+
+  return lines;
+}
+
 // --- git integration: scripts/lib/git-diff.mjs (not unit-tested directly;
 // the two functions above are, against synthetic fixtures per
 // ugcportal-plp6 K1/K2). One `git diff` call covers the whole PR, not one
@@ -257,6 +357,12 @@ function main() {
     changedFiles = getChangedFiles(base);
   } catch (err) {
     console.error(`sweep-candidates: could not diff against ${base}: ${err.message}`);
+    // Also on STDOUT, and loudly: the failure used to exist only on stderr,
+    // so anyone piping/pasting this tool's stdout into a PR body got a blank
+    // report that reads exactly like a clean one (ugcportal-kssp).
+    console.log("--- sweep-candidates: scan ---");
+    console.log(`*** DID NOT RUN: could not diff against ${base} -- ${err.message}`);
+    console.log("*** No count follows. This is not a sweep result and must not be reported as one.");
     process.exit(0); // advisory tool -- never block on its own failure
   }
 
@@ -270,6 +376,12 @@ function main() {
 
   const toContainCandidates = [];
   const siblingCandidates = [];
+  // The denominator, accumulated as the loop runs rather than predicted from
+  // `changedFiles` -- a file skipped as deleted (the `catch { continue }`
+  // below) was never parsed, and counting it as parsed would be this bead's
+  // own defect one level up (ugcportal-kssp).
+  const testFilesScanned = [];
+  const sourceFilesScanned = [];
 
   for (const filePath of changedFiles) {
     if (TEST_FILE_RE.test(filePath)) {
@@ -279,6 +391,7 @@ function main() {
       } catch {
         continue; // deleted file
       }
+      testFilesScanned.push(filePath);
       toContainCandidates.push(...findToContainCandidates(content, filePath));
     }
 
@@ -297,9 +410,32 @@ function main() {
       } catch {
         continue;
       }
+      sourceFilesScanned.push(filePath);
       const changedLines = changedLinesByFile.get(filePath) ?? new Set();
       siblingCandidates.push(...findSiblingGuardOmissions(content, changedLines, filePath));
     }
+  }
+
+  // Printed FIRST, so the denominator is on screen before either zero.
+  // A blind-spot probe that itself fails is reported as a failed probe, not
+  // folded into "none" -- an empty list and an unanswered question are the
+  // two things this whole block exists to keep apart.
+  let blindSpot;
+  try {
+    blindSpot = findBlindSpotFiles({ untracked: listUntrackedFiles(), dirtyTracked: listDirtyTrackedFiles() });
+  } catch (err) {
+    console.error(`sweep-candidates: could not inspect the working tree for uncommitted/untracked files: ${err.message}`);
+    blindSpot = [{ path: "(working-tree probe failed -- see stderr)", why: "unknown" }];
+  }
+  for (const line of formatScanReport({
+    base,
+    baseSha: resolveRefSha(base),
+    changedFiles,
+    testFilesScanned,
+    sourceFilesScanned,
+    blindSpot,
+  })) {
+    console.log(line);
   }
 
   console.log("--- sweep-candidates: Family 3 (toContain needles) ---");

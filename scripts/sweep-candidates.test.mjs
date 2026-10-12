@@ -8,7 +8,13 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { findObjectLikeBlocks, findSiblingGuardOmissions, findToContainCandidates } from "./sweep-candidates.mjs";
+import {
+  findBlindSpotFiles,
+  findObjectLikeBlocks,
+  findSiblingGuardOmissions,
+  findToContainCandidates,
+  formatScanReport,
+} from "./sweep-candidates.mjs";
 
 describe("findToContainCandidates", () => {
   it("lists a toContain call by file:line with its literal needle", () => {
@@ -227,5 +233,104 @@ describe("findSiblingGuardOmissions", () => {
     ].join("\n");
     const candidates = findSiblingGuardOmissions(content, new Set([3]), "cast-example.ts");
     expect(candidates).toEqual([{ file: "cast-example.ts", field: "id", touchedLine: 3, siblingLine: 8 }]);
+  });
+});
+
+describe("findBlindSpotFiles (ugcportal-kssp)", () => {
+  it("names an untracked test file, which is invisible to a base...HEAD diff", () => {
+    expect(findBlindSpotFiles({ untracked: ["src/lib/new-thing.test.ts"], dirtyTracked: [] })).toEqual([
+      { path: "src/lib/new-thing.test.ts", why: "untracked" },
+    ]);
+  });
+
+  it("names a tracked file whose change is not committed yet", () => {
+    expect(findBlindSpotFiles({ untracked: [], dirtyTracked: ["src/lib/thing.ts"] })).toEqual([
+      { path: "src/lib/thing.ts", why: "uncommitted changes" },
+    ]);
+  });
+
+  it("ignores non-source files, which this sweep would not have parsed either way", () => {
+    expect(findBlindSpotFiles({ untracked: ["notes.md", "a.png"], dirtyTracked: ["CHANGELOG.md"] })).toEqual([]);
+  });
+
+  it("reports a path present in both lists once, as uncommitted rather than untracked", () => {
+    const blind = findBlindSpotFiles({ untracked: ["src/a.ts"], dirtyTracked: ["src/a.ts"] });
+    expect(blind).toEqual([{ path: "src/a.ts", why: "uncommitted changes" }]);
+  });
+
+  it("returns an empty list when the working tree is clean", () => {
+    expect(findBlindSpotFiles({ untracked: [], dirtyTracked: [] })).toEqual([]);
+  });
+});
+
+describe("formatScanReport (ugcportal-kssp)", () => {
+  const scanned = {
+    base: "origin/main",
+    baseSha: "0a9e051abcdef0123456789",
+    changedFiles: ["src/a.ts", "src/a.test.ts", "README.md"],
+    testFilesScanned: ["src/a.test.ts"],
+    sourceFilesScanned: ["src/a.ts"],
+    blindSpot: [],
+  };
+
+  it("states the denominator and the resolved base SHA on a run that looked", () => {
+    const text = formatScanReport(scanned).join("\n");
+    expect(text).toContain("base: origin/main (0a9e051a)");
+    expect(text).toContain("files examined: 3 in the diff -- 1 test file(s) parsed");
+    expect(text).toContain("1 non-test source file(s) parsed");
+    expect(text).toContain("blind spot: none");
+  });
+
+  it("does NOT claim it scanned nothing when it scanned something", () => {
+    // Direction matters here: this needle's absence is what distinguishes a
+    // real sweep from a blank one, so a report that always carried it would
+    // make the two indistinguishable again -- the exact defect this whole
+    // block exists to remove.
+    expect(formatScanReport(scanned).join("\n")).not.toContain("SCANNED NOTHING");
+  });
+
+  it("says SCANNED NOTHING, not just '0', when the diff parsed no file at all", () => {
+    const text = formatScanReport({
+      ...scanned,
+      changedFiles: [],
+      testFilesScanned: [],
+      sourceFilesScanned: [],
+    }).join("\n");
+    expect(text).toContain("files examined: 0 in the diff");
+    expect(text).toContain("SCANNED NOTHING: this run parsed 0 files");
+    expect(text).toContain("instrument did not look, NOT because it looked and found nothing");
+  });
+
+  it("fires SCANNED NOTHING on the real false-zero shape: a diff of non-source files only", () => {
+    // The committed diff is non-empty, so `changedFiles.length` alone would
+    // read as healthy; nothing parseable was in it.
+    const text = formatScanReport({
+      ...scanned,
+      changedFiles: ["README.md", "docs/x.md"],
+      testFilesScanned: [],
+      sourceFilesScanned: [],
+    }).join("\n");
+    expect(text).toContain("files examined: 2 in the diff");
+    expect(text).toContain("SCANNED NOTHING");
+  });
+
+  it("names every file the scan cannot see, with why, and says what to do about it", () => {
+    const text = formatScanReport({
+      ...scanned,
+      blindSpot: [
+        { path: "src/b.test.ts", why: "untracked" },
+        { path: "src/c.ts", why: "uncommitted changes" },
+      ],
+    }).join("\n");
+    expect(text).toContain("blind spot: 2 source/test file(s) this scan CANNOT see");
+    expect(text).toContain("  src/b.test.ts (untracked)");
+    expect(text).toContain("  src/c.ts (uncommitted changes)");
+    expect(text).toContain("Commit them and re-run");
+    expect(text).not.toContain("blind spot: none");
+  });
+
+  it("prints DID NOT RESOLVE rather than an empty SHA when the base ref is bad", () => {
+    const text = formatScanReport({ ...scanned, baseSha: null }).join("\n");
+    expect(text).toContain("base: origin/main (DID NOT RESOLVE)");
   });
 });
