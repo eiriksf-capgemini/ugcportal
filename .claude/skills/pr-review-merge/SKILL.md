@@ -909,12 +909,16 @@ If any of that text could itself contain a line reading exactly `EOF`, change th
 
 ```bash
 # the edge, in the direction it was meant to point
-bd show <new-bead-id> --json | jq -r '.[0].dependencies[] | "\(.type) -> \(.depends_on_id)"'
+bd dep list <new-bead-id>
+# the same thing machine-readably, if you want to assert on it
+bd show <new-bead-id> --json | jq -r '.[0].dependencies[] | "\(.dependency_type) -> \(.id)"'
 # the fields the gate's safety property rests on
 node scripts/bd-verify-metadata.mjs <new-bead-id> cc_type=bug cc_scope=<scope>
 ```
 
-The first command must print `discovered-from -> <bead-id-from-PR-title>`. If it prints the reverse, prints nothing, or prints an edge to some other bead, the deferral is **not** recorded and the severity gate's safety property does not hold — comment and leave the PR for a human rather than merging on it.
+**`bd show --json` and `bd list --json` do not describe a dependency the same way, and getting it wrong here prints a convincing false negative.** A `bd show` dependency entry is the full target bead — keyed `id`, `title`, … plus `dependency_type`. A `bd list` entry is an edge record — keyed `issue_id`, `depends_on_id`, `type`. Reading `.type` / `.depends_on_id` out of `bd show` yields `null -> null` on a perfectly correct edge, which reads as "the deferral did not record" and sends a clean PR to a human for nothing. That is this skill's own §4.4 shape, and it was live in an earlier draft of this very step until the read-back it prescribes was actually run against a real bead (`ugcportal-h0ef`, 2026-10-12). `bd dep list` is the form with no field names to get wrong, which is why it is listed first.
+
+The output must name `discovered-from` and `<bead-id-from-PR-title>`. If it prints the reverse, prints nothing, or prints an edge to some other bead, the deferral is **not** recorded and the severity gate's safety property does not hold — comment and leave the PR for a human rather than merging on it.
 
 Then list the new bead ids in the round-marker comment posted before merge (and in the approval body too, where one exists) and in your step 6 report, **each with the edge you read back beside it**, not just the id. If you cannot file the beads (e.g. `bd` is unavailable), do **not** merge on the severity gate — comment and leave it for a human, because the gate's whole safety property is that deferral is recorded.
 
