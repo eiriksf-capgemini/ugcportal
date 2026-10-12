@@ -482,7 +482,8 @@ for. A bead that violates one is mis-scoped, not ambitious.
   digests and prepare the diff; only he decides the prose is accurate and
   writes the entry. The mechanism binds a sign-off to the exact words it
   certifies — any prose edit returns the page to draft automatically
-  (`ugcportal-xh4j` is the current pending one).
+  (`ugcportal-xh4j` re-recorded it for both pages on 2026-10-12, after
+  PR #203 and PR #204 each edited one page's prose).
 
 ---
 

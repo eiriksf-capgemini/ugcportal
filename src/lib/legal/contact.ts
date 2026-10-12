@@ -139,12 +139,23 @@ export const LEGAL_SIGN_OFF: LegalSignOff | null = {
   // and left draft on that approval). As with ugcportal-mj50 above, only
   // /privacy's digest below changed; /licence's is byte-identical to the
   // value it replaces, since this PR touches no licence text.
+  //
+  // Eirik approved two changes on 2026-10-12 (ugcportal-xh4j): /licence's
+  // deletion of the now-false "Nothing is offered for sale yet." sentence
+  // (PR #203, ugcportal-yzo7) — it became false the moment pricing shipped
+  // in that same PR, leaving the following sentence ("An item can only be
+  // sold after an administrator has completed and recorded a rights
+  // review...") untouched; and /privacy's new rights-attestation paragraph
+  // (PR #204, ugcportal-fsdf), describing the uploader's own nine-question
+  // declaration (src/lib/attestation.ts) made under their own name before
+  // an item can be sold. Unlike the two entries above, BOTH digests below
+  // changed this time.
   by: "Eirik Sander-Fjeld",
-  date: "2026-10-07",
-  bead: "ugcportal-qnq9.2.2",
+  date: "2026-10-12",
+  bead: "ugcportal-xh4j",
   authoredSha256: {
-    "/privacy": "dc3ef3a370262bde8f62819b9abca572af42f0565e8efc5706a183dae91d4ee3",
-    "/licence": "ae6a4a484a0bc2c571121a5f2e02c2bc9db46dd5d14eb6915abafe1b5fd8f901",
+    "/privacy": "2b3885e7b709da5a683e42fa50bc92e8eb68f6640d7747061e40762071e6b07d",
+    "/licence": "4ca5df2856f03a995d726c4cc6fc9d3339e8a1a2041ad7a07f66db6c3c81aac3",
   },
 };
 

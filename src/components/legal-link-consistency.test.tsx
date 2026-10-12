@@ -28,17 +28,19 @@ import { PRIVACY_PATH } from "@/lib/routes";
  * sign-off (not injected), the same "real fact, not a fixture" choice that
  * block's positive-path case makes.
  *
- * As of ugcportal-fsdf, full configuration alone is no longer enough to
- * unblock /privacy in production: its authored prose changed (the
- * uploader's own rights attestation, src/lib/attestation.ts, now described
- * in the rights-clearance category), so its digest no longer matches
- * LEGAL_SIGN_OFF and it reads as a draft until a human re-approves it.
- * Before ugcportal-fsdf the "configured"+"production" row below read
- * `true` (linked); it now reads `false` (blocked) — that flip is the
- * correct, expected consequence of the prose change, not a weakening of
- * this file's own "never happen" guarantee, which is about the footer and
- * the contact notice always agreeing with EACH OTHER, whatever the real
- * sign-off currently says.
+ * Between ugcportal-fsdf (PR #204) and ugcportal-xh4j (2026-10-12), full
+ * configuration alone was not enough to unblock /privacy in production:
+ * its authored prose had changed (the uploader's own rights attestation,
+ * src/lib/attestation.ts, now described in the rights-clearance category),
+ * so its digest no longer matched LEGAL_SIGN_OFF and it read as a draft
+ * until a human re-approved it. The "configured"+"production" row below
+ * read `true` (linked) before ugcportal-fsdf, flipped to `false` (blocked)
+ * once that PR landed, and flips back to `true` now that Eirik has
+ * reviewed the new wording and re-recorded the sign-off (ugcportal-xh4j,
+ * 2026-10-12) — each flip the correct, expected consequence of the real
+ * sign-off state, not a weakening of this file's own "never happen"
+ * guarantee, which is about the footer and the contact notice always
+ * agreeing with EACH OTHER, whatever the real sign-off currently says.
  */
 
 afterEach(() => {
@@ -52,7 +54,7 @@ function privacyLinked(markup: string): boolean {
 describe.each([
   ["draft", "production", false],
   ["draft", "development", true],
-  ["configured", "production", false],
+  ["configured", "production", true],
   ["configured", "development", true],
 ] as const)(
   "legal config=%s, NODE_ENV=%s",
