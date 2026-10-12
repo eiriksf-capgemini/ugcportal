@@ -3,6 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { ResaleRightsStatus } from "@/generated/prisma/enums";
 import { completeAttestationRow } from "@/lib/test-support/attestation";
 import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db";
+import { FIXTURE_CLEARANCE_SCOPE } from "@/lib/test-support/resale-rights";
 
 /**
  * ugcportal-yzo7 K1, K2 and K3 against a real database: what the one price
@@ -93,6 +94,11 @@ beforeAll(async () => {
       uploaderUserId: OWNER,
       status: ResaleRightsStatus.CLEARED,
       checklistVersion: CURRENT_CHECKLIST_VERSION,
+      // ugcportal-aqw: wide enough to cover every upload this fixture seeds.
+      // See FIXTURE_CLEARANCE_SCOPE for why that is a far cut-off rather
+      // than the framework-licence flag, which would be a claim about a
+      // document this fixture does not have.
+      ...FIXTURE_CLEARANCE_SCOPE,
       reviewedByUserId: ADMIN,
       reviewedAt: new Date("2026-03-01T00:00:00.000Z"),
     },
@@ -230,6 +236,11 @@ describe("K2: an uploader with no closed confirmation cannot be priced", () => {
         uploaderUserId: OWNER,
         status: ResaleRightsStatus.CLEARED,
         checklistVersion: CURRENT_CHECKLIST_VERSION,
+        // ugcportal-aqw: wide enough to cover every upload this fixture seeds.
+        // See FIXTURE_CLEARANCE_SCOPE for why that is a far cut-off rather
+        // than the framework-licence flag, which would be a claim about a
+        // document this fixture does not have.
+        ...FIXTURE_CLEARANCE_SCOPE,
         reviewedByUserId: ADMIN,
         reviewedAt: new Date("2026-03-01T00:00:00.000Z"),
       },

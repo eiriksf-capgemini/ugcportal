@@ -219,6 +219,54 @@ export async function POST(request: Request) {
 
   const conditions = optionalField(formData, "conditions");
 
+  /*
+   * The scope of the clearance over time (ugcportal-aqw).
+   *
+   * GATED ON ITS OWN CHECKBOX, exactly like `restampChecklist` above and for
+   * the same reason. An unticked checkbox submits nothing, so absence is
+   * "no" — and "no" here means the writer leaves `coversUploadsBefore` and
+   * `coversFutureUploads` alone, so an admin editing the conditions of a
+   * clearance cannot widen what it covers. That is ugcportal-aqw K2.
+   *
+   * It also means the two inputs below are read ONLY when the admin said
+   * they are recording a scope. The date input is day-granular while the
+   * stored value is an instant, so an ungated round-trip would quietly move
+   * a mid-afternoon cut-off back to that morning's midnight on every
+   * unrelated edit — narrower, so never a fail-open, but still a value no
+   * human chose.
+   */
+  const setScope = formData.get("setScope") === "yes";
+  let scope:
+    | { coversUploadsBefore: Date | null; coversFutureUploads: boolean }
+    | undefined;
+  if (setScope) {
+    const cutOffValue = optionalField(formData, "coversUploadsBefore");
+    let coversUploadsBefore: Date | null = null;
+    if (cutOffValue != null) {
+      // Midnight UTC on the chosen day, the same reading `validUntil` takes
+      // — and here too it is the stricter of the two: the clearance covers
+      // uploads made strictly before the start of that day, so a file from
+      // later the same day is out of scope rather than in it.
+      const parsed = new Date(cutOffValue);
+      if (Number.isNaN(parsed.getTime())) {
+        return settingsRedirect(request, {
+          error: "rights_invalid_covers_uploads_before",
+          reopenFor: uploaderUserId,
+        });
+      }
+      coversUploadsBefore = parsed;
+    }
+    // A blank date reaches the writer as "the decision moment" rather than
+    // as "clear the column"; see the `scope` field's own comment in
+    // src/lib/resale-rights-review.ts. There is no "no cut-off" reading for
+    // a clearance to have, so `optionalField`'s absent/blank distinction is
+    // deliberately collapsed here.
+    scope = {
+      coversUploadsBefore,
+      coversFutureUploads: formData.get("coversFutureUploads") === "yes",
+    };
+  }
+
   // Uploaded before the status write, so a failed upload leaves no clearance
   // claiming evidence that isn't there. The cost of this ordering is the
   // other kind of orphan: if the write below is then refused, the object
@@ -300,6 +348,9 @@ export async function POST(request: Request) {
       conditions,
       evidence,
       restampChecklist,
+      // `undefined` unless the admin ticked "record the scope", which is
+      // what makes the stored scope survive an unrelated edit.
+      scope,
     });
   } catch (error) {
     // An error the writer deliberately re-throws — a real fault rather than

@@ -6,6 +6,7 @@ import { PORTFOLIO_TAG_SLUG } from "@/lib/curation-tags";
 import { CURRENT_CHECKLIST_VERSION } from "@/lib/resale-rights";
 import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db";
 import { seedMedia } from "@/lib/test-support/media-fixtures";
+import { FIXTURE_CLEARANCE_SCOPE } from "@/lib/test-support/resale-rights";
 
 /**
  * ugcportal-nffp: A CLEARANCE THAT LAPSES AFTER PUBLICATION.
@@ -300,6 +301,11 @@ async function seed(): Promise<void> {
       uploaderUserId: OWNER,
       status: "CLEARED",
       checklistVersion: CURRENT_CHECKLIST_VERSION,
+      // ugcportal-aqw: wide enough to cover every upload this fixture seeds.
+      // See FIXTURE_CLEARANCE_SCOPE for why that is a far cut-off rather
+      // than the framework-licence flag, which would be a claim about a
+      // document this fixture does not have.
+      ...FIXTURE_CLEARANCE_SCOPE,
       reviewedByUserId: ADMIN,
       reviewedAt: new Date("2026-02-01T00:00:00.000Z"),
       validUntil: new Date("2099-01-01T00:00:00.000Z"),

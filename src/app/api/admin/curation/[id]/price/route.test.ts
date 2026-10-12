@@ -9,6 +9,7 @@ import {
 } from "@/lib/resale-rights";
 import { completeAttestationRow } from "@/lib/test-support/attestation";
 import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db";
+import { FIXTURE_CLEARANCE_SCOPE } from "@/lib/test-support/resale-rights";
 
 /**
  * ugcportal-0ss K1 and ugcportal-vsm K1/K3/K4, as an integration test: a real
@@ -68,6 +69,11 @@ async function setReview(
     reviewedByUserId: "admin-1",
     reviewedAt: new Date(),
     validUntil: null,
+    // ugcportal-aqw: wide enough to cover every upload this fixture seeds.
+    // See FIXTURE_CLEARANCE_SCOPE for why that is a far cut-off rather
+    // than the framework-licence flag, which would be a claim about a
+    // document this fixture does not have.
+    ...FIXTURE_CLEARANCE_SCOPE,
   };
   await prisma.resaleRightsReview.upsert({
     where: { uploaderUserId },

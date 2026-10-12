@@ -652,7 +652,7 @@ enum RightsSubjectKind {
 // of this column in the codebase (checklist Part E.3, ugcportal-0ss K4). No
 // migration default, sync job or OAuth callback may produce it.
 model ResaleRightsReview {
-  id                 String             @id @default(cuid())
+  id                  String             @id @default(cuid())
   // THE anchor (ugcportal-vsm). Whose uploads this review governs. Unique,
   // so one uploader can never have two reviews and leave the gate choosing
   // between them - the same argument as the per-layer unique index below.
@@ -664,32 +664,61 @@ model ResaleRightsReview {
   // gate reaches it *through* Media.userId and there is nothing left to
   // compare - a listing's author cannot point at somebody else's clearance
   // because they do not choose which clearance applies.
-  uploaderUserId     String             @unique
-  status             ResaleRightsStatus @default(UNREVIEWED)
-  route              ResaleRightsRoute?
+  uploaderUserId      String             @unique
+  status              ResaleRightsStatus @default(UNREVIEWED)
+  route               ResaleRightsRoute?
   // Version of docs/legal/instagram-resale-rights-checklist.md the reviewer
   // worked through. Revising the checklist retires old versions, which makes
   // every uploader cleared under one stop being sellable until re-reviewed
   // (see ACCEPTED_CHECKLIST_VERSIONS in src/lib/resale-rights.ts).
-  checklistVersion   String
+  checklistVersion    String
   // Must refer to a user with role ADMIN - set by the admin route handler
   // and re-checked at read time by the gate, because a reviewer can be
   // demoted after the clearance was recorded.
-  reviewedByUserId   String?
-  reviewedAt         DateTime?
-  validUntil         DateTime?
-  conditions         String?
+  reviewedByUserId    String?
+  reviewedAt          DateTime?
+  validUntil          DateTime?
+  // The cut-off this clearance was signed against (ugcportal-aqw,
+  // docs/legal/manual-upload-rights-review.md §1 Gap 1 and §4 item 6): the
+  // clearance covers uploads made STRICTLY BEFORE this instant, and nothing
+  // at or after it, unless coversFutureUploads below says otherwise.
+  //
+  // A COLUMN OF ITS OWN RATHER THAN `reviewedAt`, which is the whole reason
+  // this exists. `reviewedAt` is re-stamped on EVERY admin transition (see
+  // adminFields in src/lib/resale-rights-review.ts), so an admin fixing a
+  // typo in `conditions` would widen the clearance to cover everything
+  // uploaded since it was granted — material the reviewer never saw. This
+  // column is written only when the review ENTERS CLEARED, or when the
+  // reviewer explicitly re-records the scope.
+  //
+  // Nullable, and the gate reads null as OUT OF SCOPE rather than
+  // unlimited: a CLEARED row with no recorded cut-off is a clearance whose
+  // extent nobody wrote down, which is not a licence to sell. The migration
+  // that added this backfilled existing rows from `reviewedAt` (falling back
+  // to `createdAt`), because that is the instant the reviewer actually
+  // signed at and so the only material they could have examined.
+  coversUploadsBefore DateTime?
+  // The reviewer's positive record that the instrument is a framework
+  // licence over FUTURE works — åvl § 67(2)'s specialty principle means
+  // nothing transfers beyond what clearly follows from the agreement, so
+  // covering future uploads has to be written down rather than assumed.
+  //
+  // `false` by default, and the gate requires an exact `true` to permit:
+  // this is the branch that SELLS, so an unreadable value falls to the
+  // blocked side (the same reading `factBlocker` uses for `settledBy`).
+  coversFutureUploads Boolean            @default(false)
+  conditions          String?
   // Object key under the private rights-evidence/ prefix (see
   // src/lib/rights-evidence.ts). Never a Media row: evidence is contracts and
   // personal data, not a sellable asset.
-  evidenceKey        String?
-  evidenceSha256     String?
+  evidenceKey         String?
+  evidenceSha256      String?
   // Bead id of the product decision this clearance was made under - today
   // ugcportal-2eh (Option A: the sellable file is always the owner-uploaded
   // original from ugcportal-8wa).
-  productDecisionRef String?
-  createdAt          DateTime           @default(now())
-  updatedAt          DateTime           @updatedAt
+  productDecisionRef  String?
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
 
   // Cascade: a deleted user has no uploads left to sell, so the current-state
   // row goes with them. The audit trail does not - ResaleRightsEvent has no
