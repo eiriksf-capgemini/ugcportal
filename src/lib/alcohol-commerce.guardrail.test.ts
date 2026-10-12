@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { toGalleryItem } from "@/lib/gallery-items";
 import { completeAttestationRow } from "@/lib/test-support/attestation";
 import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db";
+import { FIXTURE_CLEARANCE_SCOPE } from "@/lib/test-support/resale-rights";
 
 /**
  * ugcportal-qnq9.3 K6, the guardrail: this site must never serve a price, a
@@ -222,6 +223,11 @@ beforeAll(async () => {
       status: "CLEARED",
       route: "CONTRACT",
       checklistVersion: CURRENT_CHECKLIST_VERSION,
+      // ugcportal-aqw: wide enough to cover every upload this fixture seeds.
+      // See FIXTURE_CLEARANCE_SCOPE for why that is a far cut-off rather
+      // than the framework-licence flag, which would be a claim about a
+      // document this fixture does not have.
+      ...FIXTURE_CLEARANCE_SCOPE,
       reviewedByUserId: OPERATOR,
       reviewedAt: new Date(),
       productDecisionRef: "ugcportal-2eh",

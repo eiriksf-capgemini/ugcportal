@@ -237,9 +237,18 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
   // renders on the resale-rights decision screen's plain page canvas, not
   // any well; text-ink here is the pre-existing body-text token for that
   // same safe context, pinned so a new usage cannot land silently.
+  //
+  // text-muted-foreground: 3 -> 5 and text-ink: 5 -> 6 (ugcportal-aqw), all
+  // three from the scope fieldset. Its two explanatory paragraphs sit
+  // inside a `border border-input p-3` container with NO fill, so the plain
+  // page canvas — the paper scale text-muted-foreground reads — is behind
+  // them exactly as it is behind the paragraphs already counted here. Its
+  // date input is the sixth field on this form and carries the same
+  // `bg-surface-3` fill as the other five, so it takes the same text-ink
+  // for the same reason.
   "src/app/admin/settings/rights/decision-form.tsx": {
-    "text-muted-foreground": 3,
-    "text-ink": 5,
+    "text-muted-foreground": 5,
+    "text-ink": 6,
   },
   // ugcportal-vq3z: the curation triage screen. The original seven
   // text-muted-foreground usages are body copy on the plain page canvas —

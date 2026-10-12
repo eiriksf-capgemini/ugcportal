@@ -148,6 +148,12 @@ async function renderFormForUploader(): Promise<FormData> {
       validUntil: true,
       conditions: true,
       checklistVersion: true,
+      // ugcportal-aqw. page.tsx's own UPLOADER_SELECT names these two, so
+      // this harness has to as well — otherwise the form under test would
+      // render "no scope recorded" for a clearance that has one, and the
+      // round-trip would be exercising a shape the real page never sends.
+      coversUploadsBefore: true,
+      coversFutureUploads: true,
     },
   });
 
@@ -175,6 +181,8 @@ async function blockerForStoredReview() {
     checklistVersion: review.checklistVersion,
     reviewedByUserId: review.reviewedByUserId,
     validUntil: review.validUntil,
+    coversUploadsBefore: review.coversUploadsBefore,
+    coversFutureUploads: review.coversFutureUploads,
     reviewedBy: { role: "ADMIN" },
   });
 }
@@ -416,6 +424,154 @@ describe("editing one field does not silently change the others", () => {
     expect(review.validUntil?.toISOString()).toBe(VALID_UNTIL.toISOString());
     expect(review.route).toBe("CONTRACT");
     expect(review.conditions).toBe("Editorial use only.");
+  });
+
+  /**
+   * ugcportal-aqw K2, through the real form and the real handler.
+   *
+   * The scope is the one pair of fields that must NOT round-trip the way
+   * `validUntil` does. The date input is day-granular while the stored
+   * cut-off is an instant, so a value written back on every submit would
+   * silently move a mid-afternoon cut-off to that morning's midnight. The
+   * handler therefore reads it only behind the `setScope` checkbox, and the
+   * three cases below are the three ways that can be got wrong: the field
+   * present but ungated, the field absent entirely, and the gate itself not
+   * working.
+   */
+  it("keeps the recorded scope when an admin only edits the conditions", async () => {
+    const before = await storedReview();
+    // The seed cleared this uploader, so a scope exists to preserve —
+    // without this the assertion below could pass on two nulls.
+    expect(before.coversUploadsBefore).toBeInstanceOf(Date);
+
+    const form = await renderFormForUploader();
+    // The form really does render the field, and really does render it
+    // with the stored day — so the preservation below is the handler's
+    // gate doing its job, not the value being missing from the POST.
+    expect(form.get("coversUploadsBefore")).toBe(
+      before.coversUploadsBefore!.toISOString().slice(0, 10),
+    );
+    expect(form.get("setScope")).toBeNull();
+
+    form.set("conditions", "Editorial use only. No political advertising.");
+    form.set("reason", "Uploader clarified the permitted uses.");
+    await expectRedirect(form, "rights=recorded");
+
+    const after = await storedReview();
+    expect(after.coversUploadsBefore?.toISOString()).toBe(
+      before.coversUploadsBefore!.toISOString(),
+    );
+    expect(after.coversFutureUploads).toBe(false);
+    expect(after.conditions).toBe(
+      "Editorial use only. No political advertising.",
+    );
+  });
+
+  it("keeps the recorded scope when the POST omits the field entirely", async () => {
+    const before = await storedReview();
+    expect(before.coversUploadsBefore).toBeInstanceOf(Date);
+
+    const form = await renderFormForUploader();
+    // The fixture mutation the bead asks for: a POST with no scope field at
+    // all — a partial request, or a future form that drops it.
+    form.delete("coversUploadsBefore");
+    form.delete("coversFutureUploads");
+    form.set("reason", "A submit from a form that never had those fields.");
+    await expectRedirect(form, "rights=recorded");
+
+    expect((await storedReview()).coversUploadsBefore?.toISOString()).toBe(
+      before.coversUploadsBefore!.toISOString(),
+    );
+  });
+
+  it("records a new scope only when the reviewer ticks the control", async () => {
+    const before = await storedReview();
+
+    const form = await renderFormForUploader();
+    form.set("coversUploadsBefore", "2026-02-03");
+    form.set("reason", "Narrowing the scope to the listed works.");
+    // Ungated first: the same POST, without the tick, must change nothing.
+    await expectRedirect(form, "rights=recorded");
+    expect((await storedReview()).coversUploadsBefore?.toISOString()).toBe(
+      before.coversUploadsBefore!.toISOString(),
+    );
+
+    // What ticking the checkbox submits.
+    form.set("setScope", "yes");
+    await expectRedirect(form, "rights=recorded");
+    expect((await storedReview()).coversUploadsBefore?.toISOString()).toBe(
+      "2026-02-03T00:00:00.000Z",
+    );
+  });
+
+  /**
+   * The promise the form's own label makes — "Covers uploads made before
+   * (blank — the moment you record this decision)" — and the one
+   * `rights_invalid_covers_uploads_before` tells an admin to fall back on
+   * ("Leave it blank to cover everything uploaded up to the moment you
+   * record this decision", outcomes.ts).
+   *
+   * Asserted through the handler rather than at the writer, because the
+   * writer is handed `coversUploadsBefore: null` already: the step this
+   * covers is the handler turning an empty date input into that null
+   * instead of into `new Date("")`, which is an Invalid Date and would have
+   * bounced the reviewer to the error above for doing exactly what the
+   * label told them to.
+   */
+  it("reads a ticked scope with a blank date as the decision moment", async () => {
+    const before = await storedReview();
+    const started = Date.now();
+
+    const form = await renderFormForUploader();
+    form.set("setScope", "yes");
+    form.set("coversUploadsBefore", "");
+    form.set("reason", "Re-examined today; scope is everything so far.");
+    await expectRedirect(form, "rights=recorded");
+
+    const after = await storedReview();
+    // Not an error redirect, and not left as it was: the decision moment.
+    expect(after.coversUploadsBefore).toBeInstanceOf(Date);
+    expect(after.coversUploadsBefore!.getTime()).toBeGreaterThanOrEqual(
+      started,
+    );
+    // And it really moved, so the assertion above is not satisfied by the
+    // seeded value simply surviving.
+    expect(after.coversUploadsBefore!.toISOString()).not.toBe(
+      before.coversUploadsBefore!.toISOString(),
+    );
+  });
+
+  it("records a framework licence only behind the same control", async () => {
+    const form = await renderFormForUploader();
+    // What ticking the framework-licence checkbox submits, without the
+    // scope control: the clearance must not start covering future uploads.
+    form.set("coversFutureUploads", "yes");
+    form.set("reason", "Ticked the wrong box and submitted.");
+    await expectRedirect(form, "rights=recorded");
+    expect((await storedReview()).coversFutureUploads).toBe(false);
+
+    form.set("setScope", "yes");
+    form.set("reason", "The instrument is a framework licence; recorded.");
+    await expectRedirect(form, "rights=recorded");
+    expect((await storedReview()).coversFutureUploads).toBe(true);
+  });
+
+  it("refuses a scope cut-off it cannot read, and writes nothing", async () => {
+    const before = await storedReview();
+
+    const form = await renderFormForUploader();
+    form.set("setScope", "yes");
+    form.set("coversUploadsBefore", "the third of never");
+    form.set("reason", "Typed the date by hand.");
+
+    await expectRedirect(form, "error=rights_invalid_covers_uploads_before");
+
+    const after = await storedReview();
+    expect(after.coversUploadsBefore?.toISOString()).toBe(
+      before.coversUploadsBefore!.toISOString(),
+    );
+    // Nothing else landed either: the handler returns before the writer.
+    expect(after.updatedAt.toISOString()).toBe(before.updatedAt.toISOString());
   });
 });
 

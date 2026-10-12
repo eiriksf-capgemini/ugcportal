@@ -93,6 +93,31 @@ async function linkAccount(
   });
 }
 
+/**
+ * A standing rights review, seeded through RAW SQL rather than the
+ * generated client.
+ *
+ * This file stops the migrations before `20261005120500` and never applies
+ * the later ones, so the database here is the schema as it was on that day
+ * while the generated client knows the schema as it is NOW. For `User`,
+ * `Account` and `Media` the two still agree, which is why those helpers
+ * above use the client. `ResaleRightsReview` does not: `ugcportal-aqw`
+ * added `coversUploadsBefore` and `coversFutureUploads` afterwards, and a
+ * client `create` names every scalar column it knows about — so it asked
+ * this older database for a column that does not exist in it yet.
+ *
+ * Only the columns that existed at this point, and all of the ones with no
+ * DDL default: `updatedAt` is Prisma-side (`@updatedAt`), not a database
+ * default, so an INSERT that omits it is refused.
+ */
+async function seedRightsReview(id: string, uploaderUserId: string) {
+  await prisma.$executeRawUnsafe(
+    `INSERT INTO "ResaleRightsReview"
+       ("id","uploaderUserId","status","checklistVersion","createdAt","updatedAt")
+     VALUES ('${id}','${uploaderUserId}','UNREVIEWED','test',0,0)`,
+  );
+}
+
 async function upload(userId: string, key: string): Promise<void> {
   await prisma.media.create({
     data: {
@@ -409,12 +434,8 @@ describe("a stray that still owns something is kept rather than quietly destroye
     });
     await linkAccount(BLOCKED_STRAY, "facebook", "facebook-subject-eirik-again");
     await upload(BLOCKED_STRAY, "uploads/again.jpg");
-    await prisma.resaleRightsReview.create({
-      data: { uploaderUserId: BLOCKED_STRAY, checklistVersion: "test" },
-    });
-    await prisma.resaleRightsReview.create({
-      data: { uploaderUserId: EIRIK_GOOGLE_USER, checklistVersion: "test" },
-    });
+    await seedRightsReview("rev-blocked-stray", BLOCKED_STRAY);
+    await seedRightsReview("rev-eirik-google", EIRIK_GOOGLE_USER);
 
     await applyMigration(prisma, MIGRATION_NAME);
 

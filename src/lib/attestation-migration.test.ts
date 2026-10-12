@@ -48,6 +48,18 @@ const ATTESTATION_MIGRATION = migrationNames().find((name) =>
   name.endsWith("_add_upload_rights_attestation"),
 );
 
+/**
+ * When the seeded reviewer signed, in epoch milliseconds — deliberately
+ * AFTER the uploads below, which sit at 0.
+ *
+ * ugcportal-aqw's migration backfills `coversUploadsBefore` from
+ * `reviewedAt`, and the gate's scope comparison is strict: a clearance
+ * signed at the same instant a file was uploaded does not cover that file.
+ * Left at 0, every case in this file would block on scope and measure that
+ * instead of the question it is actually about.
+ */
+const REVIEWED_AT = 86_400_000;
+
 const database = createTemporaryDatabase();
 const { prisma } = await import("@/lib/prisma");
 
@@ -89,7 +101,7 @@ beforeAll(async () => {
             ('media-2','owner-1','IMAGE','uploads/owner-1/b.jpg','image/jpeg',10,'b.jpg',0)`,
     `INSERT INTO "ResaleRightsReview"
        ("id","uploaderUserId","status","route","checklistVersion","reviewedByUserId","reviewedAt","validUntil","productDecisionRef","createdAt","updatedAt")
-     VALUES ('rev-1','owner-1','CLEARED','CONTRACT','${CURRENT_CHECKLIST_VERSION}','admin-1',0,NULL,'ugcportal-2eh',0,0)`,
+     VALUES ('rev-1','owner-1','CLEARED','CONTRACT','${CURRENT_CHECKLIST_VERSION}','admin-1',${REVIEWED_AT},NULL,'ugcportal-2eh',0,0)`,
     `INSERT INTO "MediaListing"
        ("id","mediaId","priceCents","currency",${triageColumns},"triagedByUserId","triagedAt","createdAt","updatedAt")
      VALUES ('listing-1','media-1',24900,'NOK',${triageZeros},'admin-1',0,0,0),

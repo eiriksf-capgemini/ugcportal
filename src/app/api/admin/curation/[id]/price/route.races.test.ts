@@ -29,6 +29,12 @@ const updateMock = vi.fn();
 /** What the price writer's select returns for an upload that clears the gate. */
 const SELLABLE_UPLOAD = {
   userId: "owner-1",
+  // When the file was uploaded (ugcportal-aqw), compared against the
+  // clearance's own cut-off below. Both are fixed instants rather than
+  // `new Date()`, in the order a real clearance has them: the reviewer
+  // signed after the upload existed, so this file is inside the scope and
+  // the write race stays what is under test.
+  createdAt: new Date("2026-03-01T00:00:00.000Z"),
   // The watermarked preview and the listing's own id (ugcportal-yzo7): the
   // writer reads both off the same row the gate is evaluated on, so a
   // fixture without them is refused before any race can happen.
@@ -43,6 +49,8 @@ const SELLABLE_UPLOAD = {
       checklistVersion: CURRENT_CHECKLIST_VERSION,
       reviewedByUserId: "admin-1",
       validUntil: null,
+      coversUploadsBefore: new Date("2026-03-02T00:00:00.000Z"),
+      coversFutureUploads: false,
       reviewedBy: { role: "ADMIN" },
     },
   },

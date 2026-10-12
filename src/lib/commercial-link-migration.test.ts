@@ -200,18 +200,32 @@ describe("ugcportal-qnq9.2.1: adding the commercial link to an existing database
       "table:MediaAttestation",
     ]);
 
-    // Nothing dropped, and no pre-existing table or index redefined — which
-    // is the half a "does CommercialLink exist" check would miss. A column
+    // Nothing dropped, and the redefinitions named exhaustively — which is
+    // the half a "does CommercialLink exist" check would miss. A column
     // added to Media, or a foreign key rewritten on BenefitSource, changes
     // the stored `sql` for that entry and fails here by name.
     const afterKeys = new Set(after.map(key));
     expect([...before.keys()].filter((k) => !afterKeys.has(k))).toEqual([]);
-    for (const entry of after) {
-      if (!before.has(key(entry))) continue;
-      expect(entry.sql, `${key(entry)} was redefined`).toBe(
-        before.get(key(entry))!.sql,
-      );
-    }
+
+    // A LIST RATHER THAN "NOTHING WAS REDEFINED", for the same reason the
+    // added entries above are a complete diff including later migrations'
+    // tables: a later migration may legitimately alter a pre-existing
+    // table, and excusing those by pattern would also excuse one that
+    // altered CommercialLink or Media.
+    //
+    // The one entry is the catch-up applied after this bead's own
+    // migration: 20261010100000 (ugcportal-aqw) adds `coversUploadsBefore`
+    // and `coversFutureUploads` to ResaleRightsReview, which rewrites that
+    // table's stored `sql`. Nothing on this bead's own side of the schema
+    // moves, which is the claim being made.
+    const redefined = after
+      .filter(
+        (entry) =>
+          before.has(key(entry)) && before.get(key(entry))!.sql !== entry.sql,
+      )
+      .map(key)
+      .sort();
+    expect(redefined).toEqual(["table:ResaleRightsReview"]);
   });
 
   it("leaves the pre-existing item's row byte-for-byte as it was", async () => {
