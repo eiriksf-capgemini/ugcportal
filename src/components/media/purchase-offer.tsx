@@ -12,6 +12,36 @@ import { formatOfferPrice, type PublicOffer } from "@/lib/pricing";
 export const PURCHASE_OFFER_ID = "purchase-offer";
 
 /**
+ * ugcportal-dmne: the one terracotta "chip" treatment this component renders
+ * TWICE — the for-sale badge and the highlighted offer price — one named
+ * constant so the two cannot independently drift onto a different,
+ * unmeasured pairing. `--terracotta-900` text on `--terracotta-100` fill,
+ * checked by `terracotta-900-on-terracotta-100` in src/lib/design/
+ * contrast.ts at 7.01:1, comfortably clearing body's 4.5:1.
+ *
+ * Deliberately its own opaque fill, not bare text coloured directly on this
+ * `<aside>`'s ambient `bg-muted`: `--muted` is NOT mode-invariant (it reads
+ * `--paper-card`, near-white, in light mode but `--petrol-card`, a dark
+ * teal, in dark mode — src/app/globals.css's dark-mode override) while the
+ * terracotta tokens ARE (declared in the un-gated `:root` block, never
+ * overridden per mode) — terracotta-900 text painted directly on a dark
+ * `--petrol-card` background would be dark-on-dark, nowhere near 4.5:1.
+ * Giving the chip its own explicit, equally mode-invariant terracotta-100
+ * backdrop is what keeps this pairing correct regardless of which mode the
+ * surrounding `<aside>` is in — the SAME reason `--terracotta-ink`
+ * (src/app/globals.css) exists instead of reusing the mode-dependent
+ * `--primary-foreground` for the hero's CTA.
+ *
+ * Neither terracotta-600 (3.78:1 against this fill — round-5 scratch check
+ * on terracotta-900-on-terracotta-100's own comment) nor terracotta-500
+ * (K3's own forbidden step, regardless of background) is a safe label here;
+ * terracotta-900 is the only one of the four steps that clears body text on
+ * top of terracotta-100.
+ */
+const TERRACOTTA_CHIP_CLASS =
+  "inline-flex items-center rounded-full bg-terracotta-100 px-2 py-0.5 font-medium text-terracotta-900";
+
+/**
  * What an item that may currently be sold says about itself
  * (ugcportal-yzo7).
  *
@@ -40,9 +70,24 @@ export function PurchaseOffer({ offer }: { offer: PublicOffer | null }) {
       id={PURCHASE_OFFER_ID}
       className="mt-6 rounded-lg border border-border bg-muted p-3 text-sm"
     >
-      <p className="font-medium">
+      {/*
+        ugcportal-dmne: the "for sale" marker (this bead's own in-scope
+        "'Til salgs' / for-sale badges") — English copy, consistent with
+        every other public-facing string in this app (src/components/
+        site-header.tsx's own comment on why "For sale" rather than a
+        Norwegian label). Own line, ahead of the price sentence: a status
+        label reads before the detail it is a status OF, the same ordering
+        GalleryItemAdvertisingLabel uses ahead of the photograph it
+        discloses against.
+      */}
+      <span className={TERRACOTTA_CHIP_CLASS} data-sale-badge>
+        For sale
+      </span>
+      <p className="mt-1.5 font-medium">
         Available to licence for{" "}
-        <span data-offer-price>{formatOfferPrice(offer)}</span>
+        <span className={TERRACOTTA_CHIP_CLASS} data-offer-price>
+          {formatOfferPrice(offer)}
+        </span>
       </p>
       {/*
         text-muted-foreground, not text-ink-muted (ugcportal-6uc2, phase 2):

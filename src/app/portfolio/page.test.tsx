@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { countTerracottaPrimaryControls } from "@/lib/design/terracotta-primary-control";
 import { seedMedia } from "@/lib/test-support/media-fixtures";
 import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db";
 
@@ -118,5 +119,35 @@ describe("release scope: photo pieces only (Eirik's 2026-10-04 note)", () => {
 
     const markup = await renderPortfolio();
     expect(markup).not.toContain('data-portfolio-piece="piece-video"');
+  });
+});
+
+/**
+ * ugcportal-dmne K4: /portfolio is "gallery" of K4's "front, gallery and
+ * item pages" — the full public gallery/portfolio listing, as distinct from
+ * the front page's embedded preview. Nothing on this page renders
+ * `default-accent` (no CTA lives here today), so the honest claim is "at
+ * most one", not "exactly one" — K4's own wording, checked literally rather
+ * than tightened into a stronger claim this page does not make.
+ *
+ * Review round 1, finding 3 (LOW, CONFIRMED): the bound on its own —
+ * `toBeLessThanOrEqual(1)` — is also satisfied by empty markup, so a
+ * `renderPortfolio()` that silently rendered nothing (the page crashing,
+ * the import resolving to a stub, …) would still pass. The front-page
+ * sibling pairs its bound with `toBe(1)`, which needs a real CTA to hold;
+ * the item-page sibling pairs its `toBe(0)` with content assertions
+ * (`data-sale-badge`/`data-offer-price`) proving the page actually
+ * rendered. This test had neither, so it is the one K4 page test that
+ * would survive its own fixture dying. The `data-page-section` assertion
+ * below is that companion: it is asserted elsewhere in this file (K1) as a
+ * genuine section marker this page renders, so requiring it here means the
+ * bound below is only ever exercised against markup this page actually
+ * produced, not a stand-in for "nothing rendered."
+ */
+describe("K4 — at most one terracotta-filled primary control on /portfolio", () => {
+  it("zero today (no primary CTA on this page) — still within K4's bound", async () => {
+    const markup = await renderPortfolio();
+    expect(markup).toContain('data-page-section="intro"');
+    expect(countTerracottaPrimaryControls(markup)).toBeLessThanOrEqual(1);
   });
 });
