@@ -45,6 +45,18 @@ const MINORS_MIGRATION = migrationNames().find((name) =>
   name.endsWith("_add_minors_triage_fact"),
 );
 
+/**
+ * When the seeded reviewer signed, in epoch milliseconds — deliberately
+ * AFTER the uploads below, which sit at 0.
+ *
+ * ugcportal-aqw's migration backfills `coversUploadsBefore` from
+ * `reviewedAt`, and the gate's scope comparison is strict: a clearance
+ * signed at the same instant a file was uploaded does not cover that file.
+ * Left at 0, every case in this file would block on scope and measure that
+ * instead of the question it is actually about.
+ */
+const REVIEWED_AT = 86_400_000;
+
 const database = createTemporaryDatabase();
 const { prisma } = await import("@/lib/prisma");
 
@@ -73,7 +85,7 @@ beforeAll(async () => {
      VALUES ('media-1','owner-1','IMAGE','uploads/owner-1/a.jpg','image/jpeg',10,'a.jpg',0)`,
     `INSERT INTO "ResaleRightsReview"
        ("id","uploaderUserId","status","route","checklistVersion","reviewedByUserId","reviewedAt","validUntil","productDecisionRef","createdAt","updatedAt")
-     VALUES ('rev-1','owner-1','CLEARED','CONTRACT','${CURRENT_CHECKLIST_VERSION}','admin-1',0,NULL,'ugcportal-2eh',0,0)`,
+     VALUES ('rev-1','owner-1','CLEARED','CONTRACT','${CURRENT_CHECKLIST_VERSION}','admin-1',${REVIEWED_AT},NULL,'ugcportal-2eh',0,0)`,
     // Every triage question that existed before this migration, answered
     // "no", and signed by a current admin. Nothing else is blocking.
     `INSERT INTO "MediaListing"

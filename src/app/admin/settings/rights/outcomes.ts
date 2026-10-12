@@ -10,6 +10,12 @@ const OUTCOME_MESSAGES: Record<string, string> = {
     "Say why. Every resale-rights decision is recorded with a reason, so the next reader knows what was decided and on what basis.",
   rights_invalid_valid_until:
     "That's not a date we could read. Leave it blank for a clearance with no end date.",
+  // Distinct from rights_invalid_valid_until above, because the advice for
+  // a blank field is the opposite: a blank expiry means "no end date", a
+  // blank cut-off means "this decision's own moment". One message for both
+  // would tell half the admins who see it the wrong thing.
+  rights_invalid_covers_uploads_before:
+    "That's not a date we could read for the scope cut-off. Leave it blank to cover everything uploaded up to the moment you record this decision.",
   rights_evidence_too_large:
     "That evidence file is too large (20 MB maximum). Upload the signed instrument itself rather than a scan of the whole folder.",
   rights_evidence_failed:
@@ -57,6 +63,13 @@ export const BLOCKER_MESSAGES: Record<SellabilityBlocker, string> = {
     "Not cleared. Nothing this uploader has uploaded can be sold.",
   clearance_expired:
     "The clearance has run out. Re-review the uploader to sell their work again.",
+  // ugcportal-aqw. Names the two ways out explicitly, because the useless
+  // one — "re-review the uploader" — is the first thing an admin reaches
+  // for and does nothing on its own: the scope cut-off is preserved across
+  // an ordinary edit by design, so it only moves if somebody deliberately
+  // records a new one.
+  upload_outside_clearance_scope:
+    "This file was uploaded after the clearance was signed, so the reviewer never saw it and the clearance does not cover it. Either record a new scope cut-off on the uploader's review after examining the file, or — only if the signed instrument really is a framework licence over future works — record that on the review.",
   reviewer_not_admin:
     "The reviewer of record is no longer an admin, so the clearance no longer counts.",
   checklist_version_retired:
