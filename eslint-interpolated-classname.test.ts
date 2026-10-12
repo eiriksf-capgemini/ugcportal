@@ -135,9 +135,12 @@ describe("eslint.config.mjs: INTERPOLATED_CLASSNAME_SELECTORS", () => {
         // The declarator selector is scoped by NAME SUFFIX, not by "any
         // constant": an ordinary interpolated string — a log line, a URL,
         // an SQL fragment — is none of this guard's business. Without
-        // this, the repo-wide hit count went from 12 to 228 (measured) and
-        // the guard would have been suppressed everywhere rather than
-        // obeyed.
+        // this, the repo-wide hit count went from 12 to 367 (measured via
+        // `npx eslint src` with selector 2's name-suffix requirement
+        // removed, against commit b592ba0 — this PR's merge-base; the
+        // count moves as `src/` changes, so re-run it rather than trust a
+        // bare number) and the guard would have been suppressed almost
+        // everywhere rather than obeyed.
         {
           code: "const message = `failed for ${id} at ${when}`;",
           options: INTERPOLATED_CLASSNAME_SELECTORS,
@@ -426,9 +429,13 @@ describe("eslintConfig (the real merged, exported config) wires INTERPOLATED_CLA
   it("MUTATION CHECK: an ordinary interpolated string that is not a class raises nothing", () => {
     // The declarator and helper-call selectors are deliberately NARROW.
     // Dropping either scope turns this guard into a ban on template
-    // literals: measured repo-wide, a name-unscoped version of selector 2
-    // fires 228 times against `src/`, almost all of it log lines, URLs
-    // and SQL. These two fixtures are what that would cost.
+    // literals: measured via `npx eslint src` against commit b592ba0 (this
+    // PR's merge-base), a name-unscoped version of selector 2
+    // (`VariableDeclarator TemplateLiteral[expressions.length>=1]`) fires
+    // 367 times against `src/` (96 outside test files), almost all of it
+    // log lines, URLs and SQL — the count moves as `src/` changes, so
+    // re-run the command above against a named commit rather than trust a
+    // bare number. These two fixtures are what that would cost.
     expect(
       ruleIdsFor(
         "export const message = `failed for ${id} at ${when}`;",
