@@ -83,13 +83,15 @@ export const HEX_COLOR_SELECTORS = [
  * widen when it starts writing them somewhere else.
  *
  * Rule of thumb for the fix: compose whole class strings with
- * `cn("mt-4", GALLERY_GRID_CLASS)`, never with a template literal. Every
- * pre-existing site in `src` that these selectors flagged was converted
- * that way in this bead's own PR (byte-identical output, asserted), so
- * the guard ships with ZERO `eslint-disable` escapes anywhere in the
- * repo — a disable here would also silence HEX_COLOR_SELECTORS and
- * GATED_SCRIPT_SYNTAX_SELECTORS on the same line, since
- * `no-restricted-syntax` has no per-selector granularity.
+ * `cn("mt-4", GALLERY_GRID_CLASS)`, never with a template literal. All
+ * twelve pre-existing sites in `src` that these selectors flagged were
+ * converted that way in this bead's own PR, each checked byte-identical
+ * against the template-literal form it replaced (through the real `cn`,
+ * at the constant values of the day). The repo therefore contains NO
+ * `eslint-disable` for `no-restricted-syntax` at all — deliberately,
+ * because the directive has no per-selector granularity: one here would
+ * also silence HEX_COLOR_SELECTORS and GATED_SCRIPT_SYNTAX_SELECTORS on
+ * the same line.
  */
 const INTERPOLATED_CLASSNAME_MESSAGE =
   "A Tailwind utility class may not be built by interpolating a runtime " +

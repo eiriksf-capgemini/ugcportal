@@ -259,9 +259,10 @@ describe("eslintConfig (the real merged, exported config) wires INTERPOLATED_CLA
    * The previous version of this helper ended in
    * `.filter((ruleId) => ruleId !== null)`, which DISCARDED both and
    * returned `[]`. That turned every `not.toContain(...)` assertion in
-   * this file into one that could not fail — and one of them (a JSX
-   * fixture at `src/lib/fine.ts`) was exactly that: it stayed green with
-   * the real defect substituted in. Throwing instead means a fixture
+   * this file into one that could not fail — and one of them was
+   * exactly that: a JSX fixture handed the FIXTURE PATH
+   * "src/lib/fine" + ".ts" (a string, never a file on disk), which stayed
+   * green with the real defect substituted in. Throwing instead means a fixture
    * ESLint could not actually lint is a RED test rather than a passing
    * one. `ruleIdsFor`'s own throwing behaviour is asserted by the first test
    * below.
