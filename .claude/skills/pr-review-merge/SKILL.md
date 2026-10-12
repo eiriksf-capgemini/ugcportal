@@ -170,9 +170,11 @@ Two rules follow, one here and one in 4.3. Each names what fires it, what to run
 
 **Trigger — its input is computed; one call in it is a judgement, and the default is stated.** The file list below is produced by a command, not recalled. Whether a given change "alters behaviour" is a judgement on top of that list, and the rule for it is: if you cannot say in one clause what observable thing the change makes different, treat the trigger as **fired** and say which file made you unsure. The judgement may only ever resolve toward running the grep.
 
-**Every blocking round comment this skill posts records `head <sha>`** (step 5's blocking template; step 5's rule for the `7+` row's anchor — "Record the head SHA in every blocking comment" — says the same). Cite it that way, by the sentence, not by a line number: this file is edited often enough that an absolute line number is a stale pointer within one round, and `review-standards` §5 is the rule that forbids them. The merge template deliberately does not, and that is harmless where it matters — a round that merges is terminal, so no later round reads it — with one edge: if `gh pr merge` then fails, the marker stands with no SHA and the next round takes the fail-safe branch below. Take the latest round comment and compare its SHA against this run's `headRefOid` from step 1:
+**Step 5's blocking template records `head <sha>`, and the fail-safe branch below covers the comments that do not** — 19 approval/merge comments, which record none by template, 14 pre-convention comments on #43-#61, and one omission on #211, enumerated below. Read it as the rule it is, not as a census of what is on the artefact: #211's round-6 comment is a blocking comment posted by a run of this skill and it carries no SHA, writing `Diff for this round (a2e962d..5ed8d93)` instead. Run the block below against #211 today and it prints `round 6 records no head SHA — trigger FIRES, scope is the whole PR diff`, which is why the `[ -z "$prev_head" ]` branch is live code rather than dead. Step 5's rule for the `7+` row's anchor — "Record the head SHA in every blocking comment" — states the same obligation. Cite that by the sentence, not by a line number: this file is edited often enough that an absolute line number is a stale pointer within one round, and `review-standards` §5 is the rule that forbids them. The merge template deliberately does not, and that is harmless where it matters — a round that merges is terminal, so no later round reads it — with one edge: if `gh pr merge` then fails, the marker stands with no SHA and the next round takes the fail-safe branch below. Take the latest round comment and compare its SHA against this run's `headRefOid` from step 1:
 
 ```bash
+pr_files=$(gh pr view <n> --json files --jq '.files[].path')
+
 read -r prev_n prev_head < <(
   gh api repos/:owner/:repo/issues/<n>/comments --paginate \
       --jq '.[] | [.created_at, ((.body // "") | gsub("\n"; " "))] | @tsv' \
@@ -185,14 +187,24 @@ read -r prev_n prev_head < <(
 if [ -z "$prev_n" ]; then
   echo "no previous round comment — round 1; record trigger=n/a-round-1"
 elif [ -z "$prev_head" ]; then
-  echo "round $prev_n records no head SHA — trigger FIRES, scope is the whole diff"
-elif ! changed=$(gh api repos/:owner/:repo/compare/"$prev_head"...<headRefOid> \
+  echo "round $prev_n records no head SHA — trigger FIRES, scope is the whole PR diff"
+elif ! pushed=$(gh api repos/:owner/:repo/compare/"$prev_head"...<headRefOid> \
                    --jq '.files[] | [.status, .filename] | @tsv' 2>/dev/null); then
-  echo "round $prev_n's recorded SHA did not resolve — trigger FIRES, scope is the whole diff"
+  echo "round $prev_n's recorded SHA did not resolve — trigger FIRES, scope is the whole PR diff"
+elif [ -z "$pr_files" ]; then
+  # An empty $pr_files is a failed `gh pr view`, never a real PR: intersecting
+  # against it would discard every pushed file and print nothing at all.
+  echo "the PR's own file list came back empty — trigger FIRES, scope is the whole PR diff"
 else
+  # Keep only files the PR's own diff touches. "$pushed" is a three-dot range,
+  # so it also contains everything origin/main added since round $prev_n.
+  changed=$(awk -F'\t' 'NR==FNR {pr[$0]=1; next} pr[$2]' \
+              <(printf '%s\n' "$pr_files") <(printf '%s\n' "$pushed"))
   printf '%s\n' "$changed"
 fi
 ```
+
+**Why the list is intersected with the PR's own files, and not taken from `compare` alone.** `compare/A...B` is GitHub's **three-dot** range: it diffs from `merge-base(A, B)`. `$prev_head` is an ancestor of the new head, so the raw list is everything new in the head — *including every commit `origin/main` contributed when the branch was brought up to date between rounds*, which is routine practice on this repo rather than an edge case. Unintersected on **this** PR at round 3 (`prev_head=0b93b75`, head `e84085d`) it returns **31** files — `src/lib/commercial-link.ts`, `src/components/home/hero.tsx`, `src/app/api/media/[id]/disclosure/route.ts` and 28 more — for a PR whose own diff is **two** `.md` files; the other 29 arrive through `f6e841c`, `Merge remote-tracking branch 'origin/main'`. Intersected, the same two inputs return exactly those **2**. It still fires on a round that really did push a behaviour change, and on a chain with a `main` merge in the range: on **#214** at round 2 (`prev_head=f800824`, head `11e9513`) the raw compare returns **15** files and the intersection returns **6** — `src/app/api/media/[id]/disclosure/route.ts`, `src/lib/alcohol-commerce.ts`, `src/lib/alcohol-commerce.test.ts`, `src/lib/commercial-link.ts`, `src/lib/commercial-link-label.guardrail.test.ts`, `src/lib/gallery-items.ts` — which is *precisely* the file list of `8398a92`, that round's own fix commit, four of them non-test source. At #214's round 3 it returns **1** of 2, `src/lib/curation-triage-write.ts`, again exactly what `dbfe29e` pushed, with `docs/process/development-process.md` dropped as the merge's. The intersection errs in one direction only: a base-branch commit that touches a file the PR *also* touches stays in the list, so the step fires more often than strictly needed, never less. That direction holds only while `$pr_files` is real, which is why the branch above guards it: with `pr_files` emptied by hand and the 31-file `$pushed` from this PR's round 3, the unguarded `awk` printed **nothing at all** — the one failure that would make the step fire *less*, and silently.
 
 **The capture pattern is the part that was measured, because the obvious one is wrong for this repo.** An earlier draft used `capture("head (?<sha>[0-9a-f]{7,40})")` — a bare SHA after a lowercase `head `. Reviewers here also write it in backticks (``head `db1eccfdb…` ``), capitalised (``Head `f800824…` ``) and abbreviated to seven characters. Measured over every round-marker comment in the repo (369 of them across 216 PRs, fetched through the GraphQL `pullRequests.comments` connection and matched on the same first-line anchor step 4b uses):
 
@@ -228,7 +240,7 @@ Stem them: on #207 the prose said *terminates* in one place and *terminal* in an
 <!-- ugcportal-fix-wake: N=<N> trigger=<fired|not-fired|n/a-round-1> since=<sha|none|unresolved> changed=<k files> terms=<regex|-> hits=<k|-> falsified=<k|-> -->
 ```
 
-`since` and `changed` are the trigger command's own output, so **a not-fired round still has to name the SHA it compared against and how many files came back**. Be exact about what that buys, because it is less than it looks: **neither field is unforgeable.** `since=` can be read straight off the previous round comment, where the blocking template puts it in the prose by design, and `changed=` is one `gh pr view <n> --json files --jq '.files|length'` away — both were obtained on PR #213 without the trigger command ever running, and both matched its real output. The weaker bound that does hold is the one this line was added for: a **missing** line, or `since=none` on a chain whose previous blocking comment does record a SHA, is now visible, where before the no-fire branch left exactly the trace that never looking leaves — none. `changed=0 files` against a real `since` SHA is a complete, checkable answer; it is not evidence that the comparison was made. When the trigger did fire, the comment also carries the readable form:
+`since` and `changed` are the trigger command's own output, so **a not-fired round still has to name the SHA it compared against and how many files came back**. Be exact about what that buys, because it is less than it looks: **neither field is unforgeable.** `since=` can be read straight off the previous round comment, where the blocking template puts it in the prose by design, and `changed=` is bounded above by `gh pr view <n> --json files --jq '.files|length'`, one call away and sometimes equal to it — which is what makes a guess look right. On PR #213 at round 3 the two coincide: the trigger above returns **2** files and `gh pr view 213 --json files --jq '.files|length'` returns **2**, so that field could have been filled there without the comparison ever being made. They do not always coincide — on #214 at round 2 the trigger returns **6** against the PR's **15** — so a wrong guess is visible, and a right one still proves nothing. The weaker bound that does hold is the one this line was added for: a **missing** line, or `since=none` on a chain whose previous blocking comment does record a SHA, is now visible, where before the no-fire branch left exactly the trace that never looking leaves — none. `changed=0 files` against a real `since` SHA is a complete, checkable answer; it is not evidence that the comparison was made. When the trigger did fire, the comment also carries the readable form:
 
 ```
 Fix-wake re-grep (step 4.2): round <N-1> changed <behaviour, one clause>.
@@ -249,7 +261,7 @@ gh api repos/:owner/:repo/issues/<n>/comments --paginate \
 
 ### 4.3 One round reads every file in the diff whole, and round 3 owns it
 
-Step 4.2 fires only after a behaviour change, and on #207 nothing a round pushed changed behaviour until round 5. This is the rule that covers the text a diff never touched — including the text that was wrong from the first commit.
+Step 4.2 fires on a round whose own push changed behaviour — on #207 nothing a round pushed changed behaviour until round 5 — and otherwise only where its trigger deliberately errs toward firing. This is the rule that covers the text a diff never touched — including the text that was wrong from the first commit.
 
 **Trigger — named, so it is not left to whichever round happens to think of it.** The read happens on **round 3**, whatever that round finds; **and** on any round that reaches step 5's gate list with nothing blocking, if no earlier round in this chain recorded it, or if the diff has gained a file since the round that did (compare the marker's file list below against `gh pr view <n> --json files`). On a chain that merges before round 3, that is the approving round. A chain of any length therefore pays for this at least once and normally exactly once — twice only when the diff gains a file after the round that did it, and then only for the files that were not covered. A chain that ends at round 1 pays the cheapest version of it.
 
