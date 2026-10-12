@@ -2,20 +2,39 @@ name: CI
 
 on:
   pull_request:
-    branches: [main]
+    # Deliberately no `branches:` filter. It used to be `[main]`, and that
+    # filter matches a PR's *base* branch, so a PR stacked on another PR's
+    # branch fired no workflow at all (observed on gh-224, whose
+    # statusCheckRollup was []). When its base PR merged, GitHub retargeted
+    # it to main as an `edited` event, which the quality job below skips --
+    # so it could reach main showing a green check having never run lint,
+    # test, typecheck or build (ugcportal-hwpc). Dropping the filter is
+    # preferred over listing branch patterns: a pattern list silently stops
+    # matching the day someone uses a new branch prefix, reopening this
+    # exact hole without telling anyone.
     types: [opened, synchronize, reopened, edited]
   push:
     branches: [main]
 
 # One run per PR at a time: a newer push cancels the run it supersedes.
 # Pushes to main are never cancelled, so every merge commit is verified
-# (ugcportal-ugcportal-0an4).
+# (ugcportal-0an4).
 concurrency:
-  # Edited events (title or body) skip the quality job, so they must not
-  # share a group with code events: otherwise a body edit right after a push
-  # cancels the run that carries the head's only quality result
-  # (ugcportal-ugcportal-sxwb).
-  group: ci-${{ github.event.pull_request.number || github.ref }}-${{ github.event.action == 'edited' && 'edited' || 'code' }}
+  # Two groups per PR, split by whether the run carries a quality result.
+  # The suffix is the inverse of the quality job's `if:` below, and the two
+  # have to stay in step -- scripts/ci-workflow-gating.test.mjs evaluates
+  # both against synthetic payloads and fails if they disagree.
+  #
+  # Runs that skip quality must not share a group with runs that carry one:
+  # a body edit right after a push would otherwise cancel the run holding
+  # the head's only quality result (ugcportal-sxwb).
+  #
+  # A base-ref change arrives as an `edited` event too, but it does run
+  # quality (ugcportal-hwpc), so it belongs in the 'code' group. The
+  # invariant that makes cancelling safe is "every run in the code group
+  # carries a quality result", so a newer run superseding an older one
+  # always leaves the head with one.
+  group: ci-${{ github.event.pull_request.number || github.ref }}-${{ (github.event.action == 'edited' && github.event.changes.base == null) && 'edited' || 'code' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -105,41 +124,40 @@ jobs:
     name: Lint, test, typecheck, build
     runs-on: ubuntu-latest
     # A PR title or body edit changes nothing the suite can see; the guards
-    # job still runs on it so the title guard keeps working (ugcportal-ugcportal-0an4).
-    if: github.event_name == 'push' || github.event.action != 'edited'
+    # job still runs on it so the title guard keeps working (ugcportal-0an4).
+    #
+    # A base-ref change is an `edited` event as well, and that one does
+    # change what the suite sees: actions/checkout builds the PR's merge ref
+    # (head merged into base), so retargeting a stacked PR from another PR's
+    # branch onto main is a different tree from the one any earlier run
+    # tested. `github.event.changes.base` is present only on that kind of
+    # edit, so it is what separates the two (ugcportal-hwpc).
+    if: github.event_name == 'push' || github.event.action != 'edited' || github.event.changes.base != null
     steps:
-      - uses: actions/checkout@v4
+      - run: echo "quality ran on $GITHUB_EVENT_NAME"
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Check prisma/schema.prisma matches prisma/migrations
-        run: npx prisma migrate diff --from-migrations prisma/migrations --to-schema prisma/schema.prisma --exit-code
-
-      - name: Lint
-        run: npm run lint
-
-      - name: Test
-        run: npm test
-
-      - name: Load placeholder auth env vars from scripts/ci-placeholder-env.sh
+  probe:
+    name: Probe (payload dump)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dump the event payload and both gating expressions
+        env:
+          CHANGES: ${{ toJSON(github.event.changes) }}
+          EVENT_NAME: ${{ github.event_name }}
+          ACTION: ${{ github.event.action }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          CHANGES_BASE_IS_NULL: ${{ github.event.changes.base == null }}
+          QUALITY_GATE: ${{ github.event_name == 'push' || github.event.action != 'edited' || github.event.changes.base != null }}
+          GROUP: ci-${{ github.event.pull_request.number || github.ref }}-${{ (github.event.action == 'edited' && github.event.changes.base == null) && 'edited' || 'code' }}
         run: |
-          . ./scripts/ci-placeholder-env.sh
-          {
-            echo "AUTH_SECRET=$AUTH_SECRET_PLACEHOLDER"
-            echo "AUTH_GOOGLE_ID=$AUTH_GOOGLE_ID_PLACEHOLDER"
-            echo "AUTH_GOOGLE_SECRET=$AUTH_GOOGLE_SECRET_PLACEHOLDER"
-            echo "AUTH_FACEBOOK_ID=$AUTH_FACEBOOK_ID_PLACEHOLDER"
-            echo "AUTH_FACEBOOK_SECRET=$AUTH_FACEBOOK_SECRET_PLACEHOLDER"
-          } >> "$GITHUB_ENV"
-
-      - name: Build
-        run: npm run build
-
-      - name: Typecheck
-        run: npm run typecheck
+          echo "event_name=$EVENT_NAME"
+          echo "action=$ACTION"
+          echo "base_ref=$BASE_REF"
+          echo "head_sha=$HEAD_SHA"
+          echo "changes_base_is_null=$CHANGES_BASE_IS_NULL"
+          echo "quality_gate=$QUALITY_GATE"
+          echo "concurrency_group=$GROUP"
+          echo "changes<<"
+          echo "$CHANGES"
+          echo ">>"
