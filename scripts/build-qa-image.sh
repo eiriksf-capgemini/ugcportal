@@ -62,12 +62,16 @@
 # reproducible, but the image ID is the wrong evidence for that: it is not a
 # content digest, so three different IDs from three identical-context builds
 # proves nothing -- that is also what three byte-identical rebuilds produce.
-# (All three carried the same 11-layer rootfs digest list and the same
-# `Created` timestamp when checked.) The real evidence is the layer digests
-# themselves: a `--no-cache` rebuild from the same commit changes 6 of the
-# runner's 11 layers -- the five `node:20-alpine` base layers are identical
-# both times; `apk add`, `adduser`, `mkdir /data` and all three `COPY`s
-# differ. Reproduce with
+# (All three carried the same rootfs digest list -- 11 layers at the time --
+# and the same `Created` timestamp when checked.) The real evidence is the
+# layer digests themselves: a `--no-cache` rebuild from the same commit
+# changes 10 of the runner's 15 layers. The five that are identical both
+# times are `node:20-alpine`'s own four plus the `WORKDIR /app` on top of
+# them; `apk add`, `adduser`, `mkdir /data` and all seven `COPY`s differ.
+# Re-measured at ugcportal-6jcq, which took the runner from 11 layers to 15
+# by replacing one `COPY .next/standalone ./` with the named allowlist the
+# Dockerfile now carries -- so a reading of 11 here means a stale image.
+# Reproduce with
 # `docker inspect <image> --format '{{json .RootFS.Layers}}'` against a
 # normal build and a `--no-cache` one. The tag identifies the INPUTS -- one
 # commit, plus nothing gitignored beyond a regenerated stub -- so two QA
@@ -80,9 +84,11 @@
 # node_modules/.bin directory at all. The second build is a cache hit on
 # every layer the first already made, so it adds no build time. It does cost
 # disk: the builder stage carries the full dependency tree and the source,
-# measured at 1.82 GB against the runner image's 343 MB. That is the price of
-# migrating with the real CLI rather than reimplementing `migrate deploy`
-# against @libsql/client inside the app.
+# measured at 1.8 GB against the runner image's 328 MB (both re-measured at
+# ugcportal-6jcq, which took the runner down from 343 MB and took `docs/`,
+# `e2e/` and every `*.test.*`/`*.spec.*` out of BOTH images). That is the
+# price of migrating with the real CLI rather than reimplementing
+# `migrate deploy` against @libsql/client inside the app.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
