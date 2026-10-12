@@ -504,6 +504,43 @@ describe("editing one field does not silently change the others", () => {
     );
   });
 
+  /**
+   * The promise the form's own label makes — "Covers uploads made before
+   * (blank — the moment you record this decision)" — and the one
+   * `rights_invalid_covers_uploads_before` tells an admin to fall back on
+   * ("Leave it blank to cover everything uploaded up to the moment you
+   * record this decision", outcomes.ts).
+   *
+   * Asserted through the handler rather than at the writer, because the
+   * writer is handed `coversUploadsBefore: null` already: the step this
+   * covers is the handler turning an empty date input into that null
+   * instead of into `new Date("")`, which is an Invalid Date and would have
+   * bounced the reviewer to the error above for doing exactly what the
+   * label told them to.
+   */
+  it("reads a ticked scope with a blank date as the decision moment", async () => {
+    const before = await storedReview();
+    const started = Date.now();
+
+    const form = await renderFormForUploader();
+    form.set("setScope", "yes");
+    form.set("coversUploadsBefore", "");
+    form.set("reason", "Re-examined today; scope is everything so far.");
+    await expectRedirect(form, "rights=recorded");
+
+    const after = await storedReview();
+    // Not an error redirect, and not left as it was: the decision moment.
+    expect(after.coversUploadsBefore).toBeInstanceOf(Date);
+    expect(after.coversUploadsBefore!.getTime()).toBeGreaterThanOrEqual(
+      started,
+    );
+    // And it really moved, so the assertion above is not satisfied by the
+    // seeded value simply surviving.
+    expect(after.coversUploadsBefore!.toISOString()).not.toBe(
+      before.coversUploadsBefore!.toISOString(),
+    );
+  });
+
   it("records a framework licence only behind the same control", async () => {
     const form = await renderFormForUploader();
     // What ticking the framework-licence checkbox submits, without the
