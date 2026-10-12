@@ -258,10 +258,19 @@
  * keeps the reference's literal `--petrol-700` fill with white text, which is
  * K1's exact requirement.
  *
- * Terracotta is declared but not consumed by anything in this PR (phase 1 is
- * tokens, the global canvas, and the primary/secondary button only) — see
- * the mandate note two blocks down. It exists here so "all six colours have
- * tokens" is true starting now, not only once something renders it.
+ * Terracotta had zero consumers until ugcportal-dmne (phase 1 was tokens,
+ * the global canvas, and the primary/secondary button only — see the
+ * mandate note two blocks down). ugcportal-dmne consumes three of these
+ * four steps: `--terracotta-600` (the hero's primary call-to-action fill,
+ * white label, 4.63:1 — see `terracotta-ink-on-terracotta-600` in
+ * contrast.ts) and `--terracotta-100`/`--terracotta-900` (the for-sale
+ * badge and the highlighted offer price, both on the item page — see
+ * `terracotta-900-on-terracotta-100` in contrast.ts). `--terracotta-500` is
+ * deliberately NOT consumed anywhere: measured at 3.3:1 on white and 4.4:1
+ * on `--petrol-900`, it clears neither pairing's 4.5:1 body-text
+ * requirement, so no safe pairing exists for it at body size — see that
+ * bead's K3 and src/lib/design/terracotta-500-guard.ts, the regression test
+ * that fails if a future change ever pairs it with non-large text anyway.
  * `--ink-muted-petrol` IS consumed (review round 4: this comment used to
  * claim otherwise) — it drives `--muted-foreground` below, which several
  * real components render directly on the page canvas.
@@ -276,6 +285,21 @@
   --terracotta-500: #d9713c;
   --terracotta-100: #fbe4d3;
   --terracotta-900: #7a3a17;
+  /*
+   * ugcportal-dmne: the label colour for the `--terracotta-600` CTA fill.
+   * NOT `--primary-foreground` — that token is mode-dependent (it flips to
+   * `--petrol-900` in dark mode, this file's own dark-mode override below),
+   * because petrol's OWN primary fill flips too (`--petrol-700` resting in
+   * light mode, `--petrol-200` in dark). The terracotta tokens do not
+   * participate in light/dark mode at all (same as the hero's own
+   * `.home-hero-surface` well, and the petrol-hex scale above) — declared
+   * here, in the mode-invariant `:root` block, never inside the
+   * `@media (prefers-color-scheme: dark)` override below — so the label on
+   * top of it has to be equally mode-invariant. A plain, always-opaque
+   * white, not a fifth terracotta scale step: it is a label colour, not a
+   * fill, the same relationship `--primary-foreground` has to `--primary`.
+   */
+  --terracotta-ink: #ffffff;
   --paper: #faf7f2;
   --paper-line: #d8d3c8;
   --ink-muted-petrol: #6b6b63;
@@ -397,6 +421,26 @@
   --color-petrol-100: var(--petrol-100);
   --color-petrol-200: var(--petrol-200);
   --color-petrol-500: var(--petrol-500);
+
+  /*
+   * ugcportal-dmne: aliases for the hex terracotta scale declared above, the
+   * same "`@theme` entry is a direct `var()` alias of the hex source, never
+   * an independently-authored second value" pattern the petrol-100/200/500
+   * aliases just above use, for the identical reason — one value, two
+   * spellings (`bg-terracotta-600` and `var(--terracotta-600)`) that cannot
+   * drift apart. All four hex steps get an alias here, including
+   * `--color-terracotta-500`: K3's guard
+   * (src/lib/design/terracotta-500-guard.ts) is what stops that one being
+   * used unsafely, not withholding the utility — withholding it would trade
+   * a loud, reviewable mistake (a real fill nobody checked) for a silent
+   * one (a class that compiles to nothing at all, the exact ugcportal-ei5c
+   * bug shape this file's own z1nh guard exists to catch).
+   */
+  --color-terracotta-100: var(--terracotta-100);
+  --color-terracotta-500: var(--terracotta-500);
+  --color-terracotta-600: var(--terracotta-600);
+  --color-terracotta-900: var(--terracotta-900);
+  --color-terracotta-ink: var(--terracotta-ink);
 
   /*
    * `--color-petrol-50` is deliberately NOT renamed to `--color-fjord-50`

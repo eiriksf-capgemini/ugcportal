@@ -248,8 +248,10 @@ function HeroVisual({ pieces }: { pieces: GalleryItem[] }) {
  * `text-foreground` / `text-muted-foreground`, which are audited per-file in
  * dual-meaning-usage.test.ts specifically because they change meaning
  * depending on `--background`, which this surface is not. See
- * src/lib/design/contrast.ts's `ink-on-hero-petrol` /
- * `surface-0-on-petrol-100` entries for the measured contrast this relies on.
+ * src/lib/design/contrast.ts's `ink-on-hero-petrol` entry for the title/lead
+ * and `terracotta-ink-on-terracotta-600` (ugcportal-dmne, replacing
+ * `surface-0-on-petrol-100`) for the CTA, for the measured contrast this
+ * relies on.
  *
  * NO STOCK PHOTOGRAPH, NO THIRD-PARTY ASSET (K4, unchanged by
  * ugcportal-qqnt.4's own K1): the well itself is still `.home-hero-surface`
@@ -326,13 +328,15 @@ export function Hero({ signedIn, portfolioPieces }: HeroProps) {
           </p>
           {/*
             buttonVariants, not a hand-rolled className (ugcportal-qqnt.2):
-            `default-tint` is this well's one primary — see
-            src/components/ui/button.tsx's own comment, point 6, for why
-            that variant rather than `default-neutral`. The colours are
-            unchanged from the className this replaces (bg-petrol-100 /
-            text-surface-0 / hover:bg-petrol-200), so the contrast pairings
-            already measuring them (surface-0-on-petrol-100 and its own
-            -hover entry in src/lib/design/contrast.ts) still apply.
+            `default-accent` is this well's one primary (ugcportal-dmne,
+            replacing `default-tint` — see src/components/ui/button.tsx's own
+            comment, point 6, and that variant's own comment for why
+            terracotta-600 rather than the petrol tint this used to be, or
+            `default-neutral`). This is deliberately the ONLY caller of
+            `default-accent` in the app (K4: "at most one terracotta-filled
+            primary control per page" — src/lib/design/
+            terracotta-primary-control.ts) — a second one would stop reading
+            as an accent at all, which is this bead's own stated premise.
 
             Horizontal padding changes (round-2 review, LOW, CONFIRMED):
             `size="lg"` gives `px-2.5`, not the `px-4` the hand-rolled
@@ -352,7 +356,7 @@ export function Hero({ signedIn, portfolioPieces }: HeroProps) {
 
             No `w-fit` (ugcportal-ocbo): the hand-rolled className this call
             site replaced carried one explicitly; neither `buttonVariants`'
-            base nor `default-tint`/`lg` supplies an equivalent. Currently
+            base nor `default-accent`/`lg` supplies an equivalent. Currently
             inert, not a regression — this `<Link>` is the sole child of a
             plain, non-flex/grid `<div className="mt-2">`, so it already
             shrink-wraps to its own content with no `w-fit` needed. Disclosed
@@ -365,7 +369,7 @@ export function Hero({ signedIn, portfolioPieces }: HeroProps) {
           <div className="mt-2">
             <Link
               href={cta.href}
-              className={buttonVariants({ variant: "default-tint", size: "lg" })}
+              className={buttonVariants({ variant: "default-accent", size: "lg" })}
             >
               {cta.label}
             </Link>

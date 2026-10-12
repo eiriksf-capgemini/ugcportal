@@ -757,6 +757,17 @@ export const PAIRINGS: Pairing[] = [
     usage: "The hero's title and lead paragraph, on the front page's petrol gradient surface.",
   },
   /*
+   * ugcportal-dmne: the hero's CTA moved OFF this fill onto `default-accent`
+   * (`bg-terracotta-600` — see `terracotta-ink-on-terracotta-600` below).
+   * The two entries below stay, unedited apart from their own `usage`
+   * strings: `default-tint` (src/components/ui/button.tsx) still ships the
+   * literal `bg-petrol-100`/`hover:bg-petrol-200` classes this pairing
+   * measures, so the repo-wide bare-utility coverage sweep still requires
+   * them — removing the pairing would not remove the usage, only the proof
+   * covering it. The rest of this comment is left as the historical record
+   * of why the pairing was written the way it was; only the parts below
+   * that describe CURRENT reality were touched.
+   *
    * The hero's own call-to-action: a light petrol-tint fill with a dark
    * label, mirroring the fill-light/label-dark pairing already established
    * for default-neutral / the upload dropzone — but spelled, from the
@@ -805,14 +816,68 @@ export const PAIRINGS: Pairing[] = [
     foreground: "--color-surface-0",
     background: ["--color-petrol-100"],
     requirement: "body",
-    usage: "The hero's call-to-action label, on its light petrol-tint fill.",
+    usage:
+      "default-tint's fill (src/components/ui/button.tsx) — no real caller since ugcportal-dmne moved the hero's CTA to default-accent; kept checked and referenceable for whatever petrol-tint surface reaches for it next, the same as --color-petrol-50/--color-fjord-deep.",
   },
   {
     id: "surface-0-on-petrol-100-hover",
     foreground: "--color-surface-0",
     background: ["--color-petrol-200"],
     requirement: "body",
-    usage: "The hero's call-to-action label, on its light petrol-tint fill, hovered (hover:bg-petrol-200).",
+    usage:
+      "default-tint's fill, hovered (hover:bg-petrol-200) — same no-real-caller status as surface-0-on-petrol-100 above.",
+  },
+
+  /*
+   * ugcportal-dmne K1/K2: the hero's new terracotta CTA
+   * (src/components/ui/button.tsx's `default-accent` variant,
+   * `bg-terracotta-600 text-terracotta-ink`). `--terracotta-ink`, not
+   * `--primary-foreground`: this fill is mode-invariant (declared in the
+   * un-gated `:root` block, same as every other hex petrol/terracotta
+   * token), so its label has to be too, and `--primary-foreground` flips to
+   * `--petrol-900` in dark mode — reusing it would measure a ratio this
+   * button never paints there, the exact ugcportal-ei5c/z1nh bug shape.
+   * Measured: white (#ffffff) on terracotta-600 (#b85a2b) is 4.63:1,
+   * clearing body's 4.5:1 — the pairing this entry checks.
+   *
+   * `hover:brightness-90` is NOT separately checked here, on purpose: see
+   * button.tsx's own comment on that variant for why (a CSS filter has no
+   * resolvable custom-property value for evaluatePairing to parse, the same
+   * disclosed limit default-neutral's own hover:brightness-95 already has).
+   */
+  {
+    id: "terracotta-ink-on-terracotta-600",
+    foreground: "--terracotta-ink",
+    background: ["--terracotta-600"],
+    requirement: "body",
+    usage: "The hero's primary call-to-action label (default-accent), on its terracotta-600 fill.",
+  },
+
+  /*
+   * ugcportal-dmne K1/K2: the item page's (/media/[previewId]) for-sale
+   * badge and highlighted offer price, both src/components/media/
+   * purchase-offer.tsx — see TERRACOTTA_CHIP_CLASS there. One pairing
+   * covers both real surfaces (identical fill/label pair), the same "one
+   * entry, usage names every real caller" shape `surface-0-on-fjord-400`
+   * above already uses for its own two callers.
+   *
+   * `--terracotta-900` on `--terracotta-100`, not `--terracotta-600`/`-500`
+   * on it: this is the one pairing in the whole gate that puts a terracotta
+   * step ON TOP of another terracotta step rather than on white/petrol —
+   * measured at 7.01:1, comfortably clearing body's 4.5:1 with margin to
+   * spare for the rounding this file's own header comment discloses.
+   * terracotta-600-on-terracotta-100 was also measured (3.78:1, round-5
+   * scratch check) and rejected for exactly that reason — it fails body
+   * text, which rules it out as this chip's label colour even though
+   * terracotta-600 is otherwise this bead's "safe" step elsewhere.
+   */
+  {
+    id: "terracotta-900-on-terracotta-100",
+    foreground: "--terracotta-900",
+    background: ["--terracotta-100"],
+    requirement: "body",
+    usage:
+      "The item page's 'For sale' badge and its highlighted offer price (src/components/media/purchase-offer.tsx), both terracotta-900 text on a terracotta-100 tint fill.",
   },
 ];
 

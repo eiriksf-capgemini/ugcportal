@@ -5,6 +5,7 @@ import { seedMedia } from "@/lib/test-support/media-fixtures";
 import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db";
 import { siteOrigin } from "@/lib/origin";
 import { PURCHASE_OFFER_ID } from "@/components/media/purchase-offer";
+import { countTerracottaPrimaryControls } from "@/lib/design/terracotta-primary-control";
 import { CURRENT_CHECKLIST_VERSION } from "@/lib/resale-rights";
 import { LICENCE_PATH, mediaItemPath, mediaPreviewPath } from "@/lib/routes";
 import { FIXTURE_CLEARANCE_SCOPE } from "@/lib/test-support/resale-rights";
@@ -591,5 +592,99 @@ describe("ugcportal-yzo7 K4: the price block on the item page", () => {
     const metadata = await generateMetadata(params(PREVIEW_ID));
     expect(JSON.stringify(metadata)).not.toContain("1,250.00");
     expect(JSON.stringify(metadata)).not.toContain("125000");
+  });
+});
+
+/**
+ * ugcportal-dmne K1/K2/K4: the item page's for-sale badge and highlighted
+ * price (src/components/media/purchase-offer.tsx), against a real priced,
+ * cleared item — the same seeding shape as the "ugcportal-yzo7 K4" describe
+ * block above, reused here because a badge/highlight can only render for an
+ * item that actually has a live offer.
+ */
+describe("ugcportal-dmne: the for-sale badge and highlighted price", () => {
+  const ADMIN = "admin-dmne-page";
+  const PREVIEW_ID = "pv-page-item-dmne";
+
+  beforeEach(async () => {
+    await prisma.user.create({
+      data: { id: ADMIN, email: "admin-dmne-page@example.com", role: "ADMIN" },
+    });
+    await seedMedia(prisma, {
+      id: "page-item-dmne",
+      userId: UPLOADER,
+      createdAt: new Date("2026-03-03T00:00:00.000Z"),
+      altText: "A hand-thrown ceramic mug on a linen tablecloth",
+    });
+    await prisma.mediaListing.create({
+      data: {
+        mediaId: "page-item-dmne",
+        priceCents: 250_000,
+        currency: "NOK",
+        depictsPeople: false,
+        depictsMinors: false,
+        containsMusic: false,
+        thirdPartyCreator: false,
+        sponsoredContent: false,
+        depictsAlcohol: false,
+        wineAccessory: false,
+        triagedByUserId: ADMIN,
+        triagedAt: new Date("2026-03-04T00:00:00.000Z"),
+      },
+    });
+    await prisma.resaleRightsReview.create({
+      data: {
+        uploaderUserId: UPLOADER,
+        status: "CLEARED",
+        checklistVersion: CURRENT_CHECKLIST_VERSION,
+        // ugcportal-aqw: wide enough to cover every upload this fixture seeds.
+        // See FIXTURE_CLEARANCE_SCOPE for why that is a far cut-off rather
+        // than the framework-licence flag, which would be a claim about a
+        // document this fixture does not have.
+        ...FIXTURE_CLEARANCE_SCOPE,
+        reviewedByUserId: ADMIN,
+        reviewedAt: new Date("2026-03-03T00:00:00.000Z"),
+      },
+    });
+  });
+
+  it("K1/K2: renders a 'For sale' badge and the price, both on the terracotta-100/-900 chip pairing", async () => {
+    const html = renderToStaticMarkup(await MediaItemPage(params(PREVIEW_ID)));
+
+    // className renders BEFORE the boolean data-* marker (JSX attribute
+    // order in purchase-offer.tsx: `className={TERRACOTTA_CHIP_CLASS}` then
+    // `data-sale-badge`/`data-offer-price`), so slicing back to the
+    // enclosing `<span` from each marker's own index captures exactly the
+    // class attribute that marker's element carries — robust to the exact
+    // token order inside TERRACOTTA_CHIP_CLASS itself, unlike a single
+    // regex asserting one fixed order.
+    expect(html).toContain("data-sale-badge");
+    expect(html).toContain("For sale");
+    const badgeIndex = html.indexOf("data-sale-badge");
+    const badgeTag = html.slice(html.lastIndexOf("<span", badgeIndex), badgeIndex);
+    expect(badgeTag).toContain("bg-terracotta-100");
+    expect(badgeTag).toContain("text-terracotta-900");
+
+    expect(html).toContain("2,500.00");
+    const priceIndex = html.indexOf("data-offer-price");
+    const priceTag = html.slice(html.lastIndexOf("<span", priceIndex), priceIndex);
+    expect(priceTag).toContain("bg-terracotta-100");
+    expect(priceTag).toContain("text-terracotta-900");
+  });
+
+  /**
+   * K4: this page renders NO primary CTA (`default-accent`) at all — the
+   * badge and the price highlight are deliberately a DIFFERENT fill
+   * (terracotta-100, not terracotta-600 — see TERRACOTTA_CHIP_CLASS's own
+   * comment and TERRACOTTA_PRIMARY_CTA_FILL_CLASS's), so a page that is
+   * visibly "busy" with terracotta (a badge AND a highlighted price) still
+   * correctly counts as zero primary controls, not two.
+   */
+  it("K4: still zero terracotta-filled PRIMARY controls, even with both the badge and the price highlight rendering", async () => {
+    const html = renderToStaticMarkup(await MediaItemPage(params(PREVIEW_ID)));
+
+    expect(html).toContain("data-sale-badge");
+    expect(html).toContain("data-offer-price");
+    expect(countTerracottaPrimaryControls(html)).toBe(0);
   });
 });

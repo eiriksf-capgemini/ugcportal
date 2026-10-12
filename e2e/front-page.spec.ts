@@ -211,8 +211,20 @@ test("K3: no heading level is skipped on the home page", async ({ page }) => {
  * buttonVariants (checked at the vitest level,
  * src/components/ui/button-system.test.tsx), and here, at the pixel level a
  * class-name check cannot reach: the same computed radius on all three, and
- * at most two distinct computed background colours among them (the one
- * filled treatment, and the shared transparent/outline one).
+ * at most two distinct computed background colours among them.
+ *
+ * ugcportal-dmne: the hero's own fill moved from the shared petrol tint
+ * (`default-tint`, never used by any of the other three controls here
+ * either) to a NEW, accent-only terracotta fill (`default-accent`) — the
+ * comment used to read "the one filled treatment, and the shared
+ * transparent/outline one", true before this bead because the hero and the
+ * header/empty-state's `outline`-variant controls were the only two
+ * treatments in play. That is still only TWO distinct fills after this
+ * change (terracotta-600 on the hero, transparent on the other three), not
+ * three — the empty-state link and both sign-in buttons were never filled
+ * with the petrol tint the hero used to carry, so this assertion does not
+ * need loosening; only the specific colour backing "the one filled
+ * treatment" changed.
  */
 test("K1/K2: the hero CTA, the empty-state link and the header's sign-in buttons share one radius and at most two fill colours", async ({
   page,
@@ -250,6 +262,39 @@ test("K1/K2: the hero CTA, the empty-state link and the header's sign-in buttons
   const fills = [hero.backgroundColor, emptyState.backgroundColor, google.backgroundColor, facebook.backgroundColor];
   expect(new Set(fills).size, JSON.stringify(fills)).toBeLessThanOrEqual(2);
 });
+
+/**
+ * ugcportal-dmne K1: "the primary call to action uses a terracotta token
+ * and meets its required contrast ratio", at the pixel level — same
+ * precedent as e2e/petrol-theme.spec.ts's own "page background and
+ * primary-button fill render at the adopted token" test, which this one
+ * otherwise mirrors.
+ *
+ * Checked in BOTH colour-scheme emulations even though the terracotta
+ * tokens are mode-invariant by design (src/app/globals.css's own
+ * `--terracotta-ink` comment) — this is the one test that actually proves
+ * that invariance holds in a real browser, rather than merely asserting it
+ * in prose.
+ */
+for (const mode of ["light", "dark"] as const) {
+  test(`K1 (${mode}): the hero's primary CTA computes to terracotta-600 fill, white label`, async ({
+    page,
+  }) => {
+    await page.emulateMedia({ colorScheme: mode });
+    await page.goto("/");
+
+    const heroCta = page.getByRole("link", { name: "See the portfolio" });
+    const style = await heroCta.evaluate((el) => {
+      const computed = getComputedStyle(el);
+      return { backgroundColor: computed.backgroundColor, color: computed.color };
+    });
+
+    // --terracotta-600: #b85a2b
+    expect(style.backgroundColor).toBe("rgb(184, 90, 43)");
+    // --terracotta-ink: #ffffff
+    expect(style.color).toBe("rgb(255, 255, 255)");
+  });
+}
 
 /**
  * Round-1 review, CONFIRMED medium: an earlier hero layout positioned the
