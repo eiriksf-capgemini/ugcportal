@@ -35,8 +35,8 @@
 # semantics and its `*.pem` did not match a nested path (PR #222 round 1).
 # Fixed there; the reasoning is at the top of .dockerignore.
 #
-# Measured after that fix, against this repo rather than in the abstract: the
-# context is 551 files, and `git check-ignore` claims exactly one of them --
+# Measured after that fix, against this repo rather than in the abstract:
+# `git check-ignore` claims exactly one file in the context --
 # `next-env.d.ts`, a generated stub of `/// <reference ... />` lines that
 # `next build` writes for itself -- checked by deleting it and running
 # `npm run build`, which put it back byte-identical, and the builder stage
@@ -47,6 +47,11 @@
 #   docker build -q -f Dockerfile.ctxprobe --output type=local,dest=/tmp/ctx .
 #   rm Dockerfile.ctxprobe
 #   (cd /tmp/ctx/ctx && find . -type f | sed 's|^\./||') | git check-ignore --stdin
+#
+# No file count is quoted here on purpose. It moves with `main` and with
+# whether `next build` has run (the `next-env.d.ts` stub above does not
+# exist on a fresh clone), so any number written down is stale on someone
+# else's machine. The check above is the durable form: run it, read it.
 #
 # Nothing listed means the tag sees every input. Something listed means it
 # does not, and the fix is a .dockerignore entry rather than a longer tag:
