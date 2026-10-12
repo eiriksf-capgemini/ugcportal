@@ -293,17 +293,19 @@ const buttonVariants = cva(
          * globals.css.
          *
          * `hover:brightness-90`, not a second terracotta step: the two
-         * tokens one step away from 600 (100, 900) are a four-fold jump in
-         * lightness either direction, and introducing a fifth step purely
-         * for a hover state is exactly what this bead's own "no new
-         * terracotta step" scope line forbids. `default-neutral`'s own
-         * `hover:brightness-95` is the precedent for this exact move - a
-         * filter on the existing fill, not a new token - and, like that
-         * one, is not independently contrast-checked here: a CSS filter is
-         * not a resolvable custom property, so neither `evaluatePairing`
-         * nor the bare-utility coverage scan (src/lib/design/usage.ts) can
-         * see it; disclosed, not hidden, the same way default-neutral's own
-         * comment discloses it.
+         * tokens one step away from 600 (100, 900) are not a usable hover
+         * step either direction, and by a different margin each way - by
+         * relative luminance, 100 is a 4.57x jump up and 900 a 2.45x jump
+         * down (1.87x and 1.52x respectively by perceptual L*) - and
+         * introducing a fifth step purely for a hover state is exactly what
+         * this bead's own "no new terracotta step" scope line forbids.
+         * `default-neutral`'s own `hover:brightness-95` is the precedent for
+         * this exact move - a filter on the existing fill, not a new token -
+         * and, like that one, is not independently contrast-checked here: a
+         * CSS filter is not a resolvable custom property, so neither
+         * `evaluatePairing` nor the bare-utility coverage scan
+         * (src/lib/design/usage.ts) can see it; disclosed, not hidden, the
+         * same way default-neutral's own comment discloses it.
          */
         "default-accent": "bg-terracotta-600 text-terracotta-ink hover:brightness-90",
         outline: PETROL_OUTLINE_STYLE,

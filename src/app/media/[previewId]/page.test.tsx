@@ -637,6 +637,11 @@ describe("ugcportal-dmne: the for-sale badge and highlighted price", () => {
         uploaderUserId: UPLOADER,
         status: "CLEARED",
         checklistVersion: CURRENT_CHECKLIST_VERSION,
+        // ugcportal-aqw: wide enough to cover every upload this fixture seeds.
+        // See FIXTURE_CLEARANCE_SCOPE for why that is a far cut-off rather
+        // than the framework-licence flag, which would be a claim about a
+        // document this fixture does not have.
+        ...FIXTURE_CLEARANCE_SCOPE,
         reviewedByUserId: ADMIN,
         reviewedAt: new Date("2026-03-03T00:00:00.000Z"),
       },
