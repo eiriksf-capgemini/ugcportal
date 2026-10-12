@@ -534,7 +534,7 @@ describe("text-ink-muted usage is audited per occurrence, by surface and ratio",
     // shiftedAwayKey's line (:9999) is the only thing that would show up,
     // which is NOT the unsafe occurrence - it is the SAFE one that moved.
     // A reviewer fixing just that one "new file" complaint would never be
-    // shown the unsafe occurrence silently sitting at :865 at all.
+    // shown the unsafe occurrence silently sitting at :867 at all.
     const lineOnlyFound = new Set([...collided].map(fileAndLineOf));
     const lineOnlyAudited = new Set(Object.keys(AUDITED_USAGE).map(fileAndLineOf));
     const lineOnlyUnaudited = [...lineOnlyFound].filter((k) => !lineOnlyAudited.has(k));
