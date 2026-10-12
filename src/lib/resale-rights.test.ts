@@ -36,6 +36,16 @@ import {
 
 const NOW = new Date("2026-09-24T12:00:00.000Z");
 
+/**
+ * The cut-off the baseline clearance is signed against (ugcportal-aqw): the
+ * reviewer signed at 09:00, so that is the latest upload they can have
+ * examined.
+ */
+const CUT_OFF = new Date("2026-09-24T09:00:00.000Z");
+
+/** An upload that already existed when that reviewer signed. */
+const UPLOADED_IN_SCOPE = new Date("2026-09-23T17:00:00.000Z");
+
 /** A review that passes every uploader-level check. */
 function clearedReview(overrides: Partial<GateReview> = {}): GateReview {
   return {
@@ -43,6 +53,12 @@ function clearedReview(overrides: Partial<GateReview> = {}): GateReview {
     checklistVersion: CURRENT_CHECKLIST_VERSION,
     reviewedByUserId: "admin-1",
     validUntil: null,
+    // Scoped to the material the reviewer could see, which is the ordinary
+    // case: a framework licence over future works has to be recorded
+    // deliberately, so the baseline records the narrow reading
+    // (ugcportal-aqw).
+    coversUploadsBefore: CUT_OFF,
+    coversFutureUploads: false,
     reviewedBy: { role: "ADMIN" },
     ...overrides,
   };
@@ -115,6 +131,9 @@ function clearListing(overrides: Partial<GateListing> = {}): GateListing {
 function sellableUpload(overrides: Partial<GateUpload> = {}): GateUpload {
   return {
     userId: "owner-1",
+    // Uploaded before the clearance was signed, so it is material the
+    // reviewer could have examined (ugcportal-aqw).
+    createdAt: UPLOADED_IN_SCOPE,
     user: { resaleRightsReview: clearedReview() },
     attestation: cleanAttestation(),
     listing: clearListing(),
@@ -157,6 +176,11 @@ describe("ugcportal-vsm: the clearance is the uploader's, reached through the fi
   it("routes the review through the uploader and nowhere else", () => {
     expect(Object.keys(MEDIA_GATE_SELECT).sort()).toEqual([
       "attestation",
+      // The file's own upload instant (ugcportal-aqw), compared against the
+      // clearance's recorded cut-off. The only Media column here besides
+      // the owner, and — like `userId` — it is a fact about THIS file, not
+      // a second route to a review.
+      "createdAt",
       "listing",
       "user",
       "userId",
@@ -403,6 +427,218 @@ describe("ugcportal-0ss K2: a CLEARED review can still be insufficient", () => {
   it("refuses a reviewer whose user row is gone", () => {
     const upload = withReview(clearedReview({ reviewedBy: null }));
     expect(evaluateSellability(upload, NOW).sellable).toBe(false);
+  });
+});
+
+/**
+ * ugcportal-aqw: a clearance covers the material its reviewer could examine.
+ *
+ * docs/legal/manual-upload-rights-review.md §1 Gap 1 and §4 item 6. Before
+ * this the gate never read `Media.createdAt` at all, so one signature
+ * covered every file the uploader would ever add — authorising material
+ * nobody looked at.
+ *
+ * The fixture is set up so the decision is attributable: `CUT_OFF` is the
+ * clearance's recorded cut-off and `UPLOADED_IN_SCOPE` is before it, so the
+ * baseline sells, and each case below moves ONLY `createdAt` or only the
+ * review's two scope columns.
+ */
+describe("ugcportal-aqw K1: the clearance only reaches uploads that existed", () => {
+  /** The baseline upload with a different upload instant and nothing else. */
+  function uploadedAt(createdAt: unknown): GateUpload {
+    return sellableUpload({ createdAt: createdAt as Date });
+  }
+
+  it("sells a file uploaded before the cut-off", () => {
+    // The premise of every refusal below: without this, a gate hard-wired
+    // to `upload_outside_clearance_scope` would pass them all.
+    expect(evaluateSellability(uploadedAt(UPLOADED_IN_SCOPE), NOW)).toEqual({
+      sellable: true,
+    });
+  });
+
+  it("sells a file uploaded one millisecond before the cut-off", () => {
+    const upload = uploadedAt(new Date(CUT_OFF.getTime() - 1));
+    expect(evaluateSellability(upload, NOW)).toEqual({ sellable: true });
+  });
+
+  it("refuses a file uploaded at exactly the cut-off", () => {
+    // Strict: "the uploads that existed when the reviewer signed" does not
+    // include the one being written at that instant.
+    expect(evaluateSellability(uploadedAt(CUT_OFF), NOW)).toEqual({
+      sellable: false,
+      blocker: "upload_outside_clearance_scope",
+    });
+  });
+
+  it("refuses a file uploaded one millisecond after the cut-off", () => {
+    const upload = uploadedAt(new Date(CUT_OFF.getTime() + 1));
+    expect(evaluateSellability(upload, NOW)).toEqual({
+      sellable: false,
+      blocker: "upload_outside_clearance_scope",
+    });
+  });
+
+  it("refuses a file uploaded long after the cut-off", () => {
+    const upload = uploadedAt(new Date("2027-03-01T00:00:00.000Z"));
+    expect(evaluateSellability(upload, NOW)).toEqual({
+      sellable: false,
+      blocker: "upload_outside_clearance_scope",
+    });
+  });
+
+  /**
+   * THE FAIL-OPEN THIS CHECK IS WRITTEN TO AVOID, and the same one the
+   * expiry comparison above already carried. Every comparison against NaN
+   * is false, so the natural `createdAt >= cutOff` answers "in scope" for a
+   * date nobody can read. `clearanceScopeBlocker` is written
+   * `!(createdAt < cutOff)` so the unreadable case falls to the blocked
+   * side instead.
+   */
+  it("refuses a file whose createdAt cannot be read", () => {
+    expect(evaluateSellability(uploadedAt(new Date("nonsense")), NOW)).toEqual({
+      sellable: false,
+      blocker: "upload_outside_clearance_scope",
+    });
+  });
+
+  it("refuses a createdAt that is not a Date at all", () => {
+    // A hand-written query, or a future select mapping the column as a
+    // string, must not read as "within scope".
+    expect(evaluateSellability(uploadedAt("2026-09-01"), NOW)).toEqual({
+      sellable: false,
+      blocker: "upload_outside_clearance_scope",
+    });
+  });
+
+  it("refuses a file with no createdAt loaded", () => {
+    expect(evaluateSellability(uploadedAt(null), NOW).sellable).toBe(false);
+    expect(evaluateSellability(uploadedAt(undefined), NOW).sellable).toBe(false);
+  });
+
+  it("refuses every upload when the clearance records no cut-off", () => {
+    // A CLEARED row whose scope nobody wrote down is not a licence to sell.
+    // Null is NOT read as "no limit" — that is the whole point of the
+    // inverted comparison.
+    const upload = withReview(clearedReview({ coversUploadsBefore: null }));
+    expect(evaluateSellability(upload, NOW)).toEqual({
+      sellable: false,
+      blocker: "upload_outside_clearance_scope",
+    });
+  });
+
+  it("refuses a cut-off that cannot be read", () => {
+    const upload = withReview(
+      clearedReview({ coversUploadsBefore: new Date("nonsense") }),
+    );
+    expect(evaluateSellability(upload, NOW).sellable).toBe(false);
+  });
+
+  it("sells a later upload when the reviewer recorded a framework licence", () => {
+    const upload = sellableUpload({
+      createdAt: new Date("2027-03-01T00:00:00.000Z"),
+      user: {
+        resaleRightsReview: clearedReview({ coversFutureUploads: true }),
+      },
+    });
+    expect(evaluateSellability(upload, NOW)).toEqual({ sellable: true });
+  });
+
+  it("sells even with no cut-off recorded when the licence is a framework one", () => {
+    // The two columns are read together: a framework licence has no
+    // cut-off to be outside of.
+    const upload = sellableUpload({
+      createdAt: new Date("2027-03-01T00:00:00.000Z"),
+      user: {
+        resaleRightsReview: clearedReview({
+          coversUploadsBefore: null,
+          coversFutureUploads: true,
+        }),
+      },
+    });
+    expect(evaluateSellability(upload, NOW)).toEqual({ sellable: true });
+  });
+
+  it("requires an exact true for the framework mark", () => {
+    // `=== true`, not truthiness: this is the value that permits every
+    // future upload, so a string, a 1, or anything else a hand-assembled
+    // row carries must not reach that branch.
+    for (const notTrue of ["yes", 1, {}, "true"]) {
+      const upload = sellableUpload({
+        createdAt: new Date("2027-03-01T00:00:00.000Z"),
+        user: {
+          resaleRightsReview: clearedReview({
+            coversFutureUploads: notTrue as unknown as boolean,
+          }),
+        },
+      });
+      expect(
+        { value: notTrue, result: evaluateSellability(upload, NOW) },
+      ).toEqual({
+        value: notTrue,
+        result: { sellable: false, blocker: "upload_outside_clearance_scope" },
+      });
+    }
+  });
+
+  /**
+   * ugcportal-aqw K3: a clearance's scope must never widen because
+   * `reviewedAt` moved.
+   *
+   * `reviewedAt` is re-stamped on EVERY admin transition (`adminFields`,
+   * src/lib/resale-rights-review.ts), so an admin fixing a typo in the
+   * conditions rewrites it. Anchoring scope to it would have extended the
+   * clearance over everything uploaded since it was granted.
+   *
+   * Asserted two ways, because either alone is weak. Structurally: the
+   * column is not in `REVIEW_GATE_SELECT`, so the gate cannot read it even
+   * by accident. Behaviourally: handing the gate a review that carries a
+   * `reviewedAt` far in the future — the shape a just-edited row has —
+   * changes neither verdict.
+   */
+  describe("K3: reviewedAt is not the anchor", () => {
+    it("is not even loaded by the gate's select", () => {
+      // The whole review half, key for key, rather than "reviewedAt is
+      // absent": an exact list also fails if a later edit adds some other
+      // timestamp for the scope check to be re-anchored to by mistake.
+      expect(
+        Object.keys(
+          MEDIA_GATE_SELECT.user.select.resaleRightsReview.select,
+        ).sort(),
+      ).toEqual([
+        "checklistVersion",
+        "coversFutureUploads",
+        "coversUploadsBefore",
+        "reviewedBy",
+        "reviewedByUserId",
+        "status",
+        "validUntil",
+      ]);
+    });
+
+    it("leaves both verdicts unchanged when reviewedAt moves forward", () => {
+      // The row as it looks right after an unrelated edit: `reviewedAt`
+      // re-stamped to long after the file was uploaded, scope untouched.
+      const justEdited = {
+        ...clearedReview(),
+        reviewedAt: new Date("2027-03-01T00:00:00.000Z"),
+      } as GateReview;
+
+      const inScope = sellableUpload({
+        createdAt: UPLOADED_IN_SCOPE,
+        user: { resaleRightsReview: justEdited },
+      });
+      const outOfScope = sellableUpload({
+        createdAt: new Date(CUT_OFF.getTime() + 1),
+        user: { resaleRightsReview: justEdited },
+      });
+
+      expect(evaluateSellability(inScope, NOW)).toEqual({ sellable: true });
+      expect(evaluateSellability(outOfScope, NOW)).toEqual({
+        sellable: false,
+        blocker: "upload_outside_clearance_scope",
+      });
+    });
   });
 });
 

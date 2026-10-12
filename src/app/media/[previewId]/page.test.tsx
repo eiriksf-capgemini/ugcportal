@@ -8,6 +8,7 @@ import { PURCHASE_OFFER_ID } from "@/components/media/purchase-offer";
 import { countTerracottaPrimaryControls } from "@/lib/design/terracotta-primary-control";
 import { CURRENT_CHECKLIST_VERSION } from "@/lib/resale-rights";
 import { LICENCE_PATH, mediaItemPath, mediaPreviewPath } from "@/lib/routes";
+import { FIXTURE_CLEARANCE_SCOPE } from "@/lib/test-support/resale-rights";
 
 /**
  * /media/[previewId] (ugcportal-qnq9.12, K1/K2), against a real database.
@@ -518,6 +519,11 @@ describe("ugcportal-yzo7 K4: the price block on the item page", () => {
         uploaderUserId: UPLOADER,
         status: "CLEARED",
         checklistVersion: CURRENT_CHECKLIST_VERSION,
+        // ugcportal-aqw: wide enough to cover every upload this fixture seeds.
+        // See FIXTURE_CLEARANCE_SCOPE for why that is a far cut-off rather
+        // than the framework-licence flag, which would be a claim about a
+        // document this fixture does not have.
+        ...FIXTURE_CLEARANCE_SCOPE,
         reviewedByUserId: ADMIN,
         reviewedAt: new Date("2026-03-01T00:00:00.000Z"),
       },

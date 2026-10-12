@@ -86,6 +86,13 @@ export default async function ResaleRightsSettingsPage({
         reviewedByUserId: true,
         reviewedAt: true,
         validUntil: true,
+        // ugcportal-aqw. Read for two consumers that must not disagree: the
+        // "Covers" line in the summary below, and the decision form's own
+        // scope block, which needs them to render what a reviewer would be
+        // replacing. They are also part of `GateReview`, so
+        // `uploaderClearanceBlocker` below would not typecheck without them.
+        coversUploadsBefore: true,
+        coversFutureUploads: true,
         conditions: true,
         evidenceKey: true,
         evidenceSha256: true,
@@ -416,6 +423,34 @@ export default async function ResaleRightsSettingsPage({
                           {review.validUntil
                             ? formatClearanceExpiry(review.validUntil)
                             : "no end date"}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt className="inline font-medium">Covers: </dt>
+                        <dd className="inline">
+                          {/*
+                            ugcportal-aqw. Always rendered, including the
+                            "no scope recorded" case — a clearance whose
+                            extent nobody wrote down blocks every upload
+                            (`upload_outside_clearance_scope`), and a row
+                            that said nothing here would leave an admin
+                            reading a CLEARED status with no idea why
+                            nothing sells.
+
+                            `formatReviewTimestamp`, not
+                            `formatClearanceExpiry`: this is a plain
+                            instant with no "last usable day" to work out,
+                            because the comparison is strict on both sides
+                            (`createdAt < coversUploadsBefore`) rather than
+                            the expiry's `<=`. Using the expiry formatter
+                            here would print a last-sellable-day sentence
+                            that is true of a different comparison.
+                          */}
+                          {review.coversFutureUploads
+                            ? "every upload, including future ones — recorded as a framework licence"
+                            : review.coversUploadsBefore
+                              ? `uploads made before ${formatReviewTimestamp(review.coversUploadsBefore)}`
+                              : "no scope recorded, so nothing of theirs is sellable"}
                         </dd>
                       </div>
                       {review.conditions ? (

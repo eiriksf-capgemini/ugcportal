@@ -12,6 +12,7 @@ import {
 } from "@/lib/resale-rights";
 import { completeAttestationRow } from "@/lib/test-support/attestation";
 import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db";
+import { FIXTURE_CLEARANCE_SCOPE } from "@/lib/test-support/resale-rights";
 
 /**
  * Per-layer rights clearances (ugcportal-qfy9 K1–K3), against a real SQLite
@@ -102,6 +103,11 @@ beforeAll(async () => {
       status: "CLEARED",
       route: "CONTRACT",
       checklistVersion: CURRENT_CHECKLIST_VERSION,
+      // ugcportal-aqw: wide enough to cover every upload this fixture seeds.
+      // See FIXTURE_CLEARANCE_SCOPE for why that is a far cut-off rather
+      // than the framework-licence flag, which would be a claim about a
+      // document this fixture does not have.
+      ...FIXTURE_CLEARANCE_SCOPE,
       reviewedByUserId: ADMIN,
       reviewedAt: new Date("2026-10-01T00:00:00.000Z"),
       productDecisionRef: "ugcportal-2eh",
