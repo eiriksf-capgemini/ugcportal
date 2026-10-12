@@ -815,11 +815,28 @@ describe("the lapse predicate lives in PUBLIC_MEDIA_SCOPE itself, so a later rea
      * src/lib/public-media.consumers.test.ts, which compares key sets and
      * has no opinion about whether a key names a column or a relation.
      *
-     * So: every arm of the rights half may only key on `attestation`,
-     * `listing`, or a nested `OR` of arms that do. A `Media` scalar
+     * So: every arm of the rights half may only key on one of the RELATIONS
+     * below, or be a nested `OR`/`AND` of arms that do. A `Media` scalar
      * appearing here fails this test.
+     *
+     * TWO RELATIONS BECAME FOUR AT ugcportal-pgpq, which added alkoholloven
+     * § 9-2's commercial pair as a third arm (`PUBLIC_MEDIA_ALCOHOL_COMMERCE_SCOPE`,
+     * src/lib/alcohol-commerce.ts). `advertisingDisclosure` and
+     * `commercialLinks` are relations on `Media` exactly as the first two
+     * are, so the property this case asserts is unchanged — the pair is
+     * re-read on every request, which is the whole reason that bead put it
+     * here rather than writing `publishedAt` back at the moment a benefit or
+     * a link arrives. Growing this list is a DELIBERATE act: a name added to
+     * it that is a `Media` column rather than a relation is the
+     * denormalisation this case exists to refuse, and would be waved through
+     * by nothing else.
      */
-    const RELATIONS = ["attestation", "listing"];
+    const RELATIONS = [
+      "advertisingDisclosure",
+      "attestation",
+      "commercialLinks",
+      "listing",
+    ];
 
     const armKeys = (arm: Record<string, unknown>): string[] =>
       Object.entries(arm).flatMap(([key, value]) =>

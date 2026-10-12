@@ -16,8 +16,9 @@ import {
 /**
  * ugcportal-3ae, at the predicate. The route's HTTP contract is asserted in
  * src/app/api/media/[id]/publish/route.test.ts; the agreement between this
- * predicate and the query filter that has to mean the same thing is
- * asserted, against a real database, in
+ * predicate and the rights half of the query filter — which has to mean the
+ * same thing, though the filter also carries a third, unrelated arm since
+ * ugcportal-pgpq — is asserted, against a real database, in
  * src/lib/publishability.scope-agreement.test.ts.
  */
 

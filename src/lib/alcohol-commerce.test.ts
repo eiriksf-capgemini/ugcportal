@@ -9,6 +9,7 @@ import {
   carriesCommercialLink,
   commercialPublishRefusal,
   effectiveBrandAlcoholAnswer,
+  isAlcoholUnclearedAdvertisement,
 } from "@/lib/alcohol-commerce";
 import {
   carriesUnlabelledCommercialLink,
@@ -426,6 +427,130 @@ describe("commercialPublishRefusal (K6)", () => {
         ).toBe(carries);
       },
     );
+  });
+});
+
+describe("isAlcoholUnclearedAdvertisement (the pair, ugcportal-pgpq)", () => {
+  /**
+   * The § 9-2 pair on its own, extracted from `commercialPublishRefusal` so
+   * that the publish gate and the read-side filter
+   * (`PUBLIC_MEDIA_ALCOHOL_COMMERCE_SCOPE`) ask ONE question rather than two
+   * that could drift. The table here is the predicate's whole truth table;
+   * src/lib/alcohol-commerce.scope-agreement.test.ts is the same question
+   * asked of the `where` on a real database, row by row.
+   */
+  const NO_LINKS = { commercialLinkCount: 0 };
+  const ONE_LINK = { commercialLinkCount: 1 };
+
+  /** Every state of `depictsAlcohol` that is not a recorded `no`, including
+   * the two no database column can hold: a relation that loaded as
+   * `undefined`, and a value that is not a boolean at all. */
+  const NOT_ANSWERED_NO = [
+    ["a listing that does not exist", null],
+    ["a relation that loaded as undefined", undefined],
+    ["a null answer", { depictsAlcohol: null }],
+    ["an undefined field", { depictsAlcohol: undefined }],
+    ["a value that is not a boolean", { depictsAlcohol: "maybe" }],
+    ["a recorded yes", { depictsAlcohol: true }],
+  ] as const;
+
+  it.each(NOT_ANSWERED_NO)(
+    "refuses a DECLARED BENEFIT beside %s",
+    (_label, listing) => {
+      expect(
+        isAlcoholUnclearedAdvertisement({
+          disclosure: { benefitReceived: true },
+          listing: listing as { depictsAlcohol: boolean | null } | null,
+          commercialLinks: NO_LINKS,
+        }),
+      ).toBe(true);
+    },
+  );
+
+  it.each(NOT_ANSWERED_NO)(
+    "refuses a COMMERCIAL LINK beside %s, with the benefit withdrawn",
+    (_label, listing) => {
+      expect(
+        isAlcoholUnclearedAdvertisement({
+          disclosure: { benefitReceived: false },
+          listing: listing as { depictsAlcohol: boolean | null } | null,
+          commercialLinks: ONE_LINK,
+        }),
+      ).toBe(true);
+    },
+  );
+
+  it.each(NOT_ANSWERED_NO)(
+    "permits an item carrying NOTHING commercial beside %s",
+    (_label, listing) => {
+      // The other arm, and the one a careless fix loses: §9-2 is about
+      // advertising. A photograph of a glass of wine with no benefit, no
+      // label and no link is personal content.
+      expect(
+        isAlcoholUnclearedAdvertisement({
+          disclosure: null,
+          listing: listing as { depictsAlcohol: boolean | null } | null,
+          commercialLinks: NO_LINKS,
+        }),
+      ).toBe(false);
+    },
+  );
+
+  it("permits the lawful advertisement: something commercial, alcohol answered `no`", () => {
+    // Without this the three tables above would all pass against a
+    // predicate that returned `true` for everything commercial.
+    for (const commercialLinks of [NO_LINKS, ONE_LINK]) {
+      for (const benefitReceived of [true, false]) {
+        expect(
+          isAlcoholUnclearedAdvertisement({
+            disclosure: { benefitReceived },
+            listing: { depictsAlcohol: false },
+            commercialLinks,
+          }),
+          `benefitReceived ${benefitReceived}, ${commercialLinks.commercialLinkCount} link(s)`,
+        ).toBe(false);
+      }
+    }
+  });
+
+  it("is exactly the alcohol half of `commercialPublishRefusal`, for every state of both", () => {
+    /*
+     * THE EXTRACTION, PINNED. `commercialPublishRefusal` used to spell this
+     * pair inline and now calls this function; nothing else would notice if
+     * the two came apart, because the publish route only ever sees the
+     * refusal. So: over every combination of the three inputs, with a CLEAN
+     * brand so the brand half never fires, the refusal is non-null exactly
+     * when this predicate is true, and names `depictsAlcohol` when it does.
+     */
+    const listings = NOT_ANSWERED_NO.map(([, listing]) => listing).concat([
+      { depictsAlcohol: false },
+    ] as never);
+    let refusals = 0;
+    for (const listing of listings) {
+      for (const benefitReceived of [true, false, null]) {
+        for (const commercialLinks of [NO_LINKS, ONE_LINK]) {
+          const item = {
+            disclosure: { benefitReceived, benefitSource: { alcoholLinked: false } },
+            listing: listing as { depictsAlcohol: boolean | null } | null,
+            commercialLinks,
+          };
+          const refusal = commercialPublishRefusal(item);
+          const predicate = isAlcoholUnclearedAdvertisement(item);
+          expect(
+            refusal !== null,
+            `${JSON.stringify({ listing, benefitReceived, commercialLinks })}`,
+          ).toBe(predicate);
+          if (refusal) {
+            expect(refusal.field).toBe("depictsAlcohol");
+            refusals += 1;
+          }
+        }
+      }
+    }
+    // Both outcomes occurred, so the comparison above is not agreeing with
+    // two functions that both always answer the same thing.
+    expect(refusals).toBeGreaterThan(0);
+    expect(refusals).toBeLessThan(listings.length * 3 * 2);
   });
 });
 

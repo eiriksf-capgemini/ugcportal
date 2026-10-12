@@ -41,6 +41,17 @@ import { FIXTURE_CLEARANCE_SCOPE } from "@/lib/test-support/resale-rights";
  * assertion. What is NOT here is the per-link marker and the all-surfaces
  * render sweep — that is ugcportal-qnq9.2.2, which owns what a page looks
  * like rather than what the table holds.
+ *
+ * TWO ORDERS, NOT ONE, SINCE ugcportal-pgpq. The loop below publishes each
+ * item LAST, which is the order the publish gate can see. The other order —
+ * publish an untriaged item first, then declare a benefit and attach a link
+ * to a row that is already public — reaches the forbidden pair through three
+ * requests none of which runs that gate, and is driven by
+ * `drivePublishFirst` after the loop. That is also why the depiction half of
+ * the sweep enumerates `PUBLIC_MEDIA_SCOPE` rather than `publishedAt`: under
+ * that bead's decision the row stays published and stops being served, so
+ * "published" and "the public can see it" are no longer the same set. See
+ * docs/legal/alcohol-commerce-public-visibility.md.
  */
 
 const database = createTemporaryDatabase();
@@ -67,6 +78,9 @@ const { CURRENT_CHECKLIST_VERSION } = await import("@/lib/resale-rights");
 // static import's own module evaluation would call the mock factory while
 // `authMock` is still in its temporal dead zone.
 const { MEDIA_ANONYMOUS_SELECT } = await import("@/lib/media-access");
+// The anonymous read scope (ugcportal-pgpq). Dynamic for the same reason as
+// every other import in this block.
+const { PUBLIC_MEDIA_SCOPE } = await import("@/lib/public-media");
 
 /**
  * The operator, who is both the owner of every item and the admin who prices
@@ -339,7 +353,83 @@ beforeAll(async () => {
       publish: publish.status,
     });
   }
+
+  await drivePublishFirst();
 });
+
+/**
+ * THE SAME THREE ROUTES, IN THE OTHER ORDER (ugcportal-pgpq K3).
+ *
+ * Every item in `PLAN` above is published LAST, so the publish gate is the
+ * last thing that runs and `commercialPublishRefusal` gets to see the
+ * finished row. That is one of two orders an owner can use, and it is the
+ * only one this file drove before — which is why the forbidden state this
+ * file is built to detect was, until ugcportal-pgpq, reachable only by the
+ * labelled out-of-band write the enumeration below also covers.
+ *
+ * Here the publish comes FIRST, on an untriaged item with nothing attached:
+ * § 9-2 has nothing to say about it yet, so it is accepted, and the item is
+ * public. The benefit and the link then arrive on a row that is already
+ * public, through two routes that write no `publishedAt` and read none.
+ * Both are accepted too, deliberately — see `benefitAttachmentRefusal`. So
+ * the forbidden PAIR is created, in the real table, by three ordinary
+ * requests that were each individually correct, and the enumeration below
+ * has something real to find.
+ *
+ * NO LISTING AT ALL on this item, which is the common case: `depictsAlcohol`
+ * is not merely unanswered, there is no row for the answer to live in.
+ */
+const PUBLISH_FIRST_ID = "publish-first";
+
+async function drivePublishFirst(): Promise<void> {
+  await prisma.media.create({
+    data: {
+      id: PUBLISH_FIRST_ID,
+      userId: OPERATOR,
+      kind: "IMAGE",
+      key: `media/${OPERATOR}/${PUBLISH_FIRST_ID}.png`,
+      previewKey: `previews/${OPERATOR}/${PUBLISH_FIRST_ID}.webp`,
+      previewId: `preview-${PUBLISH_FIRST_ID}`,
+      mimeType: "image/png",
+      sizeBytes: 1024,
+      originalName: `${PUBLISH_FIRST_ID}.png`,
+      altText: "a decanter nobody has triaged, published before anything was attached",
+    },
+  });
+  await prisma.mediaAttestation.create({
+    data: completeAttestationRow(PUBLISH_FIRST_ID, OPERATOR),
+  });
+
+  const publish = await PUBLISH(
+    publishRequest(PUBLISH_FIRST_ID),
+    context(PUBLISH_FIRST_ID),
+  );
+  const disclosure = await DISCLOSE(
+    disclosureRequest(PUBLISH_FIRST_ID, {
+      benefitReceived: true,
+      benefitKind: "FREE_PRODUCT",
+      // Riedel, already recorded as not alcohol-linked by the loop above, so
+      // this item is refused for the DEPICTION half of §9-2 or not at all.
+      benefitSource: "Riedel",
+      marketValueOre: 49900,
+      label: "Advertisement / Reklame",
+    }),
+    context(PUBLISH_FIRST_ID),
+  );
+  const link = await ATTACH_LINK(
+    commercialLinkRequest(PUBLISH_FIRST_ID, "Riedel"),
+    context(PUBLISH_FIRST_ID),
+  );
+
+  outcomes.set(PUBLISH_FIRST_ID, {
+    disclosure: disclosure.status,
+    // No listing, so there is no price endpoint to call — recorded as a 404
+    // for the same reason the `untriaged` item in the plan above is.
+    price: 404,
+    link: link.status,
+    publish: publish.status,
+  });
+}
 
 afterAll(async () => {
   await prisma.$disconnect();
@@ -412,7 +502,7 @@ describe("ugcportal-qnq9.3 K6: what the real write paths let through", () => {
   });
 });
 
-describe("ugcportal-qnq9.3 K6: every published row in the database", () => {
+describe("ugcportal-qnq9.3 K6: every published row, and every row the public can reach (ugcportal-pgpq)", () => {
   /**
    * Every published item, with everything about it the law cares about.
    *
@@ -450,19 +540,63 @@ describe("ugcportal-qnq9.3 K6: every published row in the database", () => {
     });
   }
 
+  /**
+   * Every row the PUBLIC can actually reach, which since ugcportal-pgpq is
+   * not the same set as every row with a `publishedAt`.
+   *
+   * THE SUBJECT OF THE DEPICTION HALF OF THE SWEEP MOVED HERE, and that is
+   * this bead's decision rather than a weakening. `publishedAt` stopped
+   * being a proxy for "the public can see it" the moment the § 9-2 pair
+   * became a read-side filter: option C leaves the row published and stops
+   * serving it. This file's own header states the criterion as what the
+   * site may never SERVE, so enumerating `PUBLIC_MEDIA_SCOPE` — the exact
+   * `where` every anonymous reader spreads — is closer to that criterion
+   * than `publishedAt: { not: null }` ever was. What keeps the move honest
+   * is "leaves a published row in the table that the public cannot reach"
+   * below, which names the row this changes the answer for and asserts both
+   * halves of its state.
+   */
+  async function servedRows() {
+    return prisma.media.findMany({
+      where: PUBLIC_MEDIA_SCOPE,
+      select: {
+        id: true,
+        listing: {
+          select: { priceCents: true, depictsAlcohol: true, wineAccessory: true },
+        },
+        advertisingDisclosure: {
+          select: {
+            benefitReceived: true,
+            label: true,
+            benefitSource: { select: { name: true, alcoholLinked: true } },
+          },
+        },
+        commercialLinks: {
+          select: {
+            url: true,
+            benefitSource: { select: { name: true, alcoholLinked: true } },
+          },
+        },
+      },
+    });
+  }
+
   it("published something, so the sweep below is not vacuous", async () => {
     const rows = await publishedRows();
     expect(rows.map((row) => row.id)).toContain("accessory");
+    // And the public can actually reach it, which is what the depiction
+    // half of the sweep enumerates.
+    expect((await servedRows()).map((row) => row.id)).toContain("accessory");
   });
 
-  it("carries no commercial affordance on alcohol, or on an alcohol brand", async () => {
-    // THE GUARDRAIL. For every published row, if it carries ANY of the
-    // commercial affordances this schema can express, then its alcohol answer
-    // must be a recorded `no` AND its benefit source must be a recorded
-    // not-alcohol-linked brand. Written in that direction — affordance
-    // implies clean — rather than as a list of forbidden rows, because that
-    // is the direction a new affordance has to satisfy too.
-    for (const row of await publishedRows()) {
+  it("serves no commercial affordance on alcohol, or on an alcohol brand", async () => {
+    // THE GUARDRAIL. For every row the public can reach, if it carries ANY
+    // of the commercial affordances this schema can express, then its
+    // alcohol answer must be a recorded `no` AND its benefit source must be
+    // a recorded not-alcohol-linked brand. Written in that direction —
+    // affordance implies clean — rather than as a list of forbidden rows,
+    // because that is the direction a new affordance has to satisfy too.
+    for (const row of await servedRows()) {
       const disclosure = row.advertisingDisclosure;
       const affordances = [
         row.listing?.priceCents != null && "a price",
@@ -475,16 +609,48 @@ describe("ugcportal-qnq9.3 K6: every published row in the database", () => {
 
       expect(
         row.listing?.depictsAlcohol,
-        `published ${row.id} carries ${affordances.join(" and ")} with the alcohol question answered ${JSON.stringify(row.listing?.depictsAlcohol ?? null)}`,
+        `served ${row.id} carries ${affordances.join(" and ")} with the alcohol question answered ${JSON.stringify(row.listing?.depictsAlcohol ?? null)}`,
       ).toBe(false);
 
+      if (disclosure?.benefitReceived === true) {
+        expect(
+          disclosure.benefitSource?.alcoholLinked,
+          `served ${row.id} carries a benefit from ${disclosure.benefitSource?.name ?? "an unnamed brand"}, whose alcohol answer is ${JSON.stringify(disclosure.benefitSource?.alcoholLinked ?? null)}`,
+        ).toBe(false);
+      }
+
+      for (const link of row.commercialLinks) {
+        expect(
+          link.benefitSource.alcoholLinked,
+          `served ${row.id} links ${link.url}, whose brand ${link.benefitSource.name} has the alcohol answer ${JSON.stringify(link.benefitSource.alcoholLinked)}`,
+        ).toBe(false);
+      }
+    }
+  });
+
+  it("carries no commercial affordance from an alcohol-linked or unchecked brand ANYWHERE in the published table", async () => {
+    /*
+     * The BRAND half, kept over every published row rather than over the
+     * served ones, because the read-side filter ugcportal-pgpq added does
+     * not judge brands and must not: ugcportal-mqh8 decided that an item
+     * already published under a brand later recorded as alcohol-linked is
+     * listed for the admin, NOT auto-unpublished. So for this half the
+     * write paths are still the whole of the enforcement, and asserting it
+     * over the published table is asserting exactly that.
+     *
+     * Its enumerated counterpart is in
+     * src/lib/alcohol-commerce.scope-agreement.test.ts, which seeds the two
+     * states this one proves the product never writes and asserts the
+     * publish gate refuses each while the read filter serves it.
+     */
+    for (const row of await publishedRows()) {
+      const disclosure = row.advertisingDisclosure;
       if (disclosure?.benefitReceived === true) {
         expect(
           disclosure.benefitSource?.alcoholLinked,
           `published ${row.id} carries a benefit from ${disclosure.benefitSource?.name ?? "an unnamed brand"}, whose alcohol answer is ${JSON.stringify(disclosure.benefitSource?.alcoholLinked ?? null)}`,
         ).toBe(false);
       }
-
       for (const link of row.commercialLinks) {
         expect(
           link.benefitSource.alcoholLinked,
@@ -492,6 +658,48 @@ describe("ugcportal-qnq9.3 K6: every published row in the database", () => {
         ).toBe(false);
       }
     }
+  });
+
+  it("accepts all three publish-first requests and leaves the row published but unreachable (ugcportal-pgpq K3)", async () => {
+    /*
+     * The case the sweep above would otherwise pass vacuously for. Three
+     * ordinary owner requests, in the order the publish gate cannot see,
+     * each answering success — and the resulting row IS the forbidden pair:
+     * public, labelled, link-carrying, with § 9-2 unanswered.
+     *
+     * Both halves are asserted. The table still holds it, untouched, which
+     * is option C's promise to the owner and what separates it from
+     * depublishing in the transaction. And `PUBLIC_MEDIA_SCOPE` does not
+     * return it, which is what makes the sweep above a measurement rather
+     * than an artefact of a fixture that never produced the state.
+     */
+    expect(outcomes.get(PUBLISH_FIRST_ID)).toEqual({
+      publish: 200,
+      disclosure: 200,
+      link: 201,
+      price: 404,
+    });
+
+    const row = await prisma.media.findUniqueOrThrow({
+      where: { id: PUBLISH_FIRST_ID },
+      select: {
+        publishedAt: true,
+        listing: { select: { depictsAlcohol: true } },
+        advertisingDisclosure: { select: { label: true } },
+        _count: { select: { commercialLinks: true } },
+      },
+    });
+    expect(row.publishedAt).not.toBeNull();
+    expect(row.listing).toBeNull();
+    expect(row.advertisingDisclosure?.label).toBe("Advertisement / Reklame");
+    expect(row._count.commercialLinks).toBe(1);
+
+    expect((await publishedRows()).map((item) => item.id)).toContain(
+      PUBLISH_FIRST_ID,
+    );
+    expect((await servedRows()).map((item) => item.id)).not.toContain(
+      PUBLISH_FIRST_ID,
+    );
   });
 
   it("leaves no price, benefit or link anywhere on an item recorded as showing alcohol", async () => {
