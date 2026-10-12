@@ -328,15 +328,21 @@ the trigger has **fired**. It may only ever resolve toward measuring.
   typecheck baseline is specifically:
 
   ```bash
-  git stash list && git -C <worktree> rev-parse HEAD   # the tree you measured
-  npm run build && npx tsc --noEmit | tee /tmp/head.txt         # this head
-  git checkout origin/main && npm run build && npx tsc --noEmit | tee /tmp/base.txt
-  wc -l /tmp/head.txt /tmp/base.txt
+  # this head, in your own review worktree
+  npm run build && npx tsc --noEmit > /tmp/head.txt 2>&1; wc -l < /tmp/head.txt
+  # the baseline, in a throwaway worktree so nothing in yours moves
+  git worktree add /tmp/wt-base-$$ origin/main
+  (cd /tmp/wt-base-$$ && npm ci && npx prisma generate \
+     && npm run build && npx tsc --noEmit > /tmp/base.txt 2>&1); wc -l < /tmp/base.txt
+  git worktree remove --force /tmp/wt-base-$$
   ```
 
-  `npm run build` before `npx tsc --noEmit`, both times. Skipping it on either
-  side invents `PageProps` errors and attributes them to whichever side
-  skipped it.
+  `npm run build` before `npx tsc --noEmit`, **both times**. Skipping it on
+  either side invents `PageProps` errors and attributes them to whichever
+  side skipped it: that is precisely how `30` was reported for a true `23`.
+  If measuring the baseline is too expensive for the finding at hand, report
+  the **gross** figure and say it is gross — `tsc reports 30 errors at this
+  head; baseline not measured` is honest and useful. `30 new` is neither.
 
 - For an absence: name the **path and the commit** of the copy you read, and
   read it from the PR's own head, not from whatever checkout your shell

@@ -300,8 +300,8 @@ export function findBlindSpotFiles({ untracked, dirtyTracked }) {
  * print the same block it would have printed had it found something).
  *
  * The property this is built for: **an empty result and a broken instrument
- * must not render the same.** A run that examined 40 files and found no
- * candidates prints a four-figure denominator and `blind spot: none`; a run
+ * must not render the same.** A run that examined files and found no
+ * candidates prints the number it examined and `blind spot: none`; a run
  * that examined nothing prints `SCANNED NOTHING` in its own banner and names
  * every file it could not see. The two are not confusable by eye.
  *
