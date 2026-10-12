@@ -5,23 +5,59 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
+import { contrastRatio, parseColor } from "./color";
 import {
   BODY_TEXT_SIZE_CLASSES,
   LARGE_TEXT_SIZE_CLASSES,
   hasUnsafeTerracotta500Pairing,
   scanForUnsafeTerracotta500Pairings,
 } from "./terracotta-500-guard";
+import { loadThemeTokens, resolveToken } from "./tokens";
 
 const SRC_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+
+/**
+ * K1's own instruction, applied to this module's premise too, not only to
+ * the PAIRINGS this bead adds: "each is re-derived by the gate rather than
+ * taken from this note." This guard's whole reason to exist is that
+ * `--terracotta-500` has NO safe body-text pairing to add to PAIRINGS in
+ * the first place (see this file's own header comment) — which means,
+ * unlike `terracotta-ink-on-terracotta-600`/`terracotta-900-on-terracotta-100`,
+ * neither of the two ratios that justify that claim is re-checked by
+ * contrast.test.ts's generic WCAG sweep (there is no PAIRINGS entry for
+ * either to sweep). Re-derived here instead, straight from the real,
+ * installed globals.css, so a future edit to the terracotta-500 hex value
+ * that accidentally made it safe (or re-confirmed it is not) would turn
+ * this red or green rather than leaving the prose in button.tsx/this
+ * module's header as the only record.
+ */
+describe("the two ratios this guard's own premise depends on", () => {
+  const tokens = loadThemeTokens();
+  const terracotta500 = parseColor(resolveToken("--terracotta-500", tokens));
+  const white = parseColor("#ffffff");
+  const petrol900 = parseColor(resolveToken("--petrol-900", tokens));
+
+  it("white on terracotta-500 is below body's 4.5:1 (large-text only)", () => {
+    const ratio = contrastRatio(white, terracotta500);
+    expect(ratio).toBeGreaterThan(3);
+    expect(ratio).toBeLessThan(4.5);
+  });
+
+  it("petrol-900 on terracotta-500 is ALSO below body's 4.5:1 — neither usable ink clears it", () => {
+    const ratio = contrastRatio(petrol900, terracotta500);
+    expect(ratio).toBeLessThan(4.5);
+  });
+});
 
 describe("hasUnsafeTerracotta500Pairing", () => {
   /*
    * K3's own required mutation, kept as a permanent regression test rather
    * than a one-off check performed by hand and reverted (ugcportal-dmne):
    * "mutate the fixture by adding such a pairing and confirm it fails" —
-   * this fixture IS the mutation (a synthetic class list, not real
-   * button.tsx/purchase-offer.tsx source), and "confirm it fails" is this
-   * assertion.
+   * this fixture IS the mutation (a synthetic class list, not real source
+   * from src/components/ui/button.tsx or
+   * src/components/media/purchase-offer.tsx), and "confirm it fails" is
+   * this assertion.
    */
   it("K3 FIXTURE MUTATION: flags terracotta-500 paired with ordinary body text (text-sm)", () => {
     expect(
