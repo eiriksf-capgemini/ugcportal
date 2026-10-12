@@ -2,6 +2,8 @@
 
 import { useMemo, useState } from "react";
 
+import { cn } from "cn";
+
 import { buttonVariants } from "@/components/ui/button";
 import { TEXT_INPUT_CLASS, TEXT_LABEL_CLASS } from "@/components/ui/text-input";
 import { contactMailtoHref } from "@/lib/contact";
@@ -75,7 +77,7 @@ export function ContactMailtoForm({
         className={TEXT_INPUT_CLASS}
       />
 
-      <label htmlFor="contact-message" className={`mt-4 ${TEXT_LABEL_CLASS}`}>
+      <label htmlFor="contact-message" className={cn("mt-4", TEXT_LABEL_CLASS)}>
         Message
       </label>
       <textarea

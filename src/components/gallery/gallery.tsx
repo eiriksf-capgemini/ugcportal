@@ -490,7 +490,7 @@ export function Gallery({
         Gallery
       </h2>
 
-      <ul className={`mt-6 ${GALLERY_GRID_CLASS}`}>
+      <ul className={cn("mt-6", GALLERY_GRID_CLASS)}>
         {items.map((item, index) => (
           <li key={item.id}>
             {/*

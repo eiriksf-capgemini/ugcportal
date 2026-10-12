@@ -3,6 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 
 import { MediaAuthorship } from "@/generated/prisma/enums";
 import { CURRENT_ATTESTATION_VERSION } from "@/lib/attestation";
+import { countTerracottaPrimaryControls } from "@/lib/design/terracotta-primary-control";
 import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db";
 import { seedAlcoholAnsweredListing } from "@/lib/test-support/media-fixtures";
 
@@ -288,6 +289,34 @@ describe("K1 — the front page hero's call to action tracks session state", () 
 
     expect(markup).toContain('href="/upload"');
     expect(markup).not.toContain("See the portfolio");
+  });
+});
+
+/**
+ * ugcportal-dmne K4: "more than one primary call to action per view defeats
+ * the purpose" of an accent colour — checked here against the front page
+ * ("front" of K4's "front, gallery and item pages"), in both session
+ * branches (the hero renders exactly one CTA either way — "See the
+ * portfolio" signed out, "Upload" signed in — never both at once).
+ *
+ * `countTerracottaPrimaryControls` and the K4 fixture mutation proving it
+ * can actually fail both live in src/lib/design/
+ * terracotta-primary-control.test.ts; this is the real, non-synthetic half
+ * — the fully assembled page, not a hand-built markup string.
+ */
+describe("K4 — at most one terracotta-filled primary control on the front page", () => {
+  it("signed out: exactly one (the hero's 'See the portfolio' CTA)", async () => {
+    const markup = await renderGallery();
+    expect(countTerracottaPrimaryControls(markup)).toBe(1);
+  });
+
+  it("signed in: exactly one (the hero's 'Upload' CTA)", async () => {
+    getSessionMock.mockResolvedValueOnce({
+      user: { id: "user-1", email: "someone@example.com", role: "USER" },
+    });
+
+    const markup = await renderGallery();
+    expect(countTerracottaPrimaryControls(markup)).toBe(1);
   });
 });
 

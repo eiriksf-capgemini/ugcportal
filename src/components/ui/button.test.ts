@@ -71,6 +71,21 @@ describe("buttonVariants", () => {
     expect(classes).toContain("bg-primary");
     expect(classes).toContain("text-primary-foreground");
   });
+
+  /*
+   * FIXTURE MUTATION CHECK (performed by hand, not left in the suite):
+   * temporarily dropped "bg-terracotta-600" from the default-accent variant
+   * string and confirmed the first assertion below failed; reverted.
+   */
+  it("default-accent variant (ugcportal-dmne) fills with terracotta-600 and a terracotta-ink label", () => {
+    const classes = buttonVariants({ variant: "default-accent" }).split(/\s+/);
+    expect(classes).toContain("bg-terracotta-600");
+    expect(classes).toContain("text-terracotta-ink");
+    // Not terracotta-500 anywhere, under any variant prefix — K3's own
+    // forbidden step, and this is the one variant most likely to reach for
+    // it by accident (it is the only variant naming any terracotta token).
+    expect(classes.some((cls) => cls.endsWith("terracotta-500"))).toBe(false);
+  });
 });
 
 /**
@@ -101,6 +116,7 @@ describe("buttonVariants base: no bare outline-none without a forced-colors-visi
     "default",
     "default-neutral",
     "default-tint",
+    "default-accent",
     "outline",
     "secondary",
     "outline-neutral",
@@ -205,6 +221,7 @@ describe("buttonVariants K1/K3 (ugcportal-ei5c): every bare colour utility a var
     "default",
     "default-neutral",
     "default-tint",
+    "default-accent",
     "outline",
     "secondary",
     "outline-neutral",

@@ -23,7 +23,10 @@ import { GALLERY_ADVERTISING_LABEL_CLASS, GALLERY_TILE_BASE_CLASS } from "./cont
  * the merged tree (ugcportal-o312's own discovery note).
  *
  * The fix factors the shared radius out to one constant
- * (`GALLERY_RADIUS_CLASS`, containment.ts) that both classes interpolate.
+ * (`GALLERY_RADIUS_CLASS`, containment.ts) that both classes pass to a
+ * `cn()` call (ugcportal-wz8w made building a Tailwind class string by
+ * template-literal interpolation a lint error, so neither constant
+ * interpolates it in any more — see the source-level test below).
  * This test does NOT merely check that both reference that one constant —
  * a future edit could reintroduce two independent literals that happen to
  * agree today and this test would still need to catch that. Instead it
@@ -58,8 +61,9 @@ describe("gallery tile and its advertising-disclosure label share one radius (ug
 
   /*
    * FIXTURE MUTATION CHECK (performed by hand, not left in the suite):
-   * temporarily reverted GALLERY_ADVERTISING_LABEL_CLASS's template literal
-   * to a hand-typed "rounded-md" (the exact pre-fix string), leaving
+   * temporarily reverted GALLERY_ADVERTISING_LABEL_CLASS's `cn()` call (a
+   * template literal before ugcportal-wz8w's conversion) to a hand-typed
+   * "rounded-md" (the exact pre-fix string), leaving
    * GALLERY_TILE_BASE_CLASS untouched — both tests above failed, the first
    * on the token mismatch ("rounded-md" !== "rounded-lg") and the second on
    * the label's pinned value. Reverted.
@@ -70,22 +74,29 @@ describe("gallery tile and its advertising-disclosure label share one radius (ug
       resolve(process.cwd(), "src/components/gallery/containment.ts"),
       "utf8",
     );
+    // Both definitions are `cn()` calls rather than template literals
+    // (ugcportal-wz8w made building a Tailwind class string by
+    // interpolation a lint error); the claim this test makes is unchanged,
+    // only the source-level form it reads.
     const tileDefinition = containment.match(
-      /export const GALLERY_TILE_BASE_CLASS = `[^`]*`;/,
+      /export const GALLERY_TILE_BASE_CLASS = cn\([^;]*\);/,
     )?.[0];
     const labelDefinition = containment.match(
-      /export const GALLERY_ADVERTISING_LABEL_CLASS =\s*`[^`]*`;/,
+      /export const GALLERY_ADVERTISING_LABEL_CLASS =\s*cn\([^;]*\);/,
     )?.[0];
     expect(tileDefinition).toBeDefined();
     expect(labelDefinition).toBeDefined();
-    // Both definitions interpolate the shared constant...
-    expect(tileDefinition).toContain("${GALLERY_RADIUS_CLASS}");
-    expect(labelDefinition).toContain("${GALLERY_RADIUS_CLASS}");
-    // ...and neither ALSO hand-types its own `rounded-*` utility outside
-    // that interpolation (stripping the `${GALLERY_RADIUS_CLASS}`
-    // placeholder before checking, so the interpolation site itself does
-    // not trip this).
-    expect(tileDefinition?.replace("${GALLERY_RADIUS_CLASS}", "")).not.toMatch(/\brounded-/);
-    expect(labelDefinition?.replace("${GALLERY_RADIUS_CLASS}", "")).not.toMatch(/\brounded-/);
+    // Both definitions name the shared constant...
+    expect(tileDefinition).toContain("GALLERY_RADIUS_CLASS");
+    expect(labelDefinition).toContain("GALLERY_RADIUS_CLASS");
+    // ...and neither ALSO hand-types its own `rounded-*` utility beside it
+    // (stripping the `GALLERY_RADIUS_CLASS` reference before checking, so
+    // the reference itself does not trip this).
+    expect(
+      tileDefinition?.replace("GALLERY_RADIUS_CLASS", ""),
+    ).not.toMatch(/\brounded-/);
+    expect(
+      labelDefinition?.replace("GALLERY_RADIUS_CLASS", ""),
+    ).not.toMatch(/\brounded-/);
   });
 });

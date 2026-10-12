@@ -112,14 +112,14 @@ describe("classAttrOf escapes regex metacharacters in its needle (round-2 review
 });
 
 describe("K1 — the hero and empty-state links resolve to buttonVariants, not a hand-written class string", () => {
-  it("the hero's CTA carries every class default-tint/lg produces", () => {
+  it("the hero's CTA carries every class default-accent/lg produces (ugcportal-dmne, was default-tint)", () => {
     const markup = renderToStaticMarkup(<Hero signedIn={false} portfolioPieces={[]} />);
     const classAttr = classAttrOf(markup, "See the portfolio");
     // Through cn(), the same tailwind-merge pass the real caller's own
     // className applies (hero.tsx calls buttonVariants bare, with no
     // conflicting classes of its own, so this changes nothing there) — see
     // the empty-state assertion below for a case where it does.
-    const expected = cn(buttonVariants({ variant: "default-tint", size: "lg" }));
+    const expected = cn(buttonVariants({ variant: "default-accent", size: "lg" }));
     expect(
       containsEveryToken(classAttr, expected),
       `classAttr: ${classAttr}\nexpected (every token of): ${expected}`,
@@ -166,9 +166,9 @@ describe("K1 — the hero and empty-state links resolve to buttonVariants, not a
    * FIXTURE MUTATION CHECK (performed by hand, not left in the suite):
    * temporarily changed the hero's variant to "outline" (a real, but WRONG,
    * buttonVariants call) and confirmed the first test above failed on the
-   * fill-specific classes ("bg-petrol-100"/"text-surface-0" no longer
-   * present); reverted. Confirms `containsEveryToken` is checking the right
-   * variant, not merely "some buttonVariants output or other".
+   * fill-specific classes ("bg-terracotta-600"/"text-terracotta-ink" no
+   * longer present); reverted. Confirms `containsEveryToken` is checking the
+   * right variant, not merely "some buttonVariants output or other".
    */
 });
 
@@ -231,13 +231,18 @@ describe("K2 — one radius token for every interactive shape", () => {
     // a shared GALLERY_RADIUS_CLASS constant (so the advertising-disclosure
     // label beside it, containment.radius-parity.test.ts's own subject,
     // could not drift onto its own literal again), so the source text no
-    // longer carries a literal "rounded-lg" inside the template string
-    // itself — this now checks the RESOLVED class value the tile actually
-    // renders with, which is the claim this test cares about either way.
+    // longer carries a literal "rounded-lg" in the definition itself —
+    // this now checks the RESOLVED class value the tile actually renders
+    // with, which is the claim this test cares about either way.
     expect(GALLERY_TILE_BASE_CLASS).toContain("rounded-lg");
     expect(GALLERY_TILE_BASE_CLASS).not.toContain("rounded-md");
+    // The composition is a `cn()` call, not a template literal
+    // (ugcportal-wz8w): building a Tailwind class string by interpolation
+    // is now a lint error, so the source-level form this asserts on
+    // changed with it. The CLAIM is unchanged — the definition names the
+    // shared constant rather than a hand-typed radius.
     expect(containment).toMatch(
-      /GALLERY_TILE_BASE_CLASS\s*=\s*`[^`]*\$\{GALLERY_RADIUS_CLASS\}/,
+      /GALLERY_TILE_BASE_CLASS\s*=\s*cn\([^;]*\bGALLERY_RADIUS_CLASS\b/,
     );
   });
 });

@@ -29,9 +29,12 @@ export const TEXT_INPUT_CLASS =
  * deferred from PR #93's round-6 review: this was left as a verbatim
  * duplicate in both files when `TEXT_INPUT_CLASS` was extracted for the
  * input/textarea itself). A label that follows a PRECEDING field in the
- * same form adds `mt-4` for spacing — compose it at the call site
- * (`` `mt-4 ${TEXT_LABEL_CLASS}` ``) rather than hard-coding a second,
- * spaced variant here.
+ * same form adds `mt-4` for spacing — compose it at the call site with
+ * `cn("mt-4", TEXT_LABEL_CLASS)` rather than hard-coding a second, spaced
+ * variant here. `cn()`, NOT a template literal: ugcportal-wz8w's lint
+ * guard (eslint.config.mjs, `INTERPOLATED_CLASSNAME_SELECTORS`) bans
+ * building a class string by interpolation, because Tailwind v4's scanner
+ * reads source TEXT and never evaluates it.
  *
  * NOT touched by ugcportal-6uc2, and that is a real gap, not an oversight
  * left silent: `text-ink` renders directly on the page canvas here (no
