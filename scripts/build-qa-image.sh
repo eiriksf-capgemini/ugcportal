@@ -54,11 +54,20 @@
 # would still not be an attestation, for the reason below.
 #
 # WHAT THE TAG DOES NOT PROMISE is byte-identical images. This build is not
-# reproducible: three runs from an identical context produced three different
-# image IDs (measured, same day, same machine). The tag identifies the
-# INPUTS -- one commit, plus nothing gitignored beyond a regenerated stub --
-# so two QA sessions a week apart are exercising the same source. That is
-# what this bead needs. It is not a claim that they hold the same bytes.
+# reproducible, but the image ID is the wrong evidence for that: it is not a
+# content digest, so three different IDs from three identical-context builds
+# proves nothing -- that is also what three byte-identical rebuilds produce.
+# (All three carried the same 11-layer rootfs digest list and the same
+# `Created` timestamp when checked.) The real evidence is the layer digests
+# themselves: a `--no-cache` rebuild from the same commit changes 6 of the
+# runner's 11 layers -- the five `node:20-alpine` base layers are identical
+# both times; `apk add`, `adduser`, `mkdir /data` and all three `COPY`s
+# differ. Reproduce with
+# `docker inspect <image> --format '{{json .RootFS.Layers}}'` against a
+# normal build and a `--no-cache` one. The tag identifies the INPUTS -- one
+# commit, plus nothing gitignored beyond a regenerated stub -- so two QA
+# sessions a week apart are exercising the same source. That is what this
+# bead needs. It is not a claim that they hold the same bytes.
 #
 # Two images, one tag. The app image is the Dockerfile's default (runner)
 # target; the migrate image is its `builder` target, which still has the

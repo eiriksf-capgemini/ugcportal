@@ -15,9 +15,25 @@
 #                tailwindcss, eslint, vitest, and the `prisma` CLI itself).
 #   3. runner  - copies just the standalone output, `public/`, and
 #                `.next/static` into a fresh, minimal base image and runs
-#                it as a non-root user. No source, no full node_modules,
-#                no dev tooling, no .git, no .env files ever reach this
-#                stage.
+#                it as a non-root user. `.git` and `.env*` files do not
+#                reach this stage, and node_modules here is the traced
+#                subset -- no devDependencies, no `.bin` directory at all
+#                (checked). But "the standalone output" is not small:
+#                Next's whole-project file tracing sweeps the entire repo
+#                into `.next/standalone` (`.dockerignore`'s header
+#                documents the mechanism), and this stage copies that
+#                directory wholesale -- so source and test files DO reach
+#                this stage. Read out of a build of this commit: /app holds
+#                2422 files, including the 438-file src/ tree and 258
+#                files matching *.test.*/*.spec.*, plus docs/, scripts/,
+#                prisma/, e2e/ and the repo-root config files (tsconfig,
+#                eslint, vitest, playwright, etc). Re-run
+#                `find /app -type f | wc -l` (and the same scoped to src/
+#                or to *.test.*/*.spec.*) against a fresh build to check
+#                today's figures -- the repo keeps growing, so these will
+#                drift. Shipping that smaller is ugcportal-6jcq, filed and
+#                deliberately out of scope here: this comment only
+#                describes what the image actually contains.
 #
 # Prisma note: this app uses Prisma's driver-adapter mode
 # (@prisma/adapter-libsql against a libsql-backed SQLite datasource), so
@@ -46,10 +62,12 @@
 # BUILT AND RUN FOR THE FIRST TIME on 2026-10-12 (ugcportal-fb32), on
 # linux/arm64 (Docker Desktop on Apple Silicon, so that is the native
 # platform here). What the image actually contains, read out of it rather
-# than inferred: node_modules/@img holds `sharp-linuxmusl-arm64`,
-# `sharp-libvips-linuxmusl-arm64` and `sharp-wasm32` — i.e. (2) above
-# behaves as described, emitting the musl bindings that exist on disk for
-# the build platform. An image uploaded through the running container
+# than inferred: node_modules/@img holds four entries — `colour`,
+# `sharp-linuxmusl-arm64`, `sharp-libvips-linuxmusl-arm64` and
+# `sharp-wasm32` — i.e. (2) above behaves as described, emitting the musl
+# bindings that exist on disk for the build platform (plus `colour`, a
+# pure-JS dependency of sharp that every platform gets). An image uploaded
+# through the running container
 # produced a watermarked preview, so the binding loads and fontconfig
 # resolves the font. The x64 half of (1) is still a lockfile check rather
 # than a build: building for x64 needs `docker build --platform linux/amd64`

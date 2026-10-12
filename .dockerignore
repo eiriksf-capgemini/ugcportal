@@ -14,9 +14,14 @@
 #
 # So the name-based patterns below carry `**/`. The ones left anchored are
 # anchored on purpose, for three different reasons:
-#   - `.next`, `out`, `build`: `**/build` would also drop a source directory
-#     called `build`. Measured: no directory of any of those three names
-#     exists anywhere in this tree except `.next` at the root.
+#   - `.next`, `out`, `build`, `certs`: `**/build` would also drop a source
+#     directory called `build`, and the same argument holds for `certs` --
+#     `**/certs` would drop a source directory of that name too, not just
+#     the one directory this pattern exists to catch. Measured: no tracked
+#     directory of any of those four names exists anywhere in this tree
+#     except `.next` at the root; `certs/` itself is untracked (gitignored)
+#     and is the directory this pattern is protecting against in the first
+#     place.
 #   - `src/generated`, `.beads/embeddeddolt`, `.beads/proxieddb`,
 #     `/coverage`: these name a path, not a name, so `**/` is meaningless.
 #   - `.git`, `.gitignore`, `.claude`, `.codex`, `.agents`, `.github`,

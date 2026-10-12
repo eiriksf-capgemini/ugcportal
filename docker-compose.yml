@@ -222,15 +222,18 @@ services:
       # deliberately not this bead.
       #
       # ALLOWED_SIGNIN_EMAILS below is the counter-example, and the model
-      # for that bead: empty there is NOT silent. Every refused sign-in is
+      # for that bead: empty there is NOT silent. A refused sign-in is
       # logged by name -- `[auth] Refused a live session for user <id>:
       # not-permitted. Permitted addresses come from ALLOWED_SIGNIN_EMAILS
       # (plus ADMIN_BOOTSTRAP_EMAILS); see docs/access-control.md.`
-      # (src/lib/live-session.ts) -- naming the variable and the doc. (The
-      # additional startup line checkSignInConfiguration emits fires only
-      # when nothing is configured anywhere, src/config/users.ts included;
-      # that array is populated here, so its absence from this stack's log
-      # is correct.)
+      # (src/lib/live-session.ts) -- naming the variable and the doc. NOT
+      # every one, though: that line is throttled to once per
+      # LIVE_SESSION_LOG_INTERVAL_MS (10s), so two refusals inside that
+      # window produce one line, with the suppressed count folded into the
+      # note on whichever line does emit next. (The additional startup line
+      # checkSignInConfiguration emits fires only when nothing is
+      # configured anywhere, src/config/users.ts included; that array is
+      # populated here, so its absence from this stack's log is correct.)
       AUTH_GOOGLE_ID: ${AUTH_GOOGLE_ID:-}
       AUTH_GOOGLE_SECRET: ${AUTH_GOOGLE_SECRET:-}
       AUTH_FACEBOOK_ID: ${AUTH_FACEBOOK_ID:-}
