@@ -1,7 +1,10 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { seedMedia } from "@/lib/test-support/media-fixtures";
+import {
+  seedAlcoholAnsweredListing,
+  seedMedia,
+} from "@/lib/test-support/media-fixtures";
 import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db";
 import { siteOrigin } from "@/lib/origin";
 import { PURCHASE_OFFER_ID } from "@/components/media/purchase-offer";
@@ -404,6 +407,9 @@ describe("the advertising-disclosure label (K1, K3, K4)", () => {
         label: "Advertisement / Reklame",
       },
     });
+    // ugcportal-pgpq: a labelled item is served only while § 9-2's alcohol
+    // question is answered `no`, so the fixture has to answer it.
+    await seedAlcoholAnsweredListing(prisma, "page-item-labelled");
 
     const element = await MediaItemPage(params("pv-page-item-labelled"));
     const html = renderToStaticMarkup(element);
@@ -433,6 +439,9 @@ describe("the advertising-disclosure label (K1, K3, K4)", () => {
         label: "Reklame",
       },
     });
+    // ugcportal-pgpq: a labelled item is served only while § 9-2's alcohol
+    // question is answered `no`, so the fixture has to answer it.
+    await seedAlcoholAnsweredListing(prisma, "page-item-labelled-leak");
 
     const element = await MediaItemPage(params("pv-page-item-labelled-leak"));
     const html = renderToStaticMarkup(element);

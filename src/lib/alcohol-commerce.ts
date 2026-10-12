@@ -168,8 +168,12 @@ export function alcoholLinkedBrandRefusal(
  * item that is an undisclosed advertisement — a worse breach reached by being
  * stricter. The honest record comes first; what it may NOT do is become
  * public before the alcohol question is answered, and that is
- * `commercialPublishRefusal`'s job below, which refuses the unanswered state
- * at the one point where the public can see the result.
+ * {@link isAlcoholUnclearedAdvertisement}'s job below — read by
+ * `commercialPublishRefusal` on a publish request, and by
+ * {@link PUBLIC_MEDIA_ALCOHOL_COMMERCE_SCOPE} on every anonymous read
+ * (ugcportal-pgpq). The read-side half is what makes this permissive write
+ * safe no matter which order the two facts arrive in: the honest record is
+ * stored, and the item simply is not served until the question is answered.
  *
  * A recorded `yes` is refused here, though, because there is no reading of
  * that in which attaching money is lawful, and the fix is a different
@@ -244,7 +248,17 @@ export function benefitAttachmentRefusal(item: {
  * through that route — the same argument advertising-disclosure.ts gives for
  * re-checking a stored label against the allowlist. The alcohol half is not
  * redundant at all: the write path permits an unanswered item on purpose, so
- * this is the only place that state is refused.
+ * this is where that state is refused on a publish request.
+ *
+ * IT IS NO LONGER THE ONLY PLACE THAT STATE IS REFUSED, which this comment
+ * used to claim and which ugcportal-pgpq found to be the defect rather than
+ * the design. Being the only one meant the pair was evaluated only when
+ * somebody asked to publish, so an item that was ALREADY public and then
+ * gained a benefit and a link through the ordinary owner routes was never
+ * asked at all. The pair is now also a read-side filter —
+ * {@link PUBLIC_MEDIA_ALCOHOL_COMMERCE_SCOPE} below, spread into
+ * `PUBLIC_MEDIA_SCOPE` — so it is re-asked on every read, and both readings
+ * go through the one predicate {@link isAlcoholUnclearedAdvertisement}.
  */
 export function commercialPublishRefusal(item: {
   disclosure:
@@ -269,7 +283,12 @@ export function commercialPublishRefusal(item: {
     if (brand) return brand;
   }
 
-  if (alcoholDepiction(item.listing) !== "absent") {
+  // The § 9-2 PAIR, asked through the shared predicate below rather than
+  // spelled again here (ugcportal-pgpq). It is the same question the read
+  // path now asks of every row it serves, and the point of routing both
+  // through one function is that they cannot come to disagree about which
+  // states of `depictsAlcohol` count as answered.
+  if (isAlcoholUnclearedAdvertisement(item)) {
     return {
       error:
         "This item carries something commercial — a recorded benefit, an advertising link, or both — so publishing it publishes an advertisement, and nobody has recorded that it is free of alcohol, or it is recorded as showing some. Answer the alcohol question with a `no` first (alkoholloven § 9-2).",
@@ -279,6 +298,144 @@ export function commercialPublishRefusal(item: {
 
   return null;
 }
+
+/**
+ * THE § 9-2 PAIR, AS ONE NAMED PREDICATE (ugcportal-pgpq): this item carries
+ * something commercial, AND the alcohol question is not answered `no`.
+ *
+ * WHY THIS EXISTS SEPARATELY FROM `commercialPublishRefusal` ABOVE, which
+ * used to spell it inline. That function runs on a PUBLISH REQUEST and had
+ * exactly one non-test caller, so the pair was only ever evaluated when
+ * somebody asked to publish. An item that was already public, and then
+ * received a benefit declaration and a commercial link through the two
+ * ordinary owner routes, was never asked the question at all — three
+ * requests (POST publish, PUT disclosure, POST commercial-links) reaching
+ * the one state this gate exists to refuse, with the gate itself never run.
+ * That is the defect ugcportal-pgpq fixes, and the fix is to ask the same
+ * question on the READ path, where it is re-asked every time the row is
+ * served rather than once when it was written.
+ *
+ * So the pair is named here, and it has TWO readers: the publish refusal
+ * above, and {@link PUBLIC_MEDIA_ALCOHOL_COMMERCE_SCOPE} below, which is
+ * this predicate as a Prisma `where`. The two are written in different
+ * languages against different engines and nothing in either file makes them
+ * agree; src/lib/alcohol-commerce.scope-agreement.test.ts runs both over one
+ * row per state on a real database and compares them, the same arrangement
+ * src/lib/publishability.scope-agreement.test.ts already uses for the
+ * publishability rule's two expressions (ugcportal-0epl).
+ *
+ * THE BRAND HALF IS DELIBERATELY NOT HERE. `commercialPublishRefusal` also
+ * refuses a benefit from an alcohol-linked or unchecked brand, and that half
+ * is NOT moved to the read path: ugcportal-mqh8 decided that an item already
+ * published under a brand later recorded as alcohol-linked is listed for the
+ * admin and NOT auto-unpublished (src/app/admin/settings/rights/brands/page.tsx,
+ * "K2'S NEEDING ATTENTION IS READ, NOT WRITTEN"). Folding it in here would
+ * overturn that decision from the other side. The split is recorded in
+ * docs/legal/alcohol-commerce-public-visibility.md and asserted as a
+ * deliberate disagreement in the scope-agreement test, so a change to it is
+ * a test failure rather than a discovery.
+ *
+ * FAIL-CLOSED, in the direction `alcoholDepiction` already chose: only a
+ * literal `false` is an answer, so a listing that does not exist, a `null`
+ * column, an `undefined` relation and a value that is somehow neither all
+ * land on the refusing side. See that function's own comment, and
+ * src/lib/resale-rights.ts's `!(expiresAt > timeOf(now))` for the same
+ * reasoning applied to a comparison rather than to a boolean.
+ */
+export function isAlcoholUnclearedAdvertisement(item: {
+  disclosure: { benefitReceived: boolean | null } | null | undefined;
+  listing: ListingAlcoholFacts | null | undefined;
+  commercialLinks: CommercialLinkFacts;
+}): boolean {
+  const declaresBenefit = item.disclosure?.benefitReceived === true;
+  if (!declaresBenefit && !carriesCommercialLink(item.commercialLinks)) {
+    return false;
+  }
+  return alcoholDepiction(item.listing) !== "absent";
+}
+
+/**
+ * ---------------------------------------------------------------------------
+ * THE SAME PAIR, AS A QUERY FILTER (ugcportal-pgpq)
+ * ---------------------------------------------------------------------------
+ *
+ * Spread into `PUBLIC_MEDIA_RIGHTS_SCOPE` (src/lib/publishability.ts) as a
+ * third arm of its `AND`, and so into `PUBLIC_MEDIA_SCOPE` and every
+ * anonymous reader that spreads it — the same placement, and for the same
+ * reason, ugcportal-nffp chose for the rights predicates: a reader somebody
+ * adds next year inherits this with nothing to remember.
+ *
+ * THIS IS THE COMPLEMENT of {@link isAlcoholUnclearedAdvertisement}, because
+ * a `where` says what is SERVED rather than what is refused. An item is
+ * served when the alcohol question is answered `no`, OR when it carries
+ * nothing commercial at all:
+ *
+ *     served  <=>  depictsAlcohol = false  OR  (no declared benefit AND no link)
+ *
+ * NO PRISMA IMPORT, keeping this module's own header claim true: a `where` is
+ * a plain object, and its shape is checked where it is used — the constant is
+ * assigned into `MediaPublicRightsScope` and that is handed to
+ * `prisma.media.findMany`, so a key Prisma does not recognise is a compile
+ * error at those call sites.
+ *
+ * THE "NOT TRUE" STATES ARE ENUMERATED POSITIVELY — a missing disclosure row,
+ * `false`, and `null` — rather than written as one `NOT: { … true }`, and
+ * that is not stylistic. `NOBODY_IDENTIFIABLE_SHOWN` in publishability.ts
+ * records what happened when its first draft used the negation: SQL's
+ * three-valued logic makes `NOT (col = 1)` evaluate to NULL on a NULL
+ * column, which is not true, so the arm fails and the row vanishes. Here
+ * that would be the SAFE direction, but it would also have hidden every
+ * published item whose disclosure row exists with `benefitReceived`
+ * unanswered, and nothing would have said why.
+ *
+ * THE ALCOHOL ARM IS THE ONE THAT IS ALLOWED TO BE STRICT, and it is written
+ * as the positive `depictsAlcohol: false` for exactly that reason. A listing
+ * that does not exist makes `listing: { is: { … } }` false; a NULL column
+ * makes `depictsAlcohol = 0` evaluate to NULL, which is not true; and a
+ * column holding something that is not a boolean at all (SQLite is
+ * dynamically typed, so `'no' = 0` is false) is false as well. All three
+ * therefore leave the row OUT of every public surface unless the other arm
+ * carries it, which is the fail-closed direction and is asserted state by
+ * state in src/lib/alcohol-commerce.read-path.test.ts.
+ */
+
+/** The § 9-2 question, answered `no`, and nothing else. */
+const ALCOHOL_ANSWERED_ABSENT = {
+  listing: { is: { depictsAlcohol: false } },
+};
+
+/**
+ * Nothing commercial on the row: no declared benefit, and no commercial
+ * link.
+ *
+ * `commercialLinks: { none: {} }` is `carriesCommercialLink` as a query —
+ * "zero rows" rather than "a count that is not at least one", because the
+ * count a `where` compares is the database's own and cannot be a `NaN`
+ * arrived at by arithmetic, which is the only input that predicate's
+ * `!(count < 1)` spelling exists to catch.
+ */
+const NOTHING_COMMERCIAL_ATTACHED = {
+  AND: [
+    {
+      OR: [
+        // No disclosure row at all: every item nobody has declared anything
+        // about, which is most of them.
+        { advertisingDisclosure: { is: null } },
+        { advertisingDisclosure: { is: { benefitReceived: false } } },
+        { advertisingDisclosure: { is: { benefitReceived: null } } },
+      ],
+    },
+    { commercialLinks: { none: {} } },
+  ],
+};
+
+export type MediaAlcoholCommerceScope = {
+  OR: [typeof ALCOHOL_ANSWERED_ABSENT, typeof NOTHING_COMMERCIAL_ATTACHED];
+};
+
+export const PUBLIC_MEDIA_ALCOHOL_COMMERCE_SCOPE: MediaAlcoholCommerceScope = {
+  OR: [ALCOHOL_ANSWERED_ABSENT, NOTHING_COMMERCIAL_ATTACHED],
+};
 
 /**
  * The gate the TRIAGE WRITE path calls before recording an alcohol answer
@@ -312,10 +469,13 @@ export function commercialPublishRefusal(item: {
  * carrying one is an advertisement one request away from the public rather
  * than a draft. Refusing only the published case would leave unpublish ->
  * reclassify -> publish as a route to the same row, and leave the publish at
- * the end of it as the only thing standing in the way — a publish that, until
+ * the end of it as the last thing standing in the way — a publish that, until
  * ugcportal-jain widened `commercialPublishRefusal` above with the link
  * count, asked nothing at all of an item whose `benefitReceived` a withdrawal
- * had since cleared. And the guardrail enumeration
+ * had since cleared. (Since ugcportal-pgpq the read-side filter stands behind
+ * it as well, which narrows this reason rather than removing it: the filter
+ * decides what is SERVED, and this one decides what is WRITTEN.) And the
+ * guardrail enumeration
  * this invariant is measured by already asserts no link sits on an
  * alcohol-recorded row ANYWHERE, published or not
  * (src/lib/alcohol-commerce.guardrail.test.ts, "leaves no price, benefit or

@@ -185,10 +185,22 @@ function namespaceImportNames(source: ts.SourceFile): Set<string> {
  * is hidden" is satisfied just as well by a materialised `isPublic` column
  * written at publish time, which would go on serving an uncleared
  * photograph for as long as nobody wrote to the row again.
+ *
+ * A THIRD QUESTION JOINED THEM AT ugcportal-pgpq. `commerce` names the test
+ * proving alkoholloven § 9-2's commercial pair reaches this reader: that an
+ * item which was public, and then received a benefit declaration and a
+ * commercial link through the two ordinary owner routes with the alcohol
+ * question never answered, stops being served HERE too. It is a third
+ * question rather than a case of `lapse` because the thing that changes is
+ * not a clearance going stale — it is a commercial fact ARRIVING, through a
+ * route that writes no `publishedAt` and reads none, and the reason the gate
+ * never ran was that it lived only on the publish request. Its covering file
+ * drives those real requests rather than seeding the end state.
  */
 type ScopeCoverage = {
   readonly filter: readonly string[];
   readonly lapse: readonly string[];
+  readonly commerce: readonly string[];
 };
 
 /**
@@ -242,26 +254,32 @@ const SCOPE_CONSUMERS: Readonly<Record<string, ScopeCoverage>> = {
   "app/api/media/preview/[previewId]/route.ts": {
     filter: ["app/api/media/preview/[previewId]/route.test.ts"],
     lapse: ["lib/public-media.lapse.test.ts"],
+    commerce: ["lib/alcohol-commerce.read-path.test.ts"],
   },
   "app/sitemap.ts": {
     filter: ["app/sitemap.test.ts"],
     lapse: ["lib/public-media.lapse.test.ts"],
+    commerce: ["lib/alcohol-commerce.read-path.test.ts"],
   },
   "lib/media-item.ts": {
     filter: ["lib/media-item.test.ts"],
     lapse: ["lib/public-media.lapse.test.ts"],
+    commerce: ["lib/alcohol-commerce.read-path.test.ts"],
   },
   "lib/portfolio.ts": {
     filter: ["lib/portfolio.test.ts"],
     lapse: ["lib/public-media.lapse.test.ts"],
+    commerce: ["lib/alcohol-commerce.read-path.test.ts"],
   },
   "lib/public-media.ts": {
     filter: ["app/page.test.tsx"],
     lapse: ["lib/public-media.lapse.test.ts"],
+    commerce: ["lib/alcohol-commerce.read-path.test.ts"],
   },
   "lib/sellable-media.ts": {
     filter: ["lib/sellable-media.test.ts"],
     lapse: ["lib/public-media.lapse.test.ts"],
+    commerce: ["lib/alcohol-commerce.read-path.test.ts"],
   },
 };
 
@@ -272,11 +290,13 @@ const SCOPE_CONSUMERS: Readonly<Record<string, ScopeCoverage>> = {
  * that file drives every reader against ONE seeded row through one helper,
  * so a fix that reaches the listings and not the bytes — the exact shape
  * this bead found — cannot leave five of six columns green and be called
- * done.
+ * done. `commerce` is arranged the same way, for the same reason, in
+ * lib/alcohol-commerce.read-path.test.ts.
  */
 const COVERAGE_MARKERS: Readonly<Record<keyof ScopeCoverage, string>> = {
   filter: "ugcportal-3ae",
   lapse: "ugcportal-nffp",
+  commerce: "ugcportal-pgpq",
 };
 
 /** Titles of every `describe`/`it` in a file, read off the AST. */
@@ -337,7 +357,7 @@ describe("every anonymous reader of PUBLIC_MEDIA_SCOPE is covered, for the filte
   });
 
   for (const [consumer, coverage] of Object.entries(SCOPE_CONSUMERS)) {
-    for (const question of ["filter", "lapse"] as const) {
+    for (const question of ["filter", "lapse", "commerce"] as const) {
       const marker = COVERAGE_MARKERS[question];
       it(`${consumer} is covered for ${question} by a test naming ${marker}`, () => {
         const coveringTests = coverage[question];

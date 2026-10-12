@@ -4,6 +4,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { MediaAuthorship } from "@/generated/prisma/enums";
 import { CURRENT_ATTESTATION_VERSION } from "@/lib/attestation";
 import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db";
+import { seedAlcoholAnsweredListing } from "@/lib/test-support/media-fixtures";
 
 /**
  * The session helper. `auth` is stubbed to THROW rather than to return null;
@@ -586,6 +587,9 @@ describe("K2 — the advertising label crosses to the feed, and nothing else fro
         label: "Advertisement / Reklame",
       },
     });
+    // ugcportal-pgpq: a labelled item is served only while § 9-2's alcohol
+    // question is answered `no`, so the fixture has to answer it.
+    await seedAlcoholAnsweredListing(prisma, mediaId);
   }
 
   it("the rendered home page shows the label and nothing else about the disclosure", async () => {
@@ -691,6 +695,9 @@ describe("commercial outbound links cross to the feed, only on a labelled item (
         benefitSourceId: source.id,
       },
     });
+    // ugcportal-pgpq: a link-carrying item is served only while § 9-2's
+    // alcohol question is answered `no`, so the fixture has to answer it.
+    await seedAlcoholAnsweredListing(prisma, mediaId);
   }
 
   it("the rendered home page shows the link, the bilingual marker, and sponsored rel — never the brand", async () => {
