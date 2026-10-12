@@ -2,10 +2,40 @@
 # anything that isn't needed to build the production image, per ugcportal-9rt
 # acceptance criteria K2 (no dev artifacts / secrets / VCS metadata in the
 # final image).
+#
+# THESE ARE NOT GITIGNORE PATTERNS, and the difference has already bitten
+# this file. Docker matches each pattern against the whole path relative to
+# the context root and `*` does not cross `/`, so a bare `*.pem` excludes
+# `./key.pem` and leaves `certs/key.pem` in the context. Measured on a
+# scratch context holding `top.pem` and `certs/nested.pem`: under `*.pem`
+# the nested one was still in the built image, under `**/*.pem` neither was
+# (ugcportal-fb32). `**/` is what makes a bare name match at every depth,
+# the root included.
+#
+# So the name-based patterns below carry `**/`. The ones left anchored are
+# anchored on purpose, for three different reasons:
+#   - `.next`, `out`, `build`, `certs`: `**/build` would also drop a source
+#     directory called `build`, and the same argument holds for `certs` --
+#     `**/certs` would drop a source directory of that name too, not just
+#     the one directory this pattern exists to catch. Measured: no tracked
+#     directory of any of those four names exists anywhere in this tree
+#     except `.next` at the root; `certs/` itself is untracked (gitignored)
+#     and is the directory this pattern is protecting against in the first
+#     place.
+#   - `src/generated`, `.beads/embeddeddolt`, `.beads/proxieddb`,
+#     `/coverage`: these name a path, not a name, so `**/` is meaningless.
+#   - `.git`, `.gitignore`, `.claude`, `.codex`, `.agents`, `.github`,
+#     `.runtime`, `AGENTS.md`, `CLAUDE.md`, `CHANGELOG.md`: repo-root
+#     tooling and docs. These are NOT depth-proof, and one nested copy does
+#     survive into the context -- `.beads/.gitignore`. Left rather than
+#     special-cased: it is beads' own ignore rules, not a secret or a dev
+#     artifact, so it is outside what K2 is about. The nested AGENTS.md /
+#     CLAUDE.md / CHANGELOG.md copies under `.next/standalone/` do not
+#     survive, because `.next` is excluded above them.
 
 # Dependencies (reinstalled fresh inside the image; never copy the host's)
-node_modules
-npm-debug.log*
+**/node_modules
+**/npm-debug.log*
 
 # Next.js build output (rebuilt inside the image)
 .next
@@ -20,11 +50,32 @@ src/generated
 .git
 .gitignore
 
-# Local env files / secrets — never bake these into an image layer
-.env
-.env*
+# Local env files / secrets — never bake these into an image layer.
+#
+# `**/*.pem` and not `*.pem`: `certs/capgemini.pem` is the corporate-proxy CA
+# bundle docker-compose.proxy-ca.yml tells a proxied developer to create, and
+# under the bare pattern it reached the build context and BOTH images.
+# Measured by rebuilding both with the old pattern (PR #222 round 1):
+#   builder  /app/certs/capgemini.pem  and
+#            /app/.next/standalone/certs/capgemini.pem   (4334 bytes each)
+#   runner   /app/certs/capgemini.pem, owned nextjs:nodejs
+# The runner's copy arrives through that standalone directory: Next's
+# whole-project tracing sweeps the repo into `.next/standalone`, which the
+# runner stage copies wholesale. So a corporate CA bundle was being baked
+# into the production image, and -- because git cannot see a gitignored
+# file -- two machines produced different image contents under one pinned
+# tag. See scripts/build-qa-image.sh for that second half.
+**/.env
+**/.env*
 !.env.example
 !env.example
+**/*.pem
+# ...and the directory docker-compose.proxy-ca.yml tells you to put the
+# bundle in, by name as well: PROXY_CA_FILE accepts any path, but a bundle
+# exported as `.crt`/`.cer` into `certs/` would slip past `**/*.pem`. Listing
+# the directory also stops `COPY . .` leaving an empty /app/certs husk in the
+# builder stage (checked both ways).
+certs
 
 # Beads issue tracker local database (large, irrelevant to the app, and
 # never something that should end up in an image)
@@ -32,8 +83,7 @@ src/generated
 .beads/proxieddb
 
 # Editor / OS cruft
-.DS_Store
-*.pem
+**/.DS_Store
 
 # Agent tooling / docs not needed at build or runtime
 .claude
@@ -47,8 +97,8 @@ CHANGELOG.md
 
 # Test artifacts
 /coverage
-*.tsbuildinfo
+**/*.tsbuildinfo
 
 # Local SQLite dev databases
-*.db
-*.db-journal
+**/*.db
+**/*.db-journal
