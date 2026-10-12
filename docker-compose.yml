@@ -39,6 +39,19 @@
 # ugcportal-fb32). That is also why the app's healthcheck below asks for the
 # API route and not the page.
 #
+# BEHIND A TLS-INTERCEPTING CORPORATE PROXY, SIGN-IN WILL NOT WORK until you
+# add the extra CA bundle. Nothing about the failure says "certificate": the
+# container is healthy, every page serves, and sign-in answers with a bare
+# `[auth][error] TypeError: fetch failed` and a redirect to
+# /auth/error?error=Configuration. Both halves reproduced on this stack. Use
+# docker-compose.proxy-ca.yml, which explains itself and has the command to
+# export the bundle:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.proxy-ca.yml up -d
+#
+# Off such a proxy, ignore it: the base stack sets no NODE_EXTRA_CA_CERTS and
+# comes up healthy with no certs/ directory on disk at all (checked).
+#
 # QA DATA PERSISTS across `docker compose down && docker compose up`: both
 # the database (`app-data`) and the uploaded objects (`minio-data`) are named
 # volumes. `docker compose down -v` is what throws them away and gives you a
