@@ -34,7 +34,24 @@ $ find src/app -name 'route.ts' | wc -l
 15
 ```
 
-The schema has grown since the bead was written: 10 enums, not 7 (`MediaAuthorship` arrived with `ugcportal-15r`; `RoleChangeSource` and `MediaKind` are outside this subsystem but inside the count), and 15 route files, not 14 (`src/app/llms.txt/route.ts` is new and unrelated).
+The enum count has grown since the bead was written: 10, not the 7 its notes record (`MediaAuthorship` arrived with `ugcportal-15r` in `d60abd2`, 2026-10-08, #197 — `git log -S'enum MediaAuthorship' -- prisma/schema.prisma`; `RoleChangeSource` and `MediaKind` are outside this subsystem but inside the count).
+
+The **route** count has not grown, and the bead's "14" is not superseded by the 15 above — the two measure different roots. The "14" in `ugcportal-5x8`'s and `ugcportal-rma`'s 2026-10-08 notes — and in the premise audit's `qnq9.5` row (`docs/process/premise-audit-v0.7.0-2026-10-08.md:148`) — is **14 API routes**, and that is still exactly what `src/app/api` holds; the 15 is every `route.ts` under `src/app`. (G9 of the same audit, at `:285`, counts the subsystem's own routes, "Nine models and six API routes" — the 6 this section reproduces below, not the 14.) Both figures are unchanged since the bead's own premise commit `54d88ca` (2026-10-07):
+
+```
+$ find src/app/api -name route.ts | wc -l
+14
+$ git ls-tree -r --name-only 54d88ca -- src/app | grep -c '/route\.ts$'
+15
+$ git ls-tree -r --name-only 54d88ca -- src/app/api | grep -c '/route\.ts$'
+14
+$ diff <(git ls-tree -r --name-only 54d88ca -- src/app | grep '/route\.ts$' | sort) \
+       <(git ls-tree -r --name-only d23add1 -- src/app | grep '/route\.ts$' | sort)
+$ git log --format='%h %ad %s' --date=short -- src/app/llms.txt/route.ts
+51a0c72 2026-10-04 feat(seo): add /llms.txt describing the public site (ugcportal-o7l) (#83)
+```
+
+The `diff` prints nothing: the `src/app` route set at `54d88ca` and at `d23add1` is the same set of 15 files. `src/app/llms.txt/route.ts` is the file that makes 15 rather than 14, and it is not new — it merged 2026-10-04, three days *before* `54d88ca`. So nothing was superseded here, and nothing grew.
 
 The rights and disclosure half, taken as everything declared after the `// Resale rights (ugcportal-0ss, …)` banner in `prisma/schema.prisma`:
 
@@ -58,7 +75,7 @@ CommercialLinkNetwork
 MediaAuthorship
 ```
 
-**8 models and 7 enums** of the schema's 16 and 10. The bead's "nine" models is not reproducible from the current schema by any grouping tried here; it may have counted `RoleChange`, which sits immediately above the banner and is an auth-audit table. The route files that implement a gate of this subsystem:
+**8 models and 7 enums** of the schema's 16 and 10. The bead's "nine" models *is* reproducible, by the grouping that adds `RoleChange` to these 8: `grep -n '^model ' prisma/schema.prisma` puts `model RoleChange` at line 500 and `grep -n 'Resale rights' prisma/schema.prisma` puts the banner at line 516, so `RoleChange` is the model immediately above the banner, and 8 + 1 = 9. That is the grouping the earlier audit used — `ugcportal-rma`'s 2026-10-08 note lists `RoleChange` and `RoleChangeSource` inside its rights-and-disclosure enumeration. This document counts 8 instead, and the difference is a judgement, not a correction: `RoleChange` is an auth-audit table of who changed whose role, and none of the library modules listed below reads it (`grep -rn RoleChange src/lib --include='*.ts' | grep -v '\.test\.'` returns 3 lines, none of them a read of the table: a comment at `sign-in-policy.ts:1278`, and the `RoleChangeActor` type declared at `roles.ts:9` and used at `:46`). The bead's "six routes" needs no correction at all — it is reproduced exactly, below. The route files that implement a gate of this subsystem:
 
 ```
 $ find src/app/api -name route.ts | grep -E 'rights|disclosure|commercial-links|publish|curation' | sort
@@ -108,7 +125,7 @@ This table is the review's instrument. The right-hand column is the property the
 
 Two consequences follow, and both are visible at this altitude rather than in any one diff:
 
-1. **The § 9-2 family's "backstop" is a backstop for a publish request.** `alcohol-commerce.ts` says of the attach-time gate: "what it may NOT do is become public before the alcohol question is answered, and that is `commercialPublishRefusal`'s job below, which refuses the unanswered state at the one point where the public can see the result." And of the publish gate: "The alcohol half is not redundant at all: the write path permits an unanswered item on purpose, so this is the only place that state is refused." Each sentence is true of the function it sits on. Neither is true of a row that was published before the benefit was declared, because `commercialPublishRefusal` has one non-test caller at d23add1 (`grep -rn commercialPublishRefusal src --include='*.ts' --include='*.tsx' | grep -v '\.test\.'` → its definition, a comment in `curation-triage-write.ts`, and the import plus the call at `src/app/api/media/[id]/publish/route.ts:310`) and that caller runs when someone asks to publish. §5.1 drives the consequence.
+1. **The § 9-2 family's "backstop" is a backstop for a publish request.** `alcohol-commerce.ts` says of the attach-time gate: "what it may NOT do is become public before the alcohol question is answered, and that is `commercialPublishRefusal`'s job below, which refuses the unanswered state at the one point where the public can see the result." And of the publish gate: "The alcohol half is not redundant at all: the write path permits an unanswered item on purpose, so this is the only place that state is refused." Each sentence is true of the function it sits on. Neither is true of a row that was published before the benefit was declared, because `commercialPublishRefusal` has one non-test caller at d23add1, and that caller runs when someone asks to publish. `grep -rn commercialPublishRefusal src --include='*.ts' --include='*.tsx' | grep -v '\.test\.'` returns **16** lines, which is not the same as 16 callers: 3 are in generated client code under `src/generated/prisma/`, 10 are prose inside comments (`alcohol-commerce.ts:171`, `:316`, `:341`; `advertising-disclosure.ts:383`, `:411`; `publishability.ts:292`; `publish-authority.ts:150`; `curation-triage-write.ts:203`; `admin/settings/rights/brands/page.tsx:50`; and `publish/route.ts:283`), 1 is the definition itself (`src/lib/alcohol-commerce.ts:249`), and the remaining 2 are the single call site — the import at `src/app/api/media/[id]/publish/route.ts:4` and the call at `:310`. Narrowed to code outside the generated client, `… | grep -v 'src/generated' | grep -v ':[0-9]*: *\*' | grep -v ':[0-9]*: *//'` returns 4 lines: that definition, that import, that call, and one comment line in `curation-triage-write.ts:203` the filter cannot drop because it is a continuation line. §5.1 drives the consequence.
 
 2. **The one place in the § 9-2 family that *does* have a written answer for "already public" is the brand flip** (`ugcportal-mqh8`, `src/app/admin/settings/rights/brands/page.tsx`): "An item already published under a brand that is now alcohol-linked is NOT auto-unpublished here … a row already public stays public until an admin acts on it directly", with the affected items listed for the admin on every render. That is a decision, recorded, with a surface. The path in §5.1 has neither a decision nor a surface.
 
@@ -237,7 +254,7 @@ Both carry a `discovered-from` edge to `ugcportal-l9qx`, `severity` in metadata,
 - It did not re-review any individual diff, and it did not run the full suite. One throwaway test was written and run for §5.1 and then deleted; its transcript is quoted, not attached.
 - The K2 tables are read from source at d23add1 and cross-checked against the cases `resale-rights.test.ts` and `alcohol-commerce.test.ts` already pin (`null`, `undefined`, `NaN`, a string, a missing relation — see the `it.each` tables in both). Where this document says a reader "fails closed", a test in one of those files exercises that input; where it says "by design", the module's own comment says so and is quoted.
 - The legal characterisations (what § 9-2 fines, what a guardian consent must say) are taken from `docs/ugc-research.md` §3.1a and `docs/legal/manual-upload-rights-review.md` §3.5 as the repo already states them. This review adds no legal reading of its own.
-- The bead's "nine models" could not be reproduced; §2 says what was counted instead. If a reader has the grouping that yields nine, the K1 notes on `5x8` and `rma` should carry that grouping rather than this one.
+- The bead's "nine models" *is* reproducible — 8 subsystem models plus `RoleChange`, the model immediately above the banner, which is the grouping `ugcportal-rma`'s own 2026-10-08 note used. §2 counts 8 and states why it prefers the banner-only grouping; a reader who wants the nine has it there. The bead's "six routes" and the `5x8`/`rma` notes' "14 API routes" both reproduce exactly and were never superseded; only the "7 enums" figure was out of date.
 
 ---
 
