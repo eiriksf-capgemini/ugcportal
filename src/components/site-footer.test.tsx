@@ -241,16 +241,16 @@ describe.each([
     //    sign-off currently says about the real prose;
     //  - the third test is the case those two cannot reach: fully
     //    configured (FILLED_LEGAL_ENV), against today's real
-    //    LEGAL_SIGN_OFF rather than a fixture. As of ugcportal-fsdf that
-    //    real fact is no longer "both pages signed off": /privacy's
-    //    authored prose changed (the uploader's own rights attestation,
-    //    src/lib/attestation.ts, now described in the rights-clearance
-    //    category), so its digest no longer matches LEGAL_SIGN_OFF and it
-    //    reads as a draft until a human re-approves it — the same sequence
-    //    ugcportal-mj50 and ugcportal-qnq9.2.2 each went through. /licence,
-    //    whose prose this change does not touch, is unaffected and is
-    //    still really signed off. The test below asserts exactly that
-    //    split rather than "both link".
+    //    LEGAL_SIGN_OFF rather than a fixture. As of ugcportal-xh4j
+    //    (2026-10-12) that real fact is "both pages signed off" again.
+    //    BOTH digests had moved and both were re-recorded together:
+    //    /licence's prose changed in ugcportal-yzo7 (PR #203, the deleted
+    //    "Nothing is offered for sale yet" sentence) and /privacy's in
+    //    ugcportal-fsdf (PR #204, the uploader's own rights attestation,
+    //    src/lib/attestation.ts, described in the rights-clearance
+    //    category). So the test below asserts "both link", not a split —
+    //    and unlike ugcportal-mj50 and ugcportal-qnq9.2.2, which each
+    //    moved only /privacy's value, this re-sign moved both.
     afterEach(() => {
       vi.unstubAllEnvs();
     });

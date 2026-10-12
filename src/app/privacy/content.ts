@@ -465,10 +465,12 @@ export const MODEL_COVERAGE: Readonly<
   // (the site's legitimate interest in selling only what it may sell and
   // being able to show why; no recipient beyond the site itself) without
   // needing new wording. That sentence changed the page's authored digest,
-  // which puts /privacy back in draft until the sign-off in
-  // src/lib/legal/contact.ts is re-recorded by a human — the same sequence
-  // ugcportal-mj50 and ugcportal-qnq9.2.2 each went through for the two
-  // records below.
+  // which put /privacy back in draft until the sign-off in
+  // src/lib/legal/contact.ts was re-recorded by a human. That happened on
+  // 2026-10-12 (ugcportal-xh4j), and unlike ugcportal-mj50 and
+  // ugcportal-qnq9.2.2 below — which each moved only /privacy's value — it
+  // re-recorded both pages, because /licence's prose had also changed
+  // (ugcportal-yzo7, PR #203).
   MediaAttestation: { category: "rights" },
   // The advertising disclosure sits with the uploads rather than with the
   // rights records, even though MediaListing.sponsoredContent looks similar:
