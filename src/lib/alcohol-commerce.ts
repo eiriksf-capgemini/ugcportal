@@ -376,18 +376,28 @@ export function isAlcoholUnclearedAdvertisement(item: {
  *
  *     served  <=>  depictsAlcohol = false  OR  (no declared benefit AND no link)
  *
- * NO PRISMA IMPORT, keeping this module's own header claim true — but not
- * because a bad key here is a compile error. It is not: `MediaAlcoholCommerceScope`
- * is `typeof` the two literals below, and the constant reaches
- * `prisma.media.findMany` as a VARIABLE rather than an object literal, so
- * TypeScript's excess-property checking never runs on it. Checked directly:
- * `npx tsc --noEmit` stays at exit 0, zero diagnostics, with
- * `notAColumnPrismaKnows: true` added to either arm below, and with
- * `advertisingDisclosure` misspelled as `advertisingDisclosures`. What
- * actually catches a bad key is Prisma itself, loudly, at runtime
- * ("Unknown argument `notAColumnPrismaKnows`", "Did you mean
- * `advertisingDisclosure`?"), and every reader's own test — real catches,
- * just not static ones.
+ * NO PRISMA IMPORT, keeping this module's own header claim true — but a bad
+ * key here is a compile error only for one of the two ways a key can be bad.
+ * `MediaAlcoholCommerceScope` is `typeof` the two literals below, so a
+ * genuinely EXTRA key — `notAColumnPrismaKnows: true` added to either arm —
+ * is invisible: the constant reaches `prisma.media.findMany` as a VARIABLE
+ * rather than an object literal, so TypeScript's excess-property checking
+ * never runs on it, and `npx tsc --noEmit` stays at exit 0. That one is
+ * caught only by Prisma itself, loudly, at runtime ("Unknown argument
+ * `notAColumnPrismaKnows`") and by every reader's own test.
+ *
+ * RENAMING OR MISSPELLING AN EXISTING KEY is the other way, and it IS a
+ * compile error — just not here. Misspelling `advertisingDisclosure` as
+ * `advertisingDisclosures` changes `MediaAlcoholCommerceScope`'s shape right
+ * along with it, because the type is derived from this same literal, so the
+ * definition below stays self-consistent and `tsc` is silent at this
+ * location. The mismatch surfaces instead at every call site that spreads
+ * this scope into a parameter actually typed as Prisma's real
+ * `MediaWhereInput` — checked directly, that single misspelling produces
+ * dozens of `tsc` errors across every reader of
+ * `PUBLIC_MEDIA_ALCOHOL_COMMERCE_SCOPE`, not zero. So: an added key is a
+ * genuine static blind spot; a renamed one is caught by `tsc`, just one hop
+ * from where it was typed rather than at the typo itself.
  *
  * THE "NOT TRUE" STATES ARE ENUMERATED POSITIVELY — a missing disclosure row,
  * `false`, and `null` — rather than written as one `NOT: { … true }`, and
