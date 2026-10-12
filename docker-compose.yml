@@ -1,3 +1,62 @@
+# Local stack for manual QA (ugcportal-fb32).
+#
+#   docker compose up -d        # MinIO, the bucket, the migration, the app
+#   open http://localhost:3000
+#
+# THE APP SERVICE RUNS A PINNED, PRE-BUILT IMAGE, not a `build:` of whatever
+# is checked out. That is the point of the bead: two QA sessions a week apart
+# should be clicking through the same artifact. Build it (and the migration
+# image beside it) with:
+#
+#   npm run docker:qa:build
+#
+# whose last line is `UGCPORTAL_IMAGE_TAG=<tag>`. To run that new build
+# instead of the pinned default, export that line (or put it in `.env`, which
+# compose reads on its own):
+#
+#   export $(npm run --silent docker:qa:build | tail -1)
+#
+# The pinned default below is the tag that was actually built, started and
+# uploaded to during ugcportal-fb32. It names the commit the image was built
+# from. It is one commit behind the commit that introduced these lines, and
+# it has to be: a tag that named its own commit would change the file that
+# contains it. Rebuilding with the one-liner is how it is re-pinned, and
+# nothing here reads a floating tag in the meantime.
+#
+# THE DATABASE. The runner stage of the Dockerfile has no `prisma` CLI — Next
+# tracing drops devDependencies, and the Dockerfile says so by name — so the
+# app image cannot migrate itself. `migrate` below is a one-shot service
+# running `prisma migrate deploy` out of the image built from the
+# Dockerfile's `builder` target, which does have the CLI, against the same
+# `app-data` volume the app then opens. `app` waits for it to exit 0.
+#
+# WITHOUT IT THE STACK LOOKS FINE FROM THE FRONT, which is why it is wired
+# this way rather than left as a documented manual step. Started against an
+# unmigrated database the container stays up, and `GET /` still answers 200:
+# the home page catches the failed read and falls back to its placeholder
+# tiles. `GET /api/public/media` answers 500 with
+# `SQLITE_ERROR: no such table: main.Media` (both observed,
+# ugcportal-fb32). That is also why the app's healthcheck below asks for the
+# API route and not the page.
+#
+# BEHIND A TLS-INTERCEPTING CORPORATE PROXY, SIGN-IN WILL NOT WORK until you
+# add the extra CA bundle. Nothing about the failure says "certificate": the
+# container is healthy, every page serves, and sign-in answers with a bare
+# `[auth][error] TypeError: fetch failed` and a redirect to
+# /auth/error?error=Configuration. Both halves reproduced on this stack. Use
+# docker-compose.proxy-ca.yml, which explains itself and has the command to
+# export the bundle:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.proxy-ca.yml up -d
+#
+# Off such a proxy, ignore it: the base stack sets no NODE_EXTRA_CA_CERTS and
+# comes up healthy with no certs/ directory on disk at all (checked).
+#
+# QA DATA PERSISTS across `docker compose down && docker compose up`: both
+# the database (`app-data`) and the uploaded objects (`minio-data`) are named
+# volumes. `docker compose down -v` is what throws them away and gives you a
+# fresh stack; the migration re-runs on the empty volume by itself.
+
 services:
   minio:
     # MinIO's images are no longer published to Docker Hub (pulls are denied there as of 2025);
@@ -11,8 +70,17 @@ services:
     # on its 100.64.0.1 interface, which makes both 0.0.0.0:9000 and
     # 127.0.0.1:9000 fail with "address already in use" (ugcportal-20bb;
     # the same collision was already noted at ugcportal-aeb's close). On
-    # such a machine set MINIO_HOST_PORT (and S3_ENDPOINT to match) in the
-    # env compose reads -- `.env`, or `docker compose --env-file .env.local`.
+    # such a machine set MINIO_HOST_PORT in the env compose reads -- `.env`,
+    # or `docker compose --env-file .env.local`, because compose does not
+    # read `.env.local` by itself (measured; see the secrets block on the
+    # `app` service below).
+    #
+    # S3_ENDPOINT follows this port for a HOST-RUN `next dev` only, which
+    # reaches MinIO through the published port and resolves S3_ENDPOINT via
+    # requireEnv in src/lib/s3.ts. The `app` service below is containerised
+    # and sets S3_ENDPOINT to the literal `http://minio:9000`, so moving this
+    # port does not require touching it there -- and an S3_ENDPOINT set for
+    # the host dev server is ignored by that service rather than applied.
     ports:
       - "${MINIO_HOST_PORT:-9000}:9000"
       - "${MINIO_CONSOLE_HOST_PORT:-9001}:9001"
@@ -38,5 +106,207 @@ services:
       mc mb --ignore-existing local/${S3_BUCKET_NAME:-ugcportal-dev}
       "
 
+  # One-shot: brings the SQLite database in `app-data` up to the current
+  # schema, then exits. Built from the Dockerfile's `builder` target, pinned
+  # to the same tag as the app so the migrations applied are the ones that
+  # shipped in that image.
+  #
+  # `user: "1001:1001"` matches the app image's non-root `nextjs` user. Not
+  # cosmetic: the same migration run as root leaves `ugcportal.db` owned
+  # `0:0` and mode 644 (checked), which the app, running as 1001, cannot
+  # write. The uid is given as a number because `nextjs` exists in the runner
+  # image and not in the builder one this service runs.
+  migrate:
+    image: ugcportal-migrate:${UGCPORTAL_IMAGE_TAG:-0.6.0-dev.ga6980eb}
+    user: "1001:1001"
+    environment:
+      DATABASE_URL: file:/data/ugcportal.db
+    volumes:
+      - app-data:/data
+    # The binary already installed in the image, not `npx prisma`. Both work
+    # here (checked, under this uid, with no HOME set), but `npx` runs npm's
+    # resolution first and so has a path to the network and to a different
+    # version of the CLI than the one this image was built with; the point of
+    # pinning the image is that there is no such path.
+    command: ["node_modules/.bin/prisma", "migrate", "deploy"]
+
+  app:
+    image: ugcportal:${UGCPORTAL_IMAGE_TAG:-0.6.0-dev.ga6980eb}
+    depends_on:
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      migrate:
+        condition: service_completed_successfully
+    # NOT a nice-to-have (ugcportal-e86, and the ~160 lines about it at the
+    # bottom of the Dockerfile, from "Run this image with an explicit memory
+    # limit" to the CMD). src/lib/watermark.ts sizes its preview
+    # concurrency cap from the container's own cgroup memory limit via
+    # src/lib/container-limits.ts. With no limit set that read falls back to
+    # host RAM and the cap is derived from memory this container does not
+    # have, which is the over-provisioning the cap exists to prevent. 1 GB is
+    # the Dockerfile's recommendation and the smallest size at which every
+    # upload the app accepts fits.
+    #
+    # Deliberately a literal and not `${...:-1g}`: an override that resolved
+    # to empty would silently remove the limit.
+    mem_limit: 1g
+    # NO CPU LIMIT IS SET, and that is a gap rather than a decision: the same
+    # module reads the cgroup's CPU quota too, so the app logs
+    # `cpuBudget=10 (host)` on a 10-core machine and sizes libvips' threads
+    # per preview from the developer machine rather than from this
+    # container — which also means two QA machines derive different
+    # configurations from the same image. The
+    # memory arithmetic still fits at 1 GB on the machine this was built on
+    # (`projectedGatedPeak=864 MB` against `usableBudget=870 MB`), so adding a
+    # limit would change the derived configuration rather than repair it —
+    # which is a load question, and load-checking this image is ugcportal-jp4.
+    ports:
+      - "${APP_HOST_PORT:-3000}:3000"
+    volumes:
+      - app-data:/data
+    environment:
+      DATABASE_URL: file:/data/ugcportal.db
+
+      # EVERY SECRET BELOW COMES FROM THE ENVIRONMENT. The defaults are
+      # obviously-fake local-QA values, not secrets: a stack brought up
+      # without them is a stack nobody can sign in to, which is the right
+      # failure for a localhost QA box.
+      #
+      # WHERE THE REAL VALUES HAVE TO GO, and getting this wrong costs an
+      # afternoon: COMPOSE READS `.env` AND NOT `.env.local` -- and
+      # `.env.local` is the file env.example's first line tells you to copy
+      # it to, so this repo's credentials are very likely sitting in the one
+      # file compose ignores. Measured on a control project carrying the same
+      # variable in both files: plain `docker compose up` took the `.env`
+      # value, and with only `.env.local` present the variable reached the
+      # container EMPTY (ugcportal-fb32, PR #222 round 1). So either
+      #
+      #   - put them in `.env` (gitignored), or export them before
+      #     `docker compose up`; or
+      #   - leave them in `.env.local` and name it on every invocation:
+      #
+      #       docker compose --env-file .env.local up -d
+      #
+      #     and behind a TLS-intercepting corporate proxy, with the CA
+      #     override as well (this is the full line that works):
+      #
+      #       docker compose --env-file .env.local \
+      #         -f docker-compose.yml -f docker-compose.proxy-ca.yml up -d
+      #
+      # An empty credential does not announce itself; see AUTH_GOOGLE_ID
+      # below for what that failure actually looks like.
+      #
+      # Not a real secret. Sessions on this stack are forgeable by anyone who
+      # has read this file; that is acceptable for localhost QA and nowhere
+      # else.
+      AUTH_SECRET: ${AUTH_SECRET:-local-qa-placeholder-not-a-real-secret}
+      # Follows APP_HOST_PORT, because a changed host port with a stale
+      # AUTH_URL sends every OAuth callback to a port nothing is listening
+      # on. Set it explicitly only if the app is reached by some other name.
+      AUTH_URL: ${AUTH_URL:-http://localhost:${APP_HOST_PORT:-3000}}
+      # Sign-in needs real OAuth client credentials; there is no local
+      # substitute. EMPTY IS SILENT, and that is the thing to know before
+      # trusting sign-in on this stack: nothing validates these.
+      # src/lib/sign-in-providers.ts builds Google()/Facebook() straight out
+      # of process.env with no check anywhere in src/, the startup logs say
+      # nothing about providers, /api/auth/providers advertises both, and
+      # `POST /api/auth/signin/google` answers 302 to accounts.google.com
+      # with an EMPTY `client_id=` -- which Google rejects as
+      # `400 invalid_request: Missing required parameter: client_id`. All
+      # four measured on this stack (ugcportal-fb32, PR #222 round 1). So a
+      # sign-in that dies at Google with that 400 means these are unset in
+      # the env compose actually reads -- see the block above, which is
+      # usually the answer. Making the app itself say so is ugcportal-93nl,
+      # deliberately not this bead.
+      #
+      # ALLOWED_SIGNIN_EMAILS below is the counter-example, and the model
+      # for that bead: empty there is NOT silent. A refused sign-in is
+      # logged by name -- `[auth] Refused a live session for user <id>:
+      # not-permitted. Permitted addresses come from ALLOWED_SIGNIN_EMAILS
+      # (plus ADMIN_BOOTSTRAP_EMAILS); see docs/access-control.md.`
+      # (src/lib/live-session.ts) -- naming the variable and the doc. NOT
+      # every one, though: that line is throttled to once per
+      # LIVE_SESSION_LOG_INTERVAL_MS (10s), so two refusals inside that
+      # window produce one line, with the suppressed count folded into the
+      # note on whichever line does emit next. (The additional startup line
+      # checkSignInConfiguration emits fires only when nothing is
+      # configured anywhere, src/config/users.ts included; that array is
+      # populated here, so its absence from this stack's log is correct.)
+      AUTH_GOOGLE_ID: ${AUTH_GOOGLE_ID:-}
+      AUTH_GOOGLE_SECRET: ${AUTH_GOOGLE_SECRET:-}
+      AUTH_FACEBOOK_ID: ${AUTH_FACEBOOK_ID:-}
+      AUTH_FACEBOOK_SECRET: ${AUTH_FACEBOOK_SECRET:-}
+      # Who may sign in at all. Empty is the app's deliberate default of
+      # "nobody"; see docs/access-control.md and env.example.
+      ALLOWED_SIGNIN_EMAILS: ${ALLOWED_SIGNIN_EMAILS:-}
+      ADMIN_BOOTSTRAP_EMAILS: ${ADMIN_BOOTSTRAP_EMAILS:-}
+
+      # Storage is the `minio` service on the compose network, so the
+      # endpoint is `minio:9000` and NOT the host port above: the app reaches
+      # it container-to-container, and it never hands the browser a storage
+      # URL to follow. There is no presigned-URL code path in src/ at all —
+      # previews are streamed through /api/media/preview/[previewId], and
+      # src/app/api/media/preview/[previewId]/route.ts says why it is not a
+      # redirect to a presigned object. So MINIO_HOST_PORT can move freely
+      # without this value following it.
+      #
+      # Which is the opposite of what the comment on that port says, on
+      # purpose, because the two are addressed to different readers: a
+      # HOST-RUN `next dev` does have to keep its S3_ENDPOINT matching the
+      # published port. A literal and not `${S3_ENDPOINT:-http://minio:9000}`
+      # for exactly that reason -- env.example ships
+      # `S3_ENDPOINT=http://localhost:9000` for the host dev server, and
+      # interpolating it here would point this container at port 9000 on
+      # itself, where nothing is listening.
+      S3_ENDPOINT: http://minio:9000
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-minioadmin}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-minioadmin}
+      S3_BUCKET_NAME: ${S3_BUCKET_NAME:-ugcportal-dev}
+      S3_FORCE_PATH_STYLE: "true"
+
+      # WITHOUT THESE FOUR, /privacy AND /licence RETURN 500 HERE. They are
+      # read at request time by src/lib/legal/contact.ts, and in production —
+      # which this image is, NODE_ENV and all — the two pages refuse to
+      # render rather than publish a privacy statement with no named
+      # controller. Observed on this stack before they were set
+      # (ugcportal-fb32); everything else served 200 throughout, so it is
+      # specifically these two pages.
+      #
+      # The defaults are obviously-fake QA strings, and they say so in the
+      # text they render into. They are not a substitute for the real values
+      # a deployment must set (see env.example), and an `.invalid` address
+      # cannot receive the Art. 12 requests the page points at.
+      LEGAL_CONTROLLER_NAME: ${LEGAL_CONTROLLER_NAME:-LOCAL QA STACK - not a real data controller}
+      LEGAL_CONTACT_EMAIL: ${LEGAL_CONTACT_EMAIL:-local-qa@example.invalid}
+      LEGAL_HOSTING_PROVIDER: ${LEGAL_HOSTING_PROVIDER:-LOCAL QA STACK - docker compose on a developer machine}
+      LEGAL_STORAGE_PROVIDER: ${LEGAL_STORAGE_PROVIDER:-LOCAL QA STACK - the MinIO service in this compose file}
+
+      # Optional. src/lib/instagram.ts reads both through `requireEnv`, so
+      # the admin Instagram connect flow throws while they are unset; nothing
+      # else in the app touches them.
+      INSTAGRAM_CLIENT_ID: ${INSTAGRAM_CLIENT_ID:-}
+      INSTAGRAM_CLIENT_SECRET: ${INSTAGRAM_CLIENT_SECRET:-}
+      INSTAGRAM_TOKEN_ENCRYPTION_KEY: ${INSTAGRAM_TOKEN_ENCRYPTION_KEY:-}
+    # Hits a route that reads the database on purpose. "The container is up"
+    # is exactly the signal that cannot distinguish a working stack from one
+    # whose migration never ran, which is the failure this compose file is
+    # arranged to prevent.
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/api/public/media').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+
 volumes:
   minio-data:
+  app-data:

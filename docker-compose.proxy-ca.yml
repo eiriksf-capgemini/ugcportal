@@ -1,0 +1,80 @@
+# Extra CA bundle for the app container, for a machine behind a TLS-
+# intercepting corporate proxy (ugcportal-fb32, and the same problem
+# scripts/with-local-ca.mjs solves for `npm run dev` — ugcportal-drt1).
+#
+#   docker compose -f docker-compose.yml -f docker-compose.proxy-ca.yml up -d
+#
+# or, to stop typing it, put this in `.env` (which compose reads on its own)
+# and keep using plain `docker compose up -d`:
+#
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.proxy-ca.yml
+#
+# WHAT GOES WRONG WITHOUT IT. Behind Capgemini's Zscaler ZTNA proxy every
+# outbound TLS handshake from Node fails with SELF_SIGNED_CERT_IN_CHAIN,
+# because the proxy re-signs the chain with a CA that is in the macOS System
+# keychain and in nothing the container has. Node builds its trust store once
+# at process start, so this has to be a real environment variable — which is
+# exactly what compose's `environment:` is, and is why the `.env.local` route
+# that does NOT work for `next dev` (its fork gets a pre-dotenv snapshot of
+# the environment) does work here. Checked from inside the container both
+# ways; see the PR for ugcportal-fb32.
+#
+# The symptom is NOT a TLS error in the UI. Auth.js swallows it and sign-in
+# fails with a bare
+#
+#   [auth][error] TypeError: fetch failed
+#       at node:internal/deps/undici/undici:…
+#
+# at Google's OIDC discovery, and a redirect to /auth/error?error=Configuration.
+# Facebook gets further and fails at the token exchange on the callback.
+# Nothing in either message mentions certificates.
+#
+# SUPPLY THE BUNDLE YOURSELF. certs/*.pem is gitignored (.gitignore's
+# `*.pem`, which in gitignore syntax does match at any depth) and
+# dockerignored (.dockerignore's `**/*.pem`, which needs the `**/` to —
+# see the note at the top of that file), and must stay both — it is
+# machine-local trust material, not something to commit and not something to
+# bake into an image layer. On a fresh clone the file does not exist.
+# Recreate it from the System keychain with:
+#
+#   mkdir -p certs && {
+#     security find-certificate -c CapgeminiPKIRootCA    -p /Library/Keychains/System.keychain;
+#     security find-certificate -c CapgeminiPKIIssuingCA1 -p /Library/Keychains/System.keychain;
+#   } > certs/capgemini.pem
+#
+# The chain is leaf <- ztnzia-internet.capgemini.com <- CapgeminiPKIIssuingCA1
+# <- CapgeminiPKIRootCA, and both CAs are in that keychain. Verify from inside
+# the running container, which is the only place that counts:
+#
+#   docker compose exec app node -e \
+#     "fetch('https://accounts.google.com/.well-known/openid-configuration').then(r=>console.log(r.status))"
+#
+# 200 means the bundle is being read. SELF_SIGNED_CERT_IN_CHAIN means it is
+# not.
+#
+# `configs:` AND NOT A BIND MOUNT UNDER `volumes:`, deliberately. Docker
+# creates a DIRECTORY at a bind mount's source path when that path does not
+# exist — checked: point one at a PEM that is not there and a host directory
+# appears under that name, the container sees a directory, and
+# NODE_EXTRA_CA_CERTS then points at one, which is a much more confusing
+# failure than the one it was meant to fix. A `configs:` entry with a missing `file:` refuses to start
+# instead ("bind source path does not exist") and creates nothing. Same
+# check, same result, both run.
+#
+# NOT IN docker-compose.yml ITSELF, for the same reason in the other
+# direction: an unproxied machine has no bundle, and the base stack must come
+# up there untouched. It does — `docker compose up -d` with no certs/
+# directory at all leaves NODE_EXTRA_CA_CERTS unset and the app healthy.
+services:
+  app:
+    environment:
+      NODE_EXTRA_CA_CERTS: /etc/ssl/local-proxy-ca.pem
+    configs:
+      - source: local-proxy-ca
+        target: /etc/ssl/local-proxy-ca.pem
+
+configs:
+  local-proxy-ca:
+    # Override PROXY_CA_FILE for a different proxy's bundle or a different
+    # path; the container-side name above never changes.
+    file: ${PROXY_CA_FILE:-./certs/capgemini.pem}
