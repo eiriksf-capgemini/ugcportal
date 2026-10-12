@@ -36,8 +36,9 @@
  *      dispatch; see `PREMISE_FRESHNESS_COST` below for what that means in
  *      practice and why a looser rule was rejected.
  *   2. A failing bead is a HARD BLOCK, not a warning. Hence a non-zero exit
- *      rather than this script's sibling `check-unreachable-beads.mjs`,
- *      which is advisory and always exits 0.
+ *      on a finding -- unlike this script's sibling
+ *      `check-unreachable-beads.mjs`, which reports what it finds and
+ *      deliberately does not fail on it.
  *
  * WHAT THIS SCRIPT CANNOT SEE, and the reason every run prints
  * `SUBSTANCE_CHECKS_NOT_MADE` whether it passed or failed. The standing
@@ -127,8 +128,9 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
  *   - "touched no file the bead mentions": would need to know which files a
  *     bead depends on, which is exactly the substance judgement this script
  *     is honest about not making.
- * The strict rule is the only one that is mechanical, so it is the only one
- * implemented here.
+ * The first two are mechanical but need a constant nothing here measured;
+ * the third needs a judgement this script does not make. The strict rule
+ * needs neither, which is why it is the one implemented.
  */
 export const PREMISE_FRESHNESS_COST =
   "A premise verified against any commit other than origin/main's current HEAD fails. Re-run the premise check and write a new `Premise verified <date> at origin/main <sha>` line; do not copy the date forward.";
@@ -582,9 +584,10 @@ export function makeGitContext(headOverride, repoDir = REPO_ROOT) {
  * every part of it is a trap this check would fail open on:
  *
  *   - `--status open,in_progress` must be the COMMA form. `bd list --help`:
- *     "repeating -s/--status silently overwrites the previous value". Two
- *     `--status` flags would sweep only in-progress beads and report a
- *     clean 9-bead run as if it had covered the backlog.
+ *     "repeating -s/--status silently overwrites the previous value". Run
+ *     on 2026-10-12: `--status open --status in_progress` returned 9 beads
+ *     (in-progress only) where `--status open,in_progress` returned 104 --
+ *     a sweep that covered 9% of the backlog and said nothing about it.
  *   - `--limit 0` is mandatory. `bd list` defaults to `--limit 50`, so a
  *     sweep over a 95-bead backlog would examine 50 and say so in a count
  *     that looks complete.

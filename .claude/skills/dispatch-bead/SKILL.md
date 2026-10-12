@@ -57,7 +57,8 @@ Mandatory setup, because each item below has burned a session:
   /tmp/wt-<short> origin/main`); the implementer runs `git` only there and
   `bd` only in the main checkout;
 - **`npx prisma generate`** after `npm install` — without it 8 test files
-  fail to *collect* and the suite reports a plausible but low total;
+  fail to *collect* and the suite reports a plausible but low total
+  (`docs/process/development-process.md` §5.1);
 - **capped vitest workers** (`VITEST_MAX_FORKS=2 VITEST_MAX_THREADS=2`) when
   several agents run;
 - **a named model** on the spawn (`harness-cost-controls`); the bead's
