@@ -112,14 +112,14 @@ describe("classAttrOf escapes regex metacharacters in its needle (round-2 review
 });
 
 describe("K1 — the hero and empty-state links resolve to buttonVariants, not a hand-written class string", () => {
-  it("the hero's CTA carries every class default-tint/lg produces", () => {
+  it("the hero's CTA carries every class default-accent/lg produces (ugcportal-dmne, was default-tint)", () => {
     const markup = renderToStaticMarkup(<Hero signedIn={false} portfolioPieces={[]} />);
     const classAttr = classAttrOf(markup, "See the portfolio");
     // Through cn(), the same tailwind-merge pass the real caller's own
     // className applies (hero.tsx calls buttonVariants bare, with no
     // conflicting classes of its own, so this changes nothing there) — see
     // the empty-state assertion below for a case where it does.
-    const expected = cn(buttonVariants({ variant: "default-tint", size: "lg" }));
+    const expected = cn(buttonVariants({ variant: "default-accent", size: "lg" }));
     expect(
       containsEveryToken(classAttr, expected),
       `classAttr: ${classAttr}\nexpected (every token of): ${expected}`,
@@ -166,9 +166,9 @@ describe("K1 — the hero and empty-state links resolve to buttonVariants, not a
    * FIXTURE MUTATION CHECK (performed by hand, not left in the suite):
    * temporarily changed the hero's variant to "outline" (a real, but WRONG,
    * buttonVariants call) and confirmed the first test above failed on the
-   * fill-specific classes ("bg-petrol-100"/"text-surface-0" no longer
-   * present); reverted. Confirms `containsEveryToken` is checking the right
-   * variant, not merely "some buttonVariants output or other".
+   * fill-specific classes ("bg-terracotta-600"/"text-terracotta-ink" no
+   * longer present); reverted. Confirms `containsEveryToken` is checking the
+   * right variant, not merely "some buttonVariants output or other".
    */
 });
 
