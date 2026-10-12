@@ -196,8 +196,10 @@ export type GateReview = {
    *
    * NOT `reviewedAt`, which is re-stamped on every admin transition — see
    * the column's own comment in prisma/schema.prisma. The gate does not read
-   * `reviewedAt` at all, and "does not widen the scope when reviewedAt
-   * moves" (resale-rights.test.ts) is what keeps it that way.
+   * `reviewedAt` at all, and `describe("K3: reviewedAt is not the anchor")`
+   * in resale-rights.test.ts — "is not even loaded by the gate's select"
+   * and "leaves both verdicts unchanged when reviewedAt moves forward" —
+   * is what keeps it that way.
    */
   coversUploadsBefore: Date | null;
   /**

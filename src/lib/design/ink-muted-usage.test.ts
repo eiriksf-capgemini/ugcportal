@@ -302,10 +302,13 @@ const AUDITED_USAGE: Readonly<Record<string, OccurrenceClassification>> = {
   // pattern page.tsx above uses.
   //
   // Lines 376/384 -> 383/391 (ugcportal-aqw): both occurrences SHIFTED
-  // DOWN SEVEN, by the `Covers:` row added to the <dl> and the comment
-  // above it. Neither the className nor the surface changed — the key
-  // carries the line only so a new occurrence cannot squat on an audited
-  // one's old line, which is what the collision case below exercises.
+  // DOWN SEVEN, by the `coversUploadsBefore`/`coversFutureUploads` fields
+  // (plus their five-line comment) added to the select above, at
+  // page.tsx:86. The `Covers:` row added lower in the <dl> (page.tsx:429)
+  // is below both occurrences and cannot have shifted them. Neither the
+  // className nor the surface changed — the key carries the line only so
+  // a new occurrence cannot squat on an audited one's old line, which is
+  // what the collision case below exercises.
   "src/app/admin/settings/rights/page.tsx:383:\"mt-1 text-ink-muted\"": {
     surface: "bg-destructive-surface (the blocked-resale-rights well)",
     pairingIds: ["muted-foreground-on-destructive-surface"],
