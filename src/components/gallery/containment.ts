@@ -1,3 +1,5 @@
+import { cn } from "cn";
+
 import { INLINE_LINK_CLASS } from "@/components/ui/inline-link";
 
 /**
@@ -110,7 +112,12 @@ export const GALLERY_RADIUS_CLASS = "rounded-lg";
  * now round by the same amount, rather than the tile's own smaller
  * `rounded-md` (8px) reading as a third, unrelated shape beside them.
  */
-export const GALLERY_TILE_BASE_CLASS = `relative block w-full overflow-hidden ${GALLERY_RADIUS_CLASS} bg-surface-1 ${GALLERY_TILE_ASPECT_CLASS}`;
+export const GALLERY_TILE_BASE_CLASS = cn(
+  "relative block w-full overflow-hidden",
+  GALLERY_RADIUS_CLASS,
+  "bg-surface-1",
+  GALLERY_TILE_ASPECT_CLASS,
+);
 
 /**
  * One INTERACTIVE tile (gallery.tsx's own `<button>`, which opens the
@@ -125,7 +132,11 @@ export const GALLERY_TILE_BASE_CLASS = `relative block w-full overflow-hidden ${
  * navigation — none of which belong on a tile nothing happens when you
  * activate.
  */
-export const GALLERY_TILE_CLASS = `group ${GALLERY_TILE_BASE_CLASS} cursor-zoom-in focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring`;
+export const GALLERY_TILE_CLASS = cn(
+  "group",
+  GALLERY_TILE_BASE_CLASS,
+  "cursor-zoom-in focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
+);
 
 /**
  * The image inside a tile.
@@ -364,8 +375,11 @@ export const GALLERY_CAPTION_CLASS =
  * own width, the same reason an inline badge anywhere else in this app
  * never spans its container.
  */
-export const GALLERY_ADVERTISING_LABEL_CLASS =
-  `mb-1.5 inline-flex w-fit items-center ${GALLERY_RADIUS_CLASS} bg-primary px-2 py-0.5 text-xs font-semibold tracking-wide text-primary-foreground uppercase`;
+export const GALLERY_ADVERTISING_LABEL_CLASS = cn(
+  "mb-1.5 inline-flex w-fit items-center",
+  GALLERY_RADIUS_CLASS,
+  "bg-primary px-2 py-0.5 text-xs font-semibold tracking-wide text-primary-foreground uppercase",
+);
 
 /**
  * SUBJECT TAGS (ugcportal-jsc), and the three decisions behind where they sit.

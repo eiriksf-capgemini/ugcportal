@@ -370,13 +370,19 @@ const buttonVariants = cva(
         default:
           "h-8 gap-1.5 px-2.5 has-data-[icon=inline-end]:pr-2 has-data-[icon=inline-start]:pl-2",
         xs: "h-6 gap-1 rounded-[min(var(--radius-md),10px)] px-2 text-xs in-data-[slot=button-group]:rounded-lg has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-3",
-        sm: `${SM_BOX_MODEL} rounded-[min(var(--radius-md),12px)] ${SM_PADDING_AND_TEXT} in-data-[slot=button-group]:rounded-lg ${SM_ICON_SIZING}`,
+        sm: cn(
+          SM_BOX_MODEL,
+          "rounded-[min(var(--radius-md),12px)]",
+          SM_PADDING_AND_TEXT,
+          "in-data-[slot=button-group]:rounded-lg",
+          SM_ICON_SIZING
+        ),
         // See the `size` comment above: derived from the SAME
         // SM_BOX_MODEL/SM_PADDING_AND_TEXT/SM_ICON_SIZING constants `sm`
         // itself uses, minus the radius cap, reserved for the header's
         // public-page controls so K2 holds without changing what every
         // other `size="sm"` caller renders.
-        "header-sm": `${SM_BOX_MODEL} ${SM_PADDING_AND_TEXT} ${SM_ICON_SIZING}`,
+        "header-sm": cn(SM_BOX_MODEL, SM_PADDING_AND_TEXT, SM_ICON_SIZING),
         lg: "h-9 gap-1.5 px-2.5 has-data-[icon=inline-end]:pr-2 has-data-[icon=inline-start]:pl-2",
         icon: "size-8",
         "icon-xs":

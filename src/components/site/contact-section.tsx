@@ -1,3 +1,5 @@
+import { cn } from "cn";
+
 import { DraftLegalLabel } from "@/components/site-footer";
 import { ContactMailtoForm } from "@/components/site/contact-mailto-form";
 import {
@@ -109,7 +111,10 @@ export function ContactSection({ defaultSubject }: { defaultSubject: string }) {
     // and 0 is the wrong number to fall back to.
     <section
       id={pathFragment(ABOUT_CONTACT_PATH)}
-      className={`${SECTION_WRAPPER_CLASS} scroll-mt-[var(--header-height,3.5rem)]`}
+      className={cn(
+        SECTION_WRAPPER_CLASS,
+        "scroll-mt-[var(--header-height,3.5rem)]",
+      )}
       data-page-section="contact"
     >
       <h2 className={SECTION_HEADING_CLASS}>Get in touch</h2>
