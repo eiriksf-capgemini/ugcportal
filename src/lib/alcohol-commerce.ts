@@ -393,11 +393,9 @@ export function isAlcoholUnclearedAdvertisement(item: {
  * definition below stays self-consistent and `tsc` is silent at this
  * location. The mismatch surfaces instead at every call site that spreads
  * this scope into a parameter actually typed as Prisma's real
- * `MediaWhereInput` — checked directly, that single misspelling produces
- * dozens of `tsc` errors across every reader of
- * `PUBLIC_MEDIA_ALCOHOL_COMMERCE_SCOPE`, not zero. So: an added key is a
- * genuine static blind spot; a renamed one is caught by `tsc`, just one hop
- * from where it was typed rather than at the typo itself.
+ * `MediaWhereInput`. So: an added key is a genuine static blind spot; a
+ * renamed one is caught by `tsc`, just one hop from where it was typed
+ * rather than at the typo itself.
  *
  * THE "NOT TRUE" STATES ARE ENUMERATED POSITIVELY — a missing disclosure row,
  * `false`, and `null` — rather than written as one `NOT: { … true }`, and
