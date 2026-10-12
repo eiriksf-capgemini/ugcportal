@@ -68,6 +68,30 @@ export type ResaleRightsTransition =
        * necessarily made against the checklist in force.
        */
       restampChecklist?: boolean;
+      /**
+       * Re-record how far this clearance reaches over time (ugcportal-aqw).
+       *
+       * ABSENT LEAVES THE RECORDED SCOPE EXACTLY AS IT IS, and the presence
+       * of this object IS the explicit "I am setting the scope now" flag.
+       * There is no separate boolean beside it to forget to check: a caller
+       * with nothing to say about scope simply does not pass one.
+       *
+       * The same argument as `restampChecklist` above, against the same
+       * failure. `reviewedAt` is re-stamped on every admin write (see
+       * `adminFields` below), so if scope followed it — or if every write
+       * carried a scope — an admin fixing a typo in `conditions` would
+       * silently extend the clearance over everything uploaded since it was
+       * granted, which is material nobody reviewed. ugcportal-aqw K2.
+       *
+       * `coversUploadsBefore: null` means "the decision moment", not "no
+       * cut-off". A CLEARED review always has a scope, so there is
+       * deliberately no way through this writer to blank the column; the
+       * gate reads a null cut-off as out of scope rather than as unlimited.
+       */
+      scope?: {
+        coversUploadsBefore: Date | null;
+        coversFutureUploads: boolean;
+      };
     }
   | {
       /**
@@ -255,6 +279,52 @@ export async function setResaleRightsStatus(
       transition.source === "ADMIN" &&
       transition.actorUserId === uploaderUserId;
 
+    /**
+     * Is this the transition that grants the clearance (ugcportal-aqw)?
+     *
+     * True on a first decision of CLEARED and on a re-clearance after a
+     * REJECTED / REVOKED / EXPIRED — both of which are a reviewer signing
+     * again, which is the moment a default scope belongs to. False for an
+     * edit to a row that is ALREADY CLEARED, which is K2's case exactly:
+     * the clearance is not being granted, so its scope is not being
+     * re-decided and nothing below writes the column.
+     *
+     * `existing?.status !== CLEARED` rather than `!existing`, so the
+     * default also lands on an uploader who was IN_REVIEW first and is
+     * cleared later. Anchoring to row creation instead would scope that
+     * clearance to the moment somebody opened the file, which is earlier
+     * than the reviewer signed — narrower than the truth, so not a
+     * fail-open, but still a cut-off no human chose.
+     */
+    const entersClearance =
+      transition.source === "ADMIN" &&
+      transition.status === "CLEARED" &&
+      existing?.status !== "CLEARED";
+
+    /**
+     * The scope columns, written only when somebody actually decided them.
+     *
+     * Three cases, and the third is the one that matters: an explicit
+     * `scope` wins; otherwise entering CLEARED defaults to the decision
+     * moment with no framework licence; otherwise NOTHING IS WRITTEN and
+     * the stored scope survives whatever else this transition changes.
+     */
+    const scopeFields =
+      transition.source !== "ADMIN"
+        ? {}
+        : transition.scope
+          ? {
+              // `?? now` rather than passing the null through: a blank
+              // cut-off on a form that is deliberately recording scope
+              // means "from this decision", and the column has no
+              // "unlimited" reading for a null to express.
+              coversUploadsBefore: transition.scope.coversUploadsBefore ?? now,
+              coversFutureUploads: transition.scope.coversFutureUploads,
+            }
+          : entersClearance
+            ? { coversUploadsBefore: now, coversFutureUploads: false }
+            : {};
+
     const adminFields =
       transition.source === "ADMIN"
         ? {
@@ -289,6 +359,10 @@ export async function setResaleRightsStatus(
                   productDecisionRef: PRODUCT_DECISION_REF,
                 }
               : {}),
+            // Empty unless the reviewer decided a scope or is granting the
+            // clearance; see `scopeFields` above. Spread last so a future
+            // key added to this object cannot shadow it by accident.
+            ...scopeFields,
           }
         : {};
 

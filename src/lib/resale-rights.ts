@@ -161,6 +161,7 @@ export type SellabilityBlocker =
   | "no_review"
   | "status_not_cleared"
   | "clearance_expired"
+  | "upload_outside_clearance_scope"
   | "checklist_version_retired"
   | "reviewer_not_admin"
   | "upload_owner_unknown"
@@ -184,6 +185,30 @@ export type GateReview = {
   checklistVersion: string;
   reviewedByUserId: string | null;
   validUntil: Date | null;
+  /**
+   * The cut-off this clearance was signed against (ugcportal-aqw). Uploads
+   * made strictly before it are covered; nothing at or after it is, unless
+   * `coversFutureUploads` says so.
+   *
+   * Typed nullable because the column is, and `null` is NOT "no limit": a
+   * CLEARED row whose scope nobody wrote down blocks, exactly as an
+   * unreadable date does. See `clearanceScopeBlocker`.
+   *
+   * NOT `reviewedAt`, which is re-stamped on every admin transition — see
+   * the column's own comment in prisma/schema.prisma. The gate does not read
+   * `reviewedAt` at all, and `describe("K3: reviewedAt is not the anchor")`
+   * in resale-rights.test.ts — "is not even loaded by the gate's select"
+   * and "leaves both verdicts unchanged when reviewedAt moves forward" —
+   * is what keeps it that way.
+   */
+  coversUploadsBefore: Date | null;
+  /**
+   * The reviewer's positive record that the instrument is a framework
+   * licence over future works. Typed `boolean` because the column is NOT
+   * NULL with a `false` default; `clearanceScopeBlocker` still requires an
+   * exact `true`, because this is the value that SELLS.
+   */
+  coversFutureUploads: boolean;
   reviewedBy: { role: Role } | null;
 };
 
@@ -275,6 +300,19 @@ export type GateAttestation = AttestationAnswers & {
  */
 export type GateUpload = {
   userId: string | null;
+  /**
+   * When the file was uploaded (`Media.createdAt`), compared against the
+   * clearance's recorded cut-off (ugcportal-aqw). This is the only reason
+   * the gate reads the column, and it is the file's own timestamp — never
+   * the review's.
+   *
+   * Typed nullable for the same reason `userId` is: under the real schema
+   * the column is `NOT NULL DEFAULT CURRENT_TIMESTAMP`, so an ordinary
+   * Prisma read cannot produce null, and the guard is for a hand-assembled
+   * input. A null — or anything else that is not a readable Date — is
+   * blocked, not waved through.
+   */
+  createdAt: Date | null;
   user: { resaleRightsReview: GateReview | null } | null;
   /**
    * `null` means NOBODY ASKED THE UPLOADER ANYTHING — the state every upload
@@ -296,6 +334,12 @@ const REVIEW_GATE_SELECT = {
   checklistVersion: true,
   reviewedByUserId: true,
   validUntil: true,
+  // The clearance's scope over time (ugcportal-aqw). Both columns, always:
+  // reading the cut-off without the framework-licence mark would block
+  // every upload a framework instrument legitimately covers, and reading
+  // the mark without the cut-off would be the fail-open.
+  coversUploadsBefore: true,
+  coversFutureUploads: true,
   reviewedBy: { select: { role: true } },
 } as const;
 
@@ -313,6 +357,9 @@ const REVIEW_GATE_SELECT = {
  */
 export const MEDIA_GATE_SELECT = {
   userId: true,
+  // When this file was uploaded (ugcportal-aqw). Read only by
+  // `clearanceScopeBlocker`, against the clearance's own recorded cut-off.
+  createdAt: true,
   user: { select: { resaleRightsReview: { select: REVIEW_GATE_SELECT } } },
   // The uploader's own declaration (ugcportal-15r). Written out rather than
   // spread from ATTESTATION_QUESTIONS for the same reason the listing's keys
@@ -1068,6 +1115,62 @@ export function uploaderClearanceBlocker(
   // hangs off the uploader, so the only way to reach it is through the file's
   // own owner. ugcportal-0ss needed `rights_holder_not_recorded` because its
   // review hung off a connected account and had to name a user separately.
+  //
+  // There is no scope check here either, and that absence is deliberate
+  // rather than an omission: "is this uploader's clearance currently good?"
+  // is a question about the review alone, and whether a clearance reaches a
+  // particular file is a question about the PAIR. That one is
+  // `clearanceScopeBlocker` below, called from `evaluateSellability`, which
+  // is the only caller that has a file in its hand.
+  return null;
+}
+
+/**
+ * Part E.3 item 6 (ugcportal-aqw): does this clearance reach THIS file?
+ *
+ * A clearance covers the material its reviewer could examine — the uploads
+ * that existed when they signed — and nothing later, unless the reviewer
+ * positively recorded that the instrument is a framework licence over
+ * future works. docs/legal/manual-upload-rights-review.md §1 Gap 1 decided
+ * that; åvl § 67(2)'s specialty principle is why the framework reading has
+ * to be written down rather than inferred.
+ *
+ * THE COMPARISON IS INVERTED FOR THE SAME REASON THE EXPIRY CHECK ABOVE IS,
+ * and it is the one thing in this function that matters. The blocking
+ * condition reads naturally as `uploadedAt >= cutoff`, but every comparison
+ * against NaN is false — so an Invalid Date `Media.createdAt`, a column a
+ * future select forgot to map, or a `null` cut-off would all have answered
+ * "in scope" and SOLD. Written as `!(uploadedAt < cutoff)`, only a pair of
+ * readable instants in the right order can permit, and anything unreadable
+ * on either side falls to the blocked side. `createdAt == cutoff` blocks
+ * too, which is the strict reading of "uploads that existed when the
+ * reviewer signed".
+ *
+ * Takes the uploaded-at value as `unknown` rather than `Date | null`
+ * because `timeOf` is what decides what counts as readable, and narrowing
+ * here would mean a caller with a hand-assembled row had already been
+ * trusted.
+ *
+ * `reviewedAt` IS NOT READ, HERE OR ANYWHERE IN THIS MODULE. It is
+ * re-stamped on every admin transition (`adminFields`,
+ * src/lib/resale-rights-review.ts), so anchoring scope to it would widen a
+ * clearance every time an admin corrected a typo. That is ugcportal-aqw K3,
+ * and `REVIEW_GATE_SELECT` does not even load the column.
+ */
+function clearanceScopeBlocker(
+  review: GateReview,
+  uploadedAt: unknown,
+): SellabilityBlocker | null {
+  // `=== true` rather than truthiness: this is the branch that PERMITS
+  // everything, including files uploaded years after the reviewer last
+  // looked, so only the exact value a reviewer can have recorded may reach
+  // it. The same reading `factBlocker` gives `settledBy === "recorded"`.
+  if (review.coversFutureUploads === true) {
+    return null;
+  }
+  if (!(timeOf(uploadedAt) < timeOf(review.coversUploadsBefore))) {
+    return "upload_outside_clearance_scope";
+  }
   return null;
 }
 
@@ -1105,7 +1208,25 @@ export function evaluateSellability(
     return { sellable: false, blocker: uploaderBlocker };
   }
 
-  // (5) The uploader's own declaration about THIS FILE
+  // `review` cannot be null past this point — step (1) answers `no_review`
+  // for that — but `tsc` cannot see across the call above, and a `review!`
+  // would be an assertion where a check costs nothing. Re-asked rather than
+  // asserted, so the unreachable branch is still the blocked one.
+  if (!review) {
+    return { sellable: false, blocker: "no_review" };
+  }
+
+  // (5) Does that clearance reach THIS file (ugcportal-aqw; §4 item 6)?
+  // Placed immediately after the standing clearance because it is the same
+  // instrument being read — "is it still good?" and then "how far does it
+  // go?" — and before anything per-upload, because a file the clearance was
+  // never signed over is not made sellable by any amount of triage.
+  const scope = clearanceScopeBlocker(review, upload.createdAt);
+  if (scope) {
+    return { sellable: false, blocker: scope };
+  }
+
+  // (6) The uploader's own declaration about THIS FILE
   // (ugcportal-15r; §4 item 7). Placed here, between the uploader's standing
   // clearance and the admin's per-upload triage, because that is the order
   // §4 sets out and because it is the order the facts are created in: a
@@ -1120,7 +1241,7 @@ export function evaluateSellability(
     return { sellable: false, blocker: attestation };
   }
 
-  // (6) The upload has to have been put forward for sale at all. The
+  // (7) The upload has to have been put forward for sale at all. The
   // clearance above says the *person* may resell their work; it says nothing
   // about this particular file, and an upload nobody has triaged is an
   // upload nobody has looked at.
@@ -1129,7 +1250,7 @@ export function evaluateSellability(
     return { sellable: false, blocker: "not_listed_for_sale" };
   }
 
-  // (7) Per-upload triage (Part C). The uploader-level clearance covers the
+  // (8) Per-upload triage (Part C). The uploader-level clearance covers the
   // owner's own copyright only.
   //
   // One call, over TRIAGE_FACTS — not a list of per-column checks here.

@@ -386,6 +386,194 @@ describe("ugcportal-0ss K3: an admin clearance is recorded", () => {
   });
 });
 
+/**
+ * ugcportal-aqw K2: an edit must not widen what a clearance covers.
+ *
+ * `adminFields` re-stamps `reviewedAt` on every admin transition, which is
+ * exactly why the scope lives in its own column — and that column is only
+ * written when the reviewer is granting the clearance or has explicitly
+ * said they are re-recording its scope. Everything else leaves it alone.
+ */
+describe("ugcportal-aqw K2: the recorded scope survives an unrelated edit", () => {
+  /** Clear the uploader and return the cut-off that decision recorded. */
+  async function clearUploader(reason = "Contract signed."): Promise<Date> {
+    await setResaleRightsStatus(UPLOADER, {
+      source: "ADMIN",
+      actorUserId: REVIEWER,
+      status: "CLEARED",
+      reason,
+    });
+    const stored = await review();
+    expect(stored?.coversUploadsBefore).toBeInstanceOf(Date);
+    return stored!.coversUploadsBefore!;
+  }
+
+  it("defaults a first clearance to the decision moment, not covering the future", async () => {
+    const before = Date.now();
+    const cutOff = await clearUploader();
+    const after = Date.now();
+
+    // The decision moment, within the window this test ran in — asserted
+    // as a range rather than against `reviewedAt`, because agreeing with
+    // `reviewedAt` is precisely what this column must not be defined by.
+    expect(cutOff.getTime()).toBeGreaterThanOrEqual(before);
+    expect(cutOff.getTime()).toBeLessThanOrEqual(after);
+    expect((await review())?.coversFutureUploads).toBe(false);
+  });
+
+  it("leaves both scope columns alone on an ordinary edit", async () => {
+    const cutOff = await clearUploader();
+
+    await setResaleRightsStatus(UPLOADER, {
+      source: "ADMIN",
+      actorUserId: REVIEWER,
+      status: "CLEARED",
+      reason: "Fixed a typo in the conditions.",
+      conditions: "Editorial use only.",
+    });
+
+    const after = await review();
+    expect(after?.coversUploadsBefore?.toISOString()).toBe(
+      cutOff.toISOString(),
+    );
+    expect(after?.coversFutureUploads).toBe(false);
+    // And the edit really happened, so the assertion above is not vacuous
+    // — including the `reviewedAt` re-stamp that makes this bead exist.
+    expect(after?.conditions).toBe("Editorial use only.");
+    expect(after!.reviewedAt!.getTime()).toBeGreaterThanOrEqual(
+      cutOff.getTime(),
+    );
+  });
+
+  it("leaves the scope alone across a status change away from CLEARED and back", async () => {
+    const cutOff = await clearUploader();
+
+    await setResaleRightsStatus(UPLOADER, {
+      source: "ADMIN",
+      actorUserId: REVIEWER,
+      status: "IN_REVIEW",
+      reason: "Re-checking the music layer.",
+    });
+    expect((await review())?.coversUploadsBefore?.toISOString()).toBe(
+      cutOff.toISOString(),
+    );
+
+    // Re-clearing IS a reviewer signing again, so the default moves — the
+    // one widening this bead permits, because it takes a deliberate
+    // transition into CLEARED rather than an edit to some other field.
+    await setResaleRightsStatus(UPLOADER, {
+      source: "ADMIN",
+      actorUserId: REVIEWER,
+      status: "CLEARED",
+      reason: "Music layer settled; clear again.",
+    });
+    expect(
+      (await review())!.coversUploadsBefore!.getTime(),
+    ).toBeGreaterThanOrEqual(cutOff.getTime());
+  });
+
+  it("writes the scope only when the transition carries one", async () => {
+    const cutOff = await clearUploader();
+    const chosen = new Date("2026-01-01T00:00:00.000Z");
+
+    await setResaleRightsStatus(UPLOADER, {
+      source: "ADMIN",
+      actorUserId: REVIEWER,
+      status: "CLEARED",
+      reason: "Scope re-examined against the instrument.",
+      scope: { coversUploadsBefore: chosen, coversFutureUploads: false },
+    });
+
+    const after = await review();
+    expect(after?.coversUploadsBefore?.toISOString()).toBe(
+      chosen.toISOString(),
+    );
+    // The fixture moved, which is what makes the three tests above mean
+    // something: the column is writable, it just is not written by them.
+    expect(after?.coversUploadsBefore?.toISOString()).not.toBe(
+      cutOff.toISOString(),
+    );
+  });
+
+  it("reads a blank cut-off on an explicit scope as the decision moment", async () => {
+    const cutOff = await clearUploader();
+    const before = Date.now();
+
+    await setResaleRightsStatus(UPLOADER, {
+      source: "ADMIN",
+      actorUserId: REVIEWER,
+      status: "CLEARED",
+      reason: "Re-examined; scope is everything up to today.",
+      scope: { coversUploadsBefore: null, coversFutureUploads: false },
+    });
+
+    const after = await review();
+    // Not null: there is no "no cut-off" state for a clearance to be in,
+    // and a null column blocks every upload at the gate.
+    expect(after?.coversUploadsBefore).toBeInstanceOf(Date);
+    expect(after!.coversUploadsBefore!.getTime()).toBeGreaterThanOrEqual(
+      before,
+    );
+    expect(after!.coversUploadsBefore!.getTime()).toBeGreaterThanOrEqual(
+      cutOff.getTime(),
+    );
+  });
+
+  it("records a framework licence only when the reviewer asks for one", async () => {
+    await clearUploader();
+    expect((await review())?.coversFutureUploads).toBe(false);
+
+    await setResaleRightsStatus(UPLOADER, {
+      source: "ADMIN",
+      actorUserId: REVIEWER,
+      status: "CLEARED",
+      reason: "Instrument is a framework licence over future works.",
+      scope: { coversUploadsBefore: null, coversFutureUploads: true },
+    });
+    expect((await review())?.coversFutureUploads).toBe(true);
+
+    // And an unrelated edit afterwards does not quietly withdraw it, which
+    // is the other direction of the same preservation rule.
+    await setResaleRightsStatus(UPLOADER, {
+      source: "ADMIN",
+      actorUserId: REVIEWER,
+      status: "CLEARED",
+      reason: "Added the contract reference to the conditions.",
+      conditions: "Framework licence 2026-03, clause 4.",
+    });
+    expect((await review())?.coversFutureUploads).toBe(true);
+  });
+
+  it("records no scope for a decision that is not a clearance", async () => {
+    await setResaleRightsStatus(UPLOADER, {
+      source: "ADMIN",
+      actorUserId: REVIEWER,
+      status: "IN_REVIEW",
+      reason: "Starting the checklist.",
+    });
+
+    // Nothing has been cleared, so there is nothing a scope would describe
+    // — and the gate blocks a null cut-off anyway.
+    expect(await review()).toMatchObject({
+      coversUploadsBefore: null,
+      coversFutureUploads: false,
+    });
+  });
+
+  it("records no scope on a SYSTEM revoke of an unreviewed uploader", async () => {
+    await setResaleRightsStatus(UPLOADER, {
+      source: "SYSTEM",
+      status: "REVOKED",
+      reason: "Uploader withdrew.",
+    });
+
+    expect(await review()).toMatchObject({
+      coversUploadsBefore: null,
+      coversFutureUploads: false,
+    });
+  });
+});
+
 describe("ugcportal-0ss K4: no system path to CLEARED", () => {
   it("refuses a system transition to CLEARED and writes nothing", async () => {
     const result = await setResaleRightsStatus(UPLOADER, {

@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -6,20 +9,48 @@ import {
 } from "@/app/admin/settings/rights/outcomes";
 import { TRIAGE_FACTS } from "@/lib/resale-rights";
 
+/**
+ * The decision handler's own source, read so the test below can name the
+ * codes it actually redirects with (ugcportal-aqw).
+ *
+ * READ RATHER THAN RETYPED, because the hand-written list this replaced was
+ * already wrong. `rights_invalid_covers_uploads_before` was added to the
+ * handler and to `OUTCOME_MESSAGES` without being added here, and the test's
+ * own name — "every code the decision handler can redirect with" — went on
+ * claiming a completeness it no longer had. A list that has to be edited in
+ * step with another file is the sibling-omission family; derived, it cannot
+ * drift.
+ */
+const DECISION_ROUTE_SOURCE = readFileSync(
+  resolve(process.cwd(), "src/app/api/admin/rights/decision/route.ts"),
+  "utf8",
+);
+
 describe("outcomeMessage", () => {
   it("resolves every code the decision handler can redirect with", () => {
-    for (const code of [
-      "rights_reason_required",
-      "rights_invalid_valid_until",
-      "rights_evidence_too_large",
-      "rights_evidence_failed",
-      "rights_storage_unavailable",
-      "rights_uploader_not_found",
-      "rights_actor_not_admin",
-      "rights_holder_missing",
-      "rights_conflict",
-    ]) {
-      expect(outcomeMessage(code)).toBeTypeOf("string");
+    // Every `rights_*` string literal in the handler. The success path uses
+    // a different query parameter (`rights=recorded`) and the 403s return
+    // JSON prose, so this prefix picks out exactly the error codes.
+    const codes = [
+      ...new Set(
+        [...DECISION_ROUTE_SOURCE.matchAll(/"(rights_[a-z_]+)"/g)].map(
+          (match) => match[1],
+        ),
+      ),
+    ].sort();
+
+    // The scan found the handler and parsed something, so the loop below is
+    // not vacuously green on an empty list — the failure a path typo or a
+    // changed literal style would otherwise produce.
+    expect(codes).toContain("rights_invalid_covers_uploads_before");
+    expect(codes.length).toBeGreaterThanOrEqual(9);
+
+    for (const code of codes) {
+      // Keyed so a failure names the code that has no message.
+      expect({ code, message: outcomeMessage(code) }).toEqual({
+        code,
+        message: expect.any(String),
+      });
     }
   });
 

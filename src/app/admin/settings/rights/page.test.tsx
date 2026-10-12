@@ -320,6 +320,69 @@ describe("what the screen says about a clearance", () => {
 
     expect(await renderPage()).toContain("Reviewed by the uploader themselves");
   });
+
+  /**
+   * ugcportal-aqw: the clearance's scope, on the screen that records it.
+   *
+   * All three states are asserted because the empty one is the dangerous
+   * one to leave out: a clearance with no recorded scope blocks every
+   * upload, and a screen that says nothing is how an admin ends up reading
+   * CLEARED beside an item that will not sell with nothing to look at.
+   */
+  it("states which uploads a clearance covers", async () => {
+    await createUploaderWithMedia("u-1", "u1@example.com");
+    await prisma.resaleRightsReview.create({
+      data: {
+        uploaderUserId: "u-1",
+        status: "CLEARED",
+        checklistVersion: CURRENT_CHECKLIST_VERSION,
+        reviewedByUserId: "admin-1",
+        reviewedAt: new Date(),
+        coversUploadsBefore: new Date("2026-05-04T09:30:00.000Z"),
+      },
+    });
+
+    const markup = await renderPage();
+    expect(markup).toContain("Covers:");
+    expect(markup).toContain("uploads made before 4 May 2026, 09:30 UTC");
+  });
+
+  it("says plainly when a clearance records no scope at all", async () => {
+    await createUploaderWithMedia("u-1", "u1@example.com");
+    await prisma.resaleRightsReview.create({
+      data: {
+        uploaderUserId: "u-1",
+        status: "CLEARED",
+        checklistVersion: CURRENT_CHECKLIST_VERSION,
+        reviewedByUserId: "admin-1",
+        reviewedAt: new Date(),
+      },
+    });
+
+    expect(await renderPage()).toContain("no scope recorded");
+  });
+
+  it("says when the clearance was recorded as a framework licence", async () => {
+    await createUploaderWithMedia("u-1", "u1@example.com");
+    await prisma.resaleRightsReview.create({
+      data: {
+        uploaderUserId: "u-1",
+        status: "CLEARED",
+        checklistVersion: CURRENT_CHECKLIST_VERSION,
+        reviewedByUserId: "admin-1",
+        reviewedAt: new Date(),
+        // A cut-off is stored as well, so this also pins WHICH of the two
+        // the screen reports when both are present — the framework mark
+        // overrides the cut-off at the gate, and the words have to match.
+        coversUploadsBefore: new Date("2026-05-04T09:30:00.000Z"),
+        coversFutureUploads: true,
+      },
+    });
+
+    const markup = await renderPage();
+    expect(markup).toContain("recorded as a framework licence");
+    expect(markup).not.toContain("uploads made before 4 May 2026");
+  });
 });
 
 describe("the decision form is opened one at a time", () => {

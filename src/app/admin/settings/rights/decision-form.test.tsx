@@ -24,6 +24,10 @@ const EXISTING: DecisionFormReview = {
   validUntil: new Date("2027-06-01T00:00:00.000Z"),
   conditions: "Editorial use only.",
   checklistVersion: CURRENT_CHECKLIST_VERSION,
+  // ugcportal-aqw. A real recorded scope, so the scope assertions below are
+  // about rendering a stored value rather than about the empty case.
+  coversUploadsBefore: new Date("2026-05-04T09:30:00.000Z"),
+  coversFutureUploads: false,
 };
 
 function render(review: DecisionFormReview | null): string {
@@ -133,6 +137,21 @@ describe("every field on the form is classified", () => {
    *   evidence         — intentionally blank: absent means "keep what's stored"
    *   restampChecklist — intentionally unticked: absent means "don't re-stamp"
    *
+   * And the three scope fields (ugcportal-aqw), which are classified
+   * together because they only mean anything together:
+   *
+   *   setScope            — intentionally unticked: absent means "leave the
+   *                         recorded scope alone", so an edit to any other
+   *                         field cannot widen the clearance (K2)
+   *   coversUploadsBefore — renders the stored day, but is READ ONLY behind
+   *                         `setScope`. Deliberately NOT a round-tripping
+   *                         field: the input is day-granular and the stored
+   *                         value is an instant, so writing it back on every
+   *                         submit would quietly move a mid-afternoon
+   *                         cut-off to that morning's midnight
+   *   coversFutureUploads — same gate; renders the stored tick so a reviewer
+   *                         re-recording the scope can also remove it
+   *
    * ugcportal-0ss also had `clearedOwnerUserId` here, and it produced two of
    * the round-trip bugs on its own. ugcportal-vsm removed the field rather
    * than fixing it a third time: the gate reaches a clearance through the
@@ -147,14 +166,75 @@ describe("every field on the form is classified", () => {
 
     expect([...names].sort()).toEqual([
       "conditions",
+      "coversFutureUploads",
+      "coversUploadsBefore",
       "evidence",
       "reason",
       "restampChecklist",
       "route",
+      "setScope",
       "status",
       "uploaderUserId",
       "validUntil",
     ]);
+  });
+});
+
+/**
+ * ugcportal-aqw: the scope block, at the component alone.
+ *
+ * The end-to-end half — that an unrelated edit leaves the stored scope
+ * standing — is in decision-round-trip.test.tsx, because the bug it guards
+ * lives in the seam between what this renders and what the handler writes.
+ * What belongs here is the rendering contract that seam depends on.
+ */
+describe("the scope control is an assertion, not a default", () => {
+  function checkbox(markup: string, name: string): string | undefined {
+    return new RegExp(`<input[^>]*\\bname="${name}"[^>]*>`).exec(markup)?.[0];
+  }
+
+  it("offers the scope control unticked, every time", () => {
+    // Ticked by default, it would widen the clearance on any submit — the
+    // exact failure the column exists to prevent.
+    expect(checkbox(render(EXISTING), "setScope")).not.toMatch(/\bchecked\b/);
+    expect(checkbox(render(null), "setScope")).not.toMatch(/\bchecked\b/);
+  });
+
+  it("renders the stored cut-off in the date input", () => {
+    // Not for round-tripping — the handler ignores it unless `setScope` is
+    // ticked — but so a reviewer re-recording the scope can see what they
+    // are replacing.
+    expect(inputValue(render(EXISTING), "coversUploadsBefore")).toBe(
+      "2026-05-04",
+    );
+    expect(inputValue(render(null), "coversUploadsBefore")).toBe("");
+  });
+
+  it("states the recorded scope in words, including when there is none", () => {
+    expect(render(EXISTING)).toContain("4 May 2026");
+    // A clearance with no recorded scope sells nothing, and the screen has
+    // to say so — otherwise an admin reads CLEARED and cannot explain why
+    // nothing is sellable.
+    expect(
+      render({ ...EXISTING, coversUploadsBefore: null }),
+    ).toContain("no scope");
+  });
+
+  it("reflects a recorded framework licence in both the words and the tick", () => {
+    const markup = render({ ...EXISTING, coversFutureUploads: true });
+    // A phrase from the *recorded-state* sentence, not from the checkbox's
+    // own label — that label says "framework licence over future works" on
+    // every render, so asserting on it would pass either way.
+    expect(markup).toContain("every upload by this person is in scope");
+    expect(render(EXISTING)).not.toContain(
+      "every upload by this person is in scope",
+    );
+    expect(checkbox(markup, "coversFutureUploads")).toMatch(/\bchecked\b/);
+    // And the narrow case really does render it unticked, so the
+    // assertion above is not passing on a hard-coded attribute.
+    expect(checkbox(render(EXISTING), "coversFutureUploads")).not.toMatch(
+      /\bchecked\b/,
+    );
   });
 });
 
