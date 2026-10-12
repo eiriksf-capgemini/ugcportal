@@ -1,6 +1,9 @@
 import type { Metadata } from "next";
 import { Fraunces, Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+
+import { cn } from "cn";
+
 import { AppShell } from "@/components/app-shell";
 import { AnalyticsLoader } from "@/components/consent/analytics-loader";
 import { ConsentProvider } from "@/components/consent/consent-context";
@@ -94,7 +97,12 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
        * browser to match the active mode for its own chrome - scrollbars, form
        * controls, the canvas before paint.
        */
-      className={`${geistSans.variable} ${geistMono.variable} ${fraunces.variable} h-full antialiased`}
+      className={cn(
+        geistSans.variable,
+        geistMono.variable,
+        fraunces.variable,
+        "h-full antialiased",
+      )}
     >
       <body className="min-h-full">
         <ConsentProvider initialConsent={initialConsent}>

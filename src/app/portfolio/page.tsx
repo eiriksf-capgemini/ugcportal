@@ -1,3 +1,5 @@
+import { cn } from "cn";
+
 import { GALLERY_GRID_CLASS } from "@/components/gallery/containment";
 import { PortfolioTile } from "@/components/portfolio/portfolio-tile";
 import { ContactSection } from "@/components/site/contact-section";
@@ -64,7 +66,7 @@ export default async function PortfolioPage() {
             New samples are on their way — check back soon.
           </p>
         ) : (
-          <ul className={`mt-4 ${GALLERY_GRID_CLASS}`}>
+          <ul className={cn("mt-4", GALLERY_GRID_CLASS)}>
             {pieces.map((piece, index) => (
               <PortfolioTile key={piece.id} piece={piece} position={index} />
             ))}

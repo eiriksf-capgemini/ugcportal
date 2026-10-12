@@ -1,4 +1,8 @@
 import { MediaAuthorship, RightsLayer, Role } from "@/generated/prisma/enums";
+import {
+  PUBLIC_MEDIA_ALCOHOL_COMMERCE_SCOPE,
+  type MediaAlcoholCommerceScope,
+} from "@/lib/alcohol-commerce";
 import { ACCEPTED_ATTESTATION_VERSIONS } from "@/lib/attestation";
 import {
   ATTESTATION_BLOCKERS,
@@ -46,6 +50,15 @@ import {
  * fixture rows in a real database and compares the answers
  * (src/lib/publishability.scope-agreement.test.ts), with the two
  * disagreements SQL cannot avoid enumerated there rather than hidden.
+ *
+ * `PUBLIC_MEDIA_RIGHTS_SCOPE` IS NO LONGER ONLY THIS MODULE'S RULE. Since
+ * ugcportal-pgpq it carries a third arm belonging to a different statute —
+ * alkoholloven § 9-2's commercial pair, defined in
+ * src/lib/alcohol-commerce.ts and cross-checked against ITS own predicate in
+ * src/lib/alcohol-commerce.scope-agreement.test.ts. It is assembled here
+ * because this is the constant every anonymous reader already spreads, not
+ * because it is part of publishability. See that arm's comment at the
+ * constant below.
  *
  * WHAT THIS DELIBERATELY DOES NOT DECIDE. Whether self-service
  * publish-by-default is the right model at all is ugcportal-55nt's question
@@ -442,6 +455,16 @@ const NOBODY_IDENTIFIABLE_SHOWN = {
 /**
  * The rights half of `PUBLIC_MEDIA_SCOPE`.
  *
+ * THREE ARMS, FROM TWO RULES, SINCE ugcportal-pgpq. The first two are this
+ * module's own publishability rule (the attestation, and the PEOPLE layer);
+ * the third is alkoholloven § 9-2's commercial pair, which lives in
+ * src/lib/alcohol-commerce.ts beside its own TypeScript predicate and is
+ * only assembled here, because this is the constant every anonymous reader
+ * already spreads. That means this constant is no longer the query form of
+ * `publishabilityBlocker` alone — see the third arm's own comment below, and
+ * docs/legal/alcohol-commerce-public-visibility.md for why the § 9-2 pair is
+ * judged at read time at all.
+ *
  * EVERYTHING UNDER ONE `AND` KEY, which is not cosmetic. `listMedia`
  * (src/lib/media-listing.ts) merges the scope with its keyset predicate as
  * `{ ...scope, ...keyset }`, and the keyset is `{ OR: [...] }` — so a scope
@@ -455,6 +478,7 @@ export type MediaPublicRightsScope = {
   AND: [
     { attestation: { is: typeof PUBLISHABLE_ATTESTATION } },
     { OR: [typeof NOBODY_IDENTIFIABLE_SHOWN, typeof PEOPLE_LAYER_CLEARED] },
+    MediaAlcoholCommerceScope,
   ];
 };
 
@@ -466,6 +490,31 @@ export const PUBLIC_MEDIA_RIGHTS_SCOPE: MediaPublicRightsScope = {
     // K2, as a query: nobody identifiable is shown, or the PEOPLE layer is
     // cleared.
     { OR: [NOBODY_IDENTIFIABLE_SHOWN, PEOPLE_LAYER_CLEARED] },
+    /*
+     * A THIRD ARM, FROM A DIFFERENT STATUTE (ugcportal-pgpq): alkoholloven
+     * § 9-2's commercial pair, defined beside its own predicate in
+     * src/lib/alcohol-commerce.ts and only assembled here.
+     *
+     * WHY IT IS HERE AND NOT IN A CONSTANT OF ITS OWN BESIDE
+     * `PUBLIC_MEDIA_SCOPE`. Two reasons, both load-bearing. The scope's own
+     * key set is asserted to be exactly the column half plus this constant
+     * (src/lib/public-media.consumers.test.ts,
+     * src/lib/media-public-feed-index-migration.test.ts) and
+     * `PUBLIC_MEDIA_SCOPE.AND` is asserted to BE this array
+     * (src/lib/public-media.lapse.test.ts), so a fourth top-level key would
+     * be a new thing to remember at every call site rather than one the
+     * scope carries. And the arm is a disjunction: a top-level `OR` on the
+     * scope is silently overwritten by `listMedia`'s keyset predicate from
+     * page two onwards — see this type's own comment above — so nesting it
+     * inside this `AND` is the only placement that survives pagination.
+     *
+     * It is a RELATION FILTER ONLY (`listing`, `advertisingDisclosure`,
+     * `commercialLinks`), which is what makes it re-evaluated on every read
+     * rather than snapshotted at publish time; that property is asserted,
+     * not just described, by "is RELATION FILTERS ONLY" in
+     * src/lib/public-media.lapse.test.ts.
+     */
+    PUBLIC_MEDIA_ALCOHOL_COMMERCE_SCOPE,
   ],
 };
 

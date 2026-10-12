@@ -231,13 +231,18 @@ describe("K2 — one radius token for every interactive shape", () => {
     // a shared GALLERY_RADIUS_CLASS constant (so the advertising-disclosure
     // label beside it, containment.radius-parity.test.ts's own subject,
     // could not drift onto its own literal again), so the source text no
-    // longer carries a literal "rounded-lg" inside the template string
-    // itself — this now checks the RESOLVED class value the tile actually
-    // renders with, which is the claim this test cares about either way.
+    // longer carries a literal "rounded-lg" in the definition itself —
+    // this now checks the RESOLVED class value the tile actually renders
+    // with, which is the claim this test cares about either way.
     expect(GALLERY_TILE_BASE_CLASS).toContain("rounded-lg");
     expect(GALLERY_TILE_BASE_CLASS).not.toContain("rounded-md");
+    // The composition is a `cn()` call, not a template literal
+    // (ugcportal-wz8w): building a Tailwind class string by interpolation
+    // is now a lint error, so the source-level form this asserts on
+    // changed with it. The CLAIM is unchanged — the definition names the
+    // shared constant rather than a hand-typed radius.
     expect(containment).toMatch(
-      /GALLERY_TILE_BASE_CLASS\s*=\s*`[^`]*\$\{GALLERY_RADIUS_CLASS\}/,
+      /GALLERY_TILE_BASE_CLASS\s*=\s*cn\([^;]*\bGALLERY_RADIUS_CLASS\b/,
     );
   });
 });

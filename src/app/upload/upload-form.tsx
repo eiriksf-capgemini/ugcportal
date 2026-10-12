@@ -9,6 +9,8 @@ import {
   useState,
 } from "react";
 
+import { cn } from "cn";
+
 import { TEXT_INPUT_CLASS, TEXT_LABEL_CLASS } from "@/components/ui/text-input";
 import { ACCEPTED_MIME_TYPES } from "@/lib/media-rules";
 
@@ -999,7 +1001,7 @@ function AltTextFields({
         {altTextError ?? ""}
       </p>
 
-      <label htmlFor={captionId} className={`mt-4 ${TEXT_LABEL_CLASS}`}>
+      <label htmlFor={captionId} className={cn("mt-4", TEXT_LABEL_CLASS)}>
         {/*
           text-muted-foreground, not text-ink-muted (ugcportal-7g2o, same
           reasoning as the alt-text helper paragraph above): this span is a

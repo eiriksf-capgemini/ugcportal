@@ -1,7 +1,10 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { RightsLayer } from "@/generated/prisma/enums";
-import { seedMedia } from "@/lib/test-support/media-fixtures";
+import {
+  seedAlcoholAnsweredListing,
+  seedMedia,
+} from "@/lib/test-support/media-fixtures";
 import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db";
 
 /**
@@ -227,6 +230,9 @@ describe("the advertising-disclosure label (K1, K2, K3)", () => {
         label: "Advertisement / Reklame",
       },
     });
+    // ugcportal-pgpq: a labelled item is served only while § 9-2's alcohol
+    // question is answered `no`, so the fixture has to answer it.
+    await seedAlcoholAnsweredListing(prisma, "item-labelled");
 
     const item = await getPublicMediaItem("pv-item-labelled");
     expect(item).not.toBeNull();
@@ -252,6 +258,9 @@ describe("the advertising-disclosure label (K1, K2, K3)", () => {
         label: "Reklame",
       },
     });
+    // ugcportal-pgpq: a labelled item is served only while § 9-2's alcohol
+    // question is answered `no`, so the fixture has to answer it.
+    await seedAlcoholAnsweredListing(prisma, "item-leak-disclosure");
 
     const item = await getPublicMediaItem("pv-item-leak-disclosure");
     expect(item).not.toBeNull();

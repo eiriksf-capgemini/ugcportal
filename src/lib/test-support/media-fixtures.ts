@@ -152,3 +152,43 @@ export async function seedMedia(
     },
   });
 }
+
+/**
+ * An admin triage whose only load-bearing answer is "this picture shows no
+ * alcohol" (ugcportal-pgpq).
+ *
+ * WHY ANY FIXTURE NEEDS THIS. Since that bead, `PUBLIC_MEDIA_SCOPE` carries
+ * alkoholloven § 9-2's commercial pair: an item that declares a benefit or
+ * carries a commercial link is served only while `MediaListing.depictsAlcohol`
+ * is a recorded `false`. A fixture that attaches a label or a link to a row
+ * with no listing is therefore no longer "an ordinary published advertisement"
+ * — it is the fail-closed case, and a test about something else (a leak, a
+ * rendered marker, a projection) would be exercising this instead and would
+ * simply find no item.
+ *
+ * ONE COPY, for the same reason `seedMedia` above is one copy: 6 call sites
+ * across three test files (src/app/page.test.tsx ×2,
+ * src/lib/media-item.test.ts ×2, src/app/media/[previewId]/page.test.tsx
+ * ×2) need the identical answer beside their labelled disclosure, and 6
+ * copies of it is the sibling-omission shape this module exists to
+ * prevent. The other triage answers are filled in so this is a completed
+ * triage rather than a half-answered row a later reader has to interpret;
+ * only `depictsAlcohol` is read by the scope.
+ */
+export async function seedAlcoholAnsweredListing(
+  client: Pick<typeof PrismaSingleton, "mediaListing">,
+  mediaId: string,
+): Promise<void> {
+  await client.mediaListing.create({
+    data: {
+      mediaId,
+      depictsPeople: false,
+      depictsMinors: false,
+      containsMusic: false,
+      thirdPartyCreator: false,
+      sponsoredContent: false,
+      depictsAlcohol: false,
+      wineAccessory: true,
+    },
+  });
+}
