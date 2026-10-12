@@ -64,8 +64,9 @@ import { cn } from "cn"
  *        is secondary - this is what src/components/auth-status.tsx's
  *        sign-in controls and the empty state's portfolio link both use.
  *      - on the hero's petrol-GRADIENT well (`.home-hero-surface`):
- *        `default-tint` is primary - see that variant's own comment for why
- *        it is not `default-neutral`.
+ *        `default-accent` is primary (ugcportal-dmne; was `default-tint`
+ *        before it) - see that variant's own comment for why terracotta and
+ *        why it is the only caller.
  *      - on the untouched near-black surface scale (bg-surface-0..4 /
  *        bg-destructive-surface - fase 2's job, not this bead's):
  *        `default-neutral` is primary, `outline-neutral` is secondary.
@@ -268,6 +269,43 @@ const buttonVariants = cva(
          * Button here needed no new contrast pairing.
          */
         "default-tint": "bg-petrol-100 text-surface-0 hover:bg-petrol-200",
+        /*
+         * ugcportal-dmne: THE one terracotta-filled control in the whole
+         * system — the hero's primary call to action (`btn-accent` in
+         * docs/design/forside.html), and the ONLY place this variant may be
+         * reached for (see this bead's own premise and the 2026-10-02
+         * handoff note: "terracotta accent scope - CTA only, never on
+         * sign-in buttons"). Every other filled control stays `default`/
+         * `default-neutral`/`default-tint` — a second caller of this variant
+         * is a second primary action, which is exactly what K4's "at most
+         * one terracotta-filled primary control per page"
+         * (src/lib/design/terracotta-primary-control.ts) exists to catch.
+         *
+         * `--terracotta-600`, not `--terracotta-500`: white-on-500 measures
+         * 3.3:1 (large-text only) and petrol-900-on-500 measures 4.4:1 -
+         * neither clears body's 4.5:1, and this button's label is body-sized
+         * (`text-sm`, the same base every other filled variant here uses).
+         * White-on-600 measures 4.63:1, which does -
+         * `terracotta-ink-on-terracotta-600` in contrast.ts is the pairing
+         * that proves it; `--terracotta-ink` (not `--primary-foreground`) is
+         * the label, because this fill is mode-invariant and
+         * `--primary-foreground` is not - see that token's own comment in
+         * globals.css.
+         *
+         * `hover:brightness-90`, not a second terracotta step: the two
+         * tokens one step away from 600 (100, 900) are a four-fold jump in
+         * lightness either direction, and introducing a fifth step purely
+         * for a hover state is exactly what this bead's own "no new
+         * terracotta step" scope line forbids. `default-neutral`'s own
+         * `hover:brightness-95` is the precedent for this exact move - a
+         * filter on the existing fill, not a new token - and, like that
+         * one, is not independently contrast-checked here: a CSS filter is
+         * not a resolvable custom property, so neither `evaluatePairing`
+         * nor the bare-utility coverage scan (src/lib/design/usage.ts) can
+         * see it; disclosed, not hidden, the same way default-neutral's own
+         * comment discloses it.
+         */
+        "default-accent": "bg-terracotta-600 text-terracotta-ink hover:brightness-90",
         outline: PETROL_OUTLINE_STYLE,
         secondary: PETROL_OUTLINE_STYLE,
         "outline-neutral": NEUTRAL_OUTLINE_STYLE,
