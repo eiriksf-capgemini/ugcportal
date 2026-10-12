@@ -25,6 +25,41 @@
 #     this bead exists to fix. `+` would be the semver spelling and Docker
 #     tags do not allow it.
 #
+# WHAT `-dirty` CANNOT SEE. It is computed from git, and git says nothing
+# about a gitignored file. So any gitignored file that reaches the BUILD
+# CONTEXT makes this tag name two different images on two machines -- exactly
+# what the pinned tag exists to prevent. That was not hypothetical:
+# `certs/capgemini.pem`, the corporate-proxy CA bundle
+# docker-compose.proxy-ca.yml tells a proxied developer to create, reached
+# the context and both images, because `.dockerignore` does not use gitignore
+# semantics and its `*.pem` did not match a nested path (PR #222 round 1).
+# Fixed there; the reasoning is at the top of .dockerignore.
+#
+# Measured after that fix, against this repo rather than in the abstract: the
+# context is 551 files, and `git check-ignore` claims exactly one of them --
+# `next-env.d.ts`, a generated stub of `/// <reference ... />` lines that
+# `next build` writes for itself -- checked by deleting it and running
+# `npm run build`, which put it back byte-identical, and the builder stage
+# runs that same `next build`. Re-run the context check after adding
+# anything to .gitignore, or after adding a directory of machine-local files:
+#
+#   printf 'FROM scratch\nCOPY . /ctx\n' > Dockerfile.ctxprobe
+#   docker build -q -f Dockerfile.ctxprobe --output type=local,dest=/tmp/ctx .
+#   rm Dockerfile.ctxprobe
+#   (cd /tmp/ctx/ctx && find . -type f | sed 's|^\./||') | git check-ignore --stdin
+#
+# Nothing listed means the tag sees every input. Something listed means it
+# does not, and the fix is a .dockerignore entry rather than a longer tag:
+# hashing the context into the tag would change it on a regenerated stub and
+# would still not be an attestation, for the reason below.
+#
+# WHAT THE TAG DOES NOT PROMISE is byte-identical images. This build is not
+# reproducible: three runs from an identical context produced three different
+# image IDs (measured, same day, same machine). The tag identifies the
+# INPUTS -- one commit, plus nothing gitignored beyond a regenerated stub --
+# so two QA sessions a week apart are exercising the same source. That is
+# what this bead needs. It is not a claim that they hold the same bytes.
+#
 # Two images, one tag. The app image is the Dockerfile's default (runner)
 # target; the migrate image is its `builder` target, which still has the
 # `prisma` CLI that the runner deliberately drops — the runner has no

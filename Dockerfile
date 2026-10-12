@@ -159,8 +159,13 @@ ENV NODE_ENV=production \
 # No FONTCONFIG_PATH is set, and that is deliberate rather than an oversight.
 # The concern is real — sharp bundles its own fontconfig inside
 # libvips-cpp.so, so its compiled-in default could point at the build prefix
-# rather than at /etc/fonts. Checked against the actual artifact this image
-# installs (@img/sharp-libvips-linuxmusl-x64, libvips-cpp.so.8.18.6):
+# rather than at /etc/fonts. Checked by reading the artifact out of the
+# image this Dockerfile actually built, which on this machine is
+# linux/arm64: @img/sharp-libvips-linuxmusl-arm64/lib/libvips-cpp.so.8.18.7
+# (the header above lists the full @img set the runner carries). The x64
+# artifact was NOT inspected — no x64 build has been made, the same
+# limitation as the header's point (1) — so this is an arm64 reading and
+# not a general one. What `strings` on it showed:
 #   - the only config-directory path in the binary is "/etc/fonts", sitting
 #     immediately beside the "FONTCONFIG_FILE"/"FONTCONFIG_PATH"/"fonts.conf"
 #     strings, i.e. fontconfig's standard default-path lookup with /etc/fonts
@@ -169,7 +174,11 @@ ENV NODE_ENV=production \
 #   - the built-in fallback config it embeds already lists
 #     <dir>/usr/share/fonts</dir>, which is where apk puts font-dejavu.
 # So FONTCONFIG_PATH=/etc/fonts would be a provable no-op, and setting it
-# would imply a problem that the binary says does not exist.
+# would imply a problem that the binary says does not exist. x64 is not
+# covered by that reading, but it cannot degrade silently there either: the
+# font probe above fails the upload rather than shipping an under-marked
+# image, so an x64 build with a fontconfig problem says so on the first
+# upload instead of after it.
 RUN apk add --no-cache fontconfig font-dejavu
 
 # Non-root runtime user (K1: "run as a non-root user in the final stage").

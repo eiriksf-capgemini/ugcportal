@@ -29,10 +29,13 @@
 # Facebook gets further and fails at the token exchange on the callback.
 # Nothing in either message mentions certificates.
 #
-# SUPPLY THE BUNDLE YOURSELF. certs/*.pem is gitignored (.gitignore's `*.pem`)
-# and must stay that way — it is machine-local trust material, not something
-# to commit. On a fresh clone the file does not exist. Recreate it from the
-# System keychain with:
+# SUPPLY THE BUNDLE YOURSELF. certs/*.pem is gitignored (.gitignore's
+# `*.pem`, which in gitignore syntax does match at any depth) and
+# dockerignored (.dockerignore's `**/*.pem`, which needs the `**/` to —
+# see the note at the top of that file), and must stay both — it is
+# machine-local trust material, not something to commit and not something to
+# bake into an image layer. On a fresh clone the file does not exist.
+# Recreate it from the System keychain with:
 #
 #   mkdir -p certs && {
 #     security find-certificate -c CapgeminiPKIRootCA    -p /Library/Keychains/System.keychain;
