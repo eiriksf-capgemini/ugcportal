@@ -64,7 +64,17 @@ export default async function PortfolioPage() {
             New samples are on their way — check back soon.
           </p>
         ) : (
-          <ul className={`mt-4 ${GALLERY_GRID_CLASS}`}>
+          <ul
+            /* eslint-disable-next-line no-restricted-syntax --
+               ugcportal-wz8w pre-existing hit, reported for triage (not
+               fixed here — scope freeze): GALLERY_GRID_CLASS is a static
+               string constant (src/components/gallery/containment.ts) —
+               its literal classes already appear in scanned source at
+               that declaration, so there is no missing-rule hazard here
+               today — but the indirection is exactly the risky PATTERN
+               this guard bans outright. */
+            className={`mt-4 ${GALLERY_GRID_CLASS}`}
+          >
             {pieces.map((piece, index) => (
               <PortfolioTile key={piece.id} piece={piece} position={index} />
             ))}

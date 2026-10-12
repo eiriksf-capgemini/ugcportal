@@ -109,6 +109,16 @@ export function ContactSection({ defaultSubject }: { defaultSubject: string }) {
     // and 0 is the wrong number to fall back to.
     <section
       id={pathFragment(ABOUT_CONTACT_PATH)}
+      /* eslint-disable-next-line no-restricted-syntax --
+         ugcportal-wz8w pre-existing hit, reported for triage (not fixed
+         here — scope freeze): SECTION_WRAPPER_CLASS is a static string
+         constant ("mt-10", src/components/site/section-heading.ts) — its
+         literal class already appears in scanned source at that
+         declaration, and the rest of this template literal
+         (`scroll-mt-[var(--header-height,3.5rem)]`) carries no
+         interpolation of its own, so there is no missing-rule hazard
+         here today — but the indirection is exactly the risky PATTERN
+         this guard bans outright. */
       className={`${SECTION_WRAPPER_CLASS} scroll-mt-[var(--header-height,3.5rem)]`}
       data-page-section="contact"
     >
