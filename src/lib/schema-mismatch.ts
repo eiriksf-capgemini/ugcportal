@@ -106,16 +106,13 @@ const introducedBy = new Map<string, string | null>();
  *
  * It IS on disk in the production image: the Dockerfile's runner stage names
  * `prisma/` in the allowlist it copies, for this read specifically
- * (ugcportal-6jcq). The comment here used to say the image copied
- * `prisma/schema.prisma` and not the history. That is not true of either
- * runner image it was checked against on 2026-10-12: `ls /app/prisma` in
- * `ugcportal:0.6.0-dev.ga6980eb`, the image this repo had actually deployed,
- * lists `migrations` beside `schema.prisma`, and that directory holds 25
- * entries -- 24 migration directories plus `migration_lock.toml`. A
- * `docker export` of a runner built at this commit lists the same 24. It may have been true of some older
- * image; no such image was found. Fail-soft either way: every read above is
- * inside a `try`, so a deployment that did drop them loses the "introduced
- * by" half of one log line rather than a route.
+ * (ugcportal-6jcq). This comment used to say the image copied
+ * `prisma/schema.prisma` and not the history, which was wrong; what the
+ * image does carry, and how that was checked, is recorded beside the `COPY
+ * ... /app/prisma` line in the Dockerfile, where it stays in step with the
+ * packaging it describes. Fail-soft either way: every read above is inside a
+ * `try`, so a deployment that did drop them loses the "introduced by" half
+ * of one log line rather than a route.
  */
 export function migrationIntroducing(
   name: string,

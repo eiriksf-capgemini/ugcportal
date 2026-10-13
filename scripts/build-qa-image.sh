@@ -85,9 +85,16 @@
 # every layer the first already made, so it adds no build time. It does cost
 # disk: the builder stage carries the full dependency tree and the source,
 # measured at 1.8 GB against the runner image's 328 MB (both re-measured at
-# ugcportal-6jcq, which took the runner down from 343 MB and took `docs/`,
-# `e2e/` and every `*.test.*`/`*.spec.*` out of BOTH images). That is the
-# price of migrating with the real CLI rather than reimplementing
+# ugcportal-6jcq, which took the runner down from 343 MB and the builder from
+# 1.82 GB). What that change took out of BOTH images is `docs/` (24 files),
+# `e2e/` (18) and every `*.test.*`/`*.spec.*` file OF THIS REPO'S OWN -- all
+# 259 of them. In the runner that is every such file there is: it holds zero.
+# In the builder it is not -- that image still holds 524, every one of them
+# inside a vendor package under
+# node_modules, which `npm ci` installs inside the image and no
+# `.dockerignore` entry can reach. All four figures read at eb3b7ad out of
+# `docker export <img> | tar -t`. That is the price of migrating with the real
+# CLI rather than reimplementing
 # `migrate deploy` against @libsql/client inside the app.
 set -euo pipefail
 
