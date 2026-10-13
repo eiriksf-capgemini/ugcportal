@@ -27,25 +27,43 @@ gets written down and pasted as a literal
 (`bd memories shell-state-does-not-persist-between-tool-calls`).
 
 `/Users/eiriksf/code/ugcportal` is a **shared checkout** that a human and other
-agents are working in. **Never run `git` there** — two exceptions, each one
+agents are working in. **Never run `git` there** — three exceptions, each one
 call against the single worktree path you supply yourself, never a path read
 off `git worktree list` or borrowed from another agent's name: `git worktree
 add`, to cut a worktree you do not already have
 (`cd /Users/eiriksf/code/ugcportal && git worktree add -b <branch>
-<worktree-path> origin/<base-commit>`), and `git worktree remove
+<worktree-path> origin/<base-commit>`); `git worktree remove
 <worktree-path>`, to take that same worktree down again once your work in it
 is done (`cd /Users/eiriksf/code/ugcportal && git worktree remove
 <worktree-path>`), where `<worktree-path>` is the literal path you passed to
-`git worktree add` yourself, in this same session — never a different one.
-Every other command, `git` included, runs from inside the worktree instead;
-beyond these two calls, `bd` is the only command you run in the shared
-checkout. Name the worktree yourself (`/tmp/wt-<bead-id>` as an implementer,
-`/tmp/wt-review-<pr>` as a reviewer, `/tmp/wt-<topic>` as an analyst), and
-**remove only what you created** — exactly that templated `git worktree
-remove` call, against exactly that path, and nothing else: another agent's
-worktree can be clean and still hold unpushed commits, which go with the local
-branch when it is removed, and this carve-out is not licence to tidy one up
-(`bd memories shared-checkout-is-not-safe-for-agents`, `bd memories
+`git worktree add` yourself, in this same session — never a different one;
+and, only as `.claude/skills/pr-review-merge/SKILL.md` step 5's merge-cleanup
+directs — which a reviewer brief mandates running in full
+(`worker-reviewer.md`'s "Yours in particular") — `node
+scripts/sweep-merged-branches.mjs --branch <branch> --execute`, run from the
+main checkout exactly as that step says, and the `git ls-remote --heads
+origin <branch>` check right after it (the same two commands `CLAUDE.md`'s
+own session-completion protocol asks a human or orchestrator closing the same
+bead to run from this same checkout). Follow that skill for the exact
+command, its flags and its order — this file only states that the exception
+exists, so "two exceptions" does not stay the official count while a third is
+exercised on every merge. Every other command, `git` included, runs from
+inside the worktree instead; beyond these three, `bd` is the only command you
+run in the shared checkout. Name the worktree yourself (`/tmp/wt-<bead-id>` as
+an implementer, `/tmp/wt-review-<pr>` as a reviewer, `/tmp/wt-<topic>` as an
+analyst). If `git worktree add` refuses because that templated path is
+already taken — two runs on the same bead, PR or topic both resolve to the
+same name — do not inspect or touch whatever is already there: append a short
+suffix you generate fresh for this attempt (four random lowercase-alnum
+characters, e.g. `/tmp/wt-review-<pr>-<suffix>`), and generate a new one each
+time it collides again, so the path stays one only you know you created, in
+this same session, rather than one a dead sibling's template alone would let
+you derive. **Remove only what you created** — exactly that templated `git
+worktree remove` call, against exactly that path (suffix and all, if you
+added one), and nothing else: another agent's worktree can be clean and still
+hold unpushed commits, which go with the local branch when it is removed, and
+this carve-out is not licence to tidy one up (`bd memories
+shared-checkout-is-not-safe-for-agents`, `bd memories
 reviewers-must-name-their-own-worktree-and-remove-only-it`). If `git worktree
 remove` refuses because the worktree is dirty or locked, stop and report
 that — do not force it, and do not look for a different worktree to remove
