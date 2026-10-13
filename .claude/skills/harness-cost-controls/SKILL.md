@@ -211,6 +211,19 @@ python3 .claude/skills/harness-cost-controls/scripts/usage_indicators.py --since
 python3 .claude/skills/harness-cost-controls/scripts/usage_indicators.py --since 2026-09-24 --project ugcportal
 ```
 
+**Never quote a figure out of this script without the scan line above it.**
+`report()`'s first output — before any indicator, and before its own
+`no requests matched` early return — is the count of files the glob matched,
+every `ANOMALY_KEYS` tally including the explicit zeros, and the filters it
+actually applied (`filters used: --since=… --project=…`). That is the
+denominator, not decoration. An
+earlier version had no such line, and two separate `--since` mistakes were
+invisible because of it: `--since 2026-09` silently widened to everything
+from September onward, and `--since 2026-9-24` silently matched nothing
+(§5, round 2). Both printed a confident, plausible report. The general form
+of this rule, and the two mitigations that go with it, are
+`review-standards` section 6; §5 below is the measured case study behind it.
+
 It uses `isSidechain` (present on every assistant turn in a Claude Code
 transcript) to identify subagent turns, and the same published per-MTok rates
 `claude-usage-report.py` uses. For subscription or seat-based access the
@@ -471,6 +484,17 @@ ask which direction a mistake in this computation would point the reader,
 and ask whether that mistake would actually show up in the `ANOMALY_KEYS`
 ledger — if it wouldn't, the ledger is missing a key, which is how three of
 these nineteen bugs were found.
+
+**This section is now one instance of a named, repo-wide rule, not a local
+curiosity.** `review-standards` section 6 (`ugcportal-kssp`) generalises it:
+print the match count before trusting a zero, never silence stderr on a
+mutating command, read the object back after a write that matters. The
+structural fix above — a tally for every drop path, printed unconditionally
+including as an explicit `0` — is mitigation 1 in its strongest form, and
+the sentence it earned ("silence and 'checked, found nothing' can no longer
+look the same") is that rule in nine words. Two sibling instruments now
+carry the same shape, each with its own test:
+`scripts/check-silenced-stderr.mjs` and `scripts/bd-verify-metadata.mjs`.
 
 ## 6. Bead-level cost vs assigned tier (ugcportal-bf7)
 
