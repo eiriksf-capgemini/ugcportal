@@ -766,10 +766,11 @@ function main() {
  * To be exact about what is special here, because the first draft of this
  * comment was not: the fail-open SHAPE is not special at all. Of the eleven
  * other `isMainModule` consumers, two are CI gates invoked directly by
- * `.github/workflows/ci.yml` -- `check-sensitive-files.mjs` (line 56) and
- * `check-pr-title.mjs` (line 87) -- and both end in exactly the same
- * `if (isMainModule(import.meta.url)) main();`, and for both a zero exit
- * means "allowed"; the first is the guard over `CLAUDE.md` and
+ * `.github/workflows/ci.yml` -- `check-sensitive-files.mjs` and
+ * `check-pr-title.mjs` -- and both guard their `main()` call behind the same
+ * `isMainModule(import.meta.url)` check (an `if (...) { main(); }` block,
+ * not a one-line form), and for both a zero exit means "allowed"; the first
+ * is the guard over `CLAUDE.md` and
  * `.claude/settings*.json`. What differs is EXPOSURE, not kind: this script
  * is the one routinely run by absolute path from another checkout, which is
  * how the mismatch below gets triggered, and it was observed here. Widening
