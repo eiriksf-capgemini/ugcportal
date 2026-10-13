@@ -866,10 +866,32 @@ describe("the skill file's own invocation does not discard the exit status", { t
     return out;
   }
 
-  it("finds the documented invocations to run", () => {
-    // If the skill is reworded so that no fenced line runs the script, every
-    // assertion below would vacuously pass over an empty list.
+  /**
+   * The shells to run each documented line through.
+   *
+   * `zsh` is the macOS default login shell and bash is what CI has; the
+   * ubuntu runner has no zsh, and spawning a missing interpreter yields
+   * `err.status === null`, not a number. That must not be mistaken for a
+   * pass and must not quietly empty the list either, so a missing shell is
+   * dropped HERE, once, with `bash` asserted present below -- rather than
+   * being swallowed per-call where an environment with neither shell would
+   * leave the whole assertion running over nothing.
+   */
+  const SHELLS = ["bash", "zsh"].filter((sh) => {
+    try {
+      execFileSync(sh, ["-c", "exit 0"], { stdio: "ignore", timeout: 10_000 });
+      return true;
+    } catch {
+      return false;
+    }
+  });
+
+  it("finds the documented invocations, and a shell to run them in", () => {
+    // Both halves guard the same vacuity: if the skill is reworded so that
+    // no fenced line runs the script, or if every shell went missing, the
+    // assertions below would pass over an empty loop and prove nothing.
     expect(documentedInvocations().length).toBeGreaterThanOrEqual(2);
+    expect(SHELLS).toContain("bash");
   });
 
   it("every documented invocation reports a failing bead as a failure", () => {
@@ -897,7 +919,7 @@ describe("the skill file's own invocation does not discard the exit status", { t
         .replaceAll("<bead-id>", "fixture-fails-everything");
       expect(runnable).not.toContain("<bead-id>");
 
-      for (const shell of ["bash", "zsh"]) {
+      for (const shell of SHELLS) {
         const res = spawnShell(shell, runnable);
         expect(
           res.status,
