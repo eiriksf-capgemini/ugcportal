@@ -27,13 +27,18 @@ gets written down and pasted as a literal
 (`bd memories shell-state-does-not-persist-between-tool-calls`).
 
 `/Users/eiriksf/code/ugcportal` is a **shared checkout** that a human and other
-agents are working in. **Never run `git` there.** `bd` is the only command you
-run in it. Do your work in a worktree of your own, under a name of your own
-(`/tmp/wt-<bead-id>` as an implementer, `/tmp/wt-review-<pr>` as a reviewer,
-`/tmp/wt-<topic>` as an analyst), and **remove only what you created** — another agent's
-worktree can be clean and still hold unpushed commits, which go with the local
-branch when it is removed (`bd memories shared-checkout-is-not-safe-for-agents`,
-`bd memories reviewers-must-name-their-own-worktree-and-remove-only-it`).
+agents are working in. **Never run `git` there** — the one exception is
+`git worktree add`, run once to cut a worktree you do not already have
+(`cd /Users/eiriksf/code/ugcportal && git worktree add -b <branch>
+<worktree-path> origin/<base-commit>`); every command after that, `git`
+included, runs from inside the new worktree instead. Beyond that one call,
+`bd` is the only command you run in the shared checkout. Name the worktree
+yourself (`/tmp/wt-<bead-id>` as an implementer, `/tmp/wt-review-<pr>` as a
+reviewer, `/tmp/wt-<topic>` as an analyst), and **remove only what you
+created** — another agent's worktree can be clean and still hold unpushed
+commits, which go with the local branch when it is removed (`bd memories
+shared-checkout-is-not-safe-for-agents`, `bd memories
+reviewers-must-name-their-own-worktree-and-remove-only-it`).
 
 A fresh worktree has no generated Prisma client, and without it every test
 file that imports it silently fails to **collect** — `npx vitest run` then
@@ -62,21 +67,34 @@ waiting on a background task** — the task finishing does not re-invoke you, so
 having done no work and the task sits unfinished until someone nudges it
 (`bd memories never-end-an-agent-turn-waiting-on-a-background-task`).
 
-Do not spawn subagents or forks of your own. A nested fork reports its
-completion to the **top-level session**, not to the agent that spawned it, so
-you would wait on a report that never arrives — this left agents idle for hours
-(`bd memories nested-fork-reports-go-to-the-top-session`). Do the work with tool
-calls in this agent.
+Do not spawn subagents or forks of your own. The memory behind this
+(`bd memories nested-fork-reports-go-to-the-top-session`) says a nested fork's
+completion notification goes to the **top-level session**, not to the agent
+that spawned it — and offers two escapes, doing the work with tool calls in
+one agent or having the orchestrator relay the result; it does not itself ban
+spawning. The second escape needs a live orchestrator to relay through while
+you wait, and a dispatched worker of this kind has none: your own turn ends
+when you report back, so there is nothing here to relay through mid-task. That
+gap is this file's own reason for hardening "prefer / or relay" into an
+absolute ban rather than restating it — not the memory's. Do the work with
+tool calls in this agent, always.
 
 Read every file you are pointed at — a skill, a script, a doc — **from your own
 worktree**, never from the shared checkout, which sits on whatever branch
-someone last left it on. A reviewer reported that two `pr-review-merge` steps
-that do exist did not, from a copy of the shared checkout that predated the
-merge adding them (`ugcportal-sv3l`).
+someone last left it on. Two reviewers, on two different PRs the same morning,
+reported that two `pr-review-merge` steps that do exist did not, each from a
+copy of the shared checkout that predated the merge adding them
+(`ugcportal-sv3l`).
 
 Never run a recursive search from `/`. It walks `/proc`, never terminates, and
 outlives the turn that started it. Scope every `find`, `grep -r` and `du` to a
 directory (`bd memories unscoped-recursive-search-from-root-never-terminates`).
+
+**State the reach of every sweep as part of its result.** Report the exact
+command, the terms searched, and the number of files examined printed beside
+the number matched — a zero from a filter that matched nothing reads exactly
+like a clean subject unless both numbers are there (`bd memories
+state-a-sweeps-reach-as-part-of-its-result`).
 
 `bd update` takes `--append-notes`. **Never `--notes`**, which replaces the
 entire notes field (`bd memories bd-update-notes-flag-replaces-use-append-notes`).
@@ -97,13 +115,6 @@ branch someone left it on, which is exactly how a stale copy of a skill
 produced a confident report that two of its steps did not exist
 (`ugcportal-sv3l`). Create `/tmp/wt-<topic>`, read from it, and remove it when
 you are done.
-
-**State the reach of every sweep as part of its result.** The exact command,
-the terms searched, and the number of files examined printed beside the number
-matched. A keyword sweep is only as wide as its keywords, and a zero from a
-filter that matched nothing is indistinguishable from a clean subject unless
-both numbers are there
-(`bd memories state-a-sweeps-reach-as-part-of-its-result`).
 
 **Never report a set from memory.** Run the command and paste its output
 together with the command that produced it — including when the answer seems
