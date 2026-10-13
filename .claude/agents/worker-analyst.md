@@ -27,18 +27,29 @@ gets written down and pasted as a literal
 (`bd memories shell-state-does-not-persist-between-tool-calls`).
 
 `/Users/eiriksf/code/ugcportal` is a **shared checkout** that a human and other
-agents are working in. **Never run `git` there** — the one exception is
-`git worktree add`, run once to cut a worktree you do not already have
+agents are working in. **Never run `git` there** — two exceptions, each one
+call against the single worktree path you supply yourself, never a path read
+off `git worktree list` or borrowed from another agent's name: `git worktree
+add`, to cut a worktree you do not already have
 (`cd /Users/eiriksf/code/ugcportal && git worktree add -b <branch>
-<worktree-path> origin/<base-commit>`); every command after that, `git`
-included, runs from inside the new worktree instead. Beyond that one call,
-`bd` is the only command you run in the shared checkout. Name the worktree
-yourself (`/tmp/wt-<bead-id>` as an implementer, `/tmp/wt-review-<pr>` as a
-reviewer, `/tmp/wt-<topic>` as an analyst), and **remove only what you
-created** — another agent's worktree can be clean and still hold unpushed
-commits, which go with the local branch when it is removed (`bd memories
-shared-checkout-is-not-safe-for-agents`, `bd memories
-reviewers-must-name-their-own-worktree-and-remove-only-it`).
+<worktree-path> origin/<base-commit>`), and `git worktree remove
+<worktree-path>`, to take that same worktree down again once your work in it
+is done (`cd /Users/eiriksf/code/ugcportal && git worktree remove
+<worktree-path>`), where `<worktree-path>` is the literal path you passed to
+`git worktree add` yourself, in this same session — never a different one.
+Every other command, `git` included, runs from inside the worktree instead;
+beyond these two calls, `bd` is the only command you run in the shared
+checkout. Name the worktree yourself (`/tmp/wt-<bead-id>` as an implementer,
+`/tmp/wt-review-<pr>` as a reviewer, `/tmp/wt-<topic>` as an analyst), and
+**remove only what you created** — exactly that templated `git worktree
+remove` call, against exactly that path, and nothing else: another agent's
+worktree can be clean and still hold unpushed commits, which go with the local
+branch when it is removed, and this carve-out is not licence to tidy one up
+(`bd memories shared-checkout-is-not-safe-for-agents`, `bd memories
+reviewers-must-name-their-own-worktree-and-remove-only-it`). If `git worktree
+remove` refuses because the worktree is dirty or locked, stop and report
+that — do not force it, and do not look for a different worktree to remove
+instead.
 
 A fresh worktree has no generated Prisma client, and without it every test
 file that imports it silently fails to **collect** — `npx vitest run` then
@@ -114,7 +125,8 @@ change, say so and stop — the change is someone else's task, and a bead.
 branch someone left it on, which is exactly how a stale copy of a skill
 produced a confident report that two of its steps did not exist
 (`ugcportal-sv3l`). Create `/tmp/wt-<topic>`, read from it, and remove it when
-you are done.
+you are done — with the `git worktree remove` call the machine section above
+permits, naming that exact path.
 
 **Never report a set from memory.** Run the command and paste its output
 together with the command that produced it — including when the answer seems
