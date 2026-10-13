@@ -110,7 +110,7 @@ point.
 
 | Decision | Where | What it says | Direction |
 |---|---|---|---|
-| **Read-path re-evaluation of an offer** | `ugcportal-74w` K5; `ugcportal-yzo7` K4, `src/lib/sellable-media.ts` | "the presence of a stored price must never by itself be treated as proof of sellability"; re-evaluated at render "because a stored flag proves nothing after the moment it was written" | Re-check on every read. Nobody has paid at this point. |
+| **Read-path re-evaluation of an offer** | `ugcportal-74w` K5; `ugcportal-yzo7` K4, `src/lib/sellable-media.ts`; `docs/legal/manual-upload-rights-review.md` §"target contract" | "the presence of a stored price must never by itself be treated as proof of sellability"; re-evaluated at render because, in the rights review's words, "a stored price proves nothing after the moment it is written" | Re-check on every read. Nobody has paid at this point. |
 | **Lapse after publication, rights family** | `ugcportal-nffp` K1; `src/lib/publishability.ts` "WHAT A LAPSE AFTER PUBLICATION DOES" | The uploader's review "moving to REVOKED or EXPIRED, its `validUntil` passing, or its checklist version being retired does NOT depublish anything, and must not: that review answers whether the work may be RESOLD" | A lapse of the *resale* clearance withdraws the **price**, not the photograph. The publishability family (attestation, PEOPLE clearance) does leave every public surface. |
 | **A commercial fact arriving on a public item** | `ugcportal-pgpq`, `docs/legal/alcohol-commerce-public-visibility.md` §2 | Option C, read path: "it is the only option robust to orderings nobody has enumerated, since it evaluates whenever the item is served" (close reason) | Re-check on every read. Also records *why not* the write-refusing and depublishing options. |
 | **A brand flipped to alcohol-linked after publication** | `ugcportal-mqh8`; `src/app/admin/settings/rights/brands/page.tsx` | "list it for the admin, no auto-unpublish" — because auto-acting "would mean one admin edit silently withdrawing an arbitrary number of other people's published work, with no review of whether the flip was right" (`alcohol-commerce-public-visibility.md` §2) | **Surface it; do not act automatically.** The one recorded precedent *against* an automatic cascade. |
@@ -281,9 +281,10 @@ operators can answer.
   that per-item terms "will be shown with it before you pay". Neither page
   nor offer mentions revocation, refund, or any condition subsequent. If the
   decision is anything other than C, the promise has to change *before* the
-  first sale, and `/licence` is already in draft pending re-sign-off
-  (`src/lib/legal/contact.ts`, `LEGAL_SIGN_OFF` still carries the pre-`yzo7`
-  digest; `ugcportal-xh4j`, in progress, re-records it).
+  first sale, and any such change puts `/licence` back in draft until it is
+  approved again (`src/lib/legal/contact.ts`, `LEGAL_SIGN_OFF`: the page was
+  re-signed on 2026-10-12 by `ugcportal-xh4j`, merged as #223, so a new
+  edit needs a new sign-off).
 - *On a depicted person's objection, the expected action is notify.* C.2.7
   and B.1.14, quoted in §3.
 
@@ -452,8 +453,10 @@ view and D should not be chosen in its place.
 - Whether `5d6` offers re-issue at all, and self-serve or support-mediated —
   `5d6`'s own stated open question.
 - Refund mechanics — unowned (`f3a`), to be filed if A in any form is chosen.
-- The buyer-facing terms text — `/licence` and its sign-off (`ugcportal-xh4j`
-  per `74w.1`'s out-of-scope line), and per-item terms (`74w.1`).
+- The buyer-facing terms text — `/licence` and the re-sign-off any change to
+  it triggers (the previous one was `ugcportal-xh4j`, closed as #223; `74w.1`'s
+  out-of-scope line keeps the terms text out of `74w`), and per-item terms
+  (`74w.1`).
 - The objection path that would make the external lapse visible —
   `ugcportal-qnq9.5`.
 - The pre-payment window between session creation and the webhook — `p3v`'s
