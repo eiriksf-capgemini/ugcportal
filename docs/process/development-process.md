@@ -202,7 +202,14 @@ validation."* It is a hard block, not a warning, and the exit status is the
 decision: the `.claude/skills/dispatch-bead` skill requires the run's output
 pasted into the brief under `## Dispatch check`, so a dispatch that skipped
 the gate is visible as a missing recorded result rather than as an
-unprovable omission.
+unprovable omission. "The exit status is the decision" is a claim about how
+the command is *invoked*, not only about how it is written: the skill's step
+1 pipes the run through `tee`, and a pipeline's status is its last command's,
+so that line carries `set -o pipefail` on the same line as the pipe, and
+`check-bead-dispatch.test.mjs` extracts every shell line in the skill that
+runs the gate and executes it against a failing bead in both bash and zsh.
+Without `pipefail` the documented command reported `0` for a bead that failed
+every check — the gate's own wiring failing open.
 
 Measured the day it was written, at `origin/main a3d55c9` over the 95 open
 beads: **12** fail at least one of the eight presence-only elements the

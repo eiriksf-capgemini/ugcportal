@@ -144,6 +144,24 @@ function runFixture(bead) {
   return runCliAllowFail(["--beads", file, "--repo", repo, "--head", HEAD()]);
 }
 
+/**
+ * The check ids the report attributed a failure to, in report order.
+ *
+ * Every failure assertion in this file goes through here rather than
+ * stopping at `status === 1`. `status === 1` is satisfied by a mutation
+ * that broke some OTHER check: it proves that something failed, not that
+ * the check under test is the one that noticed. That is the same shape the
+ * gate's own SUBSTANCE_CHECKS_NOT_MADE warns about -- "a `Verified by` that
+ * restates the criterion ... passes this script and cannot be honestly
+ * closed" -- applied to this suite.
+ */
+function failedChecks(stdout) {
+  return stdout
+    .split("\n")
+    .filter((l) => l.trim().startsWith("FAIL "))
+    .map((l) => l.trim().split(/\s+/)[1]);
+}
+
 // --- the pass path -----------------------------------------------------------
 
 describe("the complete fixture (K1, pass half)", { timeout: 30_000 }, () => {
@@ -161,6 +179,15 @@ describe("the complete fixture (K1, pass half)", { timeout: 30_000 }, () => {
     // wrong reason: strip the whole description and it must stop passing.
     const res = runFixture(completeBead({ description: "" }));
     expect(res.status).toBe(1);
+    // Named, not just non-zero: the description is what four checks read, so
+    // a status-only assertion here would survive the fixture coming to carry
+    // its scope lines or its story somewhere else entirely.
+    expect(failedChecks(res.stdout)).toEqual([
+      "description",
+      "user-story",
+      "in-scope",
+      "out-of-scope",
+    ]);
   });
 });
 
@@ -288,11 +315,7 @@ describe("K1: a bead missing one required element fails and the element is named
       expect(res.stdout).toContain(fixture.expectNamed);
       // and the failure is attributed to the check under test, not a
       // neighbouring one that the mutation broke by accident
-      const failed = res.stdout
-        .split("\n")
-        .filter((l) => l.trim().startsWith("FAIL "))
-        .map((l) => l.trim().split(/\s+/)[1]);
-      expect(failed).toContain(fixture.check);
+      expect(failedChecks(res.stdout)).toContain(fixture.check);
     });
   }
 
@@ -471,7 +494,12 @@ describe("K4: every run names the substance checks it did not make", { timeout: 
 describe("K5: the decision is an exit status", { timeout: 30_000 }, () => {
   it("exits 0 on pass and 1 on fail, so `&&` in a dispatch step blocks", () => {
     expect(runFixture(completeBead()).status).toBe(0);
-    expect(runFixture(completeBead({ notes: "" })).status).toBe(1);
+    const failing = runFixture(completeBead({ notes: "" }));
+    expect(failing.status).toBe(1);
+    // The fixture's premise lives in its notes, so emptying them is a
+    // premise failure and nothing else. Saying which keeps this from being
+    // a bare "something went wrong".
+    expect(failedChecks(failing.stdout)).toEqual(["premise-present", "premise-fresh"]);
   });
 
   it("exits 2 on a usage error, which is distinguishable from a failing bead", () => {
@@ -690,6 +718,9 @@ describe("vocabularies match CLAUDE.md", { timeout: 30_000 }, () => {
       "revert",
     ]);
   });
+});
+
+describe("the checks are bounded where they claim to be", { timeout: 30_000 }, () => {
   it("the user-story window is bounded, so background prose cannot supply the story", () => {
     expect(USER_STORY_WINDOW).toBeGreaterThan(0);
     const base = completeBead();
@@ -697,6 +728,197 @@ describe("vocabularies match CLAUDE.md", { timeout: 30_000 }, () => {
       ...base,
       description: `In scope: x.\nOut of scope: y, owned by fixture-other.\n${"filler. ".repeat(200)}As a reader, I want a story, so that it counts.`,
     };
-    expect(runFixture(bead).status).toBe(1);
+    const res = runFixture(bead);
+    expect(res.status).toBe(1);
+    // `status === 1` alone would also pass if the window were unbounded and
+    // some unrelated check had broken instead -- the fixture's description
+    // is rewritten wholesale here, so three checks read it. Name the one
+    // under test, and require it to be the ONLY failure, which is what says
+    // the two scope lines in that same description were still found.
+    expect(failedChecks(res.stdout)).toEqual(["user-story"]);
+    expect(res.stdout).toContain('user story is missing "As <role>"');
   });
+
+  // --- F3: the scope checks are LINE checks, and say so in their detail ---
+  //
+  // Before this, both ran against the whitespace-flattened description, so
+  // the `\n` in `[^:\n]{0,40}` had nothing left to exclude and the
+  // 40-character tolerance ran across sentence and paragraph breaks. Every
+  // description below passed the check it names.
+  //
+  // Two exclusions do the work and each gets its OWN case, because either
+  // one alone leaves the other's cases passing: with `.` excluded but the
+  // text still flattened, a scope statement with no full stop still reaches
+  // the next paragraph's colon; with the line structure kept but `.`
+  // allowed, "Nothing is out of scope. Rationale:" is one line and still
+  // passes. `blocks` names which exclusion each case is here to guard, so
+  // reverting one of them reds a case that names it.
+  const SCOPE_FALSE_PASSES = [
+    {
+      blocks: "the line break",
+      what: "a paragraph break with no full stop to stop it (out-of-scope)",
+      check: "out-of-scope",
+      description:
+        "As a reader, I want a story, so that it counts.\n\nIn scope: the thing.\n\nCaching is out of scope\n\nNotes: see fixture-other",
+    },
+    {
+      blocks: "the sentence break",
+      what: "a sentence break on one line (out-of-scope) -- the inverse of a scope boundary",
+      check: "out-of-scope",
+      description:
+        "As a reader, I want a story, so that it counts.\n\nIn scope: the thing.\n\nNothing is out of scope. Rationale: all of it ships.",
+    },
+    {
+      blocks: "the line break",
+      what: "a single line break with no full stop (in-scope)",
+      check: "in-scope",
+      description:
+        "As a reader, I want a story, so that it counts.\n\nEverything in scope here is fine\nSee also: something\n\nOut of scope: nothing, owned by fixture-other.",
+    },
+    {
+      blocks: "the sentence break",
+      what: "a sentence break on one line (in-scope)",
+      check: "in-scope",
+      description:
+        "As a reader, I want a story, so that it counts.\n\nNot everything in scope is listed. Rationale: it is obvious.\n\nOut of scope: nothing, owned by fixture-other.",
+    },
+  ];
+
+  for (const c of SCOPE_FALSE_PASSES) {
+    it(`a scope statement does not reach across ${c.what}`, () => {
+      const res = runFixture(completeBead({ description: c.description }));
+      expect(res.status, `${c.blocks} did not stop the match`).toBe(1);
+      expect(failedChecks(res.stdout), `${c.blocks} did not stop the match`).toEqual([c.check]);
+    });
+  }
+
+  it("the tolerance and the non-anchoring the 40 characters buy are both kept", () => {
+    // Guards the other direction: these are real forms in the backlog and a
+    // narrower fix (anchor to line start, or drop the tolerance) fails them.
+    // `ugcportal-6zdu` writes the qualifier; `e95r`, `a9no` and `uwh1` put
+    // the line mid-paragraph.
+    const res = runFixture(
+      completeBead({
+        description:
+          "As a reader, I want a story, so that it counts. In scope, and deliberately: the thing. Out of scope, and deliberately: everything else, owned by fixture-other.",
+      }),
+    );
+    expect(res.status).toBe(0);
+    expect(res.stdout).not.toContain("FAIL ");
+  });
+
+  // --- F2: `no-placeholder` fires on a marker CARRIED, not one QUOTED ---
+  it("a placeholder quoted in a code span is not a placeholder carried", () => {
+    // `ugcportal-zbcs`, the P1 whose whole job is removing p3v's
+    // `(replace K1)`, was the check's only live hit before this.
+    const res = runFixture(
+      completeBead({
+        description:
+          "As the operator, I want the marker gone, so that the bead can be closed.\n\n`ugcportal-p3v`'s acceptance field opens with the literal text `(replace K1)`, an editing instruction never carried out.\n\nIn scope: resolving the stray `(replace K1)` marker.\nOut of scope: implementing checkout, owned by fixture-other.",
+      }),
+    );
+    expect(res.status).toBe(0);
+    expect(res.stdout).not.toContain("FAIL ");
+  });
+
+  // The failure half of that pair is the `no-placeholder` single-element
+  // fixture above, which puts the same `(replace K1)` at the head of the
+  // acceptance field as BARE text -- exactly where p3v's real one is -- and
+  // asserts exit 1 with the marker named and the failure attributed to
+  // `no-placeholder`. Without it, blanking too much in stripCodeSpans would
+  // go unnoticed.
+});
+
+// --- K5: the DOCUMENTED invocation, not just the bare one ------------------
+
+/**
+ * The skill file is where the gate is actually invoked from, so it is part
+ * of the gate. Every one of its shell lines that runs this script is
+ * extracted from the markdown and EXECUTED against a bead that fails, and
+ * the status that reaches the shell must be 1.
+ *
+ * This exists because it did not, and the wiring failed open: step 1 shipped
+ * as `node scripts/check-bead-dispatch.mjs <bead-id> | tee /tmp/...`. A
+ * pipeline's status is its LAST command's, `tee` always succeeds, and
+ * neither bash nor zsh sets `pipefail` by default -- so the documented
+ * command reported 0 for a bead failing every check, in both shells, while
+ * the next line of the skill read "Exit `0` -- continue to step 2". Asserting
+ * the fix as a `toContain("set -o pipefail")` grep over the file would be
+ * the weaker shape this suite argues against everywhere else: it would pass
+ * on `set -o pipefail` written on a line of its own, which does not survive
+ * into the next shell an agent opens. Running the line is the only
+ * assertion that can tell those two apart.
+ */
+describe("the skill file's own invocation does not discard the exit status", { timeout: 60_000 }, () => {
+  const SKILL = fileURLToPath(new URL("../.claude/skills/dispatch-bead/SKILL.md", import.meta.url));
+
+  /** Shell lines inside ```bash fences that invoke this script. */
+  function documentedInvocations() {
+    const text = fs.readFileSync(SKILL, "utf8");
+    const out = [];
+    const fence = /```bash\n([\s\S]*?)```/g;
+    let m;
+    while ((m = fence.exec(text)) !== null) {
+      for (const line of m[1].split("\n")) {
+        if (line.includes("check-bead-dispatch.mjs")) out.push(line.trim());
+      }
+    }
+    return out;
+  }
+
+  it("finds the documented invocations to run", () => {
+    // If the skill is reworded so that no fenced line runs the script, every
+    // assertion below would vacuously pass over an empty list.
+    expect(documentedInvocations().length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("every documented invocation reports a failing bead as a failure", () => {
+    const failing = writeBeads({
+      id: "fixture-fails-everything",
+      title: "a bead that fails the gate",
+      status: "open",
+      description: "",
+      acceptance_criteria: "",
+      notes: "",
+      metadata: {},
+    });
+    const lines = documentedInvocations();
+    expect(lines.length).toBeGreaterThanOrEqual(2);
+
+    for (const line of lines) {
+      // Point the documented command at the fixture instead of the live
+      // `bd` database, changing nothing else about its shape -- the pipe,
+      // the redirection and any shell options stay exactly as written.
+      const runnable = line
+        .replace(
+          "node scripts/check-bead-dispatch.mjs",
+          `node ${JSON.stringify(SCRIPT)} --beads ${JSON.stringify(failing)} --repo ${JSON.stringify(repo)} --head ${HEAD()}`,
+        )
+        .replaceAll("<bead-id>", "fixture-fails-everything");
+      expect(runnable).not.toContain("<bead-id>");
+
+      for (const shell of ["bash", "zsh"]) {
+        const res = spawnShell(shell, runnable);
+        expect(
+          res.status,
+          `${shell}: \`${line}\` reported ${res.status} for a bead that fails every check`,
+        ).toBe(1);
+      }
+    }
+  });
+
+  /** Run one shell line, returning its status rather than throwing. */
+  function spawnShell(shell, command) {
+    try {
+      execFileSync(shell, ["-c", command], {
+        cwd: repo,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: 30_000,
+      });
+      return { status: 0 };
+    } catch (err) {
+      return { status: err.status };
+    }
+  }
 });

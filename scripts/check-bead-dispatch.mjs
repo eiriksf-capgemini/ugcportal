@@ -11,8 +11,14 @@
  * `Premise verified` line, and this repo's metadata -- for the whole life of
  * the backlog, and nothing enforced it. Measured 2026-10-12 at origin/main
  * a3d55c9 over the 95 open beads: 12 fail at least one of the eight
- * presence-only elements, and 21 fail at least one check in `CHECKS` below
- * (which is stricter in three places -- see the PR for the breakdown).
+ * presence-only elements, and 21 fail at least one check in `CHECKS` below.
+ * `CHECKS` differs from those eight elements in five places, not three or
+ * four: it is STRICTER on three of them (`criteria` wants `K<n>:` markers
+ * and not merely 50 characters; `verified-by` wants one inside EVERY
+ * criterion's own span rather than one anywhere in the field;
+ * `premise-present` wants a token git resolves to a commit rather than the
+ * words) and it adds two elements the audit did not count at all
+ * (`user-story`, `no-placeholder`). See the PR for the per-check table.
  * bead-template records why `bd lint` is not sufficient on its own: it
  * checks that an acceptance-criteria *section* exists, and not the
  * guardrail, the Verified-by clauses, the scope lines, the premise or the
@@ -29,9 +35,16 @@
  *      found that only 68 of 136 non-closed beads carried a premise line at
  *      all, and those were up to 80 commits stale; ugcportal-kt3k's own
  *      notes record ugcportal-dabx's four-day-old premise being found partly
- *      wrong on 2026-10-12. Seven commits landed on `main` on the day this
- *      was written (`git log origin/main --since=2026-10-12`), so "stale"
- *      here is a matter of hours, not weeks. The cost is a re-verification
+ *      wrong on 2026-10-12. Nine commits landed on `main` on the day this
+ *      was written, seven of them at or before a3d55c9, the commit the
+ *      measurement above was taken at:
+ *        git log origin/main --oneline \
+ *          --since=2026-10-12T00:00:00 --until=2026-10-13T00:00:00 | wc -l
+ *      (an explicit midnight, not a bare `--since=2026-10-12`: git's
+ *      approxidate reads a bare date as that date at the CURRENT time of
+ *      day, so the bare form answers 9 at 06:56 and 0 at 15:30 and never
+ *      reproduces a figure written down beside it.) So "stale" here is a
+ *      matter of hours, not weeks. The cost is a re-verification
  *      pass per
  *      dispatch; see `PREMISE_FRESHNESS_COST` below for what that means in
  *      practice and why a looser rule was rejected.
@@ -259,6 +272,39 @@ export const CC_TYPES = [
  */
 const PLACEHOLDER_RE = /\(replace\s+K\d+\)|\bTODO\b|\bTBD\b|\bFIXME\b|\bXXX\b|<fill[^>]*>|\.\.\.TBD/i;
 
+/**
+ * Blank out markdown code spans and fenced blocks, preserving length and
+ * line structure so nothing else shifts.
+ *
+ * A bead that QUOTES a placeholder is not a bead that CARRIES one, and the
+ * difference is not academic: measured 2026-10-13 over the whole
+ * open+in_progress backlog (104 beads), the only bead `no-placeholder`
+ * fired on was `ugcportal-zbcs` -- the P1 that exists to REMOVE
+ * `ugcportal-p3v`'s `(replace K1)` marker, which it names three times in
+ * backticks ("it opens with the literal text `(replace K1)`", "resolving
+ * the stray `(replace K1)` marker", and its own K2's "the string
+ * `(replace K1)` being absent"). Unnarrowed, the gate hard-blocks dispatch
+ * of the bead whose whole job is clearing the thing it is complaining
+ * about. After this narrowing the live count for this check is 0, and p3v
+ * -- whose marker is bare text at the head of its acceptance field, not a
+ * code span -- still fails it. zbcs itself still fails the run, on
+ * `premise-present` and `premise-fresh`, which is the gate doing its job
+ * rather than misreading a quotation; the gate's total of 21 beads failing
+ * something other than freshness is unchanged by this narrowing.
+ *
+ * Known gap, stated rather than papered over: a genuinely unfinished field
+ * that writes its marker inside backticks (`` `TODO` ``) is no longer
+ * caught. That is accepted. The repo's convention is that backticks mean
+ * "this is a literal being referred to", the backlog contains no such
+ * case, and the alternative -- a check whose only live hit is a false
+ * positive on a P1 -- is worse. SUBSTANCE_CHECKS_NOT_MADE already says a
+ * zero exit means well-formed, not right.
+ */
+function stripCodeSpans(text) {
+  const blank = (m) => m.replace(/[^\n]/g, " ");
+  return text.replace(/```[\s\S]*?```/g, blank).replace(/(`+)(?:[^`]|[^`][\s\S]*?)\1/g, blank);
+}
+
 // --- the checks --------------------------------------------------------------
 
 /**
@@ -282,6 +328,23 @@ const desc = (b) => String(b.description || "").trim();
  *  user-story regex run against the raw field fails beads for a line break.
  *  Real case: ugcportal-48zb, whose benefit clause is split as "so\nthat". */
 const descFlat = (b) => desc(b).replace(/\s+/g, " ");
+/**
+ * Description with runs of HORIZONTAL whitespace collapsed to one space and
+ * line breaks left intact, for the checks that are about a *line*.
+ *
+ * `descFlat` is right for the user-story check, which spans sentences by
+ * design, and wrong for the scope checks: it deletes every `\n` before the
+ * regex runs, so the `\n` in `[^:.\n]{0,40}` below never has anything to
+ * exclude and the tolerance silently spans paragraph breaks. Demonstrated
+ * false passes against the flattened form:
+ *   - "Caching is out of scope.\n\nNotes: see ugcportal-abc." -> passed
+ *     `out-of-scope`, pairing a scope sentence with an unrelated
+ *     paragraph's colon;
+ *   - "Everything in scope here is fine.\nSee also: ..." -> passed
+ *     `in-scope` the same way.
+ * Both fail here, and the failure detail's word "line" is now accurate.
+ */
+const descLines = (b) => desc(b).replace(/[^\S\n]+/g, " ");
 /** How much of the description the user-story check looks at. The story is
  *  the opening of the description by definition; beyond this the text is
  *  background, and "as" there should not be allowed to pair with an "I
@@ -326,14 +389,34 @@ export const CHECKS = [
     };
   }),
 
+  // The two scope checks. What the 40 characters of tolerance may NOT cross
+  // is the point of the character class, and all three exclusions are load
+  // bearing:
+  //   `:`  -- stop at the first colon, so the tolerance cannot reach past
+  //           one label to the next one's colon;
+  //   `\n` -- a line break ends the statement. Only live because these run
+  //           against `descLines`; under `descFlat` it was dead code.
+  //   `.`  -- so does a sentence boundary. Without it "Nothing is out of
+  //           scope. Rationale: all of it ships." passes `out-of-scope` --
+  //           the exact inverse of a scope boundary, and a single line, so
+  //           the `\n` exclusion alone does not catch it.
+  // What is deliberately NOT done: anchoring to line start. `ugcportal-e95r`,
+  // `ugcportal-a9no` and `ugcportal-uwh1` all carry a genuine mid-paragraph
+  // `Out of scope:` that a line-anchored form would fail. The 40-character
+  // tolerance is likewise kept and measured: a bare /out of scope:/ reports
+  // 3 failures, not 2, the third being `ugcportal-6zdu`'s "Out of scope,
+  // and deliberately:" -- the line the form asks for, rejected for a
+  // qualifier. Re-measured 2026-10-13 over the live 104-bead
+  // open+in_progress backlog: the narrowing adds zero new failures, so no
+  // real bead relies on crossing a line or a sentence to pass.
   check("in-scope", "description has an `In scope:` line", ["description"], (b) =>
-    /\bin scope\b[^:\n]{0,40}:/i.test(descFlat(b))
+    /\bin scope\b[^:.\n]{0,40}:/i.test(descLines(b))
       ? { ok: true }
       : { ok: false, detail: "no `In scope:` line in the description" },
   ),
 
   check("out-of-scope", "description has an `Out of scope:` line", ["description"], (b) =>
-    /\bout of scope\b[^:\n]{0,40}:/i.test(descFlat(b))
+    /\bout of scope\b[^:.\n]{0,40}:/i.test(descLines(b))
       ? { ok: true }
       : { ok: false, detail: "no `Out of scope:` line in the description (bead-template calls this the single most effective line in the form)" },
   ),
@@ -363,7 +446,9 @@ export const CHECKS = [
   ),
 
   check("no-placeholder", "description and criteria carry no unfinished-editing marker", ["description", "acceptance_criteria"], (b) => {
-    const hit = PLACEHOLDER_RE.exec(`${desc(b)}\n${accept(b)}`);
+    // Code spans are blanked first: a bead that quotes a marker is talking
+    // about one, not carrying one. See stripCodeSpans.
+    const hit = PLACEHOLDER_RE.exec(stripCodeSpans(`${desc(b)}\n${accept(b)}`));
     return hit
       ? { ok: false, detail: `an unfinished-editing marker is still in the text: ${JSON.stringify(hit[0])}` }
       : { ok: true };
@@ -589,8 +674,10 @@ export function makeGitContext(headOverride, repoDir = REPO_ROOT) {
  *     (in-progress only) where `--status open,in_progress` returned 104 --
  *     a sweep that covered 9% of the backlog and said nothing about it.
  *   - `--limit 0` is mandatory. `bd list` defaults to `--limit 50`, so a
- *     sweep over a 95-bead backlog would examine 50 and say so in a count
- *     that looks complete.
+ *     sweep over the 104 beads the line above measures would examine 50 and
+ *     say so in a count that looks complete. (104, not 95: 95 is the
+ *     open-only population the audit was taken over, and this sweep is
+ *     `open,in_progress`.)
  *   - no `--brief`: it omits description, acceptance criteria and notes,
  *     and `bd list --help` warns that "an omitted field is indistinguishable
  *     from an empty one in --json" -- which would turn every bead into a
@@ -674,8 +761,20 @@ function main() {
 
 /**
  * Whether this module was invoked directly, with a fallback the shared
- * `isMainModule` does not have -- and the fallback is load-bearing here in
- * a way it is not for the other scripts that use it.
+ * `isMainModule` does not have.
+ *
+ * To be exact about what is special here, because the first draft of this
+ * comment was not: the fail-open SHAPE is not special at all. Of the eleven
+ * other `isMainModule` consumers, two are CI gates invoked directly by
+ * `.github/workflows/ci.yml` -- `check-sensitive-files.mjs` (line 56) and
+ * `check-pr-title.mjs` (line 87) -- and both end in exactly the same
+ * `if (isMainModule(import.meta.url)) main();`, and for both a zero exit
+ * means "allowed"; the first is the guard over `CLAUDE.md` and
+ * `.claude/settings*.json`. What differs is EXPOSURE, not kind: this script
+ * is the one routinely run by absolute path from another checkout, which is
+ * how the mismatch below gets triggered, and it was observed here. Widening
+ * the fix to the shared helper is `ugcportal-cahr`; it is deferred under the
+ * scope freeze, not because the others are safe.
  *
  * `isMainModule` compares `import.meta.url` against `pathToFileURL(argv[1])`.
  * On macOS `/tmp` is a symlink to `/private/tmp`, so running
@@ -687,8 +786,8 @@ function main() {
  *
  * For an advisory report that is a confusing no-op. For a gate whose zero
  * exit means "this bead may be dispatched", it is a silent approval of an
- * unexamined bead -- the fail-open shape ugcportal-kssp is about, in the
- * one place it costs the most. So resolve both sides through `realpath`
+ * unexamined bead -- the fail-open shape ugcportal-kssp is about. So
+ * resolve both sides through `realpath`
  * before concluding this module is a library import.
  */
 export function invokedDirectly(moduleUrl) {

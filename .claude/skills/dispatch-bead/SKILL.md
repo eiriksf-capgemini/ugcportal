@@ -18,8 +18,27 @@ pass validation."* A failing bead is a **hard block**, not a warning.
 
 ```bash
 git -C /path/to/main/checkout fetch origin main        # freshness is measured against origin/main
-node scripts/check-bead-dispatch.mjs <bead-id> | tee /tmp/dispatch-<bead-id>.txt
+set -o pipefail && node scripts/check-bead-dispatch.mjs <bead-id> | tee /tmp/dispatch-<bead-id>.txt
 ```
+
+**`set -o pipefail` is load-bearing, and it stays on the same line as the
+pipeline.** A pipeline's exit status is its *last* command's, `tee` always
+succeeds, and neither bash nor zsh sets `pipefail` by default — so without
+it this line reports `0` for a bead that failed every check (measured in
+both shells on 2026-10-13), and every sentence below about reading the exit
+status is then vacuously true. That is the fail-open shape this gate exists
+to stop, in the gate's own invocation. Same line, not a line of its own:
+each agent tool call gets a fresh shell, so an option set earlier in the
+block is not in effect when the pipeline is run by itself. If you would
+rather not depend on a shell option at all, do not use a pipeline:
+
+```bash
+node scripts/check-bead-dispatch.mjs <bead-id> > /tmp/dispatch-<bead-id>.txt 2>&1; st=$?; cat /tmp/dispatch-<bead-id>.txt; exit $st
+```
+
+The trailing `exit $st` is the whole point of that form — stopping after
+`cat` would leave the sequence's status as `cat`'s, which is the same
+fail-open with a different last command.
 
 Exit `0` — continue to step 2. Exit `1` — **stop**; fix the bead (`bd update
 <id> --description=... --acceptance=... --set-metadata ...`) and run it
@@ -73,10 +92,16 @@ The brief must carry this block verbatim, with the real output pasted in:
 ```
 ## Dispatch check
 
-$ node scripts/check-bead-dispatch.mjs <bead-id>
+$ node scripts/check-bead-dispatch.mjs <bead-id>; echo "exit $?"
 <paste the full output, including the SUBSTANCE CHECKS NOT MADE section>
 exit 0
 ```
+
+The command recorded in the block is the **unpiped** one above, with `$?`
+echoed, so the `exit 0` line is a status the reader can see was taken from
+the run rather than typed. (If you ran the `tee` form at step 1, the saved
+`/tmp/dispatch-<bead-id>.txt` is the output to paste; the status still has
+to come from a run whose exit code was not swallowed by a pipe.)
 
 **A brief with no `## Dispatch check` block is a dispatch that skipped the
 gate**, and it is visible as exactly that — a missing recorded result, not
