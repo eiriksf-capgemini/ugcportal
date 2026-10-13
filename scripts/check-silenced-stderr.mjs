@@ -240,6 +240,15 @@ export const ALLOWLIST = [
     reason:
       "Read-only. resolveDefaultBase probes whether `origin/main` exists at all; on a shallow or offline clone it is expected not to, and the catch returns the `HEAD~1` fallback. Printing git's `fatal: ...` on that normal path would be noise, and the caller already reports which base it settled on.",
   },
+  {
+    file: "scripts/check-bead-dispatch.test.mjs",
+    kind: "stdio-ignore",
+    // Single-line site: the probe and the option that discards its streams
+    // share one line, so the default binding (hit line itself) applies.
+    commandContains: 'execFileSync(sh, ["-c", "exit 0"]',
+    reason:
+      "Read-only. The SHELLS filter probes whether each interpreter exists before the documented lines are run through it; on the ubuntu runner `zsh` is absent and spawning it fails with ENOENT, which is the EXPECTED answer and is turned into `false` by the filter. The exit status is the signal, and the test right below asserts that `bash` survived the filter, so a probe that wrongly dropped every shell cannot pass as an empty loop.",
+  },
 ];
 
 /**
