@@ -305,6 +305,31 @@ export function findBlindSpotFiles({ untracked, dirtyTracked }) {
  * that examined nothing prints `SCANNED NOTHING` in its own banner and names
  * every file it could not see. The two are not confusable by eye.
  *
+ * THREE CASES, NOT TWO. Families 3 and 4 are parsed out of JavaScript and
+ * TypeScript source; a diff can legitimately contain none. Keeping that case
+ * under the same banner as a failed run was itself a version of the defect
+ * this file is about, pointed the other way -- `pre-review` step 3 turns
+ * `SCANNED NOTHING` into "stop and fix the input", and on a docs-only PR
+ * (routine here: two merged in one week) there is nothing to fix, so the
+ * banner's own sentence -- "the instrument did not look" -- is false. A
+ * banner that cries wolf on a normal diff trains its readers to skip it, and
+ * this is the one line in this script whose entire job is to be believed. So:
+ *
+ *   - `changedFiles` empty: nothing was examined at all. SCANNED NOTHING.
+ *     This is the recorded failure -- a sweep run before the work was
+ *     committed.
+ *   - `changedFiles` non-empty, some of them parseable, none parsed: the
+ *     files were there and the instrument did not read them (all deleted at
+ *     HEAD, or unreadable). SCANNED NOTHING, with the count that proves it.
+ *   - `changedFiles` non-empty and NONE of them parseable: the instrument
+ *     looked, and these two families do not apply to this diff. Not a
+ *     banner, a stated result -- with the reminder that families 1 and 2,
+ *     and family 4 over prose, still apply and are not what this script
+ *     measures.
+ *
+ * "Parseable" is decided by the same two predicates `main` classifies with,
+ * so the branch here and the loop there cannot drift apart.
+ *
  * Pure so it is testable without a git repository: every number it prints is
  * an argument.
  *
@@ -322,9 +347,24 @@ export function formatScanReport({ base, baseSha, changedFiles, testFilesScanned
   );
 
   if (testFilesScanned.length + sourceFilesScanned.length === 0) {
-    lines.push("*** SCANNED NOTHING: this run parsed 0 files. Every count below is 0 because the");
-    lines.push("*** instrument did not look, NOT because it looked and found nothing. Do not report");
-    lines.push("*** these zeros as a sweep result.");
+    // Same predicates as main's loop: a file is parseable for these two
+    // families iff it is JS/TS source (test files are a subset of that).
+    const parseable = changedFiles.filter((f) => SOURCE_FILE_RE.test(f) || TEST_FILE_RE.test(f));
+    if (parseable.length === 0 && changedFiles.length > 0) {
+      lines.push(
+        `no Family 3 or Family 4 input: none of the ${changedFiles.length} changed file(s) is JS/TS source, so the two counts ` +
+          "below are 0 because these families do not apply to this diff -- not because the scan failed.",
+      );
+      lines.push("Families 1 and 2, and Family 4 over prose and templates, still apply and are not what this script measures.");
+    } else {
+      lines.push("*** SCANNED NOTHING: this run parsed 0 files. Every count below is 0 because the");
+      lines.push("*** instrument did not look, NOT because it looked and found nothing. Do not report");
+      lines.push("*** these zeros as a sweep result.");
+      if (parseable.length > 0) {
+        lines.push(`*** ${parseable.length} changed file(s) WERE parseable and none was read -- deleted at HEAD, or unreadable:`);
+        for (const f of parseable) lines.push(`***   ${f}`);
+      }
+    }
   }
 
   if (blindSpot.length === 0) {

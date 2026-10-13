@@ -81,9 +81,26 @@ blind spot: none -- no source or test file in the working tree is uncommitted or
 ```
 
 Two outputs mean **stop and fix the input, not report the number**:
-`*** SCANNED NOTHING` (nothing parseable was in the diff at all) and a
-`blind spot:` line naming files — commit them and re-run. `*** DID NOT RUN`
-means the base ref did not resolve.
+`*** SCANNED NOTHING` and a `blind spot:` line naming files — commit them and
+re-run. `*** DID NOT RUN` means the base ref did not resolve.
+
+`*** SCANNED NOTHING` now means one of exactly two broken-input cases, and
+says which: the diff was **empty** (the recorded failure — a sweep run before
+the work was committed), or it contained JS/TS files the scan **did not
+read**, which it then names one by one. Either is a stop.
+
+A **docs-only diff is not one of them** and no longer prints that banner. It
+prints `no Family 3 or Family 4 input: none of the N changed file(s) is JS/TS
+source`, which is a result, not a failure: the instrument looked, examined N
+files, and correctly parsed none. Docs-only PRs are routine here, and a
+banner that fired on every one of them would train everyone to skip the line
+whose whole job is to be believed (`review-standards` section 6). Copy that
+line into the checklist in place of the `files examined:` denominator's
+usual companion, and **do the remaining three families by hand anyway**:
+families 1 and 2, and family 4 over prose, apply to a docs diff exactly as
+they do to code — this PR's own `ugcportal-measured` marker defect was a
+family-4 sibling omission across three prose templates, which no parser
+would have found.
 
 Then the four questions from `review-standards` section 2, answered in writing per family, including "nothing":
 
@@ -158,7 +175,7 @@ git log origin/main..HEAD --format='%s%n%b' | grep -c 'Co-Authored-By: Claude'  
 fail-loud guards and paste what they print** (`review-standards` section 6):
 
 ```bash
-node scripts/check-silenced-stderr.mjs    # every stderr-discarding site, each allowlisted with a reason
+node scripts/check-silenced-stderr.mjs    # the seven kinds in its SILENCING_KINDS, each hit allowlisted with a reason
 ```
 
 It is already in the suite (`scripts/check-silenced-stderr.test.mjs`), so
@@ -166,7 +183,10 @@ step 1 covers whether it is green; running it by hand is for the
 enumeration, which is what the checklist line records. If your diff adds a
 command whose stderr goes nowhere, the guard tells you by name — the answer
 is to stop discarding it, not to add an allowlist entry, unless the command
-is read-only and the caller branches on its exit status.
+is read-only and the caller branches on its exit status. An entry is bound to
+the hit's own line, so an exemption written for one command never extends to
+the command beside it; a cross-line pipeline needs an explicit `lineContains`
+and without one the entry matches nothing and reads as stale.
 
 And if any step of this bead's work wrote to `bd` — metadata the next step
 depends on, a `discovered-from` edge, a note — read it back before you trust

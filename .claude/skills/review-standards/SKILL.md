@@ -237,11 +237,24 @@ states what it examined *before* what it found, and a run that examined
 nothing says so in those words rather than printing `0`.
 
 **2. Never silence stderr on a mutating command.** Enforced, not advised:
-`scripts/check-silenced-stderr.mjs` enumerates every stderr-discarding site
-under `scripts/` and `.claude/skills/` and fails unless each is allowlisted
-with a stated reason — and fails just as loudly on an allowlist entry that
-matched nothing, or on a run that scanned zero files. It runs on every
-`vitest run` via `scripts/check-silenced-stderr.test.mjs`.
+`scripts/check-silenced-stderr.mjs` scans every file under `scripts/` and
+`.claude/skills/` line by line for the **seven stderr-discarding kinds in its
+own `SILENCING_KINDS`** — the `2>`/`2>>` redirect to the null device,
+the close form, the `&>`/`>&` both-streams shorthand, the null redirect
+followed by stderr duped onto it, Python's `DEVNULL`, the `stdio` string
+`"ignore"`, and an `stdio` array with `"ignore"` in slot 2 — and fails unless
+each hit is allowlisted with a stated reason. Read that list rather than "every
+site": a pattern set is what it matches. The count is checkable rather than
+prose — the scanner throws on a kind not declared in `SILENCING_KINDS`, and
+its test drives every member of it to a real hit — and the header's KNOWN
+LIMITS names what it does not see (a redirect built from a variable, a `catch {}` that
+swallows the message without naming stderr at all). The guard fails just as
+loudly on an allowlist entry that matched nothing, on a malformed entry, or on
+a run that scanned zero files. An allowlist entry is bound to **one line**:
+the command must be on the hit's own line, unless the entry carries an
+explicit `lineContains` naming the fragment on the redirect's line, which is
+what lets a multi-line pipeline be exempted without exempting its neighbours.
+It runs on every `vitest run` via `scripts/check-silenced-stderr.test.mjs`.
 
 **3. Read the object back after a write that matters.** `bd update` exiting 0
 is not evidence the value landed. `node scripts/bd-verify-metadata.mjs <id>

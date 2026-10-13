@@ -301,9 +301,28 @@ describe("formatScanReport (ugcportal-kssp)", () => {
     expect(text).toContain("instrument did not look, NOT because it looked and found nothing");
   });
 
-  it("fires SCANNED NOTHING on the real false-zero shape: a diff of non-source files only", () => {
-    // The committed diff is non-empty, so `changedFiles.length` alone would
-    // read as healthy; nothing parseable was in it.
+  it("fires SCANNED NOTHING on the real false-zero shape: parseable files in the diff, none of them read", () => {
+    // The committed diff is non-empty and JS/TS, so `changedFiles.length`
+    // alone would read as healthy; the instrument did not read any of them.
+    const text = formatScanReport({
+      ...scanned,
+      changedFiles: ["src/a.ts", "src/b.test.ts"],
+      testFilesScanned: [],
+      sourceFilesScanned: [],
+    }).join("\n");
+    expect(text).toContain("files examined: 2 in the diff");
+    expect(text).toContain("SCANNED NOTHING");
+    expect(text).toContain("2 changed file(s) WERE parseable and none was read");
+    expect(text).toContain("***   src/a.ts");
+    expect(text).toContain("***   src/b.test.ts");
+  });
+
+  // A docs-only diff is a normal PR here, not a broken run. `pre-review`
+  // step 3 reads SCANNED NOTHING as "stop and fix the input", and on this
+  // shape there is nothing to fix -- the instrument looked, examined the
+  // file, and correctly parsed none. Keeping the banner on it would make the
+  // banner's own sentence false on a routine diff.
+  it("does NOT fire SCANNED NOTHING on a docs-only diff, where 0 is the correct answer", () => {
     const text = formatScanReport({
       ...scanned,
       changedFiles: ["README.md", "docs/x.md"],
@@ -311,7 +330,33 @@ describe("formatScanReport (ugcportal-kssp)", () => {
       sourceFilesScanned: [],
     }).join("\n");
     expect(text).toContain("files examined: 2 in the diff");
+    expect(text).not.toContain("SCANNED NOTHING");
+    expect(text).toContain("no Family 3 or Family 4 input: none of the 2 changed file(s) is JS/TS source");
+    // The zeros are still not a clean bill of health for the other two
+    // families, and the line says so rather than leaving it implied.
+    expect(text).toContain("Families 1 and 2, and Family 4 over prose and templates, still apply");
+  });
+
+  it("still fires SCANNED NOTHING on an empty diff, which is the recorded failure", () => {
+    const text = formatScanReport({
+      ...scanned,
+      changedFiles: [],
+      testFilesScanned: [],
+      sourceFilesScanned: [],
+    }).join("\n");
     expect(text).toContain("SCANNED NOTHING");
+    expect(text).not.toContain("no Family 3 or Family 4 input");
+  });
+
+  it("treats a docs diff that DOES contain one source file as an ordinary run", () => {
+    const text = formatScanReport({
+      ...scanned,
+      changedFiles: ["docs/x.md", "src/a.ts"],
+      testFilesScanned: [],
+      sourceFilesScanned: ["src/a.ts"],
+    }).join("\n");
+    expect(text).not.toContain("SCANNED NOTHING");
+    expect(text).not.toContain("no Family 3 or Family 4 input");
   });
 
   it("names every file the scan cannot see, with why, and says what to do about it", () => {

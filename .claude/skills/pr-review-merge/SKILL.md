@@ -637,6 +637,7 @@ First, the gates that apply at every round without exception. Approve and merge 
 - The step 4.1 sweep was actually run, with all four families reported
 - **The step 4.3 whole-file read exists in this chain** — either this round did it, or an earlier round's `<!-- ugcportal-whole-file-read: … -->` marker covers every file now in the diff (4.3's read-back command). If neither is true, this is the round that owns it: do the read now, before stamping anything, and carry its marker and verdict lines in the comment you are about to post. A merge on a chain where no round ever read the files whole is the #207 outcome with the escalation removed.
 - **Step 4.2's `<!-- ugcportal-fix-wake: … -->` line is in the comment you are about to post**, on every round, whether or not the trigger fired — with `since` and `changed` filled in from the trigger command's own output, and, when it fired, the readable block beside it. A missing line, or one reading `since=none` on a chain whose previous blocking comment does record a SHA, is the step not having run.
+- **Step 4.4's `<!-- ugcportal-measured: … -->` line is in the comment you are about to post**, on every round, whether or not the trigger fired — `deltas=0 absences=0 at=<headRefOid> baseline=n/a` is a complete answer and is what most rounds carry. A missing line is the step not having run. So is a line reporting `deltas=` above zero with `baseline=n/a`, or with `baseline=` equal to its own `at=`: that is a delta reported against no before-figure, which is the whole of what 4.4 exists to catch.
 
 Then apply the severity gate to the findings from steps 4 and 4.1, using the severities **you** assigned in step 4 and the round from step 4b. Definitions are in `review-standards` section 3; in short, **medium-or-above** is wrong behaviour a user or the data can reach (fail-open, authz gap, data loss, leaked credential, broken migration, a wrong figure a later bead builds on), and **low** is the correctness of the code's *description* rather than of the code (inaccurate comment, duplicate log lines, naming nit, an untidy test that still fails when the behaviour breaks). Note the one rule that is easy to get backwards: a **defective test inherits the severity of what it guards**, so a family-3 assertion-that-cannot-fail over a fresh fail-open fix is medium-or-above, not low.
 
@@ -778,6 +779,7 @@ To merge — post the round marker as its own issue comment **first**, before at
 gh pr comment <n> --body "$(cat <<'EOF'
 <!-- ugcportal-review-round: <N> -->
 <!-- ugcportal-fix-wake: N=<N> trigger=<fired|not-fired|n/a-round-1> since=<sha|none|unresolved> changed=<k files> terms=<regex|-> hits=<k|-> falsified=<k|-> -->
+<!-- ugcportal-measured: deltas=<k> absences=<k> at=<headRefOid> baseline=<sha|n/a> -->
 <!-- ugcportal-whole-file-read: <every file in the diff, space separated> -->
 Auto-approved (review round <N>, chain <exact|approx>): CI green, no sensitive paths touched, no blocking findings.
 Whole-file read (step 4.3): <per-file verdicts>.
@@ -785,7 +787,9 @@ EOF
 )"
 ```
 
-**The merge template carries both scope markers, and the `whole-file-read` one is not optional here.** Under 4.3 the round that merges owns the read whenever no earlier round recorded it, and the chains where that bites are exactly the short ones — a PR merging at round 1 or 2 copies this template verbatim, so a template without the marker would mean the shortest chains, the common case, never record the read at all. That is sibling-omission in the template set: 4.3's rule and the artefact it is checked by have to move together. This template deliberately does **not** record `head <headRefOid>`, unlike the blocking one below; see 4.2's note on why that is harmless and what the one edge case is.
+**The merge template carries all three markers, and neither the `whole-file-read` nor the `measured` one is optional here.** Under 4.3 the round that merges owns the read whenever no earlier round recorded it, and the chains where that bites are exactly the short ones — a PR merging at round 1 or 2 copies this template verbatim, so a template without the marker would mean the shortest chains, the common case, never record the read at all. That is sibling-omission in the template set: 4.3's rule and the artefact it is checked by have to move together. This template deliberately does **not** record `head <headRefOid>`, unlike the blocking one below; see 4.2's note on why that is harmless and what the one edge case is.
+
+4.4's `ugcportal-measured` line is in both templates for the same reason, and it was *not*, for one version of this file: 4.4 was written with an "on every round, including the rounds the trigger does not fire" rule and a marker to carry it, and then wired into neither template nor the gate list above — so a reviewer copying either template verbatim posted no such line and nothing noticed. The rule's no-fire branch produced no output at all, which `review-standards` section 6 defines as a rule satisfiable by someone who did nothing. The test to apply to any marker added here is section 6's: **could a reviewer be found not to have done it?** A marker that lives only in its own defining section and the step 6 report list fails that test, because both are prose a round can simply not write.
 
 Then attempt approval, but **only where it can succeed** — resolve identity fresh in the same command block (see step 1's note on why a value can't cross blocks):
 
@@ -846,6 +850,7 @@ If anything blocks: do not approve, do not merge. Post a single clear comment st
 gh pr comment <n> --body "$(cat <<'EOF'
 <!-- ugcportal-review-round: <N> -->
 <!-- ugcportal-fix-wake: N=<N> trigger=<fired|not-fired|n/a-round-1> since=<sha|none|unresolved> changed=<k files> terms=<regex|-> hits=<k|-> falsified=<k|-> -->
+<!-- ugcportal-measured: deltas=<k> absences=<k> at=<headRefOid> baseline=<sha|n/a> -->
 Review round <N> (chain <exact|approx>, head <headRefOid>). Blocking: ...
 EOF
 )"
