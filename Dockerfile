@@ -39,14 +39,18 @@
 #                project file at all (`next-server.js`,
 #                `next-minimal-server.js`, `instrumentation.js`, and the
 #                static `_global-error`, `favicon.ico`, `robots.txt` and
-#                `llms.txt` routes). The other 29 each list the SAME 572:
-#                all 438 files of src/, plus docs/, e2e/, scripts/, prisma/,
-#                public/ and 24 repo-root files. That is what makes copying
-#                the directory wholesale fatal -- 29 route traces each
-#                sweeping the entire project is still the entire project in
-#                the production image. (568 of the 572 got that far;
-#                `.dockerignore` was already dropping AGENTS.md, CLAUDE.md,
-#                CHANGELOG.md and the tsbuildinfo.) A runner built that way
+#                `llms.txt` routes). The other 29 of the 36 each list the
+#                SAME 571 (58 of all 69, counting each standalone duplicate
+#                separately): all 438 files of src/, plus docs/, e2e/,
+#                scripts/, prisma/, public/ and 23 repo-root files. That is
+#                what makes copying the directory wholesale fatal -- 29
+#                route traces (58 counting both copies) each sweeping the
+#                entire project is still the entire project in the
+#                production image. (568 of the 571 got that far;
+#                `.dockerignore` was already dropping AGENTS.md, CLAUDE.md
+#                and CHANGELOG.md -- `tsconfig.tsbuildinfo` was never one of
+#                the 571 to begin with, so it is not part of this
+#                subtraction.) A runner built that way
 #                from `main` immediately before this change (358a768) held
 #                2423 files under /app, 259 of them matching
 #                *.test.*/*.spec.*, `docs/legal/` included; naming what goes
