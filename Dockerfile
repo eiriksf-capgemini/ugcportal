@@ -13,27 +13,71 @@
 #                node_modules actually reachable from that bundle (Next's
 #                file-tracing excludes devDependencies such as typescript,
 #                tailwindcss, eslint, vitest, and the `prisma` CLI itself).
-#   3. runner  - copies just the standalone output, `public/`, and
-#                `.next/static` into a fresh, minimal base image and runs
-#                it as a non-root user. `.git` and `.env*` files do not
-#                reach this stage, and node_modules here is the traced
-#                subset -- no devDependencies, no `.bin` directory at all
-#                (checked). But "the standalone output" is not small:
-#                Next's whole-project file tracing sweeps the entire repo
-#                into `.next/standalone` (`.dockerignore`'s header
-#                documents the mechanism), and this stage copies that
-#                directory wholesale -- so source and test files DO reach
-#                this stage. Read out of a build of this commit: /app holds
-#                2422 files, including the 438-file src/ tree and 258
-#                files matching *.test.*/*.spec.*, plus docs/, scripts/,
-#                prisma/, e2e/ and the repo-root config files (tsconfig,
-#                eslint, vitest, playwright, etc). Re-run
-#                `find /app -type f | wc -l` (and the same scoped to src/
-#                or to *.test.*/*.spec.*) against a fresh build to check
-#                today's figures -- the repo keeps growing, so these will
-#                drift. Shipping that smaller is ugcportal-6jcq, filed and
-#                deliberately out of scope here: this comment only
-#                describes what the image actually contains.
+#   3. runner  - copies, BY NAME, only the files the server runs:
+#                `server.js`, `package.json`, `.next/` and `node_modules/`
+#                out of the standalone output; `.next/static`, which
+#                standalone really does omit, and `public/`, which it does
+#                NOT -- `.next/standalone/public` exists, swept in by the
+#                whole-project tracing described below, and both are taken
+#                from the builder's own copies anyway so neither depends on
+#                that tracing; and `prisma/`, which
+#                src/lib/schema-mismatch.ts reads from `process.cwd()` at
+#                request time. Into a fresh, minimal base image, run as a
+#                non-root user. `.git` and `.env*` files do not reach this
+#                stage, and node_modules here is the traced subset -- no
+#                devDependencies, no `.bin` directory at all (checked).
+#
+#                AN ALLOWLIST, AND NOT `COPY .next/standalone ./`, which is
+#                what this stage used to do. Next's whole-project file
+#                tracing sweeps the ENTIRE repository into
+#                `.next/standalone` (`.dockerignore`'s header documents the
+#                mechanism). Measured at commit eb3b7ad, from a `next build`
+#                in the repo itself (where `.dockerignore` does not apply):
+#                that build emits 69 `*.nft.json` files -- 36 under `.next/`,
+#                plus a copy of 33 of them inside `.next/standalone` -- and
+#                NOT all of them trace the project. 7 of the 36 list no
+#                project file at all (`next-server.js`,
+#                `next-minimal-server.js`, `instrumentation.js`, and the
+#                static `_global-error`, `favicon.ico`, `robots.txt` and
+#                `llms.txt` routes). The other 29 of the 36 each list the
+#                SAME 571 (58 of all 69, counting each standalone duplicate
+#                separately): all 438 files of src/, plus docs/, e2e/,
+#                scripts/, prisma/, public/ and 23 repo-root files. That is
+#                what makes copying the directory wholesale fatal -- 29
+#                route traces (58 counting both copies) each sweeping the
+#                entire project is still the entire project in the
+#                production image. (568 of the 571 got that far;
+#                `.dockerignore` was already dropping AGENTS.md, CLAUDE.md
+#                and CHANGELOG.md -- `tsconfig.tsbuildinfo` was never one of
+#                the 571 to begin with, so it is not part of this
+#                subtraction.) A runner built that way
+#                from `main` immediately before this change (358a768) held
+#                2423 files under /app, 259 of them matching
+#                *.test.*/*.spec.*, `docs/legal/` included; naming what goes
+#                in instead brings it to 1887 files with no `*.test.*` or
+#                `*.spec.*` among them (ugcportal-6jcq; every figure here is
+#                read out of `docker export`, counting regular files only --
+#                `find /app -type f` does not count the four symlinks under
+#                `.next/node_modules/`, so a listing that does reads 1891 --
+#                and the commands are in that bead's PR).
+#
+#                Naming the contents rather than excluding the unwanted is
+#                deliberate: a directory added to this repo tomorrow is swept
+#                into `.next/standalone` by the same tracing and does NOT
+#                arrive here, where `outputFileTracingExcludes` (the denylist
+#                alternative, which does work -- measured) would have to be
+#                extended for it by hand and would go quietly stale when it
+#                was not. The cost is the opposite failure: a file a future
+#                Next genuinely needs at /app has to be added below, or the
+#                server will not find it. A path that DISAPPEARS from
+#                standalone fails this build loudly; a newly REQUIRED one
+#                does not, so exercise the app and not just its healthcheck
+#                after a Next major.
+#
+#                Re-run `find /app -type f | wc -l` (and the same scoped to
+#                *.test.*/*.spec.*) against a fresh build to check today's
+#                figures -- the repo keeps growing, and only the second of
+#                those two is a number this stage holds at zero.
 #
 # Prisma note: this app uses Prisma's driver-adapter mode
 # (@prisma/adapter-libsql against a libsql-backed SQLite datasource), so
@@ -216,12 +260,55 @@ RUN addgroup --system --gid 1001 nodejs \
 # the same reason; see the comment there.
 RUN mkdir -p /data && chown nextjs:nodejs /data
 
-# Static assets Next's standalone tracing deliberately excludes and that
-# must be copied in by hand: the public/ dir and the pre-built client
-# bundles under .next/static.
+# THE ALLOWLIST. Every line below names something the running server reads;
+# nothing else from the builder reaches this image. See the stage-3 summary
+# at the top of this file for why it is spelled this way, and
+# `.dockerignore` for the mechanism that makes the exclusion necessary.
+#
+# Static assets, copied in by hand -- but only one of the two for the reason
+# usually given. `.next/static` (the pre-built client bundles, copied a few
+# lines below) genuinely is not in standalone. `public/` IS: the builder image
+# at eb3b7ad has `.next/standalone/public` holding all five files, swept in by
+# the same whole-project tracing the stage-3 summary describes. It is taken
+# from the builder's own `/app/public` regardless, so this COPY does not
+# depend on that tracing -- the same reasoning as `prisma/` at the bottom of
+# this stage.
 COPY --from=builder /app/public ./public
-COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
+
+# The standalone server entrypoint and the manifest/chunk tree it loads.
+# `.next` first, `.next/static` second: the second COPY lands inside the
+# directory the first one creates.
+COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone/server.js ./server.js
+COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone/.next ./.next
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+
+# The traced production subset of node_modules (no devDependencies, no
+# `.bin`) that the chunks above require.
+COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone/node_modules ./node_modules
+
+# package.json, because `server.js` runs with /app as its cwd (it calls
+# `process.chdir(__dirname)`) and Node resolves module type and
+# package-relative lookups from the nearest one. It is the repo's own
+# package.json, dependency lists and script names included -- Next copies it
+# into standalone unmodified -- not a generated minimal manifest.
+COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone/package.json ./package.json
+
+# prisma/, because this is read at RUN time and not at build time:
+# src/lib/schema-mismatch.ts resolves `process.cwd()/prisma/migrations` and
+# reads each migration.sql to name the migration that introduced a column
+# the database is missing. Copied from the builder's own prisma/ rather than
+# from the swept copy inside standalone, so it does not depend on the
+# tracing above. Out of scope for the trim for the same reason the migrate
+# service needs it (ugcportal-6jcq).
+#
+# What that puts here, read out of `docker export` at eb3b7ad: /app/prisma
+# holds `schema.prisma` and `migrations/`, and `migrations/` holds 25 entries
+# -- 24 migration directories plus `migration_lock.toml`. The docstring on
+# `migrationIntroducing` in src/lib/schema-mismatch.ts used to claim this
+# image carried `schema.prisma` and not the history; it did not hold of
+# `ugcportal:0.6.0-dev.ga6980eb` either, the image this repo had actually
+# deployed, whose `ls /app/prisma` on 2026-10-12 listed the same two entries.
+COPY --from=builder --chown=nextjs:nodejs /app/prisma ./prisma
 
 USER nextjs
 
