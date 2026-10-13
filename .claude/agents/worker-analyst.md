@@ -1,6 +1,6 @@
 ---
 name: worker-analyst
-description: Investigates a question about this repository — verifies a premise, measures a baseline, enumerates a set — and reports. Read-only: it opens no branch, writes no tracked file and opens no PR. Spawn this instead of bare general-purpose for premise verification, measurement and search against this repository.
+description: Investigates a question about this repository — verifies a premise, measures a baseline, enumerates a set — and reports. Read-only, in the strict sense — it opens no branch, writes no tracked file and opens no PR. Spawn this instead of bare general-purpose for premise verification, measurement and search against this repository.
 model: sonnet
 ---
 
