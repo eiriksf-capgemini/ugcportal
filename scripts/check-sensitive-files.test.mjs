@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { checkSensitiveFiles, SENSITIVE_PATTERN } from "./check-sensitive-files.mjs";
+import { checkSensitiveFiles, classifyChangedFilesInput, SENSITIVE_PATTERN } from "./check-sensitive-files.mjs";
 
 const CLI_PATH = fileURLToPath(new URL("./check-sensitive-files.mjs", import.meta.url));
 
@@ -24,12 +24,24 @@ const CLI_PATH = fileURLToPath(new URL("./check-sensitive-files.mjs", import.met
  * @returns {number}
  */
 function runCli(changedFiles) {
-  const env = { ...process.env, CHANGED_FILES: changedFiles.join("\n") };
+  return runCliRaw({ ...process.env, CHANGED_FILES: changedFiles.join("\n") }).status;
+}
+
+/**
+ * The same spawn, but with the environment built by the caller (so a test
+ * can DELETE `CHANGED_FILES` rather than set it) and with stdout/stderr
+ * returned alongside the status -- the ugcportal-kssp cases below are about
+ * what this guard SAYS when it examined nothing, which an exit code alone
+ * cannot show.
+ * @param {NodeJS.ProcessEnv} env
+ * @returns {{status: number, stdout: string, stderr: string}}
+ */
+function runCliRaw(env) {
   try {
-    execFileSync("node", [CLI_PATH], { env, stdio: "pipe" });
-    return 0;
+    const stdout = execFileSync("node", [CLI_PATH], { env, stdio: "pipe", encoding: "utf8" });
+    return { status: 0, stdout, stderr: "" };
   } catch (err) {
-    return err.status;
+    return { status: err.status, stdout: (err.stdout ?? "").toString(), stderr: (err.stderr ?? "").toString() };
   }
 }
 
@@ -129,18 +141,61 @@ describe("main() via the CLI", () => {
     expect(runCli(["src/app/page.tsx", "README.md"])).toBe(0);
   });
 
-  it("exits 0 when CHANGED_FILES is unset (no changes to evaluate)", () => {
+  it("states the denominator on a clean PR, so the pass is readable as a measurement", () => {
+    const { status, stdout } = runCliRaw({ ...process.env, CHANGED_FILES: "src/app/page.tsx\nREADME.md" });
+    expect(status).toBe(0);
+    expect(stdout).toContain("Changed files (2):");
+    expect(stdout).toContain("No sensitive files among the 2 file(s) this PR changes.");
+  });
+});
+
+describe("main() when the guard examined nothing (ugcportal-kssp)", () => {
+  // This block replaces a test that asserted the opposite -- "exits 0 when
+  // CHANGED_FILES is unset (no changes to evaluate)" -- which pinned the
+  // fail-open in place: a sensitive-path CI guard that silently passed
+  // whenever its input never arrived. Reaching this guard at all means a
+  // pull request exists, and a pull request that changes zero files does
+  // not, so "0 files" is always a fact about the input.
+
+  it("FAILS, rather than passing, when CHANGED_FILES is unset", () => {
     const env = { ...process.env };
     delete env.CHANGED_FILES;
-    expect(
-      (() => {
-        try {
-          execFileSync("node", [CLI_PATH], { env, stdio: "pipe" });
-          return 0;
-        } catch (err) {
-          return err.status;
-        }
-      })(),
-    ).toBe(0);
+    const { status, stderr, stdout } = runCliRaw(env);
+    expect(status).toBe(1);
+    expect(stderr).toContain("CHANGED_FILES is not set, so this guard examined 0 files");
+    expect(stderr).toContain("That is a broken check, not a clean PR");
+    expect(stdout).not.toContain("No sensitive files");
+  });
+
+  it("FAILS, rather than passing, when CHANGED_FILES is set but empty", () => {
+    const { status, stderr, stdout } = runCliRaw({ ...process.env, CHANGED_FILES: "" });
+    expect(status).toBe(1);
+    expect(stderr).toContain("CHANGED_FILES is set but empty, so this guard examined 0 files");
+    expect(stdout).not.toContain("No sensitive files");
+  });
+
+  it("distinguishes the two in its message, because they point at different mistakes", () => {
+    const unsetEnv = { ...process.env };
+    delete unsetEnv.CHANGED_FILES;
+    expect(runCliRaw(unsetEnv).stderr).not.toContain("is set but empty");
+    expect(runCliRaw({ ...process.env, CHANGED_FILES: "" }).stderr).not.toContain("is not set");
+  });
+});
+
+describe("classifyChangedFilesInput", () => {
+  it("reports an absent variable as unset, not as an empty PR", () => {
+    expect(classifyChangedFilesInput(undefined)).toEqual({ files: [], verdict: "unset" });
+  });
+
+  it("reports a present-but-blank variable as empty", () => {
+    expect(classifyChangedFilesInput("")).toEqual({ files: [], verdict: "empty" });
+    expect(classifyChangedFilesInput("\n  \n")).toEqual({ files: [], verdict: "empty" });
+  });
+
+  it("trims and drops blank lines but keeps every real path", () => {
+    expect(classifyChangedFilesInput("CLAUDE.md\n\n  src/a.ts  \n")).toEqual({
+      files: ["CLAUDE.md", "src/a.ts"],
+      verdict: "ok",
+    });
   });
 });

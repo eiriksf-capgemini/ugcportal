@@ -23,7 +23,28 @@ Filter to issues where `metadata.released_in` is **not** set — those are candi
 
 **Before including a candidate, verify it actually shipped.** `bd status=closed` only means the bead's work is done, not that its PR landed on `main`. For every `gh-N` token in the bead's `metadata.prs`, check `gh pr view N --json state,mergedAt` — if any PR isn't `MERGED`, drop that bead from this release (leave its `released_in` unset so a later run picks it up once it actually merges) and note it in your final report rather than silently skipping it. A bead with no `prs` at all (pre-PR-workflow direct commit) is trusted as-is. Do not skip this check — a bead closed with an unmerged PR in `prs` has already happened once in this repo's history and produced a changelog entry for work that wasn't on `main`.
 
-If there are zero verified-shipped issues, say so and stop — nothing to release.
+**Report the denominator at every narrowing, and treat a zero at the FIRST
+one as a failure of this step rather than as an empty backlog**
+(`review-standards` section 6, mitigation 1). Three numbers, in this order:
+
+```
+closed beads returned by `bd list --status=closed --json`: <A>
+of those, without `metadata.released_in`:                  <B>
+of those, every `gh-N` in `metadata.prs` MERGED:           <C>
+```
+
+`A = 0` is not a release with nothing in it — this repo has hundreds of
+closed beads, so `A = 0` means `bd list` failed, answered a different
+question, or its JSON shape changed under the filter. Stop and say so; do
+not continue to step 2 with an empty candidate set. The recorded instance
+this guards against is a dependency filter that used the wrong field name
+and reported "nothing is stuck" over a backlog with ten dead beads: every
+figure on that report was plausible.
+
+`B = 0` or `C = 0` with a healthy `A` **is** a real answer — everything
+closed has already shipped — and is reported as `A` closed, `B` unreleased,
+`C` verified-shipped, not as a bare "nothing to release". Say so with all
+three numbers and stop.
 
 ## 2. Read the current version
 
@@ -109,7 +130,23 @@ For every issue included in this release:
 
 ```bash
 bd update <id> --set-metadata released_in=v<version>
+node scripts/bd-verify-metadata.mjs <id> released_in=v<version>
 ```
+
+**The second line is not optional, and it is not decoration.** This step's
+idempotency claim below rests entirely on the write having landed, and
+`bd update` exiting 0 is not evidence of that: a mistyped key name writes a
+real key and exits 0, leaving `released_in` absent and the bead eligible for
+the *next* release too — a duplicate changelog entry for work already
+shipped. `bd-verify-metadata` reads the bead back, asserts the value, and
+prints the bead's whole metadata keyset, so a key written under a mistyped
+name is visible beside the absent one it was meant to be. It exits non-zero
+if the value is not there; **a non-zero exit here stops the step**, and the
+bead it names is the one to fix by hand.
+
+Report the read-back as a fraction in step 10: `tagged N/N beads
+released_in=v<version>, all verified by read-back`. `N/N` with no read-back
+behind it is the claim, not the evidence.
 
 This is what makes the skill idempotent — re-running it immediately after should find zero unreleased issues. Steps 6 and 7 aren't atomic: if you're interrupted between writing `CHANGELOG.md` and finishing these `bd update` calls, check `CHANGELOG.md`'s top section before rerunning from step 1 — if it already contains the version you were about to write, finish tagging the remaining beads by hand instead of regenerating (which would duplicate the section).
 
@@ -231,6 +268,6 @@ Do this only after confirming the release PR from step 8 is merged (`gh pr view 
 
 ## 10. Report back
 
-State the computed version, the bump reason (which issue(s) triggered feat/major), how many issues were included, whether step 5a's Cost Summary was included or skipped (and why, if skipped, or note any malformed `tokens_impl`/`tokens_qa` value it ignored), the PR URL, and the GitHub Release URL (or why it was skipped/deferred).
+State the computed version, the bump reason (which issue(s) triggered feat/major), step 1's three narrowing figures (`A` closed / `B` unreleased / `C` verified-shipped), step 7's read-back fraction, how many issues were included, whether step 5a's Cost Summary was included or skipped (and why, if skipped, or note any malformed `tokens_impl`/`tokens_qa` value it ignored), the PR URL, and the GitHub Release URL (or why it was skipped/deferred).
 
 Then step 7a's result, which is reported whether or not it filed anything: the retrospective document read and how many recommendations it held, how many were already converted, every bead id filed, and every recommendation deliberately not filed with its reason. If 7a was skipped or stopped, say which branch of its steps 1 or 2 caused it — a retrospective silently going unread is the failure this step exists to prevent, so "nothing to report" is never an acceptable rendering of it.

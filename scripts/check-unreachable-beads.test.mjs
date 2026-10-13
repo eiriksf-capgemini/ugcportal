@@ -21,6 +21,7 @@ import {
   BD_LIST_ARGS,
   buildBeadIndex,
   canReach,
+  countBlockingEdges,
   directBlockers,
   explainStuckPaths,
   findUnreachableBeads,
@@ -268,6 +269,25 @@ describe("formatReport", () => {
     expect(text).toContain("(none)");
   });
 
+  it("states the blocking-edge denominator alongside the flagged count", () => {
+    // ugcportal-kssp: "Flagged 0" over a backlog is only readable if the
+    // report also says how many edges the walk had to traverse.
+    const text = formatReport(findUnreachableBeads([bead("stuck", "open", ["ugcportal-ghost"]), bead("ready", "open")]));
+    expect(text).toContain("Walked 1 `blocks` edge(s) across 2 bead(s) carrying a `dependencies` array.");
+    expect(text).not.toContain("NO BLOCKING EDGES FOUND");
+  });
+
+  it("calls out a zero-edge graph as a possibly BROKEN lookup, not just a clean one", () => {
+    // The recorded v0.7.0 instance, reproduced: a blocker lookup that
+    // matches nothing makes every bead trivially reachable, and every other
+    // figure on the report still looks healthy.
+    const text = formatReport(findUnreachableBeads([bead("a", "open"), bead("b", "open")]));
+    expect(text).toContain("Examined 2 bead(s)");
+    expect(text).toContain("Walked 0 `blocks` edge(s) across 2 bead(s)");
+    expect(text).toContain("NO BLOCKING EDGES FOUND");
+    expect(text).toContain("Flagged 0 as unreachable");
+  });
+
   it("does NOT print (none) when beads are flagged", () => {
     const result = findUnreachableBeads([bead("stuck", "open", ["ugcportal-ghost"])]);
     const text = formatReport(result);
@@ -411,5 +431,27 @@ describe("CLI end-to-end (--beads fixture file, never live bd)", () => {
 
   it("rejects an unknown flag rather than silently ignoring it", () => {
     expect(() => execFileSync("node", [SCRIPT, "--nonsense"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] })).toThrow();
+  });
+});
+
+describe("countBlockingEdges (ugcportal-kssp)", () => {
+  it("counts only `blocks` edges, not every dependency type", () => {
+    const beads = [
+      { id: "a", dependencies: [{ type: "blocks", depends_on_id: "b" }, { type: "discovered-from", depends_on_id: "c" }] },
+      { id: "b", dependencies: [{ type: "blocks", depends_on_id: "c" }] },
+    ];
+    expect(countBlockingEdges(beads)).toEqual({ blockingEdgeCount: 2, beadsWithDependenciesArray: 2 });
+  });
+
+  it("reports zero when the dependencies field is absent entirely -- the renamed-field shape", () => {
+    expect(countBlockingEdges([{ id: "a" }, { id: "b" }])).toEqual({ blockingEdgeCount: 0, beadsWithDependenciesArray: 0 });
+  });
+
+  it("reports zero edges but a real array count when the TYPE string is what changed", () => {
+    // The two halves are reported separately on purpose: an array that is
+    // present but holds no `blocks` edge points at the type string, an array
+    // that is absent points at the field name.
+    const beads = [{ id: "a", dependencies: [{ type: "hard-blocks", depends_on_id: "b" }] }];
+    expect(countBlockingEdges(beads)).toEqual({ blockingEdgeCount: 0, beadsWithDependenciesArray: 1 });
   });
 });
