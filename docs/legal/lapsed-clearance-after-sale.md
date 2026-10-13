@@ -455,8 +455,8 @@ view and D should not be chosen in its place.
 - Refund mechanics — unowned (`f3a`), to be filed if A in any form is chosen.
 - The buyer-facing terms text — `/licence` and the re-sign-off any change to
   it triggers (the previous one was `ugcportal-xh4j`, closed as #223; `74w.1`'s
-  out-of-scope line keeps the terms text out of `74w`), and per-item terms
-  (`74w.1`).
+  out-of-scope line puts the site-wide `/licence` prose and its sign-off
+  outside `74w.1`), and per-item terms (`74w.1`).
 - The objection path that would make the external lapse visible —
   `ugcportal-qnq9.5`.
 - The pre-payment window between session creation and the webhook — `p3v`'s
