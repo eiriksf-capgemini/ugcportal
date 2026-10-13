@@ -127,8 +127,9 @@ CHANGELOG.md
 # is that each exists exactly once, at the repo root, so `**/vitest.config.ts`
 # would say otherwise. `playwright.config.ts` is the exception: there are
 # three (the root one plus `e2e/production/` and `e2e/seeded/`), and the two
-# nested ones are under `e2e/`, which this file excludes outright a few lines
-# down -- so anchoring costs nothing there either. Not depth-proof and
+# nested ones are under `e2e/`, which this file excludes outright in the
+# `docs`/`e2e` section further down -- so anchoring costs nothing there
+# either. Not depth-proof and
 # deliberately so, the same reasoning as `.git`/`CLAUDE.md` above.
 #
 # `*.test.*` and not `*.test*`: `src/lib/legal/legal-page.test-support.ts`
