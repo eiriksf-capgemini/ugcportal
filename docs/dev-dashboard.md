@@ -83,7 +83,9 @@ bead er sluppet. Kilden `release` henter alle beads med en slik etikett, lukkede
 (`bd list --all --label-pattern 'v*.*.*' --limit 0 --json`; `--limit 0` er «ubegrenset»,
 standarden på 50 ville stille kuttet halen av en release på 80 beads), og hver post har
 `metadata.released_in` når beaden er sluppet. `releaseLabelOf()`
-velger høyeste etikett blant beads som ikke er lukket, sammenlignet som semver, og
+velger laveste etikett blant beads som ikke er lukket, sammenlignet som semver, siden det
+er den neste releasen som skal kuttes (beads som alt er merket for en senere release, flytter
+den ikke videre). Er alle merkede beads lukket, velger den høyeste etiketten totalt.
 `releaseProgress()` deler hver bead med etiketten i tre: gjenstår (ikke lukket), ferdig men
 ikke sluppet (lukket, uten `released_in`) og sluppet (lukket, med `released_in`). Det som
 gjenstår, kommer i fire grupper: i arbeid,

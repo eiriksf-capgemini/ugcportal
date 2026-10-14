@@ -243,7 +243,9 @@ function beadBody({ bead, pr, worktree, cmuxItems, agentState }, ctx) {
   rows.push(["Acceptance criteria", textBlock(bead.acceptance_criteria, TEXT_CAP, `bd show ${bead.id}`), "list"]);
   if (bead.notes) rows.push(["Notes", textBlock(bead.notes, TEXT_CAP, `bd show ${bead.id}`), "note"]);
   if (pr) rows.push(["Pull request", prBody(pr, ctx, false), "pr"]);
+  else if (!ctx.prsUp) rows.push(["Pull request", `<span class="muted">unknown: gh pr list is down</span>`, "pr"]);
   if (worktree) rows.push(["Worktree", `<code>${esc(worktree.path)}</code> on ${icon("branch")}<code>${esc(worktree.branch ?? "detached")}</code> at ${esc(worktree.head ?? "?")}`, "folder"]);
+  else if (!ctx.worktreesUp) rows.push(["Worktree", `<span class="muted">unknown: git worktree list is down</span>`, "folder"]);
   if (cmuxItems.length)
     rows.push(["cmux", cmuxItems.map((it) => `${esc(it.label ?? it.cwd)} ${agentPill(agentStateOf(it)) || `<span class="muted">no agent</span>`}`).join("<br>"), "layout"]);
   else if (agentState) rows.push(["cmux", agentPill(agentState), "layout"]);
@@ -356,38 +358,59 @@ function beadRow(row, ctx, rightMeta, overflow, idPrefix = "bead") {
 </details>`;
 }
 
+/** The collapsed-line marker for a bead's PR when gh pr list is down. */
+function prUnknownMark() {
+  return `<span class="muted" title="gh pr list is down">${icon("pr", "PR state unknown", "muted")}</span>`;
+}
+
+/** The collapsed-line marker for a bead's worktree when git worktree list is down. */
+function worktreeUnknownMark() {
+  return `<span class="muted" title="git worktree list is down">${icon("folder", "worktree state unknown", "muted")}</span>`;
+}
+
+/**
+ * A bead's worktree on its collapsed line: the worktree when it has one, the
+ * unknown marker when git worktree list is down, nothing when it has none.
+ */
+function worktreeMeta(row, ctx) {
+  if (row.worktree) return `<code class="muted wt" title="worktree ${esc(row.worktree.path)}">${icon("folder")}${esc(path.basename(row.worktree.path))}</code>`;
+  return ctx.worktreesUp ? "" : worktreeUnknownMark();
+}
+
 function inProgressMeta(row, ctx) {
   const parts = [];
   if (row.pr) parts.push(`${link(row.pr.url, `#${row.pr.number}`, "", "pr")} ${ciIcon(row.checks)} ${reviewIcon(row.pr)}`);
   else if (ctx.prsUp) parts.push(`<span class="muted" title="no open pull request">${icon("pr", "no open PR", "muted")}</span>`);
-  else parts.push(`<span class="muted" title="gh pr list is down">${icon("pr", "PR state unknown", "muted")}</span>`);
+  else parts.push(prUnknownMark());
   parts.push(agentPill(row.agentState));
-  if (row.worktree) parts.push(`<code class="muted wt" title="worktree ${esc(row.worktree.path)}">${icon("folder")}${esc(path.basename(row.worktree.path))}</code>`);
+  parts.push(worktreeMeta(row, ctx));
   parts.push(timeIcon(row.bead.updated_at, ctx.now));
   return parts.filter(Boolean).join(" ");
 }
 
 /**
  * The open PR and worktree of a bead outside "In progress", when it has
- * either. Nothing when it has neither: a ready bead without a PR is the
- * normal case, not something to mark.
+ * either. Nothing when it has neither and both sources answered: a ready bead
+ * without a PR is the normal case, not something to mark. A down source reads
+ * "unknown" instead, so "gh is down" never looks like "no PR".
  */
-function linkedMeta(row) {
+function linkedMeta(row, ctx) {
   const parts = [];
   if (row.pr) parts.push(`${link(row.pr.url, `#${row.pr.number}`, "", "pr")} ${ciIcon(row.checks)}`);
-  if (row.worktree) parts.push(`<code class="muted wt" title="worktree ${esc(row.worktree.path)}">${icon("folder")}${esc(path.basename(row.worktree.path))}</code>`);
-  return parts.join(" ");
+  else if (!ctx.prsUp) parts.push(prUnknownMark());
+  parts.push(worktreeMeta(row, ctx));
+  return parts.filter(Boolean).join(" ");
 }
 
 function blockedMeta(row, ctx) {
   const { bead } = row;
   const chips = blockersOf(bead).map((id) => beadChip(id, ctx.known, ctx.inProgressIds)).join(" ");
-  return [linkedMeta(row), `${icon("lock", "blocked by", "muted")} ${chips || `<span class="muted">?</span>`}`, timeIcon(bead.updated_at, ctx.now)].filter(Boolean).join(" ");
+  return [linkedMeta(row, ctx), `${icon("lock", "blocked by", "muted")} ${chips || `<span class="muted">?</span>`}`, timeIcon(bead.updated_at, ctx.now)].filter(Boolean).join(" ");
 }
 
 function queueMeta(row, ctx) {
   const { bead } = row;
-  const parts = [linkedMeta(row)].filter(Boolean);
+  const parts = [linkedMeta(row, ctx)].filter(Boolean);
   if (bead.metadata?.cc_scope) parts.push(`<span class="muted chipish">${icon("tag")}${esc(bead.metadata.cc_scope)}</span>`);
   if (bead.issue_type && bead.issue_type !== "task") parts.push(`<span class="muted">${esc(bead.issue_type)}</span>`);
   parts.push(timeIcon(bead.updated_at, ctx.now));

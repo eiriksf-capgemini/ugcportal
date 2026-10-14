@@ -709,6 +709,33 @@ describe("renderHtml", () => {
     expect(bare).not.toContain('data-copy="bd update ugcportal-h0ef --claim"');
   });
 
+  it("a down prs or worktrees source reads unknown on a bead row, never like no PR or no worktree", () => {
+    const summaryOf = (sec, id) => {
+      const at = sec.indexOf(`id="${id}"`);
+      return sec.slice(sec.indexOf("<summary>", at), sec.indexOf("</summary>", at));
+    };
+    const rowOf = (sec, id) => sec.slice(sec.indexOf(`id="${id}"`), sec.indexOf("</details>", sec.indexOf(`id="${id}"`)));
+    const prUnknown = 'aria-label="PR state unknown"';
+    const wtUnknown = 'aria-label="worktree state unknown"';
+    const ready = (o) => summaryOf(sectionOf(page(o).html, "ready"), "bead-ugcportal-74w");
+    // Ready row (linkedMeta): prs down marks the PR unknown; prs up with no PR
+    // for this bead marks nothing (the mutation: source up, marker absent).
+    expect(ready({ prs: down("gh pr list: offline") })).toContain(prUnknown);
+    expect(ready()).not.toContain(prUnknown);
+    expect(ready({ worktrees: down("git worktree list: refused") })).toContain(wtUnknown);
+    expect(ready()).not.toContain(wtUnknown);
+    // The expanded body says so as well.
+    expect(rowOf(sectionOf(page({ prs: down("gh pr list: offline") }).html, "ready"), "bead-ugcportal-74w")).toContain("unknown: gh pr list is down");
+    expect(rowOf(sectionOf(page({ worktrees: down("git worktree list: refused") }).html, "ready"), "bead-ugcportal-74w")).toContain("unknown: git worktree list is down");
+    expect(rowOf(sectionOf(page().html, "ready"), "bead-ugcportal-74w")).not.toContain("unknown: g");
+    // In progress row (inProgressMeta): h0ef has wt-h0ef with the source up;
+    // with worktrees down it reads unknown instead of dropping the worktree.
+    const inProg = (o) => summaryOf(sectionOf(page(o).html, "inprogress"), "bead-ugcportal-h0ef");
+    expect(inProg({ worktrees: down("git worktree list: refused") })).toContain(wtUnknown);
+    expect(inProg()).not.toContain(wtUnknown);
+    expect(inProg()).toContain('title="worktree /private/tmp/wt-h0ef"');
+  });
+
   it("the cmux section needs git worktree list too, and says so when it is down", () => {
     const sec = sectionOf(page({ worktrees: down("git worktree list: not a git repository") }).html, "cmux");
     expect(sec).toContain("<strong>git worktree list unavailable.</strong>");
@@ -867,9 +894,15 @@ describe("gatherSources", () => {
 });
 
 describe("release progress", () => {
-  it("picks the highest semver label among beads that are not closed, compared as semver", () => {
+  it("picks the lowest semver label among beads that are not closed, compared as semver", () => {
     expect(releaseLabelOf(RELEASE_BEADS)).toBe("v0.7.0");
-    expect(releaseLabelOf([rel("a", "open", 1, ["v0.9.0"]), rel("b", "open", 1, ["v0.10.0"])])).toBe("v0.10.0");
+    // Semver, not string order: as strings "v0.10.0" sorts before "v0.9.0".
+    expect(releaseLabelOf([rel("a", "open", 1, ["v0.9.0"]), rel("b", "open", 1, ["v0.10.0"])])).toBe("v0.9.0");
+    // Live 2026-10-14: beads relabelled for v0.8.0 while v0.7.0 still has open
+    // beads. The next release to cut is v0.7.0.
+    expect(releaseLabelOf([rel("a", "closed", 1, ["v0.7.0"]), rel("b", "open", 1, ["v0.7.0"]), rel("c", "open", 1, ["v0.8.0"])])).toBe("v0.7.0");
+    // v0.7.0 all closed: the release in progress moves on to v0.8.0.
+    expect(releaseLabelOf([rel("a", "closed", 1, ["v0.7.0"]), rel("b", "closed", 1, ["v0.7.0"]), rel("c", "open", 1, ["v0.8.0"])])).toBe("v0.8.0");
     // Everything closed: fall back to the highest label overall, so a finished
     // but uncut release still shows as 100% rather than vanishing.
     expect(releaseLabelOf([rel("a", "closed", 1, ["v0.6.0"]), rel("b", "closed", 1, ["v0.7.0"])])).toBe("v0.7.0");

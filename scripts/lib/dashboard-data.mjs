@@ -224,7 +224,9 @@ export function joinRows({ prefix, inProgress, prs, worktrees, currentItems, now
 
 /**
  * The PRs a bead records as having shipped it (`metadata.prs`, e.g.
- * "gh-227,gh-231"), which cut-release and the close step write. Unlike the
+ * "gh-227,gh-231"), which the bead-close step writes (CLAUDE.md).
+ * cut-release reads it to check each PR merged; what it writes is
+ * `released_in`. Unlike the
  * recently-merged list it is not truncated, so it is what tells "this bead has
  * had a PR" apart from "nobody has started it".
  * @param {any} bead
@@ -414,12 +416,14 @@ export function compareSemver(a, b) {
 }
 
 /**
- * The release in progress: the highest semver label carried by any bead that
- * is not closed. When every labelled bead is closed it falls back to the
- * highest label overall (every bead in it is done; releaseProgress's
- * `released` / `unreleased` counts, from each bead's `released_in`, say
- * whether it has been cut), and to `null` when no bead carries a semver label
- * at all. Compared as semver, so v0.10.0 beats v0.9.0.
+ * The release in progress: the lowest semver label carried by any bead that
+ * is not closed, since that is the next release to cut (beads already
+ * labelled for a later one do not move it on). When every labelled bead is
+ * closed it falls back to the highest label overall (every bead in it is
+ * done; releaseProgress's `released` / `unreleased` counts, from each bead's
+ * `released_in`, say whether it has been cut), and to `null` when no bead
+ * carries a semver label at all. Compared as semver, so v0.9.0 comes before
+ * v0.10.0.
  * @param {any[]} beads
  * @returns {string | null}
  */
@@ -433,8 +437,8 @@ export function releaseLabelOf(beads) {
       if (b.status !== "closed") open.add(l);
     }
   }
-  const pool = open.size > 0 ? open : all;
-  return pool.size > 0 ? [...pool].sort(compareSemver).at(-1) : null;
+  if (open.size > 0) return [...open].sort(compareSemver)[0];
+  return all.size > 0 ? [...all].sort(compareSemver).at(-1) : null;
 }
 
 /**
