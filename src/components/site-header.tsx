@@ -127,10 +127,10 @@ export function SiteHeader() {
             way first under width pressure.
 
             ugcportal-ry6w: that is no longer true of the wordmark. It used to
-            be `min-w-12 shrink-[999]` (give way ~999x faster than anything
-            else), which at 390px signed in left ~12px of text - one letter -
-            once a long display name, the nav toggle and Sign out had taken
-            their widths. The Link is `shrink-0` now: the wordmark keeps its
+            be `min-w-12 shrink-[999]` (give way far faster than anything
+            else), which by CSS arithmetic left room for about one letter of
+            text once a long display name, the nav toggle and Sign out had
+            taken their widths (not observed in a render). The Link is `shrink-0` now: the wordmark keeps its
             natural width and the display name in AuthStatus (the one element
             in the row with `min-w-0 truncate`) gives way first, full name on
             its `title`.
