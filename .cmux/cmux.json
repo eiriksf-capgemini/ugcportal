@@ -1,0 +1,74 @@
+{
+  "actions": {
+    "ugcportal-dashboard": {
+      "type": "workspaceCommand",
+      "title": "ugcportal dashboard",
+      "commandName": "ugcportal dashboard",
+      "icon": {
+        "type": "symbol",
+        "name": "gauge.with.dots.needle.33percent"
+      }
+    }
+  },
+  "commands": [
+    {
+      "name": "ugcportal dashboard",
+      "description": "Beads, PRs and agent status for ugcportal: live HTML dashboard, a Claude terminal and the refresh loop",
+      "keywords": [
+        "dashboard",
+        "beads",
+        "prs",
+        "ugcportal"
+      ],
+      "workspace": {
+        "name": "ugcportal dashboard",
+        "cwd": ".",
+        "layout": {
+          "direction": "horizontal",
+          "split": 0.5,
+          "children": [
+            {
+              "pane": {
+                "surfaces": [
+                  {
+                    "type": "browser",
+                    "name": "Dashboard",
+                    "url": "file:///Users/eiriksf/code/ugcportal/.runtime/dashboard.html"
+                  }
+                ]
+              }
+            },
+            {
+              "direction": "vertical",
+              "split": 0.72,
+              "children": [
+                {
+                  "pane": {
+                    "surfaces": [
+                      {
+                        "type": "terminal",
+                        "name": "Claude",
+                        "command": "claude"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "pane": {
+                    "surfaces": [
+                      {
+                        "type": "terminal",
+                        "name": "Refresh",
+                        "command": "sh scripts/dashboard.sh; for S in $(cmux tree --workspace \"$CMUX_WORKSPACE_ID\" 2>/dev/null | grep \"\\[browser\\]\" | grep -o \"surface:[0-9]*\"); do cmux browser --surface \"$S\" reload >/dev/null 2>&1; done; sh scripts/dashboard.sh --watch 30 --sidebar; exec ${SHELL:-/bin/zsh} -l"
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ]
+}
