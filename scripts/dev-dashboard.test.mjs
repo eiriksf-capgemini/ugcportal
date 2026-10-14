@@ -9,13 +9,15 @@
  *   1. The join is by bead id, so a bead, its branch, its worktree and its
  *      PR end up on one row even though no tool knows about the others.
  *   2. A source that fails renders as a visible error block AND as a
- *      "Needs you" item. It must never render as an empty list, which would
- *      read as "nothing to do" (the fail-open shape ugcportal-kssp is about).
+ *      "Needs you" item, and every count derived from it renders as "-".
+ *      It must never render as an empty list or a 0, which would read as
+ *      "nothing to do" (the fail-open shape ugcportal-kssp is about).
  *   3. Nothing from bd, gh or git reaches the HTML unescaped.
  */
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
+import { JSDOM } from "jsdom";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -25,9 +27,11 @@ import {
   blockedByThis,
   blockersOf,
   buildAttention,
+  DASHBOARD_URL_PLACEHOLDER,
   esc,
   extractBeadId,
   findWorkspaceCommand,
+  gatherSources,
   joinRows,
   normalisePath,
   parseArgs,
@@ -38,6 +42,8 @@ import {
   releaseLabelOf,
   releaseProgress,
   renderHtml,
+  resolveWorkspaceLayout,
+  sidebarPills,
   STALE_IN_PROGRESS_HOURS,
   summariseChecks,
   TEXT_CAP,
@@ -191,12 +197,40 @@ function allSourcesOk(overrides = {}) {
     current: ok({ items: [CMUX_ITEM_WORKING] }),
     worktrees: ok(WORKTREE_PORCELAIN),
     mainLog: ok("4c8584e 65 minutes ago\n"),
+    version: ok("0.6.0"),
     ...overrides,
   };
 }
 
-function page(overrides = {}) {
-  return renderHtml({ repoName: "ugcportal", prefix: PREFIX, sources: allSourcesOk(overrides), now: NOW, refreshSeconds: 30 });
+function page(overrides = {}, now = NOW) {
+  return renderHtml({ repoName: "ugcportal", prefix: PREFIX, sources: allSourcesOk(overrides), now, refreshSeconds: 30 });
+}
+
+/** The markup of one section, from its id to the next section. */
+function sectionOf(html, key) {
+  const start = html.indexOf(`<details class="sec" id="sec-${key}"`);
+  expect(start).toBeGreaterThan(-1);
+  const next = html.indexOf('<details class="sec" id="sec-', start + 1);
+  return html.slice(start, next === -1 ? html.indexOf("</main>") : next);
+}
+
+/**
+ * Runs the page's own script in jsdom. There is no browser here, so this is
+ * the closest the tests get to clicking: scrollIntoView is stubbed (jsdom has
+ * no layout) and the window is closed after use so the reload timer dies.
+ */
+function dom(html) {
+  const d = new JSDOM(html, { runScripts: "dangerously", url: "http://localhost/dashboard.html", pretendToBeVisual: true });
+  d.window.HTMLElement.prototype.scrollIntoView = () => {};
+  return d;
+}
+
+/** Every section heading count and header tile number, in document order. */
+function counts(html) {
+  return {
+    headings: [...html.matchAll(/<h2[^>]*>.*?<span class="count">([^<]*)<\/span><\/h2>/g)].map((m) => m[1]),
+    tiles: [...html.matchAll(/<span class="n">([^<]*)<\/span>/g)].map((m) => m[1]),
+  };
 }
 
 describe("extractBeadId", () => {
@@ -222,12 +256,26 @@ describe("parseWorktrees", () => {
 });
 
 describe("summariseChecks", () => {
-  it("is red on any failure, pending on any unfinished check, green otherwise", () => {
+  it("is red on any failure, pending on any unfinished check, green only when every check is known-good", () => {
     expect(summariseChecks([{ conclusion: "SUCCESS" }, { conclusion: "FAILURE" }])).toBe("red");
     expect(summariseChecks([{ conclusion: "SUCCESS" }, { conclusion: "" }])).toBe("pending");
-    expect(summariseChecks([{ conclusion: "SUCCESS" }, { conclusion: "SKIPPED" }])).toBe("green");
+    expect(summariseChecks([{ conclusion: "SUCCESS" }, { conclusion: "SKIPPED" }, { conclusion: "NEUTRAL" }])).toBe("green");
     expect(summariseChecks([])).toBe("none");
     expect(summariseChecks(undefined)).toBe("none");
+  });
+  it("never reads a workflow that failed to start, or a conclusion it does not know, as green", () => {
+    expect(summariseChecks([{ conclusion: "SUCCESS" }, { conclusion: "STARTUP_FAILURE" }])).toBe("red");
+    expect(summariseChecks([{ conclusion: "SUCCESS" }, { conclusion: "SOMETHING_NEW" }])).toBe("unknown");
+    // Unknown outranks pending: a check that is both unknown and unfinished is still not known to pass.
+    expect(summariseChecks([{ conclusion: "SOMETHING_NEW" }, { status: "QUEUED" }])).toBe("unknown");
+  });
+  it("puts an unknown conclusion in Needs you and never raises Review pending for it", () => {
+    const odd = { ...PR_232, statusCheckRollup: [{ name: "CI", conclusion: "SOMETHING_NEW" }] };
+    const joined = joinRows({ prefix: PREFIX, inProgress: [BEAD_H0EF], prs: [odd], worktrees: [], currentItems: [], now: NOW });
+    const text = buildAttention({ prefix: PREFIX, joined, currentItems: [], sources: allSourcesOk(), now: NOW }).map(attentionText).join("\n");
+    expect(text).toContain("CI unknown: #232 for ugcportal-h0ef");
+    expect(text).not.toContain("Review pending");
+    expect(renderHtml({ repoName: "ugcportal", prefix: PREFIX, sources: allSourcesOk({ prs: ok([odd]) }), now: NOW }).html).toContain('aria-label="CI unknown"');
   });
 });
 
@@ -330,7 +378,7 @@ describe("buildAttention", () => {
       currentItems: [],
       now: NOW,
     });
-    const items = buildAttention({ joined, currentItems: [], sources, now: NOW });
+    const items = buildAttention({ prefix: PREFIX, joined, currentItems: [], sources, now: NOW });
     const text = items.map(attentionText).join("\n");
     expect(text).toContain("Source down: current is unavailable");
     expect(text).toContain("CI red: #240");
@@ -346,37 +394,81 @@ describe("buildAttention", () => {
     expect(items.find((a) => a.label === "Source down").severity).toBe("bad");
   });
 
-  it("nags about a green unreviewed PR only after the wait, and not while an agent is working on it", () => {
-    const base = { prefix: PREFIX, prs: [PR_232], worktrees: parseWorktrees(WORKTREE_PORCELAIN), now: NOW };
+  it("nags about a green unreviewed PR by the PR's own age, and not while an agent is working on it", () => {
+    const nag = (bead, pr, currentItems = []) =>
+      buildAttention({
+        prefix: PREFIX,
+        joined: joinRows({ prefix: PREFIX, inProgress: [bead], prs: [pr], worktrees: parseWorktrees(WORKTREE_PORCELAIN), currentItems, now: NOW }),
+        currentItems,
+        sources: allSourcesOk(),
+        now: NOW,
+      })
+        .map(attentionText)
+        .join("\n");
+    // Bead touched 20m ago, PR untouched for 4h: the PR has waited, so it nags,
+    // and the age it prints is the PR's.
+    expect(BEAD_H0EF.updated_at).toBe("2026-10-13T11:40:00Z");
+    expect(nag(BEAD_H0EF, PR_232)).toContain("Review pending: #232 for ugcportal-h0ef is green and unreviewed for 4h");
+    // The reverse: bead 6h old, PR updated 5m ago. Not yet.
     const oldBead = { ...BEAD_H0EF, updated_at: "2026-10-13T06:00:00Z" };
-    const idle = joinRows({ ...base, inProgress: [oldBead], currentItems: [] });
-    expect(buildAttention({ joined: idle, currentItems: [], sources: allSourcesOk(), now: NOW }).map(attentionText).join("\n")).toContain(
-      "Review pending: #232",
-    );
-    const busy = joinRows({ ...base, inProgress: [oldBead], currentItems: [CMUX_ITEM_WORKING] });
-    expect(
-      buildAttention({ joined: busy, currentItems: [CMUX_ITEM_WORKING], sources: allSourcesOk(), now: NOW }).map(attentionText).join("\n"),
-    ).not.toContain("Review pending");
-    const recent = joinRows({ ...base, inProgress: [BEAD_H0EF], currentItems: [] });
-    expect(buildAttention({ joined: recent, currentItems: [], sources: allSourcesOk(), now: NOW }).map(attentionText).join("\n")).not.toContain(
-      "Review pending",
-    );
+    expect(nag(oldBead, { ...PR_232, updatedAt: "2026-10-13T11:55:00Z" })).not.toContain("Review pending");
+    // A working agent suppresses it whatever the age.
+    expect(nag(BEAD_H0EF, PR_232, [CMUX_ITEM_WORKING])).not.toContain("Review pending");
   });
 
   it("tells a merged-but-open bead apart from an unstarted claim", () => {
     const mergedPr = { number: 250, title: "fix(x): done (ugcportal-new1)", url: "https://github.com/eiriksf-capgemini/ugcportal/pull/250", mergedAt: "2026-10-13T11:00:00Z" };
     const joined = joinRows({ prefix: PREFIX, inProgress: [BEAD_FRESH_NO_PR], prs: [], worktrees: [], currentItems: [], now: NOW });
-    const items = buildAttention({ joined, currentItems: [], sources: allSourcesOk({ merged: ok([mergedPr]) }), now: NOW });
+    const items = buildAttention({ prefix: PREFIX, joined, currentItems: [], sources: allSourcesOk({ merged: ok([mergedPr]) }), now: NOW });
     const text = items.map(attentionText).join("\n");
     expect(text).toContain("Merged, bead open: #250 for ugcportal-new1 merged 1h ago but the bead is still in_progress. bd close ugcportal-new1?");
     expect(text).not.toContain("Unstarted claim");
     expect(items.find((a) => a.label === "Merged, bead open").href).toBe(mergedPr.url);
   });
 
+  it("does not conclude 'no PR', 'no worktree' or 'no bead' from a source that is down", () => {
+    const inProgress = [BEAD_STALE_NO_PR, BEAD_FRESH_NO_PR];
+    const joined = joinRows({ prefix: PREFIX, inProgress, prs: [], worktrees: parseWorktrees(WORKTREE_PORCELAIN), currentItems: [], now: NOW });
+    const text = (overrides) =>
+      buildAttention({ prefix: PREFIX, joined, currentItems: [], sources: allSourcesOk(overrides), now: NOW })
+        .map(attentionText)
+        .join("\n");
+    // With every source up, the same rows do raise these items.
+    expect(text({})).toContain("Unstarted claim: ugcportal-new1");
+    expect(text({})).toContain("Orphan worktree: /private/tmp/wt-stray");
+    expect(text({})).toContain("Stale: ugcportal-ybv has had no update for 5d and has no PR");
+    const prsDown = text({ prs: down("gh pr list: offline") });
+    expect(prsDown).not.toContain("Unstarted claim");
+    expect(prsDown).not.toContain("Orphan worktree");
+    expect(prsDown).toContain("Stale: ugcportal-ybv has had no update for 5d and its PR state is unknown");
+    expect(text({ worktrees: down("git worktree list: not a git repository") })).not.toContain("Unstarted claim");
+    expect(text({ inProgress: down("bd list: refused") })).not.toContain("Orphan worktree");
+    const html = page({ prs: down("gh pr list: offline") }).html;
+    expect(html).toContain('aria-label="PR state unknown"');
+    expect(html).not.toContain('aria-label="no PR"');
+  });
+
+  it("matches a merged PR to a bead by whole id, never by substring", () => {
+    const abc = { id: "ugcportal-abc", title: "Parent", priority: 2, status: "in_progress", updated_at: "2026-10-13T11:55:00Z" };
+    const joined = joinRows({ prefix: PREFIX, inProgress: [abc], prs: [], worktrees: [], currentItems: [], now: NOW });
+    const merged = (prs) =>
+      buildAttention({ prefix: PREFIX, joined, currentItems: [], sources: allSourcesOk({ merged: ok(prs) }), now: NOW })
+        .map(attentionText)
+        .join("\n");
+    const pr = (number, title, headRefName) => ({ number, title, headRefName, url: `https://github.com/eiriksf-capgemini/ugcportal/pull/${number}`, mergedAt: "2026-10-13T11:00:00Z" });
+    // A dotted child and a longer sibling id, in the title and in the branch.
+    expect(merged([pr(301, "feat(x): child (ugcportal-abc.1)", "feat/ugcportal-abc.1-child"), pr(302, "fix(x): sibling (ugcportal-abcd)", "fix/ugcportal-abcd-sibling")])).not.toContain(
+      "Merged, bead open",
+    );
+    // The bead's own PR still matches, by branch alone or by title alone.
+    expect(merged([pr(303, "feat(x): no id in this title", "feat/ugcportal-abc-parent")])).toContain("Merged, bead open: #303 for ugcportal-abc");
+    expect(merged([pr(304, "feat(x): parent (ugcportal-abc)", "some-branch")])).toContain("Merged, bead open: #304 for ugcportal-abc");
+  });
+
   it("surfaces a cmux workspace whose agent is waiting on a human, with a correct plural", () => {
     const waiting = { label: "kt3k implementer", cwd: "/tmp/wt-kt3k", agents: [{ state: "idle" }], attention: [{}] };
     const joined = joinRows({ prefix: PREFIX, inProgress: [], prs: [], worktrees: [], currentItems: [waiting], now: NOW });
-    const items = buildAttention({ joined, currentItems: [waiting], sources: allSourcesOk(), now: NOW });
+    const items = buildAttention({ prefix: PREFIX, joined, currentItems: [waiting], sources: allSourcesOk(), now: NOW });
     expect(items.map(attentionText).join("\n")).toContain("Agent waiting: kt3k implementer has 1 item needing you");
   });
 });
@@ -456,6 +548,43 @@ describe("renderHtml", () => {
     expect(html).toContain("<strong>Source down:</strong> prs is unavailable");
   });
 
+  it("a down source never shows a 0 count: tiles, section headings and sidebar pills read -", () => {
+    // Every list source down at once. Before the fix each of these read 0.
+    const listSources = ["inProgress", "prs", "ready", "blocked", "release", "merged", "current", "worktrees"];
+    const allDown = Object.fromEntries(listSources.map((k) => [k, down(`${k}: refused`)]));
+    const { html, attention } = page(allDown);
+    const c = counts(html);
+    expect(c.headings).toHaveLength(8); // Needs you plus the seven sections
+    expect(c.tiles).toHaveLength(6);
+    expect(c.headings.slice(1)).toEqual(["-", "-", "-", "-", "-", "-", "-"]);
+    expect(c.tiles.slice(1)).toEqual(["-", "-", "-", "-", "-"]);
+    expect([...c.headings, ...c.tiles]).not.toContain("0");
+    // Needs you is the one count still known, and it carries one item per source.
+    expect(c.headings[0]).toBe(String(attention.length));
+    expect(attention.filter((a) => a.label === "Source down")).toHaveLength(listSources.length);
+    const pills = sidebarPills(attention.length, allSourcesOk(allDown)).map((a) => a[2]);
+    expect(pills).toEqual([`${attention.length} need you`, "- in progress", "- open PRs"]);
+    // One at a time: the down source's own tile and heading read -, the rest stay numbers.
+    for (const [key, tileIndex, headingIndex] of [["inProgress", 1, 1], ["prs", 2, 2], ["ready", 3, 4], ["blocked", 4, 5], ["release", 5, 6]]) {
+      const one = counts(page({ [key]: down("refused") }).html);
+      expect(one.tiles[tileIndex], key).toBe("-");
+      expect(one.headings[headingIndex], key).toBe("-");
+    }
+  });
+
+  it("an empty-but-working source still shows its 0, so the - above is the failure and not the emptiness", () => {
+    const c = counts(page({ inProgress: ok([]), prs: ok([]) }).html);
+    expect(c.tiles.slice(1, 3)).toEqual(["0", "0"]);
+    expect(sidebarPills(0, allSourcesOk({ inProgress: ok([]), prs: ok([]) })).map((a) => a[2]).slice(1)).toEqual(["0 in progress", "0 open PRs"]);
+  });
+
+  it("the cmux section needs git worktree list too, and says so when it is down", () => {
+    const sec = sectionOf(page({ worktrees: down("git worktree list: not a git repository") }).html, "cmux");
+    expect(sec).toContain("<strong>git worktree list unavailable.</strong>");
+    expect(sec).toContain('<span class="count">-</span>');
+    expect(sec).not.toContain("<table>");
+  });
+
   it("distinguishes the three empty states: zero-as-a-win, nothing here, and filtered to nothing", () => {
     const quiet = page({
       inProgress: ok([]),
@@ -467,7 +596,31 @@ describe("renderHtml", () => {
     expect(quiet.attention).toHaveLength(0);
     expect(quiet.html).toMatch(/<p class="empty win">.*Nothing is waiting on you\.<\/p>/);
     expect(quiet.html).toContain('<p class="empty">No beads are in progress.</p>');
-    expect(quiet.html).toContain('<p class="nomatch" hidden>No rows here match');
+  });
+
+  it("filtered to nothing: the page script shows No rows here match only in sections whose rows all missed", () => {
+    const d = dom(page().html);
+    const doc = d.window.document;
+    const shown = () => [...doc.querySelectorAll("details.sec")].filter((sec) => !sec.querySelector(".nomatch").hidden).map((sec) => sec.id);
+    // One per section, hidden until a filter runs.
+    expect(doc.querySelectorAll(".nomatch")).toHaveLength(doc.querySelectorAll("details.sec").length);
+    expect(shown()).toEqual([]);
+    const input = doc.getElementById("filter");
+    const filter = (q) => {
+      input.value = q;
+      input.dispatchEvent(new d.window.Event("input"));
+    };
+    // "h0ef" hits a row in In progress and Open PRs and nothing in Ready.
+    filter("h0ef");
+    expect(shown()).toContain("sec-ready");
+    expect(shown()).not.toContain("sec-inprogress");
+    expect(shown()).not.toContain("sec-prs");
+    expect(doc.querySelector("#sec-ready .nomatch .q").textContent).toBe("h0ef");
+    // Sections with no rows at all (merged is a list, cmux a table) never claim a miss.
+    expect(shown()).not.toContain("sec-merged");
+    filter("");
+    expect(shown()).toEqual([]);
+    d.window.close();
   });
 
   it("shows the first QUEUE_LIMIT queue rows and hides the rest behind Show all", () => {
@@ -480,6 +633,44 @@ describe("renderHtml", () => {
   it("marks the blocker that is in progress as hot and links it to its row", () => {
     const { html } = page();
     expect(html).toContain('<a href="#bead-ugcportal-h0ef" class="chip jump hot"');
+  });
+
+  it("a jump link to a dotted child id opens its row, even when the row is behind Show all", () => {
+    // ugcportal-qnq9.13 is the last of QUEUE_LIMIT + 1 ready beads, so it is an
+    // overflow row, and a blocked bead waits on it, so a chip jumps to it.
+    const ready = Array.from({ length: QUEUE_LIMIT }, (_, i) => ({ id: `ugcportal-q${i}`, title: `Ready ${i}`, priority: 1, updated_at: "2026-10-13T10:00:00Z" }));
+    ready.push({ id: "ugcportal-qnq9.13", title: "Dotted child", priority: 3, updated_at: "2026-10-13T10:00:00Z" });
+    const { html } = page({ ready: ok(ready), blocked: ok([{ ...BLOCKED_UL2J, blocked_by: ["ugcportal-qnq9.13"] }]) });
+    expect(html).toContain('<a href="#bead-ugcportal-qnq9.13" class="chip jump"');
+    expect(html.match(/id="bead-ugcportal-qnq9\.13"/g)).toHaveLength(1);
+    // The script resolves ids with getElementById and never feeds an href to a selector.
+    const script = html.slice(html.lastIndexOf("<script>"), html.lastIndexOf("</script>"));
+    expect(script).toContain('document.getElementById((a.getAttribute("href") || "").slice(1))');
+    expect(script).not.toMatch(/querySelector(All)?\(\s*(a\.getAttribute|location\.hash|"#"|'#'|`#)/);
+    // And it works: click the chip, the overflow row opens and its section shows all.
+    const d = dom(html);
+    const doc = d.window.document;
+    const target = doc.getElementById("bead-ugcportal-qnq9.13");
+    expect(target.classList.contains("overflow")).toBe(true);
+    expect(target.open).toBe(false);
+    doc.querySelector('a.chip.jump[href="#bead-ugcportal-qnq9.13"]').dispatchEvent(new d.window.MouseEvent("click", { bubbles: true, cancelable: true }));
+    expect(target.open).toBe(true);
+    expect(doc.getElementById("sec-ready").classList.contains("all")).toBe(true);
+    d.window.close();
+  });
+
+  it("carries the stale-banner markup with the generated time, and shows it after three intervals without a new file", () => {
+    const { html } = page();
+    expect(html).toContain('<meta name="refresh-seconds" content="30">');
+    expect(html).toMatch(/<span id="stale" class="stale" role="status" hidden>.*Not refreshed since <time datetime="2026-10-13T12:00:00.000Z">2026-10-13 12:00 UTC<\/time>/);
+    // Generated long ago (NOW is in the past for this run): the script unhides it.
+    const old = dom(html);
+    expect(old.window.document.getElementById("stale").hidden).toBe(false);
+    old.window.close();
+    // Generated just now: it stays hidden.
+    const fresh = dom(page({}, new Date()).html);
+    expect(fresh.window.document.getElementById("stale").hidden).toBe(true);
+    fresh.window.close();
   });
 
   it("caps long text and points at the full record", () => {
@@ -506,6 +697,32 @@ describe("parseArgs", () => {
   it("rejects unknown flags and a missing value", () => {
     expect(() => parseArgs(["--bogus"], "/repo")).toThrow(/unknown argument/);
     expect(() => parseArgs(["--repo"], "/repo")).toThrow(/needs a value/);
+  });
+  it("--workspace opens the page its Refresh pane renders, so it refuses a different --out", () => {
+    expect(parseArgs(["--workspace"], "/repo").out).toBe("/repo/.runtime/dashboard.html");
+    expect(parseArgs(["--workspace", "--out", ".runtime/dashboard.html"], "/repo").out).toBe("/repo/.runtime/dashboard.html");
+    expect(() => parseArgs(["--workspace", "--out", "/tmp/elsewhere.html"], "/repo")).toThrow(/does not take a different --out/);
+  });
+});
+
+describe("gatherSources", () => {
+  it("asks every full-list source for more than a real queue holds, and reads package.json's version", async () => {
+    const calls = [];
+    const runJson = async (cmd, args) => (calls.push([cmd, ...args]), { ok: true, value: [] });
+    const runText = async (cmd, args) => (calls.push([cmd, ...args]), { ok: true, value: "" });
+    const repo = fileURLToPath(new URL("..", import.meta.url));
+    const sources = await gatherSources(repo, { runJson, runText });
+    const call = (...prefix) => calls.find((c) => prefix.every((p, i) => c[i] === p));
+    const limitOf = (c) => c[c.indexOf("--limit") + 1];
+    expect(limitOf(call("bd", "list", "--status", "in_progress"))).toBe("0");
+    expect(limitOf(call("bd", "ready"))).toBe("0");
+    expect(limitOf(call("bd", "list", "--all"))).toBe("0");
+    expect(limitOf(call("gh", "pr", "list", "--state", "open"))).toBe("200");
+    expect(limitOf(call("gh", "pr", "list", "--state", "merged"))).toBe("8"); // intentionally recent only
+    const pkg = JSON.parse(readFileSync(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8"));
+    expect(sources.version).toEqual({ ok: true, value: pkg.version });
+    const missing = await gatherSources("/nonexistent-repo", { runJson, runText });
+    expect(missing.version.ok).toBe(false);
   });
 });
 
@@ -554,6 +771,28 @@ describe("release progress", () => {
     expect(page({ release: ok(allClosed) }).html).toContain("Everything labelled v0.7.0 is closed (6 of 6)");
     expect(page({ release: ok([]) }).html).toContain("No bead carries a semver label");
   });
+  it("tells done-but-not-cut from cut by package.json's version", () => {
+    const allClosed = RELEASE_BEADS.map((b) => ({ ...b, status: "closed" }));
+    const notCut = page({ release: ok(allClosed), version: ok("0.6.0") }).html;
+    expect(notCut).toContain("(6 of 6). Time to cut the release.");
+    expect(notCut).not.toContain("is cut");
+    const cut = page({ release: ok(allClosed), version: ok("0.7.0") }).html;
+    expect(cut).toContain("(6 of 6). v0.7.0 is cut (package.json is at 0.7.0); label the next release&#39;s beads.");
+    expect(cut).not.toContain("Time to cut the release");
+    const unknown = page({ release: ok(allClosed), version: down("package.json: ENOENT") }).html;
+    expect(unknown).toContain("package.json&#39;s version is unreadable, so whether it has been cut is unknown.");
+    expect(unknown).not.toContain("Time to cut the release");
+  });
+  it("with bd blocked down the release section says so instead of listing blocked beads as Ready", () => {
+    const up = sectionOf(page().html, "release");
+    expect(up).toContain('id="rel-ugcportal-ul2j"');
+    const sec = sectionOf(page({ blocked: down("bd blocked: dolt: connection refused") }).html, "release");
+    expect(sec).toContain("<strong>bd blocked unavailable.</strong> bd blocked: dolt: connection refused");
+    expect(sec).not.toContain('id="rel-ugcportal-ul2j"');
+    expect(sec).not.toContain('<h3 class="grp">Ready ');
+    // remaining comes from the release source alone, so the count stays a number.
+    expect(sec).toContain('Remaining in v0.7.0 <span class="count">4</span>');
+  });
   it("a failed release source is an error block and a Needs-you item, not an empty list", () => {
     const { html, attention } = page({ release: down("bd list --all: dolt: connection refused") });
     expect(html).toContain("bd list --all --label-pattern &#39;v*.*.*&#39; unavailable.");
@@ -572,7 +811,18 @@ describe("findWorkspaceCommand", () => {
     // the refresh loop, or the page's stale banner is the only thing left.
     const text = JSON.stringify(ws.layout);
     expect(ws.layout.children[0].pane.surfaces[0]).toMatchObject({ type: "browser" });
-    expect(ws.layout.children[0].pane.surfaces[0].url).toMatch(/^file:\/\/.*\/\.runtime\/dashboard\.html$/);
+    // No machine's path is committed: --workspace fills the placeholder in from
+    // --out, and the Refresh pane navigates to the page under its own cwd.
+    expect(ws.layout.children[0].pane.surfaces[0].url).toBe(DASHBOARD_URL_PLACEHOLDER);
+    expect(text).not.toMatch(/\/Users\/|\/home\//);
+    const resolved = resolveWorkspaceLayout(ws.layout, "/some/clone/.runtime/dashboard.html");
+    expect(resolved.children[0].pane.surfaces[0].url).toBe("file:///some/clone/.runtime/dashboard.html");
+    expect(ws.layout.children[0].pane.surfaces[0].url).toBe(DASHBOARD_URL_PLACEHOLDER); // the input is not mutated
+    expect(() => resolveWorkspaceLayout({ pane: { surfaces: [{ type: "browser", url: "file:///x" }] } }, "/o.html")).toThrow(/DASHBOARD_HTML/);
+    // The Refresh pane may drop stdout but never stderr (review-standards section 6).
+    const refresh = ws.layout.children[1].children[1].pane.surfaces[0].command;
+    expect(refresh).toContain('navigate \"file://$PWD/.runtime/dashboard.html\"'.replaceAll("\\", ""));
+    expect(refresh).not.toMatch(/2>\s*\/dev\/null|2>&1|&>/);
     // Both the one-shot render and the loop go through the nvm-aware wrapper:
     // a fresh cmux terminal has no node on PATH, and the wrapper is the one
     // place that fixes that. A direct `node scripts/dev-dashboard.mjs` here

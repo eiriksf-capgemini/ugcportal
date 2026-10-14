@@ -18,6 +18,11 @@
  *
  * Everything from bd, gh, cmux or git goes through esc() before it reaches
  * the document. No exceptions, including attribute values.
+ *
+ * A count derived from a source that failed renders as "-", never as 0, in
+ * the header tiles and the section headings alike (test: "a down source never
+ * shows a 0 count"). A section with more than one input lists every input
+ * that is down and shows no rows rather than a guess from the inputs left.
  */
 import path from "node:path";
 
@@ -27,6 +32,7 @@ import {
   blockedByThis,
   blockersOf,
   buildAttention,
+  extractBeadId,
   joinRows,
   normalisePath,
   parseWorktrees,
@@ -114,8 +120,8 @@ export function icon(name, label, cls = "") {
   return `<svg class="${c}" aria-hidden="true"><use href="#i-${name}"/></svg>`;
 }
 
-const CHECK_ICON = { green: "check-circle", red: "x-circle", pending: "clock", none: "circle" };
-const CHECK_CLASS = { green: "ok", red: "bad", pending: "warn", none: "muted" };
+const CHECK_ICON = { green: "check-circle", red: "x-circle", pending: "clock", unknown: "alert", none: "circle" };
+const CHECK_CLASS = { green: "ok", red: "bad", pending: "warn", unknown: "warn", none: "muted" };
 const REVIEW_ICON = { approved: "check-circle", "changes requested": "edit", "review required": "eye", unreviewed: "eye", draft: "draft" };
 const REVIEW_CLASS = { approved: "ok", "changes requested": "bad", "review required": "warn", unreviewed: "muted", draft: "muted" };
 const AGENT_ICON = { working: "activity", idle: "pause", waiting: "message", ended: "cpu", attached: "cpu" };
@@ -137,7 +143,7 @@ function agentPill(state) {
   return `<span class="agent ${esc(state)}" title="${esc(AGENT_LABEL[state])}">${icon(AGENT_ICON[state])}<span class="sr">${esc(AGENT_LABEL[state])}</span></span>`;
 }
 
-const CHECK_LABEL = { green: "CI green", red: "CI red", pending: "CI pending", none: "no CI" };
+const CHECK_LABEL = { green: "CI green", red: "CI red", pending: "CI pending", unknown: "CI unknown", none: "no CI" };
 const AGENT_LABEL = { working: "agent working", idle: "agent idle", waiting: "agent waiting", ended: "agent ended", attached: "agent attached", "": "" };
 
 function reviewWord(pr) {
@@ -280,18 +286,12 @@ function prBody(pr, ctx, standalone) {
     rows.push(["Checks", `<ul class="checks">${items.join("")}</ul>`, "check-circle"]);
   } else rows.push(["Checks", `<span class="muted">No checks reported</span>`, "check-circle"]);
   if (standalone) {
-    const beadId = extractId(pr, prefix);
+    const beadId = extractBeadId(pr.headRefName, prefix) ?? extractBeadId(pr.title, prefix);
     if (beadId) rows.push(["Bead", known.has(beadId) ? `<a href="#bead-${esc(beadId)}" class="jump">${icon("jump")}${esc(beadId)}</a>` : `${esc(beadId)} <span class="muted">(not in progress)</span>`, "tool"]);
   }
   rows.push(["Body", textBlock(pr.body, TEXT_CAP, `gh pr view ${pr.number}`), "text"]);
   if (standalone) rows.push(["Commands", [`gh pr view ${pr.number} --web`, `gh pr checks ${pr.number}`, `gh pr diff ${pr.number}`].map(copyable).join(" "), "terminal"]);
   return dl(rows);
-}
-
-function extractId(pr, prefix) {
-  const re = new RegExp(`\\b(${prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}-[a-z0-9]+(?:\\.[0-9]+)*)\\b`, "i");
-  const m = re.exec(pr.headRefName ?? "") ?? re.exec(pr.title ?? "");
-  return m ? m[1].toLowerCase() : null;
 }
 
 function dl(rows) {
@@ -341,7 +341,8 @@ function beadRow(row, ctx, rightMeta, overflow, idPrefix = "bead") {
 function inProgressMeta(row, ctx) {
   const parts = [];
   if (row.pr) parts.push(`${link(row.pr.url, `#${row.pr.number}`, "", "pr")} ${ciIcon(row.checks)} ${reviewIcon(row.pr)}`);
-  else parts.push(`<span class="muted" title="no pull request">${icon("pr", "no PR", "muted")}</span>`);
+  else if (ctx.prsUp) parts.push(`<span class="muted" title="no pull request">${icon("pr", "no PR", "muted")}</span>`);
+  else parts.push(`<span class="muted" title="gh pr list is down">${icon("pr", "PR state unknown", "muted")}</span>`);
   parts.push(agentPill(row.agentState));
   if (row.worktree) parts.push(`<code class="muted wt" title="worktree ${esc(row.worktree.path)}">${icon("folder")}${esc(path.basename(row.worktree.path))}</code>`);
   parts.push(timeIcon(row.bead.updated_at, ctx.now));
@@ -378,14 +379,20 @@ function prRow(pr, ctx, overflow) {
 
 /**
  * A section: collapsible heading with count, then one of error / empty /
- * rows. `rows` is an array of already-rendered row strings.
+ * rows. `rows` is an array of already-rendered row strings. `inputs` lists
+ * every source the rows are built from as [result, command]; one error block
+ * is rendered per input that is down, and then no rows at all, because rows
+ * built from the inputs that are left would be a guess (the release section
+ * groups by `bd blocked`, the cmux section filters by `git worktree list`).
  */
-function section({ key, title, count, source, sourceCmd, rows, emptyText, limited = 0, iconName = "list" }) {
+function section({ key, title, count, inputs, rows, emptyText, limited = 0, iconName = "list" }) {
   const body = [];
-  if (source && !source.ok) {
-    body.push(
-      `<div class="error" role="alert">${icon("x-circle", undefined, "bad")}<div><strong>${esc(sourceCmd)} unavailable.</strong> ${esc(source.error)}<div class="muted">The rest of the dashboard is current. Fix the command and the next refresh fills this in.</div></div></div>`,
-    );
+  const downInputs = inputs.filter(([source]) => !source?.ok);
+  if (downInputs.length > 0) {
+    for (const [source, cmd] of downInputs)
+      body.push(
+        `<div class="error" role="alert">${icon("x-circle", undefined, "bad")}<div><strong>${esc(cmd)} unavailable.</strong> ${esc(source?.error ?? "no result")}<div class="muted">The rest of the dashboard is current. Fix the command and the next refresh fills this in.</div></div></div>`,
+      );
   } else if (rows.length === 0) body.push(`<p class="empty">${esc(emptyText)}</p>`);
   else {
     body.push(rows.join("\n"));
@@ -410,13 +417,16 @@ function deriveRepoUrl(prs, merged) {
  * @param {object} args
  * @param {string} args.repoName
  * @param {string} args.prefix bead id prefix
- * @param {Record<string, {ok: boolean, value?: any, error?: string}>} args.sources from gatherSources()
+ * @param {Record<string, {ok: boolean, value?: any, error?: string}>} args.sources from gatherSources(); `version` is package.json's version
  * @param {Date} args.now
  * @param {number} [args.refreshSeconds]
  * @returns {{ html: string, attention: import("./dashboard-data.mjs").Attention[], joined: ReturnType<typeof joinRows> }}
  */
 export function renderHtml({ repoName, prefix, sources, now, refreshSeconds = 30 }) {
   const get = (k) => (sources[k]?.ok ? sources[k].value : null);
+  // A count is only a number when every source it is derived from answered;
+  // otherwise "-", so a failed source never reads as "0 left".
+  const countOf = (n, ...keys) => (keys.every((k) => sources[k]?.ok) ? n : "-");
   const inProgress = get("inProgress") ?? [];
   const ready = get("ready") ?? [];
   const blocked = get("blocked") ?? [];
@@ -428,12 +438,12 @@ export function renderHtml({ repoName, prefix, sources, now, refreshSeconds = 30
   const mainLog = sources.mainLog?.ok ? sources.mainLog.value.trim() : "";
 
   const joined = joinRows({ prefix, inProgress, prs, worktrees, currentItems, now });
-  const attention = buildAttention({ joined, currentItems, sources, now });
+  const attention = buildAttention({ prefix, joined, currentItems, sources, now });
   const inProgressIds = new Set(inProgress.map((b) => b.id));
   const known = new Map();
   for (const b of [...inProgress, ...ready, ...blocked]) if (b?.id && !known.has(b.id)) known.set(b.id, b);
   const repoUrl = deriveRepoUrl(prs, merged);
-  const ctx = { now, known, inProgressIds, repoUrl, prefix };
+  const ctx = { now, known, inProgressIds, repoUrl, prefix, prsUp: sources.prs?.ok === true };
   // Computed here because the header tiles need it before the sections do.
   const releaseBeads = get("release") ?? [];
   const releaseLabel = releaseLabelOf(releaseBeads);
@@ -444,11 +454,11 @@ export function renderHtml({ repoName, prefix, sources, now, refreshSeconds = 30
   const mainText = mainLog ? `${icon("commit")}origin/main ${repoUrl ? link(`${repoUrl}/commit/${mainSha}`, mainSha) : esc(mainSha)} <span class="muted">${esc(mainRest.join(" "))}</span>` : `<span class="muted">${icon("commit")}origin/main unknown</span>`;
   const tiles = [
     ["needs", "Needs you", attention.length, attention.length > 0 ? "bad" : "ok", "bell"],
-    ["inprogress", "In progress", inProgress.length, "", "tool"],
-    ["prs", "Open PRs", prs.length, "", "pr"],
-    ["ready", "Ready", ready.length, "", "play"],
-    ["blocked", "Blocked", blocked.length, "", "lock"],
-    ["release", release ? `Left in ${release.label}` : "Release", release ? release.remaining : "-", "", "tag"],
+    ["inprogress", "In progress", countOf(inProgress.length, "inProgress"), "", "tool"],
+    ["prs", "Open PRs", countOf(prs.length, "prs"), "", "pr"],
+    ["ready", "Ready", countOf(ready.length, "ready"), "", "play"],
+    ["blocked", "Blocked", countOf(blocked.length, "blocked"), "", "lock"],
+    ["release", release ? `Left in ${release.label}` : "Release", release ? countOf(release.remaining, "release") : "-", "", "tag"],
   ]
     .map(([key, label, n, cls, ic]) => `<a class="tile ${cls}" href="#sec-${key}">${icon(ic)}<span class="n">${esc(n)}</span><span class="l">${esc(label)}</span></a>`)
     .join("");
@@ -518,8 +528,15 @@ ${attention.length === 0 ? `<p class="empty win">${icon("check-circle", undefine
       for (const b of list) releaseRows.push(beadRow({ bead: b }, ctx, g === "blocked" ? blockedMeta(b, ctx) : queueMeta(b, ctx), false, "rel"));
     }
   }
+  // Every labelled bead closed means either "done, cut it" or "already cut".
+  // cut-release bumps package.json's version to the label it cuts, so the two
+  // are told apart there; an unreadable version says so instead of guessing.
+  const version = get("version");
+  let releaseDone = "Time to cut the release.";
+  if (release && version === null) releaseDone = "package.json's version is unreadable, so whether it has been cut is unknown.";
+  else if (release && release.label === `v${version}`) releaseDone = `${release.label} is cut (package.json is at ${version}); label the next release's beads.`;
   const releaseEmpty = release
-    ? `Everything labelled ${release.label} is closed (${release.done} of ${release.total}). Time to cut the release.`
+    ? `Everything labelled ${release.label} is closed (${release.done} of ${release.total}). ${releaseDone}`
     : "No bead carries a semver label (v1.2.3), so there is no release to track. Label the beads that belong to the next release.";
 
   // Merged ------------------------------------------------------------------
@@ -527,13 +544,16 @@ ${attention.length === 0 ? `<p class="empty win">${icon("check-circle", undefine
 
   const sections = [
     attnSection,
-    section({ key: "inprogress", title: "In progress", count: inProgress.length, source: sources.inProgress, sourceCmd: "bd list --status in_progress", rows: inProgressRows, emptyText: "No beads are in progress.", iconName: "tool" }),
-    section({ key: "prs", title: "Open pull requests", count: prs.length, source: sources.prs, sourceCmd: "gh pr list", rows: prRows, emptyText: "No open pull requests.", iconName: "pr" }),
-    section({ key: "cmux", title: "cmux workspaces on this repo", count: repoItems.length, source: sources.current, sourceCmd: "cmux current", rows: wsTable ? [wsTable] : [], emptyText: "No cmux workspace has this repo or one of its worktrees as cwd.", iconName: "layout" }),
-    section({ key: "ready", title: "Ready to pick up", count: ready.length, source: sources.ready, sourceCmd: "bd ready", rows: readyRows, emptyText: "Nothing is ready. Everything open is blocked or in progress.", limited: Math.max(0, ready.length - QUEUE_LIMIT), iconName: "play" }),
-    section({ key: "blocked", title: "Blocked", count: blocked.length, source: sources.blocked, sourceCmd: "bd blocked", rows: blockedRows, emptyText: "Nothing is blocked.", limited: Math.max(0, blocked.length - QUEUE_LIMIT), iconName: "lock" }),
-    section({ key: "release", title: release ? `Remaining in ${release.label}` : "Remaining in the release", count: release?.remaining ?? 0, source: sources.release, sourceCmd: "bd list --all --label-pattern 'v*.*.*'", rows: releaseRows, emptyText: releaseEmpty, iconName: "tag" }),
-    section({ key: "merged", title: "Recently merged", count: merged.length, source: sources.merged, sourceCmd: "gh pr list --state merged", rows: mergedRows.length ? [`<ul class="plain">${mergedRows.join("")}</ul>`] : [], emptyText: "Nothing merged recently.", iconName: "merge" }),
+    section({ key: "inprogress", title: "In progress", count: countOf(inProgress.length, "inProgress"), inputs: [[sources.inProgress, "bd list --status in_progress"]], rows: inProgressRows, emptyText: "No beads are in progress.", iconName: "tool" }),
+    section({ key: "prs", title: "Open pull requests", count: countOf(prs.length, "prs"), inputs: [[sources.prs, "gh pr list"]], rows: prRows, emptyText: "No open pull requests.", iconName: "pr" }),
+    section({ key: "cmux", title: "cmux workspaces on this repo", count: countOf(repoItems.length, "current", "worktrees"), inputs: [[sources.current, "cmux current"], [sources.worktrees, "git worktree list"]], rows: wsTable ? [wsTable] : [], emptyText: "No cmux workspace has this repo or one of its worktrees as cwd.", iconName: "layout" }),
+    section({ key: "ready", title: "Ready to pick up", count: countOf(ready.length, "ready"), inputs: [[sources.ready, "bd ready"]], rows: readyRows, emptyText: "Nothing is ready. Everything open is blocked or in progress.", limited: Math.max(0, ready.length - QUEUE_LIMIT), iconName: "play" }),
+    section({ key: "blocked", title: "Blocked", count: countOf(blocked.length, "blocked"), inputs: [[sources.blocked, "bd blocked"]], rows: blockedRows, emptyText: "Nothing is blocked.", limited: Math.max(0, blocked.length - QUEUE_LIMIT), iconName: "lock" }),
+    // Grouped by `bd blocked` as well as its own source, so both are inputs:
+    // with `blocked` down every blocked bead would land under "Ready".
+    // The count is release.remaining, which only the release source decides.
+    section({ key: "release", title: release ? `Remaining in ${release.label}` : "Remaining in the release", count: release ? countOf(release.remaining, "release") : "-", inputs: [[sources.release, "bd list --all --label-pattern 'v*.*.*'"], [sources.blocked, "bd blocked"]], rows: releaseRows, emptyText: releaseEmpty, iconName: "tag" }),
+    section({ key: "merged", title: "Recently merged", count: countOf(merged.length, "merged"), inputs: [[sources.merged, "gh pr list --state merged"]], rows: mergedRows.length ? [`<ul class="plain">${mergedRows.join("")}</ul>`] : [], emptyText: "Nothing merged recently.", iconName: "merge" }),
   ];
 
   const sourceList = Object.entries(sources)
@@ -772,7 +792,9 @@ const JS = `
   document.addEventListener("click", (e) => {
     const a = e.target.closest("a.jump");
     if (!a) return;
-    const t = document.querySelector(a.getAttribute("href"));
+    // getElementById, not querySelector: in "#bead-ugcportal-qnq9.13" a
+    // selector parser reads ".13" as a class, so dotted child ids never match.
+    const t = document.getElementById((a.getAttribute("href") || "").slice(1));
     if (!t) return;
     e.preventDefault();
     const sec = t.closest("details.sec");

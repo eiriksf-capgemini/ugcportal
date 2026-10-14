@@ -10,7 +10,10 @@ import path from "node:path";
 
 /** Hours an in_progress bead may go without an update before it is flagged. */
 export const STALE_IN_PROGRESS_HOURS = 24;
-/** Hours a green, unreviewed PR may sit before the dashboard nags about it. */
+/**
+ * Hours a green, unreviewed PR may sit before the dashboard nags about it,
+ * measured on the PR's own updatedAt (the same field the nag prints).
+ */
 export const REVIEW_WAIT_HOURS = 2;
 /** How many ready / blocked beads are shown before "Show all". */
 export const QUEUE_LIMIT = 12;
@@ -62,17 +65,29 @@ export function parseWorktrees(text) {
 }
 
 /**
- * Collapses a PR's statusCheckRollup into one word.
+ * Check conclusions / states that mean "this check passed or does not apply".
+ * Enumerated rather than inferred: anything not listed here and not in
+ * CHECKS_RED or CHECKS_PENDING is "unknown", never green, so a conclusion
+ * GitHub adds later cannot read as CI green.
+ */
+export const CHECKS_GREEN = ["SUCCESS", "NEUTRAL", "SKIPPED"];
+/** Conclusions / states that mean a check failed or could not run. */
+export const CHECKS_RED = ["FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE", "STALE"];
+/** States of a check that has not finished; "" is a CheckRun with no conclusion yet. */
+export const CHECKS_PENDING = ["", "PENDING", "QUEUED", "IN_PROGRESS", "EXPECTED", "WAITING", "REQUESTED"];
+
+/**
+ * Collapses a PR's statusCheckRollup into one word. Precedence is red, then
+ * unknown, then pending; "green" needs every check in CHECKS_GREEN.
  * @param {Array<{conclusion?: string, state?: string, status?: string}>} rollup
- * @returns {"green" | "red" | "pending" | "none"}
+ * @returns {"green" | "red" | "pending" | "unknown" | "none"}
  */
 export function summariseChecks(rollup) {
   if (!Array.isArray(rollup) || rollup.length === 0) return "none";
-  const states = rollup.map((c) => (c.conclusion || c.state || c.status || "").toUpperCase());
-  if (states.some((s) => ["FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED"].includes(s)))
-    return "red";
-  if (states.some((s) => ["", "PENDING", "QUEUED", "IN_PROGRESS", "EXPECTED", "WAITING"].includes(s)))
-    return "pending";
+  const states = rollup.map((c) => String(c?.conclusion || c?.state || c?.status || "").toUpperCase());
+  if (states.some((s) => CHECKS_RED.includes(s))) return "red";
+  if (states.some((s) => !CHECKS_GREEN.includes(s) && !CHECKS_PENDING.includes(s))) return "unknown";
+  if (states.some((s) => CHECKS_PENDING.includes(s))) return "pending";
   return "green";
 }
 
@@ -205,16 +220,21 @@ export function joinRows({ prefix, inProgress, prs, worktrees, currentItems, now
 /**
  * Everything that needs a human, most urgent first.
  * @param {object} args
+ * @param {string} args.prefix bead id prefix, e.g. "ugcportal"
  * @param {ReturnType<typeof joinRows>} args.joined
  * @param {any[]} args.currentItems
  * @param {Record<string, {ok: boolean, error?: string}>} args.sources
  * @param {Date} args.now
  * @returns {Attention[]}
  */
-export function buildAttention({ joined, currentItems, sources, now }) {
+export function buildAttention({ prefix, joined, currentItems, sources, now }) {
   /** @type {Attention[]} */
   const out = [];
   const add = (label, text, extra = {}) => out.push({ label, text, severity: "warn", ...extra });
+  // A rule that concludes "there is no PR / worktree / bead" from a source
+  // that is down would be a guess; such rules wait for their sources, and
+  // the "Source down" item above is what the human sees instead.
+  const up = (k) => sources[k]?.ok === true;
 
   for (const [name, res] of Object.entries(sources)) {
     if (!res.ok) add("Source down", `${name} is unavailable: ${res.error}`, { severity: "bad" });
@@ -226,14 +246,19 @@ export function buildAttention({ joined, currentItems, sources, now }) {
   const prProblems = (pr, suffix, anchor) => {
     const extra = { anchor, href: pr.url };
     if (pr.reviewDecision === "CHANGES_REQUESTED") add("Changes requested", `#${pr.number}${suffix}`, { ...extra, severity: "bad" });
-    if (summariseChecks(pr.statusCheckRollup) === "red") add("CI red", `#${pr.number}${suffix}`, { ...extra, severity: "bad" });
+    const ci = summariseChecks(pr.statusCheckRollup);
+    if (ci === "red") add("CI red", `#${pr.number}${suffix}`, { ...extra, severity: "bad" });
+    else if (ci === "unknown") add("CI unknown", `#${pr.number}${suffix} has a check conclusion this dashboard does not recognise`, extra);
     if (pr.mergeable === "CONFLICTING") add("Merge conflict", `#${pr.number}${suffix}`, { ...extra, severity: "bad" });
   };
   // A bead whose PR already merged but which is still in_progress is a
   // different problem from one nobody has started on. The recent merges are
   // the cheapest evidence available for telling the two apart.
   const merged = sources.merged?.ok && Array.isArray(sources.merged.value) ? sources.merged.value : [];
-  const mergedFor = (id) => merged.find((pr) => (pr.title ?? "").toLowerCase().includes(id.toLowerCase()) || (pr.headRefName ?? "").toLowerCase().includes(id.toLowerCase()));
+  // Whole-id match through the same extractBeadId the join uses, never a
+  // substring: ugcportal-abc.1 or ugcportal-abcd is not ugcportal-abc.
+  const mergedFor = (id) =>
+    merged.find((pr) => extractBeadId(pr.headRefName, prefix) === id || extractBeadId(pr.title, prefix) === id);
   for (const row of joined.rows) {
     const id = row.bead.id;
     const anchor = `bead-${id}`;
@@ -245,15 +270,18 @@ export function buildAttention({ joined, currentItems, sources, now }) {
         href: mergedPr.url,
       });
     else if (row.stale)
-      add("Stale", `${id} has had no update for ${ageOf(row.bead.updated_at, now)} and ${row.pr ? "has an open PR" : "has no PR"}`, { anchor });
-    else if (!row.pr && !row.worktree) add("Unstarted claim", `${id} is in_progress with no branch, worktree or PR yet`, { anchor });
+      add("Stale", `${id} has had no update for ${ageOf(row.bead.updated_at, now)} and ${row.pr ? "has an open PR" : up("prs") ? "has no PR" : "its PR state is unknown"}`, { anchor });
+    else if (!row.pr && !row.worktree && up("prs") && up("worktrees")) add("Unstarted claim", `${id} is in_progress with no branch, worktree or PR yet`, { anchor });
+    // Decided and printed on the same field, the PR's updatedAt. An
+    // unparseable date gives NaN, and NaN > n is false, so it does not nag.
+    const prAgeHours = row.pr ? (now.getTime() - Date.parse(row.pr.updatedAt ?? "")) / 3600000 : NaN;
     if (
       row.pr &&
       !row.pr.isDraft &&
       row.checks === "green" &&
       !row.pr.reviewDecision &&
       row.agentState !== "working" &&
-      row.ageHours > REVIEW_WAIT_HOURS
+      prAgeHours > REVIEW_WAIT_HOURS
     )
       add("Review pending", `#${row.pr.number} for ${id} is green and unreviewed for ${ageOf(row.pr.updatedAt, now)}`, {
         anchor,
@@ -261,7 +289,7 @@ export function buildAttention({ joined, currentItems, sources, now }) {
       });
   }
   for (const pr of joined.unlinkedPrs) prProblems(pr, "", `pr-${pr.number}`);
-  for (const wt of joined.orphanWorktrees) {
+  for (const wt of up("inProgress") && up("prs") ? joined.orphanWorktrees : []) {
     add("Orphan worktree", `${wt.path} on ${wt.branch} has no in_progress bead and no open PR`);
   }
   return out;
@@ -322,7 +350,8 @@ function compareSemver(a, b) {
 /**
  * The release in progress: the highest semver label carried by any bead that
  * is not closed. When every labelled bead is closed it falls back to the
- * highest label overall (the release is done but not cut), and to `null`
+ * highest label overall (every bead in it is done; whether it has been cut
+ * is decided by renderHtml against package.json's version), and to `null`
  * when no bead carries a semver label at all. Compared as semver, so v0.10.0
  * beats v0.9.0.
  * @param {any[]} beads

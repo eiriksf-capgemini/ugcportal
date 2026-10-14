@@ -59,7 +59,15 @@ Hver kilde er et `Result`:
 
 Det er poenget med hele designet: en kilde som feiler blir en synlig feilboks i sin egen
 seksjon og et «Source down»-punkt i «Needs you». Aldri en tom liste. En tom liste leses
-som «ingenting å gjøre», og det er feil svar når verktøyet er nede.
+som «ingenting å gjøre», og det er feil svar når verktøyet er nede. Det samme gjelder
+tallene: et tall som bygger på en kilde som er nede, vises som `-`, ikke `0`, både i
+flisene øverst, i tellingen bak seksjonsoverskriftene og i pillene i cmux-sidepanelet
+(`countOf()` i `renderHtml()`, `sidebarPills()` i `dev-dashboard.mjs`).
+
+Lister som vises i sin helhet, hentes uten tak som et ekte køomfang kan nå: `--limit 0`
+(«ubegrenset») på `bd list --status in_progress`, `bd ready` og release-kilden, og
+`--limit 200` på `gh pr list`, som ikke har noen ubegrenset verdi. En avkuttet liste ser
+nemlig komplett ut, med flis og telling. «Recently merged» er bevisst kort (8).
 
 ### Seksjonen «Remaining in v0.7.0»
 
@@ -70,9 +78,12 @@ standarden på 50 ville stille kuttet halen av en release på 80 beads). `releas
 velger høyeste etikett blant beads som ikke er lukket, sammenlignet som semver, og
 `releaseProgress()` gir ferdig/totalt pluss det som gjenstår i fire grupper: i arbeid,
 klar, blokkert (etter `bd blocked`, siden en beads egen avhengighetsliste ikke skiller en
-åpen blokkering fra en lukket) og utsatt. Lukkede beads teller bare i brøken. Er alt
-lukket, sier seksjonen det i stedet for å vise en tom liste; finnes ingen etikett, sier
-den det. Radene har id `rel-<id>` så en bead som også står i «Ready» eller «Blocked» ikke
+åpen blokkering fra en lukket) og utsatt. Lukkede beads teller bare i brøken. Seksjonen
+har derfor to kilder: er `bd blocked` nede, viser den en feilboks for den i stedet for å
+legge blokkerte beads under «Ready». Er alt lukket, sier seksjonen det i stedet for å vise
+en tom liste, og sammenligner etiketten med versjonen i `package.json` (kilden
+`version`): er etiketten `v<versjon>`, er releasen kuttet, ellers er det på tide å kutte
+den. Finnes ingen etikett, sier den det. Radene har id `rel-<id>` så en bead som også står i «Ready» eller «Blocked» ikke
 gir to elementer med samme id.
 
 ## 2. Legge til en ny datakilde
@@ -115,15 +126,14 @@ versjon antok feil felt og viste `?` for alle blokkeringer.
 ## 3. Lage en seksjon
 
 Alle seksjonene går gjennom `section()` i `dashboard-html.mjs`. Du gir den en nøkkel, en
-tittel, antallet, kilden, de ferdig rendrede radene og teksten for tom tilstand:
+tittel, antallet, kildene, de ferdig rendrede radene og teksten for tom tilstand:
 
 ```js
 section({
   key: "runs",                       // blir id="sec-runs"; brukes av filter, "Show all" og lagret åpen/lukket
   title: "Latest CI runs",
-  count: runs.length,                // vises i tellingen bak overskriften
-  source: sources.runs,              // feilboks hvis !ok
-  sourceCmd: "gh run list",          // navnet i feilboksen
+  count: countOf(runs.length, "runs"),   // "-" når kilden er nede, aldri 0
+  inputs: [[sources.runs, "gh run list"]], // [kilde, kommandonavn] for hver kilde radene bygger på
   rows: runs.map((r) => runRow(r, ctx)),
   emptyText: "No runs in the last day.",
   limited: Math.max(0, runs.length - QUEUE_LIMIT),   // > 0 gir en "Show all N"-knapp
@@ -132,7 +142,10 @@ section({
 
 `section()` velger selv mellom de tre tilstandene, i denne rekkefølgen:
 
-1. **Nede:** `<div class="error" role="alert">` med kommandonavnet og feilmeldinga.
+1. **Nede:** én `<div class="error" role="alert">` med kommandonavn og feilmelding per
+   kilde i `inputs` som er nede, og ingen rader. Bygger radene på flere kilder (release
+   grupperer etter `bd blocked`, cmux filtrerer etter `git worktree list`), skal alle stå
+   i `inputs`; rader laget av bare de kildene som svarte, ville vært gjetning.
 2. **Tom:** `<p class="empty">` med `emptyText`.
 3. **Innhold:** radene, pluss «Show all» hvis `limited > 0`.
 
@@ -156,7 +169,7 @@ function runRow(run, ctx, overflow = false) {
 <summary>
 <span class="id">${esc(run.id)}</span>
 <span class="title" title="${esc(run.name)}">${esc(run.name)}</span>
-<span class="meta">${statusDot(kindOf(run))} <span class="muted">${esc(run.conclusion ?? run.status)}</span> ${time(run.createdAt, ctx.now)}</span>
+<span class="meta">${ciIcon(summariseChecks([run]))} <span class="muted">${esc(run.conclusion ?? run.status)}</span> ${time(run.createdAt, ctx.now)}</span>
 </summary>
 <div class="body">${dl([
   ["Workflow", esc(run.workflowName)],
@@ -244,8 +257,11 @@ path-strengen inn i `ICON_PATHS`; `icon()` kaster feil på ukjente navn, så en 
 stopper renderinga i stedet for å gi et tomt hull. Fargen følger `currentColor`, så
 `ok`, `warn`, `bad` og `muted` som klasse er nok.
 
-- **`ciIcon(kind)`** gir sjekk-, kryss-, klokke- eller stiplet sirkel for CI-status med
-  etikett «CI green» osv. Brukes i rader, i sjekklista og i kildelista i bunnteksten.
+- **`ciIcon(kind)`** gir sjekk-, kryss-, klokke-, varsel- eller stiplet sirkel for
+  CI-status med etikett «CI green» osv. `kind` kommer fra `summariseChecks()`, som bare
+  sier `green` når hver sjekk er i `CHECKS_GREEN`; en konklusjon den ikke kjenner, blir
+  `unknown` («CI unknown»), aldri grønn. Brukes i rader, i sjekklista og i kildelista i
+  bunnteksten.
 - **`reviewIcon(pr)`** gir øye, blyant, sjekk eller dokument for review-tilstanden.
 - **`agentPill(state)`** gir en pille med aktivitets-, pause-, melding- eller cpu-ikon og
   skjult tekst (`.sr`) for skjermlesere.
@@ -274,11 +290,17 @@ add("Merge conflict", `#${pr.number} for ${id}`, { anchor: `bead-${id}`, href: p
 - `label` er to ord som vises i fet skrift.
 - `text` er resten av setningen, uten etikett.
 - `anchor` er id-en til raden det gjelder. Sida lager en «Show»-pille som åpner raden.
-- `href` er en ekstern lenke, som regel PR-en. Sida lager en «Open PR»-pille.
+- `href` er en ekstern lenke, som regel PR-en. Sida lager en «PR»-pille.
 - `severity` er `bad` (rød kant) eller `warn` (oransje kant, standard).
 
 Terskler er eksporterte konstanter (`STALE_IN_PROGRESS_HOURS`, `REVIEW_WAIT_HOURS`), ikke
-tall inne i koden, så testen kan importere dem.
+tall inne i koden, så testen kan importere dem. `REVIEW_WAIT_HOURS` måles på PR-ens egen
+`updatedAt`, det samme feltet som teksten skriver ut.
+
+En regel som slutter «det finnes ingen PR / worktree / bead» må vente på kildene den
+slutter fra: med `prs` eller `worktrees` nede fyrer ikke «Unstarted claim», med
+`inProgress` eller `prs` nede fyrer ikke «Orphan worktree», og «Stale» sier «its PR state
+is unknown» i stedet for «has no PR». Bruk `up("kilde")` i `buildAttention()`.
 
 Sjekk at regelen ikke fyrer på alt. Første versjon flagget «lease expired» på hver eneste
 bead, fordi bd-leaser varer fem minutter og ingenting i agentflyten kjører `bd heartbeat`.
@@ -299,7 +321,9 @@ feat/ugcportal-kt3k-bead-validator   →  ugcportal-kt3k
 ```
 
 `extractBeadId(text, prefix)` henter den ut, og krever repo-prefikset så et navn som
-`pr-129-review` ikke feiltolkes. `joinRows()` bygger tre oppslag (`prByBead`,
+`pr-129-review` ikke feiltolkes. Sammenlign alltid hele id-en den returnerer, aldri med
+`includes`: `ugcportal-abc` er en delstreng av både `ugcportal-abc.1` og
+`ugcportal-abcd`. Både koblingen og «Merged, bead open» bruker den. `joinRows()` bygger tre oppslag (`prByBead`,
 `wtByBead`, `itemsByCwd`) og slår opp i dem per bead. Skal du koble inn en ny kilde,
 legg til et fjerde `Map` på samme måte.
 
@@ -326,7 +350,8 @@ gjør, i rekkefølge:
    fokus ligger i `sessionStorage`, så en reload midt i skrivinga ikke tar fra deg
    markøren.
 3. **Hopp-lenker** (`a.jump`) åpner målraden og seksjonen før de scroller, og viser skjulte
-   rader om nødvendig.
+   rader om nødvendig. Målet slås opp med `document.getElementById`, ikke
+   `querySelector`: i `#bead-ugcportal-qnq9.13` leser en selektor `.13` som en klasse.
 4. **Copy-knapper** bruker `navigator.clipboard`, med `execCommand("copy")` som fallback for
    `file://`.
 5. **Scrollposisjon** lagres og gjenopprettes.
@@ -370,10 +395,17 @@ npx eslint scripts/dev-dashboard.mjs scripts/dev-dashboard.test.mjs scripts/lib/
   legge til ett kall til med en ny, unik nøkkel.
 - **Layouten** ligger i `.cmux/cmux.json` (prosjektlokal) og som handlingen
   `ugcportal-dashboard` i `~/.config/cmux/cmux.json` (global, synlig overalt). Venstre
-  kolonne er en nettleserflate med `file://`-adressen til `.runtime/dashboard.html`.
-  Høyre kolonne har Claude øverst og `--watch`-løkka nederst. Løkka rendrer én gang,
-  laster nettleserflatene i arbeidsområdet på nytt (i tilfelle fila ikke fantes da ruta
-  åpnet), og går så over til å vente. Endrer du den ene fila, kopier til den andre.
+  kolonne er en nettleserflate. I den prosjektlokale fila står adressen som plassholderen
+  `file://DASHBOARD_HTML`, så fila ikke inneholder én maskins hjemmekatalog;
+  `--workspace` bytter den ut med `file://`-adressen til `--out` (som for `--workspace`
+  alltid er `.runtime/dashboard.html`) før layouten gis til cmux. Høyre kolonne har
+  Claude øverst og `--watch`-løkka nederst. Løkka rendrer én gang, navigerer alle
+  nettleserflatene i arbeidsområdet til `file://$PWD/.runtime/dashboard.html` (det
+  retter plassholderen når arbeidsområdet ble åpnet fra Command Palette, og laster fila
+  hvis den ikke fantes da ruta åpnet), og går så over til å vente. Kommandoen sender
+  stdout fra `cmux` til `/dev/null`, men aldri stderr. Den globale kopien har en fast
+  adresse, siden den uansett er brukerens egen. Endrer du kommandoen i den ene fila,
+  kopier den til den andre.
 - **Node** ligger under nvm og er ikke på PATH i en fersk cmux-terminal. Derfor kjører
   layout-kommandoene gjennom `scripts/dashboard.sh`, som legger nyeste nvm-node foran PATH
   når `node` mangler. Den logikken ligger bare der, så en endring i hvor Node bor er én fil.

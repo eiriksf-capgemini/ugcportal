@@ -23,9 +23,10 @@
  * banner when the file stops being rewritten. See scripts/lib/dashboard-html.mjs.
  *
  * Every source is fetched independently. A source that fails renders as a
- * visible error block in its own section and as a "Source down" item in
- * "Needs you". It never renders as an empty list: an instrument that silently
- * matches nothing is worse than one that says it is broken (ugcportal-kssp).
+ * visible error block in every section built from it, as a "Source down" item
+ * in "Needs you", and as "-" in every count derived from it. It never renders
+ * as an empty list or a 0: an instrument that silently matches nothing is
+ * worse than one that says it is broken (ugcportal-kssp).
  *
  * Purely advisory and read-only against bd, gh and git. What it writes is the
  * output file and, only on request, cmux state: a browser pane (--open),
@@ -44,8 +45,10 @@
  * terminal top-right and this script's --watch loop bottom-right. The same
  * layout is registered globally as the `ugcportal-dashboard` action in
  * ~/.config/cmux/cmux.json. `.cmux/dock.json` seeds lazygit and the cmux Feed
- * in the right-hand Dock. From a shell, `--workspace` creates that workspace
- * directly from the project config:
+ * in the right-hand Dock. The project config's browser URL is the placeholder
+ * DASHBOARD_URL_PLACEHOLDER; the Refresh pane navigates it to the rendered
+ * page under its own cwd. From a shell, `--workspace` creates that workspace
+ * directly from the project config, with the placeholder already resolved:
  *   node scripts/dev-dashboard.mjs --workspace      (or: npm run dashboard:workspace)
  */
 import { execFile as execFileCb } from "node:child_process";
@@ -112,7 +115,12 @@ export function parseArgs(argv, cwd) {
       opts.help = true;
     } else throw new Error(`unknown argument: ${arg}`);
   }
-  if (!opts.out) opts.out = path.join(opts.repo, ".runtime", "dashboard.html");
+  const defaultOut = path.join(opts.repo, ".runtime", "dashboard.html");
+  // The workspace's Refresh pane renders to the default path and navigates the
+  // browser pane there, so a different --out would open a page nothing writes.
+  if (opts.workspace && opts.out && opts.out !== defaultOut)
+    throw new Error(`--workspace opens the page its Refresh pane renders, ${defaultOut}; it does not take a different --out`);
+  if (!opts.out) opts.out = defaultOut;
   return opts;
 }
 
@@ -136,7 +144,7 @@ function describeFailure(cmd, args, err) {
  * `{ ok: false, error }` so one broken tool cannot take the dashboard down.
  * @returns {Promise<Result<unknown>>}
  */
-async function runJson(cmd, args, cwd) {
+async function runJsonDefault(cmd, args, cwd) {
   try {
     const { stdout } = await execFile(cmd, args, { cwd, maxBuffer: 64 * 1024 * 1024 });
     const trimmed = stdout.trim();
@@ -147,7 +155,7 @@ async function runJson(cmd, args, cwd) {
 }
 
 /** @returns {Promise<Result<string>>} */
-async function runText(cmd, args, cwd) {
+async function runTextDefault(cmd, args, cwd) {
   try {
     const { stdout } = await execFile(cmd, args, { cwd });
     return { ok: true, value: stdout };
@@ -177,21 +185,30 @@ const PR_FIELDS = [
 
 /**
  * Fetches every source concurrently. Each entry is a Result so the renderer
- * can show per-section failures.
+ * can show per-section failures. The runners are injectable so the test can
+ * read the exact arguments each command is given.
  * @param {string} repo
+ * @param {{ runJson?: typeof runJsonDefault, runText?: typeof runTextDefault }} [runners]
  */
-export async function gatherSources(repo) {
-  const [inProgress, ready, blocked, status, release, prs, merged, current, worktrees, mainLog] =
+export async function gatherSources(repo, { runJson = runJsonDefault, runText = runTextDefault } = {}) {
+  const [inProgress, ready, blocked, status, release, prs, merged, current, worktrees, mainLog, version] =
     await Promise.all([
-      runJson("bd", ["list", "--status", "in_progress", "--json"], repo),
-      runJson("bd", ["ready", "--json"], repo),
+      // Every list below that the page shows in full passes a limit no real
+      // queue reaches, because a truncated list renders as a complete one,
+      // tile and count included. For bd, `--limit 0` is "unlimited"; the
+      // defaults are 50 for `bd list` and 100 for `bd ready` (92 beads were
+      // ready on 2026-10-14).
+      runJson("bd", ["list", "--status", "in_progress", "--limit", "0", "--json"], repo),
+      runJson("bd", ["ready", "--limit", "0", "--json"], repo),
+      // `bd blocked` (bd 1.3) has no --limit flag, so there is no limit to raise.
       runJson("bd", ["blocked", "--json"], repo),
       runJson("bd", ["status", "--json"], repo),
       // Every bead, closed included, that carries a semver release label.
-      // `--limit 0` is "unlimited"; the default of 50 would silently drop
-      // the tail of an 80-bead release and under-report what is left.
       runJson("bd", ["list", "--all", "--label-pattern", "v*.*.*", "--limit", "0", "--json"], repo),
-      runJson("gh", ["pr", "list", "--state", "open", "--limit", "50", "--json", PR_FIELDS], repo),
+      // gh has no unlimited value; 200 open PRs is far past anything this
+      // repo has had open at once. The default would be 30.
+      runJson("gh", ["pr", "list", "--state", "open", "--limit", "200", "--json", PR_FIELDS], repo),
+      // Deliberately short: this section is "recently merged", not a history.
       runJson(
         "gh",
         ["pr", "list", "--state", "merged", "--limit", "8", "--json", "number,title,mergedAt,url"],
@@ -200,8 +217,26 @@ export async function gatherSources(repo) {
       runJson("cmux", ["current", "--json", "--limit", "200"], repo),
       runText("git", ["worktree", "list", "--porcelain"], repo),
       runText("git", ["log", "-1", "--format=%h %cr", "origin/main"], repo),
+      readVersion(repo),
     ]);
-  return { inProgress, ready, blocked, status, release, prs, merged, current, worktrees, mainLog };
+  return { inProgress, ready, blocked, status, release, prs, merged, current, worktrees, mainLog, version };
+}
+
+/**
+ * package.json's version, which the release section compares against the
+ * release label to tell "done, not cut" from "cut".
+ * @param {string} repo
+ * @returns {Promise<Result<string>>}
+ */
+async function readVersion(repo) {
+  const file = path.join(repo, "package.json");
+  try {
+    const v = JSON.parse(await readFile(file, "utf8")).version;
+    if (typeof v !== "string" || v === "") return { ok: false, error: `${file}: no "version" field` };
+    return { ok: true, value: v };
+  } catch (err) {
+    return { ok: false, error: `${file}: ${err.message}` };
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -220,16 +255,29 @@ async function writeAtomic(outPath, content) {
 }
 
 /**
+ * The `cmux set-status` argument lists for the sidebar pills. A count whose
+ * source failed is "-", never 0, exactly as on the page's tiles.
+ * @param {number} attentionCount
+ * @param {Record<string, {ok: boolean, value?: any}>} sources
+ * @returns {string[][]}
+ */
+export function sidebarPills(attentionCount, sources) {
+  const color = attentionCount > 0 ? "#ff3b30" : "#34c759";
+  const inProgress = sources.inProgress?.ok ? sources.inProgress.value.length : "-";
+  const prs = sources.prs?.ok ? sources.prs.value.length : "-";
+  return [
+    ["set-status", "dash", `${attentionCount} need you`, "--icon", "bell", "--color", color, "--priority", "90"],
+    ["set-status", "beads", `${inProgress} in progress`, "--icon", "hammer", "--priority", "80"],
+    ["set-status", "prs", `${prs} open PR${prs === 1 ? "" : "s"}`, "--icon", "arrow.triangle.pull", "--priority", "70"],
+  ];
+}
+
+/**
  * Pushes a compact summary into cmux's sidebar for the calling workspace.
  * Best effort: a missing cmux is reported once and otherwise ignored.
  */
-async function updateSidebar(repo, attentionCount, inProgressCount, prCount) {
-  const color = attentionCount > 0 ? "#ff3b30" : "#34c759";
-  const results = await Promise.all([
-    runText("cmux", ["set-status", "dash", `${attentionCount} need you`, "--icon", "bell", "--color", color, "--priority", "90"], repo),
-    runText("cmux", ["set-status", "beads", `${inProgressCount} in progress`, "--icon", "hammer", "--priority", "80"], repo),
-    runText("cmux", ["set-status", "prs", `${prCount} open PR${prCount === 1 ? "" : "s"}`, "--icon", "arrow.triangle.pull", "--priority", "70"], repo),
-  ]);
+async function updateSidebar(repo, attentionCount, sources) {
+  const results = await Promise.all(sidebarPills(attentionCount, sources).map((args) => runTextDefault("cmux", args, repo)));
   const failed = results.find((r) => !r.ok);
   if (failed) process.stderr.write(`sidebar: ${failed.error}\n`);
 }
@@ -239,7 +287,7 @@ async function updateSidebar(repo, attentionCount, inProgressCount, prCount) {
  * name is the fallback when `bd` is down.
  */
 async function detectPrefix(repo, fallback) {
-  const res = await runJson("bd", ["list", "--limit", "1", "--json"], repo);
+  const res = await runJsonDefault("bd", ["list", "--limit", "1", "--json"], repo);
   if (res.ok && Array.isArray(res.value) && res.value[0]?.id) {
     const m = /^(.+)-[a-z0-9]+(?:\.[0-9]+)*$/i.exec(res.value[0].id);
     if (m) return m[1];
@@ -259,11 +307,7 @@ export async function renderOnce(opts, now = new Date()) {
   const refreshSeconds = opts.watchSeconds ?? DEFAULT_REFRESH_SECONDS;
   const { html, attention } = renderHtml({ repoName, prefix, sources, now, refreshSeconds });
   await writeAtomic(opts.out, html);
-  if (opts.sidebar) {
-    const inProgress = sources.inProgress.ok ? sources.inProgress.value.length : 0;
-    const prs = sources.prs.ok ? sources.prs.value.length : 0;
-    await updateSidebar(opts.repo, attention.length, inProgress, prs);
-  }
+  if (opts.sidebar) await updateSidebar(opts.repo, attention.length, sources);
   return { html, attention, sources };
 }
 
@@ -284,18 +328,50 @@ export function findWorkspaceCommand(config, name = WORKSPACE_COMMAND) {
 }
 
 /**
- * Creates the dashboard workspace in cmux from .cmux/cmux.json, so the
- * shell path and the Command Palette path build the identical layout.
- * @param {string} repo
+ * The placeholder the committed .cmux/cmux.json carries for the browser
+ * pane's URL, so the file names no machine's home directory.
  */
-async function openWorkspace(repo) {
+export const DASHBOARD_URL_PLACEHOLDER = "file://DASHBOARD_HTML";
+
+/**
+ * A copy of the workspace layout with every browser surface whose url is the
+ * placeholder pointed at `outPath`. Throws when no surface carries the
+ * placeholder, so a renamed placeholder fails here and not as a blank pane.
+ * @param {any} layout
+ * @param {string} outPath absolute path of the rendered page
+ */
+export function resolveWorkspaceLayout(layout, outPath) {
+  const url = pathToFileURL(outPath).href;
+  let replaced = 0;
+  const copy = JSON.parse(JSON.stringify(layout), (key, value) => {
+    if (key === "url" && value === DASHBOARD_URL_PLACEHOLDER) {
+      replaced += 1;
+      return url;
+    }
+    return value;
+  });
+  if (replaced === 0) throw new Error(`no browser surface in the layout has url ${DASHBOARD_URL_PLACEHOLDER}`);
+  return copy;
+}
+
+/**
+ * Creates the dashboard workspace in cmux from .cmux/cmux.json, so the
+ * shell path and the Command Palette path build the same layout. The
+ * browser pane opens `opts.out` (parseArgs pins it to the default path, the
+ * one the Refresh pane renders to); the Command Palette path opens the
+ * placeholder until the Refresh pane's first render navigates it there.
+ * @param {Options} opts
+ */
+async function openWorkspace(opts) {
+  const repo = opts.repo;
   const configPath = path.join(repo, ".cmux", "cmux.json");
   const config = JSON.parse(await readFile(configPath, "utf8"));
   const ws = findWorkspaceCommand(config);
   const cwd = path.resolve(repo, ws.cwd ?? ".");
-  const res = await runText(
+  const layout = resolveWorkspaceLayout(ws.layout, opts.out);
+  const res = await runTextDefault(
     "cmux",
-    ["new-workspace", "--name", ws.name ?? WORKSPACE_COMMAND, "--cwd", cwd, "--focus", "true", "--layout", JSON.stringify(ws.layout)],
+    ["new-workspace", "--name", ws.name ?? WORKSPACE_COMMAND, "--cwd", cwd, "--focus", "true", "--layout", JSON.stringify(layout)],
     repo,
   );
   if (!res.ok) throw new Error(res.error);
@@ -327,7 +403,7 @@ export async function main(argv = process.argv.slice(2)) {
   }
   if (opts.workspace) {
     try {
-      await openWorkspace(opts.repo);
+      await openWorkspace(opts);
     } catch (err) {
       process.stderr.write(`could not open workspace: ${err.message}\n`);
       process.exitCode = 1;
@@ -354,7 +430,7 @@ export async function main(argv = process.argv.slice(2)) {
 
   await cycle();
   if (opts.open) {
-    const res = await runText("cmux", ["browser", "open", pathToFileURL(opts.out).href, "--focus", "false"], opts.repo);
+    const res = await runTextDefault("cmux", ["browser", "open", pathToFileURL(opts.out).href, "--focus", "false"], opts.repo);
     if (!res.ok) process.stderr.write(`could not open cmux browser: ${res.error}\n`);
   }
   if (opts.watchSeconds !== null) {
