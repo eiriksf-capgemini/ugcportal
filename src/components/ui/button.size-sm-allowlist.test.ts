@@ -32,12 +32,13 @@ import { JS_FAMILY_EXTENSIONS } from "@/lib/source-extensions.mjs";
  * initialiser).
  *
  * THE ALLOWLIST IS THE MECHANISM, not a surface split. A new `sm` literal
- * fails here and its entry is added deliberately. The current entries are
- * mostly admin, upload and consent surfaces, but src/app/auth/error/page.tsx
- * (x2) renders for anyone, signed in or not, so it is a public caller on plain
- * `sm`; do not read the list as "public pages never use sm". A new
- * public-page control should still prefer "header-sm" unless it is
- * deliberately added here.
+ * fails here and its entry is added deliberately. Two allowlisted callers are
+ * public: src/components/consent/cookie-banner.tsx (x2) is mounted in the root
+ * layout for every page a visitor can land on (src/app/layout.tsx), and
+ * src/app/auth/error/page.tsx (x2) renders for anyone, signed in or not. The
+ * rest are admin and upload surfaces. So do not read the list as "public
+ * pages never use sm"; a new public-page control should still prefer
+ * "header-sm" unless it is deliberately added here.
  *
  * Counts are per file, so a second `sm` use in an allowlisted file is also
  * flagged. The list is the output of this scan, not a recollection.
