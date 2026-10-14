@@ -516,6 +516,25 @@ describe("K2: premise freshness against origin/main's current HEAD", { timeout: 
     expect(fresh.detail).toContain("no commit count was measured");
     expect(fresh.detail).not.toContain("Infinity");
   });
+
+  it("says no count was measured, not an Infinity count, when only the not-on-main count is unanswerable", () => {
+    const git = {
+      head: "f".repeat(40),
+      headShort: "fffffff",
+      resolveCommit: (sha) => sha.padEnd(40, "0"),
+      commitsAhead: () => 0,
+      commitsNotOnMain: () => Infinity,
+    };
+    const result = validateBead(
+      completeBead({ notes: `Premise verified 2026-10-14 at origin/main ${HEAD()}.` }),
+      { git, headShort: "fffffff" },
+    );
+    const fresh = result.results.find((r) => r.id === "premise-fresh");
+    expect(fresh.ok).toBe(false);
+    expect(fresh.detail).toContain("could not be compared");
+    expect(fresh.detail).toContain("no commit count was measured");
+    expect(fresh.detail).not.toContain("Infinity");
+  });
 });
 
 // --- K3: the run reports what it examined ------------------------------------
