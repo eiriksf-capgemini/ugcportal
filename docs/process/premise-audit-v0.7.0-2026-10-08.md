@@ -264,6 +264,15 @@ clearance has no effect on an issued or re-issued download URL. `p3v`'s own note
 see the risk and state it as prose, not as a criterion on any bead. `paa` and `aqw`
 both make lapse *more likely* without saying what a lapse does to a completed sale.
 
+> **2026-10-14 correction (ugcportal-zbcs):** "`p3v` K3 covers checkout" was false
+> when this was written on 2026-10-08, and the sentence after it ("state it as prose,
+> not as a criterion on any bead") was the accurate half. `p3v`'s acceptance field held
+> only K1: K3 had been authored (2026-09-24), rewritten (2026-09-27) and premise-verified
+> (2026-10-06) in `p3v`'s notes, then lost from the field at the 2026-10-06 backlog
+> review, leaving a stray `(replace K1)` marker. `ugcportal-zbcs` restored K3 to the
+> field on 2026-10-13 with a Verified-by clause, so the sentence is true again as of
+> that date. The `5d6` and `74w` halves of this paragraph are unchanged.
+
 **G6. Owner-initiated disclosure withdrawal.** `jain` owns the data pair. The
 question *"an item lawfully published as advertising stops being one — does it stay
 public?"* is deflected by the disclosure route to `qnq9.5`, which is scoped to
