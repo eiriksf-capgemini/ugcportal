@@ -11,9 +11,12 @@
  * not just the exported functions.
  *
  * Git: `makeTempRepo` below builds a throwaway repository with a known
- * three-commit history and the CLI is pointed at it with `--repo`, so the
- * staleness counts asserted here are exact and do not depend on this repo
- * having fetched `origin/main`.
+ * history -- three commits on `main`, plus one commit on a branch built on
+ * top of `main`'s HEAD and one on a branch forked from the middle commit --
+ * and the CLI is pointed at it with `--repo`, so the staleness counts
+ * asserted here are exact and do not depend on this repo having fetched
+ * `origin/main`. The two branch commits are what a premise verified on an
+ * unmerged branch names, and neither is on `main`.
  */
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -47,8 +50,12 @@ const SCRIPT = fileURLToPath(new URL("./check-bead-dispatch.mjs", import.meta.ur
 // --- a throwaway repo with a known history ----------------------------------
 
 let repo;
-/** @type {string[]} full shas, oldest first */
+/** @type {string[]} full shas of the three `main` commits, oldest first */
 let shas;
+/** full sha of a commit on a branch built ON TOP of HEAD: a descendant, not on main */
+let descendant;
+/** full sha of a commit on a branch forked from shas[1]: neither ancestor nor descendant of HEAD */
+let sideBranch;
 
 function makeTempRepo() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "kt3k-repo-"));
@@ -63,7 +70,18 @@ function makeTempRepo() {
     run(["commit", "-q", "-m", `commit ${n}`]);
     made.push(run(["rev-parse", "HEAD"]));
   }
-  return { dir, made };
+  const branchCommit = (branch, from, file) => {
+    run(["checkout", "-q", "-b", branch, from]);
+    fs.writeFileSync(path.join(dir, file), `${branch}\n`);
+    run(["add", "."]);
+    run(["commit", "-q", "-m", branch]);
+    const sha = run(["rev-parse", "HEAD"]);
+    run(["checkout", "-q", "main"]);
+    return sha;
+  };
+  const desc = branchCommit("feature-on-head", made[2], "feature.txt");
+  const side = branchCommit("side-from-middle", made[1], "side.txt");
+  return { dir, made, desc, side };
 }
 
 // Every block below spawns real `git` and a real `node` subprocess per
@@ -75,6 +93,8 @@ beforeAll(() => {
   const made = makeTempRepo();
   repo = made.dir;
   shas = made.made;
+  descendant = made.desc;
+  sideBranch = made.side;
 }, 30_000);
 
 afterAll(() => {
@@ -162,6 +182,15 @@ function failedChecks(stdout) {
     .map((l) => l.trim().split(/\s+/)[1]);
 }
 
+/**
+ * The checks that read `description`, derived from each check's declared
+ * `fields` rather than counted by hand. Comments below refer to this list
+ * instead of carrying a number, because a hand count drifted twice: once to
+ * "four" (the number that FAIL when the field is emptied) and once to
+ * "three", both written while more checks than that read it.
+ */
+const DESCRIPTION_READERS = CHECKS.filter((c) => c.fields.includes("description")).map((c) => c.id);
+
 // --- the pass path -----------------------------------------------------------
 
 describe("the complete fixture (K1, pass half)", { timeout: 30_000 }, () => {
@@ -179,10 +208,15 @@ describe("the complete fixture (K1, pass half)", { timeout: 30_000 }, () => {
     // wrong reason: strip the whole description and it must stop passing.
     const res = runFixture(completeBead({ description: "" }));
     expect(res.status).toBe(1);
-    // Named, not just non-zero: the description is what four checks read, so
-    // a status-only assertion here would survive the fixture coming to carry
-    // its scope lines or its story somewhere else entirely.
-    expect(failedChecks(res.stdout)).toEqual([
+    // Named, not just non-zero: every check in DESCRIPTION_READERS reads the
+    // description, so a status-only assertion here would survive the fixture
+    // coming to carry its scope lines or its story somewhere else entirely.
+    // Not every reader FAILS on an empty one -- `no-placeholder` finds no
+    // marker in nothing, and the premise checks find this fixture's premise
+    // in its notes -- so the list below is the readers that should, by name.
+    const failed = failedChecks(res.stdout);
+    expect(failed.filter((id) => !DESCRIPTION_READERS.includes(id))).toEqual([]);
+    expect(failed).toEqual([
       "description",
       "user-story",
       "in-scope",
@@ -403,6 +437,49 @@ describe("K2: premise freshness against origin/main's current HEAD", { timeout: 
     };
     expect(runFixture(bead).status).toBe(0);
   });
+
+  // --- G1: identity, not one-directional distance ---
+  //
+  // `<premise>..<head>` is 0 for HEAD and for every commit built on top of
+  // HEAD, so a premise verified inside an unmerged branch used to PASS with
+  // the report printing "that premise commit is origin/main's current HEAD".
+  // Each case below runs the same fixture text twice, once naming the
+  // off-main commit and once naming a commit that is on main, so the
+  // assertion is shown to flip on the commit and nothing else.
+  const OFF_MAIN = [
+    { what: "a descendant of HEAD (a branch built on top of main)", sha: () => descendant },
+    { what: "a commit on a branch forked from an older main commit", sha: () => sideBranch },
+  ];
+  for (const c of OFF_MAIN) {
+    it(`fails a premise naming ${c.what}, and says it is not on origin/main`, () => {
+      const notes = (sha) => `Premise verified 2026-10-14 at feature-branch commit ${sha} (not on main).`;
+      const off = runFixture(completeBead({ notes: notes(c.sha()) }));
+      expect(off.status).toBe(1);
+      expect(failedChecks(off.stdout)).toEqual(["premise-fresh"]);
+      expect(off.stdout).toContain(`premise commit ${c.sha()} is not on origin/main: 1 commit(s)`);
+      expect(off.stdout).not.toContain("that premise commit is origin/main's current HEAD");
+
+      // the same text naming a commit that IS main's HEAD passes
+      const on = runFixture(completeBead({ notes: notes(HEAD()) }));
+      expect(on.status).toBe(0);
+      expect(on.stdout).toContain("that premise commit is origin/main's current HEAD");
+    });
+  }
+
+  it("an off-main premise does not rescue a bead whose on-main premise is stale", () => {
+    // The old freshest-wins reduction picked the descendant (0 behind) over
+    // the stale main commit and passed the bead.
+    const bead = completeBead({
+      notes: [
+        `Premise verified 2026-10-10 at origin/main ${OLDEST()}.`,
+        `Premise re-verified 2026-10-14 on the feature branch at ${descendant}.`,
+      ].join("\n"),
+    });
+    const res = runFixture(bead);
+    expect(res.status).toBe(1);
+    expect(failedChecks(res.stdout)).toEqual(["premise-fresh"]);
+    expect(res.stdout).toContain("premise is 2 commit(s) stale");
+  });
 });
 
 // --- K3: the run reports what it examined ------------------------------------
@@ -586,6 +663,7 @@ describe("validateBead / validateBeads with a stubbed git context", { timeout: 3
     headShort: "fffffff",
     resolveCommit: (sha) => (/^[0-9a-f]{7,40}$/.test(sha) ? sha.padEnd(40, "0") : null),
     commitsAhead: () => 7,
+    commitsNotOnMain: () => 0,
   };
   const ctx = { git: stubGit, headShort: "fffffff" };
 
@@ -616,6 +694,16 @@ describe("makeGitContext", { timeout: 30_000 }, () => {
     const ctx = makeGitContext(HEAD(), repo);
     expect(ctx.commitsAhead(OLDEST())).toBe(2);
     expect(ctx.commitsAhead(HEAD())).toBe(0);
+  });
+
+  it("counts the premise's own commits that are not on main, in the other direction", () => {
+    const ctx = makeGitContext(HEAD(), repo);
+    // a descendant is 0 behind -- which is exactly why `behind` alone is not freshness
+    expect(ctx.commitsAhead(descendant)).toBe(0);
+    expect(ctx.commitsNotOnMain(descendant)).toBe(1);
+    expect(ctx.commitsNotOnMain(sideBranch)).toBe(1);
+    expect(ctx.commitsNotOnMain(HEAD())).toBe(0);
+    expect(ctx.commitsNotOnMain(OLDEST())).toBe(0);
   });
 
   it("returns null for a token git does not know as a commit", () => {
@@ -732,7 +820,8 @@ describe("the checks are bounded where they claim to be", { timeout: 30_000 }, (
     expect(res.status).toBe(1);
     // `status === 1` alone would also pass if the window were unbounded and
     // some unrelated check had broken instead -- the fixture's description
-    // is rewritten wholesale here, so three checks read it. Name the one
+    // is rewritten wholesale here, and every check in DESCRIPTION_READERS
+    // reads it. Name the one
     // under test, and require it to be the ONLY failure, which is what says
     // the two scope lines in that same description were still found.
     expect(failedChecks(res.stdout)).toEqual(["user-story"]);
@@ -825,8 +914,88 @@ describe("the checks are bounded where they claim to be", { timeout: 30_000 }, (
   // fixture above, which puts the same `(replace K1)` at the head of the
   // acceptance field as BARE text -- exactly where p3v's real one is -- and
   // asserts exit 1 with the marker named and the failure attributed to
-  // `no-placeholder`. Without it, blanking too much in stripCodeSpans would
-  // go unnoticed.
+  // `no-placeholder`. Without it, blanking too much in stripQuotedMarkers
+  // would go unnoticed.
+
+  // --- G2: the negated label is not an In-scope line ---
+  it("`Not in scope:` does not satisfy the in-scope check", () => {
+    // "in scope" is a substring of "Not in scope:"; with only that and an
+    // Out-of-scope line, the bead states nothing that IS in scope.
+    const res = runFixture(
+      completeBead({
+        description:
+          "As a reader, I want a story, so that it counts.\n\nNot in scope: everything.\nOut of scope: y, owned by fixture-other.",
+      }),
+    );
+    expect(res.status).toBe(1);
+    expect(failedChecks(res.stdout)).toEqual(["in-scope"]);
+    // and a real In-scope line beside the negated one still passes
+    const both = runFixture(
+      completeBead({
+        description:
+          "As a reader, I want a story, so that it counts.\n\nIn scope: the thing.\nNot in scope: everything.\nOut of scope: y, owned by fixture-other.",
+      }),
+    );
+    expect(both.status).toBe(0);
+  });
+
+  // --- G3: a stray backtick does not hide the bare markers after it ---
+  const STRAY_BACKTICK = [
+    {
+      // The stray ends the description and the marker opens the criteria,
+      // so the only thing between them is the boundary between the fields:
+      // scanned joined, they were one paragraph and the marker was hidden.
+      what: "at the end of the description, with the marker at the start of the acceptance criteria",
+      field: "acceptance_criteria",
+      overrides: (b) => ({
+        description: `${b.description} See \`foo.`,
+        acceptance_criteria: `K0: TODO write this criterion.\nVerified by: a test, and \`bar\`.\n\n${b.acceptance_criteria}`,
+      }),
+    },
+    {
+      what: "in one paragraph, with the marker in a later paragraph of the same field",
+      field: "description",
+      overrides: (b) => ({
+        description: `${b.description}\n\nSee \`foo for the background.\n\nTODO: say what the background is, per \`bar\`.`,
+      }),
+    },
+  ];
+  for (const c of STRAY_BACKTICK) {
+    it(`a stray backtick ${c.what} does not hide the marker`, () => {
+      const base = completeBead();
+      const res = runFixture({ ...base, ...c.overrides(base) });
+      expect(res.status).toBe(1);
+      expect(failedChecks(res.stdout)).toEqual(["no-placeholder"]);
+      expect(res.stdout).toContain(`an unfinished-editing marker is still in the ${c.field}: "TODO"`);
+    });
+  }
+
+  // --- G4: a marker QUOTED in plain quotation marks is quoted, not carried ---
+  it("a placeholder quoted in single, double or curly quotes is not a placeholder carried", () => {
+    // `ugcportal-c20m`'s own wording: "leaving the marker '(replace K1)'"
+    // and "editing instructions such as ... 'TODO' in the field".
+    const res = runFixture(
+      completeBead({
+        description:
+          "As the auditor, I want lost criteria found, so that none ship missing.\n\nOne bead was cut down, leaving the marker '(replace K1)', and others carry editing instructions such as 'TODO', \"TBD\" or \u201cFIXME\u201d in the field.\n\nIn scope: the audit.\nOut of scope: fixing each bead, owned by fixture-other.",
+      }),
+    );
+    expect(res.status).toBe(0);
+    expect(res.stdout).not.toContain("FAIL ");
+  });
+
+  it("an apostrophe is not a quotation mark: a bare marker between two still fails", () => {
+    // Guards the other direction: blanking from one apostrophe to the next
+    // would hide this bare marker.
+    const base = completeBead();
+    const res = runFixture({
+      ...base,
+      acceptance_criteria: `${base.acceptance_criteria}\n\nK3: p3v's (replace K1) marker isn't resolved yet.\nVerified by: a test.`,
+    });
+    expect(res.status).toBe(1);
+    expect(failedChecks(res.stdout)).toEqual(["no-placeholder"]);
+    expect(res.stdout).toContain('still in the acceptance_criteria: "(replace K1)"');
+  });
 });
 
 // --- K5: the DOCUMENTED invocation, not just the bare one ------------------

@@ -195,8 +195,11 @@ thing you are about to ship, or say explicitly that you did not.
 when a bead is missing any element of the `bead-template` form — user story,
 both scope lines, K-numbered criteria, a `Verified by` on each, a guardrail,
 a premise, `model`/`model_effort`, `cc_type`/`cc_scope` — or when its
-`Premise verified` line names a commit that is no longer `origin/main`'s
-HEAD, in which case it prints how many commits stale that premise is. Eirik,
+`Premise verified` line names any commit other than `origin/main`'s current
+HEAD. For an older commit on `main` it prints how many commits stale that
+premise is; for a commit that is not on `main` at all — a premise verified
+on an implementer's branch, or on top of another unmerged PR — it says so,
+because that premise rests on code `main` does not have. Eirik,
 2026-10-12: *"Before we start working with the beads all should pass
 validation."* It is a hard block, not a warning, and the exit status is the
 decision: the `.claude/skills/dispatch-bead` skill requires the run's output
@@ -207,7 +210,9 @@ the command is *invoked*, not only about how it is written: the skill's step
 1 pipes the run through `tee`, and a pipeline's status is its last command's,
 so that line carries `set -o pipefail` on the same line as the pipe, and
 `check-bead-dispatch.test.mjs` extracts every shell line in the skill that
-runs the gate and executes it against a failing bead in both bash and zsh.
+runs the gate and executes it against a failing bead in every shell present
+— bash is required, zsh is used where installed (macOS has it; the ubuntu CI
+runner does not, so in CI these lines run through bash only).
 Without `pipefail` the documented command reported `0` for a bead that failed
 every check — the gate's own wiring failing open.
 
