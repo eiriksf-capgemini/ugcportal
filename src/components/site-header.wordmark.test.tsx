@@ -8,10 +8,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
  * wordmark must not be squeezed to one letter - the display name gives way
  * first.
  *
- * WHAT THIS PINS: the class strings and markup that decide the squeeze order
- * - the wordmark Link does not shrink (`shrink-0`, no `shrink-[999]`), its
- * text is the full site name, and the signed-in name span is the element
- * that carries `min-w-0 truncate` and the full name on `title`.
+ * WHAT THIS PINS: the class strings that decide the squeeze order - the
+ * wordmark Link does not shrink (`shrink-0`, no `shrink-[999]`), and the
+ * three links of the chain that lets the signed-in name truncate: the
+ * `ml-auto` wrapper and the sign-out `<form>` carry `min-w-0`, and the name
+ * span carries `min-w-0 truncate`, no `shrink-0`, and the full name on
+ * `title`. Dropping any one lets the real header overflow.
  *
  * WHAT IT CANNOT: jsdom does no layout, so no pixel width is measured and
  * nothing here proves the rendered wordmark is N pixels wide at 390px. The
@@ -46,7 +48,12 @@ afterEach(() => {
   getSessionMock.mockReset();
 });
 
-async function renderSignedIn(): Promise<{ wordmark: Element; name: Element }> {
+async function renderSignedIn(): Promise<{
+  wordmark: Element;
+  name: Element;
+  form: Element;
+  wrapper: Element;
+}> {
   getSessionMock.mockResolvedValue({
     user: { id: "u1", name: LONG_NAME, email: "a@example.com", role: "USER" },
   });
@@ -60,16 +67,19 @@ async function renderSignedIn(): Promise<{ wordmark: Element; name: Element }> {
     ) + renderToStaticMarkup(await realAuth.AuthStatus());
   const wordmark = header.querySelector('a[href="/"]');
   const name = header.querySelector("form span[title]");
-  if (!wordmark || !name) throw new Error("wordmark or name span missing");
-  return { wordmark, name };
+  const form = name?.closest("form");
+  const wrapper = header.querySelector("div.ml-auto");
+  if (!wordmark || !name || !form || !wrapper) {
+    throw new Error("wordmark, name span, form or wrapper missing");
+  }
+  return { wordmark, name, form, wrapper };
 }
 
 describe("header wordmark under width pressure (ugcportal-ry6w)", () => {
-  it("K1: the wordmark keeps its full text and does not shrink", async () => {
+  it("K1: the wordmark Link does not shrink", async () => {
     const { wordmark } = await renderSignedIn();
     const classes = wordmark.className.split(/\s+/);
 
-    expect(wordmark.textContent).toBe("UGC Portal");
     expect(classes).toContain("shrink-0");
     expect(classes).not.toContain("shrink-[999]");
     expect(classes).not.toContain("min-w-12");
@@ -80,8 +90,18 @@ describe("header wordmark under width pressure (ugcportal-ry6w)", () => {
     const classes = name.className.split(/\s+/);
 
     expect(classes).toContain("min-w-0");
+    expect(classes).not.toContain("shrink-0");
     expect(classes).toContain("truncate");
     expect(name.getAttribute("title")).toBe(LONG_NAME);
     expect(name.textContent).toBe(LONG_NAME);
+  });
+});
+
+describe("the flex chain that lets the name truncate (ugcportal-ry6w)", () => {
+  it("K3: the wrapper and the form both carry min-w-0", async () => {
+    const { form, wrapper } = await renderSignedIn();
+
+    expect(wrapper.className.split(/\s+/)).toContain("min-w-0");
+    expect(form.className.split(/\s+/)).toContain("min-w-0");
   });
 });

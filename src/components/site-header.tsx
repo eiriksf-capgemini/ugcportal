@@ -123,17 +123,21 @@ export function SiteHeader() {
             `bg-primary` token the solid button variant uses) - it carries no
             independent meaning a screen reader needs, the Link's own
             accessible name ("UGC Portal") already says where it goes.
-            `shrink-0` on the mark so it is the wordmark's TEXT that gives
-            way first under width pressure.
+            `shrink-0` on the mark so it stays square under width pressure.
 
-            ugcportal-ry6w: that is no longer true of the wordmark. It used to
-            be `min-w-12 shrink-[999]` (give way far faster than anything
-            else), which by CSS arithmetic left room for about one letter of
-            text once a long display name, the nav toggle and Sign out had
-            taken their widths (not observed in a render). The Link is `shrink-0` now: the wordmark keeps its
-            natural width and the display name in AuthStatus (the one element
-            in the row with `min-w-0 truncate`) gives way first, full name on
-            its `title`.
+            ugcportal-ry6w: the Link is `shrink-0` too, so the wordmark keeps
+            its natural width and never gives way. It used to be
+            `min-w-12 shrink-[999]` (give way far faster than anything else),
+            which by CSS arithmetic left room for about one letter of text
+            once a long display name, the nav toggle and Sign out had taken
+            their widths (not observed in a render). What gives way instead
+            is the display name in AuthStatus, full name on its `title`: its
+            span is `min-w-0 truncate`, inside a `<form>` and the
+            `ml-auto flex min-w-0` wrapper below, and all three need
+            `min-w-0` or the row overflows rather than truncating the name.
+            The `min-w-0 truncate` on the wordmark's text span below is
+            inert under a `shrink-0` Link (nothing ever narrows it); it
+            stays as a harmless fallback if the Link ever shrinks again.
           */}
           <Link
             href="/"
