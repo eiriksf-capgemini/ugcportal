@@ -15,6 +15,7 @@ node scripts/dev-dashboard.mjs --watch 30      # render hvert 30. sekund
 node scripts/dev-dashboard.mjs --open          # åpne i en cmux-nettleserrute i tillegg
 node scripts/dev-dashboard.mjs --sidebar       # sett piller i cmux-sidepanelet
 node scripts/dev-dashboard.mjs --workspace     # åpne hele cmux-layouten
+node scripts/dev-dashboard.mjs --print-url     # skriv ut file://-adressen til fila og avslutt
 npm run dashboard                              # watch + open + sidebar
 sh scripts/dashboard.sh --watch 30 --open --sidebar   # det samme, fra et skall uten node/npm
 npx vitest run scripts/dev-dashboard.test.mjs  # testene
@@ -57,8 +58,11 @@ Hver kilde er et `Result`:
 { ok: false, error: "bd list --status: <første linje fra stderr>" }
 ```
 
-Det er poenget med hele designet: en kilde som feiler blir en synlig feilboks i sin egen
-seksjon og et «Source down»-punkt i «Needs you». Aldri en tom liste. En tom liste leses
+Det er poenget med hele designet: en kilde som feiler blir en synlig feilboks i hver
+seksjon som bygger radene sine på den, og et «Source down»-punkt i «Needs you». Aldri en
+tom liste. En rad som ellers ville sagt noe om kilden, sier «unknown» i stedet: en åpen
+PR viser «(in-progress state unknown)» ved beaden sin når `bd list --status in_progress`
+er nede, ikke «(not in progress)». En tom liste leses
 som «ingenting å gjøre», og det er feil svar når verktøyet er nede. Det samme gjelder
 tallene: et tall som bygger på en kilde som er nede, vises som `-`, ikke `0`, både i
 flisene øverst, i tellingen bak seksjonsoverskriftene og i pillene i cmux-sidepanelet
@@ -71,8 +75,10 @@ nemlig komplett ut, med flis og telling. «Recently merged» er bevisst kort (8)
 
 ### Seksjonen «Remaining in v0.7.0»
 
-Beads knyttes til en release med en semver-etikett (`v0.7.0`), den samme `cut-release`
-leser. Kilden `release` henter alle beads med en slik etikett, lukkede inkludert
+Beads planlegges inn i en release med en semver-etikett (`v0.7.0`). Det er bare
+planleggingen: `cut-release` leser ikke etiketten. Den tar med alle lukkede beads uten
+`released_in` og regner ut neste versjon fra `cc_type` (feat gir minor, resten patch), så
+versjonen den kutter kan havne over etiketten. Kilden `release` henter alle beads med en slik etikett, lukkede inkludert
 (`bd list --all --label-pattern 'v*.*.*' --limit 0 --json`; `--limit 0` er «ubegrenset»,
 standarden på 50 ville stille kuttet halen av en release på 80 beads). `releaseLabelOf()`
 velger høyeste etikett blant beads som ikke er lukket, sammenlignet som semver, og
@@ -82,8 +88,10 @@ klar, blokkert (etter `bd blocked`, siden en beads egen avhengighetsliste ikke s
 har derfor to kilder: er `bd blocked` nede, viser den en feilboks for den i stedet for å
 legge blokkerte beads under «Ready». Er alt lukket, sier seksjonen det i stedet for å vise
 en tom liste, og sammenligner etiketten med versjonen i `package.json` (kilden
-`version`): er etiketten `v<versjon>`, er releasen kuttet, ellers er det på tide å kutte
-den. Finnes ingen etikett, sier den det. Radene har id `rel-<id>` så en bead som også står i «Ready» eller «Blocked» ikke
+`version`, med `releaseIsCut()`): står versjonen på eller over etiketten som semver
+(`0.8.0` mot `v0.7.0`), er releasen kuttet, ellers er det på tide å kutte den. En versjon
+som ikke kan leses, eller som ikke er ren x.y.z, gir «unknown» i stedet for en gjetning.
+Finnes ingen etikett, sier den det. Radene har id `rel-<id>` så en bead som også står i «Ready» eller «Blocked» ikke
 gir to elementer med samme id.
 
 ## 2. Legge til en ny datakilde
@@ -297,10 +305,16 @@ Terskler er eksporterte konstanter (`STALE_IN_PROGRESS_HOURS`, `REVIEW_WAIT_HOUR
 tall inne i koden, så testen kan importere dem. `REVIEW_WAIT_HOURS` måles på PR-ens egen
 `updatedAt`, det samme feltet som teksten skriver ut.
 
-En regel som slutter «det finnes ingen PR / worktree / bead» må vente på kildene den
-slutter fra: med `prs` eller `worktrees` nede fyrer ikke «Unstarted claim», med
-`inProgress` eller `prs` nede fyrer ikke «Orphan worktree», og «Stale» sier «its PR state
-is unknown» i stedet for «has no PR». Bruk `up("kilde")` i `buildAttention()`.
+En regel som slutter «det finnes ingen PR / worktree / bead» må vente på alle kildene den
+slutter fra: med `prs`, `worktrees` eller `merged` nede fyrer ikke «Unstarted claim» (uten
+`merged` ville en bead med en allerede merget PR sett uberørt ut), med `inProgress` eller
+`prs` nede fyrer ikke «Orphan worktree», og «Stale» sier «its PR state is unknown» i
+stedet for «has no PR». «Review pending» holdes tilbake når en agent jobber, og
+agenttilstanden kommer fra `current` via `worktrees`; er en av dem nede, fyrer den likevel
+og legger til «(agent state unknown)». «Merged, bead open» foreslår `bd close` bare når
+`prs` svarte, siden en åpen oppfølgings-PR ellers ikke kan utelukkes. Forslaget om
+`bd update <id> --claim` i en rad venter på samme måte på `prs` og `worktrees`. Bruk
+`up("kilde")` i `buildAttention()`.
 
 Sjekk at regelen ikke fyrer på alt. Første versjon flagget «lease expired» på hver eneste
 bead, fordi bd-leaser varer fem minutter og ingenting i agentflyten kjører `bd heartbeat`.
@@ -399,12 +413,14 @@ npx eslint scripts/dev-dashboard.mjs scripts/dev-dashboard.test.mjs scripts/lib/
   `file://DASHBOARD_HTML`, så fila ikke inneholder én maskins hjemmekatalog;
   `--workspace` bytter den ut med `file://`-adressen til `--out` (som for `--workspace`
   alltid er `.runtime/dashboard.html`) før layouten gis til cmux. Høyre kolonne har
-  Claude øverst og `--watch`-løkka nederst. Løkka rendrer én gang, navigerer alle
-  nettleserflatene i arbeidsområdet til `file://$PWD/.runtime/dashboard.html` (det
-  retter plassholderen når arbeidsområdet ble åpnet fra Command Palette, og laster fila
+  Claude øverst og `--watch`-løkka nederst. Løkka rendrer én gang, henter adressen med
+  `sh scripts/dashboard.sh --print-url` (`dashboardUrl()`, som prosentkoder stien med
+  `pathToFileURL`, så en mappe med `#`, `?` eller `%` i navnet ikke åpner feil fil),
+  navigerer alle nettleserflatene i arbeidsområdet dit (det retter plassholderen når arbeidsområdet ble åpnet fra Command Palette, og laster fila
   hvis den ikke fantes da ruta åpnet), og går så over til å vente. Kommandoen sender
   stdout fra `cmux` til `/dev/null`, men aldri stderr. Den globale kopien har en fast
-  adresse, siden den uansett er brukerens egen. Endrer du kommandoen i den ene fila,
+  adresse i nettleserflaten, siden den uansett er brukerens egen, men Refresh-kommandoen
+  er den samme. Endrer du kommandoen i den ene fila,
   kopier den til den andre.
 - **Node** ligger under nvm og er ikke på PATH i en fersk cmux-terminal. Derfor kjører
   layout-kommandoene gjennom `scripts/dashboard.sh`, som legger nyeste nvm-node foran PATH
@@ -412,7 +428,8 @@ npx eslint scripts/dev-dashboard.mjs scripts/dev-dashboard.test.mjs scripts/lib/
 
 ## 12. Sjekkliste før du er ferdig
 
-- [ ] Seksjonen går gjennom `section()` og har `emptyText` og `sourceCmd`.
+- [ ] Seksjonen går gjennom `section()` og har `emptyText` og `inputs` med alle kildene radene bygger på.
+- [ ] Ingen rad, telling eller «Needs you»-regel konkluderer noe fra en kilde som er nede.
 - [ ] Raden har stabil `id`, `data-search`, og hele tittelen i body.
 - [ ] Alt fra data går gjennom `esc()`, også attributtverdier. Lange tekster gjennom `textBlock()`.
 - [ ] Lange lister bruker `overflow` fra `QUEUE_LIMIT`.

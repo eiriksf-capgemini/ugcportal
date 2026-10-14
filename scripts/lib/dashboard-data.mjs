@@ -232,8 +232,11 @@ export function buildAttention({ prefix, joined, currentItems, sources, now }) {
   const out = [];
   const add = (label, text, extra = {}) => out.push({ label, text, severity: "warn", ...extra });
   // A rule that concludes "there is no PR / worktree / bead" from a source
-  // that is down would be a guess; such rules wait for their sources, and
-  // the "Source down" item above is what the human sees instead.
+  // that is down would be a guess, so each such rule waits for every source
+  // its conclusion rests on and the "Source down" item is what the human
+  // sees instead: "Unstarted claim" waits for prs, worktrees and merged,
+  // "Orphan worktree" for inProgress and prs (worktrees is its own list),
+  // and "Stale" says its PR state is unknown rather than "has no PR".
   const up = (k) => sources[k]?.ok === true;
 
   for (const [name, res] of Object.entries(sources)) {
@@ -264,16 +267,26 @@ export function buildAttention({ prefix, joined, currentItems, sources, now }) {
     const anchor = `bead-${id}`;
     if (row.pr) prProblems(row.pr, ` for ${id}`, anchor);
     const mergedPr = !row.pr ? mergedFor(id) : null;
+    // "bd close" also rests on there being no open PR left for the bead (a
+    // follow-up fix PR keeps it open), and with prs down row.pr is null
+    // whether or not one exists, so the advice waits for prs.
     if (mergedPr)
-      add("Merged, bead open", `#${mergedPr.number} for ${id} merged ${ageOf(mergedPr.mergedAt, now)} ago but the bead is still in_progress. bd close ${id}?`, {
+      add("Merged, bead open", `#${mergedPr.number} for ${id} merged ${ageOf(mergedPr.mergedAt, now)} ago but the bead is still in_progress. ${up("prs") ? `bd close ${id}?` : "Its open PRs are unknown, so check them before closing it."}`, {
         anchor,
         href: mergedPr.url,
       });
     else if (row.stale)
       add("Stale", `${id} has had no update for ${ageOf(row.bead.updated_at, now)} and ${row.pr ? "has an open PR" : up("prs") ? "has no PR" : "its PR state is unknown"}`, { anchor });
-    else if (!row.pr && !row.worktree && up("prs") && up("worktrees")) add("Unstarted claim", `${id} is in_progress with no branch, worktree or PR yet`, { anchor });
+    // `merged` too: with it down, mergedFor finds nothing, and a bead whose
+    // PR already merged would read as one nobody has started.
+    else if (!row.pr && !row.worktree && up("prs") && up("worktrees") && up("merged")) add("Unstarted claim", `${id} is in_progress with no branch, worktree or PR yet`, { anchor });
     // Decided and printed on the same field, the PR's updatedAt. An
     // unparseable date gives NaN, and NaN > n is false, so it does not nag.
+    // A working agent suppresses the nag, and agentState comes from cmux
+    // current joined through git worktree list. With either down the agent
+    // state is not known: the nag still fires (its own claim, green and
+    // unreviewed, rests on prs alone) and says the agent state is unknown.
+    const agentKnown = up("current") && up("worktrees");
     const prAgeHours = row.pr ? (now.getTime() - Date.parse(row.pr.updatedAt ?? "")) / 3600000 : NaN;
     if (
       row.pr &&
@@ -283,7 +296,7 @@ export function buildAttention({ prefix, joined, currentItems, sources, now }) {
       row.agentState !== "working" &&
       prAgeHours > REVIEW_WAIT_HOURS
     )
-      add("Review pending", `#${row.pr.number} for ${id} is green and unreviewed for ${ageOf(row.pr.updatedAt, now)}`, {
+      add("Review pending", `#${row.pr.number} for ${id} is green and unreviewed for ${ageOf(row.pr.updatedAt, now)}${agentKnown ? "" : " (agent state unknown)"}`, {
         anchor,
         href: row.pr.url,
       });
@@ -340,9 +353,20 @@ export const RELEASE_LABEL = /^v\d+\.\d+\.\d+$/;
 export const RELEASE_GROUPS = ["in_progress", "ready", "blocked", "deferred"];
 export const RELEASE_GROUP_TITLE = { in_progress: "In progress", ready: "Ready", blocked: "Blocked", deferred: "Deferred" };
 
-function compareSemver(a, b) {
-  const x = a.slice(1).split(".").map(Number);
-  const y = b.slice(1).split(".").map(Number);
+/**
+ * Orders two release labels (`v0.7.0`) or plain versions (`0.7.0`) as semver.
+ * Both must be plain x.y.z with an optional leading "v"; anything else
+ * (a prerelease, an empty string) gives NaN, so a caller cannot mistake an
+ * unparseable version for an ordered one.
+ * @param {string} a
+ * @param {string} b
+ * @returns {number} negative, 0, positive, or NaN
+ */
+export function compareSemver(a, b) {
+  const parse = (v) => /^v?(\d+)\.(\d+)\.(\d+)$/.exec(String(v))?.slice(1).map(Number);
+  const x = parse(a);
+  const y = parse(b);
+  if (!x || !y) return NaN;
   for (let i = 0; i < 3; i += 1) if (x[i] !== y[i]) return x[i] - y[i];
   return 0;
 }
@@ -351,7 +375,7 @@ function compareSemver(a, b) {
  * The release in progress: the highest semver label carried by any bead that
  * is not closed. When every labelled bead is closed it falls back to the
  * highest label overall (every bead in it is done; whether it has been cut
- * is decided by renderHtml against package.json's version), and to `null`
+ * is decided by releaseIsCut against package.json's version), and to `null`
  * when no bead carries a semver label at all. Compared as semver, so v0.10.0
  * beats v0.9.0.
  * @param {any[]} beads
@@ -397,4 +421,21 @@ export function releaseProgress(beads, label, blockedIds = new Set()) {
     groups[g].sort((a, b) => (a.priority ?? 9) - (b.priority ?? 9) || String(a.id).localeCompare(String(b.id)));
   }
   return { label, total: labelled.length, done, remaining: labelled.length - done, groups };
+}
+
+/**
+ * Whether a release whose labelled beads are all closed has been cut, judged
+ * by package.json's version. The label is how this repo plans beads into a
+ * release; cut-release itself does not read it. It selects every closed bead
+ * without `released_in` and computes the next version from their cc_type
+ * (feat is minor, the rest patch), so the version it cuts can land above the
+ * label: v0.7.0 planned, 0.8.0 cut because a feat was in it. Hence "at or
+ * past the label" rather than "equal to it".
+ * @param {string} label e.g. "v0.7.0"
+ * @param {string} version package.json's version, e.g. "0.8.0"
+ * @returns {boolean | null} null when the version is not plain x.y.z
+ */
+export function releaseIsCut(label, version) {
+  const c = compareSemver(version, label);
+  return Number.isNaN(c) ? null : c >= 0;
 }

@@ -23,10 +23,13 @@
  * banner when the file stops being rewritten. See scripts/lib/dashboard-html.mjs.
  *
  * Every source is fetched independently. A source that fails renders as a
- * visible error block in every section built from it, as a "Source down" item
- * in "Needs you", and as "-" in every count derived from it. It never renders
- * as an empty list or a 0: an instrument that silently matches nothing is
- * worse than one that says it is broken (ugcportal-kssp).
+ * visible error block in every section whose rows are built from it, as
+ * "unknown" in any row that would otherwise state something about it (an
+ * open PR's bead link reads "in-progress state unknown" with bd list down),
+ * as a "Source down" item in "Needs you", and as "-" in every count derived
+ * from it. Needs-you rules that would conclude an absence from it wait for
+ * it. It never renders as an empty list or a 0: an instrument that silently
+ * matches nothing is worse than one that says it is broken (ugcportal-kssp).
  *
  * Purely advisory and read-only against bd, gh and git. What it writes is the
  * output file and, only on request, cmux state: a browser pane (--open),
@@ -38,6 +41,7 @@
  *   node scripts/dev-dashboard.mjs --open          also open it in a cmux browser pane
  *   node scripts/dev-dashboard.mjs --sidebar       also set cmux sidebar status pills
  *   node scripts/dev-dashboard.mjs --repo <path> --out <path>
+ *   node scripts/dev-dashboard.mjs --print-url     print the output's file:// URL and exit
  *
  * As a cmux workspace: `.cmux/cmux.json` defines a "ugcportal dashboard"
  * workspace command (Command Palette, or the + button's context menu) whose
@@ -46,8 +50,9 @@
  * layout is registered globally as the `ugcportal-dashboard` action in
  * ~/.config/cmux/cmux.json. `.cmux/dock.json` seeds lazygit and the cmux Feed
  * in the right-hand Dock. The project config's browser URL is the placeholder
- * DASHBOARD_URL_PLACEHOLDER; the Refresh pane navigates it to the rendered
- * page under its own cwd. From a shell, `--workspace` creates that workspace
+ * DASHBOARD_URL_PLACEHOLDER; the Refresh pane navigates it to the URL that
+ * `--print-url` prints, so the path is URL-encoded by pathToFileURL and never
+ * spliced into a file:// string by the shell. From a shell, `--workspace` creates that workspace
  * directly from the project config, with the placeholder already resolved:
  *   node scripts/dev-dashboard.mjs --workspace      (or: npm run dashboard:workspace)
  */
@@ -80,6 +85,7 @@ export const DEFAULT_REFRESH_SECONDS = 30;
  * @property {boolean} open
  * @property {boolean} sidebar
  * @property {boolean} workspace
+ * @property {boolean} [printUrl]
  * @property {boolean} [help]
  */
 
@@ -111,6 +117,7 @@ export function parseArgs(argv, cwd) {
     } else if (arg === "--open") opts.open = true;
     else if (arg === "--sidebar") opts.sidebar = true;
     else if (arg === "--workspace") opts.workspace = true;
+    else if (arg === "--print-url") opts.printUrl = true;
     else if (arg === "--help" || arg === "-h") {
       opts.help = true;
     } else throw new Error(`unknown argument: ${arg}`);
@@ -334,6 +341,16 @@ export function findWorkspaceCommand(config, name = WORKSPACE_COMMAND) {
 export const DASHBOARD_URL_PLACEHOLDER = "file://DASHBOARD_HTML";
 
 /**
+ * The file:// URL of the rendered page. pathToFileURL percent-encodes the
+ * path, so a checkout under a directory with `#`, `?` or `%` in its name
+ * still opens the right file; a shell-built "file://$PWD/..." would not.
+ * @param {string} outPath absolute path of the rendered page
+ */
+export function dashboardUrl(outPath) {
+  return pathToFileURL(outPath).href;
+}
+
+/**
  * A copy of the workspace layout with every browser surface whose url is the
  * placeholder pointed at `outPath`. Throws when no surface carries the
  * placeholder, so a renamed placeholder fails here and not as a blank pane.
@@ -341,7 +358,7 @@ export const DASHBOARD_URL_PLACEHOLDER = "file://DASHBOARD_HTML";
  * @param {string} outPath absolute path of the rendered page
  */
 export function resolveWorkspaceLayout(layout, outPath) {
-  const url = pathToFileURL(outPath).href;
+  const url = dashboardUrl(outPath);
   let replaced = 0;
   const copy = JSON.parse(JSON.stringify(layout), (key, value) => {
     if (key === "url" && value === DASHBOARD_URL_PLACEHOLDER) {
@@ -386,6 +403,7 @@ const HELP = `dev-dashboard: render an HTML dashboard of beads, PRs and cmux age
   --open           open the output in a cmux browser pane once
   --sidebar        set cmux sidebar status pills on each render
   --workspace      create the cmux dashboard workspace defined in .cmux/cmux.json and exit
+  --print-url      print the output file's file:// URL (percent-encoded) and exit
 `;
 
 export async function main(argv = process.argv.slice(2)) {
@@ -399,6 +417,10 @@ export async function main(argv = process.argv.slice(2)) {
   }
   if (opts.help) {
     process.stdout.write(HELP);
+    return;
+  }
+  if (opts.printUrl) {
+    process.stdout.write(`${dashboardUrl(opts.out)}\n`);
     return;
   }
   if (opts.workspace) {
@@ -430,7 +452,7 @@ export async function main(argv = process.argv.slice(2)) {
 
   await cycle();
   if (opts.open) {
-    const res = await runTextDefault("cmux", ["browser", "open", pathToFileURL(opts.out).href, "--focus", "false"], opts.repo);
+    const res = await runTextDefault("cmux", ["browser", "open", dashboardUrl(opts.out), "--focus", "false"], opts.repo);
     if (!res.ok) process.stderr.write(`could not open cmux browser: ${res.error}\n`);
   }
   if (opts.watchSeconds !== null) {

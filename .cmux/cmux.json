@@ -59,7 +59,7 @@
                       {
                         "type": "terminal",
                         "name": "Refresh",
-                        "command": "sh scripts/dashboard.sh; for S in $(cmux tree --workspace \"$CMUX_WORKSPACE_ID\" | grep \"\\[browser\\]\" | grep -o \"surface:[0-9]*\"); do cmux browser --surface \"$S\" navigate \"file://$PWD/.runtime/dashboard.html\" >/dev/null; done; sh scripts/dashboard.sh --watch 30 --sidebar; exec ${SHELL:-/bin/zsh} -l"
+                        "command": "sh scripts/dashboard.sh; U=\"$(sh scripts/dashboard.sh --print-url)\"; for S in $(cmux tree --workspace \"$CMUX_WORKSPACE_ID\" | grep \"\\[browser\\]\" | grep -o \"surface:[0-9]*\"); do cmux browser --surface \"$S\" navigate \"$U\" >/dev/null; done; sh scripts/dashboard.sh --watch 30 --sidebar; exec ${SHELL:-/bin/zsh} -l"
                       }
                     ]
                   }

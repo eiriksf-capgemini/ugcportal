@@ -14,6 +14,7 @@
  *      "nothing to do" (the fail-open shape ugcportal-kssp is about).
  *   3. Nothing from bd, gh or git reaches the HTML unescaped.
  */
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
@@ -27,7 +28,9 @@ import {
   blockedByThis,
   blockersOf,
   buildAttention,
+  compareSemver,
   DASHBOARD_URL_PLACEHOLDER,
+  dashboardUrl,
   esc,
   extractBeadId,
   findWorkspaceCommand,
@@ -39,6 +42,7 @@ import {
   plural,
   QUEUE_LIMIT,
   RELEASE_GROUPS,
+  releaseIsCut,
   releaseLabelOf,
   releaseProgress,
   renderHtml,
@@ -416,6 +420,23 @@ describe("buildAttention", () => {
     expect(nag(BEAD_H0EF, PR_232, [CMUX_ITEM_WORKING])).not.toContain("Review pending");
   });
 
+  it("still nags with the agent source down, but says the agent state is unknown", () => {
+    const nag = (overrides) =>
+      buildAttention({
+        prefix: PREFIX,
+        joined: joinRows({ prefix: PREFIX, inProgress: [BEAD_H0EF], prs: [PR_232], worktrees: parseWorktrees(WORKTREE_PORCELAIN), currentItems: [], now: NOW }),
+        currentItems: [],
+        sources: allSourcesOk(overrides),
+        now: NOW,
+      })
+        .map(attentionText)
+        .join("\n");
+    expect(nag({})).toContain("Review pending: #232 for ugcportal-h0ef is green and unreviewed for 4h");
+    expect(nag({})).not.toContain("agent state unknown");
+    expect(nag({ current: down("cmux current: socket refused") })).toContain("is green and unreviewed for 4h (agent state unknown)");
+    expect(nag({ worktrees: down("git worktree list: refused") })).toContain("is green and unreviewed for 4h (agent state unknown)");
+  });
+
   it("tells a merged-but-open bead apart from an unstarted claim", () => {
     const mergedPr = { number: 250, title: "fix(x): done (ugcportal-new1)", url: "https://github.com/eiriksf-capgemini/ugcportal/pull/250", mergedAt: "2026-10-13T11:00:00Z" };
     const joined = joinRows({ prefix: PREFIX, inProgress: [BEAD_FRESH_NO_PR], prs: [], worktrees: [], currentItems: [], now: NOW });
@@ -424,6 +445,12 @@ describe("buildAttention", () => {
     expect(text).toContain("Merged, bead open: #250 for ugcportal-new1 merged 1h ago but the bead is still in_progress. bd close ugcportal-new1?");
     expect(text).not.toContain("Unstarted claim");
     expect(items.find((a) => a.label === "Merged, bead open").href).toBe(mergedPr.url);
+    // With gh pr list down an open follow-up PR cannot be ruled out, so no close advice.
+    const prsDown = buildAttention({ prefix: PREFIX, joined, currentItems: [], sources: allSourcesOk({ merged: ok([mergedPr]), prs: down("gh pr list: offline") }), now: NOW })
+      .map(attentionText)
+      .join("\n");
+    expect(prsDown).toContain("Merged, bead open: #250 for ugcportal-new1 merged 1h ago but the bead is still in_progress. Its open PRs are unknown");
+    expect(prsDown).not.toContain("bd close");
   });
 
   it("does not conclude 'no PR', 'no worktree' or 'no bead' from a source that is down", () => {
@@ -443,6 +470,9 @@ describe("buildAttention", () => {
     expect(prsDown).toContain("Stale: ugcportal-ybv has had no update for 5d and its PR state is unknown");
     expect(text({ worktrees: down("git worktree list: not a git repository") })).not.toContain("Unstarted claim");
     expect(text({ inProgress: down("bd list: refused") })).not.toContain("Orphan worktree");
+    // merged down, prs and worktrees up: the bead's PR may already have merged,
+    // so "nobody has started" is not known either.
+    expect(text({ merged: down("gh pr list --state merged: offline") })).not.toContain("Unstarted claim");
     const html = page({ prs: down("gh pr list: offline") }).html;
     expect(html).toContain('aria-label="PR state unknown"');
     expect(html).not.toContain('aria-label="no PR"');
@@ -578,6 +608,27 @@ describe("renderHtml", () => {
     expect(sidebarPills(0, allSourcesOk({ inProgress: ok([]), prs: ok([]) })).map((a) => a[2]).slice(1)).toEqual(["0 in progress", "0 open PRs"]);
   });
 
+  it("an open PR's bead reads 'not in progress' only when bd list --status in_progress answered", () => {
+    const other = { ...PR_232, number: 260, headRefName: "feat/ugcportal-zzz9-elsewhere", title: "feat(x): elsewhere (ugcportal-zzz9)" };
+    const up = sectionOf(page({ prs: ok([PR_232, other]) }).html, "prs");
+    // In progress: the jump link. Not in progress, with the source up: says so.
+    expect(up).toContain('<a href="#bead-ugcportal-h0ef" class="jump">');
+    expect(up).toContain('ugcportal-zzz9 <span class="muted">(not in progress)</span>');
+    expect(up).not.toContain("in-progress state unknown");
+    // Source down: neither bead may be called "not in progress".
+    const downSec = sectionOf(page({ prs: ok([PR_232, other]), inProgress: down("bd list: refused") }).html, "prs");
+    expect(downSec).not.toContain("(not in progress)");
+    expect(downSec).toContain('ugcportal-h0ef <span class="muted">(in-progress state unknown)</span>');
+    expect(downSec).toContain('ugcportal-zzz9 <span class="muted">(in-progress state unknown)</span>');
+  });
+
+  it("suggests claiming a bead only when the PR and worktree sources both answered", () => {
+    const claim = 'data-copy="bd update ugcportal-74w --claim"';
+    expect(page().html).toContain(claim);
+    expect(page({ prs: down("gh pr list: offline") }).html).not.toContain(claim);
+    expect(page({ worktrees: down("git worktree list: refused") }).html).not.toContain(claim);
+  });
+
   it("the cmux section needs git worktree list too, and says so when it is down", () => {
     const sec = sectionOf(page({ worktrees: down("git worktree list: not a git repository") }).html, "cmux");
     expect(sec).toContain("<strong>git worktree list unavailable.</strong>");
@@ -698,6 +749,17 @@ describe("parseArgs", () => {
     expect(() => parseArgs(["--bogus"], "/repo")).toThrow(/unknown argument/);
     expect(() => parseArgs(["--repo"], "/repo")).toThrow(/needs a value/);
   });
+  it("--print-url prints the output's percent-encoded file:// URL and exits", () => {
+    expect(parseArgs(["--print-url"], "/repo")).toMatchObject({ printUrl: true, out: "/repo/.runtime/dashboard.html" });
+    expect(parseArgs([], "/repo").printUrl).toBeUndefined();
+    expect(dashboardUrl("/Users/x/a#b/.runtime/dashboard.html")).toBe("file:///Users/x/a%23b/.runtime/dashboard.html");
+    expect(dashboardUrl("/Users/x/a?b%41/.runtime/dashboard.html")).toBe("file:///Users/x/a%3Fb%2541/.runtime/dashboard.html");
+    // The real CLI, end to end: what the Refresh pane's $(...) captures.
+    const script = fileURLToPath(new URL("./dev-dashboard.mjs", import.meta.url));
+    const run = spawnSync(process.execPath, [script, "--print-url", "--out", "/tmp/a#b/x.html"], { encoding: "utf8" });
+    expect(run.status).toBe(0);
+    expect(run.stdout).toBe("file:///tmp/a%23b/x.html\n");
+  });
   it("--workspace opens the page its Refresh pane renders, so it refuses a different --out", () => {
     expect(parseArgs(["--workspace"], "/repo").out).toBe("/repo/.runtime/dashboard.html");
     expect(parseArgs(["--workspace", "--out", ".runtime/dashboard.html"], "/repo").out).toBe("/repo/.runtime/dashboard.html");
@@ -782,6 +844,25 @@ describe("release progress", () => {
     const unknown = page({ release: ok(allClosed), version: down("package.json: ENOENT") }).html;
     expect(unknown).toContain("package.json&#39;s version is unreadable, so whether it has been cut is unknown.");
     expect(unknown).not.toContain("Time to cut the release");
+    // cut-release computes the version from cc_type, so it can cut past the
+    // label: v0.7.0 planned, 0.8.0 cut. That is cut, not "time to cut".
+    const past = page({ release: ok(allClosed), version: ok("0.8.0") }).html;
+    expect(past).toContain("(6 of 6). v0.7.0 is cut (package.json is at 0.8.0)");
+    expect(past).not.toContain("Time to cut the release");
+    const odd = page({ release: ok(allClosed), version: ok("0.7.0-rc.1") }).html;
+    expect(odd).toContain("package.json&#39;s version 0.7.0-rc.1 is not plain x.y.z, so whether it has been cut is unknown.");
+    expect(odd).not.toContain("Time to cut the release");
+    expect(odd).not.toContain("is cut (");
+  });
+  it("orders versions as semver, and an unparseable one is unordered rather than older", () => {
+    expect(releaseIsCut("v0.7.0", "0.6.0")).toBe(false);
+    expect(releaseIsCut("v0.7.0", "0.7.0")).toBe(true);
+    expect(releaseIsCut("v0.7.0", "0.8.0")).toBe(true);
+    expect(releaseIsCut("v0.9.0", "0.10.0")).toBe(true); // numeric, not string, order
+    expect(releaseIsCut("v0.10.0", "0.9.9")).toBe(false);
+    expect(releaseIsCut("v0.7.0", "0.7.0-rc.1")).toBeNull();
+    expect(releaseIsCut("v0.7.0", "")).toBeNull();
+    expect(compareSemver("v0.9.0", "v0.10.0")).toBeLessThan(0);
   });
   it("with bd blocked down the release section says so instead of listing blocked beads as Ready", () => {
     const up = sectionOf(page().html, "release");
@@ -821,7 +902,12 @@ describe("findWorkspaceCommand", () => {
     expect(() => resolveWorkspaceLayout({ pane: { surfaces: [{ type: "browser", url: "file:///x" }] } }, "/o.html")).toThrow(/DASHBOARD_HTML/);
     // The Refresh pane may drop stdout but never stderr (review-standards section 6).
     const refresh = ws.layout.children[1].children[1].pane.surfaces[0].command;
-    expect(refresh).toContain('navigate \"file://$PWD/.runtime/dashboard.html\"'.replaceAll("\\", ""));
+    // The URL comes from the script's own pathToFileURL, never a shell-built
+    // "file://$PWD/...", which a # or ? in the checkout path would misroute.
+    expect(refresh).toContain('U="$(sh scripts/dashboard.sh --print-url)"');
+    expect(refresh).toContain('navigate "$U"');
+    expect(refresh).not.toContain("$PWD");
+    expect(refresh).not.toContain("file://");
     expect(refresh).not.toMatch(/2>\s*\/dev\/null|2>&1|&>/);
     // Both the one-shot render and the loop go through the nvm-aware wrapper:
     // a fresh cmux terminal has no node on PATH, and the wrapper is the one

@@ -41,6 +41,7 @@ import {
   RELEASE_GROUP_TITLE,
   RELEASE_GROUPS,
   releaseLabelOf,
+  releaseIsCut,
   releaseProgress,
   summariseChecks,
 } from "./dashboard-data.mjs";
@@ -249,7 +250,8 @@ function beadBody({ bead, pr, worktree, cmuxItems, agentState }, ctx) {
   const cmds = [`bd show ${bead.id}`];
   if (pr) cmds.push(`gh pr view ${pr.number} --web`);
   if (worktree) cmds.push(`cd ${worktree.path}`);
-  if (!worktree && !pr && repoUrl) cmds.push(`bd update ${bead.id} --claim`);
+  // Suggesting a claim concludes "no worktree and no PR", so it waits for both sources.
+  if (!worktree && !pr && repoUrl && ctx.prsUp && ctx.worktreesUp) cmds.push(`bd update ${bead.id} --claim`);
   rows.push(["Commands", cmds.map(copyable).join(" "), "terminal"]);
   return dl(rows);
 }
@@ -287,7 +289,16 @@ function prBody(pr, ctx, standalone) {
   } else rows.push(["Checks", `<span class="muted">No checks reported</span>`, "check-circle"]);
   if (standalone) {
     const beadId = extractBeadId(pr.headRefName, prefix) ?? extractBeadId(pr.title, prefix);
-    if (beadId) rows.push(["Bead", known.has(beadId) ? `<a href="#bead-${esc(beadId)}" class="jump">${icon("jump")}${esc(beadId)}</a>` : `${esc(beadId)} <span class="muted">(not in progress)</span>`, "tool"]);
+    // "not in progress" is a conclusion from bd list --status in_progress, so
+    // with that source down the row says the state is unknown instead.
+    if (beadId)
+      rows.push([
+        "Bead",
+        known.has(beadId)
+          ? `<a href="#bead-${esc(beadId)}" class="jump">${icon("jump")}${esc(beadId)}</a>`
+          : `${esc(beadId)} <span class="muted">(${ctx.inProgressUp ? "not in progress" : "in-progress state unknown"})</span>`,
+        "tool",
+      ]);
   }
   rows.push(["Body", textBlock(pr.body, TEXT_CAP, `gh pr view ${pr.number}`), "text"]);
   if (standalone) rows.push(["Commands", [`gh pr view ${pr.number} --web`, `gh pr checks ${pr.number}`, `gh pr diff ${pr.number}`].map(copyable).join(" "), "terminal"]);
@@ -443,7 +454,16 @@ export function renderHtml({ repoName, prefix, sources, now, refreshSeconds = 30
   const known = new Map();
   for (const b of [...inProgress, ...ready, ...blocked]) if (b?.id && !known.has(b.id)) known.set(b.id, b);
   const repoUrl = deriveRepoUrl(prs, merged);
-  const ctx = { now, known, inProgressIds, repoUrl, prefix, prsUp: sources.prs?.ok === true };
+  const ctx = {
+    now,
+    known,
+    inProgressIds,
+    repoUrl,
+    prefix,
+    prsUp: sources.prs?.ok === true,
+    worktreesUp: sources.worktrees?.ok === true,
+    inProgressUp: sources.inProgress?.ok === true,
+  };
   // Computed here because the header tiles need it before the sections do.
   const releaseBeads = get("release") ?? [];
   const releaseLabel = releaseLabelOf(releaseBeads);
@@ -529,12 +549,16 @@ ${attention.length === 0 ? `<p class="empty win">${icon("check-circle", undefine
     }
   }
   // Every labelled bead closed means either "done, cut it" or "already cut".
-  // cut-release bumps package.json's version to the label it cuts, so the two
-  // are told apart there; an unreadable version says so instead of guessing.
+  // The label only plans beads into a release; cut-release computes the
+  // version from cc_type, so it can cut past the label. releaseIsCut treats
+  // package.json at or past the label as cut. An unreadable or non-x.y.z
+  // version says so instead of guessing.
   const version = get("version");
+  const cut = release && version !== null ? releaseIsCut(release.label, version) : null;
   let releaseDone = "Time to cut the release.";
   if (release && version === null) releaseDone = "package.json's version is unreadable, so whether it has been cut is unknown.";
-  else if (release && release.label === `v${version}`) releaseDone = `${release.label} is cut (package.json is at ${version}); label the next release's beads.`;
+  else if (release && cut === null) releaseDone = `package.json's version ${version} is not plain x.y.z, so whether it has been cut is unknown.`;
+  else if (release && cut) releaseDone = `${release.label} is cut (package.json is at ${version}); label the next release's beads.`;
   const releaseEmpty = release
     ? `Everything labelled ${release.label} is closed (${release.done} of ${release.total}). ${releaseDone}`
     : "No bead carries a semver label (v1.2.3), so there is no release to track. Label the beads that belong to the next release.";
