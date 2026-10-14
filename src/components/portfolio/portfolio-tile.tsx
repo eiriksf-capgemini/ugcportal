@@ -18,8 +18,9 @@ import { SPEC_SAMPLE_LABEL } from "@/lib/portfolio";
 /**
  * The image's own classes, deliberately NOT `GALLERY_TILE_IMAGE_CLASS`
  * (src/components/gallery/containment.ts). That constant's hover scale
- * (`motion-safe:group-hover: scale-[1.04]` - space inserted before the
- * utility here only, round-5 review: Tailwind's source scanner reads raw
+ * (`motion-safe:group-hover: scale- [1.04]` - broken here only; the space
+ * after the hyphen is what stops extraction, since `scale-` alone is no
+ * candidate (ugcportal-rj7y); round-5 review: Tailwind's source scanner reads raw
  * file bytes, so writing the bare trigger+utility combination UNBROKEN in
  * a comment is itself a valid candidate and compiles into the real
  * production stylesheet - see globals.css's own `@source not` comment for
