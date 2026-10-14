@@ -39,9 +39,12 @@ const REPO_ROOT = path.resolve(SRC_ROOT, "..");
 /** JSX prop `size="sm"` / `size={"sm"}` and object form `size: "sm"`. */
 const SIZE_SM = /\bsize(?:=|\s*:\s*)\{?\s*["']sm["']/g;
 
+let cachedSourceFiles: string[] | undefined;
+
 function countSmCallers(): Record<string, number> {
   const found: Record<string, number> = {};
-  for (const file of walkSourceFiles(SRC_ROOT, isTestFile)) {
+  const files = (cachedSourceFiles ??= walkSourceFiles(SRC_ROOT, isTestFile));
+  for (const file of files) {
     const stripped = stripComments(readFileSync(file, "utf8"), file);
     const n = stripped.match(SIZE_SM)?.length ?? 0;
     if (n > 0) found[path.relative(REPO_ROOT, file).split(path.sep).join("/")] = n;
