@@ -264,6 +264,23 @@ clearance has no effect on an issued or re-issued download URL. `p3v`'s own note
 see the risk and state it as prose, not as a criterion on any bead. `paa` and `aqw`
 both make lapse *more likely* without saying what a lapse does to a completed sale.
 
+> **2026-10-14 correction (ugcportal-zbcs):** "`p3v` K3 covers checkout" was false
+> when this was written on 2026-10-08, and the later sentence ("state it as prose,
+> not as a criterion on any bead") was the accurate half. `p3v`'s acceptance field held
+> only K1: K3 had been added to the field (2026-09-24) and rewritten there
+> (2026-09-27), and the 2026-10-06 backlog review cut it, leaving a stray
+> `(replace K1)` marker, in the same write that recorded its premise as verified in
+> `p3v`'s notes. `ugcportal-zbcs` restored K3 to the field on 2026-10-13 with a
+> Verified-by clause, so "`p3v` K3 covers checkout" is true again as of that date.
+> The restore also narrows the prose sentence: K3's Verified-by requires that "a
+> session created while CLEARED does not fulfil if the uploader is revoked before the
+> webhook arrives", which is the session-to-webhook window `p3v`'s notes describe. So
+> from 2026-10-13 "not as a criterion on any bead" is wrong for that window. What it
+> still describes is what happens after the webhook lands, an issued or re-issued
+> download URL, which is `ugcportal-dabx`'s scope (filed from this audit on 2026-10-08;
+> its K1 defers to a decision not yet made). The `5d6` and `74w` halves of this
+> paragraph are unchanged.
+
 **G6. Owner-initiated disclosure withdrawal.** `jain` owns the data pair. The
 question *"an item lawfully published as advertising stops being one — does it stay
 public?"* is deflected by the disclosure route to `qnq9.5`, which is scoped to
