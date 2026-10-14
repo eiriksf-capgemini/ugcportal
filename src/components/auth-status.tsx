@@ -86,12 +86,16 @@ export async function AuthStatus() {
       className="flex min-w-0 items-center gap-2"
     >
       {/*
-        min-w-0 on this span, or the ellipsis is inert and a long name pushes
-        the header wider instead of truncating. It is the only element in the
-        header actions allowed to shrink, which is what keeps the Sign out
-        button at full width while a long email gives way.
+        `truncate` on this span (its overflow:hidden lets a flex item shrink
+        below its content; min-w-0 here is redundant), without which a long
+        name pushes the header wider instead of truncating. It is the only
+        element in the header actions allowed to shrink, which is what keeps
+        the Sign out button at full width while a long email gives way.
       */}
-      <span className="min-w-0 truncate text-sm text-muted-foreground">
+      <span
+        className="min-w-0 truncate text-sm text-muted-foreground"
+        title={session.user.name ?? session.user.email ?? undefined}
+      >
         {session.user.name ?? session.user.email}
       </span>
       <Button type="submit" variant="outline" size="header-sm">

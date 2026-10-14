@@ -1,6 +1,8 @@
+import { cn } from "cn";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 
+import { GALLERY_RADIUS_CLASS } from "@/components/gallery/containment";
 import {
   GalleryItemAdvertisingLabel,
   GalleryItemCommercialLinks,
@@ -194,7 +196,12 @@ export default async function MediaItemPage({ params }: RouteContext) {
           <GalleryItemAdvertisingLabel item={item} />
         </div>
       ) : null}
-      <figure className="mt-6 overflow-hidden rounded-md bg-surface-1">
+      <figure
+        className={cn(
+          "mt-6 overflow-hidden bg-surface-1",
+          GALLERY_RADIUS_CLASS,
+        )}
+      >
         {/* eslint-disable-next-line @next/next/no-img-element -- same
             reasoning as src/components/portfolio/portfolio-tile.tsx: the
             preview is served by GET /api/media/preview/[previewId], which
