@@ -720,8 +720,7 @@ describe("a priced, cleared, fully-served item loses its price block too (ugcpor
     expect(await surfaces()).toEqual(ALL_SERVED);
 
     // `null` (untriaged) keeps today's behaviour; a recorded `true` is
-    // withheld on every reader since ugcportal-qnq9.11 (option (a), true-only),
-    // so the whole sentence "whatever the alcohol answer is" ended there.
+    // withheld on every reader since ugcportal-qnq9.11 (option (a), true-only).
     await prisma.mediaListing.update({
       where: { mediaId: MEDIA_ID },
       data: { depictsAlcohol: null },
@@ -797,7 +796,7 @@ describe("an item recorded as showing alcohol is served nowhere, commercial or n
   for (const state of STATES) {
     for (const commercial of [false, true]) {
       const isServed = served(state, commercial);
-      it(`depictsAlcohol ${state === "no listing" ? "(no listing)" : state}, ${commercial ? "commercial" : "nothing commercial"}: ${isServed ? "served" : "withheld"} on all six readers`, async () => {
+      it(`depictsAlcohol ${state === "no listing" ? "(no listing)" : state}, ${commercial ? "commercial" : "nothing commercial"}: ${isServed ? "served without the offer on the five readers" : "withheld on all six readers"}`, async () => {
         await seedRow(state, commercial);
         expect(await surfaces()).toEqual(isServed ? WITHOUT_OFFER : NONE_SERVED);
         if (!isServed) {

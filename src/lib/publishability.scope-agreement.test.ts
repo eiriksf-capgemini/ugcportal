@@ -13,7 +13,9 @@ import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db"
  * layer. `PUBLIC_MEDIA_RIGHTS_SCOPE` (a Prisma `where`, spread into
  * `PUBLIC_MEDIA_SCOPE`) decides what every anonymous surface SERVES, and
  * since ugcportal-pgpq that scope also carries a third arm — alkoholloven
- * § 9-2's commercial pair (src/lib/alcohol-commerce.ts) — that
+ * § 9-2's commercial pair, widened at ugcportal-qnq9.11 by a recorded
+ * `depictsAlcohol = true` (the complement of `isWithheldFromPublicRead`,
+ * src/lib/alcohol-commerce.ts) — that
  * `publishabilityBlocker` does not evaluate at all. Over the rights rule the
  * two have to mean the same thing, and nothing in either file makes them:
  * they are written in different languages against different engines, and
@@ -22,8 +24,9 @@ import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db"
  * where-clause was written one condition short. The § 9-2 arm's own
  * agreement is checked separately, by
  * src/lib/alcohol-commerce.scope-agreement.test.ts against
- * `isAlcoholUnclearedAdvertisement`; every CASE below seeds no advertising
- * disclosure and no commercial link, which keeps that arm trivially
+ * `isWithheldFromPublicRead`; every CASE below seeds no advertising
+ * disclosure, no commercial link and no recorded `depictsAlcohol = true` (its
+ * listing seed leaves the field null), which keeps that arm trivially
  * satisfied here, so this file's comparison stays exact for the rights rule
  * — it is not a claim that the scope and the predicate agree on every row
  * either can produce.

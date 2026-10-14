@@ -12,14 +12,20 @@ import { loadDevEnvFiles } from "../../scripts/lib/env-files.mjs";
  * is a widening of the read arm in src/lib/alcohol-commerce.ts, so this spec is
  * about what the BROWSER is given: the alcohol-recorded item's previewId is
  * absent from the front page, from the gallery after scrolling, from the open
- * lightbox including its wrap-around neighbours, and from /portfolio.
+ * lightbox walked in both directions past its ends (three slides are served,
+ * the fewest on which photoswipe loops), and from /portfolio.
  *
- * TWO ITEMS, both portfolio-tagged so /portfolio has something to show:
+ * FOUR ITEMS, all portfolio-tagged so /portfolio has something to show:
  *
  *   - the COMMERCIAL item: an empty glass, alcohol answered `no`, a benefit
  *     from a clean brand, a permitted label. Served. It is the control that
  *     makes every absence below mean something (a page that rendered nothing
  *     would pass the absences alone), and it is the tile the lightbox opens.
+ *   - a second COMMERCIAL item and a PERSONAL item (alcohol answered `no`,
+ *     nothing commercial). Served. They exist so the gallery serves three
+ *     items: photoswipe loops only with more than two slides
+ *     (`canLoop()` checks `getNumItems() > 2`), so with fewer the lightbox
+ *     walk would stop at its ends and never wrap.
  *   - the ALCOHOL item: a glass of wine, `depictsAlcohol = 1`, nothing
  *     commercial. Withheld.
  *
@@ -42,6 +48,8 @@ const db = createClient({ url: DATABASE_URL });
 
 const OWNER_ID = "e2e-qnq9-11-owner";
 const COMMERCIAL_ID = "e2e-qnq9-11-commercial";
+const COMMERCIAL_TWO_ID = "e2e-qnq9-11-commercial-two";
+const PERSONAL_ID = "e2e-qnq9-11-personal";
 const ALCOHOL_ID = "e2e-qnq9-11-alcohol";
 const BRAND_ID = "e2e-qnq9-11-brand";
 // src/lib/attestation.ts CURRENT_ATTESTATION_VERSION, copied rather than
@@ -52,9 +60,10 @@ const ATTESTATION_VERSION = "2026-10-08.1";
 const PORTFOLIO_TAG_ID = "tagseed00portfolio";
 const COMMERCIAL_PREVIEW = `${COMMERCIAL_ID}-preview`;
 const ALCOHOL_PREVIEW = `${ALCOHOL_ID}-preview`;
+const SERVED_IDS = [COMMERCIAL_ID, COMMERCIAL_TWO_ID, PERSONAL_ID];
 
 async function cleanup() {
-  const ids = `'${COMMERCIAL_ID}','${ALCOHOL_ID}'`;
+  const ids = [...SERVED_IDS, ALCOHOL_ID].map((id) => `'${id}'`).join(",");
   await db.batch(
     [
       `DELETE FROM "_MediaToTag" WHERE "A" IN (${ids})`,
@@ -85,6 +94,24 @@ function listingInsert(id: string, depictsAlcohol: 0 | 1, now: string): string {
        "triagedByUserId","triagedAt","createdAt","updatedAt")
     VALUES ('${id}-listing','${id}','NOK',0,0,0,0,0,${depictsAlcohol},${depictsAlcohol ? 0 : 1},
             '${OWNER_ID}','${now}','${now}','${now}')`;
+}
+
+function attestationInsert(id: string): string {
+  return `INSERT INTO "MediaAttestation"
+      ("id","mediaId","attestedByUserId","attestationVersion","authorship",
+       "ownOriginalNotFromWeb","showsIdentifiablePeople","showsMinors",
+       "containsMusicNotOwned","otherCreativeContributor","brandOrSponsorship",
+       "aiGenerated","uploaderIsAdult")
+    VALUES ('${id}-attestation','${id}','${OWNER_ID}',
+            '${ATTESTATION_VERSION}','AUTHOR',1,0,0,0,0,1,0,1)`;
+}
+
+function disclosureInsert(id: string, now: string): string {
+  return `INSERT INTO "MediaAdvertisingDisclosure"
+      ("id","mediaId","benefitReceived","benefitKind","benefitSourceId",
+       "marketValueOre","label","createdAt","updatedAt")
+    VALUES ('${id}-disclosure','${id}',1,'FREE_PRODUCT',
+            '${BRAND_ID}',49900,'Advertisement / Reklame','${now}','${now}')`;
 }
 
 test.beforeAll(async () => {
@@ -129,8 +156,19 @@ test.beforeAll(async () => {
                '${ATTESTATION_VERSION}','AUTHOR',1,0,0,0,0,1,0,1)`,
       listingInsert(ALCOHOL_ID, 1, now),
 
-      `INSERT INTO "_MediaToTag" ("A","B") VALUES ('${COMMERCIAL_ID}','${PORTFOLIO_TAG_ID}')`,
-      `INSERT INTO "_MediaToTag" ("A","B") VALUES ('${ALCOHOL_ID}','${PORTFOLIO_TAG_ID}')`,
+      mediaInsert(COMMERCIAL_TWO_ID, "A second empty wine glass on a shelf", now),
+      attestationInsert(COMMERCIAL_TWO_ID),
+      listingInsert(COMMERCIAL_TWO_ID, 0, now),
+      disclosureInsert(COMMERCIAL_TWO_ID, now),
+
+      mediaInsert(PERSONAL_ID, "A bookshelf by the window", now),
+      attestationInsert(PERSONAL_ID),
+      listingInsert(PERSONAL_ID, 0, now),
+
+      ...[...SERVED_IDS, ALCOHOL_ID].map(
+        (id) =>
+          `INSERT INTO "_MediaToTag" ("A","B") VALUES ('${id}','${PORTFOLIO_TAG_ID}')`,
+      ),
     ],
     "write",
   );
@@ -179,20 +217,64 @@ test("the feed API the gallery pages through never returns the alcohol-recorded 
   expect(body).not.toContain("depictsAlcohol");
 });
 
-test("lightbox: opened on the commercial item and walked past the wrap-around, the alcohol-recorded item never appears", async ({
+test("lightbox: three served slides, walked past both ends so it really wraps, and the alcohol-recorded item never appears", async ({
   page,
 }) => {
   await page.goto("/");
+  // The three served tiles are all on the page, the alcohol-recorded one is
+  // not: the lightbox is built from these tiles.
+  for (const id of SERVED_IDS) {
+    await expect(page.locator(`[data-gallery-tile="${id}"]`)).toBeAttached();
+  }
+  await expect(page.locator(`[data-gallery-tile="${ALCOHOL_ID}"]`)).toHaveCount(0);
+
   await page.locator(`[data-gallery-tile="${COMMERCIAL_ID}"]`).click();
   const lightbox = page.locator(".pswp");
   await expect(lightbox).toBeAttached();
+  const counter = lightbox.locator(".pswp__counter");
 
-  // More steps than there are items, in both directions, so the wrap-around
-  // (photoswipe's default `loop`) is exercised too.
-  for (const key of ["ArrowRight", "ArrowRight", "ArrowRight", "ArrowLeft", "ArrowLeft"]) {
+  // The lightbox's own slide counter is the evidence the walk wraps: the total
+  // is exactly the three served items (the withheld one is not a fourth), and
+  // photoswipe loops only with more than two slides, so ArrowRight from the
+  // last slide lands on the first and ArrowLeft from the first on the last.
+  // The slide DOM carries no preview id here (the images do not load without
+  // object storage), so what the walk asserts about the withheld item is its
+  // id, preview id and alt text never appearing in the lightbox, with the
+  // tile assertions above as the presence control.
+  const positions: string[] = [];
+  const collect = async () => {
+    const html = await lightbox.innerHTML();
+    expect(html).not.toContain(ALCOHOL_PREVIEW);
+    expect(html).not.toContain(ALCOHOL_ID);
+    expect(html).not.toContain("photographed as wine");
+    positions.push(((await counter.textContent()) ?? "").trim());
+  };
+  await collect();
+  for (const key of [
+    ...Array<string>(4).fill("ArrowRight"),
+    ...Array<string>(4).fill("ArrowLeft"),
+  ]) {
     await page.keyboard.press(key);
-    expect(await lightbox.innerHTML()).not.toContain(ALCOHOL_PREVIEW);
+    // Let the slide transition settle before reading the counter.
+    await page.waitForTimeout(400);
+    await collect();
   }
+  expect(new Set(positions.map((p) => p.split("/")[1]?.trim()))).toEqual(
+    new Set(["3"]),
+  );
+  // Four steps right then four left from wherever the click landed cover every
+  // position, and a wrap is a step between positions two apart (3 to 1 going
+  // right, 1 to 3 going left); a non-looping ring only ever moves by one.
+  expect(new Set(positions.map((p) => p.split("/")[0]?.trim()))).toEqual(
+    new Set(["1", "2", "3"]),
+  );
+  const wrapped = positions.some((p, i) => {
+    const prev = positions[i - 1];
+    if (prev === undefined) return false;
+    const n = (x: string) => Number(x.split("/")[0]);
+    return Math.abs(n(p) - n(prev)) === 2;
+  });
+  expect(wrapped, `counter sequence ${positions.join(", ")}`).toBe(true);
   expect(await page.content()).not.toContain(ALCOHOL_PREVIEW);
 });
 

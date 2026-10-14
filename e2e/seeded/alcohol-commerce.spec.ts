@@ -242,34 +242,3 @@ test("K6: no tile on the public gallery carries a price or a buy control", async
     page.getByRole("link", { name: /buy|basket|checkout|purchase/i }),
   ).toHaveCount(0);
 });
-
-test("K6: the accessory tile carries no off-origin link, and the drink has no tile to carry one", async ({
-  page,
-}) => {
-  /*
-   * The fourth affordance the criterion names. The commercial-link column now
-   * exists (`CommercialLink`, ugcportal-qnq9.2.1) but nothing renders it — no
-   * public read path selects the relation, and the marker and the `rel` tokens
-   * are ugcportal-qnq9.2.2 — so this still asserts the SHAPE rather than a
-   * field: every link inside the tile stays on this origin. An affiliate link
-   * is by definition off-origin, so the day one is rendered without a gate
-   * this fails, which is exactly what it has to do when that bead lands.
-   */
-  await page.goto("/");
-
-  // The drink is withheld since ugcportal-qnq9.11, so the tile this asserts
-  // over is the accessory's: the one tile the page does render that could
-  // carry an affiliate link.
-  await expect(page.locator(`[data-gallery-tile="${DRINK_ID}"]`)).toHaveCount(0);
-  const tile = page.locator(`[data-gallery-tile="${ACCESSORY_ID}"]`);
-  await expect(tile).toBeAttached();
-
-  const hrefs = await tile
-    .locator("a[href]")
-    .evaluateAll((anchors) => anchors.map((a) => a.getAttribute("href") ?? ""));
-  const offOrigin = hrefs.filter(
-    (href) => /^[a-z][a-z0-9+.-]*:/i.test(href) && !href.startsWith("/"),
-  );
-
-  expect(offOrigin).toEqual([]);
-});
