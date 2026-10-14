@@ -49,9 +49,10 @@ import { loadDevEnvFiles } from "../../scripts/lib/env-files.mjs";
  *     the assertions below are that it renders nothing at all, and so no
  *     label, price or buy control.
  *
- * The first item is the reason the second assertion means something: without a
- * tile that really does render a label, "no label here" would hold against a
- * selector that matches nothing.
+ * The accessory's tile is the reason the drink assertions mean something: the
+ * drink's own label selector matches nothing by design, so what carries the
+ * drink test is its `toHaveCount(0)` tile check set against the accessory's
+ * tile, which the same page demonstrably does render with a label.
  */
 
 // The same `.env*` precedence `next dev` itself uses, so this writes to the
@@ -174,8 +175,9 @@ test.afterAll(async () => {
 });
 
 test("K1: the accessory tile renders its advertising label", async ({ page }) => {
-  // The control. Every negative assertion below is about the drink's tile not
-  // having something THIS tile demonstrably does have on the same page.
+  // The control. The drink has no tile since ugcportal-qnq9.11, so the
+  // assertions below that it renders nothing are set against THIS tile, which
+  // the same page demonstrably renders with a label.
   await page.goto("/");
 
   await expect(
@@ -241,7 +243,7 @@ test("K6: no tile on the public gallery carries a price or a buy control", async
   ).toHaveCount(0);
 });
 
-test("K6: no tile carries a commercial outbound link, and the drink has none", async ({
+test("K6: the accessory tile carries no off-origin link, and the drink has no tile to carry one", async ({
   page,
 }) => {
   /*

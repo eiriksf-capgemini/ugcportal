@@ -212,9 +212,12 @@ export function benefitAttachmentRefusal(item: {
  * ONLY AN ITEM CARRYING SOMETHING COMMERCIAL IS IN SCOPE, and there are now
  * TWO ways to carry one. An item with no disclosure, or one declaring no
  * benefit, and no commercial link either, is not advertising for anything and
- * § 9-2 has nothing to say about it — a photograph of a glass of wine is
- * perfectly publishable as personal content, which is the distinction §3.1a
- * practical rule 2 (ugcportal-qnq9.11) is built on. The benefit half is
+ * § 9-2 has nothing to say about it, so THIS gate lets it publish (200). That
+ * is not the same as it being served: since ugcportal-qnq9.11 an item recorded
+ * `depictsAlcohol = true` is withheld from every public surface by the read
+ * scope whether or not it carries anything commercial, and a `null` answer
+ * keeps today's behaviour. This gate's commercial-marker test is unchanged by
+ * that. The benefit half is
  * written as `!== true` rather than `=== false || == null` so a column
  * holding anything else reads as "not a declared benefit", matching
  * `advertisingLabelPublishRefusal`'s own reading of the same field.

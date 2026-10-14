@@ -43,10 +43,13 @@ import { FIXTURE_CLEARANCE_SCOPE } from "@/lib/test-support/resale-rights";
  * can see — the same six, through the same shape of helper,
  * src/lib/public-media.lapse.test.ts uses for ugcportal-nffp.
  *
- * AND EVERY ABSENCE IS MEASURED AGAINST A PRESENCE ON THE SAME ROW. The item
- * is served first, the commercial fact arrives, the item is gone, and then
- * the alcohol answer arrives and it comes back. A `where` clause that
- * filtered on everything would pass the absences alone.
+ * AND EVERY ABSENCE IS MEASURED AGAINST A PRESENCE ON THE SAME ROW. In the
+ * pgpq cases the item is served first, the commercial fact arrives, the item
+ * is gone, and then the alcohol answer arrives and it comes back. In the
+ * row-per-state cases of the qnq9.11 describe, each withheld row is followed,
+ * on that same row, by its alcohol answer set to a recorded `no`, and the item
+ * is asserted served. A `where` clause that filtered on everything would pass
+ * the absences alone.
  */
 
 const database = createTemporaryDatabase();
@@ -692,8 +695,11 @@ describe("a priced, cleared, fully-served item loses its price block too (ugcpor
      * THE OTHER DIRECTION, and the one that keeps this fix from being a
      * blanket "hide anything untriaged". § 9-2 is about advertising: a
      * photograph of a glass of wine with no benefit, no label and no link is
-     * personal content and is perfectly publishable, which is the
-     * distinction docs/ugc-research.md §3.1a practical rule 2 is built on.
+     * not advertising, so the commercial-marker gate is unchanged and lets it
+     * publish. What is served is then decided by the alcohol answer alone: a
+     * `null` answer keeps today's behaviour, and a recorded `true` is withheld
+     * from every public surface (ugcportal-qnq9.11, docs/ugc-research.md
+     * §3.1a practical rule 2).
      * Narrowing the whole filter to `depictsAlcohol: false` — dropping the
      * "nothing commercial" arm — reddens a great many tests across the
      * suite, but nearly all of them only because their own untriaged
@@ -705,8 +711,9 @@ describe("a priced, cleared, fully-served item loses its price block too (ugcpor
      * unanswered or answered `yes` (src/lib/resale-rights.ts — the layer's
      * `settledBy: "nothing"`), so `getPublicOffer` stops answering for a
      * reason that predates this filter and holds whether or not anything
-     * commercial is attached. The photograph itself stays on all five other
-     * readers, which is the claim this case is making.
+     * commercial is attached. For the `null` answer the photograph itself
+     * stays on all five other readers, which is the claim this case makes
+     * first; the recorded `true` at the end is served on none.
      */
     await seedSellableItem();
     expect((await PUBLISH(publishRequest(), context())).status).toBe(200);
@@ -793,6 +800,13 @@ describe("an item recorded as showing alcohol is served nowhere, commercial or n
       it(`depictsAlcohol ${state === "no listing" ? "(no listing)" : state}, ${commercial ? "commercial" : "nothing commercial"}: ${isServed ? "served" : "withheld"} on all six readers`, async () => {
         await seedRow(state, commercial);
         expect(await surfaces()).toEqual(isServed ? WITHOUT_OFFER : NONE_SERVED);
+        if (!isServed) {
+          // The presence control on the SAME row: the absence above is the
+          // alcohol/commercial rule at work, not a row nothing could ever
+          // serve. Recording a `no` brings the item back on the five readers.
+          await recordAlcoholAnswer(false);
+          expect(await surfaces(), "same row, answer set to no").toEqual(WITHOUT_OFFER);
+        }
       });
     }
   }

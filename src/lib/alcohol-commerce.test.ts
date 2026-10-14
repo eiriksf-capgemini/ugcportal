@@ -217,10 +217,12 @@ describe("commercialPublishRefusal (K6)", () => {
     ["a declared absence of benefit", { benefitReceived: false, benefitSource: null }],
     ["an unanswered benefit question", { benefitReceived: null, benefitSource: null }],
   ])("says nothing about an item with %s", (_name, disclosure) => {
-    // § 9-2 is about ADVERTISING. A photograph of a glass of wine is
-    // publishable as personal content — which is the distinction the layout
-    // separation in ugcportal-qnq9.11 is built on — and every item that
-    // existed before ugcportal-qnq9.1's migration is in one of these states.
+    // § 9-2 is about ADVERTISING, so this PUBLISH gate says nothing about an
+    // item that carries nothing commercial. Whether such an item is then
+    // served is the read scope's question, not this one's (since
+    // ugcportal-qnq9.11 a recorded `depictsAlcohol = true` is withheld from
+    // every public surface), and every item that existed before
+    // ugcportal-qnq9.1's migration is in one of these states.
     // The worst possible listing is supplied, so these pass for the reason
     // they claim rather than for want of an alcohol answer.
     expect(
