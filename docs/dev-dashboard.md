@@ -297,10 +297,12 @@ stopper renderinga i stedet for å gi et tomt hull. Fargen følger `currentColor
   skjult tekst (`.sr`) for skjermlesere.
 - **`dl(rows)`** tar et valgfritt tredje element per rad, ikonnavnet for etiketten.
 
-- **`beadChip(id, known, inProgressIds)`** lager en chip for en bead-id. Finnes beaden i
+- **`beadChip(id, ctx)`** lager en chip for en bead-id (`ctx.known`, `ctx.inProgressIds` og `ctx.inProgressUp`). Finnes beaden i
   dokumentet, blir chipen en hopp-lenke (`class="chip jump"`) som åpner raden og scroller
   dit. Er beaden i arbeid, får den `hot` og aksentfarge. Det er slik «Blocked» viser hva
-  som løsner snart.
+  som løsner snart. Er `bd list --status in_progress` nede, får chipen klassen `unk`
+  (stiplet kant) og skjermlesertekst «in-progress state unknown» i begge grener, hopp-lenke
+  eller ikke, i stedet for å se ut som «ikke i arbeid».
 - **`link(href, text)`** gir `<a target="_blank" rel="noopener">`. Alle eksterne lenker går
   gjennom den.
 - **`copyable(cmd)`** gir en kommando med «Copy»-knapp. Brukes under «Commands» i hver rad.

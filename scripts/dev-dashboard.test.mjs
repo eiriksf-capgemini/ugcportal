@@ -785,6 +785,16 @@ describe("renderHtml", () => {
     expect(dn).toContain('<span class="chip unk" title="Not in this dashboard: bd show ugcportal-h0ef (in-progress state unknown: bd list --status in_progress is down)">');
     expect(dn).toContain('<span class="sr"> in-progress state unknown</span>');
     expect(dn).not.toContain(" hot");
+    // The other branch: a chip whose target IS on the page (a jump link) must
+    // carry the same marker. Round 6 found only the plain-span branch tested.
+    const BLOCKED_ON_READY = { id: "ugcportal-chip2", title: "waits on a ready bead", priority: 2, status: "open", updated_at: "2026-10-13T10:06:44Z", blocked_by: ["ugcportal-74w"], metadata: {} };
+    const both = ok([BLOCKED_UL2J, BLOCKED_ON_READY]);
+    const upJump = sectionOf(page({ blocked: both }).html, "blocked");
+    expect(upJump).toContain('<a href="#bead-ugcportal-74w" class="chip jump" title="Curation UI">ugcportal-74w</a>');
+    const dnJump = sectionOf(page({ inProgress: down("bd list: database locked"), blocked: both }).html, "blocked");
+    expect(dnJump).toContain(
+      '<a href="#bead-ugcportal-74w" class="chip jump unk" title="Curation UI (in-progress state unknown: bd list --status in_progress is down)">ugcportal-74w<span class="sr"> in-progress state unknown</span></a>',
+    );
   });
 
   it("the cmux section needs git worktree list too, and says so when it is down", () => {
