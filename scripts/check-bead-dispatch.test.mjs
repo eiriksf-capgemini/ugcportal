@@ -945,6 +945,19 @@ describe("the checks are bounded where they claim to be", { timeout: 30_000 }, (
     expect(both.status).toBe(0);
   });
 
+  it("a `not` ending the previous line does not negate an `In scope:` line that starts the next (round-2 L7 of #236)", () => {
+    // The lookbehind must not cross a newline: "do not\nIn scope: x" is a
+    // real In-scope line preceded by an unrelated sentence.
+    const res = runFixture(
+      completeBead({
+        description:
+          "As a reader, I want a story, so that it counts. Mind the gap, do not\nIn scope: the thing.\nOut of scope: y, owned by fixture-other.",
+      }),
+    );
+    expect(res.status).toBe(0);
+    expect(failedChecks(res.stdout)).toEqual([]);
+  });
+
   // --- L4 (PR #236 round 1): emphasis around the negation does not hide it ---
   const EMPHASISED_NOT = ["**Not** in scope:", "_not_ in scope:", "*not* in scope:", "Not **in scope**:"];
   for (const label of EMPHASISED_NOT) {

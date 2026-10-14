@@ -349,8 +349,10 @@ const PLACEHOLDER_RE = /\(replace\s+K\d+\)|\bTODO\b|\bTBD\b|\bFIXME\b|\bXXX\b|<f
  *     between a stray backtick (or stray fence) and the next backtick (or
  *     fence) in that paragraph -- the pair is read as code and blanked.
  * The opposite error, which fails closed: a fenced block that contains a
- * blank line is cut at that line, so a marker in the block AFTER the blank
- * line is no longer blanked and is reported as carried.
+ * blank line is cut at that line, which leaves the opening fence unbalanced
+ * in its paragraph and the closing fence unbalanced in the next, so a bare
+ * marker on EITHER side of the blank line is no longer blanked and is
+ * reported as carried.
  * Accepted: the repo's convention is that backticks and quotes mean "this is
  * a literal being referred to", and the alternative -- a check whose only
  * live hits are quotations -- is worse. SUBSTANCE_CHECKS_NOT_MADE already
@@ -492,7 +494,7 @@ export const CHECKS = [
   // `out-of-scope` has no such twin -- "not out of scope" is not a label
   // anyone writes as one.
   check("in-scope", "description has an `In scope:` line", ["description"], (b) =>
-    /(?<!(?:^|[^a-z0-9])not[*_]*\s+[*_]*)\bin scope\b[^:.\n]{0,40}:/i.test(descLines(b))
+    /(?<!(?:^|[^a-z0-9])not[*_]*[^\S\n]+[*_]*)\bin scope\b[^:.\n]{0,40}:/i.test(descLines(b))
       ? { ok: true }
       : { ok: false, detail: "no `In scope:` line in the description" },
   ),
