@@ -198,7 +198,7 @@ const PR_FIELDS = [
  * @param {{ runJson?: typeof runJsonDefault, runText?: typeof runTextDefault }} [runners]
  */
 export async function gatherSources(repo, { runJson = runJsonDefault, runText = runTextDefault } = {}) {
-  const [inProgress, ready, blocked, status, release, prs, merged, current, worktrees, mainLog, version] =
+  const [inProgress, ready, blocked, status, release, prs, merged, current, worktrees, mainLog] =
     await Promise.all([
       // Every list below that the page shows in full passes a limit no real
       // queue reaches, because a truncated list renders as a complete one,
@@ -216,6 +216,9 @@ export async function gatherSources(repo, { runJson = runJsonDefault, runText = 
       // repo has had open at once. The default would be 30.
       runJson("gh", ["pr", "list", "--state", "open", "--limit", "200", "--json", PR_FIELDS], repo),
       // Deliberately short: this section is "recently merged", not a history.
+      // So nothing concludes "this bead never had a PR" from it alone: a PR
+      // that merged earlier is simply not here. "Unstarted claim" also reads
+      // the bead's own metadata.prs, which is not capped.
       runJson(
         "gh",
         ["pr", "list", "--state", "merged", "--limit", "8", "--json", "number,title,mergedAt,url"],
@@ -224,26 +227,8 @@ export async function gatherSources(repo, { runJson = runJsonDefault, runText = 
       runJson("cmux", ["current", "--json", "--limit", "200"], repo),
       runText("git", ["worktree", "list", "--porcelain"], repo),
       runText("git", ["log", "-1", "--format=%h %cr", "origin/main"], repo),
-      readVersion(repo),
     ]);
-  return { inProgress, ready, blocked, status, release, prs, merged, current, worktrees, mainLog, version };
-}
-
-/**
- * package.json's version, which the release section compares against the
- * release label to tell "done, not cut" from "cut".
- * @param {string} repo
- * @returns {Promise<Result<string>>}
- */
-async function readVersion(repo) {
-  const file = path.join(repo, "package.json");
-  try {
-    const v = JSON.parse(await readFile(file, "utf8")).version;
-    if (typeof v !== "string" || v === "") return { ok: false, error: `${file}: no "version" field` };
-    return { ok: true, value: v };
-  } catch (err) {
-    return { ok: false, error: `${file}: ${err.message}` };
-  }
+  return { inProgress, ready, blocked, status, release, prs, merged, current, worktrees, mainLog };
 }
 
 // ---------------------------------------------------------------------------

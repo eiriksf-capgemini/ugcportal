@@ -9,8 +9,9 @@
  *     (description, acceptance criteria, notes, checks, PR body, commands) open
  *   - sections collapse, long queues show QUEUE_LIMIT rows then "Show all"
  *   - a filter box narrows every section at once
- *   - the page reloads itself every `refreshSeconds`, but not while the
- *     filter has focus, text is selected, or the pointer rests on an open row
+ *   - the page reloads itself every `refreshSeconds`; while the filter has
+ *     focus, text is selected or the pointer rests on an open row it waits,
+ *     but it forces the reload once five intervals have passed since it loaded
  *   - open rows, collapsed sections, "show all", filter text and scroll
  *     position survive the reload (localStorage / sessionStorage)
  *   - a stale banner appears when the file has not been rewritten for three
@@ -41,7 +42,6 @@ import {
   RELEASE_GROUP_TITLE,
   RELEASE_GROUPS,
   releaseLabelOf,
-  releaseIsCut,
   releaseProgress,
   summariseChecks,
 } from "./dashboard-data.mjs";
@@ -250,8 +250,13 @@ function beadBody({ bead, pr, worktree, cmuxItems, agentState }, ctx) {
   const cmds = [`bd show ${bead.id}`];
   if (pr) cmds.push(`gh pr view ${pr.number} --web`);
   if (worktree) cmds.push(`cd ${worktree.path}`);
-  // Suggesting a claim concludes "no worktree and no PR", so it waits for both sources.
-  if (!worktree && !pr && repoUrl && ctx.prsUp && ctx.worktreesUp) cmds.push(`bd update ${bead.id} --claim`);
+  // Suggesting a claim concludes "nobody holds this": not already in progress
+  // or closed, and no open PR or worktree. `pr` and `worktree` come from
+  // joinRows' joinBead for every bead row on the page, so the last two are
+  // looked up, not assumed; with either source down they are not known, so
+  // the suggestion waits for both.
+  const claimable = bead.status !== "in_progress" && bead.status !== "closed" && !ctx.inProgressIds.has(bead.id);
+  if (claimable && !worktree && !pr && repoUrl && ctx.prsUp && ctx.worktreesUp) cmds.push(`bd update ${bead.id} --claim`);
   rows.push(["Commands", cmds.map(copyable).join(" "), "terminal"]);
   return dl(rows);
 }
@@ -325,7 +330,9 @@ function searchText(...parts) {
 
 /**
  * One bead as a collapsed row with an expandable body.
- * @param {object} row a joinRows() row, or { bead } for ready/blocked beads
+ * @param {object} row a joinRows() row: joined.rows for in-progress beads,
+ *   joined.joinBead(bead) for every other bead, so each row carries its open
+ *   PR and worktree
  * @param {object} ctx
  * @param {string} rightMeta extra summary content on the right
  * @param {boolean} overflow hidden until "Show all"
@@ -352,7 +359,7 @@ function beadRow(row, ctx, rightMeta, overflow, idPrefix = "bead") {
 function inProgressMeta(row, ctx) {
   const parts = [];
   if (row.pr) parts.push(`${link(row.pr.url, `#${row.pr.number}`, "", "pr")} ${ciIcon(row.checks)} ${reviewIcon(row.pr)}`);
-  else if (ctx.prsUp) parts.push(`<span class="muted" title="no pull request">${icon("pr", "no PR", "muted")}</span>`);
+  else if (ctx.prsUp) parts.push(`<span class="muted" title="no open pull request">${icon("pr", "no open PR", "muted")}</span>`);
   else parts.push(`<span class="muted" title="gh pr list is down">${icon("pr", "PR state unknown", "muted")}</span>`);
   parts.push(agentPill(row.agentState));
   if (row.worktree) parts.push(`<code class="muted wt" title="worktree ${esc(row.worktree.path)}">${icon("folder")}${esc(path.basename(row.worktree.path))}</code>`);
@@ -360,13 +367,27 @@ function inProgressMeta(row, ctx) {
   return parts.filter(Boolean).join(" ");
 }
 
-function blockedMeta(bead, ctx) {
-  const chips = blockersOf(bead).map((id) => beadChip(id, ctx.known, ctx.inProgressIds)).join(" ");
-  return `${icon("lock", "blocked by", "muted")} ${chips || `<span class="muted">?</span>`} ${timeIcon(bead.updated_at, ctx.now)}`;
+/**
+ * The open PR and worktree of a bead outside "In progress", when it has
+ * either. Nothing when it has neither: a ready bead without a PR is the
+ * normal case, not something to mark.
+ */
+function linkedMeta(row) {
+  const parts = [];
+  if (row.pr) parts.push(`${link(row.pr.url, `#${row.pr.number}`, "", "pr")} ${ciIcon(row.checks)}`);
+  if (row.worktree) parts.push(`<code class="muted wt" title="worktree ${esc(row.worktree.path)}">${icon("folder")}${esc(path.basename(row.worktree.path))}</code>`);
+  return parts.join(" ");
 }
 
-function queueMeta(bead, ctx) {
-  const parts = [];
+function blockedMeta(row, ctx) {
+  const { bead } = row;
+  const chips = blockersOf(bead).map((id) => beadChip(id, ctx.known, ctx.inProgressIds)).join(" ");
+  return [linkedMeta(row), `${icon("lock", "blocked by", "muted")} ${chips || `<span class="muted">?</span>`}`, timeIcon(bead.updated_at, ctx.now)].filter(Boolean).join(" ");
+}
+
+function queueMeta(row, ctx) {
+  const { bead } = row;
+  const parts = [linkedMeta(row)].filter(Boolean);
   if (bead.metadata?.cc_scope) parts.push(`<span class="muted chipish">${icon("tag")}${esc(bead.metadata.cc_scope)}</span>`);
   if (bead.issue_type && bead.issue_type !== "task") parts.push(`<span class="muted">${esc(bead.issue_type)}</span>`);
   parts.push(timeIcon(bead.updated_at, ctx.now));
@@ -428,7 +449,7 @@ function deriveRepoUrl(prs, merged) {
  * @param {object} args
  * @param {string} args.repoName
  * @param {string} args.prefix bead id prefix
- * @param {Record<string, {ok: boolean, value?: any, error?: string}>} args.sources from gatherSources(); `version` is package.json's version
+ * @param {Record<string, {ok: boolean, value?: any, error?: string}>} args.sources from gatherSources()
  * @param {Date} args.now
  * @param {number} [args.refreshSeconds]
  * @returns {{ html: string, attention: import("./dashboard-data.mjs").Attention[], joined: ReturnType<typeof joinRows> }}
@@ -521,7 +542,13 @@ ${attention.length === 0 ? `<p class="empty win">${icon("check-circle", undefine
           .join("")}</tbody></table></div>`;
 
   // Ready -------------------------------------------------------------------
-  const readyRows = ready.map((b, i) => beadRow({ bead: b }, ctx, queueMeta(b, ctx), i >= QUEUE_LIMIT));
+  // Every bead row below goes through joined.joinBead, the same lookup the
+  // in-progress rows are built with, so a ready or blocked bead with an open
+  // PR or a worktree shows it and is never offered a claim.
+  const readyRows = ready.map((b, i) => {
+    const row = joined.joinBead(b);
+    return beadRow(row, ctx, queueMeta(row, ctx), i >= QUEUE_LIMIT);
+  });
 
   // Blocked -----------------------------------------------------------------
   const sortedBlocked = [...blocked].sort((a, b) => {
@@ -529,39 +556,43 @@ ${attention.length === 0 ? `<p class="empty win">${icon("check-circle", undefine
     const bHot = blockersOf(b).some((id) => inProgressIds.has(id)) ? 0 : 1;
     return aHot - bHot || (a.priority ?? 9) - (b.priority ?? 9);
   });
-  const blockedRows = sortedBlocked.map((b, i) => beadRow({ bead: b }, ctx, blockedMeta(b, ctx), i >= QUEUE_LIMIT));
+  const blockedRows = sortedBlocked.map((b, i) => {
+    const row = joined.joinBead(b);
+    return beadRow(row, ctx, blockedMeta(row, ctx), i >= QUEUE_LIMIT);
+  });
 
   // Release -----------------------------------------------------------------
   // Everything the release label still has to deliver, grouped by what stands
-  // between it and done. Closed beads only count in the done/total figure.
+  // between it and done. Closed beads only count in the figures: done, and of
+  // those how many cut-release has released (metadata.released_in) and how
+  // many it has not.
   const releaseRows = [];
   if (release && release.remaining > 0) {
     const pct = release.total > 0 ? Math.round((release.done / release.total) * 100) : 0;
     releaseRows.push(
       `<div class="bar" role="progressbar" aria-label="${esc(release.label)} progress" aria-valuemin="0" aria-valuemax="${esc(release.total)}" aria-valuenow="${esc(release.done)}"><span style="width:${pct}%"></span></div>`,
-      `<p class="progress muted">${esc(release.done)} of ${esc(release.total)} done · ${esc(plural(release.remaining, "bead"))} remaining · ${pct}%</p>`,
+      `<p class="progress muted">${esc(release.done)} of ${esc(release.total)} done · ${esc(release.released)} released · ${esc(release.unreleased)} not yet released · ${esc(plural(release.remaining, "bead"))} remaining · ${pct}%</p>`,
     );
     for (const g of RELEASE_GROUPS) {
       const list = release.groups[g];
       if (list.length === 0) continue;
       releaseRows.push(`<h3 class="grp">${esc(RELEASE_GROUP_TITLE[g])} <span class="count">${esc(list.length)}</span></h3>`);
-      for (const b of list) releaseRows.push(beadRow({ bead: b }, ctx, g === "blocked" ? blockedMeta(b, ctx) : queueMeta(b, ctx), false, "rel"));
+      for (const b of list) {
+        const row = joined.joinBead(b);
+        const meta = g === "in_progress" ? inProgressMeta(row, ctx) : g === "blocked" ? blockedMeta(row, ctx) : queueMeta(row, ctx);
+        releaseRows.push(beadRow(row, ctx, meta, false, "rel"));
+      }
     }
   }
-  // Every labelled bead closed means either "done, cut it" or "already cut".
-  // The label only plans beads into a release; cut-release computes the
-  // version from cc_type, so it can cut past the label. releaseIsCut treats
-  // package.json at or past the label as cut. An unreadable or non-x.y.z
-  // version says so instead of guessing.
-  const version = get("version");
-  const cut = release && version !== null ? releaseIsCut(release.label, version) : null;
-  let releaseDone = "Time to cut the release.";
-  if (release && version === null) releaseDone = "package.json's version is unreadable, so whether it has been cut is unknown.";
-  else if (release && cut === null) releaseDone = `package.json's version ${version} is not plain x.y.z, so whether it has been cut is unknown.`;
-  else if (release && cut) releaseDone = `${release.label} is cut (package.json is at ${version}); label the next release's beads.`;
-  const releaseEmpty = release
-    ? `Everything labelled ${release.label} is closed (${release.done} of ${release.total}). ${releaseDone}`
-    : "No bead carries a semver label (v1.2.3), so there is no release to track. Label the beads that belong to the next release.";
+  // Every labelled bead closed: cut or not is read off each bead's
+  // released_in, which cut-release writes on every bead it releases. One
+  // closed bead without it is a candidate for the next cut-release, even
+  // when others in the label were released earlier.
+  let releaseEmpty = "No bead carries a semver label (v1.2.3), so there is no release to track. Label the beads that belong to the next release.";
+  if (release && release.unreleased > 0)
+    releaseEmpty = `Everything labelled ${release.label} is closed and ${release.unreleased} of them ${release.unreleased === 1 ? "is" : "are"} not yet released. Time to cut the release.`;
+  else if (release)
+    releaseEmpty = `${release.label} is cut (${plural(release.released, "bead")} released as ${release.releasedIn.join(", ")}); label the next release's beads.`;
 
   // Merged ------------------------------------------------------------------
   const mergedRows = merged.map((pr) => `<li>${icon("merge", undefined, "ok")}${link(pr.url, `#${pr.number}`)} ${esc(pr.title)} <span class="muted">merged ${esc(ageOf(pr.mergedAt, now))} ago</span></li>`);

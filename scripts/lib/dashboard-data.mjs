@@ -139,6 +139,12 @@ export function agentStateOf(item) {
  * bead, plus the PRs that map to no in_progress bead and the worktrees that
  * map to nothing at all.
  *
+ * `joinBead` is the same per-bead lookup the rows are built with, returned so
+ * every other bead the page renders (Ready, Blocked, the release section) is
+ * joined to its open PR and worktree too, rather than rendered as if it had
+ * neither. A row the renderer would build from `{ bead }` alone says "no PR"
+ * about a PR nobody looked up.
+ *
  * @param {object} args
  * @param {string} args.prefix bead id prefix, e.g. "ugcportal"
  * @param {any[]} args.inProgress
@@ -169,12 +175,20 @@ export function joinRows({ prefix, inProgress, prs, worktrees, currentItems, now
     itemsByCwd.set(key, list);
   }
 
-  const rows = inProgress.map((bead) => {
+  const inProgressIds = new Set(inProgress.map((b) => b.id));
+  /**
+   * One bead joined to its open PR, worktree and cmux agent. `stale` only
+   * applies to a bead that is in progress; a ready bead that nobody has
+   * touched for a week is not stale, it is waiting.
+   * @param {any} bead
+   */
+  const joinBead = (bead) => {
     const pr = prByBead.get(bead.id) ?? null;
     const wt = wtByBead.get(bead.id) ?? (pr ? wtByBranch.get(pr.headRefName) : null) ?? null;
     const items = wt ? itemsByCwd.get(normalisePath(wt.path)) ?? [] : [];
     const agentState = items.map(agentStateOf).find((s) => s !== "") ?? "";
     const ageHours = (now.getTime() - Date.parse(bead.updated_at ?? "")) / 3600000;
+    const inProgressNow = inProgressIds.has(bead.id) || bead.status === "in_progress";
     // bd's lease (lease_expires_at) is deliberately NOT read: it is a 5-minute
     // TTL kept alive by `bd heartbeat`, which nothing in this repo's agent
     // flow runs, so every in_progress bead always looks expired. updated_at
@@ -186,12 +200,12 @@ export function joinRows({ prefix, inProgress, prs, worktrees, currentItems, now
       cmuxItems: items,
       agentState,
       checks: pr ? summariseChecks(pr.statusCheckRollup) : "none",
-      stale: Number.isFinite(ageHours) && ageHours > STALE_IN_PROGRESS_HOURS,
+      stale: inProgressNow && Number.isFinite(ageHours) && ageHours > STALE_IN_PROGRESS_HOURS,
       ageHours,
     };
-  });
+  };
+  const rows = inProgress.map(joinBead);
 
-  const inProgressIds = new Set(inProgress.map((b) => b.id));
   const unlinkedPrs = prs.filter((pr) => {
     const id = extractBeadId(pr.headRefName, prefix) ?? extractBeadId(pr.title, prefix);
     return !id || !inProgressIds.has(id);
@@ -205,7 +219,24 @@ export function joinRows({ prefix, inProgress, prs, worktrees, currentItems, now
     return !(id && inProgressIds.has(id)) && !hasPr;
   });
 
-  return { rows, unlinkedPrs, orphanWorktrees };
+  return { rows, unlinkedPrs, orphanWorktrees, joinBead };
+}
+
+/**
+ * The PRs a bead records as having shipped it (`metadata.prs`, e.g.
+ * "gh-227,gh-231"), which cut-release and the close step write. Unlike the
+ * recently-merged list it is not truncated, so it is what tells "this bead has
+ * had a PR" apart from "nobody has started it".
+ * @param {any} bead
+ * @returns {string[]}
+ */
+export function recordedPrsOf(bead) {
+  const raw = bead?.metadata?.prs;
+  if (typeof raw !== "string") return [];
+  return raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
 }
 
 /**
@@ -234,9 +265,10 @@ export function buildAttention({ prefix, joined, currentItems, sources, now }) {
   // A rule that concludes "there is no PR / worktree / bead" from a source
   // that is down would be a guess, so each such rule waits for every source
   // its conclusion rests on and the "Source down" item is what the human
-  // sees instead: "Unstarted claim" waits for prs, worktrees and merged,
+  // sees instead: "Unstarted claim" waits for prs, worktrees and merged
+  // (and a PR recorded in the bead's metadata.prs rules it out outright),
   // "Orphan worktree" for inProgress and prs (worktrees is its own list),
-  // and "Stale" says its PR state is unknown rather than "has no PR".
+  // and "Stale" says its PR state is unknown rather than "has no open PR".
   const up = (k) => sources[k]?.ok === true;
 
   for (const [name, res] of Object.entries(sources)) {
@@ -255,8 +287,10 @@ export function buildAttention({ prefix, joined, currentItems, sources, now }) {
     if (pr.mergeable === "CONFLICTING") add("Merge conflict", `#${pr.number}${suffix}`, { ...extra, severity: "bad" });
   };
   // A bead whose PR already merged but which is still in_progress is a
-  // different problem from one nobody has started on. The recent merges are
-  // the cheapest evidence available for telling the two apart.
+  // different problem from one nobody has started on. The recent merges name
+  // the PR for the "bd close" advice; they are capped at 8, so a bead whose
+  // PR fell off them is kept from reading as unstarted by its own
+  // metadata.prs instead (see "Unstarted claim" below).
   const merged = sources.merged?.ok && Array.isArray(sources.merged.value) ? sources.merged.value : [];
   // Whole-id match through the same extractBeadId the join uses, never a
   // substring: ugcportal-abc.1 or ugcportal-abcd is not ugcportal-abc.
@@ -276,10 +310,16 @@ export function buildAttention({ prefix, joined, currentItems, sources, now }) {
         href: mergedPr.url,
       });
     else if (row.stale)
-      add("Stale", `${id} has had no update for ${ageOf(row.bead.updated_at, now)} and ${row.pr ? "has an open PR" : up("prs") ? "has no PR" : "its PR state is unknown"}`, { anchor });
-    // `merged` too: with it down, mergedFor finds nothing, and a bead whose
-    // PR already merged would read as one nobody has started.
-    else if (!row.pr && !row.worktree && up("prs") && up("worktrees") && up("merged")) add("Unstarted claim", `${id} is in_progress with no branch, worktree or PR yet`, { anchor });
+      // "open": prs is the open list only, and a PR that merged can have fallen
+      // off the 8 recent merges, so "has no PR" would be a guess.
+      add("Stale", `${id} has had no update for ${ageOf(row.bead.updated_at, now)} and ${row.pr ? "has an open PR" : up("prs") ? "has no open PR" : "its PR state is unknown"}`, { anchor });
+    // "Nobody has started it" rests on four inputs: no open PR (prs), no
+    // worktree (worktrees), no PR among the recent merges (merged, which is
+    // capped at 8 and so cannot alone say "never had one"), and no PR
+    // recorded on the bead itself (metadata.prs, which is not capped). A down
+    // source, or a PR recorded on the bead, means it is not concluded.
+    else if (!row.pr && !row.worktree && recordedPrsOf(row.bead).length === 0 && up("prs") && up("worktrees") && up("merged"))
+      add("Unstarted claim", `${id} is in_progress with no worktree, no open or recently merged PR, and no PR recorded in its metadata.prs`, { anchor });
     // Decided and printed on the same field, the PR's updatedAt. An
     // unparseable date gives NaN, and NaN > n is false, so it does not nag.
     // A working agent suppresses the nag, and agentState comes from cmux
@@ -354,19 +394,21 @@ export const RELEASE_GROUPS = ["in_progress", "ready", "blocked", "deferred"];
 export const RELEASE_GROUP_TITLE = { in_progress: "In progress", ready: "Ready", blocked: "Blocked", deferred: "Deferred" };
 
 /**
- * Orders two release labels (`v0.7.0`) or plain versions (`0.7.0`) as semver.
- * Both must be plain x.y.z with an optional leading "v"; anything else
- * (a prerelease, an empty string) gives NaN, so a caller cannot mistake an
- * unparseable version for an ordered one.
+ * Orders two release labels (`v0.7.0`) as semver, so v0.10.0 sorts after
+ * v0.9.0. Its only caller is releaseLabelOf, which only passes labels that
+ * match RELEASE_LABEL; anything else throws rather than sorting somewhere.
  * @param {string} a
  * @param {string} b
- * @returns {number} negative, 0, positive, or NaN
+ * @returns {number} negative, 0 or positive
  */
 export function compareSemver(a, b) {
-  const parse = (v) => /^v?(\d+)\.(\d+)\.(\d+)$/.exec(String(v))?.slice(1).map(Number);
+  const parse = (v) => {
+    const m = /^v(\d+)\.(\d+)\.(\d+)$/.exec(String(v));
+    if (!m) throw new Error(`compareSemver: ${JSON.stringify(v)} is not a release label like v1.2.3`);
+    return m.slice(1).map(Number);
+  };
   const x = parse(a);
   const y = parse(b);
-  if (!x || !y) return NaN;
   for (let i = 0; i < 3; i += 1) if (x[i] !== y[i]) return x[i] - y[i];
   return 0;
 }
@@ -374,10 +416,10 @@ export function compareSemver(a, b) {
 /**
  * The release in progress: the highest semver label carried by any bead that
  * is not closed. When every labelled bead is closed it falls back to the
- * highest label overall (every bead in it is done; whether it has been cut
- * is decided by releaseIsCut against package.json's version), and to `null`
- * when no bead carries a semver label at all. Compared as semver, so v0.10.0
- * beats v0.9.0.
+ * highest label overall (every bead in it is done; releaseProgress's
+ * `released` / `unreleased` counts, from each bead's `released_in`, say
+ * whether it has been cut), and to `null` when no bead carries a semver label
+ * at all. Compared as semver, so v0.10.0 beats v0.9.0.
  * @param {any[]} beads
  * @returns {string | null}
  */
@@ -396,18 +438,36 @@ export function releaseLabelOf(beads) {
 }
 
 /**
+ * The version cut-release shipped a bead in (`metadata.released_in`, e.g.
+ * "v0.6.0"), or "" when it has not shipped it. cut-release selects every
+ * closed bead without it and writes it on each one it releases, so this is
+ * the exact record of "released", where the release label is only the plan.
+ * @param {any} bead
+ * @returns {string}
+ */
+export function releasedInOf(bead) {
+  const v = bead?.metadata?.released_in;
+  return typeof v === "string" ? v.trim() : "";
+}
+
+/**
  * Done/total for one release label, and the beads still to do grouped by
  * what stands between them and done. `blockedIds` comes from `bd blocked`,
  * because a labelled bead's own dependency list cannot tell an open blocker
- * from a closed one. Closed beads count towards `done` and appear in no
- * group.
+ * from a closed one. Every labelled bead is in exactly one of three states:
+ * remaining (not closed, in one of the groups), unreleased (closed, no
+ * `released_in` yet, so the next cut-release considers it; cut-release
+ * itself still drops one whose PR has not merged) or released
+ * (closed with `released_in`). `done` is unreleased + released.
+ * `releasedIn` lists the distinct `released_in` values, sorted.
  * @param {any[]} beads
  * @param {string} label
  * @param {Set<string>} blockedIds
  */
 export function releaseProgress(beads, label, blockedIds = new Set()) {
   const labelled = (beads ?? []).filter((b) => (b?.labels ?? []).includes(label));
-  const done = labelled.filter((b) => b.status === "closed").length;
+  const closed = labelled.filter((b) => b.status === "closed");
+  const released = closed.filter((b) => releasedInOf(b) !== "");
   const groups = Object.fromEntries(RELEASE_GROUPS.map((g) => [g, []]));
   for (const b of labelled) {
     if (b.status === "closed") continue;
@@ -420,22 +480,14 @@ export function releaseProgress(beads, label, blockedIds = new Set()) {
   for (const g of RELEASE_GROUPS) {
     groups[g].sort((a, b) => (a.priority ?? 9) - (b.priority ?? 9) || String(a.id).localeCompare(String(b.id)));
   }
-  return { label, total: labelled.length, done, remaining: labelled.length - done, groups };
-}
-
-/**
- * Whether a release whose labelled beads are all closed has been cut, judged
- * by package.json's version. The label is how this repo plans beads into a
- * release; cut-release itself does not read it. It selects every closed bead
- * without `released_in` and computes the next version from their cc_type
- * (feat is minor, the rest patch), so the version it cuts can land above the
- * label: v0.7.0 planned, 0.8.0 cut because a feat was in it. Hence "at or
- * past the label" rather than "equal to it".
- * @param {string} label e.g. "v0.7.0"
- * @param {string} version package.json's version, e.g. "0.8.0"
- * @returns {boolean | null} null when the version is not plain x.y.z
- */
-export function releaseIsCut(label, version) {
-  const c = compareSemver(version, label);
-  return Number.isNaN(c) ? null : c >= 0;
+  return {
+    label,
+    total: labelled.length,
+    done: closed.length,
+    released: released.length,
+    unreleased: closed.length - released.length,
+    releasedIn: [...new Set(released.map(releasedInOf))].sort(),
+    remaining: labelled.length - closed.length,
+    groups,
+  };
 }

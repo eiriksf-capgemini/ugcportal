@@ -41,8 +41,9 @@ import {
   parseWorktrees,
   plural,
   QUEUE_LIMIT,
+  recordedPrsOf,
   RELEASE_GROUPS,
-  releaseIsCut,
+  releasedInOf,
   releaseLabelOf,
   releaseProgress,
   renderHtml,
@@ -176,8 +177,9 @@ function down(error) {
 }
 
 /** Shaped like `bd list --all --label-pattern 'v*.*.*' --limit 0 --json` rows (2026-10-14). */
-function rel(id, status, priority, labels = ["v0.7.0"]) {
-  return { id, title: `Release bead ${id}`, description: "", status, priority, issue_type: "task", labels, updated_at: "2026-10-12T12:00:00Z", metadata: { cc_scope: "process", cc_type: "fix" }, dependencies: [] };
+function rel(id, status, priority, labels = ["v0.7.0"], releasedIn = "") {
+  const metadata = { cc_scope: "process", cc_type: "fix", ...(releasedIn ? { released_in: releasedIn } : {}) };
+  return { id, title: `Release bead ${id}`, description: "", status, priority, issue_type: "task", labels, updated_at: "2026-10-12T12:00:00Z", metadata, dependencies: [] };
 }
 const RELEASE_BEADS = [
   rel("ugcportal-r1", "closed", 2),
@@ -186,7 +188,7 @@ const RELEASE_BEADS = [
   rel("ugcportal-r4", "open", 2),
   rel("ugcportal-ul2j", "open", 1), // also in the `blocked` fixture, so it lands in the Blocked group
   rel("ugcportal-r6", "deferred", 3),
-  rel("ugcportal-r0", "closed", 2, ["v0.6.0"]), // last release; must not count
+  rel("ugcportal-r0", "closed", 2, ["v0.6.0"], "v0.6.0"), // last release; must not count
 ];
 
 function allSourcesOk(overrides = {}) {
@@ -201,7 +203,6 @@ function allSourcesOk(overrides = {}) {
     current: ok({ items: [CMUX_ITEM_WORKING] }),
     worktrees: ok(WORKTREE_PORCELAIN),
     mainLog: ok("4c8584e 65 minutes ago\n"),
-    version: ok("0.6.0"),
     ...overrides,
   };
 }
@@ -388,7 +389,7 @@ describe("buildAttention", () => {
     expect(text).toContain("CI red: #240");
     expect(text).toContain("Changes requested: #240");
     expect(text).toContain("Merge conflict: #240");
-    expect(text).toContain("Stale: ugcportal-ybv has had no update for 5d and has no PR");
+    expect(text).toContain("Stale: ugcportal-ybv has had no update for 5d and has no open PR");
     expect(text).toContain("Unstarted claim: ugcportal-new1");
     expect(text).toContain("Orphan worktree: /private/tmp/wt-stray on spike/no-bead-here");
     expect(text).not.toContain("Lease expired");
@@ -463,7 +464,7 @@ describe("buildAttention", () => {
     // With every source up, the same rows do raise these items.
     expect(text({})).toContain("Unstarted claim: ugcportal-new1");
     expect(text({})).toContain("Orphan worktree: /private/tmp/wt-stray");
-    expect(text({})).toContain("Stale: ugcportal-ybv has had no update for 5d and has no PR");
+    expect(text({})).toContain("Stale: ugcportal-ybv has had no update for 5d and has no open PR");
     const prsDown = text({ prs: down("gh pr list: offline") });
     expect(prsDown).not.toContain("Unstarted claim");
     expect(prsDown).not.toContain("Orphan worktree");
@@ -473,9 +474,38 @@ describe("buildAttention", () => {
     // merged down, prs and worktrees up: the bead's PR may already have merged,
     // so "nobody has started" is not known either.
     expect(text({ merged: down("gh pr list --state merged: offline") })).not.toContain("Unstarted claim");
+    // ugcportal-ybv is in progress with no open PR: up says "no open PR",
+    // down says the PR state is unknown.
+    expect(page().html).toContain('aria-label="no open PR"');
+    expect(page().html).not.toContain('aria-label="PR state unknown"');
     const html = page({ prs: down("gh pr list: offline") }).html;
     expect(html).toContain('aria-label="PR state unknown"');
-    expect(html).not.toContain('aria-label="no PR"');
+    expect(html).not.toContain('aria-label="no open PR"');
+  });
+
+  it("a bead that records a PR in metadata.prs is never an unstarted claim, even when that PR fell off the recent merges", () => {
+    // Shaped like live ugcportal-dabx: in progress, PR #227 merged, no open
+    // PR, no worktree, not stale, and #227 not among the 8 recent merges.
+    const dabx = { ...BEAD_FRESH_NO_PR, id: "ugcportal-dabx", metadata: { prs: "gh-227" } };
+    const unrecorded = { ...BEAD_FRESH_NO_PR, id: "ugcportal-dabx", metadata: {} };
+    const text = (bead) =>
+      buildAttention({
+        prefix: PREFIX,
+        joined: joinRows({ prefix: PREFIX, inProgress: [bead], prs: [], worktrees: [], currentItems: [], now: NOW }),
+        currentItems: [],
+        sources: allSourcesOk(), // merged holds #228 only
+        now: NOW,
+      })
+        .map(attentionText)
+        .join("\n");
+    expect(text(dabx)).not.toContain("Unstarted claim");
+    // The same bead with nothing recorded is flagged, so the needle above is reachable.
+    expect(text(unrecorded)).toContain("Unstarted claim: ugcportal-dabx is in_progress with no worktree, no open or recently merged PR, and no PR recorded in its metadata.prs");
+    // Blank or whitespace-only metadata.prs records nothing.
+    expect(text({ ...unrecorded, metadata: { prs: " , " } })).toContain("Unstarted claim: ugcportal-dabx");
+    expect(recordedPrsOf(dabx)).toEqual(["gh-227"]);
+    expect(recordedPrsOf({ metadata: { prs: "gh-71, gh-80" } })).toEqual(["gh-71", "gh-80"]);
+    expect(recordedPrsOf({})).toEqual([]);
   });
 
   it("matches a merged PR to a bead by whole id, never by substring", () => {
@@ -629,6 +659,56 @@ describe("renderHtml", () => {
     expect(page({ worktrees: down("git worktree list: refused") }).html).not.toContain(claim);
   });
 
+  it("joins every bead row to its open PR and worktree, so a ready, blocked or release row with one shows it and is never offered a claim", () => {
+    const readyBead = { id: "ugcportal-74w", priority: 1, title: "Curation UI", status: "open", updated_at: "2026-10-12T12:00:00Z", metadata: { cc_scope: "curation" } };
+    // An open PR tied to the ready bead by its branch name alone.
+    const prReady = { ...PR_232, number: 261, title: "feat(curation): curation UI", headRefName: "feat/ugcportal-74w-curation-ui", url: "https://github.com/eiriksf-capgemini/ugcportal/pull/261" };
+    const claim = 'data-copy="bd update ugcportal-74w --claim"';
+    const withPr = page({ ready: ok([readyBead]), prs: ok([PR_232, PR_UNLINKED_RED, prReady]) }).html;
+    const readySec = sectionOf(withPr, "ready");
+    expect(readySec).toContain('href="https://github.com/eiriksf-capgemini/ugcportal/pull/261"');
+    expect(readySec).toContain("gh pr view 261 --web");
+    // The collapsed line shows it too, not only the expanded body.
+    const summaryOf = (sec, id) => {
+      const at = sec.indexOf(`id="${id}"`);
+      return sec.slice(sec.indexOf("<summary>", at), sec.indexOf("</summary>", at));
+    };
+    expect(summaryOf(readySec, "bead-ugcportal-74w")).toContain("pull/261");
+    expect(withPr).not.toContain(claim);
+    // Mutation: the same page without that PR offers the claim again.
+    expect(page({ ready: ok([readyBead]) }).html).toContain(claim);
+
+    // A worktree alone also counts.
+    const wt74w = `${WORKTREE_PORCELAIN}\nworktree /private/tmp/wt-74w\nHEAD 89abcde000000000000000000000000000000000\nbranch refs/heads/feat/ugcportal-74w-curation-ui\n`;
+    const withWt = page({ ready: ok([readyBead]), worktrees: ok(wt74w) }).html;
+    expect(sectionOf(withWt, "ready")).toContain("cd /private/tmp/wt-74w");
+    expect(summaryOf(sectionOf(withWt, "ready"), "bead-ugcportal-74w")).toContain('title="worktree /private/tmp/wt-74w"');
+    expect(withWt).not.toContain(claim);
+
+    // Blocked: ugcportal-ul2j with an open PR shows it and is not offered a claim.
+    const prUl2j = { ...PR_232, number: 262, title: "fix(x): premise", headRefName: "fix/ugcportal-ul2j-premise", url: "https://github.com/eiriksf-capgemini/ugcportal/pull/262" };
+    const blockedUp = page({ prs: ok([PR_232, prUl2j]) }).html;
+    expect(summaryOf(sectionOf(blockedUp, "blocked"), "bead-ugcportal-ul2j")).toContain("pull/262");
+    expect(blockedUp).not.toContain('data-copy="bd update ugcportal-ul2j --claim"');
+    expect(page().html).toContain('data-copy="bd update ugcportal-ul2j --claim"');
+
+    // Release section, shaped like live rel-ugcportal-vr9q: a labelled
+    // in-progress bead with an open PR and a worktree. Its release row shows
+    // the PR and the worktree, like its In progress row, and offers no claim.
+    const relH0ef = { ...rel("ugcportal-h0ef", "in_progress", 1), title: BEAD_H0EF.title };
+    const relPage = page({ release: ok([...RELEASE_BEADS, relH0ef]) }).html;
+    const relSec = sectionOf(relPage, "release");
+    const relRow = relSec.slice(relSec.indexOf('id="rel-ugcportal-h0ef"'), relSec.indexOf("</details>", relSec.indexOf('id="rel-ugcportal-h0ef"')));
+    expect(relRow).toContain('href="https://github.com/eiriksf-capgemini/ugcportal/pull/232"');
+    expect(relRow).toContain("cd /private/tmp/wt-h0ef");
+    expect(relRow).not.toContain("--claim");
+    // Mutation: with the PR and worktree gone (sources up, nothing matching),
+    // the row is still in progress, so it is still not offered a claim.
+    const bare = sectionOf(page({ release: ok([...RELEASE_BEADS, relH0ef]), prs: ok([]), worktrees: ok("worktree /Users/eiriksf/code/ugcportal\nHEAD 4c8584e0\nbranch refs/heads/main\n") }).html, "release");
+    expect(bare).not.toContain("pull/232");
+    expect(bare).not.toContain('data-copy="bd update ugcportal-h0ef --claim"');
+  });
+
   it("the cmux section needs git worktree list too, and says so when it is down", () => {
     const sec = sectionOf(page({ worktrees: down("git worktree list: not a git repository") }).html, "cmux");
     expect(sec).toContain("<strong>git worktree list unavailable.</strong>");
@@ -768,7 +848,7 @@ describe("parseArgs", () => {
 });
 
 describe("gatherSources", () => {
-  it("asks every full-list source for more than a real queue holds, and reads package.json's version", async () => {
+  it("asks every full-list source for more than a real queue holds", async () => {
     const calls = [];
     const runJson = async (cmd, args) => (calls.push([cmd, ...args]), { ok: true, value: [] });
     const runText = async (cmd, args) => (calls.push([cmd, ...args]), { ok: true, value: "" });
@@ -781,10 +861,8 @@ describe("gatherSources", () => {
     expect(limitOf(call("bd", "list", "--all"))).toBe("0");
     expect(limitOf(call("gh", "pr", "list", "--state", "open"))).toBe("200");
     expect(limitOf(call("gh", "pr", "list", "--state", "merged"))).toBe("8"); // intentionally recent only
-    const pkg = JSON.parse(readFileSync(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8"));
-    expect(sources.version).toEqual({ ok: true, value: pkg.version });
-    const missing = await gatherSources("/nonexistent-repo", { runJson, runText });
-    expect(missing.version.ok).toBe(false);
+    // Release state is read off each bead's released_in, not package.json.
+    expect(sources).not.toHaveProperty("version");
   });
 });
 
@@ -828,41 +906,51 @@ describe("release progress", () => {
     expect(html.match(/id="rel-ugcportal-ul2j"/g)).toHaveLength(1);
     expect(html).toContain("Left in v0.7.0");
   });
-  it("says so when the release is done, and when nothing carries a release label", () => {
-    const allClosed = RELEASE_BEADS.map((b) => ({ ...b, status: "closed" }));
-    expect(page({ release: ok(allClosed) }).html).toContain("Everything labelled v0.7.0 is closed (6 of 6)");
+  it("models each labelled bead as remaining, done but unreleased, or released, from metadata.released_in", () => {
+    const beads = [rel("a", "open", 1), rel("b", "closed", 1), rel("c", "closed", 1, ["v0.7.0"], "v0.7.0"), rel("d", "closed", 1, ["v0.7.0"], "v0.6.1")];
+    expect(releaseProgress(beads, "v0.7.0")).toMatchObject({ total: 4, done: 3, released: 2, unreleased: 1, remaining: 1, releasedIn: ["v0.6.1", "v0.7.0"] });
+    expect(releasedInOf(rel("x", "closed", 1, ["v0.7.0"], "v0.7.0"))).toBe("v0.7.0");
+    expect(releasedInOf(rel("x", "closed", 1))).toBe("");
+    // Mutation: dropping released_in from c moves it from released to unreleased.
+    const dropped = beads.map((b) => (b.id === "c" ? rel("c", "closed", 1) : b));
+    expect(releaseProgress(dropped, "v0.7.0")).toMatchObject({ released: 1, unreleased: 2 });
+  });
+  it("the progress line shows how many done beads are released and how many are not", () => {
+    const sec = sectionOf(page().html, "release");
+    expect(sec).toContain("2 of 6 done · 0 released · 2 not yet released · 4 beads remaining · 33%");
+    // Mutation: one of the two closed beads released.
+    const oneReleased = RELEASE_BEADS.map((b) => (b.id === "ugcportal-r1" ? rel("ugcportal-r1", "closed", 2, ["v0.7.0"], "v0.7.0") : b));
+    expect(sectionOf(page({ release: ok(oneReleased) }).html, "release")).toContain("2 of 6 done · 1 released · 1 not yet released · 4 beads remaining");
+  });
+  it("everything closed, some not yet released: time to cut", () => {
+    // Probe B: one bead released as v0.7.0, the rest closed after the cut.
+    const allClosed = RELEASE_BEADS.map((b) => (b.labels.includes("v0.7.0") ? { ...b, status: "closed" } : b));
+    allClosed[0] = rel("ugcportal-r1", "closed", 2, ["v0.7.0"], "v0.7.0");
+    const html = page({ release: ok(allClosed) }).html;
+    expect(html).toContain("Everything labelled v0.7.0 is closed and 5 of them are not yet released. Time to cut the release.");
+    expect(html).not.toContain("is cut (");
+    // Singular: only one left unreleased.
+    const oneLeft = allClosed.map((b) => (b.labels.includes("v0.7.0") && b.id !== "ugcportal-r2" ? { ...b, metadata: { ...b.metadata, released_in: "v0.7.0" } } : b));
+    expect(page({ release: ok(oneLeft) }).html).toContain("Everything labelled v0.7.0 is closed and 1 of them is not yet released. Time to cut the release.");
+  });
+  it("everything closed and released: cut, named by the version it was released as", () => {
+    // Probe A: a patch-only cut from 0.6.0 released every v0.7.0 bead as v0.6.1.
+    const released = RELEASE_BEADS.map((b) => (b.labels.includes("v0.7.0") ? { ...b, status: "closed", metadata: { ...b.metadata, released_in: "v0.6.1" } } : b));
+    const html = page({ release: ok(released) }).html;
+    expect(html).toContain("v0.7.0 is cut (6 beads released as v0.6.1); label the next release&#39;s beads.");
+    expect(html).not.toContain("Time to cut the release");
+    // Mutation: strip released_in from one bead and it is time to cut again.
+    const oneMissing = released.map((b) => (b.id === "ugcportal-r4" ? { ...b, metadata: { cc_scope: "process", cc_type: "fix" } } : b));
+    const again = page({ release: ok(oneMissing) }).html;
+    expect(again).toContain("Everything labelled v0.7.0 is closed and 1 of them is not yet released. Time to cut the release.");
+    expect(again).not.toContain("is cut (");
     expect(page({ release: ok([]) }).html).toContain("No bead carries a semver label");
   });
-  it("tells done-but-not-cut from cut by package.json's version", () => {
-    const allClosed = RELEASE_BEADS.map((b) => ({ ...b, status: "closed" }));
-    const notCut = page({ release: ok(allClosed), version: ok("0.6.0") }).html;
-    expect(notCut).toContain("(6 of 6). Time to cut the release.");
-    expect(notCut).not.toContain("is cut");
-    const cut = page({ release: ok(allClosed), version: ok("0.7.0") }).html;
-    expect(cut).toContain("(6 of 6). v0.7.0 is cut (package.json is at 0.7.0); label the next release&#39;s beads.");
-    expect(cut).not.toContain("Time to cut the release");
-    const unknown = page({ release: ok(allClosed), version: down("package.json: ENOENT") }).html;
-    expect(unknown).toContain("package.json&#39;s version is unreadable, so whether it has been cut is unknown.");
-    expect(unknown).not.toContain("Time to cut the release");
-    // cut-release computes the version from cc_type, so it can cut past the
-    // label: v0.7.0 planned, 0.8.0 cut. That is cut, not "time to cut".
-    const past = page({ release: ok(allClosed), version: ok("0.8.0") }).html;
-    expect(past).toContain("(6 of 6). v0.7.0 is cut (package.json is at 0.8.0)");
-    expect(past).not.toContain("Time to cut the release");
-    const odd = page({ release: ok(allClosed), version: ok("0.7.0-rc.1") }).html;
-    expect(odd).toContain("package.json&#39;s version 0.7.0-rc.1 is not plain x.y.z, so whether it has been cut is unknown.");
-    expect(odd).not.toContain("Time to cut the release");
-    expect(odd).not.toContain("is cut (");
-  });
-  it("orders versions as semver, and an unparseable one is unordered rather than older", () => {
-    expect(releaseIsCut("v0.7.0", "0.6.0")).toBe(false);
-    expect(releaseIsCut("v0.7.0", "0.7.0")).toBe(true);
-    expect(releaseIsCut("v0.7.0", "0.8.0")).toBe(true);
-    expect(releaseIsCut("v0.9.0", "0.10.0")).toBe(true); // numeric, not string, order
-    expect(releaseIsCut("v0.10.0", "0.9.9")).toBe(false);
-    expect(releaseIsCut("v0.7.0", "0.7.0-rc.1")).toBeNull();
-    expect(releaseIsCut("v0.7.0", "")).toBeNull();
+  it("orders release labels as semver, and refuses anything that is not one", () => {
     expect(compareSemver("v0.9.0", "v0.10.0")).toBeLessThan(0);
+    expect(compareSemver("v1.0.0", "v0.99.99")).toBeGreaterThan(0);
+    expect(compareSemver("v0.7.0", "v0.7.0")).toBe(0);
+    expect(() => compareSemver("v0.7.0", "0.7.0-rc.1")).toThrow(/not a release label/);
   });
   it("with bd blocked down the release section says so instead of listing blocked beads as Ready", () => {
     const up = sectionOf(page().html, "release");

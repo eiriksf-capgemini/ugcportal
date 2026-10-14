@@ -77,20 +77,27 @@ nemlig komplett ut, med flis og telling. «Recently merged» er bevisst kort (8)
 
 Beads planlegges inn i en release med en semver-etikett (`v0.7.0`). Det er bare
 planleggingen: `cut-release` leser ikke etiketten. Den tar med alle lukkede beads uten
-`released_in` og regner ut neste versjon fra `cc_type` (feat gir minor, resten patch), så
-versjonen den kutter kan havne over etiketten. Kilden `release` henter alle beads med en slik etikett, lukkede inkludert
+`released_in` og skriver `released_in` (for eksempel `v0.6.0`) på hver bead den slipper.
+Det feltet, ikke etiketten og ikke versjonen i `package.json`, er derfor fasiten på om en
+bead er sluppet. Kilden `release` henter alle beads med en slik etikett, lukkede inkludert
 (`bd list --all --label-pattern 'v*.*.*' --limit 0 --json`; `--limit 0` er «ubegrenset»,
-standarden på 50 ville stille kuttet halen av en release på 80 beads). `releaseLabelOf()`
+standarden på 50 ville stille kuttet halen av en release på 80 beads), og hver post har
+`metadata.released_in` når beaden er sluppet. `releaseLabelOf()`
 velger høyeste etikett blant beads som ikke er lukket, sammenlignet som semver, og
-`releaseProgress()` gir ferdig/totalt pluss det som gjenstår i fire grupper: i arbeid,
+`releaseProgress()` deler hver bead med etiketten i tre: gjenstår (ikke lukket), ferdig men
+ikke sluppet (lukket, uten `released_in`) og sluppet (lukket, med `released_in`). Det som
+gjenstår, kommer i fire grupper: i arbeid,
 klar, blokkert (etter `bd blocked`, siden en beads egen avhengighetsliste ikke skiller en
-åpen blokkering fra en lukket) og utsatt. Lukkede beads teller bare i brøken. Seksjonen
-har derfor to kilder: er `bd blocked` nede, viser den en feilboks for den i stedet for å
+åpen blokkering fra en lukket) og utsatt. Lukkede beads teller bare i tallene:
+fremdriftslinja viser ferdig/totalt og hvor mange av de ferdige som er sluppet og ikke
+(«2 of 6 done · 0 released · 2 not yet released · 4 beads remaining · 33%»). Seksjonen
+har to kilder: er `bd blocked` nede, viser den en feilboks for den i stedet for å
 legge blokkerte beads under «Ready». Er alt lukket, sier seksjonen det i stedet for å vise
-en tom liste, og sammenligner etiketten med versjonen i `package.json` (kilden
-`version`, med `releaseIsCut()`): står versjonen på eller over etiketten som semver
-(`0.8.0` mot `v0.7.0`), er releasen kuttet, ellers er det på tide å kutte den. En versjon
-som ikke kan leses, eller som ikke er ren x.y.z, gir «unknown» i stedet for en gjetning.
+en tom liste: har minst én lukket bead ingen `released_in`, er det på tide å kutte
+releasen («Everything labelled v0.7.0 is closed and 5 of them are not yet released»);
+har alle den, er releasen kuttet, og seksjonen sier hvilken versjon de ble sluppet som
+(«v0.7.0 is cut (6 beads released as v0.6.1)»). En patch-release fra 0.6.0 gir 0.6.1, under
+etiketten, så versjonen sier ikke noe om etiketten; `released_in` gjør det.
 Finnes ingen etikett, sier den det. Radene har id `rel-<id>` så en bead som også står i «Ready» eller «Blocked» ikke
 gir to elementer med samme id.
 
@@ -218,8 +225,14 @@ hver eneste rad.
 Rader lages med `map` over dataene, så `section()` får en ferdig array:
 
 ```js
-const readyRows = ready.map((b, i) => beadRow({ bead: b }, ctx, queueMeta(b, ctx), i >= QUEUE_LIMIT));
+const readyRows = ready.map((b, i) => {
+  const row = joined.joinBead(b); // beaden koblet til åpen PR og worktree
+  return beadRow(row, ctx, queueMeta(row, ctx), i >= QUEUE_LIMIT);
+});
 ```
+
+Lag aldri en bead-rad av `{ bead: b }` alene: da har raden verken PR eller worktree, og
+sier i praksis «ingen PR» om en PR ingen slo opp (se §7).
 
 Det siste argumentet er `overflow`: alt fra og med rad nummer `QUEUE_LIMIT` skjules bak
 «Show all». `QUEUE_LIMIT` er en eksportert konstant i `dashboard-data.mjs`.
@@ -306,15 +319,25 @@ tall inne i koden, så testen kan importere dem. `REVIEW_WAIT_HOURS` måles på 
 `updatedAt`, det samme feltet som teksten skriver ut.
 
 En regel som slutter «det finnes ingen PR / worktree / bead» må vente på alle kildene den
-slutter fra: med `prs`, `worktrees` eller `merged` nede fyrer ikke «Unstarted claim» (uten
-`merged` ville en bead med en allerede merget PR sett uberørt ut), med `inProgress` eller
+slutter fra. «Unstarted claim» har fire innganger: ingen åpen PR (`prs`), ingen worktree
+(`worktrees`), ingen PR blant de siste mergene (`merged`) og ingen PR registrert på beaden
+selv (`metadata.prs`). `merged` er bare de 8 siste, så en PR som er merget tidligere, er
+ikke der; det er `metadata.prs`, som ikke har noe tak, som avgjør at beaden har hatt en PR.
+Med `prs`, `worktrees` eller `merged` nede fyrer den ikke, og heller ikke når
+`metadata.prs` har en verdi. Med `inProgress` eller
 `prs` nede fyrer ikke «Orphan worktree», og «Stale» sier «its PR state is unknown» i
-stedet for «has no PR». «Review pending» holdes tilbake når en agent jobber, og
+stedet for «has no open PR» («open», fordi `prs` bare er de åpne). «Review pending» holdes tilbake når en agent jobber, og
 agenttilstanden kommer fra `current` via `worktrees`; er en av dem nede, fyrer den likevel
 og legger til «(agent state unknown)». «Merged, bead open» foreslår `bd close` bare når
-`prs` svarte, siden en åpen oppfølgings-PR ellers ikke kan utelukkes. Forslaget om
-`bd update <id> --claim` i en rad venter på samme måte på `prs` og `worktrees`. Bruk
+`prs` svarte, siden en åpen oppfølgings-PR ellers ikke kan utelukkes. Bruk
 `up("kilde")` i `buildAttention()`.
+
+Forslaget om `bd update <id> --claim` i en rad slutter «ingen har denne»: beaden er ikke i
+arbeid eller lukket, og har verken åpen PR eller worktree. Hver bead-rad på sida, også i
+«Ready», «Blocked» og release-seksjonen, kobles til PR og worktree med
+`joined.joinBead()`, samme oppslag som radene i «In progress» bygges med, så en rad med PR
+eller worktree viser dem og får aldri forslaget. Det venter i tillegg på `prs` og
+`worktrees`, siden et oppslag mot en kilde som er nede ikke finner noe.
 
 Sjekk at regelen ikke fyrer på alt. Første versjon flagget «lease expired» på hver eneste
 bead, fordi bd-leaser varer fem minutter og ingenting i agentflyten kjører `bd heartbeat`.
@@ -338,7 +361,9 @@ feat/ugcportal-kt3k-bead-validator   →  ugcportal-kt3k
 `pr-129-review` ikke feiltolkes. Sammenlign alltid hele id-en den returnerer, aldri med
 `includes`: `ugcportal-abc` er en delstreng av både `ugcportal-abc.1` og
 `ugcportal-abcd`. Både koblingen og «Merged, bead open» bruker den. `joinRows()` bygger tre oppslag (`prByBead`,
-`wtByBead`, `itemsByCwd`) og slår opp i dem per bead. Skal du koble inn en ny kilde,
+`wtByBead`, `itemsByCwd`) og slår opp i dem per bead med `joinBead()`, som den også
+returnerer, så rendereren kobler beads utenfor «In progress» på samme måte i stedet for å
+lage en rad av `{ bead }` alene. Skal du koble inn en ny kilde,
 legg til et fjerde `Map` på samme måte.
 
 Rendereren har i tillegg `known`, et `Map` over alle beads som finnes i dokumentet
