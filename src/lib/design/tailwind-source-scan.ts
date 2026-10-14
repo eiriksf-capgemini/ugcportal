@@ -47,19 +47,29 @@
  *   - a listed path that is not a regular file on disk: a tracked file
  *     deleted in the working tree (there is nothing to read), or a symlink
  *     (the repo tracks none today; one would go unread here).
- * Two known differences from Tailwind's scanner remain, each measured
- * against oxide 4.3.3's own Scanner on the same tree (a third, the user's
+ * Four known differences from Tailwind's scanner remain, each measured
+ * against oxide 4.3.3's own Scanner on the same tree (a fifth, the user's
  * global excludes file, is closed in code, see above):
  *   1. Over-match: a file that is tracked AND matches an ignore rule (today
  *      two empty `.runtime/locks/sling/*.flock` files) is listed by git and
  *      read here, though an ignore-rule walk such as Tailwind's skips it.
  *      Reading more than Tailwind is the safe direction for a guard; a false
  *      positive fails loudly with file:line.
- *   2. Under-match: an untracked nested git repository is listed by git as
- *      `inner/`, which is not a regular file, so it is skipped here, while
- *      oxide reads the files inside it. It concerns untracked files only,
+ *   2. Over-match: oxide honours a directory's `.ignore` file and git does
+ *      not, so files a `.ignore` hides from oxide are read here. Safe
+ *      direction; no `.ignore` file exists in the repo today.
+ *   3. Under-match, untracked: an untracked nested git repository is listed
+ *      by git as `inner/`, which is not a regular file, so it is skipped
+ *      here, while oxide reads the files inside it. Untracked files only,
  *      which a CI or clean checkout does not have, so it cannot reach the
  *      shipped stylesheet.
+ *   4. Under-match, TRACKED: a git submodule (a gitlink, mode 160000) is
+ *      listed by git as a path that `lstat` reports as a directory, so it is
+ *      skipped here, while oxide reads the submodule's files. Unlike 3 this
+ *      is tracked content: in a checkout with submodules initialised it
+ *      could reach a build without this guard reading it. The repo has no
+ *      submodule today (0 gitlinks), and a test asserts that, so adding one
+ *      fails loudly instead of silently widening this gap.
  * Tracked dot-directories (.claude, .github, .beads) ARE read: a planted
  * bare utility in .claude/ compiled into the stylesheet when this was
  * checked.

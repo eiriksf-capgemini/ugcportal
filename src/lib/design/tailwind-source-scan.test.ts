@@ -365,3 +365,19 @@ describe("scanTree over a planted tree (ugcportal-rj7y K1 fixture)", { timeout: 
     ]);
   });
 });
+
+describe("the repo has no git submodule (the scanner's tracked under-match, ugcportal-rj7y)", { timeout: 30_000 }, () => {
+  it("lists no mode-160000 entry in `git ls-files -s`, which scanTree would skip as a directory while oxide reads it", () => {
+    const staged = execFileSync("git", ["ls-files", "-s", "-z"], {
+      cwd: REPO_ROOT,
+      encoding: "utf8",
+      maxBuffer: 64 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "inherit"],
+    })
+      .split("\0")
+      .filter(Boolean);
+    // Fail loud on an empty listing: zero gitlinks among zero entries proves nothing.
+    expect(staged.length).toBeGreaterThan(100);
+    expect(staged.filter((entry) => entry.startsWith("160000 "))).toEqual([]);
+  });
+});

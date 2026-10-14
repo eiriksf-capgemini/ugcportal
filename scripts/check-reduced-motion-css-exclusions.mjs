@@ -137,9 +137,15 @@ export function findUngatedGroupHoverScaleRules(cssText) {
     );
     if (motionSafePrefixed && reducedMotionGated) return;
 
+    const underReduce = conditions.some((condition) =>
+      isReducedMotionQuery(condition, "reduce"),
+    );
     const missing = [
       !motionSafePrefixed && "no motion-safe: prefix",
-      !reducedMotionGated && "not nested inside @media (prefers-reduced-motion: ...)",
+      !reducedMotionGated &&
+        (underReduce
+          ? "under @media (prefers-reduced-motion: reduce), not @media (prefers-reduced-motion: no-preference)"
+          : "not nested inside @media (prefers-reduced-motion: no-preference)"),
     ]
       .filter(Boolean)
       .join(", ");

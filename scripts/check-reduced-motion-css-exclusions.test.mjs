@@ -43,7 +43,7 @@ describe("findUngatedGroupHoverScaleRules", () => {
     const offenders = findUngatedGroupHoverScaleRules(css);
     expect(offenders).toHaveLength(1);
     expect(offenders[0]).toContain("no motion-safe: prefix");
-    expect(offenders[0]).toContain("not nested inside @media (prefers-reduced-motion: ...)");
+    expect(offenders[0]).toContain("not nested inside @media (prefers-reduced-motion: no-preference)");
   });
 
   it("flags a motion-safe:-prefixed rule that is NOT nested inside a prefers-reduced-motion media query", () => {
@@ -57,7 +57,7 @@ describe("findUngatedGroupHoverScaleRules", () => {
 
     const offenders = findUngatedGroupHoverScaleRules(css);
     expect(offenders).toHaveLength(1);
-    expect(offenders[0]).toContain("not nested inside @media (prefers-reduced-motion: ...)");
+    expect(offenders[0]).toContain("not nested inside @media (prefers-reduced-motion: no-preference)");
     expect(offenders[0]).not.toContain("no motion-safe: prefix");
   });
 
@@ -90,7 +90,7 @@ describe("findUngatedGroupHoverScaleRules", () => {
 
     const offenders = findUngatedGroupHoverScaleRules(css);
     expect(offenders).toHaveLength(1);
-    expect(offenders[0]).toContain("not nested inside @media (prefers-reduced-motion: ...)");
+    expect(offenders[0]).toContain("under @media (prefers-reduced-motion: reduce), not @media (prefers-reduced-motion: no-preference)");
   });
 
   it("ignores a rule that mentions only one of group-hover/scale", () => {
