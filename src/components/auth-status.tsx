@@ -91,7 +91,10 @@ export async function AuthStatus() {
         header actions allowed to shrink, which is what keeps the Sign out
         button at full width while a long email gives way.
       */}
-      <span className="min-w-0 truncate text-sm text-muted-foreground">
+      <span
+        className="min-w-0 truncate text-sm text-muted-foreground"
+        title={session.user.name ?? session.user.email ?? undefined}
+      >
         {session.user.name ?? session.user.email}
       </span>
       <Button type="submit" variant="outline" size="header-sm">

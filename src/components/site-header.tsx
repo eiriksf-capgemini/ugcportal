@@ -124,16 +124,21 @@ export function SiteHeader() {
             independent meaning a screen reader needs, the Link's own
             accessible name ("UGC Portal") already says where it goes.
             `shrink-0` on the mark so it is the wordmark's TEXT that gives
-            way first under width pressure (the same "wordmark still shrinks
-            before the nav, before the auth actions" behaviour app-shell.tsx
-            shipped before this bead, preserved on the text span via
-            `min-w-0 truncate` rather than on the whole link via `min-w-12`
-            now that the link also has to make room for the mark).
+            way first under width pressure.
+
+            ugcportal-ry6w: that is no longer true of the wordmark. It used to
+            be `min-w-12 shrink-[999]` (give way ~999x faster than anything
+            else), which at 390px signed in left ~12px of text - one letter -
+            once a long display name, the nav toggle and Sign out had taken
+            their widths. The Link is `shrink-0` now: the wordmark keeps its
+            natural width and the display name in AuthStatus (the one element
+            in the row with `min-w-0 truncate`) gives way first, full name on
+            its `title`.
           */}
           <Link
             href="/"
             className={cn(
-              "flex min-w-12 shrink-[999] items-center gap-2 rounded-sm font-heading text-lg font-medium tracking-tight text-foreground hover:text-primary",
+              "flex shrink-0 items-center gap-2 rounded-sm font-heading text-lg font-medium tracking-tight text-foreground hover:text-primary",
               FOCUS_RING_CLASS,
             )}
           >
