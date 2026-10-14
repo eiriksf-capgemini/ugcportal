@@ -439,7 +439,7 @@ describe("K2: premise freshness against origin/main's current HEAD", { timeout: 
     expect(runFixture(bead).status).toBe(0);
   });
 
-  // --- G1: identity, not one-directional distance ---
+  // --- identity, not one-directional distance ---
   //
   // `<premise>..<head>` is 0 for HEAD and for every commit built on top of
   // HEAD, so a premise verified inside a branch used to PASS with
@@ -458,7 +458,7 @@ describe("K2: premise freshness against origin/main's current HEAD", { timeout: 
       expect(off.status).toBe(1);
       expect(failedChecks(off.stdout)).toEqual(["premise-fresh"]);
       expect(off.stdout).toContain(`premise commit ${c.sha()} is not on origin/main: 1 commit(s)`);
-      // PR #236 round 1, L1: the usual off-main commit is a branch commit
+      // The usual off-main commit is a branch commit
       // whose PR was squash-merged, so main HAS its change; the message must
       // not claim otherwise.
       expect(off.stdout).toContain("usually a branch commit whose PR was since squash-merged");
@@ -923,7 +923,18 @@ describe("the checks are bounded where they claim to be", { timeout: 30_000 }, (
   // `no-placeholder`. Without it, blanking too much in stripQuotedMarkers
   // would go unnoticed.
 
-  // --- G2: the negated label is not an In-scope line ---
+  it("says the comparison could not be made, not an Infinity count, when git rev-list fails", () => {
+    // --head names a ref git cannot resolve, so both rev-list calls fail.
+    const file = writeBeads(completeBead({ notes: `Premise verified 2026-10-14 at origin/main ${HEAD()}.` }));
+    const res = runCliAllowFail(["--beads", file, "--repo", repo, "--head", "deadbeef1234"]);
+    expect(res.status).toBe(1);
+    expect(failedChecks(res.stdout)).toEqual(["premise-fresh"]);
+    expect(res.stdout).toContain("could not be compared with head ref deadbeef1234");
+    expect(res.stdout).toContain("git rev-list");
+    expect(res.stdout).not.toContain("Infinity");
+  });
+
+  // --- the negated label is not an In-scope line ---
   it("`Not in scope:` does not satisfy the in-scope check", () => {
     // "in scope" is a substring of "Not in scope:"; with only that and an
     // Out-of-scope line, the bead states nothing that IS in scope.
@@ -945,7 +956,7 @@ describe("the checks are bounded where they claim to be", { timeout: 30_000 }, (
     expect(both.status).toBe(0);
   });
 
-  it("a `not` ending the previous line does not negate an `In scope:` line that starts the next (round-2 L7 of #236)", () => {
+  it("a `not` ending the previous line does not negate an `In scope:` line that starts the next", () => {
     // The lookbehind must not cross a newline: "do not\nIn scope: x" is a
     // real In-scope line preceded by an unrelated sentence.
     const res = runFixture(
@@ -958,7 +969,7 @@ describe("the checks are bounded where they claim to be", { timeout: 30_000 }, (
     expect(failedChecks(res.stdout)).toEqual([]);
   });
 
-  // --- L4 (PR #236 round 1): emphasis around the negation does not hide it ---
+  // --- emphasis around the negation does not hide it ---
   const EMPHASISED_NOT = ["**Not** in scope:", "_not_ in scope:", "*not* in scope:", "Not **in scope**:"];
   for (const label of EMPHASISED_NOT) {
     it(`\`${label}\` does not satisfy the in-scope check`, () => {
@@ -973,7 +984,7 @@ describe("the checks are bounded where they claim to be", { timeout: 30_000 }, (
     });
   }
 
-  // --- G3: a stray backtick does not hide the bare markers after it ---
+  // --- a stray backtick does not hide the bare markers after it ---
   const STRAY_BACKTICK = [
     {
       // The stray ends the description and the marker opens the criteria,
@@ -994,7 +1005,7 @@ describe("the checks are bounded where they claim to be", { timeout: 30_000 }, (
       }),
     },
     {
-      // PR #236 round 1, L3: fences were blanked before the paragraph split,
+      // Fences were blanked before the paragraph split,
       // so a stray ``` paired with a real fence two paragraphs down.
       what: "fence (```) in one paragraph, with the marker before a real fence in a later paragraph",
       field: "description",
@@ -1013,7 +1024,7 @@ describe("the checks are bounded where they claim to be", { timeout: 30_000 }, (
     });
   }
 
-  // --- G4: a marker QUOTED in plain quotation marks is quoted, not carried ---
+  // --- a marker QUOTED in plain quotation marks is quoted, not carried ---
   it("a placeholder quoted in single, double or curly quotes is not a placeholder carried", () => {
     // `ugcportal-c20m`'s own wording: "leaving the marker '(replace K1)'"
     // and "editing instructions such as ... 'TODO' in the field".
@@ -1040,7 +1051,7 @@ describe("the checks are bounded where they claim to be", { timeout: 30_000 }, (
     expect(res.stdout).toContain('still in the acceptance_criteria: "(replace K1)"');
   });
 
-  // --- L5 (PR #236 round 1): only a MATCHING pair of quotation marks quotes ---
+  // --- only a MATCHING pair of quotation marks quotes ---
   // QUOTED_MARKER_RE matches any opening mark, a marker and any closing mark;
   // the QUOTE_PAIRS lookup is what refuses a mismatched pair. Each case runs
   // the marker between two marks that are NOT a pair (must fail) and the

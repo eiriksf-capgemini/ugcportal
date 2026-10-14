@@ -129,7 +129,7 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
  * every commit built on top of HEAD -- a premise verified inside an
  * implementer's own branch, or a stacked bead verified on top of another
  * PR's branch, names a commit that is not in main's history, and used to
- * pass with the report saying it was HEAD (PR #230 round 3, G1). In this
+ * pass with the report saying it was HEAD. In this
  * repo's squash-merge flow that commit STAYS off main after its PR merges:
  * main gets the change under the squash commit's sha, not the branch
  * commit's, so "not on main" usually means "merged by squash", not "code
@@ -309,7 +309,7 @@ const PLACEHOLDER_RE = /\(replace\s+K\d+\)|\bTODO\b|\bTBD\b|\bFIXME\b|\bXXX\b|<f
  * whole job is clearing the thing it is complaining about. Backticks are not
  * the only way this backlog quotes, though: `ugcportal-c20m`, filed after
  * that measurement, writes "leaving the marker '(replace K1)'" and "'TODO'"
- * in plain single quotes and failed the check for it (PR #230 round 3, G4).
+ * in plain single quotes and failed the check for it.
  * So three things are blanked:
  *
  *   1. fenced blocks, ``` to ```, and
@@ -318,8 +318,8 @@ const PLACEHOLDER_RE = /\(replace\s+K\d+\)|\bTODO\b|\bTBD\b|\bFIXME\b|\bXXX\b|<f
  *      to pair with the next backtick anywhere later in the text, across
  *      paragraphs and (when the two fields were scanned joined) across the
  *      description/acceptance boundary, blanking every bare marker in
- *      between (G3), and an unbalanced fence did the same until fences
- *      were bounded too (PR #236 round 1, L3). Markdown code spans do not
+ *      between, and an unbalanced fence did the same until fences were
+ *      bounded too. Markdown code spans do not
  *      cross a blank line either;
  *   3. a marker that is the WHOLE content of a quotation: '...', "...",
  *      and their curly forms, opened and closed by a matching pair. Not any
@@ -333,8 +333,9 @@ const PLACEHOLDER_RE = /\(replace\s+K\d+\)|\bTODO\b|\bTBD\b|\bFIXME\b|\bXXX\b|<f
  * mentions of the TODO marker in backticks; before that edit, on the same
  * day, it fired on 1 (7sjc itself, a bare mention in prose -- the check was
  * right to fire, since an unquoted marker is indistinguishable from a
- * carried one). This script as it stood at bcc470e, before PR #236's
- * round-1 fixes, gives identical per-check counts over the same dump. A
+ * carried one). The script at bcc470e (before fences and code spans were
+ * bounded to one paragraph) and the script at this commit give identical
+ * per-check counts over the same dump. A
  * figure like this is a snapshot of a moving backlog, not a property of the
  * script; the durable form is the fixtures in the tests. p3v itself is no
  * longer a live example -- it is deferred, outside that population, and its
@@ -364,7 +365,7 @@ function stripQuotedMarkers(text) {
   // and code spans inside one paragraph at a time, so an unbalanced fence
   // or backtick dies at the end of its paragraph. Removing fences before
   // the split let a stray ``` pair with the next fence anywhere later in
-  // the field (PR #236 round 1, L3).
+  // the field.
   const noSpans = text
     .split(/(\n[^\S\n]*\n)/)
     .map((para) => para.replace(/```[\s\S]*?```/g, blank).replace(/(`+)(?:[^`]|[^`][\s\S]*?)\1/g, blank))
@@ -485,11 +486,11 @@ export const CHECKS = [
   // `in-scope` also refuses the NEGATED label: "in scope" is a substring of
   // "Not in scope:", so without the lookbehind a description whose only
   // scope lines are "Not in scope: ..." and "Out of scope: ..." passes both
-  // checks while stating nothing that IS in scope (PR #230 round 3, G2).
+  // checks while stating nothing that IS in scope.
   // The lookbehind also allows markdown emphasis on either side of the
   // space -- `**Not** in scope:`, `_not_ in scope:`, `*not* in scope:`,
-  // `Not **in scope**:` -- which a bare `not\s+` let through (PR #236
-  // round 1, L4). `(?:^|[^a-z0-9])` rather than `\b` before `not`,
+  // `Not **in scope**:` -- which a bare `not\s+` let through.
+  // `(?:^|[^a-z0-9])` rather than `\b` before `not`,
   // because `_` is a word character and `\b` does not fire in `_not_`.
   // `out-of-scope` has no such twin -- "not out of scope" is not a label
   // anyone writes as one.
@@ -574,6 +575,15 @@ export const CHECKS = [
     // Otherwise report the most useful failure. A premise commit that IS on
     // main is stale by a countable distance; prefer the freshest of those (a
     // bead re-verified recently still carries older lines in its log).
+    // An unanswerable count (`git rev-list` failed) is Infinity: the
+    // comparison was not made, so say so rather than print a count.
+    const unmeasured = resolved.find((r) => !Number.isFinite(r.behind) || !Number.isFinite(r.notOnMain));
+    if (unmeasured && !resolved.some((r) => r.behind === 0 && r.notOnMain === 0)) {
+      return {
+        ok: false,
+        detail: `premise commit ${unmeasured.short} could not be compared with head ref ${ctx.git.head}: \`git rev-list\` failed, so no commit count was measured. ${PREMISE_FRESHNESS_COST}`,
+      };
+    }
     const onMain = resolved.filter((r) => r.notOnMain === 0);
     if (onMain.length > 0) {
       const freshest = onMain.reduce((best, r) => (r.behind < best.behind ? r : best));
