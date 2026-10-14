@@ -62,7 +62,11 @@ Det er poenget med hele designet: en kilde som feiler blir en synlig feilboks i 
 seksjon som bygger radene sine på den, og et «Source down»-punkt i «Needs you». Aldri en
 tom liste. En rad som ellers ville sagt noe om kilden, sier «unknown» i stedet: en åpen
 PR viser «(in-progress state unknown)» ved beaden sin når `bd list --status in_progress`
-er nede, ikke «(not in progress)». En tom liste leses
+er nede, ikke «(not in progress)». På samme måte viser en bead-rad «agent state
+unknown» når `cmux current` er nede og beaden har en worktree, eller når
+`git worktree list` er nede (agenten kobles til beaden via worktree-stien), og en
+avhengighetsbrikke er stiplet og merket «in-progress state unknown» når
+`bd list --status in_progress` er nede. En tom liste leses
 som «ingenting å gjøre», og det er feil svar når verktøyet er nede. Det samme gjelder
 tallene: et tall som bygger på en kilde som er nede, vises som `-`, ikke `0`, både i
 flisene øverst, i tellingen bak seksjonsoverskriftene og i pillene i cmux-sidepanelet

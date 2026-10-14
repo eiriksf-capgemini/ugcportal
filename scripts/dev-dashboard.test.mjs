@@ -736,6 +736,57 @@ describe("renderHtml", () => {
     expect(inProg()).toContain('title="worktree /private/tmp/wt-h0ef"');
   });
 
+  it("a down git worktree list, or a down cmux current for a bead with a worktree, reads 'agent state unknown', never like no agent", () => {
+    const summaryOf = (o, id) => {
+      const sec = sectionOf(page(o).html, "inprogress");
+      const at = sec.indexOf(`id="${id}"`);
+      return sec.slice(sec.indexOf("<summary>", at), sec.indexOf("</summary>", at));
+    };
+    const rowOf = (o, id) => {
+      const sec = sectionOf(page(o).html, "inprogress");
+      return sec.slice(sec.indexOf(`id="${id}"`), sec.indexOf("</details>", sec.indexOf(`id="${id}"`)));
+    };
+    const H0EF = "bead-ugcportal-h0ef"; // worktree /private/tmp/wt-h0ef, where CMUX_ITEM_WORKING sits
+    const YBV = "bead-ugcportal-ybv"; // no worktree
+    const agentUnknown = 'aria-label="agent state unknown"';
+    const cmuxLine = (reason) => `cmux</dt><dd><span class="muted">unknown: ${reason}</span>`;
+    const curDown = { current: down("cmux current: socket not found") };
+    const wtDown = { worktrees: down("git worktree list: refused") };
+    // Positive control: both sources up and an agent working in wt-h0ef: the pill, no marker.
+    expect(summaryOf({}, H0EF)).toContain('class="agent working"');
+    expect(summaryOf({}, H0EF)).not.toContain(agentUnknown);
+    expect(rowOf({}, H0EF)).not.toContain("unknown: cmux");
+    // cmux current down: the collapsed line and the body both say unknown.
+    expect(summaryOf(curDown, H0EF)).toContain(agentUnknown);
+    expect(summaryOf(curDown, H0EF)).not.toContain('class="agent ');
+    expect(rowOf(curDown, H0EF)).toContain(cmuxLine("cmux current is down"));
+    // cmux current up with no workspace in wt-h0ef: no pill and no marker,
+    // because "no agent here" is then known (the mutation: source up, marker absent).
+    const noWorkspace = { current: ok({ items: [] }) };
+    expect(summaryOf(noWorkspace, H0EF)).not.toContain(agentUnknown);
+    expect(summaryOf(noWorkspace, H0EF)).not.toContain('class="agent ');
+    expect(rowOf(noWorkspace, H0EF)).not.toContain("cmux</dt>");
+    // A bead with no worktree, git worktree list up, has no workspace to join,
+    // so cmux current being down changes nothing about it.
+    expect(summaryOf(curDown, YBV)).not.toContain(agentUnknown);
+    // git worktree list down: the join from cmux cwd to the bead is gone, so
+    // the agent state is unknown on every in-progress row, with cmux current up.
+    expect(summaryOf(wtDown, H0EF)).toContain(agentUnknown);
+    expect(summaryOf(wtDown, YBV)).toContain(agentUnknown);
+    expect(rowOf(wtDown, H0EF)).toContain(cmuxLine("git worktree list is down"));
+    expect(rowOf({ ...curDown, ...wtDown }, YBV)).toContain(cmuxLine("cmux current and git worktree list are down"));
+  });
+
+  it("with bd list --status in_progress down a blocker chip reads in-progress state unknown, never like not in progress", () => {
+    const up = sectionOf(page().html, "blocked");
+    expect(up).toContain('class="chip jump hot"');
+    expect(up).not.toContain("in-progress state unknown");
+    const dn = sectionOf(page({ inProgress: down("bd list: database locked") }).html, "blocked");
+    expect(dn).toContain('<span class="chip unk" title="Not in this dashboard: bd show ugcportal-h0ef (in-progress state unknown: bd list --status in_progress is down)">');
+    expect(dn).toContain('<span class="sr"> in-progress state unknown</span>');
+    expect(dn).not.toContain(" hot");
+  });
+
   it("the cmux section needs git worktree list too, and says so when it is down", () => {
     const sec = sectionOf(page({ worktrees: down("git worktree list: not a git repository") }).html, "cmux");
     expect(sec).toContain("<strong>git worktree list unavailable.</strong>");

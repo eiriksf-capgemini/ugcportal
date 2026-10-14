@@ -198,19 +198,28 @@ function link(href, text, cls = "", iconName = null) {
   return `<a href="${esc(href)}" target="_blank" rel="noopener"${cls ? ` class="${cls}"` : ""}>${iconName ? icon(iconName) : ""}${esc(text)}</a>`;
 }
 
-/** Chip linking to a bead row in this document when it exists. */
-function beadChip(id, known, inProgressIds) {
+/**
+ * Chip linking to a bead row in this document when it exists. "hot" says the
+ * bead is in progress, so with bd list --status in_progress down no chip can
+ * be hot and every chip is marked "in-progress state unknown" (dashed, with a
+ * title and screen-reader text) instead of reading as "not in progress".
+ */
+function beadChip(id, ctx) {
+  const { known, inProgressIds } = ctx;
   const hot = inProgressIds.has(id) ? " hot" : "";
+  const unk = ctx.inProgressUp ? "" : " unk";
+  const unkTitle = ctx.inProgressUp ? "" : " (in-progress state unknown: bd list --status in_progress is down)";
+  const unkSr = ctx.inProgressUp ? "" : `<span class="sr"> in-progress state unknown</span>`;
   const title = known.get(id)?.title;
-  if (known.has(id)) return `<a href="#bead-${esc(id)}" class="chip jump${hot}" title="${esc(title ?? "")}">${esc(id)}</a>`;
-  return `<span class="chip${hot}" title="Not in this dashboard: bd show ${esc(id)}">${esc(id)}</span>`;
+  if (known.has(id)) return `<a href="#bead-${esc(id)}" class="chip jump${hot}${unk}" title="${esc(`${title ?? ""}${unkTitle}`)}">${esc(id)}${unkSr}</a>`;
+  return `<span class="chip${hot}${unk}" title="${esc(`Not in this dashboard: bd show ${id}${unkTitle}`)}">${esc(id)}${unkSr}</span>`;
 }
 
 /**
  * The expanded body of a bead row.
  */
 function beadBody({ bead, pr, worktree, cmuxItems, agentState }, ctx) {
-  const { now, known, inProgressIds, repoUrl } = ctx;
+  const { now, repoUrl } = ctx;
   const meta = bead.metadata ?? {};
   const dependsOn = blockersOf(bead);
   const blocks = blockedByThis(bead);
@@ -231,9 +240,9 @@ function beadBody({ bead, pr, worktree, cmuxItems, agentState }, ctx) {
   if (dependsOn.length || blocks.length) {
     rows.push([
       "Dependencies",
-      `${dependsOn.length ? `depends on ${dependsOn.map((id) => beadChip(id, known, inProgressIds)).join(" ")}` : ""}${
+      `${dependsOn.length ? `depends on ${dependsOn.map((id) => beadChip(id, ctx)).join(" ")}` : ""}${
         dependsOn.length && blocks.length ? " · " : ""
-      }${blocks.length ? `blocks ${blocks.map((id) => beadChip(id, known, inProgressIds)).join(" ")}` : ""}`,
+      }${blocks.length ? `blocks ${blocks.map((id) => beadChip(id, ctx)).join(" ")}` : ""}`,
       "link",
     ]);
   } else if ((bead.dependency_count ?? 0) + (bead.dependent_count ?? 0) > 0) {
@@ -246,9 +255,13 @@ function beadBody({ bead, pr, worktree, cmuxItems, agentState }, ctx) {
   else if (!ctx.prsUp) rows.push(["Pull request", `<span class="muted">unknown: gh pr list is down</span>`, "pr"]);
   if (worktree) rows.push(["Worktree", `<code>${esc(worktree.path)}</code> on ${icon("branch")}<code>${esc(worktree.branch ?? "detached")}</code> at ${esc(worktree.head ?? "?")}`, "folder"]);
   else if (!ctx.worktreesUp) rows.push(["Worktree", `<span class="muted">unknown: git worktree list is down</span>`, "folder"]);
+  // The agent state rests on git worktree list and, for a bead with a
+  // worktree, on cmux current; agentUnknownReason says when it is unknown.
+  const agentUnknown = agentUnknownReason({ worktree }, ctx);
   if (cmuxItems.length)
     rows.push(["cmux", cmuxItems.map((it) => `${esc(it.label ?? it.cwd)} ${agentPill(agentStateOf(it)) || `<span class="muted">no agent</span>`}`).join("<br>"), "layout"]);
   else if (agentState) rows.push(["cmux", agentPill(agentState), "layout"]);
+  else if (agentUnknown) rows.push(["cmux", `<span class="muted">unknown: ${esc(agentUnknown)}</span>`, "layout"]);
   const cmds = [`bd show ${bead.id}`];
   if (pr) cmds.push(`gh pr view ${pr.number} --web`);
   if (worktree) cmds.push(`cd ${worktree.path}`);
@@ -369,6 +382,27 @@ function worktreeUnknownMark() {
 }
 
 /**
+ * Why a bead's agent state is unknown, or "" when it is known. The agent comes
+ * from cmux current, joined to the bead through its worktree path (git
+ * worktree list), so it is unknown whenever git worktree list is down, and
+ * when cmux current is down for a bead that has a worktree. A bead with no
+ * worktree while git worktree list answered has no workspace to join, so its
+ * agent state is known: none.
+ * @returns {string} e.g. "cmux current is down"
+ */
+function agentUnknownReason(row, ctx) {
+  const down = [];
+  if (!ctx.currentUp && (row.worktree || !ctx.worktreesUp)) down.push("cmux current");
+  if (!ctx.worktreesUp) down.push("git worktree list");
+  return down.length === 0 ? "" : `${down.join(" and ")} ${down.length === 1 ? "is" : "are"} down`;
+}
+
+/** The collapsed-line marker for a bead's agent when its state is unknown. */
+function agentUnknownMark(reason) {
+  return `<span class="muted" title="${esc(reason)}">${icon("cpu", "agent state unknown", "muted")}</span>`;
+}
+
+/**
  * A bead's worktree on its collapsed line: the worktree when it has one, the
  * unknown marker when git worktree list is down, nothing when it has none.
  */
@@ -382,7 +416,8 @@ function inProgressMeta(row, ctx) {
   if (row.pr) parts.push(`${link(row.pr.url, `#${row.pr.number}`, "", "pr")} ${ciIcon(row.checks)} ${reviewIcon(row.pr)}`);
   else if (ctx.prsUp) parts.push(`<span class="muted" title="no open pull request">${icon("pr", "no open PR", "muted")}</span>`);
   else parts.push(prUnknownMark());
-  parts.push(agentPill(row.agentState));
+  const agentUnknown = agentUnknownReason(row, ctx);
+  parts.push(agentUnknown ? agentUnknownMark(agentUnknown) : agentPill(row.agentState));
   parts.push(worktreeMeta(row, ctx));
   parts.push(timeIcon(row.bead.updated_at, ctx.now));
   return parts.filter(Boolean).join(" ");
@@ -404,7 +439,7 @@ function linkedMeta(row, ctx) {
 
 function blockedMeta(row, ctx) {
   const { bead } = row;
-  const chips = blockersOf(bead).map((id) => beadChip(id, ctx.known, ctx.inProgressIds)).join(" ");
+  const chips = blockersOf(bead).map((id) => beadChip(id, ctx)).join(" ");
   return [linkedMeta(row, ctx), `${icon("lock", "blocked by", "muted")} ${chips || `<span class="muted">?</span>`}`, timeIcon(bead.updated_at, ctx.now)].filter(Boolean).join(" ");
 }
 
@@ -506,6 +541,7 @@ export function renderHtml({ repoName, prefix, sources, now, refreshSeconds = 30
     prefix,
     prsUp: sources.prs?.ok === true,
     worktreesUp: sources.worktrees?.ok === true,
+    currentUp: sources.current?.ok === true,
     inProgressUp: sources.inProgress?.ok === true,
   };
   // Computed here because the header tiles need it before the sections do.
@@ -764,6 +800,7 @@ details.row.stale .id::after{content:" stale";color:var(--warn);font-family:syst
 .chip{display:inline-block;font-family:var(--mono);font-size:11px;padding:0 6px;border-radius:9px;border:1px solid var(--line);color:var(--fg);white-space:nowrap}
 .chip .ic{width:11px;height:11px;vertical-align:-1px;margin-right:3px}
 .chip.hot{border-color:var(--accent);color:var(--accent);font-weight:600}
+.chip.unk{border-style:dashed}
 .body{padding:6px 10px 12px 18px;border-top:1px solid var(--line-soft);background:var(--panel)}
 dl{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:6px 14px;margin:0}
 dt{color:var(--muted);font-size:12px;padding-top:1px;white-space:nowrap}
