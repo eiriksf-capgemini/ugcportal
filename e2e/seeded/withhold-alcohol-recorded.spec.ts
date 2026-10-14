@@ -132,28 +132,12 @@ test.beforeAll(async () => {
        VALUES ('${BRAND_ID}','e2e-qnq9-11-riedel','Riedel (e2e)',0,'${now}','${now}','${now}')`,
 
       mediaInsert(COMMERCIAL_ID, "An empty wine glass on a windowsill", now),
-      `INSERT INTO "MediaAttestation"
-         ("id","mediaId","attestedByUserId","attestationVersion","authorship",
-          "ownOriginalNotFromWeb","showsIdentifiablePeople","showsMinors",
-          "containsMusicNotOwned","otherCreativeContributor","brandOrSponsorship",
-          "aiGenerated","uploaderIsAdult")
-       VALUES ('${COMMERCIAL_ID}-attestation','${COMMERCIAL_ID}','${OWNER_ID}',
-               '${ATTESTATION_VERSION}','AUTHOR',1,0,0,0,0,1,0,1)`,
+      attestationInsert(COMMERCIAL_ID),
       listingInsert(COMMERCIAL_ID, 0, now),
-      `INSERT INTO "MediaAdvertisingDisclosure"
-         ("id","mediaId","benefitReceived","benefitKind","benefitSourceId",
-          "marketValueOre","label","createdAt","updatedAt")
-       VALUES ('${COMMERCIAL_ID}-disclosure','${COMMERCIAL_ID}',1,'FREE_PRODUCT',
-               '${BRAND_ID}',49900,'Advertisement / Reklame','${now}','${now}')`,
+      disclosureInsert(COMMERCIAL_ID, now),
 
       mediaInsert(ALCOHOL_ID, "A glass of red wine, photographed as wine", now),
-      `INSERT INTO "MediaAttestation"
-         ("id","mediaId","attestedByUserId","attestationVersion","authorship",
-          "ownOriginalNotFromWeb","showsIdentifiablePeople","showsMinors",
-          "containsMusicNotOwned","otherCreativeContributor","brandOrSponsorship",
-          "aiGenerated","uploaderIsAdult")
-       VALUES ('${ALCOHOL_ID}-attestation','${ALCOHOL_ID}','${OWNER_ID}',
-               '${ATTESTATION_VERSION}','AUTHOR',1,0,0,0,0,1,0,1)`,
+      attestationInsert(ALCOHOL_ID),
       listingInsert(ALCOHOL_ID, 1, now),
 
       mediaInsert(COMMERCIAL_TWO_ID, "A second empty wine glass on a shelf", now),

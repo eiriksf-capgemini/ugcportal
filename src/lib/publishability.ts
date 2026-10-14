@@ -509,10 +509,13 @@ export const PUBLIC_MEDIA_RIGHTS_SCOPE: MediaPublicRightsScope = {
      * `PUBLIC_MEDIA_SCOPE.AND` is asserted to BE this array
      * (src/lib/public-media.lapse.test.ts), so a fourth top-level key would
      * be a new thing to remember at every call site rather than one the
-     * scope carries. And the arm is a disjunction: a top-level `OR` on the
-     * scope is silently overwritten by `listMedia`'s keyset predicate from
-     * page two onwards — see this type's own comment above — so nesting it
-     * inside this `AND` is the only placement that survives pagination.
+     * scope carries. And the arm is a conjunction that CONTAINS a
+     * disjunction (`{ AND: [not-recorded, { OR: [...] }] }`): hoisting its
+     * members to the scope's top level would put an `OR` there, and a
+     * top-level `OR` on the scope is silently overwritten by `listMedia`'s
+     * keyset predicate from page two onwards — see this type's own comment
+     * above — so nesting it inside this `AND` is the only placement that
+     * survives pagination.
      *
      * It is a RELATION FILTER ONLY (`listing`, `advertisingDisclosure`,
      * `commercialLinks`), which is what makes it re-evaluated on every read
