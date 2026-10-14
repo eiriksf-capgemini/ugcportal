@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import path from "node:path";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cn } from "cn";
 
 import { buttonVariants } from "@/components/ui/button";
+import { isTestFile, stripComments, walkSourceFiles } from "@/lib/design/scan-source";
 
 /**
  * ugcportal-6wkd: nothing CI-wired ever rendered AuthStatus and asserted its
@@ -206,6 +207,9 @@ describe("AuthStatus controls pin header-sm (ugcportal-6wkd)", () => {
  */
 const HEADER_SM_OUTLINE_LITERAL =
   "group/button inline-flex shrink-0 items-center justify-center rounded-lg border bg-clip-padding font-medium whitespace-nowrap transition-all select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/80 focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-transparent motion-safe:active:not-aria-[haspopup]:translate-y-px disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 aria-invalid:border-destructive/75 aria-invalid:ring-3 aria-invalid:ring-destructive/80 [&_svg]:pointer-events-none [&_svg]:shrink-0 border-primary bg-transparent text-primary hover:border-primary-hover hover:underline aria-expanded:border-primary-hover aria-expanded:underline h-7 gap-1 px-2.5 text-[0.8rem] has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-3.5";
+const SRC_ROOT = path.resolve(__dirname, "..");
+const REPO_ROOT = path.resolve(SRC_ROOT, "..");
+let cachedSourceFiles: string[] | undefined;
 const HEADER_SM_OUTLINE_FULL_WIDTH_LITERAL = `${HEADER_SM_OUTLINE_LITERAL} w-full`;
 
 describe("header-sm class output is byte-identical at all four call sites (ugcportal-hhjq K1)", () => {
@@ -245,10 +249,15 @@ describe("header-sm class output is byte-identical at all four call sites (ugcpo
     expect(buttonWithText("Facebook").className).toBe(HEADER_SM_OUTLINE_FULL_WIDTH_LITERAL);
   });
 
-  it("the source still has exactly four size=\"header-sm\" call sites, the number this block pins", () => {
-    const count = ["sign-in-menu.tsx", "auth-status.tsx"]
-      .map((f) => readFileSync(join(__dirname, f), "utf8").match(/size="header-sm"/g)?.length ?? 0)
-      .reduce((a, b) => a + b, 0);
-    expect(count).toBe(4);
+  it("every non-test source file under src carries exactly four size=\"header-sm\" call sites: three in sign-in-menu.tsx, one in auth-status.tsx", () => {
+    const found: Record<string, number> = {};
+    for (const file of (cachedSourceFiles ??= walkSourceFiles(SRC_ROOT, isTestFile))) {
+      const n = stripComments(readFileSync(file, "utf8"), file).match(/size="header-sm"/g)?.length ?? 0;
+      if (n > 0) found[path.relative(REPO_ROOT, file).split(path.sep).join("/")] = n;
+    }
+    expect(found).toEqual({
+      "src/components/auth-status.tsx": 1,
+      "src/components/sign-in-menu.tsx": 3,
+    });
   });
 });
