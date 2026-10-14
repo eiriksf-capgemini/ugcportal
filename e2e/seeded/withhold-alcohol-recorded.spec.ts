@@ -25,9 +25,10 @@ import { loadDevEnvFiles } from "../../scripts/lib/env-files.mjs";
  *
  * Seeded as published rows (raw SQL, for the reason alcohol-commerce.spec.ts
  * gives: Playwright's CJS transform cannot load the generated Prisma client).
- * "Through the real pipeline" is what the read arm sees: rows in exactly the
- * states the write paths produce. The publish route itself is exercised in
- * src/lib/alcohol-commerce.read-path.test.ts against a real database.
+ * These rows are written directly in the published state, NOT by driving the
+ * publish route, so this spec exercises the read arm and the rendered pages
+ * only. The routes are driven in src/lib/alcohol-commerce.read-path.test.ts
+ * against a real database.
  *
  * Run with `npm run test:e2e:withhold-alcohol-recorded`. Not wired into CI,
  * like every spec in this directory.
@@ -173,7 +174,7 @@ test("the feed API the gallery pages through never returns the alcohol-recorded 
   expect(body).toContain(COMMERCIAL_ID);
   expect(body).not.toContain(ALCOHOL_ID);
   expect(body).not.toContain(ALCOHOL_PREVIEW);
-  // The anonymous projection never carries the fact itself (K4).
+  // The feed response carries no `depictsAlcohol` field (K4); asserted here.
   expect(body).not.toContain("depictsAlcohol");
 });
 

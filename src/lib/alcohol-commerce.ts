@@ -367,7 +367,7 @@ export function isAlcoholUnclearedAdvertisement(item: {
  * confirming something commercial is attached, and its own test pins the two
  * as the same question. Option (a) adds a second reason to withhold that has
  * nothing to do with advertising - the item is recorded as showing alcohol
- * (`depictsAlcohol === true`), so it is never placed beside a commercial item
+ * (`depictsAlcohol === true`), so a recorded-true item is never placed beside a commercial one
  * (docs/ugc-research.md §3.1a practical rule 2). Withheld <=> recorded as
  * showing alcohol, OR the pair. `null` and a missing listing are NOT withheld
  * by the first reason (true-only, decided 2026-10-14 in ugcportal-6yrd).
@@ -487,7 +487,8 @@ const NOTHING_COMMERCIAL_ATTACHED = {
  * true, so the negated spelling would drop every untriaged listing that
  * exists - and the decision is that `null` keeps today's behaviour. The
  * positive spelling also leaves a value that is not a boolean at all (SQLite
- * is dynamically typed) OUT, which is the fail-closed direction.
+ * is dynamically typed) OUT, which is the fail-closed direction; the TypeScript
+ * twin types the answer as `boolean | null` and does not model that value.
  */
 const ALCOHOL_NOT_RECORDED_PRESENT = {
   OR: [
@@ -513,7 +514,8 @@ export type MediaAlcoholCommerceScope = {
  * Still ONE element of `PUBLIC_MEDIA_RIGHTS_SCOPE.AND`: the widening is nested
  * here rather than added as a fourth top-level key, which
  * public-media.consumers.test.ts would refuse, and it stays relation-filters-
- * only (`listing`, `advertisingDisclosure`, `commercialLinks`).
+ * only (`listing`, `advertisingDisclosure`, `commercialLinks`), asserted by
+ * "is RELATION FILTERS ONLY" in src/lib/public-media.lapse.test.ts.
  */
 export const PUBLIC_MEDIA_ALCOHOL_COMMERCE_SCOPE: MediaAlcoholCommerceScope = {
   AND: [
