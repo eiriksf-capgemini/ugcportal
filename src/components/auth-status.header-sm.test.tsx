@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -14,20 +16,20 @@ import { buttonVariants } from "@/components/ui/button";
  * own comment says "Not wired into CI" (deferred from PR #122 /
  * ugcportal-qqnt.2 round 3, low, confirmed by grep: button-system.test.tsx
  * has no reference to AuthStatus or "header-sm" anywhere). A future edit
- * reverting any of these three controls' `size="header-sm"` back to
+ * reverting any of these four controls' `size="header-sm"` back to
  * `size="sm"` — the two look interchangeable at a glance, same box model,
  * same padding, same icon sizing (button.tsx's own SM_BOX_MODEL /
  * SM_PADDING_AND_TEXT / SM_ICON_SIZING constants) — would pass the full
  * committed vitest suite while silently shrinking the header's radius back
  * under `sm`'s own cap.
  *
- * THREE controls, not one (re-read after PR #171/b4e5e7b turned the old
+ * FOUR call sites, not one (re-read after PR #171/b4e5e7b turned the old
  * two-always-visible-button layout into SignInMenu's single "Sign in"
  * disclosure): the trigger button SignInMenu renders
  * (src/components/sign-in-menu.tsx), the two provider buttons it discloses
  * behind that trigger ("Google"/"Facebook"), and the signed-in "Sign out"
- * button auth-status.tsx renders directly. All three call sites pass
- * `variant="outline" size="header-sm"` today, so all three are pinned here
+ * button auth-status.tsx renders directly. All four call sites pass
+ * `variant="outline" size="header-sm"` today, so all four are pinned here
  * — the bead's own wording lists this as one of the open questions a
  * future reader would otherwise have to re-derive from the two source
  * files by hand.
@@ -175,7 +177,7 @@ describe("AuthStatus controls pin header-sm (ugcportal-6wkd)", () => {
    * checks above can actually fail, against the REAL `sm` output (not a
    * hand-copied decoy string) — `sm`'s own cap drops the base class's
    * `rounded-lg` in favour of `rounded-[min(var(--radius-md),12px)]`, which
-   * is exactly what reverting any one of the three controls above from
+   * is exactly what reverting any one of the controls above from
    * `size="header-sm"` back to `size="sm"` would silently reintroduce.
    *
    * Also hand-verified against the real component, not only this fixture:
@@ -199,8 +201,7 @@ describe("AuthStatus controls pin header-sm (ugcportal-6wkd)", () => {
  * ugcportal-hhjq K1: the four call sites' rendered class strings as literals.
  * The assertions above compare against `buttonVariants()` itself, so editing
  * `header-sm`'s definition moves both sides of those comparisons together;
- * these literals do not move. (Checked: changing `header-sm`'s padding token
- * fails both tests below and none above.) If `header-sm` or the base classes
+ * these literals do not move. If `header-sm` or the base classes
  * change on purpose, update the strings in the same PR.
  */
 const HEADER_SM_OUTLINE_LITERAL =
@@ -208,7 +209,7 @@ const HEADER_SM_OUTLINE_LITERAL =
 const HEADER_SM_OUTLINE_FULL_WIDTH_LITERAL = `${HEADER_SM_OUTLINE_LITERAL} w-full`;
 
 describe("header-sm class output is byte-identical at all four call sites (ugcportal-hhjq K1)", () => {
-  it("signed-out Sign in trigger (sign-in-menu.tsx:59) and signed-in Sign out (auth-status.tsx:97) match the literal", async () => {
+  it("signed-out Sign in trigger and signed-in Sign out match the literal", async () => {
     getSessionMock.mockResolvedValue(null);
     const element = await AuthStatus();
     act(() => {
@@ -230,7 +231,7 @@ describe("header-sm class output is byte-identical at all four call sites (ugcpo
     expect(buttonWithText("Sign out").className).toBe(HEADER_SM_OUTLINE_LITERAL);
   });
 
-  it("both disclosed provider buttons (sign-in-menu.tsx:91, :96) match the full-width literal", async () => {
+  it("both disclosed provider buttons (Google, Facebook) match the full-width literal", async () => {
     getSessionMock.mockResolvedValue(null);
     const element = await AuthStatus();
     act(() => {
@@ -242,5 +243,12 @@ describe("header-sm class output is byte-identical at all four call sites (ugcpo
     await flush();
     expect(buttonWithText("Google").className).toBe(HEADER_SM_OUTLINE_FULL_WIDTH_LITERAL);
     expect(buttonWithText("Facebook").className).toBe(HEADER_SM_OUTLINE_FULL_WIDTH_LITERAL);
+  });
+
+  it("the source still has exactly four size=\"header-sm\" call sites, the number this block pins", () => {
+    const count = ["sign-in-menu.tsx", "auth-status.tsx"]
+      .map((f) => readFileSync(join(__dirname, f), "utf8").match(/size="header-sm"/g)?.length ?? 0)
+      .reduce((a, b) => a + b, 0);
+    expect(count).toBe(4);
   });
 });
