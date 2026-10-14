@@ -1,11 +1,11 @@
 ---
 name: review-standards
-description: ugcportal's review standards — the required sweep for this repo's four recurring defect families, the severity-gated stopping rule for review iteration (rounds 1-3 fix everything; round 4+ only a medium-or-above blocks and lows are filed as beads; hard cap at 6 rounds, then escalation to a human), and the scope freeze after first push. Read before pushing a branch for review, on every review round of a PR in this repo, and whenever deciding whether another round is worth running.
+description: ugcportal's review standards — the required sweep for this repo's four recurring defect families, the severity-gated stopping rule for review iteration (rounds 1-3 fix everything; round 4+ only a medium-or-above blocks and lows are filed as beads; hard cap at 6 rounds, then escalation to a human), the scope freeze after first push, and (section 6) the fail-loud rule for any instrument that can match nothing: print the match count before trusting a zero, never silence stderr on a mutating command, read the object back after a write that matters. Read before pushing a branch for review, on every review round of a PR in this repo, and whenever deciding whether another round is worth running.
 ---
 
 # Review standards (ugcportal)
 
-Three rules govern what happens to a PR in this repo between first push and merge, and a fourth (section 5) governs the prose a fix round may add. They exist because the expensive failure here is not a badly written bead — it is a well-written bead that grinds through nine review rounds, the last two of which find a wrong comment and some duplicate log lines.
+Three rules govern what happens to a PR in this repo between first push and merge; a fourth (section 5) governs the prose a fix round may add, and a fifth (section 6) governs what any instrument in the process must print when it matched nothing. They exist because the expensive failure here is not a badly written bead — it is a well-written bead that grinds through nine review rounds, the last two of which find a wrong comment and some duplicate log lines.
 
 Measured 2026-09-25 across five beads (`ugcportal-44q`, `bdh`, `e86`, `r1d`, `0ss`): 3.40M tokens of implementation and 1.32M of review, 4.73M combined, ~0.95M per bead. The worst case in that set was **ten implementation rounds and nine review passes** (`ugcportal-r1d`, merged as gh-32); next worst was nine and eight (`e86`, gh-31), then seven and seven (`0ss`, gh-33), five (`44q`) and four (`bdh`).
 
@@ -182,3 +182,118 @@ So the rule for anyone writing or fixing code in this repo:
 - **A pointer names a thing that exists.** A comment that cites a file, an identifier, a contrast entry or an extension (`#98` round 3: `configured-users.ts`, deleted; `#97` round 1: a contrast entry that was never added; `#95` round 5: a `.mtsx` extension TypeScript does not have) is a claim like any other — check it the way you would check a `never`.
 
 This does not change what the reviewer looks for — family 1 stays in the required sweep (section 2) — and it is not a licence to write fewer *useful* comments. It changes who catches the overclaim: the writer, before the push, with `claims-audit` beside them, rather than a reviewer at round 5 for the price of a round.
+
+## 6. An instrument that matched nothing must prove it looked
+
+`ugcportal-kssp`. `docs/process/development-process.md` section 9, weakness 6
+names this the most under-appreciated weakness in the process: **a check that
+silently matched nothing reports success, and the wrong answer is always the
+reassuring one** — which is why none of the instances below announced itself.
+Six are on the record. Three from the v0.7.0 build:
+
+- a dependency filter using the wrong field name reported "nothing is stuck"
+  over a backlog with ten dead beads;
+- `bd` writes whose stderr went to the null device were reported as applied
+  when they had failed;
+- a `||` fallback ran its second branch with the arguments reversed,
+  *succeeded*, and recorded a graph edge backwards.
+
+Three more on 2026-10-12, all from one session:
+
+- `scripts/sweep-candidates.mjs` reported `candidates found: 0` on three PRs
+  where the real figures were **4, 19 and 42** — twice because it ran before
+  the work was committed and swept an empty diff, once because the new test
+  files were still untracked;
+- a reviewer reported `30 new tsc errors` where the truth was **23**, having
+  measured without running `npm run build` first: its "7 pre-existing" were
+  `PageProps` errors from a missing `.next/types`, and a gross total was
+  reported as a delta;
+- a reviewer read a **stale copy** of a skill out of the shared checkout and
+  reported that `pr-review-merge` steps 4.2 and 4.3 do not exist. They do
+  (`ugcportal-sv3l`).
+
+### Which zeros matter
+
+Not every empty result is a hazard, and treating them all as one produces
+noise that trains everyone to skip the banner. The distinguishing property is
+narrow:
+
+> **An empty result is a hazard exactly when an empty result and a broken
+> instrument render the same.**
+
+A sweep that legitimately finds nothing is normal and common — and it is
+*safe* as long as the output of a run that looked differs from the output of
+a run that did not. So the question to ask of any instrument is not "could
+this be zero?" but "if I broke this instrument right now, would its output
+change?" If the answer is no, it needs one of the three mitigations below. If
+the answer is yes — because it already prints a denominator, or already
+refuses an input it could not read — it does not, and adding a banner to it
+is cost without a property.
+
+### The three mitigations
+
+**1. Print the match count before trusting a zero.** Every set-returning step
+states what it examined *before* what it found, and a run that examined
+nothing says so in those words rather than printing `0`.
+
+**2. Never silence stderr on a mutating command.** Enforced, not advised:
+`scripts/check-silenced-stderr.mjs` scans every file under `scripts/` and
+`.claude/skills/` line by line for the **seven stderr-discarding kinds in its
+own `SILENCING_KINDS`** — the `2>`/`2>>` redirect to the null device,
+the close form, the `&>`/`>&` both-streams shorthand, the null redirect
+followed by stderr duped onto it, Python's `DEVNULL`, the `stdio` string
+`"ignore"`, and an `stdio` array with `"ignore"` in slot 2 — and fails unless
+each hit is allowlisted with a stated reason. Read that list rather than "every
+site": a pattern set is what it matches. The count is checkable rather than
+prose — the scanner throws on a kind not declared in `SILENCING_KINDS`, and
+its test drives every member of it to a real hit — and the header's KNOWN
+LIMITS names what it does not see (a redirect built from a variable, a `catch {}` that
+swallows the message without naming stderr at all). The guard fails just as
+loudly on an allowlist entry that matched nothing, on a malformed entry, or on
+a run that scanned zero files. An allowlist entry is bound to **one line**:
+the command must be on the hit's own line, unless the entry carries an
+explicit `lineContains` naming the fragment on the redirect's line, which is
+what lets a multi-line pipeline be exempted without exempting its neighbours.
+It runs on every `vitest run` via `scripts/check-silenced-stderr.test.mjs`.
+
+**3. Read the object back after a write that matters.** `bd update` exiting 0
+is not evidence the value landed. `node scripts/bd-verify-metadata.mjs <id>
+<key>=<value> ...` reads the bead back, asserts each value, and prints the
+bead's whole metadata keyset — so a key written under a mistyped name is
+visible beside the absent one it was meant to be. It exits `1` for a
+mismatch, `2` for zero expectations (a verifier handed nothing to verify
+never prints a pass), and `3` for a bead it could not read at all, because
+"the write failed" and "I could not find out" are different answers.
+
+On `bd` specifically: use **`--append-notes`, never `--notes`**. `--notes`
+replaces the whole field and has destroyed notes on this repo twice. Verify
+it with `notes~=<a substring that was there before>`.
+
+### The output rule — what makes any of this checkable
+
+The precedent is `pr-review-merge` step 4.2, which requires a round whose
+grep falsified nothing to print the same block it would have printed had it
+found something, every hit marked "still true", and `falsified=0` in the
+marker. Generalised:
+
+> **An empty result reported in the shape a non-empty result would have taken
+> is evidence the check ran. An empty result reported as nothing at all
+> cannot be told apart from a skip.**
+
+That is the test to apply to any new rule in this file or in a skill: *could
+a reviewer be found not to have done it?* A rule whose no-fire branch
+produces no output is satisfiable by someone who did nothing, because "I
+looked and it did not apply" and "I never looked" leave the same trace.
+
+### Two kinds of report that need this and are not sets
+
+- **A delta needs its baseline, measured the same way on the same tree.**
+  "30 new tsc errors" is not a measurement until the baseline it was
+  subtracted from is stated, with the command that produced it. On this repo
+  that command is `npm run build` *then* `npx tsc --noEmit` — `tsconfig`
+  includes `.next/types`, so a typecheck without a build invents `PageProps`
+  errors and attributes them to the diff.
+- **A "does not exist" needs the revision it was looked for in.** A grep that
+  found nothing in a file proves nothing about the file unless the output
+  says which copy was read. Name the path and the SHA (`git rev-parse HEAD`
+  in the worktree you actually read), never "the repo".

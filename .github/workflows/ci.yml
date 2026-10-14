@@ -2,20 +2,39 @@ name: CI
 
 on:
   pull_request:
-    branches: [main]
+    # Deliberately no `branches:` filter. It used to be `[main]`, and that
+    # filter matches a PR's *base* branch, so a PR stacked on another PR's
+    # branch fired no workflow at all (observed on gh-224, whose
+    # statusCheckRollup was []). When its base PR merged, GitHub retargeted
+    # it to main as an `edited` event, which the quality job below skips --
+    # so it could reach main showing a green check having never run lint,
+    # test, typecheck or build (ugcportal-hwpc). Dropping the filter is
+    # preferred over listing branch patterns: a pattern list silently stops
+    # matching the day someone uses a new branch prefix, reopening this
+    # exact hole without telling anyone.
     types: [opened, synchronize, reopened, edited]
   push:
     branches: [main]
 
 # One run per PR at a time: a newer push cancels the run it supersedes.
 # Pushes to main are never cancelled, so every merge commit is verified
-# (ugcportal-ugcportal-0an4).
+# (ugcportal-0an4).
 concurrency:
-  # Edited events (title or body) skip the quality job, so they must not
-  # share a group with code events: otherwise a body edit right after a push
-  # cancels the run that carries the head's only quality result
-  # (ugcportal-ugcportal-sxwb).
-  group: ci-${{ github.event.pull_request.number || github.ref }}-${{ github.event.action == 'edited' && 'edited' || 'code' }}
+  # Two groups per PR, split by whether the run carries a quality result.
+  # The suffix is the inverse of the quality job's `if:` below, and the two
+  # have to stay in step -- scripts/ci-workflow-gating.test.mjs evaluates
+  # both against synthetic payloads and fails if they disagree.
+  #
+  # Runs that skip quality must not share a group with runs that carry one:
+  # a body edit right after a push would otherwise cancel the run holding
+  # the head's only quality result (ugcportal-sxwb).
+  #
+  # A base-ref change arrives as an `edited` event too, but it does run
+  # quality (ugcportal-hwpc), so it belongs in the 'code' group. The
+  # invariant that makes cancelling safe is "every run in the code group
+  # carries a quality result", so a newer run superseding an older one
+  # always leaves the head with one.
+  group: ci-${{ github.event.pull_request.number || github.ref }}-${{ (github.event.action == 'edited' && github.event.changes.base == null) && 'edited' || 'code' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -105,8 +124,17 @@ jobs:
     name: Lint, test, typecheck, build
     runs-on: ubuntu-latest
     # A PR title or body edit changes nothing the suite can see; the guards
-    # job still runs on it so the title guard keeps working (ugcportal-ugcportal-0an4).
-    if: github.event_name == 'push' || github.event.action != 'edited'
+    # job still runs on it so the title guard keeps working (ugcportal-0an4).
+    #
+    # A base-ref change is an `edited` event as well, and that one does
+    # change what the suite sees: actions/checkout builds the PR's merge ref
+    # (head merged into base), so retargeting a stacked PR from another PR's
+    # branch onto main is a different tree from the one any earlier run
+    # tested. Across the four payloads observed on the gh-226 probe -- open,
+    # title-only edit, body-only edit, base-ref change --
+    # `github.event.changes.base` was non-null for the base-ref change alone,
+    # so it is what separates the two (ugcportal-hwpc).
+    if: github.event_name == 'push' || github.event.action != 'edited' || github.event.changes.base != null
     steps:
       - uses: actions/checkout@v4
 

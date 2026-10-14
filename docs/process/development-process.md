@@ -482,7 +482,8 @@ for. A bead that violates one is mis-scoped, not ambitious.
   digests and prepare the diff; only he decides the prose is accurate and
   writes the entry. The mechanism binds a sign-off to the exact words it
   certifies — any prose edit returns the page to draft automatically
-  (`ugcportal-xh4j` is the current pending one).
+  (`ugcportal-xh4j` re-recorded it for both pages on 2026-10-12, after
+  PR #203 and PR #204 each edited one page's prose).
 
 ---
 
@@ -558,10 +559,19 @@ path is the first defect family applied to itself.
    when they had failed; a `||` fallback ran its second branch with the
    arguments reversed and *succeeded*, recording a graph edge backwards.
    In every case **the wrong answer was the reassuring one**, which is why
-   none of them announced itself. Three mitigations, all cheap and none yet
-   systematic: print the match count before trusting a zero; never silence
-   stderr on a mutating command; read the object back after a write that
-   matters.
+   none of them announced itself. Three mitigations: print the match count
+   before trusting a zero; never silence stderr on a mutating command; read
+   the object back after a write that matters. They were cheap and not yet
+   systematic when this was written; `ugcportal-kssp` made them systematic
+   at the points where agents actually run things, and the rule now lives in
+   one place as `review-standards` section 6. Two of the three are
+   instruments rather than instructions
+   (`scripts/check-silenced-stderr.mjs`, `scripts/bd-verify-metadata.mjs`),
+   and `scripts/sweep-candidates.mjs`, `scripts/check-sensitive-files.mjs`
+   and `scripts/check-unreachable-beads.mjs` now state what they examined
+   before what they found. What is **not** closed by that: an ad-hoc command
+   an agent writes mid-session is still governed by a rule rather than by an
+   instrument, and that is where this weakness keeps finding new ground.
 
 7. **The cap has rarely bound on a real disagreement.** In v0.5.0, eleven
    of eleven escalations ended in a merge, making the human step latency

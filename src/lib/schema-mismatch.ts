@@ -102,9 +102,17 @@ const introducedBy = new Map<string, string | null>();
  * (`ADD COLUMN "signInProvider" TEXT`) while the prose in these files'
  * comments writes them bare. Memoised for the lifetime of the process, so a
  * migration added while the dev server is running is not picked up. Null
- * whenever the migrations directory is not on disk — the production image
- * copies `prisma/schema.prisma` and not the history — or when nothing
- * matches.
+ * whenever the migrations directory is not on disk, or when nothing matches.
+ *
+ * It IS on disk in the production image: the Dockerfile's runner stage names
+ * `prisma/` in the allowlist it copies, for this read specifically
+ * (ugcportal-6jcq). This comment used to say the image copied
+ * `prisma/schema.prisma` and not the history, which was wrong; what the
+ * image does carry, and how that was checked, is recorded beside the `COPY
+ * ... /app/prisma` line in the Dockerfile, where it stays in step with the
+ * packaging it describes. Fail-soft either way: every read above is inside a
+ * `try`, so a deployment that did drop them loses the "introduced by" half
+ * of one log line rather than a route.
  */
 export function migrationIntroducing(
   name: string,

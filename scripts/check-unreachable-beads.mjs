@@ -214,7 +214,44 @@ export function findUnreachableBeads(beads) {
       });
     }
   }
-  return { examinedCount: examinedIds.length, examinedIds, flagged };
+  return { examinedCount: examinedIds.length, examinedIds, flagged, ...countBlockingEdges(beads) };
+}
+
+/**
+ * The denominator the `Flagged 0` line needs in order to be readable
+ * (ugcportal-kssp, mitigation 1).
+ *
+ * `examinedCount` already answers "how many beads did I walk". It does not
+ * answer "did the walk have anything to walk along", and that is the gap the
+ * recorded instance fell through: a dependency filter using the WRONG FIELD
+ * NAME reported "nothing is stuck" over a backlog with ten dead beads
+ * (docs/process/development-process.md section 9, weakness 6). Every figure
+ * on that report was plausible -- a healthy examined count, a confident zero
+ * -- because the only thing that had gone wrong was that the blocker lookup
+ * matched nothing, so every bead had no blockers, and a bead with no
+ * blockers is trivially reachable.
+ *
+ * This counts the edges the walk can actually traverse, under exactly the
+ * two conditions `directBlockers` above applies -- a present `dependencies`
+ * array, and `type === "blocks"` -- so that a rename at either end shows up
+ * here as a zero. A backlog with beads in it but ZERO blocking edges is far
+ * more likely to be a renamed field or a changed type string than a
+ * genuinely flat graph, and `formatReport` says so in those words rather
+ * than leaving a reader to notice.
+ *
+ * @param {Array<object>} beads
+ * @returns {{blockingEdgeCount: number, beadsWithDependenciesArray: number}}
+ */
+export function countBlockingEdges(beads) {
+  let blockingEdgeCount = 0;
+  let beadsWithDependenciesArray = 0;
+  for (const bead of beads) {
+    if (Array.isArray(bead.dependencies)) {
+      beadsWithDependenciesArray++;
+      blockingEdgeCount += bead.dependencies.filter((d) => d.type === "blocks").length;
+    }
+  }
+  return { blockingEdgeCount, beadsWithDependenciesArray };
 }
 
 // --- reporting ---------------------------------------------------------------
@@ -233,9 +270,21 @@ function formatChain(chain) {
     .join(" -> ");
 }
 
-export function formatReport({ examinedCount, flagged }) {
+export function formatReport({ examinedCount, flagged, blockingEdgeCount = 0, beadsWithDependenciesArray = 0 }) {
   const lines = [];
   lines.push(`Examined ${examinedCount} bead(s) not already closed or deferred.`);
+  lines.push(
+    `Walked ${blockingEdgeCount} \`blocks\` edge(s) across ${beadsWithDependenciesArray} bead(s) carrying a \`dependencies\` array.`,
+  );
+  // The broken-instrument branch. Nothing else in this report can tell a
+  // genuinely unblocked backlog from a blocker lookup that matched nothing,
+  // and the second of those is the recorded v0.7.0 instance this line exists
+  // for -- see countBlockingEdges above (ugcportal-kssp).
+  if (examinedCount > 0 && blockingEdgeCount === 0) {
+    lines.push(
+      "*** NO BLOCKING EDGES FOUND. With beads to examine and no `blocks` edge among them, every bead is trivially reachable and the zero below is what a BROKEN lookup prints, not only what a clean graph prints. Check that `bd list --json` still emits `dependencies[].type === \"blocks\"` before reporting this result.",
+    );
+  }
   lines.push(
     `Flagged ${flagged.length} as unreachable: every blocking path ends in deferred or missing work, or in a cycle, marked and not followed further.`,
   );

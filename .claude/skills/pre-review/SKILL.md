@@ -1,6 +1,6 @@
 ---
 name: pre-review
-description: The implementer's own review pass on a branch, run BEFORE opening the PR in this repo — build, typecheck, lint and the full test suite against the branch merged with current origin/main, the repo's guard suites named, the four-family sweep with scripts/sweep-candidates.mjs, a comment-claims audit with scripts/claims-audit.mjs (every never/always/cannot/only/exactly/guarantees/ensures, every measurement, every pointer, with the evidence beside it), a fixture-mutation check for every new assertion, a diff-hygiene pass, and (once the PR body itself is drafted) the same audit run over that body text with `claims-audit --body`/`--pr <n>`, which also flags a "deleted"/"fixed"/"corrected" claim the diff itself contradicts. Produces the checklist block the PR body must carry. Use when a bead's implementation is complete and the next step would be `git push` / `gh pr create`; also when a reviewer asks whether pre-review ran.
+description: The implementer's own review pass on a branch, run BEFORE opening the PR in this repo — build, typecheck, lint and the full test suite against the branch merged with current origin/main, the repo's guard suites named, the four-family sweep with scripts/sweep-candidates.mjs (run after committing, and reported with the file count it examined, never a bare zero), a comment-claims audit with scripts/claims-audit.mjs (every never/always/cannot/only/exactly/guarantees/ensures, every measurement, every pointer, with the evidence beside it), a fixture-mutation check for every new assertion, a diff-hygiene pass, and (once the PR body itself is drafted) the same audit run over that body text with `claims-audit --body`/`--pr <n>`, which also flags a "deleted"/"fixed"/"corrected" claim the diff itself contradicts. Produces the checklist block the PR body must carry. Use when a bead's implementation is complete and the next step would be `git push` / `gh pr create`; also when a reviewer asks whether pre-review ran.
 ---
 
 # Pre-review (ugcportal)
@@ -10,6 +10,8 @@ Usage: run this on the implementation branch, in your own worktree, after the la
 What it is not: it does not replace `pr-review-merge`, it does not change the severity gate or the round cap (`review-standards` section 3), and passing it is not a merge condition — the reviewer still runs the full sweep at round 1. It is the implementer doing first what the reviewer would otherwise do at round 1 for the price of a round.
 
 **Every step reports a result by name in the checklist (step 7), including "nothing found".** A step you skipped is written as skipped, with why. The checklist goes in the PR body; a PR body without it tells the reviewer pre-review did not run.
+
+**And every count in it carries the denominator it was measured over** (`review-standards` section 6). `0 candidates` is not a result; `0 candidates across 19 files examined` is. A zero with no denominator beside it is indistinguishable from a tool that did not run, and on 2026-10-12 three PRs in one session carried exactly that — a `sweep-candidates` zero against real figures of 4, 19 and 42.
 
 Run git only inside your worktree, never in the main checkout (`bd memories shared-checkout-is-not-safe-for-agents`).
 
@@ -53,9 +55,52 @@ If your diff adds a guard of this kind, it belongs in this table (edit this file
 
 ## 3. The four-family sweep, with the enumerator beside you
 
+**Commit first, then run it, then read its scan block before its counts.**
+On 2026-10-12 this one command reported `candidates found: 0` on three PRs
+in a single session where the real figures were **4, 19 and 42** — twice
+because it ran before the work was committed, so it swept an empty diff, and
+once because the new test files were still untracked. Nothing in its output
+distinguished those runs from a clean sweep, and the pre-review checklist
+carried the zero to the reviewer as a result (`ugcportal-kssp`;
+`review-standards` section 6).
+
 ```bash
-node scripts/sweep-candidates.mjs       # Family 3 toContain needles; Family 4 sibling literals
+git status --short                        # nothing unstaged or untracked under src/ or scripts/
+node scripts/sweep-candidates.mjs --base origin/main
 ```
+
+The script now prints a scan block before either count. **Copy its first
+four lines into the checklist verbatim** — they are the denominator, and a
+checklist line without them is a count nobody can check:
+
+```
+--- sweep-candidates: scan ---
+base: origin/main (<sha8>)
+files examined: <n> in the diff -- <n> test file(s) parsed for Family 3, <n> non-test source file(s) parsed for Family 4
+blind spot: none -- no source or test file in the working tree is uncommitted or untracked
+```
+
+Two outputs mean **stop and fix the input, not report the number**:
+`*** SCANNED NOTHING` and a `blind spot:` line naming files — commit them and
+re-run. `*** DID NOT RUN` means the base ref did not resolve.
+
+`*** SCANNED NOTHING` now means one of exactly two broken-input cases, and
+says which: the diff was **empty** (the recorded failure — a sweep run before
+the work was committed), or it contained JS/TS files the scan **did not
+read**, which it then names one by one. Either is a stop.
+
+A **docs-only diff is not one of them** and no longer prints that banner. It
+prints `no Family 3 or Family 4 input: none of the N changed file(s) is JS/TS
+source`, which is a result, not a failure: the instrument looked, examined N
+files, and correctly parsed none. Docs-only PRs are routine here, and a
+banner that fired on every one of them would train everyone to skip the line
+whose whole job is to be believed (`review-standards` section 6). Copy that
+line into the checklist in place of the `files examined:` denominator's
+usual companion, and **do the remaining three families by hand anyway**:
+families 1 and 2, and family 4 over prose, apply to a docs diff exactly as
+they do to code — this PR's own `ugcportal-measured` marker defect was a
+family-4 sibling omission across three prose templates, which no parser
+would have found.
 
 Then the four questions from `review-standards` section 2, answered in writing per family, including "nothing":
 
@@ -72,6 +117,13 @@ What the sweep does not catch, and is not expected to: the mediums that were fou
 node scripts/claims-audit.mjs             # claim-shaped sentences on the lines this branch added
 node scripts/claims-audit.mjs --all-lines # every comment in every changed file: the stale-sibling sweep
 ```
+
+This one reads the **working tree**, not `HEAD`, so uncommitted work is
+visible to it (`ugcportal-np1i`) and it refuses outright rather than
+reporting a possibly-false zero when a required git read fails. A
+`candidates found: 0` from it on a PR that changed a `.ts` file is still
+worth one second of suspicion: check the `base` it names in its own header
+line is the base you meant.
 
 Expect tens of lines on a code PR and hundreds on a PR that adds documentation (run on its own branch, this skill's PR listed 268, most of them in the report and in the script's own header, which is prose about claims); read code files first, Markdown last. It lists, per `file:line`, every comment or prose sentence that is **ABSOLUTE** (never / always / cannot / only / exactly / guarantees / ensures / impossible / unreachable / by construction), a **MEASUREMENT** (a number with a unit: `85px`, `3.18:1`, `~46x`, `2588 tests`), **TEMPORAL** (still / not yet / currently / once #94 merges / TODO), **HISTORY** (review-round narration in code or a test title), or a **REFERENCE** to a file that `git ls-files` does not have. It judges nothing; you do, one line at a time, under `review-standards` section 5:
 
@@ -119,6 +171,31 @@ git diff origin/main...HEAD --stat                       # every file is the bea
 git log origin/main..HEAD --format='%s%n%b' | grep -c 'Co-Authored-By: Claude'   # the attribution line this repo uses
 ```
 
+**If the diff touches `scripts/` or `.claude/skills/`, also run the
+fail-loud guards and paste what they print** (`review-standards` section 6):
+
+```bash
+node scripts/check-silenced-stderr.mjs    # the seven kinds in its SILENCING_KINDS, each hit allowlisted with a reason
+```
+
+It is already in the suite (`scripts/check-silenced-stderr.test.mjs`), so
+step 1 covers whether it is green; running it by hand is for the
+enumeration, which is what the checklist line records. If your diff adds a
+command whose stderr goes nowhere, the guard tells you by name — the answer
+is to stop discarding it, not to add an allowlist entry, unless the command
+is read-only and the caller branches on its exit status. An entry is bound to
+the hit's own line, so an exemption written for one command never extends to
+the command beside it; a cross-line pipeline needs an explicit `lineContains`
+and without one the entry matches nothing and reads as stale.
+
+And if any step of this bead's work wrote to `bd` — metadata the next step
+depends on, a `discovered-from` edge, a note — read it back before you trust
+it (mitigation 3):
+
+```bash
+node scripts/bd-verify-metadata.mjs <bead-id> cc_type=<t> cc_scope=<s> notes~=<a phrase that was there before>
+```
+
 Four cheap lows from v0.5.0: a hunk that belonged to another PR (#82 round 1, then round 2 when the fix commit said it was removed and it was not), the wrong `Co-Authored-By` (#91 round 1), a `docs(...)` title on a PR that added a route handler (#83 round 5), a PR body still carrying a claim the code had dropped two rounds earlier (#98 rounds 5-6). Check the PR title's type against the diff, and reread the PR body against the final diff.
 
 Then paste this into the PR body, filled in. Every line is a fact you observed, with the number or the word "nothing"; nothing here is a promise.
@@ -128,7 +205,7 @@ Then paste this into the PR body, filled in. Every line is a fact you observed, 
 
 1. Gates on merged main: lint clean; vitest <files> files / <tests> tests; build ok; typecheck ok.
 2. Guard suites: <list the ones that apply>, all green on the merged tree. New guard added: <none | name, added to pre-review step 2>.
-3. Four-family sweep (`sweep-candidates`: <n> toContain candidates, <n> sibling candidates):
+3. Four-family sweep (`sweep-candidates --base origin/main` on <sha8>: **<n> files examined — <n> test, <n> source**; blind spot: <none | list>; then <n> toContain candidates, <n> sibling candidates):
    - Family 1: <what you checked, what you found>
    - Family 2: <every comparison, NaN/null/empty answer, fail-closed yes/no>
    - Family 3: see 5.
@@ -136,7 +213,7 @@ Then paste this into the PR body, filled in. Every line is a fact you observed, 
 4. Claims audit (`claims-audit`): <n> candidates; ABSOLUTE <n> (evidence added / weakened: <n>/<n>), MEASUREMENT <n> (moved to tests: <n>, deleted: <n>), TEMPORAL <n>, HISTORY <n> (removed), REFERENCE not found <n> (fixed). `--all-lines`: <n> stale siblings corrected.
 5. Fixture mutation: <n> new assertions, <n> fixture-mutated, each failed as described; <exceptions, with why>.
 6. Real flow driven: <command and observation | none, because ...>.
-7. Diff hygiene: <n> files, all in scope; attribution on <n>/<n> commits; title type <type> matches the diff; PR body reread against the final diff.
+7. Diff hygiene: <n> files, all in scope; attribution on <n>/<n> commits; title type <type> matches the diff; PR body reread against the final diff. Fail-loud guards (`review-standards` 6): `check-silenced-stderr` <n> files examined, <n> sites, <n> not allowed | n/a, diff touches neither scripts/ nor .claude/skills/. `bd` read-back: <ids verified | no bd write this bead>.
 8. PR-body audit (`claims-audit --body`): <n> body candidates; ABSOLUTE <n>, MEASUREMENT <n>, TEMPORAL <n>, HISTORY <n>, DONE <n> (contradicted by the diff: <n>, fixed), REFERENCE not found <n> (fixed).
 ```
 

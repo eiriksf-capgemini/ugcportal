@@ -13,11 +13,71 @@
 #                node_modules actually reachable from that bundle (Next's
 #                file-tracing excludes devDependencies such as typescript,
 #                tailwindcss, eslint, vitest, and the `prisma` CLI itself).
-#   3. runner  - copies just the standalone output, `public/`, and
-#                `.next/static` into a fresh, minimal base image and runs
-#                it as a non-root user. No source, no full node_modules,
-#                no dev tooling, no .git, no .env files ever reach this
-#                stage.
+#   3. runner  - copies, BY NAME, only the files the server runs:
+#                `server.js`, `package.json`, `.next/` and `node_modules/`
+#                out of the standalone output; `.next/static`, which
+#                standalone really does omit, and `public/`, which it does
+#                NOT -- `.next/standalone/public` exists, swept in by the
+#                whole-project tracing described below, and both are taken
+#                from the builder's own copies anyway so neither depends on
+#                that tracing; and `prisma/`, which
+#                src/lib/schema-mismatch.ts reads from `process.cwd()` at
+#                request time. Into a fresh, minimal base image, run as a
+#                non-root user. `.git` and `.env*` files do not reach this
+#                stage, and node_modules here is the traced subset -- no
+#                devDependencies, no `.bin` directory at all (checked).
+#
+#                AN ALLOWLIST, AND NOT `COPY .next/standalone ./`, which is
+#                what this stage used to do. Next's whole-project file
+#                tracing sweeps the ENTIRE repository into
+#                `.next/standalone` (`.dockerignore`'s header documents the
+#                mechanism). Measured at commit eb3b7ad, from a `next build`
+#                in the repo itself (where `.dockerignore` does not apply):
+#                that build emits 69 `*.nft.json` files -- 36 under `.next/`,
+#                plus a copy of 33 of them inside `.next/standalone` -- and
+#                NOT all of them trace the project. 7 of the 36 list no
+#                project file at all (`next-server.js`,
+#                `next-minimal-server.js`, `instrumentation.js`, and the
+#                static `_global-error`, `favicon.ico`, `robots.txt` and
+#                `llms.txt` routes). The other 29 of the 36 each list the
+#                SAME 571 (58 of all 69, counting each standalone duplicate
+#                separately): all 438 files of src/, plus docs/, e2e/,
+#                scripts/, prisma/, public/ and 23 repo-root files. That is
+#                what makes copying the directory wholesale fatal -- 29
+#                route traces (58 counting both copies) each sweeping the
+#                entire project is still the entire project in the
+#                production image. (568 of the 571 got that far;
+#                `.dockerignore` was already dropping AGENTS.md, CLAUDE.md
+#                and CHANGELOG.md -- `tsconfig.tsbuildinfo` was never one of
+#                the 571 to begin with, so it is not part of this
+#                subtraction.) A runner built that way
+#                from `main` immediately before this change (358a768) held
+#                2423 files under /app, 259 of them matching
+#                *.test.*/*.spec.*, `docs/legal/` included; naming what goes
+#                in instead brings it to 1887 files with no `*.test.*` or
+#                `*.spec.*` among them (ugcportal-6jcq; every figure here is
+#                read out of `docker export`, counting regular files only --
+#                `find /app -type f` does not count the four symlinks under
+#                `.next/node_modules/`, so a listing that does reads 1891 --
+#                and the commands are in that bead's PR).
+#
+#                Naming the contents rather than excluding the unwanted is
+#                deliberate: a directory added to this repo tomorrow is swept
+#                into `.next/standalone` by the same tracing and does NOT
+#                arrive here, where `outputFileTracingExcludes` (the denylist
+#                alternative, which does work -- measured) would have to be
+#                extended for it by hand and would go quietly stale when it
+#                was not. The cost is the opposite failure: a file a future
+#                Next genuinely needs at /app has to be added below, or the
+#                server will not find it. A path that DISAPPEARS from
+#                standalone fails this build loudly; a newly REQUIRED one
+#                does not, so exercise the app and not just its healthcheck
+#                after a Next major.
+#
+#                Re-run `find /app -type f | wc -l` (and the same scoped to
+#                *.test.*/*.spec.*) against a fresh build to check today's
+#                figures -- the repo keeps growing, and only the second of
+#                those two is a number this stage holds at zero.
 #
 # Prisma note: this app uses Prisma's driver-adapter mode
 # (@prisma/adapter-libsql against a libsql-backed SQLite datasource), so
@@ -31,9 +91,9 @@
 #
 # sharp note (ugcportal-44q): watermark generation needs sharp's native
 # libvips binding, which npm installs as a platform-specific optional
-# dependency — @img/sharp-linuxmusl-x64 (+ @img/sharp-libvips-linuxmusl-x64)
-# on this alpine base. Two things have to hold, and both were checked
-# without running this build:
+# dependency — @img/sharp-linuxmusl-<arch> (+
+# @img/sharp-libvips-linuxmusl-<arch>) on this alpine base. Two things have
+# to hold:
 #   1. the lockfile resolves the musl variant — confirmed by running
 #      `npm ci --omit=dev --os=linux --libc=musl --cpu=x64` against this
 #      exact package-lock.json, which installs both @img musl packages; and
@@ -41,10 +101,21 @@
 #      — @vercel/nft has an explicit `sharp` rule that enumerates *every*
 #      entry in sharp's own optionalDependencies (and each of those packages'
 #      optionalDependencies) and emits whichever ones exist on disk, so it
-#      does not branch on the host platform. Observed doing exactly that for
-#      the darwin binding on a workstation build.
-# Residual risk: this image has never actually been built or run, so a
-# failure at load time would only show up on first deploy.
+#      does not branch on the host platform.
+#
+# BUILT AND RUN FOR THE FIRST TIME on 2026-10-12 (ugcportal-fb32), on
+# linux/arm64 (Docker Desktop on Apple Silicon, so that is the native
+# platform here). What the image actually contains, read out of it rather
+# than inferred: node_modules/@img holds four entries — `colour`,
+# `sharp-linuxmusl-arm64`, `sharp-libvips-linuxmusl-arm64` and
+# `sharp-wasm32` — i.e. (2) above behaves as described, emitting the musl
+# bindings that exist on disk for the build platform (plus `colour`, a
+# pure-JS dependency of sharp that every platform gets). An image uploaded
+# through the running container
+# produced a watermarked preview, so the binding loads and fontconfig
+# resolves the font. The x64 half of (1) is still a lockfile check rather
+# than a build: building for x64 needs `docker build --platform linux/amd64`
+# and has not been done.
 #
 # What tracing cannot supply is font *files*; see the apk install in the
 # runner stage.
@@ -59,6 +130,13 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 COPY prisma ./prisma
 COPY prisma7.config.ts ./
+# `npm ci` runs package.json's `postinstall` (`prisma generate`), which loads
+# prisma7.config.ts, which imports scripts/lib/env-files.mjs. Without this the
+# install fails with "Cannot find module './scripts/lib/env-files.mjs'" —
+# observed on the first build of this file (ugcportal-fb32). Only lib/ is
+# copied, not the whole scripts/ directory, so a change to an unrelated
+# maintenance script does not invalidate this (slow) layer.
+COPY scripts/lib ./scripts/lib
 RUN npm ci
 
 
@@ -67,6 +145,29 @@ WORKDIR /app
 
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
+
+# The same /data the runner stage creates below, with the same ownership, and
+# here for a reason that is not obvious: docker-compose.yml runs the database
+# migration from THIS stage (the runner has no `prisma` CLI), and both
+# containers mount one named volume at /data.
+#
+# Docker seeds an empty named volume from the image of the container mounting
+# it, directory ownership included — but only if that image HAS the path. With
+# /data in the runner alone, whether the migration can write depends on which
+# container Docker happened to create first: `docker compose up -d` worked
+# because the app's container was created before the migration's started, and
+# `docker compose up migrate` on a fresh volume failed with "unable to open
+# database file: /data/ugcportal.db" (observed, ugcportal-fb32). Declaring it
+# in both stages removes the ordering from the picture.
+#
+# Numeric, because neither `nextjs` nor `nodejs` exists in this stage. 1001
+# is the runner's `nextjs` uid and 1001 is its `nodejs` gid, which is exactly
+# what `chown nextjs:nodejs /data` resolves to down there. Note the app
+# PROCESS runs as uid=1001 gid=65533(nogroup) — `adduser --system` was not
+# given `-G nodejs`, so its primary group is nogroup — which does not matter
+# here because /data and the database file are owned by uid 1001 and it is
+# the owner bits that grant the write.
+RUN mkdir -p /data && chown 1001:1001 /data
 
 # Regenerate the Prisma client from schema.prisma inside the image rather
 # than trusting anything that might exist on the host (src/generated is
@@ -120,8 +221,13 @@ ENV NODE_ENV=production \
 # No FONTCONFIG_PATH is set, and that is deliberate rather than an oversight.
 # The concern is real — sharp bundles its own fontconfig inside
 # libvips-cpp.so, so its compiled-in default could point at the build prefix
-# rather than at /etc/fonts. Checked against the actual artifact this image
-# installs (@img/sharp-libvips-linuxmusl-x64, libvips-cpp.so.8.18.6):
+# rather than at /etc/fonts. Checked by reading the artifact out of the
+# image this Dockerfile actually built, which on this machine is
+# linux/arm64: @img/sharp-libvips-linuxmusl-arm64/lib/libvips-cpp.so.8.18.7
+# (the header above lists the full @img set the runner carries). The x64
+# artifact was NOT inspected — no x64 build has been made, the same
+# limitation as the header's point (1) — so this is an arm64 reading and
+# not a general one. What `strings` on it showed:
 #   - the only config-directory path in the binary is "/etc/fonts", sitting
 #     immediately beside the "FONTCONFIG_FILE"/"FONTCONFIG_PATH"/"fonts.conf"
 #     strings, i.e. fontconfig's standard default-path lookup with /etc/fonts
@@ -130,19 +236,79 @@ ENV NODE_ENV=production \
 #   - the built-in fallback config it embeds already lists
 #     <dir>/usr/share/fonts</dir>, which is where apk puts font-dejavu.
 # So FONTCONFIG_PATH=/etc/fonts would be a provable no-op, and setting it
-# would imply a problem that the binary says does not exist.
+# would imply a problem that the binary says does not exist. x64 is not
+# covered by that reading, but it cannot degrade silently there either: the
+# font probe above fails the upload rather than shipping an under-marked
+# image, so an x64 build with a fontconfig problem says so on the first
+# upload instead of after it.
 RUN apk add --no-cache fontconfig font-dejavu
 
 # Non-root runtime user (K1: "run as a non-root user in the final stage").
 RUN addgroup --system --gid 1001 nodejs \
     && adduser --system --uid 1001 nextjs
 
-# Static assets Next's standalone tracing deliberately excludes and that
-# must be copied in by hand: the public/ dir and the pre-built client
-# bundles under .next/static.
+# A writable home for the SQLite database when this image is run from
+# docker-compose.yml for manual QA (ugcportal-fb32), where `app-data` is
+# mounted here and DATABASE_URL points inside it.
+#
+# Created in the image, and owned by the runtime user, because that is what
+# decides the ownership of a FRESH named volume: Docker seeds a new volume
+# from the image's content at the mount point, ownership included. Mount a
+# volume at a path the image does not contain and it is created root-owned,
+# which this non-root process cannot write — the database file then fails to
+# open instead of being created. The builder stage declares the same path for
+# the same reason; see the comment there.
+RUN mkdir -p /data && chown nextjs:nodejs /data
+
+# THE ALLOWLIST. Every line below names something the running server reads;
+# nothing else from the builder reaches this image. See the stage-3 summary
+# at the top of this file for why it is spelled this way, and
+# `.dockerignore` for the mechanism that makes the exclusion necessary.
+#
+# Static assets, copied in by hand -- but only one of the two for the reason
+# usually given. `.next/static` (the pre-built client bundles, copied a few
+# lines below) genuinely is not in standalone. `public/` IS: the builder image
+# at eb3b7ad has `.next/standalone/public` holding all five files, swept in by
+# the same whole-project tracing the stage-3 summary describes. It is taken
+# from the builder's own `/app/public` regardless, so this COPY does not
+# depend on that tracing -- the same reasoning as `prisma/` at the bottom of
+# this stage.
 COPY --from=builder /app/public ./public
-COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
+
+# The standalone server entrypoint and the manifest/chunk tree it loads.
+# `.next` first, `.next/static` second: the second COPY lands inside the
+# directory the first one creates.
+COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone/server.js ./server.js
+COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone/.next ./.next
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+
+# The traced production subset of node_modules (no devDependencies, no
+# `.bin`) that the chunks above require.
+COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone/node_modules ./node_modules
+
+# package.json, because `server.js` runs with /app as its cwd (it calls
+# `process.chdir(__dirname)`) and Node resolves module type and
+# package-relative lookups from the nearest one. It is the repo's own
+# package.json, dependency lists and script names included -- Next copies it
+# into standalone unmodified -- not a generated minimal manifest.
+COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone/package.json ./package.json
+
+# prisma/, because this is read at RUN time and not at build time:
+# src/lib/schema-mismatch.ts resolves `process.cwd()/prisma/migrations` and
+# reads each migration.sql to name the migration that introduced a column
+# the database is missing. Copied from the builder's own prisma/ rather than
+# from the swept copy inside standalone, so it does not depend on the
+# tracing above. Out of scope for the trim for the same reason the migrate
+# service needs it (ugcportal-6jcq).
+#
+# What that puts here, read out of `docker export` at eb3b7ad: /app/prisma
+# holds `schema.prisma` and `migrations/`, and `migrations/` holds 25 entries
+# -- 24 migration directories plus `migration_lock.toml`. The docstring on
+# `migrationIntroducing` in src/lib/schema-mismatch.ts used to claim this
+# image carried `schema.prisma` and not the history; it did not hold of
+# `ugcportal:0.6.0-dev.ga6980eb` either, the image this repo had actually
+# deployed, whose `ls /app/prisma` on 2026-10-12 listed the same two entries.
+COPY --from=builder --chown=nextjs:nodejs /app/prisma ./prisma
 
 USER nextjs
 
@@ -153,6 +319,10 @@ EXPOSE 3000
 #     docker run --memory=1g ...
 #     # or, in a compose file / k8s manifest:
 #     #   mem_limit: 1g  /  resources.limits.memory: 1Gi
+#
+# docker-compose.yml's `app` service sets `mem_limit: 1g` for exactly this
+# reason, and the line the app logs on its first upload there reads
+# `memoryBudget=1024 MB (cgroup-v2)` rather than `(host)`.
 #
 # Not a nice-to-have, and not something this file can set for you — a memory
 # limit is a runtime property of the container, so there is no Dockerfile
@@ -288,6 +458,22 @@ EXPOSE 3000
 # Every number above is arithmetic over a per-preview constant measured on
 # darwin, not a measurement of this image. Measuring it here is ugcportal-68r;
 # setting the limit in a real deployment and load-checking against it is
-# ugcportal-jp4.
+# ugcportal-jp4. ugcportal-fb32 set the limit and confirmed the app derives
+# its budget from the cgroup rather than from host RAM; it did not load-check
+# the numbers in the table above, which remain arithmetic.
+#
+# MIGRATIONS ARE NOT THIS STAGE'S JOB, and cannot be: Next's standalone
+# tracing deliberately leaves devDependencies behind, the `prisma` CLI
+# included, and this stage ends up with no node_modules/.bin directory at
+# all. So there is no `prisma migrate deploy` to run in here.
+#
+# A container started against an unmigrated database does not announce it:
+# it stays up, and `GET /` answers 200 because the home page catches the
+# failed read and falls back to placeholder tiles, while every query that is
+# not caught fails — `GET /api/public/media` answers 500 with
+# `SQLITE_ERROR: no such table: main.Media` (observed, ugcportal-fb32).
+# docker-compose.yml runs the migration from a one-shot service built from
+# the `builder` stage above, which does have the CLI, against the same
+# `app-data` volume.
 
 CMD ["node", "server.js"]

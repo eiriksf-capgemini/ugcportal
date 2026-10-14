@@ -168,6 +168,45 @@ export function readFileAtHead(filePath) {
 }
 
 /**
+ * Tracked paths with staged or unstaged edits relative to HEAD, repo-root-
+ * relative. This is the half of the working tree that a `base...HEAD` diff
+ * cannot see: `git diff --name-only HEAD` is "what the commit I have not
+ * made yet would change". Together with listUntrackedFiles below it is the
+ * full blind spot of any HEAD-based scan, which scripts/sweep-candidates.mjs
+ * reports rather than silently excluding (ugcportal-kssp mitigation 1).
+ *
+ * The explicit `:/` top-level pathspec is for the same cwd reason as
+ * listTrackedFiles/listUntrackedFiles below: `git diff` with no pathspec at
+ * all already covers the whole repo from any cwd, and `:/` keeps that true
+ * rather than making it depend on nobody ever adding one here.
+ *
+ * @returns {string[]}
+ */
+export function listDirtyTrackedFiles() {
+  return execFileSync("git", ["diff", "--name-only", "HEAD", "--", ":/"], { encoding: "utf8", maxBuffer: LARGE_MAX_BUFFER })
+    .split("\n")
+    .filter(Boolean);
+}
+
+/**
+ * The commit `ref` resolves to, or `null` when it does not resolve. Used to
+ * put the SHA a scan actually compared against into that scan's own output,
+ * so a reported "0 candidates" carries the ref it was measured from
+ * (ugcportal-kssp mitigation 1). Returns null rather than throwing: the code
+ * printing a provenance banner must not itself be what fails the run.
+ *
+ * @param {string} ref
+ * @returns {string | null}
+ */
+export function resolveRefSha(ref) {
+  try {
+    return execFileSync("git", ["rev-parse", "--verify", `${ref}^{commit}`], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Every tracked path, repo-root-relative, for "does the file this comment
  * points at exist" checks. One subprocess; callers should cache the result.
  * Unlike `git diff`/`git show`, plain `git ls-files` is scoped to "the
