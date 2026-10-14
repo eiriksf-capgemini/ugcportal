@@ -249,10 +249,15 @@ describe("header-sm class output is byte-identical at all four call sites (ugcpo
     expect(buttonWithText("Facebook").className).toBe(HEADER_SM_OUTLINE_FULL_WIDTH_LITERAL);
   });
 
-  it("every non-test source file under src carries exactly four size=\"header-sm\" call sites: three in sign-in-menu.tsx, one in auth-status.tsx", () => {
+  it("the literal header-sm occurs exactly four times across non-test sources outside button.tsx, in any spelling: three in sign-in-menu.tsx, one in auth-status.tsx", () => {
+    // Any quoted spelling counts: size="header-sm", size={"header-sm"},
+    // buttonVariants({ size: "header-sm" }), a template literal. button.tsx is
+    // excluded because it DEFINES the key. Round 3 of PR #237 showed the
+    // narrower `size="header-sm"` pattern let a buttonVariants() caller through.
     const found: Record<string, number> = {};
     for (const file of (cachedSourceFiles ??= walkSourceFiles(SRC_ROOT, isTestFile))) {
-      const n = stripComments(readFileSync(file, "utf8"), file).match(/size="header-sm"/g)?.length ?? 0;
+      if (file.endsWith(`${path.sep}components${path.sep}ui${path.sep}button.tsx`)) continue;
+      const n = stripComments(readFileSync(file, "utf8"), file).match(/["'`]header-sm["'`]/g)?.length ?? 0;
       if (n > 0) found[path.relative(REPO_ROOT, file).split(path.sep).join("/")] = n;
     }
     expect(found).toEqual({
