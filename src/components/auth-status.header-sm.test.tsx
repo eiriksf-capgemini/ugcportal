@@ -196,14 +196,12 @@ describe("AuthStatus controls pin header-sm (ugcportal-6wkd)", () => {
 });
 
 /**
- * ugcportal-hhjq K1: the four call sites' rendered class strings as LITERALS,
- * captured from origin/main fc1cb69 before that bead's decision (keep the
- * dedicated `header-sm` cva key rather than a shared cn() override at the
- * callers) was made. Every assertion above compares against
- * `buttonVariants()` itself, so a change to `header-sm`'s definition moves
- * both sides together and passes; only a literal can say the output did not
- * change. If `header-sm` or the base classes change on purpose, update these
- * strings in the same PR.
+ * ugcportal-hhjq K1: the four call sites' rendered class strings as literals.
+ * The assertions above compare against `buttonVariants()` itself, so editing
+ * `header-sm`'s definition moves both sides of those comparisons together;
+ * these literals do not move. (Checked: changing `header-sm`'s padding token
+ * fails both tests below and none above.) If `header-sm` or the base classes
+ * change on purpose, update the strings in the same PR.
  */
 const HEADER_SM_OUTLINE_LITERAL =
   "group/button inline-flex shrink-0 items-center justify-center rounded-lg border bg-clip-padding font-medium whitespace-nowrap transition-all select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/80 focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-transparent motion-safe:active:not-aria-[haspopup]:translate-y-px disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 aria-invalid:border-destructive/75 aria-invalid:ring-3 aria-invalid:ring-destructive/80 [&_svg]:pointer-events-none [&_svg]:shrink-0 border-primary bg-transparent text-primary hover:border-primary-hover hover:underline aria-expanded:border-primary-hover aria-expanded:underline h-7 gap-1 px-2.5 text-[0.8rem] has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-3.5";
