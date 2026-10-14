@@ -95,8 +95,9 @@ describe("findUngatedMotionRules (ugcportal-rj7y K2)", () => {
 
     const offenders = findUngatedMotionRules(css);
     expect(offenders).toHaveLength(1);
-    expect(offenders[0]).toContain(`.animate-${"spin"}`);
-    expect(offenders[0]).toContain("animation");
+    expect(offenders[0]).toBe(
+      `.animate-${"spin"} { animation } (not nested inside @media (prefers-reduced-motion: ...))`,
+    );
   });
 
   it("flags bare scale, translate and rotate rules", () => {

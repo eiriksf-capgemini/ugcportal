@@ -162,15 +162,12 @@ function variantChain(token: string): string[] {
 
 /**
  * Whether the variants gate the utility. `motion-safe` and `motion-reduce`
- * count; `not-motion-safe` does not (it compiles to a rule that fires when
- * reduced motion IS requested), and neither does `not-motion-reduce`'s
- * inverse spelling written as a separate `not` segment.
+ * count. `not-motion-safe` does not (it compiles to a rule that fires when
+ * reduced motion IS requested): it is one whole segment, so the anchored
+ * match below rejects it.
  */
 function isGated(variants: readonly string[]): boolean {
-  return variants.some(
-    (variant, index) =>
-      /^motion-(?:safe|reduce)$/.test(variant) && variants[index - 1] !== "not",
-  );
+  return variants.some((variant) => /^motion-(?:safe|reduce)$/.test(variant));
 }
 
 export interface Finding {
