@@ -130,11 +130,16 @@ export function SiteHeader() {
             `min-w-12 shrink-[999]` (give way far faster than anything else),
             which by CSS arithmetic left room for about one letter of text
             once a long display name, the nav toggle and Sign out had taken
-            their widths (not observed in a render). What gives way instead
-            is the display name in AuthStatus, full name on its `title`: its
-            span is `min-w-0 truncate`, inside a `<form>` and the
-            `ml-auto flex min-w-0` wrapper below, and all three need
-            `min-w-0` or the row overflows rather than truncating the name.
+            their widths (confirmed in a Chromium render at 390px by the
+            round-1 reviewer: the text box was 12px wide and showed "U").
+            What gives way instead is the display name in AuthStatus, full
+            name on its `title`: the `<form>` and the `ml-auto flex min-w-0`
+            wrapper below both need `min-w-0` (without either, the round-2
+            reviewer measured the row at 574px instead of 358px, in plain-CSS
+            equivalents of these classes); the span needs
+            `truncate`, whose overflow:hidden already lets it shrink below
+            its content (without it, 489px), and must not be `shrink-0`
+            (574px). The span's own `min-w-0` is redundant (358px without).
             The `min-w-0 truncate` on the wordmark's text span below is
             inert under a `shrink-0` Link (nothing ever narrows it); it
             stays as a harmless fallback if the Link ever shrinks again.

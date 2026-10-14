@@ -10,10 +10,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
  *
  * WHAT THIS PINS: the class strings that decide the squeeze order - the
  * wordmark Link does not shrink (`shrink-0`, no `shrink-[999]`), and the
- * three links of the chain that lets the signed-in name truncate: the
- * `ml-auto` wrapper and the sign-out `<form>` carry `min-w-0`, and the name
- * span carries `min-w-0 truncate`, no `shrink-0`, and the full name on
- * `title`. Dropping any one lets the real header overflow.
+ * chain that lets the signed-in name truncate: the `ml-auto` wrapper and the
+ * sign-out `<form>` carry `min-w-0`, and the name span carries `truncate` and
+ * not `shrink-0`. Round-2 reviewer's Chromium widths at 390px, plain-CSS equivalents (shipped: 358px):
+ * dropping `min-w-0` from the wrapper or the form, or adding `shrink-0` to the
+ * span, gives 574px; dropping `truncate` gives 489px. The span's own `min-w-0`
+ * (pinned too) and the full name on `title` do not affect overflow.
  *
  * WHAT IT CANNOT: jsdom does no layout, so no pixel width is measured and
  * nothing here proves the rendered wordmark is N pixels wide at 390px. The
