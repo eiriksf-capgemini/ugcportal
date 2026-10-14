@@ -122,12 +122,14 @@ export const GALLERY_TILE_BASE_CLASS = cn(
 /**
  * One INTERACTIVE tile (gallery.tsx's own `<button>`, which opens the
  * lightbox): the shared base above, plus `group` (so `GALLERY_TILE_IMAGE_
- * CLASS`'s `group-hover: scale- […]` (space inserted before the utility,
- * same reason as every other bare mention in this file - ugcportal-61pv:
- * this exact spot, with the real value elided to an ellipsis rather than
- * written out, was found compiling a second, ungated `scale: …` rule
- * straight into the real production stylesheet, because this scan's own
- * "space inserted" convention had never been applied here) has an ancestor
+ * CLASS`'s `group-hover: scale- […]` (broken on purpose, like every other
+ * bare mention in this file: the space after the hyphen is what stops
+ * Tailwind extracting it, since `scale-` alone is no candidate; a space
+ * after the colon alone would not, the utility on its own still being one,
+ * ugcportal-rj7y - ugcportal-61pv: this exact spot, with the real value
+ * elided to an ellipsis rather than written out, was found compiling a
+ * second, ungated `scale: …` rule straight into the real production
+ * stylesheet, because the string had never been broken here) has an ancestor
  * to key off), the zoom-in cursor, and a focus-visible ring for keyboard
  * navigation — none of which belong on a tile nothing happens when you
  * activate.
@@ -159,8 +161,10 @@ export const GALLERY_TILE_CLASS = cn(
  * real browser (see the mutation-check note below).
  *
  * BUG 1, the property mismatch: Tailwind 4's `scale-*`/`translate-*`/
- * `rotate-*`/`skew-*` utilities compile to the STANDALONE CSS properties
- * `scale`/`translate`/`rotate` — not to `transform` — confirmed empirically
+ * `rotate-*` utilities compile to the STANDALONE CSS properties
+ * `scale`/`translate`/`rotate` — not to `transform` (`skew-*`, `rotate-x-*`
+ * and `rotate-y-*` are the exception: they DO compile to `transform`, read
+ * off a real build in ugcportal-rj7y's round 1) — confirmed empirically
  * the same way PR #97 confirmed it for `empty-state.tsx`'s own hover-lift,
  * by compiling globals.css and reading the generated rule:
  * `.group-hover\: scale-\[1\.04\]…{ scale: 1.04; }` (space inserted after
@@ -172,8 +176,9 @@ export const GALLERY_TILE_CLASS = cn(
  * BUG 2, the one that survives fixing BUG 1 alone: simply swapping in
  * `motion-reduce:scale-none` is STILL a no-op, for a completely different
  * reason — CSS SPECIFICITY, not property name. Tailwind compiles
- * `group-hover: scale- [1.04]` (space inserted here, and everywhere else in
- * this comment the BARE, un-prefixed combination is named, on purpose —
+ * `group-hover: scale- [1.04]` (spaces inserted here, and everywhere else in
+ * this comment the BARE, un-prefixed combination is named, on purpose; the
+ * one after the hyphen is what stops extraction (ugcportal-rj7y) —
  * round-5 review: Tailwind's own source scanner reads raw file bytes, not
  * AST-aware JS, so writing that same combination UNBROKEN inside a comment
  * is itself a valid candidate, and got compiled into the real production
@@ -204,8 +209,9 @@ export const GALLERY_TILE_CLASS = cn(
  * The actual fix is the one `empty-state.tsx`'s own hover-lift already
  * uses and documents: `motion-safe:` on the TRIGGERING utility itself,
  * not (only) a `motion-reduce:` override on the result. `motion-safe:
- * group-hover: scale- [1.04]` (space inserted before the utility here too,
- * same reason as BUG 2 above - this exact sentence used to wrap across a
+ * group-hover: scale- [1.04]` (broken here too, same reason as BUG 2 above:
+ * the space after the hyphen is what stops extraction, ugcportal-rj7y -
+ * this exact sentence used to wrap across a
  * line break right between `motion-safe:` and `group-hover:`, and
  * Tailwind's scanner reads the two halves as SEPARATE whitespace-delimited
  * candidates, not one reassembled one - so the comment's own line wrap

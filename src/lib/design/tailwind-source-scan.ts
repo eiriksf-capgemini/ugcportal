@@ -1,6 +1,6 @@
 /**
- * Repo-wide scan for unprefixed motion-shaped Tailwind utilities in every
- * file Tailwind's own source detection can read (ugcportal-rj7y).
+ * Repo-wide scan for unprefixed motion-shaped Tailwind utilities in the
+ * files Tailwind's own source detection reads (ugcportal-rj7y).
  *
  * WHY: Tailwind v4 byte-scans files for class-shaped candidates and has no
  * notion of a comment, a doc or a test fixture. A motion utility spelled out
@@ -8,19 +8,37 @@
  * stylesheet as a live rule even though nothing renders it. Each earlier
  * instance was patched with another `@source not` glob or a scan scoped to
  * that one string; this module is the one general rule they were instances
- * of: outside a `motion-safe:` or `motion-reduce:` variant, a token whose
- * final segment is a scale, translate, rotate, skew, animate or
- * transform-moving transition utility is a finding, wherever it is.
+ * of: a token whose final segment is a scale, translate, rotate, skew,
+ * animate, transform or transform-moving transition utility is a finding,
+ * wherever it is, unless its variants gate it (see `isGated`).
  *
- * What it mirrors: the `@source not` lines in src/app/globals.css, read from
- * that file at run time (never copied here), applied to every text file
- * under the repo root. What it does not reproduce: Tailwind's gitignore
- * handling and binary detection. It skips the directories .gitignore names
- * (node_modules, .next, .claude/worktrees ...), build output and `.css`
- * files, and reads only the text extensions in TEXT_EXTENSION. Dot-directories
- * that are tracked (.claude, .github, .beads) ARE read: a planted bare
- * utility in .claude/ compiled into the stylesheet when this was checked; a file Tailwind skips but this reads is an over-match,
- * which is the safe direction for a guard.
+ * The gate is asymmetric (orchestrator decision on round-1 F6, recorded in
+ * the bead): `motion-safe:` gates any utility. `motion-reduce:` fires only
+ * for users who asked for less motion, so it gates only a utility that
+ * removes or neutralises motion (NEUTRALISING_SEGMENT: the `-none` forms,
+ * the identity scale of 100, a zero translate, rotate or skew,
+ * `transition-none`, `transform-none`); a `motion-reduce:` prefix on a
+ * utility that adds motion is a finding.
+ *
+ * What is read, and by what mechanism (`listReachableFiles` + `scanTree`):
+ * every file under the repo root, whatever its extension or lack of one
+ * (shell hooks, `Dockerfile`, `.sql`, `.prisma`, `.svg` ...), except
+ *   - files a `@source not` line in src/app/globals.css excludes, read from
+ *     that file at run time (never copied here);
+ *   - binary files, detected the way git does: a NUL byte in the first
+ *     8000 bytes (Tailwind ships its own binary-extension list instead);
+ *   - the extensions and lockfiles Tailwind's scanner itself ignores
+ *     (IGNORED_EXTENSION, IGNORED_FILE: the lists compiled into
+ *     @tailwindcss/oxide 4.3.3, readable with `strings` on its `.node`
+ *     binary), plus `.css`, which a planted utility in a `.css` file under
+ *     docs/ did not reach the build when this was checked;
+ *   - the directories and files .gitignore names (SKIPPED_DIRECTORY,
+ *     SKIPPED_PATH, GITIGNORED_FILE), which Tailwind's scanner honours.
+ * The gitignore handling is a hand-kept mirror, not a parse of .gitignore.
+ * Tracked dot-directories (.claude, .github, .beads) ARE read: a planted
+ * bare utility in .claude/ compiled into the stylesheet when this was
+ * checked. A file Tailwind skips but this reads is an over-match, which is
+ * the safe direction for a guard.
  */
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
@@ -79,7 +97,12 @@ export function sourceNotMatchers(globalsCssPath: string, root: string): RegExp[
   });
 }
 
-const TEXT_EXTENSION = /\.(?:tsx?|jsx?|mjs|cjs|mdx?|html|json|jsonl|ya?ml|txt)$/;
+/** Extensions Tailwind's scanner ignores (oxide 4.3.3), plus `.css` (see the header). */
+const IGNORED_EXTENSION = /\.(?:css|less|lock|sass|scss|styl|log)$/;
+/** Lockfiles Tailwind's scanner ignores (oxide 4.3.3). */
+const IGNORED_FILE = new Set(["package-lock.json", "pnpm-lock.yaml", "bun.lockb"]);
+/** File names .gitignore excludes wherever they sit. */
+const GITIGNORED_FILE = /^(?:\.env.*|.*\.tsbuildinfo|next-env\.d\.ts|.*\.db|.*\.pem|\.DS_Store|CLAUDE\.local\.md|npm-debug\.log.*)$/;
 const SKIPPED_DIRECTORY = new Set([
   "node_modules",
   ".git",
@@ -87,16 +110,21 @@ const SKIPPED_DIRECTORY = new Set([
   ".dolt",
   ".runtime",
   ".vercel",
+  ".yarn",
   "coverage",
   "generated",
   "playwright-report",
+  "blob-report",
   "test-results",
 ]);
-/** Directories .gitignore names by path, which Tailwind's scanner honours. */
-const SKIPPED_PATH = new Set([".claude/worktrees", ".beads/proxieddb"]);
-const SKIPPED_FILE = new Set(["package-lock.json"]);
+/** Directories .gitignore names by path from the root, which Tailwind's scanner honours. */
+const SKIPPED_PATH = new Set([".claude/worktrees", ".beads/proxieddb", "out", "build", "playwright/.cache"]);
 
-/** Every text file under `root` that no matcher excludes, as forward-slash paths relative to `root`. */
+/**
+ * Every file under `root` that no matcher and no ignore list excludes, as
+ * forward-slash paths relative to `root`. Binary files are dropped later, by
+ * content, in `scanTree`.
+ */
 export function listReachableFiles(root: string, excluded: readonly RegExp[]): string[] {
   const out: string[] = [];
   const walk = (dir: string): void => {
@@ -108,13 +136,20 @@ export function listReachableFiles(root: string, excluded: readonly RegExp[]): s
         if (!SKIPPED_PATH.has(rel)) walk(full);
         continue;
       }
-      if (!TEXT_EXTENSION.test(entry.name) || SKIPPED_FILE.has(entry.name)) continue;
+      if (!entry.isFile()) continue;
+      if (IGNORED_EXTENSION.test(entry.name) || IGNORED_FILE.has(entry.name)) continue;
+      if (GITIGNORED_FILE.test(entry.name)) continue;
       if (excluded.some((matcher) => matcher.test(rel))) continue;
       out.push(rel);
     }
   };
   walk(root);
   return out.sort();
+}
+
+/** A NUL byte in the first 8000 bytes, git's own binary heuristic. */
+export function isBinary(content: Buffer): boolean {
+  return content.subarray(0, 8000).includes(0);
 }
 
 /**
@@ -136,8 +171,27 @@ const DANGEROUS_SEGMENT = new RegExp(
     `-?(?:scale|translate|rotate|skew)-${AXIS}${NUMERIC}` +
     "|-?animate-(?!none$)(?:[a-z][\\w-]*|\\[.*\\]|\\(.*\\))" +
     `|transition-(?:all|transform)` +
+    "|transform-(?:gpu|cpu|\\[.*\\]|\\(.*\\))" +
     `|transition-\\[[^\\]]*${MOVING}[^\\]]*\\]` +
     "|\\[(?:scale|translate|rotate|skew|transform|animation|animation-name|animation-duration|transition|--tw-(?:translate|scale|rotate|skew)-[xyz]):[^\\]]*\\]" +
+    ")$",
+);
+
+/**
+ * A final segment that removes or neutralises motion: the only utilities a
+ * `motion-reduce:` prefix gates. `-none` forms, the identity scale of 100, a
+ * zero translate, rotate or skew, `transition-none` and `transform-none`.
+ * Assembled from parts for the same reason as DANGEROUS_SEGMENT. The compiled
+ * check (scripts/check-reduced-motion-css-exclusions.mjs) keeps a copy as
+ * NEUTRALISING_UTILITY, and tailwind-source-scan.test.ts fails if the two
+ * sources differ.
+ */
+export const NEUTRALISING_SEGMENT = new RegExp(
+  "^(?:" +
+    "(?:animate|transition|transform|scale|translate|rotate|skew)-none" +
+    "|scale-(?:[xyz]-)?1" + "00" +
+    "|(?:translate|rotate)-(?:[xyz]-)?0" +
+    "|skew-(?:[xy]-)?0" +
     ")$",
 );
 
@@ -161,13 +215,17 @@ function variantChain(token: string): string[] {
 }
 
 /**
- * Whether the variants gate the utility. `motion-safe` and `motion-reduce`
- * count. `not-motion-safe` does not (it compiles to a rule that fires when
- * reduced motion IS requested): it is one whole segment, so the anchored
- * match below rejects it.
+ * Whether the variants gate `utility`. `motion-safe` gates anything.
+ * `motion-reduce` fires exactly when reduced motion IS requested, so it gates
+ * only a NEUTRALISING_SEGMENT utility: `motion-reduce:` on a utility that
+ * adds motion animates for the users who asked for none. `not-motion-safe`
+ * gates nothing (it fires under reduce too, and adds no neutralising
+ * guarantee): it is one whole segment, so the anchored matches reject it.
  */
-function isGated(variants: readonly string[]): boolean {
-  return variants.some((variant) => /^motion-(?:safe|reduce)$/.test(variant));
+function isGated(variants: readonly string[], utility: string): boolean {
+  if (variants.includes("motion-safe")) return true;
+  if (variants.includes("motion-reduce")) return NEUTRALISING_SEGMENT.test(utility);
+  return false;
 }
 
 export interface Finding {
@@ -186,21 +244,32 @@ export function findBareDangerousUtilities(source: string, file: string): Findin
       const variants = variantChain(token);
       const utility = variants.pop() ?? "";
       if (!DANGEROUS_SEGMENT.test(utility)) continue;
-      if (isGated(variants)) continue;
+      if (isGated(variants, utility)) continue;
       findings.push({ file, line: index + 1, token });
     }
   });
   return findings;
 }
 
-/** Scans every reachable file under `root`. Returns the findings and how many files were read. */
+/**
+ * Scans every reachable, non-binary file under `root`. Returns the findings,
+ * how many files were read and how many were skipped as binary.
+ */
 export function scanTree(
   root: string,
   excluded: readonly RegExp[],
-): { findings: Finding[]; filesScanned: number } {
-  const files = listReachableFiles(root, excluded);
-  const findings = files.flatMap((file) =>
-    findBareDangerousUtilities(readFileSync(path.join(root, file), "utf8"), file),
-  );
-  return { findings, filesScanned: files.length };
+): { findings: Finding[]; filesScanned: number; binarySkipped: number } {
+  const findings: Finding[] = [];
+  let filesScanned = 0;
+  let binarySkipped = 0;
+  for (const file of listReachableFiles(root, excluded)) {
+    const content = readFileSync(path.join(root, file));
+    if (isBinary(content)) {
+      binarySkipped++;
+      continue;
+    }
+    filesScanned++;
+    findings.push(...findBareDangerousUtilities(content.toString("utf8"), file));
+  }
+  return { findings, filesScanned, binarySkipped };
 }

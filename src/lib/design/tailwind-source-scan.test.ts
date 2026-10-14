@@ -1,7 +1,9 @@
 /**
- * ugcportal-rj7y: no file Tailwind's source detection can read carries an
- * unprefixed motion-shaped utility outside the named allowlist below.
- * The scanner and the reasoning live in tailwind-source-scan.ts.
+ * ugcportal-rj7y: no file the scanner reads carries an ungated
+ * motion-shaped utility outside the named allowlist below. Which files it
+ * reads (every non-binary file under the root, less Tailwind's own ignore
+ * lists, the `@source not` globs and the gitignored paths), what counts as
+ * a gate, and why, are in tailwind-source-scan.ts's header.
  */
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -10,7 +12,9 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { NEUTRALISING_UTILITY } from "../../../scripts/check-reduced-motion-css-exclusions.mjs";
 import {
+  NEUTRALISING_SEGMENT,
   findBareDangerousUtilities,
   globToRegExp,
   parseSourceNotGlobs,
@@ -62,7 +66,7 @@ function unallowed(findings: readonly Finding[]): Finding[] {
   );
 }
 
-describe("every file Tailwind can read is free of unprefixed motion utilities (ugcportal-rj7y K1)", () => {
+describe("every file the scanner reads is free of ungated motion utilities (ugcportal-rj7y K1)", () => {
   const excluded = sourceNotMatchers(GLOBALS_CSS, REPO_ROOT);
   const { findings, filesScanned } = scanTree(REPO_ROOT, excluded);
 
@@ -77,7 +81,8 @@ describe("every file Tailwind can read is free of unprefixed motion utilities (u
       offending(unallowed(findings)),
       "an unprefixed motion-shaped utility in a file Tailwind scans compiles into the " +
         "production stylesheet, comment or not. Break the string (a space after the hyphen " +
-        "is enough in prose), gate it with motion-safe:/motion-reduce:, or add a named " +
+        "is enough in prose), gate it with motion-safe: (motion-reduce: gates only a " +
+        "utility that removes motion), or add a named " +
         "ALLOWLIST entry with a reason.",
     ).toEqual([]);
   });
@@ -104,22 +109,63 @@ describe("findBareDangerousUtilities", () => {
       "-translate-y-0.5",
       "hover:rotate-6",
       "skew-x-3",
+      "skew-y-6",
+      "rotate-x-12",
+      "rotate-y-12",
+      "-skew-x-2",
       "animate-spin",
       "transition-transform",
       "transition-[opacity,transform]",
       "hover:[scale:1.1]",
+      "transform-gpu",
+      "transform-[scale(1.1)]",
       "not-motion-safe:animate-pulse",
     ];
     expect(hits(planted.join(" "))).toEqual(planted);
   });
 
-  it("does not flag a motion-safe: or motion-reduce: gated token at any position in the chain", () => {
+  it("does not flag a motion-safe: gated token at any position in the chain", () => {
     expect(
       hits(
-        "motion-safe:group-hover:scale-[1.04] hover:motion-safe:animate-spin motion-reduce:scale-none " +
-          "sm:motion-safe:hover:translate-y-px motion-reduce:translate-y-0",
+        "motion-safe:group-hover:scale-[1.04] hover:motion-safe:animate-spin " +
+          "sm:motion-safe:hover:translate-y-px motion-safe:skew-x-3",
       ),
     ).toEqual([]);
+  });
+
+  // Orchestrator decision on round-1 F6: motion-reduce: fires only for users
+  // who asked for less motion, so it gates a utility that removes motion and
+  // never one that adds it.
+  it("flags motion-reduce: on a utility that ADDS motion", () => {
+    const adding = [
+      "motion-reduce:animate-spin",
+      "motion-reduce:scale-110",
+      "hover:motion-reduce:-translate-y-1",
+      "motion-reduce:rotate-6",
+      "motion-reduce:skew-x-3",
+      "motion-reduce:transition-transform",
+      "motion-reduce:transition-all",
+      "motion-reduce:transform-gpu",
+    ];
+    expect(hits(adding.join(" "))).toEqual(adding);
+  });
+
+  it("accepts motion-reduce: on a utility that removes or neutralises motion, which bare would be flagged", () => {
+    const neutral = ["scale-100", "translate-0", "translate-x-0", "translate-y-0", "rotate-0", "skew-0"];
+    // Bare, the zero/identity forms still match the dangerous shape, so the
+    // prefix is what makes them pass below.
+    expect(hits(neutral.join(" "))).toEqual(neutral);
+    expect(
+      hits(
+        [...neutral, "animate-none", "scale-none", "transition-none", "transform-none"]
+          .map((utility) => `motion-reduce:${utility}`)
+          .join(" "),
+      ),
+    ).toEqual([]);
+  });
+
+  it("the compiled check's copy of the neutralising shape is the same regex", () => {
+    expect(NEUTRALISING_UTILITY.source).toBe(NEUTRALISING_SEGMENT.source);
   });
 
   it("does not flag -none forms, unrelated utilities, or the word transition in prose", () => {
@@ -178,7 +224,24 @@ describe("scanTree over a planted tree (ugcportal-rj7y K1 fixture)", () => {
   const excluded = sourceNotMatchers(GLOBALS_CSS, REPO_ROOT);
   const PLANTED = "group-hover:scale-[1.1]";
 
-  it.each(["src/a.ts", "docs/a.md", "scripts/a.mjs", "e2e/helpers.ts", "other/a.json", ".claude/a.md"])(
+  it.each([
+    "src/a.ts",
+    "docs/a.md",
+    "scripts/a.mjs",
+    "e2e/helpers.ts",
+    "other/a.json",
+    ".claude/a.md",
+    // Round-1 F2: Tailwind reads these too; a .sh plant compiled.
+    "scripts/x.sh",
+    "scripts/hook",
+    ".beads/hooks/pre-push",
+    "Dockerfile",
+    "prisma/schema.prisma",
+    "prisma/migrations/1/migration.sql",
+    "public/a.svg",
+    "a.py",
+    "a.toml",
+  ])(
     "fails naming file and string for a bare mention in %s, passes once removed",
     (rel) => {
       const root = plant({ [rel]: `// ${PLANTED}\n` });
@@ -197,7 +260,7 @@ describe("scanTree over a planted tree (ugcportal-rj7y K1 fixture)", () => {
       "e2e/a.spec.ts": PLANTED,
       "e2e/production/a.spec.tsx": PLANTED,
     });
-    expect(scanTree(root, excluded)).toEqual({ findings: [], filesScanned: 0 });
+    expect(scanTree(root, excluded)).toEqual({ findings: [], filesScanned: 0, binarySkipped: 0 });
   });
 
   it("still reads a *.spec.ts outside e2e and a *.test.ts outside src", () => {
@@ -216,6 +279,18 @@ describe("scanTree over a planted tree (ugcportal-rj7y K1 fixture)", () => {
       "src/a.css": PLANTED,
     });
     expect(scanTree(root, excluded).filesScanned).toBe(0);
+  });
+
+  it("skips a binary file by its NUL byte, and the extensions and lockfiles Tailwind ignores", () => {
+    const root = plant({
+      "public/a.png": `\u0000PNG ${PLANTED}`,
+      "a.log": PLANTED,
+      "yarn.lock": PLANTED,
+      "package-lock.json": PLANTED,
+      ".env.local": PLANTED,
+      "tsconfig.tsbuildinfo": PLANTED,
+    });
+    expect(scanTree(root, excluded)).toEqual({ findings: [], filesScanned: 0, binarySkipped: 1 });
   });
 
   it("reads tracked dot-directories, which Tailwind compiled from in a real build", () => {
