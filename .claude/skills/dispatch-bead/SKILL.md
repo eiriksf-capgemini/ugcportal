@@ -54,8 +54,13 @@ node scripts/check-bead-dispatch.mjs <bead-id> && echo DISPATCH-OK
 ```
 
 **The failure you should expect most often is freshness.** The gate requires
-the bead's `Premise verified` line to name `origin/main`'s *current* HEAD,
-and prints how many commits stale it is otherwise. That is deliberate and it
+the bead's `Premise verified` line to name `origin/main`'s *current* HEAD —
+that commit itself, not an older one and not one built on top of it — and
+prints how many commits stale it is otherwise, or that the commit is not on
+`origin/main` at all — usually a branch commit whose PR was since
+squash-merged (`main` has the change under a different sha), sometimes a
+branch not yet merged; either way it cannot be compared with `main`'s
+history, so re-verify against `origin/main`'s HEAD. That is deliberate and it
 is the expensive half: clearing it means re-running the bead's premise check
 against today's code and writing a new line, not copying a date forward. The
 reason is measured — the v0.7.0 premise audit
