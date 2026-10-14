@@ -43,7 +43,9 @@ vi.mock("@/lib/auth", () => ({
 const database = createTemporaryDatabase();
 const { prisma } = await import("@/lib/prisma");
 const { PUBLIC_MEDIA_SCOPE } = await import("@/lib/public-media");
-const { commercialPublishRefusal } = await import("@/lib/alcohol-commerce");
+const { commercialPublishRefusal, isWithheldFromPublicRead } = await import(
+  "@/lib/alcohol-commerce"
+);
 
 const OWNER = "owner-scope-pgpq";
 
@@ -130,7 +132,7 @@ const CASES: Case[] = [
   },
   {
     id: "nothing-commercial-shows-alcohol",
-    what: "a glass of wine as personal content — §9-2 has nothing to say about it",
+    what: "a glass of wine as personal content, nothing commercial: withheld since ugcportal-qnq9.11 (option (a)), by both sides",
     disclosure: "none",
     links: 0,
     depictsAlcohol: true,
@@ -343,8 +345,8 @@ async function seed(testCase: Case): Promise<void> {
  * and the two enumerated disagreements below could not be stated at all. The
  * projection mirrors what that route selects.
  */
-async function predicateRefusalField(id: string): Promise<string | null> {
-  const row = await prisma.media.findUniqueOrThrow({
+async function predicateRow(id: string) {
+  return prisma.media.findUniqueOrThrow({
     where: { id },
     select: {
       advertisingDisclosure: {
@@ -357,12 +359,35 @@ async function predicateRefusalField(id: string): Promise<string | null> {
       _count: { select: { commercialLinks: true } },
     },
   });
+}
+
+async function predicateRefusalField(id: string): Promise<string | null> {
+  const row = await predicateRow(id);
   const refusal = commercialPublishRefusal({
     disclosure: row.advertisingDisclosure,
     listing: row.listing,
     commercialLinks: { commercialLinkCount: row._count.commercialLinks },
   });
   return refusal?.field ?? null;
+}
+
+/**
+ * What the READ arm's predicate twin says (ugcportal-qnq9.11): withheld when
+ * the publish gate refuses, OR when the item is recorded as showing alcohol
+ * whatever is attached. `commercialPublishRefusal` alone cannot say the second
+ * half - it returns null for an item with nothing commercial on it - so the
+ * comparison below asks both and ORs them.
+ */
+async function predicateWithholds(id: string): Promise<boolean> {
+  const row = await predicateRow(id);
+  return (
+    (await predicateRefusalField(id)) !== null ||
+    isWithheldFromPublicRead({
+      disclosure: row.advertisingDisclosure,
+      listing: row.listing,
+      commercialLinks: { commercialLinkCount: row._count.commercialLinks },
+    })
+  );
 }
 
 let visibleIds: Set<string>;
@@ -408,11 +433,11 @@ describe("the § 9-2 predicate and PUBLIC_MEDIA_SCOPE agree, row by row (ugcport
     // A seed that produced all-visible or all-hidden rows would make every
     // `expect` in this file agree with a scope that filtered on nothing, or
     // on everything.
-    const fields = await Promise.all(
-      CASES.map((testCase) => predicateRefusalField(testCase.id)),
+    const withheld = await Promise.all(
+      CASES.map((testCase) => predicateWithholds(testCase.id)),
     );
-    expect(fields.filter((field) => field === null).length).toBeGreaterThan(3);
-    expect(fields.filter((field) => field !== null).length).toBeGreaterThan(3);
+    expect(withheld.filter((w) => !w).length).toBeGreaterThan(3);
+    expect(withheld.filter((w) => w).length).toBeGreaterThan(3);
     expect(visibleIds.size).toBeGreaterThan(3);
     expect(visibleIds.size).toBeLessThan(CASES.length);
   });
@@ -421,10 +446,8 @@ describe("the § 9-2 predicate and PUBLIC_MEDIA_SCOPE agree, row by row (ugcport
     if (DECIDED_NOT_TO_FILTER[testCase.id]) continue;
 
     it(`${testCase.id}: ${testCase.what}`, async () => {
-      const field = await predicateRefusalField(testCase.id);
-      expect(visibleIds.has(testCase.id), `${testCase.id} (${field})`).toBe(
-        field === null,
-      );
+      const withheld = await predicateWithholds(testCase.id);
+      expect(visibleIds.has(testCase.id), `${testCase.id}`).toBe(!withheld);
     });
   }
 });
@@ -455,18 +478,26 @@ describe("the one half deliberately left out of the filter (ugcportal-mqh8)", ()
   }
 });
 
-describe("the filter is a disjunction of two arms, and both of them matter", () => {
-  it("serves an alcohol-recorded row with nothing commercial, and hides the same row once a link is attached", async () => {
+describe("the filter is a conjunction: not recorded true, AND (answered no OR nothing commercial) (ugcportal-qnq9.11)", () => {
+  it("withholds an alcohol-recorded row with nothing commercial, and serves the same row once the answer is `no` or `null`", async () => {
     /*
-     * THE ARM THAT IS EASY TO LOSE. A filter written as the single condition
-     * `listing: { is: { depictsAlcohol: false } }` would pass every refusing
-     * case in this file — and would also empty the public site of every
-     * untriaged photograph on it, which is almost all of them. This case is
-     * what fails if that happens: the same row, with and without a
-     * commercial link, on the two sides of the line.
+     * REWRITTEN, NOT DELETED. This case used to assert that the same row was
+     * SERVED with nothing commercial and hidden once a link arrived: the proof
+     * that the "nothing commercial" arm was alive. Under option (a) a recorded
+     * `true` is withheld with or without a link, so that proof moves to
+     * `null` and `false`, which are the states the arm still carries, and the
+     * recorded `true` is asserted withheld on both sides of the link.
+     *
+     * THE ARM THAT IS STILL EASY TO LOSE: a filter written as the single
+     * condition `depictsAlcohol: false` would pass every refusing case in this
+     * file and empty the site of every untriaged photograph.
      */
     const id = "nothing-commercial-shows-alcohol";
-    expect(visibleIds.has(id)).toBe(true);
+    expect(visibleIds.has(id)).toBe(false);
+    const served = async () =>
+      (await prisma.media.count({ where: { id, ...PUBLIC_MEDIA_SCOPE } })) === 1;
+    expect(await served()).toBe(false);
+    expect(await predicateWithholds(id)).toBe(true);
 
     const link = await prisma.commercialLink.create({
       data: {
@@ -476,13 +507,24 @@ describe("the filter is a disjunction of two arms, and both of them matter", () 
         benefitSourceId: brandIds.clean,
       },
     });
-    const served = async () =>
-      (await prisma.media.count({ where: { id, ...PUBLIC_MEDIA_SCOPE } })) === 1;
     expect(await served()).toBe(false);
+    await prisma.commercialLink.delete({ where: { id: link.id } });
+
+    for (const depictsAlcohol of [null, false]) {
+      await prisma.mediaListing.update({
+        where: { mediaId: id },
+        data: { depictsAlcohol },
+      });
+      expect(await served(), `depictsAlcohol ${depictsAlcohol}`).toBe(true);
+      expect(await predicateWithholds(id)).toBe(false);
+    }
 
     // Put it back, so `visibleIds` (taken once in `beforeAll`) still
     // describes the database the cases above were compared against.
-    await prisma.commercialLink.delete({ where: { id: link.id } });
-    expect(await served()).toBe(true);
+    await prisma.mediaListing.update({
+      where: { mediaId: id },
+      data: { depictsAlcohol: true },
+    });
+    expect(await served()).toBe(false);
   });
 });

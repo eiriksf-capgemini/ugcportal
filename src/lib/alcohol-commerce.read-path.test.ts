@@ -711,14 +711,88 @@ describe("a priced, cleared, fully-served item loses its price block too (ugcpor
     expect((await PUBLISH(publishRequest(), context())).status).toBe(200);
     expect(await surfaces()).toEqual(ALL_SERVED);
 
-    for (const depictsAlcohol of [null, true] as const) {
-      await prisma.mediaListing.update({
-        where: { mediaId: MEDIA_ID },
-        data: { depictsAlcohol },
-      });
-      expect(await surfaces(), `depictsAlcohol: ${depictsAlcohol}`).toEqual(
-        WITHOUT_OFFER,
-      );
-    }
+    // `null` (untriaged) keeps today's behaviour; a recorded `true` is
+    // withheld on every reader since ugcportal-qnq9.11 (option (a), true-only),
+    // so the whole sentence "whatever the alcohol answer is" ended there.
+    await prisma.mediaListing.update({
+      where: { mediaId: MEDIA_ID },
+      data: { depictsAlcohol: null },
+    });
+    expect(await surfaces(), "depictsAlcohol: null").toEqual(WITHOUT_OFFER);
+
+    await prisma.mediaListing.update({
+      where: { mediaId: MEDIA_ID },
+      data: { depictsAlcohol: true },
+    });
+    expect(await surfaces(), "depictsAlcohol: true").toEqual(NONE_SERVED);
   });
+});
+
+describe("an item recorded as showing alcohol is served nowhere, commercial or not (ugcportal-qnq9.11 K2)", () => {
+  /**
+   * OPTION (a), TRUE-ONLY (decided 2026-10-14, ugcportal-6yrd): `true` is
+   * withheld, `null` keeps today's behaviour. One row per state of
+   * `depictsAlcohol` (a listing that does not exist, `null`, `false`, `true`)
+   * crossed with commercial (nothing attached / a declared benefit AND a link)
+   * against a real database, through the six real readers. The assertion is
+   * the whole served set, not "the true rows are missing", so a rule that
+   * served everything and a rule that served nothing both fail it.
+   */
+  type State = "no listing" | null | false | true;
+  const STATES: State[] = ["no listing", null, false, true];
+
+  function served(state: State, commercial: boolean): boolean {
+    if (state === true) return false;
+    if (commercial) return state === false;
+    return true;
+  }
+
+  async function seedRow(state: State, commercial: boolean): Promise<void> {
+    await seedUntriagedItem();
+    if (state !== "no listing") await recordAlcoholAnswer(state);
+    await prisma.media.update({
+      where: { id: MEDIA_ID },
+      data: { publishedAt: new Date("2026-03-02T00:00:00.000Z") },
+    });
+    if (!commercial) return;
+    // Written directly: the routes refuse every commercial row whose alcohol
+    // answer is not `no` (the publish-side gate), and this file is about what
+    // the READ path does with a row that exists anyway.
+    const brand = await prisma.benefitSource.create({
+      data: {
+        slug: "riedel-qnq9-11",
+        name: "Riedel",
+        alcoholLinked: false,
+        alcoholAnsweredAt: new Date(),
+      },
+    });
+    await prisma.mediaAdvertisingDisclosure.create({
+      data: {
+        mediaId: MEDIA_ID,
+        benefitReceived: true,
+        benefitKind: "FREE_PRODUCT",
+        marketValueOre: 49900,
+        label: "Advertisement / Reklame",
+        benefitSourceId: brand.id,
+      },
+    });
+    await prisma.commercialLink.create({
+      data: {
+        mediaId: MEDIA_ID,
+        url: "https://track.adtraction.com/t/t?a=1234&m=qnq9-11",
+        network: "ADTRACTION",
+        benefitSourceId: brand.id,
+      },
+    });
+  }
+
+  for (const state of STATES) {
+    for (const commercial of [false, true]) {
+      const isServed = served(state, commercial);
+      it(`depictsAlcohol ${state === "no listing" ? "(no listing)" : state}, ${commercial ? "commercial" : "nothing commercial"}: ${isServed ? "served" : "withheld"} on all six readers`, async () => {
+        await seedRow(state, commercial);
+        expect(await surfaces()).toEqual(isServed ? WITHOUT_OFFER : NONE_SERVED);
+      });
+    }
+  }
 });

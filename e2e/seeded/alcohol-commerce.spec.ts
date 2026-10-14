@@ -64,6 +64,10 @@ const OWNER_ID = "e2e-qnq9-3-owner";
 const ACCESSORY_ID = "e2e-qnq9-3-accessory";
 const DRINK_ID = "e2e-qnq9-3-drink";
 const BRAND_ID = "e2e-qnq9-3-brand";
+// src/lib/attestation.ts CURRENT_ATTESTATION_VERSION; without a current
+// attestation the public scope serves neither row (found while editing this
+// spec for ugcportal-qnq9.11: every test here failed before that bead).
+const ATTESTATION_VERSION = "2026-10-08.1";
 const LABEL = "Advertisement / Reklame";
 
 /** Everything this spec created, removed in the order the foreign keys allow.
@@ -73,6 +77,7 @@ const LABEL = "Advertisement / Reklame";
 async function cleanup() {
   await db.batch(
     [
+      `DELETE FROM "MediaAttestation" WHERE "mediaId" IN ('${ACCESSORY_ID}','${DRINK_ID}')`,
       `DELETE FROM "MediaAdvertisingDisclosure" WHERE "mediaId" IN ('${ACCESSORY_ID}','${DRINK_ID}')`,
       `DELETE FROM "MediaListing" WHERE "mediaId" IN ('${ACCESSORY_ID}','${DRINK_ID}')`,
       `DELETE FROM "Media" WHERE "id" IN ('${ACCESSORY_ID}','${DRINK_ID}')`,
@@ -115,6 +120,13 @@ test.beforeAll(async () => {
                'media/${OWNER_ID}/accessory.png','previews/${OWNER_ID}/accessory.webp',
                '${ACCESSORY_ID}-preview','image/png',1024,'accessory.png',
                'An empty wine glass on a windowsill','${now}','${now}')`,
+`INSERT INTO "MediaAttestation"
+         ("id","mediaId","attestedByUserId","attestationVersion","authorship",
+          "ownOriginalNotFromWeb","showsIdentifiablePeople","showsMinors",
+          "containsMusicNotOwned","otherCreativeContributor","brandOrSponsorship",
+          "aiGenerated","uploaderIsAdult")
+       VALUES ('${ACCESSORY_ID}-attestation','${ACCESSORY_ID}','${OWNER_ID}',
+               '${ATTESTATION_VERSION}','AUTHOR',1,0,0,0,0,1,0,1)`,
       `INSERT INTO "MediaListing"
          ("id","mediaId","currency","depictsPeople","depictsMinors","containsMusic",
           "thirdPartyCreator","sponsoredContent","depictsAlcohol","wineAccessory",
@@ -136,6 +148,13 @@ test.beforeAll(async () => {
                'media/${OWNER_ID}/drink.png','previews/${OWNER_ID}/drink.webp',
                '${DRINK_ID}-preview','image/png',1024,'drink.png',
                'A glass of red wine, photographed as wine','${now}','${now}')`,
+`INSERT INTO "MediaAttestation"
+         ("id","mediaId","attestedByUserId","attestationVersion","authorship",
+          "ownOriginalNotFromWeb","showsIdentifiablePeople","showsMinors",
+          "containsMusicNotOwned","otherCreativeContributor","brandOrSponsorship",
+          "aiGenerated","uploaderIsAdult")
+       VALUES ('${DRINK_ID}-attestation','${DRINK_ID}','${OWNER_ID}',
+               '${ATTESTATION_VERSION}','AUTHOR',1,0,0,0,0,1,0,1)`,
       `INSERT INTO "MediaListing"
          ("id","mediaId","currency","depictsPeople","depictsMinors","containsMusic",
           "thirdPartyCreator","sponsoredContent","depictsAlcohol","wineAccessory",
@@ -168,12 +187,18 @@ test("K1: the accessory tile renders its advertising label", async ({ page }) =>
   await expect(label).toHaveText(LABEL);
 });
 
-test("K6: the tile showing the drink carries no advertising label", async ({
+test("K6: the drink carries no advertising label - since ugcportal-qnq9.11 it has no tile at all", async ({
   page,
 }) => {
   await page.goto("/");
 
-  await expect(page.locator(`[data-gallery-tile="${DRINK_ID}"]`)).toBeAttached();
+  // An item recorded as showing alcohol is withheld from the public gallery
+  // (option (a), true-only), so "its tile has no label" became "it has no
+  // tile". The accessory's tile is the control that the gallery rendered.
+  await expect(
+    page.locator(`[data-gallery-tile="${ACCESSORY_ID}"]`),
+  ).toBeAttached();
+  await expect(page.locator(`[data-gallery-tile="${DRINK_ID}"]`)).toHaveCount(0);
   await expect(
     page.locator(`[data-gallery-advertising-label="${DRINK_ID}"]`),
   ).toHaveCount(0);
@@ -213,7 +238,7 @@ test("K6: no tile on the public gallery carries a price or a buy control", async
   ).toHaveCount(0);
 });
 
-test("K6: the drink's tile carries no commercial outbound link", async ({
+test("K6: no tile carries a commercial outbound link, and the drink has none", async ({
   page,
 }) => {
   /*
@@ -227,7 +252,11 @@ test("K6: the drink's tile carries no commercial outbound link", async ({
    */
   await page.goto("/");
 
-  const tile = page.locator(`[data-gallery-tile="${DRINK_ID}"]`);
+  // The drink is withheld since ugcportal-qnq9.11, so the tile this asserts
+  // over is the accessory's: the one tile the page does render that could
+  // carry an affiliate link.
+  await expect(page.locator(`[data-gallery-tile="${DRINK_ID}"]`)).toHaveCount(0);
+  const tile = page.locator(`[data-gallery-tile="${ACCESSORY_ID}"]`);
   await expect(tile).toBeAttached();
 
   const hrefs = await tile

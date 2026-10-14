@@ -10,6 +10,7 @@ import {
   commercialPublishRefusal,
   effectiveBrandAlcoholAnswer,
   isAlcoholUnclearedAdvertisement,
+  isWithheldFromPublicRead,
 } from "@/lib/alcohol-commerce";
 import {
   carriesUnlabelledCommercialLink,
@@ -551,6 +552,30 @@ describe("isAlcoholUnclearedAdvertisement (the pair, ugcportal-pgpq)", () => {
     // two functions that both always answer the same thing.
     expect(refusals).toBeGreaterThan(0);
     expect(refusals).toBeLessThan(listings.length * 3 * 2);
+  });
+});
+
+describe("isWithheldFromPublicRead (option (a), true-only, ugcportal-qnq9.11)", () => {
+  const NO_LINKS = { commercialLinkCount: 0 };
+  const ONE_LINK = { commercialLinkCount: 1 };
+  const cast = (listing: unknown) =>
+    listing as { depictsAlcohol: boolean | null } | null | undefined;
+
+  it.each([
+    ["a recorded yes, nothing commercial", { depictsAlcohol: true }, null, NO_LINKS, true],
+    ["a recorded yes, a link", { depictsAlcohol: true }, null, ONE_LINK, true],
+    ["a recorded yes, a benefit", { depictsAlcohol: true }, { benefitReceived: true }, NO_LINKS, true],
+    ["a recorded no, nothing commercial", { depictsAlcohol: false }, null, NO_LINKS, false],
+    ["a recorded no, a link", { depictsAlcohol: false }, null, ONE_LINK, false],
+    ["a null answer, nothing commercial", { depictsAlcohol: null }, null, NO_LINKS, false],
+    ["no listing, nothing commercial", null, null, NO_LINKS, false],
+    ["undefined listing, nothing commercial", undefined, null, NO_LINKS, false],
+    ["a null answer, a link", { depictsAlcohol: null }, null, ONE_LINK, true],
+    ["no listing, a benefit", null, { benefitReceived: true }, NO_LINKS, true],
+  ])("%s -> withheld %s", (_label, listing, disclosure, commercialLinks, expected) => {
+    expect(
+      isWithheldFromPublicRead({ disclosure, listing: cast(listing), commercialLinks }),
+    ).toBe(expected);
   });
 });
 
