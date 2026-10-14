@@ -3,7 +3,12 @@
  * The dispatch gate: a bead fails a mechanical check BEFORE work starts on
  * it (ugcportal-kt3k). Exits non-zero when a bead is missing any required
  * element of the bead-template form, or when its `Premise verified` line
- * names a commit that is no longer `origin/main`'s HEAD.
+ * names any commit other than `origin/main`'s current HEAD -- an older
+ * commit on `main`, or a commit that is not on `main` at all: not an
+ * ancestor of `origin/main`, usually a branch commit whose PR was since
+ * squash-merged (main has the change, under the squash commit's different
+ * sha) and sometimes a branch not yet merged. Either way it is not in
+ * main's history, so it cannot be compared with main's HEAD.
  *
  * Why this exists: `~/.claude/skills/bead-template/SKILL.md` has defined the
  * required form -- user story, In/Out of scope, K-numbered Given/When/Then
@@ -117,6 +122,22 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
 
 /**
  * Why the strict "names origin/main's current HEAD" rule, and what it costs.
+ *
+ * "Names HEAD" means IDENTITY, checked in both directions, not distance
+ * counted in one. Counting only `<premise>..<head>` answers "how many main
+ * commits is the premise missing", and that is 0 for HEAD itself AND for
+ * every commit built on top of HEAD -- a premise verified inside an
+ * implementer's own branch, or a stacked bead verified on top of another
+ * PR's branch, names a commit that is not in main's history, and used to
+ * pass with the report saying it was HEAD. In this
+ * repo's squash-merge flow that commit STAYS off main after its PR merges:
+ * main gets the change under the squash commit's sha, not the branch
+ * commit's, so "not on main" usually means "merged by squash", not "code
+ * main lacks". The decision is the same either way -- a commit outside
+ * main's history cannot be compared with main's HEAD, so the premise is
+ * re-verified against HEAD. So `premiseCommits` also
+ * counts `<head>..<premise>`, the premise's commits that are NOT on main,
+ * and only a commit with zero in both directions is fresh.
  * Stated here rather than in a commit message because the cost is paid by
  * every dispatch forever and the next person to find it annoying deserves
  * the reasoning.
@@ -146,7 +167,7 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
  * needs neither, which is why it is the one implemented.
  */
 export const PREMISE_FRESHNESS_COST =
-  "A premise verified against any commit other than origin/main's current HEAD fails. Re-run the premise check and write a new `Premise verified <date> at origin/main <sha>` line; do not copy the date forward.";
+  "A premise verified against any commit other than origin/main's current HEAD fails -- an older main commit, and equally a commit that is not on origin/main at all (usually a branch commit whose PR was since squash-merged, so main has the change under a different sha; sometimes a branch not yet merged). Re-run the premise check and write a new `Premise verified <date> at origin/main <sha>` line; do not copy the date forward.";
 
 /**
  * The substance checks this script does NOT make, printed on EVERY run --
@@ -273,37 +294,89 @@ export const CC_TYPES = [
 const PLACEHOLDER_RE = /\(replace\s+K\d+\)|\bTODO\b|\bTBD\b|\bFIXME\b|\bXXX\b|<fill[^>]*>|\.\.\.TBD/i;
 
 /**
- * Blank out markdown code spans and fenced blocks, preserving length and
- * line structure so nothing else shifts.
+ * Blank out text that QUOTES a placeholder rather than carrying one,
+ * preserving length and line structure so nothing else shifts. Run on ONE
+ * field at a time (the `no-placeholder` check calls it separately on the
+ * description and on the acceptance criteria), so nothing it blanks can
+ * reach from one field into the other.
  *
  * A bead that QUOTES a placeholder is not a bead that CARRIES one, and the
- * difference is not academic: measured 2026-10-13 over the whole
+ * difference is not academic. Measured 2026-10-13 over the whole
  * open+in_progress backlog (104 beads), the only bead `no-placeholder`
  * fired on was `ugcportal-zbcs` -- the P1 that exists to REMOVE
  * `ugcportal-p3v`'s `(replace K1)` marker, which it names three times in
- * backticks ("it opens with the literal text `(replace K1)`", "resolving
- * the stray `(replace K1)` marker", and its own K2's "the string
- * `(replace K1)` being absent"). Unnarrowed, the gate hard-blocks dispatch
- * of the bead whose whole job is clearing the thing it is complaining
- * about. After this narrowing the live count for this check is 0, and p3v
- * -- whose marker is bare text at the head of its acceptance field, not a
- * code span -- still fails it. zbcs itself still fails the run, on
- * `premise-present` and `premise-fresh`, which is the gate doing its job
- * rather than misreading a quotation; the gate's total of 21 beads failing
- * something other than freshness is unchanged by this narrowing.
+ * backticks. Unnarrowed, the gate hard-blocks dispatch of the bead whose
+ * whole job is clearing the thing it is complaining about. Backticks are not
+ * the only way this backlog quotes, though: `ugcportal-c20m`, filed after
+ * that measurement, writes "leaving the marker '(replace K1)'" and "'TODO'"
+ * in plain single quotes and failed the check for it.
+ * So three things are blanked:
  *
- * Known gap, stated rather than papered over: a genuinely unfinished field
- * that writes its marker inside backticks (`` `TODO` ``) is no longer
- * caught. That is accepted. The repo's convention is that backticks mean
- * "this is a literal being referred to", the backlog contains no such
- * case, and the alternative -- a check whose only live hit is a false
- * positive on a P1 -- is worse. SUBSTANCE_CHECKS_NOT_MADE already says a
- * zero exit means well-formed, not right.
+ *   1. fenced blocks, ``` to ```, and
+ *   2. inline code spans -- a run of backticks to the next run of the same
+ *      length -- both only WITHIN ONE PARAGRAPH. An unbalanced backtick used
+ *      to pair with the next backtick anywhere later in the text, across
+ *      paragraphs and (when the two fields were scanned joined) across the
+ *      description/acceptance boundary, blanking every bare marker in
+ *      between, and an unbalanced fence did the same until fences were
+ *      bounded too. Markdown code spans do not
+ *      cross a blank line either;
+ *   3. a marker that is the WHOLE content of a quotation: '...', "...",
+ *      and their curly forms, opened and closed by a matching pair. Not any
+ *      quoted text -- an apostrophe ("p3v's") is not a quotation mark, and
+ *      blanking from one apostrophe to the next would hide real markers.
+ *
+ * Measured 2026-10-14 at about 11:24Z, origin/main 534a2c9, over a dump of
+ * the live open+in_progress backlog (`bd list --status open,in_progress
+ * --limit 0 --json`, 112 beads): `no-placeholder` fires on 0 of them. That
+ * zero is after ugcportal-7sjc's own text was edited to put its two
+ * mentions of the TODO marker in backticks; before that edit, on the same
+ * day, it fired on 1 (7sjc itself, a bare mention in prose -- the check was
+ * right to fire, since an unquoted marker is indistinguishable from a
+ * carried one). The script at bcc470e (before fences and code spans were
+ * bounded to one paragraph) and the script at this commit give identical
+ * per-check counts over the same dump. A
+ * figure like this is a snapshot of a moving backlog, not a property of the
+ * script; the durable form is the fixtures in the tests. p3v itself is no
+ * longer a live example -- it is deferred, outside that population, and its
+ * acceptance field no longer opens with the marker -- so the bare-marker
+ * case is held by the `no-placeholder` single-element fixture in the tests,
+ * which puts `(replace K1)` bare at the head of the acceptance field.
+ *
+ * Known gap, stated as what is actually still not seen:
+ *   - a genuinely unfinished field that writes its marker inside backticks
+ *     (`` `TODO` ``) or as the entire content of a quotation ('TODO');
+ *   - a bare marker that sits, within the SAME paragraph of the SAME field,
+ *     between a stray backtick (or stray fence) and the next backtick (or
+ *     fence) in that paragraph -- the pair is read as code and blanked.
+ * The opposite error, which fails closed: a fenced block that contains a
+ * blank line is cut at that line, which leaves the opening fence unbalanced
+ * in its paragraph and the closing fence unbalanced in the next, so a bare
+ * marker on EITHER side of the blank line is no longer blanked and is
+ * reported as carried.
+ * Accepted: the repo's convention is that backticks and quotes mean "this is
+ * a literal being referred to", and the alternative -- a check whose only
+ * live hits are quotations -- is worse. SUBSTANCE_CHECKS_NOT_MADE already
+ * says a zero exit means well-formed, not right.
  */
-function stripCodeSpans(text) {
+function stripQuotedMarkers(text) {
   const blank = (m) => m.replace(/[^\n]/g, " ");
-  return text.replace(/```[\s\S]*?```/g, blank).replace(/(`+)(?:[^`]|[^`][\s\S]*?)\1/g, blank);
+  // Split on blank lines FIRST, keeping the separators, and blank fences
+  // and code spans inside one paragraph at a time, so an unbalanced fence
+  // or backtick dies at the end of its paragraph. Removing fences before
+  // the split let a stray ``` pair with the next fence anywhere later in
+  // the field.
+  const noSpans = text
+    .split(/(\n[^\S\n]*\n)/)
+    .map((para) => para.replace(/```[\s\S]*?```/g, blank).replace(/(`+)(?:[^`]|[^`][\s\S]*?)\1/g, blank))
+    .join("");
+  return noSpans.replace(QUOTED_MARKER_RE, (m, open, close) => (QUOTE_PAIRS[open] === close ? blank(m) : m));
 }
+
+/** Each opening quotation mark and the one that closes it. */
+const QUOTE_PAIRS = { "'": "'", '"': '"', "‘": "’", "“": "”" };
+/** A placeholder that is the whole content of a quotation; see stripQuotedMarkers. */
+const QUOTED_MARKER_RE = new RegExp(`(['"\\u2018\\u201C])(?:${PLACEHOLDER_RE.source})(['"\\u2019\\u201D])`, "gi");
 
 // --- the checks --------------------------------------------------------------
 
@@ -409,8 +482,20 @@ export const CHECKS = [
   // qualifier. Re-measured 2026-10-13 over the live 104-bead
   // open+in_progress backlog: the narrowing adds zero new failures, so no
   // real bead relies on crossing a line or a sentence to pass.
+  //
+  // `in-scope` also refuses the NEGATED label: "in scope" is a substring of
+  // "Not in scope:", so without the lookbehind a description whose only
+  // scope lines are "Not in scope: ..." and "Out of scope: ..." passes both
+  // checks while stating nothing that IS in scope.
+  // The lookbehind also allows markdown emphasis on either side of the
+  // space -- `**Not** in scope:`, `_not_ in scope:`, `*not* in scope:`,
+  // `Not **in scope**:` -- which a bare `not\s+` let through.
+  // `(?:^|[^a-z0-9])` rather than `\b` before `not`,
+  // because `_` is a word character and `\b` does not fire in `_not_`.
+  // `out-of-scope` has no such twin -- "not out of scope" is not a label
+  // anyone writes as one.
   check("in-scope", "description has an `In scope:` line", ["description"], (b) =>
-    /\bin scope\b[^:.\n]{0,40}:/i.test(descLines(b))
+    /(?<!(?:^|[^a-z0-9])not[*_]*[^\S\n]+[*_]*)\bin scope\b[^:.\n]{0,40}:/i.test(descLines(b))
       ? { ok: true }
       : { ok: false, detail: "no `In scope:` line in the description" },
   ),
@@ -446,12 +531,15 @@ export const CHECKS = [
   ),
 
   check("no-placeholder", "description and criteria carry no unfinished-editing marker", ["description", "acceptance_criteria"], (b) => {
-    // Code spans are blanked first: a bead that quotes a marker is talking
-    // about one, not carrying one. See stripCodeSpans.
-    const hit = PLACEHOLDER_RE.exec(stripCodeSpans(`${desc(b)}\n${accept(b)}`));
-    return hit
-      ? { ok: false, detail: `an unfinished-editing marker is still in the text: ${JSON.stringify(hit[0])}` }
-      : { ok: true };
+    // Quotations are blanked first: a bead that quotes a marker is talking
+    // about one, not carrying one. Each field is scanned on its own, so a
+    // stray backtick in one cannot hide a marker in the other. See
+    // stripQuotedMarkers.
+    for (const [field, text] of [["description", desc(b)], ["acceptance_criteria", accept(b)]]) {
+      const hit = PLACEHOLDER_RE.exec(stripQuotedMarkers(text));
+      if (hit) return { ok: false, detail: `an unfinished-editing marker is still in the ${field}: ${JSON.stringify(hit[0])}` };
+    }
+    return { ok: true };
   }),
 
   check("premise-present", "a premise line names a real commit", ["notes", "description"], (b, ctx) => {
@@ -479,13 +567,40 @@ export const CHECKS = [
       // twice under a different name.
       return { ok: false, detail: "no resolvable premise commit to check freshness against" };
     }
-    // The freshest premise on the bead wins: a bead re-verified today still
-    // carrying yesterday's line in its delivery log is fresh.
-    const freshest = resolved.reduce((best, r) => (r.behind < best.behind ? r : best));
-    if (freshest.behind === 0) return { ok: true };
+    // Fresh means the premise commit IS origin/main's HEAD: no main commit
+    // it lacks (`behind`) and no commit of its own that main lacks
+    // (`notOnMain`). Checking `behind` alone passed every descendant of
+    // HEAD -- see PREMISE_FRESHNESS_COST.
+    if (resolved.some((r) => r.behind === 0 && r.notOnMain === 0)) return { ok: true };
+    // Otherwise report the most useful failure. A premise commit that IS on
+    // main is stale by a countable distance; prefer the freshest of those (a
+    // bead re-verified recently still carries older lines in its log).
+    // An unanswerable count (`git rev-list` failed) is Infinity: the
+    // comparison was not made, so say so rather than print a count.
+    const unmeasured = resolved.find((r) => !Number.isFinite(r.behind) || !Number.isFinite(r.notOnMain));
+    // The `some(...)` return above means no resolved commit is fresh here, so
+    // an unmeasured one is enough to report.
+    if (unmeasured) {
+      return {
+        ok: false,
+        detail: `premise commit ${unmeasured.short} could not be compared with head ref ${ctx.git.head}: \`git rev-list\` failed, so no commit count was measured. ${PREMISE_FRESHNESS_COST}`,
+      };
+    }
+    const onMain = resolved.filter((r) => r.notOnMain === 0);
+    if (onMain.length > 0) {
+      const freshest = onMain.reduce((best, r) => (r.behind < best.behind ? r : best));
+      return {
+        ok: false,
+        detail: `premise is ${freshest.behind} commit(s) stale: verified at ${freshest.short}, origin/main is now ${ctx.headShort}. ${PREMISE_FRESHNESS_COST}`,
+      };
+    }
+    // Every named commit is off main. Its distance from HEAD is not a
+    // staleness count -- it may even be zero commits behind -- so say what
+    // is actually wrong with it.
+    const off = resolved[0];
     return {
       ok: false,
-      detail: `premise is ${freshest.behind} commit(s) stale: verified at ${freshest.short}, origin/main is now ${ctx.headShort}. ${PREMISE_FRESHNESS_COST}`,
+      detail: `premise commit ${off.short} is not on origin/main: ${off.notOnMain} commit(s) of its history are not in origin/main ${ctx.headShort}. It is usually a branch commit whose PR was since squash-merged (main then has the change under a different sha), sometimes one not yet merged; either way it is not in main's history, so it cannot be compared with main's HEAD -- re-verify against origin/main's HEAD. ${PREMISE_FRESHNESS_COST}`,
     };
   }),
 
@@ -520,7 +635,9 @@ export const EXAMINED_FIELDS = [...new Set(CHECKS.flatMap((c) => c.fields))];
 /**
  * Resolve the commit-ish tokens on premise lines against the repo, keeping
  * only the ones git recognises as commits, each with how many commits
- * `origin/main` is ahead of it.
+ * `origin/main` is ahead of it (`behind`) and how many of its own commits
+ * are not on `origin/main` (`notOnMain`). Both are needed: HEAD and every
+ * descendant of HEAD have `behind === 0`.
  */
 function premiseCommits(lines, ctx) {
   const out = [];
@@ -528,7 +645,7 @@ function premiseCommits(lines, ctx) {
     for (const sha of shas) {
       const full = ctx.git.resolveCommit(sha);
       if (!full) continue;
-      out.push({ short: sha, full, behind: ctx.git.commitsAhead(full) });
+      out.push({ short: sha, full, behind: ctx.git.commitsAhead(full), notOnMain: ctx.git.commitsNotOnMain(full) });
     }
   }
   return out;
@@ -656,6 +773,19 @@ export function makeGitContext(headOverride, repoDir = REPO_ROOT) {
       if (full === head) return 0;
       try {
         return Number(git(["rev-list", "--count", `${full}..${head}`], repoDir));
+      } catch {
+        return Infinity;
+      }
+    },
+    /**
+     * how many commits reachable from `full` are NOT reachable from HEAD;
+     * 0 exactly when `full` is HEAD or an ancestor of it (that is, on main).
+     * Infinity when unanswerable, so an error fails closed.
+     */
+    commitsNotOnMain(full) {
+      if (full === head) return 0;
+      try {
+        return Number(git(["rev-list", "--count", `${head}..${full}`], repoDir));
       } catch {
         return Infinity;
       }
