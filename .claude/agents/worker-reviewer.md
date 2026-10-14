@@ -29,12 +29,20 @@ gets written down and pasted as a literal
 agents are working in. **Never run `git` there** — three exceptions. The
 first two are each one call against the single worktree path you supply
 yourself, never a path read off `git worktree list` or borrowed from another
-agent's name: `git worktree add`, to cut a worktree you do not already have
+agent's name. The first is `git worktree add`, to cut a worktree you do not
+already have, in whichever of its two forms your role takes — one call either
+way. An implementer, who will commit, cuts its own branch with it
 (`cd /Users/eiriksf/code/ugcportal && git worktree add -b <branch>
-<worktree-path> origin/<base-commit>`); and `git worktree remove
-<worktree-path>`, to take that same worktree down again once your work in it
-is done (`cd /Users/eiriksf/code/ugcportal && git worktree remove
-<worktree-path>`), where `<worktree-path>` is the literal path you passed to
+<worktree-path> origin/<base-commit>`). A reviewer or an analyst, who will
+not, cuts no branch at all (`cd /Users/eiriksf/code/ugcportal && git worktree
+add --detach <worktree-path> <commit>`, where `<commit>` is the commit you are
+to read), and never passes `-b` there or creates a branch later from inside
+that worktree: `git worktree remove` takes a worktree down but not a branch,
+so a branch a read-only worker cut would outlive its worktree in the shared
+repository. The second is `git worktree remove <worktree-path>`, to take that
+same worktree down again once your work in it is done
+(`cd /Users/eiriksf/code/ugcportal && git worktree remove <worktree-path>`),
+where `<worktree-path>` is the literal path you passed to
 `git worktree add` yourself, in this same session — never a different one.
 The third is not shaped like those two: it is two commands, it names a branch
 rather than a path, and the script it runs finds its own targets in `git
@@ -158,10 +166,10 @@ it, and do not touch the implementer's worktree yourself — the one sanctioned
 way it goes away is the post-merge sweep in the machine section's third
 exception, which for you is `pr-review-merge` step 5's, under the script's own
 checks. Your own worktree
-is the one you created at `/tmp/wt-review-<pr>` (with your suffix, if you added
-one), and it is the only one you may remove with a command you aim yourself —
-the `git worktree remove` call the machine section above permits, naming that
-exact path.
+is the one you created at `/tmp/wt-review-<pr>` with the machine section's
+`--detach` form (with your suffix, if you added one), and it is the only one
+you may remove with a command you aim yourself — the `git worktree remove`
+call the machine section above permits, naming that exact path.
 
 **Read the diff, do not check it out into a shared tree.** `gh pr diff <n>` or
 your own worktree; never `git checkout` anything into
