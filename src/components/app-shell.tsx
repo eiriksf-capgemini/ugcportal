@@ -130,7 +130,9 @@ export function AppShell({ children }: { children: ReactNode }) {
         the `<header>` element itself, for ugcportal-14k9 — see that file's
         docstring. The shrink/truncate tuning the wordmark and the auth
         wrapper carry (what to give way first as the row runs out of width)
-        moved with it rather than being re-derived; it is unchanged.
+        moved with it rather than being re-derived; ugcportal-ry6w later
+        changed the wordmark to `shrink-0` so the display name gives way
+        first - see site-header.tsx.
       */}
       <SiteHeader />
 
