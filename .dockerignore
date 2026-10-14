@@ -32,6 +32,16 @@
 #     artifact, so it is outside what K2 is about. The nested AGENTS.md /
 #     CLAUDE.md / CHANGELOG.md copies under `.next/standalone/` do not
 #     survive, because `.next` is excluded above them.
+#   - `docs`, `e2e`, `vitest.config.ts`, `vitest.setup.ts`,
+#     `eslint.config.mjs`: each of these five exists exactly once, at the
+#     repo root (checked), so the same argument as `build`/`certs` applies --
+#     `**/docs` would also drop a source directory of that name.
+#     `playwright.config.ts`, listed alongside them below, is NOT in that
+#     set: `e2e/production/` and `e2e/seeded/` have one each as well. They
+#     are excluded anyway, by `e2e` rather than by this pattern, so the
+#     anchoring is still right -- but it is right for a different reason.
+#     Their own section near the bottom of this file says what each is and
+#     why it is not needed in either image.
 
 # Dependencies (reinstalled fresh inside the image; never copy the host's)
 **/node_modules
@@ -59,12 +69,18 @@ src/generated
 #   builder  /app/certs/capgemini.pem  and
 #            /app/.next/standalone/certs/capgemini.pem   (4334 bytes each)
 #   runner   /app/certs/capgemini.pem, owned nextjs:nodejs
-# The runner's copy arrives through that standalone directory: Next's
-# whole-project tracing sweeps the repo into `.next/standalone`, which the
-# runner stage copies wholesale. So a corporate CA bundle was being baked
-# into the production image, and -- because git cannot see a gitignored
-# file -- two machines produced different image contents under one pinned
-# tag. See scripts/build-qa-image.sh for that second half.
+# The runner's copy arrived through that standalone directory: Next's
+# whole-project tracing sweeps the repo into `.next/standalone`, and the
+# runner stage copied that directory wholesale. So a corporate CA bundle was
+# being baked into the production image, and -- because git cannot see a
+# gitignored file -- two machines produced different image contents under
+# one pinned tag. See scripts/build-qa-image.sh for that second half.
+#
+# The runner stage no longer copies standalone wholesale -- it names what it
+# takes (ugcportal-6jcq) -- but the exclusions in this file are still what
+# keeps this material out of the BUILDER stage, which `docker-compose.yml`
+# runs as the `migrate` service and which copies the whole context. Both
+# halves are needed: one file, two images.
 **/.env
 **/.env*
 !.env.example
@@ -98,6 +114,55 @@ CHANGELOG.md
 # Test artifacts
 /coverage
 **/*.tsbuildinfo
+
+# Tests and the dev tooling that runs them. Nothing here is read by `npm ci`,
+# `prisma generate` or `next build` -- checked by building the image with all
+# of it excluded -- and nothing here is read by the server at run time, so it
+# belongs in neither image. This is the pattern that used to put 259
+# *.test.*/*.spec.* files in the production image (measured by `docker
+# export` on a runner built from `main` at 358a768, ugcportal-6jcq).
+#
+# `**/` on the two name patterns because test files sit at every depth of
+# src/. The four config files are anchored, and for three of them the reason
+# is that each exists exactly once, at the repo root, so `**/vitest.config.ts`
+# would say otherwise. `playwright.config.ts` is the exception: there are
+# three (the root one plus `e2e/production/` and `e2e/seeded/`), and the two
+# nested ones are under `e2e/`, which this file excludes outright in the
+# `docs`/`e2e` section further down -- so anchoring costs nothing there
+# either. Not depth-proof and
+# deliberately so, the same reasoning as `.git`/`CLAUDE.md` above.
+#
+# `*.test.*` and not `*.test*`: `src/lib/legal/legal-page.test-support.ts`
+# and `src/lib/test-support/` are imported BY tests rather than being tests,
+# and the dot keeps them out of this -- which is moot for the runner, where
+# the Dockerfile's allowlist excludes all of src/ anyway, and not moot for
+# the builder, where a pattern that swallowed them would break nothing until
+# someone ran the suite in a container.
+**/*.test.*
+**/*.spec.*
+vitest.config.ts
+vitest.setup.ts
+playwright.config.ts
+eslint.config.mjs
+
+# Documentation and end-to-end specs. Neither is read at build or run time
+# (the only references to `docs/` from src/ are prose in comments and
+# rendered pointer strings, not file reads -- src/lib/design/tokens.ts reads
+# src/app/globals.css, not docs/design/tokens.css).
+#
+# docs/ is the sharpest thing the old wholesale copy shipped, which is why it
+# is excluded here rather than left to the runner's allowlist alone:
+# `docs/legal/manual-upload-rights-review.md` exists to enumerate where the
+# rights gate is weak and `docs/legal/instagram-resale-rights-checklist.md`
+# records which uploaders cannot be cleared. A map of the legal controls'
+# soft spots does not belong in a deployed artifact of any stage.
+#
+# Anchored, not `**/docs`: each exists exactly once, at the repo root
+# (checked), and `**/docs` would also drop a source directory that happened
+# to be called `docs` -- the same argument the header makes for `build` and
+# `certs`.
+docs
+e2e
 
 # Local SQLite dev databases
 **/*.db

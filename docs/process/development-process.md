@@ -190,8 +190,47 @@ thing you are about to ship, or say explicitly that you did not.
 
 ### 5.1 Dispatch
 
-An implementer agent gets a brief. The brief names the bead, the setup, the
-quality bar, and the boundaries. Concurrency is held to **three**
+**The bead passes a mechanical gate first, or it is not dispatched.**
+`scripts/check-bead-dispatch.mjs <bead-id>` (`ugcportal-kt3k`) exits non-zero
+when a bead is missing any element of the `bead-template` form — user story,
+both scope lines, K-numbered criteria, a `Verified by` on each, a guardrail,
+a premise, `model`/`model_effort`, `cc_type`/`cc_scope` — or when its
+`Premise verified` line names a commit that is no longer `origin/main`'s
+HEAD, in which case it prints how many commits stale that premise is. Eirik,
+2026-10-12: *"Before we start working with the beads all should pass
+validation."* It is a hard block, not a warning, and the exit status is the
+decision: the `.claude/skills/dispatch-bead` skill requires the run's output
+pasted into the brief under `## Dispatch check`, so a dispatch that skipped
+the gate is visible as a missing recorded result rather than as an
+unprovable omission. "The exit status is the decision" is a claim about how
+the command is *invoked*, not only about how it is written: the skill's step
+1 pipes the run through `tee`, and a pipeline's status is its last command's,
+so that line carries `set -o pipefail` on the same line as the pipe, and
+`check-bead-dispatch.test.mjs` extracts every shell line in the skill that
+runs the gate and executes it against a failing bead in both bash and zsh.
+Without `pipefail` the documented command reported `0` for a bead that failed
+every check — the gate's own wiring failing open.
+
+Measured the day it was written, at `origin/main a3d55c9` over the 95 open
+beads: **12** fail at least one of the eight presence-only elements the
+2026-10-12 audit counted, **21** fail at least one of the gate's stricter
+checks, and **95 of 95** fail premise freshness — which is the point of the
+freshness rule rather than an argument against it. The 12 are
+`ugcportal-ydbi`'s scope.
+
+What the gate does **not** do is the reason a green run is not a verdict.
+Every run, passing or failing, prints the substance checks it did not make:
+whether the premise is true, whether each criterion is satisfiable by
+whoever finishes the bead on the day they finish it, whether the guardrail
+guards anything, whether the model tier fits, and whether a criterion that
+should exist is missing. `ugcportal-p3v` is the standing case for the last
+one — the criterion that stops uncleared material being sold was authored,
+rewritten and premise-verified across three dated notes in that bead and
+never reached its acceptance field (`ugcportal-zbcs`, P1), while every field
+a format check reads stayed populated.
+
+An implementer agent then gets a brief. The brief names the bead, the setup,
+the quality bar, and the boundaries. Concurrency is held to **three**
 implementer agents in practice, and never
 two on the same `cc_scope`. This is current orchestrator practice, **not a
 codified rule** — `ugcportal-yzmp` proposes making it one and is still OPEN;
@@ -407,6 +446,7 @@ is cheap to omit will be omitted under load.
 
 | Skill | Job |
 |---|---|
+| `dispatch-bead` | The gate a bead passes before anyone starts on it, and the brief |
 | `pr-review-merge` | The review loop: rounds, locks, severity gate, merge, cleanup |
 | `review-standards` | What a finding is and how severity is assigned |
 | `pre-review` | Implementer's mechanical self-sweep before pushing |
@@ -445,6 +485,11 @@ its cost gets argued away. They cluster:
   `round-markers-are-untrusted-input`
 - *briefing* — `never-enumerate-a-set-in-a-brief-from-memory`,
   `verify-every-bead-id-before-putting-it-in-a-brief`
+
+**Guards outside CI.** `scripts/check-bead-dispatch.mjs` is run by hand (or
+by `dispatch-bead`) at dispatch, not in CI: it grades a bead, and a bead can
+change without a PR. `scripts/check-unreachable-beads.mjs` is the same
+shape and advisory.
 
 **Guards in CI.** `guard-sensitive-files` fails a PR that **bundles** a
 change to `CLAUDE.md` or `.claude/settings*.json` with unrelated work
@@ -559,10 +604,19 @@ path is the first defect family applied to itself.
    when they had failed; a `||` fallback ran its second branch with the
    arguments reversed and *succeeded*, recording a graph edge backwards.
    In every case **the wrong answer was the reassuring one**, which is why
-   none of them announced itself. Three mitigations, all cheap and none yet
-   systematic: print the match count before trusting a zero; never silence
-   stderr on a mutating command; read the object back after a write that
-   matters.
+   none of them announced itself. Three mitigations: print the match count
+   before trusting a zero; never silence stderr on a mutating command; read
+   the object back after a write that matters. They were cheap and not yet
+   systematic when this was written; `ugcportal-kssp` made them systematic
+   at the points where agents actually run things, and the rule now lives in
+   one place as `review-standards` section 6. Two of the three are
+   instruments rather than instructions
+   (`scripts/check-silenced-stderr.mjs`, `scripts/bd-verify-metadata.mjs`),
+   and `scripts/sweep-candidates.mjs`, `scripts/check-sensitive-files.mjs`
+   and `scripts/check-unreachable-beads.mjs` now state what they examined
+   before what they found. What is **not** closed by that: an ad-hoc command
+   an agent writes mid-session is still governed by a rule rather than by an
+   instrument, and that is where this weakness keeps finding new ground.
 
 7. **The cap has rarely bound on a real disagreement.** In v0.5.0, eleven
    of eleven escalations ended in a merge, making the human step latency
