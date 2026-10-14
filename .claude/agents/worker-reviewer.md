@@ -26,31 +26,33 @@ gets written down and pasted as a literal
 (`bd memories shell-state-does-not-persist-between-tool-calls`).
 
 `/Users/eiriksf/code/ugcportal` is a **shared checkout** that a human and other
-agents are working in. **Never run `git` there** — three exceptions, each one
-call against the single worktree path you supply yourself, never a path read
-off `git worktree list` or borrowed from another agent's name: `git worktree
-add`, to cut a worktree you do not already have
+agents are working in. **Never run `git` there** — three exceptions. The
+first two are each one call against the single worktree path you supply
+yourself, never a path read off `git worktree list` or borrowed from another
+agent's name: `git worktree add`, to cut a worktree you do not already have
 (`cd /Users/eiriksf/code/ugcportal && git worktree add -b <branch>
-<worktree-path> origin/<base-commit>`); `git worktree remove
+<worktree-path> origin/<base-commit>`); and `git worktree remove
 <worktree-path>`, to take that same worktree down again once your work in it
 is done (`cd /Users/eiriksf/code/ugcportal && git worktree remove
 <worktree-path>`), where `<worktree-path>` is the literal path you passed to
-`git worktree add` yourself, in this same session — never a different one;
-and, only as `.claude/skills/pr-review-merge/SKILL.md` step 5's merge-cleanup
-directs — which a reviewer brief mandates running in full
-(`worker-reviewer.md`'s "Yours in particular") — `node
-scripts/sweep-merged-branches.mjs --branch <branch> --execute`, run from the
-main checkout exactly as that step says, and the `git ls-remote --heads
-origin <branch>` check right after it (the same two commands `CLAUDE.md`'s
-own session-completion protocol asks a human or orchestrator closing the same
-bead to run from this same checkout). Follow that skill for the exact
-command, its flags and its order — this file only states that the exception
-exists, so "two exceptions" does not stay the official count while a third is
-exercised on every merge. Every other command, `git` included, runs from
-inside the worktree instead; beyond these three, `bd` is the only command you
-run in the shared checkout. Name the worktree yourself (`/tmp/wt-<bead-id>` as
-an implementer, `/tmp/wt-review-<pr>` as a reviewer, `/tmp/wt-<topic>` as an
-analyst). If `git worktree add` refuses because that templated path is
+`git worktree add` yourself, in this same session — never a different one.
+The third is not shaped like those two: it is two commands, it names a branch
+rather than a path, and the script it runs finds its own targets in `git
+worktree list --porcelain` (`fetchWorktrees` in the script). It is
+`scripts/sweep-merged-branches.mjs`, scoped to one merged PR's branch and run
+from the main checkout, followed by the `git ls-remote` check that the remote
+branch is gone, and it applies only after that PR has merged, where one of two
+owners directs it: `.claude/skills/pr-review-merge/SKILL.md` step 5's merge
+cleanup — a step `worker-reviewer.md`'s "Yours in particular" requires a
+reviewer to follow in full — or the same scoped pair in `CLAUDE.md`'s
+session-completion protocol. The exact invocation of both commands,
+environment prefix and flags included, belongs to the owner directing it: take
+it from there. This file does not copy it; it names the exception so that the
+count above stays true. Every other command, `git`
+included, runs from inside the worktree instead; beyond these three, `bd` is
+the only command you run in the shared checkout. Name the worktree yourself
+(`/tmp/wt-<bead-id>` as an implementer, `/tmp/wt-review-<pr>` as a reviewer,
+`/tmp/wt-<topic>` as an analyst). If `git worktree add` refuses because that templated path is
 already taken — two runs on the same bead, PR or topic both resolve to the
 same name — do not inspect or touch whatever is already there: append a short
 suffix you generate fresh for this attempt (four random lowercase-alnum
@@ -59,14 +61,25 @@ time it collides again, so the path stays one only you know you created, in
 this same session, rather than one a dead sibling's template alone would let
 you derive. **Remove only what you created** — exactly that templated `git
 worktree remove` call, against exactly that path (suffix and all, if you
-added one), and nothing else: another agent's worktree can be clean and still
-hold unpushed commits, which go with the local branch when it is removed, and
-this carve-out is not licence to tidy one up (`bd memories
+added one), and nothing else you choose: another agent's worktree can be clean
+and still hold unpushed commits, which go with the local branch when it is
+removed, and this carve-out is not licence to tidy one up (`bd memories
 shared-checkout-is-not-safe-for-agents`, `bd memories
-reviewers-must-name-their-own-worktree-and-remove-only-it`). If `git worktree
-remove` refuses because the worktree is dirty or locked, stop and report
-that — do not force it, and do not look for a different worktree to remove
-instead.
+reviewers-must-name-their-own-worktree-and-remove-only-it`). The one way
+this file lets another agent's worktree be removed is the third exception, and
+it is the script that picks it, not you. Run as its owner directs after a
+merge, the script removes the worktree checked out on the merged branch —
+normally the implementer's — and that worktree's local branch, but only past
+its own checks:
+it keeps a dirty or locked worktree, and one whose tip is neither reachable
+from a remote branch nor the merged PR's own head commit (`classifyWorktree`),
+and it re-checks that reachability right before the `git branch -D`
+(`recheckBeforeDeletingBranch`). It ends with `git worktree prune`, which
+clears only the records of worktrees whose directories are already gone. Never
+aim `git worktree remove` at that worktree yourself, and never run the script
+anywhere but that post-merge cleanup. If `git worktree remove` refuses
+because the worktree is dirty or locked, stop and report that — do not force
+it, and do not look for a different worktree to remove instead.
 
 A fresh worktree has no generated Prisma client, and without it every test
 file that imports it silently fails to **collect** — `npx vitest run` then
@@ -141,10 +154,14 @@ it from step 0 to the end, including the defect sweep it requires of you
 nothing in it is reproduced here — see the table below for why.
 
 **The branch under review is not yours.** Do not commit to it, do not push to
-it, and do not touch the implementer's worktree. Your own worktree is
-`/tmp/wt-review-<pr>`, and it is the only one you may remove — with the `git
-worktree remove` call the machine section above permits, naming that exact
-path.
+it, and do not touch the implementer's worktree yourself — the one sanctioned
+way it goes away is the post-merge sweep in the machine section's third
+exception, which for you is `pr-review-merge` step 5's, under the script's own
+checks. Your own worktree
+is the one you created at `/tmp/wt-review-<pr>` (with your suffix, if you added
+one), and it is the only one you may remove with a command you aim yourself —
+the `git worktree remove` call the machine section above permits, naming that
+exact path.
 
 **Read the diff, do not check it out into a shared tree.** `gh pr diff <n>` or
 your own worktree; never `git checkout` anything into
