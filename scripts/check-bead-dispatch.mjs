@@ -4,8 +4,11 @@
  * it (ugcportal-kt3k). Exits non-zero when a bead is missing any required
  * element of the bead-template form, or when its `Premise verified` line
  * names any commit other than `origin/main`'s current HEAD -- an older
- * commit on `main`, or a commit that is not on `main` at all (an unmerged
- * branch commit, which is a DESCENDANT of HEAD or off to one side of it).
+ * commit on `main`, or a commit that is not on `main` at all: not an
+ * ancestor of `origin/main`, usually a branch commit whose PR was since
+ * squash-merged (main has the change, under the squash commit's different
+ * sha) and sometimes a branch not yet merged. Either way it is not in
+ * main's history, so it cannot be compared with main's HEAD.
  *
  * Why this exists: `~/.claude/skills/bead-template/SKILL.md` has defined the
  * required form -- user story, In/Out of scope, K-numbered Given/When/Then
@@ -125,8 +128,14 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
  * commits is the premise missing", and that is 0 for HEAD itself AND for
  * every commit built on top of HEAD -- a premise verified inside an
  * implementer's own branch, or a stacked bead verified on top of another
- * unmerged PR, rests on code `main` does not have and used to pass with the
- * report saying it was HEAD (PR #230 round 3, G1). So `premiseCommits` also
+ * PR's branch, names a commit that is not in main's history, and used to
+ * pass with the report saying it was HEAD (PR #230 round 3, G1). In this
+ * repo's squash-merge flow that commit STAYS off main after its PR merges:
+ * main gets the change under the squash commit's sha, not the branch
+ * commit's, so "not on main" usually means "merged by squash", not "code
+ * main lacks". The decision is the same either way -- a commit outside
+ * main's history cannot be compared with main's HEAD, so the premise is
+ * re-verified against HEAD. So `premiseCommits` also
  * counts `<head>..<premise>`, the premise's commits that are NOT on main,
  * and only a commit with zero in both directions is fresh.
  * Stated here rather than in a commit message because the cost is paid by
@@ -158,7 +167,7 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
  * needs neither, which is why it is the one implemented.
  */
 export const PREMISE_FRESHNESS_COST =
-  "A premise verified against any commit other than origin/main's current HEAD fails -- an older main commit, and equally a commit that is not on origin/main at all (an unmerged branch). Re-run the premise check and write a new `Premise verified <date> at origin/main <sha>` line; do not copy the date forward.";
+  "A premise verified against any commit other than origin/main's current HEAD fails -- an older main commit, and equally a commit that is not on origin/main at all (usually a branch commit whose PR was since squash-merged, so main has the change under a different sha; sometimes a branch not yet merged). Re-run the premise check and write a new `Premise verified <date> at origin/main <sha>` line; do not copy the date forward.";
 
 /**
  * The substance checks this script does NOT make, printed on EVERY run --
@@ -303,24 +312,33 @@ const PLACEHOLDER_RE = /\(replace\s+K\d+\)|\bTODO\b|\bTBD\b|\bFIXME\b|\bXXX\b|<f
  * in plain single quotes and failed the check for it (PR #230 round 3, G4).
  * So three things are blanked:
  *
- *   1. fenced blocks, ``` to ```;
+ *   1. fenced blocks, ``` to ```, and
  *   2. inline code spans -- a run of backticks to the next run of the same
- *      length -- but only WITHIN ONE PARAGRAPH. An unbalanced backtick used
+ *      length -- both only WITHIN ONE PARAGRAPH. An unbalanced backtick used
  *      to pair with the next backtick anywhere later in the text, across
  *      paragraphs and (when the two fields were scanned joined) across the
  *      description/acceptance boundary, blanking every bare marker in
- *      between (G3). Markdown code spans do not cross a blank line either;
+ *      between (G3), and an unbalanced fence did the same until fences
+ *      were bounded too (PR #236 round 1, L3). Markdown code spans do not
+ *      cross a blank line either;
  *   3. a marker that is the WHOLE content of a quotation: '...', "...",
  *      and their curly forms, opened and closed by a matching pair. Not any
  *      quoted text -- an apostrophe ("p3v's") is not a quotation mark, and
  *      blanking from one apostrophe to the next would hide real markers.
  *
- * Measured 2026-10-14 at origin/main 283ac63 over the live open+in_progress
- * backlog (`bd list --status open,in_progress --limit 0 --json`, 110 beads):
- * `no-placeholder` fires on 0 of them after this, where it fired on 1
- * (`c20m`, a quotation) before; no other check's count moved. p3v itself is
- * no longer a live example -- it is deferred, outside that population, and
- * its acceptance field no longer opens with the marker -- so the bare-marker
+ * Measured 2026-10-14 at about 11:24Z, origin/main 534a2c9, over a dump of
+ * the live open+in_progress backlog (`bd list --status open,in_progress
+ * --limit 0 --json`, 112 beads): `no-placeholder` fires on 0 of them. That
+ * zero is after ugcportal-7sjc's own text was edited to put its two
+ * mentions of the TODO marker in backticks; before that edit, on the same
+ * day, it fired on 1 (7sjc itself, a bare mention in prose -- the check was
+ * right to fire, since an unquoted marker is indistinguishable from a
+ * carried one). This script as it stood at bcc470e, before PR #236's
+ * round-1 fixes, gives identical per-check counts over the same dump. A
+ * figure like this is a snapshot of a moving backlog, not a property of the
+ * script; the durable form is the fixtures in the tests. p3v itself is no
+ * longer a live example -- it is deferred, outside that population, and its
+ * acceptance field no longer opens with the marker -- so the bare-marker
  * case is held by the `no-placeholder` single-element fixture in the tests,
  * which puts `(replace K1)` bare at the head of the acceptance field.
  *
@@ -328,8 +346,11 @@ const PLACEHOLDER_RE = /\(replace\s+K\d+\)|\bTODO\b|\bTBD\b|\bFIXME\b|\bXXX\b|<f
  *   - a genuinely unfinished field that writes its marker inside backticks
  *     (`` `TODO` ``) or as the entire content of a quotation ('TODO');
  *   - a bare marker that sits, within the SAME paragraph of the SAME field,
- *     between a stray backtick and the next backtick in that paragraph --
- *     the pair is read as a code span and blanked.
+ *     between a stray backtick (or stray fence) and the next backtick (or
+ *     fence) in that paragraph -- the pair is read as code and blanked.
+ * The opposite error, which fails closed: a fenced block that contains a
+ * blank line is cut at that line, so a marker in the block AFTER the blank
+ * line is no longer blanked and is reported as carried.
  * Accepted: the repo's convention is that backticks and quotes mean "this is
  * a literal being referred to", and the alternative -- a check whose only
  * live hits are quotations -- is worse. SUBSTANCE_CHECKS_NOT_MADE already
@@ -337,12 +358,14 @@ const PLACEHOLDER_RE = /\(replace\s+K\d+\)|\bTODO\b|\bTBD\b|\bFIXME\b|\bXXX\b|<f
  */
 function stripQuotedMarkers(text) {
   const blank = (m) => m.replace(/[^\n]/g, " ");
-  const noFences = text.replace(/```[\s\S]*?```/g, blank);
-  // Split on blank lines, keeping the separators, so a code span is matched
-  // inside one paragraph and an unbalanced backtick dies at its end.
-  const noSpans = noFences
+  // Split on blank lines FIRST, keeping the separators, and blank fences
+  // and code spans inside one paragraph at a time, so an unbalanced fence
+  // or backtick dies at the end of its paragraph. Removing fences before
+  // the split let a stray ``` pair with the next fence anywhere later in
+  // the field (PR #236 round 1, L3).
+  const noSpans = text
     .split(/(\n[^\S\n]*\n)/)
-    .map((para) => para.replace(/(`+)(?:[^`]|[^`][\s\S]*?)\1/g, blank))
+    .map((para) => para.replace(/```[\s\S]*?```/g, blank).replace(/(`+)(?:[^`]|[^`][\s\S]*?)\1/g, blank))
     .join("");
   return noSpans.replace(QUOTED_MARKER_RE, (m, open, close) => (QUOTE_PAIRS[open] === close ? blank(m) : m));
 }
@@ -461,10 +484,15 @@ export const CHECKS = [
   // "Not in scope:", so without the lookbehind a description whose only
   // scope lines are "Not in scope: ..." and "Out of scope: ..." passes both
   // checks while stating nothing that IS in scope (PR #230 round 3, G2).
+  // The lookbehind also allows markdown emphasis on either side of the
+  // space -- `**Not** in scope:`, `_not_ in scope:`, `*not* in scope:`,
+  // `Not **in scope**:` -- which a bare `not\s+` let through (PR #236
+  // round 1, L4). `(?:^|[^a-z0-9])` rather than `\b` before `not`,
+  // because `_` is a word character and `\b` does not fire in `_not_`.
   // `out-of-scope` has no such twin -- "not out of scope" is not a label
   // anyone writes as one.
   check("in-scope", "description has an `In scope:` line", ["description"], (b) =>
-    /(?<!\bnot\s+)\bin scope\b[^:.\n]{0,40}:/i.test(descLines(b))
+    /(?<!(?:^|[^a-z0-9])not[*_]*\s+[*_]*)\bin scope\b[^:.\n]{0,40}:/i.test(descLines(b))
       ? { ok: true }
       : { ok: false, detail: "no `In scope:` line in the description" },
   ),
@@ -558,7 +586,7 @@ export const CHECKS = [
     const off = resolved[0];
     return {
       ok: false,
-      detail: `premise commit ${off.short} is not on origin/main: ${off.notOnMain} commit(s) of its history are not in origin/main ${ctx.headShort}, so the premise was verified against code main does not have. ${PREMISE_FRESHNESS_COST}`,
+      detail: `premise commit ${off.short} is not on origin/main: ${off.notOnMain} commit(s) of its history are not in origin/main ${ctx.headShort}. It is usually a branch commit whose PR was since squash-merged (main then has the change under a different sha), sometimes one not yet merged; either way it is not in main's history, so it cannot be compared with main's HEAD -- re-verify against origin/main's HEAD. ${PREMISE_FRESHNESS_COST}`,
     };
   }),
 

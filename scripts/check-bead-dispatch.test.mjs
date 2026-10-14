@@ -15,8 +15,9 @@
  * top of `main`'s HEAD and one on a branch forked from the middle commit --
  * and the CLI is pointed at it with `--repo`, so the staleness counts
  * asserted here are exact and do not depend on this repo having fetched
- * `origin/main`. The two branch commits are what a premise verified on an
- * unmerged branch names, and neither is on `main`.
+ * `origin/main`. The two branch commits are what a premise verified in a
+ * branch names -- whether that branch's PR is still open or was since
+ * squash-merged, the commit itself is not on `main`.
  */
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -441,7 +442,7 @@ describe("K2: premise freshness against origin/main's current HEAD", { timeout: 
   // --- G1: identity, not one-directional distance ---
   //
   // `<premise>..<head>` is 0 for HEAD and for every commit built on top of
-  // HEAD, so a premise verified inside an unmerged branch used to PASS with
+  // HEAD, so a premise verified inside a branch used to PASS with
   // the report printing "that premise commit is origin/main's current HEAD".
   // Each case below runs the same fixture text twice, once naming the
   // off-main commit and once naming a commit that is on main, so the
@@ -457,6 +458,11 @@ describe("K2: premise freshness against origin/main's current HEAD", { timeout: 
       expect(off.status).toBe(1);
       expect(failedChecks(off.stdout)).toEqual(["premise-fresh"]);
       expect(off.stdout).toContain(`premise commit ${c.sha()} is not on origin/main: 1 commit(s)`);
+      // PR #236 round 1, L1: the usual off-main commit is a branch commit
+      // whose PR was squash-merged, so main HAS its change; the message must
+      // not claim otherwise.
+      expect(off.stdout).toContain("usually a branch commit whose PR was since squash-merged");
+      expect(off.stdout).not.toContain("main does not have");
       expect(off.stdout).not.toContain("that premise commit is origin/main's current HEAD");
 
       // the same text naming a commit that IS main's HEAD passes
@@ -939,6 +945,21 @@ describe("the checks are bounded where they claim to be", { timeout: 30_000 }, (
     expect(both.status).toBe(0);
   });
 
+  // --- L4 (PR #236 round 1): emphasis around the negation does not hide it ---
+  const EMPHASISED_NOT = ["**Not** in scope:", "_not_ in scope:", "*not* in scope:", "Not **in scope**:"];
+  for (const label of EMPHASISED_NOT) {
+    it(`\`${label}\` does not satisfy the in-scope check`, () => {
+      const description = (scope) =>
+        `As a reader, I want a story, so that it counts.\n\n${scope}${label} everything.\nOut of scope: y, owned by fixture-other.`;
+      const res = runFixture(completeBead({ description: description("") }));
+      expect(res.status).toBe(1);
+      expect(failedChecks(res.stdout)).toEqual(["in-scope"]);
+      // the same text with an emphasised real In-scope line beside it passes
+      const both = runFixture(completeBead({ description: description("**In scope:** the thing.\n") }));
+      expect(both.status).toBe(0);
+    });
+  }
+
   // --- G3: a stray backtick does not hide the bare markers after it ---
   const STRAY_BACKTICK = [
     {
@@ -957,6 +978,15 @@ describe("the checks are bounded where they claim to be", { timeout: 30_000 }, (
       field: "description",
       overrides: (b) => ({
         description: `${b.description}\n\nSee \`foo for the background.\n\nTODO: say what the background is, per \`bar\`.`,
+      }),
+    },
+    {
+      // PR #236 round 1, L3: fences were blanked before the paragraph split,
+      // so a stray ``` paired with a real fence two paragraphs down.
+      what: "fence (```) in one paragraph, with the marker before a real fence in a later paragraph",
+      field: "description",
+      overrides: (b) => ({
+        description: `${b.description}\n\nWrap code in \`\`\` marks.\n\nTODO: write the story.\n\nExample: \`\`\`js\nx\n\`\`\``,
       }),
     },
   ];
@@ -996,6 +1026,30 @@ describe("the checks are bounded where they claim to be", { timeout: 30_000 }, (
     expect(failedChecks(res.stdout)).toEqual(["no-placeholder"]);
     expect(res.stdout).toContain('still in the acceptance_criteria: "(replace K1)"');
   });
+
+  // --- L5 (PR #236 round 1): only a MATCHING pair of quotation marks quotes ---
+  // QUOTED_MARKER_RE matches any opening mark, a marker and any closing mark;
+  // the QUOTE_PAIRS lookup is what refuses a mismatched pair. Each case runs
+  // the marker between two marks that are NOT a pair (must fail) and the
+  // same marker in a matching pair (must pass), so blanking every match
+  // regardless of the pair turns the first half red.
+  const MISMATCHED_QUOTES = [
+    { what: "an apostrophe and a double quote", bare: `'TODO"`, quoted: `'TODO'` },
+    { what: "a straight apostrophe and a curly closing quote", bare: "'TODO\u2019", quoted: "\u2018TODO\u2019" },
+    { what: "a curly opening double and a straight double", bare: "\u201cTBD\"", quoted: "\u201cTBD\u201d" },
+  ];
+  for (const c of MISMATCHED_QUOTES) {
+    it(`a marker between ${c.what} is not quoted and still fails; in a matching pair it passes`, () => {
+      const base = completeBead();
+      const withText = (t) => ({ ...base, description: `${base.description}\n\nThe field still says ${t} here.` });
+      const bare = runFixture(withText(c.bare));
+      expect(bare.status).toBe(1);
+      expect(failedChecks(bare.stdout)).toEqual(["no-placeholder"]);
+      expect(bare.stdout).toContain("an unfinished-editing marker is still in the description");
+      const quoted = runFixture(withText(c.quoted));
+      expect(quoted.status).toBe(0);
+    });
+  }
 });
 
 // --- K5: the DOCUMENTED invocation, not just the bare one ------------------

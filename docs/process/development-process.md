@@ -197,9 +197,12 @@ both scope lines, K-numbered criteria, a `Verified by` on each, a guardrail,
 a premise, `model`/`model_effort`, `cc_type`/`cc_scope` — or when its
 `Premise verified` line names any commit other than `origin/main`'s current
 HEAD. For an older commit on `main` it prints how many commits stale that
-premise is; for a commit that is not on `main` at all — a premise verified
-on an implementer's branch, or on top of another unmerged PR — it says so,
-because that premise rests on code `main` does not have. Eirik,
+premise is; for a commit that is not on `main` at all it says so. That is
+usually a branch commit whose PR was since squash-merged — `main` has the
+change, but under the squash commit's different sha — and sometimes a branch
+not yet merged; either way the commit is not in `main`'s history, so it
+cannot be compared with `main`'s HEAD, and the premise is re-verified
+against `origin/main`'s HEAD. Eirik,
 2026-10-12: *"Before we start working with the beads all should pass
 validation."* It is a hard block, not a warning, and the exit status is the
 decision: the `.claude/skills/dispatch-bead` skill requires the run's output
