@@ -1,9 +1,13 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { GALLERY_ADVERTISING_LABEL_CLASS, GALLERY_TILE_BASE_CLASS } from "./containment";
+import {
+  GALLERY_ADVERTISING_LABEL_CLASS,
+  GALLERY_RADIUS_CLASS,
+  GALLERY_TILE_BASE_CLASS,
+} from "./containment";
 
 /**
  * ugcportal-o312: a labelled, published gallery item renders the
@@ -37,7 +41,18 @@ import { GALLERY_ADVERTISING_LABEL_CLASS, GALLERY_TILE_BASE_CLASS } from "./cont
  * strings.
  */
 
-const ROUNDED_TOKEN = /\brounded-(?:none|sm|md|lg|xl|2xl|3xl|full|\[[^\]]+\])\b/;
+function listSources(dir: string): string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const path = resolve(dir, entry.name);
+    if (entry.isDirectory()) return listSources(path);
+    return /\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name)
+      ? [path]
+      : [];
+  });
+}
+
+const ROUNDED_TOKEN =
+  /\brounded-(?:none|sm|md|lg|xl|2xl|3xl|full|\[[^\]]+\])\b/;
 
 function roundedTokenOf(classString: string): string {
   const match = classString.match(ROUNDED_TOKEN);
@@ -92,11 +107,51 @@ describe("gallery tile and its advertising-disclosure label share one radius (ug
     // ...and neither ALSO hand-types its own `rounded-*` utility beside it
     // (stripping the `GALLERY_RADIUS_CLASS` reference before checking, so
     // the reference itself does not trip this).
-    expect(
-      tileDefinition?.replace("GALLERY_RADIUS_CLASS", ""),
-    ).not.toMatch(/\brounded-/);
-    expect(
-      labelDefinition?.replace("GALLERY_RADIUS_CLASS", ""),
-    ).not.toMatch(/\brounded-/);
+    expect(tileDefinition?.replace("GALLERY_RADIUS_CLASS", "")).not.toMatch(
+      /\brounded-/,
+    );
+    expect(labelDefinition?.replace("GALLERY_RADIUS_CLASS", "")).not.toMatch(
+      /\brounded-/,
+    );
+  });
+
+  it("source-level (ugcportal-7ajb): the item page's <figure> takes its radius from GALLERY_RADIUS_CLASS, not a literal rounded-* beside the label", () => {
+    const page = readFileSync(
+      resolve(process.cwd(), "src/app/media/[previewId]/page.tsx"),
+      "utf8",
+    );
+    const figure = page.match(/<figure\b[^>]*>/)?.[0];
+    expect(figure).toBeDefined();
+    expect(figure).toContain("GALLERY_RADIUS_CLASS");
+    expect(figure?.replace("GALLERY_RADIUS_CLASS", "")).not.toMatch(
+      /\brounded-/,
+    );
+    // The label the figure sits beside resolves to the same token the
+    // constant the figure references does.
+    expect(roundedTokenOf(GALLERY_ADVERTISING_LABEL_CLASS)).toBe(
+      roundedTokenOf(GALLERY_RADIUS_CLASS),
+    );
+  });
+
+  it("source-scan (ugcportal-7ajb K2): no hand-typed rounded-md/rounded-lg in src/components/gallery or src/app/portfolio outside comments", () => {
+    const files = [
+      ...listSources(resolve(process.cwd(), "src/components/gallery")),
+      ...listSources(resolve(process.cwd(), "src/app/portfolio")),
+    ];
+    // Guard against a scan that matched nothing.
+    expect(files.length).toBeGreaterThan(0);
+    const offenders: string[] = [];
+    for (const file of files) {
+      const code = readFileSync(file, "utf8")
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/^\s*\/\/.*$/gm, "");
+      const isDefinition = file.endsWith("gallery/containment.ts");
+      for (const line of code.split("\n")) {
+        if (!/\brounded-(?:md|lg)\b/.test(line)) continue;
+        if (isDefinition && line.includes("GALLERY_RADIUS_CLASS =")) continue;
+        offenders.push(`${file}: ${line.trim()}`);
+      }
+    }
+    expect(offenders).toEqual([]);
   });
 });
