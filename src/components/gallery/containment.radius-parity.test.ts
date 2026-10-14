@@ -133,9 +133,10 @@ describe("gallery tile and its advertising-disclosure label share one radius (ug
     );
   });
 
-  it("source-scan (ugcportal-7ajb K2): no hand-typed rounded-md/rounded-lg in src/components/gallery or src/app/portfolio outside comments", () => {
+  it("source-scan (ugcportal-7ajb K2): no hand-typed rounded-md/rounded-lg in src/components/gallery, src/components/portfolio or src/app/portfolio outside comments", () => {
     const files = [
       ...listSources(resolve(process.cwd(), "src/components/gallery")),
+      ...listSources(resolve(process.cwd(), "src/components/portfolio")),
       ...listSources(resolve(process.cwd(), "src/app/portfolio")),
     ];
     // Guard against a scan that matched nothing.
