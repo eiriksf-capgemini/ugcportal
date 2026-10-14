@@ -2,7 +2,7 @@
 /**
  * A rerunnable stand-in for the manual verification PR #129's round-1
  * review did by hand ("next build + compiled CSS inspection: exactly one
- * group-hover: scale-[1.04] rule... properly gated", space inserted here
+ * group-hover: scale- [1.04] rule... properly gated", space inserted here
  * only, same reason globals.css's own comment and every other file that
  * quotes this shape for illustration already gives - Tailwind's real
  * build scans THIS file's raw bytes too, `scripts/` is not excluded by
@@ -32,10 +32,19 @@
  * A rule missing either half is the exact shape ugcportal-ig4g's gallery
  * bug, and every regression this bead's lineage has found since, took.
  *
+ * It also runs the repo-wide check (ugcportal-rj7y K2): ANY rule in the
+ * compiled output that applies scale, translate, rotate or an animation and
+ * is not nested inside a `prefers-reduced-motion` media query is reported,
+ * whichever file's text it came from. That is the compiled-output half of
+ * src/lib/design/tailwind-source-scan.test.ts: that test rejects the source
+ * string, this one proves nothing from a file that ships no UI reached the
+ * stylesheet anyway (a glob or a scanner difference the text scan cannot
+ * see). The one deliberate bare rule is named in UNGATED_MOTION_ALLOWLIST.
+ *
  * Usage: `node scripts/check-reduced-motion-css-exclusions.mjs` after
  * `npm run build`. Exits 1 and lists every offending rule if any ungated
- * group-hover+scale rule is found in the compiled output; exits 0
- * otherwise (including "no build present").
+ * group-hover+scale rule or any ungated motion rule is found in the compiled
+ * output; exits 0 otherwise (including "no build present").
  */
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
@@ -125,6 +134,57 @@ export function findUngatedGroupHoverScaleRules(cssText) {
   return offenders;
 }
 
+/**
+ * Compiled rules allowed to apply motion with no reduced-motion gate. Each is
+ * a selector exactly as postcss reads it, with the reason. The video
+ * badge key is written in two pieces on purpose: Tailwind reads this file's
+ * bytes, and the whole class name here would compile a second rule. 
+ */
+export const UNGATED_MOTION_ALLOWLIST = new Map([
+  [".translate-x-" + "0\\.5", "video badge icon: a static optical nudge applied unconditionally"],
+  [
+    ".pswp__preloader .pswp__icn",
+    "PhotoSwipe's own vendored loading spinner, imported whole from its stylesheet; it ships " +
+      "ungated today and is not this script's to fix (tracked in ugcportal-o5yj, remove this entry when that lands)",
+  ],
+]);
+
+const MOTION_PROPERTY = /^(?:scale|translate|rotate|animation|animation-name)$/;
+
+/**
+ * Every rule in `cssText` that declares scale, translate, rotate or an
+ * animation (a value other than `none`) while NOT nested inside a
+ * `prefers-reduced-motion` media query, except the allowlisted selectors.
+ * Keyframe step rules are skipped: a `from`/`to` step is only reachable
+ * through an animation declaration, which this check sees itself.
+ *
+ * @param {string} cssText
+ * @returns {string[]} `selector { property }` descriptions.
+ */
+export function findUngatedMotionRules(cssText) {
+  const root = postcss.parse(cssText);
+  const offenders = [];
+  root.walkRules((rule) => {
+    if (rule.parent?.type === "atrule" && /keyframes$/.test(rule.parent.name)) return;
+    // A `not (prefers-reduced-motion: ...)` condition is the inverse variant:
+    // it fires when reduced motion IS requested, so it is not a gate.
+    if (
+      mediaConditionsOf(rule).some(
+        (condition) => condition.includes("prefers-reduced-motion") && !/^not\b/.test(condition),
+      )
+    ) {
+      return;
+    }
+    if (UNGATED_MOTION_ALLOWLIST.has(rule.selector)) return;
+    rule.walkDecls((decl) => {
+      if (decl.parent !== rule) return;
+      if (!MOTION_PROPERTY.test(decl.prop) || /^none$/i.test(decl.value.trim())) return;
+      offenders.push(`${rule.selector} { ${decl.prop} } (not nested inside @media (prefers-reduced-motion: ...))`);
+    });
+  });
+  return offenders;
+}
+
 /* c8 ignore start -- process wiring, exercised by running the script itself */
 function main() {
   const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -142,24 +202,29 @@ function main() {
   const offenders = [];
   for (const file of files) {
     const cssText = readFileSync(file, "utf8");
-    for (const offender of findUngatedGroupHoverScaleRules(cssText)) {
+    for (const offender of [
+      ...findUngatedGroupHoverScaleRules(cssText),
+      ...findUngatedMotionRules(cssText),
+    ]) {
       offenders.push(`${path.relative(repoRoot, file)}: ${offender}`);
     }
   }
 
   if (offenders.length > 0) {
     console.error(
-      `${PREFIX} found a group-hover+scale rule in the compiled production CSS ` +
+      `${PREFIX} found a motion rule in the compiled production CSS ` +
         "that is not gated by motion-safe: nested inside " +
-        "@media (prefers-reduced-motion: no-preference):\n" +
+        "@media (prefers-reduced-motion: no-preference) (a bare mention in a " +
+        "comment, doc or script compiles the same way):\n" +
         offenders.map((offender) => `  ${offender}`).join("\n"),
     );
     process.exit(1);
   }
 
   console.log(
-    `${PREFIX} every compiled group-hover+scale rule across ${files.length} CSS ` +
-      "file(s) is motion-safe:-gated.",
+    `${PREFIX} every compiled group-hover+scale rule and every scale/translate/` +
+      `rotate/animation rule across ${files.length} CSS file(s) is reduced-motion-gated ` +
+      `(${UNGATED_MOTION_ALLOWLIST.size} allowlisted).`,
   );
 }
 

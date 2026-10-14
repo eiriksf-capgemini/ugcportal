@@ -10,7 +10,11 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { findUngatedGroupHoverScaleRules } from "./check-reduced-motion-css-exclusions.mjs";
+import {
+  UNGATED_MOTION_ALLOWLIST,
+  findUngatedGroupHoverScaleRules,
+  findUngatedMotionRules,
+} from "./check-reduced-motion-css-exclusions.mjs";
 
 describe("findUngatedGroupHoverScaleRules", () => {
   it("reports nothing for a rule correctly gated by motion-safe: and @media (prefers-reduced-motion: no-preference)", () => {
@@ -73,10 +77,74 @@ describe("findUngatedGroupHoverScaleRules", () => {
 
   it("ignores a rule that mentions only one of group-hover/scale", () => {
     const css = `
-      .group-hover\\:translate-y-px:is(:where(.group):hover *) { translate: 0 -1px; }
-      .motion-safe\\:scale-100 { scale: 1; }
+      .group-hover\\:translate-y-${"px"}:is(:where(.group):hover *) { translate: 0 -1px; }
+      .motion-safe\\:scale-${"100"} { scale: 1; }
     `;
 
     expect(findUngatedGroupHoverScaleRules(css)).toEqual([]);
+  });
+});
+
+describe("findUngatedMotionRules (ugcportal-rj7y K2)", () => {
+  it("flags a bare animation utility from any file's text, with no group-hover or scale in it", () => {
+    const css = `
+      @layer utilities {
+        .animate-${"spin"} { animation: var(--animate-spin); }
+      }
+    `;
+
+    const offenders = findUngatedMotionRules(css);
+    expect(offenders).toHaveLength(1);
+    expect(offenders[0]).toContain(`.animate-${"spin"}`);
+    expect(offenders[0]).toContain("animation");
+  });
+
+  it("flags bare scale, translate and rotate rules", () => {
+    const css = `
+      .scale-${"110"} { scale: 1.1; }
+      .translate-y-${"px"} { translate: 0 1px; }
+      .rotate-${"6"} { rotate: 6deg; }
+    `;
+
+    expect(findUngatedMotionRules(css)).toHaveLength(3);
+  });
+
+  it("flags the not-motion-safe: inverse, which sits in a prefers-reduced-motion media query but fires under reduce", () => {
+    const css = `
+      @media not (prefers-reduced-motion: no-preference) {
+        .not-motion-safe\\:animate-${"spin"} { animation: spin 1s linear infinite; }
+      }
+    `;
+
+    expect(findUngatedMotionRules(css)).toHaveLength(1);
+  });
+
+  it("accepts a rule inside motion-safe: or motion-reduce: media queries", () => {
+    const css = `
+      @media (prefers-reduced-motion: no-preference) {
+        .motion-safe\\:animate-${"spin"} { animation: spin 1s linear infinite; }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .motion-reduce\\:rotate-${"6"} { rotate: 6deg; }
+      }
+    `;
+
+    expect(findUngatedMotionRules(css)).toEqual([]);
+  });
+
+  it("accepts a none value and does not read keyframe steps as rules", () => {
+    const css = `
+      .animate-none { animation: none; }
+      .translate-none { translate: none; }
+      @keyframes spin { from { rotate: 0deg; } to { rotate: 360deg; } }
+    `;
+
+    expect(findUngatedMotionRules(css)).toEqual([]);
+  });
+
+  it("accepts only the allowlisted selectors, by exact selector", () => {
+    const [selector] = [...UNGATED_MOTION_ALLOWLIST.keys()];
+    expect(findUngatedMotionRules(`${selector} { translate: 0.125rem; }`)).toEqual([]);
+    expect(findUngatedMotionRules(`${selector}-x { translate: 0.125rem; }`)).toHaveLength(1);
   });
 });

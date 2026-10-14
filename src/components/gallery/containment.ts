@@ -122,7 +122,7 @@ export const GALLERY_TILE_BASE_CLASS = cn(
 /**
  * One INTERACTIVE tile (gallery.tsx's own `<button>`, which opens the
  * lightbox): the shared base above, plus `group` (so `GALLERY_TILE_IMAGE_
- * CLASS`'s `group-hover: scale-[…]` (space inserted before the utility,
+ * CLASS`'s `group-hover: scale- […]` (space inserted before the utility,
  * same reason as every other bare mention in this file - ugcportal-61pv:
  * this exact spot, with the real value elided to an ellipsis rather than
  * written out, was found compiling a second, ungated `scale: …` rule
@@ -172,7 +172,7 @@ export const GALLERY_TILE_CLASS = cn(
  * BUG 2, the one that survives fixing BUG 1 alone: simply swapping in
  * `motion-reduce:scale-none` is STILL a no-op, for a completely different
  * reason — CSS SPECIFICITY, not property name. Tailwind compiles
- * `group-hover: scale-[1.04]` (space inserted here, and everywhere else in
+ * `group-hover: scale- [1.04]` (space inserted here, and everywhere else in
  * this comment the BARE, un-prefixed combination is named, on purpose —
  * round-5 review: Tailwind's own source scanner reads raw file bytes, not
  * AST-aware JS, so writing that same combination UNBROKEN inside a comment
@@ -204,7 +204,7 @@ export const GALLERY_TILE_CLASS = cn(
  * The actual fix is the one `empty-state.tsx`'s own hover-lift already
  * uses and documents: `motion-safe:` on the TRIGGERING utility itself,
  * not (only) a `motion-reduce:` override on the result. `motion-safe:
- * group-hover: scale-[1.04]` (space inserted before the utility here too,
+ * group-hover: scale- [1.04]` (space inserted before the utility here too,
  * same reason as BUG 2 above - this exact sentence used to wrap across a
  * line break right between `motion-safe:` and `group-hover:`, and
  * Tailwind's scanner reads the two halves as SEPARATE whitespace-delimited
