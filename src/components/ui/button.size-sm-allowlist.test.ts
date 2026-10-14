@@ -9,11 +9,11 @@ import { isTestFile, stripComments, walkSourceFiles } from "@/lib/design/scan-so
 /**
  * ugcportal-gdn3: button.tsx has two same-box-model small sizes. Plain `sm`
  * carries a capped radius; `header-sm` is the uncapped one the public-page
- * controls use. Nothing else stops a new public-page control reaching for the
- * more conventional `size="sm"` and silently losing that radius, so every
+ * controls use. Neither lint nor types distinguish them, so a new public-page control could reach for the
+ * more conventional `size="sm"` and silently lose that radius; this test is the check. Every
  * non-test `size="sm"` / `size: "sm"` caller must be on this list. A new
- * caller fails here until someone adds it deliberately (admin/upload/consent
- * surfaces only; a public-page control uses "header-sm").
+ * caller fails here, and the entry is added deliberately (the current callers are
+ * admin, upload and consent surfaces; a public-page control uses "header-sm").
  *
  * Counts are per file, so a second `sm` use in an allowlisted file is also
  * flagged. The list is the output of
