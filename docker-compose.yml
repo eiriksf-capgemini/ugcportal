@@ -59,10 +59,45 @@
 
 services:
   minio:
-    # MinIO's images are no longer published to Docker Hub (pulls are denied there as of 2025);
-    # quay.io/minio/* is the maintained registry.
-    image: quay.io/minio/minio:RELEASE.2025-04-08T15-41-24Z
-    command: server /data --console-address ":9001"
+    # WHERE THIS IMAGE COMES FROM (ugcportal-s2qp). The upstream MinIO images
+    # can no longer be pulled anonymously from anywhere: measured 2026-10-14,
+    # quay.io/minio/minio answers 401 on the manifest HEAD, quay.io/minio/mc
+    # answers "No such image", Docker Hub's minio/minio answers 404 and
+    # bitnami/minio has 0 tags. So the file used to say "quay.io/minio/* is the
+    # maintained registry", and that stopped being true.
+    #
+    # It is now Bitnami's legacy mirror on Docker Hub, docker.io/bitnamilegacy,
+    # which pulls with no login (checked after `docker logout`), pinned by
+    # DIGEST as well as tag so that a later push cannot move it under a QA
+    # session. Inside it `minio --version` prints
+    # DEVELOPMENT.2025-04-08T15-41-24Z, the same upstream build the old
+    # quay tag RELEASE.2025-04-08T15-41-24Z named.
+    #
+    # THE MIRROR IS FROZEN: bitnamilegacy receives no new tags and no fixes.
+    # That is acceptable for a pinned, localhost-only QA stack whose whole
+    # point is a fixed artifact; it is not acceptable for production, which
+    # does not use this file (the production object store is ugcportal-odx).
+    #
+    # DIFFERENCES FROM UPSTREAM, each read from the image: it runs as uid 1001
+    # (gid 0), so a `minio-data` volume first created by the old root-run
+    # image may be owned by root and unwritable -- `docker compose down -v`
+    # resets it. The data dir defaults to /bitnami/minio/data (not /data),
+    # the console port is MINIO_CONSOLE_PORT_NUMBER (default 9001), the API
+    # port is 9000, and there is no preconfigured `local` mc alias, so the
+    # healthcheck uses MinIO's own /minio/health/live endpoint with the
+    # image's curl instead of `mc ready local`.
+    #
+    # THE BITNAMI ENTRYPOINT IS BYPASSED, on purpose. Its setup phase starts a
+    # throwaway MinIO in the background (log: "Starting MinIO in
+    # background..."), stops it ~5s later, then starts the real one. The
+    # throwaway answers /minio/health/live, so with the default entrypoint
+    # the service went healthy, minio-init ran in that window and got
+    # "connection refused" (observed, first run of ugcportal-s2qp). Running
+    # the `minio` binary directly (it is on PATH, as uid 1001) leaves one
+    # server and a healthcheck that means what it says.
+    entrypoint: ["minio"]
+    command: ["server", "/bitnami/minio/data", "--console-address", ":9001"]
+    image: bitnamilegacy/minio:2025.4.8-debian-12-r3@sha256:4ab67707a5b6a391d1b4d545d70877c002fb08724e80b21eb483986103b73602
     # HOST ports are overridable; CONTAINER ports are not. minio-init below
     # reaches MinIO as minio:9000 over the compose network, and that side
     # must stay fixed. The host side is a variable because 9000 is not
@@ -88,15 +123,18 @@ services:
       MINIO_ROOT_USER: ${S3_ACCESS_KEY_ID:-minioadmin}
       MINIO_ROOT_PASSWORD: ${S3_SECRET_ACCESS_KEY:-minioadmin}
     volumes:
-      - minio-data:/data
+      - minio-data:/bitnami/minio/data
     healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
+      test: ["CMD", "curl", "-fsS", "http://localhost:9000/minio/health/live"]
       interval: 5s
       timeout: 5s
       retries: 5
 
   minio-init:
-    image: quay.io/minio/mc:RELEASE.2025-04-08T15-39-49Z
+    # Same mirror as `minio` above (see its comment); `mc` is at
+    # /opt/bitnami/minio-client/bin/mc and on PATH, and the entrypoint is
+    # overridden so the image's own entrypoint script does not run.
+    image: bitnamilegacy/minio-client:2025.4.8-debian-12-r2@sha256:579fd0e3451824569411c2bc4171c5e7e981ed23c3953988ee77aa82b8d1251f
     depends_on:
       minio:
         condition: service_healthy
