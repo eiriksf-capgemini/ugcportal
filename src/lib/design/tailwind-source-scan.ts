@@ -19,8 +19,7 @@
  * (node_modules, .next, .claude/worktrees ...), build output and `.css`
  * files, and reads only the text extensions in TEXT_EXTENSION. Dot-directories
  * that are tracked (.claude, .github, .beads) ARE read: a planted bare
- * utility in .claude/ compiled into the stylesheet in this bead's own
- * verification build; a file Tailwind skips but this reads is an over-match,
+ * utility in .claude/ compiled into the stylesheet when this was checked; a file Tailwind skips but this reads is an over-match,
  * which is the safe direction for a guard.
  */
 import { readFileSync, readdirSync } from "node:fs";
@@ -122,11 +121,12 @@ export function listReachableFiles(root: string, excluded: readonly RegExp[]): s
  * The final segment of a token, once variants are stripped, that applies
  * motion. `-none` forms remove motion and are never findings. A bare
  * `transition` is not matched: it is also an ordinary English word (a state
- * transition) and appears in prose dozens of times; only the utilities that
+ * transition) and appears in prose across the docs and source comments; only the utilities that
  * name a moving property are.
  *
- * Assembled from parts so this file's own bytes never spell a whole
- * candidate: Tailwind scans scripts and src alike.
+ * Assembled from parts so this file's own bytes do not spell a whole
+ * candidate (Tailwind scans src alike; the real-tree test in
+ * tailwind-source-scan.test.ts scans this file and fails if one appears).
  */
 const AXIS = "(?:[xyz]-)?";
 const NUMERIC = String.raw`(?:\d[\w./%]*|px|full|auto|\[.*\]|\(.*\))`;
