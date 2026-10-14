@@ -169,9 +169,11 @@ export function alcoholLinkedBrandRefusal(
  * stricter. The honest record comes first; what it may NOT do is become
  * public before the alcohol question is answered, and that is
  * {@link isAlcoholUnclearedAdvertisement}'s job below — read by
- * `commercialPublishRefusal` on a publish request, and by
- * {@link PUBLIC_MEDIA_ALCOHOL_COMMERCE_SCOPE} on every anonymous read
- * (ugcportal-pgpq). The read-side half is what makes this permissive write
+ * `commercialPublishRefusal` on a publish request — and the read side's, where
+ * {@link PUBLIC_MEDIA_ALCOHOL_COMMERCE_SCOPE} serves only what
+ * {@link isWithheldFromPublicRead} (that predicate plus the recorded-alcohol
+ * reason) does not withhold (ugcportal-pgpq, ugcportal-qnq9.11). The
+ * read-side half is what makes this permissive write
  * safe no matter which order the two facts arrive in: the honest record is
  * stored, and the item simply is not served until the question is answered.
  *
@@ -210,9 +212,12 @@ export function benefitAttachmentRefusal(item: {
  * ONLY AN ITEM CARRYING SOMETHING COMMERCIAL IS IN SCOPE, and there are now
  * TWO ways to carry one. An item with no disclosure, or one declaring no
  * benefit, and no commercial link either, is not advertising for anything and
- * § 9-2 has nothing to say about it — a photograph of a glass of wine is
- * perfectly publishable as personal content, which is the distinction §3.1a
- * practical rule 2 (ugcportal-qnq9.11) is built on. The benefit half is
+ * § 9-2 has nothing to say about it, so THIS gate lets it publish (200). That
+ * is not the same as it being served: since ugcportal-qnq9.11 an item recorded
+ * `depictsAlcohol = true` is withheld from every public surface by the read
+ * scope whether or not it carries anything commercial, and a `null` answer
+ * keeps today's behaviour. This gate's commercial-marker test is unchanged by
+ * that. The benefit half is
  * written as `!== true` rather than `=== false || == null` so a column
  * holding anything else reads as "not a declared benefit", matching
  * `advertisingLabelPublishRefusal`'s own reading of the same field.
@@ -261,8 +266,11 @@ export function benefitAttachmentRefusal(item: {
  * gained a benefit and a link through the ordinary owner routes was never
  * asked at all. The pair is now also a read-side filter —
  * {@link PUBLIC_MEDIA_ALCOHOL_COMMERCE_SCOPE} below, spread into
- * `PUBLIC_MEDIA_SCOPE` — so it is re-asked on every read, and both readings
- * go through the one predicate {@link isAlcoholUnclearedAdvertisement}.
+ * `PUBLIC_MEDIA_SCOPE` — so it is re-asked on every read. The read filter is
+ * the complement of {@link isWithheldFromPublicRead}, which is
+ * {@link isAlcoholUnclearedAdvertisement} widened by a second reason (a
+ * recorded `true`, ugcportal-qnq9.11); the publish refusal asks the narrower
+ * predicate alone.
  */
 export function commercialPublishRefusal(item: {
   disclosure:
@@ -288,10 +296,12 @@ export function commercialPublishRefusal(item: {
   }
 
   // The § 9-2 PAIR, asked through the shared predicate below rather than
-  // spelled again here (ugcportal-pgpq). It is the same question the read
-  // path now asks of every row it serves, and the point of routing both
-  // through one function is that they cannot come to disagree about which
-  // states of `depictsAlcohol` count as answered.
+  // spelled again here (ugcportal-pgpq). The read path asks this same
+  // predicate as one of the two reasons it withholds a row
+  // (`isWithheldFromPublicRead`), so the two cannot come to disagree about
+  // which states of `depictsAlcohol` count as answered for a commercial item;
+  // the read path additionally withholds a recorded `true` whatever is
+  // attached (ugcportal-qnq9.11), which a publish request does not ask here.
   if (isAlcoholUnclearedAdvertisement(item)) {
     return {
       error:
@@ -320,8 +330,10 @@ export function commercialPublishRefusal(item: {
  * served rather than once when it was written.
  *
  * So the pair is named here, and it has TWO readers: the publish refusal
- * above, and {@link PUBLIC_MEDIA_ALCOHOL_COMMERCE_SCOPE} below, which is
- * this predicate as a Prisma `where`. The two are written in different
+ * above, and {@link isWithheldFromPublicRead} below, whose complement is
+ * {@link PUBLIC_MEDIA_ALCOHOL_COMMERCE_SCOPE}, a Prisma `where`. The where is
+ * the pair plus the recorded-`true` reason, so it is wider than this
+ * predicate alone. The two are written in different
  * languages against different engines and nothing in either file makes them
  * agree; src/lib/alcohol-commerce.scope-agreement.test.ts runs both over one
  * row per state on a real database and compares them, the same arrangement
@@ -359,6 +371,34 @@ export function isAlcoholUnclearedAdvertisement(item: {
 }
 
 /**
+ * THE PUBLIC READ ARM'S PREDICATE TWIN (ugcportal-qnq9.11): is this item
+ * WITHHELD from every anonymous surface?
+ *
+ * `isAlcoholUnclearedAdvertisement` above is the publish gate's pair and is
+ * deliberately NOT widened: `commercialPublishRefusal` reads it only after
+ * confirming something commercial is attached, and its own test pins the two
+ * as the same question. Option (a) adds a second reason to withhold that has
+ * nothing to do with advertising - the item is recorded as showing alcohol
+ * (`depictsAlcohol === true`), so a recorded-true item is never placed beside a commercial one
+ * (docs/ugc-research.md §3.1a practical rule 2). Withheld <=> recorded as
+ * showing alcohol, OR the pair. `null` and a missing listing are NOT withheld
+ * by the first reason (true-only, decided 2026-10-14 in ugcportal-6yrd).
+ *
+ * The where-clause below is the complement of this function, and
+ * src/lib/alcohol-commerce.scope-agreement.test.ts compares the two row by row.
+ */
+export function isWithheldFromPublicRead(item: {
+  disclosure: { benefitReceived: boolean | null } | null | undefined;
+  listing: ListingAlcoholFacts | null | undefined;
+  commercialLinks: CommercialLinkFacts;
+}): boolean {
+  return (
+    alcoholDepiction(item.listing) === "depicted" ||
+    isAlcoholUnclearedAdvertisement(item)
+  );
+}
+
+/**
  * ---------------------------------------------------------------------------
  * THE SAME PAIR, AS A QUERY FILTER (ugcportal-pgpq)
  * ---------------------------------------------------------------------------
@@ -369,12 +409,14 @@ export function isAlcoholUnclearedAdvertisement(item: {
  * reason, ugcportal-nffp chose for the rights predicates: a reader somebody
  * adds next year inherits this with nothing to remember.
  *
- * THIS IS THE COMPLEMENT of {@link isAlcoholUnclearedAdvertisement}, because
- * a `where` says what is SERVED rather than what is refused. An item is
- * served when the alcohol question is answered `no`, OR when it carries
- * nothing commercial at all:
+ * THIS IS THE COMPLEMENT of {@link isWithheldFromPublicRead} (which wraps
+ * {@link isAlcoholUnclearedAdvertisement}), because a `where` says what is
+ * SERVED rather than what is refused. An item is served when it is not
+ * recorded as showing alcohol (ugcportal-qnq9.11), AND the alcohol question is
+ * answered `no` OR it carries nothing commercial at all:
  *
- *     served  <=>  depictsAlcohol = false  OR  (no declared benefit AND no link)
+ *     served  <=>  depictsAlcohol IS NOT true
+ *                  AND (depictsAlcohol = false OR (no declared benefit AND no link))
  *
  * NO PRISMA IMPORT, keeping this module's own header claim true — but a bad
  * key here is a compile error only for one of the two ways a key can be bad.
@@ -448,12 +490,50 @@ const NOTHING_COMMERCIAL_ATTACHED = {
   ],
 };
 
-export type MediaAlcoholCommerceScope = {
-  OR: [typeof ALCOHOL_ANSWERED_ABSENT, typeof NOTHING_COMMERCIAL_ATTACHED];
+/**
+ * NOT RECORDED AS SHOWING ALCOHOL (ugcportal-qnq9.11, option (a), true-only):
+ * the listing does not exist, or its answer is `false`, or it is `null`.
+ *
+ * ENUMERATED POSITIVELY, for the reason `NOTHING_COMMERCIAL_ATTACHED` gives
+ * above: `NOT (depictsAlcohol = 1)` is NULL on a NULL column, which is not
+ * true, so the negated spelling would drop every untriaged listing that
+ * exists - and the decision is that `null` keeps today's behaviour. The
+ * positive spelling also leaves a value that is not a boolean at all (SQLite
+ * is dynamically typed) OUT, which is the fail-closed direction; the TypeScript
+ * twin types the answer as `boolean | null` and does not model that value.
+ */
+const ALCOHOL_NOT_RECORDED_PRESENT = {
+  OR: [
+    { listing: { is: null } },
+    { listing: { is: { depictsAlcohol: false } } },
+    { listing: { is: { depictsAlcohol: null } } },
+  ],
 };
 
+export type MediaAlcoholCommerceScope = {
+  AND: [
+    typeof ALCOHOL_NOT_RECORDED_PRESENT,
+    {
+      OR: [typeof ALCOHOL_ANSWERED_ABSENT, typeof NOTHING_COMMERCIAL_ATTACHED];
+    },
+  ];
+};
+
+/**
+ * Served <=> NOT recorded as showing alcohol (qnq9.11)
+ *           AND (depictsAlcohol = false OR nothing commercial attached) (pgpq).
+ *
+ * Still ONE element of `PUBLIC_MEDIA_RIGHTS_SCOPE.AND`: the widening is nested
+ * here rather than added as a fourth top-level key, which
+ * public-media.consumers.test.ts would refuse, and it stays relation-filters-
+ * only (`listing`, `advertisingDisclosure`, `commercialLinks`), asserted by
+ * "is RELATION FILTERS ONLY" in src/lib/public-media.lapse.test.ts.
+ */
 export const PUBLIC_MEDIA_ALCOHOL_COMMERCE_SCOPE: MediaAlcoholCommerceScope = {
-  OR: [ALCOHOL_ANSWERED_ABSENT, NOTHING_COMMERCIAL_ATTACHED],
+  AND: [
+    ALCOHOL_NOT_RECORDED_PRESENT,
+    { OR: [ALCOHOL_ANSWERED_ABSENT, NOTHING_COMMERCIAL_ATTACHED] },
+  ],
 };
 
 /**

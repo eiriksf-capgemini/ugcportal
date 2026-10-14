@@ -53,7 +53,9 @@ import {
  *
  * `PUBLIC_MEDIA_RIGHTS_SCOPE` IS NO LONGER ONLY THIS MODULE'S RULE. Since
  * ugcportal-pgpq it carries a third arm belonging to a different statute —
- * alkoholloven § 9-2's commercial pair, defined in
+ * alkoholloven § 9-2's commercial pair, widened at ugcportal-qnq9.11 by a
+ * recorded `depictsAlcohol = true` (the complement of
+ * `isWithheldFromPublicRead`), defined in
  * src/lib/alcohol-commerce.ts and cross-checked against ITS own predicate in
  * src/lib/alcohol-commerce.scope-agreement.test.ts. It is assembled here
  * because this is the constant every anonymous reader already spreads, not
@@ -457,7 +459,9 @@ const NOBODY_IDENTIFIABLE_SHOWN = {
  *
  * THREE ARMS, FROM TWO RULES, SINCE ugcportal-pgpq. The first two are this
  * module's own publishability rule (the attestation, and the PEOPLE layer);
- * the third is alkoholloven § 9-2's commercial pair, which lives in
+ * the third is alkoholloven § 9-2's commercial pair plus, since
+ * ugcportal-qnq9.11, a recorded `depictsAlcohol = true` (the complement of
+ * `isWithheldFromPublicRead`), which lives in
  * src/lib/alcohol-commerce.ts beside its own TypeScript predicate and is
  * only assembled here, because this is the constant every anonymous reader
  * already spreads. That means this constant is no longer the query form of
@@ -492,7 +496,9 @@ export const PUBLIC_MEDIA_RIGHTS_SCOPE: MediaPublicRightsScope = {
     { OR: [NOBODY_IDENTIFIABLE_SHOWN, PEOPLE_LAYER_CLEARED] },
     /*
      * A THIRD ARM, FROM A DIFFERENT STATUTE (ugcportal-pgpq): alkoholloven
-     * § 9-2's commercial pair, defined beside its own predicate in
+     * § 9-2's commercial pair, widened at ugcportal-qnq9.11 by a recorded
+     * `depictsAlcohol = true` (so it is the complement of
+     * `isWithheldFromPublicRead`), defined beside its own predicate in
      * src/lib/alcohol-commerce.ts and only assembled here.
      *
      * WHY IT IS HERE AND NOT IN A CONSTANT OF ITS OWN BESIDE
@@ -503,10 +509,13 @@ export const PUBLIC_MEDIA_RIGHTS_SCOPE: MediaPublicRightsScope = {
      * `PUBLIC_MEDIA_SCOPE.AND` is asserted to BE this array
      * (src/lib/public-media.lapse.test.ts), so a fourth top-level key would
      * be a new thing to remember at every call site rather than one the
-     * scope carries. And the arm is a disjunction: a top-level `OR` on the
-     * scope is silently overwritten by `listMedia`'s keyset predicate from
-     * page two onwards — see this type's own comment above — so nesting it
-     * inside this `AND` is the only placement that survives pagination.
+     * scope carries. And the arm is a conjunction that CONTAINS a
+     * disjunction (`{ AND: [not-recorded, { OR: [...] }] }`): hoisting its
+     * members to the scope's top level would put an `OR` there, and a
+     * top-level `OR` on the scope is silently overwritten by `listMedia`'s
+     * keyset predicate from page two onwards — see this type's own comment
+     * above — so nesting it inside this `AND` is the only placement that
+     * survives pagination.
      *
      * It is a RELATION FILTER ONLY (`listing`, `advertisingDisclosure`,
      * `commercialLinks`), which is what makes it re-evaluated on every read

@@ -43,13 +43,16 @@ import { loadDevEnvFiles } from "../../scripts/lib/env-files.mjs";
  *     and the publish gate both allow this, and it is ugcportal-qnq9.3 K1. Its
  *     tile MUST carry the label.
  *   - the DRINK — a glass of wine, alcohol answered `yes`, published with NO
- *     disclosure, which is the only way the publish gate lets an
- *     alcohol-showing item become public (it is then personal content, not
- *     advertising). Its tile must carry no label, no price and no buy control.
+ *     disclosure, which was the only way the publish gate let an
+ *     alcohol-showing item become public. Since ugcportal-qnq9.11 a recorded
+ *     `yes` is withheld from every public surface, so the drink has NO TILE:
+ *     the assertions below are that it renders nothing at all, and so no
+ *     label, price or buy control.
  *
- * The first item is the reason the second assertion means something: without a
- * tile that really does render a label, "no label here" would hold against a
- * selector that matches nothing.
+ * The accessory's tile is the reason the drink assertions mean something: the
+ * drink's own label selector matches nothing by design, so what carries the
+ * drink test is its `toHaveCount(0)` tile check set against the accessory's
+ * tile, which the same page demonstrably does render with a label.
  */
 
 // The same `.env*` precedence `next dev` itself uses, so this writes to the
@@ -64,6 +67,10 @@ const OWNER_ID = "e2e-qnq9-3-owner";
 const ACCESSORY_ID = "e2e-qnq9-3-accessory";
 const DRINK_ID = "e2e-qnq9-3-drink";
 const BRAND_ID = "e2e-qnq9-3-brand";
+// src/lib/attestation.ts CURRENT_ATTESTATION_VERSION; without a current
+// attestation the public scope serves neither row (found while editing this
+// spec for ugcportal-qnq9.11: every test here failed before that bead).
+const ATTESTATION_VERSION = "2026-10-08.1";
 const LABEL = "Advertisement / Reklame";
 
 /** Everything this spec created, removed in the order the foreign keys allow.
@@ -73,6 +80,7 @@ const LABEL = "Advertisement / Reklame";
 async function cleanup() {
   await db.batch(
     [
+      `DELETE FROM "MediaAttestation" WHERE "mediaId" IN ('${ACCESSORY_ID}','${DRINK_ID}')`,
       `DELETE FROM "MediaAdvertisingDisclosure" WHERE "mediaId" IN ('${ACCESSORY_ID}','${DRINK_ID}')`,
       `DELETE FROM "MediaListing" WHERE "mediaId" IN ('${ACCESSORY_ID}','${DRINK_ID}')`,
       `DELETE FROM "Media" WHERE "id" IN ('${ACCESSORY_ID}','${DRINK_ID}')`,
@@ -115,6 +123,13 @@ test.beforeAll(async () => {
                'media/${OWNER_ID}/accessory.png','previews/${OWNER_ID}/accessory.webp',
                '${ACCESSORY_ID}-preview','image/png',1024,'accessory.png',
                'An empty wine glass on a windowsill','${now}','${now}')`,
+`INSERT INTO "MediaAttestation"
+         ("id","mediaId","attestedByUserId","attestationVersion","authorship",
+          "ownOriginalNotFromWeb","showsIdentifiablePeople","showsMinors",
+          "containsMusicNotOwned","otherCreativeContributor","brandOrSponsorship",
+          "aiGenerated","uploaderIsAdult")
+       VALUES ('${ACCESSORY_ID}-attestation','${ACCESSORY_ID}','${OWNER_ID}',
+               '${ATTESTATION_VERSION}','AUTHOR',1,0,0,0,0,1,0,1)`,
       `INSERT INTO "MediaListing"
          ("id","mediaId","currency","depictsPeople","depictsMinors","containsMusic",
           "thirdPartyCreator","sponsoredContent","depictsAlcohol","wineAccessory",
@@ -136,6 +151,13 @@ test.beforeAll(async () => {
                'media/${OWNER_ID}/drink.png','previews/${OWNER_ID}/drink.webp',
                '${DRINK_ID}-preview','image/png',1024,'drink.png',
                'A glass of red wine, photographed as wine','${now}','${now}')`,
+`INSERT INTO "MediaAttestation"
+         ("id","mediaId","attestedByUserId","attestationVersion","authorship",
+          "ownOriginalNotFromWeb","showsIdentifiablePeople","showsMinors",
+          "containsMusicNotOwned","otherCreativeContributor","brandOrSponsorship",
+          "aiGenerated","uploaderIsAdult")
+       VALUES ('${DRINK_ID}-attestation','${DRINK_ID}','${OWNER_ID}',
+               '${ATTESTATION_VERSION}','AUTHOR',1,0,0,0,0,1,0,1)`,
       `INSERT INTO "MediaListing"
          ("id","mediaId","currency","depictsPeople","depictsMinors","containsMusic",
           "thirdPartyCreator","sponsoredContent","depictsAlcohol","wineAccessory",
@@ -153,8 +175,9 @@ test.afterAll(async () => {
 });
 
 test("K1: the accessory tile renders its advertising label", async ({ page }) => {
-  // The control. Every negative assertion below is about the drink's tile not
-  // having something THIS tile demonstrably does have on the same page.
+  // The control. The drink has no tile since ugcportal-qnq9.11, so the
+  // assertions below that it renders nothing are set against THIS tile, which
+  // the same page demonstrably renders with a label.
   await page.goto("/");
 
   await expect(
@@ -168,12 +191,18 @@ test("K1: the accessory tile renders its advertising label", async ({ page }) =>
   await expect(label).toHaveText(LABEL);
 });
 
-test("K6: the tile showing the drink carries no advertising label", async ({
+test("K6: the drink carries no advertising label - since ugcportal-qnq9.11 it has no tile at all", async ({
   page,
 }) => {
   await page.goto("/");
 
-  await expect(page.locator(`[data-gallery-tile="${DRINK_ID}"]`)).toBeAttached();
+  // An item recorded as showing alcohol is withheld from the public gallery
+  // (option (a), true-only), so "its tile has no label" became "it has no
+  // tile". The accessory's tile is the control that the gallery rendered.
+  await expect(
+    page.locator(`[data-gallery-tile="${ACCESSORY_ID}"]`),
+  ).toBeAttached();
+  await expect(page.locator(`[data-gallery-tile="${DRINK_ID}"]`)).toHaveCount(0);
   await expect(
     page.locator(`[data-gallery-advertising-label="${DRINK_ID}"]`),
   ).toHaveCount(0);
@@ -190,12 +219,13 @@ test("K6: no tile on the public gallery carries a price or a buy control", async
    * price lives on MediaListing and is never projected into the public feed,
    * and checkout is ugcportal-p3v. So this case is the one that notices when
    * that stops being true: when a buy button arrives it will appear on every
-   * tile, including the drink's, and this fails rather than shipping.
+   * tile the page renders (today the accessory's alone, the drink being
+   * withheld since ugcportal-qnq9.11), and this fails rather than shipping.
    *
-   * Written over the whole page rather than scoped to the drink's tile on
-   * purpose. A price control on the accessory's tile would be lawful; one on
-   * the drink's would not; and the cheapest honest assertion while neither
-   * exists is that neither does.
+   * Written over the whole page rather than scoped to one tile on purpose.
+   * A price control on the accessory's tile would be lawful, and the drink
+   * has no tile to put one on; the cheapest honest assertion while no buy
+   * control exists is that none does.
    */
   await page.goto("/");
 
@@ -211,31 +241,4 @@ test("K6: no tile on the public gallery carries a price or a buy control", async
   await expect(
     page.getByRole("link", { name: /buy|basket|checkout|purchase/i }),
   ).toHaveCount(0);
-});
-
-test("K6: the drink's tile carries no commercial outbound link", async ({
-  page,
-}) => {
-  /*
-   * The fourth affordance the criterion names. The commercial-link column now
-   * exists (`CommercialLink`, ugcportal-qnq9.2.1) but nothing renders it — no
-   * public read path selects the relation, and the marker and the `rel` tokens
-   * are ugcportal-qnq9.2.2 — so this still asserts the SHAPE rather than a
-   * field: every link inside the tile stays on this origin. An affiliate link
-   * is by definition off-origin, so the day one is rendered without a gate
-   * this fails, which is exactly what it has to do when that bead lands.
-   */
-  await page.goto("/");
-
-  const tile = page.locator(`[data-gallery-tile="${DRINK_ID}"]`);
-  await expect(tile).toBeAttached();
-
-  const hrefs = await tile
-    .locator("a[href]")
-    .evaluateAll((anchors) => anchors.map((a) => a.getAttribute("href") ?? ""));
-  const offOrigin = hrefs.filter(
-    (href) => /^[a-z][a-z0-9+.-]*:/i.test(href) && !href.startsWith("/"),
-  );
-
-  expect(offOrigin).toEqual([]);
 });
