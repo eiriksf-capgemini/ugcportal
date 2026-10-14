@@ -9,6 +9,7 @@ import { cn } from "cn";
 
 import { buttonVariants } from "@/components/ui/button";
 import { isTestFile, stripComments, walkSourceFiles } from "@/lib/design/scan-source";
+import { JS_FAMILY_FILENAME_PATTERN } from "@/lib/source-extensions.mjs";
 
 /**
  * ugcportal-6wkd: nothing CI-wired ever rendered AuthStatus and asserted its
@@ -249,14 +250,16 @@ describe("header-sm class output is byte-identical at all four call sites (ugcpo
     expect(buttonWithText("Facebook").className).toBe(HEADER_SM_OUTLINE_FULL_WIDTH_LITERAL);
   });
 
-  it("the literal header-sm occurs exactly five times across non-test sources, in any spelling: the key definition in button.tsx, three call sites in sign-in-menu.tsx, one in auth-status.tsx", () => {
-    // Any quoted spelling counts: size="header-sm", size={"header-sm"},
-    // buttonVariants({ size: "header-sm" }), a template literal. button.tsx is
-    // scanned too and expected to hold exactly one occurrence, the cva key
-    // definition, so a caller added inside button.tsx also fails here (round 4
-    // of PR #237 showed a path-based exclusion let that through).
+  it("the quoted literal header-sm (any quote style) occurs exactly five times across non-test JS-family sources under src: the key definition in button.tsx, three call sites in sign-in-menu.tsx, one in auth-status.tsx", () => {
+    // Counts the literal in any quote style ("header-sm", 'header-sm',
+    // `header-sm`) in every file matching JS_FAMILY_FILENAME_PATTERN (.ts,
+    // .tsx, .js, .jsx, .mjs, .cjs, .mts, .cts), comments stripped. button.tsx
+    // is scanned too and expected to hold exactly one occurrence, the cva key
+    // definition, so a caller added inside button.tsx also fails here. Out of
+    // reach by construction: an escaped or computed string (`header-${"sm"}`,
+    // "header-s\u006d") that only equals the literal at runtime.
     const found: Record<string, number> = {};
-    for (const file of (cachedSourceFiles ??= walkSourceFiles(SRC_ROOT, isTestFile))) {
+    for (const file of (cachedSourceFiles ??= walkSourceFiles(SRC_ROOT, isTestFile, JS_FAMILY_FILENAME_PATTERN))) {
       const n = stripComments(readFileSync(file, "utf8"), file).match(/["'`]header-sm["'`]/g)?.length ?? 0;
       if (n > 0) found[path.relative(REPO_ROOT, file).split(path.sep).join("/")] = n;
     }
