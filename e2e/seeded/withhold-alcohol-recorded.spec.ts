@@ -25,10 +25,11 @@ import { loadDevEnvFiles } from "../../scripts/lib/env-files.mjs";
  *
  * Seeded as published rows (raw SQL, for the reason alcohol-commerce.spec.ts
  * gives: Playwright's CJS transform cannot load the generated Prisma client).
- * These rows are written directly in the published state, NOT by driving the
- * publish route, so this spec exercises the read arm and the rendered pages
- * only. The routes are driven in src/lib/alcohol-commerce.read-path.test.ts
- * against a real database.
+ * The e2e harness seeds published, attested, preview-complete rows directly
+ * because it has no login session; the publish route is exercised in the
+ * vitest read-path test (src/lib/alcohol-commerce.read-path.test.ts), against
+ * a real database. This spec therefore exercises the read arm and the
+ * rendered pages only.
  *
  * Run with `npm run test:e2e:withhold-alcohol-recorded`. Not wired into CI,
  * like every spec in this directory.

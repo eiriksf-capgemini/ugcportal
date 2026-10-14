@@ -43,9 +43,11 @@ import { loadDevEnvFiles } from "../../scripts/lib/env-files.mjs";
  *     and the publish gate both allow this, and it is ugcportal-qnq9.3 K1. Its
  *     tile MUST carry the label.
  *   - the DRINK — a glass of wine, alcohol answered `yes`, published with NO
- *     disclosure, which is the only way the publish gate lets an
- *     alcohol-showing item become public (it is then personal content, not
- *     advertising). Its tile must carry no label, no price and no buy control.
+ *     disclosure, which was the only way the publish gate let an
+ *     alcohol-showing item become public. Since ugcportal-qnq9.11 a recorded
+ *     `yes` is withheld from every public surface, so the drink has NO TILE:
+ *     the assertions below are that it renders nothing at all, and so no
+ *     label, price or buy control.
  *
  * The first item is the reason the second assertion means something: without a
  * tile that really does render a label, "no label here" would hold against a
@@ -215,12 +217,13 @@ test("K6: no tile on the public gallery carries a price or a buy control", async
    * price lives on MediaListing and is never projected into the public feed,
    * and checkout is ugcportal-p3v. So this case is the one that notices when
    * that stops being true: when a buy button arrives it will appear on every
-   * tile, including the drink's, and this fails rather than shipping.
+   * tile the page renders (today the accessory's alone, the drink being
+   * withheld since ugcportal-qnq9.11), and this fails rather than shipping.
    *
-   * Written over the whole page rather than scoped to the drink's tile on
-   * purpose. A price control on the accessory's tile would be lawful; one on
-   * the drink's would not; and the cheapest honest assertion while neither
-   * exists is that neither does.
+   * Written over the whole page rather than scoped to one tile on purpose.
+   * A price control on the accessory's tile would be lawful, and the drink
+   * has no tile to put one on; the cheapest honest assertion while no buy
+   * control exists is that none does.
    */
   await page.goto("/");
 

@@ -434,11 +434,14 @@ describe("commercialPublishRefusal (K6)", () => {
 describe("isAlcoholUnclearedAdvertisement (the pair, ugcportal-pgpq)", () => {
   /**
    * The § 9-2 pair on its own, extracted from `commercialPublishRefusal` so
-   * that the publish gate and the read-side filter
-   * (`PUBLIC_MEDIA_ALCOHOL_COMMERCE_SCOPE`) ask ONE question rather than two
-   * that could drift. The table here is the predicate's whole truth table;
-   * src/lib/alcohol-commerce.scope-agreement.test.ts is the same question
-   * asked of the `where` on a real database, row by row.
+   * that the publish gate and the read-side withholding
+   * (`isWithheldFromPublicRead`, which adds a recorded `true` as a second
+   * reason) share ONE definition of the pair rather than two that could
+   * drift. The table here is this predicate's whole truth table; the
+   * `where` (`PUBLIC_MEDIA_ALCOHOL_COMMERCE_SCOPE`) is the complement of the
+   * wider `isWithheldFromPublicRead`, and
+   * src/lib/alcohol-commerce.scope-agreement.test.ts compares those two on a
+   * real database, row by row.
    */
   const NO_LINKS = { commercialLinkCount: 0 };
   const ONE_LINK = { commercialLinkCount: 1 };
@@ -562,17 +565,17 @@ describe("isWithheldFromPublicRead (option (a), true-only, ugcportal-qnq9.11)", 
     listing as { depictsAlcohol: boolean | null } | null | undefined;
 
   it.each([
-    ["a recorded yes, nothing commercial", { depictsAlcohol: true }, null, NO_LINKS, true],
-    ["a recorded yes, a link", { depictsAlcohol: true }, null, ONE_LINK, true],
-    ["a recorded yes, a benefit", { depictsAlcohol: true }, { benefitReceived: true }, NO_LINKS, true],
-    ["a recorded no, nothing commercial", { depictsAlcohol: false }, null, NO_LINKS, false],
-    ["a recorded no, a link", { depictsAlcohol: false }, null, ONE_LINK, false],
-    ["a null answer, nothing commercial", { depictsAlcohol: null }, null, NO_LINKS, false],
-    ["no listing, nothing commercial", null, null, NO_LINKS, false],
-    ["undefined listing, nothing commercial", undefined, null, NO_LINKS, false],
-    ["a null answer, a link", { depictsAlcohol: null }, null, ONE_LINK, true],
-    ["no listing, a benefit", null, { benefitReceived: true }, NO_LINKS, true],
-  ])("%s -> withheld %s", (_label, listing, disclosure, commercialLinks, expected) => {
+    ["a recorded yes, nothing commercial", true, { depictsAlcohol: true }, null, NO_LINKS],
+    ["a recorded yes, a link", true, { depictsAlcohol: true }, null, ONE_LINK],
+    ["a recorded yes, a benefit", true, { depictsAlcohol: true }, { benefitReceived: true }, NO_LINKS],
+    ["a recorded no, nothing commercial", false, { depictsAlcohol: false }, null, NO_LINKS],
+    ["a recorded no, a link", false, { depictsAlcohol: false }, null, ONE_LINK],
+    ["a null answer, nothing commercial", false, { depictsAlcohol: null }, null, NO_LINKS],
+    ["no listing, nothing commercial", false, null, null, NO_LINKS],
+    ["undefined listing, nothing commercial", false, undefined, null, NO_LINKS],
+    ["a null answer, a link", true, { depictsAlcohol: null }, null, ONE_LINK],
+    ["no listing, a benefit", true, null, { benefitReceived: true }, NO_LINKS],
+  ])("%s -> withheld %s", (_label, expected, listing, disclosure, commercialLinks) => {
     expect(
       isWithheldFromPublicRead({ disclosure, listing: cast(listing), commercialLinks }),
     ).toBe(expected);

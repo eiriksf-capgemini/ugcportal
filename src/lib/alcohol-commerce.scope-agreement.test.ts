@@ -9,10 +9,13 @@ import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db"
  * OTHER ON A REAL DATABASE.
  *
  * `isAlcoholUnclearedAdvertisement` (TypeScript, one row at a time, read by
- * `commercialPublishRefusal`) decides a PUBLISH REQUEST.
- * `PUBLIC_MEDIA_ALCOHOL_COMMERCE_SCOPE` (a Prisma `where`, spread into
- * `PUBLIC_MEDIA_RIGHTS_SCOPE` and so into `PUBLIC_MEDIA_SCOPE`) decides what
- * every anonymous surface SERVES. They have to mean the same thing, and
+ * `commercialPublishRefusal`) decides a PUBLISH REQUEST, and is one of the two
+ * reasons `isWithheldFromPublicRead` withholds a row (the other is a recorded
+ * `true`, ugcportal-qnq9.11). `PUBLIC_MEDIA_ALCOHOL_COMMERCE_SCOPE` (a Prisma
+ * `where`, spread into `PUBLIC_MEDIA_RIGHTS_SCOPE` and so into
+ * `PUBLIC_MEDIA_SCOPE`) decides what every anonymous surface SERVES, and is
+ * the complement of `isWithheldFromPublicRead`, not of the narrower predicate.
+ * The where and `isWithheldFromPublicRead` have to agree, and
  * nothing in either file makes them: they are written in different languages
  * against different engines, and the way they come apart is silent in exactly
  * the dangerous direction — a row the publish gate refuses, sitting on the

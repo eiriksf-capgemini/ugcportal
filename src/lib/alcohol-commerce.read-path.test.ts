@@ -5,6 +5,7 @@ import { CURRENT_ATTESTATION_VERSION } from "@/lib/attestation";
 import { PORTFOLIO_TAG_SLUG } from "@/lib/curation-tags";
 import { CURRENT_CHECKLIST_VERSION } from "@/lib/resale-rights";
 import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db";
+import { seedMedia } from "@/lib/test-support/media-fixtures";
 import { FIXTURE_CLEARANCE_SCOPE } from "@/lib/test-support/resale-rights";
 
 /**
@@ -686,7 +687,7 @@ describe("a priced, cleared, fully-served item loses its price block too (ugcpor
     expect(await surfaces()).toEqual(ALL_SERVED);
   });
 
-  it("keeps serving an item that carries nothing commercial, whatever the alcohol answer is", async () => {
+  it("serves an item that carries nothing commercial unless its alcohol answer is a recorded yes (a null answer drops only the offer)", async () => {
     /*
      * THE OTHER DIRECTION, and the one that keeps this fix from being a
      * blanket "hide anything untriaged". § 9-2 is about advertising: a
@@ -795,4 +796,66 @@ describe("an item recorded as showing alcohol is served nowhere, commercial or n
       });
     }
   }
+
+  it("is absent from every page of a cursor walk, with a recorded-no sibling on page two still served (K2: feed page two)", async () => {
+    /*
+     * The feed is newest-first and keyset-paginated. At `limit: 1` the three
+     * rows below fall on pages one, two and three, so the item under test
+     * (created 2026-03-01) sits on PAGE TWO, behind the cursor, between a
+     * newer and an older recorded-no sibling. The control walk first proves
+     * that position (with the item recorded `false` it is the page-two row);
+     * the second walk then records it `true` and asserts it is on no page,
+     * and that the recorded-no siblings, including the one that now occupies
+     * page two, are still served.
+     */
+    await seedUntriagedItem();
+    await recordAlcoholAnswer(false);
+    await prisma.media.update({
+      where: { id: MEDIA_ID },
+      data: { publishedAt: new Date("2026-03-02T00:00:00.000Z") },
+    });
+    for (const [id, createdAt] of [
+      ["newer-no", new Date("2026-03-05T00:00:00.000Z")],
+      ["older-no", new Date("2026-02-01T00:00:00.000Z")],
+    ] as const) {
+      await seedMedia(prisma, { id, userId: OPERATOR, createdAt });
+      await prisma.mediaListing.create({
+        data: {
+          mediaId: id,
+          depictsPeople: false,
+          depictsMinors: false,
+          containsMusic: false,
+          thirdPartyCreator: false,
+          sponsoredContent: false,
+          depictsAlcohol: false,
+          wineAccessory: true,
+          triagedByUserId: OPERATOR,
+          triagedAt: new Date("2026-03-03T00:00:00.000Z"),
+        },
+      });
+    }
+
+    const walk = async (): Promise<string[][]> => {
+      const pages: string[][] = [];
+      let cursor: string | undefined;
+      for (let page = 0; page < 8; page += 1) {
+        const result = await listPublicMedia(
+          publicMediaListingUrl({ limit: 1, cursor }),
+        );
+        if (!result.ok) throw new Error(`listPublicMedia failed: ${result.error}`);
+        pages.push(result.page.items.map((item) => item.id));
+        if (!result.page.nextCursor) break;
+        cursor = result.page.nextCursor;
+      }
+      return pages;
+    };
+
+    // Control: the item really is the page-two row when it is served.
+    expect(await walk()).toEqual([["newer-no"], [MEDIA_ID], ["older-no"]]);
+
+    await recordAlcoholAnswer(true);
+    const pages = await walk();
+    expect(pages.flat()).not.toContain(MEDIA_ID);
+    expect(pages).toEqual([["newer-no"], ["older-no"]]);
+  });
 });

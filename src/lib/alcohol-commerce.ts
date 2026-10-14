@@ -169,9 +169,11 @@ export function alcoholLinkedBrandRefusal(
  * stricter. The honest record comes first; what it may NOT do is become
  * public before the alcohol question is answered, and that is
  * {@link isAlcoholUnclearedAdvertisement}'s job below — read by
- * `commercialPublishRefusal` on a publish request, and by
- * {@link PUBLIC_MEDIA_ALCOHOL_COMMERCE_SCOPE} on every anonymous read
- * (ugcportal-pgpq). The read-side half is what makes this permissive write
+ * `commercialPublishRefusal` on a publish request — and the read side's, where
+ * {@link PUBLIC_MEDIA_ALCOHOL_COMMERCE_SCOPE} serves only what
+ * {@link isWithheldFromPublicRead} (that predicate plus the recorded-alcohol
+ * reason) does not withhold (ugcportal-pgpq, ugcportal-qnq9.11). The
+ * read-side half is what makes this permissive write
  * safe no matter which order the two facts arrive in: the honest record is
  * stored, and the item simply is not served until the question is answered.
  *
@@ -261,8 +263,11 @@ export function benefitAttachmentRefusal(item: {
  * gained a benefit and a link through the ordinary owner routes was never
  * asked at all. The pair is now also a read-side filter —
  * {@link PUBLIC_MEDIA_ALCOHOL_COMMERCE_SCOPE} below, spread into
- * `PUBLIC_MEDIA_SCOPE` — so it is re-asked on every read, and both readings
- * go through the one predicate {@link isAlcoholUnclearedAdvertisement}.
+ * `PUBLIC_MEDIA_SCOPE` — so it is re-asked on every read. The read filter is
+ * the complement of {@link isWithheldFromPublicRead}, which is
+ * {@link isAlcoholUnclearedAdvertisement} widened by a second reason (a
+ * recorded `true`, ugcportal-qnq9.11); the publish refusal asks the narrower
+ * predicate alone.
  */
 export function commercialPublishRefusal(item: {
   disclosure:
@@ -288,10 +293,12 @@ export function commercialPublishRefusal(item: {
   }
 
   // The § 9-2 PAIR, asked through the shared predicate below rather than
-  // spelled again here (ugcportal-pgpq). It is the same question the read
-  // path now asks of every row it serves, and the point of routing both
-  // through one function is that they cannot come to disagree about which
-  // states of `depictsAlcohol` count as answered.
+  // spelled again here (ugcportal-pgpq). The read path asks this same
+  // predicate as one of the two reasons it withholds a row
+  // (`isWithheldFromPublicRead`), so the two cannot come to disagree about
+  // which states of `depictsAlcohol` count as answered for a commercial item;
+  // the read path additionally withholds a recorded `true` whatever is
+  // attached (ugcportal-qnq9.11), which a publish request does not ask here.
   if (isAlcoholUnclearedAdvertisement(item)) {
     return {
       error:
@@ -320,8 +327,10 @@ export function commercialPublishRefusal(item: {
  * served rather than once when it was written.
  *
  * So the pair is named here, and it has TWO readers: the publish refusal
- * above, and {@link PUBLIC_MEDIA_ALCOHOL_COMMERCE_SCOPE} below, which is
- * this predicate as a Prisma `where`. The two are written in different
+ * above, and {@link isWithheldFromPublicRead} below, whose complement is
+ * {@link PUBLIC_MEDIA_ALCOHOL_COMMERCE_SCOPE}, a Prisma `where`. The where is
+ * the pair plus the recorded-`true` reason, so it is wider than this
+ * predicate alone. The two are written in different
  * languages against different engines and nothing in either file makes them
  * agree; src/lib/alcohol-commerce.scope-agreement.test.ts runs both over one
  * row per state on a real database and compares them, the same arrangement
