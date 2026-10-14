@@ -486,6 +486,36 @@ describe("K2: premise freshness against origin/main's current HEAD", { timeout: 
     expect(failedChecks(res.stdout)).toEqual(["premise-fresh"]);
     expect(res.stdout).toContain("premise is 2 commit(s) stale");
   });
+
+  it("says the comparison could not be made, not an Infinity count, when git rev-list fails", () => {
+    // --head names a ref git cannot resolve, so both rev-list calls fail.
+    const file = writeBeads(completeBead({ notes: `Premise verified 2026-10-14 at origin/main ${HEAD()}.` }));
+    const res = runCliAllowFail(["--beads", file, "--repo", repo, "--head", "deadbeef1234"]);
+    expect(res.status).toBe(1);
+    expect(failedChecks(res.stdout)).toEqual(["premise-fresh"]);
+    expect(res.stdout).toContain("could not be compared with head ref deadbeef1234");
+    expect(res.stdout).toContain("git rev-list");
+    expect(res.stdout).not.toContain("Infinity");
+  });
+
+  it("says no count was measured, not an Infinity count, when only the behind count is unanswerable", () => {
+    const git = {
+      head: "f".repeat(40),
+      headShort: "fffffff",
+      resolveCommit: (sha) => sha.padEnd(40, "0"),
+      commitsAhead: () => Infinity,
+      commitsNotOnMain: () => 0,
+    };
+    const result = validateBead(
+      completeBead({ notes: `Premise verified 2026-10-14 at origin/main ${HEAD()}.` }),
+      { git, headShort: "fffffff" },
+    );
+    const fresh = result.results.find((r) => r.id === "premise-fresh");
+    expect(fresh.ok).toBe(false);
+    expect(fresh.detail).toContain("could not be compared");
+    expect(fresh.detail).toContain("no commit count was measured");
+    expect(fresh.detail).not.toContain("Infinity");
+  });
 });
 
 // --- K3: the run reports what it examined ------------------------------------
@@ -922,17 +952,6 @@ describe("the checks are bounded where they claim to be", { timeout: 30_000 }, (
   // asserts exit 1 with the marker named and the failure attributed to
   // `no-placeholder`. Without it, blanking too much in stripQuotedMarkers
   // would go unnoticed.
-
-  it("says the comparison could not be made, not an Infinity count, when git rev-list fails", () => {
-    // --head names a ref git cannot resolve, so both rev-list calls fail.
-    const file = writeBeads(completeBead({ notes: `Premise verified 2026-10-14 at origin/main ${HEAD()}.` }));
-    const res = runCliAllowFail(["--beads", file, "--repo", repo, "--head", "deadbeef1234"]);
-    expect(res.status).toBe(1);
-    expect(failedChecks(res.stdout)).toEqual(["premise-fresh"]);
-    expect(res.stdout).toContain("could not be compared with head ref deadbeef1234");
-    expect(res.stdout).toContain("git rev-list");
-    expect(res.stdout).not.toContain("Infinity");
-  });
 
   // --- the negated label is not an In-scope line ---
   it("`Not in scope:` does not satisfy the in-scope check", () => {

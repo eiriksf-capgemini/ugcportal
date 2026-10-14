@@ -578,7 +578,9 @@ export const CHECKS = [
     // An unanswerable count (`git rev-list` failed) is Infinity: the
     // comparison was not made, so say so rather than print a count.
     const unmeasured = resolved.find((r) => !Number.isFinite(r.behind) || !Number.isFinite(r.notOnMain));
-    if (unmeasured && !resolved.some((r) => r.behind === 0 && r.notOnMain === 0)) {
+    // The `some(...)` return above means no resolved commit is fresh here, so
+    // an unmeasured one is enough to report.
+    if (unmeasured) {
       return {
         ok: false,
         detail: `premise commit ${unmeasured.short} could not be compared with head ref ${ctx.git.head}: \`git rev-list\` failed, so no commit count was measured. ${PREMISE_FRESHNESS_COST}`,
