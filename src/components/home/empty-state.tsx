@@ -119,6 +119,7 @@ export function EmptyState({ pieces }: { pieces: GalleryItem[] }) {
         src/components/auth-status.tsx's own `variant="outline"` sign-in
         controls render on. The hover-lift stays layered on top via `cn()`:
         it is this call site's own polish, not part of the shared system.
+        `hover:underline` is also new here, inherited from `PETROL_OUTLINE_STYLE` in button.tsx.
 
         THE ONE CALL TO ACTION ON `buttonVariants` (ugcportal-qqnt.5): this
         link is the single button-styled control in this component, on
