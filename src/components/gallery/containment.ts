@@ -167,9 +167,11 @@ export const GALLERY_TILE_CLASS = cn(
  * off a real build in ugcportal-rj7y's round 1) — confirmed empirically
  * the same way PR #97 confirmed it for `empty-state.tsx`'s own hover-lift,
  * by compiling globals.css and reading the generated rule:
- * `.group-hover\: scale-\[1\.04\]…{ scale: 1.04; }` (space inserted after
- * the escaped colon, same reason as every other bare mention in this
- * comment - see BUG 2 below). The guard that used to
+ * `.group-hover\: scale-\[1\.04\]…{ scale: 1.04; }` (the backslash escapes
+ * are what keep this compiled-selector spelling out of the build: with
+ * them the string is no valid candidate, and a clean build carries no bare
+ * rule for it; the space after the escaped colon is not what stops it - see
+ * BUG 2 below). The guard that used to
  * sit here, `motion-reduce:transform-none`, overrode a property this
  * element never sets, so it changed nothing.
  *
@@ -187,8 +189,9 @@ export const GALLERY_TILE_CLASS = cn(
  * motion-reduce-pairing.test.ts's own header for the full account and
  * src/app/globals.css's `@source not` exclusion for the OTHER half of
  * this fix, test-fixture classes) to `.group-hover\: scale-\[1\.04\]:is(
- * :where(.group):hover *) { scale: 1.04; }` (space inserted after the
- * escaped colon here too) — `:where()` is specificity-zero, but
+ * :where(.group):hover *) { scale: 1.04; }` (here too the backslash
+ * escapes, not the space after the escaped colon, keep it out of the
+ * build) — `:where()` is specificity-zero, but
  * the compound selector still carries the class (0,1,0) plus the `:is()`
  * pseudo-class's own (0,1,0) from the `:hover` inside it, for a total of
  * (0,2,0). A bare `.motion-reduce\:scale-none { scale: none; }` is only

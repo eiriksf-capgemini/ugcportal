@@ -1,10 +1,12 @@
 /**
  * ugcportal-rj7y: no file the scanner reads carries an ungated
  * motion-shaped utility outside the named allowlist below. Which files it
- * reads (every non-binary file under the root, less Tailwind's own ignore
- * lists, the `@source not` globs and the gitignored paths), what counts as
- * a gate, and why, are in tailwind-source-scan.ts's header.
+ * reads (every non-binary file `git ls-files -co --exclude-standard` lists,
+ * so git's own evaluation of .gitignore, less Tailwind's own ignore lists
+ * and the `@source not` globs), what counts as a gate, and why, are in
+ * tailwind-source-scan.ts's header.
  */
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -205,15 +207,25 @@ describe("globToRegExp", () => {
   });
 });
 
-describe("scanTree over a planted tree (ugcportal-rj7y K1 fixture)", () => {
+// Every case spawns real `git init` / `git ls-files` subprocesses (the scan
+// asks git what it does not ignore), which a loaded machine can make slower
+// than vitest's 5s default (ugcportal-9faa).
+describe("scanTree over a planted tree (ugcportal-rj7y K1 fixture)", { timeout: 30_000 }, () => {
   const roots: string[] = [];
   afterEach(() => {
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   });
 
+  /**
+   * A fresh git repository whose ignore rules are the real repo's .gitignore,
+   * copied into .git/info/exclude (same pattern semantics, anchored at the
+   * same root) so the copy is not itself a listed file. Plants are untracked.
+   */
   function plant(files: Record<string, string>): string {
     const root = mkdtempSync(path.join(tmpdir(), "tw-scan-"));
     roots.push(root);
+    execFileSync("git", ["init", "-q"], { cwd: root, stdio: ["ignore", "ignore", "inherit"] });
+    writeFileSync(path.join(root, ".git", "info", "exclude"), readFileSync(path.join(REPO_ROOT, ".gitignore")));
     for (const [rel, body] of Object.entries(files)) {
       mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
       writeFileSync(path.join(root, rel), body);
@@ -241,6 +253,19 @@ describe("scanTree over a planted tree (ugcportal-rj7y K1 fixture)", () => {
     "public/a.svg",
     "a.py",
     "a.toml",
+    // Round-2 L1: .gitignore anchors these names to the root, so at any other
+    // depth git does not ignore them and they must be read. The first two are
+    // the review's plants, both of which compiled into a real build.
+    "src/lib/generated/zz-plant.md",
+    "docs/coverage/zz-plant.md",
+    "e2e/test-results/a.md",
+    "docs/playwright-report/a.md",
+    "src/blob-report/a.md",
+    "src/build/a.ts",
+    "docs/out/a.md",
+    // `.yarn/*` is ignored but `!.yarn/patches` re-includes it.
+    ".yarn/patches/zz.md",
+    ".yarn/releases/a.md",
   ])(
     "fails naming file and string for a bare mention in %s, passes once removed",
     (rel) => {
@@ -279,6 +304,36 @@ describe("scanTree over a planted tree (ugcportal-rj7y K1 fixture)", () => {
       "src/a.css": PLANTED,
     });
     expect(scanTree(root, excluded).filesScanned).toBe(0);
+  });
+
+  it("does not read a plant under a root-anchored ignored path, or under .yarn outside its re-includes", () => {
+    const root = plant({
+      "coverage/zz.md": PLANTED,
+      "src/generated/prisma/zz.ts": PLANTED,
+      "test-results/a.md": PLANTED,
+      "playwright-report/a.md": PLANTED,
+      "blob-report/a.md": PLANTED,
+      "build/a.ts": PLANTED,
+      "out/a.md": PLANTED,
+      ".yarn/cache/a.md": PLANTED,
+      "src/.runtime/a.md": PLANTED,
+      "docs/.dolt/a.md": PLANTED,
+    });
+    expect(scanTree(root, excluded)).toEqual({ findings: [], filesScanned: 0, binarySkipped: 0 });
+  });
+
+  it("reads a tracked file but not a tracked file deleted from the working tree", () => {
+    const root = plant({ "docs/kept.md": PLANTED, "docs/gone.md": PLANTED });
+    execFileSync("git", ["add", "docs"], { cwd: root, stdio: ["ignore", "ignore", "inherit"] });
+    rmSync(path.join(root, "docs", "gone.md"));
+    expect(offending(scanTree(root, excluded).findings)).toEqual([`docs/kept.md:1 ${PLANTED}`]);
+  });
+
+  it("throws, rather than scanning nothing, when the root is not inside a git work tree", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "tw-scan-nogit-"));
+    roots.push(root);
+    writeFileSync(path.join(root, "a.md"), PLANTED);
+    expect(() => scanTree(root, excluded)).toThrow();
   });
 
   it("skips a binary file by its NUL byte, and the extensions and lockfiles Tailwind ignores", () => {

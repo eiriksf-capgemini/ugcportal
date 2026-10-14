@@ -21,8 +21,17 @@
  * utility that adds motion is a finding.
  *
  * What is read, and by what mechanism (`listReachableFiles` + `scanTree`):
- * every file under the repo root, whatever its extension or lack of one
- * (shell hooks, `Dockerfile`, `.sql`, `.prisma`, `.svg` ...), except
+ * every file `git ls-files -co --exclude-standard` lists under the root --
+ * tracked files plus untracked files git does not ignore, whatever their
+ * extension or lack of one (shell hooks, `Dockerfile`, `.sql`, `.prisma`,
+ * `.svg` ...). Which paths are ignored is git's own evaluation of
+ * .gitignore (root anchors, any-depth names and `!` re-includes alike);
+ * nothing here re-implements or copies it. Tailwind's scanner honours
+ * .gitignore too: two plants at a root-anchored name below the root
+ * (src/lib/generated/, docs/coverage/) compiled into a real build, and this
+ * list now names both. git also applies .git/info/exclude and the user's
+ * global excludes file; whether Tailwind does was not checked, and this
+ * repo keeps its rules in .gitignore. From that list it then drops
  *   - files a `@source not` line in src/app/globals.css excludes, read from
  *     that file at run time (never copied here);
  *   - binary files, detected the way git does: a NUL byte in the first
@@ -32,15 +41,21 @@
  *     @tailwindcss/oxide 4.3.3, readable with `strings` on its `.node`
  *     binary), plus `.css`, which a planted utility in a `.css` file under
  *     docs/ did not reach the build when this was checked;
- *   - the directories and files .gitignore names (SKIPPED_DIRECTORY,
- *     SKIPPED_PATH, GITIGNORED_FILE), which Tailwind's scanner honours.
- * The gitignore handling is a hand-kept mirror, not a parse of .gitignore.
- * Tracked dot-directories (.claude, .github, .beads) ARE read: a planted
- * bare utility in .claude/ compiled into the stylesheet when this was
- * checked. A file Tailwind skips but this reads is an over-match, which is
- * the safe direction for a guard.
+ *   - a listed path that is not a regular file on disk: a tracked file
+ *     deleted in the working tree (there is nothing to read), or a symlink
+ *     (the repo tracks none today; one would go unread here).
+ * One known difference, in the over-match direction: a file that is tracked
+ * AND matches an ignore rule (today two empty `.runtime/*.flock` files) is
+ * listed by git and read here, though an ignore-rule walk such as
+ * Tailwind's would skip it (not checked against a build: both are empty).
+ * Reading more than Tailwind is the safe direction for a guard. Tracked
+ * dot-directories (.claude, .github, .beads) ARE read: a planted bare
+ * utility in .claude/ compiled into the stylesheet when this was checked.
+ * The root must be inside a git work tree; if `git ls-files` fails, this
+ * throws (git's stderr is left on the console) rather than scanning nothing.
  */
-import { readFileSync, readdirSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { lstatSync, readFileSync } from "node:fs";
 import path from "node:path";
 
 /** One `@source not "<glob>"` line, as written. */
@@ -101,49 +116,35 @@ export function sourceNotMatchers(globalsCssPath: string, root: string): RegExp[
 const IGNORED_EXTENSION = /\.(?:css|less|lock|sass|scss|styl|log)$/;
 /** Lockfiles Tailwind's scanner ignores (oxide 4.3.3). */
 const IGNORED_FILE = new Set(["package-lock.json", "pnpm-lock.yaml", "bun.lockb"]);
-/** File names .gitignore excludes wherever they sit. */
-const GITIGNORED_FILE = /^(?:\.env.*|.*\.tsbuildinfo|next-env\.d\.ts|.*\.db|.*\.pem|\.DS_Store|CLAUDE\.local\.md|npm-debug\.log.*)$/;
-const SKIPPED_DIRECTORY = new Set([
-  "node_modules",
-  ".git",
-  ".next",
-  ".dolt",
-  ".runtime",
-  ".vercel",
-  ".yarn",
-  "coverage",
-  "generated",
-  "playwright-report",
-  "blob-report",
-  "test-results",
-]);
-/** Directories .gitignore names by path from the root, which Tailwind's scanner honours. */
-const SKIPPED_PATH = new Set([".claude/worktrees", ".beads/proxieddb", "out", "build", "playwright/.cache"]);
-
 /**
- * Every file under `root` that no matcher and no ignore list excludes, as
+ * Every file `git ls-files -co --exclude-standard` lists under `root` (see
+ * the header) that no matcher and no Tailwind ignore list excludes, as
  * forward-slash paths relative to `root`. Binary files are dropped later, by
  * content, in `scanTree`.
  */
 export function listReachableFiles(root: string, excluded: readonly RegExp[]): string[] {
+  const listed = execFileSync("git", ["ls-files", "-co", "--exclude-standard", "-z"], {
+    cwd: root,
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
+    stdio: ["ignore", "pipe", "inherit"],
+  })
+    .split("\0")
+    .filter(Boolean);
   const out: string[] = [];
-  const walk = (dir: string): void => {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      if (SKIPPED_DIRECTORY.has(entry.name)) continue;
-      const full = path.join(dir, entry.name);
-      const rel = path.relative(root, full).split(path.sep).join("/");
-      if (entry.isDirectory()) {
-        if (!SKIPPED_PATH.has(rel)) walk(full);
-        continue;
-      }
-      if (!entry.isFile()) continue;
-      if (IGNORED_EXTENSION.test(entry.name) || IGNORED_FILE.has(entry.name)) continue;
-      if (GITIGNORED_FILE.test(entry.name)) continue;
-      if (excluded.some((matcher) => matcher.test(rel))) continue;
-      out.push(rel);
+  for (const rel of new Set(listed)) {
+    const name = path.posix.basename(rel);
+    if (IGNORED_EXTENSION.test(name) || IGNORED_FILE.has(name)) continue;
+    if (excluded.some((matcher) => matcher.test(rel))) continue;
+    let isRegularFile: boolean;
+    try {
+      isRegularFile = lstatSync(path.join(root, rel)).isFile();
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      isRegularFile = false;
     }
-  };
-  walk(root);
+    if (isRegularFile) out.push(rel);
+  }
   return out.sort();
 }
 
