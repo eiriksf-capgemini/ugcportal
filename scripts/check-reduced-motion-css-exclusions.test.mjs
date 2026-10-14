@@ -77,6 +77,22 @@ describe("findUngatedGroupHoverScaleRules", () => {
     expect(offenders[0]).toContain("no motion-safe: prefix");
   });
 
+  it("does not count a prefers-reduced-motion: reduce query as a gate for a motion-safe: group-hover scale rule", () => {
+    const css = `
+      @media (prefers-reduced-motion: reduce) {
+        @media (hover: hover) {
+          .motion-safe\\:group-hover\\:scale-\\[1\\.04\\]:is(:where(.group):hover *) {
+            scale: 1.04;
+          }
+        }
+      }
+    `;
+
+    const offenders = findUngatedGroupHoverScaleRules(css);
+    expect(offenders).toHaveLength(1);
+    expect(offenders[0]).toContain("not nested inside @media (prefers-reduced-motion: ...)");
+  });
+
   it("ignores a rule that mentions only one of group-hover/scale", () => {
     const css = `
       .group-hover\\:translate-y-${"px"}:is(:where(.group):hover *) { translate: 0 -1px; }

@@ -133,7 +133,7 @@ export function findUngatedGroupHoverScaleRules(cssText) {
     const motionSafePrefixed = /(?<!not-)motion-safe/.test(rule.selector);
     const conditions = mediaConditionsOf(rule);
     const reducedMotionGated = conditions.some((condition) =>
-      condition.includes("prefers-reduced-motion"),
+      isReducedMotionQuery(condition, "no-preference"),
     );
     if (motionSafePrefixed && reducedMotionGated) return;
 

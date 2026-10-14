@@ -29,9 +29,12 @@
  * nothing here re-implements or copies it. Tailwind's scanner honours
  * .gitignore too: two plants at a root-anchored name below the root
  * (src/lib/generated/, docs/coverage/) compiled into a real build, and this
- * list now names both. git also applies .git/info/exclude and the user's
- * global excludes file; whether Tailwind does was not checked, and this
- * repo keeps its rules in .gitignore. From that list it then drops
+ * list now names both. Tailwind's scanner also honours .git/info/exclude (measured
+ * against @tailwindcss/oxide 4.3.3's own Scanner) but NOT the user's global
+ * excludes file (core.excludesFile or ~/.config/git/ignore), so the git
+ * call below is told core.excludesFile=/dev/null: that drops the global
+ * file and the XDG default alike (measured with scratch files for both).
+ * From that list it then drops
  *   - files a `@source not` line in src/app/globals.css excludes, read from
  *     that file at run time (never copied here);
  *   - binary files, detected the way git does: a NUL byte in the first
@@ -44,13 +47,22 @@
  *   - a listed path that is not a regular file on disk: a tracked file
  *     deleted in the working tree (there is nothing to read), or a symlink
  *     (the repo tracks none today; one would go unread here).
- * One known difference, in the over-match direction: a file that is tracked
- * AND matches an ignore rule (today two empty `.runtime/*.flock` files) is
- * listed by git and read here, though an ignore-rule walk such as
- * Tailwind's would skip it (not checked against a build: both are empty).
- * Reading more than Tailwind is the safe direction for a guard. Tracked
- * dot-directories (.claude, .github, .beads) ARE read: a planted bare
- * utility in .claude/ compiled into the stylesheet when this was checked.
+ * Two known differences from Tailwind's scanner remain, each measured
+ * against oxide 4.3.3's own Scanner on the same tree (a third, the user's
+ * global excludes file, is closed in code, see above):
+ *   1. Over-match: a file that is tracked AND matches an ignore rule (today
+ *      two empty `.runtime/locks/sling/*.flock` files) is listed by git and
+ *      read here, though an ignore-rule walk such as Tailwind's skips it.
+ *      Reading more than Tailwind is the safe direction for a guard; a false
+ *      positive fails loudly with file:line.
+ *   2. Under-match: an untracked nested git repository is listed by git as
+ *      `inner/`, which is not a regular file, so it is skipped here, while
+ *      oxide reads the files inside it. It concerns untracked files only,
+ *      which a CI or clean checkout does not have, so it cannot reach the
+ *      shipped stylesheet.
+ * Tracked dot-directories (.claude, .github, .beads) ARE read: a planted
+ * bare utility in .claude/ compiled into the stylesheet when this was
+ * checked.
  * The root must be inside a git work tree; if `git ls-files` fails, this
  * throws (git's stderr is left on the console) rather than scanning nothing.
  */
@@ -123,7 +135,7 @@ const IGNORED_FILE = new Set(["package-lock.json", "pnpm-lock.yaml", "bun.lockb"
  * content, in `scanTree`.
  */
 export function listReachableFiles(root: string, excluded: readonly RegExp[]): string[] {
-  const listed = execFileSync("git", ["ls-files", "-co", "--exclude-standard", "-z"], {
+  const listed = execFileSync("git", ["-c", "core.excludesFile=/dev/null", "ls-files", "-co", "--exclude-standard", "-z"], {
     cwd: root,
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,

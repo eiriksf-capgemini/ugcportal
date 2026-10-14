@@ -329,6 +329,14 @@ describe("scanTree over a planted tree (ugcportal-rj7y K1 fixture)", { timeout: 
     expect(offending(scanTree(root, excluded).findings)).toEqual([`docs/kept.md:1 ${PLANTED}`]);
   });
 
+  it("does not honour the user's global excludes file, which Tailwind's scanner ignores", () => {
+    const root = plant({ "docs/zz-global.md": PLANTED });
+    const globalIgnore = path.join(root, ".git", "scratch-global-ignore");
+    writeFileSync(globalIgnore, "zz-global.md\n");
+    execFileSync("git", ["config", "core.excludesFile", globalIgnore], { cwd: root, stdio: ["ignore", "ignore", "inherit"] });
+    expect(offending(scanTree(root, excluded).findings)).toEqual([`docs/zz-global.md:1 ${PLANTED}`]);
+  });
+
   it("throws, rather than scanning nothing, when the root is not inside a git work tree", () => {
     const root = mkdtempSync(path.join(tmpdir(), "tw-scan-nogit-"));
     roots.push(root);
@@ -350,6 +358,7 @@ describe("scanTree over a planted tree (ugcportal-rj7y K1 fixture)", { timeout: 
 
   it("reads tracked dot-directories, which Tailwind compiled from in a real build", () => {
     const root = plant({ ".claude/skills/a.md": PLANTED, ".github/a.yml": PLANTED });
+    execFileSync("git", ["add", "."], { cwd: root, stdio: ["ignore", "ignore", "inherit"] });
     expect(offending(scanTree(root, excluded).findings)).toEqual([
       `.claude/skills/a.md:1 ${PLANTED}`,
       `.github/a.yml:1 ${PLANTED}`,
