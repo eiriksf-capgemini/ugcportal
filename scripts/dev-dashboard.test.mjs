@@ -894,18 +894,25 @@ describe("gatherSources", () => {
 });
 
 describe("release progress", () => {
-  it("picks the lowest semver label among beads that are not closed, compared as semver", () => {
+  it("picks the lowest semver label not yet fully released, compared as semver", () => {
     expect(releaseLabelOf(RELEASE_BEADS)).toBe("v0.7.0");
     // Semver, not string order: as strings "v0.10.0" sorts before "v0.9.0".
     expect(releaseLabelOf([rel("a", "open", 1, ["v0.9.0"]), rel("b", "open", 1, ["v0.10.0"])])).toBe("v0.9.0");
     // Live 2026-10-14: beads relabelled for v0.8.0 while v0.7.0 still has open
     // beads. The next release to cut is v0.7.0.
     expect(releaseLabelOf([rel("a", "closed", 1, ["v0.7.0"]), rel("b", "open", 1, ["v0.7.0"]), rel("c", "open", 1, ["v0.8.0"])])).toBe("v0.7.0");
-    // v0.7.0 all closed: the release in progress moves on to v0.8.0.
-    expect(releaseLabelOf([rel("a", "closed", 1, ["v0.7.0"]), rel("b", "closed", 1, ["v0.7.0"]), rel("c", "open", 1, ["v0.8.0"])])).toBe("v0.8.0");
-    // Everything closed: fall back to the highest label overall, so a finished
-    // but uncut release still shows as 100% rather than vanishing.
-    expect(releaseLabelOf([rel("a", "closed", 1, ["v0.6.0"]), rel("b", "closed", 1, ["v0.7.0"])])).toBe("v0.7.0");
+    // v0.7.0 all closed but not cut: it stays the release in progress (and
+    // says it is time to cut it) while v0.8.0 has open beads.
+    expect(releaseLabelOf([rel("a", "closed", 1, ["v0.7.0"]), rel("b", "closed", 1, ["v0.7.0"]), rel("c", "open", 1, ["v0.8.0"])])).toBe("v0.7.0");
+    // v0.7.0 all closed and released: it moves on to v0.8.0.
+    expect(
+      releaseLabelOf([rel("a", "closed", 1, ["v0.7.0"], "v0.7.0"), rel("b", "closed", 1, ["v0.7.0"], "v0.7.0"), rel("c", "open", 1, ["v0.8.0"])]),
+    ).toBe("v0.8.0");
+    // Everything closed: the lowest uncut label, so a finished but uncut
+    // release still shows as 100% rather than vanishing.
+    expect(releaseLabelOf([rel("a", "closed", 1, ["v0.6.0"], "v0.6.0"), rel("b", "closed", 1, ["v0.7.0"])])).toBe("v0.7.0");
+    // Everything released: fall back to the highest label overall.
+    expect(releaseLabelOf([rel("a", "closed", 1, ["v0.6.0"], "v0.6.0"), rel("b", "closed", 1, ["v0.7.0"], "v0.7.0")])).toBe("v0.7.0");
     expect(releaseLabelOf([rel("a", "open", 1, ["backlog"])])).toBeNull();
     expect(releaseLabelOf([])).toBeNull();
   });

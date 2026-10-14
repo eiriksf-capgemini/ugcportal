@@ -416,28 +416,29 @@ export function compareSemver(a, b) {
 }
 
 /**
- * The release in progress: the lowest semver label carried by any bead that
- * is not closed, since that is the next release to cut (beads already
- * labelled for a later one do not move it on). When every labelled bead is
- * closed it falls back to the highest label overall (every bead in it is
- * done; releaseProgress's `released` / `unreleased` counts, from each bead's
- * `released_in`, say whether it has been cut), and to `null` when no bead
- * carries a semver label at all. Compared as semver, so v0.9.0 comes before
- * v0.10.0.
+ * The release in progress: the lowest semver label not yet fully released,
+ * that is, carried by any bead that is either not closed or closed without
+ * `released_in`. That is the next release to cut: beads already labelled for
+ * a later one do not move it on, and a fully closed but uncut release stays
+ * on the page (saying it is time to cut it) until cut-release has stamped
+ * every bead in it. When every labelled bead is released it falls back to the
+ * highest label overall (so the page says that label is cut), and to `null`
+ * when no bead carries a semver label at all. Compared as semver, so v0.9.0
+ * comes before v0.10.0.
  * @param {any[]} beads
  * @returns {string | null}
  */
 export function releaseLabelOf(beads) {
-  const open = new Set();
+  const unreleased = new Set();
   const all = new Set();
   for (const b of beads ?? []) {
     for (const l of b?.labels ?? []) {
       if (!RELEASE_LABEL.test(l)) continue;
       all.add(l);
-      if (b.status !== "closed") open.add(l);
+      if (b.status !== "closed" || releasedInOf(b) === "") unreleased.add(l);
     }
   }
-  if (open.size > 0) return [...open].sort(compareSemver)[0];
+  if (unreleased.size > 0) return [...unreleased].sort(compareSemver)[0];
   return all.size > 0 ? [...all].sort(compareSemver).at(-1) : null;
 }
 
