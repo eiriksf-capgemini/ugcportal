@@ -193,3 +193,64 @@ This is the same direction `src/lib/resale-rights.ts` takes with
 - Third-party objections — `ugcportal-qnq9.5`.
 - Whether self-service publish-by-default is the right model at all —
   `ugcportal-55nt`.
+
+---
+
+## 6. 2026-10-14: an item recorded as showing alcohol is not served at all (`ugcportal-qnq9.11`)
+
+**Decided** by the product owner on 2026-10-14 via `ugcportal-6yrd`: **option
+(a), true-only.**
+
+**Why.** `docs/ugc-research.md` §3.1a practical rule 2 says commercial and
+personal wine content must be kept visually apart: a sponsored glass review
+should not sit next to "our Friday Barolo". Each of the two items can be
+lawful alone; the layout creates the breach. The three mechanisms on the
+table were (a) never publish both kinds, (b) separate views, (c) an ordering
+constraint inside the keyset feed. (b) and (c) both need `depictsAlcohol` in
+the anonymous projection, which is deliberately fail-closed and built without
+it (`src/lib/media-listing.ts`, `src/lib/media-access.ts`), and (c) fights the
+immutable `createdAt` keyset. (a) needs neither.
+
+**The rule.** An item whose `MediaListing.depictsAlcohol` is `true` is served
+on no public surface: not the feed (any page), the home page, the portfolio,
+the sitemap, the per-item page or the preview bytes. The rule is:
+
+    served  <=>  depictsAlcohol IS NOT true
+                 AND (depictsAlcohol = false OR nothing commercial attached)
+
+The second line is the §1-§5 rule above, unchanged. `null` (untriaged) and a
+missing listing are NOT withheld by the new first line; they keep exactly the
+behaviour they had, including being withheld when something commercial is
+attached. Withholding `null` too ("strict") is a possible one-literal
+follow-up, not part of this decision.
+
+**Where.** A widening of the existing read arm, not a layout change.
+`PUBLIC_MEDIA_ALCOHOL_COMMERCE_SCOPE` in `src/lib/alcohol-commerce.ts` is now
+`{ AND: [<not recorded true>, { OR: [<answered no>, <nothing commercial>] }] }`,
+still a single element of `PUBLIC_MEDIA_RIGHTS_SCOPE.AND` and so of
+`PUBLIC_MEDIA_SCOPE`, and still relation filters only. "Not recorded true" is
+written positively (no listing, `false`, or `null`) for the reason §4 gives:
+`NOT (col = 1)` is NULL on a NULL column. Its predicate twin is the new
+`isWithheldFromPublicRead`, which is `alcoholDepiction(listing) === "depicted"
+|| isAlcoholUnclearedAdvertisement(item)`. `isAlcoholUnclearedAdvertisement`
+itself is NOT widened: `commercialPublishRefusal` reads it and a test pins the
+two as the same question, and the publish gate is unchanged (publishing an
+alcohol-recorded item with nothing commercial still returns 200; it is now
+simply not served).
+
+**Projection unchanged.** `depictsAlcohol` is a filter in a `where` and is
+not selected for any anonymous reader. `gallery.tsx`, `lightbox.ts`,
+`gallery-items.ts`, `media-listing.ts` and `route.ts` are untouched.
+
+**Pinned by** the row-per-state test in
+`src/lib/alcohol-commerce.read-path.test.ts` (`depictsAlcohol` in
+{no listing, null, false, true} x commercial in {no, yes}, through the six
+readers), `src/lib/alcohol-commerce.scope-agreement.test.ts` (the new case
+added; the `mqh8` deliberate disagreements kept; the old "serves an
+alcohol-recorded row with nothing commercial" assertion rewritten, not
+deleted), and `e2e/seeded/withhold-alcohol-recorded.spec.ts`.
+
+**What it costs.** An operator's personal photograph of a glass of wine, once
+triaged `depictsAlcohol = true`, is no longer on the public site at all, even
+though it was lawful on its own. That is the price of keeping the two kinds
+apart without a layout mechanism.

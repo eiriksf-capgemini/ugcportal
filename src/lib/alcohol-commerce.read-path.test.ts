@@ -5,6 +5,7 @@ import { CURRENT_ATTESTATION_VERSION } from "@/lib/attestation";
 import { PORTFOLIO_TAG_SLUG } from "@/lib/curation-tags";
 import { CURRENT_CHECKLIST_VERSION } from "@/lib/resale-rights";
 import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db";
+import { seedMedia } from "@/lib/test-support/media-fixtures";
 import { FIXTURE_CLEARANCE_SCOPE } from "@/lib/test-support/resale-rights";
 
 /**
@@ -42,10 +43,13 @@ import { FIXTURE_CLEARANCE_SCOPE } from "@/lib/test-support/resale-rights";
  * can see — the same six, through the same shape of helper,
  * src/lib/public-media.lapse.test.ts uses for ugcportal-nffp.
  *
- * AND EVERY ABSENCE IS MEASURED AGAINST A PRESENCE ON THE SAME ROW. The item
- * is served first, the commercial fact arrives, the item is gone, and then
- * the alcohol answer arrives and it comes back. A `where` clause that
- * filtered on everything would pass the absences alone.
+ * AND EVERY ABSENCE IS MEASURED AGAINST A PRESENCE ON THE SAME ROW. In the
+ * pgpq cases the item is served first, the commercial fact arrives, the item
+ * is gone, and then the alcohol answer arrives and it comes back. In the
+ * row-per-state cases of the qnq9.11 describe, each withheld row is followed,
+ * on that same row, by its alcohol answer set to a recorded `no`, and the item
+ * is asserted served. A `where` clause that filtered on everything would pass
+ * the absences alone.
  */
 
 const database = createTemporaryDatabase();
@@ -686,13 +690,16 @@ describe("a priced, cleared, fully-served item loses its price block too (ugcpor
     expect(await surfaces()).toEqual(ALL_SERVED);
   });
 
-  it("keeps serving an item that carries nothing commercial, whatever the alcohol answer is", async () => {
+  it("serves an item that carries nothing commercial unless its alcohol answer is a recorded yes (a null answer drops only the offer)", async () => {
     /*
      * THE OTHER DIRECTION, and the one that keeps this fix from being a
      * blanket "hide anything untriaged". § 9-2 is about advertising: a
      * photograph of a glass of wine with no benefit, no label and no link is
-     * personal content and is perfectly publishable, which is the
-     * distinction docs/ugc-research.md §3.1a practical rule 2 is built on.
+     * not advertising, so the commercial-marker gate is unchanged and lets it
+     * publish. What is served is then decided by the alcohol answer alone: a
+     * `null` answer keeps today's behaviour, and a recorded `true` is withheld
+     * from every public surface (ugcportal-qnq9.11, docs/ugc-research.md
+     * §3.1a practical rule 2).
      * Narrowing the whole filter to `depictsAlcohol: false` — dropping the
      * "nothing commercial" arm — reddens a great many tests across the
      * suite, but nearly all of them only because their own untriaged
@@ -704,21 +711,164 @@ describe("a priced, cleared, fully-served item loses its price block too (ugcpor
      * unanswered or answered `yes` (src/lib/resale-rights.ts — the layer's
      * `settledBy: "nothing"`), so `getPublicOffer` stops answering for a
      * reason that predates this filter and holds whether or not anything
-     * commercial is attached. The photograph itself stays on all five other
-     * readers, which is the claim this case is making.
+     * commercial is attached. For the `null` answer the photograph itself
+     * stays on all five other readers, which is the claim this case makes
+     * first; the recorded `true` at the end is served on none.
      */
     await seedSellableItem();
     expect((await PUBLISH(publishRequest(), context())).status).toBe(200);
     expect(await surfaces()).toEqual(ALL_SERVED);
 
-    for (const depictsAlcohol of [null, true] as const) {
-      await prisma.mediaListing.update({
-        where: { mediaId: MEDIA_ID },
-        data: { depictsAlcohol },
+    // `null` (untriaged) keeps today's behaviour; a recorded `true` is
+    // withheld on every reader since ugcportal-qnq9.11 (option (a), true-only).
+    await prisma.mediaListing.update({
+      where: { mediaId: MEDIA_ID },
+      data: { depictsAlcohol: null },
+    });
+    expect(await surfaces(), "depictsAlcohol: null").toEqual(WITHOUT_OFFER);
+
+    await prisma.mediaListing.update({
+      where: { mediaId: MEDIA_ID },
+      data: { depictsAlcohol: true },
+    });
+    expect(await surfaces(), "depictsAlcohol: true").toEqual(NONE_SERVED);
+  });
+});
+
+describe("an item recorded as showing alcohol is served nowhere, commercial or not (ugcportal-qnq9.11 K2)", () => {
+  /**
+   * OPTION (a), TRUE-ONLY (decided 2026-10-14, ugcportal-6yrd): `true` is
+   * withheld, `null` keeps today's behaviour. One row per state of
+   * `depictsAlcohol` (a listing that does not exist, `null`, `false`, `true`)
+   * crossed with commercial (nothing attached / a declared benefit AND a link)
+   * against a real database, through the six real readers. The assertion is
+   * the whole served set, not "the true rows are missing", so a rule that
+   * served everything and a rule that served nothing both fail it.
+   */
+  type State = "no listing" | null | false | true;
+  const STATES: State[] = ["no listing", null, false, true];
+
+  function served(state: State, commercial: boolean): boolean {
+    if (state === true) return false;
+    if (commercial) return state === false;
+    return true;
+  }
+
+  async function seedRow(state: State, commercial: boolean): Promise<void> {
+    await seedUntriagedItem();
+    if (state !== "no listing") await recordAlcoholAnswer(state);
+    await prisma.media.update({
+      where: { id: MEDIA_ID },
+      data: { publishedAt: new Date("2026-03-02T00:00:00.000Z") },
+    });
+    if (!commercial) return;
+    // Written directly: the routes refuse every commercial row whose alcohol
+    // answer is not `no` (the publish-side gate), and this file is about what
+    // the READ path does with a row that exists anyway.
+    const brand = await prisma.benefitSource.create({
+      data: {
+        slug: "riedel-qnq9-11",
+        name: "Riedel",
+        alcoholLinked: false,
+        alcoholAnsweredAt: new Date(),
+      },
+    });
+    await prisma.mediaAdvertisingDisclosure.create({
+      data: {
+        mediaId: MEDIA_ID,
+        benefitReceived: true,
+        benefitKind: "FREE_PRODUCT",
+        marketValueOre: 49900,
+        label: "Advertisement / Reklame",
+        benefitSourceId: brand.id,
+      },
+    });
+    await prisma.commercialLink.create({
+      data: {
+        mediaId: MEDIA_ID,
+        url: "https://track.adtraction.com/t/t?a=1234&m=qnq9-11",
+        network: "ADTRACTION",
+        benefitSourceId: brand.id,
+      },
+    });
+  }
+
+  for (const state of STATES) {
+    for (const commercial of [false, true]) {
+      const isServed = served(state, commercial);
+      it(`depictsAlcohol ${state === "no listing" ? "(no listing)" : state}, ${commercial ? "commercial" : "nothing commercial"}: ${isServed ? "served without the offer on the five readers" : "withheld on all six readers"}`, async () => {
+        await seedRow(state, commercial);
+        expect(await surfaces()).toEqual(isServed ? WITHOUT_OFFER : NONE_SERVED);
+        if (!isServed) {
+          // The presence control on the SAME row: the absence above is the
+          // alcohol/commercial rule at work, not a row nothing could ever
+          // serve. Recording a `no` brings the item back on the five readers.
+          await recordAlcoholAnswer(false);
+          expect(await surfaces(), "same row, answer set to no").toEqual(WITHOUT_OFFER);
+        }
       });
-      expect(await surfaces(), `depictsAlcohol: ${depictsAlcohol}`).toEqual(
-        WITHOUT_OFFER,
-      );
     }
+  }
+
+  it("is absent from every page of a cursor walk, with a recorded-no sibling on page two still served (K2: feed page two)", async () => {
+    /*
+     * The feed is newest-first and keyset-paginated. At `limit: 1` the three
+     * rows below fall on pages one, two and three, so the item under test
+     * (created 2026-03-01) sits on PAGE TWO, behind the cursor, between a
+     * newer and an older recorded-no sibling. The control walk first proves
+     * that position (with the item recorded `false` it is the page-two row);
+     * the second walk then records it `true` and asserts it is on no page,
+     * and that the recorded-no siblings, including the one that now occupies
+     * page two, are still served.
+     */
+    await seedUntriagedItem();
+    await recordAlcoholAnswer(false);
+    await prisma.media.update({
+      where: { id: MEDIA_ID },
+      data: { publishedAt: new Date("2026-03-02T00:00:00.000Z") },
+    });
+    for (const [id, createdAt] of [
+      ["newer-no", new Date("2026-03-05T00:00:00.000Z")],
+      ["older-no", new Date("2026-02-01T00:00:00.000Z")],
+    ] as const) {
+      await seedMedia(prisma, { id, userId: OPERATOR, createdAt });
+      await prisma.mediaListing.create({
+        data: {
+          mediaId: id,
+          depictsPeople: false,
+          depictsMinors: false,
+          containsMusic: false,
+          thirdPartyCreator: false,
+          sponsoredContent: false,
+          depictsAlcohol: false,
+          wineAccessory: true,
+          triagedByUserId: OPERATOR,
+          triagedAt: new Date("2026-03-03T00:00:00.000Z"),
+        },
+      });
+    }
+
+    const walk = async (): Promise<string[][]> => {
+      const pages: string[][] = [];
+      let cursor: string | undefined;
+      for (let page = 0; page < 8; page += 1) {
+        const result = await listPublicMedia(
+          publicMediaListingUrl({ limit: 1, cursor }),
+        );
+        if (!result.ok) throw new Error(`listPublicMedia failed: ${result.error}`);
+        pages.push(result.page.items.map((item) => item.id));
+        if (!result.page.nextCursor) break;
+        cursor = result.page.nextCursor;
+      }
+      return pages;
+    };
+
+    // Control: the item really is the page-two row when it is served.
+    expect(await walk()).toEqual([["newer-no"], [MEDIA_ID], ["older-no"]]);
+
+    await recordAlcoholAnswer(true);
+    const pages = await walk();
+    expect(pages.flat()).not.toContain(MEDIA_ID);
+    expect(pages).toEqual([["newer-no"], ["older-no"]]);
   });
 });

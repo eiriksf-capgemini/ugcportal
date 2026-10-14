@@ -160,7 +160,8 @@ export async function seedMedia(
  * WHY ANY FIXTURE NEEDS THIS. Since that bead, `PUBLIC_MEDIA_SCOPE` carries
  * alkoholloven § 9-2's commercial pair: an item that declares a benefit or
  * carries a commercial link is served only while `MediaListing.depictsAlcohol`
- * is a recorded `false`. A fixture that attaches a label or a link to a row
+ * is a recorded `false` (and, since ugcportal-qnq9.11, an item recorded
+ * `true` is served on no surface at all). A fixture that attaches a label or a link to a row
  * with no listing is therefore no longer "an ordinary published advertisement"
  * — it is the fail-closed case, and a test about something else (a leak, a
  * rendered marker, a projection) would be exercising this instead and would

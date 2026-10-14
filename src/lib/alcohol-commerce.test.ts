@@ -10,6 +10,7 @@ import {
   commercialPublishRefusal,
   effectiveBrandAlcoholAnswer,
   isAlcoholUnclearedAdvertisement,
+  isWithheldFromPublicRead,
 } from "@/lib/alcohol-commerce";
 import {
   carriesUnlabelledCommercialLink,
@@ -216,10 +217,12 @@ describe("commercialPublishRefusal (K6)", () => {
     ["a declared absence of benefit", { benefitReceived: false, benefitSource: null }],
     ["an unanswered benefit question", { benefitReceived: null, benefitSource: null }],
   ])("says nothing about an item with %s", (_name, disclosure) => {
-    // § 9-2 is about ADVERTISING. A photograph of a glass of wine is
-    // publishable as personal content — which is the distinction the layout
-    // separation in ugcportal-qnq9.11 is built on — and every item that
-    // existed before ugcportal-qnq9.1's migration is in one of these states.
+    // § 9-2 is about ADVERTISING, so this PUBLISH gate says nothing about an
+    // item that carries nothing commercial. Whether such an item is then
+    // served is the read scope's question, not this one's (since
+    // ugcportal-qnq9.11 a recorded `depictsAlcohol = true` is withheld from
+    // every public surface), and every item that existed before
+    // ugcportal-qnq9.1's migration is in one of these states.
     // The worst possible listing is supplied, so these pass for the reason
     // they claim rather than for want of an alcohol answer.
     expect(
@@ -433,11 +436,14 @@ describe("commercialPublishRefusal (K6)", () => {
 describe("isAlcoholUnclearedAdvertisement (the pair, ugcportal-pgpq)", () => {
   /**
    * The § 9-2 pair on its own, extracted from `commercialPublishRefusal` so
-   * that the publish gate and the read-side filter
-   * (`PUBLIC_MEDIA_ALCOHOL_COMMERCE_SCOPE`) ask ONE question rather than two
-   * that could drift. The table here is the predicate's whole truth table;
-   * src/lib/alcohol-commerce.scope-agreement.test.ts is the same question
-   * asked of the `where` on a real database, row by row.
+   * that the publish gate and the read-side withholding
+   * (`isWithheldFromPublicRead`, which adds a recorded `true` as a second
+   * reason) share ONE definition of the pair rather than two that could
+   * drift. The table here is this predicate's whole truth table; the
+   * `where` (`PUBLIC_MEDIA_ALCOHOL_COMMERCE_SCOPE`) is the complement of the
+   * wider `isWithheldFromPublicRead`, and
+   * src/lib/alcohol-commerce.scope-agreement.test.ts compares those two on a
+   * real database, row by row.
    */
   const NO_LINKS = { commercialLinkCount: 0 };
   const ONE_LINK = { commercialLinkCount: 1 };
@@ -551,6 +557,30 @@ describe("isAlcoholUnclearedAdvertisement (the pair, ugcportal-pgpq)", () => {
     // two functions that both always answer the same thing.
     expect(refusals).toBeGreaterThan(0);
     expect(refusals).toBeLessThan(listings.length * 3 * 2);
+  });
+});
+
+describe("isWithheldFromPublicRead (option (a), true-only, ugcportal-qnq9.11)", () => {
+  const NO_LINKS = { commercialLinkCount: 0 };
+  const ONE_LINK = { commercialLinkCount: 1 };
+  const cast = (listing: unknown) =>
+    listing as { depictsAlcohol: boolean | null } | null | undefined;
+
+  it.each([
+    ["a recorded yes, nothing commercial", true, { depictsAlcohol: true }, null, NO_LINKS],
+    ["a recorded yes, a link", true, { depictsAlcohol: true }, null, ONE_LINK],
+    ["a recorded yes, a benefit", true, { depictsAlcohol: true }, { benefitReceived: true }, NO_LINKS],
+    ["a recorded no, nothing commercial", false, { depictsAlcohol: false }, null, NO_LINKS],
+    ["a recorded no, a link", false, { depictsAlcohol: false }, null, ONE_LINK],
+    ["a null answer, nothing commercial", false, { depictsAlcohol: null }, null, NO_LINKS],
+    ["no listing, nothing commercial", false, null, null, NO_LINKS],
+    ["undefined listing, nothing commercial", false, undefined, null, NO_LINKS],
+    ["a null answer, a link", true, { depictsAlcohol: null }, null, ONE_LINK],
+    ["no listing, a benefit", true, null, { benefitReceived: true }, NO_LINKS],
+  ])("%s -> withheld %s", (_label, expected, listing, disclosure, commercialLinks) => {
+    expect(
+      isWithheldFromPublicRead({ disclosure, listing: cast(listing), commercialLinks }),
+    ).toBe(expected);
   });
 });
 
