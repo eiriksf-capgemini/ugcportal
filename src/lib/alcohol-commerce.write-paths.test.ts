@@ -83,9 +83,10 @@ const GATE = "benefitAttachmentRefusal";
  *   - `benefit-source.ts` is the module that mints the row, and it is called
  *     BY that route inside the gated branch rather than reaching the gate
  *     itself — a predicate-free data-access helper, deliberately;
- *   - the publish route READS the pointer to refuse on it. It is a read, not
- *     a write, and it is in this list only because `benefitSource: {` matches
- *     its `select`.
+ *   - the shared publish gates (`lib/publish-gates.ts`, called by the
+ *     publish route and, since ugcportal-ho7j, by POST /api/media) READ the
+ *     pointer to refuse on it. It is a read, not a write, and the file is in
+ *     this list only because `benefitSource: {` matches its `select`.
  *
  * `lib/alcohol-commerce.ts` is deliberately NOT here: it is the gate, it
  * names the brand only in a type, and it matches no needle — so listing it
@@ -97,7 +98,9 @@ const ALLOWED: Record<string, string> = {
   "app/api/media/[id]/commercial-links/route.ts":
     "attaches a commercial link; calls the gate",
   "lib/benefit-source.ts": "mints the row, called from inside the gated branch",
-  "app/api/media/[id]/publish/route.ts": "reads the pointer to refuse on it",
+  // The publish gates' read, moved out of POST /api/media/[id]/publish into
+  // the module both that route and POST /api/media call (ugcportal-ho7j).
+  "lib/publish-gates.ts": "reads the pointer to refuse on it",
 };
 
 /** Every non-test file under `root` whose comment-stripped source names a
@@ -173,7 +176,7 @@ describe("ugcportal-qnq9.3 K4: every benefit-source write path is gated", () => 
     const writers = [
       "app/api/media/[id]/disclosure/route.ts",
       "app/api/media/[id]/commercial-links/route.ts",
-      "app/api/media/[id]/publish/route.ts",
+      "lib/publish-gates.ts",
     ];
     for (const file of writers) {
       const code = stripComments(

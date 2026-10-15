@@ -830,12 +830,20 @@ describe("the lapse predicate lives in PUBLIC_MEDIA_SCOPE itself, so a later rea
      * it that is a `Media` column rather than a relation is the
      * denormalisation this case exists to refuse, and would be waved through
      * by nothing else.
+     *
+     * FOUR BECAME FIVE AT ugcportal-ho7j, deliberately: `user`, for the
+     * configured-uploader arm (`user: { is: { configuredHandle: { not: null
+     * } } }`, src/lib/publishability.ts). `user` is a relation on `Media`
+     * like the other four, so clearing a person's `configuredHandle` takes
+     * their undeclared uploads off every public surface on the next request
+     * — re-evaluated, not snapshotted, which is the property asserted here.
      */
     const RELATIONS = [
       "advertisingDisclosure",
       "attestation",
       "commercialLinks",
       "listing",
+      "user",
     ];
 
     const armKeys = (arm: Record<string, unknown>): string[] =>

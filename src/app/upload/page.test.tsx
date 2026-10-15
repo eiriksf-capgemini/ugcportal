@@ -30,8 +30,17 @@ vi.mock("next/navigation", () => ({ redirect: redirectMock }));
   the two public fields and not `Tag.id`.
 */
 const tagFindManyMock = vi.fn();
+/*
+  The signed-in user's `configuredHandle` (ugcportal-ho7j), which decides
+  whether the form asks the rights questions. Not configured by default, so
+  every case written before that bead keeps rendering today's form.
+*/
+const userFindUniqueMock = vi.fn();
 vi.mock("@/lib/prisma", () => ({
-  prisma: { tag: { findMany: tagFindManyMock } },
+  prisma: {
+    tag: { findMany: tagFindManyMock },
+    user: { findUnique: userFindUniqueMock },
+  },
 }));
 
 const { default: UploadPage } = await import("./page");
@@ -58,6 +67,7 @@ async function renderPage(): Promise<string> {
 beforeEach(() => {
   vi.clearAllMocks();
   tagFindManyMock.mockResolvedValue(SEEDED_TAGS);
+  userFindUniqueMock.mockResolvedValue({ configuredHandle: null });
 });
 
 describe("the upload page is gated (K5)", () => {
@@ -284,7 +294,8 @@ describe("the tag picker on the upload page", () => {
     // whether or not a subject vocabulary exists. The marker attribute is
     // what tells the two apart — `not.toContain("<fieldset")` would now be
     // asserting that the attestation is absent, which is the opposite of
-    // what this page should do.
+    // what this page should do for this file's default user, who is not
+    // configured (a configured user gets no attestation, ugcportal-ho7j).
     expect(markup).not.toContain('data-upload-tag-picker=""');
   });
 
@@ -334,5 +345,53 @@ describe("the tag picker on the upload page", () => {
     for (const [input] of checkboxes) {
       expect(input).not.toContain("disabled");
     }
+  });
+});
+
+/**
+ * ugcportal-ho7j K1, at the page: the server decides from the signed-in
+ * user's `User` row whether the form asks the rights questions, and hands
+ * that down. The form's own behaviour in both states, including the gate on
+ * adding files, is upload-form.attestation.test.tsx.
+ */
+describe("the upload page asks a CONFIGURED user no rights questions (ugcportal-ho7j K1)", () => {
+  beforeEach(() => {
+    authMock.mockResolvedValue({
+      user: { id: "user-1", email: "someone@example.com", role: "ADMIN" },
+    });
+  });
+
+  it("reads configured-ness from the session user's own User row", async () => {
+    await renderPage();
+    expect(userFindUniqueMock).toHaveBeenCalledWith({
+      where: { id: "user-1" },
+      select: { configuredHandle: true },
+    });
+  });
+
+  it("a configured user: no attestation block, and the copy says uploads go public", async () => {
+    userFindUniqueMock.mockResolvedValue({ configuredHandle: "eirik" });
+    const markup = await renderPage();
+
+    expect(markup).not.toContain("data-upload-attestation");
+    expect(markup).not.toContain("data-attestation-question");
+    expect(markup).toContain("Your uploads go public on the site as soon as they are stored");
+    // Alt text is still asked for.
+    expect(markup).toContain("data-upload-alt-text-fields");
+  });
+
+  it("anybody else: the attestation block renders, and no publish promise is made", async () => {
+    const markup = await renderPage();
+
+    expect(markup).toContain("data-upload-attestation");
+    expect(markup).toContain("data-attestation-question");
+    expect(markup).not.toContain("go public");
+  });
+
+  it("a user row that is missing renders today's form (fail closed)", async () => {
+    userFindUniqueMock.mockResolvedValue(null);
+    const markup = await renderPage();
+
+    expect(markup).toContain("data-upload-attestation");
   });
 });

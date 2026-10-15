@@ -53,6 +53,9 @@ function upload(
     userId: OWNER,
     attestation: VALID_ATTESTATION,
     listing: null,
+    // Not configured, unless a case says so: every case written before
+    // ugcportal-ho7j is about an ordinary uploader, and keeps testing that.
+    uploaderConfigured: false,
     ...overrides,
   };
 }
@@ -94,7 +97,7 @@ describe("the closed set of publish blockers", () => {
   });
 });
 
-describe("K1: publishing requires the uploader's own declaration", () => {
+describe("K1: publishing requires the uploader's own declaration (uploader not configured)", () => {
   it("refuses an upload with no attestation at all", () => {
     expect(publishabilityBlocker(upload({ attestation: null }))).toBe(
       "attestation_missing",
@@ -359,5 +362,114 @@ describe("the refusal body", () => {
     );
     expect(missing?.blocker).not.toBe(uncleared?.blocker);
     expect(missing?.error).not.toBe(uncleared?.error);
+  });
+});
+
+/**
+ * ugcportal-ho7j K5, at the predicate: the 2x2 of (configured uploader or
+ * not) x (declaration present or missing). The same 2x2 against the Prisma
+ * scope, in a real database, is in
+ * src/lib/publishability.scope-agreement.test.ts ("the configured-uploader
+ * exemption, in the scope itself").
+ */
+describe("K5: a configured uploader's MISSING declaration, and only that, is exempt (ugcportal-ho7j)", () => {
+  it("configured, declaration missing: no blocker", () => {
+    // Fails if the exemption is removed: this is `attestation_missing` for
+    // everybody else (next case).
+    expect(
+      publishabilityBlocker(
+        upload({ attestation: null, uploaderConfigured: true }),
+      ),
+    ).toBeNull();
+    expect(
+      publishRightsRefusal(upload({ attestation: null, uploaderConfigured: true })),
+    ).toBeNull();
+  });
+
+  it("NOT configured, declaration missing: still `attestation_missing`", () => {
+    expect(
+      publishabilityBlocker(
+        upload({ attestation: null, uploaderConfigured: false }),
+      ),
+    ).toBe("attestation_missing");
+  });
+
+  it("configured, declaration PRESENT: every declaration blocker still applies", () => {
+    // Fails if the exemption is widened to "configured uploaders skip the
+    // declaration check" rather than "a configured uploader's MISSING
+    // declaration is not a refusal".
+    const configured = { uploaderConfigured: true } as const;
+    expect(
+      publishabilityBlocker(
+        upload({
+          ...configured,
+          attestation: { ...VALID_ATTESTATION, authorship: MediaAuthorship.NEITHER },
+        }),
+      ),
+    ).toBe("attestation_rights_disclaimed");
+    expect(
+      publishabilityBlocker(
+        upload({
+          ...configured,
+          attestation: { ...VALID_ATTESTATION, attestationVersion: "1999-01-01.1" },
+        }),
+      ),
+    ).toBe("attestation_version_retired");
+    expect(
+      publishabilityBlocker(
+        upload({
+          ...configured,
+          attestation: { ...VALID_ATTESTATION, attestedByUserId: ADMIN },
+        }),
+      ),
+    ).toBe("attestation_not_by_uploader");
+    expect(
+      publishabilityBlocker(
+        upload({
+          ...configured,
+          attestation: { ...VALID_ATTESTATION, showsIdentifiablePeople: true },
+        }),
+      ),
+    ).toBe("people_uncleared");
+  });
+
+  it("NOT configured, declaration present and clean: no blocker, as before", () => {
+    expect(publishabilityBlocker(upload({ uploaderConfigured: false }))).toBeNull();
+  });
+
+  it("with no declaration, the listing alone decides whether a person is shown", () => {
+    const undeclared = { attestation: null, uploaderConfigured: true } as const;
+    expect(
+      publishabilityBlocker(
+        upload({
+          ...undeclared,
+          listing: { depictsPeople: true, layerClearances: [] },
+        }),
+      ),
+    ).toBe("people_uncleared");
+    expect(
+      publishabilityBlocker(
+        upload({
+          ...undeclared,
+          listing: { depictsPeople: true, layerClearances: [PEOPLE_CLEARANCE] },
+        }),
+      ),
+    ).toBeNull();
+    for (const depictsPeople of [false, null]) {
+      expect(
+        publishabilityBlocker(
+          upload({ ...undeclared, listing: { depictsPeople, layerClearances: [] } }),
+        ),
+      ).toBeNull();
+    }
+    expect(publishabilityBlocker(upload({ ...undeclared, listing: null }))).toBeNull();
+  });
+
+  it("still refuses an upload with no owner, configured or not", () => {
+    expect(
+      publishabilityBlocker(
+        upload({ userId: null, attestation: null, uploaderConfigured: true }),
+      ),
+    ).toBe("upload_owner_unknown");
   });
 });

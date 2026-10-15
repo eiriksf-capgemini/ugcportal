@@ -40,6 +40,20 @@ export type QueueMedia = {
    */
   previewId: string | null;
   originalName: string;
+  /**
+   * When the item went public, as the 201 reported it (ugcportal-ho7j), or
+   * null. Non-null only for a CONFIGURED uploader's upload that every
+   * publish gate passed; everybody else's upload is stored unpublished.
+   */
+  publishedAt: string | null;
+  /**
+   * Why a configured uploader's upload was stored but NOT published — the
+   * `error` sentence of the refusal the 201 carried in `publishRefusal`
+   * (ugcportal-ho7j) — or null. Null for every upload by anybody else,
+   * whose 201 has no such field: for them unpublished is the expected
+   * state, not a refusal.
+   */
+  publishRefusal: string | null;
 };
 
 function stringOrNull(value: unknown): string | null {
@@ -47,7 +61,7 @@ function stringOrNull(value: unknown): string | null {
 }
 
 /**
- * Projects the 201 body down to the four fields the success state renders.
+ * Projects the 201 body down to the fields the success state renders.
  *
  * Field by field, never `...payload`. A spread here would be the whole K3
  * invariant undone in one character, and it would look tidier than this does.
@@ -67,7 +81,19 @@ export function toQueueMedia(payload: unknown): QueueMedia | null {
     kind,
     previewId: stringOrNull(row.previewId),
     originalName: stringOrNull(row.originalName) ?? "Untitled",
+    publishedAt: stringOrNull(row.publishedAt),
+    publishRefusal: refusalMessage(row.publishRefusal),
   };
+}
+
+/**
+ * The sentence out of a `publishRefusal` body (`{ error, field }` or
+ * `{ error, blocker }`), and nothing else from it. Null when the field is
+ * absent, null, or not the shape the route sends.
+ */
+function refusalMessage(value: unknown): string | null {
+  if (typeof value !== "object" || value === null) return null;
+  return stringOrNull((value as Record<string, unknown>).error);
 }
 
 export type QueueItemStatus = "pending" | "uploading" | "succeeded" | "failed";

@@ -4,7 +4,11 @@ import { DeleteObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
 import { NextResponse } from "next/server";
 
 import { auth } from "@/lib/auth";
-import { parseAttestation } from "@/lib/attestation";
+import {
+  MEDIA_ATTESTATION_FIELD_PREFIX,
+  parseAttestation,
+  type AttestationParseResult,
+} from "@/lib/attestation";
 import {
   FALLBACK_ORIGINAL_NAME,
   MAX_UPLOAD_BYTES,
@@ -20,6 +24,12 @@ import {
 import { MEDIA_OWNER_SELECT } from "@/lib/media-access";
 import { listMedia } from "@/lib/media-listing";
 import { prisma } from "@/lib/prisma";
+import {
+  isConfiguredUser,
+  publishGateRefusal,
+  publishGateSources,
+  type PublishGateRefusal,
+} from "@/lib/publish-gates";
 import {
   multipartBoundary,
   peekDeclaredPartType,
@@ -171,6 +181,29 @@ async function cleanupStoredKeys(storedKeys: readonly string[]): Promise<void> {
  * the handler reads would size the cap from one file and buffer another.
  */
 const UPLOAD_FIELD_NAME = "file";
+
+/**
+ * The 201 body (ugcportal-ho7j).
+ *
+ * For anybody but a configured uploader it is the owner projection of the
+ * new row and nothing else — byte-for-byte what this route answered before
+ * auto-publish existed.
+ *
+ * For a configured uploader it is the same row, whose `publishedAt` says
+ * whether the upload went public, plus `publishRefusal`: null when it did,
+ * otherwise the body the first refusing publish gate answered with
+ * (`{ error, field }` or `{ error, blocker }` — the same body POST
+ * /api/media/[id]/publish would answer). The upload page renders that
+ * `error` beside the file, so "stored but not public" is never silent.
+ */
+function uploadResponseBody<Row extends object>(
+  row: Row,
+  uploaderConfigured: boolean,
+  publishRefusal: PublishGateRefusal | null,
+): Row | (Row & { publishRefusal: PublishGateRefusal["body"] | null }) {
+  if (!uploaderConfigured) return row;
+  return { ...row, publishRefusal: publishRefusal?.body ?? null };
+}
 
 /**
  * Admission, then the upload.
@@ -433,8 +466,11 @@ async function handleUpload(
 
   /*
    * Alt text and caption (ugcportal-gwr). NOT required here — see
-   * MAX_ALT_TEXT_LENGTH's docstring and the publish route, which is the one
-   * place `altText` is actually enforced. What IS refused here is a value
+   * MAX_ALT_TEXT_LENGTH's docstring. `altText` is enforced at PUBLISH, by
+   * the alt-text gate in `publishGateRefusal` (src/lib/publish-gates.ts),
+   * which the manual publish route runs and which this route runs too for a
+   * configured uploader's auto-publish (ugcportal-ho7j): a configured upload
+   * with no alt text is stored unpublished. What IS refused here is a value
    * that is present and malformed: too long, or carrying a bidi override —
    * the same "fails the whole upload rather than being silently dropped"
    * treatment `tags` gets above, and for the same reason: both are strings a
@@ -512,10 +548,12 @@ async function handleUpload(
    * docs/legal/manual-upload-rights-review.md §3.1).
    *
    * REQUIRED, unlike alt text and the caption immediately above, and that
-   * asymmetry is the whole bead. Alt text is enforced at publish because a
-   * row with none is merely unpublishable; an upload with no attestation is a
-   * file nobody ever asked the only person who could know anything about. The
-   * gate refuses it (`attestation_missing`), so accepting the bytes and
+   * asymmetry is the whole bead. (One exception since ugcportal-ho7j: a
+   * configured uploader who sends no parts at all — see "EXCEPT FROM A
+   * CONFIGURED UPLOADER" below.) Alt text is enforced at publish because a
+   * row with none is merely unpublishable; an upload with no attestation is
+   * a file nobody ever asked the only person who could know anything about.
+   * The gate refuses it (`attestation_missing`), so accepting the bytes and
    * sorting it out later would only mean storing a file that can never be
    * sold and whose uploader has since closed the tab.
    *
@@ -535,12 +573,43 @@ async function handleUpload(
    * non-string outright rather than coercing it — "[object File]" is not
    * "yes", but neither is it an error unless something says so.
    */
-  const attestation = parseAttestation((name) => body.value.get(name));
-  if (!attestation.ok) {
-    return NextResponse.json(
-      { error: attestation.message, field: attestation.field },
-      { status: 400 },
-    );
+  /*
+   * EXCEPT FROM A CONFIGURED UPLOADER WHO SENT NONE (ugcportal-ho7j).
+   *
+   * The configured people (`User.configuredHandle` not null — the names in
+   * src/config/users.ts) run this site, and the upload page does not ask them
+   * the rights questions at all. Decided ONCE, here, from their `User` row by
+   * `userId` — the session's id, above — and never from anything in the
+   * request: a client cannot claim to be configured.
+   *
+   * Read HERE rather than straight after `auth()`, so that a request refused
+   * for its shape (no body, too large, no file, bad tags or alt text) costs
+   * no database round trip. Nothing before this point depends on it.
+   *
+   * A configured uploader who DOES send attestation parts is held to them
+   * exactly as anybody else: parsed strictly (an incomplete set is still a
+   * 400) and stored, and the publish gates below judge the stored row in
+   * full — a declaration that disclaims the rights keeps the upload private.
+   * Only the ABSENCE of every part is exempt, which is the state the upload
+   * form produces for these people.
+   *
+   * Everybody else is refused a missing or incomplete attestation exactly as
+   * before this bead.
+   */
+  const uploaderConfigured = await isConfiguredUser(prisma, userId);
+  const sentAttestation = [...body.value.keys()].some((name) =>
+    name.startsWith(MEDIA_ATTESTATION_FIELD_PREFIX),
+  );
+  let attestation: Extract<AttestationParseResult, { ok: true }> | null = null;
+  if (!uploaderConfigured || sentAttestation) {
+    const parsed = parseAttestation((name) => body.value.get(name));
+    if (!parsed.ok) {
+      return NextResponse.json(
+        { error: parsed.message, field: parsed.field },
+        { status: 400 },
+      );
+    }
+    attestation = parsed;
   }
 
   const buffer = Buffer.from(await file.arrayBuffer());
@@ -760,19 +829,86 @@ async function handleUpload(
        * that can never be sold and whose uploader has already answered the
        * questions. Rolling both back leaves the uploader able to retry.
        */
-      await tx.mediaAttestation.create({
-        data: {
-          mediaId: created.id,
-          attestedByUserId: userId,
-          attestationVersion: attestation.version,
-          ...attestation.answers,
-        },
-      });
+      //
+      // SKIPPED, and only skipped, for a configured uploader who sent no
+      // attestation parts (ugcportal-ho7j; see where `attestation` is
+      // decided above). Their upload is stored with no MediaAttestation row,
+      // which the publish gates accept for a configured uploader and nobody
+      // else, and which the SALE gate still refuses as `attestation_missing`
+      // (`evaluateSellability`, src/lib/resale-rights.ts, unchanged).
+      if (attestation !== null) {
+        await tx.mediaAttestation.create({
+          data: {
+            mediaId: created.id,
+            attestedByUserId: userId,
+            attestationVersion: attestation.version,
+            ...attestation.answers,
+          },
+        });
+      }
 
-      return created;
+      /*
+       * AUTO-PUBLISH, FOR A CONFIGURED UPLOADER ONLY (ugcportal-ho7j).
+       *
+       * Everyone else's upload is stored unpublished, exactly as before:
+       * this block does not run for them, and nothing else in this handler
+       * writes `publishedAt`.
+       *
+       * The SAME gates the operator's manual publish runs
+       * (`publishGateRefusal`, src/lib/publish-gates.ts) — alt text, the
+       * advertising label, the commercial links, the alcohol answer, the
+       * declaration and the PEOPLE clearance, the watermarked preview — read
+       * back through THIS transaction, so they see the row and the
+       * declaration just written. The one thing the manual route asks that
+       * this does not is the operator question (`publishOperatorRefusal`):
+       * that asks whether the CALLER may make things public, and here the
+       * answer is the configured-uploader decision above.
+       *
+       * `publishedAt` set IN THE SAME TRANSACTION as the create, so no
+       * reader can ever observe this row half-way: either it commits
+       * published, or (gate refused) unpublished, or not at all.
+       *
+       * `previewId` needs no minting here: `previewColumns` above already
+       * carries it, from the same `mediaPreviewColumns` call the manual
+       * route's repair uses, and it is null exactly when `previewKey` is —
+       * which is the case the preview gate refuses.
+       *
+       * A REFUSAL IS NOT AN ERROR. The upload succeeded; the row is kept,
+       * unpublished, and the 201 says why in `publishRefusal` — the same
+       * body the manual route would have answered with — so the upload page
+       * can show it. In practice that is a VIDEO (no watermarked still yet,
+       * ugcportal-pmb): an IMAGE whose watermark cannot be made is refused
+       * (422, 503 or a thrown 500, per the branches above) before anything
+       * is stored, as it always was.
+       */
+      if (!uploaderConfigured) {
+        return { created, publishRefusal: null };
+      }
+      const publishRefusal = await publishGateRefusal(
+        created,
+        userId,
+        publishGateSources(tx, {
+          mediaId: created.id,
+          userId,
+          uploaderConfigured,
+        }),
+      );
+      if (publishRefusal !== null) {
+        return { created, publishRefusal };
+      }
+      const publishedAt = new Date();
+      await tx.media.update({
+        where: { id: created.id },
+        data: { publishedAt },
+        select: { id: true },
+      });
+      return { created: { ...created, publishedAt }, publishRefusal: null };
     });
 
-    return NextResponse.json(media, { status: 201 });
+    return NextResponse.json(
+      uploadResponseBody(media.created, uploaderConfigured, media.publishRefusal),
+      { status: 201 },
+    );
   } catch (error) {
     if (error instanceof ObjectStorageUnreachableError) {
       // A storage outage (ugcportal-1b2c) — MinIO/S3 unreachable, not

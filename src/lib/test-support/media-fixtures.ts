@@ -38,13 +38,16 @@ export type SeedMediaOptions = {
   /**
    * Write the uploader's rights attestation alongside the row
    * (ugcportal-3ae). DEFAULTS TO TRUE, because from that bead on a row with
-   * no attestation is not on any anonymous surface at all
-   * (`PUBLIC_MEDIA_SCOPE`), so a fixture without one is not "an ordinary
-   * published photograph" — it is the fail-closed case, and every test here
-   * that is about something else would be exercising this instead.
+   * no attestation is not on any anonymous surface (`PUBLIC_MEDIA_SCOPE`)
+   * unless its uploader is a configured user (ugcportal-ho7j), so for the
+   * ordinary uploader a fixture without one is not
+   * "an ordinary published photograph" — it is the fail-closed case, and
+   * every test here that is about something else would be exercising this
+   * instead.
    *
    * `false` is how a test asks for the pre-ugcportal-3ae row deliberately:
-   * published, visible before, and refused now.
+   * published, visible before, and refused now — provided the caller's
+   * user row has no `configuredHandle` (this module does not create users).
    */
   attested?: boolean;
   /**
@@ -127,7 +130,9 @@ export async function seedMedia(
     imports or calls `seedMedia`. The other seeders in this tree (that
     file's `row()`, for one) build the row themselves rather than going
     through here. All seven of the real importers need a declaration now
-    that the public scope requires one; seven copies of these eleven columns
+    that the public scope requires one for any uploader without a
+    `configuredHandle` (a configured uploader's row is public without one
+    since ugcportal-ho7j); seven copies of these eleven columns
     is precisely the sibling-omission shape this file's own header says it
     exists to prevent.
   */

@@ -1,8 +1,5 @@
 import { NextResponse } from "next/server";
 
-import { advertisingLabelPublishRefusal } from "@/lib/advertising-disclosure";
-import { commercialPublishRefusal } from "@/lib/alcohol-commerce";
-import { commercialLinkPublishRefusal } from "@/lib/commercial-link";
 import {
   MEDIA_OWNER_SELECT,
   requireOwnedMedia,
@@ -11,11 +8,7 @@ import {
 import { mediaPreviewColumns } from "@/lib/media";
 import { prisma } from "@/lib/prisma";
 import { publishOperatorRefusal } from "@/lib/publish-authority";
-import {
-  PUBLISH_ATTESTATION_SELECT,
-  PUBLISH_LISTING_SELECT,
-  publishRightsRefusal,
-} from "@/lib/publishability";
+import { publishGateRefusal, publishGateSources } from "@/lib/publish-gates";
 
 // App Router hands dynamic segments in as a Promise (Next 16).
 type RouteContext = { params: Promise<{ id: string }> };
@@ -74,8 +67,12 @@ export async function POST(_request: Request, { params }: RouteContext) {
   // AND OWNING THE ROW IS NOT PERMISSION TO PUBLISH IT (ugcportal-9gt1).
   // `requireOwnedMedia` above answers "is this row yours"; this answers "may
   // you make anything public at all", and until this check existed nothing
-  // asked the second question. The rule — only operators publish — held
-  // solely because `ALLOWED_SIGNIN_EMAILS` happens to list two people, so
+  // asked the second question. (That is the rule for THIS route. Since
+  // ugcportal-ho7j POST /api/media also publishes, for a configured uploader
+  // only, and does not ask it: configured-ness, read from the `User` row, is
+  // that route's answer to "may you make this public".) The rule — only
+  // operators publish — held solely because `ALLOWED_SIGNIN_EMAILS` happened
+  // to list two people, so
   // adding a third address to let somebody upload would silently have handed
   // them the public gallery. See src/lib/publish-authority.ts for the
   // decision itself, and for why "may publish" is asked as its own question
@@ -110,287 +107,36 @@ export async function POST(_request: Request, { params }: RouteContext) {
     return NextResponse.json(operatorRefusal, { status: 403 });
   }
 
-  // Alt text is REQUIRED TO PUBLISH (ugcportal-gwr K1) — not at upload, and
-  // not at the schema layer (Media.altText is nullable; see that column's
-  // comment in prisma/schema.prisma). This is the one place that rule is
-  // enforced, same spirit as the preview check below: well-formed, authorized
-  // request, refused because of the row's own current state, so 400 — a
-  // field-level validation failure, not an authorization or state-conflict
-  // one — with a message naming the field, per K1 ("rejected... at the
-  // field"). `.trim()` because an owner could in principle have stored
-  // whitespace-only text before this check existed; `validateAltText` already
-  // refuses that going forward, but this route must not trust that every row
-  // in the table was written after this check existed.
+  // EVERY CONDITION ON THE MATERIAL — alt text, the advertising label, the
+  // commercial links, the alcohol answer, the uploader's declaration and the
+  // PEOPLE clearance (ugcportal-3ae), and the watermarked preview — in that
+  // order, with the status and body each refusal has always answered with.
+  // They live in src/lib/publish-gates.ts since ugcportal-ho7j, because POST
+  // /api/media now asks the same questions before it auto-publishes a
+  // configured user's upload, and one function is what keeps the two doors
+  // from drifting apart. The reasoning that stood beside each check here
+  // moved with it.
   //
-  // READ-THEN-CHECK, not folded into the `updateMany` where-clause the way
-  // `publishedAt: null` below is (review round 1, finding 8). That one is
-  // folded in because something CAN race it — a concurrent publish or
-  // unpublish — and the predicate is how two racing writes agree on a
-  // winner. Nothing today can race THIS check: `altText` is set once, at
-  // upload, and never cleared afterwards (no route writes it null — the
-  // rename endpoint only touches `originalName`), so there is no concurrent
-  // writer for a `where: { altText: { not: null } }` clause to defend
-  // against yet. The day a second writer can null it out (an edit surface,
-  // say), this needs the same treatment `previewId`'s repair logic above
-  // got — but adding it now, against nothing, would be exactly the kind of
-  // check this file's own comments elsewhere warn against: one that reads as
-  // a defence and is not exercised by anything.
-  //
-  // GATED ON `publishedAt === null` — i.e. only on an actual TRANSITION,
-  // never on an already-published row (review round 4 finding 4). Without
-  // this, an idempotent re-POST on a row that is ALREADY published but
-  // happens to have a null `altText` — which this bead's backfill migration
-  // closes for every row that existed when it ran, but cannot close for a
-  // row inserted by stale pre-this-bead code during the brief window of a
-  // migrate-then-swap rolling deploy, the same deploy shape this route's
-  // own `previewId` self-repair a few lines below exists to tolerate — would
-  // 400 instead of returning the 200 this route's own docstring promises
-  // ("Idempotent... an already-published row keeps its original [timestamp]
-  // rather than having its history rewritten"). K1 is a rule about the
-  // TRANSITION (no row may go from unpublished to published without alt
-  // text); it was never meant to retroactively block a row that is already
-  // sitting on the other side of that transition. Nothing is weakened by
-  // this: a genuinely unpublished row with no alt text is still refused
-  // below, exactly as before.
-  if (
-    access.media.publishedAt === null &&
-    (access.media.altText === null || access.media.altText.trim() === "")
-  ) {
-    return NextResponse.json(
-      {
-        error: "Add alt text before publishing this item.",
-        field: "altText",
-      },
-      { status: 400 },
-    );
-  }
-
-  // AN UNLABELLED ADVERTISEMENT MAY NOT BE PUBLISHED (ugcportal-qnq9.1 K2).
-  // Forbrukertilsynet requires a prominent advertising label on any item the
-  // operator was paid or given a benefit for, and holds both the creator and
-  // the brand responsible for one that is missing (docs/ugc-research.md §3.2;
-  // §5.7 confirms posting in English does not change that). So the same
-  // refusal shape alt text gets, a line above: a 400 naming the field,
-  // because the request is well-formed and authorized and what blocks it is
-  // the row's own current state.
-  //
-  // A SEPARATE READ rather than widening `requireOwnedMedia`. That gate is
-  // shared by PATCH, DELETE, tags and both handlers here, and none of the
-  // others has any use for the disclosure — adding it to the gate would make
-  // every one of them pay for a join to answer a question only this branch
-  // asks. Publishing is a rare, deliberate act; one extra round trip on it is
-  // the cheaper side of that trade.
-  //
-  // NOT GATED ON `publishedAt === null`, which is the one place this
-  // deliberately differs from the alt-text check above, so the difference is
-  // worth stating. That check is transition-only because `altText` has no
-  // writer that can clear it, so the only way an already-published row can
-  // have a blank one is a stale pre-backfill insert during a rolling deploy —
-  // a row that is not in breach of anything, which a 400 on an idempotent
-  // re-POST would wrongly punish. This column is the opposite case: there is
-  // no backfill and no pre-existing row that lands in the refused state (an
-  // item with no disclosure row is unanswered, which publishes), and PUT
-  // /api/media/[id]/disclosure will not create the refused pair at all. So a
-  // published row that reaches this check and fails it was written outside
-  // this API and IS in breach — and answering 200 to "publish this undisclosed
-  // advertisement" because it already happens to be public is the wrong
-  // answer to give.
-  const disclosure = await prisma.mediaAdvertisingDisclosure.findUnique({
-    where: { mediaId: id },
-    select: {
-      benefitReceived: true,
-      label: true,
-      // The brand's alcohol answer, for the second refusal below. Nested on
-      // the same read rather than fetched separately: it is one join on a
-      // query this branch already makes, and the alternative is a second
-      // round trip on the same rare, deliberate act.
-      benefitSource: { select: { alcoholLinked: true } },
-    },
-  });
-  const refusal = advertisingLabelPublishRefusal(disclosure);
-  if (refusal) {
-    return NextResponse.json(refusal, { status: 400 });
-  }
-
-  // AND NEITHER MAY AN ADVERTISING LINK WITH NO LABEL ABOVE IT
-  // (ugcportal-jain K2). The check above asks whether a DECLARED BENEFIT is
-  // labelled and answers null the moment `benefitReceived` is not `true`,
-  // which is precisely the state a withdrawal leaves behind — so until this
-  // bead, an item whose disclosure had been withdrawn after a link was
-  // attached passed every gate on this route and published carrying a live
-  // affiliate link with nothing labelling it. §3.2 wants the page labelled at
-  // the top AND at each link; the top label is rendered from
-  // `MediaAdvertisingDisclosure.label` and from nothing else.
-  //
-  // A SEPARATE COUNT RATHER THAN A WIDENED `requireOwnedMedia`, the same
-  // trade the disclosure read above states and for the same reason: PATCH,
-  // DELETE and tags have no use for the link count, and a join on the shared
-  // gate would make all three pay for it.
-  //
-  // A COUNT AND NOT THE ROWS — `CommercialLinkFacts`
-  // (src/lib/alcohol-commerce.ts) is what both gates below declare as their
-  // input, and both decide on "any". The destinations and the brands behind
-  // them are a compliance record this route has no business reading to answer
-  // a yes/no question.
-  //
-  // READ UNCONDITIONALLY, although the gate immediately below answers null
-  // for every item that carries no link, which is almost all of them. The
-  // version that skipped it behind a second reading of the disclosure would
-  // be the mistake the alcohol lookup further down documents at length: a
-  // short-circuit in a place that cannot see the gate's rule, failing in the
-  // direction of the gate never running.
-  const commercialLinks = {
-    commercialLinkCount: await prisma.commercialLink.count({
-      where: { mediaId: id },
-    }),
-  };
-  const linkRefusal = commercialLinkPublishRefusal(disclosure, commercialLinks);
-  if (linkRefusal) {
-    return NextResponse.json(linkRefusal, { status: 400 });
-  }
-
-  // AND NO ADVERTISEMENT MAY SHOW ALCOHOL, OR COME FROM A BRAND THAT SELLS IT
-  // (ugcportal-qnq9.3 K6). alkoholloven § 9-2 bans alcohol from appearing in
-  // advertising for other products, and §3.1a reads the ban as covering
-  // products that share a brand or trademark with an alcoholic drink; the
-  // breach has been administratively finable since 13 September 2024.
-  //
-  // A SECOND REFUSAL RATHER THAN A WIDER FIRST ONE. The two gates answer
-  // different questions about the same row — "is this advertisement
-  // labelled" and "may this advertisement exist at all" — and they come from
-  // different beads, different regulators and different statutes. Folding
-  // them together would produce one function whose message had to cover both,
-  // on a page where the message is the only instruction the operator gets.
-  //
-  // PUBLISHING IS THE CHOKEPOINT, which is why this lives here and not on the
-  // price route. Every public surface — the gallery tile, the lightbox, the
-  // item page, the public feed, and the advertising label all four of them
-  // render (ugcportal-e0jv) — is downstream of `publishedAt`, so an item
-  // refused here reaches none of them. A price on an unpublished row is not
-  // an offer to anybody.
-  //
-  // NOT GATED ON `publishedAt === null`, for the reason the paragraph above
-  // the alt-text check gives at length: a published row that fails this was
-  // written outside this API and IS in breach, and answering 200 to "publish
-  // this alcohol advertisement" because it already happens to be public is
-  // the wrong answer to give.
-  //
-  // THE LISTING IS READ HERE AND NOT THROUGH `requireOwnedMedia`, the same
-  // trade the disclosure read above makes: the triage answer is of no use to
-  // PATCH, DELETE or tags, and a join on the shared gate would make all of
-  // them pay for it.
-  //
-  // READ UNCONDITIONALLY, although `commercialPublishRefusal` answers null
-  // for every item that records no benefit and the lookup is then wasted. The
-  // version that skipped it behind `disclosure?.benefitReceived === true` was
-  // a second reading of the field the gate itself reads, in a module that
-  // could not see it — and the direction that mistake fails in is the gate
-  // never running at all. One indexed lookup by a unique key, on a rare and
-  // deliberate act, is the cheaper side of that trade; the predicate lives in
-  // exactly one place.
-  const listing = await prisma.mediaListing.findUnique({
-    where: { mediaId: id },
-    select: {
-      depictsAlcohol: true,
-      // The people half of the rights gate below (ugcportal-3ae): the
-      // admin's own answer to the people question, and the per-layer
-      // clearances with each clearer's CURRENT role. Folded into the read
-      // this branch already makes rather than issued as a second one — the
-      // same trade the disclosure read above states, and the reason the
-      // select is spread from `PUBLISH_LISTING_SELECT` is so there is one
-      // copy of what that gate reads rather than one here and one in the
-      // module that decides.
-      ...PUBLISH_LISTING_SELECT,
-    },
-  });
-  // `commercialLinks` is the same count the label gate above already took,
-  // reused rather than re-counted: two reads of the same number on one
-  // request could disagree, and the gate that ran second would be deciding
-  // about a row the gate that ran first never saw (ugcportal-jain).
-  const alcoholRefusal = commercialPublishRefusal({
-    disclosure,
-    listing,
-    commercialLinks,
-  });
-  if (alcoholRefusal) {
-    return NextResponse.json(alcoholRefusal, { status: 400 });
-  }
-
-  // AND NOTHING IS PUBLISHED THAT ITS UPLOADER HAS NOT VOUCHED FOR, OR THAT
-  // SHOWS A PERSON NOBODY HAS SIGNED OFF ON (ugcportal-3ae K1/K2). The gate
-  // itself is src/lib/publishability.ts; see that module for why it is
-  // separate from `evaluateSellability` and for what each refusal means.
-  //
-  // 422 rather than the 400 its two neighbours above answer with. Those
-  // refuse a FIELD the operator can go and correct — an advertising label,
-  // an alcohol answer — and a 400 naming the field is the right shape for
-  // that. These refuse the REQUEST as semantically impossible given records
-  // that live outside this form entirely: the fix is a re-upload through
-  // the flow that asks the rights questions, or an administrator recording
-  // a clearance. The body carries `blocker`, a closed-set code, rather than
-  // `field`, for the same reason.
-  //
-  // NOT GATED ON `publishedAt === null`, matching the two refusals above
-  // rather than the alt-text one. The alt-text check is transition-only
-  // because an already-published row with blank alt text is a rolling-deploy
-  // artefact that is in breach of nothing. A published row with no
-  // attestation is the opposite: it is precisely the row K3 says must not be
-  // on a public surface, and `PUBLIC_MEDIA_SCOPE` has already stopped
-  // serving it. Answering 200 to "publish this" because it is already marked
-  // published would be this route reporting success for a row the site is
-  // refusing to show.
-  //
-  // THE ATTESTATION IS READ HERE AND NOT THROUGH `requireOwnedMedia`, the
-  // same trade the two reads above make: PATCH, DELETE and tags have no use
-  // for it, and a join on the shared gate would make all of them pay.
-  const attestation = await prisma.mediaAttestation.findUnique({
-    where: { mediaId: id },
-    select: PUBLISH_ATTESTATION_SELECT,
-  });
-  const rightsRefusal = publishRightsRefusal({
-    userId: access.userId,
-    attestation,
-    listing,
-  });
-  if (rightsRefusal) {
-    return NextResponse.json(rightsRefusal, { status: 422 });
-  }
-
-  // Two different problems hide behind "this row has no usable preview", and
-  // they need different answers.
-  //
-  // `previewKey` null means there genuinely is no watermarked object — today,
-  // every VIDEO; poster frames are ugcportal-pmb. Publishing would set
-  // publishedAt, answer 200, and still surface nowhere, so it is refused.
-  //
-  // 409 rather than 400 or 422: the request is well-formed and the caller is
-  // authorized. What blocks it is the row's current state, and that state is
-  // expected to change when ugcportal-pmb lands, at which point this refusal
-  // simply stops firing.
-  //
-  // Blank is treated as absent rather than handed to mediaPreviewColumns,
-  // which would (correctly) throw on it. A writer-side bug should not become a
-  // 500 on a request that is itself well formed.
-  if (
-    access.media.previewKey === null ||
-    access.media.previewKey.trim() === ""
-  ) {
-    return NextResponse.json(
-      {
-        error:
-          "This item has no watermarked preview yet, so it cannot be published.",
-      },
-      { status: 409 },
-    );
+  // Each read happens only once every gate before it has passed, as it did
+  // when the checks were inline here: a refused request costs no read that
+  // cannot change its answer.
+  const gateRefusal = await publishGateRefusal(
+    access.media,
+    access.userId,
+    publishGateSources(prisma, { mediaId: id, userId: access.userId }),
+  );
+  if (gateRefusal) {
+    return NextResponse.json(gateRefusal.body, { status: gateRefusal.status });
   }
 
   // `previewId` null with `previewKey` set is the OTHER problem, and it is not
   // the same one: the watermarked object exists, only the public handle the
   // anonymous feed hands out is missing.
   //
-  // This used to get the message above, which was false, and a 409 with no way
-  // out. The migration backfilled only rows that existed when it ran, and
-  // nothing anywhere writes previewId on an existing row — so an ordinary
+  // This used to get the preview gate's "no watermarked preview yet" 409,
+  // which was false, and a 409 with no way out. The migration backfilled
+  // only rows that existed when it ran, and nothing anywhere writes
+  // previewId on an existing row — so an ordinary
   // migrate-then-swap deploy (migrations applied, previous build still
   // serving) mints exactly this shape, as would ugcportal-ct0's sync. The
   // owner feed deliberately still lists such a row with its preview, so the
@@ -408,6 +154,8 @@ export async function POST(_request: Request, { params }: RouteContext) {
   // the bottom reports whichever won.
   let previewId = access.media.previewId;
   if (previewId === null) {
+    // `previewKey` is non-null and non-blank here: the preview gate in
+    // `publishGateRefusal` answered 409 for every other value.
     const minted = mediaPreviewColumns(access.media.previewKey);
     const { count } = await prisma.media.updateMany({
       where: {
@@ -543,7 +291,9 @@ export async function POST(_request: Request, { params }: RouteContext) {
  * having less to verify. Every other refusal POST applies is a condition on
  * making something public, and withdrawing it moves in the safe direction:
  * the gate exists so that material reaches the public gallery only by an
- * operator's decision, not so that it STAYS there against its owner's. An
+ * operator's decision (or, since ugcportal-ho7j, by a configured user's
+ * upload passing the publish gates), not so that it STAYS there against its
+ * owner's. An
  * owner who is demoted, or who was never an operator but holds a row
  * published before this rule existed, must still be able to take their own
  * photograph down — gating this would turn a safety check into a trap, and

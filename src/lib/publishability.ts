@@ -26,14 +26,19 @@ import {
  * selling, and the two gates answer different questions about the same row.
  * Selling needs the uploader's standing resale-rights review, a complete
  * admin triage of every registered layer, and a signature on each one;
- * publishing needs the uploader to have said whose work this is and, where a
- * person is in the frame, an admin to have cleared that one layer. An item
+ * publishing needs the uploader to have said whose work this is (unless the
+ * uploader is a configured user who was not asked — ugcportal-ho7j; a
+ * declaration that IS present is judged in full whoever made it) and, where
+ * a person is in the frame, an admin to have cleared that one layer. An item
  * can be perfectly publishable and unsellable, which is the ordinary case
  * for everything on this site today. Folding them together would mean
  * showing nothing until an admin had priced it.
  *
  * TWO EXPRESSIONS OF ONE RULE, AND BOTH LIVE HERE. `publishabilityBlocker`
- * below is the TypeScript predicate the publish route calls on one row;
+ * below is the TypeScript predicate run on one row whenever something is
+ * published — by the shared publish gates (src/lib/publish-gates.ts), which
+ * both POST /api/media/[id]/publish and, for a configured uploader's
+ * auto-publish, POST /api/media call (ugcportal-ho7j);
  * `PUBLIC_MEDIA_RIGHTS_SCOPE` is the same rule as a Prisma `where`, spread
  * into `PUBLIC_MEDIA_SCOPE` (src/lib/public-media.ts) so that every
  * anonymous reader — the paginated feed, the server-rendered home page, the
@@ -63,9 +68,13 @@ import {
  * constant below.
  *
  * WHAT THIS DELIBERATELY DOES NOT DECIDE. Whether self-service
- * publish-by-default is the right model at all is ugcportal-55nt's question
- * and is still open; nothing here answers it. This adds conditions to
- * publishing, which is strictly the safer direction under either answer.
+ * publish-by-default is the right model at all is ugcportal-55nt's question.
+ * ugcportal-ho7j answered it for the CONFIGURED users only, on the
+ * operator's instruction: their uploads publish on upload, through the same
+ * gates, and a missing declaration is not a condition for them. For
+ * everybody else it is still open and nothing here answers it; for them
+ * this module only adds conditions to publishing, which is strictly the
+ * safer direction under either answer.
  * What a clearance lapsing AFTER publication does to a row that is already
  * public is ugcportal-nffp. Per-layer clearance WRITES are ugcportal-qfy9,
  * which merged as `ba9991f` while this was under review: the admin curation
@@ -145,8 +154,11 @@ const PUBLISH_ATTESTATION_BLOCKERS: Record<
  * Typed as a full `Record<PublishBlocker, string>`, so a blocker added above
  * with no message fails `tsc` — not review, and not a test.
  *
- * WHERE THEY ARE SHOWN, as of ba9991f: in the 422 body. There is no
- * owner-facing publish control to put them beside yet. Evidence, and the
+ * WHERE THEY ARE SHOWN: in the manual publish route's 422 body, and — since
+ * ugcportal-ho7j — in POST /api/media's 201 `publishRefusal` for a
+ * configured uploader's upload that was stored but not published, which the
+ * upload page's queue row renders. There is still no owner-facing publish
+ * control to put them beside. Evidence for that, and the
  * command to re-check it rather than a count that rots:
  * `grep -rn "api/media/.*publish" src` — outside the route's own directory
  * every hit is a comment or a test, and none of them is a `fetch`, a form
@@ -170,7 +182,10 @@ export const PUBLISH_BLOCKER_MESSAGES: Record<PublishBlocker, string> = {
     "This item shows an identifiable person and nobody has cleared that yet, so it cannot be made public (åndsverkloven § 104, GDPR art 9). An administrator has to record a PEOPLE clearance for it first.",
 };
 
-/** The refusal body the publish route answers with. */
+/**
+ * The refusal body the publish gates answer with — the manual route's 422
+ * body, and POST /api/media's `publishRefusal` (ugcportal-ho7j).
+ */
 export type PublishRefusal = {
   readonly error: string;
   readonly blocker: PublishBlocker;
@@ -183,7 +198,9 @@ export type PublishRefusal = {
  * `depictsPeople` is the ADMIN's answer to the people question, and it is
  * read alongside the uploader's own because the two can disagree and the
  * dangerous direction is a `no`. Either one saying `yes` means a person is
- * in the frame; it takes both to mean nobody is. Note what that does NOT do:
+ * in the frame; it takes both to mean nobody is — or, when there is no
+ * declaration at all (a configured uploader's, ugcportal-ho7j), the listing
+ * alone. Note what that does NOT do:
  * it does not require the admin to have answered. A null here is "nobody has
  * triaged this", which is the state of every upload on this site, and
  * demanding an admin answer before an owner may publish their own photograph
@@ -205,11 +222,32 @@ export type PublishabilityUpload = {
   userId: string | null;
   /**
    * `null` means NOBODY ASKED THE UPLOADER ANYTHING — every upload made
-   * before ugcportal-15r, and anything a future second write path creates
-   * without one. It is never "the uploader said no".
+   * before ugcportal-15r, every upload by a configured user who was not
+   * asked (ugcportal-ho7j), and anything a future second write path creates
+   * without one. It is never "the uploader said no". It refuses a publish
+   * for everybody except a configured uploader (`uploaderConfigured`).
    */
   attestation: GateAttestation | null;
   listing: PublishabilityListing | null;
+  /**
+   * Whether the uploader is a CONFIGURED user — `User.configuredHandle` is
+   * not null, i.e. one of the people in `CONFIGURED_USERS`
+   * (src/config/users.ts), linked by src/lib/configured-user-link.ts
+   * (ugcportal-ho7j).
+   *
+   * It changes exactly ONE thing below: a MISSING attestation stops being a
+   * refusal, because those people are not asked the rights questions at
+   * upload. A PRESENT attestation is judged in full whoever made it — a
+   * configured uploader who does answer, and answers that they hold no
+   * rights, is refused exactly as anyone else is.
+   *
+   * Required rather than optional, so every caller has to say where its
+   * answer came from: an optional flag defaulting to `false` would be
+   * fail-closed, but would also let a new caller forget the question and
+   * quietly refuse the operators' own uploads. Read it from the database
+   * (the `User` row), never from anything a client sent.
+   */
+  uploaderConfigured: boolean;
 };
 
 /**
@@ -217,7 +255,7 @@ export type PublishabilityUpload = {
  * `MEDIA_GATE_SELECT` rather than re-spelled.
  *
  * One copy, so a tenth attestation question cannot be added to the gate's
- * select and left out of the publish route's — which would read as
+ * select and left out of the publish gates' — which would read as
  * `undefined` on the row and be refused as `attestation_incomplete` on every
  * publish, a site-wide outage rather than a leak, but still a silent
  * divergence between two selects that are meant to be the same question.
@@ -236,6 +274,11 @@ export const PUBLISH_LISTING_SELECT = {
  * `=== true` on both sides rather than truthiness, matching `isTriaged` next
  * door: `null` is "not answered", and an unanswered admin triage must not
  * read as a `no` that cancels the uploader's `yes`.
+ *
+ * With NO attestation — a configured uploader's ordinary upload
+ * (ugcportal-ho7j) — the first half is false and the listing alone decides:
+ * `depictsPeople === true` means a person is shown; `false`, `null` or no
+ * listing at all means nobody is.
  */
 function showsIdentifiablePeople(upload: PublishabilityUpload): boolean {
   return (
@@ -265,14 +308,25 @@ export function publishabilityBlocker(
 
   // (1) The uploader's own declaration about this file, judged by the same
   // function the sale gate uses, then translated per code above.
-  const attestation = attestationBlocker(
-    upload.attestation ?? null,
-    upload.userId,
-  );
-  if (attestation) {
-    const refusesPublish = PUBLISH_ATTESTATION_BLOCKERS[attestation];
-    if (refusesPublish) {
-      return refusesPublish;
+  //
+  // SKIPPED ONLY WHEN THERE IS NO DECLARATION AND THE UPLOADER IS CONFIGURED
+  // (ugcportal-ho7j): the configured people are not asked at upload, so for
+  // them "nobody declared anything" is the ordinary state rather than a gap.
+  // `=== true` so a hand-assembled input that left the flag out is judged
+  // as a non-configured upload. Nothing here reaches `evaluateSellability`:
+  // the sale gate still answers `attestation_missing` for the same row.
+  const exemptFromDeclaration =
+    upload.uploaderConfigured === true && (upload.attestation ?? null) === null;
+  if (!exemptFromDeclaration) {
+    const attestation = attestationBlocker(
+      upload.attestation ?? null,
+      upload.userId,
+    );
+    if (attestation) {
+      const refusesPublish = PUBLISH_ATTESTATION_BLOCKERS[attestation];
+      if (refusesPublish) {
+        return refusesPublish;
+      }
     }
   }
 
@@ -327,7 +381,8 @@ export function publishRightsRefusal(
  * ---------------------------------------------------------------------------
  *
  * K3 is the load-bearing criterion of this bead and this is the part that
- * carries it. The predicate above runs on a publish REQUEST, so it governs
+ * carries it. The predicate above runs when a row is published (a manual
+ * publish request, or a configured uploader's auto-publish), so it governs
  * rows that cross the line from now on and nothing else. Every row published
  * before it existed — and every row whose clearance situation changed since —
  * is still sitting in the table, and every anonymous surface reads it —
@@ -378,7 +433,12 @@ export function publishRightsRefusal(
  *     depend on it.
  */
 
-/** The attestation a public row must carry, as a Prisma relation filter. */
+/**
+ * The attestation a public row must carry when it carries one at all, as a
+ * Prisma relation filter. A row with NO attestation is public only through
+ * `CONFIGURED_UPLOADER_UNDECLARED` below (ugcportal-ho7j); a row WITH one is
+ * public only if it passes this, configured uploader or not.
+ */
 const PUBLISHABLE_ATTESTATION: {
   attestationVersion: { in: string[] };
   authorship: { not: MediaAuthorship };
@@ -424,8 +484,8 @@ const PEOPLE_LAYER_CLEARED = {
 };
 
 /**
- * Nobody identifiable in the frame: the uploader said so, and no admin
- * triage contradicts them.
+ * Nobody identifiable in the frame: the uploader said so (or made no
+ * declaration at all), and no admin triage contradicts them.
  *
  * THE ADMIN'S THREE STATES ARE ENUMERATED POSITIVELY — no listing, `false`,
  * `null` — rather than written as one negation of `true`, and that is not a
@@ -444,14 +504,49 @@ const PEOPLE_LAYER_CLEARED = {
  * states a column can be in rather than only the ones a reviewer thinks of.
  */
 const NOBODY_IDENTIFIABLE_SHOWN = {
-  attestation: { is: { showsIdentifiablePeople: false } },
-  OR: [
-    // Every upload on this site today: nobody has opened the curation flow
-    // on it, so there is no triage row at all.
-    { listing: { is: null } },
-    { listing: { is: { depictsPeople: false } } },
-    { listing: { is: { depictsPeople: null } } },
+  AND: [
+    {
+      OR: [
+        { attestation: { is: { showsIdentifiablePeople: false } } },
+        // NO DECLARATION AT ALL (ugcportal-ho7j): `showsIdentifiablePeople`
+        // in the predicate reads `attestation?.showsIdentifiablePeople ===
+        // true`, which is false for a missing row, so the listing alone
+        // decides. Safe to admit here because this arm is ANDed with the
+        // first arm of the scope, which admits a missing declaration only
+        // for a configured uploader — for anyone else the row is already
+        // out before this arm is consulted.
+        { attestation: { is: null } },
+      ],
+    },
+    {
+      OR: [
+        // Every upload on this site today: nobody has opened the curation
+        // flow on it, so there is no triage row at all.
+        { listing: { is: null } },
+        { listing: { is: { depictsPeople: false } } },
+        { listing: { is: { depictsPeople: null } } },
+      ],
+    },
   ],
+};
+
+/**
+ * A row with NO declaration whose uploader is CONFIGURED (ugcportal-ho7j) —
+ * the query form of the `exemptFromDeclaration` skip in
+ * `publishabilityBlocker` above.
+ *
+ * `user` is a RELATION filter like every other key in this scope, so it is
+ * re-evaluated on every read: clearing a person's `configuredHandle` takes
+ * their undeclared uploads off every public surface on the next request,
+ * with no write to any `Media` row.
+ *
+ * `attestation: { is: null }` and not merely "or configured": a configured
+ * uploader who DID declare is judged by the declaration, in the arm beside
+ * this one, and a disclaiming declaration keeps the row out.
+ */
+const CONFIGURED_UPLOADER_UNDECLARED = {
+  attestation: { is: null },
+  user: { is: { configuredHandle: { not: null } } },
 };
 
 /**
@@ -480,7 +575,12 @@ const NOBODY_IDENTIFIABLE_SHOWN = {
  */
 export type MediaPublicRightsScope = {
   AND: [
-    { attestation: { is: typeof PUBLISHABLE_ATTESTATION } },
+    {
+      OR: [
+        { attestation: { is: typeof PUBLISHABLE_ATTESTATION } },
+        typeof CONFIGURED_UPLOADER_UNDECLARED,
+      ];
+    },
     { OR: [typeof NOBODY_IDENTIFIABLE_SHOWN, typeof PEOPLE_LAYER_CLEARED] },
     MediaAlcoholCommerceScope,
   ];
@@ -489,8 +589,14 @@ export type MediaPublicRightsScope = {
 export const PUBLIC_MEDIA_RIGHTS_SCOPE: MediaPublicRightsScope = {
   AND: [
     // K1, as a query: a declaration exists, at a version still in force, and
-    // does not disclaim the rights.
-    { attestation: { is: PUBLISHABLE_ATTESTATION } },
+    // does not disclaim the rights — or there is no declaration and the
+    // uploader is a configured user (ugcportal-ho7j).
+    {
+      OR: [
+        { attestation: { is: PUBLISHABLE_ATTESTATION } },
+        CONFIGURED_UPLOADER_UNDECLARED,
+      ],
+    },
     // K2, as a query: nobody identifiable is shown, or the PEOPLE layer is
     // cleared.
     { OR: [NOBODY_IDENTIFIABLE_SHOWN, PEOPLE_LAYER_CLEARED] },

@@ -111,8 +111,14 @@ Deliberately **not** implemented, because each would silently be the decision:
 ## Signing in is not publishing (`ugcportal-9gt1`)
 
 Being admitted by any of the three sources below lets somebody **sign in and
-upload**. For two of them — `src/config/users.ts` and `ALLOWED_SIGNIN_EMAILS`
-— that is all it does: neither puts anything on the public gallery. The third,
+upload**. For `ALLOWED_SIGNIN_EMAILS` that is all it does: it puts nothing on
+the public gallery. Since `ugcportal-ho7j`, being a configured person in
+`src/config/users.ts` (a `User` row with `configuredHandle` set) also means
+**uploads publish on upload, with no rights questions asked**. The upload is
+published only if the same material gates the manual publish route runs all
+pass (`publishGateRefusal`, `src/lib/publish-gates.ts`), and it stays
+unsellable without an attestation (see
+`docs/legal/upload-rights-attestation.md` §5). The third,
 `ADMIN_BOOTSTRAP_EMAILS`, is the exception: `reconcileBootstrapAdmin`
 (`src/lib/admin-bootstrap.ts:83`) promotes a listed address to `role: "ADMIN"`
 at sign-in, once, and `ADMIN` is exactly what `isPublishOperator` checks
@@ -163,7 +169,7 @@ every condition on the material — and a 403 with
 
 | Source | Effect |
 | --- | --- |
-| [`src/config/users.ts`](../src/config/users.ts) | The people this instance is for, each with the identities that belong to them. **Every identity listed here may sign in, and all of one person's identities share one user.** The usual place to add somebody (`ugcportal-t33p`). |
+| [`src/config/users.ts`](../src/config/users.ts) | The people this instance is for, each with the identities that belong to them. **Every identity listed here may sign in, and all of one person's identities share one user.** Since `ugcportal-ho7j` their uploads also publish on upload, without the rights questions (see "Signing in is not publishing" above). The usual place to add somebody (`ugcportal-t33p`). |
 | `ALLOWED_SIGNIN_EMAILS` | Comma-separated exact addresses permitted to sign in, each optionally bound to one provider with a `google:` or `facebook:` prefix. For somebody who is not (yet) a person in the array — a colleague who only needs to upload. |
 | `ADMIN_BOOTSTRAP_EMAILS` | First-admin bootstrap (`ugcportal-lu7`). Also grants sign-in — see below. |
 

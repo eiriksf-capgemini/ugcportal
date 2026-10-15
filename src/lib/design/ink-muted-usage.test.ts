@@ -327,37 +327,46 @@ const AUDITED_USAGE: Readonly<Record<string, OccurrenceClassification>> = {
   // text-ink-muted on the PLAIN canvas until ugcportal-7g2o fixed them (see
   // their own comments) — they are text-muted-foreground now, tracked by
   // dual-meaning-usage.test.ts, not by this file.
-  "src/app/upload/upload-form.tsx:867:\"text-sm text-ink-muted\"": {
+  "src/app/upload/upload-form.tsx:900:\"text-sm text-ink-muted\"": {
     surface: "bg-surface-1 (resting) / bg-surface-2 (dragging over) — the upload dropzone panel",
     pairingIds: ["ink-muted-on-surface-1", "ink-muted-on-surface-2"],
     lightRatio: 7.5212,
   },
-  "src/app/upload/upload-form.tsx:868:\"max-w-prose text-xs text-ink-muted\"": {
+  "src/app/upload/upload-form.tsx:901:\"max-w-prose text-xs text-ink-muted\"": {
     surface: "bg-surface-1 (resting) / bg-surface-2 (dragging over) — the upload dropzone panel",
     pairingIds: ["ink-muted-on-surface-1", "ink-muted-on-surface-2"],
     lightRatio: 7.5212,
   },
   // Inside the queue row's own nested bg-destructive-surface failure well
   // (the server's raw error detail).
-  "src/app/upload/upload-queue-list.tsx:203:\"mt-1 font-mono text-xs text-ink-muted\"": {
+  "src/app/upload/upload-queue-list.tsx:258:\"mt-1 font-mono text-xs text-ink-muted\"": {
     surface: "bg-destructive-surface (a failed upload's error detail)",
     pairingIds: ["muted-foreground-on-destructive-surface"],
     lightRatio: 7.7703,
   },
   // Three inside the queue row's own bg-surface-1 <li> (the status label,
-  // the mime-type/size line, and the "uploaded, publish it from the
-  // gallery" success note).
-  "src/app/upload/upload-queue-list.tsx:384:\"shrink-0 rounded-sm text-xs text-ink-muted outline-hidden focus:ring-3 focus:ring-ring/80\"": {
+  // the mime-type/size line, and the `successNote(item)` paragraph on a
+  // succeeded row, e.g. "Stored. The thumbnail is the watermarked preview;
+  // ...").
+  "src/app/upload/upload-queue-list.tsx:440:\"shrink-0 rounded-sm text-xs text-ink-muted outline-hidden focus:ring-3 focus:ring-ring/80\"": {
     surface: "bg-surface-1 (the queue row itself)",
     pairingIds: ["ink-muted-on-surface-1"],
     lightRatio: 8.4066,
   },
-  "src/app/upload/upload-queue-list.tsx:389:\"mt-1 text-xs text-ink-muted\"": {
+  "src/app/upload/upload-queue-list.tsx:445:\"mt-1 text-xs text-ink-muted\"": {
     surface: "bg-surface-1 (the queue row itself)",
     pairingIds: ["ink-muted-on-surface-1"],
     lightRatio: 8.4066,
   },
-  "src/app/upload/upload-queue-list.tsx:422:\"text-xs text-ink-muted\"": {
+  "src/app/upload/upload-queue-list.tsx:478:\"text-xs text-ink-muted\"": {
+    surface: "bg-surface-1 (the queue row itself)",
+    pairingIds: ["ink-muted-on-surface-1"],
+    lightRatio: 8.4066,
+  },
+  // A configured uploader's "Stored, but not published: <reason>" line
+  // (ugcportal-ho7j), rendered beside the success note above in the same
+  // bg-surface-1 <li>.
+  "src/app/upload/upload-queue-list.tsx:169:\"text-xs text-ink-muted\"": {
     surface: "bg-surface-1 (the queue row itself)",
     pairingIds: ["ink-muted-on-surface-1"],
     lightRatio: 8.4066,
@@ -514,12 +523,12 @@ describe("text-ink-muted usage is audited per occurrence, by surface and ratio",
     // `file:line` COORDINATES is unchanged by this - same count, same
     // numbers - only the content behind one of them is now a lie.
     const [victimKey] = Object.keys(AUDITED_USAGE).filter((key) =>
-      key.startsWith("src/app/upload/upload-form.tsx:867:"),
+      key.startsWith("src/app/upload/upload-form.tsx:900:"),
     );
     expect(victimKey, "fixture assumption: this occurrence still exists").toBeDefined();
     const victimLine = fileAndLineOf(victimKey);
 
-    const shiftedAwayKey = victimLine.replace(":867", ":9999") + ':"text-sm text-ink-muted"';
+    const shiftedAwayKey = victimLine.replace(":900", ":9999") + ':"text-sm text-ink-muted"';
     const unsafeNewKey = `${victimLine}:"text-ink-muted"`; // same file:line, different (shorter, fabricated) content
 
     const realFound = scanOccurrences();

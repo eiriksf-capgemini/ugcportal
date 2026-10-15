@@ -83,9 +83,28 @@ export type UploadFormProps = {
    * the picker says so rather than rendering an empty fieldset.
    */
   availableTags?: readonly SelectableTag[];
+  /**
+   * Whether the signed-in uploader is a CONFIGURED user
+   * (`User.configuredHandle` not null — src/config/users.ts), decided by the
+   * page on the server from the `User` row (ugcportal-ho7j).
+   *
+   * When true, the rights questions are not rendered and do not gate adding
+   * files, and no attestation parts are sent: POST /api/media accepts that
+   * from a configured uploader, and publishes the upload if the publish
+   * gates pass. Alt text is still required exactly as before.
+   *
+   * Defaults to false — today's form, questions and all — so a caller that
+   * does not pass it can only ever ask too much, never too little. It is an
+   * affordance, not the boundary: the route decides configured-ness again
+   * from the database, and a forged `true` here gets a 400.
+   */
+  uploaderConfigured?: boolean;
 };
 
-export function UploadForm({ availableTags = [] }: UploadFormProps) {
+export function UploadForm({
+  availableTags = [],
+  uploaderConfigured = false,
+}: UploadFormProps) {
   const inputId = useId();
   const [items, dispatch] = useReducer(uploadQueueReducer, [] as QueueItem[]);
   const [isDraggingOver, setDraggingOver] = useState(false);
@@ -407,7 +426,13 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
        * message on screen cannot describe a different condition from the one
        * that did the blocking.
        */
-      const submission = completedAttestation(attestation);
+      //
+      // NOT ASKED OF A CONFIGURED UPLOADER (ugcportal-ho7j): no questions
+      // are rendered for them, so there is nothing to gate on, and
+      // `undefined` sends no attestation parts at all.
+      const submission = uploaderConfigured
+        ? undefined
+        : completedAttestation(attestation);
       if (submission === null) {
         setAttestationRefused(true);
         return;
@@ -482,6 +507,7 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
       drain,
       dispatchQueue,
       selectedSlugs,
+      uploaderConfigured,
     ],
   );
 
@@ -747,18 +773,25 @@ export function UploadForm({ availableTags = [] }: UploadFormProps) {
         onCaptionChange={setCaption}
       />
 
-      <AttestationFields
-        draft={attestation}
-        refused={attestationRefused}
-        onAuthorshipChange={(value) =>
-          setAttestation((current) => setAttestationAuthorship(current, value))
-        }
-        onAnswerChange={(field, value) =>
-          setAttestation((current) =>
-            setAttestationAnswer(current, field, value),
-          )
-        }
-      />
+      {/*
+        Not rendered for a configured uploader (ugcportal-ho7j) — see
+        `uploaderConfigured` on the props. Everybody else gets the nine
+        questions, and the gate in `addFiles`, exactly as before.
+      */}
+      {uploaderConfigured ? null : (
+        <AttestationFields
+          draft={attestation}
+          refused={attestationRefused}
+          onAuthorshipChange={(value) =>
+            setAttestation((current) => setAttestationAuthorship(current, value))
+          }
+          onAnswerChange={(field, value) =>
+            setAttestation((current) =>
+              setAttestationAnswer(current, field, value),
+            )
+          }
+        />
+      )}
 
       <TagPicker
         availableTags={availableTags}

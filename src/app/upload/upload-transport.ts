@@ -159,8 +159,10 @@ export type UploadRequest = {
   tags?: readonly string[];
   /**
    * Alt text and caption for this file (ugcportal-gwr). Both optional at this
-   * layer — the server does not require `altText` at upload, only at publish
-   * (POST /api/media/[id]/publish) — and an absent or empty value sends no
+   * layer — the server does not require `altText` to store an upload, only
+   * to publish it (the alt-text gate in src/lib/publish-gates.ts, run by
+   * POST /api/media/[id]/publish and, for a configured uploader's
+   * auto-publish, by POST /api/media) — and an absent or empty value sends no
    * part at all, the same "no-op path is unchanged" treatment `tags` gets.
    */
   altText?: string;
@@ -168,12 +170,14 @@ export type UploadRequest = {
   /**
    * The uploader's rights attestation for this file (ugcportal-15r).
    *
-   * OPTIONAL AT THIS LAYER AND REQUIRED BY THE SERVER, which is the opposite
-   * of the asymmetry `altText` carries one line up and is worth saying why.
+   * OPTIONAL AT THIS LAYER AND REQUIRED BY THE SERVER for everybody but a
+   * configured uploader (ugcportal-ho7j), which is the opposite of the
+   * asymmetry `altText` carries one line up and is worth saying why.
    * `altText` is optional at the server too; this is optional here only
    * because this module is a transport and has no business deciding what a
-   * valid upload is — POST /api/media answers 400 for a request without one,
-   * and `UploadForm` refuses to queue a file before it gets here. Making it
+   * valid upload is — POST /api/media answers 400 for a request without one
+   * unless the uploader's `User` row is configured, and `UploadForm` refuses
+   * to queue a file without one unless it was told the uploader is. Making it
    * required in this type would mean every transport test in the repo had to
    * construct a nine-answer object to assert something about a stall timer.
    */
@@ -272,8 +276,9 @@ export function uploadFile(
       OMITTED ENTIRELY when absent rather than sent as empty parts, the same
       "the no-op path makes the request it always made" treatment tags, alt
       text and the caption get above. A request with no attestation is one the
-      server refuses with a 400 naming the missing field, which is a better
-      answer than nine empty strings.
+      server refuses with a 400 naming the missing field — unless the
+      uploader is a configured user, who is not asked (ugcportal-ho7j) —
+      which is a better answer than nine empty strings.
     */
     if (attestation !== undefined) {
       for (const [name, value] of attestationFormParts(attestation)) {
