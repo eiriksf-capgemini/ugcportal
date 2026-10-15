@@ -358,11 +358,11 @@ const AUDITED_USAGE: Record<string, Partial<Record<DualMeaningToken, number>>> =
     "text-foreground": 7,
     "text-muted-foreground": 10,
   },
-  // text-ink: 1 (low finding 5) - the queued file's name, on the upload
-  // page's own plain canvas (ugcportal-n3c).
+  // text-ink: 1 (low finding 5) - the queued file's name (ugcportal-n3c),
+  // inside the queue row's own bg-surface-1 <li>.
   //
   // text-ink: 1 -> 2 (ugcportal-ho7j): the "Published. View its public
-  // page" line, in the same queue row as the file's name.
+  // page" line, in the same bg-surface-1 queue row as the file's name.
   "src/app/upload/upload-queue-list.tsx": { "text-ink": 2 },
   // text-ink: 1 as of ugcportal-6uc2 (phase 2), was 2 (ugcportal-qnq9.16,
   // item 4 of the lows deferred from PR #93's round-6 review): the count

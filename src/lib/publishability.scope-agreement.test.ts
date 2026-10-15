@@ -9,7 +9,8 @@ import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db"
  * other on a real database.
  *
  * `publishabilityBlocker` (TypeScript, one row at a time) decides a publish
- * REQUEST against the rights rule alone — the attestation and the PEOPLE
+ * — a manual publish request, or a configured uploader's auto-publish at
+ * upload (ugcportal-ho7j) — against the rights rule alone — the attestation and the PEOPLE
  * layer. `PUBLIC_MEDIA_RIGHTS_SCOPE` (a Prisma `where`, spread into
  * `PUBLIC_MEDIA_SCOPE`) decides what every anonymous surface SERVES, and
  * since ugcportal-pgpq that scope also carries a third arm — alkoholloven

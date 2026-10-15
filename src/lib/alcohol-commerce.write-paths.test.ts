@@ -83,9 +83,10 @@ const GATE = "benefitAttachmentRefusal";
  *   - `benefit-source.ts` is the module that mints the row, and it is called
  *     BY that route inside the gated branch rather than reaching the gate
  *     itself — a predicate-free data-access helper, deliberately;
- *   - the publish route READS the pointer to refuse on it. It is a read, not
- *     a write, and it is in this list only because `benefitSource: {` matches
- *     its `select`.
+ *   - the shared publish gates (`lib/publish-gates.ts`, called by the
+ *     publish route and, since ugcportal-ho7j, by POST /api/media) READ the
+ *     pointer to refuse on it. It is a read, not a write, and the file is in
+ *     this list only because `benefitSource: {` matches its `select`.
  *
  * `lib/alcohol-commerce.ts` is deliberately NOT here: it is the gate, it
  * names the brand only in a type, and it matches no needle — so listing it

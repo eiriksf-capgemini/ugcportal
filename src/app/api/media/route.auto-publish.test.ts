@@ -125,8 +125,7 @@ beforeEach(async () => {
     data: [
       // Not ADMIN on purpose: auto-publish does not ask the operator
       // question, so a configured person who is an ordinary USER still
-      // publishes. (The configured people are admins in practice; this
-      // proves the role is not what decides.)
+      // publishes. This proves the role is not what decides.
       {
         id: CONFIGURED,
         email: "configured-ho7j@example.com",

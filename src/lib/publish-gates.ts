@@ -25,7 +25,9 @@ import type { GateAttestation } from "@/lib/resale-rights";
  * its own rather than a block inside one route:
  *
  *   - POST /api/media/[id]/publish, the operator's manual publish, which
- *     asked these questions inline until this bead moved them here verbatim;
+ *     asked these questions inline until this bead moved the checks here
+ *     unchanged (their comments came too, with pointers to code that stayed
+ *     in that route repointed);
  *   - POST /api/media, which publishes a CONFIGURED user's upload in the
  *     same transaction that creates the row, if and only if this function
  *     answers null.
@@ -134,8 +136,9 @@ export async function publishGateRefusal(
   userId: string,
   sources: PublishGateSources,
 ): Promise<PublishGateRefusal | null> {
-  // Alt text is REQUIRED TO PUBLISH (ugcportal-gwr K1) — not at upload, and
-  // not at the schema layer (Media.altText is nullable; see that column's
+  // Alt text is REQUIRED TO PUBLISH (ugcportal-gwr K1) — not to store an
+  // upload (a configured uploader's upload with none is stored unpublished),
+  // and not at the schema layer (Media.altText is nullable; see that column's
   // comment in prisma/schema.prisma). This is the one place that rule is
   // enforced, same spirit as the preview check below: well-formed, authorized
   // request, refused because of the row's own current state, so 400 — a
@@ -155,10 +158,10 @@ export async function publishGateRefusal(
   // rename endpoint only touches `originalName`), so there is no concurrent
   // writer for a `where: { altText: { not: null } }` clause to defend
   // against yet. The day a second writer can null it out (an edit surface,
-  // say), this needs the same treatment `previewId`'s repair logic in
-  // the manual route got — but adding it now, against nothing, would be exactly the kind of
-  // check the manual route's own comments warn against: one that reads as
-  // a defence and is not exercised by anything.
+  // say), this needs the same treatment `previewId`'s repair logic in the
+  // manual route got — but adding it now, against nothing, would be exactly
+  // the kind of check the manual route's own comments warn against: one
+  // that reads as a defence and is not exercised by anything.
   //
   // GATED ON `publishedAt === null` — i.e. only on an actual TRANSITION,
   // never on an already-published row. Without
@@ -199,7 +202,7 @@ export async function publishGateRefusal(
   // the row's own current state.
   //
   // A SEPARATE READ rather than widening `requireOwnedMedia`. That gate is
-  // shared by PATCH, DELETE, tags and both handlers here, and none of the
+  // shared by PATCH, DELETE, tags and both handlers of the manual route, and none of the
   // others has any use for the disclosure — adding it to the gate would make
   // every one of them pay for a join to answer a question only this branch
   // asks. Publishing is a rare, deliberate act; one extra round trip on it is
@@ -323,8 +326,8 @@ export async function publishGateRefusal(
   // an alcohol answer — and a 400 naming the field is the right shape for
   // that. These refuse the REQUEST as semantically impossible given records
   // that live outside this form entirely: the fix is a re-upload through
-  // the flow that asks the rights questions, or an administrator recording
-  // a clearance. The body carries `blocker`, a closed-set code, rather than
+  // the flow that asks the rights questions (everybody but a configured
+  // uploader is asked them), or an administrator recording a clearance. The body carries `blocker`, a closed-set code, rather than
   // `field`, for the same reason.
   //
   // NOT GATED ON `publishedAt === null`, matching the two refusals above
@@ -412,7 +415,8 @@ export type PublishGateClient = Pick<
  * The gates' sources, read from the database for one row.
  *
  * `uploaderConfigured`, when the caller already knows it (POST /api/media
- * decided it once, from the `User` row, before any work), is used as given
+ * decided it once, from the `User` row, before the watermark and storage
+ * work), is used as given
  * rather than read a second time; otherwise it is read from the uploader's
  * `User` row on demand — never from the session or the request.
  */

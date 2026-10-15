@@ -294,7 +294,8 @@ describe("the tag picker on the upload page", () => {
     // whether or not a subject vocabulary exists. The marker attribute is
     // what tells the two apart — `not.toContain("<fieldset")` would now be
     // asserting that the attestation is absent, which is the opposite of
-    // what this page should do.
+    // what this page should do for this file's default user, who is not
+    // configured (a configured user gets no attestation, ugcportal-ho7j).
     expect(markup).not.toContain('data-upload-tag-picker=""');
   });
 

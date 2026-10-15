@@ -3,8 +3,9 @@
 **Attestation version:** `2026-10-08.1`
 
 The questions every uploader answers about every file, at the moment they
-upload it, except the configured users, who are not asked (§5). Filed from `docs/legal/manual-upload-rights-review.md` §3.1 and
-built as `ugcportal-15r`.
+upload it, except the configured users, who are not asked (§5). Filed from
+`docs/legal/manual-upload-rights-review.md` §3.1 and built as
+`ugcportal-15r`.
 
 ## 0. Why this document exists
 

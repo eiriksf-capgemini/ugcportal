@@ -345,8 +345,9 @@ const AUDITED_USAGE: Readonly<Record<string, OccurrenceClassification>> = {
     lightRatio: 7.7703,
   },
   // Three inside the queue row's own bg-surface-1 <li> (the status label,
-  // the mime-type/size line, and the "uploaded, publish it from the
-  // gallery" success note).
+  // the mime-type/size line, and the `successNote(item)` paragraph on a
+  // succeeded row, e.g. "Stored. The thumbnail is the watermarked preview;
+  // ...").
   "src/app/upload/upload-queue-list.tsx:440:\"shrink-0 rounded-sm text-xs text-ink-muted outline-hidden focus:ring-3 focus:ring-ring/80\"": {
     surface: "bg-surface-1 (the queue row itself)",
     pairingIds: ["ink-muted-on-surface-1"],

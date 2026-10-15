@@ -2970,9 +2970,11 @@ describe("POST /api/media — subject tags", () => {
 /**
  * Alt text and caption at upload time (ugcportal-gwr).
  *
- * NOT required here — see the publish route's own tests for the K1 gate that
- * actually enforces "required to publish". What this route refuses is a
- * value that is present and malformed (too long, or carrying a bidi
+ * NOT required here to STORE an upload — see the publish route's own tests
+ * and src/lib/publish-gates.test.ts for the K1 gate that enforces "required
+ * to publish", which this route also runs for a configured uploader's
+ * auto-publish (the describe at the bottom of this file). What this route
+ * refuses is a value that is present and malformed (too long, or carrying a bidi
  * override), the same "fails the whole upload rather than being silently
  * dropped" treatment the subject-tags block above already covers, and for
  * the same reason.
@@ -3149,7 +3151,9 @@ describe("POST /api/media — alt text and caption", () => {
  * ugcportal-15r K1 and K3 at the route: POST /api/media collects a complete
  * attestation, stores an explicit answer for every question with the version
  * the uploader was shown, names the authenticated uploader as the actor, and
- * refuses rather than defaulting anything.
+ * refuses rather than defaulting anything. Every case here is an uploader
+ * who is NOT configured (this file's default); a configured uploader who
+ * sends no parts at all is the describe at the bottom (ugcportal-ho7j).
  */
 describe("POST /api/media — the uploader's rights attestation (ugcportal-15r)", () => {
   function imageFile() {
@@ -3266,7 +3270,7 @@ describe("POST /api/media — the uploader's rights attestation (ugcportal-15r)"
     });
   }
 
-  it("refuses an upload that carries no attestation at all", async () => {
+  it("refuses an upload that carries no attestation at all, from an uploader who is not configured", async () => {
     const response = await POST(buildRequest(imageFile(), [], { attestation: [] }));
 
     expect(response.status).toBe(400);

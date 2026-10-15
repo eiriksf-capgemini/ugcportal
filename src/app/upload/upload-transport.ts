@@ -159,8 +159,10 @@ export type UploadRequest = {
   tags?: readonly string[];
   /**
    * Alt text and caption for this file (ugcportal-gwr). Both optional at this
-   * layer — the server does not require `altText` at upload, only at publish
-   * (POST /api/media/[id]/publish) — and an absent or empty value sends no
+   * layer — the server does not require `altText` to store an upload, only
+   * to publish it (the alt-text gate in src/lib/publish-gates.ts, run by
+   * POST /api/media/[id]/publish and, for a configured uploader's
+   * auto-publish, by POST /api/media) — and an absent or empty value sends no
    * part at all, the same "no-op path is unchanged" treatment `tags` gets.
    */
   altText?: string;

@@ -249,9 +249,11 @@ const TRIAGED_ALCOHOL_FREE = { depictsAlcohol: false as boolean | null };
  * Spread into the default for every case in this file for the same reason
  * `altText` is present on `unpublishedMedia` and CHECKED_BRAND on the
  * disclosure fixtures: from this bead on, an upload with no declaration
- * cannot be published at all, so a fixture without one would make every case
- * above fail for THIS bead's reason instead of its own. The cases that ARE
- * about the declaration override it explicitly.
+ * cannot be published unless its uploader is a configured user
+ * (ugcportal-ho7j; this file's owner is not — see `userFindUniqueMock`), so a
+ * fixture without one would make every case above fail for THIS bead's
+ * reason instead of its own. The cases that ARE about the declaration
+ * override it explicitly.
  */
 const VALID_ATTESTATION = {
   attestedByUserId: OWNER_ID,
@@ -1408,7 +1410,7 @@ describe("publishing is visibility only, never sellability (K4)", () => {
  * two refusals be told apart from each other rather than both just reading
  * "refused".
  */
-describe("publishing requires the uploader's declaration (ugcportal-3ae K1)", () => {
+describe("publishing requires the uploader's declaration, for an owner who is not configured (ugcportal-3ae K1)", () => {
   it("refuses with 422 and `attestation_missing`, and writes nothing", async () => {
     signedInAs(OWNER_ID);
     mediaFindUniqueMock.mockResolvedValue(unpublishedMedia);
@@ -1430,8 +1432,9 @@ describe("publishing requires the uploader's declaration (ugcportal-3ae K1)", ()
   it("refuses an already-published row too, rather than answering an idempotent 200", async () => {
     // The two refusals above this one in the handler are not gated on
     // `publishedAt === null` either, and for the reason stated there: a
-    // published row that fails this IS the row K3 says must not be on a
-    // public surface, and PUBLIC_MEDIA_SCOPE has already stopped serving it.
+    // published row with no declaration from an uploader who is not
+    // configured (this file's owner) IS the row K3 says must not be on a
+    // public surface, and PUBLIC_MEDIA_SCOPE does not serve it.
     signedInAs(OWNER_ID);
     mediaFindUniqueMock.mockResolvedValue(publishedMedia);
     attestationFindUniqueMock.mockResolvedValue(null);
@@ -1701,7 +1704,9 @@ describe("publishing something showing a person requires a PEOPLE clearance (ugc
  * ---------------------------------------------------------------------------
  *
  * Every case above this point signs in as an operator, because since this
- * bead that is what it takes to publish anything at all. These are the cases
+ * bead that is what it takes to publish anything through this route (POST
+ * /api/media's auto-publish for a configured uploader, ugcportal-ho7j, does
+ * not ask it). These are the cases
  * where NOT being one is the subject.
  *
  * What makes them worth more than "a non-admin gets 403": each one arranges

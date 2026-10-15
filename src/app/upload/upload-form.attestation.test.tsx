@@ -17,7 +17,10 @@ import { UploadForm } from "./upload-form";
 /**
  * ugcportal-15r K1 at the form: every question in §3.1 is actually asked, an
  * unanswered one refuses the upload rather than being defaulted, and what
- * goes on the wire carries an explicit answer for each.
+ * goes on the wire carries an explicit answer for each — for an uploader who
+ * is not configured, which is what `mount()` renders by default. A
+ * configured uploader is asked nothing (the ugcportal-ho7j describes at the
+ * bottom).
  *
  * A REAL DOM AND A REAL CLIENT ROOT rather than `renderToStaticMarkup`,
  * following upload-form.clock.test.tsx: the claim is not only "the questions

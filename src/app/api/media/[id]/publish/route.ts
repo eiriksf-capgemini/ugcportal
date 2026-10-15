@@ -67,8 +67,12 @@ export async function POST(_request: Request, { params }: RouteContext) {
   // AND OWNING THE ROW IS NOT PERMISSION TO PUBLISH IT (ugcportal-9gt1).
   // `requireOwnedMedia` above answers "is this row yours"; this answers "may
   // you make anything public at all", and until this check existed nothing
-  // asked the second question. The rule — only operators publish — held
-  // solely because `ALLOWED_SIGNIN_EMAILS` happens to list two people, so
+  // asked the second question. (That is the rule for THIS route. Since
+  // ugcportal-ho7j POST /api/media also publishes, for a configured uploader
+  // only, and does not ask it: configured-ness, read from the `User` row, is
+  // that route's answer to "may you make this public".) The rule — only
+  // operators publish — held solely because `ALLOWED_SIGNIN_EMAILS` happened
+  // to list two people, so
   // adding a third address to let somebody upload would silently have handed
   // them the public gallery. See src/lib/publish-authority.ts for the
   // decision itself, and for why "may publish" is asked as its own question
@@ -287,7 +291,9 @@ export async function POST(_request: Request, { params }: RouteContext) {
  * having less to verify. Every other refusal POST applies is a condition on
  * making something public, and withdrawing it moves in the safe direction:
  * the gate exists so that material reaches the public gallery only by an
- * operator's decision, not so that it STAYS there against its owner's. An
+ * operator's decision (or, since ugcportal-ho7j, by a configured user's
+ * upload passing the publish gates), not so that it STAYS there against its
+ * owner's. An
  * owner who is demoted, or who was never an operator but holds a row
  * published before this rule existed, must still be able to take their own
  * photograph down — gating this would turn a safety check into a trap, and

@@ -466,8 +466,11 @@ async function handleUpload(
 
   /*
    * Alt text and caption (ugcportal-gwr). NOT required here — see
-   * MAX_ALT_TEXT_LENGTH's docstring and the publish route, which is the one
-   * place `altText` is actually enforced. What IS refused here is a value
+   * MAX_ALT_TEXT_LENGTH's docstring. `altText` is enforced at PUBLISH, by
+   * the alt-text gate in `publishGateRefusal` (src/lib/publish-gates.ts),
+   * which the manual publish route runs and which this route runs too for a
+   * configured uploader's auto-publish (ugcportal-ho7j): a configured upload
+   * with no alt text is stored unpublished. What IS refused here is a value
    * that is present and malformed: too long, or carrying a bidi override —
    * the same "fails the whole upload rather than being silently dropped"
    * treatment `tags` gets above, and for the same reason: both are strings a
@@ -546,10 +549,11 @@ async function handleUpload(
    *
    * REQUIRED, unlike alt text and the caption immediately above, and that
    * asymmetry is the whole bead. (One exception since ugcportal-ho7j: a
-   * configured uploader who sends no parts at all — see the next paragraph.) Alt text is enforced at publish because a
-   * row with none is merely unpublishable; an upload with no attestation is a
-   * file nobody ever asked the only person who could know anything about. The
-   * gate refuses it (`attestation_missing`), so accepting the bytes and
+   * configured uploader who sends no parts at all — see "EXCEPT FROM A
+   * CONFIGURED UPLOADER" below.) Alt text is enforced at publish because a
+   * row with none is merely unpublishable; an upload with no attestation is
+   * a file nobody ever asked the only person who could know anything about.
+   * The gate refuses it (`attestation_missing`), so accepting the bytes and
    * sorting it out later would only mean storing a file that can never be
    * sold and whose uploader has since closed the tab.
    *

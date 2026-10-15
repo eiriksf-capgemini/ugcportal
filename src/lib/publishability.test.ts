@@ -97,7 +97,7 @@ describe("the closed set of publish blockers", () => {
   });
 });
 
-describe("K1: publishing requires the uploader's own declaration", () => {
+describe("K1: publishing requires the uploader's own declaration (uploader not configured)", () => {
   it("refuses an upload with no attestation at all", () => {
     expect(publishabilityBlocker(upload({ attestation: null }))).toBe(
       "attestation_missing",

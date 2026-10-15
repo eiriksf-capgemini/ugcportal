@@ -35,7 +35,10 @@ import {
  * showing nothing until an admin had priced it.
  *
  * TWO EXPRESSIONS OF ONE RULE, AND BOTH LIVE HERE. `publishabilityBlocker`
- * below is the TypeScript predicate the publish route calls on one row;
+ * below is the TypeScript predicate run on one row whenever something is
+ * published — by the shared publish gates (src/lib/publish-gates.ts), which
+ * both POST /api/media/[id]/publish and, for a configured uploader's
+ * auto-publish, POST /api/media call (ugcportal-ho7j);
  * `PUBLIC_MEDIA_RIGHTS_SCOPE` is the same rule as a Prisma `where`, spread
  * into `PUBLIC_MEDIA_SCOPE` (src/lib/public-media.ts) so that every
  * anonymous reader — the paginated feed, the server-rendered home page, the
@@ -65,9 +68,13 @@ import {
  * constant below.
  *
  * WHAT THIS DELIBERATELY DOES NOT DECIDE. Whether self-service
- * publish-by-default is the right model at all is ugcportal-55nt's question
- * and is still open; nothing here answers it. This adds conditions to
- * publishing, which is strictly the safer direction under either answer.
+ * publish-by-default is the right model at all is ugcportal-55nt's question.
+ * ugcportal-ho7j answered it for the CONFIGURED users only, on the
+ * operator's instruction: their uploads publish on upload, through the same
+ * gates, and a missing declaration is not a condition for them. For
+ * everybody else it is still open and nothing here answers it; for them
+ * this module only adds conditions to publishing, which is strictly the
+ * safer direction under either answer.
  * What a clearance lapsing AFTER publication does to a row that is already
  * public is ugcportal-nffp. Per-layer clearance WRITES are ugcportal-qfy9,
  * which merged as `ba9991f` while this was under review: the admin curation
@@ -147,8 +154,11 @@ const PUBLISH_ATTESTATION_BLOCKERS: Record<
  * Typed as a full `Record<PublishBlocker, string>`, so a blocker added above
  * with no message fails `tsc` — not review, and not a test.
  *
- * WHERE THEY ARE SHOWN, as of ba9991f: in the 422 body. There is no
- * owner-facing publish control to put them beside yet. Evidence, and the
+ * WHERE THEY ARE SHOWN: in the manual publish route's 422 body, and — since
+ * ugcportal-ho7j — in POST /api/media's 201 `publishRefusal` for a
+ * configured uploader's upload that was stored but not published, which the
+ * upload page's queue row renders. There is still no owner-facing publish
+ * control to put them beside. Evidence for that, and the
  * command to re-check it rather than a count that rots:
  * `grep -rn "api/media/.*publish" src` — outside the route's own directory
  * every hit is a comment or a test, and none of them is a `fetch`, a form
@@ -172,7 +182,10 @@ export const PUBLISH_BLOCKER_MESSAGES: Record<PublishBlocker, string> = {
     "This item shows an identifiable person and nobody has cleared that yet, so it cannot be made public (åndsverkloven § 104, GDPR art 9). An administrator has to record a PEOPLE clearance for it first.",
 };
 
-/** The refusal body the publish route answers with. */
+/**
+ * The refusal body the publish gates answer with — the manual route's 422
+ * body, and POST /api/media's `publishRefusal` (ugcportal-ho7j).
+ */
 export type PublishRefusal = {
   readonly error: string;
   readonly blocker: PublishBlocker;
@@ -185,7 +198,9 @@ export type PublishRefusal = {
  * `depictsPeople` is the ADMIN's answer to the people question, and it is
  * read alongside the uploader's own because the two can disagree and the
  * dangerous direction is a `no`. Either one saying `yes` means a person is
- * in the frame; it takes both to mean nobody is. Note what that does NOT do:
+ * in the frame; it takes both to mean nobody is — or, when there is no
+ * declaration at all (a configured uploader's, ugcportal-ho7j), the listing
+ * alone. Note what that does NOT do:
  * it does not require the admin to have answered. A null here is "nobody has
  * triaged this", which is the state of every upload on this site, and
  * demanding an admin answer before an owner may publish their own photograph
@@ -240,7 +255,7 @@ export type PublishabilityUpload = {
  * `MEDIA_GATE_SELECT` rather than re-spelled.
  *
  * One copy, so a tenth attestation question cannot be added to the gate's
- * select and left out of the publish route's — which would read as
+ * select and left out of the publish gates' — which would read as
  * `undefined` on the row and be refused as `attestation_incomplete` on every
  * publish, a site-wide outage rather than a leak, but still a silent
  * divergence between two selects that are meant to be the same question.
@@ -366,7 +381,8 @@ export function publishRightsRefusal(
  * ---------------------------------------------------------------------------
  *
  * K3 is the load-bearing criterion of this bead and this is the part that
- * carries it. The predicate above runs on a publish REQUEST, so it governs
+ * carries it. The predicate above runs when a row is published (a manual
+ * publish request, or a configured uploader's auto-publish), so it governs
  * rows that cross the line from now on and nothing else. Every row published
  * before it existed — and every row whose clearance situation changed since —
  * is still sitting in the table, and every anonymous surface reads it —

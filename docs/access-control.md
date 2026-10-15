@@ -169,7 +169,7 @@ every condition on the material — and a 403 with
 
 | Source | Effect |
 | --- | --- |
-| [`src/config/users.ts`](../src/config/users.ts) | The people this instance is for, each with the identities that belong to them. **Every identity listed here may sign in, and all of one person's identities share one user.** The usual place to add somebody (`ugcportal-t33p`). |
+| [`src/config/users.ts`](../src/config/users.ts) | The people this instance is for, each with the identities that belong to them. **Every identity listed here may sign in, and all of one person's identities share one user.** Since `ugcportal-ho7j` their uploads also publish on upload, without the rights questions (see "Signing in is not publishing" above). The usual place to add somebody (`ugcportal-t33p`). |
 | `ALLOWED_SIGNIN_EMAILS` | Comma-separated exact addresses permitted to sign in, each optionally bound to one provider with a `google:` or `facebook:` prefix. For somebody who is not (yet) a person in the array — a colleague who only needs to upload. |
 | `ADMIN_BOOTSTRAP_EMAILS` | First-admin bootstrap (`ugcportal-lu7`). Also grants sign-in — see below. |
 
