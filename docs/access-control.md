@@ -420,7 +420,8 @@ permission, so an identity removed from it is no longer permitted *by it*:
   on whether that identity ever signed in through the array:
   * **never** — it gets an **ordinary, handle-less user**, exactly as any
     other allowlisted address does, linked to nobody;
-  * **it had** — its `Account` row still points at the person's old user, and
+  * **it had**, and the person was removed from the array or dropped whole —
+    its `Account` row still points at the person's old user, and
     `getUserByAccount` (not wrapped) resolves the sign-in to that row, with
     the **stale handle still on it**. That row is no longer configured for
     anything: `findConfiguredUser` does not match the identity, so nothing is
@@ -432,7 +433,12 @@ permission, so an identity removed from it is no longer permitted *by it*:
     not needed to take back publish-on-upload. Another of that person's
     identities that was never linked, arriving at the same address as the
     old row's `User.email`, meets the same `OAuthAccountNotLinked` refusal
-    the next paragraph describes.
+    the next paragraph describes;
+  * **it had**, but only that identity was dropped and the person is still
+    kept through their others — `getUserByAccount` (not wrapped) resolves it
+    to that person's row, which is still configured: its handle is still in
+    `CURRENT_CONFIGURED_HANDLES`, so `isConfiguredUser` answers `true`. Only
+    the identity's linking for new sign-ins is lost.
 
 There is one more way it can fail, and it is the case the drop exists to
 prevent: if two people were listed under one address and an entry now admits
