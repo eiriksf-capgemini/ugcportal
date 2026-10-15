@@ -17,9 +17,9 @@ Parsed from the bead's notes with a regex over entry labels on 2026-10-15: 66 la
 
 Beside those: 15 unnumbered measurement entries (section D and the `===` headers of 10-09/10: the #207 blind spot, prose churn on #209, splice damage on #208, the three corrections to the #207 story, and the rest) and 3 inline B-side incidents (the yzo7 title that kept its descoped half; an agent ending its turn on a background wait, z4nh; a reviewer removing the implementer's worktree, PR #211).
 
-Three things the table says. The orchestrator caused 37 of 66 entries, more than agents and tooling together, and the section-A preamble says why that share matters: a brief defect reaches every agent it is sent to — A1 went into five briefs, and B2's three identical false zeroes came from one instruction. Second, all 18 unmarked entries are orchestrator-caused: A13–A30 of 10-09/10 each state a rule and none says whether a bead owns it, against the catalogue's own opening sentence ("says whether it is owned"); they are counted as unowned here. Third, a memory is a weaker owner than a bead: A13 (10-09) is the orchestrator committing B1 twenty minutes after cataloguing it, and A24 is A4 repeated after its memory became a flat prohibition.
+Three things the table says. The orchestrator caused 37 of 66 entries, more than agents and tooling together, and the section-A preamble says why that share matters: a brief defect reaches every agent it is sent to — A1 went into five briefs, and B2's three identical false zeroes came from one instruction. Second, 18 of the 22 unmarked entries are the orchestrator's A13–A30 of 10-09/10, none of which says whether a bead owns it, against the catalogue's own opening sentence ("says whether it is owned"); the other four are B3, B8, C8 and C12. All 22 are counted as unowned here. Third, a memory is a weaker owner than a bead: A13 (10-09) is the orchestrator committing B1 twenty minutes after cataloguing it, and A24 is A4 repeated after its memory became a flat prohibition.
 
-Three UNOWNED items have since acquired owners the catalogue does not record (read from `bd show` 2026-10-15): C5 (CI `skipping` reads as failure) was fixed by `ugcportal-h0ef`, PR #232; C1's "consider a bead" became `ugcportal-kssp`, PR #229, which is why `sweep-candidates` now prints a scan block; C3's `ugcportal-l99p` shipped as PR #205.
+Three things moved after the entries were written (read from `bd show` 2026-10-15): the one UNOWNED item among them, C5 (CI `skipping` reads as failure), was fixed by `ugcportal-h0ef`, PR #232; C1 (owned `ugcportal-fgcb`) says "consider a bead" for the sweep's false zero, and that became `ugcportal-kssp`, PR #229, which is why `sweep-candidates` now prints a scan block; C3's owner `ugcportal-l99p` shipped as PR #205.
 
 ## 2. The patterns that cost the most
 
@@ -43,13 +43,13 @@ Cost: the largest token line in the catalogue. The stopping rule is behaving as 
 
 Entries: A1, A3, A10 (memories); A2, A7, A11, A12 (UNOWNED); A17, A19, A21, A23, A26, A27, A28, A29, A30 and the cycle-marker correction (no marker). The catalogue's tally at A30: ten errors, "nine transcription, one causal".
 
-A stale baseline (204/4553 for a true 205/4584) in five briefs (A1); a wrong advisory severity that cost #191 a blocking round (A3); a fix authorised at #201's cap that zeroed two real historical findings on #131 and #193 (A10); a bead id that never existed (A17); counts relayed to Eirik and later measured false — 29 against 28 border sites (A23), a matrix cell contradicting the leak the bead fixes (A26), 29/11 against 16/6 usages (A27); two changes credited to the wrong PR (A29); a causal story about #207 told three times and wrong twice.
+A stale baseline (204/4553 for a true 205/4584) in five briefs (A1); a wrong advisory severity that cost #191 a blocking round (A3); a fix authorised at #201's cap that zeroed two real historical findings on #131 and #193 (A10); a bead id that never existed (A17); counts written down and later measured false — 29 against 28 border sites, relayed to Eirik three times (A23), a matrix cell in a bead's notes contradicting the leak the bead fixes (A26), 29/11 against 16/6 usages in 7g2o's premise (A27); two changes credited to the wrong PR (A29); a causal story about #207 told three times and wrong twice.
 
-Cost: A3 one round; A10 one cap escalation and a regression on real data; the rest caught before any cost (cost not recorded) by one control, nine for nine (A29): briefs that asked the agent to re-derive and report discrepancies. `dispatch-bead` now carries "never enumerate a set in a brief from memory" for implementer briefs. Review briefs and reports to Eirik (A14, A21, A26) have no such rule: `ugcportal-4bok`, filed from this document.
+Cost: A3 one round; A10 one cap escalation and a regression on real data; the rest caught before any cost (cost not recorded) — A2, A11 and A12 by the orchestrator's own re-check, and the nine errors A29 tallies by one control, nine for nine: briefs that asked the agent to re-derive and report discrepancies. `dispatch-bead` now carries "never enumerate a set in a brief from memory" for implementer briefs. Review briefs and reports to Eirik (A14, A21, A23) have no such rule: `ugcportal-4bok`, filed from this document.
 
 ### 2.4 Instruments that report a reassuring zero
 
-Entries: B2 and C1 (memory, then `ugcportal-kssp`, PR #229); C3 (`ugcportal-l99p`, PR #205); C2 (`ugcportal-fgcb`, open); A16, A18, A20, A23 (no marker); A15/14 (UNOWNED).
+Entries: B2 (memory) and C1 (owned `ugcportal-fgcb`; the sweep's false zero shipped as `ugcportal-kssp`, PR #229); C3 (`ugcportal-l99p`, PR #205); C2 (`ugcportal-fgcb`, open); A16, A18, A20, A23 (no marker); A15/14 (UNOWNED).
 
 `sweep-candidates` reported 0 on #192, #195 and #194 against real figures of 4, 19 and 42, each a blocking round-1 finding (B2); #196 reported 0, then 42 after committing (C1). `.next/standalone` doubled the suite (462/9256 against 225/4999) until the pre-push hook refused a good push on #203 (C3). A silenced stderr hid two failed `bd` writes (A16); a wrong JSON field printed "UNREACHABLE: 0" against a true 10 (A18); `bd list --all` hid two gate beads (A20).
 
@@ -69,7 +69,7 @@ Entries: A19/14, B11, B10, C18, B6 (all UNOWNED); the z4nh "ended its turn on wa
 
 Four reviewer runs on #244/#245 sat ten minutes with no output inside an image build, a 30-minute suite under load and a lock check, and the orchestrator finished the reviews inline (A19/14); the #235 round-5 fix agent stalled 600 s after pushing (B11); the #201 round-6 fix and the z4nh round-4 fix each ended on "waiting for" a background task that cannot resume them (B6, 10-09). The 7sjc implementer and the cut-release agent were blocked by the auto-mode permission check on `bd show`, `bd update --claim`, `git push` and `gh pr comment`, stopped correctly and handed back (B10, C18).
 
-Cost: "a full handback and a human round-trip" each (C18); tokens not recorded. The worker definitions say foreground with `timeout: 600000` and never background; A19/14 says background anything over eight minutes. Both cannot stand: `ugcportal-9u80`. The allowlist is `ugcportal-pyky`.
+Cost: "a full handback and a human round-trip" each (C18); tokens not recorded. The worker definitions say to run the suite in the foreground with `timeout: 600000` and "never end a turn waiting on a background task"; A19/14 says background anything over eight minutes. Both cannot stand: `ugcportal-9u80`. The allowlist is `ugcportal-pyky`.
 
 ### 2.7 A pinned third-party image went private
 
@@ -85,7 +85,7 @@ B1, B3, B6, B7, B9 and the worktree removal on #211 were each self-reported by t
 
 ## 4. Recommendations
 
-Each maps to a bead; `ugcportal-p7x7` reconciles them at the next cut.
+Each is tracked by its own bead. `cut-release` step 7a does not reconcile this document: it lists `docs/process/release-cost-*.md` and matches beads on `metadata.retro_source`, which none of the beads below carries.
 
 1. Close the hand-merge gap mechanically, and make the up-to-date rule cheap — one branch update, no re-review of a byte-identical diff: `ugcportal-li65`.
 2. A separate reviewer identity, so an `exact` chain exists; until then every late round on an `approx` chain costs A18/14's 130–200k per nit: `ugcportal-62b6`. Whether a review-thread sentence blocks: `ugcportal-n005`.
