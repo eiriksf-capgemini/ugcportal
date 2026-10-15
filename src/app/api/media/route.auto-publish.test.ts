@@ -34,7 +34,7 @@ const authMock = vi.fn();
 vi.mock("@/lib/auth", () => ({ auth: authMock }));
 
 // The configured row below carries the fixture handle "fixture-handle", which
-// is configured only while the array derives it (ugcportal-lskg): append the
+// is configured only while the checked array derives it (ugcportal-lskg): append the
 // fixture person to the real CONFIGURED_USERS rather than seed a real name.
 vi.mock("@/config/users", async (importOriginal) => {
   const { withFixtureConfiguredUser } = await import(
@@ -61,7 +61,11 @@ const { FORMER_CONFIGURED_HANDLE } = await import(
   "@/lib/test-support/fixture-configured-user"
 );
 
-/** A configured person: `configuredHandle` set, as configured-user-link leaves them. */
+/**
+ * A configured person: a `configuredHandle` the checked array derives (the
+ * fixture person the `@/config/users` mock appends), as configured-user-link
+ * leaves them.
+ */
 const CONFIGURED = "configured-ho7j";
 /** Somebody allowed to sign in who is not one of the configured people. */
 const ORDINARY = "ordinary-ho7j";
@@ -310,7 +314,7 @@ describe("an upload by anybody else is never published automatically (ugcportal-
   });
 
   it("an ADMIN who is not configured is not auto-published either", async () => {
-    // Auto-publish is decided by `configuredHandle`, not by role.
+    // Auto-publish is decided by the configured handle, not by role.
     authMock.mockResolvedValue({ user: { id: ADMIN, role: "ADMIN" } });
 
     const body = await (

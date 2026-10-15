@@ -116,8 +116,11 @@ the public gallery. Since `ugcportal-ho7j`, being a configured person in
 `src/config/users.ts` also means **uploads publish on upload, with no rights
 questions asked**. That grant follows the array, not the row
 (`ugcportal-lskg`): a `User` row counts as configured only while its
-`configuredHandle` is one the array derives today (`CURRENT_CONFIGURED_HANDLES`
-in `src/lib/sign-in-policy.ts`, asked by `isConfiguredUser` in
+`configuredHandle` is one the **checked** array derives today — the people
+`reviewConfiguredUsers().sound` keeps, the same list sign-in and linking use,
+so a person the boot check drops (no identities, a handle that loses a
+letter, a handle collision) is not configured either
+(`CURRENT_CONFIGURED_HANDLES` in `src/lib/sign-in-policy.ts`, asked by `isConfiguredUser` in
 `src/lib/publish-gates.ts` and by the public scope in
 `src/lib/publishability.ts`). Sign-in writes the column and nothing clears it,
 so a person removed from the array keeps their handle on the row — but from

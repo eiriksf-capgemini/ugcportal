@@ -542,9 +542,10 @@ const NOBODY_IDENTIFIABLE_SHOWN = {
  * their undeclared uploads off every public surface on the next request,
  * with no write to any `Media` row.
  *
- * `in` the handles the array derives TODAY, not `not: null`
+ * `in` the handles the CHECKED array derives TODAY, not `not: null`
  * (ugcportal-lskg): the column is written at sign-in and nothing clears it, so
- * a person removed from `CONFIGURED_USERS` keeps a non-null handle. Asking
+ * a person removed from `CONFIGURED_USERS`, or dropped by its boot check,
+ * keeps a non-null handle. Asking
  * the same list `isConfiguredUser` (src/lib/publish-gates.ts) asks is what
  * takes their undeclared uploads off the public site once the deploy that
  * removes them is live. Copied into a fresh array because Prisma's `in`

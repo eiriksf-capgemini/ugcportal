@@ -84,7 +84,7 @@ import { applyMigrations, createTemporaryDatabase } from "@/lib/test-support/db"
  */
 
 // The configured row below carries the fixture handle "fixture-handle", which
-// is configured only while the array derives it (ugcportal-lskg): append the
+// is configured only while the checked array derives it (ugcportal-lskg): append the
 // fixture person to the real CONFIGURED_USERS rather than seed a real name.
 vi.mock("@/config/users", async (importOriginal) => {
   const { withFixtureConfiguredUser } = await import(
@@ -116,9 +116,9 @@ const DEMOTED = "demoted-scope-3ae";
  * A CONFIGURED uploader (ugcportal-ho7j): `User.configuredHandle` set, the
  * state src/lib/configured-user-link.ts leaves the people in
  * src/config/users.ts in. The handle is a fixture value, not one of the
- * real ones: since ugcportal-lskg the rule reads "in the list the array
- * derives today", so the fixture person is appended to the array by the
- * `vi.mock` above.
+ * real ones: since ugcportal-lskg the rule reads "in the list the checked
+ * array derives today", so the fixture person (with one identity, so the
+ * check keeps them) is appended to the array by the `vi.mock` above.
  */
 const CONFIGURED_OWNER = "configured-owner-scope-ho7j";
 /**

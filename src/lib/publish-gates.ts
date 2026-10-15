@@ -456,14 +456,14 @@ export function publishGateSources(
 
 /**
  * Is this user one of the CONFIGURED people — `User.configuredHandle` set
- * AND one of the handles `CONFIGURED_USERS` derives TODAY
+ * AND one of the handles the CHECKED `CONFIGURED_USERS` derives TODAY
  * (`CURRENT_CONFIGURED_HANDLES`, src/lib/sign-in-policy.ts;
  * src/config/users.ts, linked by src/lib/configured-user-link.ts)?
  *
  * Not "the column is set" (ugcportal-lskg): sign-in writes the column and
- * nothing clears it, so a person removed from the array keeps a non-null
- * handle. Asking the array is what makes removing them enough to take
- * publish-on-upload back. The Prisma arm `CONFIGURED_UPLOADER_UNDECLARED`
+ * nothing clears it, so a person removed from the array, or dropped by its
+ * boot check (`reviewConfiguredUsers`), keeps a non-null handle. Asking the
+ * checked array is what makes either enough to take publish-on-upload back. The Prisma arm `CONFIGURED_UPLOADER_UNDECLARED`
  * (src/lib/publishability.ts) asks the same list.
  *
  * Read from the `User` row by id, never from the session: the session

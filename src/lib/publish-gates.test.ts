@@ -28,7 +28,7 @@ import {
   FORMER_CONFIGURED_HANDLE,
 } from "@/lib/test-support/fixture-configured-user";
 
-// "fixture-handle" below is configured only while the array derives it
+// "fixture-handle" below is configured only while the checked array derives it
 // (ugcportal-lskg): append the fixture person to the real CONFIGURED_USERS.
 vi.mock("@/config/users", async (importOriginal) => {
   const { withFixtureConfiguredUser } = await import(
